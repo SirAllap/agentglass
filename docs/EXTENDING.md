@@ -310,8 +310,14 @@ curl -sS http://localhost:4000/control \
 | `project.picker`, `windows.switcher`, `bench.toggle` | — | the project picker, the window switcher, the bench |
 | `bench.file`, `peek.file` | `root`: absolute, `path`: under it | a file on the bench / in the viewer (reading) |
 | `bench.board` | `root`, `kind`: `pr`\|`tasks`\|`files` | a board as a bench tab |
-| `git.modal` | `which`: `insights`\|`bisect` | that modal of the Git view |
-| `git.compare`, `git.blame` | `base` (a ref), `path` (under the checkout) | those modals |
+| `git.modal` | `which`: `insights`\|`bisect`\|`palette` | that modal of the Git view |
+| `git.compare`, `git.blame`, `git.rebase` | `base` (a ref), `path` (under the checkout), `base` | those modals. The rebase editor only draws the plan: nothing moves until the person presses Start |
+| `event.open` | `id`: a whole number | the event modal, for an event in the window's feed or the server's recent list (otherwise `ok:false`, "no recent event has that id") |
+| `session.open` | `id`, `app?` | the session modal |
+| `whatsnew.open` | — | the release notes of the running version; never marks them seen |
+| `lantern.schedule`, `terminal.resume` | — | the Lantern schedule dialog (a schedule exists only when the person submits it) and the Terminal's Resume sessions list |
+| `settings.plugin` | `name` | Settings on one plugin's page |
+| `pane.open` | `which`: `git`\|`diff`\|`pr`\|`card` | what the pane chords open for the focused terminal pane (`ok:false` when no pane has one) |
 | `chat.new`, `theme.set`, `zoom.step`, `workspace.toggle`, `esc.peel` | as the old `chat`/`theme`/`zoom`/`workspace`/`esc` | |
 | `ui.state`, `ui.read` | — / `panel` | *reads, not opens:* see below |
 
@@ -321,9 +327,19 @@ curl -sS http://localhost:4000/control \
 **Settings through the UI's own code path.** `web/src/lib/settingsRegistry.ts`
 holds a `SettingDef` per exposed setting; the Settings row calls `def.set(v)`
 and so does `settings.set`, so a value is checked and stored exactly as a click
-would (the def wraps the pref module's own setter). Only Appearance, Diff,
-Rail (which drawer a view sits in) and Terminal's "How it draws" group are
-exposed so far; any other id answers "not exposed". A def with no `level` is
+would (the def wraps the pref module's own setter). Exposed:
+Appearance, Diff, Rail (which drawer a view sits in), Terminal, three Notifications
+settings (quiet mode, checks only when approved, conversation), the browser's
+search engine, Tasks (where it opens, which sources show) and the single-key
+shortcuts (`keys.binding.<action>`; a key another action holds is refused in the
+module's words). Any other id answers "not exposed", and some are meant to: the
+notification kinds, channels, voices and "silence all" (they decide whether an
+agent blocked on the person can reach them), the mirror of other apps'
+notifications, the browser's home page and cookie import, right-click paste, which
+tmux the terminal runs on, the view and app chords, and the whole of Connections,
+ClickUp, Remote, Plugins, Hooks, Understudy, Lantern, tmux and Privacy. A row an
+agent must not reach says so on the row (`agentNever="why"`), and a page left out
+is in `NOT_EXPOSED_ON_PURPOSE` with its reason. A def with no `level` is
 level 3 and refused; a `secret` def answers `{set:true}` and is never written.
 Every write reports what it replaced with an undo handle, and the window shows
 an "An agent changed X" chip with an Undo button (it leaves by itself after 20
@@ -376,8 +392,10 @@ curl -sS http://localhost:4000/control \
   -H "Authorization: Bearer $AGENTGLASS_TOKEN" -H 'content-type: application/json' \
   -d '{"cmd":"ui","do":"ui.state"}'
 
-# one panel: view, chat, bench, gates, settings.diff, settings.terminal,
-# settings.browser, settings.notifications
+# one panel: view, chat, bench, gates, and the Settings panes: diff, terminal,
+# browser, notifications, prefs, rail, keys, tasks, appearance, understudy (held
+# by the window) and hooks, lantern, budgets, recipes, review-prompts,
+# saved-replies, tmux, privacy, plugins, log, about (held by the server)
 curl -sS http://localhost:4000/control \
   -H "Authorization: Bearer $AGENTGLASS_TOKEN" -H 'content-type: application/json' \
   -d '{"cmd":"ui","do":"ui.read","args":{"panel":"chat"}}'
@@ -402,8 +420,16 @@ The answer is `{"ok":true,"applied":true,"value":{"state":{…},"untrusted":{…
 Panels are read from the stores and preference modules, not from the screen, so
 they answer whether or not the panel is mounted. A panel that only a mounted
 component could describe answers `{"mounted":false,"hint":"open it quietly"}`;
-none is one yet. Settings panes without a clean getter are listed in `ui.state`
-under `notCovered` with the reason; credential panes are never readable.
+none is one yet. A pane the server holds (the second list above; `ui.state`
+marks it `asksServer`) is read by calling the route the pane itself calls, when
+the read is asked: one request, no cache, no poll, and `ok:false` with a sentence
+if the route fails or is slow. Each shape picks its fields by name, so a field a
+route adds later, a plugin's own settings or a credentials path does not travel;
+the text of recipes, prompts and replies stays in the window (only their
+lengths come out). The Settings panes with no reader are listed in `ui.state`
+under `notCovered` with the reason: the credential panes (connections, remote,
+clickup) are never readable, and `settings.privacy` says only whether ClickUp is
+set and how many devices are paired.
 
 **`POST /control/result` is not for agents.** It is how a window answers a
 command (`{"rid":…,"ok":…,"applied":…,"value":…}`), behind the same
@@ -444,9 +470,14 @@ an agent should and should not do with them is
 [`skills/ui-control/SKILL.md`](../skills/ui-control/SKILL.md). Ceiling: the MCP
 server can list tools only while the app is running.
 
-**Adding a panel is adding its door.** A new view, Settings page or app chord
-without a registry entry (or a reasoned line in `NOT_AGENT_DOOR`) fails
-`web/test/ui-registry-guard.test.ts`.
+**Adding a panel is adding its door.** A new view, Settings page, app chord or
+dialog (any component that draws through a `Portal`) without a registry entry (a
+`modals: [file]` on the entry that opens it) or a reasoned line in
+`NOT_AGENT_DOOR` fails `web/test/ui-registry-guard.test.ts`. Left out on purpose,
+each with its reason in that file: the merge dialog (it would stage a merge, which
+is level 3), the people picker (choosing writes an assignment), the Rescue modal
+(it only exists inside the worktree-removal flow), and the menus and pickers that
+open from a click on a panel's own subject.
 
 `open finder` is the one command that names a path. The server checks only its
 spelling — absolute, no `.`/`..`/empty segment, no control characters, at most

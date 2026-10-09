@@ -26,6 +26,26 @@ door (`ui_settings_open`, `ui_read`, `ui_settings_set`, ...), and the list comes
 from the running app, so it is always the doors this version has. Set
 `AGENTGLASS_UI_AS` to the name your calls carry.
 
+What you can open: every view and Settings page, one plugin's own page
+(`settings.plugin`), the machine panel, project picker, window switcher, the
+bench, a file in the viewer, the Git modals (insights, bisect, the git palette,
+compare, blame, and the rebase editor, which only draws the plan), one event or
+session the window holds (`event.open`, `session.open`), the running version's
+release notes (`whatsnew.open`), the Lantern schedule dialog, the Terminal's
+Resume list, and what the pane chords open for the focused terminal pane
+(`pane.open`). Opening only shows: starting a rebase, saving a schedule,
+resuming a session is the person's click. Not doors, on purpose: the merge dialog
+(a merge is level 3), the people picker, the Rescue modal and the menus inside a
+panel; `agentglass-ui list` is the truth.
+
+What you can read: `agentglass-ui read <panel>` for view, chat, bench, gates and
+the Settings panes (diff, terminal, browser, notifications, prefs, rail, keys,
+tasks, appearance, understudy, hooks, lantern, budgets, recipes, review-prompts,
+saved-replies, tmux, privacy, plugins, log, about). Panes the server holds ask
+their own route and can take a moment. Recipe steps, prompt and reply text, plugin
+settings and credentials are never in an answer; names and titles are under
+`untrusted`.
+
 Every answer is one JSON object. `ok: true` means a window ran the command;
 `ok: false` carries one sentence saying why (no window is open, a change is
 off on this server, the setting is not exposed, an argument is outside its set).
@@ -35,7 +55,10 @@ Read the sentence and do what it says; do not retry the same call.
 
 1. **Look or open.** Opens a panel or reads state. Nothing changes.
 2. **Change a local setting.** `settings set`, and only for the settings
-   `settings list` shows (appearance, diff, rail, the terminal's drawing). The
+   `settings list` shows (appearance, diff, rail, the terminal, quiet mode and two
+   pull-request notices, the search engine, what Tasks shows, single-key
+   shortcuts). Not notification kinds, channels or voices, the home page, tokens,
+   remote access, plugin trust or the gate: those are the person's. The
    person gets an "An agent changed X" chip with Undo. `AGENTGLASS_CONTROL_LEVEL=1`
    on the server turns this level off: then `settings set` is not offered at all.
 3. **An effect outside the app** (merge, push, send). Does not exist. If the task
@@ -72,4 +95,5 @@ Read the sentence and do what it says; do not retry the same call.
 - "not offered by this agentglass": this version has no such door, or it needs a
   level the server does not allow. `agentglass-ui list` is the truth.
 - "not exposed": that setting is not one an agent may touch, now or yet. Panels
-  without a getter are named in `state` under `notCovered`, with the reason.
+  with no reader (the credential ones) are named in `state` under `notCovered`,
+  with the reason.

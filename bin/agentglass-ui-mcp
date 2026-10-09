@@ -87,6 +87,8 @@ def schema_of(spec):
         return {"type": "number", "enum": list(spec["values"])}
     if t == "bool":
         return {"type": "boolean"}
+    if t == "int":
+        return {"type": "integer", "minimum": 0, "maximum": spec.get("max", 0)}
     if t == "pathKind":
         return {"type": "string", "enum": ["file", "dir"], "description": "whether the path is a file or a folder; read from a trailing slash when absent"}
     if t == "scalar":

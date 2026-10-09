@@ -20,23 +20,64 @@
  * it is not one. A reason is a sentence; "later" is not one.
  */
 import { describe, expect, it } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { join, relative } from "node:path";
 import { UI_ACTIONS, VIEW_IDS, SETTINGS_PAGE_IDS, type UiActionDef } from "../../shared/uiActions.ts";
-import { UI_HANDLERS } from "../src/lib/uiActions.ts";
+import { globalStubs } from "./stubGlobal.ts";
+
+// uiActions reaches the settings registry, which reaches pref modules that read
+// localStorage when they load: this file starts from a stub, like the registry's own tests.
+const stubGlobal = globalStubs();
+stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {}, clear: () => {}, key: () => null, length: 0 } as unknown as Storage);
+stubGlobal("location", new URL("http://localhost:5173/"));
+stubGlobal("window", new EventTarget());
+stubGlobal("document", { documentElement: { getAttribute: () => "graphite", setAttribute: () => {}, style: { setProperty: () => {}, getPropertyValue: () => "" } } });
+const { UI_HANDLERS } = await import("../src/lib/uiActions.ts");
 
 const ROOT = join(import.meta.dir, "..", "..");
 const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
 
 /** What is deliberately not an agent door, by surface kind, with the reason. */
-const NOT_AGENT_DOOR: { views: Record<string, string>; settingsPages: Record<string, string>; chords: Record<string, string> } = {
+const POPOVER = "a menu, picker or popover inside a panel that is already a door: it opens from a click on that panel's own subject and chooses among its rows";
+const OUTPUT = "output the app draws to the owner (a toast, a banner, a chip), not a place the owner goes: there is nothing to open";
+const NOT_AGENT_DOOR: {
+  views: Record<string, string>; settingsPages: Record<string, string>; chords: Record<string, string>;
+  /** Component files that draw through a Portal and are not an entry's `modals`. */
+  dialogs: Record<string, string>;
+} = {
   views: {},
   settingsPages: {},
-  chords: {
-    "pane.git": "acts on the focused terminal pane, which only the window knows; it needs a state read first (slice 2) and then a pane-addressed door",
-    "pane.diff": "acts on the focused terminal pane, which only the window knows; it needs a state read first (slice 2) and then a pane-addressed door",
-    "pane.pr": "acts on the focused terminal pane, which only the window knows; it needs a state read first (slice 2) and then a pane-addressed door",
-    "pane.card": "acts on the focused terminal pane, which only the window knows; it needs a state read first (slice 2) and then a pane-addressed door",
+  chords: {},
+  dialogs: {
+    "Portal.tsx": "the portal primitive every dialog draws through, not a dialog itself",
+    "AgentChangeChip.tsx": OUTPUT,
+    "AskedBanners.tsx": OUTPUT,
+    "NoteToasts.tsx": OUTPUT,
+    "ZoomToast.tsx": OUTPUT,
+    "TopBarNotes.tsx": OUTPUT,
+    "NeedsPopover.tsx": "the popover under the Waiting-on-you chip: output about what needs the owner, read through ui.read gates",
+    "Feed.tsx": POPOVER,
+    "BasePicker.tsx": POPOVER,
+    "ContextMenu.tsx": POPOVER,
+    "FacetMenu.tsx": POPOVER,
+    "Select.tsx": POPOVER,
+    "FilterPresets.tsx": POPOVER,
+    "tasks/FilterBuilder.tsx": POPOVER,
+    "tasks/EmojiPicker.tsx": POPOVER,
+    "diff/PresetDiff.tsx": POPOVER,
+    "StatusPanel.tsx": POPOVER,
+    "StackMarks.tsx": POPOVER,
+    "CardFiles.tsx": POPOVER,
+    "TopBar.tsx": POPOVER,
+    "BrowserPanel.tsx": POPOVER,
+    "PrPanel.tsx": POPOVER,
+    "TasksPanel.tsx": POPOVER,
+    "workspace/Workspace.tsx": POPOVER,
+    "ConfirmDialog.tsx": "a question an action asks the owner before it runs: it exists only while that action waits, and the answer is the owner's",
+    "MergeDialog.tsx": "a promise settled inside the merge flow of a loaded pull request, behind a guard dialog: a door would stage a merge, which is level 3 and waits for the stage-only model",
+    "PeoplePick.tsx": "choosing a person writes an assignment or a reviewer request, and it opens only from a card or a pull request it is about: there is no state of its own to show",
+    "RescueModal.tsx": "the end of the worktree-removal flow, a promise that flow settles: opened alone it has nothing to settle, and opening it means starting the removal",
+    "CommitModal.tsx": "no mount site outside itself (measured): dead code, not a surface",
   },
 };
 
@@ -73,6 +114,20 @@ const enumValues = (id: keyof typeof UI_ACTIONS, arg: string): readonly string[]
   const a = (UI_ACTIONS[id] as UiActionDef).args[arg];
   return a && a.t === "enum" ? a.values : [];
 };
+/** Every component file that draws through a Portal or says role="dialog". */
+const dialogFiles = (() => {
+  const out: string[] = [];
+  const base = join(ROOT, "web/src/components");
+  const walk = (dir: string) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (e.isDirectory()) walk(join(dir, e.name));
+      else if (e.name.endsWith(".tsx") && /<Portal\b|createPortal|role="dialog"/.test(readFileSync(join(dir, e.name), "utf8"))) out.push(relative(base, join(dir, e.name)));
+    }
+  };
+  walk(base);
+  return out.sort();
+})();
+const modalsInRegistry = new Set(Object.values(UI_ACTIONS as Record<string, UiActionDef>).flatMap((d) => d.modals ?? []));
 const chordsInRegistry = new Set(Object.values(UI_ACTIONS as Record<string, UiActionDef>).flatMap((d) => d.chords ?? []));
 
 describe("every surface the app enumerates is an agent door or a decided exception", () => {
@@ -90,6 +145,12 @@ describe("every surface the app enumerates is an agent door or a decided excepti
   it("every Settings page opens through settings.open", () => {
     const missing = settingsPageIds.filter((id) => !enumValues("settings.open", "page").includes(id) && !(id in NOT_AGENT_DOOR.settingsPages));
     expect(missing, "add the page to SETTINGS_PAGE_IDS in shared/uiActions.ts, or to NOT_AGENT_DOOR.settingsPages with a reason").toEqual([]);
+  });
+
+  it("every dialog the app draws is an entry's `modals` or a decided exception", () => {
+    expect(dialogFiles.length, "the scan found no dialogs: it is reading the wrong folder").toBeGreaterThanOrEqual(40);
+    const missing = dialogFiles.filter((f) => !modalsInRegistry.has(f) && !(f in NOT_AGENT_DOOR.dialogs));
+    expect(missing, "give an entry `modals: [file]` in shared/uiActions.ts, or add the file to NOT_AGENT_DOOR.dialogs with a reason").toEqual([]);
   });
 
   it("every app chord is an entry's `chords` or a decided exception", () => {
@@ -111,7 +172,15 @@ describe("the registry names only things that exist, and the exceptions are not 
     expect([...chordsInRegistry].filter((id) => !chordIds.includes(id))).toEqual([]);
   });
 
+  it("no `modals` entry names a file that does not draw a dialog", () => {
+    expect([...modalsInRegistry].filter((f) => !dialogFiles.includes(f))).toEqual([]);
+  });
+
   it("an exception names a surface that exists and is not already a door", () => {
+    for (const f of Object.keys(NOT_AGENT_DOOR.dialogs)) {
+      expect(existsSync(join(ROOT, "web/src/components", f)), `${f} is gone; drop the exception`).toBe(true);
+      expect(modalsInRegistry.has(f), `${f} is a door now; drop the exception`).toBe(false);
+    }
     for (const id of Object.keys(NOT_AGENT_DOOR.views)) expect(railIds, id).toContain(id);
     for (const id of Object.keys(NOT_AGENT_DOOR.settingsPages)) expect(settingsPageIds, id).toContain(id);
     for (const id of Object.keys(NOT_AGENT_DOOR.chords)) { expect(chordIds, id).toContain(id); expect(chordsInRegistry.has(id), `${id} is a door now; drop the exception`).toBe(false); }

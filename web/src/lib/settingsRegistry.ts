@@ -23,9 +23,13 @@
  *     the window shows a chip saying so (AgentChangeChip). The undo goes through
  *     the same def, so it is also validated.
  *
- * Panes migrated so far are Appearance, Diff, Rail and the "How it draws" group
- * of Terminal (MIGRATED below). Every other pane is listed in NOT_YET_MIGRATED,
- * on purpose: a new pane has to be put on one list or the other, and a test
+ * Migrated: Appearance, Diff, Rail, Terminal, the part of Notifications that cannot
+ * hide a stopped agent, the search engine, what Tasks shows, and the single-key
+ * shortcuts. A row an agent must not reach is marked `agentNever="why"` and a
+ * whole page left out is in NOT_EXPOSED_ON_PURPOSE with its reason (remote,
+ * tokens, plugin trust, the gate and hooks, consent: nothing that gives an agent
+ * more power or lets it silence the owner's alerts). Every other pane is listed in
+ * NOT_YET_MIGRATED, on purpose: a new pane has to be put on one list or the other, and a test
  * fails until it is. Order of rows inside the rail's drawers, and the one-click
  * resets, are row actions and not settings, so they are marked agentExempt.
  */
@@ -38,6 +42,21 @@ import {
   currentTermCursor, setTermCursor, fontAvailable, type CursorStyle,
 } from "./termPrefs.ts";
 import { ACCENTS, currentAccent, setAccentPref } from "./accent.ts";
+import { focusFollowsMouse, setFocusFollowsMouse } from "./termFocusPref.ts";
+import { paneActionsMode, setPaneActionsMode } from "./paneActionsPref.ts";
+import { tabGroupsOn, setTabGroupsOn, tabGroupRulesText, setTabGroupRulesText } from "./tabGroups.ts";
+import {
+  copyOnSelect, setCopyOnSelect, currentNoteEditor, setNoteEditor, NOTE_EDITORS, currentScrollback, setScrollback,
+  SCROLLBACK_SIZES, DEFAULT_SCROLLBACK, currentWordSeparators, setWordSeparators, DEFAULT_WORD_SEPARATORS, type NoteEditor,
+} from "./termPrefs.ts";
+import { notifyQuiet, setNotifyQuiet } from "./sysNotify.ts";
+import { ciOnlyApproved, setCiOnlyApproved, CI_ONLY_APPROVED_DEFAULT } from "./ciNotifyPref.ts";
+import { talkNotify, setTalkNotify, TALK_NOTIFY_DEFAULT, type TalkNotify } from "./talkNotify.ts";
+import { searchEngine, setSearchEngine } from "./browserPrefs.ts";
+import { DEFAULT_SEARCH_ENGINE, SEARCH_ENGINE_LABELS, type SearchEngine } from "./browserUrl.ts";
+import { taskLanding, setTaskLanding, type TaskLanding } from "./taskLanding.ts";
+import { TASK_SOURCES, taskSourceShown, setTaskSourceShown, shownTaskSources, type TaskSourceId } from "./taskSources.ts";
+import { bindings, rebind, DEFAULTS as DEFAULT_BINDINGS, LABELS as KEY_LABELS, type ActionId } from "./keybindings.ts";
 import {
   THEMES, applyTheme, applyThemeMode, chooseTheme, themeMode, desktopPaletteName, type ThemeMode,
 } from "./themes.ts";
@@ -83,7 +102,10 @@ interface DefSpec {
   default: SettingValue;
   read(): SettingValue;
   validate(raw: unknown): SettingValue | null;
-  write(v: SettingValue): void;
+  /** Apply it. A returned string is the pref module refusing, in its own words
+   *  (a key already bound, the last task source): nothing was stored, and the
+   *  sentence reaches the row and the agent alike. */
+  write(v: SettingValue): void | string;
   /** What undo needs when the value alone does not say it (the theme mode
    *  forgets which palette it was on). Defaults to the value. */
   capture?(): unknown;
@@ -116,7 +138,8 @@ function defineSetting(s: DefSpec): SettingDef {
       if (v === null) return { ok: false, error: `not a valid value for ${s.id}` };
       const prev = get();
       const token = s.capture ? s.capture() : prev;
-      s.write(v);
+      const refused = s.write(v);
+      if (typeof refused === "string") return { ok: false, error: refused };
       announce(s.id);
       return {
         ok: true, prev, value: v,
@@ -261,9 +284,125 @@ const rail: SettingDef[] = VIEWS.map((v) => defineSetting({
   restore: (t) => saveRail(t as ReturnType<typeof railIds>),
 }));
 
+// ── terminal: the rest of the pane ──────────────────────────────────────────
+
+const MOUSE = "Mouse and clipboard";
+const TABS = "Tab groups";
+const HISTORY = "History and selection";
+/** The longest free text one of these may be (rules and separators, not prose). */
+const MAX_TEXT = 200;
+const text = (raw: unknown): string | null => (typeof raw === "string" && raw.length <= MAX_TEXT ? raw : null);
+
+const terminalMore: SettingDef[] = [
+  defineSetting({
+    id: "terminal.focusFollowsMouse", page: "terminal", section: MOUSE, label: "Focus follows mouse", level: 2, default: false,
+    read: () => focusFollowsMouse(), validate: bool, write: (v) => setFocusFollowsMouse(v as boolean),
+  }),
+  defineSetting({
+    id: "terminal.paneBar", page: "terminal", section: MOUSE, label: "Bar on a pane", level: 2, default: true,
+    // The pref module stores "hover" or "off"; the row is a switch, so the def is one too.
+    read: () => paneActionsMode() !== "off", validate: bool, write: (v) => setPaneActionsMode(v ? "hover" : "off"),
+  }),
+  defineSetting({
+    id: "terminal.copyOnSelect", page: "terminal", section: MOUSE, label: "Copy on select", level: 2, default: true,
+    read: () => copyOnSelect(), validate: bool, write: (v) => setCopyOnSelect(v as boolean),
+  }),
+  defineSetting({
+    id: "terminal.noteEditor", page: "terminal", section: "Bench note", label: "Note editor", level: 2, default: "builtin",
+    read: () => currentNoteEditor(), validate: oneOf(NOTE_EDITORS.map((e) => e.v) as NoteEditor[]), write: (v) => setNoteEditor(v as NoteEditor),
+  }),
+  defineSetting({
+    id: "terminal.tabGroups", page: "terminal", section: TABS, label: "Group tabs by project", level: 2, default: true,
+    read: () => tabGroupsOn(), validate: bool, write: (v) => setTabGroupsOn(v as boolean),
+  }),
+  defineSetting({
+    id: "terminal.tabGroupRules", page: "terminal", section: TABS, label: "Group by name", level: 2, default: "",
+    read: () => tabGroupRulesText(),
+    // Text the module trims to nothing is stored as nothing; say that up front so
+    // the value reported back is the value the next read gives.
+    validate: (raw) => { const t = text(raw); return t === null ? null : t.trim() === "" ? "" : t; },
+    write: (v) => setTabGroupRulesText(v as string),
+  }),
+  defineSetting({
+    id: "terminal.scrollback", page: "terminal", section: HISTORY, label: "Scrollback", level: 2, default: DEFAULT_SCROLLBACK,
+    read: () => currentScrollback(),
+    validate: (raw) => (typeof raw === "number" && (SCROLLBACK_SIZES as readonly number[]).includes(raw) ? raw : null),
+    write: (v) => setScrollback(v as number),
+  }),
+  defineSetting({
+    id: "terminal.wordSeparators", page: "terminal", section: HISTORY, label: "Word separators", level: 2, default: DEFAULT_WORD_SEPARATORS,
+    read: () => currentWordSeparators(), validate: text, write: (v) => setWordSeparators(v as string),
+  }),
+];
+
+// ── notifications: the ones that cannot hide a stopped agent ────────────────
+
+// Not here, on purpose: the kind and channel switches, "Silence all", the voices
+// (one of them is Silent), and the two rows that read other apps' notifications.
+// Each decides whether an agent that is blocked on the owner can reach them.
+const notifications: SettingDef[] = [
+  defineSetting({
+    id: "notifications.quiet", page: "notifications", section: "How it reaches you", label: "Quiet — only what is stopped interrupts", level: 2, default: true,
+    read: () => notifyQuiet(), validate: bool, write: (v) => setNotifyQuiet(v as boolean),
+  }),
+  defineSetting({
+    id: "notifications.ciOnlyApproved", page: "notifications", section: "Pull requests", label: "Checks: only when the pull request is approved", level: 2,
+    default: CI_ONLY_APPROVED_DEFAULT, read: () => ciOnlyApproved(), validate: bool, write: (v) => setCiOnlyApproved(v as boolean),
+  }),
+  defineSetting({
+    id: "notifications.talk", page: "notifications", section: "Pull requests", label: "Conversation: when somebody says something", level: 2, default: TALK_NOTIFY_DEFAULT,
+    read: () => talkNotify(), validate: oneOf(["everything", "reviews", "off"] as TalkNotify[]), write: (v) => setTalkNotify(v as TalkNotify),
+  }),
+];
+
+// ── browser: where an address-bar word goes ─────────────────────────────────
+
+// Not here: the home page (a page the browser opens by itself, with the owner's
+// sessions) and the cookie and history import (credentials).
+const browser: SettingDef[] = [
+  defineSetting({
+    id: "browser.searchEngine", page: "browser", section: "", label: "Search engine", level: 2, default: DEFAULT_SEARCH_ENGINE,
+    read: () => searchEngine(), validate: oneOf(Object.keys(SEARCH_ENGINE_LABELS) as SearchEngine[]), write: (v) => setSearchEngine(v as SearchEngine),
+  }),
+];
+
+// ── tasks: what the view shows ──────────────────────────────────────────────
+
+const TASK_LANDINGS = ["last", "all", ...TASK_SOURCES.map((s) => s.id)] as TaskLanding[];
+const tasks: SettingDef[] = [
+  defineSetting({
+    id: "tasks.landing", page: "tasks", section: "Opens on", label: "Tasks view opens on", level: 2, default: "last",
+    read: () => taskLanding(), validate: oneOf(TASK_LANDINGS), write: (v) => setTaskLanding(v as TaskLanding),
+  }),
+  ...TASK_SOURCES.map((src) => defineSetting({
+    id: `tasks.source.${src.id}`, page: "tasks", section: "Task sources", label: `${src.label} in the Tasks view`, level: 2, default: true,
+    read: () => taskSourceShown(src.id), validate: bool,
+    // The module keeps the last visible source and says nothing; an agent, and
+    // the row, are told instead of being shown a switch that did not move.
+    write: (v) => {
+      if (!v && taskSourceShown(src.id) && shownTaskSources().length <= 1) return "at least one task source stays shown";
+      setTaskSourceShown(src.id, v as boolean);
+    },
+  })),
+];
+
+// ── keys: the single-letter shortcuts ───────────────────────────────────────
+
+// Not here: the view chords and the "even inside a shell" app chord. Those are
+// delivered while a terminal has the focus, so a binding made for the owner could
+// shadow a key their shell needs; they stay the owner's to press.
+const keys: SettingDef[] = (Object.keys(KEY_LABELS) as ActionId[]).map((a) => defineSetting({
+  id: `keys.binding.${a}`, page: "keys", section: "Keys", label: KEY_LABELS[a].label, level: 2, default: DEFAULT_BINDINGS[a],
+  read: () => bindings()[a],
+  // Length is the module's to judge ("pick a single character"), in its own words.
+  validate: (raw) => (typeof raw === "string" && raw.length >= 1 && raw.length <= 16 ? raw : null),
+  // The module refuses a reserved key and one another action holds, in words.
+  write: (v) => { const r = rebind(a, v as string); if (!r.ok) return r.error; },
+}));
+
 // ── the registry ────────────────────────────────────────────────────────────
 
-export const SETTING_DEFS: readonly SettingDef[] = [...appearance, ...diff, ...terminal, ...rail];
+export const SETTING_DEFS: readonly SettingDef[] = [...appearance, ...diff, ...terminal, ...terminalMore, ...rail, ...notifications, ...browser, ...tasks, ...keys];
 
 /** Which panes (and, for Terminal, which groups) have been migrated. A row in
  *  here must carry a settingId or be marked agentExempt; a guard test reads this. */
@@ -271,15 +410,38 @@ export const MIGRATED: Readonly<Record<string, "all" | readonly string[]>> = {
   appearance: "all",
   diff: "all",
   rail: "all",
-  terminal: [DRAWS],
+  terminal: "all",
+  notifications: "all",
+  browser: "all",
+  tasks: "all",
+  keys: "all",
 };
 
 /** The panes with nothing migrated yet. Every Settings page is on exactly one of
  *  the two lists, so adding a page forces a decision rather than a silent gap. */
 export const NOT_YET_MIGRATED = [
-  "prefs", "notifications", "keys", "browser", "tasks", "hooks", "lantern", "understudy", "budgets", "recipes",
+  "prefs", "hooks", "lantern", "understudy", "budgets", "recipes",
   "review-prompts", "saved-replies", "connections", "clickup", "remote", "plugins", "tmux", "privacy", "about", "log", "onboarding",
 ] as const;
+
+/**
+ * Pages that are not migrated and WILL NOT be without a decision about their
+ * risk, with the reason. Every one is also in NOT_YET_MIGRATED (a test holds
+ * the two together), so the list of what is merely not done yet is the rest.
+ */
+export const NOT_EXPOSED_ON_PURPOSE: Readonly<Record<string, string>> = {
+  connections: "tokens and credentials of the services the app talks to: an agent never reads or writes them",
+  clickup: "a ClickUp token and workspace link: a credential pane",
+  remote: "reaching this machine from outside: who may pair and how is the owner's alone, at any level",
+  plugins: "plugin trust and consent: approving what a plugin may do cannot be something another agent does for the owner",
+  hooks: "the gate and the hook install decide what an agent may do without asking: no agent edits its own leash",
+  understudy: "consent and the level at which a stand-in may decide for the owner",
+  lantern: "every setting here is held by the server and changes what the app sends outward (prompts nudged into agents, notification sweeps, the orchestrator's wake that spends tokens), and a def's write is synchronous",
+  tmux: "which tmux the terminal runs on and its config text: it changes what runs a shell",
+  privacy: "retention and data export: what the app keeps and gives away",
+};
+
+
 
 /** The highest level of write an agent may make from this window. */
 export const AGENT_MAX_LEVEL = 2;

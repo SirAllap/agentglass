@@ -79,3 +79,26 @@ export function installedNotes(baseTag: string, distance: number, latest: string
 function rank(tag: string): number {
   return (tag.match(/\d+/g) ?? []).map(Number).reduce((n, part) => n * 1000 + part, 0);
 }
+
+/*
+ * "Show me the notes now", asked from outside the component that owns the modal
+ * (an agent's door, the same one-slot idiom as openSettings.ts): the sender does
+ * not know whether the window has loaded them, and does not have to. Nothing
+ * listening is a no-op.
+ *
+ * Showing them on demand never calls markSeen: that mark belongs to the version
+ * boundary, and an agent that asked to look must not decide the owner has read
+ * the announcement they have not yet been given.
+ */
+const showers = new Set<() => void>();
+
+export function onShowWhatsNew(fn: () => void): () => void {
+  showers.add(fn);
+  return () => { showers.delete(fn); };
+}
+
+export function showWhatsNew(): void {
+  for (const fn of showers) {
+    try { fn(); } catch { /* one bad listener must not stop the rest */ }
+  }
+}

@@ -19,9 +19,18 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { UI_ACTIONS, UI_READ_IDS, READ_PANELS, isReadAction, type UiActionDef } from "../../shared/uiActions.ts";
-import { PROVIDERS, isSecretName } from "../src/lib/uiSnapshots.ts";
-import { UI_HANDLERS } from "../src/lib/uiActions.ts";
+import { UI_ACTIONS, UI_READ_IDS, READ_PANELS, READ_PANELS_NOW, READ_PANELS_LATE, isReadAction, type UiActionDef } from "../../shared/uiActions.ts";
+import { PROVIDERS, LATE_PROVIDERS, isSecretName } from "../src/lib/uiSnapshots.ts";
+import { globalStubs } from "./stubGlobal.ts";
+
+// uiActions reaches the settings registry, which reaches pref modules that read
+// localStorage when they load: this file starts from a stub, like the registry's own tests.
+const stubGlobal = globalStubs();
+stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {}, clear: () => {}, key: () => null, length: 0 } as unknown as Storage);
+stubGlobal("location", new URL("http://localhost:5173/"));
+stubGlobal("window", new EventTarget());
+stubGlobal("document", { documentElement: { getAttribute: () => "graphite", setAttribute: () => {}, style: { setProperty: () => {}, getPropertyValue: () => "" } } });
+const { UI_HANDLERS } = await import("../src/lib/uiActions.ts");
 
 const ROOT = join(import.meta.dir, "..", "..");
 const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
@@ -78,15 +87,23 @@ describe("the registry's reads", () => {
 });
 
 describe("providers", () => {
-  it("are keyed by READ_PANELS, one each", () => {
-    expect(Object.keys(PROVIDERS).sort()).toEqual([...READ_PANELS].sort());
+  it("are keyed by READ_PANELS, one each, now or later", () => {
+    expect(Object.keys(PROVIDERS).sort()).toEqual([...READ_PANELS_NOW].sort());
+    expect(Object.keys(LATE_PROVIDERS).sort()).toEqual([...READ_PANELS_LATE].sort());
+    expect([...READ_PANELS].sort()).toEqual([...READ_PANELS_NOW, ...READ_PANELS_LATE].sort());
   });
 
   it("every provider goes through finish, the one place the rules are applied", () => {
     const table = snapshots.slice(snapshots.indexOf("export const PROVIDERS"), snapshots.indexOf("/** `ui.state`"));
-    const entries = [...table.matchAll(/^\s+(?:"[a-z.]+"|[a-z]+): (.*),$/gm)];
+    const entries = [...table.matchAll(/^\s+(?:"[a-z.-]+"|[a-z]+): (.*),$/gm)];
+    // Two tables, told apart by the shape of their right-hand side: a pane the
+    // window holds is `finish(provider(s))`, a pane the server holds is the
+    // route's answer handed to `finish`.
+    const now = entries.filter((e) => /^\(s\) => finish\(\w+\(s\)\)$/.test(e[1]!));
+    const late = entries.filter((e) => /^\(s\) => s\.later\.\w+\(\)\.then\(\(d\) => finish\(\w+\(d\)\)\)$/.test(e[1]!));
+    expect(now.length, "a pane the window holds does not go through finish").toBe(READ_PANELS_NOW.length);
+    expect(late.length, "a pane the server holds does not go through finish").toBe(READ_PANELS_LATE.length);
     expect(entries.length).toBe(READ_PANELS.length);
-    for (const e of entries) expect(e[1], e[0]).toMatch(/=> finish\(\w+\(s\)\)$/);
     expect(snapshots.slice(snapshots.indexOf("export function uiState"))).toMatch(/return finish\(/);
   });
 
@@ -111,6 +128,37 @@ describe("providers", () => {
     for (const line of code(snapshots).split("\n").filter((l) => /^import /.test(l))) {
       if (/from "\.\/\w+(Store)?\.ts"/.test(line)) expect(line, "uiSnapshots must stay free of runtime store imports").toMatch(/^import type /);
     }
+  });
+});
+
+describe("the pane readers (paneState.ts)", () => {
+  const panes = code(read("web/src/lib/paneState.ts"));
+
+  // Every route a read may call, by the name `api` gives it. Each one is a GET
+  // that the pane itself makes on open. A new name here is a new request an
+  // agent can cause by asking, which is a decision to make with eyes open.
+  const READ_ROUTES = [
+    "hooksStatus", "lanternSettings", "seatWake", "budgets", "recipes", "prPrompts", "savedReplies", "tmuxStatus", "privacy",
+    "plugins", "actions", "updateStatus", "logDigest",
+  ];
+
+  it("calls only read routes", () => {
+    const used = [...new Set([...panes.matchAll(/\bapi\.(\w+)\(/g)].map((m) => m[1]!))].sort();
+    expect(used).toEqual([...READ_ROUTES].sort());
+  });
+
+  it("touches no component but the rail's list of views, no hook, no DOM, no timer, no subscription", () => {
+    const imports = [...panes.matchAll(/from "(\.[^"]+)"/g)].map((m) => m[1]!).filter((p) => p.includes("components/"));
+    expect(imports).toEqual(["../components/workspace/views.ts"]);
+    expect(panes).not.toMatch(/\b(useState|useEffect|useRef|useSyncExternalStore|useMemo|useCallback)\b/);
+    expect(panes).not.toMatch(/\b(document|window)\.|querySelector|getElementById|setInterval|setTimeout|new WebSocket|EventSource|\bfetch\(|\bsubscribe\w*\(/);
+  });
+
+  it("never passes a result on whole: no spread of an api answer", () => {
+    // `...x` over a result would carry every field the server adds. The shapes
+    // choose by name; these are the spreads that copy a local list or getter.
+    const allowed = ["VIEW_IDS", "bindings", "p.workDays"];
+    for (const m of panes.matchAll(/\.\.\.([\w.]+)/g)) expect(allowed, `spread of ${m[1]}`).toContain(m[1]!);
   });
 });
 

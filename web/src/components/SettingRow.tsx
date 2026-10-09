@@ -92,6 +92,7 @@ export function SettingRow({ label, hint, control, onClick, href, download, disa
    *  `agentExempt`, a row that is not a setting, which is read from source only. */
   settingId?: string;
   agentExempt?: boolean;
+  agentNever?: string;
   label: React.ReactNode;
   hint?: React.ReactNode;
   control?: React.ReactNode;
@@ -213,6 +214,8 @@ export function Switch({ on, busy }: { on: boolean; busy?: boolean }) {
 }
 
 export function Fold({ label, hint, children, defaultOpen }: {
+  /** See SettingRow: a read-out that is not a setting. */
+  agentExempt?: boolean;
   label: React.ReactNode;
   hint?: React.ReactNode;
   children: React.ReactNode;
@@ -271,7 +274,7 @@ export function Fold({ label, hint, children, defaultOpen }: {
 export function Toggle({ on, onClick, label, hint, disabled, modified, settingId }: {
   on: boolean; onClick: () => void; label: string; hint: string;
   /** See SettingRow. */
-  settingId?: string; agentExempt?: boolean;
+  settingId?: string; agentExempt?: boolean; agentNever?: string;
   /** Differs from the shipped default: SettingRow draws the dot. */
   modified?: boolean;
   /** A host that cannot do this at all — the row stays, greyed, saying why in

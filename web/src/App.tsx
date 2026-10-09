@@ -18,7 +18,7 @@ import { usePoll } from "./lib/usePoll.ts";
 import { refusalFinal, useCoverHold } from "./lib/cover.ts";
 import { initialTheme, applyTheme, THEMES } from "./lib/themes.ts";
 import { subscribeControl } from "./lib/controlBus.ts";
-import { controlReply, type UiCtx } from "./lib/uiActions.ts";
+import { controlReplyLater, type UiCtx } from "./lib/uiActions.ts";
 import { answerControl } from "./lib/controlAnswer.ts";
 import { liveSources } from "./lib/uiSnapshotSources.ts";
 import type { AppSlice } from "./lib/uiSnapshots.ts";
@@ -1035,6 +1035,8 @@ export default function App() {
   // What the window shows right now, for the agent's reads (lib/uiSnapshots.ts).
   // Plain data, rebuilt on render and read only when asked: no state of its own,
   // no effect, nothing subscribed.
+  const eventsRef = useRef(events);
+  eventsRef.current = events;
   const appSliceRef = useRef<AppSlice>(null as unknown as AppSlice);
   appSliceRef.current = {
     view: wsView, theme, scale, workspace: workspace ?? null, windowMs, filter,
@@ -1073,6 +1075,9 @@ export default function App() {
         setSkillsOpen(false);
         setSearchOpen(false);
         setSessionView(null);
+        // Settings is an overlay too: an agent that opened a page must be able to close it.
+        setSettingsOpen(false);
+        setSettingsJump(null);
       },
       panel: (what) => {
         if (what === "stats") setStatsOpen(true);
@@ -1089,14 +1094,25 @@ export default function App() {
       setMachine,
       setProjectOpen,
       setWindowsOpen,
+      // Looked up in this window's feed first; with a view covering the
+      // dashboard that feed is paused (useLive), so the server's recent events,
+      // the very list the dashboard starts from, are the second place to look. An
+      // id in neither is a refusal the agent hears.
+      openEvent: async (id) => {
+        const e = eventsRef.current.find((x) => x.id === id) ?? (await api.recent().catch(() => [] as WatchEvent[])).find((x) => x.id === id);
+        if (!e) return false;
+        setSelected(e);
+        return true;
+      },
+      openSession: (id, app) => setSessionView({ id, app: app ?? "" }),
+      paneDoor: (which) => openFocusedPaneDoor(which),
       // What ui.state / ui.read describe. Read through the ref App refreshes on
       // every render, because this effect runs once and would otherwise answer
       // with the first render's state.
       sources: liveSources(() => appSliceRef.current),
     };
     return subscribeControl((cmd, rid) => {
-      const reply = controlReply(cmd, ctx);
-      answerControl(rid, reply, api.controlResult, document.visibilityState === "hidden");
+      void controlReplyLater(cmd, ctx).then((reply) => answerControl(rid, reply, api.controlResult, document.visibilityState === "hidden"));
     });
   }, []);
 

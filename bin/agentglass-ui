@@ -104,6 +104,10 @@ def coerce(spec, text):
         return None, "true or false"
     if t == "pathKind":
         return (text, None) if text in ("file", "dir") else (None, "file or dir")
+    if t == "int":
+        if not re.fullmatch(r"\d+", text) or int(text) > spec.get("max", 0):
+            return None, "a whole number, 0 or more"
+        return int(text), None
     if t == "scalar":
         low = text.lower()
         if low in ("true", "false"):
@@ -133,6 +137,9 @@ def check(spec, value):
     if t == "num":
         ok = isinstance(value, (int, float)) and not isinstance(value, bool) and value in spec["values"]
         return (value, None) if ok else (None, "one of " + ", ".join(str(v) for v in spec["values"]))
+    if t == "int":
+        ok = isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= spec.get("max", 0)
+        return (value, None) if ok else (None, "a whole number, 0 or more")
     if t == "scalar":
         ok = isinstance(value, (bool, int, float))
         return (value, None) if ok else (None, "a string, number or true/false")
@@ -188,7 +195,7 @@ def _describe(spec):
     if t in ("enum", "num"):
         return "one of " + ", ".join(str(v) for v in spec["values"])
     return {"bool": "true or false", "slug": "an id", "ref": "a git ref", "abspath": "an absolute path",
-            "relpath": "a relative path", "pathKind": "file or dir", "scalar": "a value"}.get(t, "a value")
+            "relpath": "a relative path", "pathKind": "file or dir", "scalar": "a value", "int": "a whole number"}.get(t, "a value")
 
 
 # ── answers: what the server said, as a sentence (pure) ─────────────────────

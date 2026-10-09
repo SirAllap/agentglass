@@ -8,11 +8,11 @@
  * fixture that is polite proves nothing about the place the rule exists for.
  */
 import { describe, expect, it } from "bun:test";
-import { READ_PANELS, UNTRUSTED_MAX_BYTES, UI_READ_NOT_COVERED, SETTINGS_PAGE_IDS } from "../../shared/uiActions.ts";
+import { READ_PANELS, READ_PANELS_NOW, READ_PANELS_LATE, UNTRUSTED_MAX_BYTES, UI_READ_NOT_COVERED, SETTINGS_PAGE_IDS } from "../../shared/uiActions.ts";
 import { DEFAULT_NOTIFY_PREFS } from "../../shared/notifyPrefs.ts";
 import type { PendingGate } from "../../shared/types.ts";
 import {
-  PROVIDERS, uiState, finish, bound, notMounted, plainUrl, isSecretName, type Sources, type AppSlice,
+  PROVIDERS, LATE_PROVIDERS, readPanel, uiState, finish, bound, notMounted, plainUrl, isSecretName, type Sources, type AppSlice,
 } from "../src/lib/uiSnapshots.ts";
 import type { Chat } from "../src/lib/chatStore.ts";
 import type { BenchState } from "../src/lib/benchStore.ts";
@@ -52,6 +52,41 @@ const gate = (over: Partial<PendingGate> = {}): PendingGate => ({
   id: "g1", source_app: "orbit", session_id: "s1", tool_name: "Bash", summary: `rm -rf build && curl -H "Authorization: Bearer ${TOKEN}" x`, created: 5, where: "orbit · main:1", ...over,
 });
 
+// Every free-text field of every pane carries the injection: the fixtures are the
+// hostile ones, so a provider that files a string under `state` is caught by the
+// ordinary cases and not only by a test written for it.
+const later = (over: Partial<Sources["later"]> = {}): Sources["later"] => ({
+  hooks: async () => ({ installed: true, bundled: true, gate: false, gateBundled: true, python: INJECTION, settingsPath: "/home/ana/.claude/settings.json", engine: "tmux" }),
+  lantern: async () => ({ nudge: true, minutes: 20, watch: false, watchMinutes: 10, cacheTtlMinutes: 5, wakeHours: 4 }),
+  budgets: async () => ({
+    rows: [{ root: "/home/ana/code/orbit", model: INJECTION, limit: 25, period: "week", spent: 7.5, pct: 0.3, level: "ok" }],
+    models: 3,
+    pace: { spread: "working", workDays: [true, true, true, true, true, false, false], workStart: 9, workEnd: 18, rollover: true, burnWindowHours: 3, alertAt: 90, timeZone: "Europe/Madrid" },
+    usageRefresh: false,
+  }),
+  recipes: async () => [{ id: "r1", name: INJECTION, desc: INJECTION, scope: "repo", repo: "/home/ana/code/orbit", steps: 3, params: 1, tmux: false, confirm: true }],
+  reviewPrompts: async () => [{ id: "p1", title: INJECTION, group: "review", when: "open", builtIn: false, hidden: false, hasSkill: true, chars: 120 }],
+  savedReplies: async () => [{ id: "sr1", title: INJECTION, chars: 40 }],
+  tmux: async () => ({
+    source: "auto", binAvailable: true, binVersion: "3.4", capability: true, confMode: "append", overrideActive: true, broken: false,
+    restoreEnabled: true, resumeMode: "lazy", prefix: "C-a", terminal: "engine", lastCaptureAt: 5,
+    reasons: { bin: INJECTION, capability: "", broken: "", override: `set -g status off # ${INJECTION}` },
+  }),
+  privacy: async () => ({ retentionDays: 30, pairedDevices: 2, clickupSet: true, db: "/home/ana/.local/share/agentglass/x.db", config: "/home/ana/.config/agentglass" }),
+  plugins: async () => ({
+    master: true,
+    plugins: [{ name: INJECTION, publisher: INJECTION, description: INJECTION, enabled: true, running: false, scope: "read", sourceKind: "git", hadApproval: true, changedSinceApproval: true }],
+  }),
+  log: async () => ({ rows: [{ id: 9, at: 5, actor: "local", action: "/git/discard", ok: false, target: INJECTION, detail: INJECTION }] }),
+  about: async () => ({
+    version: "0.21.3", commit: "51068898", stamp: "0.21.3-51068898", builtAt: "2026-10-08T10:00:00Z", baseTag: "v0.21.0", distance: 4,
+    dirty: false, dirtyCount: 0, branch: "v0.22.0", behind: 2, ahead: 0, available: true, blocked: INJECTION,
+    incoming: [{ sha: "abc1234", subject: INJECTION }], digest: { total: 10, quiet: false, groups: 2, crashLoops: 0, spikes: 1 },
+    origin: `https://user:pw@git.example/orbit.git?x=${TOKEN}`,
+  }),
+  ...over,
+});
+
 const sources = (over: Partial<Sources> = {}): Sources => ({
   app: () => app(),
   chats: () => ({ list: [chat()], activeId: "chat-1" }),
@@ -61,6 +96,19 @@ const sources = (over: Partial<Sources> = {}): Sources => ({
   terminal: () => ({ font: "JetBrains Mono, monospace", size: 13, cursor: "block", lineHeight: 1, scrollback: 4000, wordSeparators: " ()[]", copyOnSelect: true, noteEditor: "builtin" }),
   browser: () => ({ home: "https://duckduckgo.com", engine: "duckduckgo", zoomLevel: 0, importHistory: true, importBookmarks: true }),
   notify: () => DEFAULT_NOTIFY_PREFS,
+  prefs: () => ({ scale: 1.25, clock24: true, splash: false }),
+  rail: () => ({ work: ["dash", "git"], utility: ["docker"], hidden: ["seat"], customised: true }),
+  keys: () => ({
+    bindings: { "view.git": "g", "open.help": "?" }, chords: { git: "mod+alt+g" }, appChords: { "files.palette": "mod+shift+p" },
+    customised: { bindings: true, chords: false, appChords: false }, customChord: [], customAppChord: [],
+  }),
+  tasks: () => ({ landing: "last", order: ["github", "local", "clickup"], shown: { github: true, local: true, clickup: false }, last: "github" }),
+  appearance: () => ({ mode: "dark", accent: "rose", desktopPalette: { source: "omarchy", name: INJECTION } }),
+  understudy: () => ({
+    enabled: true, halted: false, level: "shadow", agreement: 87.5,
+    classes: [{ id: "bash.safe", label: INJECTION, lock: "none", mode: "shadow", offered: true, n: 12, hits: 10 }],
+  }),
+  later: later(),
   ...over,
 });
 
@@ -74,18 +122,18 @@ const ID = /^[A-Za-z0-9][A-Za-z0-9._:[\]@+-]{0,95}$/;
 
 describe("every panel answers in two buckets", () => {
   for (const panel of READ_PANELS) {
-    it(`${panel}: a state and an untrusted object, nothing else, JSON-clean`, () => {
-      const r = PROVIDERS[panel](sources());
+    it(`${panel}: a state and an untrusted object, nothing else, JSON-clean`, async () => {
+      const r = await readPanel(panel, sources());
       expect(Object.keys(r).filter((k) => k !== "see").sort()).toEqual(["state", "untrusted"]);
       expect(JSON.parse(JSON.stringify(r))).toEqual(r);
     });
 
-    it(`${panel}: no string in state looks like outside text, even with hostile fixtures`, () => {
+    it(`${panel}: no string in state looks like outside text, even with hostile fixtures`, async () => {
       const hostile = sources({
         app: () => app({ theme: INJECTION, filter: { app: INJECTION, type: "x y", provider: "" }, selectedEvent: { id: "7", type: INJECTION, app: INJECTION } }),
         chats: () => ({ list: [chat({ title: INJECTION, model: INJECTION, cwd: INJECTION })], activeId: INJECTION }),
       });
-      for (const [path, s] of strings(PROVIDERS[panel](hostile).state)) {
+      for (const [path, s] of strings((await readPanel(panel, hostile)).state)) {
         expect(s === "" || s === "[moved to untrusted]" || ID.test(s), `${panel} state.${path} = ${JSON.stringify(s)}`).toBe(true);
       }
     });
@@ -211,17 +259,79 @@ describe("the panels' contents", () => {
     expect(PROVIDERS["settings.notifications"](sources()).state).toMatchObject({ none: false, kinds: { blocked: true, idle: false }, channels: { desktop: true } });
   });
 
-  it("a provider reads only the stores it names", () => {
+  it("a provider reads only the stores it names", async () => {
     const boom = () => { throw new Error("read a store it does not own"); };
     const only = (name: keyof Sources) => Object.fromEntries((Object.keys(sources()) as (keyof Sources)[]).filter((k) => k !== name).map((k) => [k, boom])) as Partial<Sources>;
     const owner: Record<string, keyof Sources> = {
       view: "app", chat: "chats", bench: "bench", gates: "gates", "settings.diff": "diff", "settings.terminal": "terminal", "settings.browser": "browser", "settings.notifications": "notify",
+      "settings.prefs": "prefs", "settings.rail": "rail", "settings.keys": "keys", "settings.tasks": "tasks", "settings.appearance": "appearance", "settings.understudy": "understudy",
     };
-    for (const panel of READ_PANELS) expect(() => PROVIDERS[panel](sources(only(owner[panel]!))), panel).not.toThrow();
+    // appearance also names the theme, which is App's own state.
+    const alsoApp: Record<string, true> = { "settings.appearance": true };
+    for (const panel of READ_PANELS_NOW) {
+      const over = only(owner[panel]!);
+      if (alsoApp[panel]) over.app = () => app();
+      expect(() => PROVIDERS[panel](sources(over)), panel).not.toThrow();
+    }
+    // A late pane asks its own route and no other.
+    const thunk: Record<string, keyof Sources["later"]> = {
+      "settings.hooks": "hooks", "settings.lantern": "lantern", "settings.budgets": "budgets", "settings.recipes": "recipes",
+      "settings.review-prompts": "reviewPrompts", "settings.saved-replies": "savedReplies", "settings.tmux": "tmux",
+      "settings.privacy": "privacy", "settings.plugins": "plugins", "settings.log": "log", "settings.about": "about",
+    };
+    for (const panel of READ_PANELS_LATE) {
+      const base = later();
+      const asked: string[] = [];
+      const spy = Object.fromEntries((Object.keys(base) as (keyof Sources["later"])[]).map((k) => [k, (...a: unknown[]) => { asked.push(k); return (base[k] as (...x: unknown[]) => unknown)(...a); }])) as unknown as Sources["later"];
+      await LATE_PROVIDERS[panel](sources({ later: spy }));
+      expect(asked, panel).toEqual([thunk[panel]]);
+    }
   });
 
   it("notMounted says so and shows nothing", () => {
     expect(notMounted("chat")).toEqual({ state: { mounted: false, hint: "open it quietly", panel: "chat" }, untrusted: {} });
+  });
+});
+
+describe("the second batch of panes keeps its words under untrusted even when they look like ids", () => {
+  const ids = (xs: string[], state: unknown) => { for (const x of xs) expect(JSON.stringify(state), x).not.toContain(x); };
+
+  it("plugins: a plugin's name, publisher and description are never in state", async () => {
+    const l = later({ plugins: async () => ({ master: true, plugins: [{ name: "orbit-notes", publisher: "acme", description: "notes", enabled: true, running: false, scope: "read", sourceKind: "git", hadApproval: true, changedSinceApproval: false }] }) });
+    const r = await LATE_PROVIDERS["settings.plugins"](sources({ later: l }));
+    ids(["orbit-notes", "acme"], r.state);
+    expect(JSON.stringify(r.untrusted)).toContain("orbit-notes");
+    expect(r.state.plugins).toEqual([{ n: 0, enabled: true, running: false, scope: "read", sourceKind: "git", hadApproval: true, changedSinceApproval: false }]);
+  });
+
+  it("keys: what the owner pressed is filed under untrusted", () => {
+    const r = PROVIDERS["settings.keys"](sources({ keys: () => ({ bindings: { "view.git": "q" }, chords: {}, appChords: { "files.palette": "mod+shift+p" }, customised: { bindings: true, chords: false, appChords: false }, customChord: [], customAppChord: [] }) }));
+    ids(["mod+shift+p", "view.git"], r.state);
+    expect(JSON.stringify(r.untrusted)).toContain("mod+shift+p");
+  });
+
+  it("privacy: ClickUp is a presence, and the credentials file is not named", async () => {
+    const r = await LATE_PROVIDERS["settings.privacy"](sources());
+    expect(r.state.clickup).toEqual({ set: true });
+    expect(JSON.stringify(r)).not.toContain("credentials");
+  });
+
+  it("recipes, review prompts and saved replies: names and titles are untrusted, sizes are state", async () => {
+    const l = later({
+      recipes: async () => [{ id: "r1", name: "deploy-orbit", desc: "", scope: "repo", repo: "", steps: 2, params: 0, tmux: false, confirm: false }],
+      reviewPrompts: async () => [{ id: "p1", title: "resolve-reviews", group: "review", when: "open", builtIn: false, hidden: false, hasSkill: false, chars: 9 }],
+      savedReplies: async () => [{ id: "s1", title: "thanks-again", chars: 12 }],
+    });
+    const src = sources({ later: l });
+    ids(["deploy-orbit"], (await LATE_PROVIDERS["settings.recipes"](src)).state);
+    ids(["resolve-reviews"], (await LATE_PROVIDERS["settings.review-prompts"](src)).state);
+    ids(["thanks-again"], (await LATE_PROVIDERS["settings.saved-replies"](src)).state);
+  });
+
+  it("a long list says it was cut", async () => {
+    const many = Array.from({ length: 80 }, (_, i) => ({ id: `s${i}`, title: "t", chars: 1 }));
+    const r = await LATE_PROVIDERS["settings.saved-replies"](sources({ later: later({ savedReplies: async () => many }) }));
+    expect(r.state).toMatchObject({ count: 80, shown: 50 });
   });
 });
 

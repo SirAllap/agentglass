@@ -53,17 +53,27 @@ export const SETTINGS_PAGE_IDS = [
 
 export const PANEL_IDS = ["stats", "skills", "search", "help", "palette"] as const;
 export const MACHINE_TABS = ["ports", "resources", "locks"] as const;
-export const GIT_MODALS = ["insights", "bisect"] as const;
+export const GIT_MODALS = ["insights", "bisect", "palette"] as const;
 export const BOARD_KINDS = ["pr", "tasks", "files"] as const;
+export const PANE_DOORS = ["git", "diff", "pr", "card"] as const;
 /**
  * What `ui.read` can be asked about. Each one has exactly one provider in
  * web/src/lib/uiSnapshots.ts, keyed by these ids, so a panel named here with no
  * provider is a compile error and web/test/ui-read-guard.test.ts pins the rest.
- * `settings.*` are the preference panes whose values a pref module hands out
- * through a plain getter; the panes that have no such getter are listed by
- * UI_READ_NOT_COVERED, with the reason, rather than guessed at.
+ * `settings.*` are the preference panes. The ones in READ_PANELS_LATE are held by
+ * the server, so the window asks the same route the pane asks and answers when it
+ * has the reply; the rest are read from a pref module or a store, synchronously.
+ * The panes no reader describes are listed by UI_READ_NOT_COVERED, with the reason.
  */
-export const READ_PANELS = ["view", "chat", "bench", "gates", "settings.diff", "settings.terminal", "settings.browser", "settings.notifications"] as const;
+export const READ_PANELS_NOW = [
+  "view", "chat", "bench", "gates", "settings.diff", "settings.terminal", "settings.browser", "settings.notifications",
+  "settings.prefs", "settings.rail", "settings.keys", "settings.tasks", "settings.appearance", "settings.understudy",
+] as const;
+export const READ_PANELS_LATE = [
+  "settings.hooks", "settings.lantern", "settings.budgets", "settings.recipes", "settings.review-prompts",
+  "settings.saved-replies", "settings.tmux", "settings.privacy", "settings.plugins", "settings.log", "settings.about",
+] as const;
+export const READ_PANELS = [...READ_PANELS_NOW, ...READ_PANELS_LATE] as const;
 
 export type UiLevel = 1 | 2 | 3;
 /** open: shows something. read: answers with state and shows nothing. change:
@@ -86,6 +96,8 @@ export type ArgSpec =
   | { t: "bool"; optional?: true }
   | { t: "slug"; max: number; optional?: true }
   | { t: "ref"; optional?: true }
+  /** A whole number from 0 to `max`: a row id the app minted (an event). */
+  | { t: "int"; max: number; optional?: true }
   | { t: "abspath"; optional?: true }
   | { t: "relpath"; optional?: true }
   /** Whether another argument's absolute path is a folder: said by the caller
@@ -113,6 +125,11 @@ export interface UiActionDef {
   refine?: (a: Record<string, unknown>) => Record<string, unknown> | null;
   /** App chords (keybindings.ts AppChordId) this entry is the agent's door for. */
   chords?: readonly string[];
+  /** The dialogs and popovers this entry opens, as component files under
+   *  web/src/components. web/test/ui-registry-guard.test.ts holds every
+   *  component that draws through a Portal against these, so a new dialog is a
+   *  door or a decided exception. */
+  modals?: readonly string[];
 }
 
 const def = <const D extends UiActionDef>(d: D): D => d;
@@ -124,8 +141,8 @@ export const UI_ACTIONS = {
     args: { open: { t: "bool", optional: true } },
   }),
   "esc.peel": def({ level: 1, kind: "open", surface: "peels the top overlay, as Escape does", legacy: { cmd: "esc" }, args: {} }),
-  "panel.open": def({ level: 1, kind: "open", surface: "stats, skills, search, help or the command palette", legacy: { cmd: "open" }, args: { what: { t: "enum", values: PANEL_IDS } } }),
-  "finder.open": def({
+  "panel.open": def({ modals: ["CommandPalette.tsx", "HelpLegend.tsx", "SearchModal.tsx", "SkillsModal.tsx", "StatsModal.tsx"], level: 1, kind: "open", surface: "stats, skills, search, help or the command palette", legacy: { cmd: "open" }, args: { what: { t: "enum", values: PANEL_IDS } } }),
+  "finder.open": def({ modals: ["FilePalette.tsx"],
     level: 1, kind: "open", surface: "the file finder on one absolute path", legacy: { cmd: "open", pin: { what: "finder" } }, chords: ["files.palette"],
     args: { path: { t: "abspath" }, kind: { t: "pathKind", of: "path" } },
   }),
@@ -139,7 +156,7 @@ export const UI_ACTIONS = {
     refine: (a) => (a.name !== undefined ? { name: a.name } : a.dir !== undefined ? { dir: a.dir } : null),
   }),
   "zoom.step": def({ level: 1, kind: "open", surface: "window zoom in, out or reset", legacy: { cmd: "zoom" }, args: { dir: { t: "num", values: [1, -1, 0] } } }),
-  "settings.open": def({
+  "settings.open": def({ modals: ["SettingsModal.tsx", "plugins/Market.tsx"],
     level: 1, kind: "open", surface: "Settings on one page, optionally scrolled to one row (the plugin market is inside page plugins)",
     args: { page: { t: "enum", values: SETTINGS_PAGE_IDS }, row: { t: "slug", max: 80, optional: true } },
   }),
@@ -152,16 +169,41 @@ export const UI_ACTIONS = {
     level: 2, kind: "change", surface: "one exposed setting, through the same setter its Settings row calls",
     args: { id: { t: "slug", max: 80 }, value: { t: "scalar" } },
   }),
-  "machine.open": def({ level: 1, kind: "open", surface: "the machine panel on ports, resources or locks", args: { tab: { t: "enum", values: MACHINE_TABS } } }),
-  "project.picker": def({ level: 1, kind: "open", surface: "the project picker", args: {} }),
-  "windows.switcher": def({ level: 1, kind: "open", surface: "the window switcher", chords: ["windows.switcher"], args: {} }),
-  "bench.toggle": def({ level: 1, kind: "open", surface: "the floating bench, shown or hidden", chords: ["bench.toggle"], args: {} }),
+  "machine.open": def({ modals: ["MachinePanel.tsx"], level: 1, kind: "open", surface: "the machine panel on ports, resources or locks", args: { tab: { t: "enum", values: MACHINE_TABS } } }),
+  "project.picker": def({ modals: ["ProjectPicker.tsx"], level: 1, kind: "open", surface: "the project picker", args: {} }),
+  "windows.switcher": def({ modals: ["terminal/WindowSwitcher.tsx"], level: 1, kind: "open", surface: "the window switcher", chords: ["windows.switcher"], args: {} }),
+  "bench.toggle": def({ modals: ["bench/FloatingBench.tsx"], level: 1, kind: "open", surface: "the floating bench, shown or hidden", chords: ["bench.toggle"], args: {} }),
   "bench.file": def({ level: 1, kind: "open", surface: "a file on the bench, read-write as the bench always is", args: { root: { t: "abspath" }, path: { t: "relpath" } } }),
   "bench.board": def({ level: 1, kind: "open", surface: "a board (pull requests, tasks, files) as a bench tab", args: { root: { t: "abspath" }, kind: { t: "enum", values: BOARD_KINDS } } }),
-  "peek.file": def({ level: 1, kind: "open", surface: "the file viewer, reading", args: { root: { t: "abspath" }, path: { t: "relpath" } } }),
-  "git.modal": def({ level: 1, kind: "open", surface: "Insights or Bisect over the checkout the Git view is on", args: { which: { t: "enum", values: GIT_MODALS } } }),
-  "git.compare": def({ level: 1, kind: "open", surface: "the Compare modal against one ref", args: { base: { t: "ref" } } }),
-  "git.blame": def({ level: 1, kind: "open", surface: "the Blame modal on one file of the checkout", args: { path: { t: "relpath" } } }),
+  "peek.file": def({ modals: ["PeekFile.tsx"], level: 1, kind: "open", surface: "the file viewer, reading", args: { root: { t: "abspath" }, path: { t: "relpath" } } }),
+  "git.modal": def({ modals: ["InsightsModal.tsx", "BisectModal.tsx", "GitPalette.tsx"], level: 1, kind: "open", surface: "Insights, Bisect or the git command palette over the checkout the Git view is on", args: { which: { t: "enum", values: GIT_MODALS } } }),
+  "git.compare": def({ modals: ["CompareModal.tsx"], level: 1, kind: "open", surface: "the Compare modal against one ref", args: { base: { t: "ref" } } }),
+  "git.blame": def({ modals: ["BlameModal.tsx"], level: 1, kind: "open", surface: "the Blame modal on one file of the checkout", args: { path: { t: "relpath" } } }),
+  // Opening shows a plan and moves nothing: the rebase starts only when the owner
+  // presses Start rebase in the modal, and the server re-validates the plan then.
+  "git.rebase": def({ modals: ["RebaseModal.tsx"],
+    level: 1, kind: "open", surface: "the interactive-rebase editor from one commit (shows the plan; nothing moves until the owner presses Start)",
+    args: { base: { t: "ref" } },
+  }),
+  // Looked up in the window's feed, then the server's recent events (the list
+  // the dashboard starts from). An id in neither is an answer, not a guess.
+  "event.open": def({ modals: ["EventModal.tsx"], level: 1, kind: "open", surface: "the event modal for one recent event", args: { id: { t: "int", max: Number.MAX_SAFE_INTEGER } } }),
+  "session.open": def({ modals: ["SessionModal.tsx"],
+    level: 1, kind: "open", surface: "the session modal for one session id",
+    args: { id: { t: "slug", max: 128 }, app: { t: "slug", max: 128, optional: true } },
+  }),
+  "whatsnew.open": def({ modals: ["ReleaseNotesModal.tsx"], level: 1, kind: "open", surface: "the release notes of the running version, without marking them seen", args: {} }),
+  // The dialog creates a schedule only when the owner submits it.
+  "lantern.schedule": def({ modals: ["LanternSchedule.tsx"], level: 1, kind: "open", surface: "the Lantern schedule dialog (empty; a schedule exists only once the owner submits it)", args: {} }),
+  "terminal.resume": def({ modals: ["ResumeSessions.tsx"], level: 1, kind: "open", surface: "the Resume sessions list of the Terminal view (resuming is the owner's click)", args: {} }),
+  "settings.plugin": def({
+    level: 1, kind: "open", surface: "Settings on one plugin's own page (a plugin that is not installed answers with its page saying so)",
+    args: { name: { t: "slug", max: 64 } },
+  }),
+  "pane.open": def({
+    level: 1, kind: "open", surface: "the git, diff, pull request or card view of the focused terminal pane's branch (the pane chords)",
+    chords: ["pane.git", "pane.diff", "pane.pr", "pane.card"], args: { which: { t: "enum", values: PANE_DOORS } },
+  }),
   // Reads. They answer and show nothing: no view changes, no window rises, no
   // focus moves. The answer is `{state, untrusted}` (see UiSnapshot below).
   "ui.state": def({ level: 1, kind: "read", surface: "what is open in the window now, and which panels ui.read can describe", args: {} }),
@@ -179,22 +221,13 @@ export const isReadAction = (id: string): boolean => (UI_READ_IDS as readonly st
 /**
  * Settings panes (and views) `ui.read` does NOT describe, with the reason. Said
  * in the answer of `ui.state`, so an agent learns the edge from the app and not
- * from a failed call. A pane leaves this list when it has a def whose getter is
- * the one its row calls (slice 3).
+ * from a failed call.
  */
 export const UI_READ_NOT_COVERED: Readonly<Record<string, string>> = {
-  "settings.appearance": "theme and zoom are App state: read them from panel view",
-  "settings.connections": "credential pane: values are never read through this channel",
-  "settings.remote": "credential pane: values are never read through this channel",
-  "settings.clickup": "credential pane: values are never read through this channel",
-  "settings.plugins": "not a closed set (plugin settings pages come and go)",
-  "settings.log": "not a setting",
-  "settings.about": "not a setting",
+  "settings.connections": "credential pane: values are never read through this channel (settings.privacy says only whether ClickUp is set)",
+  "settings.remote": "credential pane: values are never read through this channel (settings.privacy says only how many devices are paired)",
+  "settings.clickup": "credential pane: values are never read through this channel (settings.privacy says only whether it is set)",
   "settings.onboarding": "not a setting",
-  ...Object.fromEntries(
-    ["prefs", "rail", "keys", "tasks", "hooks", "lantern", "understudy", "budgets", "recipes", "review-prompts", "saved-replies", "tmux", "privacy"]
-      .map((p) => [`settings.${p}`, "no clean getter yet: the values are read inside the pane or held by the server (slice 3 adds one def per setting)"]),
-  ),
 };
 
 /**
@@ -229,6 +262,7 @@ type Val<S> =
   : S extends { t: "bool" } ? boolean
   : S extends { t: "pathKind" } ? "file" | "dir"
   : S extends { t: "scalar" } ? string | number | boolean
+  : S extends { t: "int" } ? number
   : string;
 type Args<A> =
   { [K in keyof A as A[K] extends { optional: true } ? never : K]: Val<A[K]> } &
@@ -308,6 +342,7 @@ function one(spec: ArgSpec, v: unknown): unknown {
     case "bool": return typeof v === "boolean" ? v : undefined;
     case "slug": return typeof v === "string" && v.length <= spec.max && SLUG.test(v) ? v : undefined;
     case "ref": return typeof v === "string" && REF.test(v) && !v.includes("..") ? v : undefined;
+    case "int": return typeof v === "number" && Number.isSafeInteger(v) && v >= 0 && v <= spec.max ? v : undefined;
     case "abspath": return absPath(v)?.path;
     case "relpath": return relPath(v) ?? undefined;
     case "scalar":

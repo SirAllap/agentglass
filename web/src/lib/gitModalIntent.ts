@@ -9,15 +9,18 @@
  * and opens the view, and the view drains it when it has a checkout, which
  * covers both orderings without a timing assumption.
  *
- * Rebase and Rescue are not here on purpose: one rewrites history and the other
- * is a scan whose answer is a promise a person settles. Neither is a thing to
- * show on request; they come with the levels that can stage an effect.
+ * Rebase is here because its editor only draws a plan: nothing moves until the
+ * owner presses Start, and the server re-validates the plan then. Rescue is not:
+ * it is the end of a worktree-removal flow, a promise that flow settles, and has
+ * no state of its own to open.
  */
 export type GitModalIntent =
   | { which: "insights" }
   | { which: "bisect" }
+  | { which: "palette" }
   | { which: "compare"; base: string }
-  | { which: "blame"; path: string };
+  | { which: "blame"; path: string }
+  | { which: "rebase"; base: string };
 
 /** Long enough for the view to mount and read its repos; short enough that a
  *  request nobody was there for does not fire at the next unrelated visit. */

@@ -215,6 +215,23 @@ describe("parseControlCmd — the ui wire shape", () => {
     for (const base of ["--output=x", "-b", "a..b", "a b", "", "a\nb", "x".repeat(201)]) expect(ui("git.compare", { base })).toBeNull();
   });
 
+  test("the second batch of doors takes only what its specs allow", () => {
+    expect(ui("git.rebase", { base: "origin/main" })).toEqual({ cmd: "ui", do: "git.rebase", args: { base: "origin/main" } });
+    for (const base of ["--exec=x", "a..b", "", "a b"]) expect(ui("git.rebase", { base })).toBeNull();
+    expect(ui("event.open", { id: 12 })).toEqual({ cmd: "ui", do: "event.open", args: { id: 12 } });
+    for (const id of [-1, 1.5, "12", null, Number.NaN, Number.MAX_SAFE_INTEGER + 2, undefined]) expect(ui("event.open", { id })).toBeNull();
+    expect(ui("session.open", { id: "5f2c0a9e-1111" })).toEqual({ cmd: "ui", do: "session.open", args: { id: "5f2c0a9e-1111" } });
+    expect(ui("session.open", { id: "5f2c0a9e-1111", app: "orbit" })).toEqual({ cmd: "ui", do: "session.open", args: { id: "5f2c0a9e-1111", app: "orbit" } });
+    for (const id of ["a b", "x\ny", "", "../x"]) expect(ui("session.open", { id })).toBeNull();
+    expect(ui("session.open", { id: "a", app: "a b" })).toBeNull();
+    expect(ui("pane.open", { which: "card" })).toEqual({ cmd: "ui", do: "pane.open", args: { which: "card" } });
+    expect(ui("pane.open", { which: "rescue" })).toBeNull();
+    expect(ui("settings.plugin", { name: "orbit-notes" })).toEqual({ cmd: "ui", do: "settings.plugin", args: { name: "orbit-notes" } });
+    for (const name of ["a/b", "plugin:x y", "", "x".repeat(65)]) expect(ui("settings.plugin", { name })).toBeNull();
+    for (const id of ["whatsnew.open", "lantern.schedule", "terminal.resume"] as const) expect(ui(id)).toEqual({ cmd: "ui", do: id, args: {} });
+    expect(ui("git.modal", { which: "palette" })).toEqual({ cmd: "ui", do: "git.modal", args: { which: "palette" } });
+  });
+
   test("a finder through ui carries the kind the spelling implies, like the old spelling", () => {
     expect(ui("finder.open", { path: "/home/ana/notes/" })).toEqual({ cmd: "ui", do: "finder.open", args: { path: "/home/ana/notes", kind: "dir" } });
     expect(ui("finder.open", { path: "/home/ana/notes/plan.md" })).toEqual({ cmd: "ui", do: "finder.open", args: { path: "/home/ana/notes/plan.md", kind: "file" } });

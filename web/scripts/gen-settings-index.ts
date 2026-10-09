@@ -43,7 +43,7 @@ const OUT_PATH = resolve(HERE, "../src/lib/settingsRows.gen.ts");
 // operable row — a stepper, a labelled radio group, a bulk-select button.
 const ROW_TAGS = ["SettingRow", "Row", "Toggle", "Fold", "Select", "Stepper", "Choice", "Bulk", "Path", "MiniBtn", "SoundRow"];
 
-type Row = { pane: string; section: string; label: string; hint: string; settingId?: string; agentExempt?: true };
+type Row = { pane: string; section: string; label: string; hint: string; settingId?: string; agentExempt?: true; agentNever?: string };
 type Page = { id: string; label: string };
 
 /** Every .tsx file under web/src/components, recursively. */
@@ -120,7 +120,7 @@ function rowsIn(text: string, pane: string): Row[] {
   const rows: Row[] = [];
   for (let i = 0; i < labels.length; i++) {
     const m = labels[i]!;
-    const before = text.slice(Math.max(0, m.index! - 500), m.index!);
+    const before = text.slice(Math.max(0, m.index! - 1000), m.index!);
     // A trailing space (or newline) after the name is what tells a JSX
     // opening tag apart from a TypeScript generic — `<Stepper label=` vs.
     // `useState<TaskLanding>(...)`, where the name is immediately followed
@@ -144,9 +144,11 @@ function rowsIn(text: string, pane: string): Row[] {
     const tagText = before.slice(tagMatch.index!);
     const settingId = tagText.match(/\bsettingId="([^"]{1,80})"/)?.[1];
     const agentExempt = /\bagentExempt\b/.test(tagText);
+    // A row an agent must not reach, with the reason on the row itself.
+    const agentNever = tagText.match(/\bagentNever="([^"]{1,240})"/)?.[1];
     rows.push({
       pane, section: sectionFor(markers, m.index!), label, hint: hintMatch ? hintMatch[1]! : "",
-      ...(settingId ? { settingId } : {}), ...(agentExempt ? { agentExempt: true as const } : {}),
+      ...(settingId ? { settingId } : {}), ...(agentExempt ? { agentExempt: true as const } : {}), ...(agentNever ? { agentNever } : {}),
     });
   }
   return rows;
@@ -206,7 +208,7 @@ export function buildOutput(): string {
   const esc = (s: string) => s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   const rowLines = rows.map((r) =>
     `  { pane: "${r.pane}", section: "${esc(r.section)}", label: "${esc(r.label)}", hint: "${esc(r.hint)}"`
-    + `${r.settingId ? `, settingId: "${esc(r.settingId)}"` : ""}${r.agentExempt ? ", agentExempt: true" : ""} },`).join("\n");
+    + `${r.settingId ? `, settingId: "${esc(r.settingId)}"` : ""}${r.agentExempt ? ", agentExempt: true" : ""}${r.agentNever ? `, agentNever: "${esc(r.agentNever)}"` : ""} },`).join("\n");
   const pageLines = pages.map((p) => `  { id: "${p.id}", label: "${esc(p.label)}" },`).join("\n");
 
   const out = `/*
@@ -217,8 +219,9 @@ export function buildOutput(): string {
  * this file is stale.
  */
 /** \`settingId\` is the SettingDef an agent reaches through the row (web/src/lib/settingsRegistry.ts);
- *  \`agentExempt\` marks a row that is not a setting (a reset button, a read-out). */
-export type SettingsRowRaw = { pane: string; section: string; label: string; hint: string; settingId?: string; agentExempt?: true };
+ *  \`agentExempt\` marks a row that is not a setting (a reset button, a read-out);
+ *  \`agentNever\` marks a setting an agent must not reach, and says why. */
+export type SettingsRowRaw = { pane: string; section: string; label: string; hint: string; settingId?: string; agentExempt?: true; agentNever?: string };
 export type SettingsPageRaw = { id: string; label: string };
 
 export const SETTINGS_ROWS: SettingsRowRaw[] = [

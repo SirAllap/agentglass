@@ -214,6 +214,6 @@ describe("the strip draws them", () => {
 
   test("Settings can switch it off and hold the name rules", () => {
     expect(settings).toContain('label="Group tabs by project"');
-    expect(settings).toContain("onBlur={() => setTabGroupRulesText(groupRules)}");
+    expect(settings).toContain(`onBlur={() => { setting("terminal.tabGroupRules").set(groupRules); }}`);
   });
 });

@@ -19,12 +19,14 @@ import { openSettings } from "./openSettings.ts";
 import { openFinderAt } from "./finderTarget.ts";
 import { latchChatIntent } from "./chatIntent.ts";
 import { latchGitModal } from "./gitModalIntent.ts";
+import { latchViewModal } from "./viewModalIntent.ts";
+import { showWhatsNew } from "./whatsNew.ts";
 import { toggleBench, showFile, showBoard } from "./benchStore.ts";
 import { openPeek } from "./openPeek.ts";
 import { THEMES } from "./themes.ts";
 import { settings } from "./settingsRegistry.ts";
 import type { MachineTab } from "../components/MachinePanel.tsx";
-import { PROVIDERS, uiState, type Sources } from "./uiSnapshots.ts";
+import { readPanel, uiState, type Sources } from "./uiSnapshots.ts";
 
 export interface UiCtx {
   goView(v: ViewId): void;
@@ -38,6 +40,13 @@ export interface UiCtx {
   setMachine(tab: MachineTab): void;
   setProjectOpen(open: boolean): void;
   setWindowsOpen(open: boolean): void;
+  /** The event modal on an event from this window's feed, or the server's recent
+   *  feed when the window has paused its own (a view covers the dashboard);
+   *  false when neither has one by that id. */
+  openEvent(id: number): boolean | Promise<boolean>;
+  openSession(id: string, app?: string): void;
+  /** The pane chords' own function: false when no focused pane has anything to open. */
+  paneDoor(which: UiArgs<"pane.open">["which"]): boolean;
   /** Where the reads gather their data (uiSnapshotSources.ts in the window; a
    *  fixture in a test). Absent in a window that cannot describe itself. */
   sources?: Sources;
@@ -101,9 +110,19 @@ export const UI_HANDLERS: { [Id in UiActionId]: Handler<Id> } = {
   "git.modal": (a, c) => { latchGitModal({ which: a.which }); c.goView("git"); },
   "git.compare": (a, c) => { latchGitModal({ which: "compare", base: a.base }); c.goView("git"); },
   "git.blame": (a, c) => { latchGitModal({ which: "blame", path: a.path }); c.goView("git"); },
+  "git.rebase": (a, c) => { latchGitModal({ which: "rebase", base: a.base }); c.goView("git"); },
+  "event.open": async (a, c) => { if (!(await c.openEvent(a.id))) throw new Error("no recent event has that id"); },
+  "session.open": (a, c) => c.openSession(a.id, a.app),
+  "whatsnew.open": () => showWhatsNew(),
+  "lantern.schedule": (_a, c) => { latchViewModal("lantern.schedule"); c.goView("lantern"); },
+  "terminal.resume": (_a, c) => { latchViewModal("terminal.resume"); c.goView("term"); },
+  "settings.plugin": (a) => openSettings(`plugin:${a.name}`),
+  // The chords' own seam. The chord lets the key fall through when nothing
+  // answers; an agent is told instead, since silence reads as success.
+  "pane.open": (a, c) => { if (!c.paneDoor(a.which)) throw new Error("no focused terminal pane has a " + a.which + " to open"); },
   // Reads: stores and pref modules only, nothing is shown, raised or focused.
   "ui.state": (_a, c) => uiState(sourcesOf(c)),
-  "ui.read": (a, c) => PROVIDERS[a.panel](sourcesOf(c)),
+  "ui.read": (a, c) => readPanel(a.panel, sourcesOf(c)),
 };
 
 /**
@@ -126,17 +145,50 @@ export function execControl(cmd: ControlCmd, ctx: UiCtx): { id: UiActionId; valu
 
 export const runControl = (cmd: ControlCmd, ctx: UiCtx): UiActionId | null => execControl(cmd, ctx)?.id ?? null;
 
+/** The most a read of a server-held pane may wait for its route. The server
+ *  gives up on the whole ask at five seconds (control.ts); answering first, with
+ *  a sentence, beats being cut off with a bare timeout. */
+export const LATE_READ_MS = 4000;
+
+const isThenable = (v: unknown): v is PromiseLike<unknown> => typeof (v as { then?: unknown } | null)?.then === "function";
+
+const fail = (e: unknown): UiReply => ({ ok: false, applied: false, error: e instanceof Error ? e.message : "the handler failed" });
+const done = (value: unknown): UiReply => ({ ok: true, applied: true, ...(value === undefined ? {} : { value }) });
+
 /**
  * The answer to POST /control/result for one command: what this window did.
  * `applied` means the handler ran without throwing; a seam with nothing
  * listening is a no-op by design (see above), so it cannot say more than that.
+ * A handler that answers later (a pane the server holds) is `controlReplyLater`'s.
  */
 export function controlReply(cmd: ControlCmd, ctx: UiCtx): UiReply {
   try {
     const r = execControl(cmd, ctx);
     if (!r) return { ok: false, applied: false, error: "this window does not know that door" };
-    return { ok: true, applied: true, ...(r.value === undefined ? {} : { value: r.value }) };
+    if (isThenable(r.value)) return { ok: false, applied: false, error: "that door answers later" };
+    return done(r.value);
   } catch (e) {
-    return { ok: false, applied: false, error: e instanceof Error ? e.message : "the handler failed" };
+    return fail(e);
+  }
+}
+
+/** The same, waiting for a handler that returns a promise: a read of a pane the
+ *  server holds asks that pane's own route. A route that fails or is slow is a
+ *  sentence, not a hang. */
+export async function controlReplyLater(cmd: ControlCmd, ctx: UiCtx, waitMs: number = LATE_READ_MS): Promise<UiReply> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const r = execControl(cmd, ctx);
+    if (!r) return { ok: false, applied: false, error: "this window does not know that door" };
+    const late = Promise.resolve(r.value);
+    const value = await Promise.race([
+      late,
+      new Promise<never>((_, no) => { timer = setTimeout(() => no(new Error("the app's own server did not answer for that pane in time")), waitMs); }),
+    ]);
+    return done(value);
+  } catch (e) {
+    return fail(e);
+  } finally {
+    clearTimeout(timer);
   }
 }

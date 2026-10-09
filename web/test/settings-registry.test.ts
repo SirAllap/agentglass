@@ -260,8 +260,12 @@ describe("deny by default", () => {
 
 describe("no def hides a secret by accident", () => {
   const SENSITIVE = /token|key|secret|password|credential/i;
+  // The Keys page is keyboard shortcuts: its ids carry the word "key" for that
+  // reason and for no other. Only that exact prefix is let through, so a
+  // `keys.apiKey` would still be caught.
+  const SHORTCUT = /^keys\.binding\./;
   it("an id that looks sensitive is marked secret", () => {
-    const bad = R.SETTING_DEFS.filter((d) => SENSITIVE.test(d.id) && !d.secret).map((d) => d.id);
+    const bad = R.SETTING_DEFS.filter((d) => SENSITIVE.test(d.id.replace(SHORTCUT, "")) && !d.secret).map((d) => d.id);
     expect(bad).toEqual([]);
   });
   it("the check sees an id written in the source, not only the ones that are built", async () => {
@@ -269,7 +273,7 @@ describe("no def hides a secret by accident", () => {
     const lines = src.split("\n").filter((l) => !l.trim().startsWith("//") && !l.trim().startsWith("*"));
     const ids = lines.join("\n").match(/\bid: "([^"]+)"/g) ?? [];
     expect(ids.length).toBeGreaterThan(8);
-    const offenders = ids.filter((i) => SENSITIVE.test(i));
+    const offenders = ids.filter((i) => SENSITIVE.test(i.replace(/id: "keys\.binding\./, 'id: "')));
     // A sensitive-looking literal must sit next to `secret: true` on the same def.
     for (const o of offenders) expect(lines.join("\n")).toMatch(new RegExp(`${o.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^\\n]*secret: true`));
   });

@@ -7,6 +7,7 @@ import { subscribeBench } from "../lib/benchStore.ts";
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { wash } from "./git/ui.tsx";
 import { modelLabelOf } from "../../../shared/models.ts";
+import { subscribeViewModal, takeViewModal } from "../lib/viewModalIntent.ts";
 import { ScheduleDialog, ScheduledSection, type AgentSchedule } from "./LanternSchedule.tsx";
 import { handOff } from "../lib/lanternAsk.ts";
 import { api } from "../lib/api.ts";
@@ -385,6 +386,12 @@ export function LanternView({ active }: { active: boolean }) {
   const [schedules, setSchedules] = useState<AgentSchedule[]>([]);
   const [checkouts, setCheckouts] = useState<string[]>([]);
   const [scheduling, setScheduling] = useState(false);
+  // The dialog asked for through the registry (lib/viewModalIntent.ts).
+  useEffect(() => {
+    const run = () => { if (takeViewModal("lantern.schedule")) setScheduling(true); };
+    run();
+    return subscribeViewModal(run);
+  }, []);
   /* The agent CLIs on this machine, for the cards' hand-off. Read once per open. */
   const [kinds, setKinds] = useState<{ id: string; title: string }[]>([]);
   useEffect(() => {

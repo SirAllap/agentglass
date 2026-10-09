@@ -15,6 +15,7 @@ import { requestWorktreeJump } from "../lib/worktreeJump.ts";
 import { ICON } from "../lib/iconSize.ts";
 import { GearIcon } from "./workspace/icons.tsx";
 import { openSettings } from "../lib/openSettings.ts";
+import { peekViewModal, subscribeViewModal } from "../lib/viewModalIntent.ts";
 import { CaretIcon, ExpandIcon, GridIcon, IconLabel, LockIcon, PinIcon, SearchIcon } from "../lib/glyphIcons.tsx";
 import { nextSeen, unlistedWorktree, type PaneSeen, readPaneSeen, writePaneSeen } from "../lib/paneWorktree.ts";
 import { readBranchPrs, writeBranchPrs, readCardPrios, writeCardPrios, type RememberedPr, type RememberedPrio } from "../lib/paneFacts.ts";
@@ -4028,6 +4029,13 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
 function MoreMenu({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLSpanElement>(null);
+  // The Sessions list asked for through the registry (lib/viewModalIntent.ts):
+  // it lives in here, so the menu opens first and the list takes the request.
+  useEffect(() => {
+    const run = () => { if (peekViewModal("terminal.resume")) setOpen(true); };
+    run();
+    return subscribeViewModal(run);
+  }, []);
   useEffect(() => {
     if (!open) return;
     const away = (e: PointerEvent) => {

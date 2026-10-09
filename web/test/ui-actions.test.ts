@@ -11,18 +11,25 @@ import { UI_ACTIONS, READ_PANELS } from "../../shared/uiActions.ts";
 import { DEFAULT_NOTIFY_PREFS } from "../../shared/notifyPrefs.ts";
 import type { Sources, AppSlice } from "../src/lib/uiSnapshots.ts";
 import type { ControlCmd } from "../../shared/types.ts";
-import { runControl, controlReply, nextThemeId, UI_HANDLERS, type UiCtx } from "../src/lib/uiActions.ts";
+import type { UiCtx } from "../src/lib/uiActions.ts";
 import { onOpenSettings } from "../src/lib/openSettings.ts";
 import { onFinderAt, type FinderTarget } from "../src/lib/finderTarget.ts";
 import { peekChatIntent, takeChatIntent } from "../src/lib/chatIntent.ts";
 import { takeGitModal, latchGitModal, GIT_MODAL_TTL_MS } from "../src/lib/gitModalIntent.ts";
 import { benchState, __resetBench } from "../src/lib/benchStore.ts";
 import { clearPeek, peekRequest } from "../src/lib/openPeek.ts";
+import { peekViewModal, takeViewModal, latchViewModal, subscribeViewModal, VIEW_MODAL_TTL_MS } from "../src/lib/viewModalIntent.ts";
+import { onShowWhatsNew } from "../src/lib/whatsNew.ts";
 
 const stubGlobal = globalStubs();
 // A window is only an event target here: the finder's channel is an event on it.
 stubGlobal("window", new EventTarget());
 stubGlobal("CustomEvent", class<T> extends Event { detail: T; constructor(t: string, i: { detail: T }) { super(t); this.detail = i.detail; } });
+// uiActions reaches the settings registry and so pref modules that read localStorage when they load.
+stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {}, clear: () => {}, key: () => null, length: 0 } as unknown as Storage);
+stubGlobal("location", new URL("http://localhost:5173/"));
+stubGlobal("document", { documentElement: { getAttribute: () => "graphite", setAttribute: () => {}, style: { setProperty: () => {}, getPropertyValue: () => "" } } });
+const { runControl, controlReply, controlReplyLater, nextThemeId, UI_HANDLERS } = await import("../src/lib/uiActions.ts");
 
 /** A ctx that records what it was asked, in order. */
 function ctx() {
@@ -32,12 +39,15 @@ function ctx() {
     goView: rec("goView"), workspace: rec("workspace"), peel: rec("peel"), panel: rec("panel"),
     setTheme: (next) => calls.push(["setTheme", next("graphite")]),
     zoom: rec("zoom"), setMachine: rec("setMachine"), setProjectOpen: rec("setProjectOpen"), setWindowsOpen: rec("setWindowsOpen"),
+    openEvent: (id) => { calls.push(["openEvent", id]); return id !== 404; },
+    openSession: rec("openSession"),
+    paneDoor: (which) => { calls.push(["paneDoor", which]); return which !== "card"; },
   };
   return { c, calls };
 }
 const ui = (id: string, args: Record<string, unknown> = {}) => ({ cmd: "ui", do: id, args }) as unknown as ControlCmd;
 
-beforeEach(() => { __resetBench(); clearPeek(); takeChatIntent(); takeGitModal(); });
+beforeEach(() => { __resetBench(); clearPeek(); takeChatIntent(); takeGitModal(); takeViewModal("lantern.schedule"); takeViewModal("terminal.resume"); });
 afterEach(() => { onOpenSettings(null); });
 
 describe("runControl — one handler for both spellings", () => {
@@ -143,6 +153,95 @@ describe("the doors, each through its own seam", () => {
   });
 });
 
+describe("the doors of the second batch", () => {
+  it("the rebase editor and the git palette latch for the Git view", () => {
+    const k = ctx();
+    runControl(ui("git.rebase", { base: "origin/main" }), k.c);
+    expect(takeGitModal()).toEqual({ which: "rebase", base: "origin/main" });
+    runControl(ui("git.modal", { which: "palette" }), k.c);
+    expect(takeGitModal()).toEqual({ which: "palette" });
+    expect(k.calls).toEqual([["goView", "git"], ["goView", "git"]]);
+  });
+
+  it("an event opens only if a feed has it, and the agent hears when none does", async () => {
+    const k = ctx();
+    expect(await controlReplyLater(ui("event.open", { id: 7 }), k.c)).toEqual({ ok: true, applied: true });
+    expect(k.calls).toEqual([["openEvent", 7]]);
+    const miss = await controlReplyLater(ui("event.open", { id: 404 }), k.c);
+    expect(miss.ok).toBe(false);
+    expect(miss.error).toContain("no recent event");
+    // The second place to look may answer later.
+    k.c.openEvent = async (id) => id === 9;
+    expect(await controlReplyLater(ui("event.open", { id: 9 }), k.c)).toEqual({ ok: true, applied: true });
+  });
+
+  it("a session opens with or without its app name", () => {
+    const k = ctx();
+    runControl(ui("session.open", { id: "5f2c0a9e-1111", app: "orbit" }), k.c);
+    runControl(ui("session.open", { id: "5f2c0a9e-1111" }), k.c);
+    expect(k.calls).toEqual([["openSession", "5f2c0a9e-1111", "orbit"], ["openSession", "5f2c0a9e-1111", undefined]]);
+  });
+
+  it("the pane chords' door is asked, and a pane with nothing to open is an answer", () => {
+    const k = ctx();
+    expect(controlReply(ui("pane.open", { which: "pr" }), k.c).applied).toBe(true);
+    const miss = controlReply(ui("pane.open", { which: "card" }), k.c);
+    expect(miss).toMatchObject({ ok: false, applied: false });
+    expect(miss.error).toContain("card");
+    expect(controlReply(ui("pane.open", { which: "terminal" }), k.c).ok).toBe(false);
+  });
+
+  it("a plugin's page opens through the same bus as every settings link", () => {
+    const seen: unknown[][] = [];
+    onOpenSettings((...a) => { seen.push(a); });
+    runControl(ui("settings.plugin", { name: "orbit-notes" }), ctx().c);
+    expect(seen).toEqual([["plugin:orbit-notes"]]);
+  });
+
+  it("release notes on demand ask the component that owns the modal", () => {
+    let asked = 0;
+    const off = onShowWhatsNew(() => { asked += 1; });
+    runControl(ui("whatsnew.open"), ctx().c);
+    off();
+    runControl(ui("whatsnew.open"), ctx().c);
+    expect(asked).toBe(1);
+  });
+
+  it("the schedule dialog and the resume list latch for their view and bring it up", () => {
+    const k = ctx();
+    runControl(ui("lantern.schedule"), k.c);
+    expect(takeViewModal("lantern.schedule")).toBe(true);
+    runControl(ui("terminal.resume"), k.c);
+    expect(takeViewModal("terminal.resume")).toBe(true);
+    expect(k.calls).toEqual([["goView", "lantern"], ["goView", "term"]]);
+  });
+});
+
+describe("the view modal mailbox", () => {
+  it("is one slot, read once, and leaves a request for the other dialog alone", () => {
+    latchViewModal("terminal.resume");
+    expect(takeViewModal("lantern.schedule")).toBe(false);
+    expect(peekViewModal("terminal.resume")).toBe(true);
+    expect(takeViewModal("terminal.resume")).toBe(true);
+    expect(takeViewModal("terminal.resume")).toBe(false);
+  });
+
+  it("a request nobody was there for lapses", () => {
+    latchViewModal("lantern.schedule");
+    expect(takeViewModal("lantern.schedule", Date.now() + VIEW_MODAL_TTL_MS + 1000)).toBe(false);
+  });
+
+  it("tells a listener, and a throwing listener does not stop the next", () => {
+    const heard: string[] = [];
+    const a = subscribeViewModal(() => { throw new Error("bad listener"); });
+    const b = subscribeViewModal(() => heard.push("b"));
+    latchViewModal("terminal.resume");
+    a(); b();
+    takeViewModal("terminal.resume");
+    expect(heard).toEqual(["b"]);
+  });
+});
+
 describe("the git modal mailbox", () => {
   it("is one slot, read once, and a request nobody was there for lapses", () => {
     latchGitModal({ which: "bisect" });
@@ -187,14 +286,59 @@ const fixture: Sources = {
   terminal: () => ({ font: "", size: 13, cursor: "block", lineHeight: 1, scrollback: 4000, wordSeparators: " ", copyOnSelect: true, noteEditor: "builtin" }),
   browser: () => ({ home: "https://duckduckgo.com", engine: "duckduckgo", zoomLevel: 0, importHistory: true, importBookmarks: true }),
   notify: () => DEFAULT_NOTIFY_PREFS,
+  prefs: () => ({ scale: 1, clock24: false, splash: true }),
+  rail: () => ({ work: ["dash"], utility: [], hidden: [], customised: false }),
+  keys: () => ({ bindings: {}, chords: {}, appChords: {}, customised: { bindings: false, chords: false, appChords: false }, customChord: [], customAppChord: [] }),
+  tasks: () => ({ landing: "last", order: ["github"], shown: { github: true }, last: null }),
+  appearance: () => ({ mode: "dark", accent: "", desktopPalette: null }),
+  understudy: () => null,
+  later: {
+    hooks: async () => ({ installed: false, bundled: false, gate: false, gateBundled: false, python: "python3", settingsPath: "", engine: "default" }),
+    lantern: async () => ({ nudge: false, minutes: 20, watch: false, watchMinutes: 10, cacheTtlMinutes: 5, wakeHours: null }),
+    budgets: async () => ({ rows: [], models: 0, pace: { spread: "working", workDays: [], workStart: 9, workEnd: 18, rollover: true, burnWindowHours: 3, alertAt: 90, timeZone: "UTC" }, usageRefresh: false }),
+    recipes: async () => [], reviewPrompts: async () => [], savedReplies: async () => [],
+    tmux: async () => ({ source: "auto", binAvailable: true, binVersion: "3.4", capability: true, confMode: "append", overrideActive: false, broken: false, restoreEnabled: true, resumeMode: "lazy", prefix: "", terminal: "engine", lastCaptureAt: null, reasons: { bin: "", capability: "", broken: "", override: "" } }),
+    privacy: async () => ({ retentionDays: 0, pairedDevices: 0, clickupSet: false, db: "", config: "" }),
+    plugins: async () => ({ master: true, plugins: [] }),
+    log: async () => ({ rows: [] }),
+    about: async () => ({ version: "0.0.0", commit: "", stamp: "", builtAt: "", baseTag: "", distance: 0, dirty: false, dirtyCount: 0, branch: "", behind: 0, ahead: 0, available: false, blocked: "", incoming: [], digest: null, origin: "" }),
+  },
 };
 
+describe("a pane the server holds answers later, and says so when it cannot", () => {
+  it("the sync reply refuses a promise instead of answering with one", () => {
+    const k = ctx();
+    k.c.sources = fixture;
+    expect(controlReply(ui("ui.read", { panel: "settings.lantern" }), k.c)).toEqual({ ok: false, applied: false, error: "that door answers later" });
+  });
+
+  it("the later reply waits for the route and carries the snapshot", async () => {
+    const k = ctx();
+    k.c.sources = fixture;
+    const r = await controlReplyLater(ui("ui.read", { panel: "settings.lantern" }), k.c);
+    expect(r).toMatchObject({ ok: true, applied: true, value: { state: { minutes: 20 } } });
+  });
+
+  it("a route that fails is a sentence, and one that never answers is cut short", async () => {
+    const k = ctx();
+    k.c.sources = { ...fixture, later: { ...fixture.later, tmux: () => Promise.reject(new Error("503 from /terminal/tmux-status")), log: () => new Promise(() => {}) } };
+    expect(await controlReplyLater(ui("ui.read", { panel: "settings.tmux" }), k.c)).toEqual({ ok: false, applied: false, error: "503 from /terminal/tmux-status" });
+    const slow = await controlReplyLater(ui("ui.read", { panel: "settings.log" }), k.c, 20);
+    expect(slow.ok).toBe(false);
+    expect(slow.error).toContain("did not answer");
+  });
+
+  it("an open still answers at once through the later path", async () => {
+    expect(await controlReplyLater(ui("view.open", { to: "git" }), ctx().c)).toEqual({ ok: true, applied: true });
+  });
+});
+
 describe("controlReply — what the window answers", () => {
-  it("ui.state and every ui.read panel answer a snapshot, and call nothing App owns", () => {
+  it("ui.state and every ui.read panel answer a snapshot, and call nothing App owns", async () => {
     const k = ctx();
     k.c.sources = fixture;
     for (const cmd of [ui("ui.state"), ...READ_PANELS.map((panel) => ui("ui.read", { panel }))]) {
-      const r = controlReply(cmd, k.c);
+      const r = await controlReplyLater(cmd, k.c);
       expect(r.ok, JSON.stringify(cmd)).toBe(true);
       expect(r.applied).toBe(true);
       expect(Object.keys((r.value ?? {}) as object)).toEqual(expect.arrayContaining(["state", "untrusted"]));
@@ -202,13 +346,13 @@ describe("controlReply — what the window answers", () => {
     expect(k.calls).toEqual([]);
   });
 
-  it("a read raises nothing: no setting is opened, no view changes, no chat or git intent is latched, the bench stays shut", () => {
+  it("a read raises nothing: no setting is opened, no view changes, no chat or git intent is latched, the bench stays shut", async () => {
     const k = ctx();
     k.c.sources = fixture;
     let opened = 0;
     onOpenSettings(() => { opened++; });
-    for (const panel of READ_PANELS) controlReply(ui("ui.read", { panel }), k.c);
-    controlReply(ui("ui.state"), k.c);
+    for (const panel of READ_PANELS) await controlReplyLater(ui("ui.read", { panel }), k.c);
+    await controlReplyLater(ui("ui.state"), k.c);
     expect(opened).toBe(0);
     expect(k.calls).toEqual([]);
     expect(benchState().open).toBe(false);

@@ -60,6 +60,8 @@ describe.skipIf(!HAVE_PY)("arguments, as pure functions", () => {
     expect(coerce({ t: "num", values: [1, -1, 0] }, "5")).toEqual([null, "one of 1, -1, 0"]);
     expect(coerce({ t: "bool" }, "on")).toEqual([true, null]);
     expect(coerce({ t: "bool" }, "maybe")).toEqual([null, "true or false"]);
+    expect(coerce({ t: "int", max: 100 }, "42")).toEqual([42, null]);
+    for (const bad of ["-1", "1.5", "x", "101", ""]) expect(coerce({ t: "int", max: 100 }, bad)).toEqual([null, "a whole number, 0 or more"]);
     expect(coerce({ t: "abspath" }, "rel/x")).toEqual([null, "an absolute path"]);
     expect(coerce({ t: "slug", max: 8 }, "has space")[1]!).toContain("letters, digits");
     expect(coerce({ t: "slug", max: 8 }, "ninechars")[1]!).toContain("at most 8");

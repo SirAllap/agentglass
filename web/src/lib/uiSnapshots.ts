@@ -30,7 +30,7 @@
  * `see` which routes carry the rest.
  */
 import {
-  READ_PANELS, UI_READ_NOT_COVERED, UNTRUSTED_MAX_BYTES,
+  READ_PANELS, READ_PANELS_LATE, READ_PANELS_NOW, UI_READ_NOT_COVERED, UNTRUSTED_MAX_BYTES,
   type UiSnapshot,
 } from "../../../shared/uiActions.ts";
 import { stripSecrets } from "../../../shared/scrub.ts";
@@ -38,8 +38,14 @@ import type { PendingGate, ViewId } from "../../../shared/types.ts";
 import type { NotifyPrefs } from "../../../shared/notifyPrefs.ts";
 import type { Chat } from "./chatStore.ts";
 import type { BenchState, BenchTab } from "./benchStore.ts";
+import type {
+  PrefsData, RailData, KeysData, TasksData, AppearanceData, UnderstudyData, HooksData, LanternData, BudgetsData, RecipeRow,
+  ReviewPromptRow, SavedReplyRow, TmuxData, PrivacyData, PluginsData, LogData, AboutData,
+} from "./paneState.ts";
 
 export type ReadPanel = (typeof READ_PANELS)[number];
+export type NowPanel = (typeof READ_PANELS_NOW)[number];
+export type LatePanel = (typeof READ_PANELS_LATE)[number];
 
 /** What App holds that no store does: the view, the modals, the selection. */
 export interface AppSlice {
@@ -72,6 +78,27 @@ export interface Sources {
   };
   browser(): { home: string; engine: string; zoomLevel: number; importHistory: boolean; importBookmarks: boolean };
   notify(): NotifyPrefs;
+  prefs(): PrefsData;
+  rail(): RailData;
+  keys(): KeysData;
+  tasks(): TasksData;
+  appearance(): AppearanceData;
+  understudy(): UnderstudyData | null;
+  /** The panes the server holds. Each is one request to the route the pane
+   *  itself uses, made when the read is asked and never before. */
+  later: {
+    hooks(): Promise<HooksData>;
+    lantern(): Promise<LanternData>;
+    budgets(): Promise<BudgetsData>;
+    recipes(): Promise<RecipeRow[]>;
+    reviewPrompts(): Promise<ReviewPromptRow[]>;
+    savedReplies(): Promise<SavedReplyRow[]>;
+    tmux(): Promise<TmuxData>;
+    privacy(): Promise<PrivacyData>;
+    plugins(): Promise<PluginsData>;
+    log(): Promise<LogData>;
+    about(): Promise<AboutData>;
+  };
 }
 
 // ── the answer's two buckets ────────────────────────────────────────────────
@@ -287,9 +314,145 @@ const notifications = (src: Sources): UiSnapshot => {
   return { state: { none: n.none, kinds: n.kinds, channels: n.channels }, untrusted: {} };
 };
 
-/** Panel id to provider. Keyed by READ_PANELS, so a panel with no provider is a
- *  type error here, and a provider for a panel the registry lacks is one too. */
-export const PROVIDERS: { [P in ReadPanel]: (src: Sources) => UiSnapshot } = {
+// ── the preference panes the window holds ───────────────────────────────────
+
+const prefs = (src: Sources): UiSnapshot => ({ state: { ...src.prefs() }, untrusted: {} });
+
+const rail = (src: Sources): UiSnapshot => ({ state: { ...src.rail() }, untrusted: {} });
+
+/** What the owner pressed is their own text and not an id; it is filed under
+ *  `untrusted` like any string the app did not mint. */
+const keys = (src: Sources): UiSnapshot => {
+  const k = src.keys();
+  return {
+    state: { customised: k.customised, customChord: k.customChord, customAppChord: k.customAppChord },
+    untrusted: { bindings: k.bindings, chords: k.chords, appChords: k.appChords },
+  };
+};
+
+const tasks = (src: Sources): UiSnapshot => ({ state: { ...src.tasks() }, untrusted: {} });
+
+const appearance = (src: Sources): UiSnapshot => {
+  const a = src.appearance();
+  const app = src.app();
+  return { state: { mode: a.mode, accent: a.accent, theme: app.theme, scale: app.scale }, untrusted: { desktopPalette: a.desktopPalette } };
+};
+
+const MAX_CLASSES = 30;
+const understudy = (src: Sources): UiSnapshot => {
+  const u = src.understudy();
+  if (!u) return { state: { loaded: false }, untrusted: {}, see: ["/understudy/scorecard"] };
+  const shown = u.classes.slice(0, MAX_CLASSES);
+  return {
+    state: {
+      loaded: true, enabled: u.enabled, halted: u.halted, level: u.level, agreement: u.agreement, classes: u.classes.length,
+      rows: shown.map((c) => ({ id: c.id, lock: c.lock, mode: c.mode, offered: c.offered, n: c.n, hits: c.hits })),
+    },
+    untrusted: { labels: Object.fromEntries(shown.map((c) => [c.id, c.label])) },
+    see: ["/understudy/scorecard"],
+  };
+};
+
+// ── the panes the server holds ──────────────────────────────────────────────
+
+const MAX_ROWS = 50;
+/** A list's first rows and how many there were, so a long one says it was cut. */
+const head = <T>(xs: readonly T[]): { rows: T[]; count: number; shown: number } => {
+  const rows = xs.slice(0, MAX_ROWS);
+  return { rows, count: xs.length, shown: rows.length };
+};
+
+const hooks = (h: HooksData): UiSnapshot => ({
+  state: { installed: h.installed, bundled: h.bundled, gate: h.gate, gateBundled: h.gateBundled, engine: h.engine },
+  untrusted: { python: h.python, settingsPath: h.settingsPath },
+  see: ["/hooks/status"],
+});
+
+const lantern = (l: LanternData): UiSnapshot => ({ state: { ...l }, untrusted: {}, see: ["/lantern/settings", "/seat/wake"] });
+
+const budgets = (b: BudgetsData): UiSnapshot => {
+  const r = head(b.rows);
+  const { timeZone, ...pace } = b.pace;
+  return {
+    state: {
+      count: r.count, shown: r.shown, models: b.models, usageRefresh: b.usageRefresh, pace,
+      rows: r.rows.map((x) => ({ scope: x.root === "" ? "machine" : "project", anyModel: x.model === "", limit: x.limit, period: x.period, spent: x.spent, pct: x.pct, level: x.level })),
+    },
+    untrusted: { timeZone, rows: r.rows.map((x) => ({ root: x.root, model: x.model })) },
+    see: ["/budgets"],
+  };
+};
+
+const recipes = (rs: readonly RecipeRow[]): UiSnapshot => {
+  const r = head(rs);
+  return {
+    state: { count: r.count, shown: r.shown, recipes: r.rows.map((x) => ({ id: x.id, scope: x.scope, steps: x.steps, params: x.params, tmux: x.tmux, confirm: x.confirm })) },
+    // A recipe's steps are shell commands the owner typed; only how many there are leaves the window.
+    untrusted: { recipes: r.rows.map((x) => ({ id: x.id, name: x.name, desc: x.desc, repo: x.repo })) },
+    see: ["/recipes"],
+  };
+};
+
+const reviewPrompts = (rs: readonly ReviewPromptRow[]): UiSnapshot => {
+  const r = head(rs);
+  return {
+    state: { count: r.count, shown: r.shown, prompts: r.rows.map((x) => ({ id: x.id, group: x.group, when: x.when, builtIn: x.builtIn, hidden: x.hidden, hasSkill: x.hasSkill, chars: x.chars })) },
+    untrusted: { titles: Object.fromEntries(r.rows.map((x) => [x.id, x.title])) },
+    see: ["/pr-prompts"],
+  };
+};
+
+const savedReplies = (rs: readonly SavedReplyRow[]): UiSnapshot => {
+  const r = head(rs);
+  return {
+    state: { count: r.count, shown: r.shown, replies: r.rows.map((x) => ({ id: x.id, chars: x.chars })) },
+    untrusted: { titles: Object.fromEntries(r.rows.map((x) => [x.id, x.title])) },
+    see: ["/saved-replies"],
+  };
+};
+
+const tmux = (t: TmuxData): UiSnapshot => {
+  const { reasons, binVersion, ...rest } = t;
+  // A version banner ("tmux 3.4a") is text the binary printed, not an id.
+  return { state: { ...rest }, untrusted: { ...reasons, binVersion }, see: ["/terminal/tmux-status"] };
+};
+
+const privacy = (p: PrivacyData): UiSnapshot => ({
+  state: { retentionDays: p.retentionDays, pairedDevices: p.pairedDevices, clickup: { set: p.clickupSet } },
+  untrusted: { db: p.db, config: p.config },
+  see: ["/privacy"],
+});
+
+const plugins = (p: PluginsData): UiSnapshot => {
+  const r = head(p.plugins);
+  return {
+    state: {
+      master: p.master, count: r.count, shown: r.shown,
+      plugins: r.rows.map((x, n) => ({ n, enabled: x.enabled, running: x.running, scope: x.scope, sourceKind: x.sourceKind, hadApproval: x.hadApproval, changedSinceApproval: x.changedSinceApproval })),
+    },
+    untrusted: { plugins: r.rows.map((x, n) => ({ n, name: x.name, publisher: x.publisher, description: x.description })) },
+    see: ["/plugins"],
+  };
+};
+
+const log = (l: LogData): UiSnapshot => ({
+  state: { shown: l.rows.length, failed: l.rows.filter((x) => !x.ok).length, rows: l.rows.map((x) => ({ id: x.id, at: x.at, ok: x.ok })) },
+  untrusted: { rows: l.rows.map((x) => ({ id: x.id, actor: x.actor, action: x.action, target: x.target, detail: x.detail })) },
+  see: ["/actions"],
+});
+
+const about = (a: AboutData): UiSnapshot => {
+  const { incoming, blocked, origin, digest, ...rest } = a;
+  return {
+    state: { ...rest, hasIncoming: incoming.length > 0, blocked: blocked !== "", digest },
+    untrusted: { incoming, blocked, origin: plainUrl(origin) },
+    see: ["/update/status", "/logs/digest"],
+  };
+};
+
+/** Panel id to provider. Keyed by READ_PANELS_NOW, so a panel with no provider
+ *  is a type error here, and a provider for a panel the registry lacks is one too. */
+export const PROVIDERS: { [P in NowPanel]: (src: Sources) => UiSnapshot } = {
   view: (s) => finish(view(s)),
   chat: (s) => finish(chat(s)),
   bench: (s) => finish(bench(s)),
@@ -298,7 +461,36 @@ export const PROVIDERS: { [P in ReadPanel]: (src: Sources) => UiSnapshot } = {
   "settings.terminal": (s) => finish(terminal(s)),
   "settings.browser": (s) => finish(browser(s)),
   "settings.notifications": (s) => finish(notifications(s)),
+  "settings.prefs": (s) => finish(prefs(s)),
+  "settings.rail": (s) => finish(rail(s)),
+  "settings.keys": (s) => finish(keys(s)),
+  "settings.tasks": (s) => finish(tasks(s)),
+  "settings.appearance": (s) => finish(appearance(s)),
+  "settings.understudy": (s) => finish(understudy(s)),
 };
+
+/** The same, for the panes the server holds: each asks its route and answers
+ *  when it has the reply. Keyed by READ_PANELS_LATE. */
+export const LATE_PROVIDERS: { [P in LatePanel]: (src: Sources) => Promise<UiSnapshot> } = {
+  "settings.hooks": (s) => s.later.hooks().then((d) => finish(hooks(d))),
+  "settings.lantern": (s) => s.later.lantern().then((d) => finish(lantern(d))),
+  "settings.budgets": (s) => s.later.budgets().then((d) => finish(budgets(d))),
+  "settings.recipes": (s) => s.later.recipes().then((d) => finish(recipes(d))),
+  "settings.review-prompts": (s) => s.later.reviewPrompts().then((d) => finish(reviewPrompts(d))),
+  "settings.saved-replies": (s) => s.later.savedReplies().then((d) => finish(savedReplies(d))),
+  "settings.tmux": (s) => s.later.tmux().then((d) => finish(tmux(d))),
+  "settings.privacy": (s) => s.later.privacy().then((d) => finish(privacy(d))),
+  "settings.plugins": (s) => s.later.plugins().then((d) => finish(plugins(d))),
+  "settings.log": (s) => s.later.log().then((d) => finish(log(d))),
+  "settings.about": (s) => s.later.about().then((d) => finish(about(d))),
+};
+
+const isLate = (p: ReadPanel): p is LatePanel => (READ_PANELS_LATE as readonly string[]).includes(p);
+
+/** What `ui.read` answers with: at once for a pane the window holds, a promise
+ *  for one the server does. */
+export const readPanel = (panel: ReadPanel, src: Sources): UiSnapshot | Promise<UiSnapshot> =>
+  isLate(panel) ? LATE_PROVIDERS[panel](src) : PROVIDERS[panel as NowPanel](src);
 
 /** `ui.state`: what is open now, and which panels `ui.read` can describe. */
 export function uiState(src: Sources): UiSnapshot {
@@ -310,7 +502,7 @@ export function uiState(src: Sources): UiSnapshot {
   return finish({
     state: {
       view: a.view, open,
-      readers: [...READ_PANELS].map((panel) => ({ panel, needsMount: false })),
+      readers: [...READ_PANELS].map((panel) => ({ panel, needsMount: false, asksServer: isLate(panel) })),
       notCovered: Object.keys(UI_READ_NOT_COVERED),
     },
     untrusted: {},

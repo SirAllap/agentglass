@@ -1143,7 +1143,9 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
       if (!m) return;
       if (m.which === "insights") setInsightsOpen(true);
       else if (m.which === "bisect") setBisectOpen(true);
+      else if (m.which === "palette") setPaletteOpen(true);
       else if (m.which === "compare") setCompareTarget(m.base);
+      else if (m.which === "rebase") setRebaseBase(m.base);
       else setBlamePath({ path: m.path });
     };
     run();
