@@ -95,8 +95,12 @@ export function behindOf(root: string, number: number, force = false): number | 
  */
 export function askingBehind(root: string, number: number): boolean {
   if (!root || !number) return false;
-  const hit = seen.get(keyOf(root, number));
-  return !hit || Date.now() - hit.at >= TTL_MS;
+  /* Only a FIRST look keeps the space. An answer past its five minutes is still
+     an answer — `behindOf` goes on returning it while it is asked again — so a
+     card that read "up to date" must not turn into a pulsing grey box on every
+     expiry, which on an unfocused window (it does not re-ask there) stayed grey
+     until somebody came back. */
+  return !seen.has(keyOf(root, number));
 }
 
 /**

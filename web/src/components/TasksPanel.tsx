@@ -10,6 +10,7 @@
 // Finishing removes the worktree, deletes the branch and kills the window. The
 // second half is the half nobody builds, and it is the reason a machine ends up
 // with fourteen checkouts nobody can name.
+import { putCard } from "../lib/prCardStore.ts";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { Fragment, type CSSProperties, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { BlockedIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DotIcon, IconLabel, KeyboardIcon, LockIcon, MonitorIcon, NoteIcon, PlusIcon, PullRequestIcon, RefreshIcon, SearchIcon } from "../lib/glyphIcons.tsx";
@@ -1663,7 +1664,9 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
   const writes = useRef<CardWrites | null>(null);
   if (!writes.current) {
     writes.current = new CardWrites({
-      onTask: (task) => setOver((m) => ({ ...m, [task.id]: task })),
+      /* And into the store the pull-request board and detail read, so a face
+         added here is on the PR card that carries this card at once. */
+      onTask: (task) => { putCard(task.id, task); setOver((m) => ({ ...m, [task.id]: task })); },
       onNote: (n) => setNote(n),
       /* The value drawn before the answer came back was a guess, and it was
          wrong: back to whatever the board really read. */

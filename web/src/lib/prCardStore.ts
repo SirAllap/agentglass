@@ -51,6 +51,25 @@ let version = 0;
 
 function tell(): void { version++; for (const l of listeners) l(); }
 
+/**
+ * Hold a reading under every name the card goes by.
+ *
+ * One card has two references on screen. The detail carries the pull request's
+ * body, so a ClickUp address in it makes the reference the task's own id; a row
+ * of the list has no body and reads the id out of the branch (`ORBIT-1042`).
+ * Measured: removing an assignee in the detail wrote the new card under the
+ * first and the board row looked it up under the second, so it kept drawing
+ * both faces until Refresh cleared the store and the server's copy took over.
+ * The task knows both names (`id`, `customId`), so every reading is stored under
+ * all of them — a write on either surface is the same datum on the other.
+ */
+const namesOf = (query: string, t: ProviderTask | null | undefined): string[] =>
+  [query, t?.id, t?.customId].filter((k): k is string => !!k);
+
+function hold(query: string, entry: Entry): void {
+  for (const k of namesOf(query, entry.task)) seen.set(k, entry);
+}
+
 /** Changes when any answer lands — the snapshot for `useSyncExternalStore`,
  *  which needs a value it can compare rather than a fresh object. */
 export function cardVersion(): number { return version; }
@@ -62,7 +81,7 @@ function pump(): void {
     inflight.add(query);
     api.clickupFind(query)
       .then((r) => {
-        seen.set(query, {
+        hold(query, {
           at: Date.now(),
           task: r?.ok && r.task ? r.task : null,
           error: r?.ok && r.task ? "" : (r?.error || "ClickUp could not find it"),
@@ -120,7 +139,7 @@ export function askingCard(query: string): boolean {
 export function putCard(query: string, task: ProviderTask | undefined | null): void {
   if (!query) return;
   if (!task) { forgetCard(query); return; }
-  seen.set(query, { at: Date.now(), task, error: "" });
+  hold(query, { at: Date.now(), task, error: "" });
   tell();
 }
 
@@ -135,7 +154,7 @@ export function peekCard(query: string): Entry | null {
  */
 export function forgetCard(query: string): void {
   if (!query) return;
-  seen.delete(query);
+  for (const k of namesOf(query, seen.get(query)?.task)) seen.delete(k);
   tell();
 }
 
