@@ -31,6 +31,7 @@ import { requestTermIssue } from "../lib/termIssue.ts";
 import { diffSplit, diffWrap, diffNoWhitespace, setDiffNoWhitespace } from "../lib/diffPrefs.ts";
 import { Portal } from "./Portal.tsx";
 import { CheckFailuresPanel, type PrRefs } from "./CheckFailures.tsx";
+import { CheckOnBase } from "./CheckOnBase.tsx";
 import { failedInRun, failureRowText, jobFor } from "../lib/checkFailures.ts";
 import { failureKey, loadCached, readOf, summaryOf, useFailureStore } from "../lib/checkFailuresStore.ts";
 import { MergeBox } from "./MergeBox.tsx";
@@ -12284,7 +12285,8 @@ export function Checks({ d, root, jobs, prRefs, onRerun, onRerunJobs, onAsk, bus
         {/* The log, here. It used to say "the log lives on GitHub" and send you
             to a browser for the one thing you opened the check to read. */}
         {expanded && <CheckFailuresPanel root={root} check={k} job={jobFor(k, jobs)}
-          sameRun={failedInRun(k, d.checksAll).map((o) => ({ label: shortName(o), open: () => openSibling(checkRowId(o)) }))} refs={prRefs} />}
+          sameRun={failedInRun(k, d.checksAll).map((o) => ({ label: shortName(o), open: () => openSibling(checkRowId(o)) }))} refs={prRefs}
+          rowAction={(f) => <CheckOnBase root={root} pr={d.number} failure={f} />} />}
         {expanded && <JobLog root={root} name={k.name} jobs={jobs} />}
       </div>
     );

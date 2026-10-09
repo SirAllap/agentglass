@@ -155,6 +155,7 @@ import {
   ghRateLimit,
   branchBehind, localHead, prRollup, repoIdFor as prRepoIdFor, subscribeTalkSeen,
   prBranches, prsForBranch, nodeIdOk, locateRepo, isForeignRoot } from "./prs.ts";
+import { planCheckOnBase, startCheckOnBase, checkOnBaseStatus, cancelCheckOnBase } from "./checkOnBasePr.ts";
 import { repoSpend } from "./spend.ts";
 import { repoMetrics } from "./checkRuns.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
@@ -7243,6 +7244,29 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         { attempt: url.searchParams.get("attempt"), step: url.searchParams.get("step") },
         url.searchParams.get("force") === "1",
       ));
+    }
+    /* "Check on base": the plan is a read; starting runs repository code on this machine, so it is a POST from a trusted caller. */
+    if (pathname === "/prs/check-on-base/plan") {
+      const p = await planCheckOnBase(url.searchParams.get("root") || "", url.searchParams.get("number") || "");
+      return json(p.ok ? p.plan : p);
+    }
+    if (pathname === "/prs/check-on-base/status") return json(checkOnBaseStatus(url.searchParams.get("id") || ""));
+    if (pathname === "/prs/check-on-base" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { root?: unknown; number?: unknown; command?: unknown; baseSha?: unknown; headSha?: unknown; sandbox?: unknown; allowNoSandbox?: unknown };
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const started = await startCheckOnBase(b.root, b.number, b.command, b);
+      // Running a command from a CI log on this machine is the auditable fact; the command itself is kept, cut short.
+      noteAction(clientIp, "/prs/check-on-base",
+        { root: b.root, number: b.number, command: typeof b.command === "string" ? b.command.slice(0, 200) : undefined, sandbox: b.sandbox },
+        started.ok ? { ok: true } : { ok: false, error: started.error }, asActor(caller));
+      return json(started);
+    }
+    if (pathname === "/prs/check-on-base/cancel" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { id?: unknown };
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      return json(cancelCheckOnBase(b.id));
     }
     if (pathname === "/prs/check-jobs") {
       return json(await checkJobs(url.searchParams.get("root") || "", url.searchParams.get("number") || ""));

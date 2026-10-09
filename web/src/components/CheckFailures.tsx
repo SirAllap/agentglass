@@ -101,7 +101,7 @@ function Excerpt({ text }: { text: string }) {
 const notable = (v: TestVerdict | undefined): TestVerdict | undefined => (v && (v.kind === "main" || v.kind === "flaky" || v.kind === "others") ? v : undefined);
 
 /** One failure: its name, what it said in a few words, a copy button, and the excerpt when open. */
-function FailureRow({ f, verdict, open, onToggle, first, refs }: { f: CiFailure; verdict?: TestVerdict; open: boolean; onToggle: () => void; first: boolean; refs?: PrRefs }) {
+function FailureRow({ f, verdict, open, onToggle, first, refs, action }: { f: CiFailure; verdict?: TestVerdict; open: boolean; onToggle: () => void; first: boolean; refs?: PrRefs; action?: ReactNode }) {
   const gist = failureGist(f);
   const fact = fileFact(f, refs?.changed);
   return (
@@ -119,6 +119,7 @@ function FailureRow({ f, verdict, open, onToggle, first, refs }: { f: CiFailure;
         <CopyFailure f={f} />
       </div>
       {open && <Excerpt text={f.excerpt} />}
+      {open && action}
     </div>
   );
 }
@@ -185,7 +186,7 @@ function StateBox({ tag, title, children }: { tag: ReactNode; title: string; chi
 }
 
 /** Whatever the row is, it says something: with no job to read, it says why and where to go. */
-export function CheckFailuresPanel({ root, check, job, sameRun, refs }: { root: string; check: PrCheck; job?: PrCheckJob; sameRun?: SameRun[]; refs?: PrRefs }) {
+export function CheckFailuresPanel({ root, check, job, sameRun, refs, rowAction }: { root: string; check: PrCheck; job?: PrCheckJob; sameRun?: SameRun[]; refs?: PrRefs; rowAction?: (f: CiFailure) => ReactNode }) {
   if (!job) {
     return (
       <div className="mx-2.5 mb-2 rounded-xl overflow-hidden text-[11px]" style={{ border: EDGE, background: "var(--surface-card)" }}>
@@ -196,13 +197,13 @@ export function CheckFailuresPanel({ root, check, job, sameRun, refs }: { root: 
       </div>
     );
   }
-  return <JobFailures root={root} check={check} job={job} sameRun={sameRun ?? []} refs={refs} />;
+  return <JobFailures root={root} check={check} job={job} sameRun={sameRun ?? []} refs={refs} rowAction={rowAction} />;
 }
 
 /** A check that failed in the same run, and what opens its detail. */
 export interface SameRun { label: string; open: () => void }
 
-function JobFailures({ root, check, job, sameRun, refs }: { root: string; check: PrCheck; job: PrCheckJob; sameRun: SameRun[]; refs?: PrRefs }) {
+function JobFailures({ root, check, job, sameRun, refs, rowAction }: { root: string; check: PrCheck; job: PrCheckJob; sameRun: SameRun[]; refs?: PrRefs; rowAction?: (f: CiFailure) => ReactNode }) {
   useFailureStore();
   const key = failureKey(root, job.id);
   const hints = { attempt: job.attempt, step: job.failedStep };
@@ -237,7 +238,7 @@ function JobFailures({ root, check, job, sameRun, refs }: { root: string; check:
               {r.cached && <Tag title="Read earlier and kept: opening it again made no request">cached</Tag>}
             </span>
           </div>
-          {r.failures.map((f, i) => <FailureRow key={`${i}-${f.signature}`} f={f} verdict={notable(r.verdicts[i])} refs={refs} first={i === 0} open={openRows.has(i)} onToggle={() => toggle(i)} />)}
+          {r.failures.map((f, i) => <FailureRow key={`${i}-${f.signature}`} f={f} action={rowAction?.(f)} verdict={notable(r.verdicts[i])} refs={refs} first={i === 0} open={openRows.has(i)} onToggle={() => toggle(i)} />)}
           {r.more > 0 && <div className="px-2.5 py-1.5 text-[10.5px]" style={{ borderTop: LINE, color: "var(--text3)" }}>+{r.more} more not shown here. The full log has them.</div>}
         </>
       );

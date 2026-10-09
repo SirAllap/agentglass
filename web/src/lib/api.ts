@@ -2,6 +2,7 @@ import { forgetShared, sharedRead } from "./sharedRead.ts";
 import type { UiAction, Field, NoteStatus, PluginPanel, PluginPrNotes } from "./pluginTypes.ts";
 import type { ImportedPlace } from "./desktop.ts";
 import type { PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/types.ts";
+import type { CheckOnBasePlan, CheckOnBaseStatus } from "../../../shared/checkOnBase.ts";
 import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest } from "../../../shared/types.ts";
 import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember } from "../../../shared/providers.ts";
 import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from "../../../shared/notifyPrefs.ts";
@@ -2028,6 +2029,14 @@ const realApi = {
   prCheckFailuresCached: (root: string, jobs: string[]) =>
     get<{ ok: boolean; summaries?: Record<string, CheckFailureSummary>; error?: string }>(
       `/prs/check-failures-cached?root=${encodeURIComponent(root)}&jobs=${encodeURIComponent(jobs.join(","))}`),
+  /** "Check on base": which two commits, whether both are here, and how the command would be boxed. Reads only. */
+  prCheckOnBasePlan: (root: string, number: number) =>
+    get<CheckOnBasePlan | { ok: false; error: string }>(`/prs/check-on-base/plan?root=${encodeURIComponent(root)}&number=${number}`),
+  /** Run the command the person confirmed on the two commits and the sandbox they were shown; the server refuses anything else. */
+  prCheckOnBaseStart: (root: string, number: number, command: string, plan: CheckOnBasePlan, allowNoSandbox: boolean) =>
+    post<{ ok: true; id: string } | { ok: false; error: string }>("/prs/check-on-base", { root, number, command, baseSha: plan.base.sha, headSha: plan.head.sha, sandbox: plan.sandbox, allowNoSandbox }),
+  prCheckOnBaseStatus: (id: string) => get<CheckOnBaseStatus>(`/prs/check-on-base/status?id=${encodeURIComponent(id)}`),
+  prCheckOnBaseCancel: (id: string) => post<{ ok: boolean }>("/prs/check-on-base/cancel", { id }),
   /** Re-run everything, only the failures, or a single job. */
   prRerunJobs: (root: string, what: "all" | "failed" | "job", id: string) =>
     post<PrActionResult>("/prs/rerun-jobs", { root, what, id }),
@@ -2571,6 +2580,10 @@ const demoApi: typeof realApi = {
   prCheckFailures: () => D({ ok: false, kind: "error", error: "not available in the demo", requests: 0 } as CheckFailures),
   prFailingTests: () => D({ ok: false, error: "not available in the demo" } as FailingTests | { ok: false; error: string }),
   prCheckFailuresCached: () => D({ ok: false, error: "not available in the demo" } as { ok: boolean; summaries?: Record<string, CheckFailureSummary>; error?: string }),
+  prCheckOnBasePlan: () => D({ ok: false, error: "not available in the demo" } as { ok: false; error: string }),
+  prCheckOnBaseStart: () => D({ ok: false, error: "not available in the demo" } as { ok: false; error: string }),
+  prCheckOnBaseStatus: () => D({ ok: false, error: "not available in the demo" } as { ok: false; error: string }),
+  prCheckOnBaseCancel: () => D({ ok: false }),
   prRerunJobs: () => D(demoPrAction()),
   prCounts: (_r: string, _s: "open" | "closed" | "all") => D({ ok: false, error: "not available in the demo" } as { ok: boolean; counts?: { review: number; mine: number; failing: number; ready: number; all: number }; error?: string }),
   prCheckMetrics: (_r: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; repo?: string; checks?: CheckMetric[]; error?: string }),
