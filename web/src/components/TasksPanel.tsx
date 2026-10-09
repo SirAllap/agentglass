@@ -45,11 +45,14 @@ import { openSettings } from "../lib/openSettings.ts";
 import { useFindScope } from "../lib/findScope.ts";
 import { handoffTo, setHandoffTo, type HandoffTo } from "../lib/handoffTo.ts";
 import { openPrs, openPr, prRefFromUrl } from "../lib/openPrs.ts";
+import { otherGithubLinks } from "../../../shared/githubLinks.ts";
+import { requestBrowserNav } from "../lib/browserNav.ts";
+import { HAS_BROWSER } from "../lib/desktop.ts";
 import { matchesQuery } from "../lib/boardSearch.ts";
 import { openCard, type CardJump } from "../lib/openCard.ts";
 import type { IssueJump } from "../lib/openIssue.ts";
 import { TASK_SOURCES, shownTaskSources, subscribeTaskSources, type TaskSourceId } from "../lib/taskSources.ts";
-import { CHIP, CTRL_H, EDGE, INPUT, INPUT_STYLE, RefreshButton, LINE, TL_AVATAR, TL_CSS } from "./workspace/Chrome.tsx";
+import { CHIP, CTRL_H, EDGE, IconChip, INPUT, INPUT_STYLE, RefreshButton, LINE, TL_AVATAR, TL_CSS } from "./workspace/Chrome.tsx";
 import { useTaskConnected, visibleTaskSources } from "../lib/taskConnected.ts";
 import { landingSource, rememberTaskSource } from "../lib/taskLanding.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
@@ -129,9 +132,11 @@ function sinceWords(ms: number): string {
   return `the last ${Math.round(hours / 24)} days`;
 }
 
-export function TasksView({ active, onOpenChatWith, cardJump, issueJump }: {
+export function TasksView({ active, onOpenChatWith, onOpenBrowser, cardJump, issueJump }: {
   active: boolean;
   onOpenChatWith?: (cwd: string, prompt: string, title: string) => void;
+  /** Switch to the browser view; a link that is not a card or a pull request opens there. */
+  onOpenBrowser?: () => void;
   /** A pull request asking for the card it came from — see lib/openCard.ts.
    *  It arrives as a prop rather than a subscription because this view is
    *  mounted the first time somebody comes here, which may be the click that
@@ -265,7 +270,7 @@ export function TasksView({ active, onOpenChatWith, cardJump, issueJump }: {
         )}
       </ViewHeader>
       {source === "local" ? <LocalBody active={active} repos={repos} here={root} onOpenChatWith={onOpenChatWith} />
-      : source === "clickup" ? <ClickUpBody active={active} repos={repos} here={root} onOpenChatWith={onOpenChatWith} jump={cardJump} />
+      : source === "clickup" ? <ClickUpBody active={active} repos={repos} here={root} onOpenChatWith={onOpenChatWith} onOpenBrowser={onOpenBrowser} jump={cardJump} />
       : (
         <div className="flex flex-col flex-1 min-h-0">
           {source === "all" && <NowBand onChanged={() => {}} />}
@@ -839,11 +844,12 @@ const todayStr = () => {
  * the list behind it knows its own statuses, which is what makes a status
  * picker possible without guessing.
  */
-function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
+function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump }: {
   active: boolean;
   repos: GitRepoRef[];
   here: string;
   onOpenChatWith?: (cwd: string, prompt: string, title: string) => void;
+  onOpenBrowser?: () => void;
   /** "Show me this card" — from the pull-request masthead. See lib/openCard.ts. */
   jump?: CardJump | null;
 }) {
@@ -2266,6 +2272,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
     ? <CardDetail t={picked} today={today} statuses={cardStatuses} fields={cardFields} place={cardPlaceShown}
     writable={boards.writeEnabled} repos={repos} here={here}
     onOpenChatWith={onOpenChatWith}
+    onOpenBrowser={onOpenBrowser}
     wide={wide}
     byId={byId} onGo={(id) => setSel(id)} boardPeople={boardPeople}
     skills={skills}
@@ -5464,7 +5471,7 @@ function CardHop({ list, id, onGo }: { list: ProviderTask[]; id: string; onGo: (
 /** A card as a read of it answered: partial until the first answer is in. */
 type CardRead = Partial<TaskDetail> & { ok?: boolean; error?: string };
 
-function CardDetail({ t, today, statuses, fields, place, writable, repos, here, onOpenChatWith, onApply, saving, skills, onNote, onFresh, wide, byId, onGo, onOpenList, boardPeople, nav, onClose }: {
+function CardDetail({ t, today, statuses, fields, place, writable, repos, here, onOpenChatWith, onOpenBrowser, onApply, saving, skills, onNote, onFresh, wide, byId, onGo, onOpenList, boardPeople, nav, onClose }: {
   t: ProviderTask; today: string;
   statuses: ListStatus[]; fields: ListField[];
   /** Space / Folder / List, for the card in hand. */
@@ -5472,6 +5479,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
   writable: boolean;
   repos: GitRepoRef[]; here: string;
   onOpenChatWith?: (cwd: string, prompt: string, title: string) => void;
+  onOpenBrowser?: () => void;
   /**
    * Apply one field, now.
    *
@@ -5721,6 +5729,18 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
 
   const [prs, setPrs] = useState<{ number: number; title: string; state: string; draft?: boolean; url: string; stated?: boolean }[]>([]);
   const [prsErr, setPrsErr] = useState(false);
+
+  // Read out of text the card already carries: no request, and the targets are
+  // never fetched. See shared/githubLinks.ts.
+  const others = useMemo(
+    () => otherGithubLinks(full?.description, t.custom?.find((c) => /github/i.test(c.name))?.value),
+    [full?.description, t.custom],
+  );
+  const openOther = useCallback((url: string) => {
+    if (HAS_BROWSER && onOpenBrowser) { requestBrowserNav(url); onOpenBrowser(); return; }
+    openExternal(url);
+  }, [onOpenBrowser]);
+
 
   useEffect(() => {
     let live = true;
@@ -6716,6 +6736,28 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
         {!prs.length && !prsErr && (
           <div className="text-[11px] px-1 pb-2" style={{ color: "var(--text4)" }}>
             No pull request names this card yet.
+          </div>
+        )}
+
+        {!!others.length && (
+          <div className="mb-3 pt-2.5" style={{ borderTop: LINE }}>
+            <div className={`${EYEBROW} mb-1.5 flex items-center gap-2`} style={{ color: "var(--text4)" }}>
+              Other links <span>{others.length}</span>
+            </div>
+            {others.map((l) => (
+              <div key={l.url} className="flex items-center gap-2 py-1">
+                <button onClick={() => openOther(l.url)}
+                  className="text-left flex-1 min-w-0 rounded px-1 -mx-1 hover:bg-white/5"
+                  title={HAS_BROWSER && onOpenBrowser ? "Open in the browser tab" : "Open in your browser"}>
+                  <span className="block truncate text-[11px]" style={{ color: "var(--primary-ink)" }}>{l.title}</span>
+                  <div className="truncate text-[10.5px]" style={{ color: "var(--text3)" }}>{l.path}</div>
+                </button>
+                <IconChip title="Open" onClick={() => openOther(l.url)}>↗</IconChip>
+                <IconChip title="Copy the link" onClick={() => { void navigator.clipboard.writeText(l.url).catch(() => {}); }}>
+                  <CopyIcon size={ICON.xs} />
+                </IconChip>
+              </div>
+            ))}
           </div>
         )}
       </>)}

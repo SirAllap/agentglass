@@ -222,7 +222,7 @@ export function Workspace({
           );
         })}
         {BOARDS.filter((k) => visited.has(k)).map((k) => (
-          <BoardInstance key={k} kind={k} openChatWith={openChatWith} reviewInTerminal={reviewInTerminal}
+          <BoardInstance key={k} kind={k} openChatWith={openChatWith} reviewInTerminal={reviewInTerminal} openBrowser={openBrowser}
             prJump={prJump} cardJump={cardJump} issueJump={issueJump} />
         ))}
       </div>
@@ -342,17 +342,18 @@ function BoardInstance({ kind, ...props }: Omit<BoardBodyProps, "active">) {
 interface BoardBodyProps {
   kind: BoardKind; active: boolean;
   openChatWith: (cwd: string, prompt: string, title: string) => void;
+  openBrowser: () => void;
   reviewInTerminal: (root: string, number: number, recipe?: string, card?: string) => void;
   prJump?: import("../../lib/openPrs.ts").PrJump | null;
   cardJump?: import("../../lib/openCard.ts").CardJump | null;
   issueJump?: import("../../lib/openIssue.ts").IssueJump | null;
 }
 
-function BoardBodyImpl({ kind, active, openChatWith, reviewInTerminal, prJump, cardJump, issueJump }: BoardBodyProps) {
+function BoardBodyImpl({ kind, active, openChatWith, openBrowser, reviewInTerminal, prJump, cardJump, issueJump }: BoardBodyProps) {
   if (kind === "files") return <FilesView active={active} />;
   return kind === "pr"
     ? <PrView active={active} onOpenChatWith={openChatWith} onReviewInTerminal={reviewInTerminal} jumpTo={prJump} />
-    : <TasksView active={active} onOpenChatWith={openChatWith} cardJump={cardJump} issueJump={issueJump} />;
+    : <TasksView active={active} onOpenChatWith={openChatWith} onOpenBrowser={openBrowser} cardJump={cardJump} issueJump={issueJump} />;
 }
 
 const BoardBody = memo(BoardBodyImpl, hiddenOnly);

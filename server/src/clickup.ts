@@ -3049,6 +3049,9 @@ export function prNumberFromUrl(url: string): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+/** GitHub links on a card that are not pull requests; see shared/githubLinks.ts. */
+export { otherGithubLinks } from "../../shared/githubLinks.ts";
+
 /**
  * Does this pull request actually name that card?
  *
