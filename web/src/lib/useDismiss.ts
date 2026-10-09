@@ -25,6 +25,8 @@ export function useDismiss(
     if (!open) return;
     const onDown = (e: MouseEvent) => {
       if (ref.current?.contains(e.target as Node)) return;
+      // A Select inside the box draws its list in a portal, outside it.
+      if ((e.target as Element).closest?.("[data-menu-layer]")) return;
       close();
     };
     const onKey = (e: KeyboardEvent) => {

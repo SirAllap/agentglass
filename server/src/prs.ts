@@ -344,12 +344,16 @@ export async function prsForBranch(root: string, branchIn: unknown): Promise<{
  * time and only when it is on screen. One GraphQL call, the same contexts the
  * detail view already reads.
  */
-export async function prRollup(rootIn: unknown, numberIn: unknown, fresh = false): Promise<{ ok: boolean; checks?: PrCheckRollup; error?: string }> {
+export async function prRollup(rootIn: unknown, numberIn: unknown, fresh = false): Promise<{ ok: boolean; checks?: PrCheckRollup; /** Every check by name — what the notify watches match against. */ all?: PrCheck[];
+  /** OPEN, CLOSED or MERGED — a watch on a PR that is no longer open ends. */
+  state?: string;
+  /** More than the 100 contexts one page holds: `all` is not every check, so nothing may conclude "all done" from it. */
+  truncated?: boolean; error?: string }> {
   const number = Number(numberIn);
   const repo = await repoIdFor(rootIn);
   if (!repo || !Number.isFinite(number)) return { ok: false, error: "no GitHub remote here" };
   const q = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){`
-    + `commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){${SEL_CHECKS}}}}}}`
+    + `state commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){totalCount ${SEL_CHECKS}}}}}}`
     + `}}}`;
   /* Held for ROLLUP_TTL_MS and shared between callers: a card asks whenever it
      scrolls into view, and 100% of the repeats measured came back identical.
@@ -360,10 +364,13 @@ export async function prRollup(rootIn: unknown, numberIn: unknown, fresh = false
       "api", "graphql", "-f", `query=${q}`,
       "-F", `owner=${repo.owner}`, "-F", `name=${repo.name}`, "-F", `number=${number}`,
     ]);
-    const raw = r?.data?.repository?.pullRequest?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes;
+    const pr = r?.data?.repository?.pullRequest;
+    const ctxs = pr?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts;
+    const raw = ctxs?.nodes;
     if (!raw) return { ok: false, error: "GitHub would not list its checks" };
     const normalised = raw.map((c: any) => ({ ...c, workflowName: c.checkSuite?.workflowRun?.workflow?.name || "" }));
-    return { ok: true, checks: rollupChecks(normalised).rollup };
+    const r2 = rollupChecks(normalised);
+    return { ok: true, checks: r2.rollup, all: r2.all, state: typeof pr?.state === "string" ? pr.state : undefined, truncated: Number(ctxs?.totalCount ?? 0) > raw.length };
   }, { fresh, keep: (v) => v.ok });
 }
 const ROLLUP_TTL_MS = 30_000;
@@ -704,6 +711,7 @@ export function rollupChecks(raw: RawCheck[] | null | undefined): { rollup: PrCh
       workflow: c.workflowName || "",
       state, done,
       url: c.detailsUrl || c.targetUrl || undefined,
+      ...((c.conclusion || "").toUpperCase() === "CANCELLED" ? { cancelled: true } : null),
     };
     all.push(check);
     if (state === "success") success++;
@@ -801,6 +809,13 @@ export function noteCi(repo: PrRepoId, pr: PrSummary): void {
  */
 const talkLatch = new Map<string, number>();
 const talkListeners = new Set<(n: PrTalkNote) => void>();
+/** Every remark list a poll reads, before the latch decides whether it is news: a persisted watch keeps its
+ *  own memory of what it has seen (prNotifyWatch.ts) and must not depend on this process's. */
+const talkSeenListeners = new Set<(repo: string, number: number, title: string, theirs: PrTalk[]) => void>();
+export function subscribeTalkSeen(fn: (repo: string, number: number, title: string, theirs: PrTalk[]) => void): () => void {
+  talkSeenListeners.add(fn);
+  return () => { talkSeenListeners.delete(fn); };
+}
 
 export function subscribeTalk(fn: (n: PrTalkNote) => void): () => void {
   talkListeners.add(fn);
@@ -835,6 +850,7 @@ export function noteTalk(repo: PrRepoId, pr: PrSummary): void {
   if (!pr.talk) return;
   const key = `${repo.key}#${pr.number}`;
   const theirs = pr.talk.filter((t) => !t.mine);
+  for (const fn of talkSeenListeners) { try { fn(repo.nameWithOwner, pr.number, pr.title, theirs); } catch { /* a listener must not break the poll */ } }
   let newest = 0;
   for (const t of theirs) newest = Math.max(newest, Date.parse(t.at) || 0);
   const prev = talkLatch.get(key);

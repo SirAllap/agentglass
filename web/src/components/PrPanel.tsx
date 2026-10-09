@@ -107,6 +107,7 @@ import { CloseButton, CloseIcon } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { AgentIcon, ArrowIcon, AttachIcon, BlockedIcon, BoltIcon, BranchIcon, CaretIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CommitIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, EditIcon, EyeIcon, FileIcon, FlagIcon, IconLabel, LinkIcon, MergeIcon, MoreIcon, PlusIcon, RefreshIcon, SearchIcon, SparkleIcon, StarIcon, TagIcon, UndoIcon, UserIcon } from "../lib/glyphIcons.tsx";
 import { PrIcon } from "./workspace/icons.tsx";
+import { PrWatchMenu } from "./PrWatchMenu.tsx";
 import { CardChip } from "../lib/priority.tsx";
 import { ColumnsIcon, InboxIcon, QuoteIcon } from "./settingsNavIcons.tsx";
 import { pins, isPinned, togglePin, subscribePins, type Pin } from "../lib/prPins.ts";
@@ -4892,6 +4893,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                   it lands on a click handler, and a bare reference would hand
                   the MouseEvent in as the pull request number. */}
               <Masthead
+                root={root} repo={repo?.nameWithOwner ?? ""}
                 d={d} busy={busy || !!mergeWork} local={local} onShowLocal={showLocal}
                 onEditTitle={doEditTitle} onDraft={() => { void field(draftPatch(d.number, !d.isDraft), () => api.prDraft(root, d.number, !d.isDraft), d.isDraft ? "Mark ready failed" : "Convert to draft failed", "draft"); }}
                 onClose={doClose} onLocalReview={(recipe) => doLocalReview(undefined, recipe)}
@@ -8052,7 +8054,8 @@ function prStateBadge(d: { state: PrSummary["state"]; isDraft: boolean }): { tin
   return { tint: "var(--success)", state: "Open", glyph: <PrIcon size={ICON.xs} /> };
 }
 
-function Masthead({ d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, onLocalReview, onReviewInTerminal, onLabels, onReviewers, onNudge, onEditField, condensed, viewed, threads, queued, awaitingChecks, localHead }: {
+function Masthead({ root, repo, d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, onLocalReview, onReviewInTerminal, onLabels, onReviewers, onNudge, onEditField, condensed, viewed, threads, queued, awaitingChecks, localHead }: {
+  root: string; repo: string;
   d: PrDetail; busy: boolean;
   /** What plugins have written here — what their buttons in this row say. */
   local: LocalNotes;
@@ -8230,6 +8233,10 @@ function Masthead({ d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, 
         <Btn small onClick={copyLink} title={linkCopied ? "Copied!" : "Copy the link to this pull request"}>
           {linkCopied ? <DoneIcon size={ICON.xs} /> : <LinkIcon size={ICON.xs} />}{linkCopied ? "Copied" : "Copy link"}
         </Btn>
+        {/* Server-side watch rules: see PrWatchMenu. The repo may be unknown
+            for a checkout with no GitHub remote, and then there is nothing to
+            watch. */}
+        {repo && <PrWatchMenu root={root} repo={repo} d={d} />}
         <Menu label={<MoreIcon size={ICON.sm} />} title="More actions">
           {(close) => (
             <>

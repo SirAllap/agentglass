@@ -1,6 +1,7 @@
 import { forgetShared, sharedRead } from "./sharedRead.ts";
 import type { UiAction, Field, NoteStatus, PluginPanel, PluginPrNotes } from "./pluginTypes.ts";
 import type { ImportedPlace } from "./desktop.ts";
+import type { PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/types.ts";
 import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest } from "../../../shared/types.ts";
 import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember } from "../../../shared/providers.ts";
 import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from "../../../shared/notifyPrefs.ts";
@@ -2067,6 +2068,19 @@ const realApi = {
   prUpdateBranch: (root: string, number: number, syncLocal = false) =>
     post<PrActionResult>("/prs/update-branch", { root, number, syncLocal }),
   prRerun: (root: string, number: number) => post<PrActionResult>("/prs/rerun", { root, number }),
+  /** "Tell me when this PR's CI does X" — the rules live on the server, see
+   *  server/src/prNotifyWatch.ts. */
+  prWatches: () => get<PrWatchState & { ok: boolean }>("/prs/notify-watch"),
+  prWatchAdd: (root: string, number: number, title: string, rule: PrWatchRule) =>
+    post<{ ok: boolean; error?: string }>("/prs/notify-watch/add", { root, number, title, rule }),
+  /** Fires decided while no client was connected, oldest first; acknowledge each once shown. */
+  prWatchPending: () => get<{ ok: boolean; fires: PrWatchFire[] }>("/prs/notify-watch/pending"),
+  prWatchAck: (seq: number) => post<{ ok: boolean }>("/prs/notify-watch/ack", { seq }),
+  prWatchRemove: (id: string) => post<{ ok: boolean }>("/prs/notify-watch/remove", { id }),
+  prWatchApply: (root: string, number: number, title: string) =>
+    post<{ ok: boolean; applied: number; error?: string }>("/prs/notify-watch/apply", { root, number, title }),
+  prWatchPreset: (root: string, rules: PrWatchRule[], auto: boolean) =>
+    post<{ ok: boolean; error?: string }>("/prs/notify-watch/default", { root, rules, auto }),
   prMerge: (root: string, number: number, method: "squash" | "merge" | "rebase", opts: { deleteBranch?: boolean; auto?: boolean; headSha?: string; subject?: string; body?: string; disableAuto?: boolean }) =>
     post<PrActionResult>("/prs/merge", { root, number, method, ...opts }),
   prClose: (root: string, number: number, reopen = false) => post<PrActionResult>("/prs/close", { root, number, reopen }),
@@ -2560,6 +2574,13 @@ const demoApi: typeof realApi = {
   prDraft: (_r: string, _n: number, _d: boolean) => D(demoPrAction()),
   prUpdateBranch: (_r: string, _n: number, _s?: boolean) => D(demoPrAction()),
   prRerun: (_r: string, _n: number) => D(demoPrAction()),
+  prWatches: () => D({ ok: true, watches: [], presets: [] }),
+  prWatchAdd: (_r: string, _n: number, _t: string, _rule: PrWatchRule) => D({ ok: false, error: "not available in the demo" }),
+  prWatchPending: () => D({ ok: true, fires: [] as PrWatchFire[] }),
+  prWatchAck: (_s: number) => D({ ok: true }),
+  prWatchRemove: (_id: string) => D({ ok: true }),
+  prWatchApply: (_r: string, _n: number, _t: string) => D({ ok: false, applied: 0, error: "not available in the demo" }),
+  prWatchPreset: (_r: string, _rules: PrWatchRule[], _a: boolean) => D({ ok: false, error: "not available in the demo" }),
   prMerge: (_r: string, _n: number, _m: "squash" | "merge" | "rebase", _o: { deleteBranch?: boolean; auto?: boolean; headSha?: string; subject?: string; body?: string; disableAuto?: boolean }) => D(demoPrAction()),
   prClose: (_r: string, _n: number, _reopen?: boolean) => D(demoPrAction()),
   prReviewPrompt: (_r: string, _n: number, _recipe?: string, _card?: string) => D({ ok: false, error: "not available in the demo" }),

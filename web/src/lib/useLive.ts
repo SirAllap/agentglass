@@ -7,7 +7,8 @@ import { emitControl } from "./controlBus.ts";
 import { clientId, emitBrowserAsk } from "./browserBus.ts";
 import { emitUnderstudy } from "./understudyBus.ts";
 import { emitPlugin } from "./pluginBus.ts";
-import { recordNote, fireDesktopAlert, firePopupOnly } from "./sysNotify.ts";
+import { recordNote, fireDesktopAlert, firePopupOnly, fireWatchAlert, deliverPendingWatchFires } from "./sysNotify.ts";
+import { setPrWatchState, hasActiveWatch, reloadPrWatches } from "./prWatchStore.ts";
 import { pollGatesNow } from "./gateStore.ts";
 import { ciShouldNotify } from "./ciNotifyPref.ts";
 import { talkBody, talkShouldNotify, talkSummary, talkUrgency } from "./talkNotify.ts";
@@ -359,6 +360,8 @@ export function useLive(paused = false): LiveData {
          * message about one pull request, from a person.
          */
         const t = frame.data;
+        // A comment watch on this PR says it itself (once, with the same words): not twice.
+        if (hasActiveWatch(t.repo, t.number, ["comment"])) return;
         if (!talkShouldNotify(t)) return;
         recordNote({
           app: "agentglass",
@@ -370,6 +373,8 @@ export function useLive(paused = false): LiveData {
         });
         return;
       }
+      if (frame.type === "prwatch") { setPrWatchState(frame.data); return; }
+      if (frame.type === "prwatchfire") { fireWatchAlert(frame.data); return; }
       if (frame.type === "ci") {
         /*
          * Only the pull requests that are about to merge, unless told
@@ -378,6 +383,7 @@ export function useLive(paused = false): LiveData {
          * line, on something approved it is the last thing between you and
          * merging. See ciNotifyPref.ts; the switch is in Settings.
          */
+        if (hasActiveWatch(frame.data.repo, frame.data.number, ["ci-pass", "ci-fail"])) return; // the watch says it
         if (!ciShouldNotify(frame.data)) return;
         // The server holds the latch, so this arrives once per verdict for a
         // whole suite. Naming the failures is the point: "1 failing" without a
@@ -402,6 +408,9 @@ export function useLive(paused = false): LiveData {
       if (frame.type === "initial") {
         // A socket that just (re)opened may have missed a change while it was down.
         void pollGatesNow();
+        // Fires decided while no window was open, and a watch list that could not be read the first time.
+        void deliverPendingWatchFires();
+        reloadPrWatches();
         // openTools seeds the per-agent "running" state for sessions whose
         // calls have already aged out of the buffer, and it rides on the same
         // first frame — so it is read before the events, not instead of them.

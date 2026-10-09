@@ -139,6 +139,10 @@ import { capBuildCache, removeImages } from "./dockerprune.ts";
 import { inbox, markRead, markRepoRead, unsubscribe } from "./ghinbox.ts";
 import { applyMarks, listMarks, parseMarkOps, talkAlreadyRead, MARK_KINDS } from "./marks.ts";
 import { noteAsk as noteWatchAsk, startPrWatch } from "./prWatch.ts";
+import {
+  listWatches, addWatch, removeWatch, setPreset, applyPreset, sawMine, onTalkSeen as watchOnTalkSeen, pendingFires, ackFire,
+  subscribeWatchChange, subscribeWatchFire, startPrNotifyWatch,
+} from "./prNotifyWatch.ts";
 import { measureFile } from "./filemeasure.ts";
 import { editorCursor } from "./editorwhere.ts";
 import {
@@ -148,7 +152,7 @@ import {
   rerunFailedChecks, mergePr, closePr, filesSince, codeowners, prepareReviewPrompt, pendingReviewFor, branchUrl, subscribeCi, subscribeTalk, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
   prBaseOf,
   ghRateLimit,
-  branchBehind, localHead, prRollup,
+  branchBehind, localHead, prRollup, repoIdFor as prRepoIdFor, subscribeTalkSeen,
   prBranches, prsForBranch, nodeIdOk, locateRepo } from "./prs.ts";
 import { repoSpend } from "./spend.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
@@ -7019,6 +7023,32 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     /* The truth about one pull request's checks — see prRollup. The list's own
        rollup counts a re-run's old attempt beside the new one, and a card
        cannot tell without asking. */
+    /* "Tell me when this pull request's CI does X" — the rules and the repo
+       defaults, kept server side so they outlive the window. See prNotifyWatch.ts. */
+    if (pathname === "/prs/notify-watch" && req.method === "GET") return json({ ok: true, ...listWatches() });
+    // Fires decided while no client was there to hear them, oldest first — for the window on connect and for a phone.
+    if (pathname === "/prs/notify-watch/pending" && req.method === "GET") return json({ ok: true, fires: pendingFires() });
+    if (pathname.startsWith("/prs/notify-watch/") && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      if (pathname === "/prs/notify-watch/remove") return json(removeWatch(String(b.id ?? "")));
+      if (pathname === "/prs/notify-watch/ack") return json(ackFire(Number(b.seq)));
+      const id = await prRepoIdFor(b.root);
+      if (!id) return json({ ok: false, error: "no GitHub remote here" }, 400);
+      const ctx = { repo: id.nameWithOwner, number: Number(b.number), root: String(b.root), title: String(b.title ?? "") };
+      if (pathname === "/prs/notify-watch/add") {
+        const r = addWatch({ ...ctx, rule: b.rule });
+        if (r.ok) prNotifyKick();
+        return json(r, r.ok ? 200 : 400);
+      }
+      if (pathname === "/prs/notify-watch/apply") {
+        const r = applyPreset(ctx);
+        if (r.ok) prNotifyKick();
+        return json(r, r.ok ? 200 : 400);
+      }
+      if (pathname === "/prs/notify-watch/default") return json(setPreset(id.nameWithOwner, b.rules, b.auto === true));
+      return json({ ok: false, error: "not found" }, 404);
+    }
     if (pathname === "/prs/rollup") {
       return json(await prRollup(url.searchParams.get("root") || "", url.searchParams.get("number") || 0, url.searchParams.get("force") === "1"));
     }
@@ -7062,14 +7092,17 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // A real client just asked for this — worth re-asking on a timer even
       // while nobody is on this tab. See prWatch.ts.
       noteWatchAsk(root, filter, state);
-      return json(await listPrs(
+      const listed = await listPrs(
         root,
         filter,
         state,
         url.searchParams.get("force") === "1",
         url.searchParams.get("after") || undefined,
         url.searchParams.get("q") || undefined,
-      ));
+      );
+      // Only an unpaged, unfiltered read is the whole list: a later page's PRs are old, not new.
+      if (!url.searchParams.get("after") && !url.searchParams.get("q")) noteMine(root, filter, state, listed);
+      return json(listed);
     }
     /* Which files moved between two commits of this pull request — see filesSince.
        A GET because it reads, and cached by the client against the pair of shas: the
@@ -9454,6 +9487,24 @@ startAutoFetch();
 // arrives once per verdict no matter how many browser tabs are watching, and
 // the frame carries the names of what failed rather than only a count.
 subscribeCi((v) => broadcast({ type: "ci", data: v }));
+/* The notify watches: any change sends the whole (small) list, a firing sends
+   one frame, and the CI tick reads through prRollup — see prNotifyWatch.ts. */
+/** Your open PRs a list read returned — the auto-apply of a repo's default rules. */
+function noteMine(root: string, filter: string, state: string, r: { repo: { nameWithOwner: string } | null; prs: { number: number; title: string }[] }): void {
+  if (filter !== "mine" || state !== "open" || !r.repo) return;
+  try { sawMine(r.repo.nameWithOwner, root, r.prs); } catch { /* a bookkeeping failure must not fail a list */ }
+}
+// A comment watch is a promise to be told: it reads every remark list the poll sees, before any latch or read mark.
+subscribeTalkSeen(watchOnTalkSeen);
+subscribeWatchChange(() => broadcast({ type: "prwatch", data: listWatches() }));
+subscribeWatchFire((f) => broadcast({ type: "prwatchfire", data: f }));
+const prNotifyKick = process.env.NODE_ENV === "test" ? () => {} : startPrNotifyWatch(async (root, number) => {
+  const r = await prRollup(root, number);
+  if (!(r.ok && r.checks && r.all)) return null;
+  // Past 100 contexts `all` is only the first page: never conclude "all done" from it.
+  const complete = !r.truncated;
+  return { allDone: r.checks.allDone && complete, verdict: complete ? r.checks.verdict : null, all: r.all, state: r.state };
+}).kick;
 // A plugin drew something, or wrote notes on a pull request. The frame says
 // only where to look again; what was drawn is fetched over the token.
 setPluginUiHook((f) => broadcast({ type: "plugin", data: f }));
@@ -9511,7 +9562,7 @@ if (process.env.NODE_ENV !== "test") {
   startPrWatch({
     liveClients: () => clients.size,
     // A root that no longer resolves rejects; a timer has nobody to tell.
-    relist: (root, filter) => { void listPrs(root, filter, "open").catch(() => {}); },
+    relist: (root, filter) => { void listPrs(root, filter, "open").then((r) => noteMine(root, filter, "open", r)).catch(() => {}); },
   });
 }
 /* The Lantern's watch: the field re-read every N minutes, a loud word when

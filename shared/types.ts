@@ -1929,6 +1929,11 @@ export type WsFrame =
    *  server holds the latch, so a suite of sixty-one checks sends one of these,
    *  not sixty-one. */
   | { type: "ci"; data: CiVerdict }
+  /** The whole list of notify watches, after any change to it. Tiny, so it is
+   *  sent whole: one datum, and the board and the detail both read it. */
+  | { type: "prwatch"; data: PrWatchState }
+  /** A notify watch fired. One frame per firing; the client raises the popup. */
+  | { type: "prwatchfire"; data: PrWatchFire }
   /** Somebody said something on a pull request you have a stake in. One frame
    *  per pull request per poll — the server holds the latch, exactly as it does
    *  for `ci` — and never a bot. See PrTalkNote. */
@@ -2059,6 +2064,60 @@ export interface CardNote {
   /** What they said, trimmed to a line. */
   said?: string;
   url?: string;
+}
+
+/**
+ * What a person asked to be told about on one pull request. A LIST of rules per
+ * PR, so a new kind of rule is one more member of this union and one more case
+ * in `evalRule` (server/src/prNotifyWatch.ts), not a new column.
+ *
+ * `check.match` is a case-insensitive substring of the check's name (or its
+ * workflow's), not an exact name: it must work before the check has started and
+ * on every matrix variant ("evals (py3.12)"). Ceiling: substring only, no regex.
+ */
+export type PrWatchRule =
+  | { type: "ci-pass" }
+  | { type: "ci-fail" }
+  | { type: "check"; match: string; on: "fail" | "pass" | "either" }
+  /** Sticky: comments keep coming, so this one stays on until turned off. */
+  | { type: "comment" };
+
+export interface PrWatch {
+  id: string;
+  repo: string; // owner/name
+  number: number;
+  rule: PrWatchRule;
+  /** Waiting. A fired one-shot rule is kept, inactive, so the button can say
+   *  what happened last. */
+  active: boolean;
+  lastAt?: number;
+  lastText?: string;
+}
+
+export interface PrWatchFire {
+  /** The queue position: acknowledge it (`/prs/notify-watch/ack`) once shown, and it is never sent again. */
+  seq: number;
+  /** Which rule fired, and what kind it is — generic on purpose, so another
+   *  client (the phone) can subscribe to the same events. */
+  ruleId: string;
+  rule: PrWatchRule["type"];
+  repo: string;
+  number: number;
+  title: string;
+  /** "CI passed", "CI failed", "evals failed", "New comment". */
+  summary: string;
+  detail: string;
+  ok: boolean;
+}
+
+export interface PrWatchState { watches: PrWatch[]; presets: PrWatchPreset[] }
+
+/** A repo's default rules, applied with one click — and, when `auto`, to each
+ *  new PR of yours in that repo. */
+export interface PrWatchPreset {
+  repo: string;
+  rules: PrWatchRule[];
+  auto: boolean;
 }
 
 /** The aggregate outcome of a PR's checks, once every one of them is terminal. */
@@ -3106,6 +3165,9 @@ export interface PrCheck {
   /** Terminal means it will not change without a new push or a re-run. */
   done: boolean;
   url?: string;
+  /** The run was cancelled (a new push, a sync, a concurrency group), not failed: `state` says failure for the
+   *  board, but a watch must neither report it as a failure nor treat it as finished — a rerun is coming. */
+  cancelled?: boolean;
   /** GitHub will not merge until this one passes. Absent when GitHub was not
    *  asked, which is not the same as "not required". */
   required?: boolean;
