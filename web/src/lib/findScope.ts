@@ -233,7 +233,7 @@ export function registerEngine(fn: () => FindEngine | null): () => void {
  * rebuilt only when the SCOPE moved — which is wrong for a view that swaps its
  * own body: the pull-request panel goes from board to table without changing
  * the element it pushed, so the board's engine stayed live after the board had
- * unmounted. MEASURED, by him: with the bar open, going Board → Mine answered
+ * unmounted. MEASURED: with the bar open, going Board → Mine answered
  * 0/1 and found nothing, and typing the same word again fixed it; leaving the
  * panel and coming back fixed it too, because THAT moved the scope.
  *

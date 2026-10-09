@@ -37,6 +37,10 @@ describe("the template", () => {
   test("one that cannot be filled stays as written and is named; an unknown one is left alone", () => {
     expect(fillTemplate("{author} {status} {nope}", { status: "done" })).toEqual({ text: "{author} done {nope}", missing: ["author"] });
   });
+  test("a value that looks like a placeholder is posted as written, not filled in a second time", () => {
+    // A pull request title is text somebody else typed; "{me}" in it is not ours to expand.
+    expect(fillTemplate("{pr}", { pr: "fix {me} and {author}", me: "Ada Test", author: "Sam Rivera" })).toEqual({ text: "fix {me} and {author}", missing: [] });
+  });
   test("a fixed comment with a gap is not posted, and says why; a whole one is", () => {
     expect(resolveComment("{pr} {author}", prContext({ pr: { number: 1, title: "t" } }))).toEqual({ skip: "the comment names {author}, which is not known here" });
     expect(resolveComment("   ", CTX)).toEqual({ skip: "the comment is empty" });

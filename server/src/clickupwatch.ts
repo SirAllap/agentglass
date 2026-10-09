@@ -297,7 +297,7 @@ export async function pollCards(now = Date.now()): Promise<CardNote[]> {
   /*
    * The cards that moved on the boards you follow, which is the only way to see
    * a mention on a card that is not yours. Scoped to your own lists: a
-   * company's workspace moves constantly and none of the rest is yours to be
+   * shared workspace moves constantly and none of the rest is yours to be
    * told about. A failure here costs the mentions, not the assignments.
    */
   const lists = savedViews().map((v) => v.listId).filter((x): x is string => !!x);

@@ -567,10 +567,10 @@ export function PeekFile({ peek, onClose, topPx }: {
      *     leaves the target in the middle makes you hunt for it a second time.
      *
      * What is NOT sent is a highlight over the changed lines. It was, for one
-     * build, and he saw what it does to a place of a hundred and thirty-five
-     * lines: `DiffChange` is a background, so the whole screen went yellow and
+     * build, and on a place of a hundred and thirty-five lines
+     * it was seen to fail: `DiffChange` is a background, so the whole screen went yellow and
      * the syntax colours underneath it went away. The editor already marks
-     * where you are — his cursorline, his dimming — and that is the marking
+     * where you are — the cursorline, the dimming — and that is the marking
      * this should not compete with.
      */
     jump.current = (line: number) => {

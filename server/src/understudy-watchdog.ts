@@ -113,8 +113,7 @@ export async function recoverAfterRestart(): Promise<Recovery[]> {
      * work that was still missing — two branches sat there already merged and
      * seventeen had been merged and deleted. Re-offering that is asking an
      * agent to spend twenty minutes redoing something that is already in the
-     * tree, which is exactly what he said not to do: "if that work is already
-     * done, we must not do it again".
+     * tree, and work that is already done is never done again.
      *
      * So the branch is asked first. Merged means the work landed — the row
      * says so instead of sitting on hold for ever, and nothing is queued.

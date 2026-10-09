@@ -143,7 +143,7 @@ export function fileInLane(p: PrSummary, stake: Stake, hint?: FailureHint | null
    * already means "your review is still outstanding", and the guard only ever
    * fired when somebody ELSE had approved.
    *
-   * Reported from the app exactly that way: the pill said "Needs my review 1"
+   * Seen in the app exactly that way: the pill said "Needs my review 1"
    * and the board's own review lane said "Nothing here. Good." One screen, one
    * fact, two answers — which is worse than either answer alone.
    */

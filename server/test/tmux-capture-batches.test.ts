@@ -33,7 +33,8 @@ const saved = { ...process.env };
 beforeAll(async () => {
   mkdirSync(TMPDIR, { recursive: true });
   const shim = join(ROOT, "tmux-shim");
-  writeFileSync(shim, `#!/bin/sh\necho "$@" >> "${LOG}"\nexec "${realTmux}" "$@"\n`);
+  // One line per call whatever the arguments hold: a format may carry a newline.
+  writeFileSync(shim, `#!/bin/sh\necho "$1" >> "${LOG}"\nexec "${realTmux}" "$@"\n`);
   chmodSync(shim, 0o755);
   process.env.TMUX_TMPDIR = TMPDIR;
   process.env.AGENTGLASS_TMUX_SOCKET = SOCK;
@@ -122,6 +123,29 @@ step("the batch photographs exactly what asking one session, window and pane at 
   expect(panes).toBeGreaterThan(SESSIONS * 3);
   const w5 = batch!.trees.get("desk2")!.find((w) => w.name === "w5")!;
   expect(w5.panes.map((p) => p.path)).toEqual(["/usr", "/var"]);
+});
+
+step("a tab or a newline in a pane's folder cannot move another field", async () => {
+  /* A folder name is anybody's text. Read raw, a tab in it shifted every field
+     after the path: part of the name became the pane's start command, which a
+     restore replays with `sh -c`, and its pid. A literal `%09` checks that the
+     escape round-trips rather than decoding what was never encoded. */
+  const odd = join(ROOT, "a\tx%09\ty\necho INJECTED");
+  mkdirSync(odd, { recursive: true });
+  sh(["new-window", "-d", "-t", "=desk3", "-n", "odd", "-c", odd, "sleep 602"]);
+  await Bun.sleep(1500);                          // forked panes settle (see above)
+  const { allWindowTrees } = await import("../src/tmuxlayout.ts");
+  const batch = await allWindowTrees();
+  const w = batch!.trees.get("desk3")!.find((x) => x.name === "odd")!;
+  const p = w.panes[0]!;
+  const tm = (f: string) => sh(["display-message", "-t", `=desk3:${w.id}.${p.id}`, "-p", f]).stdout.toString().trim();
+  expect(p.path).toBe(odd);
+  expect(p.pid).toBe(Number(tm("#{pane_pid}")));
+  expect(p.dead).toBeUndefined();
+  expect(batch!.starts.get(p.id)).toBe(tm("#{pane_start_command}"));
+  expect(batch!.starts.get(p.id)).toContain("sleep 602");
+  expect(batch!.starts.get(p.id)).not.toContain("INJECTED");
+  sh(["kill-window", "-t", `=desk3:${w.id}`]);    // the restore step below lists panes line by line
 });
 
 step("a change is written at once", async () => {

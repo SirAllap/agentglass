@@ -1249,8 +1249,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
    *
    * It used to hand the file to whatever nvim happened to be running, and on a
    * machine with none it copied a command to the clipboard and called that an
-   * answer. His words: "that should no longer work that way, it is old — now we
-   * always open a floating modal with nvim". So `e` and the button do the same
+   * answer. The file now always opens in a floating modal with nvim. So `e` and
+   * the button do the same
    * thing the pull request does, and the file opens at the change you were
    * reading with the rest of them down the right.
    */
@@ -1707,7 +1707,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
    * this asked when you ARRIVED on a branch and never again. A pull request
    * merged from anywhere else — the browser, another session, an auto-merge —
    * left the chip saying "2 PRs land here" for as long as the panel stayed on
-   * that branch. Reported from a screenshot of exactly that, two minutes after
+   * that branch. Seen exactly that way, two minutes after
    * both of them had merged.
    *
    * Two triggers, and neither is a poll:

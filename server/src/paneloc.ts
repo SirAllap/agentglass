@@ -58,7 +58,7 @@ const AGENT_COMMS = new Set(["claude", "codex", "gemini", "amp", "opencode", "cr
  * file lives in.
  *
  * `comm` says `node` for every one of them, so a walk that matches names
- * never sees a qwen or a gemini at all: measured on the owner's machine,
+ * never sees a qwen or a gemini at all: measured on a development machine,
  * `/usr/bin/qwen` is `#!/usr/bin/env node` and its process is
  * `node /usr/lib/node_modules/@qwen-code/qwen-code/scripts/cli-entry.js`,
  * which is why a tab running it was read as a plain shell — no agent, no

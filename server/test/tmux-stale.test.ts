@@ -13,12 +13,12 @@
 // private socket", and it was wrong in the two ways that mattered. The socket
 // NAME was private; the DIRECTORY and the CONFIGURATION were the developer's.
 // `-L agx-stale-test` with no TMUX_TMPDIR lands in /tmp/tmux-<uid>, beside the
-// `default` his sessions are on, and no `-f` means the server reads
+// `default` the developer's sessions are on, and no `-f` means the server reads
 // ~/.tmux.conf like any other.
 //
 // Not deduced — measured, by running the whole server suite behind a `tmux` that
 // resolves the socket by tmux's own rule and records where each call lands. This
-// file made 239 of the 333 calls that reached his socket directory, and the
+// file made 239 of the 333 calls that reached the developer's socket directory, and the
 // callers name what was really happening:
 //
 //   .tmux/plugins/tpm/tpm                          63 calls from kanagawa.sh
@@ -26,14 +26,14 @@
 //   .tmux/plugins/tmux-continuum/continuum.tmux
 //   .tmux/plugins/tmux-continuum/scripts/continuum_restore.sh   <- this one ran
 //
-// His plugin manager was not "inheritable", it was EXECUTING inside a fixture
-// this file created and then `kill-server`s. `@continuum-restore 'on'` is in his
-// config, and the only thing that stopped it rebuilding his workspace in here is
+// The developer's plugin manager was not "inheritable", it was EXECUTING inside a fixture
+// this file created and then `kill-server`s. `@continuum-restore 'on'` is in the
+// developer's config, and the only thing that stopped it rebuilding their workspace in here is
 // continuum's own `another_tmux_server_running_on_startup` — literally "is
-// another tmux of mine already up". On a fresh boot, on CI, or any evening his
+// another tmux of mine already up". On a fresh boot, on CI, or any evening their
 // tmux is down, that check flips and this file starts the only server on the
-// machine, with his config, with restore on, and with tmux-assistant-resurrect
-// relaunching his agent CLIs `--resume` into it. That is not a new risk: it is
+// machine, with their config, with restore on, and with tmux-assistant-resurrect
+// relaunching their agent CLIs `--resume` into it. That is not a new risk: it is
 // the exact afternoon tmuxIsolated.ts was written about.
 //
 // So: `-f /dev/null` for the config and a TMUX_TMPDIR of our own for the
@@ -43,7 +43,7 @@
 // directory to `listPanes`.
 //
 // The assertions below read `list-keys` and `show-options`, so until now they
-// were measuring his dotfiles and passing by luck. Under `-f /dev/null` they
+// were measuring the developer's dotfiles and passing by luck. Under `-f /dev/null` they
 // measure tmux's own defaults, which is what they were always claiming to.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";

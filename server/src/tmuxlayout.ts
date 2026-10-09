@@ -42,12 +42,27 @@ const PANE_RE = /^%\d+$/;
  *  nothing a shell would read, and nothing else is accepted for `-t` either. */
 export const LAYOUT_RE = /^[0-9a-f]{4},[0-9x,{}\[\]]+$/;
 
+/**
+ * A free-form field, escaped by tmux itself before it reaches a row.
+ *
+ * Rows are tab-separated and newline-ended, and a directory name, a window or
+ * session name, a process name or a start command may hold a tab or a newline
+ * of its own. Read raw, a pane whose folder name held a tab shifted every
+ * field after it: part of the folder name landed in the start command a
+ * restore replays with `sh -c`, and in the pid a conversation is found by.
+ * So tmux percent-escapes `%`, tab and newline in each free-form field and
+ * `unfree` turns them back; no value can then hold a separator.
+ */
+const free = (v: string): string => `#{s/%/%25/;s/\t/%09/;s/\n/%0A/:${v}}`;
+export const unfree = (s: string | undefined): string =>
+  (s ?? "").replace(/%(25|09|0A)/g, (_, h: string) => (h === "25" ? "%" : h === "09" ? "\t" : "\n"));
+
 /** One window row for a session, or null when the session is gone. */
 export async function listWindows(name: string): Promise<TmuxWindow[]> {
   if (!validSessionName(name)) return [];
   const r = await tmux([
     "list-windows", "-t", `=${name}`,
-    "-F", "#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{window_flags}\t#{window_layout}",
+    "-F", `#{window_id}\t#{window_index}\t${free("window_name")}\t#{window_active}\t#{window_flags}\t#{window_layout}`,
   ]);
   if (!r.ok) return [];
   return r.stdout.split("\n").filter(Boolean).map((line) => {
@@ -55,7 +70,7 @@ export async function listWindows(name: string): Promise<TmuxWindow[]> {
     /* How the window is split, in tmux's own words — the one string that
        brings a window back split the way it was, not merely into as many
        panes. See tmuxrestore.ts (restoreLayout). */
-    return { id, index: Number(index), name: name_ ?? "", active: active === "1", flags: flags ?? "", ask: undefined, phone: undefined, agent: undefined, ...(layout && LAYOUT_RE.test(layout) ? { layout } : {}) };
+    return { id, index: Number(index), name: unfree(name_), active: active === "1", flags: flags ?? "", ask: undefined, phone: undefined, agent: undefined, ...(layout && LAYOUT_RE.test(layout) ? { layout } : {}) };
   }).filter((w) => WINDOW_RE.test(w.id));
 }
 
@@ -64,14 +79,14 @@ export async function windowPanes(name: string, windowId: string): Promise<TmuxP
   if (!validSessionName(name) || !WINDOW_RE.test(windowId)) return null;
   const r = await tmux([
     "list-panes", "-t", `=${name}:${windowId}`,
-    "-F", "#{pane_id}\t#{pane_index}\t#{pane_active}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_dead}\t#{pane_pid}",
+    "-F", `#{pane_id}\t#{pane_index}\t#{pane_active}\t${free("pane_current_command")}\t${free("pane_current_path")}\t#{pane_dead}\t#{pane_pid}`,
   ]);
   if (!r.ok) return null;
   return r.stdout.split("\n").filter(Boolean).map((line) => {
     const [id, index, active, command, path, dead, pid] = line.split("\t");
     const n = Number(pid);
     return {
-      id, index: Number(index), active: active === "1", command: command ?? "", path: path ?? "",
+      id, index: Number(index), active: active === "1", command: unfree(command), path: unfree(path),
       ...(dead === "1" ? { dead: true } : {}), ...(Number.isInteger(n) && n > 1 ? { pid: n } : {}),
     };
   }).filter((p) => PANE_RE.test(p.id));
@@ -96,42 +111,43 @@ export async function windowTree(name: string): Promise<TmuxWindowDetail[]> {
  * The layout sweep used to ask per session, per window and per pane: 57 spawns
  * a tick on 8 sessions, 170 on 24, every ten seconds. `-a` lists the whole
  * server at once; the rows are the ones `listWindows`/`windowPanes` parse, with
- * the session name in front. A start command can hold a newline, so each pane
- * row ends in a marker instead of trusting the line break. Null when tmux did
- * not answer, so the caller can fall back to asking one session at a time.
+ * the session name in front. A start command can hold a newline and a folder
+ * name a tab, so every free-form field is escaped (`free`) and a row is one
+ * line with a fixed number of fields. Null when tmux did not answer, so the caller can fall back to
+ * asking one session at a time.
  */
-const ROW_END = "~~agx-end~~";
 export async function allWindowTrees(): Promise<{ trees: Map<string, TmuxWindowDetail[]>; starts: Map<string, string> } | null> {
   const [wr, pr] = await Promise.all([
-    tmux(["list-windows", "-a", "-F", "#{session_name}\t#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{window_flags}\t#{window_layout}"]),
-    tmux(["list-panes", "-a", "-F", `#{session_name}\t#{window_id}\t#{pane_id}\t#{pane_index}\t#{pane_active}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_dead}\t#{pane_pid}\t#{pane_start_command}${ROW_END}`]),
+    tmux(["list-windows", "-a", "-F", `${free("session_name")}\t#{window_id}\t#{window_index}\t${free("window_name")}\t#{window_active}\t#{window_flags}\t#{window_layout}`]),
+    tmux(["list-panes", "-a", "-F", `${free("session_name")}\t#{window_id}\t#{pane_id}\t#{pane_index}\t#{pane_active}\t${free("pane_current_command")}\t${free("pane_current_path")}\t#{pane_dead}\t#{pane_pid}\t${free("pane_start_command")}`]),
   ]);
   if (!wr.ok || !pr.ok) return null;
   const trees = new Map<string, TmuxWindowDetail[]>();
   const byWindow = new Map<string, TmuxWindowDetail>();
   for (const line of wr.stdout.split("\n").filter(Boolean)) {
-    const [sess = "", id = "", index, name_, active, flags, layout] = line.split("\t");
+    const [rawSess, id = "", index, name_, active, flags, layout] = line.split("\t");
+    const sess = unfree(rawSess);
     if (!WINDOW_RE.test(id)) continue;
-    const w: TmuxWindowDetail = { id, index: Number(index), name: name_ ?? "", active: active === "1", flags: flags ?? "", ...(layout && LAYOUT_RE.test(layout) ? { layout } : {}), panes: [] };
+    const w: TmuxWindowDetail = { id, index: Number(index), name: unfree(name_), active: active === "1", flags: flags ?? "", ...(layout && LAYOUT_RE.test(layout) ? { layout } : {}), panes: [] };
     if (!trees.has(sess)) trees.set(sess, []);
     trees.get(sess)!.push(w);
     byWindow.set(`${sess}\t${id}`, w);
   }
   const starts = new Map<string, string>();
-  for (const rec of pr.stdout.split(ROW_END)) {
-    const row = rec.replace(/^\n/, "");
-    if (!row) continue;
+  for (const row of pr.stdout.split("\n")) {
     const f = row.split("\t");
-    const [sess = "", win = "", id = "", index, active, command, path, dead, pid] = f;
+    // Exactly ten fields or the row is not one this asked for.
+    if (f.length !== 10) continue;
+    const [rawSess, win = "", id = "", index, active, command, path, dead, pid, start] = f;
     if (!PANE_RE.test(id)) continue;
-    const w = byWindow.get(`${sess}\t${win}`);
+    const w = byWindow.get(`${unfree(rawSess)}\t${win}`);
     if (!w) continue;
     const n = Number(pid);
     w.panes.push({
-      id, index: Number(index), active: active === "1", command: command ?? "", path: path ?? "",
+      id, index: Number(index), active: active === "1", command: unfree(command), path: unfree(path),
       ...(dead === "1" ? { dead: true } : {}), ...(Number.isInteger(n) && n > 1 ? { pid: n } : {}),
     });
-    starts.set(id, f.slice(9).join("\t").trim());
+    starts.set(id, unfree(start).trim());
   }
   return { trees, starts };
 }

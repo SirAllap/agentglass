@@ -33,7 +33,7 @@ const {
 } = require("./guest-guard.js");
 const { startEgressProxy, literalRefusal, EGRESS_ENV } = require("./egress-guard.js");
 /* S9: the honest "an agent is driving this" header — see identify-header.js
-   for the decision and browser-phase3-plan-2026-09-25.md §S9/D8 for why. */
+   for the decision and which origins count. */
 const { IDENTIFY_HEADER, shouldIdentify, createOwnerBook } = require("./identify-header.js");
 
 /**
@@ -1243,13 +1243,15 @@ async function ensureServer(adopt) {
      tells TypeScript that the two ternaries are asking the same question. */
   const [cmd, argv] = PACKAGED
     ? [/** @type {string} */ (SIDECAR_BIN), []]
-    : ["bun", ["--no-env-file", "run", path.join(REPO, "server", "src", "index.ts")]];
+    : ["bun", ["--no-env-file", `--config=${path.join(REPO, "server", "bunfig.toml")}`, "run", path.join(REPO, "server", "src", "index.ts")]];
   /* No `cwd`, on purpose and with a ceiling. The sidecar starts in the launch
      directory because the open project's default root, the Clone's checkout and
      the self-update script are found from it; a data directory would quietly
      empty those. What a launch directory must not do is configure the server:
      the binary is compiled without `.env` and `bunfig.toml` autoload
-     (build.mjs), and the dev spawn passes --no-env-file. */
+     (build.mjs), and the dev spawn passes --no-env-file and names the repo's
+     own bunfig.toml, which makes bun skip the one in the launch directory
+     (that file only holds the test preload). */
   const child = spawn(cmd, argv, { stdio: DESK_PIPE ? ["ignore", "ignore", "pipe", "pipe"] : ["ignore", "ignore", "pipe"], env });
   sidecar = child;
   const err = tailStderr(child);
@@ -2762,7 +2764,7 @@ function registerIpc(win) {
           /*
            * On EVERY load, and once more a beat later.
            *
-           * `once("dom-ready")` was not enough and he noticed: the DevTools
+           * `once("dom-ready")` was not enough: the DevTools
            * front-end is a page that reloads itself as panels come up, and each
            * load resets the zoom to 1 — so the level came back only if you were
            * quick. `on` rather than `once` covers the reloads; the delayed
@@ -3825,7 +3827,7 @@ function guardWebviews(win, opts = {}) {
      * For a SIGN-IN it is fatal. Google's, Microsoft's and every SSO flow open
      * a popup and then talk back to it: `window.opener`, `postMessage`, and a
      * handle they hold on to. Denying the open hands the page a null, and what
-     * you get is exactly what he saw — six of "[GSI_LOGGER] Failed to open
+     * you get is six of "[GSI_LOGGER] Failed to open
      * popup window on url… Maybe blocked by the browser?" and two stray tabs
      * called "Login" that could never finish anything.
      *
@@ -3901,7 +3903,7 @@ function guardWebviews(win, opts = {}) {
          * worth one more thing that behaves unlike every other browser.
          */
         /* TRUE. A sign-in window that dies because the page underneath it
-           navigated is exactly the symptom he described — the verification-code
+           navigated is exactly the symptom seen — the verification-code
            page appearing for a moment and vanishing — and the page underneath a
            sign-in navigates as a matter of course, because that is what a
            sign-in does to it. */
@@ -3973,8 +3975,7 @@ function guardWebviews(win, opts = {}) {
 
     /*
      * S9: `X-Agentglass-Agent`, self-asserted and sent only to a dev origin —
-     * see identify-header.js for what counts as one, and browser-phase3-plan
-     * -2026-09-25.md §S9 for why (D8). Off until `ag:browserSessionSettings`
+     * see identify-header.js for what counts as one and why. Off until `ag:browserSessionSettings`
      * turns it on for THIS session; nothing here reaches the switch.
      *
      * ONE dispatcher per session, same rule the COOP filter just above is

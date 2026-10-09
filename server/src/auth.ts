@@ -588,7 +588,7 @@ export function scopeNeeded(method: string, pathname: string): Scope {
  * `/chat/send` and `/terminal/tmux/windows` are the two names that are
  * deliberately *not* here, and understudy-allowlist.test.ts asserts both by
  * name rather than by rule. The first is speaking as him into a running agent;
- * the second reshapes his desk out from under him. Something that can do either
+ * the second reshapes the person's desk out from under them. Something that can do either
  * has stopped being a watcher, so on the day somebody adds "just let it reply",
  * the failing test is the conversation that should happen first.
  */
@@ -665,6 +665,20 @@ export function understudyRequiresToken(token: string | null | undefined): boole
  *  to list it twice. */
 export function isDeskPrivatePluginPath(pathname: string): boolean {
   return pathname === "/plugins/settings" || pathname === "/plugins/panels" || pathname.startsWith("/plugins/panels/");
+}
+
+/**
+ * May this caller read a pull request by a `gh:owner/name` root?
+ *
+ * Such a root is read with the person's gh token, which sees every repository
+ * they can, while every scope here is written against the open project. So it
+ * is for a caller that could already do anything here: this machine (null, or
+ * the machine token) or a full-scope paired device. A read-only phone, a
+ * plugin whatever its scope, the understudy and a seat are refused.
+ */
+export function mayReadForeignRoot(caller: Caller | null): boolean {
+  if (caller === null) return true;
+  return caller.kind !== "plugin" && caller.scope === "full" && !caller.principal;
 }
 
 /** True when this caller may make this request. */

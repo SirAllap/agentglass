@@ -24,7 +24,7 @@
  * still does not doze off on its own. Plain block was the first version, and
  * it did what it says to every suspend, that one included: with an agent
  * mid-turn the menu entry answered "Operation inhibited" and nothing happened,
- * with nothing on screen saying why. Measured on the owner's laptop.
+ * with nothing on screen saying why. Measured on a laptop.
  *
  * `block-weak` arrived in systemd 257. An older logind refuses the mode at
  * once ("Invalid mode specification", exit 1, measured on 261 with a bogus

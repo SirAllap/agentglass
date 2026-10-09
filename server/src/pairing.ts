@@ -32,8 +32,10 @@ import { issueDevice, type Scope, type Device } from "./devices.ts";
  * (3) is what keeps this honest on a network without TLS, which is the normal
  * case here: the server speaks plain HTTP over the LAN. Anything on that wifi
  * running tcpdump sees every byte of this exchange — the ticket, the code, the
- * public keys — and still cannot read the credential, because it never travels
- * in the clear and the key that unwraps it never leaves the phone.
+ * public keys — and still cannot read the credential, because it is delivered
+ * encrypted and the key that unwraps it never leaves the phone. That covers the
+ * exchange only; the requests the phone makes afterwards carry the credential
+ * (see SECURITY.md, "After pairing").
  *
  * What this does **not** defend against, today: an active on-path attacker.
  * The phone's public key is never bound to the six-digit code shown only at

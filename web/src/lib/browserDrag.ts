@@ -1,8 +1,8 @@
 // Dragging a page onto the shelf, without the HTML5 drag API.
 //
 // The first version used `draggable` + `dragstart`/`dragover`/`drop`. It
-// rendered the attribute, the handlers were wired, and nothing happened when he
-// tried it — twice. Rather than keep guessing at why (a frameless Electron
+// rendered the attribute, the handlers were wired, and nothing happened when
+// tried — twice. Rather than keep guessing at why (a frameless Electron
 // window, a `<webview>` sibling, a scroller, an `onMouseDown` that selects the
 // row: any of them is a plausible suspect and none of them is provable from
 // here), the drag is done with pointer events, which this app already uses for

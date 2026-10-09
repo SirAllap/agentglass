@@ -519,9 +519,12 @@ const MAX_EMOJI_GLUE = 16;
  * a link reference definition (`[x]: # (note)`) renders nothing; `<details>`
  * collapses what is inside it; three newlines in a row push text below the
  * four rows the box shows, where GitHub collapses the gap and draws it under
- * the person's name.
+ * the person's name. A link reference definition needs no space after its
+ * colon, may sit inside a blockquote or a list item, and may put its
+ * destination on the next line, so the line is matched from its container
+ * prefixes to the colon and no further; `hidden` on any tag hides the element.
  */
-const HIDDEN_MARKUP = /<!--|<details\b|^[ \t]*\[[^\]\n]*\]:[ \t]/mi;
+const HIDDEN_MARKUP = /<!--|<details\b|<[a-z][^>\n]*\shidden\b|^[ \t]{0,3}(?:>[ \t]*|[-*+][ \t]+|\d+[.)][ \t]+)*\[[^\]\n]*\]:/mi;
 
 /** `owner/name`, or null. */
 export function repoName(raw: unknown): string | null {

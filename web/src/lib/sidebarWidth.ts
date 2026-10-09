@@ -57,7 +57,7 @@ export function subscribeSidebarWidth(fn: () => void): () => void {
  * which is what "the layout breaks" looks like: a project chip printed
  * straight across a percentage.
  *
- * Reported by dragging the handle: the columns did not scroll and did not
+ * Seen by dragging the handle: the columns did not scroll and did not
  * truncate, they collided. Hiding the horizontal overflow (the fix before
  * this one) removed the scrollbar and left the collision, which is worse — a
  * scrollbar at least admits something did not fit.

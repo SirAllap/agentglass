@@ -212,7 +212,7 @@ async function submitConfirmed(windowId: string, pasted: string, deadline: numbe
  * worktrees are under a path he had already answered for. A private config
  * directory starts with none.
  *
- * So the answer is written before the pane opens: this is his machine, his
+ * So the answer is written before the pane opens: this is the person's own machine, their
  * repository, and a worktree the app itself just cut off his own branch. There
  * is nobody else to ask.
  */
@@ -252,7 +252,7 @@ function cloneClaudeHome(): string | null {
      * place, because that check used `-p`, and one-shot mode skips the
      * ceremony. The pane does not.
      *
-     * Written, not copied: this file is a hundred kilobytes of his projects,
+     * Written, not copied: this file is a hundred kilobytes of the person's projects,
      * his history and his tips. The clone needs four fields — that onboarding
      * is done, which version did it, when it started, and a theme — and has no
      * business holding the rest. Only when there is nothing here, so anything
@@ -286,14 +286,14 @@ function cloneClaudeHome(): string | null {
      * of runs.
      *
      * Found by A/B rather than by reading: the same command in the same
-     * worktree, once with his config and once with this one. His came up at a
+     * worktree, once with the person's config and once with this one. That one came up at a
      * prompt; this one came up at the agreement. That is the whole diagnosis,
      * and it took twenty seconds after two wrong guesses that each looked
      * right on their own.
      *
      * Written only when there is no settings.json, so anything the clone is
      * given later stays. The flag is not a new permission — the mode is
-     * already chosen by the caller, on his machine, in a worktree this app
+     * already chosen by the caller, on the person's machine, in a worktree this app
      * cut off his own branch; this is only the acknowledgement that nobody is
      * sitting there to press 2.
      */

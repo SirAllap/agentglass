@@ -23,7 +23,7 @@ export interface BrowserProfile {
   name: string;
   /** S9: send `X-Agentglass-Agent` to a dev origin from this profile's tabs.
    *  Off unless the profile turns it on — see identify-header.js for what a
-   *  dev origin is and browser-phase3-plan-2026-09-25.md §S9 for why. Absent
+   *  dev origin is and why. Absent
    *  is the same as false, so a profile saved before this existed opens off. */
   identify?: boolean;
 }

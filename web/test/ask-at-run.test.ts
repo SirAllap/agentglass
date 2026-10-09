@@ -18,7 +18,7 @@ import { stepChanges } from "../src/lib/stepAssign.ts";
 import { AUTHOR_IS_MEMBER } from "../../shared/providers.ts";
 
 const m = (id: number, name: string, over: Partial<ListMember> = {}): ListMember => ({ id, name, initials: name.slice(0, 2), ...over });
-const TEAM = [m(1, "Zoe Okafor"), m(2, "Ada Test", { me: true }), m(3, "Sam Rivera"), m(4, "Priya Nair"), m(5, "Leo Marsh")];
+const TEAM = [m(1, "Zoe Okafor"), m(2, "Ada Test", { me: true }), m(3, "Sam Rivera"), m(4, "Pia Novak"), m(5, "Leo Marsh")];
 const person = (id: number): Picked[number] => ({ kind: "person", id, name: TEAM.find((x) => x.id === id)!.name });
 
 describe("a GitHub user is never matched to a ClickUp member", () => {
@@ -77,8 +77,8 @@ describe("where the picker starts", () => {
     expect(startingPick({ who: "me" }, { members: null }).pick).toEqual([{ kind: "me" }]);
   });
   test("a named person, several people, and nobody", () => {
-    expect(startingPick({ who: "person", person: { id: 4, name: "Priya Nair" } }, { members: TEAM }).pick).toEqual([person(4)]);
-    expect(startingPick({ who: "person", person: { id: 4, name: "Priya Nair" }, also: [{ id: 5, name: "Leo Marsh" }] }, { members: TEAM }).pick).toEqual([person(4), person(5)]);
+    expect(startingPick({ who: "person", person: { id: 4, name: "Pia Novak" } }, { members: TEAM }).pick).toEqual([person(4)]);
+    expect(startingPick({ who: "person", person: { id: 4, name: "Pia Novak" }, also: [{ id: 5, name: "Leo Marsh" }] }, { members: TEAM }).pick).toEqual([person(4), person(5)]);
     expect(startingPick({ who: "none" }, { members: TEAM }).pick).toEqual([]);
   });
 });
@@ -95,14 +95,14 @@ describe("several people", () => {
     expect(togglePick([{ kind: "me" }], TEAM[1]!)).toEqual([]);
   });
   test("the trigger says up to two names and counts the rest; the sentence names them all", () => {
-    expect(shortName("David Pallares")).toBe("David P.");
+    expect(shortName("Sam Rivera")).toBe("Sam R.");
     expect(shortName("Cher")).toBe("Cher");
-    const three: Picked = [{ kind: "person", id: 1, name: "David Pallares" }, { kind: "person", id: 2, name: "Alex Moreno" }, { kind: "person", id: 3, name: "Priya Nair" }];
+    const three: Picked = [{ kind: "person", id: 1, name: "Sam Rivera" }, { kind: "person", id: 2, name: "Ada Lovelace" }, { kind: "person", id: 3, name: "Leo Marsh" }];
     expect(pickName([])).toBe("nobody");
-    expect(pickName(three.slice(0, 2))).toBe("David P., Alex M.");
-    expect(pickName(three)).toBe("David P., Alex M. +1");
-    expect(pickSentence(three.slice(0, 2))).toBe("David P. and Alex M.");
-    expect(pickSentence(three)).toBe("David P., Alex M. and Priya N.");
+    expect(pickName(three.slice(0, 2))).toBe("Sam R., Ada L.");
+    expect(pickName(three)).toBe("Sam R., Ada L. +1");
+    expect(pickSentence(three.slice(0, 2))).toBe("Sam R. and Ada L.");
+    expect(pickSentence(three)).toBe("Sam R., Ada L. and Leo M.");
     expect(pickSentence([{ kind: "me" }])).toBe("you");
   });
   test("they mean the same one write as a single person does: added when missing, nobody else taken off", () => {
@@ -111,7 +111,7 @@ describe("several people", () => {
     expect(e.kind).toBe("many");
     const { write, named } = stepChanges({ people, unassign: "all", ensure: e });
     expect(write).toEqual({ add: [3, 4], rem: [5] }); // Ada stays (picked and already on), Leo comes off with "everyone"
-    expect(named).toBe("Sam Rivera and Priya Nair");
+    expect(named).toBe("Sam Rivera and Pia Novak");
     expect(stepChanges({ people, unassign: "none", ensure: pickToEnsure([{ kind: "me" }, person(3)]) }).write).toEqual({ add: [3] });
     expect(pickToEnsure([])).toEqual({ kind: "none" });
   });
@@ -121,7 +121,7 @@ describe("the picker holds its starting choice", () => {
   const Probe = ({ start }: { start: Parameters<typeof startingPick>[0] }) => React.createElement(AssignPicker, { state: useAskAssign({ on: true, start, members: TEAM, onCard: [{ id: 5 }] }) });
   test("it opens on the default, on several people, and on nobody when that is the default: the card is not given to the person merging", () => {
     expect(renderToStaticMarkup(React.createElement(Probe, { start: { who: "me" } }))).toContain('aria-label="Assign to: you"'.replace("you", "Ada T."));
-    expect(renderToStaticMarkup(React.createElement(Probe, { start: { who: "person", person: { id: 3, name: "Sam Rivera" }, also: [{ id: 4, name: "Priya Nair" }] } }))).toContain('aria-label="Assign to: Sam R., Priya N."');
+    expect(renderToStaticMarkup(React.createElement(Probe, { start: { who: "person", person: { id: 3, name: "Sam Rivera" }, also: [{ id: 4, name: "Pia Novak" }] } }))).toContain('aria-label="Assign to: Sam R., Pia N."');
     expect(renderToStaticMarkup(React.createElement(Probe, { start: { who: "none" } }))).toContain('aria-label="Assign to: nobody"');
   });
   test("what the person chose is not moved by a later answer from the server", async () => {
@@ -136,16 +136,16 @@ describe("taking people off", () => {
     expect(startingTakeOff({ who: "none" }, { cardPeople: onCard })).toEqual([]);
     expect(startingTakeOff({ who: "me" }, { cardPeople: onCard })).toEqual([person(2)]);
     expect(startingTakeOff({ who: "all" }, { cardPeople: onCard })).toEqual([person(2), person(3), person(4)]);
-    expect(startingTakeOff({ who: "people", people: [{ id: 4, name: "Priya Nair" }, { id: 99, name: "Gone" }] }, { cardPeople: onCard })).toEqual([person(4)]);
+    expect(startingTakeOff({ who: "people", people: [{ id: 4, name: "Pia Novak" }, { id: 99, name: "Gone" }] }, { cardPeople: onCard })).toEqual([person(4)]);
   });
   test("a pick means ids, with the person pressing resolved from the members", () => {
     expect(pickedIds([{ kind: "me" }, person(3)], TEAM)).toEqual([2, 3]);
   });
   test("named people come off, and only those on the card; everybody else stays, and an ensured person never does", () => {
-    const people = [{ id: 2, me: true, name: "Ada Test" }, { id: 3, name: "Sam Rivera" }, { id: 4, name: "Priya Nair" }];
+    const people = [{ id: 2, me: true, name: "Ada Test" }, { id: 3, name: "Sam Rivera" }, { id: 4, name: "Pia Novak" }];
     expect(stepChanges({ people, unassign: "none", takeOff: [3, 99], ensure: { kind: "none" } }).write).toEqual({ rem: [3] });
     expect(stepChanges({ people, unassign: "all", takeOff: [], ensure: { kind: "none" } }).write).toEqual({});
-    expect(stepChanges({ people, unassign: "none", takeOff: [3, 4], ensure: { kind: "person", id: 4, name: "Priya Nair" } }).write).toEqual({ rem: [3] });
+    expect(stepChanges({ people, unassign: "none", takeOff: [3, 4], ensure: { kind: "person", id: 4, name: "Pia Novak" } }).write).toEqual({ rem: [3] });
   });
   test("the run-time picker is the same component, over the card's people", async () => {
     const src = await Bun.file(new URL("../src/components/AssignPicker.tsx", import.meta.url).pathname).text();

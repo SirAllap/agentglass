@@ -94,7 +94,7 @@ export function factsLine(base: SideTally, head: SideTally): string {
   return `${phrase(base)} on base, ${phrase(head)} on head`;
 }
 
-const RUNNERS = /^(pytest|python3?|bun|npm|pnpm|yarn|npx|make|go|cargo|uv|tox|node|deno|dotnet|mvn|gradle|bundle|rspec|phpunit|\.\/)/;
+const RUNNERS = /^(?:(?:pytest|python3?|bun|npm|pnpm|yarn|npx|make|go|cargo|uv|tox|node|deno|dotnet|mvn|gradle|bundle|rspec|phpunit)(?: |$)|\.\/)/;
 const shellQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 /**
@@ -102,20 +102,40 @@ const shellQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
  * name IS a command, or a pytest node id. Anything else is left empty — the
  * log's own `Run …` line is not kept, so a guess would be a guess. The person
  * edits it, and the page remembers what they settled on.
+ *
+ * A step name or an annotation title is written by whoever wrote the workflow,
+ * which on a pull request from a fork is the fork. So a suggestion is short
+ * enough to be read whole in the two-row box, single-spaced, and made of
+ * characters a command line of words needs and nothing that chains, redirects
+ * or substitutes; anything else is not suggested at all.
  */
+const SUGGEST_MAX = 120;
+const PLAIN_COMMAND = /^[\w./:=@+,-]+(?: [\w./:=@+,-]+)*$/;
 export function suggestCommand(f: { kind: string; title: string }): string {
   const title = f.title.trim();
-  if (!title || title.length > CHECK_COMMAND_MAX) return "";
-  if (f.kind === "step" || f.kind === "annotation") return RUNNERS.test(title) ? title : "";
+  if (!title || title.length > SUGGEST_MAX) return "";
+  if (f.kind === "step" || f.kind === "annotation") return RUNNERS.test(title) && PLAIN_COMMAND.test(title) ? title : "";
   if (f.kind === "pytest" && /^[\w./-]+\.py(::|$)/.test(title)) return `python3 -m pytest ${shellQuote(title)}`;
   return "";
 }
+
+/**
+ * Characters that can make the box show less than what runs: control
+ * characters (a newline pushes the rest below the visible rows), bidi
+ * overrides and isolates (they reorder what is shown), zero-width and
+ * invisible formatting characters, and a long run of spaces that pads the
+ * rest out of view.
+ */
+const HIDING = /[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/;
+const PADDING = /[ \u00a0\u2000-\u200a\u3000]{8,}/;
 
 /** Why a command is refused before anything runs; "" when it may run. */
 export function commandProblem(cmd: unknown): string {
   if (typeof cmd !== "string" || !cmd.trim()) return "write the command to run";
   if (cmd.length > CHECK_COMMAND_MAX) return `the command is longer than ${CHECK_COMMAND_MAX} characters`;
   if (cmd.includes("\0")) return "the command holds a NUL byte";
+  if (HIDING.test(cmd)) return "the command holds a line break or an invisible character; write it on one line";
+  if (PADDING.test(cmd)) return "the command holds a long run of spaces that can hide the rest of it";
   return "";
 }
 

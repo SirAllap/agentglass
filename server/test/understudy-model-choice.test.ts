@@ -6,10 +6,10 @@
  * most expensive model there is, out of a weekly allowance shared with the
  * person whose account it is.
  *
- * His rule, in his own words: haiku when the work is "almost a copy and
- * paste", sonnet for the middle, opus "for things where I want it to do a
- * really top-notch analysis". And one prohibition that is not about quality: Fable is
- * never used here, because that allowance is what he needs for his own work.
+ * The rule: haiku when the work is close to a copy and paste, sonnet for the
+ * middle, opus for a deep analysis. And one prohibition that is not about
+ * quality: Fable is never used here, because that allowance is what the person
+ * needs for their own work.
  */
 import { describe, expect, test } from "bun:test";
 import { chooseModel, FORBIDDEN_MODELS } from "../src/understudy-model.ts";

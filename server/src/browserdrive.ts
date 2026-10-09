@@ -47,10 +47,9 @@ import { diskAllows, diskEnabled } from "./disk.ts";
 /*
  * TABS, which the browser has had all along and the agents could not reach.
  *
- * Reported by an agent, in its own words: "tabs belong to the browser's UI;
- * the CLI I drive only has open/read/click/type/wait/shot/text/back/forward/
- * scroll/press — there is no verb for switching tab, and `open` replaces the
- * current view. So I move the agent's side outside the browser."
+ * The CLI only had open/read/click/type/wait/shot/text/back/forward/scroll/
+ * press: no verb for switching tab, and `open` replaced the current view, so
+ * an agent's side of the work had to move outside the browser.
  *
  * That is a real cost and it was ours: the panel has tabs, grouped into
  * folders, with profiles under them — and none of it was addressable. An
@@ -3279,7 +3278,7 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
  */
 
 /**
- * Several verbs, one call — spec §1, the first item on his own list by return.
+ * Several verbs, one call — spec §1.
  *
  * MEASURED, which is the only reason this shape and not another: starting the
  * CLI process costs 104 ms before it has said a word, and the round trip to

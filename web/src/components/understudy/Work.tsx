@@ -2,10 +2,10 @@
  * The work loop, on screen.
  *
  * Everything else in this panel was built around a different question. The
- * scorecard measures whether the understudy DECIDES like him; the queue shows
- * what it would ask for and waits. Both are instruments, and his answer to what
- * they added up to was that he still could not leave it working on his issues
- * for a day. That is what this tab is for.
+ * scorecard measures whether the understudy DECIDES like the person; the queue
+ * shows what it would ask for and waits. Both are instruments, and neither
+ * added up to leaving it working on their issues for a day. That is what this
+ * tab is for.
  *
  * IT EXISTED ONLY OVER HTTP UNTIL NOW. The loop, the queue he fills by hand,
  * which project is open, the runs it has done — all of it was reachable with
@@ -61,10 +61,9 @@ const when = (ms: number) =>
 /**
  * WHERE SOMEBODY IS, the first time they open this.
  *
- * His words, looking at the panel: "none of the 3 tabs make sense, they are full
- * of overwhelming info, and you don't want to touch anything in case it breaks". He
- * commissioned this feature; if it does not tell him where to start, it tells
- * nobody.
+ * The three tabs were full of overwhelming information and nothing invited a
+ * first touch. The person who commissioned this feature needs it to say where
+ * to start; if it does not, it tells nobody.
  *
  * The three tabs are three real, separate jobs, and they read left to right in
  * the REVERSE of the order they are used in: you teach it, then you check its
@@ -238,8 +237,7 @@ export function stampFor(state: string): { word: string; tone: "success" | "warn
 /**
  * THE RUN BUTTON: what it says, and whether it does anything.
  *
- * His words about the tab this replaces: "it is not intuitive at all... it is very
- * hard". The fault was not one control. Four ways to start were laid out
+ * The tab this replaces was hard to read. The fault was not one control. Four ways to start were laid out
  * above the box you type the task into, and one empty setting — an eyebrow
  * called "May work in" — silently disabled all four while every button still
  * looked live.
@@ -371,7 +369,7 @@ const leaf = (path: string) => path.split("/").filter(Boolean).pop() ?? path;
  *
  * `open-only` keeps the task-tracker sources silent; `everywhere` lets them
  * offer cards. It could be changed over HTTP and never read, so the switch
- * deciding whether the clone reaches somebody's company was invisible in the
+ * deciding whether the clone reaches somebody's work was invisible in the
  * application — and it is the setting people most want to check before leaving
  * it running.
  *

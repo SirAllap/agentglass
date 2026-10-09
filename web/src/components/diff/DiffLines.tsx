@@ -65,7 +65,7 @@ export const LINEBTN_CSS = '.agx-gutter{position:sticky}.agx-linebtn{position:ab
  * how specific — `SCROLLBAR_CSS` is injected as a plain <style> in the tree, so
  * `.agx-scroll{scrollbar-width:thin}` won and the pane kept its bar. Measured
  * in the running app: `scrollbar-width` computed `thin` and `offsetHeight -
- * clientHeight` was 10px on both split panes, which is the bar he kept finding
+ * clientHeight` was 10px on both split panes, which is the bar that kept showing
  * at the bottom of the file after the rail was already there.
  *
  * Unlayered and two classes deep, so it wins on specificity wherever it lands,

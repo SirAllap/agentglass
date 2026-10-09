@@ -301,7 +301,7 @@ function parseLines(lines: string[], repo?: string): Block[] {
     }
 
     const image = IMAGE_ONLY.exec(line.trim());
-    if (image && !parseShieldBadge(image[2]!)) { out.push({ t: "image", alt: image[1]!, src: image[2]! }); i++; continue; }
+    if (image && /^https?:\/\//i.test(image[2]!) && !parseShieldBadge(image[2]!)) { out.push({ t: "image", alt: image[1]!, src: image[2]! }); i++; continue; }
 
     // A paragraph runs to the blank line, or to the first line that starts
     // something else — otherwise a list written straight under a sentence, which
@@ -436,6 +436,7 @@ function splitRow(line: string, repo?: string): Inline[][] {
 }
 
 const CODE_SPAN = /^(`+)([\s\S]*?)\1/;
+const SAFE_LINK = /^(?:https?:\/\/|mailto:)/i;
 const LINK = /^\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/;
 const IMAGE_INLINE = /^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/;
 /** `[![alt](img)](href)` — the `[^\]]*` of LINK would close on the image's own
@@ -448,6 +449,9 @@ const ISSUE_REF = /^#(\d{1,7})(?!\w)/;
 /** A picture, or the pill a shields.io address spells out — the badge is read,
  *  never fetched: a request per comment to a host the proxy does not allow. */
 function pictureOrBadge(src: string, alt: string): Inline {
+  // A body is text somebody else wrote: only a web address is fetched, the same
+  // rule the desktop's renderer applies. Anything else is named, never loaded.
+  if (!/^https?:\/\//i.test(src)) return { t: "text", text: alt ? `[image: ${alt}]` : "[image]" };
   const badge = parseShieldBadge(src);
   return badge ? { t: "badge", ...badge } : { t: "image", src, alt };
 }
@@ -539,7 +543,12 @@ export function parseInline(src: string, repo?: string): Inline[] {
     const link = LINK.exec(rest);
     if (link) {
       flush();
-      out.push({ t: "link", href: link[2]!, kids: parseInline(link[1]!) });
+      // Tapping a link hands its address to the system. A body is text somebody
+      // else wrote, so only web and mail addresses stay links (the desktop's
+      // renderer allows http(s) alone); any other scheme, or a path that goes
+      // nowhere, keeps its label as plain text.
+      if (SAFE_LINK.test(link[2]!)) out.push({ t: "link", href: link[2]!, kids: parseInline(link[1]!) });
+      else out.push(...parseInline(link[1]!));
       i += link[0].length;
       continue;
     }

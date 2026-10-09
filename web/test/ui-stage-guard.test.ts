@@ -171,3 +171,15 @@ describe("the modules a staged request travels through reach no network", () => 
     });
   }
 });
+
+describe("the merge guard comes before the merge dialog", () => {
+  // The dialog asks "merge?"; the guard is what says a review is still pending or a check is red.
+  // Without it the person answers the first question without the second one being asked.
+  it("runMerge asks confirmMergeGuard before askMerge, and doAutoMerge before it arms", () => {
+    const run = slice(panel, "const runMerge = async", "const choice = await askMerge");
+    expect(code(run)).toContain("await confirmMergeGuard(detail, ask");
+    expect(code(run)).toContain("return;");
+    const auto = slice(panel, "const doAutoMerge = async", "api.prMerge(");
+    expect(code(auto)).toContain("if (!(await confirmMergeGuard(detail, ask))) return;");
+  });
+});

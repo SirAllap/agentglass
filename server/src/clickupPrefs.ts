@@ -49,20 +49,35 @@ const MAX_ITEMS = 20;
  *
  * A heuristic, not a proof. It refuses what that blow-up needs: a group that
  * holds an alternation or a quantifier and is itself repeated without a bound,
- * and a backreference. Nested bounded repeats (`(a{1,3}){1,3}`) and overlapping
- * adjacent quantifiers (`a*a*a*b`) are polynomial and are not caught here; the
- * length cap in `matchPref` is what bounds those.
+ * and a backreference. Overlapping adjacent quantifiers are polynomial rather
+ * than exponential, but the degree is the number of them: `a*a*a*a*a*c`
+ * against 200 `a`s took 90.8 s, four of them 2.05 s. So a pattern may hold two
+ * unbounded quantifiers at most (`*`, `+`, `{n,}`, or a bound past
+ * WIDE_BOUND), counted outside escapes and character classes, and with the
+ * name cut to MAX_TESTED the worst it can cost is a cube of that length.
+ * Nested bounded repeats (`(a{1,3}){1,3}`) are left to that cap as well.
  */
 export function patternProblem(src: string): string | null {
   if (/\\[1-9]|\\k</.test(src)) return "uses a backreference";
   for (const m of src.matchAll(/\(((?:[^()\\]|\\.)*)\)\s*(?:[+*]|\{\d+,\d*\})/g)) {
     if (/[+*|]|\{\d+,/.test(m[1]!.replace(/\\./g, ""))) return "repeats a group that already repeats or branches";
   }
+  // Escapes and classes first: a `*` inside `[*]` or after a backslash is a character.
+  const bare = src.replace(/\\./g, "x").replace(/\[(?:\\.|[^\]\\])*\]/g, "x");
+  let wide = 0;
+  for (const q of bare.matchAll(/[*+]|\{\d+,(\d*)\}/g)) {
+    if (q[0] === "*" || q[0] === "+" || q[1] === "" || Number(q[1]) > WIDE_BOUND) wide++;
+  }
+  if (wide > 2) return "repeats too many parts without a bound";
   return null;
 }
 
-/** The longest name a saved pattern is tested against. Names are a few words. */
-const MAX_TESTED = 200;
+/** A bounded repeat this wide costs what an unbounded one does on a short name. */
+const WIDE_BOUND = 16;
+
+/** The longest name a saved pattern is tested against. Names are a few words;
+ *  64 cubed is the worst a pattern that passed `patternProblem` can cost. */
+const MAX_TESTED = 64;
 /** Test a saved pattern against a name typed by somebody else. */
 export function matchPref(src: string, fallback: string, name: string): boolean {
   return prefPattern(src, fallback).test(name.slice(0, MAX_TESTED));

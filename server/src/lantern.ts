@@ -199,8 +199,8 @@ export async function boardNow(): Promise<LanternCard[]> {
    * GIT IS ASKED IN THE REPOSITORY THE ROW IS ACTUALLY IN.
    *
    * The first version asked one repository for everything — the configured
-   * workspace root — and on this machine that root is the company's
-   * checkout, whose HEAD is a `master` none of these branches has ever been
+   * workspace root — and on a work machine that root is a repository outside
+   * the open project, whose HEAD is a `master` none of these branches has ever been
    * near. Every row read "not in master": true, meaningless, and exactly
    * the kind of answer that sends somebody looking for work that is
    * already in.

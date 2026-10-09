@@ -169,7 +169,7 @@ export type PtyWsData = { kind: "pty"; root: string; cols: number; rows: number;
    * you left running". Every other shell this app opens is a shell somebody
    * asked for in a place — the console docked under Docker's logs, the one that
    * pre-types an install command — and joining the desk's session makes those a
-   * SECOND CLIENT on it. Measured on his machine: three clients, all on session
+   * SECOND CLIENT on it. Measured on a development machine: three clients, all on session
    * `orbit`, so the Docker console mirrored whichever tab the terminal was
    * showing, and anything typed into it would have gone to the pane running an
    * agent.

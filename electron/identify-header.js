@@ -5,13 +5,13 @@
 // main.js — see guest-guard.js's header comment for why that file cannot be
 // imported at all. CommonJS with no build step, because main.js requires it.
 //
-// D8 (browser-phase3-plan-2026-09-25.md): loopback plus the two TLDs nothing
+// Which origins: loopback plus the two TLDs nothing
 // on the public internet resolves — never a substring match on "localhost",
 // which is exactly how `evil-localhost.com` and `localhost.evil.com` would
 // have gotten a header meant for a machine's own dev server. RFC1918 LAN
 // hosts are deliberately left out: a name on the LAN is somebody else's
-// server, not this machine's, and the plan defers that to an explicit
-// per-profile list nobody has asked for yet.
+// server, not this machine's, and an explicit per-profile list is
+// deferred until somebody asks for one.
 
 /** @param {string} host */
 function isLoopbackV4(host) {

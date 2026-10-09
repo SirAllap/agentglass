@@ -121,7 +121,7 @@ describe("on Linux, the measured spelling is unchanged", () => {
   });
 
   test("a window born from `exec claude …` has no shell in it: the agent is the pane's own process", () => {
-    /* Measured on the owner's desk: six windows opened by an orchestrator as
+    /* Measured on a desk: six windows opened by an orchestrator as
        `tmux new-window "exec claude …"` were photographed with no flags and
        no id, because the walk started at the pane process's CHILDREN and it
        had none — exec had replaced the shell. */

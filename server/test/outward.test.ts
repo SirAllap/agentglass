@@ -124,6 +124,11 @@ describe("a Lantern status post", () => {
       `curl -s -X POST ${to} -d "\`gh pr merge 5\`"`,
       `curl -s -X POST ${to} -d "x" -H "a: \${X:=y}"`,
       `curl -s -X POST ${to} -d @/home/user/notes.txt`,
+      // process substitution and brace expansion run before curl reads a word
+      `curl -s -X POST ${to} -d <({git,push,origin,main})`,
+      `curl -s -X POST ${to} -d <(git push origin main)`,
+      `curl -s -X POST ${to} -d >(sh) -d '{}'`,
+      `curl -s -X POST ${to} -H {a,b} -d '{}'`,
     ]) {
       expect(bash(cmd), cmd).not.toBeNull();
     }

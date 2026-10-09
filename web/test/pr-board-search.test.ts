@@ -682,7 +682,7 @@ describe("assigning on GitHub, and the card on the other board", () => {
 
   it("writes nothing until the summary is accepted", () => {
     /* One button for both halves, and a summary before either happens: the two
-       writes land on two different companies' servers and only one of them can
+       writes land on two different servers and only one of them can
        be undone from here. */
     expect(src).toContain('? (ghChanged ? "Yes, do both" : "Yes, move the card")');
     expect(src).toContain('if (!asking) { setAsking(true); return; }');

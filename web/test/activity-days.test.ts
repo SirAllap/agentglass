@@ -8,7 +8,7 @@
  * heading is credited with events that belong to the other, and the day it
  * borrowed from can vanish from the page entirely.
  *
- * Not a hypothesis. Measured against his own database, 200 rows, one fold of
+ * Not a hypothesis. Measured against a real database, 200 rows, one fold of
  * `/prs/pending-review` with two members on one side of midnight and three on
  * the other:
  *

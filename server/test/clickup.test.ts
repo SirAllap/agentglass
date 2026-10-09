@@ -699,7 +699,7 @@ describe("several changes to one card", () => {
 
 describe("who can be put on a card", () => {
   it("asks the LIST, not the workspace", async () => {
-    // A workspace here holds the whole company. A picker offering all of them
+    // A workspace here holds the whole organisation. A picker offering all of them
     // to assign one backend card is a picker nobody uses twice.
     C.setCredential("clickup", { token: "pk_1_X", accountId: "7" });
     reply = () => json({ members: [{ id: 9, username: "Ana", initials: "AN", color: "#f0f" }] });
@@ -831,6 +831,20 @@ describe("the pull requests a card produced", () => {
       "https://github.com/acme/widgets", "https://example.invalid/x/y/pull/1"]) {
       expect(prNumberFromUrl(bad), JSON.stringify(bad)).toBe(null);
     }
+  });
+
+  it("takes the host from the address, not from text that merely contains github.com", () => {
+    // The field is typed by any member of the workspace, and the card lists
+    // what it holds as the card's own pull request with an "Open on GitHub"
+    // link: a path or a userinfo naming github.com must not be believed.
+    for (const decoy of ["https://evil.example/github.com/acme/orbit/pull/7",
+      "https://github.com@evil.example/acme/orbit/pull/7",
+      "https://github.com.evil.example/acme/orbit/pull/7",
+      "javascript:void(0)//github.com/acme/orbit/pull/7",
+      "https://evil.example/?u=https://github.com/acme/orbit/pull/7"]) {
+      expect(prNumberFromUrl(decoy), decoy).toBe(null);
+    }
+    expect(prNumberFromUrl("https://www.github.com/acme/orbit/pull/7")).toBe(7);
   });
 });
 

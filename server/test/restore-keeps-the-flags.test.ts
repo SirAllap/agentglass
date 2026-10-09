@@ -3,13 +3,13 @@
  *
  * The restore rebuilt every agent pane as a plain `claude --resume <id>`,
  * whatever it had actually been started with. The owner opens every session
- * with `--dangerously-skip-permissions` — measured on his own machine, four
+ * with `--dangerously-skip-permissions` — measured on a development machine, four
  * panes of four — so a restore handed him back a desk that behaved differently
  * from the one he had, pane by pane, and he had to notice and fix each one.
  *
  * And a desk is not uniform: ten panes started one way and two the other come
  * back with the distinction flattened. That is the app deciding something it
- * was never asked to decide. In his words, it does not even consider it.
+ * was never asked to decide.
  *
  * What is tested here is the rule, not the machine: `agentArgsOf` takes the
  * argv the kernel holds for the process under a pane and says what a restored

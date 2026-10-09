@@ -919,7 +919,7 @@ export interface CardPr {
    *  on another card's). Absent from an older server, read as own. */
   link?: "own" | "mention";
   /** For a mention: the item the pull request was actually cut for, when it
-   *  names one ("ORBIT-24798"). */
+   *  names one ("ORBIT-1043"). */
   belongsTo?: string;
 }
 

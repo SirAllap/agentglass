@@ -72,6 +72,11 @@ describe("the server does not read a .env or bunfig.toml from where it runs", ()
     const main = code("electron/main.js");
     const at = main.indexOf('["bun", [');
     expect(at).not.toBe(-1);
-    expect(main.slice(at, main.indexOf("]];", at) + 1)).toContain('"--no-env-file"');
+    const spawnArgs = main.slice(at, main.indexOf("]];", at) + 1);
+    expect(spawnArgs).toContain('"--no-env-file"');
+    // `.env` is one file the launch directory can use to configure the server;
+    // bunfig.toml (a preload that runs before main) is the other, and bun reads
+    // the one in the cwd unless it is told which to read.
+    expect(spawnArgs).toContain("--config=${path.join(REPO, \"server\", \"bunfig.toml\")}");
   });
 });

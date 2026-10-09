@@ -2,7 +2,7 @@
  * Text search, which ClickUp's API does not have.
  *
  * The shape of this is decided by one measurement: a single page of
- * `/team/{id}/task` on his workspace takes sixteen seconds and returns a
+ * `/team/{id}/task` on a large workspace takes sixteen seconds and returns a
  * hundred rows, and there is no `?query=` for a personal token. So the matching
  * is done here, and what is worth pinning is the matcher — every word has to be
  * somewhere, because a hit whose reason cannot be seen reads as noise.

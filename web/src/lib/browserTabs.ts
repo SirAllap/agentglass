@@ -49,7 +49,7 @@ export interface BrowserTab {
    * the kept one", and that is only true until you click a link: opening a kept
    * page and pressing History inside it moved the tab out of its folder and
    * into the loose list, which reads as the browser having opened a second tab
-   * — his words, "it opens a new tab... when it should not". A tab keeps its
+   * — a new tab where none should open. A tab keeps its
    * shelf entry wherever it wanders, and the entry shows where it is.
    */
   shelfId?: string;

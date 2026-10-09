@@ -334,8 +334,7 @@ export function pushGate(agent: string, tool: string, summary: string, pane?: st
  * instead of expiring it in a few seconds. This is not news — it is a machine
  * that has STOPPED and will stay stopped until somebody looks, which is the
  * exact shape `pushGate` uses for an approval. Anything quieter and the clone
- * spends the night idle while its report sits behind a bell nobody opened:
- * "we cannot let this happen, otherwise nobody will want to use the clone".
+ * spends the night idle while its report sits behind a bell nobody opened.
  *
  * One call rather than a delivery path of its own, so it inherits the webhook,
  * the native notification while a window is open, and `notify-send` when none

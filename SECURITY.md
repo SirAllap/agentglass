@@ -39,6 +39,20 @@ complement, rather than replace, the private reporting path below.
   check, plus a DNS-rebinding guard that refuses a request arriving under a
   `Host` that is not localhost or private (`AGENTGLASS_ALLOWED_HOSTS` allows a
   reverse-proxy name explicitly).
+- **A tokenless server turns away another site's subresource loads.** A simple
+  `GET` from an `<img>` or `<script>` on a page you merely visited carries no
+  `Origin`, so the Origin rule let it through as if it were curl, and the page
+  could make the server spend your ClickUp and GitHub budgets or run a read with
+  side effects. Where there is no `AGENTGLASS_TOKEN`, a request with no `Origin`,
+  `Sec-Fetch-Site: cross-site` and a mode other than a top-level navigation gets
+  a 403. curl, the hooks and the CLIs send no `Sec-Fetch-Site` and are not
+  affected, and a link that opens the UI still works. It is limited to tokenless
+  servers on purpose: with a token such a request carries none and is refused
+  with a 401 anyway, while the desktop renderer, which is cross-site to
+  loopback, loads avatars as `<img>` with the token in the URL and no `Origin`,
+  and would go blank. The ceiling: a desktop app that adopted a server started
+  by hand without a token shows no avatars from it.
+  `server/test/cross-site-get.test.ts` boots one server of each kind.
 - **Token.** `AGENTGLASS_TOKEN` is required on every route except `/health`, the
   pairing handshake, and the local senders' own routes — the telemetry intake
   sinks (`/ingest`, the OTLP receivers) and `/agents/status`, a hooked session
@@ -198,9 +212,19 @@ What this gives you, and what it does not:
 
 - **The QR is not a credential.** Photographing it, or scanning it from a shared
   screen, gets a form asking for six digits that are not in the picture.
-- **The credential never travels in the clear.** The server speaks plain HTTP
+- **The pairing exchange never shows the key.** The server speaks plain HTTP
   over the LAN, so anything on that network sees the whole exchange — ticket,
   code, both public keys — and still has no key.
+- **After pairing, the key does travel in the clear on a plain-http address.**
+  The phone sends it as a bearer header on every request, and in the address of
+  the live socket, over the same transport it paired on. The app accepts an
+  `http://` address for any host, not only a private one, and Android lets it
+  send cleartext to every host. Anyone who can read traffic on that network (a
+  shared Wi-Fi, say) reads the key from any request and can use it from there
+  at the device's level, which at `full` includes the terminal. Pair over the
+  Tailscale address (WireGuard) or an `https://` address, and give a phone only
+  the level it needs. A TLS listener on the machine, or a signature on each
+  request in place of a bearer key, is not built.
 - **It does not defend against an active on-path attacker today.** The phone's
   public key is not bound to the six-digit code shown only at the machine, so
   someone who can rewrite traffic can substitute their own key and the pairing
@@ -612,7 +636,7 @@ Reading ClickUp needs only the token. **Changing** anything there — moving a c
 to another status, putting yourself on it — is off unless you set
 `AGENTGLASS_CLICKUP_WRITE=1`, and that default is the opposite of the one the
 local task list uses. The reason is the blast radius rather than the risk of a
-bug: your Taskwarrior store is yours, while a status change on a company board
+bug: your Taskwarrior store is yours, while a status change on a shared team board
 fires automations, notifies a team, and cannot be undone from here.
 
 With it on, each change still asks first — naming the card and what will change
@@ -663,6 +687,20 @@ Three details of the same boundary, because each was once wrong:
 
 The boundary is covered by `server/test/disk-scope.test.ts`; a regression there
 is a hole rather than a bug, and it would not show up in a screenshot.
+
+**A pull request by `gh:owner/name` needs full access.** The pull request
+routes also take a `gh:` root, which is read with the person's own `gh` token
+and so reaches every repository that token can, while every scope above is
+written against the open project. Such a root is answered only for a caller that
+could already do anything here: this machine (no token, or the machine token) or
+a paired device with the `full` grant. A device at `read` or `answer`, a plugin
+whatever its scope, the Clone and a seat get a 403, "a repository outside the
+open project needs full access". The rule is `mayReadForeignRoot` in
+`server/src/auth.ts`, and it applies to the root in the query string and to a
+root in the body of the conflict, nudge, notify-watch, check-on-base and `/prs/`
+POST routes, asked as soon as the body is parsed and before the root is used.
+`server/test/foreign-root-scope.test.ts` unit-tests the rule and fails if a
+handler reads a body root before asking it.
 
 ## Plugins
 
@@ -1049,12 +1087,13 @@ value; only an unset variable is the default. What each level means:
 - **Level 3 only stages.** An entry at level 3 may open a dialog with its fields
   filled in; it may not call a route that writes. The person's click is the
   effect. There are no automatic grants, so `AGENTGLASS_CONTROL_LEVEL=3` lets an
-  agent prepare something and never perform it. Four doors ship, all on one pull
+  agent prepare something and never perform it. Five doors ship, all on one pull
   request: `pr.merge.stage` (method, commit subject and body), `pr.comment.stage`
-  (the text), `pr.review.stage` (verdict and text) and `card.move.stage` (the new
-  status of the card the pull request carries). Each opens the dialog the screen
-  already has, filled in, and nothing more: the merge, the comment, the review and
-  the move happen when the person presses that dialog's own button. What arrived
+  (the text), `pr.review.stage` (verdict and text), `card.move.stage` (the new
+  status of the card the pull request carries) and `pr.unstick` (opens the Unstick
+  dialog and does not run it). Each opens the dialog the screen already has,
+  filled in, and nothing more: the merge, the comment, the review, the move and
+  the unstick happen when the person presses that dialog's own button. What arrived
   is shown as written by the caller (`as` is a label the caller picks, so it is
   quoted, never trusted), in a field the person can edit, under a line saying
   nothing is sent until they press; the confirm button, `Enter` and the chord
@@ -1161,8 +1200,10 @@ them off while leaving the read-only cockpit working.
 ## The phone app and plain http
 
 The native app keeps cleartext http allowed for every host. Pairing over a bare
-LAN or tailnet address is plain http, Android's network security config cannot
-scope cleartext by address range, and the pairing token is the protection, not
-the transport (see the handshake above: the credential is sealed to the phone's
-key). The config does restrict https to the system certificate store, so a
-certificate authority installed on the phone cannot vouch for a host.
+LAN or tailnet address is plain http, and Android's network security config
+cannot scope cleartext by address range. The handshake above seals the
+credential to the phone's key, but only for the pairing itself: the requests
+that follow carry the device key over the same transport, so on a plain-http
+address on a network you do not own it is readable there (see "After pairing"
+above for what to do). The config does restrict https to the system certificate
+store, so a certificate authority installed on the phone cannot vouch for a host.

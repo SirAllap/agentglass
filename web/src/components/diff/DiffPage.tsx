@@ -906,7 +906,7 @@ function Body({ row, state, split, wrap, noWs, mode, comments, staleIds, jumpTo,
         </div>
         {/* Open it where the change is.
             Source control has had this on `e` for a while and the pull request
-            has it as a button; this view had neither, which is what he noticed.
+            has it as a button; this view had neither.
             The line is the first hunk's, not line 1: opening a 900-line file
             you came to BECAUSE of a diff and landing at the top means scrolling
             back to where you already were. */}

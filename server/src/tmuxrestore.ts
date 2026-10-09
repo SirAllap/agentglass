@@ -226,10 +226,10 @@ const NOT_REPLAYED = new Set(["--resume", "--session-id", "-p", "--print"]);
  * THE FLAGS ARE PART OF THE DESK. This user opens every session with
  * `--dangerously-skip-permissions`; a restore that rebuilds them as a plain
  * `claude --resume <id>` hands back twelve panes that all behave differently
- * from the twelve he had, and he has to notice and fix each one. Worse, a desk
- * where some panes were started that way and some were not comes back with the
- * distinction flattened — the app decided something it was never asked to
- * decide. His words: it does not even consider it.
+ * from the twelve there were, and each one has to be noticed and fixed. Worse, a
+ * desk where some panes were started that way and some were not comes back with
+ * the distinction flattened — the app decided something it was never asked to
+ * decide.
  *
  * Kept verbatim rather than filtered through an allow-list. A flag this does
  * not recognise is a flag the person chose, and dropping it silently is the
@@ -420,7 +420,7 @@ export interface AgentUnder { name: string; argv: string[]; cwd: string; started
  * that is the measured half of this: a window born from
  * `tmux new-window "exec claude …"` has no shell left in it — `exec`
  * replaced it — so the agent IS the pane's process and a walk that started
- * at its children found nothing. Six windows on the owner's desk were
+ * at its children found nothing. Six windows on a desk were
  * photographed that way with no flags and no way to resume.
  *
  * Named by `agentNamed` (paneloc.ts): the binary's basename, or the npm
@@ -1398,7 +1398,7 @@ async function restorePass(mode: "lazy" | "all"): Promise<{ ok: boolean; restore
       /*
        * ONLY WHILE THE DESK IS STILL COMING BACK.
        *
-       * A live session in steady state is the owner's working desk, and this
+       * A live session in steady state is a working desk, and this
        * file's oldest promise is that a restore only ever builds what is
        * missing from a desk nobody has yet — never adds a window to one
        * somebody is sitting at. `settled` is that line: false until this
@@ -1487,7 +1487,7 @@ async function engineShell(): Promise<string> {
  * — it exits, and the window goes with it. Measured on this user's machine
  * after a reboot: a session of five windows came back with one, the four whose
  * resume failed vanished in the same second they were made, and the count said
- * five. He rebuilt his desk by hand.
+ * five. The desk was rebuilt by hand.
  *
  * Checking immediately proves nothing: `new-window` returns as soon as tmux has
  * forked, and a CLI that fails takes a few hundred milliseconds to say so. One

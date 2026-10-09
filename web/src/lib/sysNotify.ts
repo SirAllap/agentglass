@@ -3,6 +3,7 @@ import { notifies, type NotifyKind } from "../../../shared/notifyPrefs.ts";
 import { getNotifyPrefs } from "./notifyPrefsStore.ts";
 import { alertPayload, watchPayload, type NotifyPayload, type NotifyTarget } from "../../../shared/notifyPayload.ts";
 import { raiseWindow } from "./desktop.ts";
+import { openExternal } from "./externalUrl.ts";
 import { gotoOfTarget } from "./notifyRoute.ts";
 import { clickupSetup, type ClickUpSetup } from "./clickupSetup.ts";
 
@@ -484,7 +485,7 @@ const historyListeners = new Set<() => void>();
  * THE ONES THAT WERE ALREADY ON SCREEN.
  *
  * Filing a ClickUp notification against its card started existing today, and
- * the notifications that made him ask for it were sitting in this list with
+ * the notifications that needed it were sitting in this list with
  * their card chip already attached — which is exactly the path that returns
  * early on arrival. So the list is walked once, at startup, and every note
  * that already knows its card is filed. Idempotent by the notification's own
@@ -684,7 +685,7 @@ const windowFocused = (): boolean => typeof document !== "undefined" && document
 export function openTarget(t: NotifyTarget): void {
   const g = gotoOfTarget(t);
   if (g) { goto?.(g); return; }
-  if (t.kind === "url") { try { window.open(t.url, "_blank", "noopener,noreferrer"); } catch { /* no window to open one from */ } }
+  if (t.kind === "url") { try { openExternal(t.url); } catch { /* no window to open one from */ } }
 }
 
 export function fireWatchAlert(f: { seq: number; alertId?: string; payload?: NotifyPayload; repo: string; number: number; title: string; summary: string; detail: string; ok: boolean }) {

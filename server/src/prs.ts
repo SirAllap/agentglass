@@ -406,8 +406,8 @@ export async function prForHead(rootIn: unknown, branchIn: unknown): Promise<{
 /**
  * The true rollup for ONE pull request — the latest run per check name.
  *
- * The list cannot have this. Its rollup is GitHub'"'"'s aggregate counts, and those
- * count a re-run'"'"'s old attempt alongside the new one: measured on a pull
+ * The list cannot have this. Its rollup is GitHub's aggregate counts, and those
+ * count a re-run's old attempt alongside the new one: measured on a pull
  * request github.com calls "All checks have passed", the aggregate answers
  * `state: FAILURE` with one FAILURE in the counts. Even their own `state` field
  * is wrong here, because their page does not use it either — it keeps the
@@ -821,8 +821,8 @@ function checkState(c: RawCheck): { state: PrCheckState; done: boolean } {
  * A re-run does not replace the run it repeats: GitHub keeps both, so a check
  * that failed and was re-run comes back twice, once FAILURE and once
  * IN_PROGRESS. Measured on a real pull request: their aggregate answered
- * `FAILURE: 1, IN_PROGRESS: 2` while github.com'"'"'s own page said "Some checks
- * haven'"'"'t completed yet" and listed no failures — because their UI keeps the
+ * `FAILURE: 1, IN_PROGRESS: 2` while github.com's own page said "Some checks
+ * haven't completed yet" and listed no failures — because their UI keeps the
  * latest run per name and the aggregate does not.
  *
  * Counting both put a pull request in Blocked over a suite that was busy and

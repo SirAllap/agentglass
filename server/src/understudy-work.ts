@@ -7,7 +7,7 @@
  * is not a thing you can leave working on your issues for a day, and no amount
  * of accuracy turns the first into the second — they are different objects.
  *
- * What he asked for: take a card or a pull request, do the work, and when that
+ * What was asked for: take a card or a pull request, do the work, and when that
  * one is finished go and find the next where he would have looked.
  *
  * THE DESIGN MISTAKE THAT WAS BLOCKING IT. Everything before this was built on
@@ -25,7 +25,7 @@
  * WHAT STILL BOUNDS IT. The shift — how long, how much, and stop on failure.
  * The halt, which now reaches the actuator. And the repository allow-list,
  * which starts at the open project because an error there costs a worktree and
- * an error in his company's repository costs something else entirely.
+ * an error in a work repository costs something else entirely.
  */
 import { createHash } from "node:crypto";
 import type { UnderstudyWorkItem, UnderstudyWorkRun } from "../../shared/types.ts";
@@ -410,7 +410,7 @@ export function brief(
    * forty rules were HTTP API guidance out of a third-party skill — idempotency
    * keys, cursor pagination, a sacred duty to downstream consumers — in a task
    * about naming a git branch. The rule that says never to create a worktree
-   * or a branch in his company's repository sits at index 727 of 1,239, so no
+   * or a branch in a work repository sits at index 727 of 1,239, so no
    * run has ever been sent it.
    *
    * `ask` already does this properly for the panel: rules that share a word
@@ -510,7 +510,7 @@ export function brief(
       /*
        * THE VIEWS, in the only form something without a screen can use them.
        *
-       * He asked for the clone to have the views as well — the pull request
+       * The clone gets the views as well — the pull request
        * panel, the diff, the branch list. A view is pixels and a layout, which
        * means nothing to an agent; what a view IS underneath is a route. So it
        * gets the routes, and it gets told which view each one is, because
@@ -727,9 +727,10 @@ export function brief(
      *
      * The only thing this brief said about disagreement was "where their rules
      * and yours disagree, follow theirs" — which is right about STYLE and
-     * wrong about the task. He argues constantly: "I don't understand the ledger",
-     * "that is no use to me", "this is not what I asked for". An understudy that never
-     * pushes back is not standing in for him, it is impersonating a yes-man.
+     * wrong about the task. The person argues constantly: a request that does not
+     * make sense to them, a result that is no use to them, an answer that is
+     * not what they asked for. An understudy that never pushes back is not
+     * standing in for them, it is impersonating a yes-man.
      *
      * The measured case: a run spent forty-five minutes on a task whose
      * framing was wrong and delivered nothing. Saying so in minute three would

@@ -9,10 +9,10 @@
  * — the window it was created in disappears in the same second, silently, and
  * the count still says it was restored.
  *
- * Measured on the owner's machine after a reboot on 2026-09-02: a session of five
+ * Measured on a development machine after a reboot on 2026-09-02: a session of five
  * windows came back with one. The four whose resume failed
- * were created and gone within the same second, `restored` said five, and he
- * rebuilt his desk by hand and told us it had not come back.
+ * were created and gone within the same second, `restored` said five, and the
+ * desk had to be rebuilt by hand.
  *
  * Worse, and reproduced on an isolated server: when it is the session's FIRST
  * window, the session goes with it and tmux, left with no sessions, exits —
@@ -117,7 +117,7 @@ describe("the desk comes back even when the commands do not", () => {
 
   step("a live session is never touched, whatever the photograph says", async () => {
     /* The guarantee this whole file rests on: restore only ever BUILDS what is
-       missing. The owner's working desk is not an input to it. */
+       missing. A working desk is not an input to it. */
     const name = S("d");
     await pane.tmux(["new-session", "-d", "-s", name, "-n", "mine", "-c", "/tmp"]);
     writeLayout([{ name, windows: [win("notmine", DIES), win("neither", DIES)] }]);

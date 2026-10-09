@@ -57,7 +57,7 @@ const panel = await Bun.file(
 
 describe("the tabs that were removed are removed", () => {
   /*
-   * Measured in his own database before cutting: `understudy_proposals` and
+   * Measured in a real database before cutting: `understudy_proposals` and
    * `understudy_acts` had never held a row, no ledger row has ever carried the
    * verdict "disagree", and seven scored decisions across thirteen classes all
    * belonged to one of them. The screens for all three are gone.

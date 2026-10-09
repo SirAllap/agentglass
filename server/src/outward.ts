@@ -282,6 +282,12 @@ function localStatusPost(c: string): boolean {
      is `$PWD` (the reminder's worktree field); a backtick, `$(`, `${`, any
      other variable or `$'…'` keeps the call outward. */
   if (/`|\$(?!PWD(?![\w]))/.test(c)) return false;
+  /* Process substitution and brace expansion run or rebuild words before
+     curl sees them: `-d <({git,push,origin,main})` runs the push. Neither
+     happens inside quotes, where the status body's own braces live, so the
+     check reads only what is outside them. */
+  const bare = c.replace(/'[^']*'|"(?:\\.|[^"\\])*"|\\./g, "q");
+  if (/[<>]\(|[{}]/.test(bare)) return false;
   const words: string[] = [];
   let rest = c.trimStart();
   while (rest) {

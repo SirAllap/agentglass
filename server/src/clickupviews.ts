@@ -202,7 +202,7 @@ export function removeFolder(id: string): void {
   });
 }
 
-/** The stored answer to "may this app change my company's board". */
+/** The stored answer to "may this app change a shared team board". */
 export const writesAllowed = (): boolean => load().writes === true;
 export function setWritesAllowed(on: boolean): void { save({ ...load(), writes: on }); }
 export const currentView = (): string | undefined => load().current;

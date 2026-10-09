@@ -161,10 +161,10 @@ describe("the pull request's author is not a ClickUp choice", () => {
 
 describe("taking named people off", () => {
   test("is saved with the people, and the old keys see none", () => {
-    expect(save({ handoff: { enabled: true, blocks: [{ type: "unassign", who: "people", people: [{ id: 3, name: "Sam Rivera" }, { id: 4, name: "Priya Nair" }, { id: 3, name: "Sam again" }] }] } }).ok).toBe(true);
+    expect(save({ handoff: { enabled: true, blocks: [{ type: "unassign", who: "people", people: [{ id: 3, name: "Sam Rivera" }, { id: 4, name: "Pia Novak" }, { id: 3, name: "Sam again" }] }] } }).ok).toBe(true);
     P.__setPrefsPath(file);
     const g = P.clickupPrefs().handoff;
-    expect(g.blocks).toEqual([{ type: "unassign", who: "people", people: [{ id: 3, name: "Sam Rivera" }, { id: 4, name: "Priya Nair" }] }]);
+    expect(g.blocks).toEqual([{ type: "unassign", who: "people", people: [{ id: 3, name: "Sam Rivera" }, { id: 4, name: "Pia Novak" }] }]);
     expect(g.unassign).toBe("none");
   });
   test("asks, starting at people, or at nobody with an empty list", () => {

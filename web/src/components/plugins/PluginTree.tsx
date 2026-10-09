@@ -3,7 +3,7 @@ import type { Field, UiAction, UiNode, UiOpenPr } from "../../lib/pluginTypes.ts
 import type { Tone } from "../../../../shared/pluginUi.ts";
 import { openPr } from "../../lib/openPrs.ts";
 import { Markdown } from "../../lib/markdown.tsx";
-import { openExternal } from "../../lib/externalUrl.ts";
+import { externalUrl, openExternal } from "../../lib/externalUrl.ts";
 import { ago } from "../../lib/fileRecents.ts";
 import { Select } from "../Select.tsx";
 import { Switch } from "../SettingRow.tsx";
@@ -215,7 +215,7 @@ function Node({ node, ctx }: { node: UiNode; ctx: Ctx }): ReactNode {
       );
     case "link":
       return (
-        <a href={node.href} onClick={(e) => { e.preventDefault(); openExternal(node.href); }}
+        <a href={externalUrl(node.href)} onClick={(e) => { e.preventDefault(); openExternal(node.href); }}
           className="text-[12px] hover:underline inline-flex items-center gap-1" style={{ color: "var(--primary-ink)" }} title={node.href}>
           {node.text} <ExternalIcon size={ICON.xs} />
         </a>

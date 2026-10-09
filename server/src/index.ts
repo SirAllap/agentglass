@@ -207,7 +207,7 @@ import { join as joinPath, resolve as resolvePath, basename } from "node:path";
 import { hostname, tmpdir } from "node:os";
 import { privateHost, resolvePeer, originOf, guardedFetch, hostsOnly } from "./net.ts";
 import { DESK_HEADER, claimDesk, deskHeld } from "./desk.ts";
-import { resolveToken, healthProof, tokenOk, isIntake, isAuthExempt, callerFor, allowed, scopeNeeded, pluginOfRequest, answersFromADevice, deskKeyOk, understudyRequiresToken, UNDERSTUDY_NO_TOKEN_ERROR, mintUnderstudyToken, revokeUnderstudyToken, tokenlessWarning, type Caller, type Origin } from "./auth.ts";
+import { resolveToken, healthProof, tokenOk, isIntake, isAuthExempt, callerFor, allowed, mayReadForeignRoot, scopeNeeded, pluginOfRequest, answersFromADevice, deskKeyOk, understudyRequiresToken, UNDERSTUDY_NO_TOKEN_ERROR, mintUnderstudyToken, revokeUnderstudyToken, tokenlessWarning, type Caller, type Origin } from "./auth.ts";
 import {
   listPlugins, masterEnabled, setMaster, installPlugin, installFromCatalogue, updatePlugin, enablePlugin, disablePlugin, removePlugin, setPluginUnboxedConsent, envAllowsUnboxed,
   contributesOf, isRunning, pluginSettings, pluginOwnSettings, setPluginSettings, resumeEnabledPlugins, stopAllPluginsSync, pluginIcon,
@@ -273,8 +273,8 @@ async function openProjectRepos(): Promise<string[]> {
    * THE CHECKOUT THIS SERVER IS RUNNING FROM, which discovery never finds.
    *
    * `discoverRepos` works from telemetry — where work has recently happened
-   * THROUGH the app — and from projects somebody has opened in it. On this
-   * machine both are the company's repositories: the open project gets worked
+   * THROUGH the app — and from projects somebody has opened in it. On a
+   * work machine both are work repositories: the open project gets worked
    * on from a terminal, so the app has never seen it, so the loop concluded it
    * had nowhere to work and declined every task it found.
    *
@@ -288,8 +288,8 @@ async function openProjectRepos(): Promise<string[]> {
    * DELIBERATELY NOT `workspaceRoot()`.
    *
    * It looks like the right answer — the root somebody launched the app with —
-   * and on this machine it is the company's repository, because that is what
-   * the application is pointed at. Adding it here put thirty of their
+   * and on a work machine it is a work repository outside the open project,
+   * because that is what the application is pointed at. Adding it here put thirty of their
    * checkouts one `isOpenProjectPath` call away from being worked in; the only
    * thing that stopped them was the fence name, which is the thing that had
    * just been wrong.
@@ -340,7 +340,7 @@ async function openProjectRepos(): Promise<string[]> {
    * So the projects this machine has actually worked in are consulted — and
    * ONLY the one the fence names. The name is matched before anything is
    * opened: a fence called `agentglass-understudy` looks inside `agentglass`
-   * and nowhere else, so the company's repository next to it is never so much
+   * and nowhere else, so the repository next to it is never so much
    * as listed. Everything found still has to pass `isOpenProjectPath` below,
    * exactly as before. This makes it possible for a name to match something;
    * it never makes a name unnecessary.
@@ -1101,7 +1101,7 @@ async function runAgentIn(
    *
    * It gets a minted one instead: the understudy's principal, every GET
    * answered and every write refused by `understudyAllows`. That is also what
-   * gives it the views he asked for — the panel, the diff, the branch list —
+   * gives it the views that were asked for — the panel, the diff, the branch list —
    * because a view is a route once you have no screen to look at.
    *
    * Minted per run and revoked in `finally`, so a credential never outlives the
@@ -1679,8 +1679,28 @@ function mayHostBrowser(req: Request): boolean {
 
 function localOrigin(req: Request): boolean {
   const o = req.headers.get("origin");
-  if (!o) return true;
+  if (!o) return !crossSiteSubresource(req);
   return vouchedOrigin(o);
+}
+
+/**
+ * A browser loading this server as a subresource of somebody else's page.
+ *
+ * A simple GET (an `<img>`, a `<script>`) carries no Origin, so on a server
+ * with no token it passed the Origin rule as if it were curl, and a page the
+ * person merely visited could make the server spend their ClickUp and GitHub
+ * budgets or run a read with side effects. Every current browser says where a
+ * request came from in Sec-Fetch-Site, and curl, the hooks and the CLIs send
+ * none; a top-level navigation (a link to the UI) is still let through.
+ *
+ * Only where there is no token. With one, such a request carries none and the
+ * token gate answers 401, while the desktop renderer, which is cross-site to
+ * loopback, loads avatars as `<img>` with the token in the URL and no Origin;
+ * refusing it here would blank them. The ceiling: a desktop app that adopted
+ * a server started by hand without a token shows no avatars from it.
+ */
+function crossSiteSubresource(req: Request): boolean {
+  return !AUTH_TOKEN && req.headers.get("sec-fetch-site") === "cross-site" && req.headers.get("sec-fetch-mode") !== "navigate";
 }
 
 /**
@@ -2586,6 +2606,8 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
           + "what an agent's own shell looks like. Answer it in the desktop app, in the "
           + "web UI, or on a paired phone."),
     }, 403);
+    // A `gh:` root reaches past the open project: see mayReadForeignRoot.
+    const foreignRefused = () => json({ ok: false, error: "a repository outside the open project needs full access" }, 403);
     const rebindBlocked = () =>
       json({ ok: false, error: "request Host is not a local or private address (DNS-rebinding guard — set AGENTGLASS_ALLOWED_HOSTS for a reverse-proxy name)" }, 403);
 
@@ -2732,6 +2754,9 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // minute per device — it is what lets the pane say when a phone was last
       // heard from, which is the difference between a device list and a guess.
       if (caller.device) markSeen(caller.device.id);
+      // Here for a root in the query; the POST routes that read one from the
+      // body ask the same question once they have parsed it.
+      if (isForeignRoot(url.searchParams.get("root") ?? "") && !mayReadForeignRoot(caller)) return foreignRefused();
     }
 
     /*
@@ -3949,7 +3974,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      *
      * The screen was reported as confusing and it was: twenty rows of equal
      * weight, one holding eight kilobytes of somebody's own conventions and
-     * another four hundred megabytes of their company's work, and a request to
+     * another four hundred megabytes of their work, and a request to
      * choose. This is the answer to "where do I start" — everything the person
      * wrote deliberately about how they work, plus their own project's record,
      * and no raw transcript of anybody else's.
@@ -4078,7 +4103,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      *
      * Deliberately its own route rather than a field on some larger settings
      * body: this is the switch that decides whether the understudy may draft a
-     * request against his company's repository, and a setting like that should
+     * request against a work repository, and a setting like that should
      * be a thing somebody did, not a field that rode along with something else.
      */
     /*
@@ -4160,8 +4185,8 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      * tool he has — a run that goes wrong costs a directory.
      *
      * The repositories are the ones already discovered and then filtered to the
-     * open project. His decision, taken on a Saturday and for a good reason:
-     * prove it where a mistake costs a worktree rather than his job.
+     * open project. The person's decision, and for a good reason:
+     * prove it where a mistake costs a worktree rather than the real repository.
      */
     if (pathname === "/understudy/work/next" && req.method === "GET") {
       const repos = await openProjectRepos();
@@ -4276,11 +4301,11 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
        * version of this line said `item.repo || repos[0]` — take whatever is
        * first if the task does not say.
        *
-       * Found by running it: the top task on a real machine was a card from his
-       * COMPANY'S tracker, and a card carries no checkout. With one open-project
+       * Found by running it: the top task on a real machine was a card from a
+       * work tracker, and a card carries no checkout. With one open-project
        * repository present that fallback would have cut a worktree in agentglass
        * and set an agent to work on somebody else's ticket inside it. Not a
-       * leak — nothing would have reached the company's repository — but a
+       * leak — nothing would have reached a work repository — but a
        * confident, wrong, and completely wasted run, and the kind that erodes
        * trust faster than a failure does.
        *
@@ -4442,10 +4467,9 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
          * THE PROJECTS THIS MACHINE HAS ACTUALLY SEEN, so the fence stops being
          * a bare text field.
          *
-         * Asked, meeting that field: "what a crap way to pick another
-         * project" — you typed a name with no list of what was valid, no
-         * sense of what existed, and a name matching everything was refused by
-         * a rule you could not see.
+         * Meeting that field, you typed a name with no list of what was valid,
+         * no sense of what existed, and a name matching everything was refused
+         * by a rule you could not see.
          *
          * Derived from the checkouts discovery already found: the last path
          * segment of each root, minus its worktree suffixes, deduplicated. Not
@@ -4468,7 +4492,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
          *
          * `open-only` keeps the task-tracker sources silent; `everywhere` lets
          * them offer work. There was a route to SET it and none to ask, so the
-         * switch that decides whether the clone reaches somebody's company
+         * switch that decides whether the clone reaches somebody's work
          * could not be seen in the application at all — only changed with curl.
          * A fence whose position is invisible is one nobody can trust, and this
          * is the position people most want to check before walking away.
@@ -6531,7 +6555,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     }
     if (pathname === "/clickup/members") {
       // Who can be put on a card. Scoped to the LIST the card lives in: a
-      // workspace here holds the whole company, and a picker offering all of
+      // workspace here holds the whole organisation, and a picker offering all of
       // them to assign one backend card is a picker nobody uses twice.
       /* No list: the workspace's people, for a setting that names one before a card is open. */
       const r = url.searchParams.has("workspace") ? await workspaceMembers() : await listMembers(url.searchParams.get("list") ?? "");
@@ -6901,7 +6925,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       }
       if (pathname === "/browse") return json(browseDir(url.searchParams.get("path") || "", url.searchParams.get("hidden") === "1", localBrowse));
       if (pathname === "/preview/facts") return json(fileFacts(url.searchParams.get("path") || "", localBrowse));
-      if (pathname === "/preview/git") return json(fileGitFacts(url.searchParams.get("path") || "", localBrowse));
+      if (pathname === "/preview/git") return json(await fileGitFacts(url.searchParams.get("path") || "", localBrowse));
       if (pathname === "/preview/raw" || pathname === "/preview/page") {
         const r = await fileBytes(url.searchParams.get("path") || "", localBrowse);
         if (!r.ok) return json({ error: r.error }, 404);
@@ -7264,6 +7288,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname === "/prs/conflict" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      if (isForeignRoot(b.root) && !mayReadForeignRoot(caller)) return foreignRefused();
       const asked = String(b.root ?? "");
       const root = prRouteRoot(asked);
       const number = Number(b.number ?? 0);
@@ -7328,6 +7353,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname.startsWith("/prs/notify-watch/") && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      if (isForeignRoot(b.root) && !mayReadForeignRoot(caller)) return foreignRefused();
       if (pathname === "/prs/notify-watch/remove") return json(removeWatch(String(b.id ?? "")));
       if (pathname === "/prs/notify-watch/ack") return json(ackFire(Number(b.seq)));
       const id = await prRepoIdFor(b.root);
@@ -7482,6 +7508,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (!desktopOnly(req)) return json({ ok: false, error: "Check on base runs code from the pull request, so only the desktop app can start it" }, 403);
       let b: { root?: unknown; number?: unknown; command?: unknown; baseSha?: unknown; headSha?: unknown; sandbox?: unknown; allowNoSandbox?: unknown };
       try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      if (isForeignRoot(b.root) && !mayReadForeignRoot(caller)) return foreignRefused();
       const started = await startCheckOnBase(b.root, b.number, b.command, b);
       // Running a command from a CI log on this machine is the auditable fact; the command itself is kept, cut short.
       noteAction(clientIp, "/prs/check-on-base",
@@ -7508,6 +7535,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (!trustedCaller(req, from)) return csrfBlocked();
       let b: { root?: unknown; number?: unknown; send?: unknown };
       try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      if (isForeignRoot(b.root) && !mayReadForeignRoot(caller)) return foreignRefused();
       const got = await prDetail(b.root, b.number);
       if (!got.ok || !got.detail) return json({ ok: false, error: got.error ?? "no such pull request" }, 400);
       const text = nudgeText(got.detail);
@@ -7590,6 +7618,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      if (isForeignRoot(b.root) && !mayReadForeignRoot(caller)) return foreignRefused();
       const root = b.root ?? "";
       const n = b.number;
       /* A node id is checked at the door as well as in prs.ts — see nodeIdOk
@@ -8621,12 +8650,16 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const name = String(b.session ?? "");
       if (!validSessionName(name)) return json({ ok: false, error: "invalid session" }, 400);
+      // A new window or pane runs a command (a shell when argv is empty), which
+      // is the terminal by another door: refused while it is switched off, as
+      // /run/start is. Closing, selecting and renaming run nothing and stay.
+      const starts = b.op === "new" || b.op === "split";
+      if (starts && !TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
       // A directory is only for a window or pane that STARTS somewhere. Closing
       // or renaming one needs none, and asking for it made a window whose
       // checkout had since been deleted impossible to close.
-      const needsCwd = b.op === "new" || b.op === "split";
-      const cwd = (needsCwd ? gitSafeAbs(b.cwd) : "") ?? "";
-      if (needsCwd && (!cwd || !fsExists(cwd))) return json({ ok: false, error: "that directory is not available" }, 400);
+      const cwd = (starts ? gitSafeAbs(b.cwd) : "") ?? "";
+      if (starts && (!cwd || !fsExists(cwd))) return json({ ok: false, error: "that directory is not available" }, 400);
       let res: { ok: boolean; stdout: string; stderr: string };
       switch (b.op) {
         case "new":

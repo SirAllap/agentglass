@@ -5,7 +5,7 @@
  * `sleep:handle-lid-switch` in BLOCK mode. A block inhibitor on `sleep` does
  * exactly what it says to every suspend, the one a person asks for from the
  * menu included: `systemctl suspend` answers "Operation inhibited" and nothing
- * happens. Measured on the owner's machine — with an agent mid-turn the
+ * happens. Measured on a development machine — with an agent mid-turn the
  * suspend entry did nothing at all, with no word on screen about why.
  *
  * So the two halves of the assertion are held separately, each in the only

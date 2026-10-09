@@ -134,6 +134,19 @@ describe("install = copy, no code runs", () => {
     expect(r.plugin.approvedHash).toBeNull();
   });
 
+  test("updating one plugin leaves a plugin whose name looks like its old copy alone", async () => {
+    // The old folder is set aside during an update; a name built by suffixing
+    // the plugin's own name was itself a valid plugin name, and was deleted.
+    const twin = await installPlugin(fixture({ ...okManifest, name: `watcher.old-${process.pid}` }));
+    expect(twin.ok).toBe(true);
+    if (!twin.ok) return;
+    expect((await installPlugin(fixture())).ok).toBe(true);
+    expect((await installPlugin(fixture({ ...okManifest, description: "watches the gate, again" }))).ok).toBe(true);
+    expect(existsSync(join(twin.plugin.installDir, MANIFEST_NAME))).toBe(true);
+    const kept = JSON.parse(readFileSync(join(twin.plugin.installDir, MANIFEST_NAME), "utf8"));
+    expect(kept.name).toBe(`watcher.old-${process.pid}`);
+  });
+
   test("no manifest at the root is refused", async () => {
     const dir = mkdtempSync(join(tmpdir(), "agx-plugin-src-"));
     const r = await installPlugin(dir);

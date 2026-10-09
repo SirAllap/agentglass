@@ -4,7 +4,7 @@
  * tmux closes a window the instant its command exits — `remain-on-exit` is
  * off by default — and the engine's own config left it that way. For a
  * program that CRASHED that is a tab gone from the strip in the same second,
- * with nothing anywhere to say why. Measured on the owner's desk on
+ * with nothing anywhere to say why. Measured on a desk on
  * 2026-09-21: five tabs running agent CLIs, each started by hand with
  * `tmux new-window "cli …"` and so without the wrapper this app's own windows
  * carry to hold the pane open, vanished over one afternoon. The only trace of

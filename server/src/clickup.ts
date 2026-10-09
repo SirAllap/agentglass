@@ -696,7 +696,7 @@ export async function changedForMe(sinceMs: number): Promise<CallResult<{ tasks:
  * Text search across the workspace, since ClickUp's API has none.
  *
  * MEASURED first, because the shape of this is decided by one number: a single
- * page of `/team/{id}/task` on his workspace takes **16.6 seconds** and returns
+ * page of `/team/{id}/task` on a large workspace takes **16.6 seconds** and returns
  * a hundred rows. There is no `?query=` on v2 with a personal token — the
  * search in ClickUp's own web app is not an endpoint anybody else can call — so
  * the only honest options were "sweep and filter here" or "nothing".
@@ -1063,7 +1063,7 @@ export async function searchTasks(q: string, force = false): Promise<CallResult<
  *
  * The companion to `changedForMe`, and it exists for one case that one cannot
  * see: somebody mentioning you on a card that is not yours. Scoped to the lists
- * behind your saved boards rather than the whole workspace — a company's
+ * behind your saved boards rather than the whole workspace — a shared
  * workspace moves constantly and none of it is yours to be told about.
  *
  * Measured on a real board: one card moved in the last hour. So this is a call
@@ -2060,7 +2060,7 @@ export function refreshCommentCounts(tasks: ProviderTask[], token: string, onCou
  *
  * The local task list ships with writes ENABLED and a switch to turn them off,
  * which is the right default for a store that belongs to you. This is the
- * opposite case: it is somebody's company workspace, a status change fires
+ * opposite case: it is a shared team workspace, a status change fires
  * automations and notifies a team, and there is no undo. So the default is
  * read-only and turning it on is a deliberate act — the same reasoning
  * `TASK_WRITE_ENABLED` uses, pointed the other way.
@@ -2217,7 +2217,7 @@ export function mergeMembers(raw: NonNullable<RawTask["assignees"]>[number][], m
  * Who can be put on a card: the members of the list it lives in.
  *
  * The list rather than the workspace, and that is the whole point — a workspace
- * here has everybody in the company in it, and a picker offering all of them to
+ * here has everybody in the organisation in it, and a picker offering all of them to
  * assign one backend card is a picker nobody uses twice. ClickUp publishes
  * membership per list, which is the team that actually works the board.
  */
@@ -2229,14 +2229,14 @@ export async function listMembers(listId: string): Promise<CallResult<{ members:
    * The list AND the workspace, because the list alone is wrong here.
    *
    * The comment above was the theory. Measured against a real board: both of
-   * his lists answered with the same twenty people — Alex Koh, Brett Carpenter,
-   * Canny, Chuck Williams — and not one of the six ClickUp'"'"'s own picker offers
+   * both lists answered with the same twenty people — Ada, Bjorn, a bot account,
+   * Carol — and not one of the six ClickUp's own picker offers
    * for those very cards. Whatever `/list/{id}/member` is reporting, it is not
    * the team that works the board, and it was leaving the people he actually
    * assigns out of the picker entirely.
    *
    * So both sources, de-duplicated: nobody who can be assigned is missing, and
-   * the client puts the ones already on this board'"'"'s cards at the top — which
+   * the client puts the ones already on this board's cards at the top — which
    * is what ClickUp does with its own "Assignees" group.
    */
   const me2 = me ? redacted("clickup") : null;
@@ -2767,7 +2767,7 @@ export async function setChecklistItem(checklistId: string, itemId: string, done
  * lives in is a different question — measured on a real board, list membership
  * left out most of the people who actually work it (see listMembers).
  *
- * Cached for an hour. A roster changes when somebody joins the company; a
+ * Cached for an hour. A roster changes when somebody joins the organisation; a
  * comment is written far more often than that, and a call per comment on the
  * send path is a delay on the one action that must feel immediate.
  */
@@ -3287,7 +3287,16 @@ export type { CardPr };
  *  ambiguous — issue or PR — so it has to be a link that says `/pull/` or
  *  `/-/merge_requests/`. */
 export function prNumberFromUrl(url: string): number | null {
-  const m = /github\.com\/[^/]+\/[^/]+\/pull\/(\d+)/i.exec(url || "");
+  // The host is parsed, not matched as text: a field is typed by any member of
+  // the workspace, and `evil.example/github.com/x/y/pull/7` or
+  // `github.com@evil.example/...` must not pass for a pull request of ours.
+  let m: RegExpExecArray | null = null;
+  try {
+    const u = new URL((url || "").trim());
+    if ((u.protocol === "https:" || u.protocol === "http:") && /^(www\.)?github\.com$/i.test(u.hostname) && !u.username && !u.password) {
+      m = /^\/[^/]+\/[^/]+\/pull\/(\d+)/i.exec(u.pathname);
+    }
+  } catch { /* not an absolute URL: GitLab below, or nothing */ }
   const n = m ? Number(m[1]) : NaN;
   return Number.isFinite(n) && n > 0 ? n : mergeRequestNumber(url);
 }
@@ -3300,7 +3309,7 @@ export { otherGithubLinks } from "../../shared/githubLinks.ts";
  *
  * GitHub's search does not answer the question it was asked. `ORBIT-1042` is
  * tokenised at the hyphen, so the search matches anything carrying the bare
- * number — and MEASURED on his own repository, all three "linked" pull requests
+ * number — and MEASURED on a real repository, all three "linked" pull requests
  * were false:
  *
  *   #1042  matched by its own NUMBER. Its title and body contain no "1042"
@@ -3355,7 +3364,7 @@ export function mentionsTask(taskId: string, pr: { title?: string; body?: string
  *
  * `mentionsCard` answers "does the text carry the id", and a stacked pull
  * request's body does for both cards it sits between: MEASURED on two stacked
- * pull requests, the second said "Depends on #19748 (ORBIT-24797 ...)" and so
+ * pull requests, the second said "Depends on #1041 (ORBIT-1042 ...)" and so
  * the search for the first card returned it too. Both cards then drew the
  * newer one as their chip, and anybody reading the board asked why two cards
  * had the same pull request.

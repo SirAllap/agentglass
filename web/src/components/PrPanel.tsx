@@ -2088,7 +2088,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * It used to collapse once you scrolled — author, branch, reviewers, checks —
    * to buy back a fifth of the window while reading a diff. Two things were
    * wrong with it. Files never did it (that tab does not scroll the page), so
-   * one tab kept the strip and the rest lost it, which he reported as an
+   * one tab kept the strip and the rest lost it, which read as an
    * inconsistency. And it changed the HEIGHT of the scroller while you were
    * scrolling it, which is what made "put me back where I was" a race nobody
    * could win — three attempts at remembering a scroll position lost to this.
@@ -2125,7 +2125,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const [behind, setBehind] = useState<number | null>(null);
   /** The answer is not in yet, which is a different thing from "not behind".
    *  Without it the Update-branch button simply appears a second late, which is
-   *  the jump he reported — see the placeholder in Overview. */
+   *  a visible jump — see the placeholder in Overview. */
   const [behindAsking, setBehindAsking] = useState(false);
   /** And what that branch looks like on THIS machine, which is the half the
    *  Update button never mentioned. Same call, no extra round trip. */
@@ -2567,7 +2567,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    *
    * Refresh used to force the detail and the board lists and then EMPTY the
    * diff to make its effect run again — so the file you were reading went blank
-   * for as long as GitHub took, which is the flicker he asked not to have. And
+   * for as long as GitHub took, which is a visible flicker. And
    * the pieces that live outside the detail (the review GitHub is holding for
    * you) were fetched once when the pull request opened and never again: a line
    * comment deleted in the browser stayed on this screen until you left the
@@ -7256,7 +7256,7 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
   const [sideFolded, setSideFolded] = useState(true);
   const [plan, setPlan] = useState<{ lines: string[]; run: () => Promise<boolean> }>({ lines: [], run: async () => true });
   /* One button for both halves, and a summary before either happens: the two
-     writes land on two different companies' servers and only one of them can be
+     writes land on two different servers and only one of them can be
      undone from here. */
   const [asking, setAsking] = useState(false);
   const [running, setRunning] = useState(false);
@@ -7696,7 +7696,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
    * so on a menu opened a while later the first render has no card and the
    * second one does. With the plan and the write below this return, those two
    * renders ran a different number of hooks, React threw, and the window went
-   * black. That is the blank app in his screenshot.
+   * black. That was the blank app.
    */
   if (!ref || (!stepOn && !assignReviewer)) return null;
 
@@ -8829,7 +8829,7 @@ function PrSidebar({ d, root, spend, onEditField, onRerequest }: {
           </div>
         </SidebarSection>
       )}
-      {/* Under the GitHub facts, where he asked for it: the pull request first,
+      {/* Under the GitHub facts, the pull request first,
           and then the card it came from. */}
       <CardFacts d={d} />
       <AskInChat d={d} root={root} />
@@ -9000,7 +9000,7 @@ function Masthead({ root, repo, d, busy, local, stackUi, onOpenPr, onShowLocal, 
               <span aria-hidden className="flex" style={{ opacity: 0.7 }}>{copied ? <DoneIcon size={ICON.xs} /> : <CopyIcon size={ICON.xs} />}</span>
             </button>
             {/* Beside the number, not down in the fields: this is the pull
-                request's OTHER identity — the one the rest of the company files
+                request's OTHER identity — the one the rest of the organisation files
                 it under — and it has to stay on screen once the metadata folds
                 away, which is exactly when you are deep enough in a diff to
                 have forgotten what the card asked for. */}
@@ -12471,7 +12471,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
             <span className="inline-flex items-center gap-1 ml-auto">
               {/* Steps rather than a scrollbar: the rows are scattered through a
                   conversation that may be hundreds long, and "the next thing
-                  THEY said" is the movement being asked for. */}
+                  this person wrote" is the movement wanted. */}
               <button onClick={() => step(-1)} title={`Previous remark by ${person}`}
                 className="agx-btn inline-grid place-items-center rounded"
                 style={{ width: 20, height: 20, color: "var(--text3)", border: EDGE }}>↑</button>

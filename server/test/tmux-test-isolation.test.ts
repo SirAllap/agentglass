@@ -10,9 +10,9 @@
  * 24 of the 26 test files that spawn or import the server set no TMUX_TMPDIR,
  * so `bun test` in server/ or mobile/ could send `resize-window -A`,
  * `set-option -w window-size` and `refresh-client` at a live session. Measured
- * at the time: none of his windows carried `@agx-had-size`, so nothing had been
+ * at the time: none of the developer's windows carried `@agx-had-size`, so nothing had been
  * damaged — luck about that afternoon's state, not a property of the code. It
- * armed the moment a phone did a `fit` on one of his windows.
+ * armed the moment a phone did a `fit` on one of the developer's windows.
  *
  * AND THEN A THIRD TIME, through a door both halves below were blind to. The
  * two guards this file exercises open with `if (process.env.NODE_ENV !==
@@ -74,7 +74,7 @@
  *
  * A THIRD variable, found after this file was first written and the reason it
  * has a `$TMUX` test: agents in this repo run INSIDE the developer's tmux, and
- * `$TMUX` names his socket outright — ahead of TMUX_TMPDIR — for any command
+ * `$TMUX` names the developer's socket outright — ahead of TMUX_TMPDIR — for any command
  * with no `-S` and no `-L`. A guard that asked TMUX_TMPDIR where a bare command
  * would land was therefore answering about the wrong socket in every test file
  * that sets one. See "a private TMUX_TMPDIR does not buy back the socket $TMUX
@@ -271,7 +271,7 @@ describe.if(HAVE_TMUX)("a suite with no TMUX_TMPDIR cannot reach the default soc
     expect(readdirSync(join(STAND_IN, `tmux-${UID}`))).toContain("default");
     expect(ctl.tmuxSockets()).toEqual([]);
     // …including when a client's own spelling is offered. Under `bun test` that
-    // spelling came out of /proc, and /proc here has his tmux in it.
+    // spelling came out of /proc, and /proc here has the developer's tmux in it.
     expect(ctl.tmuxSockets(["-S", SOCKET])).toEqual([]);
   });
 
@@ -331,8 +331,8 @@ describe.if(HAVE_TMUX)("a suite with no TMUX_TMPDIR cannot reach the default soc
    * The door a private TMUX_TMPDIR does NOT close, and the reason this file
    * grew a second half.
    *
-   * Agents in this repo run inside his tmux, so `bun test` inherits a `$TMUX`
-   * naming his socket — and `$TMUX` beats TMUX_TMPDIR for a flagless `tmux`.
+   * Agents in this repo run inside the developer's tmux, so `bun test` inherits a `$TMUX`
+   * naming the developer's socket — and `$TMUX` beats TMUX_TMPDIR for a flagless `tmux`.
    * Measured on 3.6a with an empty directory to hide behind:
    *
    *   TMUX_TMPDIR=/tmp/agx-probe-empty tmux list-sessions
@@ -348,7 +348,7 @@ describe.if(HAVE_TMUX)("a suite with no TMUX_TMPDIR cannot reach the default soc
    *   guard says allowed   true
    *   bare tmux reached    the five sessions somebody was working in
    *
-   * `$TMUX` is set here rather than read, so this is the same test on his desk
+   * `$TMUX` is set here rather than read, so this is the same test on a desk
    * and on a CI runner that is not inside tmux at all.
    */
   step("a private TMUX_TMPDIR does not buy back the socket $TMUX names", () => {
@@ -392,18 +392,18 @@ describe.if(HAVE_TMUX)("a suite with no TMUX_TMPDIR cannot reach the default soc
    * on stderr and a zero exit. Measured on 3.6a, `$TMUX` cleared:
    *
    *   TMUX_TMPDIR=/tmp/does-not-exist tmux -f /dev/null -L default list-sessions
-   *     -> the sessions somebody was working in     ** his live server **
+   *     -> the sessions somebody was working in     ** the developer's live server **
    *   TMUX_TMPDIR=<a real dir>        tmux -f /dev/null -L zzz     list-sessions
    *     -> error connecting to <that dir>/tmux-1000/zzz
    *
    * So the one arrangement that unlocked the guard was also the one where the
-   * command went to his server. Reproduced through this module before the fix,
+   * command went to the developer's server. Reproduced through this module before the fix,
    * with NODE_ENV=test and `$TMUX` cleared:
    *
    *   socketPath([])        /tmp/agx-test-tmux-ABSENT/tmux-1000/default
    *   guard says allowed    true
    *   what actually ran     display-message -p -t @1 #{window_width}
-   *                         show-options -gv prefix          ** on his server **
+   *                         show-options -gv prefix          ** on the developer's server **
    *
    * Not a contrived precondition: `tmuxTmp.ts` makes one fixed directory and
    * exported the path whether or not the mkdir worked, so one stale
@@ -424,19 +424,19 @@ describe.if(HAVE_TMUX)("a suite with no TMUX_TMPDIR cannot reach the default soc
        *
        * It used to be that `socketDir()` answered the machine's real directory
        * when the named one was missing — so a bare `tmux` would have landed on
-       * his servers, and refusing was the only protection available. That
+       * the developer's servers, and refusing was the only protection available. That
        * fallback is gone: a TMUX_TMPDIR that is set is used whether or not it
        * exists, because whoever set it meant somewhere else, and tmux itself
        * creates the directory it is pointed at.
        *
-       * So a bare `tmux` is no longer a way back to his sockets, and there is
+       * So a bare `tmux` is no longer a way back to the developer's sockets, and there is
        * nothing left to refuse about it. What must still be refused is the
-       * thing that names his directory OUT LOUD — a path spelled by hand — and
+       * thing that names the developer's directory OUT LOUD — a path spelled by hand — and
        * that is asserted right below.
        */
       expect(ctl.tmuxSocketAllowed([])).toBe(true);
       expect(ctl.tmuxSocketAllowed(["-L", "default"])).toBe(true);
-      // Naming his socket directory explicitly is still refused, missing
+      // Naming the developer's socket directory explicitly is still refused, missing
       // TMUX_TMPDIR or not: that one cannot be a mistake about where you are.
       expect(ctl.tmuxSocketAllowed(["-S", join(`/tmp/tmux-${UID}`, "default")])).toBe(false);
       // Discovery too, and this is the half that makes the order matter.
@@ -459,7 +459,7 @@ describe.if(HAVE_TMUX)("a suite with no TMUX_TMPDIR cannot reach the default soc
   });
 
   /*
-   * The spellings, because all three name his socket and all three used to be
+   * The spellings, because all three name the developer's socket and all three used to be
    * allowed by a guard that compared paths as strings.
    *
    * Nothing in the app spells a socket this way today. "Nothing does it today"
@@ -749,7 +749,7 @@ describe("nothing that spawns the server lets it find the developer's tmux", () 
      * than a preference: on tmux 3.6a a TMUX_TMPDIR whose directory is ABSENT
      * falls back to /tmp/tmux-<uid> silently, so a hand-rolled path that was
      * never created is worse than setting nothing — it reads as isolation to
-     * every guard in the server while tmux uses his directory. That is the
+     * every guard in the server while tmux uses the developer's directory. That is the
      * exact hole `server/test/tmuxTmp.ts` was fixed for.
      *
      * A test file is not held to this: they build theirs with `mkdtempSync`,
@@ -801,16 +801,16 @@ describe("nothing that spawns the server lets it find the developer's tmux", () 
  * by tmux's own rule and writes down where each call lands. 333 of 1087 calls
  * landed in `/tmp/tmux-<uid>`, and the CALLERS are what named the real problem:
  *
- *   .tmux/plugins/tpm/tpm                                      his plugin manager
+ *   .tmux/plugins/tpm/tpm                                      the developer's plugin manager
  *   .tmux/plugins/tmux-resurrect/resurrect.tmux
  *   .tmux/plugins/tmux-continuum/scripts/continuum_restore.sh  <- this one RAN
  *
- * Not "would have inherited his config": his config was executing, and the
- * restore script ran. What stopped it rebuilding his workspace inside a test
+ * Not "would have inherited the developer's config": that config was executing, and the
+ * restore script ran. What stopped it rebuilding their workspace inside a test
  * fixture is continuum's own `another_tmux_server_running_on_startup` — "is
  * another tmux of mine already up". On a fresh boot, on CI, or any evening his
  * tmux is down, that flips, and the file that started the only server on the
- * machine gets his sessions and his agent CLIs `--resume`d into it.
+ * machine gets the developer's sessions and the developer's agent CLIs `--resume`d into it.
  *
  * The second file it found is the reason this lint is worth having rather than
  * being a note in a commit message. `tmux-tabs.test.ts` spawns no tmux at all —

@@ -5,8 +5,8 @@
  * reachable from any view with the bench's own chord, floating over the
  * Lantern itself so the board and the conversation are on screen together,
  * and a tmux session underneath, so closing the window does not end it. The
- * Chat view was the first answer and the wrong one — it was hidden from his
- * rail, and every agent he has lives in a pane already.
+ * Chat view was the first answer and the wrong one — it was hidden from the
+ * rail, and every agent already lives in a pane.
  *
  * The server composes the first message (the field as it is now) and mints
  * the ticket; nothing about what runs travels from here. This only picks the

@@ -1922,7 +1922,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
    * Deliberately a separate act from typing in the box. ClickUp's API has no
    * text search with a personal token, so this sweeps the most recently updated
    * few hundred cards and filters them here — MEASURED at sixteen seconds for
-   * the first page on his workspace, ten minutes of cache after that. A search
+   * the first page on a large workspace, ten minutes of cache after that. A search
    * box that stalls for sixteen seconds without a word is a broken search box;
    * one that says "this will take a moment" and then answers is a feature.
    */
@@ -2023,7 +2023,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
        *
        * This used `clickupWhere`, which only answers "is this card already on
        * a board you have" — so the prefixed form was instant (it was cached)
-       * and a bare number came back empty and left him watching a spinner.
+       * and a bare number came back empty and left a spinner running.
        * `find` is the one that normalises a bare number against the
        * workspace's own id shape and then goes and gets the card. Measured on
        * a real id: `/clickup/where?id=1042` answers {ok:false} while
@@ -2559,9 +2559,9 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
              *
              * Twice wrong before this. First the reddish CLOSE box with a
              * negative margin, which ate the field's padding and sat on the
-             * border — "to feo, to pisado". Then a quiet circle floating
-             * inside, which is what he pointed at and said: make it part of
-             * the input, like the button welded to the right end of a
+             * border. Then a quiet circle floating
+             * inside, which still read as a separate object: it should be part
+             * of the input, like the button welded to the right end of a
              * subscribe field.
              *
              * So it is a segment: full height of the box, flush against its
@@ -2767,7 +2767,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
             <MenuItem onClick={() => { openExternal(menu.v.url); setMenu(null); }}>Open in ClickUp ↗</MenuItem>
           )}
           {/* Named for what it does and, more importantly, for what it does
-              not. "Remove" beside a board that lives in somebody's company
+              not. "Remove" beside a board that lives in a shared team
               workspace is a word worth being precise about: this writes to a
               file on this machine and never calls ClickUp. The line underneath
               says so, because a destructive-looking red item with no
@@ -4373,7 +4373,7 @@ const LOOKED_MAX = 12;
  * The old treatment was the accent at 18% behind a normal-weight label, which
  * beside five identical outlined chips reads as "slightly warmer", not as "this
  * one is doing something". Reported as not being able to tell what was picked.
- * Filled, in the accent'"'"'s own colour, with the panel'"'"'s background for the text —
+ * Filled, in the accent's own colour, with the panel's background for the text —
  * the same way the app marks a pressed control everywhere else.
  */
 const ON_CHIP = {
@@ -5124,8 +5124,12 @@ const LINK_BUTTONS = "flex items-start gap-1 shrink-0";
 const ROW_SQUARE: CSSProperties = { width: HIT, height: HIT, border: EDGE, color: "var(--text3)" };
 function RowSquare({ href, onClick, title, children }: { href?: string; onClick?: () => void; title: string; children: ReactNode }) {
   const cls = "agx-btn inline-flex items-center justify-center rounded-lg shrink-0 text-[12px]";
-  return href
-    ? <a href={href} target="_blank" rel="noreferrer noopener" className={cls} style={ROW_SQUARE} title={title} aria-label={title}>{children}</a>
+  // A link the card's field handed us goes through `externalUrl`; one that is not
+  // http(s) draws nothing rather than a square that goes somewhere unexpected.
+  const safe = href === undefined ? undefined : externalUrl(href);
+  if (href !== undefined && !safe) return null;
+  return safe
+    ? <a href={safe} target="_blank" rel="noreferrer noopener" className={cls} style={ROW_SQUARE} title={title} aria-label={title}>{children}</a>
     : <button onClick={onClick} className={cls} style={ROW_SQUARE} title={title} aria-label={title}>{children}</button>;
 }
 
@@ -6177,8 +6181,8 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
             controls travel together — refresh is always the last control on
             a toolbar (see the board's own bar, Git, Docker, Lantern). */}
         <span className="flex-1" />
-        {t.url && (
-          <a href={t.url} target="_blank" rel="noreferrer" className="text-[10.5px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg"
+        {externalUrl(t.url) && (
+          <a href={externalUrl(t.url)} target="_blank" rel="noreferrer" className="text-[10.5px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg"
             style={{ border: line, color: "var(--text2)" }}>Open ↗</a>
         )}
         {/*
@@ -8449,7 +8453,7 @@ function TaskDetail({ t, today, reminder, onCancel, writable, onToggleNote, onSh
         <>
           <div className={`${EYEBROW} mt-4 mb-1.5`} style={{ color: "var(--text3)" }}>Links</div>
           {t.urls.map((u) => (
-            <a key={u} href={u} target="_blank" rel="noreferrer"
+            <a key={u} href={externalUrl(u)} target="_blank" rel="noreferrer"
               className="block text-[10px] break-all mb-1" style={{ color: "var(--info-ink)" }}>{u}</a>
           ))}
         </>

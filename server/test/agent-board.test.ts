@@ -305,7 +305,7 @@ describe("the merged answer comes from the right repository", () => {
 
   test("two repositories can give different refs in the same board", () => {
     /*
-     * The whole reason this is keyed by branch. The company's checkout is on
+     * The whole reason this is keyed by branch. A work checkout is on
      * `master` and ours is on a working branch, and asking one repository
      * about the other's branches answered "not in master" for every row on
      * this machine — true, meaningless, and the shape of an answer that sends
@@ -330,8 +330,8 @@ describe("the merged answer comes from the right repository", () => {
 describe("the route does not ask the configured workspace root", () => {
   test("it resolves each row's own checkout to its repository", async () => {
     /*
-     * `workspaceRoot()` is whatever `config().root` says, and on this machine
-     * that is the company's repository — read-only, on `master`, and not
+     * `workspaceRoot()` is whatever `config().root` says, and on a work machine
+     * that is a work repository — read-only, on `master`, and not
      * where any of this work lives. Reading it for this answer is how every
      * row came back "not in master".
      */
@@ -371,7 +371,7 @@ describe("the route does not ask the configured workspace root", () => {
 describe("an agent nobody asked to announce itself", () => {
   const MIN = 60_000;
   const now = 1_700_000_000_000;
-  /* A fictional checkout: the real ones name the company, and this repository
+  /* A fictional checkout: the real ones name a private project, and this repository
      is public. */
   const wt = "/home/somebody/code/orbit-feature";
   const trees = [{ path: wt, branch: "feat/orbit-1042" }];

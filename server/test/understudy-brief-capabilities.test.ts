@@ -48,8 +48,7 @@ describe("it is told what it can reach", () => {
 
   test("the web comes second, and the repository first", () => {
     /*
-     * His own rule, in his own words elsewhere: look at what is already there
-     * before inventing. A brief that says "you may search" without that order
+     * The rule: look at what is already there before inventing. A brief that says "you may search" without that order
      * gets an agent googling a convention this codebase already has.
      */
     expect(spoken).toContain("the repository first, then the web");

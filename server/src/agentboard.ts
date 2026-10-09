@@ -120,7 +120,7 @@ export function forgetAgent(name: string, session: string): boolean {
  * The board kept lines nobody could clear: a session that ended without
  * saying `done` left its name on the field for fourteen days, and by the
  * second day a field of twenty read as twenty agents. Measured on the
- * owner's board: twenty-five rows, five of them alive.
+ * a real board: twenty-five rows, five of them alive.
  */
 export function dropLine(name: string): boolean {
   const n = (name || "").trim();
@@ -323,7 +323,7 @@ export function merged(p: {
    *
    * Keyed by branch and not a flat list because the answer is per REPOSITORY.
    * The first version asked one repository — the configured workspace root —
-   * for every row, and on this machine that root is the company's checkout,
+   * for every row, and on a work machine that root is a repository outside the open project,
    * whose HEAD is a `master` none of these branches has ever been near. Every
    * row read "not in master", which is true, meaningless, and the exact shape
    * of an answer that sends somebody looking.

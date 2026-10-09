@@ -389,10 +389,9 @@ TOOLS = [
         },
     },
     {
-        # ONE CALL INSTEAD OF SIX. Reported by an agent who drove this all day:
-        # "what I need is a call that returns the whole state, not six verbs I
-        # poll in turn — every read/text/shot is a new process and I write
-        # for i in $(seq 1 20); that is where the time goes, not the network."
+        # ONE CALL INSTEAD OF SIX. Driving this all day took six verbs polled
+        # in turn, every read/text/shot a new process inside a shell loop, and
+        # that is where the time went, not the network.
         "name": "browser_observe",
         "description": (
             "EVERYTHING AT ONCE, and the verb to reach for first. One answer with: the URL and title; "
@@ -1093,10 +1092,9 @@ TOOLS = [
         },
     },
     {
-        # §1 of the spec, and the first item on his own list by return: "a
-        # persistent duplex transport + action-returns-state kills polling and
-        # half the calls". This is the half of it that does not need a new
-        # transport — one request carrying the whole interaction.
+        # §1 of the spec: a persistent duplex transport plus action-returns-state
+        # kills polling and half the calls. This is the half of it that does not
+        # need a new transport — one request carrying the whole interaction.
         "name": "browser_do",
         "description": (
             "SEVERAL VERBS IN ONE CALL. Starting this tool costs ~104ms before it has said a word, so "
@@ -2110,11 +2108,9 @@ def run(name, args, raw=False):
         res = call(verb, body)
     # AND THEN WAIT, RATHER THAN TAKE THE SCREEN.
     #
-    # This used to switch the app to the browser view, and that is the single
-    # most complained-about behaviour this tool has: "I am working away
-    # quietly in my terminal… and it focuses the browser on me. I go back to
-    # the terminal and it focuses the browser again… up to four, five, six
-    # times." It is not a fix either: the browser panel is mounted from launch
+    # This used to switch the app to the browser view, which pulled the person
+    # out of their terminal and did it again each time they went back, four to
+    # six times in a row. It is not a fix either: the browser panel is mounted from launch
     # whether or not anybody goes to it, so this error nearly always means the
     # window is still STARTING, and the answer to that is patience.
     if not res.get("ok") and "view is not open" in (res.get("error") or ""):

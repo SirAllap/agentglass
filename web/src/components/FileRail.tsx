@@ -557,8 +557,8 @@ export function FileRail({
           * What you already said, before what you might say next.
           *
           * The box drew "Approve / Request changes / Comment" identically
-          * whether or not you had already reviewed — reported from a pull
-          * request he had approved two hours earlier. Your own last verdict is
+          * whether or not you had already reviewed — seen on a pull
+          * request approved two hours earlier. Your own last verdict is
           * the one fact that changes what this box is for, so it goes first.
           *
           * `viewerRequested` still shows underneath when it is set: GitHub only

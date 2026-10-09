@@ -3946,10 +3946,8 @@ def main():
     # NOTHING BELOW MOVES ANYBODY'S SCREEN UNLESS THEY ASKED FOR IT.
     #
     # This used to switch the app to the browser view whenever a call could not
-    # be answered, and that is the single most complained-about behaviour this
-    # tool has: "I am working away quietly in my terminal… and it focuses the
-    # browser on me. I go back to the terminal and it focuses the browser again…
-    # up to four, five, six times."
+    # be answered, which pulled the person out of their terminal and did it
+    # again each time they went back, four to six times in a row.
     #
     # It is not a fix for anything either. The browser panel is mounted from
     # launch whether or not anybody goes to it (KEEP_RUNNING in the workspace),

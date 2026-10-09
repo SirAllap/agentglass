@@ -116,6 +116,11 @@ describe("what is in this folder", () => {
     ".config/agent-secrets/key", ".config/gh/hosts.yml", ".config/google-chrome/Default/Cookies",
     ".mozilla/firefox/profile/cookies.sqlite", ".password-store/site.gpg", ".claude/.credentials.json",
     ".netrc", ".npmrc", ".env", ".env.local", ".git-credentials", ".config/1Password/vault",
+    ".claude.json", ".codex/auth.json", ".gemini/oauth_creds.json", ".config/github-copilot/apps.json",
+    ".config/hub", ".config/glab-cli/config.yml", ".cargo/credentials.toml", ".terraform.d/credentials.tfrc.json",
+    ".vault-token", ".config/rclone/rclone.conf", ".config/Slack/Cookies", ".thunderbird/profile/logins.json",
+    ".config/Code/User/globalStorage/state.vscdb", ".bash_history", ".zsh_history",
+    ".local/share/fish/fish_history", ".python_history",
   ];
   for (const rel of DENIED) {
     test(`stays locked for a local caller: ${rel}`, async () => {

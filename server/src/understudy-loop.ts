@@ -537,9 +537,9 @@ export async function workOne(p: {
   }
 
   /*
-   * THE ONLY VERDICT THAT COUNTS. The agent saying it is done is not evidence;
-   * his own words on this are "compiling is not evidence", after a session that
-   * reported success on a build nobody had run. So the tests run, and their
+   * THE ONLY VERDICT THAT COUNTS. The agent saying it is done is not evidence,
+   * and neither is a build that compiled: a session once reported success on a
+   * build nobody had run. So the tests run, and their
    * result is the outcome regardless of how confident the transcript sounded.
    */
   const checked = await p.verify(cut.path, VERIFY_TIMEOUT_MS);
@@ -839,9 +839,9 @@ export async function workOne(p: {
 /**
  * Keep going until there is nothing left, or the shift says stop.
  *
- * THIS IS THE SENTENCE HE ACTUALLY SAID: "if we run out of work, look for more
- * where we usually look for it". Until now the loop did exactly one task per
- * request, which is a task runner with a loop's name on it.
+ * THE BRIEF IS: when the work runs out, look for more where work usually
+ * comes from. Until now the loop did exactly one task per request, which is a
+ * task runner with a loop's name on it.
  *
  * WHAT ENDS IT, and every one of these is a hard stop rather than a preference:
  *

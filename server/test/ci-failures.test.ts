@@ -12,6 +12,10 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+/** Shaped like a GitHub token so the redaction is exercised, built at run time
+ *  so the source never holds a string a secret scanner reads as a real one. */
+const FAKE_PAT = "ghp_" + "x".repeat(36);
+
 const dir = mkdtempSync(join(tmpdir(), "agx-ci-failures-"));
 process.env.XDG_CONFIG_HOME = dir;
 process.env.AGENTGLASS_DB = join(dir, "p.db");
@@ -295,7 +299,7 @@ describe("limits", () => {
 
 describe("redaction runs before anything is kept", () => {
   test.each([
-    ["a GitHub token", "token ghp_abcdefghijklmnopqrstuvwxyz0123456789 used", "ghp_"],
+    ["a GitHub token", `token ${FAKE_PAT} used`, "ghp_"],
     ["a bearer header", "Authorization: Bearer abcdefghijklmnop1234567890", "abcdefghijklmnop"],
     ["a key assignment", "API_KEY=supersecretvalue123", "supersecretvalue123"],
     ["a url with credentials", "git clone https://bot:hunter2pass@example.com/x.git", "hunter2pass"],
@@ -304,9 +308,9 @@ describe("redaction runs before anything is kept", () => {
   ])("%s", (_n, input, leaked) => expect(redact(input)).not.toContain(leaked));
 
   test("it reaches the excerpt, the title and the signature", () => {
-    const r = extractFailures(`error: bad token ghp_abcdefghijklmnopqrstuvwxyz0123456789\n(fail) uses jane@example.com [1ms]`);
+    const r = extractFailures(`error: bad token ${FAKE_PAT}\n(fail) uses jane@example.com [1ms]`);
     const all = JSON.stringify(r);
-    expect(all).not.toContain("ghp_abc");
+    expect(all).not.toContain(FAKE_PAT);
     expect(all).not.toContain("jane@");
     // the signature once leaked a token the excerpt had hidden
     expect(r.failures[0]!.signature).not.toContain("ghp_");
@@ -346,9 +350,9 @@ describe("annotations", () => {
     expect(r.failures[0]!.excerpt).toContain("Received: 5");
   });
   test("a message from nowhere is titled by its first line, and is redacted", () => {
-    const r = annotationFailures([A("deploy failed with token ghp_abcdefghijklmnopqrstuvwxyz0123456789\nmore")]);
+    const r = annotationFailures([A(`deploy failed with token ${FAKE_PAT}\nmore`)]);
     expect(r.failures[0]!.title).toContain("deploy failed");
-    expect(JSON.stringify(r)).not.toContain("ghp_abc");
+    expect(JSON.stringify(r)).not.toContain(FAKE_PAT);
   });
 });
 
@@ -468,12 +472,12 @@ describe("readCheckFailures", () => {
 
   test("what is stored is the redacted text, and 90 days later it is gone", async () => {
     const id = job();
-    const leak = stamp(`error: bad token ghp_abcdefghijklmnopqrstuvwxyz0123456789\n(fail) uses jane@example.com [1ms]`);
+    const leak = stamp(`error: bad token ${FAKE_PAT}\n(fail) uses jane@example.com [1ms]`);
     const { src } = sources({ log: { ok: true, text: leak, bytes: leak.length } });
     const t0 = Date.parse("2026-01-01T00:00:00Z");
     await readCheckFailures("github.com/acme/orbit", id, {}, src, { now: t0 });
     const raw = JSON.stringify(db.prepare(`SELECT * FROM ci_failure_items WHERE job_id = ?`).all(id));
-    expect(raw).not.toContain("ghp_abc");
+    expect(raw).not.toContain(FAKE_PAT);
     expect(raw).not.toContain("jane@");
     // a later read, 91 days on, prunes it
     const other = sources();
@@ -501,8 +505,8 @@ describe("outputFailures", () => {
     expect(outputFailures({ title: "", summary: "  ", text: "" }).failures).toEqual([]);
   });
   test("what an app wrote is redacted like a log", () => {
-    const r = outputFailures({ title: "deploy gate", summary: "token ghp_abcdefghijklmnopqrstuvwxyz0123456789 for jane@example.com", text: "" });
-    expect(JSON.stringify(r)).not.toContain("ghp_abc");
+    const r = outputFailures({ title: "deploy gate", summary: `token ${FAKE_PAT} for jane@example.com`, text: "" });
+    expect(JSON.stringify(r)).not.toContain(FAKE_PAT);
     expect(JSON.stringify(r)).not.toContain("jane@");
   });
   test("a long summary is capped, keeping both ends", () => {
