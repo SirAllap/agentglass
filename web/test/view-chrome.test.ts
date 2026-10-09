@@ -150,7 +150,8 @@ const KNOWN: { file: string; cls: string; what: string }[] = [
   { file: "PrPanel.tsx", cls: "agx-btn text-[10.5px] px-2 py-0.5 rounded-full", what: "reviewer and base pickers" },
   { file: "TasksPanel.tsx", cls: "rounded-full", what: "ten chips across its two bars" },
   { file: "TasksPanel.tsx", cls: "text-[11.5px]", what: "a chip a size off the ladder" },
-  { file: "DockerPanel.tsx", cls: "text-[13px]", what: "a chip a size off the ladder" },
+  // DockerPanel's text-[13px] refresh button is gone: it is `RefreshButton`
+  // now, which has no text size of its own to be off the ladder.
 ];
 
 /** Is this one of the divergences that predates the scan being fixed? */
@@ -175,8 +176,11 @@ describe("the chip a view puts in its chrome", () => {
     const chrome = read("workspace/Chrome.tsx");
     expect(chrome).toContain('export const CHIP = "agx-chip text-[11px] px-2.5 min-h-[28px]');
     // And the icon-only sibling takes the app's own target size rather than a
-    // fourth opinion about how big a square control is.
-    expect(chrome).toContain("width: HIT, height: HIT");
+    // fourth opinion about how big a square control is — `HIT` by default, or
+    // `CTRL_H.regular` through the `IconButton` wrapper that lines it up with
+    // `CHIP` in a header that mixes the two.
+    expect(chrome).toContain("width: size, height: size");
+    expect(chrome).toContain("size = HIT");
   });
 
   it("is tall enough to hit", () => {

@@ -22,6 +22,25 @@
 
 import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
 import { HIT, ICON } from "../../lib/iconSize.ts";
+import { DoneIcon, RefreshIcon } from "../../lib/glyphIcons.tsx";
+
+/**
+ * The three heights a control comes in, and the one border every one of them
+ * shares.
+ *
+ * Named so the next control reaches for these instead of typing `28` or
+ * `edge(14)` again: `CHIP` already is `min-h-[28px]` (588 uses), and `edge(14)`
+ * is the most-used of the 17 percentages `edge()` is called with (54, against
+ * 52 for the next one down).
+ *
+ * `EDGE` is `edge(14)`'s own string, not a call to it: `git/ui.tsx` imports
+ * `CHIP` from this file already, and calling `edge()` at this module's top
+ * level would make the two files' load order decide which one sees the other
+ * half-initialized. The value cannot drift — `edge()` is one string template,
+ * checked by the slice-1 guard test.
+ */
+export const CTRL_H = { compact: 22, regular: 28, large: 32 } as const;
+export const EDGE = "1px solid color-mix(in srgb, var(--text) 14%, transparent)";
 
 /**
  * The one shape — and the class that gives it a body.
@@ -49,9 +68,9 @@ export const CHIP = "agx-chip text-[11px] px-2.5 min-h-[28px] inline-flex items-
  *
  * A toolbar toggle is transparent until it is on — the tint IS the state. A
  * control that is always available (the repo picker, the link to GitHub) has no
- * on-state to show, and transparent turns it into grey text: "no parece otra
- * cosa" was the report, about a header where two of them had become captions
- * with arrows after them.
+ * on-state to show, and transparent turns it into grey text: the report was
+ * that it no longer looked like a control at all, about a header where two of
+ * them had become captions with arrows after them.
  */
 export const CHIP_SURFACE = {
   background: "color-mix(in srgb, var(--text) 5%, transparent)",
@@ -346,13 +365,14 @@ export function ScopeChip({ label, kind, trailing = "none", on, onClick, title, 
  * reason `CloseButton` exists and is the size it is. A view that hand-rolls 24
  * is both slightly wrong and slightly different, which is the worse half.
  */
-export function IconChip({ onClick, title, children, on, expanded, hasPopup }: {
+export function IconChip({ onClick, title, children, on, expanded, hasPopup, size = HIT }: {
   onClick: () => void;
   title: string;
   children: ReactNode;
   on?: boolean;
   expanded?: boolean;
   hasPopup?: boolean;
+  size?: number;
 }) {
   return (
     <button
@@ -361,7 +381,7 @@ export function IconChip({ onClick, title, children, on, expanded, hasPopup }: {
       {...(expanded !== undefined ? { "aria-expanded": expanded } : {})}
       {...(hasPopup ? { "aria-haspopup": "menu" as const } : {})}
       className="inline-flex items-center justify-center rounded-lg transition-colors shrink-0"
-      style={{ width: HIT, height: HIT, ...chipTone(!!on) }}
+      style={{ width: size, height: size, ...chipTone(!!on) }}
     >
       {children}
     </button>
@@ -371,6 +391,61 @@ export function IconChip({ onClick, title, children, on, expanded, hasPopup }: {
 /** The size an icon inside `IconChip` is drawn at. Named so a call site does not
  *  have to know that the default rung happens to be the right one. */
 export const CHIP_ICON = ICON.md;
+
+/**
+ * `IconChip` at `CTRL_H.regular` (28) instead of `HIT` (26).
+ *
+ * The audit found the 2px step in every header that mixes an icon control
+ * with `CHIP`: `IconChip` was drawn at `HIT`, and `CHIP` is `min-h-[28px]`,
+ * so an icon button and a text chip on the same row never lined up. `HIT`
+ * itself is unchanged — it still answers "how small can a square target be"
+ * for `CloseButton` and the rail — this is only the rung a header control
+ * reaches for instead.
+ */
+export function IconButton(props: Omit<Parameters<typeof IconChip>[0], "size">) {
+  return <IconChip {...props} size={CTRL_H.regular} />;
+}
+
+/**
+ * The header refresh control, drawn once instead of the twelve looks the
+ * audit found: six spelled the word "Refresh" as visible text, three drew a
+ * bare icon, two bordered one, one combined icon and text — and three of the
+ * twelve hand-rolled the arrow as an inline `<path>` instead of `RefreshIcon`.
+ *
+ * Icon-only everywhere now; the word moves into `title` (also used as the
+ * `aria-label`), which is where a tooltip and a screen reader both already
+ * look for it. `done` is the Git panel's flash of a tick in `--success` once
+ * a refresh that changed nothing on screen still needs to say that it ran —
+ * opt-in, because every other caller has nothing to report back.
+ */
+export function RefreshButton({ onRefresh, busy, done, title, disabled }: {
+  onRefresh: () => void;
+  busy?: boolean;
+  done?: boolean;
+  title: string;
+  disabled?: boolean;
+}) {
+  const showDone = !!done && !busy;
+  return (
+    <button
+      type="button"
+      onClick={onRefresh}
+      disabled={disabled ?? busy}
+      title={title}
+      aria-label={title}
+      className="grid place-items-center rounded-lg shrink-0 transition-colors disabled:opacity-60"
+      style={{
+        width: CTRL_H.regular, height: CTRL_H.regular,
+        ...CHIP_SURFACE,
+        color: showDone ? "var(--success)" : CHIP_SURFACE.color,
+      }}
+    >
+      {showDone
+        ? <DoneIcon size={CHIP_ICON} />
+        : <RefreshIcon size={CHIP_ICON} className={busy ? "animate-spin" : undefined} />}
+    </button>
+  );
+}
 
 /**
  * The filter box a list view puts above its rows.

@@ -48,7 +48,7 @@ import { matchesQuery } from "../lib/boardSearch.ts";
 import { openCard, type CardJump } from "../lib/openCard.ts";
 import type { IssueJump } from "../lib/openIssue.ts";
 import { TASK_SOURCES, shownTaskSources, subscribeTaskSources, type TaskSourceId } from "../lib/taskSources.ts";
-import { CHIP } from "./workspace/Chrome.tsx";
+import { CHIP, CTRL_H, EDGE, RefreshButton } from "./workspace/Chrome.tsx";
 import { useTaskConnected, visibleTaskSources } from "../lib/taskConnected.ts";
 import { landingSource, rememberTaskSource } from "../lib/taskLanding.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
@@ -350,8 +350,7 @@ function IssuesBody({ root, active, jump }: { root: string; active: boolean; jum
             placeholder="Search issues — press ↵" spellCheck={false}
             className="flex-1 min-w-0 bg-transparent outline-none text-[11px]" style={{ color: "var(--text)" }} />
         </span>
-        <button onClick={load} title="Refresh" className="agx-btn text-[11px] px-2 py-1 rounded-lg"
-          style={{ color: "var(--text2)", border: edge(20) }}><RefreshIcon /></button>
+        <RefreshButton onRefresh={load} title="Refresh" />
       </div>
 
       {note && <NoteStrip note={note} onClose={() => setNote(null)} />}
@@ -2501,22 +2500,26 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
         {externalUrl(data?.view?.url) && (
           <a href={externalUrl(data?.view?.url)} target="_blank" rel="noreferrer noopener"
             title={`Open ${data?.view?.name ?? "this board"} in ClickUp`}
-            className="text-[10.5px] px-2 py-0.5 rounded-lg"
-            style={{ border: edge(16), color: "var(--text2)" }}>
+            className={CHIP}
+            style={{ border: EDGE, color: "var(--text2)" }}>
             Open ↗
           </a>
         )}
         {/* Where a card opens. Two, not three: full screen was offered and
             turned down — it covers the table entirely, and in an app that
-            already lives in tabs it does nothing the modal does not. */}
-        <div className="flex rounded-lg overflow-hidden shrink-0" style={{ border: edge(16) }}>
+            already lives in tabs it does nothing the modal does not.
+            `CTRL_H.regular` on the wrapper and each button, not `min-h` alone
+            — this is a joined pill with `overflow-hidden`, and a `min-h` that
+            lets a child grow taller than its sibling clips one side of the
+            border radius. */}
+        <div className="flex rounded-lg overflow-hidden shrink-0" style={{ border: EDGE, height: CTRL_H.regular }}>
           {([["side", "Sidebar"], ["modal", "Modal"]] as const).map(([id, label]) => (
             <button key={id} onClick={() => setCardMode(id)}
               aria-pressed={cardMode === id}
               title={id === "side"
                 ? "Open a card beside the list, in a pane you can drag wider"
                 : "Open a card over the list, with room for a long description"}
-              className="text-[10.5px] px-2 py-0.5"
+              className="text-[11px] px-2.5 inline-flex items-center"
               style={cardMode === id
                 ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)", color: "var(--text)" }
                 : { color: "var(--text3)" }}>
@@ -2528,14 +2531,10 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
             refresh to update only the assigned to me view" — so the button says
             which one it is going to re-read rather than leaving somebody to
             wonder whether pressing it costs the whole sidebar. */}
-        <button onClick={() => void load(data?.view?.id, true, true)} disabled={busy}
+        <RefreshButton onRefresh={() => void load(data?.view?.id, true, true)} busy={busy}
           title={data?.view?.name
             ? `Read ${data.view.name} again now — no other board is touched`
-            : "Read this board again now"}
-          className="text-[10.5px] px-2 py-0.5 rounded-lg"
-          style={{ border: edge(16), color: "var(--text2)", opacity: busy ? 0.5 : 1 }}>
-          {busy ? <RefreshIcon size={ICON.xs} className="animate-spin" /> : "Refresh"}
-        </button>
+            : "Read this board again now"} />
       </div>
 
       {/*
@@ -2735,9 +2734,9 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           title={showDone
             ? "Every status this board has, finished ones included"
             : `Bring back ${counts.done} card${counts.done === 1 ? "" : "s"} in a finished status — in production, released, won't fix`}
-          className="text-[10.5px] px-2 py-0.5 rounded-lg"
+          className={CHIP}
           style={showDone
-            ? { border: edge(14), color: "var(--text3)" }
+            ? { border: EDGE, color: "var(--text3)" }
             : { border: "1px solid color-mix(in srgb, var(--text) 22%, transparent)", color: "var(--text2)" }}>
           {showDone ? "showing everything" : `show ${counts.done} done`}
         </button>
@@ -5850,13 +5849,17 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           z-20, so it was working and invisible. Measured rather than written
           down — this band holds chips, a title that wraps and a tab row, and its
           height changes with every one of them. */}
-      <div ref={cardHead} className="sticky top-0 z-20 pb-1.5" style={{ background: "var(--bg)" }}>
+      {/* `pt-4` matches the scroller's own `px-4` — the action bar used to
+          touch the modal's top edge, because the scroller carries no top
+          padding (see above) and neither did this sticky band. Side and top
+          are now the same number instead of one of them being zero. */}
+      <div ref={cardHead} className="sticky top-0 z-20 pt-4 pb-1.5" style={{ background: "var(--bg)" }}>
         {/* The card's actions live above its identity, not below its text: they
             are what you reach for after reading, and a long card put them a
             full scroll away. In the sticky band, so they follow the card. */}
         <div className="flex items-center gap-1.5 flex-wrap pb-1.5 mb-1.5" style={{ borderBottom: edge(10) }}>
         <div className="relative">
-          <button onClick={() => setAskOpen((o) => !o)} className="text-[10.5px] px-2 py-1 rounded-lg"
+          <button onClick={() => setAskOpen((o) => !o)} className="text-[10.5px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg"
             style={{ border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", color: "var(--warning)" }}>
             Hand to Claude ▾
           </button>
@@ -5988,18 +5991,24 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
             </div>
           )}
         </div>
-        <button onClick={() => void copyIt(t.customId || t.id, "human")} className="text-[10.5px] px-2 py-1 rounded-lg"
+        <button onClick={() => void copyIt(t.customId || t.id, "human")} className="text-[10.5px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg"
           style={{ border: line, color: "var(--text2)" }}>Copy {t.customId ? "PROJ id" : "id"}</button>
         {/* Beside the id it belongs with, and before Open: the two buttons are
             the two ways to take this card somewhere else, and the one that
             leaves the app should not be the only way to get its address. */}
         {t.url && (
-          <button onClick={() => void copyIt(t.url, "url")} className="text-[10.5px] px-2 py-1 rounded-lg"
+          <button onClick={() => void copyIt(t.url, "url")} className="text-[10.5px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg"
             style={{ border: line, color: "var(--text2)" }}
             title={t.url}>{copied === "url" ? <span className="inline-flex items-center gap-1">copied<DoneIcon size={ICON.xs} /></span> : "Copy URL"}</button>
         )}
+        {/* Open and Refresh share the far right corner: Copy PROJ id / Copy
+            URL stay grouped with Hand to Claude on the left, and the spacer
+            goes before Open rather than before Refresh, so the two rightmost
+            controls travel together — refresh is always the last control on
+            a toolbar (see the board's own bar, Git, Docker, Lantern). */}
+        <span className="flex-1" />
         {t.url && (
-          <a href={t.url} target="_blank" rel="noreferrer" className="text-[10.5px] px-2 py-1 rounded-lg"
+          <a href={t.url} target="_blank" rel="noreferrer" className="text-[10.5px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg"
             style={{ border: line, color: "var(--text2)" }}>Open ↗</a>
         )}
         {/*
@@ -6013,7 +6022,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
          *
           Its own spinner rather than the board's, so it is obvious WHICH thing
           is being re-read. */}
-        <button onClick={() => {
+        <RefreshButton onRefresh={() => {
           setRereading(true);
           void api.clickupTask(t.id)
             .then((r) => {
@@ -6025,19 +6034,8 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
             .catch(() => { /* keep what we have */ })
             .finally(() => setRereading(false));
         }}
-          disabled={rereading}
-          title="Read this card again — the board keeps whatever it had"
-          className="text-[10.5px] px-2 py-1 rounded-lg flex items-center gap-1.5 disabled:opacity-50"
-          style={{ border: line, color: "var(--text2)" }}>
-          {/* ICON.xs — below twelve a stroked glyph stops resolving at 1x, and
-              the suite says so. It caught this one too. */}
-          <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4}
-            strokeLinecap="round" strokeLinejoin="round" aria-hidden
-            style={rereading ? { animation: "agx-spin 1s linear infinite" } : undefined}>
-            <path d="M21 12a9 9 0 1 1-2.6-6.4" /><path d="M21 3v6h-6" />
-          </svg>
-          {rereading ? "reading…" : "Refresh card"}
-        </button>
+          busy={rereading}
+          title="Read this card again — the board keeps whatever it had" />
       </div>
         {/* The identity chips sit in the SAME band as the table's column titles
             beside them — one height, centred, rather than a top padding chosen

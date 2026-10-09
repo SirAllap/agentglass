@@ -118,6 +118,7 @@ import { emitControl } from "../lib/controlBus.ts";
 import { refreshUnderstudy } from "../lib/understudyStore.ts";
 import { mutedSources, setMuted, sourceLabel, subscribeMuted } from "../lib/notePolicy.ts";
 import { MuteGlyph } from "./TopBarNotes.tsx";
+import { RefreshButton } from "./workspace/Chrome.tsx";
 
 /** A heading inside a Section, for a pane that answers the same question about
  *  two different sources. Without it "Quiet" and "Alert sounds" sit in one flat
@@ -2697,11 +2698,7 @@ function GhBudget({ open }: { open: boolean }) {
       <SettingRow
         label="How much of your GitHub allowance is left"
         hint="Every pull request, check and search this app shows spends one. GitHub refills them on a rolling window — 5,000 an hour for REST and GraphQL, 30 a minute for Search, which is the one that runs out first because looking up a card's pull requests is a search."
-        control={<button onClick={() => void load()} disabled={busy}
-          className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-          style={{ border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", color: "var(--text3)", opacity: busy ? 0.5 : 1 }}>
-          {busy ? "Checking…" : "Refresh"}
-        </button>}
+        control={<RefreshButton onRefresh={() => void load()} busy={busy} title="Refresh the GitHub budget" />}
       />
       <div className="py-1">
         {state && !state.ok && (

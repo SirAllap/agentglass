@@ -2301,7 +2301,7 @@ export function BrowserView({ active: viewOn, scope }: {
              on a row of text, and this is the control that changes what the
              sidebar holds. */
           className="agx-x shrink-0 grid place-items-center opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 rounded-md"
-          style={{ width: 24, height: 24 }}><CloseIcon size={ICON.md} /></button>
+          style={{ width: CLOSE_CELL, height: CLOSE_CELL }}><CloseIcon size={ICON.md} /></button>
       </div>
     );
   };
@@ -2713,7 +2713,7 @@ export function BrowserView({ active: viewOn, scope }: {
                    grouping was a change of tint and nothing else. */
                 <div style={{ marginLeft: 12, paddingLeft: 8, borderLeft: `2px solid hsl(${hue} 58% 56% / 0.32)` }}>
                   {rows.map(({ t, n }) => (
-                    <div key={t.id}>
+                    <div key={t.id} className="pt-1">
                       {line("tabs", null, n)}
                       <div {...pressProps("tab", t.id, tabLabel(t))}
                         data-drop-to="tabs" data-drop-index={String(n)}
@@ -2721,7 +2721,7 @@ export function BrowserView({ active: viewOn, scope }: {
                         onClick={() => { if (!dragged.current) show(t.id); }}
                         onMouseDown={(e) => { if (e.button === 1) { e.preventDefault(); close(t.id); } }}
                         title={t.url || "New tab"}
-                        className="group flex items-center gap-2 rounded-md px-1.5 py-1 cursor-default min-w-0"
+                        className="group flex items-center gap-2 rounded-md px-1.5 min-h-[28px] cursor-default min-w-0"
                         style={{
                           /* Its own space's colour, not the theme's accent: on
                              a bar showing four identities, "which one is this"
@@ -2754,8 +2754,8 @@ export function BrowserView({ active: viewOn, scope }: {
                             one meaning, one target big enough to aim at. */}
                         <button onClick={(e) => { e.stopPropagation(); close(t.id); }} aria-label={`Close ${tabLabel(t)}`}
                           title="Close this page"
-                          className="agx-x shrink-0 grid place-items-center opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 rounded-md"
-                          style={{ width: 24, height: 24 }}><CloseIcon size={ICON.md} /></button>
+                          className="agx-x shrink-0 grid place-items-center opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 rounded-md ml-1"
+                          style={{ width: CLOSE_CELL, height: CLOSE_CELL }}><CloseIcon size={ICON.md} /></button>
                       </div>
                     </div>
                   ))}

@@ -36,7 +36,7 @@ import { flashElement } from "../lib/flash.ts";
 import { shaFromHref } from "../lib/commitLink.ts";
 import { isShortRef, openInApp, wantsExternal } from "../lib/linkRouter.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
-import { ScopeChip } from "./workspace/Chrome.tsx";
+import { RefreshButton, ScopeChip } from "./workspace/Chrome.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import type {
   PrSummary, PrDetail, PrRepoId, PrThread, PrComment, PrReview, PrReviewer, PrCheck, GitRepoRef, FileChange,
@@ -4297,7 +4297,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             * dropped, so pressing this on a pull request somebody had pushed to
             * re-read everything around a diff that stayed as it was.
             */}
-          <Btn onClick={() => {
+          <RefreshButton onRefresh={() => {
             const plan = refreshPlan(selected);
             if (plan.pr != null) {
               /* One pull request open: refresh that one. The lists, and the
@@ -4324,8 +4324,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             boardForce.current = true;
             setBoardTick((n) => n + 1);
             loadList(true);
-          }} disabled={busy} small
-            title={selected != null ? "Refresh this pull request" : "Refresh the list"}>Refresh</Btn>
+          }} busy={busy}
+            title={selected != null ? "Refresh this pull request" : "Refresh the list"} />
         </div>
       </div>
 

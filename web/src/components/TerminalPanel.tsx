@@ -71,6 +71,7 @@ import { sharedPhase } from "../lib/sharedPhase.ts";
 import { StatusMark, STATUS_COLOR } from "./terminal/StatusMark.tsx";
 import { STATUS_WORDS } from "../../../shared/windowStatus.ts";
 import { buildGroups, openGroups, parseRules, setOpenGroups, subscribeTabGroups, tabGroupRulesText, tabGroupsOn, tabGroupsVersion, worthGrouping, type TabGroup } from "../lib/tabGroups.ts";
+import { CTRL_H, EDGE, chipTone } from "./workspace/Chrome.tsx";
 
 const ROOT_KEY = "agentglass.terminalRoot";
 /** The repo the terminal view last used — what a docked console should open
@@ -3019,8 +3020,8 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
             />
             </MoreMenu>
             <button type="button" onClick={() => openSettings("terminal")} aria-label="Terminal settings…" title="Terminal settings…"
-                className="shrink-0 grid place-items-center rounded hover:bg-white/10"
-                style={{ width: MIN_BOX, height: MIN_BOX, color: "var(--text3)" }}><GearIcon size={ICON.xs} /></button>
+                className="shrink-0 grid place-items-center rounded-lg hover:bg-white/10"
+                style={{ width: CTRL_H.regular, height: CTRL_H.regular, color: "var(--text3)" }}><GearIcon size={ICON.md} /></button>
     </>
   );
   /* Exactly one of the two window lists is ever on screen, and either one can be
@@ -3125,10 +3126,10 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       style={{ maskImage: edgeMask(tabStrip.edges), WebkitMaskImage: edgeMask(tabStrip.edges) }}>
                     <span
                       title={prefixLive ? "tmux is waiting for the rest of the sequence" : `tmux prefix: ${(sess?.tmuxPrefix ?? []).join(" or ") || "unknown"}`}
-                      className="shrink-0 px-1.5 py-0.5 rounded-md text-[10px] font-semibold tabular-nums transition-colors duration-75"
+                      className="shrink-0 px-2.5 min-h-[28px] inline-flex items-center rounded-lg text-[10px] font-semibold tabular-nums transition-colors duration-75"
                       style={prefixLive
                         ? { background: "var(--primary)", color: "var(--bg2)" }
-                        : { color: "var(--text4)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                        : { color: "var(--text4)", border: EDGE }}>
                       {(sess?.tmuxPrefix[0] ?? "tmux")}
                     </span>
                     {/* A badge and nothing more: a phone on this tmux can resize or
@@ -3137,8 +3138,8 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                     {(sess?.tmuxPhones ?? 0) > 0 && (
                       <span
                         title="A phone is attached to a session on this tmux, so a window may be sized or scrolled by it"
-                        className="shrink-0 px-1.5 py-0.5 rounded-md text-[10px] font-semibold"
-                        style={{ color: "var(--text3)", background: "var(--surface-inset)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                        className="shrink-0 px-2.5 min-h-[28px] inline-flex items-center rounded-lg text-[10px] font-semibold"
+                        style={{ color: "var(--text3)", background: "var(--surface-inset)", border: EDGE }}>
                         {sess!.tmuxPhones > 1 ? `${sess!.tmuxPhones} phones attached` : "phone attached"}
                       </span>
                     )}
@@ -3155,7 +3156,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         one of them, so pressing the new key in a pane belonging
                         to the other looks exactly like a setting that did not
                         apply. Reported as precisely that, twice. */}
-                    <span className="shrink-0 px-1.5 rounded text-[9.5px] uppercase tracking-wider"
+                    <span className="shrink-0 px-2.5 min-h-[28px] inline-flex items-center rounded-lg text-[9.5px] uppercase tracking-wider"
                       style={sess?.tmuxEngine
                         ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 13%, transparent)" }
                         : { color: "var(--text4)", background: "color-mix(in srgb, var(--text) 8%, transparent)" }}
@@ -3184,7 +3185,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       */}
                     {sess?.tmuxSession && (
                       <button
-                        className="shrink-0 px-1.5 py-0.5 text-[10px] max-w-[12rem] truncate rounded"
+                        className="shrink-0 px-2.5 min-h-[28px] inline-flex items-center text-[10px] max-w-[12rem] truncate rounded-lg"
                         style={{
                           color: sessionMenu ? "var(--text2)" : "var(--text4)",
                           background: sessionMenu ? "color-mix(in srgb, var(--text) 8%, transparent)" : "transparent",
@@ -3402,9 +3403,18 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                           }}
                           onDoubleClick={() => setRenaming(w.id)}
                           title={`${w.name || "shell"} — window ${w.index}${w.flags ? ` (${w.flags})` : ""}${w.status ? `, agent ${STATUS_WORDS[w.status]}` : ""}${w.pinned && tabGroups ? ", pinned first in its group" : ""}. Double-click to rename, drag to reorder${groupsOn ? ", right-click to pin or regroup" : ""}`}
-                          className={`group flex items-center gap-1.5 px-1 py-px text-[10.5px] cursor-pointer shrink-0 transition-colors${w.id === activeWindow ? " font-semibold" : ""}`}
+                          className={`group flex items-center gap-1.5 px-2 rounded-lg text-[10.5px] cursor-pointer shrink-0 transition-colors${w.id === activeWindow ? " font-semibold" : ""}`}
                           style={{
-                            ...(w.id === activeWindow ? { color: "var(--primary-hover)" } : { color: "var(--text2)" }),
+                            minHeight: CTRL_H.regular,
+                            // The active window used to be told apart by colour
+                            // alone — a bold red word beside plain ones — which
+                            // is not "unmistakable" the way a filled, bordered
+                            // chip is; every other selected control in the app
+                            // (`chipTone`) carries a box, and this was the one
+                            // exception. `chipTone` also keeps `--text3` for the
+                            // resting tabs, matching `IconChip`'s off state.
+                            ...chipTone(w.id === activeWindow),
+                            ...(w.id === activeWindow ? { border: EDGE } : { color: "var(--text2)" }),
                             // The tab being carried fades; the one it would land
                             // before takes a line on its leading edge, which is
                             // where it will actually go.
@@ -3551,7 +3561,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                                 {...dropOnGroup(g)}
                                 className="shrink-0 flex items-center gap-0.5 ml-1 pl-2 pr-0.5 text-[10px] rounded-sm"
                                 style={{
-                                  color: "var(--text3)", minHeight: MIN_BOX,
+                                  color: "var(--text3)", minHeight: CTRL_H.regular,
                                   borderLeft: "1px solid color-mix(in srgb, var(--border) 45%, transparent)",
                                   background: dropLit(g) ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent",
                                 }}
@@ -3565,7 +3575,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                                 onClick={() => toggleKeptOpen(g.key)}
                                 className="shrink-0 flex items-center gap-0.5 ml-1 pl-2 pr-0.5 text-[10px] rounded-sm"
                                 style={{
-                                  color: "var(--text4)", cursor: "pointer", minHeight: MIN_BOX,
+                                  color: "var(--text4)", cursor: "pointer", minHeight: CTRL_H.regular,
                                   borderLeft: "1px solid color-mix(in srgb, var(--border) 45%, transparent)",
                                   background: dropLit(g) ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent",
                                 }}
@@ -3685,14 +3695,14 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         boxShadow: dropOn === "__end__" ? "inset -2px 0 0 0 var(--primary)" : undefined,
                       }}
                       aria-hidden />
-                    <button onClick={() => tmuxCmd({ cmd: "new", root })} className="shrink-0 px-1.5 py-0.5 rounded-md text-[11px]" style={{ color: "var(--text3)" }} title={`New tmux window (${px} c puts it next to this one)`}>+</button>
+                    <button onClick={() => tmuxCmd({ cmd: "new", root })} className="shrink-0 px-2.5 min-h-[28px] inline-flex items-center rounded-lg text-[11px]" style={{ color: "var(--text3)" }} title={`New tmux window (${px} c puts it next to this one)`}>+</button>
                     {/* Not on the engine. That server keeps its status line off
                         by design — the config gate refuses any config that turns
                         it on — so the button would be offering a bar that cannot
                         arrive. On the machine's own tmux it is a real choice,
                         because that bar is the user's and they may prefer it. */}
                     {!sess?.tmuxEngine && (
-                      <button onClick={() => setTmuxBar(true)} className="ml-auto shrink-0 px-2 py-0.5 rounded-md text-[10px]" style={{ color: "var(--text3)" }}
+                      <button onClick={() => setTmuxBar(true)} className="ml-auto shrink-0 px-2.5 min-h-[28px] inline-flex items-center rounded-lg text-[10px]" style={{ color: "var(--text3)" }}
                         title="Give tmux its own status line back — this strip steps aside, so you are never looking at two window lists">
                         Use tmux's bar
                       </button>
@@ -4016,8 +4026,8 @@ function MoreMenu({ children }: { children: React.ReactNode }) {
     <span ref={box} className="relative shrink-0">
       <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
         title="Commands and sessions"
-        className="text-[11px] px-2 py-1 rounded-lg flex items-center gap-1"
-        style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+        className="text-[11px] px-2.5 min-h-[28px] rounded-lg flex items-center gap-1"
+        style={{ color: "var(--text2)", border: EDGE }}>
         More <span style={{ color: "var(--text3)" }}>▾</span>
       </button>
       {open && (

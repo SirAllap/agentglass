@@ -15,7 +15,7 @@ import { BisectModal } from "./BisectModal.tsx";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
-import { CHIP } from "./workspace/Chrome.tsx";
+import { CHIP, RefreshButton } from "./workspace/Chrome.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { BlockedIcon, BranchIcon, ChartIcon, CommitIcon, CrossIcon, DoneIcon, FileIcon, IconLabel, ListIcon, MinusIcon, PlusIcon, RefreshIcon, SparkleIcon, StashIcon, TargetIcon, TreeIcon, UndoIcon } from "../lib/glyphIcons.tsx";
 import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, ConflictBlock, BlockChoice, MergeInfo, FileChange, WalkthroughResult, WalkthroughFile, TidyReport, TidyFinding, GitSubmodule } from "../../../shared/types.ts";
@@ -327,7 +327,7 @@ function BranchChip({ branch, onCopied }: { branch: GitBranchInfo; onCopied?: (n
     // pushed everything else down. The name truncates, the counts never do —
     // they are the part you are actually reading — and the full name is one
     // hover or one click away.
-    <span className="px-2 py-0.5 rounded-md text-[11px] inline-flex items-center gap-1 min-w-0 max-w-[min(30vw,340px)] cursor-pointer"
+    <span className="px-2.5 min-h-[28px] rounded-lg text-[11px] inline-flex items-center gap-1 min-w-0 max-w-[min(30vw,340px)] cursor-pointer"
       style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", color: "var(--primary-hover)" }}
       onClick={() => {
         navigator.clipboard?.writeText(branch.name).then(() => onCopied?.(branch.name)).catch(() => { /* no clipboard permission */ });
@@ -2724,7 +2724,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     return (
       <button onClick={() => setView(id)} title={`${VIEW_LABEL[id]}${n ? ` (${n})` : ""} — press ${num}`}
         aria-keyshortcuts={String(num)} aria-selected={on} role="tab"
-        className="text-[11px] leading-none rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 font-medium px-3 py-1.5"
+        className="text-[11px] leading-none rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 font-medium px-3 min-h-[28px]"
         style={{
           background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
           border: `1px solid ${on ? "color-mix(in srgb, var(--primary) 42%, transparent)" : "transparent"}`,
@@ -2820,14 +2820,14 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     <button
                       onClick={() => setInsightsOpen(true)}
                       disabled={busy}
-                      className="text-[11px] px-2 py-1 rounded-lg whitespace-nowrap shrink-0 font-medium"
+                      className="text-[11px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg whitespace-nowrap shrink-0 font-medium"
                       style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--text) 4%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", opacity: busy ? 0.5 : 1 }}
                       title="Repo insights — commit pace, contributors, churn, changelog"
                     ><IconLabel icon={<ChartIcon size={ICON.xs} />}>insights</IconLabel></button>
                     {branch?.state === "bisecting" && (
                       <button
                         onClick={() => setBisectOpen(true)}
-                        className="text-[11px] px-2 py-1 rounded-lg whitespace-nowrap shrink-0"
+                        className="text-[11px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg whitespace-nowrap shrink-0"
                         style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}
                         title="A bisect is in progress — mark the checked-out commit good or bad"
                       ><IconLabel icon={<TargetIcon size={ICON.xs} />}>bisect</IconLabel></button>
@@ -2880,7 +2880,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     {prChip.kind === "open" && (
                       <button
                         onClick={() => openPr(prChip.repo, prChip.pr.number)}
-                        className="text-[11px] px-2 py-1 rounded-lg whitespace-nowrap flex items-center gap-1.5"
+                        className="text-[11px] px-2.5 min-h-[28px] rounded-lg whitespace-nowrap flex items-center gap-1.5"
                         style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}
                         title={`${prChip.pr.title} — open it in Pull requests`}>
                         {/* The state as a dot rather than a word: the row is
@@ -2912,7 +2912,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         the answer to "where is my pull request" there is "there
                         are twelve, and they land here". */}
                     {prAskFailed && !branchPr && prsOntoBranch.length === 0 && (
-                      <span className="text-[11px] px-2 py-1 rounded-lg whitespace-nowrap"
+                      <span className="text-[11px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg whitespace-nowrap"
                         title={`${prAskFailed} — so this header cannot say whether the branch has a pull request`}
                         style={{ color: "var(--text4)", border: "1px dashed color-mix(in srgb, var(--text) 18%, transparent)" }}>
                         PR unknown
@@ -2921,7 +2921,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     {!branchPr && prsOntoBranch.length > 0 && (
                       <button
                         onClick={() => openPrs(currentBranchName)}
-                        className="text-[11px] px-2 py-1 rounded-lg whitespace-nowrap flex items-center gap-1.5"
+                        className="text-[11px] px-2.5 min-h-[28px] rounded-lg whitespace-nowrap flex items-center gap-1.5"
                         style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}
                         title={`${prsOntoBranch.length} open pull request${prsOntoBranch.length === 1 ? "" : "s"} merge into ${currentBranchName}:\n${prsOntoBranch.slice(0, 6).map((p) => `#${p.number} ${p.title}`).join("\n")}`}>
                         <span style={{ color: "var(--text4)" }}>→</span>
@@ -2999,20 +2999,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       indistinguishable from one that never ran. So it spins
                       while it goes, and says so briefly when it lands.
                     */}
-                    <button onClick={refreshAll} disabled={refreshing} title="Refresh this view and the working tree"
-                      className="text-[11px] px-2 py-1 rounded-lg disabled:opacity-60" style={{ color: refreshed ? "var(--success)" : "var(--text2)" }}>
-                      <span className={refreshing ? "inline-flex animate-spin" : "inline-flex"} aria-hidden>
-                        {refreshed && !refreshing ? (
-                          <svg width={ICON.sm} height={ICON.sm} viewBox="0 0 14 14" fill="none">
-                            <path d="M3 7.4l2.6 2.6L11 4.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                          </svg>
-                        ) : (
-                          <svg width={ICON.sm} height={ICON.sm} viewBox="0 0 14 14" fill="none">
-                            <path d="M12 7a5 5 0 1 1-1.6-3.7M12 2.2V4.8H9.4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-                          </svg>
-                        )}
-                      </span>
-                    </button>
+                    <RefreshButton onRefresh={refreshAll} busy={refreshing} done={refreshed}
+                      title="Refresh this view and the working tree" />
                   </div>
                 </div>
 
@@ -3578,14 +3566,14 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         and "some files" are three ways to put work aside; they
                         belong beside each other. */}
                     <div className="flex items-center gap-2 flex-wrap mb-3">
-                    {writeEnabled && <button onClick={stashPush} disabled={busy || tree?.clean} className="text-[11px] px-3 py-1.5 rounded-lg font-medium" style={{ background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", color: "var(--text)", opacity: tree?.clean ? 0.5 : 1 }}>⇩ stash all changes</button>}
+                    {writeEnabled && <button onClick={stashPush} disabled={busy || tree?.clean} className="text-[11px] px-3 min-h-[28px] inline-flex items-center rounded-lg font-medium" style={{ background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", color: "var(--text)", opacity: tree?.clean ? 0.5 : 1 }}>⇩ stash all changes</button>}
                     {/* Snapshots: named checkpoints that never touch the tree.
                         stash push MOVES work off the tree; a snapshot copies it
                         and leaves the tree alone — so "before I try this" can
                         restore even after the experiment goes sideways. */}
                     {writeEnabled && (
                       <>
-                        <input value={snapshotLabel} onChange={(e) => setSnapshotLabel(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") snapshotNow(); }} placeholder="snapshot label (optional) — tree is not touched" className="px-3 py-1.5 rounded-lg text-[11.5px] outline-none min-w-0 w-56 shrink-0" style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text)" }} />
+                        <input value={snapshotLabel} onChange={(e) => setSnapshotLabel(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") snapshotNow(); }} placeholder="snapshot label (optional) — tree is not touched" className="px-3 min-h-[28px] rounded-lg text-[11.5px] outline-none min-w-0 w-56 shrink-0" style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text)" }} />
                         <button onClick={snapshotNow} disabled={busy || tree?.clean} className={`${CHIP} font-medium`} style={{ background: "color-mix(in srgb, var(--info) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--info) 35%, transparent)", color: "var(--text)", opacity: tree?.clean ? 0.5 : 1 }} title="Copy the current tree into refs/agx/wip — nothing moves, restore anytime"><IconLabel icon={<RefreshIcon size={ICON.xs} />}>snapshot now</IconLabel></button>
                       </>
                     )}
@@ -3599,7 +3587,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     {!!stashes.length && (
                       <input value={q} onChange={(e) => { setQ(e.target.value); setRowIdx(0); }}
                         placeholder="Search stashes…"
-                        className="px-3 py-1.5 rounded-lg text-[11.5px] outline-none min-w-0 flex-1 max-w-xs"
+                        className="px-3 min-h-[28px] rounded-lg text-[11.5px] outline-none min-w-0 flex-1 max-w-xs"
                         style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text)" }} />
                     )}
                     </div>

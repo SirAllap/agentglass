@@ -23,7 +23,7 @@ describe("panels link to their settings", () => {
   ] as const)("%s opens the %s page from a gear", (k, pane) => {
     const s = code(files[k]);
     expect(s).toContain(`openSettings("${pane}")`);
-    expect(s).toContain("<GearIcon size={ICON.xs} />");
+    expect(s).toMatch(/<GearIcon size=\{ICON\.(xs|md)\} \/>/);
   });
 
   test("the diff gear sits in both diff toolbars, beside the theme picker", () => {

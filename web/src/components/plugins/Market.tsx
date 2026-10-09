@@ -33,6 +33,7 @@ import { ExternalIcon } from "../browser/icons.tsx";
 import { Portal } from "../Portal.tsx";
 import { CloseButton } from "../CloseButton.tsx";
 import { LAYER } from "../../lib/layers.ts";
+import { RefreshButton } from "../workspace/Chrome.tsx";
 import type { Catalogue, InstallSource } from "../../../../shared/types.ts";
 
 /** The list this project publishes, on its own site, and the same document
@@ -193,11 +194,8 @@ export function Market({ installed, onInstalled }: {
             placeholder="Search the market" spellCheck={false}
             className="w-[190px] px-2.5 py-1.5 rounded-lg text-[12.5px] outline-none"
             style={{ background: "var(--bg)", border: "1px solid var(--surface-line)", color: "var(--text)" }} />
-          <button onClick={() => void load()} disabled={state.kind === "loading"}
-            className="text-[12px] font-normal px-2.5 py-1.5 rounded-lg whitespace-nowrap hover:opacity-80 disabled:opacity-50"
-            style={{ color: "var(--text2)", border: "1px solid var(--surface-line)" }}>
-            {state.kind === "loading" ? "Reading…" : "Refresh"}
-          </button>
+          <RefreshButton onRefresh={() => void load()} busy={state.kind === "loading"}
+            title="Refresh the market" />
         </div>
       </div>
 

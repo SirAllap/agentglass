@@ -34,6 +34,7 @@ import { Spinner } from "../Spinner.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { CommentIcon, DoneIcon, EyeIcon, FlagIcon, HandIcon, InboxIcon, UserIcon } from "../../lib/glyphIcons.tsx";
 import { GitIcon } from "../workspace/icons.tsx";
+import { RefreshButton } from "../workspace/Chrome.tsx";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 
@@ -280,10 +281,8 @@ export function Inbox({ repo, onFlash, onUnread }: {
             title="Turn the order round">
             {newest ? "Newest first" : "Oldest first"}
           </button>
-          <button onClick={() => load(true)} disabled={busy} className="agx-btn rounded-md px-2 py-1 text-[10.5px] shrink-0"
-            style={{ color: "var(--text3)", border: edge(14) }} title={at ? `Read ${fmtAgo(at)}` : "Read the inbox again"}>
-            {busy ? "Reading…" : "Refresh"}
-          </button>
+          <RefreshButton onRefresh={() => load(true)} busy={busy}
+            title={at ? `Read ${fmtAgo(at)}` : "Read the inbox again"} />
         </div>
 
         {/* Select all, and what you can do to what is selected. */}

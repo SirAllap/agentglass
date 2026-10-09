@@ -11,6 +11,7 @@ import { ScheduleDialog, ScheduledSection, type AgentSchedule } from "./LanternS
 import { handOff } from "../lib/lanternAsk.ts";
 import { api } from "../lib/api.ts";
 import { ClockIcon, IconLabel } from "../lib/glyphIcons.tsx";
+import { RefreshButton } from "./workspace/Chrome.tsx";
 import { ICON, MIN_BOX } from "../lib/iconSize.ts";
 import { GearIcon } from "./workspace/icons.tsx";
 import { openSettings } from "../lib/openSettings.ts";
@@ -439,7 +440,7 @@ export function LanternView({ active }: { active: boolean }) {
         actions={
           <>
             {failed && <span className="text-[10.5px]" style={{ color: "var(--warning)" }} title="The last read failed; this is the previous answer">stale</span>}
-            <button type="button" onClick={() => { void refreshLantern(); }} className="agx-btn text-[10.5px] px-2 py-0.5 rounded" style={{ color: "var(--text3)", border: edge(20) }} title="Read the field again now">Refresh</button>
+            <RefreshButton onRefresh={() => { void refreshLantern(); }} title="Read the field again now" />
             <button type="button" onClick={() => openSettings("lantern")} aria-label="Lantern settings…" title="Lantern settings…"
                 className="shrink-0 grid place-items-center rounded hover:bg-white/10"
                 style={{ width: MIN_BOX, height: MIN_BOX, color: "var(--text3)" }}><GearIcon size={ICON.xs} /></button>

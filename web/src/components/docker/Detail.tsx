@@ -107,12 +107,12 @@ export function Detail({
                 would have typed it into. A second, container-only terminal
                 would be a second set of bugs for no extra reach. */}
             {writeEnabled && c.state === "running" && (
-              <button onClick={onExec} className="text-[10px] px-2 py-0.5 rounded min-h-[20px]"
+              <button onClick={onExec} className="text-[10px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg"
                 style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}
                 title={`Open a shell inside ${c.name}`}>Exec</button>
             )}
             <Select value={String(tail)} onChange={(v) => onTail(Number(v))} align="right"
-              className="text-[10px] px-1 py-0.5 rounded outline-none"
+              className="text-[10px] px-2.5 min-h-[28px] rounded-lg outline-none"
               style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}
               options={[100, 200, 400, 1000, 2000].map((n) => ({ value: String(n), label: `${n} lines` }))} />
           </div>

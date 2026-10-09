@@ -45,6 +45,7 @@ import { openSettings } from "../lib/openSettings.ts";
 import { appChordFor, chordLabel } from "../lib/keybindings.ts";
 import { FolderIcon, SearchIcon } from "../lib/glyphIcons.tsx";
 import { scopeLabel, scopeTitle } from "../lib/projectPick.ts";
+import { RefreshButton } from "./workspace/Chrome.tsx";
 
 export const TOP_BAR_H = 30;
 
@@ -321,15 +322,7 @@ function PlanPanel({ u, age, at, onClose, onRefresh, busy }: {
           <button type="button" onClick={() => { onClose(); openSettings("budgets"); }} aria-label="Usage settings…" title="Usage settings…"
                 className="shrink-0 grid place-items-center rounded hover:bg-white/10"
                 style={{ width: MIN_BOX, height: MIN_BOX, color: "var(--text3)" }}><GearIcon size={ICON.xs} /></button>
-          <button onClick={onRefresh} disabled={busy} title="Read the plan again"
-            className="shrink-0 grid place-items-center rounded hover:bg-white/10 disabled:opacity-40"
-            style={{ width: 20, height: 20, color: "var(--text3)" }}>
-            <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2}
-              strokeLinecap="round" strokeLinejoin="round"
-              style={busy ? { animation: "agx-spin 1s linear infinite" } : undefined}>
-              <path d="M21 12a9 9 0 1 1-2.6-6.4" /><path d="M21 3v6h-6" />
-            </svg>
-          </button>
+          <RefreshButton onRefresh={onRefresh} busy={busy} title="Read the plan again" />
         </div>
 
         <div className="flex flex-col gap-3 px-3 py-3">
