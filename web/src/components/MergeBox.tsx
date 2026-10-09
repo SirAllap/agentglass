@@ -196,7 +196,7 @@ function Segments({ segs, total }: { segs: { key: string; count: number; label: 
 }
 
 export function MergeBox({
-  path, onAction, busy, mergeNode, conflictNode, autoNode, extraNode, cornerNode, notes, history, actionDisabled, pendingAction, showMergeRow = true,
+  path, onAction, busy, mergeNode, conflictNode, autoNode, extraNode, noticeNode, cornerNode, notes, history, actionDisabled, pendingAction, showMergeRow = true,
 }: {
   path: MergePath;
   onAction: (a: PathAction) => void;
@@ -209,6 +209,8 @@ export function MergeBox({
   autoNode: ReactNode;
   /** The quieter row of what else can be done to the branch. */
   extraNode?: ReactNode;
+  /** A notice about the branch action beside it: a row of its own under the buttons, full width. */
+  noticeNode?: ReactNode;
   /** Rarely used actions (To draft, Close), quiet, in the hero's top-right corner. */
   cornerNode?: ReactNode;
   /** Things only the panel knows about this branch (a confirmation, the files that conflict), as rows under the list. */
@@ -354,7 +356,7 @@ export function MergeBox({
           secondary group sits left, the merge group right, and the callout,
           when there is one, above the row on a line of its own; when they do not fit, the groups wrap under each other
           instead of squeezing. */}
-      {(callout || extraNode || showMergeRow) && (
+      {(callout || extraNode || noticeNode || showMergeRow) && (
         <div className="flex items-center gap-x-3 gap-y-2 flex-wrap px-4 py-3" style={{ borderTop: LINE, background: wash("var(--border)", 12) }}>
           {callout && (
             <span className="flex items-center gap-2 min-w-0 basis-full pl-3 text-[11.5px] font-semibold leading-snug"
@@ -367,6 +369,7 @@ export function MergeBox({
           )}
           {extraNode && <div className="flex items-center gap-1.5 flex-wrap min-w-0">{extraNode}</div>}
           {showMergeRow && <span className="flex items-center gap-1.5 ml-auto flex-wrap">{mergeNode}{!path.ready && autoNode}</span>}
+          {noticeNode && <div className="basis-full min-w-0 flex flex-col gap-1.5">{noticeNode}</div>}
         </div>
       )}
     </section>

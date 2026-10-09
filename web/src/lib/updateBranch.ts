@@ -59,8 +59,8 @@ export function updateBranchMove(behind: number | null, base: string, local?: Pr
     ? `your local ${local.branch} has ${local.ahead} commit${local.ahead === 1 ? "" : "s"} GitHub does not have — push ${local.ahead === 1 ? "it" : "them"} and this can pull too`
     : local.sync === "busy"
       ? `${tail(local.worktree)} is mid-merge — your local ${local.branch} stays put`
-      : "Your local copy has uncommitted changes, so Update branch will only update GitHub. "
-        + "Stash them, or commit and push, to bring this branch up to date locally.";
+      : "Your local copy has uncommitted changes, so Update branch is a remote-only sync: it updates the branch on GitHub "
+        + "and leaves this checkout as it is. Stash them, or commit and push, and it can update both.";
 
   return {
     label: `Update branch${count}`,

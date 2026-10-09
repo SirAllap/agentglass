@@ -59,8 +59,8 @@ describe("when it cannot", () => {
     expect(m.label).toBe("Update branch · 56 behind");
     // A sentence for someone who has never read this code, capitals and all:
     // it says what the button will and will not do, and what to do about it.
-    expect(m.note).toBe("Your local copy has uncommitted changes, so Update branch will only update GitHub. "
-      + "Stash them, or commit and push, to bring this branch up to date locally.");
+    expect(m.note).toBe("Your local copy has uncommitted changes, so Update branch is a remote-only sync: it updates the branch on GitHub "
+      + "and leaves this checkout as it is. Stash them, or commit and push, and it can update both.");
     expect(m.dirtyTree).toEqual({ worktree: "/home/x/code/agentglass-work", branch: "feat/thing" });
   });
 
@@ -81,5 +81,34 @@ describe("when it cannot", () => {
     const m = updateBranchMove(1, "main", head({ sync: "diverged", ahead: 1 }));
     expect(m.note).toContain("1 commit GitHub");
     expect(updateBranchMove(1, "main", undefined).title).toContain("1 commit behind");
+  });
+});
+
+/* The layout and the warning are drawn in two components, and the picture
+   cannot be rendered here, so what is pinned is the wiring: the notice goes to
+   the box's own full-width row (as `extraNode` its `basis-full` was relative to
+   a wrapper only as wide as the button, and it sat beside it), and the button
+   wears the same hatch as the merge button, from one constant. */
+const panel = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
+const box = await Bun.file(new URL("../src/components/MergeBox.tsx", import.meta.url)).text();
+const code = (src: string) => src.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*|\{\/\*)/.test(l)).join("\n");
+
+describe("the dirty-checkout notice in the merge box", () => {
+  it("is its own full-width row under the buttons, not part of the button group", () => {
+    expect(code(panel)).toMatch(/noticeNode=\{canUpdate && updateMove\.note \? noticeNode : undefined\}/);
+    expect(code(box)).toMatch(/\{noticeNode && <div className="basis-full /);
+    const c = code(panel), notice = c.indexOf("const noticeNode = ("), extra = c.indexOf("const extraNode = (");
+    expect(notice).toBeGreaterThan(-1);
+    expect(extra).toBeGreaterThan(notice);
+    const at = c.indexOf(">Review changes</Btn>");
+    expect(at).toBeGreaterThan(notice);
+    expect(at).toBeLessThan(extra);
+  });
+
+  it("puts the merge button's hatch on Update branch when the tree is dirty", () => {
+    expect(updateBranchMove(5, "main", head({ sync: "dirty", dirty: true, worktree: "/x/wt" })).dirtyTree).toBeDefined();
+    expect(code(panel)).toMatch(/<Btn onClick=\{\(\) => onUpdateBranch\(updateMove\.syncLocal\)\}[^\n]*hazard=\{!!updateMove\.dirtyTree\}/);
+    expect(code(panel).match(/background: HAZARD_STRIPE/g)?.length).toBe(3);
+    expect(code(panel)).not.toContain('background: "repeating-linear-gradient(135deg, var(--warning)');
   });
 });

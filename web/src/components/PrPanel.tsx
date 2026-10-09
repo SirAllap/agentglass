@@ -594,15 +594,22 @@ function Bar({ parts }: { parts: { pct: number; tint: string }[] }) {
 /** The panel's button: `Button` from Chrome.tsx under this file's old prop
  *  names. `small` is the `compact` rung; the reasoning behind the fixed height
  *  and the in-button spinner lives on `Button`. */
-export function Btn({ children, onClick, disabled, danger, primary, ok, warn, title, small, pending }: {
+/** The hatched amber the merge button wears for a merge you can perform and
+ *  probably should not yet; the Update branch button wears it for a sync that
+ *  will only reach GitHub. One signal, one place to change it. */
+export const HAZARD_STRIPE = "repeating-linear-gradient(135deg, var(--warning) 0 7px, color-mix(in srgb, var(--warning) 62%, var(--bg)) 7px 14px)";
+
+export function Btn({ children, onClick, disabled, danger, primary, ok, warn, title, small, pending, hazard }: {
   children: React.ReactNode; onClick?: () => void; disabled?: boolean;
   danger?: boolean; primary?: boolean; ok?: boolean; warn?: boolean; title?: string; small?: boolean;
   pending?: boolean;
+  hazard?: boolean;
 }) {
   const tone = danger ? "danger" : ok ? "ok" : warn ? "warn" : primary ? "primary" : "plain";
   return (
     <Button onClick={onClick} disabled={disabled} pending={pending} title={title}
-      size={small ? "compact" : "regular"} tone={tone}>
+      size={small ? "compact" : "regular"} tone={tone}
+      style={hazard && !disabled ? { background: HAZARD_STRIPE, color: "var(--bg)", fontWeight: 600 } : undefined}>
       {children}
     </Button>
   );
@@ -5670,12 +5677,12 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
                     // Same hazard stripe as the behind case, and for the same
                     // reason: this is a merge you can perform and probably
                     // should not yet.
-                    background: "repeating-linear-gradient(135deg, var(--warning) 0 7px, color-mix(in srgb, var(--warning) 62%, var(--bg)) 7px 14px)",
+                    background: HAZARD_STRIPE,
                     color: "var(--bg)", fontWeight: 600,
                   }
                 : isBehind
                 ? {
-                    background: "repeating-linear-gradient(135deg, var(--warning) 0 7px, color-mix(in srgb, var(--warning) 62%, var(--bg)) 7px 14px)",
+                    background: HAZARD_STRIPE,
                     color: "var(--bg)", fontWeight: 600,
                   }
                 : { background: "var(--primary)", color: "var(--bg)", fontWeight: 500 }}>
@@ -5744,6 +5751,36 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
   const conflictNode = (
             <ConflictActions root={root} number={d.number} branch={d.headRefName} base={d.baseRefName} repo={/github\.com\/([^/]+\/[^/]+)\//.exec(d.url)?.[1] ?? ""} title={d.title} disabled={busy} />
   );
+  const noticeNode = (
+    <>
+          {/* Drawn by MergeBox on a row of its own under the buttons, full width.
+              Inside `extraNode` it was `basis-full` of a wrapper that is only as
+              wide as the button, so it sat beside it. */}
+          {canUpdate && updateMove.note && !updateMove.dirtyTree && (
+            <span className="basis-full text-[10.5px] leading-snug" style={{ color: "var(--text3)" }}>
+              {updateMove.note}
+            </span>
+          )}
+          {/* A dirty checkout is the one note with something to press: the sentence,
+              the two names as chips, and the changes one click away in the app's own
+              File changes. The button is always the right-hand end of this row. */}
+          {canUpdate && updateMove.dirtyTree && (
+            <div className="basis-full rounded overflow-hidden" style={{ border: LINE }}>
+              <Reason last tint="var(--warning)" glyph={<WarningIcon size={ICON.xs} />}
+                action={<Btn small onClick={() => requestWorktreeJump({ view: "diff", filter: dirName(updateMove.dirtyTree!.worktree) })}
+                  title="Open this worktree's uncommitted changes in File changes">Review changes</Btn>}>
+                {updateMove.note}
+                <span className="flex items-center gap-1.5 mt-1 min-w-0 font-mono text-[10.5px]">
+                  <span className="shrink-0 px-1.5 rounded" title={updateMove.dirtyTree.worktree}
+                    style={{ background: "var(--surface-inset)", color: "var(--text2)" }}>{dirName(updateMove.dirtyTree.worktree)}</span>
+                  <span className="truncate px-1.5 rounded" title={updateMove.dirtyTree.branch}
+                    style={{ background: "var(--surface-inset)", color: "var(--text2)" }}>{updateMove.dirtyTree.branch}</span>
+                </span>
+              </Reason>
+            </div>
+          )}
+    </>
+  );
   const extraNode = (
     <>
           {/*
@@ -5810,7 +5847,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
              * stale in that window, so the second press is usually for a gap
              * that has already been closed.
              */
-            <Btn onClick={() => onUpdateBranch(updateMove.syncLocal)} disabled={busy || !!awaitingChecks} warn
+            <Btn onClick={() => onUpdateBranch(updateMove.syncLocal)} disabled={busy || !!awaitingChecks} warn hazard={!!updateMove.dirtyTree}
               pending={busyWhat === "Update branch"}
               title={awaitingChecks
                 ? "The branch was just updated — waiting for the checks to start. Pushing again would restart them."
@@ -5822,33 +5859,6 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
           {c.failure > 0 && !heroHas("rerun") && <Btn onClick={onRerun} disabled={busy || !!awaitingChecks} pending={busyWhat === "Re-run checks"}
             title={awaitingChecks ? "A new run is already starting from the update" : "Run the failed checks again"}>
             Re-run failed</Btn>}
-          {/* Last in the row, so its own line is UNDER everything rather than
-              between the update button and the pair pinned to the right — which
-              is what happened when it sat next to the button that earns it. It
-              names a path, so it needs the width. */}
-          {canUpdate && updateMove.note && !updateMove.dirtyTree && (
-            <span className="basis-full text-[10.5px] leading-snug" style={{ color: "var(--text3)" }}>
-              {updateMove.note}
-            </span>
-          )}
-          {/* A dirty checkout is the one note with something to press: the sentence,
-              the two names as chips, and the changes one click away in the app's own
-              File changes. The button is always the right-hand end of this row. */}
-          {canUpdate && updateMove.dirtyTree && (
-            <div className="basis-full rounded overflow-hidden" style={{ border: LINE }}>
-              <Reason last tint="var(--warning)" glyph={<WarningIcon size={ICON.xs} />}
-                action={<Btn small onClick={() => requestWorktreeJump({ view: "diff", filter: dirName(updateMove.dirtyTree!.worktree) })}
-                  title="Open this worktree's uncommitted changes in File changes">Review changes</Btn>}>
-                {updateMove.note}
-                <span className="flex items-center gap-1.5 mt-1 min-w-0 font-mono text-[10.5px]">
-                  <span className="shrink-0 px-1.5 rounded" title={updateMove.dirtyTree.worktree}
-                    style={{ background: "var(--surface-inset)", color: "var(--text2)" }}>{dirName(updateMove.dirtyTree.worktree)}</span>
-                  <span className="truncate px-1.5 rounded" title={updateMove.dirtyTree.branch}
-                    style={{ background: "var(--surface-inset)", color: "var(--text2)" }}>{updateMove.dirtyTree.branch}</span>
-                </span>
-              </Reason>
-            </div>
-          )}
     </>
   );
   /* Rarely used, so they sit in the box's top-right corner as text and not as
@@ -6006,7 +6016,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
         </section>
       ) : (
         <MergeBox path={path} busy={busy} onAction={onPathAction}
-          mergeNode={mergeNode} conflictNode={conflictNode} autoNode={autoNode} extraNode={extraNode} cornerNode={cornerNode}
+          mergeNode={mergeNode} conflictNode={conflictNode} autoNode={autoNode} extraNode={extraNode} noticeNode={canUpdate && updateMove.note ? noticeNode : undefined} cornerNode={cornerNode}
           notes={hasNotes ? notesNode : undefined}
           actionDisabled={actionDisabled} pendingAction={pendingAction} showMergeRow={!conflicted || !!d.autoMerge}
           history={<ReviewHistory reviews={d.reviews} timeline={d.timeline} pending={d.reviewers} author={d.author} you={d.viewerDidAuthor ? d.author : undefined} onGoReview={onGoReview} />} />
