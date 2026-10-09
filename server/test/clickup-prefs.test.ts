@@ -192,6 +192,27 @@ describe("the store", () => {
     }
   });
 
+  /*
+   * Polynomial, not exponential, and still a freeze: five adjacent overlapping
+   * quantifiers against 200 `a`s took 90.8 s. The degree is the count of them.
+   */
+  test("a pattern with more than two unbounded repeats is refused at save", () => {
+    for (const bad of ["a*a*a*a*a*c", "a+a+a+c", "x.*y.*z.*w", "a{2,}b{1,}c*d", "a{0,999}a{0,999}a{0,999}c"]) {
+      const r = P.applyPrefs(P.defaultPrefs(), { readOnlyFieldPattern: bad });
+      expect(r.ok, bad).toBe(false);
+      expect((r as { error: string }).error).toContain("can hang the app");
+    }
+    // A star that is a character is not a repeat.
+    expect(P.patternProblem("\\*\\*\\*[*+]*x")).toBeNull();
+  });
+
+  test("the worst pattern that still saves answers a long hostile name at once", () => {
+    expect(P.patternProblem("a*a*c")).toBeNull();
+    const t = performance.now();
+    expect(P.matchPref("a*a*c", "^sprint\\b", "a".repeat(5000))).toBe(false);
+    expect(performance.now() - t).toBeLessThan(50);
+  });
+
   test("the patterns people actually write still save", () => {
     for (const ok of ["^sprint\\b", "^(sprint|iteration) \\d+", "clickup|\\bcu-|-cu\\b", "do not edit", "(q[1-4])\\s*plan"]) {
       expect(P.applyPrefs(P.defaultPrefs(), { readOnlyFieldPattern: ok }).ok, ok).toBe(true);
@@ -208,9 +229,10 @@ describe("the store", () => {
     expect(performance.now() - t).toBeLessThan(50);
   });
 
-  test("a name is cut to 200 characters before a pattern sees it", () => {
-    // Bounded, so a slow pattern the heuristic cannot see still costs 200 characters at most.
-    expect(P.matchPref("^x.*y$", "^sprint\\b", "x" + "z".repeat(500) + "y")).toBe(false);
+  test("a name is cut to 64 characters before a pattern sees it", () => {
+    // Bounded, so a slow pattern the heuristic cannot see still costs 64 characters at most.
+    expect(P.matchPref("^x.*y$", "^sprint\\b", "x" + "z".repeat(62) + "y")).toBe(true);
+    expect(P.matchPref("^x.*y$", "^sprint\\b", "x" + "z".repeat(63) + "y")).toBe(false);
     expect(P.matchPref("^x.*z$", "^sprint\\b", "x" + "z".repeat(500))).toBe(true);
   });
 });
