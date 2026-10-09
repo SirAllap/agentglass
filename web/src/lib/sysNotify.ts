@@ -1092,8 +1092,8 @@ async function attachCard(n: SystemNote): Promise<void> {
    * FILED AGAINST THE CARD, not only linked to it.
    *
    * ClickUp's API reports no assignment and no follower, so this sentence is
-   * the only record of it that will ever exist here — "Irra assigned this task
-   * to: javi" was on screen while the card's activity showed nothing. Sent
+   * the only record of it that will ever exist here — "Grace assigned this task
+   * to: ada" was on screen while the card's activity showed nothing. Sent
    * before the early return below, because a note that already carries its
    * chip is exactly the one that arrived before any of this existed.
    *

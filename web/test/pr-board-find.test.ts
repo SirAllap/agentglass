@@ -4,7 +4,7 @@
  * Two searches used to live on this screen and they answered differently: the
  * app's find bar painted the words it could see and said 1/1, while the board's
  * own box lit the cards that answer and said 1 of 16. The difference is not
- * cosmetic — a card whose only connection to "javidoe" is a requested reviewer
+ * cosmetic — a card whose only connection to "adadoe" is a requested reviewer
  * has nothing on screen to paint, and it is exactly the card somebody typing a
  * name is looking for.
  *
@@ -21,7 +21,7 @@ const card = {
   baseRefName: "master",
   labels: [{ name: "regression" }],
   assignees: ["marlowe"],
-  reviewers: [{ login: "javidoe" }],
+  reviewers: [{ login: "adadoe" }],
 };
 
 describe("what the card's work item answers to", () => {
@@ -61,13 +61,13 @@ describe("what a card answers to", () => {
 
   /* The half a text search cannot reach, and the reason this rule exists. */
   test("and the people on it, who are only half drawn", () => {
-    expect(prMatches(card, "javidoe")).toBe(true);
+    expect(prMatches(card, "adadoe")).toBe(true);
     expect(prMatches(card, "marlowe")).toBe(true);
     expect(prMatches(card, "orbit-1042-break-times")).toBe(true);
   });
 
   test("case and stray spaces do not matter", () => {
-    expect(prMatches(card, "  JAVIdoe ")).toBe(true);
+    expect(prMatches(card, "  ADAdoe ")).toBe(true);
   });
 
   test("no needle is not a filter", () => {

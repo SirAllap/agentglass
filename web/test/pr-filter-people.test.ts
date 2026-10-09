@@ -2,8 +2,8 @@
  * "Can the finder search by assignee name?"
  *
  * It could not. The box matched the number, the title and the AUTHOR — which
- * answers "whose pull request is this" and never "where is Javi on this",
- * while the card under the cursor said "Waiting on javidoe" in as many
+ * answers "whose pull request is this" and never "where is Ada on this",
+ * while the card under the cursor said "Waiting on adadoe" in as many
  * words. On a board of 389 open pull requests that is the question people
  * actually type into it.
  *
@@ -33,41 +33,41 @@ const find = (rows: PrSummary[], text: string) => applyFilters(rows, { ...parseQ
 
 describe("the free-text box", () => {
   it("finds a pull request by the person assigned to it", () => {
-    const rows = [pr({ number: 10, assignees: ["javidoe"] }), pr({ number: 11 })];
-    expect(find(rows, "javi")).toEqual([10]);
+    const rows = [pr({ number: 10, assignees: ["adadoe"] }), pr({ number: 11 })];
+    expect(find(rows, "ada")).toEqual([10]);
   });
 
   it("finds one by who was asked to review it", () => {
-    const rows = [pr({ number: 20, reviewers: [{ login: "javidoe" }] }), pr({ number: 21 })];
-    expect(find(rows, "javi")).toEqual([20]);
+    const rows = [pr({ number: 20, reviewers: [{ login: "adadoe" }] }), pr({ number: 21 })];
+    expect(find(rows, "ada")).toEqual([20]);
   });
 
   it("still finds the old three: number, title and author", () => {
-    const rows = [pr({ number: 30, title: "Cart totals" }), pr({ number: 31, title: "Ledger", author: "javidoe" })];
+    const rows = [pr({ number: 30, title: "Cart totals" }), pr({ number: 31, title: "Ledger", author: "adadoe" })];
     expect(find(rows, "cart")).toEqual([30]);
     expect(find(rows, "31")).toEqual([31]);
-    expect(find(rows, "javid")).toEqual([31]);
+    expect(find(rows, "adad")).toEqual([31]);
   });
 
   it("does not match a person who is not on it", () => {
-    expect(find([pr({ number: 40, assignees: ["alexdoe"] })], "javi")).toEqual([]);
+    expect(find([pr({ number: 40, assignees: ["alexdoe"] })], "ada")).toEqual([]);
   });
 });
 
 describe("why the row is in the answer", () => {
   it("names the person, when the person is the reason", () => {
-    const row = pr({ assignees: ["javidoe"], reviewers: [{ login: "javi-b" }] });
-    expect(peopleMatched(row, "javi")).toEqual(["javidoe", "javi-b"]);
+    const row = pr({ assignees: ["adadoe"], reviewers: [{ login: "ada-b" }] });
+    expect(peopleMatched(row, "ada")).toEqual(["adadoe", "ada-b"]);
   });
 
   it("says nothing when the title or the author already explains it", () => {
     // A row that matched its own title is legible without help; a chip there is
     // noise on every row of a title search.
-    expect(peopleMatched(pr({ title: "javi's refactor", assignees: ["javidoe"] }), "javi")).toEqual([]);
-    expect(peopleMatched(pr({ author: "javidoe", assignees: ["javidoe"] }), "javi")).toEqual([]);
+    expect(peopleMatched(pr({ title: "ada's refactor", assignees: ["adadoe"] }), "ada")).toEqual([]);
+    expect(peopleMatched(pr({ author: "adadoe", assignees: ["adadoe"] }), "ada")).toEqual([]);
   });
 
   it("says nothing when the box is empty", () => {
-    expect(peopleMatched(pr({ assignees: ["javidoe"] }), "")).toEqual([]);
+    expect(peopleMatched(pr({ assignees: ["adadoe"] }), "")).toEqual([]);
   });
 });

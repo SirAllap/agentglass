@@ -42,7 +42,7 @@ describe("merging a list that has not finished loading", () => {
   // previous answer for every field but this one, so it looked complete and knew
   // nothing about what had been said on it.
   it("keeps what has been said on it — the badge must not blink off", () => {
-    const talk: PrTalk[] = [{ at: "2026-08-14T16:18:15Z", who: "javidoe", kind: "review", state: "CHANGES_REQUESTED", says: true }];
+    const talk: PrTalk[] = [{ at: "2026-08-14T16:18:15Z", who: "adadoe", kind: "review", state: "CHANGES_REQUESTED", says: true }];
     const before = row(1, { checks: green, checksLoaded: true, talk });
     const [p] = keepLoadedChecks([before], [fast(1)]);
     expect(p!.talk).toEqual(talk);
@@ -52,7 +52,7 @@ describe("merging a list that has not finished loading", () => {
   // a row that arrives WITH its second pass saying "nobody has said anything"
   // must not have yesterday's remarks put back on it.
   it("does not resurrect remarks a complete answer has dropped", () => {
-    const stale: PrTalk[] = [{ at: "2026-08-14T16:18:15Z", who: "javidoe", kind: "comment" }];
+    const stale: PrTalk[] = [{ at: "2026-08-14T16:18:15Z", who: "adadoe", kind: "comment" }];
     const before = row(1, { checks: green, checksLoaded: true, talk: stale });
     const [p] = keepLoadedChecks([before], [row(1, { checks: green, checksLoaded: true, talk: [] })]);
     expect(p!.talk).toEqual([]);

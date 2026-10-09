@@ -793,11 +793,9 @@ async function listTasksOf(token: string, listId: string, me?: string, fresh = f
      * The view answers the question on screen and reaches cards whose home is
      * another list. What it also does is apply the view's own FILTER, and a
      * list's default view usually has one: measured on a real list, the view
-     * answered 105 cards across nine statuses while the list holds 252 across
-     * fourteen. Everything in TO DO, IN STAGING, IN PRODUCTION, WON'T FIX and
-     * COMPLETED was invisible — not collapsed, absent, with no way to ask for
-     * it. "I need every status to show up in the lists… otherwise, what is
-     * the point."
+     * answered fewer than half the cards and left out five whole statuses.
+     * Everything in those statuses was invisible — not collapsed, absent, with
+     * no way to ask for it. A status with cards must always show as a group.
      *
      * The raw list is the other half: it has no filter and it reaches the
      * closed ones, and it misses the cards this list only borrows. So both are

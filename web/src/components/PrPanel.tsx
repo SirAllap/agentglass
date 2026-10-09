@@ -1700,7 +1700,7 @@ function PrRow({ p, active, onSelect, onReview, pinned, onTogglePin, q, unread, 
    *  wear — see prUnread.ts. */
   unread?: Unread | null;
   /** What is in the filter box, so a row that is here because of a PERSON can
-   *  say which one. Without it a search for "javi" returns rows whose author
+   *  say which one. Without it a search for "ada" returns rows whose author
    *  column says somebody else, and the list looks like it ignored you. */
   q?: string;
   /** On the bar at the top. Undefined where there is no repository to pin it

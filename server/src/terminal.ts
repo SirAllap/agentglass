@@ -1365,7 +1365,7 @@ export function ptyOpen(ws: PtyWs) {
      * and the hint bar drew that for the life of the shell. Change the key in
      * the settings panel — which now applies to the running server — and every
      * label still said the old one, which reads exactly like a setting that
-     * did nothing. Reported as "I have to restart agentglass anyway".
+     * did nothing. The app had to be restarted to see the change.
      *
      * It costs nothing: the sweep's one tmux call carries it, alongside the
      * windows and the panes. It used to be two more subprocesses of its own,
@@ -2185,7 +2185,7 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
      * The obvious fix was to switch the client onto it, and it was WORSE.
      * `switch-client` takes the whole terminal to the other session, so the
      * four windows the operator had open for their own work vanished from the
-     * strip at once — "I have completely lost my tmux". Nothing was lost, but
+     * strip at once, which reads as a lost tmux. Nothing was lost, but
      * showing somebody that mid-task is not something an app may do.
      *
      * The window is opened and left where it belongs. Finding it is the strip's

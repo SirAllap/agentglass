@@ -3021,7 +3021,7 @@ export async function rawListTasks(
        * status a person groups by. It was false, so COMPLETED — 199 of the 252
        * cards on one real list — was not merely collapsed, it was never
        * fetched, and the board could not have shown that group however it was
-       * asked. "I need every status to show up in the lists."
+       * asked. Every status the list has must show up.
        *
        * Whether a done group is SHOWN is a separate decision the panel already
        * makes (see `showDone`); this is about whether it can be.

@@ -11,8 +11,7 @@
  * no renderer here to mount the components and look. This is a regression
  * guard on the exact shapes the round-2 fixes replaced, not a general ban on
  * `py-0.5`/`py-1` (a row action, a menu item and a badge legitimately use
- * them outside a header) — see `~/brain/agentglass/ui-round2-2026-09-28.md`
- * for the full before/after list.
+ * them outside a header).
  */
 import { describe, expect, it } from "bun:test";
 

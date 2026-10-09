@@ -374,7 +374,7 @@ export function sweepStalledRuns(now = Date.now()): Recovery[] {
  * in flight, and no hand was raised, because every watcher in this file looks at
  * RUNS and there were none to look at.
  *
- * "We entrust it with a task and it has to be able to finish it" — so the first
+ * An agent entrusted with a task has to be able to finish it, so the first
  * answer to being idle is not to report it, it is to go back to work.
  */
 const IDLE_AFTER_MS = 90_000;

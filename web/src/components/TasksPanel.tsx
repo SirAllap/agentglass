@@ -2313,8 +2313,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
      * with nothing in it right now simply was not there — and a person reading
      * the board cannot tell "no cards in TO DO" from "this list has no TO DO".
      * ClickUp's own page draws all fifteen, empty ones included, because the
-     * empty ones are half of what a workflow tells you. "I need every status
-     * to show up in the lists… otherwise, what is the point."
+     * empty ones are half of what a workflow tells you: a status with no cards
+     * must still show as a group.
      *
      * Seeded before the rows are folded in, so the order is the workflow's own
      * and an empty group lands exactly where it belongs between two full ones.
@@ -5707,14 +5707,14 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
    * A FACE FOR A NAME A SENTENCE CARRIES.
    *
    * The "seen here" rows are notifications, and ClickUp writes them starting
-   * with the person: "Irra assigned this task to: javi". The API says who
+   * with the person: "Grace assigned this task to: ada". The API says who
    * created a card and nothing else, so this is the only other place a name
    * appears on the timeline — and it should look like the creation row rather
    * than like a bullet with grey text.
    *
    * Built from everybody the board already knows, matched on the whole name
-   * first and then on the first word, because a notification says "javi" where
-   * the board says "Javier Ortega".
+   * first and then on the first word, because a notification says "ada" where
+   * the board says "Ada Lovelace".
    */
   const faceByName = useCallback((name: string) => {
     const want = name.trim().toLowerCase();
