@@ -80,8 +80,16 @@ export function noteNvimArgv(root: string): string[] | null {
   const nvim = Bun.which("nvim");
   if (!nvim) return null;
   const file = notePath(root);
-  try { mkdirSync(dirname(file), { recursive: true, mode: 0o700 }); } catch { return null; }
-  return [nvim, file];
+  try {
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+    // The file exists before nvim opens it, and nvim writes it on every
+    // change with no swap file. Restarting the app killed nvim mid-edit: the
+    // text lived only in the swap, and the next open stopped on E325
+    // ATTENTION over a note that "CANNOT BE FOUND". The textarea saves as you
+    // type, so this is the same promise from the other editor.
+    writeFileSync(file, "", { flag: "a", mode: 0o600 });
+  } catch { return null; }
+  return [nvim, "-n", "-c", "autocmd TextChanged,TextChangedI,InsertLeave <buffer> silent! update", file];
 }
 
 export interface NoteReport { ok: boolean; text: string; at?: number; error?: string; nvim?: boolean }
