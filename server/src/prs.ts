@@ -1914,6 +1914,7 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
          callback below publishes into `listCache` itself, so by the time the
          final write runs, what is in there is the half-loaded pass. */
       const prior = new Map((listCache.get(key)?.prs ?? []).map((p) => [p.number, p]));
+      const readStart = Date.now();
       const page = await fetchList(repo, filter, state, after, (early) => {
         /*
          * The early rows, with the last full answer laid underneath them.
@@ -1947,7 +1948,7 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
         listCache.set(key, keep({ at: Date.now(), loading: false, checksPending: false }));
         return;
       }
-      storePage(repo, filter, state, key, prior, page);
+      storePage(repo, filter, state, key, prior, page, undefined, readStart);
     } catch (e) {
       listCache.set(key, keep({ loading: false, checksPending: false, error: failed("prs/list", e, "the pull requests could not be read") }));
     } finally {
@@ -1956,10 +1957,138 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
   })();
 }
 
+/*
+ * THE LIST ROW AND THE DETAIL ARE ONE DATUM.
+ *
+ * Measured on a pull request whose base moved: the detail (its own read, past
+ * its 45 s cache) said "conflicts with master" while the board card kept
+ * saying nothing for minutes. `mergeable` flips when the BASE moves, which
+ * bumps neither `updatedAt` nor the rollup, so the poll's probe found the queue
+ * unchanged and never re-read it; and the detail's fresh answer went to the
+ * detail cache alone. A read of either is now written into the other.
+ *
+ * Ceiling, named: only the fields both carry; the list's own (scope, agent
+ * spend, the tracker card) are not the detail's to say.
+ */
+const SHARED_FIELDS = ["title", "state", "isDraft", "reviewDecision", "updatedAt", "additions",
+  "deletions", "changedFiles", "labels", "assignees", "reviewers", "milestone", "checks", "headSha"] as const;
+
+/** `row` brought up to date from a detail read, or `row` itself when the
+ *  detail is older (its `updatedAt`) or says nothing new. An UNKNOWN
+ *  `mergeable` is GitHub still computing: it never replaces a known answer. */
+export function projectDetailOnRow(row: PrSummary, d: PrDetail): PrSummary {
+  if (row.number !== d.number || d.updatedAt < row.updatedAt) return row;
+  const patch: Record<string, unknown> = {};
+  const r = row as unknown as Record<string, unknown>;
+  const src = d as unknown as Record<string, unknown>;
+  for (const k of SHARED_FIELDS) {
+    if (src[k] !== undefined && JSON.stringify(r[k]) !== JSON.stringify(src[k])) patch[k] = src[k];
+  }
+  if (d.mergeable !== "UNKNOWN" && d.mergeable !== row.mergeable) patch.mergeable = d.mergeable;
+  if (!Object.keys(patch).length) return row;
+  return { ...row, ...patch, ...(patch.checks ? { checksLoaded: true } : {}) } as PrSummary;
+}
+
+/** The reverse: a list row read after the detail brings the detail's shared
+ *  fields up to date. Only a strictly newer `updatedAt`, or a known
+ *  `mergeable` where the detail's is still UNKNOWN. */
+export function projectRowOnDetail(d: PrDetail, row: PrSummary): PrDetail {
+  if (row.number !== d.number) return d;
+  const patch: Record<string, unknown> = {};
+  if (row.updatedAt > d.updatedAt) {
+    const r = row as unknown as Record<string, unknown>;
+    const dd = d as unknown as Record<string, unknown>;
+    for (const k of SHARED_FIELDS) if (r[k] !== undefined && JSON.stringify(dd[k]) !== JSON.stringify(r[k])) patch[k] = r[k];
+    if (row.mergeable !== "UNKNOWN" && row.mergeable !== d.mergeable) patch.mergeable = row.mergeable;
+  } else if (d.mergeable === "UNKNOWN" && row.mergeable !== "UNKNOWN") patch.mergeable = row.mergeable;
+  return Object.keys(patch).length ? { ...d, ...patch } as PrDetail : d;
+}
+
+/** Detail reads by pull request, so a list read that STARTED before one cannot
+ *  write its older rows over it (same rule as the web's `holdEdits`). */
+const projected = new Map<string, { at: number; detail: PrDetail }>();
+const PROJECTED_HOLD_MS = 2 * 60_000;
+
+/** A detail read lands: write it into every cached list row of that pull request. */
+export function projectDetail(repo: PrRepoId, d: PrDetail, now = Date.now()): void {
+  projected.set(`${repo.key}\u0000${d.number}`, { at: now, detail: d });
+  for (const [k, e] of listCache) {
+    if (!k.startsWith(`${repo.key}\u0000`) || !e.prs.some((r) => r.number === d.number)) continue;
+    const prs = e.prs.map((r) => projectDetailOnRow(r, d));
+    if (prs.some((r, i) => r !== e.prs[i])) listCache.set(k, { ...e, prs });
+  }
+}
+
+/** Rows of a list read started at `since`, with any detail read since then laid over them. */
+function keepNewerDetails(repo: PrRepoId, rows: PrSummary[], since: number, now = Date.now()): PrSummary[] {
+  if (!projected.size) return rows;
+  return rows.map((r) => {
+    const k = `${repo.key}\u0000${r.number}`;
+    const p = projected.get(k);
+    if (!p) return r;
+    if (now - p.at > PROJECTED_HOLD_MS) { projected.delete(k); return r; }
+    return p.at > since ? projectDetailOnRow(r, p.detail) : r;
+  });
+}
+
+/** Seconds to wait before each re-ask of a `mergeable` GitHub answered UNKNOWN. */
+export const MERGEABLE_RECHECK_MS = [25_000, 30_000, 40_000];
+const rechecking = new Set<string>();
+
+/**
+ * GitHub answers UNKNOWN while it computes mergeability (after a push or a base
+ * move). The list used to hold that until the next real change of the queue.
+ * One cheap follow-up for only those pull requests, at most three, each for
+ * the ones still UNKNOWN; none at all when nothing is UNKNOWN.
+ */
+export async function recheckMergeable(
+  numbers: number[],
+  ask: (ns: number[]) => Promise<Map<number, string>>,
+  apply: (n: number, m: "MERGEABLE" | "CONFLICTING") => void,
+  wait: (ms: number) => Promise<void> = (ms) => new Promise((r) => { const t = setTimeout(r, ms); (t as any).unref?.(); }),
+  delays = MERGEABLE_RECHECK_MS,
+): Promise<number> {
+  let left = numbers, asked = 0;
+  for (const ms of delays) {
+    if (!left.length) break;
+    await wait(ms);
+    asked++;
+    const got = await ask(left).catch(() => new Map<number, string>());
+    for (const [n, m] of got) if (m === "MERGEABLE" || m === "CONFLICTING") apply(n, m);
+    left = left.filter((n) => { const m = got.get(n); return m !== "MERGEABLE" && m !== "CONFLICTING"; });
+  }
+  return asked;
+}
+
+async function askMergeable(repo: PrRepoId, ns: number[]): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  const [owner, name] = repo.nameWithOwner.split("/");
+  const body = ns.map((n) => `p${n}: pullRequest(number: ${Number(n)}) { mergeable }`).join("\n");
+  const res = await ghJson<{ data?: { repository?: Record<string, any> } }>(
+    ["api", "graphql", "-f", `query=query { repository(owner: "${owner}", name: "${name}") { ${body} } }`]);
+  for (const n of ns) { const m = res?.data?.repository?.[`p${n}`]?.mergeable; if (typeof m === "string") out.set(n, m); }
+  return out;
+}
+
+function scheduleMergeableRecheck(repo: PrRepoId, rows: PrSummary[]): void {
+  const ns = rows.filter((r) => r.mergeable === "UNKNOWN" && !rechecking.has(`${repo.key}\u0000${r.number}`)).map((r) => r.number);
+  if (!ns.length) return;
+  for (const n of ns) rechecking.add(`${repo.key}\u0000${n}`);
+  void recheckMergeable(ns, (l) => askMergeable(repo, l), (n, m) => {
+    for (const [k, e] of listCache) {
+      if (!k.startsWith(`${repo.key}\u0000`)) continue;
+      const prs = e.prs.map((r) => (r.number === n && r.mergeable !== m ? { ...r, mergeable: m } : r));
+      if (prs.some((r, i) => r !== e.prs[i])) listCache.set(k, { ...e, prs });
+    }
+    const d = detailCache.get(`${repo.key}#${n}`);
+    if (d && d.detail.mergeable !== m) detailCache.set(`${repo.key}#${n}`, { ...d, detail: { ...d.detail, mergeable: m } });
+  }).catch(() => {}).finally(() => { for (const n of ns) rechecking.delete(`${repo.key}\u0000${n}`); });
+}
+
 /** A complete page into the cache: the per-PR check cache, the disk copy, and
  *  the CI and conversation notifications. `fp` is the probe's fingerprint of
  *  the rows it came with, for a queue; see probeOpen. */
-function storePage(repo: PrRepoId, filter: PrFilter, state: PrState, key: string, prior: Map<number, PrSummary>, page: ListPage, fp?: string): void {
+function storePage(repo: PrRepoId, filter: PrFilter, state: PrState, key: string, prior: Map<number, PrSummary>, page: ListPage, fp?: string, since = Date.now()): void {
   // The rollups arrived with the rows, so there is no second pass to wait
   // on and nothing to carry over. Feed the per-PR cache anyway: the detail
   // view and the notification latch both read it.
@@ -1970,11 +2099,19 @@ function storePage(repo: PrRepoId, filter: PrFilter, state: PrState, key: string
      the write `saveDiskCache` persists, so a blank that gets here outlives
      the session that caused it. */
   listCache.set(key, {
-    at: Date.now(), prs: page.rows.map((r) => carryOver(prior.get(r.number), r)),
+    at: Date.now(), prs: keepNewerDetails(repo, page.rows.map((r) => carryOver(prior.get(r.number), r)), since),
     loading: false, checksPending: false,
     total: page.total, hasNext: page.hasNext, cursor: page.cursor, fp,
   });
   saveDiskCache();
+  if (state === "open") scheduleMergeableRecheck(repo, listCache.get(key)!.prs);
+  /* And the open detail, if this read is newer than it. */
+  for (const r of listCache.get(key)!.prs) {
+    const dk = `${repo.key}#${r.number}`, hit = detailCache.get(dk);
+    if (!hit) continue;
+    const next = projectRowOnDetail(hit.detail, r);
+    if (next !== hit.detail) detailCache.set(dk, { ...hit, detail: next });
+  }
   // Only open PRs raise CI notifications — a merged or closed PR's checks
   // are history, not something to alert on.
   if (state === "open" && ciNotifiesFor(filter)) {
@@ -2009,8 +2146,8 @@ function storePage(repo: PrRepoId, filter: PrFilter, state: PrState, key: string
  * pay for it.
  */
 const PROBE_QUERY = `query($m:String!,$r:String!,$first:Int!){
-  m:search(query:$m,type:ISSUE,first:$first){issueCount nodes{...on PullRequest{number updatedAt commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}
-  r:search(query:$r,type:ISSUE,first:$first){issueCount nodes{...on PullRequest{number updatedAt commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}
+  m:search(query:$m,type:ISSUE,first:$first){issueCount nodes{...on PullRequest{number updatedAt mergeable commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}
+  r:search(query:$r,type:ISSUE,first:$first){issueCount nodes{...on PullRequest{number updatedAt mergeable commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}
 }`;
 type Probe = { at: number; fp: { mine: string; review: string }; counts: { mine: number; review: number } };
 const probeCache = new Map<string, Probe>();
@@ -2020,7 +2157,7 @@ export const PROBE_TTL_MS = 60_000;
 function probeFp(search: any): string {
   const nodes = (search?.nodes ?? []) as any[];
   return `${search?.issueCount ?? "?"}|${nodes.map((n) =>
-    `${n?.number}:${n?.updatedAt}:${n?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state ?? "-"}`).join(",")}`;
+    `${n?.number}:${n?.updatedAt}:${n?.mergeable ?? "-"}:${n?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state ?? "-"}`).join(",")}`;
 }
 
 async function probeOpen(repo: PrRepoId): Promise<Probe | null> {
@@ -2064,6 +2201,7 @@ function readQueues(repo: PrRepoId): Promise<boolean> {
   const running = queuesInflight.get(repo.key);
   if (running) return running;
   const p = (async () => {
+    const readStart = Date.now();
     const [res, cap] = await Promise.all([
       ghGraphql<any>(QUEUES_QUERY, {
         m: searchExpr(repo, "mine", "open"), r: searchExpr(repo, "review", "open"), first: LIST_PAGE,
@@ -2077,7 +2215,7 @@ function readQueues(repo: PrRepoId): Promise<boolean> {
       const key = cacheKey(repo, filter, "open");
       const prior = new Map((listCache.get(key)?.prs ?? []).map((q) => [q.number, q]));
       const early = barePage(search);
-      storePage(repo, filter, "open", key, prior, { ...early, rows: completeRows(early.rows, search.nodes ?? [], me) }, probeFp(search));
+      storePage(repo, filter, "open", key, prior, { ...early, rows: completeRows(early.rows, search.nodes ?? [], me) }, probeFp(search), readStart);
     }
     probeCache.set(repo.key, {
       at: Date.now(),
@@ -3301,6 +3439,7 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
 
   detailCache.set(key, { at: Date.now(), detail });
   saveDetailCache();
+  projectDetail(repo, detail);
   return { ok: true, detail };
 }
 

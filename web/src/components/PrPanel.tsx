@@ -67,7 +67,7 @@ import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
 import { keepLoadedChecks } from "../lib/prMerge.ts";
 import { askingBehind, behindAnswer, forgetBehind, forgetOneBehind, onBehind, refreshBehind } from "../lib/prBehindStore.ts";
 import { refreshRollup } from "../lib/prRollupStore.ts";
-import { overlayDetail, holdEdits, EDIT_HOLD_MS, refreshPlan, rowPatch, type EditLog } from "../lib/prRefresh.ts";
+import { overlayDetail, holdEdits, refreshPlan, rowPatch, type EditLog } from "../lib/prRefresh.ts";
 import {
   anchorId, bootstrapSince, clearSeen, foldedIdx, markAllSeen, newKeys, newSince, onSeenChange, readSeen,
   reviewSpeaks, writeSeen, type NewAtom,
@@ -2809,9 +2809,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
      up to date from it instead (see `overlayDetail`). */
   useEffect(() => {
     if (!detail || away) return;
-    /* Only a reading the panel stands behind, after an edit made here. */
-    const edited = editedAt.current.get(detail.number);
-    if (edited && !detailStale && Date.now() - edited < EDIT_HOLD_MS) editLog.current.set(detail.number, { at: Date.now(), patch: rowPatch(detail) });
+    /* Only a reading the panel stands behind. Any such reading is at least as
+       new as a list read that started before it, an edit made here or not: the
+       conflict a base move caused reached the detail first and a poll already
+       in flight brought the board's older row back over it. */
+    if (!detailStale) editLog.current.set(detail.number, { at: Date.now(), patch: rowPatch(detail) });
     setPrs((cur) => overlayDetail(cur, detail));
     setBoardMine((cur) => overlayDetail(cur, detail));
     setBoardReview((cur) => overlayDetail(cur, detail));

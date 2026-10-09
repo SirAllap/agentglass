@@ -31,6 +31,11 @@ export function rowPatch(d: PrDetail) {
     changedFiles: d.changedFiles, labels: d.labels, assignees: d.assignees,
     reviewers: d.reviewers,
     milestone: d.milestone, checks: d.checks, checksLoaded: true,
+    /* The board files a card by these two, and a base that moved changes the
+       first without touching `updatedAt`, so the detail can learn it first. An
+       UNKNOWN is GitHub still computing: never a reason to forget a known one. */
+    ...(d.mergeable !== "UNKNOWN" ? { mergeable: d.mergeable } : {}),
+    ...(d.headSha ? { headSha: d.headSha } : {}),
   };
 }
 
