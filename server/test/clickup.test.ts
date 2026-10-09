@@ -832,6 +832,20 @@ describe("the pull requests a card produced", () => {
       expect(prNumberFromUrl(bad), JSON.stringify(bad)).toBe(null);
     }
   });
+
+  it("takes the host from the address, not from text that merely contains github.com", () => {
+    // The field is typed by any member of the workspace, and the card lists
+    // what it holds as the card's own pull request with an "Open on GitHub"
+    // link: a path or a userinfo naming github.com must not be believed.
+    for (const decoy of ["https://evil.example/github.com/acme/orbit/pull/7",
+      "https://github.com@evil.example/acme/orbit/pull/7",
+      "https://github.com.evil.example/acme/orbit/pull/7",
+      "javascript:void(0)//github.com/acme/orbit/pull/7",
+      "https://evil.example/?u=https://github.com/acme/orbit/pull/7"]) {
+      expect(prNumberFromUrl(decoy), decoy).toBe(null);
+    }
+    expect(prNumberFromUrl("https://www.github.com/acme/orbit/pull/7")).toBe(7);
+  });
 });
 
 describe("a merge request on a card's link field", () => {

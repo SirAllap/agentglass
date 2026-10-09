@@ -3287,7 +3287,16 @@ export type { CardPr };
  *  ambiguous — issue or PR — so it has to be a link that says `/pull/` or
  *  `/-/merge_requests/`. */
 export function prNumberFromUrl(url: string): number | null {
-  const m = /github\.com\/[^/]+\/[^/]+\/pull\/(\d+)/i.exec(url || "");
+  // The host is parsed, not matched as text: a field is typed by any member of
+  // the workspace, and `evil.example/github.com/x/y/pull/7` or
+  // `github.com@evil.example/...` must not pass for a pull request of ours.
+  let m: RegExpExecArray | null = null;
+  try {
+    const u = new URL((url || "").trim());
+    if ((u.protocol === "https:" || u.protocol === "http:") && /^(www\.)?github\.com$/i.test(u.hostname) && !u.username && !u.password) {
+      m = /^\/[^/]+\/[^/]+\/pull\/(\d+)/i.exec(u.pathname);
+    }
+  } catch { /* not an absolute URL: GitLab below, or nothing */ }
   const n = m ? Number(m[1]) : NaN;
   return Number.isFinite(n) && n > 0 ? n : mergeRequestNumber(url);
 }

@@ -5124,8 +5124,12 @@ const LINK_BUTTONS = "flex items-start gap-1 shrink-0";
 const ROW_SQUARE: CSSProperties = { width: HIT, height: HIT, border: EDGE, color: "var(--text3)" };
 function RowSquare({ href, onClick, title, children }: { href?: string; onClick?: () => void; title: string; children: ReactNode }) {
   const cls = "agx-btn inline-flex items-center justify-center rounded-lg shrink-0 text-[12px]";
-  return href
-    ? <a href={href} target="_blank" rel="noreferrer noopener" className={cls} style={ROW_SQUARE} title={title} aria-label={title}>{children}</a>
+  // A link the card's field handed us goes through `externalUrl`; one that is not
+  // http(s) draws nothing rather than a square that goes somewhere unexpected.
+  const safe = href === undefined ? undefined : externalUrl(href);
+  if (href !== undefined && !safe) return null;
+  return safe
+    ? <a href={safe} target="_blank" rel="noreferrer noopener" className={cls} style={ROW_SQUARE} title={title} aria-label={title}>{children}</a>
     : <button onClick={onClick} className={cls} style={ROW_SQUARE} title={title} aria-label={title}>{children}</button>;
 }
 
