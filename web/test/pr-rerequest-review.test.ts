@@ -24,3 +24,15 @@ describe("re-request review from the sidebar", () => {
     expect(src).toContain("onAsk={(login) => api.prReviewers(root, d.number, [login], [])}");
   });
 });
+
+describe("a reviewer asked again", () => {
+  const start = src.indexOf("function ReviewerList(");
+  const body = src.slice(start, src.indexOf("\n}\n", start));
+
+  test("reads as pending, the way GitHub shows it, not as an arrow beside the old verdict", () => {
+    expect(body).toContain("const pending = !!r.again || ask === \"done\";");
+    expect(body).toContain("`Awaiting requested review from ${r.login}`");
+    expect(body).toContain('background: "var(--warning)"');
+    expect(body).not.toContain('title="Asked to look again"');
+  });
+});

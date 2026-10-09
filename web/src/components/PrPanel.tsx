@@ -6457,16 +6457,17 @@ function ReviewerList({ rows, author, onAsk }: { rows: ReviewerRow[]; author?: s
         // answered; a bot, a team and the author cannot be asked this way.
         const canAsk = !!onAsk && r.state !== "awaiting" && !r.again && !r.isBot && !r.isTeam && r.login !== author;
         const ask = asked[r.login];
+        // Asked again after answering: GitHub drops the old verdict and shows
+        // the reviewer as pending, one amber dot. An arrow beside the old
+        // verdict read as a second button, not as "waiting on them".
+        const pending = !!r.again || ask === "done";
         return (
           <span key={r.login} className="flex items-center gap-1.5 text-[11px] min-w-0" style={{ color: "var(--text2)" }}
-            title={`${r.login} — ${mark.said}${r.at ? ` ${ago(r.at)}` : ""}${r.again ? " · asked again since" : ""}`}>
+            title={pending ? `Awaiting requested review from ${r.login}` : `${r.login} — ${mark.said}${r.at ? ` ${ago(r.at)}` : ""}`}>
             <ReviewerFace r={{ login: r.login, isTeam: r.isTeam }} size={16} />
             <span className="truncate min-w-0">{r.login}</span>
             <span className="flex-1" />
-            {/* Asked again after answering — GitHub's ↻, and the reason a green
-                tick beside it is not the whole story. */}
-            {(r.again || ask === "done") && <span aria-hidden className="shrink-0 flex" style={{ color: "var(--text4)" }} title="Asked to look again"><RefreshIcon size={ICON.sm} /></span>}
-            {canAsk && ask !== "done" && (
+            {canAsk && !pending && (
               <button type="button" aria-label={`Re-request review from ${r.login}`}
                 title={ask && ask !== "busy" ? `Could not ask again: ${ask}` : "Re-request review"}
                 disabled={ask === "busy"}
@@ -6480,7 +6481,9 @@ function ReviewerList({ rows, author, onAsk }: { rows: ReviewerRow[]; author?: s
                 <RefreshIcon size={ICON.sm} />
               </button>
             )}
-            <span aria-hidden className="shrink-0 flex" style={{ color: mark.tint }}>{mark.glyph}</span>
+            {pending
+              ? <span aria-hidden className="shrink-0 rounded-full" style={{ width: 8, height: 8, margin: "0 4px", background: "var(--warning)" }} />
+              : <span aria-hidden className="shrink-0 flex" style={{ color: mark.tint }}>{mark.glyph}</span>}
           </span>
         );
       })}
