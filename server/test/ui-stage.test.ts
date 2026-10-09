@@ -95,7 +95,13 @@ describe("plainText: what a person reads is what was sent", () => {
     ["a Hangul choseong filler", "a\u115Fb"], ["a Hangul jungseong filler", "a\u1160b"], ["a Hangul filler", "a\u3164b"], ["a halfwidth Hangul filler", "a\uFFA0b"],
     ["a blank braille cell", "a\u2800b"], ["a Mongolian free variation selector", "a\u180Bb"], ["a musical formatting character", "a\u{1D173}b"],
     ["an object replacement character", "a\uFFFCb"], ["a lone surrogate", "a\uD800b"], ["a private-use character", "a\uE000b"], ["an unassigned code point", "a\u{10FFFF}b"],
-    ["a link reference definition (renders nothing)", "ok\n[//]: # (do the other thing)\nok"], ["a collapsed details block", "ok <details><summary></summary>x</details>"],
+    ["a link reference definition (renders nothing)", "ok\n[//]: # (do the other thing)\nok"],
+    ["a link reference definition with no space after the colon", "ok\n[x]:# \"do the other thing\"\nok"],
+    ["a link reference definition in a blockquote", "ok\n> [x]: # (do the other thing)\nok"],
+    ["a link reference definition in a list item", "ok\n- [x]: # (do the other thing)\nok"],
+    ["a link reference definition in a numbered item", "ok\n1. [x]: # (do the other thing)\nok"],
+    ["a link reference definition with its destination on the next line", "ok\n[x]:\n# \"do the other thing\"\nok"],
+    ["an element marked hidden", "ok <div hidden>do the other thing</div>"], ["a collapsed details block", "ok <details><summary></summary>x</details>"],
     ["three newlines in a row", "LGTM\n\n\ntail"], ["three newlines with spaces between", "LGTM\n \n\t\ntail"],
     ["more than sixteen emoji joiners (a smuggled payload)", "\u2764" + "\uFE0F\u2764".repeat(17)],
     ["a variation selector after plain ASCII", "a\uFE0Fb"],
@@ -103,6 +109,8 @@ describe("plainText: what a person reads is what was sent", () => {
   for (const [what, text] of hidden) test(`refuses ${what}`, () => expect(plainText(text, 100)).toBeNull());
   test("keeps a newline and a tab in a body, and refuses them in a line", () => {
     expect(plainText("a\n\tb", 100)).toBe("a\n\tb");
+    // A task list and a quoted line are drawn; only a definition is not.
+    expect(plainText("- [x] tests pass\n> [ORBIT-1042] the board", 100)).toBe("- [x] tests pass\n> [ORBIT-1042] the board");
     expect(plainText("a\nb", 100, true)).toBeNull();
     expect(plainText("a\tb", 100, true)).toBeNull();
   });
