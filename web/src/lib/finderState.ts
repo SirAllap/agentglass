@@ -106,6 +106,15 @@ export const scrollFor = (s: FinderSnapshot, path: string | null): number =>
 export const indexOfSel = (paths: (string | null)[], sel: string | null): number =>
   sel ? paths.indexOf(sel) : -1;
 
+/** The path to remember as "where you are". Closing the finder empties its list
+ *  (nothing is fetched while it is shut), and an empty list has no selection:
+ *  reading that as "nothing selected" wrote null to storage and let the cursor
+ *  fall to row 0, so the finder reopened on the first folder with the file's
+ *  path still in the box. Only an open finder with a row under the cursor gets
+ *  to change what is remembered. */
+export const rememberedSel = (prev: string | null, open: boolean, live: string | null): string | null =>
+  open && live ? live : prev;
+
 /** The footer's promise, in words: what reopening will put back. Only the
  *  parts that exist — no "“”" for an empty box, no section before a file. */
 export function resumeLine(p: { file: string | null; section: string | null; tab: string; q: string }): string {

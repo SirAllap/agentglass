@@ -7,7 +7,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
-  DRAWER_DEFAULT, DRAWER_MAX, DRAWER_MIN, clampDrawer, emptySnapshot, indexOfSel, restore, resumeLine, scrollFor, tabViewOf, withTabView,
+  DRAWER_DEFAULT, DRAWER_MAX, DRAWER_MIN, clampDrawer, emptySnapshot, indexOfSel, rememberedSel, restore, resumeLine, scrollFor, tabViewOf, withTabView,
 } from "../src/lib/finderState.ts";
 
 describe("a snapshot survives a round trip through storage", () => {
@@ -74,5 +74,20 @@ describe("the footer says what reopening will restore", () => {
   });
   test("what is empty is left out", () => {
     expect(resumeLine({ file: null, section: null, tab: "Recent", q: "" })).toBe("reopens exactly here: Recent");
+  });
+});
+
+describe("closing the finder does not forget the selection", () => {
+  const file = "~/code/orbit/prompts/greeting.jinja2";
+  test("while open, the live selection is what is remembered", () => {
+    expect(rememberedSel(null, true, file)).toBe(file);
+    expect(rememberedSel("~/code/orbit/old.md", true, file)).toBe(file);
+  });
+  test("closed, the list is emptied and has no selection: the last one stays", () => {
+    expect(rememberedSel(file, false, null)).toBe(file);
+    expect(rememberedSel(file, false, "~/code/orbit/first-dir")).toBe(file);
+  });
+  test("open but the list is still loading: the last one stays", () => {
+    expect(rememberedSel(file, true, null)).toBe(file);
   });
 });

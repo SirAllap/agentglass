@@ -40,7 +40,7 @@ import { useFileSource, type FileSource } from "./finder/useFileSource.ts";
 import { extChips, chipLabel, hasGlob, matchGlob, passesExts, toggleExt } from "../lib/finderFilters.ts";
 import { outline as outlineOf, viewerActions, type OutlineItem } from "../lib/finderViewer.ts";
 import { benchOpen, goTo as goToPath, type BenchOpen } from "../lib/finderFolder.ts";
-import { DRAWER_MAX, DRAWER_MIN, RAIL_W, clampDrawer, indexOfSel, restore, resumeLine, scrollFor, type FinderSnapshot, type TabView } from "../lib/finderState.ts";
+import { DRAWER_MAX, DRAWER_MIN, RAIL_W, clampDrawer, indexOfSel, rememberedSel, restore, resumeLine, scrollFor, type FinderSnapshot, type TabView } from "../lib/finderState.ts";
 import type { FileGitFacts } from "../../../shared/types.ts";
 import { RevealButton } from "./finder/RevealButton.tsx";
 import type { BrowseReport } from "../../../shared/types.ts";
@@ -291,6 +291,7 @@ export function FilePalette({
     viewStash.current = { ...viewStash.current, [tab]: { sel: selAbsRef.current, exts } };
     const v = viewStash.current[to];
     pendingSel.current = v?.sel ?? null;
+    listTop.current = null;   // another tab's list is another length
     setExts(v?.exts ?? []);
     setTab(to); setQ(r.next.q); setBrowsePath(r.next.browsePath);
   }, [tab, q, browsePath, exts]);
@@ -303,6 +304,9 @@ export function FilePalette({
   const handledTarget = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  /** How far the list was scrolled, kept for the next opening: the list is
+   *  unmounted when the finder closes, and its scroll goes with it. */
+  const listTop = useRef<number | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
   const repo = repos.find((r) => r.root === root) ?? null;
@@ -900,6 +904,13 @@ export function FilePalette({
   const selRow = shown[cursor];
   const selAbs = selRow ? absOf(selRow) : null;
   selAbsRef.current = selAbs;
+  /* The selection that survives a close: see finderState.rememberedSel. */
+  const lastSel = useRef<string | null>(saved.tabs[saved.tab]?.sel ?? null);
+  lastSel.current = rememberedSel(lastSel.current, open, selAbs);
+  const openRef = useRef(open);
+  openRef.current = open;
+  /* Closed, the list is emptied; put the selection back when it is refetched. */
+  useEffect(() => { if (!open) pendingSel.current = lastSel.current; }, [open]);
   /* The box says the selected item's path (see followBox), when it was already
      holding a folder path with nothing typed after it. A plain search, or a
      path with a name half-typed, is left alone. */
@@ -959,7 +970,7 @@ export function FilePalette({
       const b = stash.current[t.id]; const v = viewStash.current[t.id];
       if (t.id !== tab && (b || v)) tabs[t.id] = { q: b?.q ?? "", browsePath: b?.browsePath ?? null, sel: v?.sel ?? null, exts: v?.exts ?? [] };
     }
-    tabs[tab] = { q, browsePath, sel: selAbsRef.current, exts };
+    tabs[tab] = { q, browsePath, sel: lastSel.current, exts };
     snap.current = { ...snap.current, v: 1, tab, tabs, drawerW, collapsed };
     writeSnap(snap.current);
   }, [tab, q, browsePath, exts, drawerW, collapsed]);
@@ -969,7 +980,8 @@ export function FilePalette({
   }, [flushSnap]);
   useEffect(() => { schedule(); }, [schedule, selAbs]);
   const onTop = useCallback((top: number) => {
-    if (!selAbsRef.current) return;
+    /* A closing viewer empties and reports 0: that is not where you were. */
+    if (!selAbsRef.current || !openRef.current) return;
     snap.current = { ...snap.current, scroll: { path: selAbsRef.current, top: Math.round(top) } };
     schedule();
   }, [schedule]);
@@ -979,14 +991,19 @@ export function FilePalette({
 
   /* The saved selection, once its results are here. */
   useEffect(() => {
-    if (!pendingSel.current || !shown.length) return;
+    if (!open || !pendingSel.current || !shown.length) return;
     const i = indexOfSel(shown.map((r) => absOf(r)), pendingSel.current);
     pendingSel.current = null;
     if (i >= 0) {
       setCursor((c) => reduceSelection(c, { type: "focus", index: i }, shown.length));
-      requestAnimationFrame(() => listRef.current?.querySelector<HTMLElement>(`[data-row="${i}"]`)?.scrollIntoView({ block: "center" }));
+      requestAnimationFrame(() => {
+        const el = listRef.current;
+        if (!el) return;
+        if (listTop.current !== null) el.scrollTop = listTop.current;
+        else el.querySelector<HTMLElement>(`[data-row="${i}"]`)?.scrollIntoView({ block: "center" });
+      });
     }
-  }, [shown, absOf]);
+  }, [open, shown, absOf]);
 
   /* The drawer's width, dragged. Held to its bounds while the pointer is still
      down, so what is drawn is what will be restored. */
@@ -1207,7 +1224,7 @@ export function FilePalette({
                   </div>
                 )}
 
-                <div ref={listRef} className="flex-1 min-h-0 agx-scroll overflow-y-auto overflow-x-hidden pb-2">
+                <div ref={listRef} onScroll={(e) => { if (openRef.current) listTop.current = e.currentTarget.scrollTop; }} className="flex-1 min-h-0 agx-scroll overflow-y-auto overflow-x-hidden pb-2">
                   {collapsed ? (
                     <div className="flex flex-col items-center gap-1 py-1">
                       {shown.slice(0, 200).map((row, i) => {
