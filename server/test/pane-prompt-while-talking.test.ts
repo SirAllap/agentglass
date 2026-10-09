@@ -49,6 +49,8 @@ import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 /* Nothing here mutates this process's own environment: everything the run needs
    is handed to the child's `env`, which is the only place it takes effect. */
 const SOCKET = `agx-prompttalk-${process.pid}`;
+/* Well inside the hook's 90 s, so the report arrives instead of the timeout. */
+const STALL_MS = 60_000;
 
 /*
  * A stand-in for the agent CLI, written by the test rather than committed as a
@@ -116,7 +118,7 @@ finally:
 `;
 
 const CHILD = String.raw`
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
 import { runAgentInteractivePane } from "REPO/server/src/understudy-pane.ts";
 import { tmux, tmuxCapability } from "REPO/server/src/tmuxpane.ts";
 
@@ -148,7 +150,10 @@ test("a key hint that merely scrolls past does not kill a healthy run", async ()
   expect(r?.out ?? "").toContain("ran out of time");
 }, 40000);
 
-test.afterAll?.(async () => { if (have) await tmux(["kill-server"]); });
+// afterAll is imported: test.afterAll does not exist on Bun 1.3.9 (typeof is
+// "undefined"), so the optional call this used to be was a silent no-op and the
+// child never killed the server it started.
+afterAll(async () => { if (have) await tmux(["kill-server"]); });
 `;
 
 let jail = "";
@@ -191,7 +196,24 @@ beforeAll(async () => {
       TMUX: "",
     },
   });
-  out = `${await new Response(child.stdout).text()}\n${await new Response(child.stderr).text()}`;
+  /* Both pipes at once, and the child killed at STALL_MS with what it had said
+     and what tmux held at that moment. Read one after the other, a child that
+     fills the second pipe while this waits for the first to close blocks both
+     for the whole hook budget; and a child that is merely stuck costs 90 s and
+     the line "a hook timed out", which names nothing. */
+  let said = "";
+  const drain = async (s: ReadableStream<Uint8Array>) => {
+    for await (const c of s) said += new TextDecoder().decode(c);
+  };
+  const stalled = setTimeout(() => {
+    const ls = Bun.spawnSync(["tmux", ...TMUX_ISOLATED, "-L", SOCKET, "list-windows", "-a"],
+      { env: { ...process.env, TMUX_TMPDIR: TMUX_TEST_TMPDIR, TMUX: "" } });
+    said += `\n[stalled after ${STALL_MS}ms; tmux windows: ${ls.stdout.toString().trim() || ls.stderr.toString().trim() || "none"}]`;
+    try { child.kill(); } catch { /* gone */ }
+  }, STALL_MS);
+  await Promise.all([drain(child.stdout as ReadableStream<Uint8Array>), drain(child.stderr as ReadableStream<Uint8Array>)]);
+  clearTimeout(stalled);
+  out = said;
   code = await child.exited;
 // 90s, because this hook IS the work: the child drives two real panes and one
 // of them deliberately runs to its own deadline. The default five seconds
