@@ -161,10 +161,10 @@ describe("the files share one editor", () => {
   it("never hands the reader's session to a shell", async () => {
     const b = await load();
     // Fill every slot below the reader's, then ask for one more: the answer
-    // must skip 90, or a shell would attach to the session holding somebody's
-    // editor and tmux would mirror the two.
+    // must skip 90 (the reader) and 91 (the note in Neovim), or a shell would
+    // attach to a session holding somebody's editor and tmux would mirror the two.
     for (let n = 0; n < b.READER_SLOT - 1; n++) b.addTab(A, { kind: "term", title: `t${n}` });
-    expect(b.freeSlot(A)).toBe(b.READER_SLOT + 1);
+    expect(b.freeSlot(A)).toBe(b.NOTE_SLOT + 1);
   });
 });
 
