@@ -86,6 +86,9 @@ import { UnreadBadge } from "./UnreadBadge.tsx";
 import { excerpt, findInDiffs, groupByFile, type Match } from "../lib/diffFind.ts";
 import { PrFilterBar } from "./PrFilterBar.tsx";
 import { FilterBuilder } from "./tasks/FilterBuilder.tsx";
+import { FilterPresets } from "./FilterPresets.tsx";
+import { useFilterPresets } from "./useFilterPresets.ts";
+import { presetCounts } from "../lib/filterPresets.ts";
 import { EMPTY as EMPTY_RULES, readFilterSet, type FilterSet } from "./tasks/filters.ts";
 import { Avatar } from "./Avatar.tsx";
 import { StatusPill } from "./StatusPill.tsx";
@@ -3219,6 +3222,26 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
      keeps the tracker's two out of the way of everybody who has no tracker. */
   const ruleFields = useMemo(() => builderFields(ruleRows, filters, facetOpts), [ruleRows, filters, facetOpts]);
   /*
+   * Saved filter sets, one chip each beside the Filters button. The count on a
+   * chip is what the BOARD would show under that set — the same
+   * `applyRulesKeepUnread` over the same two pools, deduplicated by number the
+   * way the board counts — so a chip can never disagree with the line it sits
+   * under. Off the board it is the table's pool, narrowed by the pills.
+   */
+  const presetsApi = useFilterPresets({ repoKey: repo?.key ?? null, rules, setRules, fields: ruleFields });
+  const presetCountsById = useMemo(
+    () => presetCounts<PrSummary>(
+      presetsApi.presets,
+      boardShown ? [boardMineCards, boardReviewCards] : [applyFilters(pool, filters)],
+      (rows, f) => applyRulesKeepUnread(rows as PrSummary[], f, readPrField, isRuleExempt),
+      (p) => p.number,
+    ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [presetsApi.presets, boardShown, boardMineCards, boardReviewCards, pool, filters, repo?.key, seenMarks],
+  );
+  const [builderOpenSignal, setBuilderOpenSignal] = useState(0);
+  const editPresetRule = useCallback((id: string) => { presetsApi.apply(id); setBuilderOpenSignal((n) => n + 1); }, [presetsApi]);
+  /*
    * Neither list has answered yet.
    *
    * Two empty arrays are the initial state AND the "nothing wants anything from
@@ -4726,7 +4749,14 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               /* The half the pills cannot say: `is not`, `is set`, and rules
                  joined together. Handed the same fields the pills offer, so the
                  two lists can never disagree about what a field is. */
-              builder={<FilterBuilder fields={ruleFields} value={rules} onChange={setRules} />}
+              builder={(
+                <>
+                  <FilterBuilder fields={ruleFields} value={rules} onChange={setRules} openSignal={builderOpenSignal} />
+                  <FilterPresets api={presetsApi} counts={presetCountsById} rules={rules} fields={ruleFields}
+                    hotkeys={active && selected == null}
+                    onEditRule={editPresetRule} />
+                </>
+              )}
             />
           )}
           <div ref={listRef} tabIndex={-1} onKeyDown={onListKey} className="flex-1 overflow-y-auto min-h-0 agx-scroll outline-none">

@@ -101,6 +101,8 @@ const ALLOWED: { file: string; marker: string; why: string }[] = [
   { file: "PrPanel.tsx", marker: 'placeholder="Filter files…"',
     why: "icon and a clear button share the pill's one border with the input" },
 
+  { file: "FilterPresets.tsx", marker: 'aria-label="Preset name"',
+    why: "a preset's name edited in place, inside the chip itself or a menu row; INPUT's 32px height would not fit either" },
   { file: "TerminalPanel.tsx", marker: "defaultValue={String(w.index)}",
     why: "a 7-character-wide inline rename of a window's position in the tab strip; not a search box" },
   { file: "TerminalPanel.tsx", marker: "defaultValue={w.name}",
