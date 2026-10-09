@@ -13,7 +13,7 @@
  * The ceiling this accepts: a board scrolled into view for the first time
  * still pays one request per card the moment its row mounts — there is no
  * cheaper source for the card-to-pull-request link today. What this avoids is
- * asking again: `TTL_MS` matches `CU_POLL_MS`, the board's own refresh
+ * asking again: `TTL_MS` matches `BOARD_POLL_MS`, the board's own refresh
  * interval, so a row re-rendered by that poll reuses its answer until it is
  * genuinely due for another one, instead of racing the poll with a timer of
  * its own.
@@ -21,8 +21,8 @@
 import { api } from "./api.ts";
 import type { CardPr } from "./cardPrPick.ts";
 
-/** Ten minutes, no longer the board's own poll interval (`CU_POLL_MS` in
- *  TasksPanel.tsx). Each answer is a `gh pr list --search`, a GraphQL request
+/** Ten minutes, no longer the board's own poll interval (`BOARD_POLL_MS` in
+ *  lib/boardPoll.ts). Each answer is a `gh pr list --search`, a GraphQL request
  *  against the account's 5000 an hour, and in step with a one-minute poll a
  *  board of thirty cards could spend thirty a minute on a link that changes
  *  once in a card's life. Ceiling: a pull request opened for a card shows on

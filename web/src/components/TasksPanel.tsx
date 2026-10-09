@@ -61,6 +61,7 @@ import { parseLocal, toLine, sortTasks, step, checkbox, toggleCheckbox, checkPro
 import { useSyncExternalStore } from "react";
 import { CloseButton, CloseIcon } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { boardDue, BOARD_POLL_MS, BOARD_TICK_MS } from "../lib/boardPoll.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { PRIOS, prioLook, Flag } from "../lib/priority.tsx";
 
@@ -1385,8 +1386,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
    *
    * Set once per board you land on, so an explicit toggle survives the poll.
    */
-  /** What this board costs to ask, which is what decides how often we do. */
-  const pollMs = data?.view?.builtin ? CU_POLL_SLOW_MS : CU_POLL_MS;
+  /** How often an idle board asks again; see lib/boardPoll.ts. */
+  const pollMs = BOARD_POLL_MS;
 
 
   /*
@@ -1448,15 +1449,17 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
      * signal that works in both a browser and the app.
      */
     const looking = () => !document.hidden && document.hasFocus();
-    const tick = () => {
+    const ask = (cause: "tick" | "focus") => {
       if (!looking()) return;
       // Age, not ticks. Asking our own server is free, but it is the thing that
       // makes the server ask ClickUp, so the client keeps its own floor too.
-      if (data?.at && Date.now() - data.at < pollMs) return;
+      if (!boardDue(Date.now(), data?.at, cause)) return;
       void load(data?.view?.id);
     };
+    const tick = () => ask("tick");
+    const onFocus = () => ask("focus");
     /*
-     * Two minutes, and it usually decides to do nothing.
+     * A minute, and it usually decides to do nothing (see lib/boardPoll.ts).
      *
      * This is no longer a poll in any meaningful sense: the server serves from
      * disk and refreshes on its own schedule, so a tick that finds the data
@@ -1467,10 +1470,10 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
      * The listener does the real work. Coming back to the window is when a
      * stale board matters, and it is exactly when nothing else would notice.
      */
-    const t = setInterval(tick, 120_000);
-    window.addEventListener("focus", tick);
-    return () => { clearInterval(t); window.removeEventListener("focus", tick); };
-  }, [active, load, data?.view?.id, data?.at, pollMs]);
+    const t = setInterval(tick, BOARD_TICK_MS);
+    window.addEventListener("focus", onFocus);
+    return () => { clearInterval(t); window.removeEventListener("focus", onFocus); };
+  }, [active, load, data?.view?.id, data?.at]);
 
   /* One list that sits directly in a space. The picker sends its id and
      nothing else — the resolver takes a bare list id, which is the whole
@@ -4247,8 +4250,6 @@ const ON_CHIP_OK = {
   background: "var(--success)", border: "1px solid var(--success)", color: "var(--bg)", fontWeight: 600,
 } as const;
 
-const CU_POLL_MS = 60_000;
-const CU_POLL_SLOW_MS = 300_000;
 
 /*
  * The columns, and the ones that come and go.
