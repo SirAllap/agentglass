@@ -46,8 +46,9 @@ import { RevealButton } from "./finder/RevealButton.tsx";
 import type { BrowseReport } from "../../../shared/types.ts";
 import { appChordFor, chordLabel } from "../lib/keybindings.ts";
 import { LAYER } from "../lib/layers.ts";
+import { FINDER_BOX, FINDER_MARGIN } from "../lib/finderSize.ts";
 import { shortPath } from "../lib/shortPath.ts";
-import { afterJump, dirsFirst, humanBytes, pageUrl, fileKind, focusSelection, pathBar, pathInputText, placeSections, shortenHome, switchTab, type BrowseState, type PlaceRow } from "../lib/paletteModel.ts";
+import { afterJump, dirsFirst, humanBytes, pageUrl, fileKind, focusSelection, followBox, pathBar, pathInputText, placeSections, shortenHome, switchTab, type BrowseState, type PlaceRow } from "../lib/paletteModel.ts";
 import type { DiskPlace, FsEntry, GitRepoRef, GrepHit } from "../../../shared/types.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { FileViewer } from "./CardFiles.tsx";
@@ -478,9 +479,15 @@ export function FilePalette({
   /* A typed path is somewhere to go, not something to find. `~/Downloads` used
      to answer "Nothing under ~/Documents is called ~/Downloads", which is the
      literal truth and completely useless. */
+  const [boxMirror, setBoxMirror] = useState<{ text: string; dirText: string } | null>(null);
+  /** Bumped where the selection moves by a person's hand or a link, so the box
+   *  mirrors it — and not when a list merely reloads under a path being typed. */
+  const [mirrorTick, setMirrorTick] = useState(0);
+  /* The list reads the folder of what the box mirrors, not the mirror itself. */
+  const readQ = boxMirror && q === boxMirror.text ? boxMirror.dirText : q;
   const typedPath = useMemo(
-    () => readPath(q, homeDir, browsePath || place || root || homeDir),
-    [q, homeDir, browsePath, place, root],
+    () => readPath(readQ, homeDir, browsePath || place || root || homeDir),
+    [readQ, homeDir, browsePath, place, root],
   );
 
   const at = useMemo(() => {
@@ -499,6 +506,7 @@ export function FilePalette({
     const j = afterJump(t.browsePath, homeDir, !!typedPath);
     setPlaceRecents(rememberPlace(t.browsePath));
     setPlace(t.browsePath);
+    setBoxMirror(null);
     setBrowsePath(j.browsePath); setQ(j.q);
     setWantFile({ dir: t.browsePath, name: t.name });
   }, [homeDir, typedPath]);
@@ -507,6 +515,7 @@ export function FilePalette({
    *  already holding a path (see `afterJump`). */
   const jump = useCallback((abs: string) => {
     const j = afterJump(abs, homeDir, !!typedPath);
+    setBoxMirror(null);
     setBrowsePath(j.browsePath); setQ(j.q);
     inputRef.current?.focus();
   }, [homeDir, typedPath]);
@@ -696,6 +705,7 @@ export function FilePalette({
     const i = shown.findIndex((r) => r.rel === wantFile.name);
     if (i >= 0) {
       setCursor((c) => reduceSelection(c, { type: "focus", index: i }, shown.length));
+      setMirrorTick((n) => n + 1);
       /* Centred, once the row is drawn: the file a link named is the reason the
          finder opened, and "nearest" left it at the bottom edge of a long folder. */
       requestAnimationFrame(() => listRef.current?.querySelector<HTMLElement>(`[data-row="${i}"]`)?.scrollIntoView({ block: "center" }));
@@ -827,10 +837,10 @@ export function FilePalette({
       if (k === "i") { e.preventDefault(); setShowInfo((v) => !v); return; }
     }
     if (e.key === "ArrowDown" || (e.key === "n" && e.ctrlKey)) {
-      e.preventDefault(); setCursor((c) => reduceSelection(c, { type: "key", dir: 1 }, shown.length)); return;
+      e.preventDefault(); setCursor((c) => reduceSelection(c, { type: "key", dir: 1 }, shown.length)); setMirrorTick((n) => n + 1); return;
     }
     if (e.key === "ArrowUp" || (e.key === "p" && e.ctrlKey)) {
-      e.preventDefault(); setCursor((c) => reduceSelection(c, { type: "key", dir: -1 }, shown.length)); return;
+      e.preventDefault(); setCursor((c) => reduceSelection(c, { type: "key", dir: -1 }, shown.length)); setMirrorTick((n) => n + 1); return;
     }
     /* ← goes up a folder and → goes into one: the two keys a file browser is
        driven with. Only while browsing, and only with the box empty, so they
@@ -890,6 +900,17 @@ export function FilePalette({
   const selRow = shown[cursor];
   const selAbs = selRow ? absOf(selRow) : null;
   selAbsRef.current = selAbs;
+  /* The box says the selected item's path (see followBox), when it was already
+     holding a folder path with nothing typed after it. A plain search, or a
+     path with a name half-typed, is left alone. */
+  useEffect(() => {
+    if (!mirrorTick || !selRow || !selAbs || !homeDir || !typedPath || typedPath.tail) return;
+    const m = followBox(selAbs, selRow.kind === "dir", homeDir);
+    if (m.text === q) return;
+    keepSel.current = true; setBoxMirror(m); setQ(m.text);
+    // Only a move of the selection runs this; q and typedPath are that moment's.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mirrorTick]);
   const source: FileSource | null = useMemo(() => {
     if (!open || !selRow || !selAbs) return null;
     if (selRow.kind === "recent" && selRow.gone) return null;
@@ -1002,7 +1023,7 @@ export function FilePalette({
   const unit = at ? (shown.length === 1 ? "item" : "items") : (shown.length === 1 ? "result" : "results");
   const sectionAt = outlineAt >= 0 ? outline[outlineAt]?.label ?? null : null;
   const canStep = shown.length > 0;
-  const step = (dir: 1 | -1) => setCursor((c) => reduceSelection(c, { type: "key", dir }, shown.length));
+  const step = (dir: 1 | -1) => { setCursor((c) => reduceSelection(c, { type: "key", dir }, shown.length)); setMirrorTick((n) => n + 1); };
 
   return (
     <>
@@ -1022,9 +1043,9 @@ export function FilePalette({
               translateX(-50%) written on it is overwritten the moment the open
               animation runs — measured: the palette sat with its left edge on the
               centre line. A flex parent has no such fight, and it is also what
-              lets the panel be as tall as its content and no taller: it centres
-              at any height instead of being pinned to a top offset. */}
-          <div className="fixed inset-0 flex items-center justify-center pointer-events-none" style={{ zIndex: 2, padding: 20 }}>
+              also what keeps the panel's box fixed: it fills the frame the
+              layout gives it (see finderSize.ts) instead of sizing to content. */}
+          <div className="fixed inset-0 flex items-center justify-center pointer-events-none" style={{ zIndex: 2, padding: FINDER_MARGIN }}>
           <motion.div
             initial={{ opacity: 0, y: -8, scale: 0.985 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -1033,9 +1054,7 @@ export function FilePalette({
             ref={panelRef}
             className="flex flex-col overflow-hidden rounded-xl pointer-events-auto"
             style={{
-              width: "min(1480px, 100%)",
-              maxHeight: "100%",
-              minHeight: "min(440px, 100%)",
+              ...FINDER_BOX,
               background: "var(--surface-card)",
               border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)",
               boxShadow: "0 30px 70px -20px #000",
@@ -1060,7 +1079,7 @@ export function FilePalette({
               <div className="flex items-center gap-2.5 flex-1 min-w-0 px-3 py-2 rounded-md"
                 style={{ background: "var(--bg)", border: "1.5px solid color-mix(in srgb, var(--text) 80%, transparent)" }}>
                 <span className="flex" style={{ color: "var(--text3)" }}><SearchIcon size={ICON.xs} /></span>
-                <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)}
+                <input ref={inputRef} value={q} onChange={(e) => { setBoxMirror(null); setQ(e.target.value); }}
                   spellCheck={false} autoComplete="off" placeholder={active.placeholder}
                   className="flex-1 min-w-0 bg-transparent outline-none text-[13px]" style={{ color: "var(--text)" }} />
                 {/* One control, not two.
@@ -1197,7 +1216,7 @@ export function FilePalette({
                         const on = i === cursor;
                         return (
                           <button key={`${row.kind}:${row.rel}:${i}`} data-row={i} title={row.rel} aria-current={on ? "true" : undefined}
-                            onClick={() => { setCursor((c) => reduceSelection(c, { type: "click", index: i }, shown.length)); openRow(row, false, true); }}
+                            onClick={() => { setCursor((c) => reduceSelection(c, { type: "click", index: i }, shown.length)); setMirrorTick((n) => n + 1); openRow(row, false, true); }}
                             className="agx-pal-hit grid place-items-center rounded-lg"
                             style={{ width: 34, height: 34, color: KIND_INK[kind],
                               ...(on ? { background: "color-mix(in srgb, var(--text) 12%, transparent)", boxShadow: `inset 0 0 0 1px ${"color-mix(in srgb, var(--text) 22%, transparent)"}` } : null) }}>
@@ -1208,7 +1227,7 @@ export function FilePalette({
                     </div>
                   ) : (
                     <Answers tab={tab} q={q} root={root} place={place} placeErr={placeErr} rows={shown} cursor={cursor}
-                      status={status} onPick={(r, i) => { setCursor((c) => reduceSelection(c, { type: "click", index: i }, shown.length)); openRow(r, false, true); }}
+                      status={status} onPick={(r, i) => { setCursor((c) => reduceSelection(c, { type: "click", index: i }, shown.length)); setMirrorTick((n) => n + 1); openRow(r, false, true); }}
                       onDouble={(r) => { if (viewRows.includes(r)) viewImage(r); else openRow(r); }} browsing={!!at}
                       browseError={browsed && !browsed.ok ? browsed.error ?? null : null}
                       needle={globAsked ? "" : (typedPath ? typedPath.tail : asked.text).trim()} />

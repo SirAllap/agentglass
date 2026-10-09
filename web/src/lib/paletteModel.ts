@@ -90,6 +90,25 @@ export function pathInputText(abs: string, home: string): string {
   return s.endsWith("/") ? s : `${s}/`;
 }
 
+/**
+ * What the box says while the selection moves: the SELECTED item's own path,
+ * so the box, the path bar and the centre header name the same thing. A file
+ * is written out in full ("~/notes/todo.md"), a folder ends in a slash. The
+ * box is only a mirror here — `dirText` is what the list still reads from it,
+ * the folder the item is in, so a mirrored file name never filters the list
+ * down to itself and the arrow keys keep having somewhere to go. Typing
+ * replaces the mirror and the box is an ordinary query again.
+ */
+export function followBox(abs: string, isDir: boolean, home: string): { text: string; dirText: string } {
+  const clean = abs.replace(/\/+$/, "") || "/";
+  const cut = clean.lastIndexOf("/");
+  const text = shortenHome(clean, home);
+  return {
+    text: isDir && !text.endsWith("/") ? `${text}/` : text,
+    dirText: pathInputText(cut <= 0 ? "/" : clean.slice(0, cut), home),
+  };
+}
+
 /** What focusing the box does to its text. A last query is selected so the
  *  first key replaces it; a path is somewhere to edit, so the caret goes to
  *  its end and nothing is selected. */
