@@ -14,7 +14,7 @@ import {
 import { Chip } from "./Chrome.tsx";
 import { closeBench } from "../../lib/benchStore.ts";
 
-const NAME: Record<BoardKind, string> = { pr: "Pull requests", tasks: "Tasks" };
+const NAME: Record<BoardKind, string> = { pr: "Pull requests", tasks: "Tasks", files: "Files" };
 
 const ELSEWHERE: Record<BoardPlace, string> = {
   bench: "is open in the floating window",

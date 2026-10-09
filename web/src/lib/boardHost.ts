@@ -31,7 +31,7 @@
  * instances, which is the design this replaced.
  */
 
-export type BoardKind = "pr" | "tasks";
+export type BoardKind = "pr" | "tasks" | "files";
 export type BoardPlace = "rail" | "bench";
 
 export interface SlotFacts { id: string; visible: boolean; seen: number }
@@ -54,7 +54,7 @@ export function pickHolder(slots: SlotFacts[], current: string | null): string |
 interface Slot extends SlotFacts { kind: BoardKind; place: BoardPlace; el: HTMLElement }
 
 const slots = new Map<string, Slot>();
-const holder: Record<BoardKind, string | null> = { pr: null, tasks: null };
+const holder: Record<BoardKind, string | null> = { pr: null, tasks: null, files: null };
 const nodes: Partial<Record<BoardKind, HTMLElement>> = {};
 const listeners = new Set<() => void>();
 let clock = 0;

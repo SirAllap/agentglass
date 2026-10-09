@@ -167,10 +167,11 @@ export function Workspace({
      when the bench lets go of it. See lib/boardHost.ts. */
   const benchPr = useSyncExternalStore(subscribeBoards, () => benchWants("pr"), () => false);
   const benchTasks = useSyncExternalStore(subscribeBoards, () => benchWants("tasks"), () => false);
+  const benchFiles = useSyncExternalStore(subscribeBoards, () => benchWants("files"), () => false);
   useEffect(() => {
-    const want = [benchPr && "pr", benchTasks && "tasks"].filter(Boolean) as ViewId[];
+    const want = [benchPr && "pr", benchTasks && "tasks", benchFiles && "files"].filter(Boolean) as ViewId[];
     setVisited((cur) => (want.every((k) => cur.has(k)) ? cur : new Set([...cur, ...want])));
-  }, [benchPr, benchTasks]);
+  }, [benchPr, benchTasks, benchFiles]);
 
   const mounted = useMemo(
     () => VIEWS.filter((v) => visited.has(v.id) || KEEP_RUNNING.has(v.id)),
@@ -283,7 +284,7 @@ function BodyImpl({ id, active, openChat, openBrowser, openLantern, chatFocusId 
   chatFocusId?: string | null;
 }) {
   switch (id) {
-    case "files": return <FilesView active={active} />;
+    case "files": return <BoardSlot kind="files" place="rail" visible={active} />;
     /* The two boards are not drawn here: this is one of the two places they
        can be shown, and the board itself is rendered once, below. */
     case "tasks": return <BoardSlot kind="tasks" place="rail" visible={active} />;
@@ -308,7 +309,7 @@ function BodyImpl({ id, active, openChat, openBrowser, openLantern, chatFocusId 
 
 const Body = memo(BodyImpl, hiddenOnly);
 
-const BOARDS: BoardKind[] = ["pr", "tasks"];
+const BOARDS: BoardKind[] = ["pr", "tasks", "files"];
 
 /**
  * The one pull-request board, or the one task board.
@@ -348,6 +349,7 @@ interface BoardBodyProps {
 }
 
 function BoardBodyImpl({ kind, active, openChatWith, reviewInTerminal, prJump, cardJump, issueJump }: BoardBodyProps) {
+  if (kind === "files") return <FilesView active={active} />;
   return kind === "pr"
     ? <PrView active={active} onOpenChatWith={openChatWith} onReviewInTerminal={reviewInTerminal} jumpTo={prJump} />
     : <TasksView active={active} onOpenChatWith={openChatWith} cardJump={cardJump} issueJump={issueJump} />;

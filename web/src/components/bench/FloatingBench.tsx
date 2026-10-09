@@ -47,12 +47,13 @@ import { BenchTerm } from "./BenchTerm.tsx";
 import { BenchNote } from "./BenchNote.tsx";
 import { BenchWeb } from "./BenchWeb.tsx";
 import { BoardSlot } from "../workspace/BoardSlot.tsx";
+import type { BoardKind } from "../../lib/boardHost.ts";
 import { RAIL_W } from "../workspace/ViewRail.tsx";
 import { TOP_BAR_H } from "../TopBar.tsx";
 import type { GitRepoRef } from "../../../../shared/types.ts";
 import { ICON } from "../../lib/iconSize.ts";
 import { AgentIcon, ExpandIcon, FileIcon, NoteIcon, SearchIcon } from "../../lib/glyphIcons.tsx";
-import { BrowserIcon, IssuesIcon, PrIcon, TerminalIcon } from "../workspace/icons.tsx";
+import { BrowserIcon, FilesIcon, IssuesIcon, PrIcon, TerminalIcon } from "../workspace/icons.tsx";
 import { CloseIcon } from "../CloseButton.tsx";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
@@ -113,6 +114,7 @@ const GLYPH: Record<BenchTab["kind"], ComponentType<{ size?: number }>> = {
   agent: AgentIcon,
   pr: PrIcon,
   tasks: IssuesIcon,
+  files: FilesIcon,
 };
 
 /**
@@ -320,7 +322,7 @@ export function FloatingBench() {
     setMenuOpen(false);
   }, [root]);
 
-  const newBoard = useCallback((kind: "pr" | "tasks") => {
+  const newBoard = useCallback((kind: BoardKind) => {
     if (!root) return;
     showBoard(root, kind);
     setMenuOpen(false);
@@ -886,7 +888,7 @@ function BenchFab() {
 /** Everything except a file. The file tabs share one editor and are rendered
  *  once, above — see the reader. */
 function TabBody({ root, tab, active }: { root: string; tab: BenchTab; active: boolean }) {
-  if (tab.kind === "pr" || tab.kind === "tasks") return <BoardSlot kind={tab.kind} place="bench" visible={active} />;
+  if (tab.kind === "pr" || tab.kind === "tasks" || tab.kind === "files") return <BoardSlot kind={tab.kind} place="bench" visible={active} />;
   if (tab.kind === "note") return <BenchNote root={root} active={active} />;
   if (tab.kind === "web") return <BenchWeb active={active} />;
   return <BenchTerm root={root} slot={tab.slot} agent={tab.kind === "agent" ? tab.agent : undefined} type={tab.type} active={active} />;
@@ -924,7 +926,7 @@ function BenchMenu({ root, onClose, onTerm, onNote, onWeb, onAgent, onBoard }: {
   onClose: () => void;
   onTerm: () => void; onNote: () => void; onWeb: () => void;
   onAgent: (a: { id: string; label: string }) => void;
-  onBoard: (kind: "pr" | "tasks") => void;
+  onBoard: (kind: BoardKind) => void;
 }) {
   /*
    * A click anywhere else closes it — including inside this window.
@@ -979,6 +981,7 @@ function BenchMenu({ root, onClose, onTerm, onNote, onWeb, onAgent, onBoard }: {
           <div className="px-3 pt-2 pb-1 text-[9px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>A board, moved here from its view</div>
           <MenuRow glyph={GLYPH.pr} label="Pull requests" onClick={() => onBoard("pr")} />
           <MenuRow glyph={GLYPH.tasks} label="Tasks" onClick={() => onBoard("tasks")} />
+          <MenuRow glyph={GLYPH.files} label="Files" onClick={() => onBoard("files")} />
         </div>
         <div className="px-3 py-2 text-[10px]" style={{ borderTop: edge(12), color: "var(--text4)" }}>
           A file gets here from the palette, a diff or a pull request — wherever you were reading it.

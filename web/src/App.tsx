@@ -61,6 +61,7 @@ import { onFinderAt, type FinderTarget } from "./lib/finderTarget.ts";
 import { WindowSwitcher } from "./components/terminal/WindowSwitcher.tsx";
 import { FloatingBench } from "./components/bench/FloatingBench.tsx";
 import { benchTakesBoard, toggleBench, showFile } from "./lib/benchStore.ts";
+import type { BoardKind } from "./lib/boardHost.ts";
 import { PeekFile, isRenderable, type Peek } from "./components/PeekFile.tsx";
 import { clearPeek, peekRequest, subscribePeek } from "./lib/openPeek.ts";
 import { requestFilesReveal } from "./lib/filesReveal.ts";
@@ -241,7 +242,7 @@ export default function App() {
   useEffect(() => onCloseSettings(() => { setSettingsOpen(false); setSettingsJump(null); }), []);
   /* A board goes where the person is reading boards: the bench, when it is open
      on one; the view otherwise. See benchTakesBoard. */
-  const toBoard = useCallback((kind: "pr" | "tasks") => { if (!benchTakesBoard(kind)) goView(kind); }, [goView]);
+  const toBoard = useCallback((kind: BoardKind) => { if (!benchTakesBoard(kind)) goView(kind); }, [goView]);
   useEffect(() => onOpenPrs((j) => { setPrJump(j); toBoard("pr"); }), [toBoard]);
   /* The other half: a sender that knows exactly which pull request it means
      gets the panel's jump, which selects and opens, instead of a search. */

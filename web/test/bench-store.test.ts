@@ -99,6 +99,14 @@ describe("showing a board", () => {
     const again = await load();
     expect(again.tabsFor(A).map((t) => t.kind)).toEqual(["pr", "tasks"]);
   });
+
+  it("the files board is a bench kind, and survives a reload", async () => {
+    const b = await load();
+    expect(b.showBoard(A, "files").title).toBe("Files");
+    expect(b.showBoard(A, "files").id).toBe(b.showBoard(A, "files").id);
+    const again = await load();
+    expect(again.tabsFor(A).map((t) => t.kind)).toEqual(["files"]);
+  });
 });
 
 describe("a panel asking for a board", () => {
