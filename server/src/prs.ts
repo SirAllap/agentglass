@@ -14,6 +14,8 @@
 // 3. Writes are public. A stray `gh pr merge` is not a UI bug, it is a deploy,
 //    so every mutation goes through `writeGuard` and the irreversible ones are
 //    named separately from the rest.
+import { ttlRead, forgetReads } from "./ttlread.ts";
+import { singleFlight } from "./singleflight.ts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { failed } from "./refused.ts";
 import { homedir, tmpdir } from "node:os";
@@ -212,6 +214,17 @@ export async function prBranches(root: string, number: number): Promise<{ base: 
    a row already holding both names: measured at five of them in two and a half
    minutes on an idle board. A row is at most one list refresh old; a base
    retargeted since then is corrected on the next one. */
+function knownHeadSha(repoKey: string, number: number): string {
+  const d = detailCache.get(`${repoKey}#${number}`)?.detail as { headSha?: string } | undefined;
+  if (d?.headSha) return d.headSha;
+  for (const [k, e] of listCache) {
+    if (!k.startsWith(`${repoKey}\u0000`)) continue;
+    const p = e.prs.find((r) => r.number === number);
+    if (p?.headSha) return p.headSha;
+  }
+  return "";
+}
+
 function knownBranches(repoKey: string, number: number): { base: string; head: string } | null {
   const d = detailCache.get(`${repoKey}#${number}`)?.detail;
   if (d?.baseRefName && d.headRefName) return { base: d.baseRefName, head: d.headRefName };
@@ -331,30 +344,47 @@ export async function prsForBranch(root: string, branchIn: unknown): Promise<{
  * time and only when it is on screen. One GraphQL call, the same contexts the
  * detail view already reads.
  */
-export async function prRollup(rootIn: unknown, numberIn: unknown): Promise<{ ok: boolean; checks?: PrCheckRollup; error?: string }> {
+export async function prRollup(rootIn: unknown, numberIn: unknown, fresh = false): Promise<{ ok: boolean; checks?: PrCheckRollup; error?: string }> {
   const number = Number(numberIn);
   const repo = await repoIdFor(rootIn);
   if (!repo || !Number.isFinite(number)) return { ok: false, error: "no GitHub remote here" };
   const q = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){`
     + `commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){${SEL_CHECKS}}}}}}`
     + `}}}`;
-  const r = await ghJson<any>([
-    "api", "graphql", "-f", `query=${q}`,
-    "-F", `owner=${repo.owner}`, "-F", `name=${repo.name}`, "-F", `number=${number}`,
-  ]);
-  const raw = r?.data?.repository?.pullRequest?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes;
-  if (!raw) return { ok: false, error: "GitHub would not list its checks" };
-  const normalised = raw.map((c: any) => ({ ...c, workflowName: c.checkSuite?.workflowRun?.workflow?.name || "" }));
-  return { ok: true, checks: rollupChecks(normalised).rollup };
+  /* Held for ROLLUP_TTL_MS and shared between callers: a card asks whenever it
+     scrolls into view, and 100% of the repeats measured came back identical.
+     A push or a re-run shows up on the next list read, well inside the window
+     the checks strip already lags GitHub by. */
+  return ttlRead(`rollup\u0000${repo.key}#${number}`, ROLLUP_TTL_MS, async () => {
+    const r = await ghJson<any>([
+      "api", "graphql", "-f", `query=${q}`,
+      "-F", `owner=${repo.owner}`, "-F", `name=${repo.name}`, "-F", `number=${number}`,
+    ]);
+    const raw = r?.data?.repository?.pullRequest?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes;
+    if (!raw) return { ok: false, error: "GitHub would not list its checks" };
+    const normalised = raw.map((c: any) => ({ ...c, workflowName: c.checkSuite?.workflowRun?.workflow?.name || "" }));
+    return { ok: true, checks: rollupChecks(normalised).rollup };
+  }, { fresh, keep: (v) => v.ok });
 }
+const ROLLUP_TTL_MS = 30_000;
 
-export async function branchBehind(root: string, number: number): Promise<{ ok: boolean; behind?: number; ahead?: number; local?: PrLocalHead; error?: string }> {
+const BEHIND_TTL_MS = 60_000;
+
+export async function branchBehind(root: string, number: number, fresh = false): Promise<{ ok: boolean; behind?: number; ahead?: number; local?: PrLocalHead; error?: string }> {
   const id = await repoIdFor(root);
   if (!id) return { ok: false, error: "no GitHub remote here" };
   const pr = await prBranches(root, number);
   if (!pr) return { ok: false, error: "could not read the branches" };
-  const cmp = await ghJson<{ behind_by?: number; ahead_by?: number }>(
-    ["api", `repos/${id.owner}/${id.name}/compare/${encodeURIComponent(pr.base)}...${encodeURIComponent(pr.head)}?per_page=1`], root);
+  /* The comparison is what costs a request; the local half below is git only.
+     Keyed by the branches and the head sha when a list or detail read already
+     holds it, so a push is a new key. A base that moved on its own is the one
+     case only the TTL catches, which is why the panel's explicit refresh
+     (`fresh`) skips it. */
+  const sha = knownHeadSha(id.key, number);
+  const cmp = await ttlRead(`behind\u0000${id.key}\u0000${pr.base}\u0000${pr.head}\u0000${sha}`, BEHIND_TTL_MS, () =>
+    ghJson<{ behind_by?: number; ahead_by?: number }>(
+      ["api", `repos/${id.owner}/${id.name}/compare/${encodeURIComponent(pr.base)}...${encodeURIComponent(pr.head)}?per_page=1`], root),
+    { fresh, keep: (v) => v != null });
   if (!cmp) return { ok: false, error: "GitHub would not compare those branches" };
   // Local state rides along. It is git only — no network — so it costs a few
   // milliseconds on a call the panel already makes, rather than a second round
@@ -2331,13 +2361,17 @@ export type PrFacetOptions = {
   cardStatuses?: { status: string; color?: string; type?: string }[];
 };
 const facetCache = new Map<string, { at: number; data: PrFacetOptions }>();
-const FACET_TTL_MS = 5 * 60_000;
+/* Twenty minutes: contributors, labels, milestones and base branches change a
+   few times a day, and the 5-minute copy expired between a reload and the next
+   open, so 7 REST reads and a 68 KB body were repeated for the same lists. */
+const FACET_TTL_MS = 20 * 60_000;
 
 export async function facetOptions(rootIn: unknown): Promise<{ ok: boolean; data?: PrFacetOptions; error?: string }> {
   const repo = await repoIdFor(rootIn);
   if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
   const hit = facetCache.get(repo.key);
   if (hit && Date.now() - hit.at < FACET_TTL_MS) return { ok: true, data: hit.data };
+  return singleFlight(`facets\u0000${repo.key}`, async () => {
   const r = repo.nameWithOwner;
   const [contribs, assignees, labels, milestones, branches] = await Promise.all([
     ghJson<any[]>(["api", `repos/${r}/contributors?per_page=100`]),
@@ -2361,6 +2395,7 @@ export async function facetOptions(rootIn: unknown): Promise<{ ok: boolean; data
   };
   facetCache.set(repo.key, { at: Date.now(), data });
   return { ok: true, data };
+  });
 }
 
 /**
@@ -2881,7 +2916,7 @@ const DETAIL_FILE = join(CACHE_DIR, "pr-detail.json");
 const DETAIL_MAX_ENTRIES = 24;
 let detailWriteTimer: ReturnType<typeof setTimeout> | null = null;
 /** Refreshes already running, so ten glances at a stale card make one call. */
-const detailInflight = new Set<string>();
+const detailFlights = new Map<string, Promise<{ ok: boolean; detail?: PrDetail; error?: string }>>();
 
 function loadDetailCache(): void {
   try {
@@ -3151,6 +3186,13 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
   const key = `${repo.key}#${number}`;
   const hit = detailCache.get(key);
   if (!force && hit && Date.now() - hit.at < DETAIL_TTL_MS) return { ok: true, detail: hit.detail };
+  /* One read of a pull request at a time. The stale path below starts a refresh
+     and the panel comes back for it 1.2 s later with force=1: measured as two
+     `gh` pairs (4 graphql spawns) for one open, identical answers. A caller
+     that arrives while a read is running joins it. A write drops the entry
+     (see `invalidate`) so a read that began before it is never joined after. */
+  const flying = detailFlights.get(key);
+  if (flying && (force || !hit)) return flying;
   /*
    * Stale, but on screen now.
    *
@@ -3164,13 +3206,16 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
    * rather than trusting a five-minute-old merge state indefinitely.
    */
   if (!force && hit) {
-    if (!detailInflight.has(key)) {
-      detailInflight.add(key);
-      void prDetail(rootIn, number, true).catch(() => {}).finally(() => detailInflight.delete(key));
-    }
+    void prDetail(rootIn, number, true).catch(() => {});
     return { ok: true, detail: hit.detail, stale: true };
   }
 
+  const p = readDetail(rootIn, number, repo, key).finally(() => { if (detailFlights.get(key) === p) detailFlights.delete(key); });
+  detailFlights.set(key, p);
+  return p;
+}
+
+async function readDetail(rootIn: unknown, number: number, repo: PrRepoId, key: string): Promise<{ ok: boolean; detail?: PrDetail; error?: string }> {
   const cap = await ghCapability();
   if (!cap.available || !cap.authed) return { ok: false, error: cap.reason };
 
@@ -3835,7 +3880,11 @@ function writeGuard(rootIn: unknown): PrActionResult | null {
 
 function invalidate(repo: PrRepoId, number?: number): void {
   for (const k of listCache.keys()) if (k.startsWith(`${repo.key}\u0000`)) listCache.delete(k);
-  if (number !== undefined) detailCache.delete(`${repo.key}#${number}`);
+  if (number !== undefined) {
+    detailCache.delete(`${repo.key}#${number}`);
+    detailFlights.delete(`${repo.key}#${number}`);
+    forgetReads(`pending\u0000${repo.key}#${number}`);
+  }
 }
 
 async function runPr(rootIn: unknown, number: number, args: string[], stdin?: string): Promise<PrActionResult> {
@@ -4112,6 +4161,40 @@ export async function prFileToTemp(rootIn: unknown, numberIn: unknown, pathIn: u
   return { ok: true, file, sha };
 }
 
+/* `pulls/{n}` for the two readers that only want the two commit shas, held for
+   PULL_META_TTL_MS and shared. The writers (applySuggestion, addLineComment)
+   keep asking GitHub themselves: they act on the head, so it must be exact. */
+const PULL_META_TTL_MS = 30_000;
+const pullMeta = (repo: PrRepoId, n: number) =>
+  ttlRead(`pull\u0000${repo.key}#${n}`, PULL_META_TTL_MS,
+    () => ghJson<any>(["api", `repos/${repo.nameWithOwner}/pulls/${n}`]), { keep: (v) => v != null });
+
+/* A file at a commit never changes, so this is exact rather than fresh: keyed
+   by repo, path and sha, kept by bytes. Measured: every "expand context" click
+   was two spawns, and the same file at the same sha the click before. */
+const contentCache = new Map<string, { file: any; bytes: number }>();
+const CONTENT_BUDGET = 8 * 1024 * 1024;
+let contentBytes = 0;
+async function contentAt(from: string, path: string, ref: string): Promise<any | null> {
+  const key = `${from}\u0000${path}\u0000${ref}`;
+  const hit = contentCache.get(key);
+  if (hit) { contentCache.delete(key); contentCache.set(key, hit); return hit.file; }
+  const file = await singleFlight(`content\u0000${key}`, () =>
+    ghJson<any>(["api", `repos/${from}/contents/${encodeURI(path)}?ref=${ref}`]));
+  if (file) {
+    const bytes = String(file.content ?? "").length + 200;
+    if (bytes <= CONTENT_BUDGET / 4) {
+      contentCache.set(key, { file, bytes });
+      contentBytes += bytes;
+      for (const [k, e] of contentCache) {
+        if (contentBytes <= CONTENT_BUDGET) break;
+        contentCache.delete(k); contentBytes -= e.bytes;
+      }
+    }
+  }
+  return file;
+}
+
 export async function fileSlice(rootIn: unknown, numberIn: unknown, args: {
   path?: unknown; side?: unknown; from?: unknown; to?: unknown;
 }): Promise<{ ok: boolean; lines?: string[]; start?: number; total?: number; binary?: boolean; url?: string; error?: string }> {
@@ -4120,13 +4203,13 @@ export async function fileSlice(rootIn: unknown, numberIn: unknown, args: {
   if (!Number.isInteger(n) || n <= 0 || !path) return { ok: false, error: "invalid file" };
   const repo = await repoIdFor(rootIn);
   if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
-  const pr = await ghJson<any>(["api", `repos/${repo.nameWithOwner}/pulls/${n}`]);
+  const pr = await pullMeta(repo, n);
   // LEFT is the base — the file as it was; RIGHT is the head — as it is now.
   const left = args.side === "LEFT";
   const ref = left ? pr?.base?.sha : pr?.head?.sha;
   const from = left ? repo.nameWithOwner : (pr?.head?.repo?.full_name ?? repo.nameWithOwner);
   if (!ref) return { ok: false, error: "could not read the pull request's commits" };
-  const file = await ghJson<any>(["api", `repos/${from}/contents/${encodeURI(path)}?ref=${ref}`]);
+  const file = await contentAt(from, path, ref);
   if (!file) return { ok: false, error: `${path} is not on that side` };
   // A file GitHub will not inline is a big one or a binary one; either way the
   // bytes come from `download_url`, which the asset proxy can fetch.
@@ -5022,9 +5105,15 @@ export async function pendingReviewFor(rootIn: unknown, numberIn: unknown): Prom
   if (!root || !Number.isSafeInteger(n) || n <= 0) return { ok: true, id: null, comments: [] };
   const repo = await repoIdFor(root);
   if (!repo) return { ok: true, id: null, comments: [] };
-  const p = await pendingReview(repo.nameWithOwner, n);
-  return { ok: true, id: p?.id ?? null, comments: p?.comments ?? [] };
+  /* The panel re-reads this on every detail refresh to notice a draft deleted
+     in the browser; measured as one graphql spawn per re-open with nothing new.
+     Held briefly, dropped by every write here that could change it. */
+  return ttlRead(`pending\u0000${repo.key}#${n}`, PENDING_TTL_MS, async () => {
+    const p = await pendingReview(repo.nameWithOwner, n);
+    return { ok: true as const, id: p?.id ?? null, comments: p?.comments ?? [] };
+  });
 }
+const PENDING_TTL_MS = 20_000;
 
 export async function submitReviewWith(
   rootIn: unknown, numberIn: unknown, verb: unknown, body: unknown, commentsIn: unknown,

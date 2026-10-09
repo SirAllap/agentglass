@@ -67,28 +67,53 @@ export interface InboxPage {
 /*
  * Cached, because this is polled.
  *
- * GitHub's notifications endpoint carries a `X-Poll-Interval` header and asks
- * for sixty seconds between calls; it also answers 304 against `If-Modified-
- * Since` for free. `gh api` hides both, so the cheap version of respecting them
- * is a TTL of our own — and one shared answer for however many surfaces ask.
+ * The notifications endpoint carries a `X-Poll-Interval` header and asks for
+ * sixty seconds between calls; it also answers 304 against `If-None-Match`
+ * without counting against the rate limit. The panel polls every 60 s and the
+ * old 45 s TTL was shorter than that, so 12 of 12 polls measured spawned `gh`
+ * for an unchanged list. The TTL is now longer than the poll (a second poll
+ * inside it is free), and past it the read is conditional: a 304 keeps the
+ * list we hold and costs a spawn but no quota and no parse.
+ *
+ * The ceiling: a notification can be up to TTL_MS old on screen. A write here
+ * drops the cache, and `force` still asks the API outright.
  */
-const TTL_MS = 45_000;
-let cache: { at: number; all: boolean; page: InboxPage } | null = null;
+const TTL_MS = 90_000;
+let cache: { at: number; all: boolean; page: InboxPage; etag: string } | null = null;
 
 export function __resetInbox(): void { cache = null; }
+
+/** `gh api -i` prints the status line and headers, a blank line, then the body. */
+export function splitIncluded(out: string): { status: number; etag: string; body: string } {
+  const m = /^HTTP\/[\d.]+ (\d{3})[^\n]*\r?\n/.exec(out);
+  if (!m) return { status: 0, etag: "", body: out };
+  const cut = out.search(/\r?\n\r?\n/);
+  const head = cut < 0 ? out : out.slice(0, cut);
+  const body = cut < 0 ? "" : out.slice(cut).replace(/^\r?\n\r?\n/, "");
+  const etag = /^etag:\s*(.+?)\s*$/im.exec(head)?.[1] ?? "";
+  return { status: Number(m[1]), etag, body };
+}
 
 /**
  * The inbox.
  *
- * `all` is GitHub's own flag: false gives only what is unread, true gives the
+ * `all` is the API's own flag: false gives only what is unread, true gives the
  * recent history too. The panel asks for everything and filters on this side —
  * switching between All and Unread is a tab, and a tab that costs a network
  * call reads as broken.
  */
 export async function inbox(all = true, force = false): Promise<InboxPage> {
-  const fresh = cache && cache.all === all && Date.now() - cache.at < TTL_MS;
-  if (fresh && !force) return cache!.page;
-  const r = await gh(["api", `/notifications?all=${all ? "true" : "false"}&per_page=50`]);
+  const same = cache && cache.all === all ? cache : null;
+  if (same && !force && Date.now() - same.at < TTL_MS) return same.page;
+  const args = ["api", "-i", `/notifications?all=${all ? "true" : "false"}&per_page=50`];
+  if (same?.etag && !force) args.splice(2, 0, "-H", `If-None-Match: ${same.etag}`);
+  const r = await gh(args);
+  const got = splitIncluded(r.stdout);
+  // "Not modified" is the answer, not a failure: gh exits non-zero on a 304.
+  if (same && (got.status === 304 || /HTTP 304/.test(r.stderr))) {
+    cache = { ...same, at: Date.now() };
+    return same.page;
+  }
   if (r.code !== 0) {
     // The last good answer beats an empty list: an inbox that empties itself
     // when the network hiccups reads as "you are all caught up".
@@ -96,13 +121,13 @@ export async function inbox(all = true, force = false): Promise<InboxPage> {
     return { ok: false, items: [], at: Date.now(), error: r.stderr.trim() || "GitHub did not answer" };
   }
   let raw: RawNote[] = [];
-  try { raw = JSON.parse(r.stdout) as RawNote[]; } catch { raw = []; }
+  try { raw = JSON.parse(got.body) as RawNote[]; } catch { raw = []; }
   const page: InboxPage = {
     ok: true,
     items: raw.map(toItem).filter((x): x is InboxItem => !!x).sort((a, b) => b.at - a.at),
     at: Date.now(),
   };
-  cache = { at: Date.now(), all, page };
+  cache = { at: Date.now(), all, page, etag: got.etag };
   return page;
 }
 

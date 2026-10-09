@@ -653,7 +653,7 @@ describe("how far behind, on the page and on the board", () => {
   it("re-asks while you are looking at it, and on Refresh", () => {
     // Five minutes is right for a board of twelve and far too long for the page
     // in front of you.
-    expect(src).toContain("const slow = setInterval(again, 30_000);");
+    expect(src).toContain("const slow = setInterval(() => { if (looking()) again(); }, 30_000);");
     expect(src).toContain("forgetBehind();");
   });
 });

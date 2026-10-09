@@ -1,3 +1,4 @@
+import { forgetShared, sharedRead } from "./sharedRead.ts";
 import type { UiAction, Field, NoteStatus, PluginPanel, PluginPrNotes } from "./pluginTypes.ts";
 import type { ImportedPlace } from "./desktop.ts";
 import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest } from "../../../shared/types.ts";
@@ -727,6 +728,10 @@ async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
   throw last;
 }
 
+/** How long callers of `gitRepos` share one answer. Short: the server keeps its
+ *  own for 15 s, and a git write or the server's "git changed" frame drops it. */
+const REPOS_SHARE_MS = 2_000;
+
 async function post<T>(path: string, body: unknown, headers: Record<string, string> = {}): Promise<T> {
   // Gated like GET, and only gated: waiting for a listener changes nothing
   // about what a POST means, where asking twice would. Measured in the real
@@ -734,8 +739,16 @@ async function post<T>(path: string, body: unknown, headers: Record<string, stri
   // `/theme/sync` on boot and `/browser/ready`, which is the panel the maintainer
   // reported as not starting.
   await whenServerUp();
-  const r = await fetch(SERVER + path, { method: "POST", headers: authHeaders({ "content-type": "application/json", ...headers }), body: JSON.stringify(body) });
-  return r.json() as Promise<T>;
+  // A git write changes what /git/repos says (dirty count, branch): drop the
+  // shared copy before AND after, so nothing asks for a stale one meanwhile.
+  const git = path.startsWith("/git/");
+  if (git) forgetShared();
+  try {
+    const r = await fetch(SERVER + path, { method: "POST", headers: authHeaders({ "content-type": "application/json", ...headers }), body: JSON.stringify(body) });
+    return await (r.json() as Promise<T>);
+  } finally {
+    if (git) forgetShared();
+  }
 }
 
 /** The viewer's IANA zone, or null if the runtime cannot say. Memoized: this
@@ -1046,7 +1059,7 @@ const realApi = {
   // always answers it (index.ts's /git/repos) — so the bell can tell "this
   // window's folders" from a whole-machine sweep. See gitNote.ts's
   // notesWorthyRepos.
-  gitRepos: () => get<{ repos: GitRepoRef[]; roots?: string[] }>("/git/repos"),
+  gitRepos: () => sharedRead("git/repos", REPOS_SHARE_MS, () => get<{ repos: GitRepoRef[]; roots?: string[] }>("/git/repos")),
   /** Put a PNG somewhere an agent can read it, and say where. A tmux window
    *  takes text; a megabyte of base64 in a prompt is not text. */
   /** Everywhere another browser has been, for the address bar. */
@@ -1494,12 +1507,14 @@ const realApi = {
       `/prs/local-head?${new URLSearchParams({ root, branch })}`),
   /** The latest run per check name for ONE pull request — the list's rollup
    *  counts a re-run's old attempt beside the new one. See prRollupStore. */
-  prRollup: (root: string, number: number) =>
+  prRollup: (root: string, number: number, force = false) =>
     get<{ ok: boolean; checks?: PrCheckRollup; error?: string }>(
-      `/prs/rollup?${new URLSearchParams({ root, number: String(number) })}`),
-  prBehind: (root: string, number: number) =>
+      `/prs/rollup?${new URLSearchParams({ root, number: String(number), ...(force ? { force: "1" } : {}) })}`),
+  /** `force` skips the server's 60 s copy: after "Update branch", or when the
+   *  person pressed Refresh. The panel's own 30 s tick does not need it. */
+  prBehind: (root: string, number: number, force = false) =>
     get<{ ok: boolean; behind?: number; ahead?: number; local?: PrLocalHead; error?: string }>(
-      `/prs/behind?${new URLSearchParams({ root, number: String(number) })}`),
+      `/prs/behind?${new URLSearchParams({ root, number: String(number), ...(force ? { force: "1" } : {}) })}`),
   /** Which saved board already holds this card. Local — the server answers from
    *  its cache, so this can be asked before every lookup. */
   clickupWhere: (id: string) =>

@@ -22,6 +22,7 @@
  *     somebody to a browser for them.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { usePoll } from "../../lib/usePoll.ts";
 import type { InboxItem } from "../../../../shared/types.ts";
 import { api } from "../../lib/api.ts";
 import { byDay, facetCounts, facetOrder, FACETS, filterInbox, inFacet, reasonLabel, searchInbox } from "../../lib/ghInbox.ts";
@@ -115,13 +116,15 @@ function Rail({ mark, label, n, on, hint, onClick }: {
   );
 }
 
-export function Inbox({ repo, onFlash, onUnread }: {
+export function Inbox({ repo, onFlash, onUnread, active = true }: {
   /** The repository the panel is showing, which is what this opens filtered to. */
   repo: string;
   onFlash?: (ok: boolean, text: string) => void;
   /** How many are unread in THIS repository, for the pill that opened this —
    *  the only number the panel shows before the inbox is on screen. */
   onUnread?: (n: number) => void;
+  /** Whether the list can be seen. False while a pull request is open on top. */
+  active?: boolean;
 }) {
   /* The app's own dialog, not the browser's — see no-native-dialogs.test.ts.
      This one had a `window.confirm` and the lint could not see it: its
@@ -172,10 +175,10 @@ export function Inbox({ repo, onFlash, onUnread }: {
   useEffect(() => { load(); }, [load]);
   /* Polled while it is on screen, at GitHub's own asking distance for this
      endpoint. The server caches under it, so several windows cost one call. */
-  useEffect(() => {
-    const timer = setInterval(() => load(), 60_000);
-    return () => clearInterval(timer);
-  }, [load]);
+  /* Through `usePoll`, and not while a pull request is open over it: the list
+     stays mounted under the detail, and its interval went on asking for a list
+     nobody could see, focused or not — 1 spawn a minute, 12 of 12 unchanged. */
+  usePoll(active, () => load(), 60_000);
 
   const all = optimistic.view(raw ?? []);
   /** Everything on this shelf, in this repository unless asked otherwise. Every

@@ -31,7 +31,7 @@ type Entry = { at: number; checks: PrCheckRollup | null; sig: string };
 
 const seen = new Map<string, Entry>();
 const inflight = new Set<string>();
-const waiting: { key: string; root: string; number: number; sig: string }[] = [];
+const waiting: { key: string; root: string; number: number; sig: string; force?: boolean }[] = [];
 const listeners = new Set<() => void>();
 let running = 0;
 
@@ -43,7 +43,7 @@ function pump(): void {
     const job = waiting.shift()!;
     running++;
     inflight.add(job.key);
-    api.prRollup(job.root, job.number)
+    api.prRollup(job.root, job.number, job.force)
       .then((r) => { seen.set(job.key, { at: Date.now(), checks: r.ok ? (r.checks ?? null) : null, sig: job.sig }); })
       .catch(() => { seen.set(job.key, { at: Date.now(), checks: null, sig: job.sig }); })
       .finally(() => { running--; inflight.delete(job.key); tell(); pump(); });
@@ -62,14 +62,14 @@ export function onRollup(fn: () => void): () => void {
  * on screen is the card. Only worth calling for a card whose list rollup claims
  * a failure — everything else is already telling the truth.
  */
-export function rollupOf(root: string, number: number, sig = ""): PrCheckRollup | null {
+export function rollupOf(root: string, number: number, sig = "", force = false): PrCheckRollup | null {
   if (!root || !number) return null;
   const key = keyOf(root, number);
   const hit = seen.get(key);
   const age = hit ? Date.now() - hit.at : Infinity;
   if (hit && (sig && hit.sig === sig ? age < SAME_MS : age < TTL_MS)) return hit.checks;
   if (!inflight.has(key) && !waiting.some((w) => w.key === key)) {
-    waiting.push({ key, root, number, sig });
+    waiting.push({ key, root, number, sig, force });
     pump();
   }
   return hit?.checks ?? null;
@@ -79,5 +79,7 @@ export function rollupOf(root: string, number: number, sig = ""): PrCheckRollup 
 export function refreshRollup(root: string, number: number): void {
   if (!root || !number) return;
   seen.delete(keyOf(root, number));
-  rollupOf(root, number);
+  // Forced: the person pressed Refresh, or re-ran a job, and the server's copy
+  // is exactly what they are trying to get past.
+  rollupOf(root, number, "", true);
 }

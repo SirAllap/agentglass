@@ -2843,7 +2843,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
        back asks once, if a tick was skipped. */
     let missed = false;
     const tick = () => {
-      if (document.visibilityState === "hidden") { missed = true; return; }
+      // Hidden, or visible behind another window (no focus): the poll measured
+      // 1.5 requests a minute with nobody looking. Coming back asks once.
+      if (document.visibilityState === "hidden" || !document.hasFocus()) { missed = true; return; }
       missed = false;
       loadList();
       // Keep the open pull request current too. This reads the server's cache,
@@ -2856,9 +2858,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     const t = setInterval(tick, POLL_MS);
     const onBack = () => { if (missed && document.visibilityState === "visible") tick(); };
     document.addEventListener("visibilitychange", onBack);
+    window.addEventListener("focus", onBack);
     return () => {
       clearInterval(t);
       document.removeEventListener("visibilitychange", onBack);
+      window.removeEventListener("focus", onBack);
       // Leaving the view, or changing what is being listed, cancels the
       // collection: it would otherwise land against a scope nobody is looking
       // at any more, and its backoff would still be counting from the old one.
@@ -3722,11 +3726,17 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
        far too long for the pull request in front of you. Measured while he was
        looking at one: the server said 0 behind, GitHub agreed, and the page
        still said 936. */
-    const again = () => { refreshBehind(root, selectedRef.current ?? 0); };
+    /* Not forced: the server holds a comparison for 60 s, so the tick costs a
+       spawn every other time at most. Pressing Refresh or updating the branch
+       is what forces one. And only while the window is the one being looked
+       at: both ticks used to run on for a window in the background, measured
+       at 7.7 and 1.9 requests a minute against an answer that never moved. */
+    const looking = () => document.visibilityState === "visible" && document.hasFocus();
+    const again = () => { refreshBehind(root, selectedRef.current ?? 0, false); };
     again();
-    const slow = setInterval(again, 30_000);
-    const t = setInterval(read, 8_000);
-    const onBack = () => { if (document.visibilityState === "visible") { read(); again(); } };
+    const slow = setInterval(() => { if (looking()) again(); }, 30_000);
+    const t = setInterval(() => { if (looking()) read(); }, 8_000);
+    const onBack = () => { if (looking()) { read(); again(); } };
     window.addEventListener("focus", onBack);
     document.addEventListener("visibilitychange", onBack);
     return () => {
@@ -4691,7 +4701,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
           )}
           <div ref={listRef} tabIndex={-1} onKeyDown={onListKey} className="flex-1 overflow-y-auto min-h-0 agx-scroll outline-none">
             {inboxOn ? (
-              <Inbox repo={repo?.nameWithOwner ?? ""} onFlash={flash} onUnread={setInboxUnread} />
+              <Inbox repo={repo?.nameWithOwner ?? ""} onFlash={flash} onUnread={setInboxUnread} active={active && selected == null} />
             ) : boardShown && repo && !listState.needsAuth ? (
               /* The board replaces the TABLE, not the panel: every pill, facet
                  and search above stays where it was, and picking any of them

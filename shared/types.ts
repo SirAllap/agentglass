@@ -2178,6 +2178,9 @@ export interface WorkingTree {
   clean: boolean;
   writeEnabled: boolean;
   error?: string;
+  /** What the tree says, without the read time: equal signatures mean nothing
+   *  changed, so a caller can keep the object it holds. */
+  sig?: string;
 }
 /** A repo agentglass knows about (from telemetry paths + the server's own cwd). */
 export interface GitRepoRef {

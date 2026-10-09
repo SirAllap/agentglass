@@ -1859,7 +1859,7 @@ async function whileRefsHoldAsync(key: string, root: string, compute: () => Prom
 }
 
 const TREE_TTL_MS = 1_000;
-const treeCache = new Map<string, { at: number; data: WorkingTree }>();
+const treeCache = new Map<string, { at: number; text: string; sig: string }>();
 // The worktree panel is the heaviest git poll (a list plus base/behind/dirty per
 // checkout). Its inner reads are cached and family-shared now, but the assembled
 // answer had no cache of its own — so every poll of every open tab still rebuilt
@@ -5450,14 +5450,30 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // The 1s cache handles the 2.5s re-poll; single-flight handles the tabs
       // that miss it together. workingTree is four git reads on the loop, so
       // one caller doing them for all is the difference under a fan-out.
-      return body(await singleFlight(`tree:${root}`, async () => {
+      const text = await singleFlight(`tree:${root}`, async () => {
         const hit = treeCache.get(root);
-        if (hit && Date.now() - hit.at < TREE_TTL_MS * backoff()) return JSON.stringify(hit.data);
+        if (hit && Date.now() - hit.at < TREE_TTL_MS * backoff()) return hit.text;
         const data = await workingTree(root);
+        /* A signature of what the tree SAYS, not of when it was read. Every file
+           carries `timestamp: now`, so two reads of an unchanged tree differed
+           byte for byte: measured at 24 requests a minute of 100% identical
+           answers that no ETag or hash could ever match. The stamp stays (the
+           type asks for it) and is left out of the signature. The poll cadence
+           is unchanged: the doorbell does not ring for an edit made on disk, so
+           this poll is the only way such an edit shows up. */
+        const sig = Bun.hash(JSON.stringify(data, (k, v) => (k === "timestamp" ? undefined : v))).toString(36);
+        const out = JSON.stringify({ ...data, sig });
         if (treeCache.size > 40) treeCache.clear();
-        treeCache.set(root, { at: Date.now(), data });
-        return JSON.stringify(data);
-      }));
+        treeCache.set(root, { at: Date.now(), text: out, sig });
+        return out;
+      });
+      const sig = treeCache.get(root)?.sig;
+      if (sig && req.headers.get("if-none-match") === `"${sig}"`) {
+        return new Response(null, { status: 304, headers: { ETag: `"${sig}"`, ...cors } });
+      }
+      return new Response(text, {
+        headers: { "content-type": "application/json", ...cors, ...(sig ? { ETag: `"${sig}"`, "Cache-Control": "no-cache" } : {}) },
+      });
     }
     /*
      * The rebuilt Diff view, in two halves.
@@ -6989,7 +7005,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
        rollup counts a re-run's old attempt beside the new one, and a card
        cannot tell without asking. */
     if (pathname === "/prs/rollup") {
-      return json(await prRollup(url.searchParams.get("root") || "", url.searchParams.get("number") || 0));
+      return json(await prRollup(url.searchParams.get("root") || "", url.searchParams.get("number") || 0, url.searchParams.get("force") === "1"));
     }
     if (pathname === "/prs/local-head") {
       return json({ ok: true, local: await localHead(
@@ -7000,7 +7016,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname === "/prs/behind") {
       const asked = url.searchParams.get("root") ?? "";
       const root = asked && inScopeReal(asked) ? asked : (workspaceRoot() ?? process.cwd());
-      return json(await branchBehind(root, Number(url.searchParams.get("number") ?? 0)));
+      return json(await branchBehind(root, Number(url.searchParams.get("number") ?? 0), url.searchParams.get("force") === "1"));
     }
     /* What this project's agents have spent, by branch and by checkout — the
        whole repository in one answer, because the board looks its rows up in it
@@ -7140,7 +7156,15 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       ));
     }
     if (pathname === "/prs/diff") {
-      return json(await prDiff(url.searchParams.get("root") || "", url.searchParams.get("number") || "", url.searchParams.get("force") === "1"));
+      const d = await prDiff(url.searchParams.get("root") || "", url.searchParams.get("number") || "", url.searchParams.get("force") === "1");
+      /* A diff past its 5 minute copy is re-read and, unchanged, was sent whole
+         again (27.8 KB measured on a 12-file pull request). Its content is its
+         tag, so the browser's own revalidation answers a 304. */
+      const tag = d.ok && d.text ? `"${Bun.hash(d.text).toString(36)}"` : "";
+      if (tag && req.headers.get("if-none-match") === tag) return new Response(null, { status: 304, headers: { ETag: tag, ...cors } });
+      return new Response(JSON.stringify(d), {
+        headers: { "content-type": "application/json", ...cors, ...(tag ? { ETag: tag, "Cache-Control": "no-cache" } : {}) },
+      });
     }
     // Images in a PR body. Not JSON — it streams the bytes back, because
     // GitHub's own attachment URLs 404 without the token this attaches.

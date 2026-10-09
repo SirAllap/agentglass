@@ -1240,7 +1240,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const loadTree = useCallback(async (r: string) => {
     if (!r) return;
     const seq = ++treeSeq.current;
-    try { const t = await api.gitTree(r); if (seq !== treeSeq.current) return; setTree(t); setTreeFor(r); if (t.error) flash(false, t.error); }
+    try { const t = await api.gitTree(r); if (seq !== treeSeq.current) return; setTree((cur) => (cur && t.sig && cur.sig === t.sig && cur.root === t.root ? cur : t)); setTreeFor(r); if (t.error) flash(false, t.error); }
     catch (e) { if (seq === treeSeq.current) flash(false, String(e)); }
     finally { if (seq === treeSeq.current) setTreeRead(true); }
   }, []);

@@ -24,14 +24,21 @@ type Entry = { at: number; behind: number | null; local: PrLocalHead | null };
 
 const seen = new Map<string, Entry>();
 const inflight = new Set<string>();
-const waiting: { key: string; root: string; number: number }[] = [];
+const waiting: { key: string; root: string; number: number; force?: boolean }[] = [];
 const listeners = new Set<() => void>();
 let running = 0;
 
 const keyOf = (root: string, number: number) => `${root}::${number}`;
 
+const looking = () => typeof document === "undefined" || (!document.hidden && document.hasFocus());
+
 function tell(): void {
   for (const l of listeners) l();
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("focus", () => tell());
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) tell(); });
 }
 
 function pump(): void {
@@ -39,7 +46,7 @@ function pump(): void {
     const job = waiting.shift()!;
     running++;
     inflight.add(job.key);
-    api.prBehind(job.root, job.number)
+    api.prBehind(job.root, job.number, job.force)
       .then((r) => { seen.set(job.key, { at: Date.now(), behind: r.ok ? (r.behind ?? 0) : null, local: r.ok ? (r.local ?? null) : null }); })
       // A failure is remembered too, as "no answer" — otherwise every render
       // queues the same doomed request again.
@@ -61,13 +68,19 @@ export function onBehind(fn: () => void): () => void {
  * about yet puts it in the queue. That is deliberate — the thing that knows a
  * card is on screen is the card.
  */
-export function behindOf(root: string, number: number): number | null {
+export function behindOf(root: string, number: number, force = false): number | null {
   if (!root || !number) return null;
   const key = keyOf(root, number);
   const hit = seen.get(key);
   if (hit && Date.now() - hit.at < TTL_MS) return hit.behind;
+  /* Not while nobody is looking. Every render calls this, so an answer that
+     aged out queued a comparison from a window in the background: measured as
+     one `gh` spawn per card per five minutes on an unfocused board. Coming back
+     rings `tell()` (below) and the re-render asks then. A first look, with
+     nothing held, is always allowed. */
+  if (hit && !looking()) return hit.behind;
   if (!inflight.has(key) && !waiting.some((w) => w.key === key)) {
-    waiting.push({ key, root, number });
+    waiting.push({ key, root, number, force });
     pump();
   }
   return hit?.behind ?? null;
@@ -118,10 +131,10 @@ export function forgetOneBehind(root: string, number: number): void {
  * agreed, and the page went on showing 936 because this store was still inside
  * its own five minutes.
  */
-export function refreshBehind(root: string, number: number): void {
+export function refreshBehind(root: string, number: number, force = true): void {
   if (!root || !number) return;
   seen.delete(keyOf(root, number));
-  behindOf(root, number);
+  behindOf(root, number, force);
 }
 
 /** Forget everything — for a test, or a repository that has just changed under
