@@ -2,11 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { api } from "../lib/api.ts";
 import { clickupPrefs, clickupPrefsSaved } from "../lib/clickupPrefs.ts";
 import { __forgetClickupSetup, clickupSetup } from "../lib/clickupSetup.ts";
-import { __forgetClickupSpaces, useClickupSpaces } from "../lib/clickupSpaces.ts";
+import { __forgetClickupSpaces, PENDING_CARDS, useClickupSpaces } from "../lib/clickupSpaces.ts";
 import { __forgetClickupPrefs } from "../lib/clickupPrefs.ts";
 import { CLICKUP, addTurnsWritesOn, clickupAdd, clickupAssign, clickupRemove, clickupSetStatus, clickupSteps, clickupUnassign, type PrefsPatch } from "../lib/clickupWorkflow.ts";
 import { allStatuses, countedIds, isActive, moments, resolveImplicit, withCounted, type MapSpace, type StepKind } from "../lib/workflowMap.ts";
-import { pageState, partitionUnits, type Partition } from "../lib/workflowLayout.ts";
+import { eyeIds, pageState, partitionUnits, type Partition } from "../lib/workflowLayout.ts";
 import { openSettings } from "../lib/openSettings.ts";
 import { assignWords, pressSentence } from "../lib/stepAssign.ts";
 import { setting } from "../lib/settingsRegistry.ts";
@@ -15,7 +15,7 @@ import { DEFAULT_CARD_SKILL_PATTERN } from "../../../shared/cardSkills.ts";
 import { SettingRow, Switch, Toggle } from "./SettingRow.tsx";
 import { Button, INPUT, INPUT_STYLE, LINE, Segmented } from "./workspace/Chrome.tsx";
 import { Dot, StatusPopover, type PanelView } from "./StatusPanel.tsx";
-import { Badge, WorkflowMap } from "./WorkflowMap.tsx";
+import { Badge, ListEye, WorkflowMap } from "./WorkflowMap.tsx";
 import { WFM_CSS } from "./workflowMapStyle.ts";
 import { CaretIcon, DoneIcon, EyeIcon, LinkIcon, LockIcon, NoteIcon, PlusIcon, EditIcon, UserIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { HIT, ICON } from "../lib/iconSize.ts";
@@ -234,7 +234,7 @@ export function ClickUpPane() {
 
   const units: MapSpace[] = useMemo(() => {
     const raw = state.kind === "ok" ? state.spaces : state.kind === "error" || state.kind === "loading" ? state.stale ?? [] : [];
-    return raw.map((s) => ({ id: s.id, name: s.name, ...(s.group ? { group: s.group } : null), statuses: s.statuses, ...(s.counted === false ? { counted: false } : null), ...(s.fromList ? { fromList: true } : null), ...(s.spaceId ? { spaceId: s.spaceId } : null) }));
+    return raw.map((s) => ({ id: s.id, name: s.name, ...(s.group ? { group: s.group } : null), statuses: s.statuses, ...(s.counted === false ? { counted: false } : null), ...(s.fromList ? { fromList: true } : null), ...(s.spaceId ? { spaceId: s.spaceId } : null), ...(s.cards ? { cards: s.cards } : null) }));
   }, [state]);
   const part = useMemo(() => partitionUnits(units), [units]);
   const panel: PanelView = state.kind === "ok" ? { kind: "ok" }
@@ -276,11 +276,15 @@ export function ClickUpPane() {
   const distinct = allStatuses(part.counted).length;
   const asOf = state.kind === "ok" || state.kind === "empty" ? state.at : state.kind === "error" ? state.staleAt : undefined;
   const st = pageState({ connected, refused: frozen, writes: changesOn, steps, part, m: (s) => M[s.kind] });
+  /* The eye on a list: the same save the checklist makes, through the setting. */
+  const toggleCounted = (u: MapSpace) => { const ids = eyeIds(units, u); if (ids) count(ids); };
   const chosen = prefs.statusSpaces.counted.length > 0;
   const narrowed = state.kind === "ok" && !state.note;
   const showAdvanced = () => { setAdvOpen(true); requestAnimationFrame(() => advRef.current?.querySelector<HTMLElement>("input")?.focus()); };
   const source = <><b style={{ color: "var(--text)" }}>Where these come from.</b> {narrowed ? `The ${n.lists} where your tasks live` : `The ${n.spaces} ${n.name} returned`}{asOf ? `, read from ${n.name} ${ago(asOf)}` : ""}. {part.folded.length ? `The rest are folded below; ` : ""}choosing costs no request.</>;
-  const countWord = (c: Partition) => (c.counted.length ? c.counted.map((u) => u.name).join(", ") : "none");
+  /* Cards still being read: which lists count is not known yet, and "0 lists count" or "none" would say it is. */
+  const reading = state.kind === "loading" && state.why === PENDING_CARDS;
+  const countWord = (c: Partition) => (reading ? "reading which ones your cards live in…" : c.counted.length ? c.counted.map((u) => u.name).join(", ") : "none");
 
   if (st === "out" || st === "refused") {
     return (
@@ -322,10 +326,10 @@ export function ClickUpPane() {
 
       <Card id="cu-found" title="What we found" open={foundOpen ?? steps.length === 0} onToggle={setFoundOpen} flush
         right={<>
-          <Badge tone={state.kind === "error" ? "warn" : state.kind === "loading" ? "dim" : "ok"}>{state.kind === "loading" ? "Reading…" : state.kind === "error" ? (asOf ? `As of ${ago(asOf)}` : "Not read") : "Read-only"}</Badge>
+          <Badge tone={state.kind === "error" ? "warn" : state.kind === "loading" ? "dim" : "ok"}>{reading ? "Reading your cards…" : state.kind === "loading" ? "Reading…" : state.kind === "error" ? (asOf ? `As of ${ago(asOf)}` : "Not read") : "Read-only"}</Badge>
           <span className="flex gap-2 flex-wrap ml-auto">
-            <Fact><b className="text-[13px]" style={{ color: "var(--text)" }}>{part.counted.length}</b> {n.lists} count</Fact>
-            <Fact><b className="text-[13px]" style={{ color: "var(--text)" }}>{distinct}</b> statuses</Fact>
+            {!reading && <Fact><b className="text-[13px]" style={{ color: "var(--text)" }}>{part.counted.length}</b> {n.lists} count</Fact>}
+            {!reading && <Fact><b className="text-[13px]" style={{ color: "var(--text)" }}>{distinct}</b> statuses</Fact>}
             {part.folded.length > 0 && <Fact><b className="text-[13px]" style={{ color: "var(--text)" }}>{part.folded.length}</b> ignored</Fact>}
             {prefs.prLinkField && <Fact>PR link <b style={{ color: "var(--text)" }}>{prefs.prLinkField}</b></Fact>}
             {prefs.swatchField && <Fact>Swatch <b style={{ color: "var(--text)" }}>{prefs.swatchField}</b></Fact>}
@@ -343,8 +347,11 @@ export function ClickUpPane() {
               : part.counted.length ? (
                 <ul className="m-0 p-0 flex flex-col gap-2" style={{ listStyle: "none" }}>
                   {part.counted.map((u) => (
-                    <li key={u.id} className="flex gap-2 items-center flex-wrap"><b>{u.name}</b>{hint(`${u.group ? `${u.group} · ` : ""}${u.statuses.length} statuses`)}
-                      <span className="flex gap-1 flex-wrap">{u.statuses.map((s) => <Tagged key={s.status}><Dot type={s.type} color={s.color} />{s.status}</Tagged>)}</span></li>
+                    <li key={u.id} className="flex gap-2 items-start">
+                      <span className="flex gap-2 items-center flex-wrap flex-1 min-w-0"><b>{u.name}</b>{hint(`${u.group ? `${u.group} · ` : ""}${u.statuses.length} statuses`)}
+                        <span className="flex gap-1 flex-wrap">{u.statuses.map((s) => <Tagged key={s.status}><Dot type={s.type} color={s.color} />{s.status}</Tagged>)}</span></span>
+                      <ListEye unit={u} nouns={n} onToggle={toggleCounted} blocked={frozen || eyeIds(units, u) === null} />
+                    </li>
                   ))}
                 </ul>
               ) : hint(`No ${n.list} counts.`)}
@@ -386,6 +393,7 @@ export function ClickUpPane() {
         onUnassign={(v) => { void send(clickupUnassign(v)); }}
         onAssign={(kind, a) => { void send(clickupAssign(kind, a)); }}
         people={readPeople}
+        onToggleCounted={toggleCounted}
         onCountAgain={(u) => { const ids = withCounted(units, u.fromList && u.spaceId ? u.spaceId : u.id, true); if (ids) count(ids); }}
         onRetry={reread} />
       {note && <div role="alert" className="text-[11px] -mt-4" style={{ color: "var(--error-ink)" }}>{note}</div>}

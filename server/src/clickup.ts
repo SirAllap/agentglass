@@ -16,7 +16,7 @@
  * unusual enough to be worth stating: ClickUp's personal tokens are sent bare,
  * and adding `Bearer` produces a 401 that looks exactly like a wrong token.
  */
-import { statusSpaces, type StatusSpaces } from "../../shared/statusSpaces.ts";
+import { statusSpaces, type CardsRead, type StatusSpaces } from "../../shared/statusSpaces.ts";
 import { singleFlight } from "./singleflight.ts";
 import { cardIdDigits, mentionsCardId } from "../../shared/cardRef.ts";
 import { matchesQuery, mergeRequestNumber, readTaskRef } from "../../shared/taskref.ts";
@@ -3510,15 +3510,32 @@ export async function clickupSpaces(fresh = false): Promise<CallResult<{ spaces:
   };
 }
 
+/** How long a settings read waits for the first look at the cards. ClickUp's own floor for that
+ *  query is ten to twelve seconds (see fetchTasks), so most of one is spent here and the rest comes
+ *  back as `pending`, which the page asks about again. */
+export const CARDS_WAIT_MS = 9_000;
+
 /**
  * The same spaces, led by where this person's cards live — see `statusSpaces`.
- * Zero extra requests: the spaces come from the memo above and the cards from
- * the assigned-to-me snapshot, read from memory and never fetched here.
+ *
+ * The cards are the assigned-to-me snapshot. When it already exists it is read from memory and
+ * nothing is asked. When it does not (the server has just started, nobody has opened the board) the
+ * answer is not "every space": it waits for the first look, which the board needs anyway, joins it
+ * if one is under way (single flight), and says `pending` if it is not back in `waitMs`. Nothing
+ * waits when the person has chosen their spaces: the cards then only order them.
  */
-export async function clickupStatusSpaces(fresh = false): Promise<CallResult<StatusSpaces>> {
+export async function clickupStatusSpaces(fresh = false, waitMs = CARDS_WAIT_MS): Promise<CallResult<StatusSpaces>> {
   const r = await clickupSpaces(fresh);
   if (!r.ok) return { ...r, data: undefined };
-  return { ok: true, data: statusSpaces(r.data?.spaces ?? [], clickupCached()?.tasks ?? [], clickupPrefs().statusSpaces.counted) };
+  const chosen = clickupPrefs().statusSpaces.counted;
+  if (!clickupCached() && chosen.length === 0) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([clickupTasks().catch(() => null), new Promise((res) => { timer = setTimeout(res, waitMs); })]);
+    clearTimeout(timer);
+  }
+  const snapNow = clickupCached();
+  const read: CardsRead = !snapNow ? "loading" : snapNow.tasks.length ? "loaded" : "none";
+  return { ok: true, data: statusSpaces(r.data?.spaces ?? [], snapNow?.tasks ?? [], chosen, read) };
 }
 
 export interface ClickUpFolder {

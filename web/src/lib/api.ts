@@ -1466,7 +1466,7 @@ const realApi = {
    *  second answer already carries the lists inside each folder. */
   clickupSpaces: (fresh = false) => get<{ ok: boolean; error?: string; throttled?: boolean; unauthorised?: boolean; spaces?: ClickUpSpace[] }>(fresh ? "/clickup/spaces?fresh=1" : "/clickup/spaces"),
   /** The settings picker's spaces: this person's own first (see shared/statusSpaces.ts). */
-  clickupStatusSpaces: (fresh = false) => get<{ ok: boolean; error?: string; throttled?: boolean; unauthorised?: boolean; spaces?: ClickUpSpace[]; source?: "tasks" | "spaces"; note?: string }>(fresh ? "/clickup/status-spaces?fresh=1" : "/clickup/status-spaces"),
+  clickupStatusSpaces: (fresh = false) => get<{ ok: boolean; error?: string; throttled?: boolean; unauthorised?: boolean; spaces?: ClickUpSpace[]; source?: "chosen" | "tasks" | "pending" | "spaces"; note?: string }>(fresh ? "/clickup/status-spaces?fresh=1" : "/clickup/status-spaces"),
   clickupFolders: (spaceId: string) =>
     /* `folderless` marks the one entry that is not a folder: the lists sitting
        directly in the space, gathered under a single heading so this shape
@@ -2735,7 +2735,7 @@ const demoApi: typeof realApi = {
   clickupAddView: (_u: string) => D({ ok: false, error: "not available in the demo" }),
   clickupRemoveView: (_i: string) => D({ ok: true }),
   clickupSpaces: (_fresh?: boolean) => D({ ok: true, spaces: [] as ClickUpSpace[] }),
-  clickupStatusSpaces: (_fresh?: boolean) => D({ ok: true, spaces: [] as ClickUpSpace[], source: "spaces" as const, note: undefined as string | undefined }),
+  clickupStatusSpaces: (_fresh?: boolean) => D({ ok: true, spaces: [] as ClickUpSpace[], source: "spaces" as "chosen" | "tasks" | "pending" | "spaces", note: undefined as string | undefined }),
   clickupFolders: (_s: string) => D({ ok: true, folders: [] as { id: string; name: string; lists: { id: string; name: string }[]; folderless?: boolean }[] }),
   clickupAddFolder: (_i: string, _n: string) => D({ ok: false, error: "not available in the demo" }),
   clickupRemoveFolder: (_i: string) => D({ ok: true }),

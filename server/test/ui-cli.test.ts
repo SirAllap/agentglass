@@ -76,6 +76,27 @@ describe.skipIf(!HAVE_PY)("arguments, as pure functions", () => {
     expect(coerce({ t: "scalar" }, "")).toEqual(["", null]);
   });
 
+  /* The value of `settings set` arrives as text. A space id is digits, and reading it as a number
+     is what made the validator (which wants a string) refuse "90170067734"; a trailing comma got
+     round it. The kind a setting stores is in settings.list, and the CLI goes by that. */
+  describe("a setting's value, by the kind it stores", () => {
+    const listing = (type: string | null) => ({ ok: true, value: [{ id: "clickup.statusSpaces.counted", ...(type ? { type } : {}) }, { id: "terminal.fontSize", type: "number" }] });
+    const value = (id: string, text: string, res: unknown) =>
+      py(CLI, "g['run_door'] = lambda *a, **k: D['res']\nprint(json.dumps(g['setting_value'](D['id'], D['text'])))", { id, text, res });
+    test("digits stay text for a setting that stores text", () => {
+      expect(value("clickup.statusSpaces.counted", "90170067734", listing("string"))).toBe("90170067734");
+      expect(value("clickup.statusSpaces.counted", "true", listing("string"))).toBe("true");
+    });
+    test("a setting that stores a number or a flag still reads them as such", () => {
+      expect(value("terminal.fontSize", "14", listing("string"))).toBe(14);
+      expect(value("diff.wrap", "false", { ok: true, value: [{ id: "diff.wrap", type: "boolean" }] })).toBe(false);
+    });
+    test("when the kind cannot be read the old rule holds", () => {
+      expect(value("x.y", "90170067734", { ok: false, error: "no window open" })).toBe(90170067734);
+      expect(value("clickup.statusSpaces.counted", "90170067734", listing(null))).toBe(90170067734);
+    });
+  });
+
   test("--arg splits at the first '=', and refuses a bare word or a repeat", () => {
     const kv = (items: string[]) => py(CLI, "print(json.dumps(g['parse_kv'](D)))", items);
     expect(kv(["page=appearance", "row=a=b"])).toEqual([{ page: "appearance", row: "a=b" }, null]);
@@ -340,12 +361,17 @@ describe.skipIf(!HAVE_PY)("against a running app", () => {
   });
 
   test("a setting is read as a number when it looks like one, and the window's undo comes back", async () => {
-    const w = await window_((d) => ({ ok: true, applied: true, value: { prev: 13, value: d.args.value, undo: "u1" } }));
+    const w = await window_((d) => d.do === "settings.list"
+      ? { ok: true, applied: true, value: [{ id: "terminal.fontSize", type: "number" }, { id: "clickup.statusSpaces.counted", type: "string" }] }
+      : { ok: true, applied: true, value: { prev: 13, value: d.args.value, undo: "u1" } });
     const r = await cli("--as", "orbit-agent", "settings", "set", "terminal.fontSize", "14");
     expect(r.out).toEqual({ ok: true, applied: true, value: { prev: 13, value: 14, undo: "u1" } });
-    expect(w.seen[0]).toEqual({ cmd: "ui", do: "settings.set", args: { id: "terminal.fontSize", value: 14 } });
+    expect(w.seen.at(-1)).toEqual({ cmd: "ui", do: "settings.set", args: { id: "terminal.fontSize", value: 14 } });
     const log = await (await fetch(base + "/actions?limit=50")).json() as { actions: { action: string; target: string }[] };
     expect(log.actions.find((a) => a.action === "/control/settings.set")?.target).toBe("as orbit-agent · terminal.fontSize");
+    const ids = await cli("settings", "set", "clickup.statusSpaces.counted", "90170067734");
+    expect(ids.out.value.value).toBe("90170067734");
+    expect(w.seen.at(-1)).toEqual({ cmd: "ui", do: "settings.set", args: { id: "clickup.statusSpaces.counted", value: "90170067734" } });
     w.close();
   });
 
@@ -426,6 +452,18 @@ describe.skipIf(!HAVE_PY)("against a running app", () => {
     expect(w.frames.at(-1)).toMatchObject({ present: "now" });
     send({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "ui_settings_open", arguments: { page: "diff", now: "yes" } } });
     expect((await reply(6)).result.isError).toBe(true);
+    /* A number for a setting that stores text is that text: a model that writes a space id without quotes. */
+    w.close();
+    const w2 = await window_((d) => d.do === "settings.list"
+      ? { ok: true, applied: true, value: [{ id: "clickup.statusSpaces.counted", type: "string" }, { id: "terminal.fontSize", type: "number" }] }
+      : { ok: true, applied: true, value: { echoed: d } });
+    send({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "ui_settings_set", arguments: { id: "clickup.statusSpaces.counted", value: 90170067734 } } });
+    expect((await reply(7)).result.isError).toBeUndefined();
+    expect(w2.seen.at(-1)).toEqual({ cmd: "ui", do: "settings.set", args: { id: "clickup.statusSpaces.counted", value: "90170067734" } });
+    send({ jsonrpc: "2.0", id: 8, method: "tools/call", params: { name: "ui_settings_set", arguments: { id: "terminal.fontSize", value: 14 } } });
+    expect((await reply(8)).result.isError).toBeUndefined();
+    expect(w2.seen.at(-1)).toEqual({ cmd: "ui", do: "settings.set", args: { id: "terminal.fontSize", value: 14 } });
+    w2.close();
     send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "ui_view_open", arguments: { to: "nowhere" } } });
     const bad = await reply(4);
     expect(bad.result.isError).toBe(true);
@@ -436,7 +474,6 @@ describe.skipIf(!HAVE_PY)("against a running app", () => {
     expect(targets).toContain("as orbit-mcp · now");
     try { p.kill(); } catch { /* gone */ }
     await reader.catch(() => {});
-    w.close();
   });
 });
 

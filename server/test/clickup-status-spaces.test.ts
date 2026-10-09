@@ -17,6 +17,8 @@ import * as PF from "../src/clickupPrefs.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "agx-cu-statusspaces-"));
 let seen: string[] = [];
+let taskDelay = 0;
+let taskRows: ReturnType<typeof task>[] | null = null;
 const ok = (b: unknown) => new Response(JSON.stringify(b), { headers: { "content-type": "application/json", "x-ratelimit-remaining": "99" } });
 const WORK = ["to do", "in development", "code review", "released"].map((s, i) => ({ status: s, type: i ? "custom" : "open", orderindex: i }));
 const task = (id: string, space: string, list: string, status: string) => ({
@@ -34,7 +36,10 @@ const server = Bun.serve({
       { id: "1", name: "Sales", statuses: [{ status: "requests", type: "open" }] },
       { id: "2", name: "Orbit", statuses: WORK },
     ] });
-    if (p === "/team/9/task") return ok({ tasks: [task("a", "2", "10", "code review"), task("b", "2", "11", "released")], last_page: true });
+    if (p === "/team/9/task") {
+      if (taskDelay) await Bun.sleep(taskDelay);
+      return ok({ tasks: taskRows ?? [task("a", "2", "10", "code review"), task("b", "2", "11", "released")], last_page: true });
+    }
     return ok({});
   },
 });
@@ -42,6 +47,8 @@ const count = (re: RegExp) => seen.filter((s) => re.test(s)).length;
 
 beforeEach(() => {
   seen = [];
+  taskDelay = 0;
+  taskRows = null;
   C.__setCredentialsPath(join(dir, "credentials.json"));
   C.__clearAll();
   C.setCredential("clickup", { token: "pk_1_TEST", accountId: "7", workspaceId: "9" });
@@ -75,13 +82,47 @@ describe("clickupStatusSpaces", () => {
     expect(seen.length).toBe(1);
   });
 
-  test("no cards read yet: every space, a sentence, and the picker never starts the slow card read", async () => {
+  /* Measured on a real workspace: the page asked while the server had not read the cards yet, was told
+     "every space counts", and kept that until it was reopened. The first look at the cards is ten
+     seconds of ClickUp's own latency; an answer given inside it is not "everything", it is "not yet". */
+  test("cards not read yet: the answer waits for the first look and then narrows, in one card request", async () => {
+    taskDelay = 150;
+    const [a, b] = await Promise.all([CU.clickupStatusSpaces(), CU.clickupTasks().catch(() => null)]);
+    expect(b).not.toBeNull();
+    expect(a.data!.source).toBe("tasks");
+    expect(a.data!.spaces.map((s) => [s.name, s.counted])).toEqual([["Orbit", true], ["Sales", false]]);
+    expect(count(/\/team\/9\/task$/)).toBe(1);
+  });
+
+  test("cards still being read when the wait ends: pending, nothing counted, nothing ignored", async () => {
+    taskDelay = 400;
+    const r = await CU.clickupStatusSpaces(false, 20);
+    expect(r.data!.source).toBe("pending");
+    expect(r.data!.spaces.every((s) => s.counted === false && s.pending === true)).toBe(true);
+    expect(r.data!.note).toContain("None counts until");
+    await Bun.sleep(500);
+    const again = await CU.clickupStatusSpaces();
+    expect(again.data!.source).toBe("tasks");
+    expect(again.data!.spaces[0]!.name).toBe("Orbit");
+    expect(count(/\/team\/9\/task$/)).toBe(1);
+  });
+
+  test("cards that could not be read at all: every space, and it says so", async () => {
+    taskRows = [];
     const r = await CU.clickupStatusSpaces();
     expect(r.data!.source).toBe("spaces");
     expect(r.data!.note).toContain("No cards have been read yet");
     expect(r.data!.spaces.map((s) => s.name)).toEqual(["Sales", "Orbit"]);
+  });
+
+  test("a chosen set of spaces does not wait for the cards, and starts no card request", async () => {
+    taskDelay = 400;
+    expect(PF.setClickupPrefs({ statusSpaces: { counted: ["1"] } }).ok).toBe(true);
+    const t0 = Date.now();
+    const r = await CU.clickupStatusSpaces();
+    expect(Date.now() - t0).toBeLessThan(300);
+    expect(r.data!.source).toBe("chosen");
     expect(count(/\/team\/9\/task$/)).toBe(0);
-    expect(seen.length).toBe(1);
   });
 
   test("a saved choice of spaces decides what counts, with no request of its own", async () => {

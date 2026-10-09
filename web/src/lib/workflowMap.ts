@@ -39,6 +39,8 @@ export interface MapSpace {
   fromList?: boolean;
   /** For a list place, the space it sits in; counting follows the space. */
   spaceId?: string;
+  /** How many of the person's cards sit here, when the cards are known. */
+  cards?: number;
 }
 
 /** The spaces that count, and the ignored ones the page lists under "Ignored". */

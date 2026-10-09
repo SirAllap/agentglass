@@ -650,6 +650,9 @@ export interface ClickUpSpace {
   fromList?: boolean;
   /** A space that says in its own name that nobody should use it. */
   legacy?: boolean;
+  /** The person's cards are still being read, so whether this space counts is not known yet
+   *  (it is not "ignored", and it is not counted either). */
+  pending?: boolean;
 }
 
 /** Somebody who can be put on a card: the members of the list it lives in.

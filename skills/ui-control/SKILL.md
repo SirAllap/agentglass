@@ -59,7 +59,9 @@ Read the sentence and do what it says; do not retry the same call.
    `settings list` shows (appearance, diff, rail, the terminal, quiet mode and two
    pull-request notices, the search engine, what Tasks shows, single-key
    shortcuts, and which ClickUp spaces count for statuses:
-   `settings set clickup.statusSpaces.counted 901,902`, a comma-separated list of
+   `settings set clickup.statusSpaces.counted 901,902` (`settings list` says each
+   setting's `type`; one that stores a string takes digits as text, and `display` is
+   its value in words), a comma-separated list of
    space ids, empty for "the spaces my cards live in"; the rest are ignored, not
    deleted, and the page lists them to count again; a read before the ClickUp page
    was ever opened may say empty until the first local read lands). Not notification kinds, channels or voices, the home page, tokens,

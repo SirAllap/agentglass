@@ -2,15 +2,15 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { Button, LINE } from "./workspace/Chrome.tsx";
 import { Dot, StatusPanel, StatusPopover, type PanelView } from "./StatusPanel.tsx";
 import { WFM_CSS } from "./workflowMapStyle.ts";
-import { ArrowIcon, CaretIcon, DoneIcon, ListIcon, MergeIcon, NoteIcon, PlusIcon, UserIcon, WarningIcon, CrossIcon } from "../lib/glyphIcons.tsx";
-import { ICON } from "../lib/iconSize.ts";
+import { ArrowIcon, CaretIcon, DoneIcon, EyeIcon, EyeOffIcon, ListIcon, MergeIcon, NoteIcon, PlusIcon, UserIcon, WarningIcon, CrossIcon } from "../lib/glyphIcons.tsx";
+import { HIT, ICON } from "../lib/iconSize.ts";
 import { ASSIGN_LABEL, ASSIGN_WHO, assignLabel, pressSentence, type Assign } from "../lib/stepAssign.ts";
 import {
   UNASSIGN_LABEL, addable, allStatuses, isActive, moments, needsStatus, suggestStatus,
-  type MapSpace, type Moment, type Step, type StepKind, type TrackerAdapter, type Unassign,
+  type MapSpace, type Moment, type Nouns, type Step, type StepKind, type TrackerAdapter, type Unassign,
 } from "../lib/workflowMap.ts";
 import {
-  coveragePill, coverageRows, lineInk, notInUnit, planConnectors, statusHome,
+  coveragePill, coverageRows, defaultUnit, eyeIds, lineInk, notInUnit, planConnectors, statusHome,
   type CoveragePill, type Partition, type Wire,
 } from "../lib/workflowLayout.ts";
 
@@ -52,10 +52,29 @@ export interface MapProps {
   onRetry: () => void;
   /** Count a folded list again. */
   onCountAgain?: (unit: MapSpace) => void;
+  /** The eye on a list: hide it from the counted ones, or bring it back. Absent: no eye is drawn. */
+  onToggleCounted?: (unit: MapSpace) => void;
 }
 
 /** Somebody the "a person…" choice can name. */
 export interface MapPerson { id: number; name: string; sub?: string }
+
+/**
+ * The eye on a list: hide it from the ones that count, or bring it back. It has its place at the end of
+ * its row in every state (a disabled eye when hiding would leave nothing counted, an empty box when no
+ * handler is given), so a press moves the row and never a control.
+ */
+export function ListEye({ unit, nouns, onToggle, blocked }: { unit: MapSpace; nouns: Pick<Nouns, "list" | "name">; onToggle?: (u: MapSpace) => void; blocked?: boolean }) {
+  if (!onToggle) return <span aria-hidden className="shrink-0" style={{ width: HIT, marginRight: 6 }} />;
+  const off = unit.counted === false;
+  const label = off ? "Show it again" : blocked ? `At least one ${nouns.list} has to count` : `Hide this ${nouns.list} from ${nouns.name} statuses`;
+  return (
+    <button type="button" className="wfm-eye" data-eye={off ? "off" : "on"} title={label} aria-label={`${label}: ${unit.name}`} disabled={blocked}
+      onClick={() => onToggle(unit)}>
+      {off ? <EyeOffIcon size={ICON.md} /> : <EyeIcon size={ICON.md} />}
+    </button>
+  );
+}
 
 const UNASSIGN_OPTIONS = (["none", "me", "all"] as const).map((v) => ({ value: v, label: UNASSIGN_LABEL[v] }));
 /** The mark each moment wears in the map, drawn and not typed. */
@@ -156,7 +175,8 @@ export function WorkflowMap(p: MapProps) {
   const units = useMemo(() => [...part.counted, ...part.folded.map((f) => f.unit)], [part]);
   const listed = useMemo(() => allStatuses(part.counted), [part.counted]);
   const [selId, setSelId] = useState<string | null>(null);
-  const sel: MapSpace | undefined = part.counted.find((u) => u.id === selId) ?? part.counted[0];
+  /* Opens on the counted list with most of the person's cards; with no cards to go on it opens on none and asks. */
+  const sel: MapSpace | undefined = part.counted.find((u) => u.id === selId) ?? defaultUnit(part.counted) ?? undefined;
   const [composer, setComposer] = useState(false);
   const [picker, setPicker] = useState<{ kind: StepKind; anchor: HTMLElement } | null>(null);
   const [lit, setLit] = useState<string | null>(null);
@@ -285,6 +305,10 @@ export function WorkflowMap(p: MapProps) {
   const missing = notInUnit(steps, sel);
   const pinsOnStatus = (status: string): { k: StepKind; num: number }[] =>
     steps.flatMap((s, i) => (s.status && s.status.toLowerCase() === status.toLowerCase() && isActive(s, M[s.kind]) && changesOn ? [{ k: s.kind, num: i + 1 }] : []));
+  /* The eye on a list (see ListEye): hiding the last counted one is refused, so its eye is the disabled one. */
+  const eye = (u: MapSpace) => (
+    <ListEye unit={u} nouns={n} onToggle={p.onToggleCounted} blocked={frozen || (u.counted !== false && eyeIds(units, u) === null)} />
+  );
   const column = (
     <aside className="wfm-col" aria-label="Your statuses">
       <div className="flex flex-col gap-0.5">
@@ -293,7 +317,7 @@ export function WorkflowMap(p: MapProps) {
       </div>
       {panel.kind === "loading" && !sel ? (
         <div aria-busy="true">{[70, 50, 65, 45, 60, 40].map((w, i) => <div key={i} className="px-2 py-2"><div className="agx-skel rounded" style={{ width: `${w}%`, height: 12, background: "var(--surface-inset)" }} /></div>)}</div>
-      ) : !sel ? (
+      ) : !sel && part.counted.length === 0 ? (
         <div className="text-[11px]" style={{ color: "var(--text3)" }}>
           {units.length ? <>No {n.list} counts. Count one again below to see its statuses.</> : <>No {n.lists} to show.</>}
         </div>
@@ -302,39 +326,48 @@ export function WorkflowMap(p: MapProps) {
           {(part.counted.length > 1 || part.folded.length > 0) && (
             <div className="wfm-lt" role="tablist" aria-label={spaceWord[0]!.toUpperCase() + spaceWord.slice(1)}>
               {part.counted.map((u) => (
-                <button key={u.id} type="button" role="tab" aria-selected={u.id === sel.id} onClick={() => setSelId(u.id)}>
-                  <span className="n"><b className="text-[13px]">{u.name}</b>{u.group && hint(u.group)}</span>
-                  <span className="text-[11px] tabular-nums" style={{ color: "var(--text3)" }}>{u.statuses.length}</span>
-                </button>
+                <div key={u.id} className="r" {...(u.id === sel?.id ? { "data-sel": "" } : {})}>
+                  <button type="button" className="t" role="tab" aria-selected={u.id === sel?.id} onClick={() => setSelId(u.id)}>
+                    <span className="n"><b className="text-[13px]">{u.name}</b>{u.group && hint(u.group)}</span>
+                    <span className="text-[11px] tabular-nums" style={{ color: "var(--text3)" }}>{u.statuses.length}</span>
+                  </button>
+                  {eye(u)}
+                </div>
               ))}
             </div>
           )}
-          <div role="group" aria-label={`Statuses in ${sel.name}`} className="flex flex-col gap-0.5">
-            {sel.statuses.length === 0 ? <div className="py-2 text-[11px]" style={{ color: "var(--text3)" }}>This {n.list} has no statuses we can read.</div>
-              : sel.statuses.map((s) => {
-                const pins = pinsOnStatus(s.status);
-                const lit_ = !!lit && lit.toLowerCase() === s.status.toLowerCase();
-                const ids = pins.map((x) => x.k);
-                const hot = ids.some((k) => hl.has(k)) || lit_;
-                return (
-                  <div key={s.status} data-status={s.status} className="wfm-sr" {...(pins.length ? { "data-tg": "" } : {})} {...(hot ? { "data-hl": "" } : {})}
-                    onMouseEnter={() => ids.length && light(ids, true)} onMouseLeave={() => ids.length && light(ids, false)}>
-                    <span data-dot><Dot type={s.type} color={s.color} /></span>
-                    <span className="n">{s.status}</span>
-                    <span className="wfm-pins">{pins.map((x) => <span key={x.k} className="wfm-pin" {...(hl.has(x.k) ? { "data-hl": "" } : {})} title={`Step ${x.num}`} onMouseEnter={() => light([x.k], true)} onMouseLeave={() => light([x.k], false)}>{x.num}</span>)}</span>
-                  </div>
-                );
-              })}
-          </div>
-          <div className="text-[11px]" style={{ color: "var(--text3)" }}>A line runs from a step’s status to the same status here. Hover a step or a status to follow one line.</div>
-          {missing.length > 0 && (
-            <div className="flex flex-col gap-1 pt-3" style={{ borderTop: LINE }}>
-              <span className="text-[10px] font-semibold uppercase" style={{ letterSpacing: ".1em", color: "var(--text3)" }}>Not in {sel.name}</span>
-              <div className="text-[11px]" style={{ color: "var(--text3)" }}>
-                {missing.map((num) => <span key={num} className="wfm-pin mr-1" data-off="" {...(hl.has(steps[num - 1]!.kind) ? { "data-hl": "" } : {})} onMouseEnter={() => light([steps[num - 1]!.kind], true)} onMouseLeave={() => light([steps[num - 1]!.kind], false)}>{num}</span>)}
-                point at a status this {n.list} does not have.
-              </div>
+          {!sel ? (
+            <div className="text-[11px]" style={{ color: "var(--text3)" }}>Your cards could not be read, so no {n.list} is picked for you. Pick one above to see its statuses.</div>
+          ) : (
+            <>
+            <div role="group" aria-label={`Statuses in ${sel.name}`} className="flex flex-col gap-0.5">
+              {sel.statuses.length === 0 ? <div className="py-2 text-[11px]" style={{ color: "var(--text3)" }}>This {n.list} has no statuses we can read.</div>
+                : sel.statuses.map((s) => {
+                  const pins = pinsOnStatus(s.status);
+                  const lit_ = !!lit && lit.toLowerCase() === s.status.toLowerCase();
+                  const ids = pins.map((x) => x.k);
+                  const hot = ids.some((k) => hl.has(k)) || lit_;
+                  return (
+                    <div key={s.status} data-status={s.status} className="wfm-sr" {...(pins.length ? { "data-tg": "" } : {})} {...(hot ? { "data-hl": "" } : {})}
+                      onMouseEnter={() => ids.length && light(ids, true)} onMouseLeave={() => ids.length && light(ids, false)}>
+                      <span data-dot><Dot type={s.type} color={s.color} /></span>
+                      <span className="n">{s.status}</span>
+                      <span className="wfm-pins">{pins.map((x) => <span key={x.k} className="wfm-pin" {...(hl.has(x.k) ? { "data-hl": "" } : {})} title={`Step ${x.num}`} onMouseEnter={() => light([x.k], true)} onMouseLeave={() => light([x.k], false)}>{x.num}</span>)}</span>
+                    </div>
+                  );
+                })}
             </div>
+            <div className="text-[11px]" style={{ color: "var(--text3)" }}>A line runs from a step’s status to the same status here. Hover a step or a status to follow one line.</div>
+            {missing.length > 0 && (
+              <div className="flex flex-col gap-1 pt-3" style={{ borderTop: LINE }}>
+                <span className="text-[10px] font-semibold uppercase" style={{ letterSpacing: ".1em", color: "var(--text3)" }}>Not in {sel.name}</span>
+                <div className="text-[11px]" style={{ color: "var(--text3)" }}>
+                  {missing.map((num) => <span key={num} className="wfm-pin mr-1" data-off="" {...(hl.has(steps[num - 1]!.kind) ? { "data-hl": "" } : {})} onMouseEnter={() => light([steps[num - 1]!.kind], true)} onMouseLeave={() => light([steps[num - 1]!.kind], false)}>{num}</span>)}
+                  point at a status this {n.list} does not have.
+                </div>
+              </div>
+            )}
+            </>
           )}
         </>
       )}
@@ -343,13 +376,9 @@ export function WorkflowMap(p: MapProps) {
           <summary><span className="chev" aria-hidden><CaretIcon size={ICON.xs} /></span><b className="text-[13px]">Ignored ({part.folded.length})</b></summary>
           <div className="wfm-lt mt-2">
             {part.folded.map((f) => (
-              <div key={f.unit.id} className="flex flex-col gap-1 px-2 py-2">
-                <b className="text-[13px]" style={{ overflowWrap: "anywhere" }}>{f.unit.name}</b>
-                <span className="flex items-center gap-2">{hint("ignored")}<span className="flex-1" />
-                  {p.onCountAgain && <button type="button" className="wfm-again" onClick={() => p.onCountAgain!(f.unit)}
-                    style={{ height: 24, fontSize: 11, fontWeight: 600, color: "var(--primary-ink)", padding: "0 8px", borderRadius: 6, background: "transparent", boxShadow: "inset 0 0 0 1px var(--w-edge)", border: 0, cursor: "pointer", whiteSpace: "nowrap" }}>
-                    Count it again
-                  </button>}</span>
+              <div key={f.unit.id} className="r">
+                <span className="nm"><b className="text-[13px]">{f.unit.name}</b>{hint("ignored")}</span>
+                {eye(f.unit)}
               </div>
             ))}
           </div>

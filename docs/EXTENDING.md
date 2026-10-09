@@ -366,8 +366,12 @@ A `settings.set` is always answered, like a read: `{ok, applied, value:
 handle the chip offers (empty, with `unchanged: true`, when the setting already
 had that value). A refused value or an id that is not exposed is `{ok:false,
 applied:false, error}`, and the audit line then says failed. `settings.get` and
-`settings.list` answer with the value and the exposed list; a secret answers
-`{set:true}` and nothing else. (`ui.read settings.diff` and the other
+`settings.list` answer with the value and the exposed list. Each setting says
+the `type` it stores (`string`, `number` or `boolean`: a string setting whose
+value is digits, like a list of ids, is still a string, and `agentglass-ui`
+sends it as typed), and carries `display`, the value as a person would read it
+(a space's name, "on", "the spaces my cards live in"), next to the raw `value`
+you write back. A secret answers `{set:true}` and nothing else. (`ui.read settings.diff` and the other
 `settings.*` panels describe a pane read-only; `settings.get` is the one that
 pairs with `settings.set`.)
 

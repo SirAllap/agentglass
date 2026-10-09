@@ -9,6 +9,7 @@ import { describe, expect, test } from "bun:test";
 import type { ClickUpSpace } from "../../shared/providers.ts";
 import { statusSpaces } from "../../shared/statusSpaces.ts";
 import { CLICKUP } from "../src/lib/clickupWorkflow.ts";
+import { defaultUnit, eyeIds } from "../src/lib/workflowLayout.ts";
 import { allStatuses, countedIds, moments, reach, reachOf, splitSpaces, withCounted, type Step } from "../src/lib/workflowMap.ts";
 
 const st = (status: string, type = "custom") => ({ status, type });
@@ -172,5 +173,78 @@ describe("the picker reads the narrowed spaces", () => {
     const s = splitSpaces(SPACES);
     expect(s.yours.length).toBe(SPACES.length);
     expect(s.other).toEqual([]);
+  });
+});
+
+/* The default, "the spaces my cards live in", is a function of what is known of the cards. Measured on a
+   real workspace with nothing chosen: the page said "10 lists count" and selected the first of them
+   while the cards were still being read. Three states, three answers. */
+describe("the default, by what is known of the cards", () => {
+  const CARDS = [card("3", "10", "Bugs", "code review"), card("3", "11", "Misc", "in production"), card("5", "20", "Inbox", "open")];
+
+  test("cards read: the spaces they live in count, the busiest leads", () => {
+    const r = statusSpaces(SPACES, CARDS, [], "loaded");
+    expect(r.source).toBe("tasks");
+    expect(r.spaces.filter((s) => s.counted).map((s) => s.name)).toEqual(["Orbit", "Support"]);
+    expect(defaultUnit(splitSpaces(r.spaces.map((s) => ({ ...s }))).yours)?.name).toBe("Orbit");
+  });
+
+  test("cards being read: no space counts and none is ignored; each says it is pending", () => {
+    const r = statusSpaces(SPACES, [], [], "loading");
+    expect(r.source).toBe("pending");
+    expect(r.spaces.length).toBe(SPACES.length);
+    expect(r.spaces.every((s) => s.counted === false && s.pending === true)).toBe(true);
+    expect(r.note).toContain("None counts until");
+  });
+
+  test("cards that could not be read: every space counts, it says so, and nothing is selected for the person", () => {
+    const r = statusSpaces(SPACES, [], [], "none");
+    expect(r.source).toBe("spaces");
+    expect(r.spaces.every((s) => s.counted === true && !s.pending)).toBe(true);
+    expect(r.note).toContain("No cards have been read yet");
+    expect(defaultUnit(r.spaces)).toBeNull();
+  });
+
+  test("a choice beats all three, and a read that is under way does not undo it", () => {
+    for (const read of ["loaded", "loading", "none"] as const) {
+      const r = statusSpaces(SPACES, read === "loaded" ? CARDS : [], ["4"], read);
+      expect(r.source).toBe("chosen");
+      expect(r.spaces.filter((s) => s.counted).map((s) => s.name)).toEqual(["Sales"]);
+    }
+  });
+
+  test("loading with cards already in hand is not pending: the cards decide", () => {
+    expect(statusSpaces(SPACES, CARDS, [], "loading").source).toBe("tasks");
+  });
+});
+
+describe("which counted space is selected", () => {
+  const u = (id: string, cards?: number) => ({ id, name: id, statuses: [], ...(cards === undefined ? null : { cards }) });
+  test("the one with most of the person's cards, the first among equals", () => {
+    expect(defaultUnit([u("a", 2), u("b", 9), u("c", 9)])?.id).toBe("b");
+  });
+  test("one counted space is the answer; several with no card to go on are not", () => {
+    expect(defaultUnit([u("a")])?.id).toBe("a");
+    expect(defaultUnit([u("a"), u("b")])).toBeNull();
+    expect(defaultUnit([])).toBeNull();
+  });
+});
+
+describe("the eye on a list", () => {
+  const units = [
+    { id: "1", name: "Orbit", statuses: [] },
+    { id: "2", name: "Sales", statuses: [] },
+    { id: "list:9", name: "Orbit / Inbox", statuses: [], fromList: true, spaceId: "1" },
+    { id: "3", name: "Support", statuses: [], counted: false },
+  ];
+  test("hiding a counted list saves the others; showing a hidden one saves them plus it", () => {
+    expect(eyeIds(units, units[1]!)).toEqual(["1"]);
+    expect(eyeIds(units, units[3]!)).toEqual(["1", "2", "3"]);
+  });
+  test("a list place follows its space", () => {
+    expect(eyeIds(units, units[2]!)).toEqual(["2"]);
+  });
+  test("the last counted list cannot be hidden: nothing would be left to pick a status from", () => {
+    expect(eyeIds([units[0]!, { ...units[1]!, counted: false }], units[0]!)).toBeNull();
   });
 });

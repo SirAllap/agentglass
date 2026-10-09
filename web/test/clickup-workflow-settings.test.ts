@@ -18,7 +18,7 @@ import { partitionUnits } from "../src/lib/workflowLayout.ts";
 
 const st = (status: string, type = "custom") => ({ status, type });
 const SPACES: MapSpace[] = [
-  { id: "1", name: "Engineering", group: "Platform", statuses: [st("to do", "open"), st("code review"), st("ready for qa"), st("done", "done")] },
+  { id: "1", name: "Engineering", group: "Platform", cards: 12, statuses: [st("to do", "open"), st("code review"), st("ready for qa"), st("done", "done")] },
   { id: "2", name: "Support", statuses: [st("open", "open"), st("solved", "closed")] },
 ];
 const prefs = (over: Partial<ClickUpPrefs> = {}): ClickUpPrefs => ({
@@ -201,5 +201,61 @@ describe("the page is only there with ClickUp", () => {
     const pane = await Bun.file(new URL("../src/components/ClickUpPane.tsx", import.meta.url).pathname).text();
     const body = pane.slice(pane.indexOf("export function ClickUpPane"));
     expect(body.match(/const r = await api\.clickupSetPrefs\(patch\);/g)?.length).toBe(1);
+  });
+});
+
+describe("the column opens on the list with most of the person's cards", () => {
+  const render = (units: MapSpace[]) => renderToStaticMarkup(
+    React.createElement(WorkflowMap, { adapter: CLICKUP, part: partitionUnits(units), panel: { kind: "ok" }, steps: [], changesOn: true, onAdd() {}, onStatus() {}, onRemove() {}, onUnassign() {}, onAssign() {}, onRetry() {} }));
+  const u = (id: string, name: string, cards?: number): MapSpace => ({ id, name, statuses: [st("to do", "open")], ...(cards === undefined ? null : { cards }) });
+
+  test("the busiest of several is selected, though it is not first in the answer", () => {
+    const html = render([u("1", "Pro Updates", 0), u("2", "Orbit", 21), u("3", "Sales", 3)]);
+    expect(html).toMatch(/aria-selected="true"><span class="n"><b class="text-\[13px\]">Orbit</);
+    expect(html).toContain('aria-label="Statuses in Orbit"');
+  });
+  test("with no card to go on none is selected and the column says why", () => {
+    const html = render([u("1", "Pro Updates"), u("2", "Orbit")]);
+    expect(html).not.toContain('aria-selected="true"');
+    expect(html).not.toContain("Statuses in");
+    expect(html).toContain("no list is picked for you");
+  });
+});
+
+describe("the eye on a list", () => {
+  const u = (id: string, name: string, extra: Partial<MapSpace> = {}): MapSpace => ({ id, name, statuses: [st("to do", "open")], cards: 1, ...extra });
+  const render = (units: MapSpace[], toggle: MapProps["onToggleCounted"] = () => {}) => renderToStaticMarkup(
+    React.createElement(WorkflowMap, { adapter: CLICKUP, part: partitionUnits(units), panel: { kind: "ok" }, steps: [], changesOn: true, onToggleCounted: toggle, onAdd() {}, onStatus() {}, onRemove() {}, onUnassign() {}, onAssign() {}, onRetry() {} }));
+  const eyes = (html: string) => [...html.matchAll(/<button[^>]*class="wfm-eye"[^>]*>/g)].map((m) => m[0]);
+
+  test("every counted list has an eye that says what it does, and an ignored one has the same eye to bring it back", () => {
+    const html = render([u("1", "Orbit"), u("2", "Sales"), u("3", "Support", { counted: false })]);
+    const e = eyes(html);
+    expect(e.length).toBe(3);
+    expect(e[0]).toContain('title="Hide this list from ClickUp statuses"');
+    expect(e[1]).toContain('title="Hide this list from ClickUp statuses"');
+    expect(e[2]).toContain('title="Show it again"');
+    expect(e[2]).toContain('data-eye="off"');
+    expect(html).toContain("Ignored (1)");
+  });
+
+  test("the eye is a sibling of the tab, at the end of its row: nothing is drawn over anything", () => {
+    const html = render([u("1", "Orbit"), u("2", "Sales")]);
+    expect(html).toMatch(/<div class="r" data-sel=""><button type="button" class="t" role="tab"[^>]*>.*?<\/button><button type="button" class="wfm-eye"/);
+    expect(html).not.toMatch(/<button[^>]*role="tab"[^>]*>(?:(?!<\/button>).)*wfm-eye/);
+  });
+
+  test("the last list that counts has its eye disabled, in the same place, and says why", () => {
+    const html = render([u("1", "Orbit"), u("3", "Support", { counted: false })]);
+    const [first, second] = eyes(html);
+    expect(first).toContain("disabled");
+    expect(first).toContain("At least one list has to count");
+    expect(second).not.toContain("disabled");
+  });
+
+  test("without a handler no eye is drawn, and the box it would take is kept", () => {
+    const html = render([u("1", "Orbit"), u("2", "Sales")], null as never);
+    expect(eyes(html).length).toBe(0);
+    expect(html).toContain('class="shrink-0" style="width:26px;margin-right:6px"');
   });
 });

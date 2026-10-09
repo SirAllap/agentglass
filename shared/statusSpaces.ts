@@ -12,10 +12,18 @@
  * pane can list them and count one again, and they stay out of the pickers, the
  * selector and the coverage. Nothing chosen means "where my cards live".
  *
+ * Three things can be true of the cards: they are read (then they decide), they
+ * are being read (the first look at the board takes ten seconds of ClickUp's own
+ * latency, and an answer given in those ten seconds that said "every space
+ * counts" was kept by the page until it was reopened: measured on a real
+ * workspace, ten spaces counted and the busiest one not even selected), or they
+ * could not be read at all. The second is its own answer, `pending`, in which no
+ * space counts yet and each says so; only the third counts everything.
+ *
  * Limits, chosen: a list that overrides its space's statuses is only known by
  * the statuses its cards wear (the full set is one GET /list/{id} away, and
- * nothing here asks). A person with no cards read yet gets every space back,
- * with a sentence saying why.
+ * nothing here asks). A person whose cards could not be read gets every space
+ * back, with a sentence saying why.
  */
 import type { ClickUpSpace, ProviderTask, SpaceStatus } from "./providers.ts";
 
@@ -24,15 +32,19 @@ type Seen = Pick<ProviderTask, "spaceId" | "listId" | "list" | "status" | "statu
 const low = (s: string) => s.trim().toLowerCase();
 const LEGACY = /\b(legacy|deprecated|do not use|archived?)\b/i;
 
+/** What is known of the person's cards: read, still being read, or not readable. */
+export type CardsRead = "loaded" | "loading" | "none";
+
 export interface StatusSpaces {
   spaces: ClickUpSpace[];
-  /** "chosen": the person's own pick; "tasks": where the cards live; "spaces": nothing to go on. */
-  source: "chosen" | "tasks" | "spaces";
+  /** "chosen": the person's own pick; "tasks": where the cards live; "pending": the cards are
+   *  still being read, so no space counts yet; "spaces": nothing to go on. */
+  source: "chosen" | "tasks" | "pending" | "spaces";
   /** Said to the person when the answer is not narrowed. */
   note?: string;
 }
 
-export function statusSpaces(all: readonly ClickUpSpace[], tasks: readonly Seen[], chosen: readonly string[] = []): StatusSpaces {
+export function statusSpaces(all: readonly ClickUpSpace[], tasks: readonly Seen[], chosen: readonly string[] = [], read: CardsRead = tasks.length ? "loaded" : "none"): StatusSpaces {
   const spaces = all.map((s) => ({ ...s, ...(LEGACY.test(s.name) ? { legacy: true } : null) }));
   const byId = new Map(spaces.map((s) => [s.id, s]));
   const cards = new Map<string, number>();
@@ -53,21 +65,23 @@ export function statusSpaces(all: readonly ClickUpSpace[], tasks: readonly Seen[
   const mineIds = new Set(cards.keys());
   const picked = new Set(chosen.filter((id) => byId.has(id)));
   const gone = chosen.length > 0 && picked.size === 0;
-  const source: StatusSpaces["source"] = picked.size ? "chosen" : mineIds.size ? "tasks" : "spaces";
-  const counted = (id: string) => (source === "chosen" ? picked.has(id) : source === "tasks" ? mineIds.has(id) : true);
+  const source: StatusSpaces["source"] = picked.size ? "chosen" : read === "loading" && !mineIds.size ? "pending" : mineIds.size ? "tasks" : "spaces";
+  const counted = (id: string) => (source === "chosen" ? picked.has(id) : source === "tasks" ? mineIds.has(id) : source === "pending" ? false : true);
   const lists: ClickUpSpace[] = [...overrides.entries()].map(([key, o]) => ({
     id: `list:${key}`, name: `${o.space.name} / ${o.listName}`, statuses: [...o.seen.values()], mine: true, cards: o.n, fromList: true,
     spaceId: o.space.id, counted: counted(o.space.id),
   }));
   const rank = (s: ClickUpSpace) => (s.counted ? 0 : 2) + (s.legacy ? 1 : 0);
-  const body = spaces.map((s) => ({ ...s, ...(source === "spaces" ? null : mineIds.has(s.id) ? { mine: true, cards: cards.get(s.id)! } : { mine: false }), counted: counted(s.id) }));
+  const body = spaces.map((s) => ({ ...s, ...(source === "pending" ? { pending: true as const } : null), ...(source === "spaces" || source === "pending" ? null : mineIds.has(s.id) ? { mine: true, cards: cards.get(s.id)! } : { mine: false }), counted: counted(s.id) }));
   body.sort((a, b) => rank(a) - rank(b) || (b.cards ?? 0) - (a.cards ?? 0));
   const out: ClickUpSpace[] = [];
   for (const sp of body) {
     out.push(sp);
     out.push(...lists.filter((l) => l.spaceId === sp.id));
   }
-  const note = source === "spaces"
+  const note = source === "pending"
+    ? "Reading the cards assigned to you, to see which spaces they live in. None counts until they are read."
+    : source === "spaces"
     ? (tasks.length
       ? "None of your cards say which space they are in, so every space is counted."
       : "No cards have been read yet, so every space is counted. Open your cards once and this narrows to your own.")

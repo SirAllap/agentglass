@@ -19,7 +19,7 @@
  * newest; undoing it shows the one before, if that is still on offer.
  */
 import { useEffect, useSyncExternalStore } from "react";
-import { settings, shownChange, type SettingValue } from "../lib/settingsRegistry.ts";
+import { say, settings, shownChange } from "../lib/settingsRegistry.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { LAYER } from "../lib/layers.ts";
 import { Portal } from "./Portal.tsx";
@@ -29,9 +29,6 @@ import { AgentBackChip, useBackOffer } from "./AgentBackChip.tsx";
 import type { ViewId } from "../../../shared/types.ts";
 import { offers } from "../lib/agentOffers.ts";
 import { changeText, CHIP_MS, CHIP_BOTTOM } from "../lib/quietPresent.ts";
-
-/** A value as a sentence would say it: nothing stored is "default". */
-export const say = (v: SettingValue): string => (v === "" ? "default" : typeof v === "boolean" ? (v ? "on" : "off") : String(v));
 
 export function AgentChangeChip({ onBack }: { onBack: (v: ViewId) => void }) {
   const log = useSyncExternalStore(settings.subscribeChanges, settings.changes, () => []);
@@ -59,7 +56,12 @@ export function AgentChangeChip({ onBack }: { onBack: (v: ViewId) => void }) {
       role="status" aria-live="polite">
       <CloseButton onClick={() => settings.dismiss(c.handle)} title="Dismiss" hit={22} style={{ top: 6, right: 7, color: "var(--text4)" }} className="absolute rounded" />
       <div className="text-[13.5px] font-semibold" style={{ color: "var(--text)", overflowWrap: "anywhere" }}>{changeText(c.as, c.label)}</div>
-      <div className="text-[12px] mt-1" style={{ color: "var(--text3)" }}>{say(c.prev)} → {say(c.value)}</div>
+      {/* The words the setting itself uses for its values (a space's name, not its id); a long one is cut with
+          an ellipsis and the whole sentence is the tooltip. */}
+      {(() => {
+        const line = `${settings.display(c.id, c.prev)} → ${settings.display(c.id, c.value)}`;
+        return <div className="text-[12px] mt-1 truncate" title={line} style={{ color: "var(--text3)" }}>{line}</div>;
+      })()}
       <button onClick={() => settings.undo(c.handle)} className="agx-btn text-[12px] mt-2 px-2.5 rounded-lg font-medium" style={AGENT_BTN}>
         Undo
       </button>

@@ -254,6 +254,11 @@ export function EyeIcon({ size = ICON.sm, className }: P) {
   return <svg {...svg(size, className)}><path d="M1.4 7S3.6 3 7 3s5.6 4 5.6 4-2.2 4-5.6 4S1.4 7 1.4 7z" /><circle cx="7" cy="7" r="1.8" /></svg>;
 }
 
+/** 👁 crossed out: the same eye, hidden. */
+export function EyeOffIcon({ size = ICON.sm, className }: P) {
+  return <svg {...svg(size, className)}><path d="M1.4 7S3.6 3 7 3s5.6 4 5.6 4-2.2 4-5.6 4S1.4 7 1.4 7z" /><circle cx="7" cy="7" r="1.8" /><path d="M2.4 12L11.6 2" /></svg>;
+}
+
 /** 🏷 */
 export function TagIcon({ size = ICON.sm, className }: P) {
   return <svg {...svg(size, className)}><path d="M1.9 2.9v3.5l5.6 5.6 4.4-4.4-5.6-5.6H2.9a1 1 0 0 0-1 .9z" /><circle cx="4.6" cy="4.6" r=".8" /></svg>;

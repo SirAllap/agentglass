@@ -76,3 +76,22 @@ describe("readSpaces", () => {
     expect(names(await b)).toEqual(["New workspace"]);
   });
 });
+
+describe("readAnswer: what an answer from the server is to the page", () => {
+  const sp = [{ id: "1", name: "Orbit", statuses: [], counted: false, pending: true }, { id: "2", name: "Sales", statuses: [], counted: false, pending: true }];
+  test("'pending' is not an answer about the spaces: the page waits, and nothing is held as counted", () => {
+    expect(S.readAnswer({ spaces: sp, source: "pending", note: "Reading" }, 1)).toEqual({ kind: "pending" });
+    expect(S.readAnswer({ spaces: sp, source: "pending" }, S.MAX_PENDING - 1)).toEqual({ kind: "pending" });
+  });
+  test("after MAX_PENDING asks it gives up: every space counts, it says the cards did not load", () => {
+    const a = S.readAnswer({ spaces: sp, source: "pending" }, S.MAX_PENDING);
+    expect(a.kind).toBe("spaces");
+    if (a.kind !== "spaces") return;
+    expect(a.spaces.every((s) => !("pending" in s) && !("counted" in s))).toBe(true);
+    expect(a.note).toContain("did not load");
+  });
+  test("a narrowed answer carries no note, and one that could not narrow keeps the server's", () => {
+    expect(S.readAnswer({ spaces: sp, source: "tasks" }, 1)).toEqual({ kind: "spaces", spaces: sp });
+    expect(S.readAnswer({ spaces: sp, source: "spaces", note: "No cards" }, 1)).toEqual({ kind: "spaces", spaces: sp, note: "No cards" });
+  });
+});

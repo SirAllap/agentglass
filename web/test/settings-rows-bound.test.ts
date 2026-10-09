@@ -128,7 +128,7 @@ describe("a page that is migrated for most of it and refuses the rest", () => {
   });
 
   test("the guard bites: a secret-class ClickUp def is refused, listed as secret, and never read back", () => {
-    const secret = { id: "clickup.token", page: "clickup", section: "", label: "ClickUp token", secret: true as const, level: 2 as const, default: "", get: () => "pk_1_X", validate: () => "x", set: () => ({ ok: true as const, prev: "", value: "x", revert: () => {} }) };
+    const secret = { id: "clickup.token", page: "clickup", section: "", label: "ClickUp token", secret: true as const, level: 2 as const, default: "", type: "string" as const, display: (v: unknown) => String(v), get: () => "pk_1_X", validate: () => "x", set: () => ({ ok: true as const, prev: "", value: "x", revert: () => {} }) };
     const sneaky = { ...secret, id: "clickup.connection.workspace", secret: undefined, label: "Workspace" };
     for (const d of [secret, sneaky]) {
       const { pattern } = R.NEVER_ON_PAGE.clickup!;

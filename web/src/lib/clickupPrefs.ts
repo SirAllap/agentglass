@@ -19,7 +19,7 @@
 import { useEffect, useState } from "react";
 import { api } from "./api.ts";
 import { clickupSetup } from "./clickupSetup.ts";
-import { recountSpaces } from "./clickupSpaces.ts";
+import { recountSpaces, spaceNamesNow } from "./clickupSpaces.ts";
 import type { ClickUpPrefs } from "../../../shared/providers.ts";
 
 const TTL = 60_000;
@@ -92,4 +92,12 @@ export function setCountedSpaces(ids: string[]): void {
     })
     .catch(() => { if (before) clickupPrefsSaved(before.value); })
     .finally(() => recountSpaces());
+}
+
+/** The pick of counted spaces as a person says it: the names, or what the default means. An id whose space
+ *  has not been read is shown as the id; nothing is invented. */
+export function countedSpacesText(ids: readonly string[]): string {
+  if (!ids.length) return "the spaces my cards live in";
+  const names = spaceNamesNow();
+  return ids.map((id) => names.get(id) ?? id).join(", ");
 }

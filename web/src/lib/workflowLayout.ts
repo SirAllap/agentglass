@@ -12,7 +12,7 @@
  * project for another tracker. The words come in as `Nouns`.
  */
 import { luminance, parseColor } from "./contrast.ts";
-import { needsStatus, type MapSpace, type Moment, type Nouns, type Step } from "./workflowMap.ts";
+import { needsStatus, withCounted, type MapSpace, type Moment, type Nouns, type Step } from "./workflowMap.ts";
 
 const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 const hasStatus = (u: MapSpace, status: string) => u.statuses.some((x) => same(x.status, status));
@@ -34,6 +34,25 @@ export function partitionUnits(units: readonly MapSpace[]): Partition {
     counted: units.filter((u) => u.counted !== false),
     folded: units.filter((u) => u.counted === false).map((unit) => ({ unit })),
   };
+}
+
+/**
+ * The unit the status column opens on: the counted one with most of the person's cards (the first
+ * among equals), or the only one there is. With several counted and no card to go on it is NONE, so
+ * the person is asked to pick instead of being shown the first space of the answer as if it were theirs.
+ */
+export function defaultUnit(counted: readonly MapSpace[]): MapSpace | null {
+  let best: MapSpace | null = null;
+  for (const u of counted) if ((u.cards ?? 0) > (best?.cards ?? 0)) best = u;
+  return best ?? (counted.length === 1 ? counted[0]! : null);
+}
+
+/**
+ * What the eye on a unit saves: the ids that count once this one is hidden (if it counts) or shown
+ * (if it is hidden). A list place follows its space. Null when hiding would leave nothing counted.
+ */
+export function eyeIds(units: readonly MapSpace[], u: MapSpace): string[] | null {
+  return withCounted(units, u.fromList && u.spaceId ? u.spaceId : u.id, u.counted === false);
 }
 
 /** Where a status lives: in the units that count, and in the ones folded away. */

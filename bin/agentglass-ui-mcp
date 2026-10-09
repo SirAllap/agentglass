@@ -97,7 +97,7 @@ def schema_of(spec):
         return {"type": "string", "enum": ["file", "dir"], "description": "whether the path is a file or a folder; read from a trailing slash when absent"}
     if t == "scalar":
         return {"anyOf": [{"type": "string"}, {"type": "number"}, {"type": "boolean"}],
-                "description": "the new value; which values a setting takes is the setting's own (see ui_settings_list)"}
+                "description": "the new value; which values a setting takes is the setting's own (see ui_settings_list, whose `type` says whether it stores a string: pass those as a JSON string, even when they are digits)"}
     if t == "slug":
         return {"type": "string", "maxLength": spec.get("max", 80), "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"}
     return {"type": "string", "description": {"ref": "a git ref", "abspath": "an absolute path", "relpath": "a path relative to the root"}.get(t, "text")}
@@ -156,6 +156,7 @@ def run(name, args):
         if now is not None and not isinstance(now, bool):
             return {"content": [{"type": "text", "text": "now is true or false"}], "isError": True}
         present = "now" if now else None
+    given = UI.typed_given(entry["id"], given, AS, (actions, level, None))
     cmd, bad = UI.build_command(actions, level, entry["id"], given, AS, present=present)
     if bad:
         return {"content": [{"type": "text", "text": bad}], "isError": True}
