@@ -145,7 +145,7 @@ describe("however many blocks, one write", () => {
     expect(writes[0]).toEqual({ status: "qa", rem: [2] });
   });
   test("no move block: the write has no status; no block changes anything: it has nothing at all", () => {
-    expect(stepChanges({ people, unassign: "none", ensure: { kind: "person", id: 3, name: "Priya Nair" } }).write).toEqual({ add: [3] });
+    expect(stepChanges({ people, unassign: "none", ensure: { kind: "person", id: 3, name: "Pia Novak" } }).write).toEqual({ add: [3] });
     expect(stepChanges({ people, unassign: "all", ensure: { kind: "none" } }).write).toEqual({ rem: [1, 2] });
     expect(stepChanges({ people, unassign: "none", ensure: { kind: "none" } }).write).toEqual({});
   });
