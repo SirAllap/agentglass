@@ -288,4 +288,42 @@ describe("a suite that is still running", () => {
     const f = fileInLane(pr({ fail: 2, ok: 30 }), MINE);
     expect(f.lane).toBe("blocked");
   });
+
+  /*
+   * The other half of the rule above. A suite of 70 with two failures, one job
+   * still running and 56 passed was filed "in flight" with no red anywhere,
+   * while its own detail said "Merging is blocked". Once the failures are
+   * NAMED they come from the latest run per name, so a name in `failing` has
+   * no run of the same name in flight to replace it.
+   */
+  it("is blocked by a failure that nothing is replacing, however much is still running", () => {
+    const f = fileInLane(pr({ fail: 2, pend: 1, ok: 56, failing: ["acme-gate", "lint"] }), MINE);
+    expect(f.lane).toBe("blocked");
+    expect(f.reason).toContain("acme-gate, lint failing");
+    expect(f.reason).toContain("1 other check still running");
+    expect(f.reason).not.toContain("re-run may be replacing");
+  });
+
+  it("files someone else's standing failure under others, with the same truth", () => {
+    const f = fileInLane(pr({ fail: 1, pend: 3, ok: 40, failing: ["acme-gate"] }), NEITHER);
+    expect(f.lane).toBe("others");
+    expect(f.reason).toContain("acme-gate failing");
+    expect(f.reason).toContain("3 other checks still running");
+  });
+
+  it("keeps waiting when the aggregate has no names, because there it is only a guess", () => {
+    // `failing` empty with failures counted is the list's aggregate: a re-run's
+    // old attempt sits beside the new one and nothing says which is which.
+    const f = fileInLane(pr({ fail: 1, pend: 1, ok: 40 }), MINE);
+    expect(f.lane).toBe("flight");
+    expect(f.reason).toContain("which a re-run may be replacing");
+  });
+
+  it("keeps waiting when the re-run replaced the only failure", () => {
+    // The named read keeps the latest run per name: the failed run was dropped
+    // for the one now running, so nothing is red and nothing is blocked.
+    const f = fileInLane(pr({ fail: 0, pend: 1, ok: 40 }), MINE);
+    expect(f.lane).toBe("flight");
+    expect(f.reason).toContain("nothing red yet");
+  });
 });
