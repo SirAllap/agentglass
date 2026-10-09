@@ -30,6 +30,7 @@ const ALLOWED: Record<string, RegExp[]> = {
     /case "copied": return \{ ch: "⧉"/,                    // the diff's change column
   ],
   "lib/prBody.ts": [/^\s*[a-z_+"-]+: "/],                  // markdown emoji shortcodes
+  "lib/emojiData.ts": [/./],                               // the emoji picker's table: the characters ARE the content
   "lib/useLive.ts": [/\.replace\(\/\^/],                   // stripping a server's emoji prefix
 };
 

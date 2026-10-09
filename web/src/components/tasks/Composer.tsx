@@ -19,9 +19,11 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Markdown } from "../../lib/markdown.tsx";
-import { bold, bullet, checklist, code, fence, heading, italic, link, newline, ordered, quote, strike, table, type Sel } from "../../lib/mdEditor.ts";
+import { bold, bullet, checklist, code, fence, heading, insertText, italic, link, newline, ordered, quote, strike, table, type Sel } from "../../lib/mdEditor.ts";
+import { pushRecent, readRecent, writeRecent } from "../../lib/emojiData.ts";
 import { insertMention, matchPeople, mentionQuery, menuPlacement, MENU_MAX, type Mentionable } from "../../lib/mentions.ts";
 import { EDGE, LINE } from "../workspace/Chrome.tsx";
+import { EmojiPicker } from "./EmojiPicker.tsx";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 
@@ -112,6 +114,10 @@ export function Composer({ value, onChange, onSend, onCancel, busy, placeholder,
   /** The mention being typed, and which row of the menu is under the cursor. */
   const [at, setAt] = useState<{ at: number; query: string } | null>(null);
   const [pick, setPick] = useState(0);
+  /** The emoji popover, and the button it hangs from. */
+  const [emojiAt, setEmojiAt] = useState<HTMLElement | null>(null);
+  const [recent, setRecent] = useState<string[]>(readRecent);
+  useEffect(() => { if (busy || preview) setEmojiAt(null); }, [busy, preview]);
 
   /* Height follows the text: measured with the height released, because
      scrollHeight of a box that is already tall never reports it shrinking. */
@@ -137,6 +143,16 @@ export function Composer({ value, onChange, onSend, onCancel, busy, placeholder,
     const out = fn({ text: value, start: el.selectionStart, end: el.selectionEnd });
     onChange(out.text);
     setCaret({ start: out.start, end: out.end });
+  };
+
+  /** The chosen emoji goes where the caret is, over the selection. Shift keeps
+   *  the popover open for another; either way the caret stays in the box. */
+  const putEmoji = (ch: string, keep: boolean) => {
+    run((s) => insertText(s, ch));
+    const next = pushRecent(recent, ch);
+    setRecent(next);
+    writeRecent(next);
+    if (!keep) setEmojiAt(null);
   };
 
   /** Re-read the mention under the caret after anything that moves it. */
@@ -220,6 +236,14 @@ export function Composer({ value, onChange, onSend, onCancel, busy, placeholder,
           style={{ width: 24, height: 24, color: "var(--text3)" }}>
           <Ink text="@" />
         </button>
+        <button type="button" title="Add emoji" aria-label="Add emoji" aria-haspopup="dialog" aria-expanded={!!emojiAt}
+          disabled={busy || preview}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={(e) => { const b = e.currentTarget; setEmojiAt((cur) => (cur ? null : b)); }}
+          className="agx-btn inline-flex items-center justify-center rounded"
+          style={{ width: 24, height: 24, color: emojiAt ? "var(--info)" : "var(--text3)" }}>
+          <Ink d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM8 14s1.5 2 4 2 4-2 4-2M9 9.5h.01M15 9.5h.01" />
+        </button>
         <span className="flex-1" />
         <button type="button" className="agx-btn rounded px-2 text-[10.5px]" style={{ height: 24, color: preview ? "var(--info)" : "var(--text3)" }}
           title={preview ? "Back to writing" : "See it the way the card will"}
@@ -299,6 +323,11 @@ export function Composer({ value, onChange, onSend, onCancel, busy, placeholder,
             </button>
           ))}
         </div>
+      )}
+
+      {emojiAt && (
+        <EmojiPicker anchor={emojiAt} recent={recent} onPick={putEmoji}
+          onClose={() => { setEmojiAt(null); box.current?.focus(); }} />
       )}
 
       <div className="flex items-center gap-2 px-2 py-1.5" style={{ borderTop: LINE }}>
