@@ -59,6 +59,7 @@ const NOT_AGENT_DOOR: {
     "Feed.tsx": POPOVER,
     "BasePicker.tsx": POPOVER,
     "ContextMenu.tsx": POPOVER,
+    "AnchoredMenu.tsx": POPOVER,
     "FacetMenu.tsx": POPOVER,
     "Select.tsx": POPOVER,
     "FilterPresets.tsx": POPOVER,

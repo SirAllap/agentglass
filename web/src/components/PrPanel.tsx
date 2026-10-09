@@ -125,18 +125,19 @@ import { useClickupSetup } from "../lib/clickupSetup.ts";
 import { writeBlock } from "../lib/cardWrites.ts";
 import type { ListStatus as CuStatus, ListMember as CuMember, ProviderTask, HandoffUnassign } from "../../../shared/providers.ts";
 import { CloseButton, CloseIcon } from "./CloseButton.tsx";
-import { ICON } from "../lib/iconSize.ts";
+import { HIT, ICON } from "../lib/iconSize.ts";
 import { isTrunkBranch, type Stack } from "../lib/prStack.ts";
 import { usePrStacks } from "../lib/usePrStacks.ts";
 import { factsReader, laneMap, rungReader } from "../lib/prStackFacts.ts";
 import { BaseToken, StackControl, type Neighbour } from "./StackMarks.tsx";
 import { wordOf, type Facts, type Rung } from "../lib/prStackWords.ts";
-import { AgentIcon, ArrowIcon, AttachIcon, BlockedIcon, BoltIcon, BranchIcon, CaretIcon, ChartIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CommitIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, EditIcon, EyeIcon, FileIcon, FlagIcon, IconLabel, LinkIcon, MergeIcon, MoreIcon, PinIcon, PlusIcon, RefreshIcon, SearchIcon, SparkleIcon, TagIcon, UndoIcon, UserIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { AgentIcon, ArrowIcon, AttachIcon, BlockedIcon, BoltIcon, BranchIcon, CaretIcon, ChartIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CommitIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, EditIcon, EyeIcon, FileIcon, FlagIcon, IconLabel, LinkIcon, MarkdownIcon, MergeIcon, MoreIcon, PinIcon, PlusIcon, RefreshIcon, SearchIcon, SparkleIcon, TagIcon, UndoIcon, UserIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { PrIcon } from "./workspace/icons.tsx";
 import { PrWatchMenu } from "./PrWatchMenu.tsx";
 import { onChecksRead } from "../lib/prWatchStore.ts";
 import { CardChip } from "../lib/priority.tsx";
-import { ColumnsIcon, InboxIcon, QuoteIcon } from "./settingsNavIcons.tsx";
+import { BellIcon, ColumnsIcon, InboxIcon, QuoteIcon } from "./settingsNavIcons.tsx";
+import { AnchoredMenu } from "./AnchoredMenu.tsx";
 import { pins, isPinned, togglePin, subscribePins, type Pin } from "../lib/prPins.ts";
 import { TriageBoard } from "./TriageBoard.tsx";
 import { Inbox } from "./prs/Inbox.tsx";
@@ -676,8 +677,10 @@ ${TL_CSS}
 /* menus — .agx-menu itself now lives in index.css: it was defined HERE, in a
    <style> this component injects, so a menu in any other panel had no
    background until somebody had opened a pull request. See index.css. */
+.agx-mi{border-radius:8px}
 .agx-mi:hover{background:color-mix(in srgb,var(--primary) 12%,transparent);color:var(--text)}
-.agx-mi:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}
+.agx-mi:active{background:color-mix(in srgb,var(--primary) 22%,transparent)}
+.agx-mi:focus-visible{outline:2px solid var(--primary);outline-offset:-2px;background:color-mix(in srgb,var(--primary) 12%,transparent);color:var(--text)}
 /* the "＋" that adds a reviewer or a label, inline with the values it extends */
 .agx-inline-add{font-size:10px;padding:1px 6px;border-radius:5px;color:var(--text3);border:1px solid color-mix(in srgb,var(--text) 24%,transparent);transition:color .13s,border-color .13s,background .13s}
 .agx-inline-add:hover:not(:disabled){color:var(--primary);border-color:var(--primary);background:color-mix(in srgb,var(--primary) 10%,transparent)}
@@ -6478,14 +6481,7 @@ export function Menu({ label, title, children, align = "right", primary, bare }:
 }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
-    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
-    document.addEventListener("mousedown", away);
-    document.addEventListener("keydown", esc);
-    return () => { document.removeEventListener("mousedown", away); document.removeEventListener("keydown", esc); };
-  }, [open]);
+  const closeMenu = useCallback(() => setOpen(false), []);
   // `flex`, and not for layout: a block wrapper around an inline-flex button
   // builds a line box, and the leading above the baseline made this 26.6px tall
   // around a 24px button. Beside a bare Btn with no wrapper, that showed up as
@@ -6502,24 +6498,30 @@ export function Menu({ label, title, children, align = "right", primary, bare }:
           </button>
         )
         : <Btn onClick={() => setOpen((v) => !v)} title={title} small primary={primary}>{label}</Btn>}
-      {open && (
-        <div className="absolute z-50 mt-1.5 rounded-lg overflow-hidden agx-menu" style={{ [align]: 0, minWidth: 216 }}>
-          {children(() => setOpen(false))}
-        </div>
-      )}
+      {/* Drawn on the body, not inside this wrapper: a comment card is
+          `overflow: hidden`, and the list used to be cut off at its edge. */}
+      {open && <AnchoredMenu anchor={box} align={align} onClose={closeMenu}>{children(closeMenu)}</AnchoredMenu>}
     </div>
   );
 }
 
 export function MenuItem({ children, onClick, danger, kbd, icon }: {
   children: React.ReactNode; onClick: () => void; danger?: boolean; kbd?: string;
-  /** Drawn before the words, in the words' own colour. */
+  /** Drawn before the words, in the words' own colour. Pass it HERE and not as a
+   *  child: the label is a truncating box, and an svg put inside it (they are
+   *  `display: block` under the reset) took a line to itself, so the eye sat
+   *  above the word Hide. */
   icon?: React.ReactNode;
 }) {
+  // One row, one height: HIT, whatever the row holds. The rows used to be as
+  // tall as their glyph's fallback font made them, and the column was uneven.
   return (
-    <button onClick={onClick} className="agx-mi w-full text-left flex items-center gap-2 px-3 py-1.5 text-[11px]"
-      style={{ color: danger ? "var(--error)" : "var(--text2)" }}>
-      {icon && <span className="shrink-0 flex">{icon}</span>}
+    <button type="button" role="menuitem" onClick={onClick} className="agx-mi w-full text-left flex items-center gap-2 px-2.5 text-[11px] whitespace-nowrap"
+      style={{ minHeight: HIT, color: danger ? "var(--error)" : "var(--text2)" }}>
+      {/* Its own box at the icon's size, so a row with an icon and a row
+          without keep the label on the same line, and an icon of 12 and one of 14 do not
+          shift the words. */}
+      {icon && <span className="shrink-0 grid place-items-center" style={{ width: ICON.sm, height: ICON.sm }}>{icon}</span>}
       <span className="min-w-0 truncate">{children}</span>
       {kbd && <span className="ml-auto text-[9.5px] shrink-0" style={{ color: "var(--text3)" }}>{kbd}</span>}
     </button>
@@ -6674,7 +6676,7 @@ function ReviewMenu({ d, onPick, canTerm, primary = true }: {
                   destination lines it used to be: one shape to learn, and the
                   suggestion is a prompt like the rest — it is just the one this
                   pull request calls for. */}
-              <div role="button" tabIndex={0}
+              <div role="menuitem" tabIndex={0}
                 onClick={() => { close(); onPick(top.id, canTerm ? "term" : "chat"); }}
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); close(); onPick(top.id, canTerm ? "term" : "chat"); } }}
                 title={top.skill || top.title}
@@ -6700,7 +6702,7 @@ function ReviewMenu({ d, onPick, canTerm, primary = true }: {
                      nothing at all. And it runs in a terminal, because that is
                      where a review belongs — a real agent in tmux that survives
                      this app, which you can attach to and keep working in. */
-                  <div key={r.id} role="button" tabIndex={0}
+                  <div key={r.id} role="menuitem" tabIndex={0}
                     onClick={() => { close(); onPick(r.id, canTerm ? "term" : "chat"); }}
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); close(); onPick(r.id, canTerm ? "term" : "chat"); } }}
                     title={r.skill || r.title}
@@ -8580,22 +8582,22 @@ function Masthead({ root, repo, d, busy, local, stackUi, onOpenPr, onShowLocal, 
                   only reason the column looked ragged — a colour pictogram next
                   to line art reads as a different size whatever its em box says.
                   ⧉ for copy is the one the machine panel already uses. */}
-              <MenuItem onClick={() => { close(); onEditTitle(); }}>&#9998; Edit title</MenuItem>
+              <MenuItem icon={<EditIcon size={ICON.sm} />} onClick={() => { close(); onEditTitle(); }}>Edit title</MenuItem>
               {/* Requesting a review or flipping the draft flag are things you do
                   to a pull request that is still going. On a merged one GitHub
                   does not offer them either. */}
               {d.state === "OPEN" && <>
-                <MenuItem onClick={() => { close(); onReviewers(); }}>&#9673; Request a review</MenuItem>
-                <MenuItem icon={<DraftIcon size={ICON.xs} />} onClick={() => { close(); onDraft(); }}>{d.isDraft ? "Mark ready for review" : "Convert to draft"}</MenuItem>
+                <MenuItem icon={<UserIcon size={ICON.sm} />} onClick={() => { close(); onReviewers(); }}>Request a review</MenuItem>
+                <MenuItem icon={<DraftIcon size={ICON.sm} />} onClick={() => { close(); onDraft(); }}>{d.isDraft ? "Mark ready for review" : "Convert to draft"}</MenuItem>
               </>}
-              <MenuItem icon={<TagIcon size={ICON.xs} />} onClick={() => { close(); onLabels(); }}>Edit labels</MenuItem>
+              <MenuItem icon={<TagIcon size={ICON.sm} />} onClick={() => { close(); onLabels(); }}>Edit labels</MenuItem>
               <MenuSep />
               {onNudge && d.state === "OPEN" && (
-                <MenuItem onClick={() => { close(); onNudge(); }}>&#128276; Nudge the reviewers</MenuItem>
+                <MenuItem icon={<BellIcon size={ICON.sm} />} onClick={() => { close(); onNudge(); }}>Nudge the reviewers</MenuItem>
               )}
               {d.state !== "MERGED" && <>
                 <MenuSep />
-                <MenuItem icon={d.state === "CLOSED" ? <UndoIcon size={ICON.xs} /> : <CrossIcon size={ICON.xs} />} onClick={() => { close(); onClose(); }} danger={d.state !== "CLOSED"}>
+                <MenuItem icon={d.state === "CLOSED" ? <UndoIcon size={ICON.sm} /> : <CrossIcon size={ICON.sm} />} onClick={() => { close(); onClose(); }} danger={d.state !== "CLOSED"}>
                   {d.state === "CLOSED" ? "Reopen pull request" : "Close pull request"}
                 </MenuItem>
               </>}
@@ -11027,22 +11029,22 @@ function Card({ who, chip, when, url, edited, assoc, nodeId, reactions, onReact,
               {(close) => (
                 <>
                   {url && (
-                    <MenuItem onClick={() => { close(); void navigator.clipboard?.writeText(url).catch(() => {}); }}>
-                      &#9033; Copy link
+                    <MenuItem icon={<LinkIcon size={ICON.sm} />} onClick={() => { close(); void navigator.clipboard?.writeText(url).catch(() => {}); }}>
+                      Copy link
                     </MenuItem>
                   )}
                   {body && (
-                    <MenuItem onClick={() => { close(); void navigator.clipboard?.writeText(body).catch(() => {}); }}>
-                      &#9033; Copy Markdown
+                    <MenuItem icon={<MarkdownIcon size={ICON.sm} />} onClick={() => { close(); void navigator.clipboard?.writeText(body).catch(() => {}); }}>
+                      Copy Markdown
                     </MenuItem>
                   )}
                   {body && onQuote && (
-                    <MenuItem onClick={() => { close(); onQuote(body); }}>&#8221; Quote reply</MenuItem>
+                    <MenuItem icon={<QuoteIcon size={ICON.sm} />} onClick={() => { close(); onQuote(body); }}>Quote reply</MenuItem>
                   )}
-                  {mine && onEdit && <><MenuSep /><MenuItem onClick={() => { close(); onEdit(); }}>&#9998; Edit</MenuItem></>}
+                  {mine && onEdit && <><MenuSep /><MenuItem icon={<EditIcon size={ICON.sm} />} onClick={() => { close(); onEdit(); }}>Edit</MenuItem></>}
                   {onHide && (
-                    <MenuItem onClick={() => { close(); onHide(!minimized); }}>
-                      <EyeIcon size={ICON.xs} />{minimized ? "Unhide" : "Hide"}
+                    <MenuItem icon={<EyeIcon size={ICON.sm} />} onClick={() => { close(); onHide(!minimized); }}>
+                      {minimized ? "Unhide" : "Hide"}
                     </MenuItem>
                   )}
                 </>
@@ -12223,7 +12225,7 @@ function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOp
                   <MenuItem key={r.id} onClick={() => { close(); insertAtCaret(r.text); }}>{r.title}</MenuItem>
                 ))}
                 <MenuSep />
-                <MenuItem onClick={() => { close(); openSettings("saved-replies"); }}>&#9998; Edit saved replies…</MenuItem>
+                <MenuItem icon={<EditIcon size={ICON.sm} />} onClick={() => { close(); openSettings("saved-replies"); }}>Edit saved replies…</MenuItem>
               </>
             )}
           </Menu>

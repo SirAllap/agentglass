@@ -112,6 +112,18 @@ export function SearchIcon({ size = ICON.sm, className }: P) {
   return <svg {...svg(size, className)}><circle cx="6" cy="6" r="3.8" /><path d="M8.9 8.9L12 12" /></svg>;
 }
 
+/** The Markdown mark: a framed M with a down arrow, the one GitHub draws for
+ *  "this is markdown source". */
+export function MarkdownIcon({ size = ICON.sm, className }: P) {
+  return (
+    <svg {...svg(size, className)} strokeWidth={1.3}>
+      <rect x="1.2" y="2.8" width="11.6" height="8.4" rx="1.6" />
+      <path d="M3.6 9V5l1.8 2 1.8-2v4" />
+      <path d="M10 5v4M8.7 7.8L10 9.1l1.3-1.3" />
+    </svg>
+  );
+}
+
 /** ✎ */
 export function EditIcon({ size = ICON.sm, className }: P) {
   return <svg {...svg(size, className)}><path d="M9.5 2.5l2 2L5 11l-2.6.6L3 9z" /><path d="M8.3 3.7l2 2" /></svg>;
