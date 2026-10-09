@@ -198,9 +198,19 @@ What this gives you, and what it does not:
 
 - **The QR is not a credential.** Photographing it, or scanning it from a shared
   screen, gets a form asking for six digits that are not in the picture.
-- **The credential never travels in the clear.** The server speaks plain HTTP
+- **The pairing exchange never shows the key.** The server speaks plain HTTP
   over the LAN, so anything on that network sees the whole exchange — ticket,
   code, both public keys — and still has no key.
+- **After pairing, the key does travel in the clear on a plain-http address.**
+  The phone sends it as a bearer header on every request, and in the address of
+  the live socket, over the same transport it paired on. The app accepts an
+  `http://` address for any host, not only a private one, and Android lets it
+  send cleartext to every host. Anyone who can read traffic on that network (a
+  shared Wi-Fi, say) reads the key from any request and can use it from there
+  at the device's level, which at `full` includes the terminal. Pair over the
+  Tailscale address (WireGuard) or an `https://` address, and give a phone only
+  the level it needs. A TLS listener on the machine, or a signature on each
+  request in place of a bearer key, is not built.
 - **It does not defend against an active on-path attacker today.** The phone's
   public key is not bound to the six-digit code shown only at the machine, so
   someone who can rewrite traffic can substitute their own key and the pairing
@@ -1161,8 +1171,10 @@ them off while leaving the read-only cockpit working.
 ## The phone app and plain http
 
 The native app keeps cleartext http allowed for every host. Pairing over a bare
-LAN or tailnet address is plain http, Android's network security config cannot
-scope cleartext by address range, and the pairing token is the protection, not
-the transport (see the handshake above: the credential is sealed to the phone's
-key). The config does restrict https to the system certificate store, so a
-certificate authority installed on the phone cannot vouch for a host.
+LAN or tailnet address is plain http, and Android's network security config
+cannot scope cleartext by address range. The handshake above seals the
+credential to the phone's key, but only for the pairing itself: the requests
+that follow carry the device key over the same transport, so on a plain-http
+address on a network you do not own it is readable there (see "After pairing"
+above for what to do). The config does restrict https to the system certificate
+store, so a certificate authority installed on the phone cannot vouch for a host.

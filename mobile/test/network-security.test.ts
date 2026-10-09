@@ -8,6 +8,7 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 const plugin = require("../plugins/with-network-security.js") as { networkSecurityConfigXml(): string };
+const doc = await Bun.file(new URL("../../SECURITY.md", import.meta.url)).text();
 const app = JSON.parse(await Bun.file(new URL("../app.json", import.meta.url)).text());
 
 describe("the network security config", () => {
@@ -34,5 +35,23 @@ describe("app.json", () => {
 
   it("wires the plugin that writes the config", () => {
     expect(app.expo.plugins).toContain("./plugins/with-network-security.js");
+  });
+});
+
+describe("what SECURITY.md says about the phone's key on plain http", () => {
+  // The config above permits cleartext to every host, and the app sends the
+  // device key on every request after pairing. The document must say that, and
+  // must not claim the key never crosses the network unencrypted.
+  const flat = doc.replace(/\s+/g, " ");
+
+  it("says the key travels in the clear after pairing on a plain-http address, and what to do", () => {
+    expect(flat).toContain("After pairing, the key does travel in the clear on a plain-http address");
+    expect(flat).toContain("Tailscale address (WireGuard) or an `https://` address");
+    expect(flat).toContain("accepts an `http://` address for any host, not only a private one");
+  });
+
+  it("does not claim the credential never travels in the clear", () => {
+    expect(flat).not.toContain("The credential never travels in the clear");
+    expect(flat).not.toContain("the pairing token is the protection, not the transport");
   });
 });
