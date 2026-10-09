@@ -16,6 +16,7 @@ import { BlockedIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CopyIcon
 import { pickCardPr, cardPrTint, cardPrInk, mergedInk, sortedCardPrs, type CardPr } from "../lib/cardPrPick.ts";
 import { cardPrsOf, onCardPrs, cardPrVersion } from "../lib/cardPrStore.ts";
 import { api } from "../lib/api.ts";
+import { Optimistic, commentResolvedPatch } from "../lib/taskOptimistic.ts";
 import { FilterBuilder } from "./tasks/FilterBuilder.tsx";
 import { EMPTY, apply as applyFilters, fieldsOf, liveCount as builtCount, type FilterSet } from "./tasks/filters.ts";
 import type { GitRepoRef, IssueDetail, IssuePr, IssueRow, IssueWork, StartMode, LocalTask, TaskCapability, TasksListResponse, SkillInfo } from "../../../shared/types.ts";
@@ -5458,6 +5459,9 @@ function CardHop({ list, id, onGo }: { list: ProviderTask[]; id: string; onGo: (
   );
 }
 
+/** A card as a read of it answered: partial until the first answer is in. */
+type CardRead = Partial<TaskDetail> & { ok?: boolean; error?: string };
+
 function CardDetail({ t, today, statuses, fields, place, writable, repos, here, onOpenChatWith, onApply, saving, skills, onNote, onFresh, wide, byId, onGo, onOpenList, boardPeople, nav, onClose }: {
   t: ProviderTask; today: string;
   statuses: ListStatus[]; fields: ListField[];
@@ -5513,7 +5517,21 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
      lint could not see either: its lookbehind skipped every receiver, `window`
      included. */
   const { ask, dialog } = useDialogs();
-  const [full, setFull] = useState<(Partial<TaskDetail> & { ok?: boolean; error?: string }) | null>(null);
+  const [serverFull, setFull] = useState<CardRead | null>(null);
+  /* What the pane draws is the card the server last returned with any cheap
+     write still standing over it — see lib/taskOptimistic.ts. One layer per
+     card: a resolve pressed on one card has nothing to say about the next. */
+  const [layerTick, setLayerTick] = useState(0);
+  const layerFail = useRef(onNote);
+  layerFail.current = onNote;
+  const layers = useMemo(() => new Optimistic<CardRead>({
+    onChange: () => setLayerTick((n) => n + 1),
+    onFail: (text) => layerFail.current(text),
+  }), [t.id]);
+  const full = useMemo(() => (serverFull ? layers.view(serverFull) : null), [serverFull, layers, layerTick]);
+  /** Which card is open now, for a write that answers after the pane moved on. */
+  const openCard = useRef(t.id);
+  openCard.current = t.id;
 
   /*
    * A FACE FOR A NAME A SENTENCE CARRIES.
@@ -5716,17 +5734,26 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
   useEffect(() => {
     let live = true;
     setFull(null); setStatusOpen(false); setAskOpen(false);
-    void api.clickupTask(t.id).then((r) => { if (live) setFull(r); }).catch(() => { if (live) setFull({ ok: false, error: "Could not read the card" }); });
+    const ticket = layers.readStarted();
+    void api.clickupTask(t.id).then((r) => {
+      if (!live) return;
+      if (r.ok) layers.readLanded(ticket);
+      setFull(r);
+    }).catch(() => { if (live) setFull({ ok: false, error: "Could not read the card" }); });
     return () => { live = false; };
-  }, [t.id]);
+  }, [t.id, layers]);
 
   /* Re-read the card after anything that changes the conversation. The board's
      own poll does not carry comments — they are fetched per card, on demand —
      so a comment posted here would otherwise not appear until the card was
      closed and opened again. */
   const reread = useCallback(() => {
-    void api.clickupTask(t.id).then(setFull).catch(() => { /* the card stays as it was */ });
-  }, [t.id]);
+    const ticket = layers.readStarted();
+    void api.clickupTask(t.id).then((r) => {
+      if (r.ok) layers.readLanded(ticket);
+      setFull(r);
+    }).catch(() => { /* the card stays as it was */ });
+  }, [t.id, layers]);
 
   /** Whether THIS card is being re-read, so its own button can say so without
    *  the board's Refresh claiming the work. */
@@ -6029,8 +6056,10 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           is being re-read. */}
         <RefreshButton onRefresh={() => {
           setRereading(true);
+          const ticket = layers.readStarted();
           void api.clickupTask(t.id)
             .then((r) => {
+              if (r.ok) layers.readLanded(ticket);
               setFull(r);
               /* And the fields the BOARD owns, or half the card stays as it was
                  read a minute ago while the other half is current. */
@@ -6866,12 +6895,18 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                   <CommentAction label={c.resolved ? "Resolved" : "Resolve"}
                     title={c.resolved ? "Mark it unresolved" : "Mark it resolved"}
                     d="M4 12l5 5L20 6" on={!!c.resolved} tone="var(--success, #98c379)"
-                    busy={busyComment === c.id}
                     onClick={() => {
-                      setBusyComment(c.id);
-                      void api.clickupCommentResolve(c.id, !c.resolved).then((r) => {
-                        if (r.ok) reread(); else onNote(r.error ?? "ClickUp refused that");
-                      }).finally(() => setBusyComment(null));
+                      /* Drawn on the press and sent behind — see
+                         lib/taskOptimistic.ts. The read after it is the one
+                         allowed to replace the layer, and only while this
+                         card is still the one open. */
+                      const on = !c.resolved;
+                      const card = t.id;
+                      void layers.run({
+                        patch: commentResolvedPatch(c.id, on),
+                        send: () => api.clickupCommentResolve(c.id, on),
+                        failText: "ClickUp refused that",
+                      }).then((ok) => { if (ok && openCard.current === card) reread(); });
                     }} />
                   {c.mine && (
                     <>
