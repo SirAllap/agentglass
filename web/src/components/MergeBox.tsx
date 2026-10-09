@@ -285,7 +285,7 @@ export function MergeBox({
       <div className="px-4 py-3.5 flex items-start gap-3" style={{ boxShadow: `inset 3px 0 0 ${tone.tint}`, background: hero.tone === "ready" ? wash(tone.tint, 7) : undefined }}>
         <div className="min-w-0 flex-1">
         <div className="text-[10px] font-semibold uppercase tracking-[.13em]" style={{ color: tone.ink }}>{hero.eyebrow}</div>
-        <h2 className="text-[17px] leading-snug font-semibold mt-1.5" style={{ color: "var(--text)", maxWidth: "62ch" }}>
+        <h2 className="text-[17px] leading-snug font-semibold mt-1.5" style={{ color: "var(--text)" }}>
           {hero.parts.map((p, k) => p.em ? <span key={k} style={{ color: tone.ink }}>{p.text}</span> : <span key={k}>{p.text}</span>)}
         </h2>
         {hero.warnings?.map((w) => (
