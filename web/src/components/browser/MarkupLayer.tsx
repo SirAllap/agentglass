@@ -13,8 +13,10 @@ import { feedbackWindowName } from "../../lib/pageRef.ts";
 import { api } from "../../lib/api.ts";
 import type { GitRepoRef } from "../../../../shared/types.ts";
 import { CheckoutPicker } from "../CheckoutPicker.tsx";
-import { ArrowIcon, BoxIcon, CircleIcon, EditIcon } from "../../lib/glyphIcons.tsx";
+import { ArrowIcon, BoxIcon, CircleIcon, EditIcon, IconLabel } from "../../lib/glyphIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
+import { Button, EDGE } from "../workspace/Chrome.tsx";
+import { TerminalIcon } from "../workspace/icons.tsx";
 
 type Guest = { capturePage(): Promise<{ toDataURL(): string }> } | null;
 
@@ -202,15 +204,10 @@ export function MarkupLayer({ view, url, onNote, onDone }: {
       <div className="absolute left-1/2 -translate-x-1/2 bottom-4 flex flex-col items-center gap-1.5"
         style={{ pointerEvents: "auto" }}>
         <div className="flex items-center gap-1 px-1.5 py-1 rounded-xl shadow-2xl"
-          style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }}>
+          style={{ background: "var(--surface-card)", border: EDGE }}>
           {TOOLS.map((t) => (
-            <button key={t.id} onClick={() => setTool(t.id)} title={t.label}
-              className="agx-btn rounded-lg flex items-center justify-center"
-              style={{
-                width: 26, height: 26, fontSize: 12,
-                color: tool === t.id ? "var(--text)" : "var(--text3)",
-                background: tool === t.id ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
-              }}>{t.glyph}</button>
+            <Button key={t.id} onClick={() => setTool(t.id)} title={t.label} label={t.label}
+              size="compact" square on={tool === t.id}>{t.glyph}</Button>
           ))}
           <span style={{ width: 1, height: 16, background: "color-mix(in srgb, var(--border) 45%, transparent)" }} />
           {COLOURS.map((c) => (
@@ -230,16 +227,16 @@ export function MarkupLayer({ view, url, onNote, onDone }: {
             </button>
           ))}
           <span style={{ width: 1, height: 16, background: "color-mix(in srgb, var(--border) 45%, transparent)" }} />
-          <button onClick={() => setState(undo)} disabled={!state.shapes.length} title="Undo (Ctrl+Z)"
-            className="agx-btn rounded-lg disabled:opacity-25" style={{ width: 24, height: 24, fontSize: 12, color: "var(--text3)" }}>↶</button>
-          <button onClick={() => setState(redo)} disabled={!state.undone.length} title="Redo (Ctrl+Shift+Z)"
-            className="agx-btn rounded-lg disabled:opacity-25" style={{ width: 24, height: 24, fontSize: 12, color: "var(--text3)" }}>↷</button>
-          <button onClick={() => setState(emptyMarkup())} disabled={!state.shapes.length} title="Clear it all"
-            className="agx-btn rounded-lg disabled:opacity-25" style={{ width: 24, height: 24, fontSize: 12, color: "var(--error)" }}>⌫</button>
+          <Button onClick={() => setState(undo)} disabled={!state.shapes.length} title="Undo (Ctrl+Z)" label="Undo"
+            size="compact" square>↶</Button>
+          <Button onClick={() => setState(redo)} disabled={!state.undone.length} title="Redo (Ctrl+Shift+Z)" label="Redo"
+            size="compact" square>↷</Button>
+          <Button onClick={() => setState(emptyMarkup())} disabled={!state.shapes.length} title="Clear it all" label="Clear it all"
+            size="compact" square tone="danger">⌫</Button>
         </div>
 
         <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-xl shadow-2xl"
-          style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }}>
+          style={{ background: "var(--surface-card)", border: EDGE }}>
           <span className="text-[10.5px] mr-1" style={{ color: "var(--text3)" }}>
             Draw on the page, then
           </span>
@@ -247,17 +244,13 @@ export function MarkupLayer({ view, url, onNote, onDone }: {
             <CheckoutPicker repos={repos} value={repo} onPick={setRepo}
               title="Which checkout the agent works in" triggerMaxWidth={180} />
           )}
-          <button onClick={() => void hand()} disabled={busy || !state.shapes.length}
-            className="agx-btn text-[11px] px-2.5 py-1 rounded-lg disabled:opacity-40"
-            style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>
-            ▸_ Hand it to Claude
-          </button>
-          <button onClick={() => void copy()} disabled={busy || !state.shapes.length}
-            className="agx-btn text-[11px] px-2 py-1 rounded-lg disabled:opacity-40"
-            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+          <Button onClick={() => void hand()} disabled={busy || !state.shapes.length} size="compact" tone="primary">
+            <IconLabel icon={<TerminalIcon size={ICON.xs} />}>Hand it to Claude</IconLabel>
+          </Button>
+          <Button onClick={() => void copy()} disabled={busy || !state.shapes.length} size="compact">
             Copy it
-          </button>
-          <button onClick={onDone} className="text-[10px] px-1" style={{ color: "var(--text3)" }}>Done</button>
+          </Button>
+          <Button onClick={onDone} size="compact">Done</Button>
         </div>
       </div>
     </div>

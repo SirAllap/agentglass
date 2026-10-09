@@ -604,7 +604,11 @@ function frameFromRaw(out: string, c: TmuxClient): TmuxFrame | null {
 const frameRawCache = new Map<string, { at: number; out: string | null }>();
 
 interface CachedParsedFrame {
-  at: number;
+  /** The raw read it was parsed from, by identity. A parse is only ever reused
+   *  against that same read: keyed on its own clock, a fresh read that
+   *  `notBefore` forced would be handed the parse of the stale one it
+   *  replaced, which is the stale answer again. */
+  src: { at: number; out: string | null };
   /** Only what is the session's: `client` and `popup` are per client and are
    *  taken from each call's own parse, never from here. */
   parsed: { session: string; id: string; status: string; owned: boolean; windows: TmuxWindow[]; panes: TmuxPane[]; windowOfPane: Map<string, string>; attached: Set<string>; sessions: { id: string; name: string; windows: number }[] };
@@ -637,18 +641,28 @@ const frameParsedCache = new Map<string, CachedParsedFrame>();
  * this — needs the real answer, not a moment-old one. `ttlMs` should stay
  * under the sweep's own interval, so a cached answer is never staler than an
  * uncached sweep already tolerated between two ticks of its own.
+ *
+ * `notBefore` is for a caller that KNOWS tmux changed at a given moment: an
+ * answer read before it is refused whatever its age. The TTL alone let the
+ * one sweep meant to catch a window switch — the one armed off the redraw the
+ * switch causes — be answered by a read taken a moment BEFORE the switch, by
+ * this client's own poll or any other panel on the socket. The strip then sat
+ * on the old window until the next poll: measured over 30 switches on an
+ * isolated tmux with two clients, p50 408ms, p90 1273ms, max 1854ms (2000ms
+ * once the poll has slowed). A read taken after the moment still serves every
+ * client that asks, so the sharing survives.
  */
-export function readFrameCached(c: TmuxClient, ttlMs: number): TmuxFrame | null {
+export function readFrameCached(c: TmuxClient, ttlMs: number, notBefore = 0): TmuxFrame | null {
   const socketKey = c.socket.join(" ");
   const now = Date.now();
 
   // Get or fetch raw output (shared per socket)
-  const cachedRaw = frameRawCache.get(socketKey);
-  const out = cachedRaw && now - cachedRaw.at < ttlMs ? cachedRaw.out : (() => {
-    const fresh = tmux(c.socket, FRAME_ARGV, true);
-    frameRawCache.set(socketKey, { at: now, out: fresh });
-    return fresh;
-  })();
+  let cachedRaw = frameRawCache.get(socketKey);
+  if (!cachedRaw || now - cachedRaw.at >= ttlMs || cachedRaw.at < notBefore) {
+    cachedRaw = { at: now, out: tmux(c.socket, FRAME_ARGV, true) };
+    frameRawCache.set(socketKey, cachedRaw);
+  }
+  const out = cachedRaw.out;
 
   if (!out) return null;
 
@@ -661,7 +675,7 @@ export function readFrameCached(c: TmuxClient, ttlMs: number): TmuxFrame | null 
   const cacheKey = `${socketKey}\0${parsed.id}`;
   const cachedParsed = frameParsedCache.get(cacheKey);
 
-  if (cachedParsed && now - cachedParsed.at < ttlMs) {
+  if (cachedParsed && cachedParsed.src === cachedRaw) {
     // Reuse cached parse, but build a new frame with this client's target.
     //
     // And this client's own fields. `client` is the size of THIS tty and
@@ -689,7 +703,7 @@ export function readFrameCached(c: TmuxClient, ttlMs: number): TmuxFrame | null 
   // Not cached, parse and cache it
   const prefix = parsePrefix(out);
   frameParsedCache.set(cacheKey, {
-    at: now,
+    src: cachedRaw,
     parsed: {
       session: parsed.session,
       id: parsed.id,

@@ -47,6 +47,32 @@ describe("which review is the mark", () => {
   });
 });
 
+describe("on your own pull request", () => {
+  it("there is no \"since your review\": your replies are not a review of your own code", () => {
+    const d = detail({
+      viewerDidAuthor: true,
+      reviews: [review({ viewerDidAuthor: true, commit: "1".repeat(40) })],
+      headSha: "9".repeat(40),
+    });
+    expect(sinceRange(d)).toBeNull();
+  });
+});
+
+describe("when only the base came in", () => {
+  it("merges of master since your review are not changes to read again", () => {
+    const c = (oid: string, isMerge: boolean) => ({ oid, isMerge }) as PrDetail["commits"][number];
+    const d = detail({
+      reviews: [review({ viewerDidAuthor: true, commit: "1".repeat(40) })],
+      commits: [c("1".repeat(40), false), c("8".repeat(40), true), c("9".repeat(40), true)],
+      headSha: "9".repeat(40),
+    });
+    expect(sinceRange(d)).toBeNull();
+    d.commits.push(c("a".repeat(40), false));
+    d.headSha = "a".repeat(40);
+    expect(sinceRange(d)).toEqual({ from: "1".repeat(40), to: "a".repeat(40) });
+  });
+});
+
 describe("what gets compared", () => {
   it("your reviewed commit against the head", () => {
     const d = detail({

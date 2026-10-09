@@ -4,6 +4,7 @@ import { api } from "../lib/api.ts";
 import { fmtAgo } from "../lib/format.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import type { AgentProbe } from "../../../shared/types.ts";
+import { EDGE } from "./workspace/Chrome.tsx";
 
 /**
  * The agents already on this machine, and one button each.
@@ -105,7 +106,7 @@ export function AgentsPane({ open }: { open: boolean }) {
                     : `Write the agentglass wiring into ${p.configPath}. The file is backed up first, and a config we cannot parse is left alone.`}
                   className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
                   style={p.connected
-                    ? { color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }
+                    ? { color: "var(--text2)", border: EDGE }
                     : { color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 42%, transparent)" }}>
                   {busy === p.id ? "…" : p.connected ? "Disconnect" : "Connect"}
                 </button>}

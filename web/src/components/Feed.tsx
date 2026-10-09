@@ -8,6 +8,7 @@ import { fmtTime, fmtMs, fmtUsd, agentKey, hashColor } from "../lib/format.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { ChartIcon, CopyIcon, CrossIcon, ExpandIcon, IconLabel } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
 
 type Category = "all" | "tools" | "chat" | "alerts";
 
@@ -121,15 +122,15 @@ function EventRowInner({ row, onSelect, compact }: { row: Row; onSelect?: (e: Wa
       )}
       <span className="shrink-0 font-medium" style={{ color: f.color }}>{f.verb}</span>
       {e.tool_name && (
-        <span className="chip shrink-0" style={{ color: "var(--info)", background: "color-mix(in srgb, var(--info) 10%, transparent)" }}>{e.tool_name}</span>
+        <span className="chip shrink-0" style={{ color: "var(--info-ink)", background: "color-mix(in srgb, var(--info) 10%, transparent)" }}>{e.tool_name}</span>
       )}
       {d && <span className="truncate min-w-0" style={{ color: "var(--text2)" }} title={d}>{d}</span>}
       {running && <span className="shrink-0 t-dim2 animate-pulse">…</span>}
       {count > 1 && (
-        <span className="chip shrink-0" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>×{count}</span>
+        <span className="chip shrink-0" style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>×{count}</span>
       )}
       {e.duration_ms != null && <span className="t-dim2 shrink-0">{fmtMs(e.duration_ms)}</span>}
-      {e.cost_usd > 0 && <span className="shrink-0" style={{ color: "var(--success)" }}>{fmtUsd(e.cost_usd)}</span>}
+      {e.cost_usd > 0 && <span className="shrink-0" style={{ color: "var(--success-ink)" }}>{fmtUsd(e.cost_usd)}</span>}
       {/* in a lane the column header already names the agent — the per-row tag is noise there */}
       {!compact && <span className="ml-auto shrink-0 truncate max-w-[120px]" style={{ color: `color-mix(in srgb, ${aColor} 75%, var(--text4))` }} title={aKey}>{aKey}</span>}
     </motion.div>
@@ -169,7 +170,7 @@ function Lane({ aKey, rows, onSelect }: { aKey: string; rows: Row[]; onSelect?: 
     if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
   }, [rows.length, rows[rows.length - 1]?.key]);
   return (
-    <div className="flex flex-col min-w-0 min-h-0 rounded-lg" style={{ border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", background: "color-mix(in srgb, var(--bg3) 88%, var(--bg))" }}>
+    <div className="flex flex-col min-w-0 min-h-0 rounded-lg" style={{ border: EDGE, background: "color-mix(in srgb, var(--bg3) 88%, var(--bg))" }}>
       <div className="flex items-center gap-1.5 px-2 py-1.5 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
         <span className="h-2 w-2 rounded-full shrink-0" style={{ background: color, boxShadow: `0 0 6px ${color}` }} />
         <span className="text-[10.5px] font-medium truncate" style={{ color: `color-mix(in srgb, ${color} 75%, var(--text))` }} title={aKey}>{aKey}</span>
@@ -256,9 +257,9 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
     if (follow && ref.current) ref.current.scrollTop = ref.current.scrollHeight;
   }, [rows.length, rows[rows.length - 1]?.key, follow, full]);
 
-  const live = { color: "var(--success)", background: "color-mix(in srgb, var(--success) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 42%, transparent)" };
-  const attn = { color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 15%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" };
-  const paused = { color: "var(--text4)", background: "color-mix(in srgb, var(--bg3) 35%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" };
+  const live = { color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 42%, transparent)" };
+  const attn = { color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 15%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" };
+  const paused = { color: "var(--text4)", background: "color-mix(in srgb, var(--bg3) 35%, transparent)", border: EDGE };
   const followToggle = (
     <motion.button
       onClick={() => applyFollow(!follow)}
@@ -330,8 +331,8 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Search events — type to filter (regex ok, e.g. tool.*fail)"
-            className="flex-1 min-w-0 px-3 py-1.5 rounded-lg text-[11px] outline-none"
-            style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }}
+            className={`flex-1 min-w-0 ${INPUT}`}
+            style={INPUT_STYLE}
           />
           <div className="flex gap-1 shrink-0">
             {CATS.map((c) => (
@@ -341,7 +342,7 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
                 className="chip cursor-pointer"
                 style={
                   cat === c.key
-                    ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", borderColor: "color-mix(in srgb, var(--primary) 50%, transparent)" }
+                    ? { color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", borderColor: "color-mix(in srgb, var(--primary) 50%, transparent)" }
                     : { color: "var(--text4)" }
                 }
               >
@@ -354,7 +355,7 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
               className="chip cursor-pointer"
               style={
                 lanes
-                  ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", borderColor: "color-mix(in srgb, var(--primary) 50%, transparent)" }
+                  ? { color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", borderColor: "color-mix(in srgb, var(--primary) 50%, transparent)" }
                   : { color: "var(--text4)" }
               }
             >
@@ -422,8 +423,8 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
                 <motion.div
                   initial={{ opacity: 0, scale: 0.97, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.98, y: 8 }}
                   transition={{ type: "spring", stiffness: 330, damping: 30 }}
-                  className="w-[92vw] h-[90vh] rounded-2xl flex flex-col pointer-events-auto"
-                  style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
+                  className="w-[92vw] h-[90vh] rounded-xl flex flex-col pointer-events-auto"
+                  style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
                 >
                   <div className="flex items-center justify-between px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                     <div>

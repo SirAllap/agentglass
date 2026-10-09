@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { Field, UiAction, UiNode, UiOpenPr } from "../../lib/pluginTypes.ts";
 import { openPr } from "../../lib/openPrs.ts";
 import { Markdown } from "../../lib/markdown.tsx";
@@ -6,12 +6,13 @@ import { openExternal } from "../../lib/externalUrl.ts";
 import { ago } from "../../lib/fileRecents.ts";
 import { Select } from "../Select.tsx";
 import { Switch } from "../SettingRow.tsx";
-import { Spinner } from "../Spinner.tsx";
 import { useDialogs, type ConfirmSpec } from "../ConfirmDialog.tsx";
 import { Row, Chip, type Tone as RowTone } from "../git/ui.tsx";
 import { DoneIcon } from "../../lib/glyphIcons.tsx";
 import { CloseIcon } from "../CloseButton.tsx";
+import { ExternalIcon } from "../browser/icons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
+import { EDGE, LINE, Tabs as HouseTabs, Button as HouseButton } from "../workspace/Chrome.tsx";
 
 /**
  * A plugin's screen, drawn with this app's own parts.
@@ -105,7 +106,7 @@ function Node({ node, ctx }: { node: UiNode; ctx: Ctx }): ReactNode {
       );
     case "section":
       return (
-        <section className="rounded-lg min-w-0" style={{ background: "var(--surface-card)", border: "1px solid var(--surface-line)", boxShadow: "var(--surface-lift)" }}>
+        <section className="rounded-lg min-w-0" style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "var(--surface-lift)" }}>
           <header className="flex items-center gap-3 px-3.5 pt-3 pb-2">
             <div className="min-w-0 flex-1">
               <div className="text-[12.5px] font-semibold truncate" style={{ color: "var(--text)" }}>{node.title}</div>
@@ -136,7 +137,7 @@ function Node({ node, ctx }: { node: UiNode; ctx: Ctx }): ReactNode {
     case "code":
       return (
         <pre className="t-mono text-[11.5px] rounded-md px-3 py-2 overflow-auto min-w-0 m-0"
-          style={{ background: "var(--surface-inset)", border: "1px solid var(--surface-line)", color: "var(--text2)", maxHeight: 420 }}>
+          style={{ background: "var(--surface-inset)", border: EDGE, color: "var(--text2)", maxHeight: 420 }}>
           {node.text}
         </pre>
       );
@@ -144,7 +145,7 @@ function Node({ node, ctx }: { node: UiNode; ctx: Ctx }): ReactNode {
       return <Badge text={node.text} tone={node.tone} />;
     case "stat":
       return (
-        <div className="rounded-lg px-3 py-2.5 min-w-[112px] self-stretch" style={{ background: "var(--surface-inset)", border: "1px solid var(--surface-line)" }}>
+        <div className="rounded-lg px-3 py-2.5 min-w-[112px] self-stretch" style={{ background: "var(--surface-inset)", border: EDGE }}>
           <div className="text-[10px] uppercase tracking-wide" style={{ color: "var(--text3)" }}>{node.label}</div>
           <div className="text-[20px] font-semibold tabular-nums leading-tight" style={{ color: TONE_COLOR[node.tone ?? "default"] }}>{node.value}</div>
           {node.hint && <div className="text-[10.5px] mt-0.5" style={{ color: "var(--text3)" }}>{node.hint}</div>}
@@ -228,8 +229,8 @@ function Node({ node, ctx }: { node: UiNode; ctx: Ctx }): ReactNode {
     case "link":
       return (
         <a href={node.href} onClick={(e) => { e.preventDefault(); openExternal(node.href); }}
-          className="text-[12px] hover:underline" style={{ color: "var(--primary)" }} title={node.href}>
-          {node.text} ↗
+          className="text-[12px] hover:underline inline-flex items-center gap-1" style={{ color: "var(--primary-ink)" }} title={node.href}>
+          {node.text} <ExternalIcon size={ICON.xs} />
         </a>
       );
     case "divider":
@@ -268,25 +269,22 @@ function Tabs({ node, ctx }: { node: Extract<UiNode, { type: "tabs" }>; ctx: Ctx
   // wants its findings showing); follow it when it does.
   useEffect(() => { if (node.selected) setSel(node.selected); }, [node.selected]);
   const cur = node.tabs.find((t) => t.id === sel) ?? node.tabs[0];
+  const panelId = useId();
   return (
     <div className="flex flex-col gap-3 min-w-0">
-      <div role="tablist" className="flex items-center gap-1 min-w-0 overflow-x-auto" style={{ borderBottom: "1px solid var(--surface-line)" }}>
-        {node.tabs.map((t) => {
-          const on = t.id === cur?.id;
-          return (
-            <button key={t.id} role="tab" aria-selected={on} type="button" onClick={() => setSel(t.id)}
-              className="agx-btn text-[11.5px] px-2.5 h-[30px] inline-flex items-center gap-1.5 whitespace-nowrap"
-              style={{
-                color: on ? "var(--text)" : "var(--text3)", background: "transparent", border: 0, borderRadius: 0,
-                boxShadow: on ? "inset 0 -2px 0 var(--primary)" : "none",
-              }}>
-              {t.label}
-              {t.badge && <span className="text-[10px] tabular-nums px-1 rounded" style={{ background: "var(--surface-inset)", color: "var(--text2)" }}>{t.badge}</span>}
-            </button>
-          );
-        })}
+      <div className="min-w-0 overflow-x-auto" style={{ borderBottom: LINE }}>
+        <HouseTabs<string> label="Sections" panelId={panelId} value={cur?.id ?? ""} onChange={setSel}
+          options={node.tabs.map((t) => ({
+            id: t.id,
+            label: (
+              <span className="inline-flex items-center gap-1.5">
+                {t.label}
+                {t.badge && <span className="text-[10px] tabular-nums px-1 rounded" style={{ background: "var(--surface-inset)", color: "var(--text2)" }}>{t.badge}</span>}
+              </span>
+            ),
+          }))} />
       </div>
-      {cur && <div className="flex flex-col gap-3 min-w-0"><Nodes nodes={cur.children} ctx={ctx} /></div>}
+      {cur && <div id={panelId} role="tabpanel" className="flex flex-col gap-3 min-w-0"><Nodes nodes={cur.children} ctx={ctx} /></div>}
     </div>
   );
 }
@@ -314,22 +312,15 @@ function usePending(version: number): [boolean, (p: Promise<unknown>) => void] {
 
 function Button({ node, ctx }: { node: Extract<UiNode, { type: "button" }>; ctx: Ctx }) {
   const [pending, run] = usePending(ctx.version);
-  const edge = node.tone === "danger" ? "var(--error)" : node.tone === "primary" ? "var(--primary)" : "var(--border)";
   const press = async () => {
     if (node.confirm && !(await ctx.ask({ title: node.label, body: node.confirm, confirmLabel: node.label, danger: node.tone === "danger" }))) return;
     run(ctx.onAction(node.action));
   };
   return (
-    <button type="button" onClick={() => { void press(); }} disabled={node.disabled || pending} aria-busy={pending || undefined}
-      className="agx-btn rounded inline-flex items-center justify-center gap-1.5 whitespace-nowrap leading-none disabled:opacity-40 text-[11px] px-2.5 h-[28px]"
-      style={{
-        color: node.tone === "primary" ? "var(--primary)" : node.tone === "danger" ? "var(--error)" : "var(--text)",
-        border: `1px solid color-mix(in srgb, ${edge} 55%, transparent)`,
-        background: node.tone === "primary" ? "color-mix(in srgb, var(--primary) 10%, transparent)" : "transparent",
-      }}>
-      {pending && <Spinner />}
+    <HouseButton onClick={() => { void press(); }} disabled={node.disabled} pending={pending}
+      tone={node.tone === "default" ? "plain" : node.tone}>
       {node.label}
-    </button>
+    </HouseButton>
   );
 }
 
@@ -348,11 +339,7 @@ function Form({ node, ctx }: { node: Extract<UiNode, { type: "form" }>; ctx: Ctx
         <FieldRow key={f.key} field={f} value={values[f.key]} onChange={(v) => setValues((s) => ({ ...s, [f.key]: v }))} />
       ))}
       <div>
-        <button type="submit" disabled={pending}
-          className="agx-btn rounded inline-flex items-center gap-1.5 leading-none text-[11px] px-3 h-[28px] disabled:opacity-40"
-          style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 55%, transparent)", background: "color-mix(in srgb, var(--primary) 10%, transparent)" }}>
-          {pending && <Spinner />}{node.submit.label}
-        </button>
+        <HouseButton type="submit" tone="primary" pending={pending}>{node.submit.label}</HouseButton>
       </div>
     </form>
   );
@@ -521,8 +508,8 @@ function MultiPick({ field, value, onChange }: { field: Field; value: string[]; 
       {options.length === 0 ? (
         <div className="text-[11.5px] t-dim">{field.placeholder ? `Loading… (for example ${field.placeholder})` : "Loading the list…"}</div>
       ) : (
-        <div className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
-          <input className="agx-input t-mono w-full" style={{ border: 0, borderRadius: 0, borderBottom: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}
+        <div className="rounded-lg overflow-hidden" style={{ border: EDGE }}>
+          <input className="agx-input t-mono w-full" style={{ border: 0, borderRadius: 0, borderBottom: LINE }}
             placeholder={`Search ${options.length} …`} value={q} onChange={(e) => setQ(e.target.value)} />
           <div className="max-h-[220px] overflow-y-auto py-1">
             {shown.length === 0 && <div className="px-3 py-2 text-[11.5px] t-dim">Nothing matches “{q.trim()}”.</div>}

@@ -22,7 +22,7 @@ export function Throughput({ events }: { events: WatchEvent[] }) {
       title="How busy the fleet is"
       right={
         <div className="text-right leading-tight">
-          <div className="text-[22px] font-semibold tabular-nums" style={{ color: "var(--primary)" }}>
+          <div className="text-[22px] font-semibold tabular-nums" style={{ color: "var(--primary-ink)" }}>
             {perSec.toFixed(2)}
           </div>
           <div className="text-[10px] t-dim2">events / sec · peak {peak}/s</div>

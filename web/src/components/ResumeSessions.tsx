@@ -27,7 +27,7 @@ import { api } from "../lib/api.ts";
 import { ago } from "../lib/fileRecents.ts";
 import { Portal } from "./Portal.tsx";
 import { LAYER } from "../lib/layers.ts";
-import { CHIP, CHIP_SURFACE, CHIP_SURFACE_CLS } from "./workspace/Chrome.tsx";
+import { CHIP, CHIP_SURFACE, CHIP_SURFACE_CLS, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 import { ICON } from "../lib/iconSize.ts";
 
 const YOLO_KEY = "agentglass.resume.yolo";
@@ -143,15 +143,15 @@ export function ResumeSessions({ root, disabled, onOpen, onGo }: {
                   ...(pos.bottom == null ? { top: pos.top } : { bottom: pos.bottom }),
                   left: pos.left, width: 540, maxHeight: pos.maxHeight, zIndex: 9999,
                   background: "color-mix(in srgb, var(--bg2) 97%, black)",
-                  border: "1px solid color-mix(in srgb, var(--border) 70%, transparent)",
+                  border: EDGE,
                   boxShadow: "0 24px 60px -18px rgba(0,0,0,0.7)",
                 }}>
                 <div className="p-2 flex items-center gap-2 shrink-0"
-                  style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 10%, transparent)" }}>
+                  style={{ borderBottom: LINE }}>
                   <input autoFocus value={q} onChange={(e) => setQ(e.target.value)}
                     placeholder="Filter these sessions…"
-                    className="flex-1 min-w-0 rounded-md px-2 py-1 text-[11px] outline-none"
-                    style={{ background: "color-mix(in srgb, var(--text) 6%, transparent)", color: "var(--text)" }} />
+                    className={`flex-1 min-w-0 ${INPUT}`}
+                    style={INPUT_STYLE} />
                   {/* Remembered, and stated where the press happens: what a
                       resumed agent may do without asking is not something to
                       find out afterwards. */}
@@ -167,7 +167,7 @@ export function ResumeSessions({ root, disabled, onOpen, onGo }: {
                   {rows === null && !err && (
                     <p className="m-0 px-1 py-2 text-[10.5px]" style={{ color: "var(--text4)" }}>Reading the transcripts…</p>
                   )}
-                  {err && <p className="m-0 px-1 py-2 text-[10.5px]" style={{ color: "var(--warning)" }}>{err}</p>}
+                  {err && <p className="m-0 px-1 py-2 text-[10.5px]" style={{ color: "var(--warning-ink)" }}>{err}</p>}
                   {rows !== null && !err && shown.length === 0 && (
                     <p className="m-0 px-1 py-2 text-[10.5px]" style={{ color: "var(--text4)" }}>
                       {rows.length ? "Nothing matches that." : "No agent sessions in this project yet."}
@@ -178,7 +178,7 @@ export function ResumeSessions({ root, disabled, onOpen, onGo }: {
                     return (
                       <div key={s.id} className="rounded-lg px-2.5 py-2 group/rs"
                         style={{
-                          border: "1px solid color-mix(in srgb, var(--text) 10%, transparent)",
+                          border: EDGE,
                           background: "color-mix(in srgb, var(--text) 3%, transparent)",
                           // Running already: still legible, plainly not on offer.
                           opacity: at ? 0.62 : 1,
@@ -203,7 +203,7 @@ export function ResumeSessions({ root, disabled, onOpen, onGo }: {
                               <button onClick={() => { onGo(at); close(); }}
                                 title={`Running in ${at.session}:${at.windowIndex} ${at.windowName}`}
                                 className="agx-btn text-[10px] px-1.5 py-0.5 rounded"
-                                style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
+                                style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
                                 Go →
                               </button>
                             ) : (
@@ -211,13 +211,13 @@ export function ResumeSessions({ root, disabled, onOpen, onGo }: {
                                 <button onClick={() => { onOpen(s, { split: false, yolo }); close(); }}
                                   title="Resume it in a tab of its own"
                                   className="agx-btn text-[10px] px-1.5 py-0.5 rounded"
-                                  style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 18%, transparent)" }}>
+                                  style={{ color: "var(--text2)", border: EDGE }}>
                                   Tab
                                 </button>
                                 <button onClick={() => { onOpen(s, { split: true, yolo }); close(); }}
                                   title="Resume it beside this pane"
                                   className="agx-btn text-[10px] px-1.5 py-0.5 rounded"
-                                  style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 18%, transparent)" }}>
+                                  style={{ color: "var(--text2)", border: EDGE }}>
                                   Split
                                 </button>
                               </>
@@ -231,7 +231,7 @@ export function ResumeSessions({ root, disabled, onOpen, onGo }: {
                           <span>·</span>
                           <span>{weight(s.size)}</span>
                           {at && (
-                            <span className="ml-auto truncate" style={{ color: "var(--primary)" }}
+                            <span className="ml-auto truncate" style={{ color: "var(--primary-ink)" }}
                               title={`${at.session}:${at.windowIndex} ${at.windowName} · ${at.paneId}`}>
                               open in {at.windowIndex} {at.windowName}
                             </span>

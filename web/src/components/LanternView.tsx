@@ -5,12 +5,13 @@ import { subscribeLantern, lanternRows, lanternFailed, lanternWatch, lanternCach
 import { askLantern, hasLanternTab } from "../lib/lanternAsk.ts";
 import { subscribeBench } from "../lib/benchStore.ts";
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
-import { edge, wash } from "./git/ui.tsx";
+import { wash } from "./git/ui.tsx";
 import { modelLabelOf } from "../../../shared/models.ts";
 import { ScheduleDialog, ScheduledSection, type AgentSchedule } from "./LanternSchedule.tsx";
 import { handOff } from "../lib/lanternAsk.ts";
 import { api } from "../lib/api.ts";
 import { ClockIcon, IconLabel } from "../lib/glyphIcons.tsx";
+import { RefreshButton, EDGE, LINE } from "./workspace/Chrome.tsx";
 import { ICON, MIN_BOX } from "../lib/iconSize.ts";
 import { GearIcon } from "./workspace/icons.tsx";
 import { openSettings } from "../lib/openSettings.ts";
@@ -131,12 +132,12 @@ function Where({ r }: { r: LanternRow }) {
     <div className="flex items-baseline gap-1.5 min-w-0 text-[10.5px]" style={{ color: "var(--text4)" }}>
       {r.worktree && <span className="truncate" title={r.worktree}>{here(r.worktree)}</span>}
       {r.worktree && r.branch && <span aria-hidden className="shrink-0">·</span>}
-      {r.branch && <span className="truncate" style={{ color: "var(--primary)" }} title={`branch ${r.branch}`}>{r.branch}</span>}
+      {r.branch && <span className="truncate" style={{ color: "var(--primary-ink)" }} title={`branch ${r.branch}`}>{r.branch}</span>}
       {r.branch && r.landed === true && (
-        <span className="shrink-0" style={{ color: "var(--success)" }} title={`already merged into ${r.landedInto || "the base"}`}>· in {r.landedInto || "the base"}</span>
+        <span className="shrink-0" style={{ color: "var(--success-ink)" }} title={`already merged into ${r.landedInto || "the base"}`}>· in {r.landedInto || "the base"}</span>
       )}
       {r.branch && r.landed === false && (
-        <span className="shrink-0" style={{ color: "var(--warning)" }} title={`nobody has merged this into ${r.landedInto || "the base"}`}>· not in {r.landedInto || "the base"}</span>
+        <span className="shrink-0" style={{ color: "var(--warning-ink)" }} title={`nobody has merged this into ${r.landedInto || "the base"}`}>· not in {r.landedInto || "the base"}</span>
       )}
     </div>
   );
@@ -215,7 +216,7 @@ function HandOff({ session, kinds }: { session: string; kinds: { id: string; tit
           {busy === k.id ? "…" : k.title.replace(/ Code$/, "")}
         </button>
       ))}
-      {err && <span className="text-[10px]" style={{ color: "var(--error)" }}>{err}</span>}
+      {err && <span className="text-[10px]" style={{ color: "var(--error-ink)" }}>{err}</span>}
     </span>
   );
 }
@@ -287,7 +288,10 @@ export function AgentCard({ r, onJump, onClear, quiet, cacheTtlMs, kinds }: { r:
               <span className="text-[10px] uppercase tracking-wide shrink-0 font-medium" style={{ color: tone }}>{waitWord(w)}</span>
               <span className="ml-auto text-[10.5px] tabular-nums shrink-0" style={{ color: tone }} title={`Stopped on you since ${new Date(w.since).toLocaleString()}`}>for {fmtAgo(w.since)}</span>
             </div>
-            {w.why && <div className="text-[11.5px]" style={{ color: "var(--text)" }}>{w.why}</div>}
+            {/* The notification's own words — a paragraph somebody's session wrote,
+                not a label the app composed, so it reads in the prose face like a
+                pull request body or a comment (docs/design-system.md, Principles). */}
+            {w.why && <div className="text-[11.5px]" style={{ color: "var(--text)", fontFamily: "var(--font-prose)" }}>{w.why}</div>}
           </div>
         </div>
       )}
@@ -299,7 +303,7 @@ export function AgentCard({ r, onJump, onClear, quiet, cacheTtlMs, kinds }: { r:
             <div className="flex items-start gap-2 min-w-0">
               <Label tone={r.state === "working" ? "var(--success)" : undefined}>now</Label>
               <div className="flex-1 min-w-0 flex flex-col">
-                <span className="text-[11.5px] leading-snug line-clamp-2" style={{ color: "var(--text)" }} title={now.text}>{now.text}</span>
+                <span className="text-[11.5px] leading-snug line-clamp-2" style={{ color: "var(--text)", fontFamily: "var(--font-prose)" }} title={now.text}>{now.text}</span>
                 <span className="text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>
                   {now.tag}{now.at ? ` · ${fmtAgo(now.at)} ago` : ""}
                 </span>
@@ -309,7 +313,7 @@ export function AgentCard({ r, onJump, onClear, quiet, cacheTtlMs, kinds }: { r:
           {!quiet && f?.lastAsk && (
             <div className="flex items-start gap-2 min-w-0">
               <Label>asked</Label>
-              <span className="flex-1 min-w-0 text-[11px] leading-snug line-clamp-2" style={{ color: "var(--text3)" }} title={f.lastAsk.text}>{f.lastAsk.text}</span>
+              <span className="flex-1 min-w-0 text-[11px] leading-snug line-clamp-2" style={{ color: "var(--text3)", fontFamily: "var(--font-prose)" }} title={f.lastAsk.text}>{f.lastAsk.text}</span>
             </div>
           )}
         </div>
@@ -343,7 +347,7 @@ export function AgentCard({ r, onJump, onClear, quiet, cacheTtlMs, kinds }: { r:
 
       {/* the strip: numbers, and Go in its own slot — only when either exists */}
       {(r.paneId || (f && (f.tools > 0 || f.turns > 0 || f.cost > 0))) && (
-      <div className="flex items-center gap-3 min-w-0 pt-1" style={{ borderTop: edge(8) }}>
+      <div className="flex items-center gap-3 min-w-0 pt-1" style={{ borderTop: LINE }}>
         <div className="flex-1 min-w-0 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10.5px]">
           {f && f.tools > 0 && <Fact n={count(f.tools)} word="calls" />}
           {f && f.turns > 0 && <Fact n={count(f.turns)} word={f.turns === 1 ? "turn" : "turns"} />}
@@ -351,7 +355,7 @@ export function AgentCard({ r, onJump, onClear, quiet, cacheTtlMs, kinds }: { r:
           {f && f.cost > 0 && <Fact n={money(f.cost)} word="" title="what this session has cost so far" />}
           {f?.permissionMode === "bypassPermissions" && <Pill tone="var(--warning)" title="running with permission prompts off">yolo</Pill>}
           {cache && !quiet && (cache.warm
-            ? <span className="tabular-nums" style={{ color: "var(--success)" }} title="The prompt cache is still warm: a turn sent now is the cheap one (Settings → Agents → Lantern sets the window)">cache {mmss(cache.leftMs)}</span>
+            ? <span className="tabular-nums" style={{ color: "var(--success-ink)" }} title="The prompt cache is still warm: a turn sent now is the cheap one (Settings → Agents → Lantern sets the window)">cache {mmss(cache.leftMs)}</span>
             : <span style={{ color: "var(--text4)" }} title="The prompt cache has gone cold: the next turn pays to rebuild it">cache cold</span>)}
           {f?.startedAt && !quiet && <span style={{ color: "var(--text4)" }} title={new Date(f.startedAt).toLocaleString()}>started {agoSentence(f.startedAt)}</span>}
           {!quiet && r.session && r.role !== "lantern" && kinds && kinds.length > 0 && <HandOff session={r.session} kinds={kinds} />}
@@ -438,14 +442,14 @@ export function LanternView({ active }: { active: boolean }) {
       <ViewHeader label="Lantern"
         actions={
           <>
-            {failed && <span className="text-[10.5px]" style={{ color: "var(--warning)" }} title="The last read failed; this is the previous answer">stale</span>}
-            <button type="button" onClick={() => { void refreshLantern(); }} className="agx-btn text-[10.5px] px-2 py-0.5 rounded" style={{ color: "var(--text3)", border: edge(20) }} title="Read the field again now">Refresh</button>
+            {failed && <span className="text-[10.5px]" style={{ color: "var(--warning-ink)" }} title="The last read failed; this is the previous answer">stale</span>}
+            <RefreshButton onRefresh={() => { void refreshLantern(); }} title="Read the field again now" />
             <button type="button" onClick={() => openSettings("lantern")} aria-label="Lantern settings…" title="Lantern settings…"
                 className="shrink-0 grid place-items-center rounded hover:bg-white/10"
                 style={{ width: MIN_BOX, height: MIN_BOX, color: "var(--text3)" }}><GearIcon size={ICON.xs} /></button>
             {rows && (
               <button type="button" onClick={() => setScheduling(true)}
-                className="agx-btn text-[10.5px] px-2 py-0.5 rounded" style={{ color: "var(--text3)", border: edge(20) }}
+                className="agx-btn text-[10.5px] px-2 py-0.5 rounded" style={{ color: "var(--text3)", border: EDGE }}
                 title="Start an agent later: at a clock time, a date-time, or after a delay"><IconLabel icon={<ClockIcon size={ICON.xs} />}>Schedule…</IconLabel></button>
             )}
             {rows && (
@@ -455,7 +459,7 @@ export function LanternView({ active }: { active: boolean }) {
                 {asking === "opening…" ? "Opening…" : lanternOpen ? "Back to the chat" : "Ask about the agents"}
               </button>
             )}
-            {asking && asking !== "opening…" && <span className="text-[10.5px]" style={{ color: "var(--error)" }}>{asking}</span>}
+            {asking && asking !== "opening…" && <span className="text-[10.5px]" style={{ color: "var(--error-ink)" }}>{asking}</span>}
           </>
         }>
         {/*
@@ -470,7 +474,7 @@ export function LanternView({ active }: { active: boolean }) {
             : "Nobody is around"}
         </span>
         {finished.length > 0 && (
-          <span className="text-[10.5px]" style={{ color: "var(--warning)" }} title="Turns that ended and are waiting for whatever you say next">
+          <span className="text-[10.5px]" style={{ color: "var(--warning-ink)" }} title="Turns that ended and are waiting for whatever you say next">
             {finished.length} finished, waiting for you
           </span>
         )}
@@ -503,7 +507,7 @@ export function LanternView({ active }: { active: boolean }) {
 
         {need.length > 0 && (
           <section className="flex flex-col gap-2">
-            <div className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--error)" }}>Needs you · {need.length}</div>
+            <div className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--error-ink)" }}>Needs you · {need.length}</div>
             <div style={GRID}>
               {need.map((r) => <AgentCard key={r.paneId ?? r.name} r={r} onJump={jump} cacheTtlMs={cacheTtlMs} kinds={kinds} />)}
             </div>
@@ -512,7 +516,7 @@ export function LanternView({ active }: { active: boolean }) {
 
         {finished.length > 0 && (
           <section className="flex flex-col gap-2">
-            <div className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--warning)" }}>Finished · waiting for you · {finished.length}</div>
+            <div className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--warning-ink)" }}>Finished · waiting for you · {finished.length}</div>
             <div style={GRID}>
               {finished.map((r) => <AgentCard key={r.paneId ?? r.name} r={r} onJump={jump} cacheTtlMs={cacheTtlMs} kinds={kinds} />)}
             </div>

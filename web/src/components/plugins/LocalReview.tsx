@@ -6,6 +6,7 @@ import { Markdown } from "../../lib/markdown.tsx";
 import { ago } from "../../lib/fileRecents.ts";
 import { Spinner } from "../Spinner.tsx";
 import { ICON } from "../../lib/iconSize.ts";
+import { Button, EDGE } from "../workspace/Chrome.tsx";
 
 /**
  * Notes plugins wrote on a pull request, drawn inside the pull request.
@@ -64,11 +65,11 @@ export function useLocalNotes(repo: string | undefined, number: number | null | 
 }
 
 const SEV: Record<PrNote["severity"], { label: string; color: string; rank: number }> = {
-  critical: { label: "Critical", color: "var(--error)", rank: 0 },
-  high: { label: "High", color: "var(--error)", rank: 1 },
-  medium: { label: "Medium", color: "var(--warning)", rank: 2 },
-  low: { label: "Low", color: "var(--info)", rank: 3 },
-  idea: { label: "Idea", color: "var(--primary)", rank: 4 },
+  critical: { label: "Critical", color: "var(--error-ink)", rank: 0 },
+  high: { label: "High", color: "var(--error-ink)", rank: 1 },
+  medium: { label: "Medium", color: "var(--warning-ink)", rank: 2 },
+  low: { label: "Low", color: "var(--info-ink)", rank: 3 },
+  idea: { label: "Idea", color: "var(--primary-ink)", rank: 4 },
   info: { label: "Info", color: "var(--text3)", rank: 5 },
 };
 
@@ -101,7 +102,7 @@ export function LocalMark({ title }: { title?: string }) {
   return (
     <span className="shrink-0 inline-flex items-center gap-1 text-[9.5px] uppercase tracking-wide px-1.5 py-px rounded"
       title={title ?? "Only on this machine. Never sent to GitHub."}
-      style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 10%, transparent)" }}>
+      style={{ color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 10%, transparent)" }}>
       <LocalGlyph />
       local
     </span>
@@ -115,19 +116,17 @@ function copyNote(n: LocalNote): void {
 }
 
 function StatusActions({ n, onStatus }: { n: LocalNote; onStatus: (s: NoteStatus) => void }) {
-  const btn = "agx-btn rounded inline-flex items-center leading-none text-[10px] px-2 h-[22px] whitespace-nowrap";
-  const edge = "1px solid var(--surface-line)";
   return (
     <div className="flex items-center gap-1 shrink-0">
       {n.status === "open" ? (
         <>
-          <button type="button" className={btn} style={{ border: edge, color: "var(--success)" }} onClick={() => onStatus("resolved")} title="Fixed, or handled — keeps it out of the open count">Resolve</button>
-          <button type="button" className={btn} style={{ border: edge, color: "var(--text3)" }} onClick={() => onStatus("dismissed")} title="Not a problem — the plugin keeps this answer on its next pass">Dismiss</button>
+          <Button size="compact" tone="ok" onClick={() => onStatus("resolved")} title="Fixed, or handled — keeps it out of the open count">Resolve</Button>
+          <Button size="compact" onClick={() => onStatus("dismissed")} title="Not a problem — the plugin keeps this answer on its next pass">Dismiss</Button>
         </>
       ) : (
-        <button type="button" className={btn} style={{ border: edge, color: "var(--text2)" }} onClick={() => onStatus("open")}>Reopen</button>
+        <Button size="compact" onClick={() => onStatus("open")}>Reopen</Button>
       )}
-      <button type="button" className={btn} style={{ border: edge, color: "var(--text3)" }} onClick={() => copyNote(n)} title="Copy as markdown, to post it yourself if you choose to">Copy</button>
+      <Button size="compact" onClick={() => copyNote(n)} title="Copy as markdown, to post it yourself if you choose to">Copy</Button>
     </div>
   );
 }
@@ -150,7 +149,7 @@ export function NoteCard({ n, onStatus, onOpenFile, compact, md = plainMd }: {
   return (
     <div className="rounded-md min-w-0" style={{
       background: closed ? "transparent" : `color-mix(in srgb, ${c} 4%, var(--surface-card))`,
-      border: "1px solid var(--surface-line)", borderLeft: `3px solid ${closed ? "var(--surface-line)" : c}`,
+      border: EDGE, borderLeft: `3px solid ${closed ? "var(--surface-line)" : c}`,
     }}>
       {/* Wraps rather than clips: in a split diff the column is half the
           window, and a title plus four buttons does not fit on one line. The
@@ -229,7 +228,7 @@ export function RunCard({ run, notes, publisher, onStatus, onOpenFile, md = plai
         {bySev.map(([s, n]) => (
           <span key={s} className="inline-flex items-center gap-1"><SevChip s={s} /><span className="tabular-nums">{n}</span></span>
         ))}
-        {notes.length > 0 && openN === 0 && <span style={{ color: "var(--success)" }}>all handled</span>}
+        {notes.length > 0 && openN === 0 && <span style={{ color: "var(--success-ink)" }}>all handled</span>}
       </div>
       {run.summary && (
         <div className="px-3 pb-2.5 min-w-0">{md(run.summary)}</div>
@@ -321,7 +320,7 @@ export function LocalStrip({ local, onShow }: { local: LocalNotes; onShow: () =>
             <span className="text-[12px] truncate min-w-0" style={{ color: "var(--text)" }}>{run.title}</span>
             {running && <Spinner className="px-0 py-0" />}
             {run.state === "done" && open.length === 0 && (
-              <span className="text-[9.5px] uppercase tracking-wide shrink-0" style={{ color: "var(--success)" }}>nothing to fix</span>
+              <span className="text-[9.5px] uppercase tracking-wide shrink-0" style={{ color: "var(--success-ink)" }}>nothing to fix</span>
             )}
             {[...bySev.entries()].sort((a, b) => SEV[a[0]].rank - SEV[b[0]].rank).map(([sev, n]) => (
               <span key={sev} className="shrink-0 text-[9.5px] uppercase tracking-wide px-1.5 py-px rounded tabular-nums"
@@ -331,11 +330,9 @@ export function LocalStrip({ local, onShow }: { local: LocalNotes; onShow: () =>
             ))}
             {run.meta && <span className="text-[10.5px] truncate shrink-0" style={{ color: "var(--text3)" }}>{run.meta}</span>}
             <span className="text-[10.5px] shrink-0 ml-auto" style={{ color: "var(--text3)" }}>{ago(safeMs(run.finishedAt ?? run.startedAt))}</span>
-            <button type="button" onClick={onShow}
-              className="agx-btn rounded inline-flex items-center leading-none text-[10px] px-2 h-[22px] whitespace-nowrap shrink-0"
-              style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}>
+            <Button size="compact" onClick={onShow} className="shrink-0" style={{ color: "var(--primary-ink)" }}>
               {open.length ? "Show findings" : "Show the run"}
-            </button>
+            </Button>
           </div>
         );
       })}

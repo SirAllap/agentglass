@@ -6,6 +6,7 @@ import { api } from "../lib/api.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { BranchIcon, DoneIcon, IconLabel } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
 
 // Commits the repo's LIVE working tree (not the telemetry snapshot): the agent's
 // changed-file list is only the entry point — we read `git status` fresh and
@@ -126,13 +127,13 @@ export function CommitModal({ open, onClose, paths }: { open: boolean; onClose: 
               <motion.div
                 initial={{ opacity: 0, scale: 0.96, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.97, y: 8 }}
                 transition={{ type: "spring", stiffness: 340, damping: 30 }}
-                className="w-[min(760px,94vw)] max-h-[min(760px,92vh)] rounded-2xl flex flex-col pointer-events-auto"
-                style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
+                className="w-[min(760px,94vw)] max-h-[min(760px,92vh)] rounded-xl flex flex-col pointer-events-auto"
+                style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
               >
                 {/* header */}
                 <div className="flex items-center gap-2.5 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                   <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>Commit</span>
-                  {repo && <span className="chip text-[10px]" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}><IconLabel icon={<BranchIcon size={ICON.xs} />}>{repo.branch}</IconLabel></span>}
+                  {repo && <span className="chip text-[10px]" style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}><IconLabel icon={<BranchIcon size={ICON.xs} />}>{repo.branch}</IconLabel></span>}
                   {repo && <span className="text-[10.5px] t-dim2 truncate" title={repo.root}>{repo.root}</span>}
                   <CloseButton onClick={onClose} className="ml-auto" />
                 </div>
@@ -145,13 +146,13 @@ export function CommitModal({ open, onClose, paths }: { open: boolean; onClose: 
 
                   {result?.ok ? (
                     <div className="flex flex-col items-center justify-center py-10 gap-3">
-                      <div className="flex justify-center" style={{ color: "var(--success)" }}><DoneIcon size={ICON.xl} /></div>
+                      <div className="flex justify-center" style={{ color: "var(--success-ink)" }}><DoneIcon size={ICON.xl} /></div>
                       <div className="text-[14px] font-semibold" style={{ color: "var(--text)" }}>{amending ? "Amended" : "Committed"}</div>
                       <div className="text-[12px] t-dim2 tabular-nums">
-                        <span className="font-mono" style={{ color: "var(--primary)" }}>{result.shortSha}</span> · {result.summary}
+                        <span className="font-mono" style={{ color: "var(--primary-ink)" }}>{result.shortSha}</span> · {result.summary}
                       </div>
                       <div className="flex items-center gap-2 mt-2">
-                        <button onClick={load} className="px-3 py-1.5 rounded-lg text-[11px]" style={{ background: "color-mix(in srgb, var(--bg3) 45%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}>Commit more</button>
+                        <button onClick={load} className="px-3 py-1.5 rounded-lg text-[11px]" style={{ background: "color-mix(in srgb, var(--bg3) 45%, transparent)", border: EDGE, color: "var(--text)" }}>Commit more</button>
                         <button onClick={onClose} className="px-3 py-1.5 rounded-lg text-[11px]" style={{ background: "var(--primary)", color: "var(--bg)" }}>Done</button>
                       </div>
                     </div>
@@ -176,7 +177,7 @@ export function CommitModal({ open, onClose, paths }: { open: boolean; onClose: 
                           <span className="text-[10px] t-dim2 uppercase tracking-wide">Files in this commit</span>
                           <button onClick={toggleAll} className="text-[10px] t-dim2 hover:opacity-80">{allOn ? "Select none" : "Select all"} · {selPaths.length}/{repo.files.length}</button>
                         </div>
-                        <div className="rounded-lg p-1 space-y-0.5 max-h-[220px] overflow-y-auto" style={{ background: "color-mix(in srgb, var(--bg3) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
+                        <div className="rounded-lg p-1 space-y-0.5 max-h-[220px] overflow-y-auto" style={{ background: "color-mix(in srgb, var(--bg3) 22%, transparent)", border: EDGE }}>
                           {repo.files.length === 0 && <div className="t-dim2 text-center py-6 text-[11px]">Working tree clean — nothing to commit</div>}
                           {repo.files.map((f) => <FileRow key={f.path} f={f} on={sel.has(f.path)} onToggle={() => toggle(f.path)} />)}
                         </div>
@@ -191,24 +192,24 @@ export function CommitModal({ open, onClose, paths }: { open: boolean; onClose: 
                         <input
                           value={title} onChange={(e) => { setTitle(e.target.value); setConfirming(false); }}
                           placeholder={suggestTitle(selPaths) || "Commit title…"}
-                          className="w-full px-3 py-1.5 rounded-lg text-[12px] outline-none mb-1.5"
-                          style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }}
+                          className={`w-full mb-1.5 ${INPUT}`}
+                          style={INPUT_STYLE}
                         />
                         <textarea
                           value={body} onChange={(e) => setBody(e.target.value)}
                           placeholder="Extended description (optional)…" rows={3}
                           className="w-full px-3 py-1.5 rounded-lg text-[11.5px] outline-none resize-none"
-                          style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }}
+                          style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: EDGE, color: "var(--text)" }}
                         />
                       </div>
 
                       {!enabled && (
-                        <div className="text-[11px] px-3 py-2 rounded-lg" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 12%, transparent)" }}>
+                        <div className="text-[11px] px-3 py-2 rounded-lg" style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 12%, transparent)" }}>
                           Committing is disabled on this server (AGENTGLASS_COMMIT_DISABLED=1).
                         </div>
                       )}
                       {result && !result.ok && (
-                        <div className="text-[11px] px-3 py-2 rounded-lg font-mono" style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 12%, transparent)" }}>
+                        <div className="text-[11px] px-3 py-2 rounded-lg font-mono" style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 12%, transparent)" }}>
                           {result.error}
                         </div>
                       )}
@@ -232,12 +233,12 @@ export function CommitModal({ open, onClose, paths }: { open: boolean; onClose: 
                     </button>
                     {amending && <span className="text-[10px] t-dim2">rewrites HEAD — unpushed work only</span>}
                     <span className="text-[10.5px] t-dim2 tabular-nums ml-auto">
-                      {selPaths.length} file{selPaths.length === 1 ? "" : "s"} → <span className="inline-flex items-center gap-1" style={{ color: "var(--warning)" }}><BranchIcon size={ICON.xs} />{repo.branch}</span>
+                      {selPaths.length} file{selPaths.length === 1 ? "" : "s"} → <span className="inline-flex items-center gap-1" style={{ color: "var(--warning-ink)" }}><BranchIcon size={ICON.xs} />{repo.branch}</span>
                     </span>
                     <div className="flex items-center gap-2">
                       {confirming ? (
                         <>
-                          <button onClick={() => setConfirming(false)} className="px-3 py-1.5 rounded-lg text-[11px]" style={{ background: "color-mix(in srgb, var(--bg3) 45%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text3)" }}>Cancel</button>
+                          <button onClick={() => setConfirming(false)} className="px-3 py-1.5 rounded-lg text-[11px]" style={{ background: "color-mix(in srgb, var(--bg3) 45%, transparent)", border: EDGE, color: "var(--text3)" }}>Cancel</button>
                           <button onClick={doCommit} disabled={busy} className="px-3 py-1.5 rounded-lg text-[11px] font-medium" style={{ background: amending ? "var(--warning)" : "var(--error)", color: "#fff", opacity: busy ? 0.6 : 1 }}>
                             {busy ? (amending ? "Amending…" : "Committing…") : amending ? `Yes, amend last commit` : `Yes, commit ${selPaths.length}`}
                           </button>

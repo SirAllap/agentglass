@@ -19,6 +19,8 @@ import type { GitRepoRef } from "../../../../shared/types.ts";
 import { CheckoutPicker } from "../CheckoutPicker.tsx";
 import { EditIcon, IconLabel } from "../../lib/glyphIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
+import { Button, EDGE, Segmented } from "../workspace/Chrome.tsx";
+import { TerminalIcon } from "../workspace/icons.tsx";
 
 type Guest = {
   executeJavaScript(code: string): Promise<unknown>;
@@ -189,8 +191,8 @@ export function PagePicker({ view, url, title, mode, onNote, onDone }: {
         className="absolute rounded-xl shadow-2xl flex flex-col gap-2 p-3"
         style={{
           left, top, width: 360,
-          background: "var(--bg2)",
-          border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)",
+          background: "var(--surface-card)",
+          border: EDGE,
         }}>
         <div className="flex items-baseline gap-2 min-w-0">
           <span className="text-[11px] font-semibold" style={{ color: "var(--text)" }}>
@@ -211,19 +213,13 @@ export function PagePicker({ view, url, title, mode, onNote, onDone }: {
           rows={3} spellCheck={false}
           placeholder="What should the agent change here?"
           className="w-full rounded-lg px-2 py-1.5 text-[11.5px] outline-none resize-none"
-          style={{ background: "var(--bg)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)", color: "var(--text)" }} />
+          style={{ background: "var(--surface-inset)", border: EDGE, color: "var(--text)" }} />
 
-        <div className="flex items-center gap-1">
-          {(["change", "question"] as Intent[]).map((k) => (
-            <button key={k} onClick={() => setIntent(k)}
-              className="text-[10.5px] px-2 py-1 rounded-lg flex-1"
-              style={{
-                color: intent === k ? "var(--text)" : "var(--text3)",
-                background: intent === k ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent",
-                border: `1px solid color-mix(in srgb, var(--border) ${intent === k ? 55 : 30}%, transparent)`,
-              }}>{k === "change" ? <IconLabel icon={<EditIcon size={ICON.xs} />}>Change it</IconLabel> : "? Just asking"}</button>
-          ))}
-        </div>
+        <Segmented<Intent> label="What the note is" value={intent} onChange={setIntent}
+          options={[
+            { id: "change", label: <IconLabel icon={<EditIcon size={ICON.xs} />}>Change it</IconLabel> },
+            { id: "question", label: "? Just asking" },
+          ]} />
 
         {repos.length > 1 && (
           <CheckoutPicker repos={repos} value={repo} onPick={setRepo}
@@ -233,15 +229,11 @@ export function PagePicker({ view, url, title, mode, onNote, onDone }: {
         {/* Terminal first, chat as the lesser option — the same order and the
             same reason as the conflict handoff. */}
         <div className="flex items-center gap-2">
-          <button onClick={() => void hand("terminal")} disabled={sending}
-            className="agx-btn text-[11px] px-2.5 py-1 rounded-lg flex-1"
-            style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", opacity: sending ? 0.5 : 1 }}>
-            ▸_ Hand it to Claude
-          </button>
-          <button onClick={() => void hand("chat")} disabled={sending}
-            className="text-[10px] px-1 shrink-0"
-            style={{ color: "var(--text3)", textDecoration: "underline", textUnderlineOffset: 3 }}>in the chat</button>
-          <button onClick={onDone} className="text-[10px] px-1 shrink-0" style={{ color: "var(--text3)" }}>Cancel</button>
+          <Button size="compact" tone="primary" className="flex-1" onClick={() => void hand("terminal")} disabled={sending}>
+            <IconLabel icon={<TerminalIcon size={ICON.xs} />}>Hand it to Claude</IconLabel>
+          </Button>
+          <Button size="compact" onClick={() => void hand("chat")} disabled={sending}>In the chat</Button>
+          <Button size="compact" onClick={onDone}>Cancel</Button>
         </div>
       </div>
     </div>

@@ -5,6 +5,7 @@ import { menuUnder, PICK_W, PICK_H } from "../lib/menuPos.ts";
 import type { ListMember } from "../../../shared/providers.ts";
 import { DoneIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { INPUT, INPUT_STYLE, LINE } from "./workspace/Chrome.tsx";
 
 /*
  * The picker this app uses to put somebody on a card.
@@ -66,12 +67,12 @@ export function PeoplePick(p: PeoplePickProps) {
       <div data-menu-layer className="fixed inset-0" style={{ zIndex: 9998 }} onClick={p.onClose} />
       <div ref={box} data-menu-layer data-people-pick
         className="agx-scroll fixed rounded-lg shadow-2xl flex flex-col overflow-y-auto py-1"
-        style={{ ...pos, zIndex: 9999, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--text) 28%, transparent)", width: PICK_W, maxHeight: PICK_H }}>
+        style={{ ...pos, zIndex: 9999, background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--text) 28%, transparent)", width: PICK_W, maxHeight: PICK_H }}>
         {!p.busy && all.length > (p.filterOver ?? 12) && (
           <input value={q} onChange={(e) => setQ(e.target.value)} autoFocus
             placeholder="Filter people…" spellCheck={false}
-            className="mx-1 mb-1 px-2 py-1 rounded text-[11px] outline-none shrink-0"
-            style={{ background: "var(--bg3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", color: "var(--text)" }} />
+            className={`mx-1 mb-1 shrink-0 ${INPUT}`}
+            style={INPUT_STYLE} />
         )}
         {p.busy && <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>Reading the team…</div>}
         {!p.busy && all.length === 0 && (
@@ -83,7 +84,7 @@ export function PeoplePick(p: PeoplePickProps) {
           const divide = i > 0 && !!p.dividerBefore?.(m, shown[i - 1]!);
           return (
             <div key={m.id}>
-              {divide && <div className="my-1" style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 14%, transparent)" }} />}
+              {divide && <div className="my-1" style={{ borderTop: LINE }} />}
               <button className="w-full text-left px-2 py-1.5 hover:bg-white/5 flex items-center gap-2 disabled:opacity-70"
                 disabled={saving} onClick={() => p.onPick(m)}>
                 {p.face(m)}
@@ -93,7 +94,7 @@ export function PeoplePick(p: PeoplePickProps) {
                 </span>
                 {saving
                   ? <span className="agx-spin shrink-0" aria-label="Applying" style={{ width: 10, height: 10, borderWidth: 1.5, borderColor: "var(--text3)", borderTopColor: "transparent" }} />
-                  : on ? <span className="flex" style={{ color: "var(--success)" }}><DoneIcon size={ICON.xs} /></span> : null}
+                  : on ? <span className="flex" style={{ color: "var(--success-ink)" }}><DoneIcon size={ICON.xs} /></span> : null}
               </button>
             </div>
           );

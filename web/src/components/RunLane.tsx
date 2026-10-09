@@ -32,6 +32,7 @@ import type { LegActivity, ProviderSpend, Run, RunLeg } from "../lib/api.ts";
 import { activityOf, refreshActivity, subscribeRuns, watchActivity } from "../lib/runStore.ts";
 import { fmtAgo, fmtUsd } from "../lib/format.ts";
 import { ICON } from "../lib/iconSize.ts";
+import { EDGE } from "./workspace/Chrome.tsx";
 
 /** "unknown" is a real bucket — an event whose model never resolved — and it
  *  reads as a value rather than as a gap when it is spelled with a capital.
@@ -156,14 +157,14 @@ export function OriginMark({ origin, size = ICON.sm }: { origin: RunLeg["origin"
  *  that says "yes, still" is a chip nobody reads. */
 const LEG_STATE: Record<RunLeg["state"], { label: string; color: string; title: string } | null> = {
   running: null,
-  won: { label: "won", color: "var(--success)", title: "The leg this run was called for" },
+  won: { label: "won", color: "var(--success-ink)", title: "The leg this run was called for" },
   lost: { label: "lost", color: "var(--text4)", title: "Not the winner — the checkout this app cut for it has been removed" },
   released: {
     label: "released", color: "var(--text3)",
     title: "Handed back. This checkout was never this app's to remove, so the run let go of it and left it exactly as it was",
   },
   gone: {
-    label: "gone", color: "var(--warning)",
+    label: "gone", color: "var(--warning-ink)",
     title: "The checkout is not on disk any more — somebody removed it by hand. Kept so the run still reads as a run that had this many legs",
   },
 };
@@ -226,9 +227,9 @@ function LegRow({ row, renderCard }: { row: LaneRow; renderCard: (a: AgentCard) 
           <span className="chip shrink-0" title={st.title} style={{ color: st.color }}>{st.label}</span>
         )}
         <span className="ml-auto shrink-0 flex items-center gap-2 text-[10px] t-dim2 tabular-nums">
-          <span style={{ color: "var(--success)" }}>{fmtUsd(activity?.costUsd ?? 0)}</span>
+          <span style={{ color: "var(--success-ink)" }}>{fmtUsd(activity?.costUsd ?? 0)}</span>
           <span>{events} events</span>
-          {!!activity?.errors && <span style={{ color: "var(--error)" }}>{activity.errors} err</span>}
+          {!!activity?.errors && <span style={{ color: "var(--error-ink)" }}>{activity.errors} err</span>}
           {!!activity?.lastSeen && <span title="When this checkout last produced an event">{ago(activity.lastSeen)}</span>}
         </span>
       </div>
@@ -306,7 +307,7 @@ export function RunLane({ run, cards, renderCard }: {
 
   return (
     <div className="space-y-1.5 rounded-xl p-1.5"
-      style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 8%, transparent)" }}>
+      style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", border: EDGE }}>
       <button
         onClick={() => setOpen((o) => !o)}
         className="w-full flex items-center gap-2 px-1 py-0.5 rounded-md text-left min-w-0"
@@ -346,7 +347,7 @@ export function RunLane({ run, cards, renderCard }: {
                 {bills.map((p) => (
                   <span key={p.provider} className="chip tabular-nums" title={`${p.events} events charged to ${providerLabel(p.provider)}`}
                     style={{ color: "var(--text2)" }}>
-                    {providerLabel(p.provider)} <span style={{ color: "var(--success)" }}>{fmtUsd(p.costUsd)}</span> · {p.events} ev
+                    {providerLabel(p.provider)} <span style={{ color: "var(--success-ink)" }}>{fmtUsd(p.costUsd)}</span> · {p.events} ev
                   </span>
                 ))}
               </div>

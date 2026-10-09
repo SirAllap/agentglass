@@ -139,7 +139,7 @@ function Card({ n, onGone, onGoto }: {
         <span className="text-[10.5px] font-semibold truncate" style={{ color: "var(--text2)", maxWidth: 170 }}>{n.app}</span>
         <span className="text-[9.5px] shrink-0" style={{ color: "var(--text4)" }}>{ago(n.at)}</span>
         {n.urgency === 2 && (
-          <span className="text-[10px] uppercase tracking-wider shrink-0" style={{ color: "var(--error)" }}>urgent</span>
+          <span className="text-[10px] uppercase tracking-wider shrink-0" style={{ color: "var(--error-ink)" }}>urgent</span>
         )}
         {/* The rest of the message, on the card, without going to the bell for
             it. Same control the bell's rows carry, so opening a notification is

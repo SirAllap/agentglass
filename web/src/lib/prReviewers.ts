@@ -139,6 +139,12 @@ export type ReviewVerdict = {
    *  verdict still blocks exactly as GitHub shows it; this is the other half
    *  of that same screen. */
   askedAgain?: boolean;
+  /** Only for `changes` or `commented`: EVERY one of `who` has been re-asked,
+   *  so nobody named here is still the one holding up the merge. Draw it like
+   *  GitHub's own pending arrow (amber), not the still-standing verdict
+   *  (red/grey) — the kind stays `changes`/`commented` because that is still
+   *  whose verdict this is, exactly as GitHub counts it. */
+  cleared?: boolean;
 };
 
 /**
@@ -156,24 +162,35 @@ const humans = (rows: readonly ReviewerRow[]) => rows.filter((r) => !r.isBot && 
 
 export function reviewVerdict(rows: readonly ReviewerRow[]): ReviewVerdict {
   const people = humans(rows);
-  const of = (s: ReviewerState) => people.filter((r) => r.state === s).map((r) => r.login);
+  const of = (s: ReviewerState) => people.filter((r) => r.state === s);
 
+  /*
+   * ASKED AGAIN CLEARS THE BLOCK — once EVERY changes-requesting or
+   * commenting reviewer has been re-asked, not just one of several. The kind
+   * stays theirs (it is still whose verdict this is, exactly as GitHub
+   * counts it); `cleared` says nobody in `who` is still the one holding the
+   * merge up, so the reader draws it amber, like a fresh request, not red.
+   */
   const changes = of("changes");
   if (changes.length) {
-    return { kind: "changes", who: changes,
-      askedAgain: people.some((r) => r.state === "changes" && r.again) };
+    return { kind: "changes", who: changes.map((r) => r.login),
+      askedAgain: changes.some((r) => r.again),
+      ...(changes.every((r) => r.again) ? { cleared: true } : null) };
   }
   const approved = of("approved");
   if (approved.length) {
     /* Re-requested after approving is the same GitHub ↻ the `changes` branch
        above already reads — an approval can be asked again exactly as a
        change request can, and until now only one of the two carried it. */
-    return { kind: "approved", who: approved,
-      askedAgain: people.some((r) => r.state === "approved" && r.again) };
+    return { kind: "approved", who: approved.map((r) => r.login),
+      askedAgain: approved.some((r) => r.again) };
   }
   const commented = of("commented");
-  if (commented.length) return { kind: "commented", who: commented };
-  const awaiting = of("awaiting");
+  if (commented.length) {
+    return { kind: "commented", who: commented.map((r) => r.login),
+      ...(commented.every((r) => r.again) ? { cleared: true } : null) };
+  }
+  const awaiting = of("awaiting").map((r) => r.login);
   if (awaiting.length) return { kind: "awaiting", who: awaiting };
   /* `dismissed` lands here on purpose: a dismissed review is a decision that
      has been taken back, which is the same standing as never having one. */

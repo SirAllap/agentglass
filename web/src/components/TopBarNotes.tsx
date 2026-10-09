@@ -49,6 +49,7 @@ import { appLinkFor } from "../lib/appLink.ts";
 import { ICON, MIN_BOX } from "../lib/iconSize.ts";
 import { GearIcon } from "./workspace/icons.tsx";
 import { openSettings } from "../lib/openSettings.ts";
+import { EDGE, LINE } from "./workspace/Chrome.tsx";
 import {
   canMute, groupNotes, laneOf, mutedSources, setMuted, sourceLabel, sourceOf, subscribeMuted,
   type Lane,
@@ -151,14 +152,14 @@ export function useAmbientNotes(): { note: Note | null; behind: number; ahead: n
         if (first || c.attention === prev || c.attention === "none") continue;
         if (c.attention === "blocked") {
           // Blocked, not merely finished: the chat cannot continue without you.
-          push({ id: `${c.id}-b-${c.messages.length}`, kind: "blocked", color: "var(--error)", title: c.title || "Chat", sub: c.blockedTool ? `Needs "${c.blockedTool}"` : "Waiting on you", urgent: true });
+          push({ id: `${c.id}-b-${c.messages.length}`, kind: "blocked", color: "var(--error-ink)", title: c.title || "Chat", sub: c.blockedTool ? `Needs "${c.blockedTool}"` : "Waiting on you", urgent: true });
           // The summary differs from the "Turn finished" one on purpose.
           // `supersede` keys a chat note on id + summary, so while both said
           // just the chat title, a turn ending QUIETLY DELETED the urgent
           // "Blocked" row above it — the one note in this loop he had to act on.
           recordNote({ app: "chat", summary: `${c.title || "Chat"} — blocked`, body: c.blockedTool ? `Blocked — needs "${c.blockedTool}"` : "Blocked — waiting on you", urgency: 2, goto: { kind: "chat", id: c.id } });
         } else if (c.attention === "done") {
-          push({ id: `${c.id}-d-${c.messages.length}`, kind: "done", color: "var(--success)", title: c.title || "Chat", sub: "Turn finished" });
+          push({ id: `${c.id}-d-${c.messages.length}`, kind: "done", color: "var(--success-ink)", title: c.title || "Chat", sub: "Turn finished" });
           // Silent, and it always should have been: a turn that ended is not a
           // task. The chat's own green dot says the same thing without a sound,
           // and with nine sessions this is the highest-volume note in the app.
@@ -182,7 +183,7 @@ export function useAmbientNotes(): { note: Note | null; behind: number; ahead: n
     push({
       id: `gate-${g.id}`,
       kind: "blocked",
-      color: "var(--warning)",
+      color: "var(--warning-ink)",
       title: `Approve ${g.tool_name}?`,
       sub: `${g.source_app}:${g.session_id.slice(0, 8)} is waiting on you`,
       // Ahead of the chatter, and never dropped for being late: the hold is
@@ -231,7 +232,7 @@ export function useAmbientNotes(): { note: Note | null; behind: number; ahead: n
           const prev = seen.get(r.root) ?? 0;
           seen.set(r.root, r.behind);
           if (!first && r.behind > prev) {
-            push({ id: `${r.root}-${r.behind}`, kind: "pull", color: "var(--info)", title: r.name, sub: `${r.behind} to pull on ${r.branch}` });
+            push({ id: `${r.root}-${r.behind}`, kind: "pull", color: "var(--info-ink)", title: r.name, sub: `${r.behind} to pull on ${r.branch}` });
             // The destination was already a supported kind and simply never
             // passed: mirrored git notes get one derived from their *text*
             // (gitDestination), while ours — which hold the repo and the branch
@@ -493,7 +494,7 @@ function HistoryRow({ n, onGone, onGoto, onMute }: {
             <Cap>{sourceLabel(sourceOf(n))}</Cap>
             <Cap dim>{ago(n.at)}</Cap>
             {(n.count ?? 1) > 1 && <Cap dim>×{n.count}</Cap>}
-            {n.urgency === 2 && <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--error)" }}>urgent</span>}
+            {n.urgency === 2 && <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--error-ink)" }}>urgent</span>}
           </span>
           {/* The title unwraps too. Expanding has to mean "show me all of it",
               and a summary cut at one line with an ellipsis is part of "all of
@@ -774,12 +775,12 @@ export function NotifyBell({ noDrag, onGoto }: {
             className="fixed flex flex-col rounded-xl overflow-hidden"
             style={{
               top: at.top, right: at.right, width: 360,
-              background: "var(--bg2)",
-              border: "1px solid var(--border)",
+              background: "var(--surface-card)",
+              border: EDGE,
               boxShadow: "0 22px 48px -20px var(--shadow)",
             }}
           >
-            <div className="flex items-center gap-2 px-3 py-2.5" style={{ borderBottom: "1px solid var(--border)" }}>
+            <div className="flex items-center gap-2 px-3 py-2.5" style={{ borderBottom: LINE }}>
               <Cap>notifications</Cap>
               <Cap dim>{visible.length}</Cap>
               {/* Silencing without saying so is how you end up asking why you
@@ -808,7 +809,7 @@ export function NotifyBell({ noDrag, onGoto }: {
                 never hides a list you did not know was there. */}
             {laneChoices.length > 2 && (
               <div className="flex items-center gap-0.5 px-2 py-1.5 flex-wrap" role="tablist" aria-label="Show"
-                style={{ borderBottom: "1px solid var(--border)" }}>
+                style={{ borderBottom: LINE }}>
                 {laneChoices.map((l) => (
                   <button key={l.id} role="tab" aria-selected={lane === l.id}
                     className="agx-note-btn tabular-nums"
@@ -901,7 +902,7 @@ export function NotifyBell({ noDrag, onGoto }: {
                 back what was already collected. */}
             {mutedHere.length > 0 && (
               <div className="px-2.5 py-1.5 text-[10px] flex items-center gap-1 flex-wrap"
-                style={{ borderTop: "1px solid var(--border)", color: "var(--text4)" }}>
+                style={{ borderTop: LINE, color: "var(--text4)" }}>
                 <span className="mr-1">Muted</span>
                 {mutedHere.map((src) => (
                   <button key={src} className="agx-note-btn inline-flex items-center gap-1" onClick={() => setMuted(src, false)}
@@ -913,7 +914,7 @@ export function NotifyBell({ noDrag, onGoto }: {
             )}
             {hist.length > 0 && (!own || !mirroring) && (
               <div className="px-2.5 py-1.5 text-[9.5px] flex items-center gap-2"
-                style={{ borderTop: "1px solid var(--border)", color: "var(--text4)" }}>
+                style={{ borderTop: LINE, color: "var(--text4)" }}>
                 <span>
                   {!own && !mirroring ? "Both lanes are quiet — nothing interrupts, everything still collects here."
                     : !own ? "agentglass's own alerts are not interrupting — they still collect here."

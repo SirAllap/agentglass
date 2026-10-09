@@ -12,6 +12,7 @@
 // because "is 5173 still up?" is a question you have while looking at anything.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CopyIcon, DiskIcon, IconLabel, RefreshIcon } from "../lib/glyphIcons.tsx";
+import { RefreshButton, Tabs, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
 import type { GitLock, GitLocksReport, GitRepoRef, ProcDetail, MachineTotals, PortEntry, PortsReport, ProcEntry, ResourceReport, SpaceReport } from "../../../shared/types.ts";
@@ -24,7 +25,6 @@ import { CheckoutPicker } from "./CheckoutPicker.tsx";
 
 export type MachineTab = "ports" | "resources" | "locks";
 
-const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 /** Fast enough that a dev server you just started appears while you are still
  *  looking, slow enough that a /proc walk every tick is not a cost. Also what
  *  makes the CPU column a rate at all: it needs two samples. */
@@ -53,25 +53,21 @@ export function MachinePanel({ tab, onTab, onClose, onOpenBrowser }: {
           // At 760 the flexible column got 218px and truncated the ancestry
           // chain; at 1020 the pane was 340 and wrapped a command line and a
           // long path over three lines each. `96vw` still caps it on a laptop.
-          width: "min(1320px, 96vw)", background: "var(--bg2)", border: edge(20),
+          width: "min(1320px, 96vw)", background: "var(--surface-card)", border: EDGE,
           boxShadow: "0 40px 90px -24px var(--shadow)",
         }}>
-        <div className="flex items-center gap-2 px-3 py-2 shrink-0" style={{ borderBottom: edge(16) }}>
+        <div className="flex items-center gap-2 px-3 py-2 shrink-0" style={{ borderBottom: LINE }}>
           <span className="text-[12px] font-medium" style={{ color: "var(--text)" }}>Machine</span>
-          <span className="inline-flex rounded-md overflow-hidden ml-2" style={{ border: edge(20) }}>
-            {(["ports", "resources", "locks"] as const).map((t) => (
-              <button key={t} onClick={() => onTab(t)} className="text-[10.5px] px-3 py-1"
-                style={t === tab
-                  ? { background: "color-mix(in srgb, var(--primary) 20%, transparent)", color: "var(--text)" }
-                  : { color: "var(--text3)" }}>{t === "ports" ? "Ports" : t === "resources" ? "Resources" : "Locks"}</button>
-            ))}
-          </span>
-          <CloseButton onClick={onClose} title="Close" style={{ color: "var(--text2)", border: edge(18) }} className="agx-btn ml-auto shrink-0 rounded" />
+          {/* The shared `Tabs`: these swap the whole body, so they are a tab
+              list to a screen reader, not three loose buttons in a box. */}
+          <div className="ml-2"><Tabs value={tab} onChange={onTab} label="Machine" panelId="machine-tab-body"
+            options={[{ id: "ports", label: "Ports" }, { id: "resources", label: "Resources" }, { id: "locks", label: "Locks" }]} /></div>
+          <CloseButton onClick={onClose} title="Close" style={{ color: "var(--text2)", border: EDGE }} className="agx-btn ml-auto shrink-0 rounded" />
         </div>
         {/* Not a scroller itself: each tab owns its own scrolling, because
             Resources pins a footer under one and a scroller here would push
             that footer off the bottom instead. */}
-        <div className="flex-1 min-h-0 flex flex-col">
+        <div id="machine-tab-body" role="tabpanel" className="flex-1 min-h-0 flex flex-col">
           {tab === "ports" ? <Ports onOpenBrowser={onOpenBrowser} /> : tab === "resources" ? <Resources /> : <Locks />}
         </div>
       </div>
@@ -144,11 +140,11 @@ function Ports({ onOpenBrowser }: { onOpenBrowser?: () => void }) {
 
       {/* Above the groups rather than inside one: it filters both, and a filter
           that lives in a section looks like it only applies there. */}
-      <div className="px-3.5 py-1.5" style={{ borderBottom: edge(7) }}>
+      <div className="px-3.5 py-1.5" style={{ borderBottom: LINE }}>
         <input value={q} onChange={(e) => setQ(e.target.value)}
           placeholder="Filter by port, process, checkout or what started it…"
-          className="text-[10.5px] px-2 py-1 rounded w-full outline-none bg-transparent"
-          style={{ color: "var(--text)", border: edge(20) }} />
+          className={`w-full ${INPUT}`}
+          style={INPUT_STYLE} />
       </div>
 
       <Group label="Yours" count={mine.length} />
@@ -223,7 +219,7 @@ function MachineStrip({ m }: { m: MachineTotals }) {
   const diskPct = m.diskTotal ? (diskUsed / m.diskTotal) * 100 : null;
   if (!m.memTotal && !m.diskTotal && m.cpu == null) return null;
   return (
-    <div className="px-3.5 py-2.5 flex items-start gap-5" style={{ borderBottom: edge(10) }}>
+    <div className="px-3.5 py-2.5 flex items-start gap-5" style={{ borderBottom: LINE }}>
       <span className="text-[10px] uppercase tracking-wider shrink-0 pt-0.5" style={{ color: "var(--text4)" }}>
         This<br />machine
       </span>
@@ -310,7 +306,7 @@ function Row({ p, actions, dim, selected, onSelect, narrow }: {
     <div className={`group grid items-center gap-3 px-3.5 py-1.5 hover:bg-white/5${onSelect ? " cursor-pointer" : ""}`}
       onClick={onSelect}
       style={{
-        borderBottom: edge(7), gridTemplateColumns: narrow ? PORT_GRID_NARROW : PORT_GRID,
+        borderBottom: LINE, gridTemplateColumns: narrow ? PORT_GRID_NARROW : PORT_GRID,
         background: selected ? "color-mix(in srgb, var(--primary) 14%, transparent)" : undefined,
       }}>
       {/* A live socket, marked the way a running shell is marked everywhere
@@ -379,7 +375,7 @@ function Row({ p, actions, dim, selected, onSelect, narrow }: {
       {p.publicBind && (
         <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap"
           title={`Listening on every interface (${p.addr}), not just this machine — anything that can reach you on the network can reach this port.`}
-          style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>
+          style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>
           on the network
         </span>
       )}
@@ -399,7 +395,7 @@ function Row({ p, actions, dim, selected, onSelect, narrow }: {
       {p.cwdGone && (
         <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap"
           title="Its working directory no longer exists — the checkout it was serving has been removed."
-          style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}>
+          style={{ color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}>
           checkout gone
         </span>
       )}
@@ -409,21 +405,21 @@ function Row({ p, actions, dim, selected, onSelect, narrow }: {
       {p.tmpLeftover && (
         <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap"
           title={`It is serving from ${p.dir}, a scratch directory. Whatever it was for, nobody is likely to look at it again.`}
-          style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>
+          style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>
           tmp leftover
         </span>
       )}
       {p.duplicate && (
         <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap"
           title={`Another ${p.proc} is serving the same folder (${p.dir}). One of them is probably left over.`}
-          style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>
+          style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>
           duplicate
         </span>
       )}
       {p.idleSec != null && (
         <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap"
           title={`Nothing has connected for ${forAge(p.idleSec!)}.`}
-          style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>
+          style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>
           idle
         </span>
       )}
@@ -432,7 +428,7 @@ function Row({ p, actions, dim, selected, onSelect, narrow }: {
       {(p.dir ?? p.cwd) && (
         <span className="min-w-0 truncate text-[10px] px-1.5 py-0.5 rounded-full max-w-full"
           title={p.dir && p.dir !== p.cwd ? `Serving ${p.dir}\nStarted in ${p.cwd ?? "?"}` : p.dir ?? p.cwd ?? ""}
-          style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
+          style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
           {(p.dir ?? p.cwd)!.split("/").filter(Boolean).pop()}
         </span>
       )}
@@ -560,13 +556,13 @@ function Resources() {
         {/* Under the totals rather than over them: the numbers at the top are
             the machine's and do not move when you filter, and a box above them
             would suggest they do. */}
-        <div className="px-3.5 py-1.5" style={{ borderBottom: edge(7) }}>
+        <div className="px-3.5 py-1.5" style={{ borderBottom: LINE }}>
           <input value={q} onChange={(e) => setQ(e.target.value)}
             placeholder="Filter by process, command, checkout or pid…"
-            className="text-[10.5px] px-2 py-1 rounded w-full outline-none bg-transparent"
-            style={{ color: "var(--text)", border: edge(20) }} />
+            className={`w-full ${INPUT}`}
+            style={INPUT_STYLE} />
         </div>
-        <div className="flex items-baseline gap-3 px-3.5 py-3" style={{ borderBottom: edge(12) }}>
+        <div className="flex items-baseline gap-3 px-3.5 py-3" style={{ borderBottom: LINE }}>
           <span className="text-[22px] tabular-nums leading-none" style={{ color: "var(--text)" }}>
             {data.oursCpu != null ? data.oursCpu.toFixed(1) : "—"}<span className="text-[12px]" style={{ color: "var(--text3)" }}>%</span>
           </span>
@@ -580,9 +576,9 @@ function Resources() {
                 lie a panel like this must not tell. */}
             {!data.rated && " · CPU needs a second sample"}
           </span>
-          <button onClick={load} title="Sample again now"
-            className="agx-btn ml-auto shrink-0 px-1.5 py-0.5 rounded text-[11px]"
-            style={{ color: "var(--text2)", border: edge(18) }}><RefreshIcon /></button>
+          <span className="ml-auto flex">
+            <RefreshButton onRefresh={load} title="Sample again now" />
+          </span>
         </div>
 
         {/* The whole machine, above our share of it.
@@ -594,7 +590,7 @@ function Resources() {
         <MachineStrip m={data.machine} />
 
         <div className="grid px-3.5 py-1 text-[9.5px] uppercase tracking-wider"
-          style={{ gridTemplateColumns: COLS, color: "var(--text3)", borderBottom: edge(10) }}>
+          style={{ gridTemplateColumns: COLS, color: "var(--text3)", borderBottom: LINE }}>
           <span>Name</span><span /><span className="text-right">CPU</span><span className="text-right">RSS</span>
         </div>
 
@@ -622,7 +618,7 @@ function Resources() {
                     {!kShut && k.procs.length > shown.length && (
                       <button onClick={() => setShowAll((c) => new Set(c).add(k.key))}
                         className="w-full text-left px-3.5 py-1 text-[10px] hover:bg-white/5"
-                        style={{ paddingLeft: 3.5 * 4 + 2 * 16, color: "var(--primary)" }}>
+                        style={{ paddingLeft: 3.5 * 4 + 2 * 16, color: "var(--primary-ink)" }}>
                         show {k.procs.length - shown.length} more in this checkout
                       </button>
                     )}
@@ -673,7 +669,7 @@ function Line({ label, cpu, rss, depth, title, aside, kind, caret, onClick, spar
       {...(onClick ? { onClick, type: "button" as const } : {})}
       className={`grid items-center w-full text-left px-3.5 py-1 text-[11.5px] ${onClick ? "hover:bg-white/5" : ""}`}
       style={{
-        gridTemplateColumns: COLS, borderBottom: edge(6),
+        gridTemplateColumns: COLS, borderBottom: LINE,
         background: selected ? "color-mix(in srgb, var(--primary) 14%, transparent)" : undefined,
       }} title={title}>
       <span className="min-w-0 flex items-center gap-1.5" style={{ paddingLeft: depth * 16 }}>
@@ -751,7 +747,7 @@ function Space({ repos }: { repos: GitRepoRef[] }) {
   };
 
   return (
-    <div className="shrink-0" style={{ borderTop: edge(16), background: "color-mix(in srgb, var(--text) 5%, transparent)" }}>
+    <div className="shrink-0" style={{ borderTop: LINE, background: "color-mix(in srgb, var(--text) 5%, transparent)" }}>
       <div className="flex items-center gap-2 px-3.5 py-2 text-[11px] flex-wrap">
         <span className="flex" style={{ color: "var(--text3)" }}><DiskIcon size={ICON.xs} /></span>
         <span style={{ color: "var(--text)", fontWeight: 500 }}>Disk</span>
@@ -763,19 +759,19 @@ function Space({ repos }: { repos: GitRepoRef[] }) {
         {data && !data.error && (
           <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>
             <b style={{ color: "var(--text2)", fontWeight: 500 }}>{mb(data.bytes)}</b>
-            {data.freeable > 0 && <> · <b style={{ color: "var(--success)", fontWeight: 500 }}>{mb(data.freeable)}</b> rebuildable</>}
+            {data.freeable > 0 && <> · <b style={{ color: "var(--success-ink)", fontWeight: 500 }}>{mb(data.freeable)}</b> rebuildable</>}
           </span>
         )}
         <span className="ml-auto flex items-center gap-1.5 shrink-0">
           {data && !data.error && (
             <button onClick={() => setOpen((o) => !o)} className="agx-btn text-[10.5px] px-2 py-0.5 rounded"
-              style={{ color: "var(--text2)", border: edge(20) }}>{open ? "Hide" : "Show"} the breakdown</button>
+              style={{ color: "var(--text2)", border: EDGE }}>{open ? "Hide" : "Show"} the breakdown</button>
           )}
           <button onClick={() => void scan()} disabled={busy || !root}
             className="agx-btn text-[10.5px] px-2 py-0.5 rounded disabled:opacity-50"
             style={busy
-              ? { color: "var(--text3)", border: edge(20) }
-              : { color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}>
+              ? { color: "var(--text3)", border: EDGE }
+              : { color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}>
             {busy ? "Measuring…" : <IconLabel icon={<RefreshIcon size={ICON.xs} />}>{data ? "Measure again" : "Measure"}</IconLabel>}
           </button>
         </span>
@@ -786,7 +782,7 @@ function Space({ repos }: { repos: GitRepoRef[] }) {
           Nothing is measured until you ask — `du` reads every file under the checkout, which takes seconds.
         </div>
       )}
-      {data?.error && <div className="px-3.5 pb-2 text-[10.5px]" style={{ color: "var(--error)" }}>{data.error}</div>}
+      {data?.error && <div className="px-3.5 pb-2 text-[10.5px]" style={{ color: "var(--error-ink)" }}>{data.error}</div>}
 
       {data && !data.error && open && (
         <div className="px-3.5 pb-2.5">
@@ -826,7 +822,7 @@ function Space({ repos }: { repos: GitRepoRef[] }) {
 
 function Card({ k, v, tint, small }: { k: string; v: string; tint?: string; small?: boolean }) {
   return (
-    <div className="rounded-md px-2 py-1.5 min-w-0" style={{ border: edge(14) }}>
+    <div className="rounded-md px-2 py-1.5 min-w-0" style={{ border: EDGE }}>
       <div className="text-[9.5px] truncate" style={{ color: "var(--text3)" }}>{k}</div>
       <div className={`${small ? "text-[10.5px]" : "text-[13px]"} tabular-nums truncate`} style={{ color: tint ?? "var(--text)" }}>{v}</div>
     </div>
@@ -879,8 +875,8 @@ function DetailPane({ pid, onClose }: { pid: number; onClose: () => void }) {
       // 420 rather than 340: this holds absolute paths and full command lines,
       // and at 340 both wrapped over three lines each, which is how a detail
       // pane becomes harder to read than the row it replaced.
-      style={{ width: 420, borderLeft: edge(14), background: "color-mix(in srgb, var(--text) 3%, transparent)" }}>
-      <div className="flex items-center gap-2 px-3 py-2 shrink-0" style={{ borderBottom: edge(10) }}>
+      style={{ width: 420, borderLeft: LINE, background: "color-mix(in srgb, var(--text) 3%, transparent)" }}>
+      <div className="flex items-center gap-2 px-3 py-2 shrink-0" style={{ borderBottom: LINE }}>
         <span className="text-[11px] font-medium truncate" style={{ color: "var(--text)" }}>{d?.comm || `pid ${pid}`}</span>
         <span className="text-[10px] tabular-nums shrink-0" style={{ color: "var(--text4)" }}>pid {pid}</span>
         <CloseButton onClick={onClose} title="Close the detail" hit={22} className="ml-auto" />
@@ -888,7 +884,7 @@ function DetailPane({ pid, onClose }: { pid: number; onClose: () => void }) {
 
       {!d ? <Note>Reading /proc…</Note> : d.error ? <Note tint="var(--warning)">{d.error}</Note> : (
         <div className="px-3 py-2 flex flex-col gap-3 text-[10.5px]">
-          {note && <div style={{ color: "var(--warning)" }}>{note}</div>}
+          {note && <div style={{ color: "var(--warning-ink)" }}>{note}</div>}
 
           <Field label="Command">
             {/* Wrapped and selectable, unlike everywhere else in this panel:
@@ -917,8 +913,8 @@ function DetailPane({ pid, onClose }: { pid: number; onClose: () => void }) {
 
           <Field label={envLabel(d.env.length, q, d.env.filter((v) => matches(v.key, q)).length)}>
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter…"
-              className="text-[10px] px-1.5 py-1 rounded mb-1 outline-none bg-transparent w-full"
-              style={{ color: "var(--text)", border: edge(20) }} />
+              className={`w-full mb-1 ${INPUT}`}
+              style={INPUT_STYLE} />
             {/* Matched on the KEY only. The values are the thing being
                 protected, and a filter that searched them would answer "does
                 this process hold a variable containing <string>" for anything
@@ -935,7 +931,7 @@ function DetailPane({ pid, onClose }: { pid: number; onClose: () => void }) {
                   // detail, and one that must not travel to a phone.
                   <button onClick={() => void reveal(v.key)} className="shrink-0 hover:opacity-70"
                     title="Hidden because it looks like a secret. Click to reveal — the desktop app only."
-                    style={{ color: "var(--text4)" }}>•••••••• <span style={{ color: "var(--primary)" }}>show</span></button>
+                    style={{ color: "var(--text4)" }}>•••••••• <span style={{ color: "var(--primary-ink)" }}>show</span></button>
                 ) : (
                   <span className="min-w-0 break-all" style={{ color: "var(--text2)", userSelect: "text" }}>{v.value}</span>
                 )}
@@ -1049,7 +1045,7 @@ function LockRow({ l, busy, onRemove, selected, onSelect }: {
     <div className={`group grid items-center gap-3 px-3.5 py-1.5 hover:bg-white/5${onSelect ? " cursor-pointer" : ""}`}
       onClick={onSelect}
       style={{
-        borderBottom: edge(7), gridTemplateColumns: "8px minmax(0, 1fr) 176px 76px",
+        borderBottom: LINE, gridTemplateColumns: "8px minmax(0, 1fr) 176px 76px",
         background: selected ? "color-mix(in srgb, var(--primary) 14%, transparent)" : undefined,
       }}>
       <span className="grid place-items-center">
@@ -1069,7 +1065,7 @@ function LockRow({ l, busy, onRemove, selected, onSelect }: {
       <span className="flex items-center justify-end min-w-0 overflow-hidden">
         <span className="min-w-0 truncate text-[10px] px-1.5 py-0.5 rounded-full max-w-full"
           title={l.repo}
-          style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
+          style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
           {l.repo.split("/").filter(Boolean).pop()}
         </span>
       </span>
@@ -1092,7 +1088,7 @@ function LockRow({ l, busy, onRemove, selected, onSelect }: {
 function Group({ label, count, hint }: { label: string; count: number; hint?: string }) {
   return (
     <div className="flex items-center gap-2 px-3.5 py-1.5 text-[10px] uppercase tracking-wider"
-      style={{ color: "var(--text3)", background: "color-mix(in srgb, var(--text) 5%, transparent)", borderBottom: edge(10) }}>
+      style={{ color: "var(--text3)", background: "color-mix(in srgb, var(--text) 5%, transparent)", borderBottom: LINE }}>
       <span>{label}</span>
       {hint && <span className="normal-case tracking-normal text-[9.5px] truncate" style={{ color: "var(--text4)" }}>{hint}</span>}
       <span className="ml-auto tabular-nums tracking-normal">{count}</span>

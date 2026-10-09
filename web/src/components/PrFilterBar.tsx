@@ -6,6 +6,7 @@ import {
 } from "../lib/prFilter.ts";
 import { SearchIcon } from "../lib/glyphIcons.tsx";
 import { CloseIcon } from "./CloseButton.tsx";
+import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 /**
  * The PR list's filter bar (#pulldash-style): a query input, a wrapping row of
@@ -65,7 +66,6 @@ export function PrFilterBar({
   if (filters.text.trim()) {
     chips.push({ key: "text", label: `"${filters.text.trim()}"`, onRemove: () => emit({ ...filters, text: "" }) });
   }
-
   const border = "1px solid color-mix(in srgb, var(--border) 45%, transparent)";
 
   return (
@@ -92,8 +92,8 @@ export function PrFilterBar({
           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); onSearch(); } }}
           placeholder="Filter these, or press ⏎ to search them all"
           spellCheck={false}
-          className="flex-1 text-[10px] px-2 py-1 rounded bg-transparent min-w-0"
-          style={{ color: "var(--text2)", border, outline: "none" }} />
+          className={`flex-1 min-w-0 ${INPUT}`}
+          style={INPUT_STYLE} />
         {/*
           * Appears only when there is something to ask for.
           *
@@ -135,7 +135,7 @@ export function PrFilterBar({
               : `${unread.count} of the loaded pull requests have something said on them since you last looked. Counted here rather than on GitHub — the mark is this browser\u2019s.`}
             className="agx-btn inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded tabular-nums"
             style={{
-              color: "var(--warning)",
+              color: "var(--warning-ink)",
               border: `1px solid color-mix(in srgb, var(--warning) ${unread.on ? 70 : 40}%, transparent)`,
               background: unread.on ? "color-mix(in srgb, var(--warning) 16%, transparent)" : "transparent",
             }}>

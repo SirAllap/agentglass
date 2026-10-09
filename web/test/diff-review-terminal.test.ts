@@ -12,7 +12,7 @@ import { readFileSync } from "node:fs";
  * the same call rather than inventing a second way to open a terminal.
  *
  * Source-level lock, not a render: there is no renderer in this project
- * (CLAUDE.md), and `deliver` is a closure inside a hook-heavy component that
+ * (AGENTS.md), and `deliver` is a closure inside a hook-heavy component that
  * a unit test cannot call directly without mounting the whole page.
  */
 const src = readFileSync(new URL("../src/components/diff/DiffPage.tsx", import.meta.url), "utf8");

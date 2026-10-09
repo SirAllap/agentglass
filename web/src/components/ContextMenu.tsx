@@ -15,6 +15,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Portal } from "./Portal.tsx";
+import { EDGE } from "./workspace/Chrome.tsx";
 
 export function ContextMenu({ x, y, onClose, children }: { x: number; y: number; onClose: () => void; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -53,7 +54,7 @@ export function ContextMenu({ x, y, onClose, children }: { x: number; y: number;
         style={{
           top: pos.y, left: pos.x, minWidth: 184, zIndex: 9999,
           background: "color-mix(in srgb, var(--bg2) 97%, black)",
-          border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)",
+          border: EDGE,
           boxShadow: "0 24px 60px -18px rgba(0,0,0,0.7)",
           backdropFilter: "blur(18px)",
         }}

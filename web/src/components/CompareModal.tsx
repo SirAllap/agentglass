@@ -13,6 +13,7 @@ import { api } from "../lib/api.ts";
 import type { GitFileChange } from "../../../shared/types.ts";
 import { SwapIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { EDGE } from "./workspace/Chrome.tsx";
 
 type CompareResult = {
   ok: boolean;
@@ -81,8 +82,8 @@ export function CompareModal({ root, initialBase, onClose }: {
           <motion.div
             initial={{ opacity: 0, scale: 0.96, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.97, y: 8 }}
             transition={{ type: "spring", stiffness: 340, damping: 30 }}
-            className="w-[min(760px,94vw)] max-h-[min(80vh,640px)] rounded-2xl flex flex-col pointer-events-auto"
-            style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
+            className="w-[min(760px,94vw)] max-h-[min(80vh,640px)] rounded-xl flex flex-col pointer-events-auto"
+            style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
             <div className="flex items-center gap-2 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
               <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>Compare</span>
               <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>read-only</span>
@@ -93,14 +94,14 @@ export function CompareModal({ root, initialBase, onClose }: {
               <div className="flex items-center gap-2">
                 <div className="flex-1">
                   <div className="text-[9.5px] uppercase tracking-wider t-dim2 mb-1">base</div>
-                  <select value={base} onChange={(e) => setBase(e.target.value)} className="w-full px-2 py-1.5 rounded-lg text-[11.5px] outline-none" style={{ background: "var(--bg3)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }}>
+                  <select value={base} onChange={(e) => setBase(e.target.value)} className="w-full px-2 py-1.5 rounded-lg text-[11.5px] outline-none" style={{ background: "var(--bg3)", border: EDGE, color: "var(--text)" }}>
                     {refs.map((n) => <option key={n} value={n}>{n}</option>)}
                   </select>
                 </div>
                 <button onClick={() => { setBase(other); setOther(base); }} title="Swap the two sides" className="mt-5 shrink-0 text-[13px] px-2 py-1.5 rounded-lg t-dim2 hover:brightness-125"><SwapIcon size={ICON.sm} /></button>
                 <div className="flex-1">
                   <div className="text-[9.5px] uppercase tracking-wider t-dim2 mb-1">other</div>
-                  <select value={other} onChange={(e) => setOther(e.target.value)} className="w-full px-2 py-1.5 rounded-lg text-[11.5px] outline-none" style={{ background: "var(--bg3)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }}>
+                  <select value={other} onChange={(e) => setOther(e.target.value)} className="w-full px-2 py-1.5 rounded-lg text-[11.5px] outline-none" style={{ background: "var(--bg3)", border: EDGE, color: "var(--text)" }}>
                     {refs.map((n) => <option key={n} value={n}>{n}</option>)}
                   </select>
                 </div>
@@ -109,13 +110,13 @@ export function CompareModal({ root, initialBase, onClose }: {
               {r?.ok ? (
                 <>
                   <div className="mt-4 flex items-center gap-3 flex-wrap">
-                    <span className="text-[11.5px] px-2 py-1 rounded-lg tabular-nums" style={{ background: "color-mix(in srgb, var(--success) 12%, transparent)", color: "var(--success)" }} title="commits {other} has that {base} doesn't">
+                    <span className="text-[11.5px] px-2 py-1 rounded-lg tabular-nums" style={{ background: "color-mix(in srgb, var(--success) 12%, transparent)", color: "var(--success-ink)" }} title="commits {other} has that {base} doesn't">
                       ↑ {r.ahead!.length} ahead
                     </span>
-                    <span className="text-[11.5px] px-2 py-1 rounded-lg tabular-nums" style={{ background: "color-mix(in srgb, var(--warning) 12%, transparent)", color: "var(--warning)" }} title="commits {base} has that {other} doesn't">
+                    <span className="text-[11.5px] px-2 py-1 rounded-lg tabular-nums" style={{ background: "color-mix(in srgb, var(--warning) 12%, transparent)", color: "var(--warning-ink)" }} title="commits {base} has that {other} doesn't">
                       ↓ {r.behind!.length} behind
                     </span>
-                    <span className="text-[11px] px-2 py-1 rounded-lg tabular-nums" style={{ background: "color-mix(in srgb, var(--info) 12%, transparent)", color: "var(--info)" }} title="lines changed between the two tips">
+                    <span className="text-[11px] px-2 py-1 rounded-lg tabular-nums" style={{ background: "color-mix(in srgb, var(--info) 12%, transparent)", color: "var(--info-ink)" }} title="lines changed between the two tips">
                       {r.diff!.length} file{r.diff!.length === 1 ? "" : "s"}, {total} line{total === 1 ? "" : "s"}
                     </span>
                     {busy && <span className="text-[10px] t-dim2 ml-auto">comparing…</span>}
@@ -127,7 +128,7 @@ export function CompareModal({ root, initialBase, onClose }: {
                       <div className="space-y-0.5">
                         {r.behind!.map((c) => (
                           <div key={c.hash} className="flex items-center gap-2 px-2 py-1 rounded-md text-[11px]" style={{ background: "color-mix(in srgb, var(--bg3) 45%, transparent)" }}>
-                            <span className="shrink-0 text-[9.5px] px-1 py-px rounded" style={{ background: "color-mix(in srgb, var(--warning) 14%, transparent)", color: "var(--warning)" }} title={`{base} has this, {other} doesn't`}>↓</span>
+                            <span className="shrink-0 text-[9.5px] px-1 py-px rounded" style={{ background: "color-mix(in srgb, var(--warning) 14%, transparent)", color: "var(--warning-ink)" }} title={`{base} has this, {other} doesn't`}>↓</span>
                             <span className="shrink-0 tabular-nums font-mono" style={{ color: "var(--primary-hover)" }}>{c.shortHash}</span>
                             <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text)" }}>{c.subject}</span>
                             <span className="shrink-0 text-[9.5px] t-dim2">{c.author}</span>
@@ -135,7 +136,7 @@ export function CompareModal({ root, initialBase, onClose }: {
                         ))}
                         {r.ahead!.map((c) => (
                           <div key={c.hash} className="flex items-center gap-2 px-2 py-1 rounded-md text-[11px]" style={{ background: "color-mix(in srgb, var(--bg3) 45%, transparent)" }}>
-                            <span className="shrink-0 text-[9.5px] px-1 py-px rounded" style={{ background: "color-mix(in srgb, var(--success) 14%, transparent)", color: "var(--success)" }} title={`{other} has this, {base} doesn't`}>↑</span>
+                            <span className="shrink-0 text-[9.5px] px-1 py-px rounded" style={{ background: "color-mix(in srgb, var(--success) 14%, transparent)", color: "var(--success-ink)" }} title={`{other} has this, {base} doesn't`}>↑</span>
                             <span className="shrink-0 tabular-nums font-mono" style={{ color: "var(--primary-hover)" }}>{c.shortHash}</span>
                             <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text)" }}>{c.subject}</span>
                             <span className="shrink-0 text-[9.5px] t-dim2">{c.author}</span>
@@ -155,8 +156,8 @@ export function CompareModal({ root, initialBase, onClose }: {
                             <div key={f.file_path} className="flex items-center gap-2 px-2 py-1 rounded-md text-[11px] font-mono" style={{ background: "color-mix(in srgb, var(--bg3) 45%, transparent)" }}>
                               <span className="shrink-0 w-14 text-[9px] uppercase" style={{ color: CHANGE_STATUS[f.status] ?? "var(--text3)" }}>{f.status}</span>
                               <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text)" }}>{rel}</span>
-                              <span className="shrink-0 tabular-nums" style={{ color: "var(--success)" }}>+{f.additions}</span>
-                              <span className="shrink-0 tabular-nums" style={{ color: "var(--error)" }}>−{f.deletions}</span>
+                              <span className="shrink-0 tabular-nums" style={{ color: "var(--success-ink)" }}>+{f.additions}</span>
+                              <span className="shrink-0 tabular-nums" style={{ color: "var(--error-ink)" }}>−{f.deletions}</span>
                             </div>
                           );
                         })}
@@ -169,7 +170,7 @@ export function CompareModal({ root, initialBase, onClose }: {
                   )}
                 </>
               ) : (
-                <div className="mt-4 text-[11.5px] px-3 py-2 rounded-lg" style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 10%, transparent)" }}>
+                <div className="mt-4 text-[11.5px] px-3 py-2 rounded-lg" style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 10%, transparent)" }}>
                   {r?.error || (busy ? "comparing…" : "pick two refs to compare")}
                 </div>
               )}

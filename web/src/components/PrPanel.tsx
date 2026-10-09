@@ -19,6 +19,7 @@
 //
 // 4. Nothing waits on the network. `gh` costs a second or more per call and the
 //    server has one thread; every read is a cached answer with its age shown.
+import { dataInk } from "../lib/contrast.ts";
 import { PluginPrActions } from "./plugins/PluginPrActions.tsx";
 import { useLocalNotes, groupByRun, RunCard, NoteCard, LocalMark, LocalGlyph, LocalStrip, sortNotes, type LocalNotes, type LocalNote } from "./plugins/LocalReview.tsx";
 import { createContext, Fragment, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
@@ -36,12 +37,12 @@ import { flashElement } from "../lib/flash.ts";
 import { shaFromHref } from "../lib/commitLink.ts";
 import { isShortRef, openInApp, wantsExternal } from "../lib/linkRouter.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
-import { ScopeChip } from "./workspace/Chrome.tsx";
+import { Button, RefreshButton, ScopeChip, Segmented, Tabs, CTRL_H, EDGE, CHIP_SURFACE, INPUT, INPUT_STYLE, LINE, TL_AVATAR, TL_CSS } from "./workspace/Chrome.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import type {
   PrSummary, PrDetail, PrRepoId, PrThread, PrComment, PrReview, PrReviewer, PrCheck, GitRepoRef, FileChange,
   PrReaction, PrAuthorAssociation, PrEvent, PrCommit, PrFile, PrCheckJob, PrLocalHead,
-  ReviewRecipe, ReviewRecipeGroup, ReviewRecipeContext,
+  ReviewRecipe, ReviewRecipeGroup, ReviewRecipeContext, PrActionResult,
 } from "../../../shared/types.ts";
 import { api, type BranchSpend, type RepoSpend } from "../lib/api.ts";
 import {
@@ -51,25 +52,25 @@ import { updateBranchMove, prConflicted, gitSaysClean as cleanMerge } from "../l
 import { depSpec } from "../../../shared/deps.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { useMergeDialog } from "./MergeDialog.tsx";
-import { mergeCardRef, mergeNote, statusColor } from "../lib/cardMove.ts";
+import { mergeCardRef, mergeNote, statusColor, rfqaStatus } from "../lib/cardMove.ts";
 import { cardPlan, cardPlanNote } from "../lib/cardPlan.ts";
-import { cardOf, askingCard, onCard, forgetCard, forgetCards, cardVersion, withCard } from "../lib/prCardStore.ts";
+import { cardOf, askingCard, onCard, putCard, forgetCards, cardVersion, withCard } from "../lib/prCardStore.ts";
 import { PeoplePick } from "./PeoplePick.tsx";
 import { SCROLLBAR_CSS, LINEBTN_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, LineMenuCtx, type LinePick, type LineSel } from "./diff/DiffLines.tsx";
 import { Toggle } from "./diff/DiffControls.tsx";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { Select } from "./Select.tsx";
-import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, parseShieldBadge, toggleChecklistItem, type MdBlock, type MdListItem, type ParsedFile } from "../lib/prBody.ts";
+import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, parseShieldBadge, toggleChecklistItem, parseChecklist, type MdBlock, type MdListItem, type ParsedFile } from "../lib/prBody.ts";
 import { afterViewed, fileAtFloor, stepFileIndex, verticalScrollerOf } from "../lib/prNav.ts";
 import { buildFileTree, treeOrder, type TreeNode } from "../lib/prFileTree.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
 import { keepLoadedChecks } from "../lib/prMerge.ts";
 import { askingBehind, behindAnswer, forgetBehind, forgetOneBehind, onBehind, refreshBehind } from "../lib/prBehindStore.ts";
-import { forgetRollups, refreshRollup } from "../lib/prRollupStore.ts";
-import { overlayDetail, refreshPlan } from "../lib/prRefresh.ts";
+import { refreshRollup } from "../lib/prRollupStore.ts";
+import { overlayDetail, holdEdits, refreshPlan, rowPatch, type EditLog } from "../lib/prRefresh.ts";
 import {
   anchorId, bootstrapSince, clearSeen, foldedIdx, markAllSeen, newKeys, newSince, onSeenChange, readSeen,
-  reviewSpeaks, threadLastAt, threadMovedOn, writeSeen, type NewAtom,
+  reviewSpeaks, writeSeen, type NewAtom,
 } from "../lib/prNew.ts";
 import { unreadOf, type Unread } from "../lib/prUnread.ts";
 import { quoteReply } from "../lib/prQuote.ts";
@@ -104,7 +105,7 @@ import { useClickupSetup } from "../lib/clickupSetup.ts";
 import type { ListStatus as CuStatus, ListMember as CuMember, ProviderTask } from "../../../shared/providers.ts";
 import { CloseButton, CloseIcon } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { AgentIcon, ArrowIcon, AttachIcon, BlockedIcon, BoltIcon, BranchIcon, CaretIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, EditIcon, EyeIcon, FileIcon, FlagIcon, IconLabel, LinkIcon, MergeIcon, MoreIcon, PlusIcon, RefreshIcon, SearchIcon, SparkleIcon, StarIcon, TagIcon, UndoIcon, UserIcon } from "../lib/glyphIcons.tsx";
+import { AgentIcon, ArrowIcon, AttachIcon, BlockedIcon, BoltIcon, BranchIcon, CaretIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CommitIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, EditIcon, EyeIcon, FileIcon, FlagIcon, IconLabel, LinkIcon, MergeIcon, MoreIcon, PlusIcon, RefreshIcon, SearchIcon, SparkleIcon, StarIcon, TagIcon, UndoIcon, UserIcon } from "../lib/glyphIcons.tsx";
 import { PrIcon } from "./workspace/icons.tsx";
 import { CardChip } from "../lib/priority.tsx";
 import { ColumnsIcon, InboxIcon, QuoteIcon } from "./settingsNavIcons.tsx";
@@ -112,6 +113,8 @@ import { pins, isPinned, togglePin, subscribePins, type Pin } from "../lib/prPin
 import { TriageBoard } from "./TriageBoard.tsx";
 import { Inbox } from "./prs/Inbox.tsx";
 import { FileRail } from "./FileRail.tsx";
+import { Optimistic, type Sent, reactionPatch, bodyPatch, resolvedPatch, labelsPatch, assigneesPatch, reviewersPatch, milestonePatch, draftPatch, titlePatch } from "../lib/prOptimistic.ts";
+import { prTimeline } from "../lib/prTimeline.ts";
 
 /**
  * The second half of a merge, named once.
@@ -285,9 +288,14 @@ function Dot({ tint, title }: { tint: string; title?: string }) {
 }
 
 function Chip({ text, tint, title }: { text: string; tint: string; title?: string }) {
+  // `tint` is a label's OWN colour — GitHub's hex, not a theme token — so it
+  // never passed through `inkTints` and was painted on straight: GitHub picks
+  // these against its own dark default, and half of them fail on a light
+  // theme's near-white surfaces. `dataInk` runs the same lift `inkTints` runs
+  // for theme tints, just read off the live page instead of a theme object.
   return (
     <span title={title} className="shrink-0 text-[10px] px-1.5 py-px rounded-full uppercase tracking-wide"
-      style={{ color: tint, background: `color-mix(in srgb, ${tint} 10%, transparent)` }}>{text}</span>
+      style={{ color: dataInk(tint), background: `color-mix(in srgb, ${tint} 10%, transparent)` }}>{text}</span>
   );
 }
 
@@ -344,7 +352,7 @@ function CardPill({ label, onClick, title, external, className, priority, status
   return (
     <span className={`align-middle inline-flex items-center gap-1 ${className ?? ""}`}>
       <CardChip id={label} priority={priority ?? null} status={status} title={title} onOpen={onClick} />
-      {external && <span aria-hidden style={{ fontSize: 10, opacity: 0.7, color: "var(--primary)" }}>↗</span>}
+      {external && <span aria-hidden style={{ fontSize: 10, opacity: 0.7, color: "var(--primary-ink)" }}>↗</span>}
     </span>
   );
 }
@@ -395,6 +403,9 @@ function PrCardChip({ pr, card }: {
  */
 function p2Verdict(hv: PrSummary["humanReview"], rows: ReviewerRow[], decision?: string | null, gate?: PrDetail["gate"]): {
   tint: string; glyph: React.ReactNode; head: string; who?: string; note?: string; url?: string;
+  /** A changes-requested verdict's own Go to it moved into the review
+   *  history below, which lists every round rather than only this one. */
+  noGoTo?: boolean;
 } | null {
   const named = (list: string[]) =>
     list.slice(0, 2).join(" and ") + (list.length > 2 ? ` +${list.length - 2}` : "");
@@ -403,7 +414,8 @@ function p2Verdict(hv: PrSummary["humanReview"], rows: ReviewerRow[], decision?:
     ? hv
     : (() => {
       const r = reviewVerdict(rows);
-      return r.kind === "none" ? null : { kind: r.kind, who: r.who, mine: false } as NonNullable<PrSummary["humanReview"]>;
+      return r.kind === "none" ? null
+        : { kind: r.kind, who: r.who, mine: false, askedAgain: r.askedAgain, cleared: r.cleared } as NonNullable<PrSummary["humanReview"]>;
     })();
   if (!v) return null;
   const who = named(Array.isArray(v.who) ? v.who : []);
@@ -420,9 +432,15 @@ function p2Verdict(hv: PrSummary["humanReview"], rows: ReviewerRow[], decision?:
        */
       /* Whether it still COUNTS is GitHub's answer — see staleApproval. Where
          GitHub still counts it, amber would say "gone" about an approval the
-         merge box on github.com lists as valid. */
+         merge box on github.com lists as valid — commits on top of it are a
+         quiet note, not a colour change. AMBER IS FOR A RE-REQUEST, not for
+         time passing: reported side by side with the board card, which drew
+         this exact stale-but-counted approval amber with nothing re-asked —
+         a fact this row got right and that one did not. */
       const s = staleApproval(decision, v.mine ? "You approved" : who ? `Approved by ${who}` : "Approved", gate);
-      return { tint: s.counts ? "var(--success)" : "var(--warning)", glyph: <RefreshIcon size={ICON.xs} />, url: v.url,
+      const amber = v.askedAgain || !s.counts;
+      return { tint: amber ? "var(--warning)" : "var(--success)",
+        glyph: amber ? <RefreshIcon size={ICON.xs} /> : <DoneIcon size={ICON.xs} />, url: v.url,
         // The reviewer is inside the sentence: "… — still counts by ada" was
         // the one order the trailing " by" could not read in.
         head: s.head, who: undefined,
@@ -435,9 +453,21 @@ function p2Verdict(hv: PrSummary["humanReview"], rows: ReviewerRow[], decision?:
       note: "Whatever is listed below, the review is done" };
   }
   if (v.kind === "changes") {
+    /*
+     * CLEARED: every one of them has been re-asked, so nobody named here is
+     * still the one holding up the merge — draw it like GitHub's own pending
+     * arrow (amber), not the still-standing red. `v.who` still names them:
+     * the merge is waiting on their SECOND look, not on a stranger.
+     */
+    if (v.cleared) {
+      return { tint: "var(--warning)", glyph: <CircleIcon size={ICON.xs} />, url: v.url, noGoTo: true,
+        head: v.mine ? "Waiting on you" : "Waiting on review",
+        who: v.mine ? undefined : who,
+        note: v.mine ? "You were asked to look again." : "Changes applied, asked to look again." };
+    }
     /* A band, not a line among the obstacles. It is the same kind of fact as an
        approval — a person decided — and it was drawn as neither. */
-    return { tint: "var(--error)", glyph: <CrossIcon size={ICON.xs} />, url: v.url,
+    return { tint: "var(--error)", glyph: <CrossIcon size={ICON.xs} />, url: v.url, noGoTo: true,
       head: v.mine ? "You asked for changes" : "Changes requested",
       who: v.mine ? undefined : who,
       /*
@@ -462,22 +492,155 @@ function p2Verdict(hv: PrSummary["humanReview"], rows: ReviewerRow[], decision?:
     note: "Somebody wrote, without approving or asking for changes." };
 }
 
-function ReviewChip({ v }: { v: PrSummary["humanReview"] }) {
+function ReviewChip({ v, decision }: { v: PrSummary["humanReview"]; decision?: string | null }) {
   if (!v) return null;
   /* Capitalised, like GitHub's own — "approved" all lower case beside
      "APPROVED" on the same screen was the inconsistency reported. */
   if (v.kind === "approved") {
-    return v.stale
+    /* Amber for a RE-REQUEST, not for time passing — see p2Verdict's own
+       note. An approval GitHub still counts is green here too, even with
+       commits on top of it; this chip has no room for the quiet note, so it
+       drops the "moved" word rather than say something the merge box, right
+       below it on the same pull request, does not. */
+    const amber = v.askedAgain || !staleApproval(decision).counts;
+    return v.stale && amber
       ? <Chip text="Approved · moved" tint="var(--warning)" />
       : <Chip text="Approved" tint="var(--success)" />;
   }
   if (v.kind === "changes") {
+    /* Everybody who requested changes has since been re-asked — pending, like
+       the list's own "Awaiting review" chip, not still red. */
+    if (v.cleared) return <Chip text="Awaiting review" tint="var(--warning)" />;
     return v.askedAgain
       ? <Chip text="Changes requested · asked again" tint="var(--error)" />
       : <Chip text="Changes requested" tint="var(--error)" />;
   }
   if (v.kind === "awaiting") return <Chip text="Awaiting review" tint="var(--warning)" />;
   return <Chip text="Commented" tint="var(--text3)" />;
+}
+
+const REVIEW_ROUND: Record<string, { word: string; tint: string; glyph: React.ReactNode }> = {
+  APPROVED: { word: "Approved", tint: "var(--success)", glyph: <DoneIcon size={ICON.xs} /> },
+  CHANGES_REQUESTED: { word: "Changes requested", tint: "var(--error)", glyph: <CrossIcon size={ICON.xs} /> },
+  COMMENTED: { word: "Commented", tint: "var(--text3)", glyph: <CommentIcon size={ICON.xs} /> },
+};
+
+/**
+ * PAST ROUNDS, not just the newest verdict.
+ *
+ * The merge box used to carry one review as a fact with a "Go to it" beside
+ * it, and round one read exactly like round three once round three's
+ * re-request went out — the box had already forgotten there had been a first
+ * round at all. Collapsed by default: most pull requests never need it open,
+ * and it would otherwise out-grow the box it sits in on anything reviewed
+ * more than a couple of times.
+ *
+ * THE AUTHOR'S OWN COMMENTS ARE NOT A ROUND. Answering your own threads
+ * arrives as a COMMENTED review — see `humanVerdict`'s own reason for
+ * dropping them from the verdict — and on the installed build they filled the
+ * list eight deep with the one person who is never a reviewer of their own
+ * pull request, before the one real round anybody needed to see.
+ *
+ * No per-round thread or line-comment count: GitHub prices that as a nested
+ * connection per review (see the note by `SEL_TALK` in prs.ts — sixty
+ * reviews would each cost their own `comments(first:0)`), and a thread carries
+ * no link back to the review it came from either, so there is nothing in what
+ * this panel already fetches to count it from. The same is true of WHEN a
+ * re-request went out: `reviewRequests` says who is outstanding, never since
+ * when, so the ↻ here is a fact ("asked again"), not a time.
+ */
+function ReviewHistory({ reviews, pending, author, onGoReview }: {
+  reviews?: PrReview[];
+  pending?: PrReviewer[];
+  /** The pull request's own author — their replies are not a reviewer's
+   *  round, whatever state GitHub filed them under. */
+  author?: string;
+  onGoReview: (nodeId: string | undefined, url: string) => void;
+}) {
+  /* Closed by default — most pull requests never need it, and open by
+     default would out-grow the box on anything reviewed more than a couple
+     of times. */
+  const [open, setOpen] = useState(false);
+  const authorLc = (author || "").toLowerCase();
+  const rounds = (reviews ?? [])
+    .filter((r) => !r.isBot && r.author?.toLowerCase() !== authorLc && REVIEW_ROUND[r.state])
+    .sort((a, b) => (b.submittedAt || "").localeCompare(a.submittedAt || ""));
+  // Nothing to look back on unless a round once asked for changes or just
+  // commented — an all-approvals pull request has no "history" worth a box.
+  if (!rounds.some((r) => r.state === "CHANGES_REQUESTED" || r.state === "COMMENTED")) return null;
+
+  const pendingLogins = new Set((pending ?? []).filter((p) => !p.isTeam).map((p) => p.login.toLowerCase()));
+  const seenAuthor = new Set<string>();
+
+  return (
+    <div style={{ borderBottom: LINE }}>
+      {/*
+       * A REAL DISCLOSURE, copied from the board's own group headers
+       * (TasksPanel's status groups): the whole row is the control, not a
+       * glyph beside it, and the chevron is a drawn triangle that rotates
+       * rather than a text arrow disappearing into this font at 11px.
+       */}
+      <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open}
+        title={open ? "Hide past rounds" : "Show past rounds"}
+        className="agx-btn w-full flex items-center gap-2 px-3 py-1.5 text-[11.5px] text-left hover:bg-white/5"
+        style={{ color: "var(--text2)" }}>
+        <span aria-hidden className="inline-flex items-center justify-center shrink-0 w-3.5">
+          <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none"
+            style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform 120ms ease" }}>
+            <path d="M4 2.5 L8.5 6 L4 9.5" stroke="var(--text2)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </span>
+        <span className="text-[11px] font-medium">Review history</span>
+        <span className="text-[10px] tabular-nums px-1.5 rounded-full" style={{ ...CHIP_SURFACE, color: "var(--text3)" }}>{rounds.length}</span>
+      </button>
+      {open && (
+        <div className="flex flex-col pb-1">
+          {rounds.map((r, i) => {
+            const kind = REVIEW_ROUND[r.state]!;
+            // Only the reviewer's OWN latest round can have been re-asked since —
+            // an earlier round of theirs was superseded before any re-request.
+            const isLatestForAuthor = !seenAuthor.has(r.author.toLowerCase());
+            seenAuthor.add(r.author.toLowerCase());
+            const again = isLatestForAuthor && pendingLogins.has(r.author.toLowerCase());
+            /*
+             * THE WHOLE ROW IS THE JUMP, not a button squeezed in beside the
+             * text — the same "the heading is the control" rule the
+             * disclosure above already follows. Disabled (no pointer, no
+             * hover) on the rare review GitHub gave no URL for.
+             */
+            return (
+              <button key={r.nodeId ?? `${r.author}-${r.submittedAt}-${i}`}
+                type="button" disabled={!r.url} onClick={() => r.url && onGoReview(r.nodeId, r.url)}
+                title={r.url ? "Go to this review in the conversation" : undefined}
+                className="agx-btn w-full flex items-center gap-1.5 pl-9 pr-3 py-1.5 text-[11px] text-left whitespace-nowrap hover:bg-white/5 disabled:hover:bg-transparent disabled:cursor-default">
+                <span aria-hidden className="flex shrink-0" style={{ color: kind.tint }}>{kind.glyph}</span>
+                <Avatar login={r.author} size={14} />
+                <b className="shrink-0 truncate max-w-[110px]" style={{ color: "var(--text2)", fontWeight: 500 }}>{r.author}</b>
+                <Chip text={kind.word} tint={kind.tint} />
+                <span className="shrink-0" style={{ color: "var(--text3)" }}
+                  title={r.submittedAt ? new Date(r.submittedAt).toLocaleString() : undefined}>
+                  {ago(r.submittedAt)}
+                </span>
+                {/* No per-round thread count: a thread carries no link back to
+                    the review it came from, so there is nothing in what this
+                    panel already fetches to count it from — see the note on
+                    this component. A chip that cannot be true for any round
+                    is worse than no chip. */}
+                {again && <Chip text="asked again" tint="var(--warning)" title="Re-requested since this round" />}
+                <span className="flex-1 min-w-0" />
+                {r.url && (
+                  <span aria-hidden className="shrink-0 inline-flex items-center gap-1"
+                    style={{ height: CTRL_H.compact, color: "var(--text3)" }}>
+                    Go to it<ArrowIcon size={ICON.xs} />
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function Bar({ parts }: { parts: { pct: number; tint: string }[] }) {
@@ -490,87 +653,20 @@ function Bar({ parts }: { parts: { pct: number; tint: string }[] }) {
 }
 
 
+/** The panel's button: `Button` from Chrome.tsx under this file's old prop
+ *  names. `small` is the `compact` rung; the reasoning behind the fixed height
+ *  and the in-button spinner lives on `Button`. */
 export function Btn({ children, onClick, disabled, danger, primary, ok, warn, title, small, pending }: {
   children: React.ReactNode; onClick?: () => void; disabled?: boolean;
   danger?: boolean; primary?: boolean; ok?: boolean; warn?: boolean; title?: string; small?: boolean;
-  /**
-   * This button's own request is in flight.
-   *
-   * Every action in this panel is a round trip through `gh`, which is a second
-   * or two on a good day, and the only feedback was the button going grey — the
-   * same grey it wears when it is disabled for a reason that has nothing to do
-   * with you. Reported as the worst thing about the app: "we have to give
-   * feedback on async requests, ALWAYS".
-   *
-   * The spinner goes IN the button, before the label, and the label stays: a
-   * control that swaps its words for "Working…" moves everything beside it, and
-   * you can no longer tell which of three buttons you pressed.
-   */
   pending?: boolean;
 }) {
-  // `warn` is the amber "this mutates the branch" accent, matching the Source
-  // Control bar's sync/behind colour (--warning). Used for update-branch, which
-  // merges the base into this branch — a consequential action that should not
-  // read the same as its plain neighbours.
-  const edge = danger ? "var(--error)" : ok ? "var(--success)" : warn ? "var(--warning)" : primary ? "var(--primary)" : "var(--border)";
+  const tone = danger ? "danger" : ok ? "ok" : warn ? "warn" : primary ? "primary" : "plain";
   return (
-    <button onClick={onClick} disabled={disabled || pending} title={pending ? "Working…" : title}
-      aria-busy={pending || undefined}
-      /*
-       * `leading-none`, and it is not a nicety.
-       *
-       * Buttons with identical classes came out different heights, and the
-       * cause is the LABEL: `↗` and `⋯` are not in the UI font, so they arrive
-       * from a fallback whose line box is taller, and the button grows to hold
-       * it. Measured side by side at the same font-size and padding: 17px for a
-       * plain-text label against 21px for one carrying an arrow — a row of
-       * three controls at two heights, with nothing in the CSS to explain it.
-       *
-       * Pinning the line height makes the box the padding's business rather
-       * than the glyph's. Same measurement after: 16, 16, 16.
-       */
-      /*
-       * A FIXED height, and the contents centred in it.
-       *
-       * Two attempts at making these agree failed because both tried to make
-       * the box come out the same by accident: same classes, then same line
-       * height. It kept not working, because the height was still a function of
-       * the label — `↗` and `⋯` are not in the UI font and arrive from a
-       * fallback with its own metrics, and a fallback can differ per machine,
-       * per theme font setting, per glyph.
-       *
-       * So the height stops being derived at all. `inline-flex` + `items-center`
-       * + an explicit height means a row of these is the same row whatever is
-       * written on them, and the padding only decides the width.
-       */
-      className={`agx-btn rounded inline-flex items-center justify-center gap-1 whitespace-nowrap leading-none disabled:opacity-40 ${small ? "text-[10px] px-2 h-[24px]" : "text-[10.5px] px-2.5 h-[28px]"}`}
-      style={{
-        // A plain button's label was --text2, a tier meant for labels beside
-        // things — so "Comment" sat at the contrast of a caption next to the
-        // button it competes with. It is a control: it reads at full strength,
-        // and the border is what says it is the quieter of the two.
-        color: primary ? "var(--bg)" : danger ? "var(--error)" : ok ? "var(--success)" : warn ? "var(--warning)" : "var(--text)",
-        background: primary ? "var(--primary)" : warn ? "color-mix(in srgb, var(--warning) 16%, transparent)"
-          // A quiet button still needs an edge you can find. Transparent on a
-          // panel, with a border mixed at half strength, was a label with a
-          // suggestion of a box — on the neutral themes, where --border is
-          // close to the surface it sits on, it vanished entirely.
-          : "color-mix(in srgb, var(--border) 30%, transparent)",
-        border: `1px solid color-mix(in srgb, ${edge} ${primary ? 100 : warn ? 55 : 85}%, transparent)`,
-        cursor: disabled ? "not-allowed" : "pointer",
-        // The filled one carries the weight. On a neutral theme --primary is a
-        // grey, so fill alone does not separate the two — the label has to say
-        // which is which as well.
-        fontWeight: primary ? 600 : warn ? 500 : 500,
-      }}>
-      {pending && (
-        <span className="agx-spin mr-1.5 shrink-0" aria-hidden
-          style={{ width: 9, height: 9, borderWidth: 1.5,
-            borderColor: primary ? "color-mix(in srgb, var(--bg) 55%, transparent)" : "currentColor",
-            borderTopColor: "transparent" }} />
-      )}
+    <Button onClick={onClick} disabled={disabled} pending={pending} title={title}
+      size={small ? "compact" : "regular"} tone={tone}>
       {children}
-    </button>
+    </Button>
   );
 }
 
@@ -601,19 +697,7 @@ export const MD_CSS = `
    empty beside text that stopped in mid-air. GitHub caps nothing here either,
    so the same pull request read narrower in the app than on the page it came
    from. Reading comfort on a wide display is what the panel width is for. */
-/* One timeline, one rail. The node says what kind of thing happened; the
-   rail says they happened in an order. */
-.agx-tl{position:relative;padding-left:26px}
-.agx-tl::before{content:"";position:absolute;left:9px;top:6px;bottom:6px;width:2px;border-radius:2px;background:color-mix(in srgb,var(--border) 42%,transparent)}
-.agx-ev{position:relative;margin-bottom:10px}
-.agx-ev:last-child{margin-bottom:0}
-.agx-node{position:absolute;left:-26px;top:6px;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:9px;background:var(--bg);border:2px solid color-mix(in srgb,var(--text) 24%,transparent)}
-/* A small event — opened, force-pushed, review requested. It sits on the same
-   rail as the comments but weighs a fraction of one, because it is context
-   rather than something anybody said. */
-.agx-tiny{position:relative;display:flex;align-items:center;gap:7px;font-size:10.5px;color:var(--text3);padding:3px 0;margin-bottom:10px}
-.agx-tiny .agx-node{top:1px;width:18px;height:18px;left:-26px}
-.agx-tiny b{color:var(--text2);font-weight:500}
+${TL_CSS}
 /* menus — .agx-menu itself now lives in index.css: it was defined HERE, in a
    <style> this component injects, so a menu in any other panel had no
    background until somebody had opened a pull request. See index.css. */
@@ -637,7 +721,7 @@ export const MD_CSS = `
    was set in --text2 — a grey chosen for labels, against a dark panel. The
    dimmer tiers still exist and still recede; they are for eyebrows, timestamps
    and hints, which is what "secondary" was supposed to mean. */
-.agx-md{margin:0;line-height:1.7;font-size:12.5px;color:var(--text)}
+.agx-md{margin:0;line-height:1.7;font-size:12.5px;color:var(--text);font-family:var(--font-prose)}
 .agx-md>*:first-child{margin-top:0}
 .agx-md>*:last-child{margin-bottom:0}
 .agx-md p{margin:0 0 .85em}
@@ -1131,7 +1215,7 @@ function ImageDiff({ root, number, path, status }: {
     <div className="flex-1 min-w-0 p-3 flex flex-col gap-1.5 items-start">
       <span className="text-[9.5px] uppercase tracking-wider" style={{ color: tint ?? "var(--text3)" }}>{label}</span>
       {src
-        ? <img src={src} alt="" className="max-w-full rounded" style={{ maxHeight: 320, border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", background: "repeating-conic-gradient(color-mix(in srgb, var(--border) 22%, transparent) 0% 25%, transparent 0% 50%) 50% / 16px 16px" }} />
+        ? <img src={src} alt="" className="max-w-full rounded" style={{ maxHeight: 320, border: EDGE, background: "repeating-conic-gradient(color-mix(in srgb, var(--border) 22%, transparent) 0% 25%, transparent 0% 50%) 50% / 16px 16px" }} />
         : <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>—</span>}
     </div>
   );
@@ -1373,7 +1457,7 @@ function PrTableHead() {
         // The workspace panel this lives in is painted --bg2; a sticky heading
         // in --bg would read as a band of the wrong colour sliding over the
         // rows rather than as the table's own header.
-        background: "var(--bg2)",
+        background: "var(--surface-card)",
         color: "var(--text3)",
         fontSize: 10,
         letterSpacing: ".07em",
@@ -1432,7 +1516,7 @@ function PinnedCapsule({ pinned, pinState, selected, current, onOpen }: {
       <div className="flex items-center gap-1.5 rounded-full pl-2.5 pr-1 py-0.5 min-w-0 overflow-x-auto agx-scroll pointer-events-auto"
         style={{
           background: "color-mix(in srgb, var(--bg3) 85%, transparent)",
-          border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)",
+          border: EDGE,
         }}>
         {pinned.length === 0
           ? <span className="text-[10px] shrink-0 inline-flex items-center gap-1" style={{ color: "var(--text4)" }}><StarIcon size={ICON.xs} />nothing pinned</span>
@@ -1453,7 +1537,7 @@ function PinnedCapsule({ pinned, pinState, selected, current, onOpen }: {
             className="group flex items-center gap-1 rounded-full shrink-0 overflow-hidden pl-1.5"
             style={p.number === selected
               ? { background: "color-mix(in srgb, var(--primary) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }
-              : { border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+              : { border: EDGE }}>
             {/* A dot, not a coloured number. Colour alone cannot say "green" to
                 somebody who cannot see green, and the same dot is what the rows
                 in the list use — so the bar and the list agree rather than
@@ -1496,7 +1580,7 @@ function PinnedCapsule({ pinned, pinState, selected, current, onOpen }: {
             className="text-[10px] px-2 py-px rounded-full shrink-0 inline-flex items-center gap-1"
             style={currentPinned
               ? { color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }
-              : { color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 32%, transparent)", background: "color-mix(in srgb, var(--warning) 8%, transparent)" }}>
+              : { color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 32%, transparent)", background: "color-mix(in srgb, var(--warning) 8%, transparent)" }}>
             <StarIcon size={ICON.xs} filled={currentPinned} />{currentPinned ? "Pinned" : `Pin #${current.number}`}
           </button>
         )}
@@ -1607,7 +1691,10 @@ function Pill({ on, label, icon, dot, count, countTint, title, onClick }: {
 }) {
   return (
     <button onClick={onClick} title={title} role="tab" aria-selected={on}
-      className="agx-btn text-[10px] leading-none px-2 py-1 rounded-lg flex items-center gap-1.5 shrink-0 transition-all"
+      /* The `CHIP` rung (28, 11px): the Open / Closed / All `Segmented` at
+         the end of this row is house `Chip`s, and a row of 20px pills beside
+         28px chips read as two kinds of control. */
+      className="agx-btn text-[11px] leading-none px-2.5 min-h-[28px] rounded-lg flex items-center gap-1.5 shrink-0 transition-all"
       style={{
         color: on ? "var(--text)" : "var(--text3)",
         background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
@@ -1732,7 +1819,7 @@ function PrRow({ p, active, onSelect, onReview, pinned, onTogglePin, q, unread, 
             <span style={{ color: "var(--text4)" }}>→</span>
             <span style={isTrunk(p.baseRefName)
               ? { color: "var(--text3)" }
-              : { color: "var(--warning)" }}>{p.baseRefName}</span>
+              : { color: "var(--warning-ink)" }}>{p.baseRefName}</span>
           </span>
           {/* Beside the branch it is about, and set in the row's own dim tone
               rather than a colour: this is a fact about the pull request, not a
@@ -1743,7 +1830,7 @@ function PrRow({ p, active, onSelect, onReview, pinned, onTogglePin, q, unread, 
             <span className="shrink-0 tabular-nums" title={spend.title}
               style={{ color: "var(--text3)" }}>{spend.text}</span>
           )}
-          {p.isDraft ? <Chip text="draft" tint="var(--text3)" /> : <ReviewChip v={p.humanReview} />}
+          {p.isDraft ? <Chip text="draft" tint="var(--text3)" /> : <ReviewChip v={p.humanReview} decision={p.reviewDecision} />}
           {shownLabels.map((l) => <Chip key={l.name} text={l.name} tint={l.color ? `#${l.color}` : "var(--primary)"} />)}
           {p.labels.length > shownLabels.length && (
             <span className="tabular-nums shrink-0" title={p.labels.map((l) => l.name).join(", ")}>+{p.labels.length - shownLabels.length}</span>
@@ -1762,7 +1849,7 @@ function PrRow({ p, active, onSelect, onReview, pinned, onTogglePin, q, unread, 
       <button onClick={(e) => { e.stopPropagation(); onReview(); }}
         className="agx-btn text-[10px] px-2 py-1 rounded justify-self-end whitespace-nowrap"
         title="Hand this pull request to the chat for a local review"
-        style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", color: "var(--text2)" }}>
+        style={{ border: EDGE, color: "var(--text2)" }}>
         Review →
       </button>
     </div>
@@ -1943,7 +2030,18 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const condensed = false;
   /** A file being read whole, over the panel. Null when nothing is open. */
   const [peek, setPeek] = useState<Peek | null>(null);
-  const [detail, setDetail] = useState<PrDetail | null>(null);
+  const [serverDetail, setDetail] = useState<PrDetail | null>(null);
+  /* What the screen draws is the server's pull request with any cheap write
+     still standing over it — see lib/prOptimistic.ts for why a layer rather
+     than editing `serverDetail` in place. `layerTick` is how the layer says
+     it changed. */
+  const [layerTick, setLayerTick] = useState(0);
+  const layerFail = useRef<(text: string) => void>(() => {});
+  const [layers] = useState(() => new Optimistic<PrDetail>({
+    onChange: () => setLayerTick((n) => n + 1),
+    onFail: (text) => layerFail.current(text),
+  }));
+  const detail = useMemo(() => (serverDetail ? layers.view(serverDetail) : null), [serverDetail, layers, layerTick]);
   /** Showing what was held while the real answer is on its way. Only true when
    *  there was something to show — a cold open has nothing to be stale about. */
   const [detailStale, setDetailStale] = useState(false);
@@ -2404,6 +2502,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     setToast({ ok, msg });
     setTimeout(() => setToast(null), 4500);
   }, []);
+  /* A cheap write that did not land is reported where every other write is. */
+  layerFail.current = (text) => flash(false, text);
 
   useEffect(() => {
     if (!active) return;
@@ -2483,6 +2583,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settleDelay = useRef(SETTLE_MS);
   const loadListRef = useRef<((force?: boolean) => void) | null>(null);
+  /** When each pull request was last edited from the detail, and the row as the
+   *  detail then drew it — so a list read before the edit cannot undo it. */
+  const editedAt = useRef(new Map<number, number>());
+  const editLog = useRef<EditLog>(new Map());
 
   const loadList = useCallback((force = false) => {
     if (!root) return;
@@ -2494,7 +2598,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       // Same rule as the board: a refresh may add and correct, but it may not
       // un-know. Every fetch starts at the fast pass, so without this a list
       // that had its check states dropped back to "not in yet" on every poll.
-      setPrs((cur) => keepLoadedChecks(cur, r.prs));
+      setPrs((cur) => holdEdits(keepLoadedChecks(cur, r.prs), editLog.current, r.fetchedAt));
       setListState({ fetchedAt: r.fetchedAt, loading: r.loading, checksPending: r.checksPending, error: r.error, needsAuth: r.needsAuth, total: r.total, hasNext: r.hasNext, cursor: r.cursor ?? null, pageSize: r.pageSize });
       // The keyboard cursor, never the open pull request. This lands on every
       // poll and on every scope switch, and when the list was a column beside a
@@ -2593,60 +2697,18 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   // pane nobody is looking at — and resumes on return. Resuming refreshes; it
   // does not reset.
 
-  /**
-   * Warm the states you are not looking at.
+  /*
+   * Nothing is fetched ahead of being asked for.
    *
-   * Each state is its own cache entry on the server, so the first visit to
-   * Closed or All paid the whole fetch — about a second and a half of GitHub —
-   * while the user watched. Touching them once in the background makes the
-   * switch instant. Staggered, because the point is to spend idle time, not to
-   * queue three searches behind the one being waited on.
+   * The panel used to warm the other states (Closed, All), the next page, and
+   * five repository-wide counts (Failing, Ready and All among them) in the
+   * background, on every refresh — each a GraphQL request against the
+   * account's hourly 5000, most of them for tabs that are only ever opened by
+   * hand. What is loaded without a click is YOUR two queues: Mine and Needs my
+   * review, which are also the board. Their counts come from those lists'
+   * totals (see the board's fetch); any other tab, state or page pays for its
+   * own read when it is opened.
    */
-  useEffect(() => {
-    if (!active || !root || listState.loading) return;
-    const others = (["open", "closed", "all"] as StateSel[]).filter((st) => st !== stateSel);
-    const timers = others.map((st, i) => setTimeout(() => {
-      void api.prList(root, filter, st, false).catch(() => {});
-      void api.prCounts(root, st).catch(() => {});
-    }, 1500 + i * 2000));
-    return () => timers.forEach(clearTimeout);
-  }, [active, root, filter, stateSel, listState.loading]);
-
-  /**
-   * Fetch the next page before it is asked for.
-   *
-   * Each page is its own entry in the server's cache, so touching it once means
-   * Next answers from memory instead of waiting on GitHub. Deliberately after a
-   * beat, and never while the current page is still loading: the point is to
-   * spend the idle time, not to compete for it.
-   */
-  useEffect(() => {
-    if (!active || !root || !listState.hasNext || !listState.cursor || listState.loading) return;
-    const next = listState.cursor;
-    const t = setTimeout(() => { void api.prList(root, filter, stateSel, false, next).catch(() => {}); }, 900);
-    return () => clearTimeout(t);
-  }, [active, root, filter, stateSel, listState.hasNext, listState.cursor, listState.loading]);
-
-  /**
-   * Warm the filters you are not looking at.
-   *
-   * Each is its own cache entry on the server, so the first visit to a tab
-   * always paid the whole fetch. Touching them once fills the counts and leaves
-   * a warm cache to switch into. Staggered, because the server has one thread
-   * and three `gh` calls at once is the stall this panel exists to avoid.
-   */
-  useEffect(() => {
-    if (!active || !root) return;
-    let live = true;
-    // One request for all five numbers, and they are the TRUE totals for the
-    // current state — not a tally of the page on screen, which stopped being
-    // the answer the moment the list got pages, and not a stale figure carried
-    // over from a different state.
-    api.prCounts(root, stateSel)
-      .then((r) => { if (live && r.ok && r.counts) setViewCounts(r.counts as unknown as Record<string, number>); })
-      .catch(() => {});
-    return () => { live = false; };
-  }, [active, root, stateSel, listState.fetchedAt]);
 
   /*
    * A wait with a deadline.
@@ -2673,8 +2735,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     const req = ++detailReq.current;
     if (staleTimer.current) clearTimeout(staleTimer.current);
     setDetailErr("");
+    const ticket = layers.readStarted();
     api.prDetail(root, n, force).then((r) => {
       if (req !== detailReq.current) return; // a later selection already won
+      if (r.ok && r.detail) layers.readLanded(ticket, { stale: !!r.stale });
       // Disarmed by any load, so a later, ordinary open of that number is ordinary.
       const trying = tryAsPr.current?.number === n ? tryAsPr.current : null;
       tryAsPr.current = null;
@@ -2745,15 +2809,26 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
      up to date from it instead (see `overlayDetail`). */
   useEffect(() => {
     if (!detail || away) return;
+    /* Only a reading the panel stands behind. Any such reading is at least as
+       new as a list read that started before it, an edit made here or not: the
+       conflict a base move caused reached the detail first and a poll already
+       in flight brought the board's older row back over it. */
+    if (!detailStale) editLog.current.set(detail.number, { at: Date.now(), patch: rowPatch(detail) });
     setPrs((cur) => overlayDetail(cur, detail));
     setBoardMine((cur) => overlayDetail(cur, detail));
     setBoardReview((cur) => overlayDetail(cur, detail));
-  }, [detail, away]);
+  }, [detail, away, detailStale]);
 
   useEffect(() => {
     if (!active || !root) return;
     loadList();
-    const t = setInterval(() => {
+    /* Not while the window is hidden (minimised, another workspace): a poll
+       nobody can see still spends from the account's GitHub budget. Coming
+       back asks once, if a tick was skipped. */
+    let missed = false;
+    const tick = () => {
+      if (document.visibilityState === "hidden") { missed = true; return; }
+      missed = false;
       loadList();
       // Keep the open pull request current too. This reads the server's cache,
       // so it only reaches the network when that entry has actually aged out —
@@ -2761,9 +2836,13 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       // you navigate away and back.
       const n = selectedRef.current;
       if (n != null) loadDetail(n);
-    }, POLL_MS);
+    };
+    const t = setInterval(tick, POLL_MS);
+    const onBack = () => { if (missed && document.visibilityState === "visible") tick(); };
+    document.addEventListener("visibilitychange", onBack);
     return () => {
       clearInterval(t);
+      document.removeEventListener("visibilitychange", onBack);
       // Leaving the view, or changing what is being listed, cancels the
       // collection: it would otherwise land against a scope nobody is looking
       // at any more, and its backoff would still be counting from the old one.
@@ -3189,7 +3268,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     return () => clearTimeout(t);
   }, [boardOn, boardMine, boardReview]);
   useEffect(() => {
-    if (!boardOn || !root) return;
+    /* Not gated on the board being shown: these two lists are also where the
+       Mine and Needs my review counts come from, and the server answers both
+       from one cached read (see `probeOpen` in prs.ts). */
+    if (!root) return;
     let live = true;
     setBoardLoading(true);
     /* Settled rather than all: one scope failing must not leave the board
@@ -3201,11 +3283,19 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     const force = boardForce.current;
     boardForce.current = false;
     void Promise.allSettled([
-      api.prList(root, "mine", stateSel, force).then((r) => { if (live) setBoardMine((cur) => keepLoadedChecks(cur, r.prs ?? [])); }),
-      api.prList(root, "review", stateSel, force).then((r) => { if (live) setBoardReview((cur) => keepLoadedChecks(cur, r.prs ?? [])); }),
+      api.prList(root, "mine", stateSel, force).then((r) => {
+        if (!live) return;
+        setBoardMine((cur) => holdEdits(keepLoadedChecks(cur, r.prs ?? []), editLog.current, r.fetchedAt));
+        if (typeof r.total === "number") setViewCounts((c) => ({ ...c, mine: r.total! }));
+      }),
+      api.prList(root, "review", stateSel, force).then((r) => {
+        if (!live) return;
+        setBoardReview((cur) => holdEdits(keepLoadedChecks(cur, r.prs ?? []), editLog.current, r.fetchedAt));
+        if (typeof r.total === "number") setViewCounts((c) => ({ ...c, review: r.total! }));
+      }),
     ]).then(() => { if (live) setBoardLoading(false); });
     return () => { live = false; };
-  }, [boardOn, root, stateSel, listState.fetchedAt, boardTick]);
+  }, [root, stateSel, listState.fetchedAt, boardTick]);
 
   /**
    * What the agents have spent in this repository, by branch — one request for
@@ -3442,7 +3532,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   // One picker for the masthead's "＋" and the sidebar's ✎ both — lifted here
   // so it can open from the masthead on every tab, not only where the sidebar
   // renders.
-  const fieldPicker = usePrFieldPicker(detail, root, act, flash);
+  const fieldPicker = usePrFieldPicker(detail, root, act, flash,
+    (add, remove, colors) => setLabels(add, remove, colors), (...a) => field(...a));
 
   const key = repo && detail ? `${repo.key}#${detail.number}` : "";
 
@@ -3946,12 +4037,76 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     if (!detail) return;
     const title = await askText({ title: `Rename #${detail.number}`, confirmLabel: "Save", input: { label: "Title", initial: detail.title } });
     if (!title?.trim() || title.trim() === detail.title) return;
-    await act("Edit title", () => api.prEdit(root, detail.number, { title: title.trim() }));
+    void field(titlePatch(detail.number, title.trim()), () => api.prEdit(root, detail.number, { title: title.trim() }), "The title did not save", "title");
   };
 
   const doEditBody = async (body: string) => {
     if (!detail) return false;
     return act("Description", () => api.prEdit(root, detail.number, { body }));
+  };
+
+  /**
+   * A cheap write, drawn now and sent behind — see lib/prOptimistic.ts.
+   *
+   * When it lands, the pull request is read once more, quietly: that read began
+   * after the write finished, so it is the one allowed to replace the layer with
+   * GitHub's own answer. Only the pull request, and only if it is still the one
+   * open — the list is the slow read that made these feel slow in the first
+   * place, and it catches up on its own poll.
+   */
+  const cheap = (n: number, w: Parameters<typeof layers.run>[0], alsoList = false): Promise<boolean> => {
+    editedAt.current.set(n, Date.now());
+    return layers.run(w).then((ok) => {
+      if (!ok || selectedRef.current !== n) return ok;
+      loadDetail(n, true);
+      if (alsoList) loadList(true);
+      return ok;
+    });
+  };
+  /** A sidebar field or the masthead: drawn on the press like a label, and the
+   *  answer still awaited by whoever needs it (the reviewer picker moves the
+   *  card only if GitHub took the change). */
+  const field = (patch: (d: PrDetail) => PrDetail, send: () => Promise<Sent>, failText: string, lane: string) =>
+    detail ? cheap(detail.number, { patch, send, failText, lane: `${lane}:${detail.number}` }) : Promise.resolve(false);
+
+  /** A box ticked in the description. The whole body is the write, as it is on
+   *  github.com; one lane so two quick ticks cannot land in the wrong order and
+   *  leave the first one's body as the last word. */
+  const doToggleTask = (body: string) => {
+    if (!detail) return;
+    const n = detail.number;
+    cheap(n, {
+      patch: bodyPatch(n, body, parseChecklist(body)),
+      send: () => api.prEdit(root, n, { body }),
+      failText: "The checklist did not save",
+      lane: `body:${n}`,
+    });
+  };
+
+  const doResolve = (t: PrThread) => {
+    if (!detail) return;
+    const to = !t.isResolved;
+    cheap(detail.number, {
+      patch: resolvedPatch(t.id, to),
+      send: () => api.prSetThreadResolved(root, t.id, to),
+      failText: to ? "Resolve failed" : "Unresolve failed",
+      lane: `thread:${t.id}`,
+    });
+  };
+
+  /** Labels by name. Returns true on the press: the picker closes on it, and
+   *  a refusal comes back as the label disappearing again with a note. */
+  const setLabels = (add: string[], remove: string[], colors: Record<string, string> = {}) => {
+    if (!detail) return false;
+    if (!add.length && !remove.length) return true;
+    const n = detail.number;
+    cheap(n, {
+      patch: labelsPatch(n, add, remove, colors),
+      send: () => api.prLabels(root, n, add, remove),
+      failText: "Labels did not save",
+      lane: `labels:${n}`,
+    }, true);
+    return true;
   };
 
   /** Labels and reviewers both take a comma-separated list and diff it against
@@ -3968,7 +4123,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     const add = want.filter((l) => !cur.includes(l));
     const remove = cur.filter((l) => !want.includes(l));
     if (add.length === 0 && remove.length === 0) return;
-    await act("Labels", () => api.prLabels(root, detail.number, add, remove));
+    setLabels(add, remove);
   };
 
   const doReply = async (t: PrThread, body: string): Promise<boolean> => {
@@ -4001,9 +4156,14 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     }));
   };
 
-  const doReact = async (nodeId: string, content: string, on: boolean) => {
-    if (!nodeId) return;
-    await act(on ? "Reaction" : "Reaction removed", () => api.prReactTo(root, nodeId, content, on));
+  const doReact = (nodeId: string, content: string, on: boolean) => {
+    if (!nodeId || !detail) return;
+    cheap(detail.number, {
+      patch: reactionPatch(nodeId, content, on),
+      send: () => api.prReactTo(root, nodeId, content, on),
+      failText: on ? "Reaction failed" : "Removing the reaction failed",
+      lane: `react:${nodeId}:${content}`,
+    });
   };
   const doReviewers = async () => {
     if (!detail) return;
@@ -4020,7 +4180,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     const add = want.filter((l) => !cur.includes(l));
     const remove = cur.filter((l) => !want.includes(l));
     if (add.length === 0 && remove.length === 0) return;
-    await act("Reviewers", () => api.prReviewers(root, detail.number, add, remove));
+    void field(reviewersPatch(detail.number, add, remove), () => api.prReviewers(root, detail.number, add, remove), "Reviewers did not save", "reviewers");
   };
 
   /** The chase, written for you: who it waits on, what for, where — on the
@@ -4251,7 +4411,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                   one is on its way. Said quietly and in passing — the
                   alternative was an empty pane, which said nothing at all for
                   a whole second. */}
-              {detailStale && <span className="animate-pulse" style={{ color: "var(--primary)" }}>· refreshing</span>}
+              {detailStale && <span className="animate-pulse" style={{ color: "var(--primary-ink)" }}>· refreshing</span>}
             </button>
           </>
         )}
@@ -4297,7 +4457,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             * dropped, so pressing this on a pull request somebody had pushed to
             * re-read everything around a diff that stayed as it was.
             */}
-          <Btn onClick={() => {
+          <RefreshButton onRefresh={() => {
             const plan = refreshPlan(selected);
             if (plan.pr != null) {
               /* One pull request open: refresh that one. The lists, and the
@@ -4316,16 +4476,26 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               return;
             }
             forgetBehind();
-            forgetRollups();
+            /* Not the checked rollups: each is a GraphQL request per red card,
+               and one is asked again by itself once the list shows its head or
+               its aggregate moved (see rollupOf), which is exactly what a
+               forced list read below brings in. */
             /* And the tracker cards, which were the one reading Refresh could
                not shift: they are held here, not on the server, so re-asking
                the server for the same rows brought the same card back. */
             forgetCards();
-            boardForce.current = true;
-            setBoardTick((n) => n + 1);
-            loadList(true);
-          }} disabled={busy} small
-            title={selected != null ? "Refresh this pull request" : "Refresh the list"}>Refresh</Btn>
+            /* What is on screen, once. The board is YOUR two queues, and the
+               server answers both from ONE request (QUEUES_QUERY in prs.ts), as
+               it does the table when that shows one of them; a table showing
+               anything else is forced only when it is the thing on screen. */
+            if (boardShown) {
+              boardForce.current = true;
+              setBoardTick((n) => n + 1);
+            }
+            const tableIsQueue = stateSel === "open" && (filter === "mine" || filter === "review") && !cursor && !serverQuery;
+            loadList(!boardShown || tableIsQueue);
+          }} busy={busy}
+            title={selected != null ? "Refresh this pull request" : "Refresh the list"} />
         </div>
       </div>
 
@@ -4335,7 +4505,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       {away && (
         <div className="flex items-center gap-2 px-2.5 py-1.5 shrink-0 text-[11px] border-b"
           style={{ borderColor: "color-mix(in srgb, var(--warning) 30%, transparent)", background: "color-mix(in srgb, var(--warning) 8%, transparent)" }}>
-          <span style={{ color: "var(--warning)" }}>Showing {away.repo} on top of {away.back.repo}</span>
+          <span style={{ color: "var(--warning-ink)" }}>Showing {away.repo} on top of {away.back.repo}</span>
           <span className="ml-auto">
             <Btn onClick={() => { setAway(null); setSelected(null); setRoot(away.back.root); }} small>
               Back to {away.back.repo}
@@ -4384,7 +4554,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               */}
             <Pill on={boardShown} icon={<ColumnsIcon size={ICON.xs} />} label="Board"
               title={searching ? "Clear the search and go back to the lanes" : "Yours and the ones you were asked to look at, in lanes"}
-              onClick={() => { if (searching) setQuery(""); setInboxOn(false); setBoard(true); }} />
+              onClick={() => { if (searching) setQuery(""); setInboxOn(false); setStateSel("open"); setBoard(true); }} />
             {/* Its number is the only one on this row counting things nobody
                 has looked at yet, so it keeps the warning colour when it is not
                 the view you are in. */}
@@ -4407,18 +4577,16 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 style={{ color: "var(--text3)", border: "1px dashed color-mix(in srgb, var(--text) 16%, transparent)" }}>Custom</span>
             )}
             {/* Open / Closed / All — the state axis. "Closed" holds merged +
-                closed, like GitHub's own Closed tab. */}
-            <div className="ml-auto flex rounded-full overflow-hidden shrink-0 self-center" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
-              {STATES.map((s) => (
-                <button key={s.id} onClick={() => setStateSel(s.id)} title={`Show ${s.label.toLowerCase()} pull requests`}
-                  className="agx-btn text-[10px] px-2 py-0.5"
-                  style={{
-                    color: stateSel === s.id ? "var(--bg)" : "var(--text3)",
-                    background: stateSel === s.id ? "var(--primary)" : "transparent",
-                  }}>
-                  {s.label}
-                </button>
-              ))}
+                closed, like GitHub's own Closed tab. The board is a triage of
+                OPEN work (its lanes are "needs your review", "ready to land",
+                "blocked"), so picking Closed or All leaves it for the table:
+                fed the closed list, the board drew merged pull requests in
+                "Blocked" with "Open to re-run" under a heading counting them
+                as open. */}
+            <div className="ml-auto self-center">
+              <Segmented value={stateSel} label="Pull request state"
+                options={STATES.map((s) => ({ id: s.id, label: s.label, title: `Show ${s.label.toLowerCase()} pull requests` }))}
+                onChange={(s) => { setStateSel(s); if (s !== "open") setBoard(false); }} />
             </div>
           </div>
           {/* Always, once the repository is known — not "once rows arrived".
@@ -4476,13 +4644,14 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                    read. One switch now; the board just reads and writes it. */
                 onlyUnread={unreadOnly} onOnlyUnread={setUnreadOnly}
                 /*
-                 * Every open pull request, not the count for whichever filter
-                 * happened to be selected — `listState.total` is the current
-                 * scope's, so in board mode it was the size of `mine` and the
-                 * sentence read "the other 0 are a table" over three hundred
-                 * and eighty-eight of them.
+                 * Unknown, on purpose: the repository-wide count was a search
+                 * over every open pull request, fetched only to print this
+                 * number. Below zero the board says "open pull requests"
+                 * without one. `listState.total` is NOT a stand-in — it is the
+                 * current scope's, so the sentence read "the other 0 are a
+                 * table" over three hundred and eighty-eight of them.
                  */
-                total={viewCounts.all ?? listState.total ?? prs.length}
+                total={-1}
                 hasTaskProvider={hasTaskProvider}
                 pinned={(n) => isPinned(repo.nameWithOwner, n)}
                 onOpen={openPr}
@@ -4532,7 +4701,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 }} />
             ) : listState.needsAuth ? (
               <div className="p-3 text-[11px]" style={{ color: "var(--text3)" }}>
-                <div style={{ color: "var(--warning)" }}>{listState.error || "The GitHub CLI is not set up"}</div>
+                <div style={{ color: "var(--warning-ink)" }}>{listState.error || "The GitHub CLI is not set up"}</div>
                 {/* Two steps, and the second is the one people miss: an
                     installed gh that has never logged in reads exactly like a
                     missing one from here. The link is the project's own page,
@@ -4558,7 +4727,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             ) : visiblePrs.length === 0 ? (
               <div className="p-3 text-[11px] flex flex-col items-start gap-1.5" style={{ color: "var(--text3)" }}>
                 <span>No pull requests match {activeCount(filters) === 1 ? "this filter" : "these filters"}.</span>
-                <button onClick={() => setQuery("")} className="text-[10.5px] px-2 py-0.5 rounded hover:bg-white/5" style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)" }}>Clear filters</button>
+                <button onClick={() => setQuery("")} className="text-[10.5px] px-2 py-0.5 rounded hover:bg-white/5" style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)" }}>Clear filters</button>
               </div>
             ) : (
               // Dimmed, not blanked, while the next scope loads: you can still
@@ -4584,7 +4753,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               style={{ borderColor: "color-mix(in srgb, var(--text) 11%, transparent)", color: "var(--text3)" }}>
               <button onClick={() => setPages((p) => p.slice(0, -1))} disabled={pages.length === 0 || listState.loading}
                 className="agx-btn px-2 py-0.5 rounded disabled:opacity-35"
-                style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", color: "var(--text2)" }}>‹ Previous</button>
+                style={{ border: EDGE, color: "var(--text2)" }}>‹ Previous</button>
               <span className="tabular-nums">
                 Page {pages.length + 1}
                 {listState.total != null && listState.pageSize
@@ -4594,7 +4763,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               <button onClick={() => { if (listState.cursor) setPages((p) => [...p, listState.cursor!]); }}
                 disabled={!listState.hasNext || !listState.cursor || listState.loading}
                 className="agx-btn ml-auto px-2 py-0.5 rounded disabled:opacity-35"
-                style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", color: "var(--text2)" }}>Next ›</button>
+                style={{ border: EDGE, color: "var(--text2)" }}>Next ›</button>
             </div>
           )}
         </div>
@@ -4633,11 +4802,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
              * and it now carries the one thing it never had: a way to try again.
              */
             detailErr ? (
-              <div className="p-4 flex items-baseline gap-2 flex-wrap text-[11.5px]" style={{ color: "var(--error)" }}>
+              <div className="p-4 flex items-baseline gap-2 flex-wrap text-[11.5px]" style={{ color: "var(--error-ink)" }}>
                 <span>{detailErr}</span>
                 <button onClick={() => { setDetailErr(""); if (selected != null) loadDetail(selected, true); }}
                   className="agx-btn px-2 py-0.5 rounded text-[10.5px]"
-                  style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
+                  style={{ color: "var(--text2)", border: EDGE }}>
                   Try again
                 </button>
               </div>
@@ -4649,7 +4818,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                   the MouseEvent in as the pull request number. */}
               <Masthead
                 d={d} busy={busy} local={local} onShowLocal={showLocal}
-                onEditTitle={doEditTitle} onDraft={() => act(d.isDraft ? "Mark ready" : "Convert to draft", () => api.prDraft(root, d.number, !d.isDraft))}
+                onEditTitle={doEditTitle} onDraft={() => { void field(draftPatch(d.number, !d.isDraft), () => api.prDraft(root, d.number, !d.isDraft), d.isDraft ? "Mark ready failed" : "Convert to draft failed", "draft"); }}
                 onClose={doClose} onLocalReview={(recipe) => doLocalReview(undefined, recipe)}
                 onReviewInTerminal={onReviewInTerminal && d ? (recipe) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "") : undefined}
                 condensed={condensed}
@@ -4666,55 +4835,53 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               />
               {fieldPicker.node}
               <div className="flex border-b shrink-0 overflow-x-auto items-center" style={{ borderColor: "color-mix(in srgb, var(--text) 11%, transparent)" }}>
-                {TABS.map((t) => (
-                  <button key={t.id}
+                {/* The shared `Tabs`, so this strip is an exclusive group to a screen
+                    reader (`role="tab"`, `aria-selected`, arrow keys) like every
+                    other one in the app, and wears the same underline. It was plain
+                    buttons, which announced five unrelated actions. */}
+                <Tabs value={tab} label="Pull request sections" panelId="pr-tab-body"
+                  onChange={(id) => {
                     /* Written from the live element on the way out, as well as
                        on scroll. A tab whose content shrinks is clamped by the
                        browser the moment the new one renders, and a value read
                        after that is zero. */
-                    onClick={() => {
-                      const el = tabBodyRef.current;
-                      if (el && tab !== "files") tabScroll.current[tab] = el.scrollTop;
-                      setTab(t.id);
-                    }} className="text-[10.5px] px-3 py-1.5 whitespace-nowrap"
-                    style={{
-                      color: tab === t.id ? "var(--text)" : "var(--text3)",
-                      borderBottom: `2px solid ${tab === t.id ? "var(--primary)" : "transparent"}`,
-                      background: tab === t.id ? "color-mix(in srgb, var(--primary) 8%, transparent)" : "transparent",
-                    }}>
+                    const el = tabBodyRef.current;
+                    if (el && tab !== "files") tabScroll.current[tab] = el.scrollTop;
+                    setTab(id);
+                  }}
+                  options={TABS.map((t) => ({ id: t.id, label: (<>
                     {t.label}
-                    {/* The count carries the state, so a tab that wants
-                        something is amber at the number people already read
-                        rather than only at a mark beside it. */}
-                    {t.n != null && (
-                      <span className="ml-1 tabular-nums" style={t.warn ? { color: "var(--warning)" } : { opacity: .6 }}>{t.n}</span>
-                    )}
-                    {/* And the dot stays. Colour alone cannot say "amber" to
-                        somebody who cannot see it, and Review is often warn
-                        with no count at all — a verdict is owed and nothing is
-                        queued — which is a tint with nothing to tint. */}
-                    {t.warn && <span className="ml-1" style={{ color: "var(--warning)" }}>●</span>}
-                    {/* Said as a number, not a dot: "somebody replied" and
-                        "seven people replied while you were at lunch" are
-                        different sizes of the same news, and the second is why
-                        you would leave what you are doing. */}
-                    {!!t.hot && (
-                      <span className="ml-1.5 text-[9.5px] px-1.5 rounded-full tabular-nums align-middle"
-                        title={`${t.hot} new since you last looked`}
-                        style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 18%, transparent)",
-                          border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>
-                        {t.hot} new
-                      </span>
-                    )}
-                    {t.one && (
-                      <span className="ml-1.5 text-[10px] px-1 rounded align-middle"
-                        title="The tree, the diff and what the rest of the pull request says about the file you are on — all at once"
-                        style={{ color: "var(--primary)", border: "1px dashed color-mix(in srgb, var(--primary) 55%, transparent)" }}>
-                        one screen
-                      </span>
-                    )}
-                  </button>
-                ))}
+                      {/* The count carries the state, so a tab that wants
+                          something is amber at the number people already read
+                          rather than only at a mark beside it. */}
+                      {t.n != null && (
+                        <span className="ml-1 tabular-nums" style={t.warn ? { color: "var(--warning-ink)" } : { opacity: .6 }}>{t.n}</span>
+                      )}
+                      {/* And the dot stays. Colour alone cannot say "amber" to
+                          somebody who cannot see it, and Review is often warn
+                          with no count at all — a verdict is owed and nothing is
+                          queued — which is a tint with nothing to tint. */}
+                      {t.warn && <span className="ml-1" style={{ color: "var(--warning-ink)" }}>●</span>}
+                      {/* Said as a number, not a dot: "somebody replied" and
+                          "seven people replied while you were at lunch" are
+                          different sizes of the same news, and the second is why
+                          you would leave what you are doing. */}
+                      {!!t.hot && (
+                        <span className="ml-1.5 text-[9.5px] px-1.5 rounded-full tabular-nums align-middle"
+                          title={`${t.hot} new since you last looked`}
+                          style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 18%, transparent)",
+                            border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>
+                          {t.hot} new
+                        </span>
+                      )}
+                      {t.one && (
+                        <span className="ml-1.5 text-[10px] px-1 rounded align-middle"
+                          title="The tree, the diff and what the rest of the pull request says about the file you are on — all at once"
+                          style={{ color: "var(--primary-ink)", border: "1px dashed color-mix(in srgb, var(--primary) 55%, transparent)" }}>
+                          one screen
+                        </span>
+                      )}
+                  </>) }))} />
                 <div className="ml-auto flex items-center gap-1.5 px-2 shrink-0">
                   {myDrafts.length > 0 && <Chip text={`${myDrafts.length} pending`} tint="var(--warning)" title="Line comments queued but not sent" />}
                   {hasReviewDraft && tab !== "review" && (
@@ -4745,7 +4912,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                   columns scroll inside it, which is what the mockup means by
                   putting `overflow:auto` on each of the three. */}
               <CommitJumpCtx.Provider value={jumpToCommit}>
-              <div ref={tabBodyRef} className={`flex-1 min-h-0 agx-scroll ${tab === "files" ? "overflow-hidden p-0" : "overflow-y-auto p-3"}`}
+              <div ref={tabBodyRef} id="pr-tab-body" role="tabpanel" className={`flex-1 min-h-0 agx-scroll ${tab === "files" ? "overflow-hidden p-0" : "overflow-y-auto p-3"}`}
                 onScroll={(e) => {
                   /*
                    * Files is a frame, not a page, and frames do not scroll.
@@ -4784,7 +4951,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                           conflictFiles={conflictFiles}
                           updateRefused={!!refusedUpdate && refusedUpdate.number === d.number && refusedUpdate.updatedAt === d.updatedAt}
                           onEditRequest={() => setEditingBody(true)}
-                          onToggleTask={(newBody) => { void doEditBody(newBody); }}
+                          onToggleTask={doToggleTask}
                           onLocalReview={(recipe) => doLocalReview(undefined, recipe)}
                           onReviewInTerminal={onReviewInTerminal && d ? (recipe) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "") : undefined}
                           onMerge={doMerge} onClose={doClose}
@@ -4808,7 +4975,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                           onRerun={() => act("Re-run checks", () => api.prRerun(root, d.number))}
                           onAutoMerge={doAutoMerge}
                           onCancelAutoMerge={() => act("Auto-merge cancelled", () => api.prMerge(root, d.number, mergeMethod, { disableAuto: true }))}
-                          onDraft={() => act(d.isDraft ? "Mark ready" : "Convert to draft", () => api.prDraft(root, d.number, !d.isDraft))}
+                          onDraft={() => { void field(draftPatch(d.number, !d.isDraft), () => api.prDraft(root, d.number, !d.isDraft), d.isDraft ? "Mark ready failed" : "Convert to draft failed", "draft"); }}
                           onGoThreads={() => setTab("conversation")}
                           /*
                            * The review, in THIS panel.
@@ -4855,7 +5022,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                           d={d} lanes={lanes} raw={rawBots} onRaw={setRawBots} busy={busy} onComment={doComment}
                           atoms={newAtoms} newSet={newSet} onMarkRead={markPrRead}
                           sinceMine={sinceMine} onUnmarkRead={unmarkPrRead}
-                          onResolve={(t) => act(t.isResolved ? "Unresolve" : "Resolve", () => api.prSetThreadResolved(root, t.id, !t.isResolved))}
+                          onResolve={doResolve}
                           onReply={doReply}
                           onApply={doApplySuggestion}
                           onReact={doReact}
@@ -4888,12 +5055,12 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                         {/* Grouped by the day they landed, as GitHub does — a
                             long branch reads as a history rather than a list. */}
                         <div className="text-[10px] uppercase tracking-wider mb-1 pl-1" style={{ color: "var(--text3)" }}>{day}</div>
-                        <div className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+                        <div className="rounded-lg overflow-hidden" style={{ border: EDGE }}>
                           {list.map((c, i) => (
                             <div key={c.oid} data-oid={c.oid}
                               ref={commitFocus === c.oid ? focusedCommitRef : undefined}
                               style={{
-                                ...(i ? { borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" } : {}),
+                                ...(i ? { borderTop: LINE } : {}),
                                 /* Only until you look at another one. A row that
                                    stays lit after you have moved on is telling
                                    you about a click you have forgotten. */
@@ -4922,7 +5089,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                                         title={openMsgs.has(c.oid) ? "Hide the full message" : "Show the full commit message"}
                                         aria-expanded={openMsgs.has(c.oid)}
                                         className="agx-btn ml-1.5 align-middle text-[10px] px-1.5 rounded leading-none"
-                                        style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)" }}>…</button>
+                                        style={{ color: "var(--text3)", border: EDGE }}>…</button>
                                     )}
                                   </span>
                                   {c.body?.trim() && openMsgs.has(c.oid) && (
@@ -4947,7 +5114,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                                     {c.checks === "SUCCESS" ? <DoneIcon size={ICON.xs} /> : c.checks === "FAILURE" || c.checks === "ERROR" ? <CrossIcon size={ICON.xs} /> : <CircleIcon size={ICON.xs} />}
                                   </span>
                                 )}
-                                <span className="tabular-nums shrink-0 px-1.5 py-0.5 rounded" style={{ ...CODE_FONT_STYLE, fontSize: "10px", color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}>{c.short}</span>
+                                <span className="tabular-nums shrink-0 px-1.5 py-0.5 rounded" style={{ ...CODE_FONT_STYLE, fontSize: "10px", color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}>{c.short}</span>
                               </button>
                               {selCommit === c.oid && (
                                 <div className="my-2">
@@ -4962,7 +5129,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                       </div>
                     ))}
                     {d.truncated?.commits && (
-                      <div className="text-[10px] px-1" style={{ color: "var(--warning)" }}>
+                      <div className="text-[10px] px-1" style={{ color: "var(--warning-ink)" }}>
                         Showing the most recent {d.truncated.commits} commits — a branch with more history than that is only listed in full on GitHub.
                       </div>
                     )}
@@ -5010,7 +5177,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                     }}
                     busy={busy} onReply={doReply}
                     onApply={doApplySuggestion}
-                    onResolve={(t) => act(t.isResolved ? "Unresolve" : "Resolve", () => api.prSetThreadResolved(root, t.id, !t.isResolved))}
+                    onResolve={doResolve}
                   />
                   </div>
                   <FileRail d={d} path={showingFile ?? selFile}
@@ -5372,14 +5539,14 @@ function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, open
         */}
       {movedSince > 0 && (
         <Reason tint="var(--warning)" glyph={<RefreshIcon size={ICON.xs} />}
-          action={<button onClick={onGoMoved} style={{ color: "var(--primary)" }}>Show them</button>}>
-          <b style={{ color: "var(--warning)" }}>{movedSince}</b>
+          action={<button onClick={onGoMoved} style={{ color: "var(--primary-ink)" }}>Show them</button>}>
+          <b style={{ color: "var(--warning-ink)" }}>{movedSince}</b>
           {movedSince === 1 ? " file has" : " files have"} changed since your review
         </Reason>
       )}
 
       {d.forcePushedSinceReview && (
-        <div className="text-[10.5px] px-2.5 py-2 rounded" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>
+        <div className="text-[10.5px] px-2.5 py-2 rounded" style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>
           The author force-pushed after the last review — that review was for code that is no longer here.
         </div>
       )}
@@ -5390,7 +5557,7 @@ function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, open
           not finished working it out" on a pull request that merged an hour ago.
           What is left is what GitHub leaves: what happened, and reopen. */}
       {d.state !== "OPEN" ? (
-        <section className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+        <section className="rounded-lg overflow-hidden" style={{ border: EDGE }}>
           <div className="flex gap-2.5 items-start p-3">
             <span className="shrink-0 rounded-full flex items-center justify-center text-[13px]"
               style={{ width: 26, height: 26, background: d.state === "MERGED" ? "var(--primary)" : "color-mix(in srgb, var(--text3) 60%, transparent)", color: "var(--bg)" }}>
@@ -5408,14 +5575,14 @@ function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, open
             </span>
           </div>
           <div className="flex items-center gap-1.5 flex-wrap px-3 py-2.5"
-            style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
+            style={{ borderTop: LINE, background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
             {d.state === "CLOSED" && <Btn onClick={onClose} disabled={busy} pending={busyWhat === "Reopen"} title="Put it back to open, with its comments and reviews intact"><UndoIcon size={ICON.xs} />Reopen</Btn>}
             <a href={externalUrl(d.url)} target="_blank" rel="noreferrer noopener" className="text-[10.5px] px-2.5 py-1 rounded"
-              style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)" }}>Open on GitHub ↗</a>
+              style={{ color: "var(--text2)", border: EDGE }}>Open on GitHub ↗</a>
           </div>
         </section>
       ) : (
-      <section className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+      <section className="rounded-lg overflow-hidden" style={{ border: EDGE }}>
         <div className="flex gap-2.5 items-start p-3">
           <span className="shrink-0 rounded-full flex items-center justify-center text-[13px]"
             style={{ width: 26, height: 26,
@@ -5448,7 +5615,7 @@ function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, open
           </span>
         </div>
 
-        <div style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+        <div style={{ borderTop: LINE }}>
           {/*
             * WHAT THE REVIEWER DECIDED, first, and drawn even when something
             * else is blocking.
@@ -5493,7 +5660,7 @@ function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, open
 const v = p2Verdict(d.humanReview, reviewerRoster(d), d.reviewDecision, d.gate);
             if (!v) return null;
             return (
-              <div className="flex gap-2.5 items-center px-3 py-2 text-[12px]"
+              <div className="flex gap-2.5 items-center px-3 py-1.5 text-[11.5px]"
                 style={{
                   background: `color-mix(in srgb, ${v.tint} 10%, transparent)`,
                   borderLeft: `2px solid ${v.tint}`,
@@ -5509,28 +5676,15 @@ const v = p2Verdict(d.humanReview, reviewerRoster(d), d.reviewDecision, d.gate);
                     <span className="block text-[11px] mt-0.5" style={{ color: "var(--text3)" }}>{v.note}</span>
                   )}
                 </span>
-                {v.url && (() => {
-                  /*
-                   * The same review, as a row this panel already draws.
-                   *
-                   * Matched on the URL rather than by parsing `#pullrequestreview-…`
-                   * out of it: `humanReview.url` and `PrReview.url` are the one
-                   * string GitHub gave for that submission, so equality is exact and
-                   * there is no fragment format to keep in step with.
-                   */
-                  const node = d.reviews?.find((r) => r.url && r.url === v.url)?.nodeId;
-                  return (
-                    <button className="agx-btn shrink-0 rounded px-1.5 py-0.5 text-[11px]"
-                      style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}
-                      title="Go to that review in the conversation"
-                      onClick={() => onGoReview(node, v.url!)}>Go to it</button>
-                  );
-                })()}
+                {/* No "Go to it" here any more — the Review history right below
+                    this band already carries a go-to per round, including this
+                    one, and a second button beside it pointed at the same place. */}
               </div>
             );
           })()}
+          <ReviewHistory reviews={d.reviews} pending={d.reviewers} author={d.author} onGoReview={onGoReview} />
           {openThreads > 0 && (
-            <Reason tint={blockers.some((b) => b.kind === "threads") ? "var(--error)" : "var(--warning)"} glyph={<CircleIcon size={ICON.xs} />} action={<button onClick={onGoThreads} style={{ color: "var(--primary)" }}>Go to thread</button>}>
+            <Reason tint={blockers.some((b) => b.kind === "threads") ? "var(--error)" : "var(--warning)"} glyph={<CircleIcon size={ICON.xs} />} action={<button onClick={onGoThreads} style={{ color: "var(--primary-ink)" }}>Go to thread</button>}>
               {openThreads} review thread{openThreads === 1 ? "" : "s"} still open — <span style={{ color: "var(--text3)" }}>
                 {blockers.some((b) => b.kind === "threads") ? "this branch requires them resolved before merging" : "a reply is not a resolve"}
               </span>
@@ -5623,7 +5777,7 @@ const v = p2Verdict(d.humanReview, reviewerRoster(d), d.reviewDecision, d.gate);
             <Reason tint={conflictFiles.resolvedLocally ? "var(--text3)" : "var(--error)"}
               glyph={conflictFiles.resolvedLocally ? "·" : "!"}
               action={conflictFiles.files.length > 5
-                ? <button onClick={() => setAllFiles((v) => !v)} style={{ color: "var(--primary)" }}>
+                ? <button onClick={() => setAllFiles((v) => !v)} style={{ color: "var(--primary-ink)" }}>
                     {allFiles ? "Show less" : `+${conflictFiles.files.length - 5} more`}
                   </button>
                 : undefined}>
@@ -5641,7 +5795,7 @@ const v = p2Verdict(d.humanReview, reviewerRoster(d), d.reviewDecision, d.gate);
         </div>
 
         <div className="flex items-center gap-1.5 flex-wrap px-3 py-2.5"
-          style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
+          style={{ borderTop: LINE, background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
           {/* The methods this repository allows, opening on the one GitHub's
               own button opens on. It used to be all three regardless and it
               always opened on squash — which is both the method a repository
@@ -5873,7 +6027,7 @@ const v = p2Verdict(d.humanReview, reviewerRoster(d), d.reviewDecision, d.gate);
           <span className="block text-[10px] uppercase tracking-[.13em]" style={{ color: "var(--text3)" }}>Next</span>
           <span className="block text-[12.5px]" style={{ color: "var(--text)" }}>Conversation</span>
         </span>
-        <span className="ml-auto text-[10.5px] shrink-0" style={{ color: "var(--primary)" }}>
+        <span className="ml-auto text-[10.5px] shrink-0" style={{ color: "var(--primary-ink)" }}>
           {conversationCount === 0 ? "Nothing said yet" : `${conversationCount} comment${conversationCount === 1 ? "" : "s"} and thread${conversationCount === 1 ? "" : "s"}`} →
         </span>
       </button>
@@ -5896,9 +6050,9 @@ function Description({ d, busy, onEdit, onToggleTask }: {
     /* `data-pr-body` is an address, like `data-node` on a timeline entry: a
        mention that lives in the description has to be scrollable-to as well.
        See the jump in the panel. */
-    <section data-pr-body className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+    <section data-pr-body className="rounded-lg overflow-hidden" style={{ border: EDGE }}>
       <div className="flex items-center gap-2 px-3 py-1.5"
-        style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
+        style={{ borderBottom: LINE, background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
         <span className="text-[9.5px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>description</span>
         {/* Opening the editor is the shell's to do — it takes the whole column,
             so the click has to leave this box entirely. */}
@@ -6040,10 +6194,10 @@ function BodyEditor({ prNumber, initial, busy, onSave, onCancel, onOpenGithub }:
       onDrop={(e) => { e.preventDefault(); void takeFiles([...e.dataTransfer.files]); }}
       onPaste={(e) => { const fs = [...e.clipboardData.files]; if (fs.length) { e.preventDefault(); void takeFiles(fs); } }}>
       <div className="flex items-center gap-2 px-3 py-2 shrink-0"
-        style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
+        style={{ borderBottom: LINE, background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
         <span className="text-[11px] font-semibold" style={{ color: "var(--text)" }}>Editing description</span>
         <span className="text-[10.5px] tabular-nums" style={{ color: "var(--text3)" }}>· #{prNumber}</span>
-        {dirty && <span className="text-[8.5px] uppercase tracking-[.13em]" style={{ color: "var(--warning)" }}>unsaved</span>}
+        {dirty && <span className="text-[8.5px] uppercase tracking-[.13em]" style={{ color: "var(--warning-ink)" }}>unsaved</span>}
         <span className="ml-auto flex gap-1">
           <Btn onClick={() => setPreview(false)} small primary={!preview}>Write</Btn>
           <Btn onClick={() => setPreview(true)} small primary={preview}>Preview</Btn>
@@ -6052,7 +6206,7 @@ function BodyEditor({ prNumber, initial, busy, onSave, onCancel, onOpenGithub }:
 
       {!preview && (
         <div className="flex items-center gap-0.5 px-2 py-1 shrink-0 flex-wrap"
-          style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+          style={{ borderBottom: LINE }}>
           <TB title="Heading" onClick={() => prefixLines(() => "### ")}>H</TB>
           <TB title="Bold" onClick={() => wrap("**")}><b>B</b></TB>
           <TB title="Italic" onClick={() => wrap("_")}><i>I</i></TB>
@@ -6072,10 +6226,10 @@ function BodyEditor({ prNumber, initial, busy, onSave, onCancel, onOpenGithub }:
 
       {attachNote && (
         <div className="flex items-center gap-2 px-3 py-1.5 text-[10.5px] shrink-0"
-          style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+          style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", borderBottom: LINE }}>
           <span className="min-w-0 truncate"><b>{attachNote}</b> can't be attached from here — GitHub has no public upload API for attachments.</span>
           <button onClick={onOpenGithub} className="agx-btn ml-auto shrink-0 px-2 py-0.5 rounded"
-            style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>Attach on GitHub ↗</button>
+            style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>Attach on GitHub ↗</button>
           <button onClick={() => setAttachNote(null)} className="agx-btn shrink-0 grid place-items-center w-5 h-5 rounded" style={{ color: "var(--text3)" }} aria-label="Dismiss"><CloseIcon size={ICON.xs} /></button>
         </div>
       )}
@@ -6100,7 +6254,7 @@ function BodyEditor({ prNumber, initial, busy, onSave, onCancel, onOpenGithub }:
       )}
 
       <div className="flex items-center gap-1.5 px-3 py-2 shrink-0"
-        style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
+        style={{ borderTop: LINE, background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
         <span className="text-[10px]" style={{ color: "var(--text3)" }}>Markdown · ⌘↵ save · Esc cancel</span>
         <span className="ml-auto flex gap-1.5">
           <Btn onClick={onCancel} disabled={saving} small>Cancel</Btn>
@@ -6333,7 +6487,7 @@ function ReviewMenu({ d, onPick, canTerm, primary = true }: {
                 title={top.skill || top.title}
                 className="agx-mi w-full flex items-center gap-2 px-3 py-1.5 text-[11px] cursor-pointer" style={{ color: "var(--text)" }}>
                 <span className="min-w-0 truncate flex-1">
-                  {top.skill && <span style={{ color: "var(--primary)" }}>/ </span>}
+                  {top.skill && <span style={{ color: "var(--primary-ink)" }}>/ </span>}
                   {top.title}
                 </span>
                 <ChatInstead onChat={() => { close(); onPick(top.id, "chat"); }} />
@@ -6359,7 +6513,7 @@ function ReviewMenu({ d, onPick, canTerm, primary = true }: {
                     title={r.skill || r.title}
                     className="agx-mi w-full flex items-center gap-2 px-3 py-1.5 text-[11px] cursor-pointer" style={{ color: "var(--text2)" }}>
                     <span className="min-w-0 truncate flex-1">
-                      {r.skill && <span style={{ color: "var(--primary)" }}>/ </span>}
+                      {r.skill && <span style={{ color: "var(--primary-ink)" }}>/ </span>}
                       {r.title}
                     </span>
                     <ChatInstead onChat={() => { close(); onPick(r.id, "chat"); }} />
@@ -6427,7 +6581,7 @@ function Field({ label, title, max, children }: {
  */
 function SidebarSection({ title, onEdit, children }: { title: string; onEdit?: (e: React.MouseEvent<HTMLButtonElement>) => void; children: React.ReactNode }) {
   return (
-    <div className="py-2.5" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+    <div className="py-2.5" style={{ borderBottom: LINE }}>
       <div className="flex items-center gap-2 mb-1.5">
         <span className="text-[9.5px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>{title}</span>
         {onEdit && (
@@ -6454,22 +6608,48 @@ function SidebarSection({ title, onEdit, children }: { title: string; onEdit?: (
  * with both screens side by side. The roster and its order are in
  * lib/prReviewers.
  */
-function ReviewerList({ rows }: { rows: ReviewerRow[] }) {
+function ReviewerList({ rows, author, onAsk }: { rows: ReviewerRow[]; author?: string; onAsk?: (login: string) => Promise<PrActionResult> }) {
+  // Logins asked again from this row, so the ↻ turns into "asked" at once
+  // instead of waiting for the next list refresh.
+  const [asked, setAsked] = useState<Record<string, "busy" | "done" | string>>({});
   if (!rows.length) return <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>No reviewers</span>;
   return (
     <div className="flex flex-col gap-1">
       {rows.map((r) => {
         const mark = REVIEW_MARK[r.state];
+        // GitHub offers "Re-request review" only to a person who has already
+        // answered; a bot, a team and the author cannot be asked this way.
+        // An APPROVED reviewer keeps the tick alone — a ↻ beside it read as
+        // "something is wrong with this approval" rather than as an option.
+        const canAsk = !!onAsk && r.state !== "awaiting" && r.state !== "approved" && !r.again && !r.isBot && !r.isTeam && r.login !== author;
+        const ask = asked[r.login];
+        // Asked again after answering: GitHub drops the old verdict and shows
+        // the reviewer as pending, one amber dot. An arrow beside the old
+        // verdict read as a second button, not as "waiting on them".
+        const pending = !!r.again || ask === "done";
         return (
           <span key={r.login} className="flex items-center gap-1.5 text-[11px] min-w-0" style={{ color: "var(--text2)" }}
-            title={`${r.login} — ${mark.said}${r.at ? ` ${ago(r.at)}` : ""}${r.again ? " · asked again since" : ""}`}>
+            title={pending ? `Awaiting requested review from ${r.login}` : `${r.login} — ${mark.said}${r.at ? ` ${ago(r.at)}` : ""}`}>
             <ReviewerFace r={{ login: r.login, isTeam: r.isTeam }} size={16} />
             <span className="truncate min-w-0">{r.login}</span>
             <span className="flex-1" />
-            {/* Asked again after answering — GitHub's ↻, and the reason a green
-                tick beside it is not the whole story. */}
-            {r.again && <span aria-hidden className="shrink-0 flex" style={{ color: "var(--text4)" }} title="Asked to look again"><RefreshIcon size={ICON.sm} /></span>}
-            <span aria-hidden className="shrink-0 flex" style={{ color: mark.tint }}>{mark.glyph}</span>
+            {canAsk && !pending && (
+              <button type="button" aria-label={`Re-request review from ${r.login}`}
+                title={ask && ask !== "busy" ? `Could not ask again: ${ask}` : "Re-request review"}
+                disabled={ask === "busy"}
+                onClick={async () => {
+                  setAsked((m) => ({ ...m, [r.login]: "busy" }));
+                  const res = await onAsk!(r.login).catch((e: unknown) => ({ ok: false, error: String(e) }) as PrActionResult);
+                  setAsked((m) => ({ ...m, [r.login]: res.ok ? "done" : (res.error || "failed") }));
+                }}
+                className="shrink-0 grid place-items-center rounded-md hover:bg-white/5 disabled:opacity-50"
+                style={{ width: 20, height: 20, color: ask && ask !== "busy" ? "var(--error)" : "var(--primary)" }}>
+                <RefreshIcon size={ICON.sm} />
+              </button>
+            )}
+            {pending
+              ? <span aria-hidden className="shrink-0 rounded-full" style={{ width: 8, height: 8, margin: "0 4px", background: "var(--warning)" }} />
+              : <span aria-hidden className="shrink-0 flex" style={{ color: mark.tint }}>{mark.glyph}</span>}
           </span>
         );
       })}
@@ -6635,7 +6815,7 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
   return (
     <Portal>
       <div ref={box} className="fixed rounded-lg overflow-hidden flex flex-col"
-        style={{ left, top, width: W, maxHeight: maxH, border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", background: "color-mix(in srgb, var(--bg2) 98%, black)", boxShadow: "0 18px 44px -18px rgba(0,0,0,.8)" }}>
+        style={{ left, top, width: W, maxHeight: maxH, border: EDGE, background: "color-mix(in srgb, var(--bg2) 98%, black)", boxShadow: "0 18px 44px -18px rgba(0,0,0,.8)" }}>
         {/* `min-h-0`, and it is the whole bug: a flex child's default floor is
             its content, so the people list grew past the menu instead of
             scrolling inside it — taking the ClickUp half and Done off the
@@ -6645,14 +6825,14 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
             one. At px-3 the filter chips started 8px to the left of the repo
             chips they sit under — two left edges in one header, which is the
             kind of thing you notice without being able to name. */}
-        <div className="px-5 pt-2 pb-1.5 shrink-0" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+        <div className="px-5 pt-2 pb-1.5 shrink-0" style={{ borderBottom: LINE }}>
           <div className="text-[11px] font-semibold" style={{ color: "var(--text)" }}>{title}</div>
           <div className="text-[10px]" style={{ color: "var(--text3)" }}>{hint}</div>
         </div>
         <div className="p-1.5 shrink-0">
           <input ref={filterInput} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter…"
-            className="w-full px-2 py-1 rounded text-[11px] outline-none"
-            style={{ background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }} />
+            className={`w-full ${INPUT}`}
+            style={INPUT_STYLE} />
         </div>
         <div className="overflow-y-auto agx-scroll flex-1 min-h-0 pb-1">
           {loading ? (
@@ -6677,7 +6857,7 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
         </div>
         {side?.({ folded: sideFolded, onFold: setSideFolded, onPlan: setPlan })}
         {multi && (
-          <div className="p-1.5 shrink-0 flex flex-col gap-1.5" style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+          <div className="p-1.5 shrink-0 flex flex-col gap-1.5" style={{ borderTop: LINE }}>
             {asking && (
               /* What is about to happen, in the order it will happen, and
                  nothing that is not a change. Read once and accepted, rather
@@ -6720,12 +6900,12 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
             {failed && (
               /* Said here rather than only in the toast: the menu is still open
                  over it, and the toast is behind the menu. */
-              <div className="px-1 text-[10.5px]" style={{ color: "var(--warning)" }}>{failed}</div>
+              <div className="px-1 text-[10.5px]" style={{ color: "var(--warning-ink)" }}>{failed}</div>
             )}
             <div className="flex items-center gap-2">
               {asking && (
                 <button onClick={() => setAsking(false)} className="agx-btn px-2 py-1 rounded text-[10.5px]"
-                  style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>Back</button>
+                  style={{ color: "var(--text3)", border: EDGE }}>Back</button>
               )}
               <button
                 onClick={async () => {
@@ -6906,8 +7086,9 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
       setCard((c) => c ? { ...c, status: moved || c.status, updated: r.task?.updated ?? c.updated } : c);
       /* The sidebar is holding the status this write just changed. Throwing it
          away is what makes the card's own section agree with the menu that
-         moved it, without waiting out the minute. */
-      forgetCard(query);
+         moved it, without waiting out the minute. The write's own answer
+         replaces it, so the board's row agrees too. */
+      putCard(query, r.task);
     }
     return r.ok;
   }, [folded, card, plan, on, label, note, query]);
@@ -6940,7 +7121,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
     return (
       <button onClick={() => onFold(false)} title={`Also move ${ref.label} in ClickUp`}
         className="agx-btn shrink-0 w-full flex items-center gap-2 px-3 py-1.5 text-[10.5px]"
-        style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", color: "var(--text3)" }}>
+        style={{ borderTop: LINE, color: "var(--text3)" }}>
         <span aria-hidden>▴</span>
         <span className="truncate">Also move {ref.label} in ClickUp</span>
       </button>
@@ -6951,15 +7132,15 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
     /* Under the people, not beside them: the menu's height is what was going
        spare. Capped, so the list above it keeps most of the window and this
        never pushes Done off the bottom. */
-    <div className="flex flex-col min-w-0 shrink-0" style={{ maxHeight: 260, borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
-      <div className="px-4 pt-2 pb-1.5 shrink-0" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+    <div className="flex flex-col min-w-0 shrink-0" style={{ maxHeight: 260, borderTop: LINE }}>
+      <div className="px-4 pt-2 pb-1.5 shrink-0" style={{ borderBottom: LINE }}>
         <div className="flex items-center gap-2">
           <div className="text-[11px] font-semibold min-w-0 truncate" style={{ color: "var(--text)" }}>
             Also in ClickUp <span style={{ color: "var(--text4)", fontWeight: 400 }}>· optional</span>
           </div>
           <button onClick={() => onFold(true)} title="Leave the card alone — this folds away and comes back on the strip"
             className="agx-btn ml-auto shrink-0 px-1.5 py-0.5 rounded text-[10px]"
-            style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+            style={{ color: "var(--text3)", border: EDGE }}>
             Not now ▾
           </button>
         </div>
@@ -6968,7 +7149,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
         </div>
       </div>
       {err ? (
-        <div className="px-3 py-3 text-[11px]" style={{ color: "var(--warning)" }}>{err}</div>
+        <div className="px-3 py-3 text-[11px]" style={{ color: "var(--warning-ink)" }}>{err}</div>
       ) : !card ? (
         <div className="px-3 py-3 text-[11px]" style={{ color: "var(--text3)" }}>Looking it up…</div>
       ) : (
@@ -7018,8 +7199,8 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
           <div className="px-2 pt-2 shrink-0">
             <div className="text-[9px] uppercase tracking-[0.16em] mb-1" style={{ color: "var(--text4)" }}>Assigned</div>
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter people…" spellCheck={false}
-              className="w-full px-2 py-1 rounded text-[11px] outline-none"
-              style={{ background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }} />
+              className={`w-full ${INPUT}`}
+              style={INPUT_STYLE} />
           </div>
           <div className="overflow-y-auto agx-scroll flex-1 min-h-0 py-1">
             {members === null && <div className="px-3 py-2 text-[11px]" style={{ color: "var(--text3)" }}>Reading the team…</div>}
@@ -7038,7 +7219,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
                 <span className="truncate" style={{ color: on.has(m.id) ? "var(--success)" : "var(--text2)" }}>
                   {m.name}{m.me ? " · you" : ""}
                 </span>
-                {on.has(m.id) && <span className="ml-auto flex" style={{ color: "var(--success)" }}><DoneIcon size={ICON.xs} /></span>}
+                {on.has(m.id) && <span className="ml-auto flex" style={{ color: "var(--success-ink)" }}><DoneIcon size={ICON.xs} /></span>}
               </button>
             ))}
           </div>
@@ -7069,7 +7250,11 @@ type PrAct = (label: string, fn: () => Promise<{ ok: boolean; error?: string; de
 function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
   /** How to say what happened on the other board — the panel's own toast, so a
    *  ClickUp write reports where every other write reports. */
-  note: (ok: boolean, msg: string) => void) {
+  note: (ok: boolean, msg: string) => void,
+  /** Labels are a cheap write, drawn on the press rather than awaited. */
+  setLabels: (add: string[], remove: string[], colors: Record<string, string>) => boolean,
+  /** The other sidebar fields: drawn now, the answer awaited. */
+  field: (patch: (d: PrDetail) => PrDetail, send: () => Promise<Sent>, failText: string, lane: string) => Promise<boolean>) {
   const [facets, setFacets] = useState<Facets | null>(null);
   const [mentions, setMentions] = useState<Mentions | null>(null);
   /* CODEOWNERS, read once per checkout when a picker is first opened. Empty rules
@@ -7098,14 +7283,14 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
   // The picker holds its selection locally and hands back the final set; here
   // we diff it against what the PR has now and write just the delta — the shape
   // the endpoints already take.
-  const commit = (was: string[], label: string, fn: (add: string[], remove: string[]) => Promise<{ ok: boolean; error?: string; detail?: string }>) => (next: string[]) => {
+  const commit = (was: string[], label: string, patch: (n: number, add: string[], remove: string[]) => (d: PrDetail) => PrDetail, fn: (add: string[], remove: string[]) => Promise<{ ok: boolean; error?: string; detail?: string }>) => (next: string[]) => {
     const add = next.filter((x) => !was.includes(x));
     const remove = was.filter((x) => !next.includes(x));
     // Nothing to write is not a failure — and the answer is awaited now, so
     // "GitHub first, and the card only if it landed" is true rather than
     // aspirational.
     if (!add.length && !remove.length) return true;
-    return act(label, () => fn(add, remove));
+    return field(patch(d!.number, add, remove), () => fn(add, remove), `${label} did not save`, label.toLowerCase());
   };
 
   let node: React.ReactNode = null;
@@ -7115,7 +7300,11 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
       const was = d.labels.map((l) => l.name);
       node = <FieldPicker anchor={a} title="Apply labels" hint="Tick to add or remove" multi loading={loading}
         options={(facets?.labels ?? []).map((l) => ({ value: l.name, label: l.name, color: l.color }))}
-        selected={was} onClose={close} onCommit={commit(was, "Labels", (add, remove) => api.prLabels(root, d.number, add, remove))} />;
+        selected={was} onClose={close} onCommit={(next: string[]) => {
+          const colors: Record<string, string> = {};
+          for (const l of facets?.labels ?? []) colors[l.name] = l.color;
+          return setLabels(next.filter((x) => !was.includes(x)), was.filter((x) => !next.includes(x)), colors);
+        }} />;
     } else if (picker.field === "reviewers") {
       const was = d.reviewers.map((r) => r.login);
       /*
@@ -7144,21 +7333,49 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
         const n = ownedBy.get(u.toLowerCase());
         return { value: u, label: u, avatar: u, ...(n ? { sub: `owns ${n}` } : null) };
       }).sort((x, y) => (ownedBy.get(y.value.toLowerCase()) ?? 0) - (ownedBy.get(x.value.toLowerCase()) ?? 0));
+
+      /*
+       * PAST REVIEWERS FIRST — the person you would ask again is almost
+       * always somebody who has already read this, not a stranger further
+       * down the collaborator list. An approval left behind by new commits
+       * comes before every other past reviewer, because that is the one
+       * whose "yes" this pull request no longer actually has.
+       *
+       * Ranked by their own last verdict's timestamp, most recent first,
+       * within each of the two groups — same order the sidebar already
+       * reads reviewers in, for the same reason: what it costs you.
+       */
+      const lastCommitAt = d.commits.length ? d.commits[d.commits.length - 1]!.committedAt : undefined;
+      const past = reviewerRoster(d).filter((r) => r.state !== "awaiting" && !r.isBot && !r.isTeam);
+      const staleApproved = past.filter((r) => r.state === "approved" && r.at && lastCommitAt && r.at < lastCommitAt);
+      const otherPast = past.filter((r) => !staleApproved.includes(r));
+      const byRecent = (rows: ReviewerRow[]) => [...rows].sort((x, y) => (y.at ?? "").localeCompare(x.at ?? ""));
+      const reviewed = [...byRecent(staleApproved), ...byRecent(otherPast)];
+      const reviewedLogins = new Set(reviewed.map((r) => r.login.toLowerCase()));
+      const reviewedOptions = reviewed
+        .filter((r) => (mentions?.users ?? []).some((u) => u.toLowerCase() === r.login.toLowerCase()))
+        .map((r) => {
+          const mark = REVIEW_MARK[r.state];
+          return { value: r.login, label: r.login, avatar: r.login,
+            sub: `${mark.said}${r.at ? ` ${ago(r.at)}` : ""}` };
+        });
+      const rest = people.filter((p) => !reviewedLogins.has(p.value.toLowerCase()));
+
       node = <FieldPicker anchor={a} title="Request reviewers" multi loading={loading}
         hint={teams.length
           ? `Owners first, from ${owns.path ?? "CODEOWNERS"} · ${teams.join(", ")} — ask a team on GitHub`
           : ownedBy.size
           ? `Owners first, from ${owns.path ?? "CODEOWNERS"}`
           : "Collaborators on this repository"}
-        options={people}
+        options={[...reviewedOptions, ...rest]}
         side={(h) => <ClickUpSide d={d} note={note} {...h} />}
-        selected={was} onClose={close} onCommit={commit(was, "Reviewers", (add, remove) => api.prReviewers(root, d.number, add, remove))} />;
+        selected={was} onClose={close} onCommit={commit(was, "Reviewers", reviewersPatch, (add, remove) => api.prReviewers(root, d.number, add, remove))} />;
     } else if (picker.field === "assignees") {
       const was = d.assignees;
       node = <FieldPicker anchor={a} title="Assign people" hint="Up to 10 assignees" multi loading={loading}
         options={(facets?.assignees ?? []).map((u) => ({ value: u, label: u, avatar: u }))}
         side={(h) => <ClickUpSide d={d} note={note} {...h} />}
-        selected={was} onClose={close} onCommit={commit(was, "Assignees", (add, remove) => api.prAssignees(root, d.number, add, remove))} />;
+        selected={was} onClose={close} onCommit={commit(was, "Assignees", assigneesPatch, (add, remove) => api.prAssignees(root, d.number, add, remove))} />;
     } else {
       // Milestone is one-of, not many: picking commits at once, and a leading
       // "No milestone" entry clears it — passing "" to the endpoint, exactly as
@@ -7167,7 +7384,7 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
       node = <FieldPicker anchor={a} title="Set milestone" hint="Choose one, or clear it" multi={false} loading={loading}
         options={[{ value: "", label: "No milestone" }, ...(facets?.milestones ?? []).map((m) => ({ value: m, label: m }))]}
         selected={was} onClose={close}
-        onCommit={(next) => { const title = next[0] ?? ""; return title === (d.milestone ?? "") ? true : act("Milestone", () => api.prMilestone(root, d.number, title)); }} />;
+        onCommit={(next) => { const title = next[0] ?? ""; return title === (d.milestone ?? "") ? true : field(milestonePatch(d.number, title), () => api.prMilestone(root, d.number, title), "Milestone did not save", "milestone"); }} />;
     }
   }
 
@@ -7222,10 +7439,10 @@ function CardStatusPick({ task, query, onSaid }: { task: ProviderTask; query: st
     setBusy(true);
     onSaid("moving…");
     const r = await api.clickupCard(task.id, { status }, task.updated)
-      .catch(() => ({ ok: false, error: "Could not reach the server" }));
+      .catch(() => ({ ok: false, error: "Could not reach the server", task: undefined }));
     setBusy(false);
     onSaid(r.ok ? `now ${status}` : `!${r.error || "ClickUp refused that"}`);
-    if (r.ok) forgetCard(query);
+    if (r.ok) putCard(query, r.task);
   };
 
   return (
@@ -7265,10 +7482,10 @@ function CardPeoplePick({ task, query, onSaid }: { task: ProviderTask; query: st
     const off = on.has(m.id);
     setSaving(m.id);
     const r = await api.clickupCard(task.id, off ? { rem: [m.id] } : { add: [m.id] }, task.updated)
-      .catch(() => ({ ok: false, error: "Could not reach the server" }));
+      .catch(() => ({ ok: false, error: "Could not reach the server", task: undefined }));
     setSaving(null);
     onSaid(r.ok ? (off ? `${m.name} off` : `${m.name} on`) : `!${r.error || "ClickUp refused that"}`);
-    if (r.ok) forgetCard(query);
+    if (r.ok) putCard(query, r.task);
   };
 
   return (
@@ -7301,8 +7518,67 @@ function CardPeoplePick({ task, query, onSaid }: { task: ProviderTask; query: st
     </>
   );
 }
+/**
+ * One press: send the card to the list's own "ready for QA" status and clear
+ * every assignee, because handing off work and staying on the card is the
+ * mistake this exists to stop. Hidden rather than disabled when the list has
+ * no such status or the card is already in it — a control with nothing to do
+ * is not a control, it is a question nobody asked.
+ *
+ * The status list is fetched on mount rather than on hover the way the status
+ * picker's is: hover cannot decide whether to show a button at all. One extra
+ * read per card the sidebar already opened for.
+ */
+function CardRfqaButton({ task, query, onSaid, ask }: {
+  task: ProviderTask; query: string; onSaid: (s: string) => void;
+  ask: (spec: { title: string; body?: string; confirmLabel?: string; danger?: boolean }) => Promise<boolean>;
+}) {
+  const [statuses, setStatuses] = useState<CuStatus[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let live = true;
+    if (!task.listId) { setStatuses([]); return; }
+    void api.clickupList(task.listId)
+      .then((r) => { if (live) setStatuses(r?.ok ? (r.statuses ?? []) : []); })
+      .catch(() => { if (live) setStatuses([]); });
+    return () => { live = false; };
+  }, [task.listId]);
+
+  const target = statuses ? rfqaStatus(statuses, task.status) : undefined;
+  if (!target) return null;
+
+  const move = async () => {
+    if (busy) return;
+    const said = await ask({
+      title: `Move ${query} to Ready for QA and unassign everyone?`,
+      confirmLabel: "Move to RfQA",
+    });
+    if (!said) return;
+    setBusy(true);
+    onSaid("moving…");
+    // One request: the same write the status picker and the people picker each
+    // make half of — see cardMove's note on the three-call version racing its
+    // own `updated` stamp.
+    const rem = (task.people ?? []).map((p) => p.id).filter((n): n is number => n != null);
+    const r = await api.clickupCard(task.id, { status: target, rem }, task.updated)
+      .catch(() => ({ ok: false, error: "Could not reach the server", task: undefined }));
+    setBusy(false);
+    onSaid(r.ok ? `now ${target} · unassigned` : `!${r.error || "ClickUp refused that"}`);
+    if (r.ok) putCard(query, r.task);
+  };
+
+  return (
+    <button onClick={() => { void move(); }} disabled={busy}
+      className="agx-btn text-[10.5px] px-2 py-0.5 rounded disabled:opacity-50"
+      title={`Move to ${target} and unassign everyone`}
+      style={{ color: "var(--text2)", border: EDGE }}>
+      Move to RfQA
+    </button>
+  );
+}
 function CardFacts({ d, root }: { d: PrDetail; root: string }) {
   const setup = useClickupSetup();
+  const { ask, dialog } = useDialogs();
   /* Whether the agent here can post to Slack — see server/src/slackreach.ts.
      Asked once per mount rather than baked in: somebody connects the
      integration without restarting agentglass, and a button that only appears
@@ -7394,16 +7670,17 @@ function CardFacts({ d, root }: { d: PrDetail; root: string }) {
                 <button onClick={() => { setSaid(""); setTell(tell === "slack" ? null : "slack"); setMsg(""); }}
                   className="agx-btn text-[10.5px] px-2 py-0.5 rounded"
                   title="Ask an agent to say it in Slack — it writes the message"
-                  style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
+                  style={{ color: "var(--text2)", border: EDGE }}>
                   Ping Slack
                 </button>
               )}
               <button onClick={() => { setSaid(""); setTell(tell === "card" ? null : "card"); setMsg(defaultPing(d, whoToTell(task))); }}
                 className="agx-btn text-[10.5px] px-2 py-0.5 rounded"
                 title="Write a note on this card's activity"
-                style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
+                style={{ color: "var(--text2)", border: EDGE }}>
                 Note on card
               </button>
+              <CardRfqaButton task={task} query={query} onSaid={setSaid} ask={ask} />
               {said && <span className="text-[10px]" style={{ color: said.startsWith("!") ? "var(--warning)" : "var(--success)" }}>{said.replace(/^!/, "")}</span>}
             </div>
 
@@ -7418,13 +7695,13 @@ function CardFacts({ d, root }: { d: PrDetail; root: string }) {
                 <textarea value={msg} onChange={(e) => setMsg(e.target.value)} rows={3} spellCheck={false}
                   placeholder={tell === "slack" ? "Anything to add — what to look at first, whether it is urgent. Optional." : ""}
                   className="w-full px-2 py-1 rounded text-[11px] outline-none resize-y"
-                  style={{ background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }} />
+                  style={{ background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text)", border: EDGE }} />
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] truncate min-w-0" style={{ color: "var(--text4)" }}>
                     {tell === "slack" ? `an agent writes it${whoToTell(task) ? ` to ${whoToTell(task)!.name}` : ""}, in the words that chat is written in` : `on ${whoToTell(task) ? `the card, to ${whoToTell(task)!.name}` : "the card"}`}
                   </span>
                   <button disabled={sending || (tell === "card" && !msg.trim())} className="agx-btn ml-auto shrink-0 text-[10.5px] px-2 py-0.5 rounded disabled:opacity-40"
-                    style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}
+                    style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}
                     onClick={async () => {
                       const target = whoToTell(task);
                       if (tell === "slack") {
@@ -7472,6 +7749,7 @@ function CardFacts({ d, root }: { d: PrDetail; root: string }) {
           </>
         )}
       </div>
+      {dialog}
     </SidebarSection>
   );
 }
@@ -7563,12 +7841,11 @@ function PrSidebar({ d, root, spend, onEditField }: {
      * scrolling value and the other is `visible`, the `visible` one computes to
      * `auto` — so the column had a horizontal scrollbar too, and it was on
      * screen, three quarters of the width, under a sidebar whose every section
-     * is a narrow label. "It makes no sense for this scroll to be here, there
-     * must never be sideways scroll here", and there is nothing here worth reaching
-     * sideways for: a long label wants truncating, never a second axis.
+     * is a narrow label. There is nothing here worth reaching sideways for:
+     * a long label wants truncating, never a second axis.
      */
     <aside className="sticky top-0 shrink-0 w-[248px] pl-4 hidden lg:block overflow-y-auto overflow-x-hidden agx-scroll overscroll-contain"
-      style={{ borderLeft: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", maxHeight: "calc(100vh - 6rem)" }}>
+      style={{ borderLeft: LINE, maxHeight: "calc(100vh - 6rem)" }}>
       <SidebarSection title="Reviewers" onEdit={(e) => onEditField("reviewers", e)}>
         {(() => {
           /*
@@ -7584,10 +7861,15 @@ function PrSidebar({ d, root, spend, onEditField }: {
            */
           const rows = reviewerRoster(d);
           const v = reviewVerdict(rows);
-          const tint = v.kind === "approved" ? "var(--success)"
+          /* `cleared` — every changes/commented reviewer already re-asked — draws
+             like a pending request (amber), not the still-standing verdict, even
+             though `kind` itself stays theirs. See the type's own comment. */
+          const tint = v.cleared ? "var(--warning)"
+            : v.kind === "approved" ? "var(--success)"
             : v.kind === "changes" ? "var(--error)"
             : v.kind === "awaiting" ? "var(--warning)" : "var(--text3)";
-          const mark = v.kind === "approved" ? <DoneIcon size={ICON.sm} /> : v.kind === "changes" ? <CrossIcon size={ICON.sm} />
+          const mark = v.cleared ? <CircleIcon size={ICON.sm} />
+            : v.kind === "approved" ? <DoneIcon size={ICON.sm} /> : v.kind === "changes" ? <CrossIcon size={ICON.sm} />
             : v.kind === "commented" ? <CommentIcon size={ICON.sm} /> : <CircleIcon size={ICON.sm} />;
           return (
             <>
@@ -7595,13 +7877,14 @@ function PrSidebar({ d, root, spend, onEditField }: {
                 <div className="flex items-center gap-1.5 text-[11px] mb-1.5" style={{ color: tint }} title={verdictLine(v)}>
                   <span aria-hidden className="flex">{mark}</span>
                   <b style={{ fontWeight: 500 }}>
-                    {v.kind === "approved" ? "Approved" : v.kind === "changes" ? "Changes requested"
+                    {v.cleared ? "Awaiting"
+                      : v.kind === "approved" ? "Approved" : v.kind === "changes" ? "Changes requested"
                       : v.kind === "commented" ? "Commented" : "Awaiting"}
                   </b>
-                  {v.askedAgain && <span className="truncate" style={{ color: "var(--text4)" }}>· asked again</span>}
+                  {v.askedAgain && !v.cleared && <span className="truncate" style={{ color: "var(--text4)" }}>· asked again</span>}
                 </div>
               )}
-              <ReviewerList rows={rows} />
+              <ReviewerList rows={rows} author={d.author} onAsk={(login) => api.prReviewers(root, d.number, [login], [])} />
             </>
           );
         })()}
@@ -7646,7 +7929,7 @@ function PrSidebar({ d, root, spend, onEditField }: {
               <span key={i.number} className="flex items-center gap-1 min-w-0">
                 <button onClick={() => openIssue(i.number)}
                   className="agx-btn text-[11px] truncate text-left min-w-0"
-                  style={{ color: "var(--primary)" }}
+                  style={{ color: "var(--primary-ink)" }}
                   title={`Open #${i.number} in Tasks — ${i.title}`}>#{i.number} {i.title}</button>
                 <a href={externalUrl(i.url)} target="_blank" rel="noreferrer noopener"
                   className="agx-btn text-[9px] shrink-0" style={{ color: "var(--text4)" }}
@@ -7668,7 +7951,7 @@ function PrSidebar({ d, root, spend, onEditField }: {
       <CardFacts d={d} root={root} />
       {d.autoMerge && (
         <SidebarSection title="Auto-merge">
-          <span className="text-[10.5px]" style={{ color: "var(--warning)" }}>
+          <span className="text-[10.5px]" style={{ color: "var(--warning-ink)" }}>
             Armed by {d.autoMerge.enabledBy} ({d.autoMerge.method.toLowerCase()})
           </span>
         </SidebarSection>
@@ -7810,7 +8093,7 @@ function Masthead({ d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, 
       .catch(() => { /* no clipboard permission */ });
   };
   return (
-    <div className="px-3 pt-2.5 pb-2 shrink-0" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+    <div className="px-3 pt-2.5 pb-2 shrink-0" style={{ borderBottom: LINE }}>
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <span className="text-[9.5px] px-1.5 py-0.5 rounded-full align-middle inline-flex items-center gap-1"
@@ -7919,7 +8202,7 @@ function Masthead({ d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, 
       {!condensed && (
       <div className="flex flex-wrap items-start gap-x-5 gap-y-2 mt-2.5 -mx-3 -mb-2 px-3 py-2"
         style={{
-          borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)",
+          borderTop: LINE,
           background: "color-mix(in srgb, var(--border) 14%, transparent)",
         }}>
         <Field label="Author"><Avatar login={d.author} size={14} />{d.author}</Field>
@@ -7981,7 +8264,7 @@ function Masthead({ d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, 
                     the answer here is a yes or no (see PrLocalHead.dirty), so it
                     says that and no more rather than inventing a number. */}
                 {wt.dirty && (
-                  <span title="That worktree has uncommitted changes" style={{ color: "var(--warning)" }}>●</span>
+                  <span title="That worktree has uncommitted changes" style={{ color: "var(--warning-ink)" }}>●</span>
                 )}
                 {/* The two trips worth offering, and the same two the terminal
                     offers, through the same request — so a press here and a press
@@ -8005,8 +8288,8 @@ function Masthead({ d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, 
           </Field>
         )}
         <Field label="Changes">
-          <span className="tabular-nums" style={{ color: "var(--success)" }}>+{d.additions}</span>
-          <span className="tabular-nums" style={{ color: "var(--error)" }}>−{d.deletions}</span>
+          <span className="tabular-nums" style={{ color: "var(--success-ink)" }}>+{d.additions}</span>
+          <span className="tabular-nums" style={{ color: "var(--error-ink)" }}>−{d.deletions}</span>
           <span style={{ color: "var(--text3)" }}>· {d.changedFiles} file{d.changedFiles === 1 ? "" : "s"}</span>
         </Field>
         <Field label="Assignee" max={190}>
@@ -8081,7 +8364,7 @@ function BlockerRow({ b }: { b: MergeBlocker }) {
 function Reason({ tint, glyph, children, action }: { tint: string; glyph: React.ReactNode; children: React.ReactNode; action?: React.ReactNode }) {
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 text-[11.5px]"
-      style={{ color: "var(--text)", borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+      style={{ color: "var(--text)", borderBottom: LINE }}>
       <span className="shrink-0 w-3.5 flex justify-center" style={{ color: tint }}>{glyph}</span>
       <span className="min-w-0">{children}</span>
       {action && <span className="ml-auto shrink-0 text-[10px]">{action}</span>}
@@ -8099,10 +8382,10 @@ function DiffToolbar({ path, add, del, split, wrap, onSplit, onWrap, right }: {
 }) {
   return (
     <div className="flex items-center gap-2 px-2.5 py-1.5 text-[10.5px] shrink-0"
-      style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 10%, transparent)" }}>
+      style={{ borderBottom: LINE, background: "color-mix(in srgb, var(--border) 10%, transparent)" }}>
       {path && <span className="truncate" style={{ color: "var(--text)" }}>{path}</span>}
-      {add != null && <span className="tabular-nums shrink-0" style={{ color: "var(--success)" }}>+{add}</span>}
-      {del != null && <span className="tabular-nums shrink-0" style={{ color: "var(--error)" }}>−{del}</span>}
+      {add != null && <span className="tabular-nums shrink-0" style={{ color: "var(--success-ink)" }}>+{add}</span>}
+      {del != null && <span className="tabular-nums shrink-0" style={{ color: "var(--error-ink)" }}>−{del}</span>}
       <span className="ml-auto flex items-center gap-1 shrink-0">
         {right}
         <Toggle on={split} onClick={() => onSplit(!split)} title="Split / unified">{split ? "Split" : "Unified"}</Toggle>
@@ -8173,7 +8456,7 @@ function FileStack({ files, split, wrap, onSplit, onWrap, scope }: {
       }}>
       {files.map((f, i) => (
         <div key={f.file_path} data-diff-file={f.file_path} className="rounded overflow-hidden flex flex-col"
-          style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", maxHeight: 520 }}>
+          style={{ border: EDGE, maxHeight: 520 }}>
           <DiffToolbar path={f.file_path} add={f.additions} del={f.deletions}
             split={split} wrap={wrap} onSplit={i === 0 ? onSplit : onSplit} onWrap={onWrap} />
           <div className="flex-1 min-h-0 flex">
@@ -8266,7 +8549,7 @@ function PeekButton({ path, onPeek }: { path: string; onPeek: (p: string) => voi
       onClick={async () => { setBusy(true); try { await onPeek(path); } finally { setBusy(false); } }}
       title={busy ? "Fetching this file from GitHub at the pull request's head commit…" : "Open the whole file in an editor"}
       className="agx-btn shrink-0 flex items-center gap-1.5 text-[10px] px-1.5 py-0.5 rounded"
-      style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 18%, transparent)" }}>
+      style={{ color: "var(--text2)", border: EDGE }}>
       {busy ? <><span className="agx-spin" style={{ width: 9, height: 9 }} />Opening…</> : <><FileIcon size={ICON.xs} />Open</>}
     </button>
   );
@@ -8345,9 +8628,9 @@ function FileTree({ node, sel, onPick, onPeek, seen, drafts, pending, moved, dep
                 </svg>
               </span>
             )}
-            {n > 0 && <span className="ml-auto text-[10px] shrink-0" style={{ color: "var(--warning)" }}>{n}</span>}
-            {f.comments > 0 && <span className="ml-auto text-[10px] shrink-0" style={{ color: "var(--primary)" }}>{f.comments}</span>}
-            {seen(f.path) && <span className="ml-auto shrink-0 flex" style={{ color: "var(--success)" }}><DoneIcon size={ICON.xs} /></span>}
+            {n > 0 && <span className="ml-auto text-[10px] shrink-0" style={{ color: "var(--warning-ink)" }}>{n}</span>}
+            {f.comments > 0 && <span className="ml-auto text-[10px] shrink-0" style={{ color: "var(--primary-ink)" }}>{f.comments}</span>}
+            {seen(f.path) && <span className="ml-auto shrink-0 flex" style={{ color: "var(--success-ink)" }}><DoneIcon size={ICON.xs} /></span>}
           </button>
         );
       })}
@@ -8389,15 +8672,15 @@ function FilesFilterMenu({ facets, hiddenExts, onToggleExt, onClearExts, showVie
     <>
       <button ref={btnRef} onClick={() => setOpen((o) => !o)} title="Filter changed files"
         aria-label="Filter changed files" aria-haspopup="menu" aria-expanded={open}
-        className="agx-btn shrink-0 grid place-items-center rounded"
-        style={{ width: 24, height: 22, color: active ? "var(--primary)" : "var(--text3)", border: `1px solid color-mix(in srgb, ${active || open ? "var(--primary)" : "var(--border) 45%"}, transparent)` }}>
+        className="agx-btn shrink-0 grid place-items-center rounded-lg"
+        style={{ width: CTRL_H.compact, height: CTRL_H.compact, color: active ? "var(--primary)" : "var(--text3)", border: `1px solid color-mix(in srgb, ${active || open ? "var(--primary)" : "var(--border) 45%"}, transparent)` }}>
         <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3.5h12L9.3 9v4L6.7 14.3V9L2 3.5Z" /></svg>
       </button>
       {open && (
         <Portal>
           <div className="fixed inset-0" style={{ zIndex: 9998 }} onClick={() => setOpen(false)} />
           <div role="menu" className="fixed p-1.5 rounded-xl flex flex-col overflow-hidden text-[11px]"
-            style={{ top: pos.top, left: pos.left, minWidth: 216, maxHeight: "min(60vh, 420px)", zIndex: 9999, background: "color-mix(in srgb, var(--bg2) 97%, black)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", boxShadow: "0 24px 60px -18px rgba(0,0,0,0.7)", backdropFilter: "blur(18px)" }}>
+            style={{ top: pos.top, left: pos.left, minWidth: 216, maxHeight: "min(60vh, 420px)", zIndex: 9999, background: "color-mix(in srgb, var(--bg2) 97%, black)", border: EDGE, boxShadow: "0 24px 60px -18px rgba(0,0,0,0.7)", backdropFilter: "blur(18px)" }}>
             <div className="px-2 pt-1 pb-1 text-[9.5px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>File extensions</div>
             <div className="flex flex-col gap-0.5 overflow-y-auto agw-noscrollbar">
               {facets.map((f) => {
@@ -8414,7 +8697,7 @@ function FilesFilterMenu({ facets, hiddenExts, onToggleExt, onClearExts, showVie
             </div>
             <button role="menuitemcheckbox" aria-checked={showViewed} onClick={onToggleViewed}
               className="mt-1 px-2 py-1.5 rounded-lg text-left flex items-center gap-2 hover:bg-white/5"
-              style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+              style={{ borderTop: LINE }}>
               <span aria-hidden className="shrink-0 grid place-items-center text-[10px]" style={box(showViewed)}>{showViewed ? <DoneIcon size={ICON.xs} /> : null}</span>
               <span className="flex-1" style={{ color: "var(--text2)" }}>Viewed files</span>
               <span className="tabular-nums shrink-0 text-[10px]" style={{ color: "var(--text3)" }}>{viewedCount}</span>
@@ -8473,7 +8756,7 @@ function FindBar({ value, onChange, inputRef, listRef, hits, groups, at, onGo, o
   onGo: (i: number) => void; onClose: () => void;
   fileCount: number; loaded: boolean;
 }) {
-  const edge = "1px solid color-mix(in srgb, var(--text) 20%, transparent)";
+  const edge = EDGE;
   const typed = value.trim().length >= 2;
   // The index each group's first match sits at, so a row knows its own place in
   // the flat list without the render doing arithmetic per row.
@@ -8484,13 +8767,13 @@ function FindBar({ value, onChange, inputRef, listRef, hits, groups, at, onGo, o
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center gap-2 px-2 py-1.5 rounded-md"
         style={{ background: "var(--bg)", border: edge }}>
-        <span className="shrink-0 flex" style={{ color: "var(--primary)" }}><SearchIcon size={ICON.xs} /></span>
+        <span className="shrink-0 flex" style={{ color: "var(--primary-ink)" }}><SearchIcon size={ICON.xs} /></span>
         <input
           ref={inputRef} value={value} onChange={(e) => onChange(e.target.value)}
           placeholder={`Search the code of ${fileCount} file${fileCount === 1 ? "" : "s"}…`}
           spellCheck={false} autoComplete="off"
-          className="flex-1 min-w-0 bg-transparent outline-none text-[11px]"
-          style={{ ...CODE_FONT_STYLE, color: "var(--text)" }}
+          className={`flex-1 min-w-0 ${INPUT}`}
+          style={{ ...INPUT_STYLE, ...CODE_FONT_STYLE }}
           onKeyDown={(e) => {
             // Held here rather than on the frame: while you are typing, the
             // frame never sees a key, and Enter has to mean "next" for this to
@@ -8530,7 +8813,7 @@ function FindBar({ value, onChange, inputRef, listRef, hits, groups, at, onGo, o
               {numbered.map((g) => (
                 <div key={g.path}>
                   <div className="sticky top-0 z-[1] px-2.5 py-1 flex items-center gap-2"
-                    style={{ background: "color-mix(in srgb, var(--text) 7%, var(--bg))", borderBottom: "1px solid color-mix(in srgb, var(--text) 12%, transparent)" }}>
+                    style={{ background: "color-mix(in srgb, var(--text) 7%, var(--bg))", borderBottom: LINE }}>
                     <span className="truncate text-[10.5px]" style={{ ...CODE_FONT_STYLE, color: "var(--text)" }}>{g.path}</span>
                     <span className="ml-auto shrink-0 tabular-nums text-[10px]" style={{ color: "var(--text3)" }}>{g.matches.length}</span>
                   </div>
@@ -8564,7 +8847,7 @@ function FindBar({ value, onChange, inputRef, listRef, hits, groups, at, onGo, o
               {/* findInDiffs stops at 500. A list that quietly ended early is
                   how you conclude a symbol is used nowhere else. */}
               {hits.length >= 500 && (
-                <div className="px-2.5 py-1.5 text-[10px]" style={{ color: "var(--warning)" }}>
+                <div className="px-2.5 py-1.5 text-[10px]" style={{ color: "var(--warning-ink)" }}>
                   First 500 matches — narrow the search to see the rest.
                 </div>
               )}
@@ -8607,7 +8890,7 @@ function DetailSkeleton({ number }: { number: number | null }) {
         <div className="flex gap-4">{["96px", "120px", "88px", "104px"].map((w, i) => bar(11, w, 0.05 * (i + 1)))}</div>
       </div>
       {/* the tab row */}
-      <div className="flex gap-3 pt-1" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+      <div className="flex gap-3 pt-1" style={{ borderBottom: LINE }}>
         {["64px", "92px", "70px", "58px", "62px"].map((w, i) => <div key={i} className="pb-2">{bar(11, w, 0.03 * i)}</div>)}
       </div>
       {/* the body: a wide column and the sidebar beside it, same as Overview */}
@@ -9435,10 +9718,12 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
           draws a scrollbar — one ran the whole width of the app. The column is
           flush now, so there is nothing to pull out of. */}
       <div ref={barRef} className="flex flex-col gap-1 sticky top-0 z-30 px-3 py-2"
-        style={{ background: "var(--bg2)", borderBottom: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+        style={{ background: "var(--surface-card)", borderBottom: LINE }}>
       <div className="flex items-center gap-2 flex-wrap">
-        <span className="flex items-center gap-1.5 px-2 py-1 rounded shrink-0"
-          style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+        {/* Every control in this row is at the `compact` rung, the height of
+            the `Btn small`s beside it, so the row is one line of controls. */}
+        <span className="flex items-center gap-1.5 px-2 rounded-lg shrink-0"
+          style={{ border: EDGE, height: CTRL_H.compact }}>
           <span className="flex" style={{ color: "var(--text3)" }}><SearchIcon size={ICON.xs} /></span>
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter files…"
             className="bg-transparent outline-none text-[10.5px] w-28" style={{ color: "var(--text)" }} />
@@ -9530,7 +9815,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
       <div className="flex items-center gap-2 text-[10px]" style={{ color: "var(--text3)" }}>
         {/* Named for what it does to the middle column, not for a layout — you
             are choosing how much is in front of you. */}
-        <span className="inline-flex rounded overflow-hidden shrink-0" style={{ border: "1px solid color-mix(in srgb, var(--text) 18%, transparent)" }}>
+        <span className="inline-flex rounded overflow-hidden shrink-0" style={{ border: EDGE }}>
           {([[true, "One file"], [false, "All files"]] as const).map(([v, label]) => (
             <button key={label} onClick={() => setOne(v)} className="px-2 py-px"
               style={oneFile === v
@@ -9557,7 +9842,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
             other eight, so hiding it below five files would strand you. */}
         {(oneFile || shownFiles.length > 4) && (
           <aside ref={treeRef} className="shrink-0 agx-tree3 sticky top-[68px] z-10 agx-scroll hidden md:block pr-1"
-            style={{ borderRight: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+            style={{ borderRight: LINE }}>
             {/* `showing`, not `sel`.
                 
                 In one-file mode the first file is on screen before anybody has
@@ -9592,7 +9877,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
       {/* A file list that quietly disagreed with the header count is how nobody
           noticed the hundred-and-first file was missing. Say it. */}
       {d.truncated?.files ? (
-        <div className="text-[10px] px-1 py-1" style={{ color: "var(--warning)" }}>
+        <div className="text-[10px] px-1 py-1" style={{ color: "var(--warning-ink)" }}>
           {/* Nine pages of names are fetched now, so this line means a branch of
               nine hundred files and more — a vendor drop or a generated tree,
               not a review somebody is reading top to bottom. */}
@@ -9678,7 +9963,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
                 top: Math.max(0, barH - 10),
                 height: FILE_HEAD_H,
                 background: "color-mix(in srgb, var(--border) 12%, var(--bg))",
-                borderBottom: open ? "1px solid color-mix(in srgb, var(--border) 25%, transparent)" : undefined,
+                borderBottom: open ? LINE : undefined,
               }}>
               <button onClick={() => { onSel(f.path); toggleFold(f.path); }} className="flex-1 min-w-0 text-left flex items-center gap-2">
                 <span className="shrink-0" style={{ color: "var(--text3)" }}>{open ? "▾" : "▸"}</span>
@@ -9710,8 +9995,8 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
                     : undefined;
                   return (
                     <span className="ml-auto shrink-0 flex items-center gap-1.5" title={t}>
-                      <span className="tabular-nums" style={{ color: "var(--success)" }}>+{add}</span>
-                      <span className="tabular-nums" style={{ color: "var(--error)" }}>−{del}</span>
+                      <span className="tabular-nums" style={{ color: "var(--success-ink)" }}>+{add}</span>
+                      <span className="tabular-nums" style={{ color: "var(--error-ink)" }}>−{del}</span>
                     </span>
                   );
                 })()}
@@ -9771,7 +10056,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
                     /* Said, not spun. GitHub refuses the whole-diff endpoint
                        past 20,000 lines, and a refusal drawn as a spinner is a
                        pane somebody waits at for ever. */
-                    <div className="text-[11px] p-3" style={{ color: "var(--warning)" }}>
+                    <div className="text-[11px] p-3" style={{ color: "var(--warning-ink)" }}>
                       {diffErr}
                     </div>
                   ) : !loaded ? <Loading label="Loading the diff…" size={18} />
@@ -9825,18 +10110,18 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
                               {ln.map((n) => <NoteCard key={`${n.plugin}/${n.id}`} n={n} compact md={localMd} onStatus={(st) => { void local?.setStatus(n, st); }} />)}
                               {pend.map((dc, i) => (
                                 <div key={`p${i}`} className="rounded-lg overflow-hidden text-[11.5px]" style={{
-                                  background: "var(--bg2)",
+                                  background: "var(--surface-card)",
                                   border: "1px dashed color-mix(in srgb, var(--warning) 55%, transparent)",
                                 }}>
                                   {/* Dashed and amber: this is written and not
                                       sent. A solid card would read as posted,
                                       which is the one thing it is not. */}
                                   <div className="px-2.5 py-1 flex items-center gap-2 text-[10px]"
-                                    style={{ background: "color-mix(in srgb, var(--warning) 14%, transparent)", color: "var(--warning)" }}>
+                                    style={{ background: "color-mix(in srgb, var(--warning) 14%, transparent)", color: "var(--warning-ink)" }}>
                                     <span>Pending — sent when you submit the review</span>
                                     <button onClick={() => onDropDraft(dc)} title="Discard this pending comment"
                                       className="agx-btn ml-auto px-1.5 py-0.5 rounded text-[10px]"
-                                      style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 45%, transparent)" }}>Drop</button>
+                                      style={{ color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 45%, transparent)" }}>Drop</button>
                                   </div>
                                   <div className="px-2.5 py-2"><Md body={dc.body} /></div>
                                 </div>
@@ -9867,7 +10152,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
                                       <button onClick={() => openExternal(h.url!)}
                                         title="Edit this pending comment on GitHub"
                                         className="agx-btn shrink-0 text-[10px] px-1.5 py-0.5 rounded"
-                                        style={{ color: "var(--primary)" }}>Edit ↗</button>
+                                        style={{ color: "var(--primary-ink)" }}>Edit ↗</button>
                                     )}
                                   </div>
                                   <div className="px-2.5 py-2"><Md body={h.body} /></div>
@@ -9879,8 +10164,8 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
                                   // on a tint of its own, and lifted off the
                                   // diff by a shadow the way every other
                                   // floating surface in this app is.
-                                  background: "var(--bg2)",
-                                  border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)",
+                                  background: "var(--surface-card)",
+                                  border: EDGE,
                                   boxShadow: "0 12px 30px -14px var(--shadow)",
                                 }}>
                                   {/* The line's own actions live here, beside the
@@ -9890,7 +10175,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
                                       you, not before you have seen it. */}
                                   <div className="px-3 py-2 text-[11px] flex items-center gap-2" style={{
                                     background: "color-mix(in srgb, var(--border) 22%, transparent)",
-                                    borderBottom: "1px solid color-mix(in srgb, var(--text) 16%, transparent)",
+                                    borderBottom: LINE,
                                     color: "var(--text)",
                                   }}>
                                     <span className="min-w-0 truncate">
@@ -9898,11 +10183,11 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
                                     </span>
                                     <span className="ml-auto flex items-center gap-1 shrink-0">
                                       <button onClick={() => suggestHere(f, composing)} title="Prefill a suggestion block with this line"
-                                        className="agx-btn px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>± Suggest</button>
+                                        className="agx-btn px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: EDGE }}>± Suggest</button>
                                       <button onClick={() => { if (repoName && headSha) void navigator.clipboard?.writeText(`https://github.com/${repoName}/blob/${headSha}/${f.path}#L${composing.line}`); }}
                                         disabled={!repoName || !headSha}
                                         title="Copy a link to this line on GitHub"
-                                        className="agx-btn px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}><LinkIcon size={ICON.xs} /></button>
+                                        className="agx-btn px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: EDGE }}><LinkIcon size={ICON.xs} /></button>
                                     </span>
                                   </div>
                                   <div className="p-2.5 flex flex-col gap-2">
@@ -9934,7 +10219,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
                                           return ok;
                                         },
                                       }} />
-                                    <button onClick={cancelCompose} className="agx-btn self-start px-2 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)" }}>Cancel</button>
+                                    <button onClick={cancelCompose} className="agx-btn self-start px-2 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: EDGE }}>Cancel</button>
                                   </div>
                                 </div>
                               )}
@@ -9988,7 +10273,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
                         <button onClick={() => openExternal(h.url!)}
                           title="Edit this pending comment on GitHub"
                           className="agx-btn shrink-0 text-[10px] px-1.5 py-0.5 rounded"
-                          style={{ color: "var(--primary)" }}>Edit ↗</button>
+                          style={{ color: "var(--primary-ink)" }}>Edit ↗</button>
                       )}
                     </div>
                     <div className="px-2.5 py-2"><Md body={h.body} /></div>
@@ -9997,7 +10282,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
               </div>
             )}
             {open && belowNotes.length > 0 && (
-              <div className="px-2.5 py-2 flex flex-col gap-1.5" style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--primary) 4%, transparent)" }}>
+              <div className="px-2.5 py-2 flex flex-col gap-1.5" style={{ borderTop: LINE, background: "color-mix(in srgb, var(--primary) 4%, transparent)" }}>
                 <div className="flex items-center gap-2 text-[9.5px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>
                   <LocalMark />Notes on lines this diff does not show
                 </div>
@@ -10005,7 +10290,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
               </div>
             )}
             {open && belowThreads.length > 0 && (
-              <div className="px-2.5 py-2 flex flex-col gap-2" style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 6%, transparent)" }}>
+              <div className="px-2.5 py-2 flex flex-col gap-2" style={{ borderTop: LINE, background: "color-mix(in srgb, var(--border) 6%, transparent)" }}>
                 {/* Not anchored to a visible line — outdated threads, or ones on
                     context the diff does not reach — so they live under the file
                     rather than inline. */}
@@ -10063,7 +10348,7 @@ function GhLink({ href, title }: { href: string; title: string }) {
   }, [copied]);
   if (!safe) return null;
   const box = "shrink-0 inline-grid place-items-center rounded";
-  const style = { width: 20, height: 20, color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" };
+  const style = { width: 20, height: 20, color: "var(--text3)", border: EDGE };
   /* Two glyphs need more than the square the single-glyph button uses: at 20
      wide the mark and the arrow touched the border and each other. Same height,
      so the pair still reads as one row of controls. */
@@ -10143,7 +10428,7 @@ function Reactions({ nodeId, reactions, onReact }: {
     if (!has.length) return null;
     return (
       <div className="flex gap-1 flex-wrap mt-2">
-        {has.map((r) => <span key={r.content} className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", color: "var(--text2)" }}>{REACTION_EMOJI.find((e) => e.content === r.content)?.glyph ?? "•"} {r.count}</span>)}
+        {has.map((r) => <span key={r.content} className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ border: EDGE, color: "var(--text2)" }}>{REACTION_EMOJI.find((e) => e.content === r.content)?.glyph ?? "•"} {r.count}</span>)}
       </div>
     );
   }
@@ -10180,7 +10465,7 @@ function Reactions({ nodeId, reactions, onReact }: {
             style={{
               top: pos.top, left: pos.left, zIndex: 9999,
               background: "color-mix(in srgb, var(--bg2) 97%, black)",
-              border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)",
+              border: EDGE,
               boxShadow: "0 24px 60px -18px rgba(0,0,0,.7)",
               backdropFilter: "blur(18px)",
             }}>
@@ -10207,8 +10492,8 @@ function AssocChip({ a }: { a?: PrAuthorAssociation }) {
   return <Chip text={label} tint={tint} title={`GitHub says this author is ${label}`} />;
 }
 
-function Card({ who, chip, when, tone, url, edited, assoc, nodeId, reactions, onReact, fresh, body, mine, minimized, onQuote, onEdit, onHide, editor, children }: {
-  who: string; chip?: React.ReactNode; when?: string; tone?: "chg" | "appr" | "bot"; url?: string;
+function Card({ who, chip, when, url, edited, assoc, nodeId, reactions, onReact, fresh, body, mine, minimized, onQuote, onEdit, onHide, editor, children }: {
+  who: string; chip?: React.ReactNode; when?: string; url?: string;
   edited?: string | null; assoc?: PrAuthorAssociation;
   nodeId?: string; reactions?: PrReaction[]; onReact?: (nodeId: string, content: string, on: boolean) => void;
   /**
@@ -10238,24 +10523,30 @@ function Card({ who, chip, when, tone, url, edited, assoc, nodeId, reactions, on
   fresh?: boolean;
   children: React.ReactNode;
 }) {
-  const edge = fresh ? "var(--warning)"
-    : tone === "chg" ? "var(--error)" : tone === "appr" ? "var(--success)" : tone === "bot" ? "var(--info)" : "var(--border)";
+  /* GitHub draws a verdict card the same neutral surface as any other card —
+     the small icon on the rail beside it (and the "requested changes" /
+     "approved" chip in the header) is what carries the colour. A card that is
+     ALSO a red box reads as an error, which a two-day-old review that has
+     since been addressed is not. `fresh` still gets its own edge: that one is
+     not a verdict, it is "this showed up since you last looked". */
+  const edge = fresh ? "var(--warning)" : "var(--border)";
   return (
     /* `data-node` is the address the rail jumps to. The timeline's own entry
        key is positional inside a FILTERED lane, so it changes when the Humans
        / Bots segment changes and cannot be used to find a row. A node id is the
        same string the rail already holds. */
-    <div data-node={nodeId || undefined} className="rounded-md overflow-hidden mb-2"
-      style={{ border: `1px solid color-mix(in srgb, ${edge} ${tone ? 40 : 28}%, transparent)` }}>
-      <div className="flex items-center gap-2 px-2.5 py-1.5 text-[11px]"
-        style={{ background: `color-mix(in srgb, ${edge} ${tone ? 10 : 14}%, transparent)`, borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
-        <Avatar login={who} size={17} />
+    /* No avatar of its own: the timeline hangs the author's face beside the
+       card, as GitHub does, and one face per remark is the point of it. */
+    <div data-node={nodeId || undefined} className="agx-card rounded-md overflow-hidden"
+      style={{ border: `1px solid color-mix(in srgb, ${edge} ${fresh ? 40 : 28}%, transparent)` }}>
+      <div className="flex items-center gap-2 px-3 py-2 text-[11px]"
+        style={{ background: `color-mix(in srgb, ${edge} ${fresh ? 10 : 14}%, transparent)`, borderBottom: LINE }}>
         <b style={{ color: "var(--text)", fontWeight: 500 }}>{who}</b>
         <AssocChip a={assoc} />
         {chip}
         {fresh && (
           <span className="text-[9px] px-1.5 rounded-full"
-            style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 16%, transparent)" }}>new</span>
+            style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 16%, transparent)" }}>new</span>
         )}
         <span className="ml-auto flex items-center gap-1.5 shrink-0">
           {when && <span className="text-[10px]" style={{ color: "var(--text3)" }}>{when}</span>}
@@ -10342,7 +10633,7 @@ function ThreadSnippet({ hunk, line }: { hunk?: string; line?: number | null }) 
 
   if (!hunk?.trim()) return null;
   return (
-    <div className="text-[10.5px]" style={{ ...CODE_FONT_STYLE, borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+    <div className="text-[10.5px]" style={{ ...CODE_FONT_STYLE, borderBottom: LINE }}>
       {rows.map((r, i) => (
         <div key={i} className="flex" style={{
           background: r.text.startsWith("+") ? "color-mix(in srgb, var(--success) 10%, transparent)"
@@ -10359,7 +10650,7 @@ function ThreadSnippet({ hunk, line }: { hunk?: string; line?: number | null }) 
   );
 }
 
-function Thread({ t, onResolve, onReply, onApply, busy, inline, newSet, cameFrom }: {
+function Thread({ t, onResolve, onReply, onApply, busy, inline, newSet }: {
   t: PrThread; onResolve: (t: PrThread) => void; onReply: (t: PrThread, body: string) => Promise<boolean>;
   onApply?: (t: PrThread, text: string) => void; busy: boolean;
   /** The comments said since this browser last looked, by `${threadId}:${id}`.
@@ -10367,10 +10658,6 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline, newSet, cameFrom
    *  the diff is somewhere you went deliberately, not somewhere you are being
    *  told to look. */
   newSet?: Set<string>;
-  /** The review this thread was submitted with, when it has been pulled out to
-   *  the top of the timeline for having moved on since. Without this the
-   *  promotion loses the one thing the nesting was for. */
-  cameFrom?: string;
   /** Rendered anchored under its line in the diff, not in the file's thread
    *  list: drop the path (obvious from where it sits) and the duplicated code
    *  snippet (the line is right above it). */
@@ -10432,10 +10719,10 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline, newSet, cameFrom
   return (
     <SuggestCtx.Provider value={suggest}>
     <div data-thread={t.id} data-resolved={t.isResolved ? "1" : undefined}
-      className={`rounded-md overflow-hidden ${inline ? "" : "mb-2"}`} style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+      className={`rounded-md overflow-hidden ${inline ? "" : "mb-2"}`} style={{ border: EDGE }}>
       <div className="flex items-center gap-2 px-2.5 py-1.5 text-[10.5px]"
         style={{ background: "color-mix(in srgb, var(--border) 14%, transparent)",
-          borderBottom: open ? "1px solid color-mix(in srgb, var(--text) 11%, transparent)" : undefined }}>
+          borderBottom: open ? LINE : undefined }}>
         {t.isResolved && (
           <button onClick={() => setOpen((v) => !v)} aria-expanded={open}
             title={open ? "Hide this resolved thread" : "Show this resolved thread"}
@@ -10444,17 +10731,12 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline, newSet, cameFrom
             {open ? "▾" : "▸"}
           </button>
         )}
-        <span className="truncate" style={{ color: "var(--primary)" }}>
+        <span className="truncate" style={{ color: "var(--primary-ink)" }}>
           {inline
             ? (t.startLine && t.line && t.startLine !== t.line ? `Lines ${t.startLine}–${t.line}` : t.line ? `Line ${t.line}` : "Comment")
             : `${t.path}${t.line ? `:${t.line}` : ""}`}
         </span>
         {t.isOutdated && <Chip text="outdated" tint="var(--text3)" title="The code under this comment has changed since" />}
-        {/* Where it came from, now that it no longer sits under it. */}
-        {cameFrom && (
-          <Chip text={`from ${cameFrom}'s review`} tint="var(--text3)"
-            title="Submitted with that review, and answered since — so it is shown at the time of its last reply rather than the review's" />
-        )}
         <span className="ml-auto flex items-center gap-1.5 shrink-0">
           {/* How much conversation, and when it last moved. A thread carries two
               dates and only one of them was ever on screen: "opened two days
@@ -10467,7 +10749,7 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline, newSet, cameFrom
           )}
           {hot.size > 0 && (
             <span className="text-[9.5px] px-1.5 rounded-full tabular-nums"
-              style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 16%, transparent)",
+              style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 16%, transparent)",
                 border: "1px solid color-mix(in srgb, var(--warning) 42%, transparent)" }}>
               {hot.size} new
             </span>
@@ -10493,7 +10775,7 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline, newSet, cameFrom
         i > 0 && !hidden.has(i - 1) ? (
           <button key={c.id} onClick={() => setUnfolded(true)}
             className="agx-btn w-full text-left px-3 py-1.5 text-[10.5px]"
-            style={{ color: "var(--text3)", borderTop: "1px solid color-mix(in srgb, var(--text) 10%, transparent)",
+            style={{ color: "var(--text3)", borderTop: LINE,
               background: "color-mix(in srgb, var(--border) 9%, transparent)" }}>
             ▸ {hidden.size} earlier {hidden.size === 1 ? "reply" : "replies"}
           </button>
@@ -10525,15 +10807,20 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline, newSet, cameFrom
                 background: "color-mix(in srgb, var(--primary) 32%, transparent)" }} />
           )}
           <div className="flex items-center gap-1.5 mb-1.5 text-[10px]">
-            <Avatar login={c.author} size={15} />
+            {/* 20px, not the 40px the top-level timeline gives a remark — a
+                reply inside a thread is a smaller unit of "who said this",
+                the same way GitHub's own reply avatars shrink beside the
+                thread's opening comment. */}
+            <Avatar login={c.author} size={20} />
             <b style={{ color: "var(--text)", fontWeight: 500 }}>{c.author}</b>
+            <AssocChip a={c.association} />
             {newSet?.has(`${t.id}:${c.id}`) && (
               <span className="text-[9px] px-1.5 rounded-full"
-                style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 16%, transparent)" }}>
+                style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 16%, transparent)" }}>
                 new
               </span>
             )}
-            {c.isBot && <Chip text="automation" tint="var(--info)" />}
+            {c.isBot && <Chip text="bot" tint="var(--info)" />}
             <span className="ml-auto flex items-center gap-1.5" style={{ color: "var(--text3)" }}>
               {ago(c.createdAt)}
               {c.url && <GhLink href={c.url} title="Open this comment on GitHub" />}
@@ -10542,27 +10829,37 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline, newSet, cameFrom
           <Md body={c.body} />
         </div>
       ))}
-      <div className="flex flex-col gap-2 px-3 py-2.5" style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+      <div className="flex flex-col gap-2 px-3 py-2.5" style={{ borderTop: LINE }}>
         {/* Reply with the full markdown composer — Write/Preview, mentions, the
             lot — the same box GitHub gives you, not a one-line prompt. Collapsed
-            to a slim affordance until you mean it. */}
-        {canReply && (replying ? (
-          <Composer
-            onSend={async (b) => { const ok = await onReply(t, b); if (ok) setReplying(false); return ok; }}
-            busy={busy} placeholder="Reply — markdown works here" sendLabel="Reply" autoFocus
-            stash={`reply|${t.id}`}
-          />
+            to a slim affordance until you mean it, and Resolve sits beside it
+            rather than stacked under it — a quiet button in the footer, the
+            way GitHub draws it, not a second full-width row every thread pays
+            for whether or not anybody is about to reply. */}
+        {canReply && replying ? (
+          <>
+            <Composer
+              onSend={async (b) => { const ok = await onReply(t, b); if (ok) setReplying(false); return ok; }}
+              busy={busy} placeholder="Reply — markdown works here" sendLabel="Reply" autoFocus
+              stash={`reply|${t.id}`}
+            />
+            <div className="flex gap-1.5">
+              <Btn onClick={() => setReplying(false)} small>Cancel</Btn>
+              <Btn onClick={() => onResolve(t)} disabled={busy} small>{t.isResolved ? "Unresolve" : "Resolve conversation"}</Btn>
+            </div>
+          </>
         ) : (
-          <button onClick={() => setReplying(true)}
-            className="agx-btn w-full text-left px-3 py-1.5 rounded-lg text-[11px]"
-            style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", background: "color-mix(in srgb, var(--border) 8%, transparent)" }}>
-            Reply…
-          </button>
-        ))}
-        <div className="flex gap-1.5">
-          {replying && <Btn onClick={() => setReplying(false)} small>Cancel</Btn>}
-          <Btn onClick={() => onResolve(t)} disabled={busy} ok={!t.isResolved} small>{t.isResolved ? "Unresolve" : "Resolve conversation"}</Btn>
-        </div>
+          <div className="flex items-center gap-1.5">
+            {canReply && (
+              <button onClick={() => setReplying(true)}
+                className="agx-btn flex-1 min-w-0 text-left px-3 py-1.5 rounded-lg text-[11px]"
+                style={{ color: "var(--text3)", border: EDGE, background: "color-mix(in srgb, var(--border) 8%, transparent)" }}>
+                Reply…
+              </button>
+            )}
+            <Btn onClick={() => onResolve(t)} disabled={busy} small>{t.isResolved ? "Unresolve" : "Resolve conversation"}</Btn>
+          </div>
+        )}
       </div>
       </>}
     </div>
@@ -10654,7 +10951,27 @@ function TimelineEvent({ e }: { e: PrEvent }) {
   const inner = <span>{said} <span style={{ color: "var(--text3)" }}>· {ago(e.at)}</span></span>;
   return (
     <div className="agx-tiny">
+      {e.actor && <Avatar login={e.actor} size={ICON.md} />}
       {e.url ? <a href={externalUrl(e.url)} target="_blank" rel="noreferrer noopener" style={{ color: "inherit" }}>{inner}</a> : inner}
+    </div>
+  );
+}
+
+/** Commits pushed back to back, as GitHub prints them: who, how many, and the
+ *  subjects. The Commits tab has the rest. */
+function CommitsEvent({ commits }: { commits: PrCommit[] }) {
+  const first = commits[0];
+  if (!first) return null;
+  return (
+    <div className="agx-tiny" style={{ alignItems: "flex-start", flexDirection: "column", gap: 2 }}>
+      <span className="flex items-center gap-1.5">{first.author && <Avatar login={first.author} size={ICON.md} />}<b>{first.author || "somebody"}</b> added {commits.length} commit{commits.length === 1 ? "" : "s"}
+        {first.committedAt && <span style={{ color: "var(--text3)" }}> · {ago(first.committedAt)}</span>}</span>
+      {commits.map((c) => (
+        <span key={c.oid} className="flex gap-2 min-w-0 w-full">
+          <code style={{ ...CODE_FONT_STYLE, color: "var(--text3)" }}>{c.short}</code>
+          <span className="truncate" style={{ color: "var(--text2)" }}>{c.message}</span>
+        </span>
+      ))}
     </div>
   );
 }
@@ -10823,6 +11140,8 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   const [pCursor, setPCursor] = useState(-1);
   useEffect(() => { setPerson(null); setPCursor(-1); }, [who]);
   const tlRef = useRef<HTMLDivElement>(null);
+  /** GitHub's order and grouping, decided off the panel — see prTimeline. */
+  const timeline = useMemo(() => prTimeline(d), [d]);
 
   /*
    * Walk to the next thing said since you last looked.
@@ -10877,155 +11196,115 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
      "New" is showing and you are left staring at nothing with no clue why. */
   useEffect(() => { if (who === "new" && !atoms.length) setWho("all"); }, [who, atoms.length, setWho]);
   const kb = Math.round(lanes.bots.reduce((n, c) => n + c.body.length, 0) / 1024);
-  const reviewAuthors = new Set(lanes.humans.map((r) => r.author));
-
-  /*
-   * The threads that have moved on since the review they were submitted with.
-   *
-   * A review owns its threads, and that grouping is the meaning of a "requested
-   * changes": the verdict, with its reasons under it. But it is also what
-   * buries a live argument — the review is dated two days ago, so everything
-   * nested under it sits two days back on the page however recently anybody
-   * spoke. Measured on a real one: a reply nine minutes old, three comments
-   * deep, in the middle of a long page, and no sign anywhere that it existed.
-   *
-   * So a thread that has been answered SINCE its review comes out to the top
-   * level and takes its place by its last reply. It keeps a chip naming the
-   * review it came from, so the grouping is still readable — trading one loss
-   * for another would not be a fix.
-   */
-  const cameFrom = new Map<string, string>();
-  for (const r of lanes.humans) {
-    for (const t of d.threads) {
-      if (t.comments[0]?.author !== r.author) continue;
-      if (threadMovedOn(t, r.submittedAt)) cameFrom.set(t.id, r.author);
-    }
-  }
-  const orphanThreads = d.threads.filter(
-    (t) => cameFrom.has(t.id) || !reviewAuthors.has(t.comments[0]?.author ?? ""),
-  );
-
   /** Who said it, so the timeline can be narrowed to one kind of voice. An
    *  `event` is nobody speaking — a push, a label — and belongs to neither
    *  side, so it shows in the whole timeline and in no filtered view. */
   type Lane = "human" | "bot" | "event" | "local";
-  /** `ms` is what the timeline sorts on, and for a thread it is its LAST
-   *  comment. It used to be the first, which is the ordering bug this whole
-   *  feature was written for. */
-  /* `author` is whoever's remark this row IS — for a thread, whoever raised it,
-     the same rule the lane uses. Absent on events, which nobody said. */
-  type Entry = { at: string; ms: number; key: string; lane: Lane; author?: string; hot?: number; node: React.ReactNode; body: React.ReactNode };
+  /* `author` is whoever's remark this row IS — for a review, its reviewer, and
+     for a thread standing alone, whoever raised it. Absent on events, which
+     nobody said. `ms` is where the row sits, and it is GitHub's slot for it —
+     see prTimeline for why a reply or a resolve never moves one. */
+  /* `face` is whose avatar hangs beside the row, for a remark; an event has
+     none and shows its `node` on the rail instead. */
+  type Entry = { ms: number; key: string; lane: Lane; author?: string; face?: string; hot?: number; node: React.ReactNode; body: React.ReactNode };
   const entries: Entry[] = [];
-  const ms = (iso: string) => Date.parse(iso) || 0;
   /** How many of the things said since your last visit are inside this one. */
   const hotOf = (keys: string[]) => keys.filter((k) => newSet.has(k)).length;
   const threadHot = (t: PrThread) => hotOf(t.comments.map((c) => `${t.id}:${c.id}`));
+  const threadNode = (t: PrThread) =>
+    <span style={{ color: t.isResolved ? "var(--success)" : "var(--warning)" }}>{t.isResolved ? <DoneIcon size={ICON.xs} /> : <CircleIcon size={ICON.xs} />}</span>;
+  const threadRow = (t: PrThread) =>
+    <Thread key={t.id} t={t} onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy} newSet={newSet} />;
+  /** GitHub's badges beside a name: whose pull request it is, and a bot. */
+  const badge = (who: string, isBot: boolean) => isBot ? <Chip text="bot" tint="var(--info)" />
+    : who === d.author ? <Chip text="author" tint="var(--text3)" title="Opened this pull request" /> : undefined;
 
-  for (const [i, r] of lanes.humans.entries()) {
-    const mine = d.threads.filter((t) => t.comments[0]?.author === r.author && !cameFrom.has(t.id));
-    const tone = r.state === "CHANGES_REQUESTED" ? "chg" : r.state === "APPROVED" ? "appr" : undefined;
-    entries.push({
-      at: r.submittedAt, ms: ms(r.submittedAt), key: `r${i}`, lane: "human", author: r.author,
-      hot: hotOf([`r${r.author}-${r.submittedAt}`]) + mine.reduce((n, t) => n + threadHot(t), 0),
-      node: <span style={{ color: tone === "chg" ? "var(--error)" : tone === "appr" ? "var(--success)" : "var(--text3)" }}>
-        {r.state === "CHANGES_REQUESTED" ? <CrossIcon size={ICON.xs} /> : r.state === "APPROVED" ? <DoneIcon size={ICON.xs} /> : <CommentIcon size={ICON.xs} />}</span>,
-      body: (
-        <>
-          <span id={anchorId(`r${r.author}-${r.submittedAt}`)} />
-          <Card who={r.author} when={ago(r.submittedAt)} url={r.url} tone={tone}
-            fresh={newSet.has(`r${r.author}-${r.submittedAt}`)}
-            edited={r.editedAt} assoc={r.association} nodeId={r.nodeId} reactions={r.reactions} onReact={onReact}
-            {...acts({ author: r.author, nodeId: r.nodeId, body: r.body, kind: "issue" })}
-            chip={r.state === "CHANGES_REQUESTED" ? <Chip text="requested changes" tint="var(--error)" />
-              : r.state === "APPROVED" ? <Chip text="approved" tint="var(--success)" /> : undefined}>
-            {r.body ? <Md body={r.body} />
-              : <span style={{ color: "var(--text3)" }}>({r.state.toLowerCase().replace("_", " ")}, no note)</span>}
-          </Card>
-          {mine.length > 0 && (
-            <div className="pl-3 ml-2" style={{ borderLeft: "2px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
-              {mine.map((t) => <Thread key={t.id} t={t} onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy} newSet={newSet} />)}
+  for (const x of timeline) {
+    if (x.kind === "review") {
+      const r = x.review;
+      const anchor = `r${r.author}-${r.submittedAt}`;
+      const tone = r.isBot ? "bot" : r.state === "CHANGES_REQUESTED" ? "chg" : r.state === "APPROVED" ? "appr" : undefined;
+      const verdict = r.state === "CHANGES_REQUESTED" ? <Chip text="requested changes" tint="var(--error)" />
+        : r.state === "APPROVED" ? <Chip text="approved" tint="var(--success)" /> : undefined;
+      const node = <span style={{ color: tone === "chg" ? "var(--error)" : tone === "appr" ? "var(--success)" : "var(--text3)" }}>
+        {r.state === "CHANGES_REQUESTED" ? <CrossIcon size={ICON.xs} /> : r.state === "APPROVED" ? <DoneIcon size={ICON.xs} /> : <EyeIcon size={ICON.xs} />}</span>;
+      entries.push({
+        ms: x.ms, key: anchor, lane: x.lane, author: r.author, face: r.author, node,
+        hot: hotOf([anchor]) + x.threads.reduce((n, t) => n + threadHot(t), 0),
+        /* GitHub's shape for a review: a line on the rail saying who reviewed
+           and with what verdict, the note under it as a card when there is
+           one, and the threads it opened nested under that. */
+        body: (
+          <>
+            <span id={anchorId(anchor)} />
+            <div className="agx-tiny">
+              <span className="agx-node">{node}</span>
+              <span><b>{r.author}</b> {badge(r.author, r.isBot)} {r.state === "APPROVED" ? "approved these changes" : r.state === "CHANGES_REQUESTED" ? "requested changes" : "reviewed"} <span style={{ color: "var(--text3)" }}>· {ago(r.submittedAt)}</span></span>
             </div>
-          )}
-        </>
-      ),
-    });
-  }
-  for (const c of lanes.humanComments) {
-    entries.push({
-      at: c.createdAt, ms: ms(c.createdAt), key: `c${c.id}`, lane: "human", author: c.author, hot: hotOf([`c${c.id}`]),
-      node: <span style={{ color: "var(--text3)" }}><CommentIcon size={ICON.xs} /></span>,
-      body: <><span id={anchorId(`c${c.id}`)} />
-        <Card who={c.author} when={ago(c.createdAt)} url={c.url} fresh={newSet.has(`c${c.id}`)}
-          edited={c.editedAt} assoc={c.association} nodeId={c.nodeId} reactions={c.reactions} onReact={onReact}
-          {...acts({ author: c.author, nodeId: c.nodeId, body: c.body, kind: "issue" })}><Md body={c.body} /></Card></>,
-    });
-  }
-  for (const t of orphanThreads) {
-    /*
-     * Whose voice this is, read off the thread rather than assumed.
-     *
-     * It was hard-coded to "human", so every line comment an automation wrote
-     * was filed as a person: reported from a pull request nobody had touched
-     * except the author, where the Humans tab counted eight and the whole
-     * eight were a bot arguing on the diff. The filter exists to answer "has a
-     * PERSON said anything", and it was answering "has anything been said".
-     *
-     * Read off whoever OPENED it, not off "does any human appear in it". A
-     * thread is one row in this timeline and the row is headed by the person
-     * who raised the point; a reply inside somebody else's thread is part of
-     * their remark, not a remark of your own. It is also the only rule that can
-     * say "Humans 0" on a pull request where only automation has raised
-     * anything — which is the answer he came looking for.
-     */
-    const lane: Lane = t.comments[0]?.isBot ? "bot" : "human";
-    entries.push({
-      // Its LAST comment, not its first. A thread nobody has touched sorts
-      // exactly where it always did; one that has just been answered arrives
-      // where the answer belongs.
-      at: t.comments[0]?.createdAt ?? "", ms: threadLastAt(t), key: `t${t.id}`, lane, author: t.comments[0]?.author, hot: threadHot(t),
-      node: <span style={{ color: t.isResolved ? "var(--success)" : "var(--warning)" }}>{t.isResolved ? <DoneIcon size={ICON.xs} /> : <CircleIcon size={ICON.xs} />}</span>,
-      body: <Thread t={t} onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy}
-        newSet={newSet} cameFrom={cameFrom.get(t.id)} />,
-    });
-  }
-  for (const [i, r] of lanes.botReviews.entries()) {
-    entries.push({
-      at: r.submittedAt, ms: ms(r.submittedAt), key: `br${i}`, lane: "bot", node: <span style={{ color: "var(--info)" }}><AgentIcon size={ICON.xs} /></span>,
-      body: <Card who={r.author} when={ago(r.submittedAt)} url={r.url} tone="bot"
-        nodeId={r.nodeId} reactions={r.reactions} onReact={onReact}
-        chip={<Chip text="automation" tint="var(--info)" />}><Md body={r.body} /></Card>,
-    });
-  }
-  for (const c of lanes.bots) {
-    entries.push({
-      at: c.createdAt, ms: ms(c.createdAt), key: `b${c.id}`, lane: "bot", hot: hotOf([`c${c.id}`]),
-      node: <span style={{ color: "var(--info)" }}><AgentIcon size={ICON.xs} /></span>,
-      body: (
-        <Card who={c.author} when={ago(c.createdAt)} url={c.url} tone="bot" chip={<Chip text="automation" tint="var(--info)" />}
-          nodeId={c.nodeId} reactions={c.reactions} onReact={onReact}>
-          {/* Rendered, not dumped. In full these used to be a <pre> of the raw
-              source, so a coverage report arrived as `<!-- Pytest Coverage
-              Comment -->` and a wall of pipe characters — the one shape of
-              comment that most needs a table to be a table. It goes through the
-              same Md as everything else: the table renders, the <details> folds,
-              and the shields.io badge becomes a pill instead of a broken image. */}
-          {raw
-            ? <Md body={c.body} />
-            : <span style={{ color: "var(--text2)" }}>{c.digest || "(Nothing worth pulling out)"}</span>}
-        </Card>
-      ),
-    });
-  }
-
-  // The events between the remarks: pushes, renames, labels, the merge itself.
-  // Without them the conversation reads as if nothing happened between comments
-  // — the force-push that invalidated a review simply is not there.
-  for (const [i, e] of d.timeline.entries()) {
-    entries.push({
-      at: e.at, ms: ms(e.at), key: `e${i}`, lane: "event",
-      node: <span style={{ color: EVENT_TINT[e.kind] ?? "var(--text3)" }}>{EVENT_GLYPH[e.kind] ?? "•"}</span>,
-      body: <TimelineEvent e={e} />,
-    });
+            {r.body.trim() && (
+              <Card who={r.author} when={ago(r.submittedAt)} url={r.url}
+                fresh={newSet.has(anchor)}
+                edited={r.editedAt} assoc={r.association} nodeId={r.nodeId} reactions={r.reactions} onReact={onReact}
+                {...(r.isBot ? {} : acts({ author: r.author, nodeId: r.nodeId, body: r.body, kind: "issue" }))}
+                chip={<>{badge(r.author, r.isBot)}{verdict}</>}>
+                <Md body={r.body} />
+              </Card>
+            )}
+            {x.threads.length > 0 && <div className="agx-nest">{x.threads.map(threadRow)}</div>}
+          </>
+        ),
+      });
+    } else if (x.kind === "thread") {
+      const t = x.thread;
+      entries.push({ ms: x.ms, key: `t${t.id}`, lane: x.lane, author: t.comments[0]?.author, face: t.comments[0]?.author, hot: threadHot(t), node: threadNode(t),
+        body: <div className="agx-card rounded-md">{threadRow(t)}</div> });
+    } else if (x.kind === "comment" && !x.comment.isBot) {
+      const c = x.comment;
+      entries.push({
+        ms: x.ms, key: `c${c.id}`, lane: "human", author: c.author, face: c.author, hot: hotOf([`c${c.id}`]),
+        node: <span style={{ color: "var(--text3)" }}><CommentIcon size={ICON.xs} /></span>,
+        body: <><span id={anchorId(`c${c.id}`)} />
+          <Card who={c.author} when={ago(c.createdAt)} url={c.url} fresh={newSet.has(`c${c.id}`)} chip={badge(c.author, false)}
+            edited={c.editedAt} assoc={c.association} nodeId={c.nodeId} reactions={c.reactions} onReact={onReact}
+            {...acts({ author: c.author, nodeId: c.nodeId, body: c.body, kind: "issue" })}><Md body={c.body} /></Card></>,
+      });
+    } else if (x.kind === "comment") {
+      const c = x.comment;
+      entries.push({
+        ms: x.ms, key: `b${c.id}`, lane: "bot", author: c.author, face: c.author, hot: hotOf([`c${c.id}`]),
+        node: <span style={{ color: "var(--info-ink)" }}><AgentIcon size={ICON.xs} /></span>,
+        body: (
+          <Card who={c.author} when={ago(c.createdAt)} url={c.url} chip={badge(c.author, true)}
+            nodeId={c.nodeId} reactions={c.reactions} onReact={onReact}>
+            {/* Rendered, not dumped. In full these used to be a <pre> of the raw
+                source, so a coverage report arrived as `<!-- Pytest Coverage
+                Comment -->` and a wall of pipe characters — the one shape of
+                comment that most needs a table to be a table. It goes through the
+                same Md as everything else: the table renders, the <details> folds,
+                and the shields.io badge becomes a pill instead of a broken image. */}
+            {raw
+              ? <Md body={c.body} />
+              : <span style={{ color: "var(--text2)" }}>{c.digest || "(Nothing worth pulling out)"}</span>}
+          </Card>
+        ),
+      });
+    } else if (x.kind === "event") {
+      // The events between the remarks: pushes, renames, labels, the merge
+      // itself. Without them the conversation reads as if nothing happened
+      // between comments — the force-push that invalidated a review is not there.
+      const e = x.event;
+      entries.push({
+        ms: x.ms, key: x.key, lane: "event",
+        node: <span style={{ color: EVENT_TINT[e.kind] ?? "var(--text3)" }}>{EVENT_GLYPH[e.kind] ?? "•"}</span>,
+        body: <TimelineEvent e={e} />,
+      });
+    } else {
+      entries.push({
+        ms: x.ms, key: x.key, lane: "event",
+        node: <span style={{ color: "var(--text3)" }}><CommitIcon size={ICON.xs} /></span>,
+        body: <CommitsEvent commits={x.commits} />,
+      });
+    }
   }
 
   // What plugins said about this pull request, on this machine only: one
@@ -11035,8 +11314,8 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   if (local) {
     for (const g of groupByRun(local)) {
       entries.push({
-        at: new Date(g.ms).toISOString(), ms: g.ms, key: g.key, lane: "local",
-        node: <span style={{ color: "var(--primary)" }}><LocalGlyph size={ICON.xs} /></span>,
+        ms: g.ms, key: g.key, lane: "local",
+        node: <span style={{ color: "var(--primary-ink)" }}><LocalGlyph size={ICON.xs} /></span>,
         body: g.run
           ? <RunCard run={g.run} notes={g.notes} publisher={local.publishers[g.run.plugin]} onStatus={local.setStatus} onOpenFile={onOpenFile} md={localMd} />
           : <div className="flex flex-col gap-1.5">{g.notes.map((n) => <NoteCard key={`${n.plugin}/${n.id}`} n={n} md={localMd} onStatus={(st) => local.setStatus(n, st)} onOpenFile={onOpenFile} />)}</div>,
@@ -11095,7 +11374,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   const opened = (
     <div key="opened" className="agx-tiny">
       <span className="agx-node"><PlusIcon size={ICON.xs} /></span>
-      <span><b>{d.author}</b> opened this pull request from <code style={{ ...CODE_FONT_STYLE, color: "var(--primary)" }}>{d.headRefName}</code> into <code style={{ ...CODE_FONT_STYLE, color: "var(--text2)" }}>{d.baseRefName}</code></span>
+      <span><b>{d.author}</b> opened this pull request from <code style={{ ...CODE_FONT_STYLE, color: "var(--primary-ink)" }}>{d.headRefName}</code> into <code style={{ ...CODE_FONT_STYLE, color: "var(--text2)" }}>{d.baseRefName}</code></span>
     </div>
   );
   /* The real force-push events now come from the timeline with their own
@@ -11103,8 +11382,8 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
      review — a judgement the raw event cannot make. */
   const forced = d.forcePushedSinceReview ? (
     <div key="forced" className="agx-tiny">
-      <span className="agx-node" style={{ color: "var(--warning)" }}><RefreshIcon size={ICON.xs} /></span>
-      <span style={{ color: "var(--warning)" }}>The last review was for code that is no longer here — it was force-pushed over</span>
+      <span className="agx-node" style={{ color: "var(--warning-ink)" }}><RefreshIcon size={ICON.xs} /></span>
+      <span style={{ color: "var(--warning-ink)" }}>The last review was for code that is no longer here — it was force-pushed over</span>
     </div>
   ) : null;
 
@@ -11149,7 +11428,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
          * the band you get a strip of moving text above a pinned bar.
          */
         <div className="flex items-center gap-2 mb-3 px-2.5 py-1.5 rounded-lg text-[10.5px] flex-wrap sticky"
-          style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 14%, var(--bg))",
+          style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 14%, var(--bg))",
             border: "1px solid color-mix(in srgb, var(--warning) 34%, transparent)",
             position: "sticky", top: 0, zIndex: 8, boxShadow: "0 -12px 0 0 var(--bg)" }}>
           <span aria-hidden>●</span>
@@ -11184,7 +11463,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
           <span>Nothing new since you last looked.</span>
           <button onClick={onUnmarkRead} className="agx-btn px-1.5 py-0.5 rounded"
             title="Forget the mark and show everything said after your own last comment"
-            style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+            style={{ color: "var(--text3)", border: EDGE }}>
             Show the {sinceMine} since your last comment
           </button>
         </div>
@@ -11192,7 +11471,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
       <div className="flex items-center gap-2 mb-3 text-[10px]" style={{ color: "var(--text3)" }}>
         <span>One timeline — reviews, comments, threads and events in the order they happened</span>
         {d.truncated?.comments ? (
-          <span style={{ color: "var(--warning)" }}>· showing the most recent {d.truncated.comments}</span>
+          <span style={{ color: "var(--warning-ink)" }}>· showing the most recent {d.truncated.comments}</span>
         ) : null}
         <span className="flex-1" />
         {lanes.bots.length > 0 && (
@@ -11217,7 +11496,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
           a filter that is always there and usually empty teaches people not to
           press it. */}
       {(botCount > 0 || atoms.length > 0 || localCount > 0) && (
-        <div className="flex mb-3 rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+        <div className="flex mb-3 rounded-lg overflow-hidden" style={{ border: EDGE }}>
           {([
             ["all", "All", humanCount + botCount + localCount] as const,
             ...(botCount > 0 ? [["human", "Humans", humanCount] as const, ["bot", "Bots", botCount] as const] : []),
@@ -11270,10 +11549,10 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
                   THEY said" is the movement being asked for. */}
               <button onClick={() => step(-1)} title={`Previous remark by ${person}`}
                 className="agx-btn inline-grid place-items-center rounded"
-                style={{ width: 20, height: 20, color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>↑</button>
+                style={{ width: 20, height: 20, color: "var(--text3)", border: EDGE }}>↑</button>
               <button onClick={() => step(1)} title={`Next remark by ${person}`}
                 className="agx-btn inline-grid place-items-center rounded"
-                style={{ width: 20, height: 20, color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>↓</button>
+                style={{ width: 20, height: 20, color: "var(--text3)", border: EDGE }}>↓</button>
               <span className="text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>
                 {pCursor >= 0 ? `${pCursor + 1}/${shown.length}` : shown.length}
               </span>
@@ -11291,7 +11570,9 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
           {newest && forced}
           {shown.map((e) => (
             <div key={e.key} className="agx-ev" data-hot={e.hot ? "1" : undefined}>
-              <span className="agx-node">{e.node}</span>
+              {e.face
+                ? <span className="agx-av"><Avatar login={e.face} size={TL_AVATAR} /></span>
+                : <span className="agx-node">{e.node}</span>}
               {e.body}
             </div>
           ))}
@@ -11474,8 +11755,8 @@ function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOp
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => { e.preventDefault(); void takeFiles([...e.dataTransfer.files]); }}
       onPaste={(e) => { const fs = [...e.clipboardData.files]; if (fs.length) { e.preventDefault(); void takeFiles(fs); } }}
-      style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
-      <div className="flex items-center gap-1 px-2 py-1.5" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+      style={{ border: EDGE }}>
+      <div className="flex items-center gap-1 px-2 py-1.5" style={{ borderBottom: LINE }}>
         <Btn onClick={() => setPreview(false)} small primary={!preview}>Write</Btn>
         <Btn onClick={() => setPreview(true)} small primary={preview}>Preview</Btn>
         {/*
@@ -11507,20 +11788,20 @@ function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOp
       </div>
       {imageNote && (
         <div className="flex items-center gap-2 px-2.5 py-1.5 text-[10.5px]"
-          style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+          style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", borderBottom: LINE }}>
           <span className="min-w-0 truncate">
             <b>{imageNote}</b> can't be attached from here — GitHub has no public upload API for attachments.
           </span>
           {onOpenGithub && (
             <button onClick={onOpenGithub} className="agx-btn ml-auto shrink-0 px-2 py-0.5 rounded"
-              style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>Attach on GitHub ↗</button>
+              style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>Attach on GitHub ↗</button>
           )}
           <button onClick={() => setImageNote(null)} className="agx-btn shrink-0 grid place-items-center w-5 h-5 rounded" style={{ color: "var(--text3)" }} aria-label="Dismiss"><CloseIcon size={ICON.xs} /></button>
         </div>
       )}
       {restored && (
         <div className="flex items-center gap-2 px-2.5 py-1 text-[10px]"
-          style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 10%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+          style={{ color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 10%, transparent)", borderBottom: LINE }}>
           <span>Picked up where you left off — this was never sent.</span>
           <button onClick={() => setRestored(false)} className="agx-btn ml-auto shrink-0 grid place-items-center w-5 h-5 rounded" style={{ color: "var(--text3)" }} aria-label="Dismiss"><CloseIcon size={ICON.xs} /></button>
         </div>
@@ -11549,7 +11830,7 @@ function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOp
           />
           {ac && matches.length > 0 && (
             <div className="absolute left-3 bottom-2 z-20 rounded-lg overflow-hidden"
-              style={{ background: "color-mix(in srgb, var(--bg2) 97%, black)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", boxShadow: "0 14px 34px -16px rgba(0,0,0,.75)" }}>
+              style={{ background: "color-mix(in srgb, var(--bg2) 97%, black)", border: EDGE, boxShadow: "0 14px 34px -16px rgba(0,0,0,.75)" }}>
               {matches.map((m, i) => (
                 <button key={m.label} onMouseEnter={() => setAcIdx(i)} onClick={() => take(i)}
                   className="agx-btn w-full text-left flex items-center gap-2 px-2.5 py-1 text-[11px]"
@@ -11563,7 +11844,7 @@ function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOp
         </div>
       )}
       <div className="flex items-center gap-2 px-2.5 py-2"
-        style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
+        style={{ borderTop: LINE, background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
         {/* With two outcomes, "to send" stops being an answer. The shortcut goes to
             the reversible one on purpose: a queued comment can be dropped before
             the review is submitted, and a posted one has already notified
@@ -11668,18 +11949,18 @@ function JobLog({ root, name, jobs }: { root: string; name: string; jobs: PrChec
   return (
     <div className="px-2.5 pb-2">
       <button onClick={() => setOpen((v) => !v)} className="agx-btn text-[10px] px-2 py-0.5 rounded"
-        style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)" }}>
+        style={{ color: "var(--text2)", border: EDGE }}>
         {open ? "▾ Hide log" : "▸ Show log"}
       </button>
       {open && (
-        <div className="mt-1.5 rounded overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
-          {err ? <div className="p-2 text-[10.5px]" style={{ color: "var(--error)" }}>{err}</div>
+        <div className="mt-1.5 rounded overflow-hidden" style={{ border: EDGE }}>
+          {err ? <div className="p-2 text-[10.5px]" style={{ color: "var(--error-ink)" }}>{err}</div>
             : text === null ? <div className="p-2 text-[10.5px]" style={{ color: "var(--text3)" }}>Reading the log…</div>
             : steps.length === 0 ? <div className="p-2 text-[10.5px]" style={{ color: "var(--text3)" }}>The log is empty.</div>
             : steps.map((st, i) => {
               const on = openSteps.has(i);
               return (
-                <div key={i} style={i ? { borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" } : undefined}>
+                <div key={i} style={i ? { borderTop: LINE } : undefined}>
                   <button onClick={() => setOpenSteps((c) => { const n = new Set(c); if (n.has(i)) n.delete(i); else n.add(i); return n; })}
                     className="agx-btn w-full text-left flex items-center gap-2 px-2 py-1 text-[10.5px]"
                     style={{ background: st.failed ? "color-mix(in srgb, var(--error) 10%, transparent)" : "transparent" }}>
@@ -11726,7 +12007,7 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyWhat }: 
 
   return (
     <div className="text-[11px] flex flex-col gap-2">
-      <div className="flex items-center gap-3 p-3 rounded-lg" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+      <div className="flex items-center gap-3 p-3 rounded-lg" style={{ border: EDGE }}>
         <span className="shrink-0 rounded-full flex items-center justify-center text-[13px]"
           style={{ width: 26, height: 26, background: c.failure > 0 ? "var(--error)" : c.pending > 0 ? "var(--warning)" : "var(--success)", color: "var(--bg)" }}>
           {c.failure > 0 ? <CrossIcon size={ICON.sm} /> : c.pending > 0 ? <CircleIcon size={ICON.sm} /> : <DoneIcon size={ICON.sm} />}
@@ -11756,14 +12037,14 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyWhat }: 
         const bad = list.filter((k) => k.state === "failure").length;
         const good = list.filter((k) => k.state === "success").length;
         return (
-          <div key={name} className="rounded overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+          <div key={name} className="rounded overflow-hidden" style={{ border: EDGE }}>
             <button onClick={() => setOpenGroups((o) => ({ ...o, [name]: !isOpen }))}
               className="w-full text-left flex items-center gap-2 px-2.5 py-1.5"
               style={{ background: "color-mix(in srgb, var(--border) 14%, transparent)" }}>
               <span style={{ color: "var(--text3)" }}>{isOpen ? "▾" : "▸"}</span>
               <b style={{ color: "var(--text)", fontWeight: 500 }}>{name}</b>
-              {bad > 0 && <span className="inline-flex items-center gap-0.5" style={{ color: "var(--error)" }}>{bad}<CrossIcon size={ICON.xs} /></span>}
-              {good > 0 && <span className="inline-flex items-center gap-0.5" style={{ color: "var(--success)" }}>{good}<DoneIcon size={ICON.xs} /></span>}
+              {bad > 0 && <span className="inline-flex items-center gap-0.5" style={{ color: "var(--error-ink)" }}>{bad}<CrossIcon size={ICON.xs} /></span>}
+              {good > 0 && <span className="inline-flex items-center gap-0.5" style={{ color: "var(--success-ink)" }}>{good}<DoneIcon size={ICON.xs} /></span>}
               <span className="ml-auto tabular-nums" style={{ color: "var(--text3)" }}>{list.length}</span>
             </button>
             {isOpen && list.map((k, i) => {
@@ -11771,7 +12052,7 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyWhat }: 
               const id = `${name}::${k.name}::${i}`;
               const expanded = bad && openCheck === id;
               return (
-                <div key={id} style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: bad ? "color-mix(in srgb, var(--error) 7%, transparent)" : undefined }}>
+                <div key={id} style={{ borderTop: LINE, background: bad ? "color-mix(in srgb, var(--error) 7%, transparent)" : undefined }}>
                   {/* A failing check is the one row on this tab you came for, so
                       it is the one row that opens into somewhere to go next. */}
                   <button onClick={() => bad && setOpenCheck(expanded ? null : id)} disabled={!bad}
@@ -11792,7 +12073,7 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyWhat }: 
                       {onAsk && <Btn onClick={() => onAsk(k)} primary small title="Check the pull request out locally and hand the failure to Claude"><SparkleIcon size={ICON.xs} />Ask Claude why</Btn>}
                       {k.url && (
                         <a href={externalUrl(k.url)} target="_blank" rel="noreferrer noopener" className="agx-btn text-[10px] px-2 py-0.5 rounded"
-                          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)" }}>Open run ↗</a>
+                          style={{ color: "var(--text2)", border: EDGE }}>Open run ↗</a>
                       )}
                       <Btn onClick={onRerun} disabled={busy} small pending={busyWhat === "Re-run checks"} title="Re-run every failing check on this pull request"><RefreshIcon size={ICON.xs} />Re-run failed</Btn>
                       {/* GitHub offers all three, and "the whole run failed
@@ -11894,9 +12175,9 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
           ends of the desk. This one has nothing to spread: the chips fill a row
           and wrap, the verdict stays its own size, and the send goes to the far
           edge where the eye ends up anyway. */}
-      <div className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+      <div className="rounded-lg overflow-hidden" style={{ border: EDGE }}>
         <div className="flex items-center gap-2 px-3 py-1.5 text-[11px]"
-          style={{ background: "color-mix(in srgb, var(--border) 12%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+          style={{ background: "color-mix(in srgb, var(--border) 12%, transparent)", borderBottom: LINE }}>
           <b style={{ color: "var(--text)", fontWeight: 500 }}>Finish your review</b>
           <span style={{ color: "var(--text3)" }}>#{d.number}</span>
           <button onClick={onGoFiles} className="ml-auto tabular-nums text-[10px]" style={{ color: seen < d.files.length ? "var(--primary)" : "var(--text3)" }}>
@@ -11913,7 +12194,7 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
           {drafts.length > 0 ? (
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-1.5 flex-wrap">
-                <span className="text-[10px] uppercase tracking-wider shrink-0 mr-1" style={{ color: "var(--warning)" }}>Pending</span>
+                <span className="text-[10px] uppercase tracking-wider shrink-0 mr-1" style={{ color: "var(--warning-ink)" }}>Pending</span>
                 {drafts.map((c, i) => {
                   const on = openDraft === i;
                   const where = `${c.path.split("/").pop()}:${c.startLine && c.startLine !== c.line ? `${c.startLine}–${c.line}` : c.line}`;
@@ -11925,7 +12206,7 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
                       title={`${c.path}:${c.line}`}
                       className="agx-btn text-[10.5px] px-2 py-0.5 rounded-full shrink-0"
                       style={{
-                        color: "var(--warning)",
+                        color: "var(--warning-ink)",
                         border: `1px ${on ? "solid" : "dashed"} color-mix(in srgb, var(--warning) 55%, transparent)`,
                         background: on ? "color-mix(in srgb, var(--warning) 16%, transparent)" : "transparent",
                         ...CODE_FONT_STYLE,
@@ -11937,11 +12218,11 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
               </div>
               {openDraft != null && drafts[openDraft] && (
                 <div className="rounded-lg overflow-hidden text-[11.5px]" style={{
-                  background: "var(--bg2)",
+                  background: "var(--surface-card)",
                   border: "1px dashed color-mix(in srgb, var(--warning) 55%, transparent)",
                 }}>
                   <div className="px-2.5 py-1 flex items-center gap-2 text-[10px]"
-                    style={{ background: "color-mix(in srgb, var(--warning) 14%, transparent)", color: "var(--warning)" }}>
+                    style={{ background: "color-mix(in srgb, var(--warning) 14%, transparent)", color: "var(--warning-ink)" }}>
                     <span className="min-w-0 truncate" style={{ ...CODE_FONT_STYLE }}>
                       {drafts[openDraft].path}:{drafts[openDraft].startLine && drafts[openDraft].startLine !== drafts[openDraft].line
                         ? `${drafts[openDraft].startLine}–${drafts[openDraft].line}` : drafts[openDraft].line}
@@ -11949,7 +12230,7 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
                     <button onClick={() => { const i = openDraft; setOpenDraft(null); onDrop(i); }}
                       title="Discard this pending comment"
                       className="agx-btn ml-auto shrink-0 px-1.5 py-0.5 rounded text-[10px]"
-                      style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 45%, transparent)" }}>Drop</button>
+                      style={{ color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 45%, transparent)" }}>Drop</button>
                   </div>
                   <div className="px-2.5 py-2"><Md body={drafts[openDraft].body} /></div>
                 </div>
@@ -11963,7 +12244,7 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
                   contradicting it. */}
               {held.length > 0
                 ? <>Nothing queued from here — {held.length} comment{held.length === 1 ? " is" : "s are"} already drafted on GitHub, below.</>
-                : <>No line comments queued here. Open <button onClick={onGoFiles} style={{ color: "var(--primary)" }}>files</button> and
+                : <>No line comments queued here. Open <button onClick={onGoFiles} style={{ color: "var(--primary-ink)" }}>files</button> and
                   use the “+” on a line to attach one.</>}
             </div>
           )}
@@ -11983,7 +12264,7 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
               </div>
               {held.map((c, i) => (
                 <div key={`${c.path}:${c.line}:${i}`} className="px-2.5 py-2"
-                  style={{ borderTop: i ? "1px solid color-mix(in srgb, var(--text) 10%, transparent)" : undefined }}>
+                  style={{ borderTop: i ? LINE : undefined }}>
                   <div className="text-[10px] tabular-nums flex items-center gap-2">
                     <span className="truncate" title={c.path}>{c.path}{c.line === null ? " · outdated" : `:${c.line}`}</span>
                     {/* The way to change it. Nothing in this app can: the API
@@ -11993,7 +12274,7 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
                     {c.url && (
                       <button onClick={() => openExternal(c.url!)} title="Edit this comment on GitHub"
                         className="agx-btn shrink-0 ml-auto px-1.5 py-0.5 rounded"
-                        style={{ color: "var(--primary)" }}>Edit ↗</button>
+                        style={{ color: "var(--primary-ink)" }}>Edit ↗</button>
                     )}
                   </div>
                   <div className="mt-1"><Md body={c.body} /></div>
@@ -12006,7 +12287,7 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
               are one choice; three stacked cards took six rows to say the same
               thing and pushed the button that ends the review off the fold. */}
           <div className="flex items-center gap-2 flex-wrap">
-            <div className="flex rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 18%, transparent)" }}>
+            <div className="flex rounded-lg overflow-hidden" style={{ border: EDGE }}>
               {([
                 ["approve", <><DoneIcon size={ICON.xs} />Approve</>, "Submit and mark the pull request approved.", "var(--success)"],
                 ["request_changes", <><CrossIcon size={ICON.xs} />Request changes</>, "Submit and block the merge until they land.", "var(--error)"],
@@ -12022,7 +12303,7 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
                       color: on ? tint : "var(--text2)",
                       fontWeight: on ? 650 : 400,
                       background: on ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent",
-                      borderLeft: n === 0 ? undefined : "1px solid color-mix(in srgb, var(--text) 14%, transparent)",
+                      borderLeft: n === 0 ? undefined : LINE,
                       boxShadow: on ? "inset 0 -2px 0 var(--primary)" : undefined,
                       opacity: off ? 0.4 : 1, cursor: off ? "not-allowed" : "pointer",
                     }}>{label}</button>
@@ -12057,7 +12338,7 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
               </span>
             </div>
             {preview ? (
-              <div className="rounded-md p-2.5 min-h-[56px]" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+              <div className="rounded-md p-2.5 min-h-[56px]" style={{ border: EDGE }}>
                 {body.trim() ? <Md body={body} /> : <span className="text-[11px]" style={{ color: "var(--text3)" }}>Nothing to preview.</span>}
               </div>
             ) : (

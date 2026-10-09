@@ -21,7 +21,7 @@ export function UnreadBadge({ u }: { u: Unread }) {
     <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] tabular-nums"
       title={unreadTitle(u)}
       style={{
-        color: "var(--warning)",
+        color: "var(--warning-ink)",
         border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)",
         background: "color-mix(in srgb, var(--warning) 14%, transparent)",
       }}>

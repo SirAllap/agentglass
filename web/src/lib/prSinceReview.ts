@@ -45,10 +45,20 @@ export function myLastReview(d: Pick<PrDetail, "reviews"> | null | undefined): P
  */
 export function sinceRange(d: PrDetail | null | undefined): { from: string; to: string } | null {
   if (!d) return null;
+  // The author's own "reviews" are replies to threads, submitted as COMMENTED
+  // against whatever commit was up then. "Files changed since your review" on
+  // your own pull request counted your own pushes against your own replies.
+  if (d.viewerDidAuthor) return null;
   const mine = myLastReview(d);
   if (!mine?.commit) return null;
   const head = d.headSha || d.commits[d.commits.length - 1]?.oid || "";
   if (!head || head === mine.commit) return null;
+  // Only merges of the base since then: the files that "changed" are other
+  // people's already-merged work coming in from master, not anything this
+  // pull request asks you to read again.
+  const at = d.commits.findIndex((c) => c.oid === mine.commit);
+  const after = at >= 0 ? d.commits.slice(at + 1) : [];
+  if (after.length && after.every((c) => c.isMerge)) return null;
   return { from: mine.commit, to: head };
 }
 

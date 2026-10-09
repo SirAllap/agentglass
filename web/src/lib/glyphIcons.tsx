@@ -350,6 +350,19 @@ export function MergeIcon({ size = ICON.sm, className }: P) {
   );
 }
 
+/** Two circles and the line between them, an arrowhead partway along it —
+ *  a branch offering itself back, which is the one shape `BranchIcon` and
+ *  `MergeIcon` both stop short of drawing. The row's pull-request chip. */
+export function PullRequestIcon({ size = ICON.sm, className }: P) {
+  return (
+    <svg {...svg(size, className)}>
+      <circle cx="4" cy="3" r="1.3" /><circle cx="4" cy="11" r="1.3" /><circle cx="10.4" cy="8" r="1.3" />
+      <path d="M4 4.3v5.4M4.6 4.2c.6 2 2.4 3.6 4.5 3.8" />
+      <path d="M7.9 6.6 9.1 8l-1.2 1.4" />
+    </svg>
+  );
+}
+
 /** ＋ */
 export function PlusIcon({ size = ICON.sm, className }: P) {
   return <svg {...svg(size, className)}><path d="M7 2.8v8.4M2.8 7h8.4" /></svg>;

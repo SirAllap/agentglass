@@ -97,8 +97,8 @@ describe("where the card stands, beside the pull request", () => {
        the standard, which should be this one". See components/PeoplePick. */
     expect(people).toContain("<PeoplePick");
     // And what we are holding about the card stops being true the moment it
-    // lands, so it is thrown away rather than left to go stale on screen.
-    expect(pick).toContain("forgetCard(query)");
+    // lands, so the write's own answer replaces it — the board reads the same.
+    expect(pick).toContain("putCard(query, r.task)");
   });
 
   it("shows who is on it, as faces", () => {
@@ -117,8 +117,8 @@ describe("where the card stands, beside the pull request", () => {
     expect(FACTS).not.toContain("api.clickupFind");
   });
 
-  it("is the second reader of a lookup the menu invalidates when it writes", () => {
-    expect(CLICKUP).toContain("forgetCard(query);");
+  it("is the second reader of a lookup the menu replaces when it writes", () => {
+    expect(CLICKUP).toContain("putCard(query, r.task);");
   });
 });
 

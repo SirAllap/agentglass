@@ -18,6 +18,7 @@ import { CloseButton } from "./CloseButton.tsx";
 import { BranchIcon, CopyIcon, IconLabel } from "../lib/glyphIcons.tsx";
 import { agentsOf, subscribeAgents } from "../lib/fleetAgents.ts";
 import { branchesOf, subscribeBranches } from "../lib/repoBranches.ts";
+import { EDGE } from "./workspace/Chrome.tsx";
 import {
   SHARED_TREE_LABEL, SHARED_TREE_TOOLTIP,
   branchForCwd, isSharedCwd, liveSharedCwds, workingTreeOf,
@@ -44,7 +45,7 @@ function Stat({ k, v, color }: { k: string; v: string; color?: string }) {
 // literals rebuilt for every message on every poll, which is a fresh style
 // recalculation for a bubble whose colours have never once changed.
 const USER_BUBBLE = { background: "color-mix(in srgb, var(--primary) 26%, var(--bg2))", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--primary) 55%, transparent)", borderLeft: "3px solid var(--primary)" };
-const AGENT_BUBBLE = { background: "color-mix(in srgb, var(--bg3) 85%, var(--bg))", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", borderLeft: "3px solid color-mix(in srgb, var(--info) 70%, transparent)" };
+const AGENT_BUBBLE = { background: "color-mix(in srgb, var(--bg3) 85%, var(--bg))", color: "var(--text)", border: EDGE, borderLeft: "3px solid color-mix(in srgb, var(--info) 70%, transparent)" };
 
 const Bubble = memo(function Bubble({ role, ts, text }: { role: string; ts: number; text: string }) {
   const user = role === "user";
@@ -166,8 +167,8 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
               <motion.div
                 initial={{ opacity: 0, scale: 0.95, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 8 }}
                 transition={{ type: "spring", stiffness: 330, damping: 30 }}
-                className="w-[95vw] h-[95vh] rounded-2xl flex flex-col pointer-events-auto overflow-hidden"
-                style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
+                className="w-[95vw] h-[95vh] rounded-xl flex flex-col pointer-events-auto overflow-hidden"
+                style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
               >
                 {/* header */}
                 <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
@@ -191,7 +192,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                     )}
                     {d && shared && (
                       <span className="chip" title={SHARED_TREE_TOOLTIP}
-                        style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}>
+                        style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}>
                         {SHARED_TREE_LABEL}
                       </span>
                     )}
@@ -210,7 +211,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                       ) : sessionCwd(d) ? (
                         <button onClick={() => { onResume(d); onClose(); }} className="chip cursor-pointer"
                           title={`Continue this conversation in ${sessionCwd(d)} — claude keeps the full context`}
-                          style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 12%, transparent)", borderColor: "color-mix(in srgb, var(--success) 45%, transparent)" }}>
+                          style={{ color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 12%, transparent)", borderColor: "color-mix(in srgb, var(--success) 45%, transparent)" }}>
                           ↩ Resume in chat
                         </button>
                       ) : (
@@ -312,8 +313,8 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                               <button key={c.id} onClick={() => { setDiffPath(c.file_path); setDiffOpen(true); }} title={`Open diff · ${c.file_path}`} className="w-full text-left flex items-center gap-2 text-[10.5px] rounded px-1 -mx-1 py-0.5 transition-colors hover:bg-[color-mix(in_srgb,var(--primary)_12%,transparent)]">
                                 <span className="truncate" style={{ color: "var(--text3)" }}>{c.file_path.split("/").pop()}</span>
                                 <span className="ml-auto shrink-0 tabular-nums">
-                                  {c.additions > 0 && <span style={{ color: "var(--success)" }}>+{c.additions} </span>}
-                                  {c.deletions > 0 && <span style={{ color: "var(--error)" }}>−{c.deletions}</span>}
+                                  {c.additions > 0 && <span style={{ color: "var(--success-ink)" }}>+{c.additions} </span>}
+                                  {c.deletions > 0 && <span style={{ color: "var(--error-ink)" }}>−{c.deletions}</span>}
                                 </span>
                               </button>
                             ))}
@@ -343,7 +344,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                             <button onClick={toBottom}
                               className="text-[9.5px] px-1.5 py-0.5 rounded-full"
                               title="Jump to the newest turn and follow again"
-                              style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 15%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 45%, transparent)" }}>
+                              style={{ color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 15%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 45%, transparent)" }}>
                               ↓ Resume live
                             </button>
                           )}

@@ -17,6 +17,7 @@ import { subscribeUpdate, updateState, updateAvailable } from "../lib/updateStor
 import { readProgress, fraction, elapsed, PHASES, CLOSES_AT, type Progress } from "../lib/updateProgress.ts";
 import { ReleaseNotesModal } from "./ReleaseNotesModal.tsx";
 import { CloseButton } from "./CloseButton.tsx";
+import { EDGE } from "./workspace/Chrome.tsx";
 
 /** Dismissed for this version only. A later release is a different piece of
  *  news and gets to knock again. */
@@ -28,7 +29,6 @@ const APPEAR_AFTER_MS = 20_000;
 /** The log is a file on disk being appended to; a second is plenty. */
 const POLL_MS = 1_000;
 
-const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 
 export function UpdateToast() {
   const st = useSyncExternalStore(subscribeUpdate, updateState, () => null);
@@ -98,7 +98,7 @@ export function UpdateToast() {
       <div className="fixed rounded-xl text-left"
         style={{
           right: 16, bottom: 16, width: 320, zIndex: 60,
-          background: "var(--bg2)", border: edge(14), boxShadow: "0 12px 34px #000a",
+          background: "var(--surface-card)", border: EDGE, boxShadow: "0 12px 34px #000a",
           padding: "12px 14px",
         }}
         role="status" aria-live="polite">
@@ -118,17 +118,17 @@ export function UpdateToast() {
                     .catch(() => setNotesText({ text: "", error: "Could not read the notes" }));
                 }
               }}
-              className="text-[11px] mt-1.5 underline" style={{ color: "var(--primary)" }}>
+              className="text-[11px] mt-1.5 underline" style={{ color: "var(--primary-ink)" }}>
               See what changes
             </button>
             {/* Orca can promise your sessions survive because it swaps a
                 downloaded binary. This compiles here and its own script says
                 "this stops the running app", so the card says that instead —
                 twice, and the second time is while it is happening. */}
-            <div className="text-[10.5px] mt-2" style={{ color: "var(--warning)" }}>
+            <div className="text-[10.5px] mt-2" style={{ color: "var(--warning-ink)" }}>
               Built on this machine. The window will close and come back on its own.
             </div>
-            {error && <div className="text-[10.5px] mt-1.5" style={{ color: "var(--error)" }}>{error}</div>}
+            {error && <div className="text-[10.5px] mt-1.5" style={{ color: "var(--error-ink)" }}>{error}</div>}
             <button onClick={() => void start()}
               className="block w-full text-center text-[11.5px] mt-2.5 py-1.5 rounded-lg font-medium"
               style={{ background: "color-mix(in srgb, var(--primary) 18%, transparent)",
@@ -178,7 +178,7 @@ export function UpdateToast() {
             </div>
             {error && (
               <div className="mt-2">
-                <div className="text-[10.5px]" style={{ color: "var(--error)" }}>{error}</div>
+                <div className="text-[10.5px]" style={{ color: "var(--error-ink)" }}>{error}</div>
                 {p?.tail && (
                   <pre className="mt-1 text-[10px] whitespace-pre-wrap break-all m-0 max-h-[90px] overflow-y-auto agx-scroll"
                     style={{ color: "var(--text4)" }}>{p.tail}</pre>

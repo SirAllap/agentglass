@@ -611,7 +611,6 @@ describe("a board is for pointing at, not for pressing", () => {
      */
     expect(board).toContain('onAct(p, "open")');
     expect(board).not.toContain("onAct(p, act)");
-    expect(board).toContain('if (k === "a") { e.preventDefault(); onAct(at, "open"); return; }');
   });
 
   it("still says what the card is asking for", () => {
@@ -660,7 +659,7 @@ describe("the number on a card", () => {
  */
 describe("a red card", () => {
   it("checks itself against the latest run per name", () => {
-    expect(board).toContain("const real = rollupOf(root, p.number);");
+    expect(board).toContain("const real = rollupOf(root, p.number, `${p.headSha ?? \"\"}|${JSON.stringify(p.checks)}`);");
     expect(board).toContain("return real ? { ...p, checks: real } : p;");
   });
 
@@ -727,18 +726,41 @@ describe("the shortcuts the legend promises", () => {
     expect(bare).toContain("preventScroll: true");
   });
 
-  it("the legend still names the keys it claims", () => {
-    // If a shortcut is ever removed, this row has to lose it in the same
-    // commit — a legend is a promise, and that is what made this a bug.
-    for (const k of ["lane", "card", "across", "open", "pin"]) {
-      expect(SRC, `the legend lost "${k}"`).toContain(`</K> ${k}<`);
+  it("the board answers no card keys, and prints none", () => {
+    // Ctrl+Alt+A closes and opens the bench; the board's `a` read it as "open
+    // this card" and opened whatever the cursor rested on. The keys went.
+    for (const k of ['"j"', '"k"', '"h"', '"l"', '"p"', '"a"']) {
+      expect(bare, `the board still handles ${k}`).not.toContain(`k === ${k}`);
     }
+    expect(SRC).not.toContain("</K> pin<");
+    expect(SRC).not.toContain("</K> open it<");
+  });
+});
+
+describe("a stale approval on the card", () => {
+  it("is green when GitHub still counts it, amber only once re-requested", () => {
+    // Reported beside the merge box on the same pull request reading the
+    // identical fact green ("still counts") while this card was amber for
+    // commits alone.
+    const fn = board.slice(board.indexOf('if (v.kind === "approved") {'), board.indexOf("function CardView("));
+    expect(fn).toContain("staleApproval(p.reviewDecision).counts");
+    expect(fn).toContain("if (!v.askedAgain && counts)");
+  });
+});
+
+describe("the card header strip, cleared", () => {
+  // Reported on the installed build: the merge box had already gone amber for
+  // "every changes-requester re-asked", and this strip — the same fact, a
+  // different surface — still read red. One truth, one wording, two places.
+  const fn = board.slice(board.indexOf('if (v.kind === "changes") {'), board.indexOf('if (v.kind === "awaiting") {'));
+
+  it("draws amber, not red, once every changes-requester is cleared", () => {
+    expect(fn).toContain("if (v.cleared)");
+    expect(fn).toContain("var(--warning)");
   });
 
-  it("and every key it names is handled", () => {
-    // The other half of the same promise, from the other end.
-    for (const k of ['"j"', '"k"', '"h"', '"l"', '"p"', '"a"']) {
-      expect(bare, `no handler for ${k}`).toContain(k);
-    }
+  it("says the same thing the merge box says", () => {
+    expect(fn).toContain("Waiting on review by");
+    expect(fn).toContain("Changes applied, asked to look again.");
   });
 });

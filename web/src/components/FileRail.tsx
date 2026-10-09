@@ -24,6 +24,7 @@ import { mergeBlockedWhy, checksLine, checksStanding, standingLine, mergeVerdict
 import { mergeBlockers, mergeRefusal } from "../../../shared/mergeBlockers.ts";
 import { ICON } from "../lib/iconSize.ts";
 import { CircleIcon, CommentIcon, CrossIcon, DoneIcon, IconLabel } from "../lib/glyphIcons.tsx";
+import { EDGE, LINE } from "./workspace/Chrome.tsx";
 
 /** How your own last verdict reads back, and in what colour. Its own map so the
  *  three states are spelled once — the buttons above already spell them as
@@ -291,7 +292,7 @@ export function FileRail({
      * named breakpoint when the design names its own.
      */
     <aside className="agx-rail agx-col3 flex-col shrink-0 agx-scroll"
-      style={{ width: 320, borderLeft: edge(12) }}>
+      style={{ width: 320, borderLeft: LINE }}>
       {!path && (
         <Sec title="Nothing selected">
           <p className="m-0 text-[10.5px]" style={{ color: "var(--text4)" }}>
@@ -395,7 +396,7 @@ export function FileRail({
                 {threads.slice(0, THREAD_CAP).map((t) => (
                   <button key={t.id} onClick={onGoConversation}
                     className="block w-full text-left mb-2 last:mb-0 text-[11px]">
-                    <span style={{ color: "var(--primary)" }}>{t.line ? lines(t.line, t.startLine) : "Comment"}</span>
+                    <span style={{ color: "var(--primary-ink)" }}>{t.line ? lines(t.line, t.startLine) : "Comment"}</span>
                     <span className="ml-1.5 text-[9.5px]" style={{ color: "var(--text4)" }}>
                       {t.comments[0]?.author}
                       {/* Kept, not hidden: the lines moved, the argument did
@@ -450,14 +451,14 @@ export function FileRail({
                      second place to read the same output. */
                   <button key={check.name} onClick={onGoChecks} title="Open the log"
                     className="flex w-full items-baseline gap-1.5 text-left text-[11px] mb-1 last:mb-0">
-                    <span className="flex" style={{ color: "var(--error)" }}><CrossIcon size={ICON.xs} /></span>
+                    <span className="flex" style={{ color: "var(--error-ink)" }}><CrossIcon size={ICON.xs} /></span>
                     <span className="min-w-0 truncate" style={{ color: "var(--text2)" }}>{check.name}</span>
                     {/* Said only when it is true. A check carries a name and no
                         log, so most of the time we cannot know which file broke
                         it — and claiming otherwise is how a panel starts lying
                         quietly. */}
                     {namesFile && <span className="shrink-0 text-[9px] px-1 rounded"
-                      style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 32%, transparent)" }}>names this file</span>}
+                      style={{ color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 32%, transparent)" }}>names this file</span>}
                   </button>
                 ))}
               </>
@@ -484,7 +485,7 @@ export function FileRail({
                   </p>
                   {queued.map((q, i) => (
                     <div key={i} className="mb-2 last:mb-0 text-[11px]">
-                      <span style={{ color: "var(--warning)" }}>{lines(q.line, q.startLine)}</span>
+                      <span style={{ color: "var(--warning-ink)" }}>{lines(q.line, q.startLine)}</span>
                       {/* Yours and not yet sent, so this is the one body with
                           no bot in its history — read the same way anyway,
                           because the moment it goes out GitHub will render it
@@ -510,7 +511,7 @@ export function FileRail({
               {heldHere.map((h, i) => (
                 <div key={i} className="mb-2 last:mb-0 text-[11px] flex items-start gap-1.5">
                   <span className="min-w-0">
-                    <span style={{ color: "var(--primary)" }}>
+                    <span style={{ color: "var(--primary-ink)" }}>
                       {h.line == null ? "Outdated" : lines(h.line)}
                     </span>
                     <Quote body={h.body} max={90} />
@@ -518,7 +519,7 @@ export function FileRail({
                   {h.url && (
                     <button onClick={() => openExternal(h.url!)} title="Edit this comment on GitHub"
                       className="agx-btn shrink-0 ml-auto text-[9.5px] px-1 rounded"
-                      style={{ color: "var(--primary)" }}>Edit ↗</button>
+                      style={{ color: "var(--primary-ink)" }}>Edit ↗</button>
                   )}
                 </div>
               ))}
@@ -570,7 +571,7 @@ export function FileRail({
           </p>
         )}
         {d.viewerRequested && (
-          <p className="m-0 mb-1.5 text-[10.5px]" style={{ color: "var(--warning)" }}>
+          <p className="m-0 mb-1.5 text-[10.5px]" style={{ color: "var(--warning-ink)" }}>
             {mine ? "They have asked you to look again." : "You were asked to look at this."}
           </p>
         )}
@@ -603,13 +604,13 @@ export function FileRail({
               <textarea value={body ?? ""} onChange={(e) => onBody(e.target.value)} rows={2}
                 placeholder="Summary — optional for an approval, markdown works"
                 className="w-full mt-1.5 rounded-md p-2 text-[10.5px] resize-y"
-                style={{ background: "var(--bg2)", color: "var(--text)", border: edge(18) }} />
+                style={{ background: "var(--surface-inset)", color: "var(--text)", border: EDGE }} />
             )}
             <p className="m-0 mt-1.5 text-[10px]" style={{ color: "var(--text4)" }}>{goesWith}</p>
             {onSubmit && (
               <button onClick={onSubmit} disabled={busyWhat === "Review"}
                 className="agx-btn w-full mt-1.5 rounded-md py-1 text-[10.5px] inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
-                style={{ background: "var(--primary)", color: "var(--bg)", border: edge(20) }}>
+                style={{ background: "var(--primary)", color: "var(--bg)", border: EDGE }}>
                 {busyWhat === "Review" && (
                   <span className="agx-spin" aria-hidden
                     style={{ width: 9, height: 9, borderWidth: 1.5, borderColor: "color-mix(in srgb, var(--bg) 55%, transparent)", borderTopColor: "transparent" }} />
@@ -644,7 +645,7 @@ export function FileRail({
         <button onClick={onMerge} disabled={!canMerge || !!refusal || busyWhat === "Merge"}
           title={refusal ? `${refusal.title} — ${refusal.detail}` : undefined}
           className="agx-btn w-full mt-2 rounded-md py-1 text-[10.5px] inline-flex items-center justify-center gap-1.5 disabled:opacity-40"
-          style={{ background: allClear ? "var(--primary)" : "transparent", color: allClear ? "var(--bg)" : "var(--text2)", border: edge(20) }}>
+          style={{ background: allClear ? "var(--primary)" : "transparent", color: allClear ? "var(--bg)" : "var(--text2)", border: EDGE }}>
           {/* "anyway" is a word about overriding something. With nothing to
               override it turned a plain press into a dare. */}
           {busyWhat === "Merge" && (
@@ -693,11 +694,11 @@ function Sec({ title, action, children }: {
   title: string; action?: { label: string; on: () => void }; children: React.ReactNode;
 }) {
   return (
-    <section className="px-2.5 py-2" style={{ borderBottom: edge(12) }}>
+    <section className="px-2.5 py-2" style={{ borderBottom: LINE }}>
       <div className="flex items-baseline gap-2 mb-1.5">
         <h4 className="m-0 text-[9px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>{title}</h4>
         {action && (
-          <button onClick={action.on} className="ml-auto text-[9.5px]" style={{ color: "var(--primary)" }}>{action.label}</button>
+          <button onClick={action.on} className="ml-auto text-[9.5px]" style={{ color: "var(--primary-ink)" }}>{action.label}</button>
         )}
       </div>
       {children}

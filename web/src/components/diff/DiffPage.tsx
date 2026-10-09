@@ -35,7 +35,7 @@ import { useSidebarWidth } from "../../lib/sidebarWidth.ts";
 import { SidebarGrip } from "../SidebarGrip.tsx";
 import { CloseButton } from "../CloseButton.tsx";
 import { ICON } from "../../lib/iconSize.ts";
-import { CHIP_ICON, Chip, FilterField, IconChip, Segmented } from "../workspace/Chrome.tsx";
+import { CHIP_ICON, Chip, FilterField, IconChip, Segmented, EDGE } from "../workspace/Chrome.tsx";
 import { viewHeaderClass, viewHeaderStyle } from "../workspace/ViewHeader.tsx";
 import { diffSplit, diffWrap, setDiffSplit, setDiffWrap, diffNoWhitespace, setDiffNoWhitespace } from "../../lib/diffPrefs.ts";
 import { subscribeWorktreeJump, worktreeJump, requestWorktreeJump } from "../../lib/worktreeJump.ts";
@@ -341,8 +341,8 @@ export function DiffPage({ active, onClose }: {
           {loading && !rows.length ? "reading git…" : (
             <>
               {totals.files} {totals.files === 1 ? "file" : "files"}
-              {" · "}<span style={{ color: "var(--success)" }}>+{totals.add}</span>
-              {" "}<span style={{ color: "var(--error)" }}>−{totals.del}</span>
+              {" · "}<span style={{ color: "var(--success-ink)" }}>+{totals.add}</span>
+              {" "}<span style={{ color: "var(--error-ink)" }}>−{totals.del}</span>
               {totals.done > 0 && <span style={{ color: "var(--text4)" }}>{" · "}{totals.done} read</span>}
             </>
           )}
@@ -548,7 +548,7 @@ function Menu({
 function Tick({ on }: { on: boolean }) {
   return (
     <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none" aria-hidden className="shrink-0"
-      style={{ opacity: on ? 1 : 0, color: "var(--primary)" }}>
+      style={{ opacity: on ? 1 : 0, color: "var(--primary-ink)" }}>
       <path d="M2.5 6.4l2.4 2.4L9.5 3.6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
@@ -605,15 +605,15 @@ function List({
                    "feat/…" beside a whole sentence was the first render of this. */
                 <span className={h.shared ? "text-[9.5px] px-1 rounded shrink-0" : "text-[10px] truncate min-w-0"} title={h.title}
                   style={h.shared
-                    ? { color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 15%, transparent)" }
+                    ? { color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 15%, transparent)" }
                     : { color: "var(--text3)", flex: "1 1 0" }}>
                   {h.text}
                 </span>
               )}
               <span className="ml-auto shrink-0 text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>
                 {g.rows.length}
-                {"  "}<span style={{ color: "var(--success)" }}>+{g.add}</span>
-                {" "}<span style={{ color: "var(--error)" }}>−{g.del}</span>
+                {"  "}<span style={{ color: "var(--success-ink)" }}>+{g.add}</span>
+                {" "}<span style={{ color: "var(--error-ink)" }}>−{g.del}</span>
               </span>
             </button>
             {!collapsed.has(g.key) && (
@@ -697,7 +697,7 @@ function Row({ r, selected, reviewed, onSelect, onToggleReviewed, authors }: {
         {authors && (
           <span className="text-[9.5px] px-1 rounded shrink-0 inline-flex items-center gap-0.5" title={rowAuthorsTitle(authors)}
             aria-label={`${authors.length} authors`}
-            style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 15%, transparent)" }}>
+            style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 15%, transparent)" }}>
             <AgentIcon size={ICON.xs} />{authors.length}
           </span>
         )}
@@ -709,8 +709,8 @@ function Row({ r, selected, reviewed, onSelect, onToggleReviewed, authors }: {
       <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>{whenLabel(r.changedAt)}</span>
 
       <span className="shrink-0 text-[10px] tabular-nums" style={{ minWidth: 62, textAlign: "right" }}>
-        {r.additions > 0 && <span style={{ color: "var(--success)" }}>+{r.additions}</span>}
-        {r.deletions > 0 && <span style={{ color: "var(--error)" }}> −{r.deletions}</span>}
+        {r.additions > 0 && <span style={{ color: "var(--success-ink)" }}>+{r.additions}</span>}
+        {r.deletions > 0 && <span style={{ color: "var(--error-ink)" }}> −{r.deletions}</span>}
       </span>
 
       <button
@@ -910,12 +910,12 @@ function Body({ row, state, split, wrap, noWs, mode, comments, staleIds, jumpTo,
             back to where you already were. */}
         <button onClick={openFile} title="Open it here, at its first change"
           className="ml-auto shrink-0 px-2 py-1 rounded-md text-[10.5px] flex items-center gap-1"
-          style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+          style={{ color: "var(--text3)", border: EDGE }}>
           <IconLabel icon={<FileIcon size={ICON.xs} />}>Open</IconLabel>
         </button>
         <button onClick={copy} title="Copy the full path"
           className="shrink-0 px-2 py-1 rounded-md text-[10.5px]"
-          style={{ color: copied ? "var(--success)" : "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+          style={{ color: copied ? "var(--success)" : "var(--text3)", border: EDGE }}>
           {copied ? "Copied" : "Copy path"}
         </button>
       </div>
@@ -946,7 +946,7 @@ function Body({ row, state, split, wrap, noWs, mode, comments, staleIds, jumpTo,
           </HiliteCtx.Provider>
         )}
         {state.diff?.truncated && (
-          <p className="px-4 py-3 text-[11px]" style={{ color: "var(--warning)" }}>
+          <p className="px-4 py-3 text-[11px]" style={{ color: "var(--warning-ink)" }}>
             This diff was cut off — the file changed more than this view will render at once.
           </p>
         )}

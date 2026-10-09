@@ -8,6 +8,7 @@ import { Spinner } from "../Spinner.tsx";
 import { PluginTree } from "./PluginTree.tsx";
 import { PanelGlyph } from "./panelGlyph.tsx";
 import { PluginMark } from "./PluginMark.tsx";
+import { Button, LINE, Tabs } from "../workspace/Chrome.tsx";
 
 /**
  * The rail's home for plugins: every panel an enabled plugin declared, one
@@ -101,11 +102,7 @@ export function PluginsView({ active }: { active: boolean }) {
             A plugin can add a panel to this view, a page to Settings and local notes to a pull request. It draws
             with this app's own parts and never runs inside the window. Install one and enable it to see it here.
           </div>
-          <button type="button" onClick={() => openSettings("plugins")}
-            className="agx-btn rounded inline-flex items-center leading-none text-[11px] px-3 h-[28px] mt-1"
-            style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 55%, transparent)", background: "color-mix(in srgb, var(--primary) 10%, transparent)" }}>
-            Browse plugins
-          </button>
+          <Button tone="primary" onClick={() => openSettings("plugins")} className="mt-1">Browse plugins</Button>
         </div>
       </Centered>
     );
@@ -114,27 +111,23 @@ export function PluginsView({ active }: { active: boolean }) {
   return (
     <div className="flex flex-col h-full min-h-0">
       <header className="flex items-center gap-2 px-4 h-[44px] shrink-0 min-w-0"
-        style={{ borderBottom: "1px solid var(--surface-line)", background: "var(--surface-nav)" }}>
-        <div role="tablist" className="flex items-center gap-1 min-w-0 overflow-x-auto flex-1">
-          {panels.map((p) => {
-            const on = current && keyOf(p) === keyOf(current);
-            return (
-              <button key={keyOf(p)} role="tab" aria-selected={!!on} type="button" onClick={() => choose(p)}
-                title={`${p.title} — ${p.plugin} by ${p.publisher}`}
-                className="agx-btn rounded-md inline-flex items-center gap-1.5 whitespace-nowrap text-[11.5px] px-2.5 h-[28px]"
-                style={{
-                  color: on ? "var(--text)" : "var(--text3)",
-                  background: on ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent",
-                  border: "1px solid transparent",
-                }}>
-                {p.hasIcon || p.color
-                  ? <PluginMark name={p.plugin} icon={p.hasIcon ? "icon" : undefined} color={p.color ?? undefined} size={ICON.lg} stamp={p.stamp} />
-                  : <PanelGlyph icon={p.icon} size={ICON.sm} />}
-                {p.title}
-                {!p.running && <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--text4)" }} title="not running" />}
-              </button>
-            );
-          })}
+        style={{ borderBottom: LINE, background: "var(--surface-nav)" }}>
+        <div className="min-w-0 overflow-x-auto flex-1">
+          <Tabs<string> label="Plugin panels" panelId="plugin-panel" value={current ? keyOf(current) : ""}
+            onChange={(k) => { const p = panels.find((q) => keyOf(q) === k); if (p) choose(p); }}
+            options={panels.map((p) => ({
+              id: keyOf(p),
+              title: `${p.title} — ${p.plugin} by ${p.publisher}`,
+              label: (
+                <span className="inline-flex items-center gap-1.5">
+                  {p.hasIcon || p.color
+                    ? <PluginMark name={p.plugin} icon={p.hasIcon ? "icon" : undefined} color={p.color ?? undefined} size={ICON.lg} stamp={p.stamp} />
+                    : <PanelGlyph icon={p.icon} size={ICON.sm} />}
+                  {p.title}
+                  {!p.running && <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--text4)" }} title="not running" />}
+                </span>
+              ),
+            }))} />
         </div>
         {current && (
           <div className="flex items-center gap-2 shrink-0 text-[10.5px]" style={{ color: "var(--text3)" }}>
@@ -144,20 +137,16 @@ export function PluginsView({ active }: { active: boolean }) {
             </span>
             <span style={{ color: "var(--text4)" }}>·</span>
             <span className="truncate max-w-[18ch]" title={`Published by ${current.publisher} — not verified`}>{current.publisher}</span>
-            <button type="button" onClick={() => openSettings(`plugin:${current.plugin}`)}
-              className="agx-btn rounded inline-flex items-center leading-none text-[10.5px] px-2 h-[24px] ml-1"
-              style={{ color: "var(--text2)", border: "1px solid var(--surface-line)", background: "transparent" }}>
-              Settings
-            </button>
+            <Button size="compact" onClick={() => openSettings(`plugin:${current.plugin}`)} className="ml-1">Settings</Button>
           </div>
         )}
       </header>
       {error && (
-        <div className="px-4 py-1.5 text-[11px] shrink-0" style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 8%, transparent)" }}>
+        <div className="px-4 py-1.5 text-[11px] shrink-0" style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 8%, transparent)" }}>
           {error}
         </div>
       )}
-      <div className="flex-1 min-h-0 overflow-auto">
+      <div id="plugin-panel" role="tabpanel" className="flex-1 min-h-0 overflow-auto">
         <div className="p-4 min-h-full flex flex-col">
           {current && !current.running ? (
             <Centered>
@@ -167,11 +156,7 @@ export function PluginsView({ active }: { active: boolean }) {
                   Its panel is drawn by its own process, and there is none right now. Enable it again in Settings; if it
                   keeps stopping, the plugin exited on its own.
                 </div>
-                <button type="button" onClick={() => openSettings("plugins")}
-                  className="agx-btn rounded inline-flex items-center leading-none text-[11px] px-3 h-[28px] mt-1"
-                  style={{ color: "var(--text)", border: "1px solid var(--surface-line)", background: "transparent" }}>
-                  Open plugin settings
-                </button>
+                <Button onClick={() => openSettings("plugins")} className="mt-1">Open plugin settings</Button>
               </div>
             </Centered>
           ) : current && !current.tree ? (

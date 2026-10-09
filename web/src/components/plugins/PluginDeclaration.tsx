@@ -5,6 +5,7 @@ import { CommandIcon, PuzzleIcon, ShieldIcon, SlidersIcon } from "../settingsNav
 import { describeSandbox, type SandboxGrant } from "../../../../shared/pluginSandbox.ts";
 import { boxWording } from "../../lib/pluginBoxState.ts";
 import { HIT, ICON } from "../../lib/iconSize.ts";
+import { EDGE } from "../workspace/Chrome.tsx";
 
 /**
  * What switching a plugin on approves, drawn rather than recited.
@@ -87,7 +88,7 @@ export function PluginDeclaration({ plugin }: { plugin: PublicPlugin }) {
         {/* The command, as a command: the one line here that is not prose, and
             the one a reader is most likely to want to recognise. */}
         <code className="block t-mono text-[11.5px] px-2 py-1.5 rounded-md break-all"
-          style={{ color: "var(--text)", background: "var(--surface-inset)", border: "1px solid var(--surface-line)" }}>
+          style={{ color: "var(--text)", background: "var(--surface-inset)", border: EDGE }}>
           {plugin.entrypoint}
         </code>
       </Block>
@@ -104,7 +105,7 @@ export function PluginDeclaration({ plugin }: { plugin: PublicPlugin }) {
           {box.tone === "boxed" && box.refused && box.refused.length > 0 && (
             <div className="flex flex-col gap-0.5 mb-1.5">
               {box.refused.map((r) => (
-                <p key={r.path} className="m-0 text-[11.5px] leading-snug" style={{ color: "var(--error)" }}>
+                <p key={r.path} className="m-0 text-[11.5px] leading-snug" style={{ color: "var(--error-ink)" }}>
                   Refused <span className="t-mono">{r.path}</span> — {r.why}
                 </p>
               ))}
@@ -127,7 +128,7 @@ export function PluginDeclaration({ plugin }: { plugin: PublicPlugin }) {
           <div className="flex flex-col gap-1">
             {drawn.map((s) => (
               <div key={s.what} className="flex items-start gap-2 min-w-0">
-                <span className="shrink-0 mt-px" style={{ color: "var(--primary)" }}>{s.icon}</span>
+                <span className="shrink-0 mt-px" style={{ color: "var(--primary-ink)" }}>{s.icon}</span>
                 <span className="min-w-0 text-[12px] leading-snug">
                   <span style={{ color: "var(--text)" }}>{s.what}</span>
                   <span className="t-dim"> — {s.where}</span>
@@ -156,7 +157,7 @@ function FixBlock({ command }: { command: string }) {
   return (
     <div className="relative mb-1.5">
       <pre className="m-0 t-mono text-[11px] leading-relaxed px-2 py-1.5 pr-7 rounded-md overflow-x-auto whitespace-pre"
-        style={{ color: "var(--text)", background: "var(--surface-inset)", border: "1px solid var(--surface-line)" }}>
+        style={{ color: "var(--text)", background: "var(--surface-inset)", border: EDGE }}>
         {command}
       </pre>
       <button type="button" className="agx-btn absolute top-1 right-1 rounded inline-flex items-center justify-center"
@@ -176,7 +177,7 @@ function Grants({ label, grants }: { label: string; grants: SandboxGrant[] }) {
       <span className="flex flex-col gap-0.5">
         {grants.map((g) => (
           <span key={g.path} className="t-mono text-[11.5px]" style={{ color: g.secret ? "var(--error)" : "var(--text)" }}>
-            {g.path}{g.secret && <span className="t-dim" style={{ color: "var(--error)" }}> · {g.secret}</span>}
+            {g.path}{g.secret && <span className="t-dim" style={{ color: "var(--error-ink)" }}> · {g.secret}</span>}
           </span>
         ))}
       </span>
@@ -190,7 +191,7 @@ function Block({ icon, tint, head, chip, children }: {
   return (
     <section className="rounded-lg px-2.5 py-2 min-w-0" style={{
       background: "color-mix(in srgb, var(--border) 10%, transparent)",
-      border: "1px solid color-mix(in srgb, var(--border) 34%, transparent)",
+      border: EDGE,
     }}>
       <div className="flex items-center gap-1.5 mb-1.5">
         <span className="shrink-0 flex" style={{ color: tint }}>{icon}</span>

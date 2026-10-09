@@ -199,9 +199,28 @@ export async function ghCapability(force = false): Promise<GhCapability> {
 export async function prBranches(root: string, number: number): Promise<{ base: string; head: string } | null> {
   const id = await repoIdFor(root);
   if (!id) return null;
+  const known = knownBranches(id.key, number);
+  if (known) return known;
   const pr = await ghJson<{ baseRefName?: string; headRefName?: string }>(
     ["pr", "view", String(number), "--repo", `${id.owner}/${id.name}`, "--json", "baseRefName,headRefName"], root);
   return pr?.baseRefName && pr.headRefName ? { base: pr.baseRefName, head: pr.headRefName } : null;
+}
+
+/* Out of what is already in memory, before `gh pr view` — which is a GraphQL
+   request, one point of the account's hourly budget. The board asks how far
+   behind every card is, each of those asked this first, and every card was
+   a row already holding both names: measured at five of them in two and a half
+   minutes on an idle board. A row is at most one list refresh old; a base
+   retargeted since then is corrected on the next one. */
+function knownBranches(repoKey: string, number: number): { base: string; head: string } | null {
+  const d = detailCache.get(`${repoKey}#${number}`)?.detail;
+  if (d?.baseRefName && d.headRefName) return { base: d.baseRefName, head: d.headRefName };
+  for (const [k, e] of listCache) {
+    if (!k.startsWith(`${repoKey}\u0000`)) continue;
+    const p = e.prs.find((r) => r.number === number);
+    if (p?.baseRefName && p.headRefName) return { base: p.baseRefName, head: p.headRefName };
+  }
+  return null;
 }
 
 /**
@@ -846,7 +865,7 @@ export function ciNotifiesFor(filter: PrFilter): boolean {
  */
 const LIST_FIELDS_FAST = "number,title,author,state,isDraft,headRefName,baseRefName,url,updatedAt,reviewDecision,additions,deletions,changedFiles,labels,assignees,milestone";
 
-type Entry = { at: number; prs: PrSummary[]; loading: boolean; checksPending: boolean; error?: string; total?: number; hasNext?: boolean; cursor?: string | null };
+type Entry = { at: number; prs: PrSummary[]; loading: boolean; checksPending: boolean; error?: string; total?: number; hasNext?: boolean; cursor?: string | null; fp?: string };
 const listCache = new Map<string, Entry>();
 const inflight = new Set<string>();
 
@@ -945,7 +964,12 @@ function saveDiskCache(): void {
 }
 
 loadDiskCache();
-const LIST_TTL_MS = 90_000;
+/* Two minutes, and a refresh inside it is usually one point, not two: see
+   probeOpen. GitHub's GraphQL budget is 5000 an hour per ACCOUNT, shared with
+   every other tool signed in as the same person, and an idle panel measured
+   ~720 an hour at 90s with every list paying for its rows and checks each
+   time. */
+const LIST_TTL_MS = 120_000;
 
 // `\u0000` written as an escape, never as the byte: a raw NUL makes the whole
 // file read as binary to grep, which then skips it in silence. Same separator,
@@ -1004,8 +1028,12 @@ export function mapReviewers(nodes: any[] | null | undefined): PrReviewer[] {
   return out;
 }
 
-/** One page of the list, and everything the rows need, in a single request. */
-const LIST_PAGE = 25;
+/** One page of the list, and everything the rows need, in a single request.
+ *  Twenty, not twenty-five: GitHub prices a query by its page size times the
+ *  connections under each row, over a hundred, rounded. Your two queues in one
+ *  request (QUEUES_QUERY) measured 4 points at 25 rows and 3 at 20 with
+ *  `rateLimit(dryRun:true)`. */
+const LIST_PAGE = 20;
 
 /**
  * The rows, and nothing that costs more than a row is worth.
@@ -1021,17 +1049,18 @@ const LIST_PAGE = 25;
  * They now ride on SEARCH_CHECKS, which runs beside this one and is the slower
  * of the pair — measured, adding them there costs nothing at all.
  */
-const SEARCH_ROWS = `query($q:String!,$first:Int!,$after:String){
-  search(query:$q, type:ISSUE, first:$first, after:$after){
-    issueCount
-    pageInfo{hasNextPage endCursor}
-    nodes{ ... on PullRequest {
+const SEL_ROW = `
       number title url state isDraft createdAt updatedAt
       baseRefName headRefName
       author{login}
       labels(first:10){nodes{name color}}
       assignees(first:5){nodes{login}}
-      milestone{title}
+      milestone{title}`;
+const SEARCH_ROWS = `query($q:String!,$first:Int!,$after:String){
+  search(query:$q, type:ISSUE, first:$first, after:$after){
+    issueCount
+    pageInfo{hasNextPage endCursor}
+    nodes{ ... on PullRequest {${SEL_ROW}
     } }
   }
 }`;
@@ -1070,6 +1099,13 @@ const SEARCH_ROWS = `query($q:String!,$first:Int!,$after:String){
  * line arrives here as a `COMMENTED` review with an empty body. Asking
  * `reviewThreads` for the same information would cost a walk per pull request,
  * which is precisely what the list cannot afford.
+ *
+ * No line-comment count per review. It was `comments(first:0){totalCount}`
+ * under each of the sixty reviews, and GitHub prices a nested connection per
+ * parent: sixty per row, twenty-five rows, 15 of the 17 points the whole
+ * checks query cost (measured with `rateLimit(dryRun:true)`). Ceiling, named:
+ * a batch of line comments counts as one remark on a card, where the
+ * conversation panel, which reads the detail, counts each line.
  */
 /**
  * The verdict of the PEOPLE who reviewed, ignoring bots.
@@ -1175,7 +1211,21 @@ export function humanVerdict(
     };
   };
 
-  if (changes.length) return build("changes", changes, approved.length);
+  if (changes.length) {
+    /*
+     * EVERY CHANGES-REQUESTER RE-ASKED CLEARS THE RED.
+     *
+     * `who` still names all of them — GitHub's own page does too, re-request
+     * arrow or not. One left un-re-asked and their thread is genuinely still
+     * the one to answer, so the merge box stays red. Only once EVERY one of
+     * them is back in `pending` (this pull request's own re-request list)
+     * does `cleared` say nobody named here is still holding it up — draw it
+     * like a fresh, unanswered request instead.
+     */
+    const allAskedAgain = changes.every(([login]) => pendingLogins.has(login.toLowerCase()));
+    const v = build("changes", changes, approved.length) as NonNullable<PrSummary["humanReview"]>;
+    return allAskedAgain ? { ...v, cleared: true } : v;
+  }
   if (approved.length) return build("approved", approved, changes.length);
   /*
    * WAITING OUTRANKS COMMENTED, because it is the more useful half.
@@ -1244,7 +1294,6 @@ const SEL_TALK = `
       comments(last:10){nodes{createdAt viewerDidAuthor author{login}}}
       reviews(last:60){nodes{
         submittedAt state viewerDidAuthor author{login} url
-        comments(first:0){totalCount}
       }}
       reviewThreads(first:100){totalCount nodes{isResolved}}`;
 
@@ -1263,9 +1312,7 @@ export function unresolvedThreads(node: { reviewThreads?: { totalCount?: number;
   return { open, more: (t.totalCount ?? t.nodes.length) > t.nodes.length };
 }
 
-const SEARCH_CHECKS = `query($q:String!,$first:Int!,$after:String){
-  search(query:$q, type:ISSUE, first:$first, after:$after){
-    nodes{ ... on PullRequest {
+const SEL_ROW_CHECKS = `
       number additions deletions changedFiles reviewDecision mergeable
       headRefName title
       author{login}
@@ -1277,7 +1324,40 @@ const SEARCH_CHECKS = `query($q:String!,$first:Int!,$after:String){
         state
         contexts(first:0){checkRunCountsByState{state count} statusContextCountsByState{state count}}
       }}}}
-      ${SEL_TALK}
+      ${SEL_TALK}`;
+const SEARCH_CHECKS = `query($q:String!,$first:Int!,$after:String){
+  search(query:$q, type:ISSUE, first:$first, after:$after){
+    nodes{ ... on PullRequest {${SEL_ROW_CHECKS}
+    } }
+  }
+}`;
+
+/**
+ * YOUR two queues, rows and checks, in ONE request — what Refresh costs.
+ *
+ * Refresh used to force three lists (the one on screen and the board's two),
+ * each a rows query and a checks query: 39 points of the account's hourly
+ * 5000 for one press, measured with `{rateLimit{used}}` before and after. The
+ * checks query alone was 17 of those, almost all of it the per-review count
+ * SEL_TALK no longer asks for. Both searches ride in one request here and
+ * both cache entries are filled from it: 3 points at LIST_PAGE rows each,
+ * measured with `rateLimit(dryRun:true)`.
+ *
+ * Rows and checks together, where a single list asks for them as two requests
+ * so the rows can paint first: the queues are also held on disk, so what is on
+ * screen while this runs is the last answer, not an empty panel.
+ */
+const QUEUES_QUERY = `query($m:String!,$r:String!,$first:Int!){
+  m:search(query:$m, type:ISSUE, first:$first){
+    issueCount
+    pageInfo{hasNextPage endCursor}
+    nodes{ ... on PullRequest {${SEL_ROW}${SEL_ROW_CHECKS}
+    } }
+  }
+  r:search(query:$r, type:ISSUE, first:$first){
+    issueCount
+    pageInfo{hasNextPage endCursor}
+    nodes{ ... on PullRequest {${SEL_ROW}${SEL_ROW_CHECKS}
     } }
   }
 }`;
@@ -1455,24 +1535,34 @@ async function fetchList(repo: PrRepoId, filter: PrFilter, state: PrState, after
   // null distinct so a network blip holds the last good list while a genuine
   // empty is allowed to empty the panel.
   if (!search) return null;
+  const early = barePage(search);
+  onRows?.(early);
+  const checksRes = await checksP;
+  return { ...early, rows: completeRows(early.rows, checksRes?.data?.search?.nodes ?? [], me) };
+}
+
+/** The first pass of a page: rows without their checks. */
+function barePage(search: any): ListPage {
   const bare: PrSummary[] = (search.nodes || [])
     .filter((n: any) => n && typeof n.number === "number")
     .map((n: any) => mapSummary({ ...n, labels: n.labels?.nodes ?? [], assignees: n.assignees?.nodes ?? [] }, false));
-  const meta = {
+  return {
+    rows: bare,
     total: Number(search.issueCount ?? bare.length),
     hasNext: !!search.pageInfo?.hasNextPage,
     cursor: search.pageInfo?.endCursor ?? null,
   };
-  onRows?.({ rows: bare, ...meta });
+}
 
-  const checksRes = await checksP;
+/** The second pass laid over the first: SEL_ROW_CHECKS' nodes, by number. */
+function completeRows(bare: PrSummary[], checkNodes: any[], me: string): PrSummary[] {
   // The second pass carries the costly row fields as well as the rollups, so a
   // row is complete the moment this lands. A PR missing from the answer keeps
   // the first-pass row: `checksLoaded` stays false, the review chip stays off,
   // and the stats stay at zero — all of which read as "not yet", which is true.
   type SecondPass = { rollup: PrCheckRollup; stats: Pick<PrSummary, "additions" | "deletions" | "changedFiles" |  "reviewDecision" | "humanReview" | "card" | "reviewers" | "headSha" | "mergeable" | "talk" | "openThreads"> };
   const second = new Map<number, SecondPass>();
-  for (const n of checksRes?.data?.search?.nodes ?? []) {
+  for (const n of checkNodes) {
     if (!n?.number) continue;
     const head = n.commits?.nodes?.[0]?.commit;
     const roll = head?.statusCheckRollup;
@@ -1545,11 +1635,11 @@ async function fetchList(repo: PrRepoId, filter: PrFilter, state: PrState, after
    * happens is a verdict replaced by a blank.
    */
   for (const [num, hit] of second) {
-    const n = (checksRes?.data?.search?.nodes ?? []).find((x: { number?: number }) => x?.number === num);
+    const n = (checkNodes).find((x: { number?: number }) => x?.number === num);
     if (!Array.isArray(n?.reviews?.nodes)) delete (hit.stats as Partial<typeof hit.stats>).humanReview;
   }
 
-  const rows: PrSummary[] = bare.map((r) => {
+  return bare.map((r) => {
     const hit = second.get(r.number);
     /*
      * `false`, spelled out, for a row the second pass has not reached.
@@ -1563,7 +1653,6 @@ async function fetchList(repo: PrRepoId, filter: PrFilter, state: PrState, after
      */
     return hit ? { ...r, ...hit.stats, checks: hit.rollup, checksLoaded: true } : { ...r, checksLoaded: false };
   });
-  return { rows, ...meta };
 }
 
 /**
@@ -1776,7 +1865,7 @@ function refreshChecks(repo: PrRepoId, filter: PrFilter, state: PrState, rows: P
 }
 
 /** Refresh behind the response. Never awaited by a request handler. */
-function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: string, query?: string): void {
+function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: string, query?: string, force = false): void {
   const key = cacheKey(repo, filter, state, after, query);
   if (inflight.has(key)) return;
   inflight.add(key);
@@ -1797,6 +1886,27 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
         return;
       }
 
+      /* YOUR two queues (the first page of open Mine and Needs my review)
+         are one request between them: see QUEUES_QUERY. A poll asks the
+         one-point probe first and stops if nothing moved; Refresh, which means
+         "go and look", goes straight to the read. */
+      if (isQueue(filter, state, after, query)) {
+        /* Nothing to compare with (a first load) and the probe is a point
+           that can only say "read it". */
+        if (!force && prev?.fp) {
+          const probe = await probeOpen(repo);
+          const fp = probe?.fp[filter as "mine" | "review"];
+          /* An empty queue is an answer too: its fingerprint carries the
+             count, so "still none" is one point, not three. */
+          if (fp && prev?.fp === fp && !prev.error) {
+            listCache.set(key, { ...prev, at: Date.now(), loading: false, checksPending: false });
+            return;
+          }
+        }
+        if (!(await readQueues(repo))) listCache.set(key, keep({ at: Date.now(), loading: false, checksPending: false }));
+        return;
+      }
+
       // Rows and their check rollups, in one request.
       // Put the rows on screen the moment they arrive; the checks land a beat
       // later and only fill in the dots.
@@ -1804,6 +1914,7 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
          callback below publishes into `listCache` itself, so by the time the
          final write runs, what is in there is the half-loaded pass. */
       const prior = new Map((listCache.get(key)?.prs ?? []).map((p) => [p.number, p]));
+      const readStart = Date.now();
       const page = await fetchList(repo, filter, state, after, (early) => {
         /*
          * The early rows, with the last full answer laid underneath them.
@@ -1837,32 +1948,7 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
         listCache.set(key, keep({ at: Date.now(), loading: false, checksPending: false }));
         return;
       }
-      // The rollups arrived with the rows, so there is no second pass to wait
-      // on and nothing to carry over. Feed the per-PR cache anyway: the detail
-      // view and the notification latch both read it.
-      for (const r of page.rows) checkCache.set(`${repo.key}\u0000${r.number}`, { updatedAt: r.updatedAt, rollup: r.checks });
-      /* Through `carryOver` too. The comment above used to say there was
-         nothing to carry because the rollups came back with the rows — true of
-         the CHECKS, and not of a field GitHub failed to send at all. This is
-         the write `saveDiskCache` persists, so a blank that gets here outlives
-         the session that caused it. */
-      listCache.set(key, {
-        at: Date.now(), prs: page.rows.map((r) => carryOver(prior.get(r.number), r)),
-        loading: false, checksPending: false,
-        total: page.total, hasNext: page.hasNext, cursor: page.cursor,
-      });
-      saveDiskCache();
-      // Only open PRs raise CI notifications — a merged or closed PR's checks
-      // are history, not something to alert on.
-      if (state === "open" && ciNotifiesFor(filter)) {
-        for (const r of page.rows) noteCi(repo, r);
-        /* And the other half of "what happened while I was away". Same gate, and
-           for the same reason: a stake is what makes a remark worth interrupting
-           for, and `all` is fetched passively to fill the tab counts — every open
-           pull request in the repository, most of which are nothing to do with
-           you. See ciNotifiesFor. */
-        for (const r of page.rows) noteTalk(repo, r);
-      }
+      storePage(repo, filter, state, key, prior, page, undefined, readStart);
     } catch (e) {
       listCache.set(key, keep({ loading: false, checksPending: false, error: failed("prs/list", e, "the pull requests could not be read") }));
     } finally {
@@ -1871,51 +1957,315 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
   })();
 }
 
-/**
- * Exact counts for every saved view, in one request.
+/*
+ * THE LIST ROW AND THE DETAIL ARE ONE DATUM.
  *
- * The panel used to get these by fetching the OTHER scopes' lists in the
- * background — two extra full list queries, each costing what the visible one
- * costs, purely to put a number on a pill. `issueCount` with `first: 0` returns
- * the count and no rows, so all five arrive together for ~700ms and nothing is
- * fetched twice. They are also the TRUE totals: a count taken from the page on
- * screen stopped being the answer the moment the list got pages.
+ * Measured on a pull request whose base moved: the detail (its own read, past
+ * its 45 s cache) said "conflicts with master" while the board card kept
+ * saying nothing for minutes. `mergeable` flips when the BASE moves, which
+ * bumps neither `updatedAt` nor the rollup, so the poll's probe found the queue
+ * unchanged and never re-read it; and the detail's fresh answer went to the
+ * detail cache alone. A read of either is now written into the other.
+ *
+ * Ceiling, named: only the fields both carry; the list's own (scope, agent
+ * spend, the tracker card) are not the detail's to say.
  */
-const VIEW_COUNT_QUERY = `query($a:String!,$b:String!,$c:String!,$d:String!,$e:String!){
+const SHARED_FIELDS = ["title", "state", "isDraft", "reviewDecision", "updatedAt", "additions",
+  "deletions", "changedFiles", "labels", "assignees", "reviewers", "milestone", "checks", "headSha"] as const;
+
+/** `row` brought up to date from a detail read, or `row` itself when the
+ *  detail is older (its `updatedAt`) or says nothing new. An UNKNOWN
+ *  `mergeable` is GitHub still computing: it never replaces a known answer. */
+export function projectDetailOnRow(row: PrSummary, d: PrDetail): PrSummary {
+  if (row.number !== d.number || d.updatedAt < row.updatedAt) return row;
+  const patch: Record<string, unknown> = {};
+  const r = row as unknown as Record<string, unknown>;
+  const src = d as unknown as Record<string, unknown>;
+  for (const k of SHARED_FIELDS) {
+    if (src[k] !== undefined && JSON.stringify(r[k]) !== JSON.stringify(src[k])) patch[k] = src[k];
+  }
+  if (d.mergeable !== "UNKNOWN" && d.mergeable !== row.mergeable) patch.mergeable = d.mergeable;
+  if (!Object.keys(patch).length) return row;
+  return { ...row, ...patch, ...(patch.checks ? { checksLoaded: true } : {}) } as PrSummary;
+}
+
+/** The reverse: a list row read after the detail brings the detail's shared
+ *  fields up to date. Only a strictly newer `updatedAt`, or a known
+ *  `mergeable` where the detail's is still UNKNOWN. */
+export function projectRowOnDetail(d: PrDetail, row: PrSummary): PrDetail {
+  if (row.number !== d.number) return d;
+  const patch: Record<string, unknown> = {};
+  if (row.updatedAt > d.updatedAt) {
+    const r = row as unknown as Record<string, unknown>;
+    const dd = d as unknown as Record<string, unknown>;
+    for (const k of SHARED_FIELDS) if (r[k] !== undefined && JSON.stringify(dd[k]) !== JSON.stringify(r[k])) patch[k] = r[k];
+    if (row.mergeable !== "UNKNOWN" && row.mergeable !== d.mergeable) patch.mergeable = row.mergeable;
+  } else if (d.mergeable === "UNKNOWN" && row.mergeable !== "UNKNOWN") patch.mergeable = row.mergeable;
+  return Object.keys(patch).length ? { ...d, ...patch } as PrDetail : d;
+}
+
+/** Detail reads by pull request, so a list read that STARTED before one cannot
+ *  write its older rows over it (same rule as the web's `holdEdits`). */
+const projected = new Map<string, { at: number; detail: PrDetail }>();
+const PROJECTED_HOLD_MS = 2 * 60_000;
+
+/** A detail read lands: write it into every cached list row of that pull request. */
+export function projectDetail(repo: PrRepoId, d: PrDetail, now = Date.now()): void {
+  projected.set(`${repo.key}\u0000${d.number}`, { at: now, detail: d });
+  for (const [k, e] of listCache) {
+    if (!k.startsWith(`${repo.key}\u0000`) || !e.prs.some((r) => r.number === d.number)) continue;
+    const prs = e.prs.map((r) => projectDetailOnRow(r, d));
+    if (prs.some((r, i) => r !== e.prs[i])) listCache.set(k, { ...e, prs });
+  }
+}
+
+/** Rows of a list read started at `since`, with any detail read since then laid over them. */
+function keepNewerDetails(repo: PrRepoId, rows: PrSummary[], since: number, now = Date.now()): PrSummary[] {
+  if (!projected.size) return rows;
+  return rows.map((r) => {
+    const k = `${repo.key}\u0000${r.number}`;
+    const p = projected.get(k);
+    if (!p) return r;
+    if (now - p.at > PROJECTED_HOLD_MS) { projected.delete(k); return r; }
+    return p.at > since ? projectDetailOnRow(r, p.detail) : r;
+  });
+}
+
+/** Seconds to wait before each re-ask of a `mergeable` GitHub answered UNKNOWN. */
+export const MERGEABLE_RECHECK_MS = [25_000, 30_000, 40_000];
+const rechecking = new Set<string>();
+
+/**
+ * GitHub answers UNKNOWN while it computes mergeability (after a push or a base
+ * move). The list used to hold that until the next real change of the queue.
+ * One cheap follow-up for only those pull requests, at most three, each for
+ * the ones still UNKNOWN; none at all when nothing is UNKNOWN.
+ */
+export async function recheckMergeable(
+  numbers: number[],
+  ask: (ns: number[]) => Promise<Map<number, string>>,
+  apply: (n: number, m: "MERGEABLE" | "CONFLICTING") => void,
+  wait: (ms: number) => Promise<void> = (ms) => new Promise((r) => { const t = setTimeout(r, ms); (t as any).unref?.(); }),
+  delays = MERGEABLE_RECHECK_MS,
+): Promise<number> {
+  let left = numbers, asked = 0;
+  for (const ms of delays) {
+    if (!left.length) break;
+    await wait(ms);
+    asked++;
+    const got = await ask(left).catch(() => new Map<number, string>());
+    for (const [n, m] of got) if (m === "MERGEABLE" || m === "CONFLICTING") apply(n, m);
+    left = left.filter((n) => { const m = got.get(n); return m !== "MERGEABLE" && m !== "CONFLICTING"; });
+  }
+  return asked;
+}
+
+async function askMergeable(repo: PrRepoId, ns: number[]): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  const [owner, name] = repo.nameWithOwner.split("/");
+  const body = ns.map((n) => `p${n}: pullRequest(number: ${Number(n)}) { mergeable }`).join("\n");
+  const res = await ghJson<{ data?: { repository?: Record<string, any> } }>(
+    ["api", "graphql", "-f", `query=query { repository(owner: "${owner}", name: "${name}") { ${body} } }`]);
+  for (const n of ns) { const m = res?.data?.repository?.[`p${n}`]?.mergeable; if (typeof m === "string") out.set(n, m); }
+  return out;
+}
+
+function scheduleMergeableRecheck(repo: PrRepoId, rows: PrSummary[]): void {
+  const ns = rows.filter((r) => r.mergeable === "UNKNOWN" && !rechecking.has(`${repo.key}\u0000${r.number}`)).map((r) => r.number);
+  if (!ns.length) return;
+  for (const n of ns) rechecking.add(`${repo.key}\u0000${n}`);
+  void recheckMergeable(ns, (l) => askMergeable(repo, l), (n, m) => {
+    for (const [k, e] of listCache) {
+      if (!k.startsWith(`${repo.key}\u0000`)) continue;
+      const prs = e.prs.map((r) => (r.number === n && r.mergeable !== m ? { ...r, mergeable: m } : r));
+      if (prs.some((r, i) => r !== e.prs[i])) listCache.set(k, { ...e, prs });
+    }
+    const d = detailCache.get(`${repo.key}#${n}`);
+    if (d && d.detail.mergeable !== m) detailCache.set(`${repo.key}#${n}`, { ...d, detail: { ...d.detail, mergeable: m } });
+  }).catch(() => {}).finally(() => { for (const n of ns) rechecking.delete(`${repo.key}\u0000${n}`); });
+}
+
+/** A complete page into the cache: the per-PR check cache, the disk copy, and
+ *  the CI and conversation notifications. `fp` is the probe's fingerprint of
+ *  the rows it came with, for a queue; see probeOpen. */
+function storePage(repo: PrRepoId, filter: PrFilter, state: PrState, key: string, prior: Map<number, PrSummary>, page: ListPage, fp?: string, since = Date.now()): void {
+  // The rollups arrived with the rows, so there is no second pass to wait
+  // on and nothing to carry over. Feed the per-PR cache anyway: the detail
+  // view and the notification latch both read it.
+  for (const r of page.rows) checkCache.set(`${repo.key}\u0000${r.number}`, { updatedAt: r.updatedAt, rollup: r.checks });
+  /* Through `carryOver` too. The comment above used to say there was
+     nothing to carry because the rollups came back with the rows — true of
+     the CHECKS, and not of a field GitHub failed to send at all. This is
+     the write `saveDiskCache` persists, so a blank that gets here outlives
+     the session that caused it. */
+  listCache.set(key, {
+    at: Date.now(), prs: keepNewerDetails(repo, page.rows.map((r) => carryOver(prior.get(r.number), r)), since),
+    loading: false, checksPending: false,
+    total: page.total, hasNext: page.hasNext, cursor: page.cursor, fp,
+  });
+  saveDiskCache();
+  if (state === "open") scheduleMergeableRecheck(repo, listCache.get(key)!.prs);
+  /* And the open detail, if this read is newer than it. */
+  for (const r of listCache.get(key)!.prs) {
+    const dk = `${repo.key}#${r.number}`, hit = detailCache.get(dk);
+    if (!hit) continue;
+    const next = projectRowOnDetail(hit.detail, r);
+    if (next !== hit.detail) detailCache.set(dk, { ...hit, detail: next });
+  }
+  // Only open PRs raise CI notifications — a merged or closed PR's checks
+  // are history, not something to alert on.
+  if (state === "open" && ciNotifiesFor(filter)) {
+    for (const r of page.rows) noteCi(repo, r);
+    /* And the other half of "what happened while I was away". Same gate, and
+       for the same reason: a stake is what makes a remark worth interrupting
+       for, and `all` is fetched passively to fill the tab counts — every open
+       pull request in the repository, most of which are nothing to do with
+       you. See ciNotifiesFor. */
+    for (const r of page.rows) noteTalk(repo, r);
+  }
+}
+
+/**
+ * Has either of YOUR queues changed since it was last read — one point.
+ *
+ * GitHub charges GraphQL by the request, one point at the least, and a list
+ * here is two of them (rows, then checks). An idle panel re-reading Mine and
+ * Needs my review every two minutes to find them unchanged was most of the
+ * account's hourly budget. This asks both searches in ONE request for what a
+ * refresh would notice: each pull request's number, `updatedAt` (bumped by a
+ * push, a comment, a review, a label, a title) and its head commit's rollup
+ * state (which a check finishing does NOT bump `updatedAt` for). Same
+ * `searchExpr` and page size as the list, so it looks at the same rows.
+ *
+ * Ceiling, named: a change `updatedAt` misses and the rollup does not carry —
+ * `mergeable` flipping because the BASE moved — waits for Refresh, opening the
+ * pull request (the detail is read on its own), or the next real change.
+ *
+ * Shared by both lists and by the counts, cached a minute, and one in flight
+ * per repository: the two queues refresh on the same beat and must not each
+ * pay for it.
+ */
+const PROBE_QUERY = `query($m:String!,$r:String!,$first:Int!){
+  m:search(query:$m,type:ISSUE,first:$first){issueCount nodes{...on PullRequest{number updatedAt mergeable commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}
+  r:search(query:$r,type:ISSUE,first:$first){issueCount nodes{...on PullRequest{number updatedAt mergeable commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}
+}`;
+type Probe = { at: number; fp: { mine: string; review: string }; counts: { mine: number; review: number } };
+const probeCache = new Map<string, Probe>();
+const probeInflight = new Map<string, Promise<Probe | null>>();
+export const PROBE_TTL_MS = 60_000;
+
+function probeFp(search: any): string {
+  const nodes = (search?.nodes ?? []) as any[];
+  return `${search?.issueCount ?? "?"}|${nodes.map((n) =>
+    `${n?.number}:${n?.updatedAt}:${n?.mergeable ?? "-"}:${n?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state ?? "-"}`).join(",")}`;
+}
+
+async function probeOpen(repo: PrRepoId): Promise<Probe | null> {
+  const hit = probeCache.get(repo.key);
+  if (hit && Date.now() - hit.at < PROBE_TTL_MS) return hit;
+  const running = probeInflight.get(repo.key);
+  if (running) return running;
+  const p = (async () => {
+    const d = (await ghGraphql<any>(PROBE_QUERY, {
+      m: searchExpr(repo, "mine", "open"), r: searchExpr(repo, "review", "open"), first: LIST_PAGE,
+    }))?.data;
+    if (!d?.m || !d?.r) return null;
+    const got: Probe = {
+      at: Date.now(),
+      fp: { mine: probeFp(d.m), review: probeFp(d.r) },
+      counts: { mine: Number(d.m.issueCount ?? 0), review: Number(d.r.issueCount ?? 0) },
+    };
+    probeCache.set(repo.key, got);
+    return got;
+  })().finally(() => probeInflight.delete(repo.key));
+  probeInflight.set(repo.key, p);
+  return p;
+}
+
+/** The first page of open Mine or Needs my review, no search text: a list
+ *  QUEUES_QUERY answers. */
+function isQueue(filter: PrFilter, state: PrState, after?: string, query?: string): boolean {
+  return !after && !query && state === "open" && (filter === "mine" || filter === "review");
+}
+
+const queuesInflight = new Map<string, Promise<boolean>>();
+
+/**
+ * Both queues from ONE request, into both cache entries — and the probe's
+ * cache as well, from the same rows, so the counts and the next poll's "has it
+ * moved" are free for a minute. One in flight per repository: Refresh forces
+ * the list on screen and the board's two, and all three are this read.
+ * False when GitHub did not answer; the caller keeps what it had.
+ */
+function readQueues(repo: PrRepoId): Promise<boolean> {
+  const running = queuesInflight.get(repo.key);
+  if (running) return running;
+  const p = (async () => {
+    const readStart = Date.now();
+    const [res, cap] = await Promise.all([
+      ghGraphql<any>(QUEUES_QUERY, {
+        m: searchExpr(repo, "mine", "open"), r: searchExpr(repo, "review", "open"), first: LIST_PAGE,
+      }),
+      ghCapability().catch(() => null),
+    ]);
+    const d = res?.data;
+    if (!d?.m || !d?.r) return false;
+    const me = cap?.login || "";
+    for (const [filter, search] of [["mine", d.m], ["review", d.r]] as const) {
+      const key = cacheKey(repo, filter, "open");
+      const prior = new Map((listCache.get(key)?.prs ?? []).map((q) => [q.number, q]));
+      const early = barePage(search);
+      storePage(repo, filter, "open", key, prior, { ...early, rows: completeRows(early.rows, search.nodes ?? [], me) }, probeFp(search), readStart);
+    }
+    probeCache.set(repo.key, {
+      at: Date.now(),
+      fp: { mine: probeFp(d.m), review: probeFp(d.r) },
+      counts: { mine: Number(d.m.issueCount ?? 0), review: Number(d.r.issueCount ?? 0) },
+    });
+    return true;
+  })().catch(() => false).finally(() => queuesInflight.delete(repo.key));
+  queuesInflight.set(repo.key, p);
+  return p;
+}
+
+/**
+ * How many are in YOUR two queues. Nothing repository-wide.
+ *
+ * It used to count Failing, Ready and All as well — three searches over every
+ * open pull request in the repository, for pills on tabs that are only opened
+ * by hand. Those tabs now show no number; their list is read when one is
+ * clicked. The panel takes these two from the lists it already has, so this
+ * endpoint is only for a client that wants the numbers without the rows.
+ */
+const VIEW_COUNT_QUERY = `query($a:String!,$b:String!){
   review:search(query:$a,type:ISSUE,first:0){issueCount}
   mine:search(query:$b,type:ISSUE,first:0){issueCount}
-  failing:search(query:$c,type:ISSUE,first:0){issueCount}
-  ready:search(query:$d,type:ISSUE,first:0){issueCount}
-  all:search(query:$e,type:ISSUE,first:0){issueCount}
 }`;
 
-export type PrViewCounts = { review: number; mine: number; failing: number; ready: number; all: number };
+export type PrViewCounts = { review: number; mine: number };
 const countCache = new Map<string, { at: number; counts: PrViewCounts }>();
-const COUNT_TTL_MS = 60_000;
+const COUNT_TTL_MS = 5 * 60_000;
 
 export async function viewCounts(rootIn: unknown, stateIn: unknown): Promise<{ ok: boolean; counts?: PrViewCounts; error?: string }> {
   const state: PrState = stateIn === "closed" || stateIn === "all" ? stateIn : "open";
   const repo = await repoIdFor(rootIn);
   if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
+  if (state === "open") {
+    const probe = await probeOpen(repo);
+    return probe ? { ok: true, counts: probe.counts } : { ok: false, error: "could not read the counts" };
+  }
   const key = `${repo.key}|${state}`;
   const hit = countCache.get(key);
   if (hit && Date.now() - hit.at < COUNT_TTL_MS) return { ok: true, counts: hit.counts };
-  const base = `repo:${repo.nameWithOwner} is:pr${state === "open" ? " is:open" : state === "closed" ? " is:closed" : ""}`;
   const res = await ghGraphql<any>(VIEW_COUNT_QUERY, {
-    a: `${base} review-requested:@me`,
-    b: `${base} author:@me`,
-    c: `${base} status:failure`,
-    d: `${base} review:approved status:success`,
-    e: base,
+    a: searchExpr(repo, "review", state),
+    b: searchExpr(repo, "mine", state),
   });
   const d = res?.data;
   if (!d) return { ok: false, error: "could not read the counts" };
   const counts: PrViewCounts = {
     review: Number(d.review?.issueCount ?? 0),
     mine: Number(d.mine?.issueCount ?? 0),
-    failing: Number(d.failing?.issueCount ?? 0),
-    ready: Number(d.ready?.issueCount ?? 0),
-    all: Number(d.all?.issueCount ?? 0),
   };
   countCache.set(key, { at: Date.now(), counts });
   return { ok: true, counts };
@@ -2057,7 +2407,7 @@ export async function listPrs(rootIn: unknown, filterIn: unknown, stateIn: unkno
   const key = cacheKey(repo, filter, state, after, query);
   const hit = listCache.get(key);
   const age = hit ? Date.now() - hit.at : Infinity;
-  if (force || !hit || age > LIST_TTL_MS) refreshList(repo, filter, state, after, query);
+  if (force || !hit || age > LIST_TTL_MS) refreshList(repo, filter, state, after, query, force);
   const cur = listCache.get(key);
 
   // "you are here" — the checkout's branch, matched against the PR heads. This
@@ -2771,6 +3121,28 @@ export function threadsFrom(nodes: unknown): PrThread[] {
   });
 }
 
+/** Null while GitHub's GraphQL quota has room; otherwise the sentence that
+ *  says it is used up and when it comes back. The limit is per account, per
+ *  hour, and every client of this account spends from the same 5000 — which is
+ *  why an error that "fixes itself" does so at the top of the hour's window. */
+async function graphqlQuotaGone(cwd?: string): Promise<string | null> {
+  /* The probe is a one-point GraphQL query, not the REST rate_limit endpoint:
+     that one reports a different, lagging counter (71 used where GraphQL's own
+     said 604), so it could say "room" over an exhausted quota. GraphQL answers
+     for itself — and when it is out, it refuses this probe with the same
+     RATE_LIMIT error, which is the answer. */
+  const probe = await gh(["api", "graphql", "-f", "query={rateLimit{remaining}}"], cwd);
+  const refused = /rate limit/i.test(`${probe.stdout} ${probe.stderr}`);
+  const left = probe.code === 0 ? Number(/"remaining":\s*(\d+)/.exec(probe.stdout)?.[1] ?? NaN) : NaN;
+  if (!refused && !(left === 0)) return null;
+  const r = await gh(["api", "rate_limit", "--jq", ".resources.graphql.reset"], cwd);
+  const reset = r.code === 0 ? Number(r.stdout.trim()) : NaN;
+  if (!Number.isFinite(reset)) return "GitHub's API quota for this account is used up — try again in a few minutes";
+  const mins = Math.max(1, Math.ceil((reset * 1000 - Date.now()) / 60000));
+  const at = new Date(reset * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return `GitHub's API quota for this account is used up — it comes back at ${at} (in ${mins} min)`;
+}
+
 export async function prDetail(rootIn: unknown, numberIn: unknown, force = false): Promise<{ ok: boolean; detail?: PrDetail; error?: string; stale?: boolean }> {
   const number = Number(numberIn);
   if (!Number.isInteger(number) || number <= 0) return { ok: false, error: "invalid pull request number" };
@@ -2805,12 +3177,32 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
   const viewerLogin = cap.login || "";
   const vars = ["-F", `owner=${repo.owner}`, "-F", `name=${repo.name}`, "-F", `number=${number}`];
   // In parallel: the gate costs a round trip, not a second wait. See GATE_QUERY.
-  const [data, gateData] = await Promise.all([
+  const ask = () => Promise.all([
     ghJson<any>(["api", "graphql", "-f", `query=${DETAIL_QUERY}`, ...vars]),
     ghJson<any>(["api", "graphql", "-f", `query=${GATE_QUERY}`, ...vars]),
   ]);
+  let [data, gateData] = await ask();
+  /* One quiet retry. A read that comes back empty is nearly always gh or the
+     network blinking for a moment — the same page loads a few seconds later,
+     which is what people saw: an error that fixed itself. Asking again after a
+     beat turns most of those into a page that is merely a second slower. */
+  let limited: string | null = null;
+  if (!data?.data?.repository?.pullRequest) {
+    /* Asked first, and free: rate_limit does not count against the limit it
+       reports. Out of quota, a second try only burns what is left of the next
+       window — so it says when the window opens instead. */
+    limited = await graphqlQuotaGone(typeof rootIn === "string" ? rootIn : undefined);
+    if (!limited) {
+      await new Promise((r) => setTimeout(r, 1500));
+      [data, gateData] = await ask();
+    }
+  }
   const p = data?.data?.repository?.pullRequest;
-  if (!p) return { ok: false, error: "pull request not found, or gh could not reach the host" };
+  if (!p) {
+    return { ok: false, error: limited ?? (data == null
+      ? "GitHub did not answer (gh failed twice) — Try again in a moment"
+      : "pull request not found on this repository") };
+  }
   const mergePolicy = mergePolicyOf(data?.data?.repository);
   // Everything GitHub cut into pages, topped up before a single reader below
   // reads a length and believes it. See fillPages.
@@ -3047,6 +3439,7 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
 
   detailCache.set(key, { at: Date.now(), detail });
   saveDetailCache();
+  projectDetail(repo, detail);
   return { ok: true, detail };
 }
 

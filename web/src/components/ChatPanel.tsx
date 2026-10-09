@@ -50,6 +50,7 @@ import { CloseButton } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { inOpenProjects } from "../lib/projectPick.ts";
 import { BoltIcon, CopyIcon, IconLabel, PinIcon, RefreshIcon, StarIcon } from "../lib/glyphIcons.tsx";
+import { INPUT, INPUT_STYLE, EDGE, LINE, TL_AVATAR, TL_CSS } from "./workspace/Chrome.tsx";
 
 // Claude's list arrives from the server, like the other two agents'. It is data
 // there (shared/claude-models.json), filtered to the models whose shutdown date
@@ -134,7 +135,41 @@ const ALLOW_KEY = "agentglass.chatAllowedTools";
 const repoName = (p: string) => p.split("/").pop() || p;
 
 const selCls = "text-[10.5px] px-2 py-1 rounded-md outline-none";
-const selStyle = { background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", color: "var(--text2)" };
+const selStyle = { background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: EDGE, color: "var(--text2)" };
+
+/*
+ * The conversation drawn as a rail, not a phone app's two-sided bubbles.
+ *
+ * Every other conversation this workspace shows — a pull request, a tracker
+ * card — puts the speaker's face in a column of its own, outside a neutral
+ * card, on a rail that runs behind the cards (`TL_*` / `TL_CSS` in
+ * workspace/Chrome.tsx, also used by PrPanel.tsx and TasksPanel.tsx). This was
+ * the one view still doing it the messenger way: a filled bubble on the right
+ * for you, a tinted one on the left for the model. Next to a panel that reads
+ * like GitHub, that read like a different product.
+ *
+ * This file used to carry its own literal copy of those numbers and rules
+ * under an `agx-chat-*` prefix — the same geometry, independently
+ * rediscovered. It now uses the shared `.agx-tl` / `.agx-ev` / `.agx-av`
+ * classes directly; a chat has no nested threads or small on-rail events, so
+ * it never needs `.agx-node` or `.agx-tiny` from that shared string.
+ */
+
+/** Who is speaking, on the rail. A chat role is not a GitHub login — there is
+ *  no picture to fetch, only "you" or the agent — so this is initials on a
+ *  filled circle rather than `Avatar.tsx`, which exists for the pull request
+ *  panel's real avatars. */
+function RoleAvatar({ role, agent }: { role: "user" | "assistant"; agent: AgentKind }) {
+  const label = role === "user" ? "You" : agentLabel(agent);
+  const initials = label.slice(0, 2).toUpperCase();
+  const tone = role === "user" ? "var(--primary)" : "var(--info)";
+  return (
+    <span className="shrink-0 rounded-full inline-flex items-center justify-center" aria-hidden
+      style={{ width: TL_AVATAR, height: TL_AVATAR, background: tone, color: "var(--bg)", fontSize: TL_AVATAR * 0.36, fontWeight: 600 }}>
+      {initials}
+    </span>
+  );
+}
 
 /** One row in the chat list. */
 /**
@@ -190,12 +225,12 @@ function Thinking({ text, streaming }: { text: string; streaming: boolean }) {
   const [open, setOpen] = useState(false);
   const lines = text.trim().split("\n");
   return (
-    <div className="mb-1.5 rounded-md overflow-hidden" style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 22%, transparent)" }}>
+    <div className="mb-1.5 rounded-md overflow-hidden" style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", border: EDGE }}>
       <button onClick={() => setOpen(!open)} aria-expanded={open}
         className="w-full flex items-center gap-1.5 px-2 py-1 text-left hover:opacity-80">
         <span className="text-[10px] t-dim2 transition-transform" style={{ transform: open ? "none" : "rotate(-90deg)" }}>▼</span>
         <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>thinking</span>
-        {streaming && <span className="text-[10px]" style={{ color: "var(--info)" }}>·</span>}
+        {streaming && <span className="text-[10px]" style={{ color: "var(--info-ink)" }}>·</span>}
         {/* A length cue, so a fold is an informed choice rather than a mystery. */}
         {!open && <span className="text-[10px] t-dim2 ml-auto tabular-nums">{lines.length} line{lines.length === 1 ? "" : "s"}</span>}
       </button>
@@ -266,7 +301,7 @@ function Inspector({ chat }: { chat: Chat }) {
       {u.costUsd > 0 && (
         <div className="flex items-baseline gap-2 pt-1 mt-0.5 border-t" style={{ borderColor: "color-mix(in srgb, var(--border) 20%, transparent)" }}>
           <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>cost</span>
-          <span className="ml-auto text-[11px] tabular-nums font-medium" style={{ color: "var(--success)" }}>{fmtUsd(u.costUsd)}</span>
+          <span className="ml-auto text-[11px] tabular-nums font-medium" style={{ color: "var(--success-ink)" }}>{fmtUsd(u.costUsd)}</span>
         </div>
       )}
     </div>
@@ -330,11 +365,11 @@ function ChatRow({ chat, active, onPick, onClose }: { chat: Chat; active: boolea
         <div className="flex items-center gap-1.5 min-w-0 mt-1.5">
           <span className="truncate text-[9.5px] t-dim2">{repoName(chat.cwd) || "No repo"}</span>
           {chat.sending
-            ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--success)" }}>· Running</span>
+            ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--success-ink)" }}>· Running</span>
             : chat.attention === "blocked"
-            ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--warning)" }}>· Needs you</span>
+            ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--warning-ink)" }}>· Needs you</span>
             : chat.attention === "done"
-            ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--primary)" }}>· Done</span>
+            ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--primary-ink)" }}>· Done</span>
             : null}
           {/* How full this chat's context is, per row. With several open it's
               the number that decides which one you go back to first — the one
@@ -387,7 +422,7 @@ function PanePrompt({ chat }: { chat: Chat }) {
   const Key = ({ label, k }: { label: string; k: string }) => (
     <button onClick={() => press(k)} title={`Send ${k} to the pane`}
       className="text-[10px] leading-none px-1.5 py-1 rounded"
-      style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>{label}</button>
+      style={{ color: "var(--text3)", border: EDGE }}>{label}</button>
   );
   return (
     <div className="mb-2 rounded-lg overflow-hidden"
@@ -405,7 +440,7 @@ function PanePrompt({ chat }: { chat: Chat }) {
       <pre className="agx-scroll px-2.5 py-2 overflow-x-auto whitespace-pre text-[11px] leading-[1.5] m-0"
         style={{ ...CODE_FONT_STYLE, background: "color-mix(in srgb, var(--bg3) 45%, transparent)", color: "var(--text2)", maxHeight: 260 }}>{screen}</pre>
       <div className="px-2.5 py-1 text-[9.5px] t-dim2 flex items-center gap-1.5"
-        style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+        style={{ borderTop: LINE }}>
         <span>Your arrow keys work here.</span>
         {chat.attachCommand && (
           <button onClick={() => navigator.clipboard?.writeText(chat.attachCommand!)}
@@ -440,7 +475,7 @@ function EffortDial({ chat }: { chat: Chat }) {
       <button onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-haspopup="listbox"
         title={"How hard the model thinks, sent as --effort.\n\nDefault leaves the CLI's own setting alone.\nChanging this restarts the chat's session, keeping the conversation."}
         className="flex items-center gap-1.5 text-[10px] px-2 py-1 rounded-md"
-        style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+        style={{ color: "var(--text3)", border: EDGE }}>
         <span className="flex items-end gap-0.5" aria-hidden>
           {CHAT_EFFORTS.map((_, i) => (
             <span key={i} style={{
@@ -453,7 +488,7 @@ function EffortDial({ chat }: { chat: Chat }) {
       </button>
       {open && (
         <div role="listbox" className="absolute z-20 mt-1 right-0 rounded-lg py-1 min-w-[150px]"
-          style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 8px 24px rgba(0,0,0,.35)" }}>
+          style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 8px 24px rgba(0,0,0,.35)" }}>
           <button onClick={() => pick(undefined)} role="option" aria-selected={!chat.effort}
             className="w-full text-left px-2.5 py-1 text-[11px] hover:bg-white/5"
             style={{ color: !chat.effort ? "var(--text)" : "var(--text3)" }}>Default</button>
@@ -495,7 +530,7 @@ function CopyButton({ label, title, text, disabled }: { label: string; title: st
       disabled={disabled}
       title={title}
       className="text-[10px] px-2 py-1 rounded-md shrink-0 disabled:opacity-40"
-      style={{ color: done ? "var(--ok, var(--text2))" : "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}
+      style={{ color: done ? "var(--ok, var(--text2))" : "var(--text3)", border: EDGE }}
     >{done ? "Copied" : label}</button>
   );
 }
@@ -567,7 +602,7 @@ function ResumeRow({ s, openChatId, onPick }: { s: SessionRollup; openChatId?: s
         </div>
       </div>
       {live
-        ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--success)" }}>● Running</span>
+        ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--success-ink)" }}>● Running</span>
         : why === "no-dir"
         ? <span className="text-[9.5px] shrink-0 t-dim2">No dir</span>
         : openChatId
@@ -645,13 +680,13 @@ function ResumePicker({ onPick, onClose }: { onPick: (s: SessionRollup) => void;
           zIndex: 21,
           maxHeight: "min(60vh, 460px)",
           background: "color-mix(in srgb, var(--bg2) 97%, black)",
-          border: "1px solid color-mix(in srgb, var(--border) 70%, transparent)",
+          border: EDGE,
           boxShadow: "0 24px 60px -18px rgba(0,0,0,0.7)",
         }}
       >
         <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter sessions…"
-          className="mx-1 mt-0.5 mb-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
-          style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", color: "var(--text)" }} />
+          className={`mx-1 mt-0.5 mb-1.5 shrink-0 ${INPUT}`}
+          style={INPUT_STYLE} />
         <div role="listbox" aria-label="sessions to resume" className="agx-scroll flex-1 min-h-0 overflow-y-auto flex flex-col gap-0.5">
           {rows === null && <div className="px-2.5 py-3 text-[11px] t-dim2">Loading sessions…</div>}
           {rows !== null && !shown.length && <div className="px-2.5 py-3 text-[11px] t-dim2">No sessions to resume</div>}
@@ -1308,9 +1343,9 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                     counting. */}
                 <ViewHeader label="Chats" actions={<>
                   <button onClick={() => setResumeOpen((v) => !v)} aria-expanded={resumeOpen} aria-haspopup="listbox"
-                    className="text-[11px] px-2.5 py-1 rounded-lg shrink-0" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}
+                    className="text-[11px] px-2.5 py-1 rounded-lg shrink-0" style={{ color: "var(--text2)", border: EDGE }}
                     title="Continue a session that already exists — e.g. one you started in a terminal">↩ Resume</button>
-                  <button onClick={() => add()} className="text-[11px] px-2.5 py-1 rounded-lg shrink-0" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }} title="New chat">+ New</button>
+                  <button onClick={() => add()} className="text-[11px] px-2.5 py-1 rounded-lg shrink-0" style={{ color: "var(--text2)", border: EDGE }} title="New chat">+ New</button>
                 </>} />
 
                 <div className="flex-1 min-h-0 flex overflow-hidden">
@@ -1318,8 +1353,8 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                 <div className="shrink-0 flex flex-col" style={{ width: sidebarW, background: "color-mix(in srgb, var(--bg) 40%, transparent)" }}>
                   {chats.length > 6 && (
                     <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter chats…"
-                      className="mx-2.5 mt-2.5 mb-2 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
-                      style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", color: "var(--text)" }} />
+                      className={`mx-2.5 mt-2.5 mb-2 shrink-0 ${INPUT}`}
+                      style={INPUT_STYLE} />
                   )}
                   <div role="listbox" aria-label="open chats" className="agx-scroll flex-1 min-h-0 overflow-y-auto px-2 pt-2.5 pb-2 flex flex-col gap-0.5">
                     {shown.map((c) => (
@@ -1338,7 +1373,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                       </div>
                     )}
                     {noRepo && (
-                      <div className="px-2.5 py-2 text-[11px]" style={{ color: "var(--warning)" }}>
+                      <div className="px-2.5 py-2 text-[11px]" style={{ color: "var(--warning-ink)" }}>
                         Nowhere to run a chat: no git repository was found
                       </div>
                     )}
@@ -1399,8 +1434,8 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                             onChange={(e) => setAllowed(e.target.value)}
                             placeholder="Allowed tools…"
                             title={"Tools that may run without asking — space-separated.\n\nExamples: Read  Edit  Bash(git status)  Bash(gh pr view:*)\n\nWithout this, `claude -p` refuses anything that would normally prompt, because there is no terminal to prompt from."}
-                            className="text-[10px] px-2 py-1 rounded-md outline-none min-w-0 flex-1 max-w-[280px]"
-                            style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text2)" }}
+                            className={`min-w-0 flex-1 max-w-[280px] ${INPUT}`}
+                            style={INPUT_STYLE}
                           />
                         )}
                         {/* Same reasoning as the allowlist above: `--effort` is
@@ -1420,7 +1455,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                             disabled={active.sending}
                             title="Open Claude Code's own settings in this chat's pane. They apply to every chat, not just this one."
                             className="text-[10px] px-2 py-1 rounded-md shrink-0 disabled:opacity-40 inline-flex items-center gap-1"
-                            style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}
+                            style={{ color: "var(--text3)", border: EDGE }}
                           ><GearIcon size={ICON.xs} />Config</button>
                         )}
                         {/* Keep this one, however long you are away.
@@ -1443,7 +1478,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                             className="text-[10px] px-2 py-1 rounded-md shrink-0"
                             style={active.panePinned
                               ? { color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }
-                              : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}
+                              : { color: "var(--text3)", border: EDGE }}
                           ><IconLabel icon={<PinIcon size={ICON.xs} />}>{active.panePinned ? "Pinned" : "Pin"}</IconLabel></button>
                         )}
                         {active.sessionId && <span className="text-[9.5px] t-dim2 tabular-nums" title="Resuming this session"><IconLabel icon={<RefreshIcon size={ICON.xs} />}>{active.sessionId.slice(0, 8)}</IconLabel></span>}
@@ -1493,6 +1528,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                   <div ref={scrollRef} onScroll={onScroll}
                     className="agx-scroll flex-1 min-h-0 overflow-y-auto px-5 py-4">
                     <div ref={contentRef} className="min-h-full flex flex-col justify-end gap-3">
+                      {active && <style>{TL_CSS}</style>}
                       {active && !active.messages.length && (
                         <div className="grid place-items-center text-center t-dim2 text-[12px] py-10">
                           {usable
@@ -1500,111 +1536,90 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                             : <div>No local <code>{cliName(active.agent)}</code> CLI found — install it to chat.</div>}
                         </div>
                       )}
-                      {active?.messages.map((m, i) => (
-                        <div key={i}>
-                          {/* The seam between what was said before this panel
-                              adopted the session and what is being said in it
-                              now — without it, replayed history reads as though
-                              you had typed it here. */}
-                          {m.historical && !active.messages[i + 1]?.historical && (
-                            <div className="flex items-center gap-2 my-3 text-[9.5px] uppercase tracking-wider t-dim2">
-                              <span className="flex-1 h-px" style={{ background: "color-mix(in srgb, var(--border) 45%, transparent)" }} />
-                              <span>resumed here</span>
-                              <span className="flex-1 h-px" style={{ background: "color-mix(in srgb, var(--border) 45%, transparent)" }} />
-                            </div>
-                          )}
-                          <div className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                          <div className="max-w-[86%] min-w-0 rounded-xl px-3.5 py-2.5 text-[12px] leading-relaxed break-words"
-                            style={{
-                              // Resumed history reads at full strength, same as
-                              // live: the "resumed here" divider already marks the
-                              // seam, so dimming the bubbles on top of it only made
-                              // a restored conversation look degraded next to the
-                              // console it mirrors.
-                              ...CODE_FONT_STYLE, fontFamily: undefined,
-                              // Stronger than the old 16%/45% wash: at that
-                              // strength every bubble was the same violet as the
-                              // panel behind it, and on some themes the two roles
-                              // were indistinguishable. The left border is what
-                              // survives a theme that flattens the fills.
-                              // Filled, not tinted. At 26% over the panel every
-                              // user bubble was within a shade of the surface
-                              // behind it, so on the darker themes the two
-                              // speakers read as one voice. A filled accent is
-                              // the one treatment that survives every palette,
-                              // and it is what puts a conversation on screen
-                              // instead of a transcript.
-                              // Half the accent rather than a quarter of it, and
-                              // no further: past about this the body text stops
-                              // being reliably legible on it across the themes,
-                              // and a bubble you cannot read is a worse problem
-                              // than two that look alike.
-                              background: m.role === "user"
-                                ? "color-mix(in srgb, var(--primary) 50%, var(--bg2))"
-                                : "color-mix(in srgb, var(--bg3) 85%, var(--bg))",
-                              border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)",
-                              borderLeft: `3px solid ${m.role === "user" ? "var(--primary)" : "color-mix(in srgb, var(--info) 70%, transparent)"}`,
-                              color: "var(--text)",
-                            }}>
-                            {/* Role and time, the way the session view has always
-                                shown them — their absence is most of why the two
-                                read as different products. */}
-                            {/* On the filled user bubble the old
-                                `--primary-hover` label sat on its own colour and
-                                vanished; the agent's still gets the accent it
-                                always had, because its bubble is a surface. */}
-                            <div className="text-[10px] uppercase tracking-wider mb-1 flex items-center gap-2"
-                              style={{ color: m.role === "user" ? "var(--text)" : "var(--info)", opacity: m.role === "user" ? 0.75 : 1 }}>
-                              <span>{m.role}</span>
-                              <span className="t-dim2 normal-case tracking-normal">{fmtTime(m.ts)}</span>
-                            </div>
-                            {m.thinking && <Thinking text={m.thinking} streaming={!!m.streaming && !m.text} />}
-                            {/* Behind a fold, not in front of the answer. The
-                                summary line carries the running call and any
-                                failure; the feed itself is one click away. */}
-                            <ToolFeed tools={m.tools} streaming={!!m.streaming}>
-                              {/* Folded the same way the session timeline
-                                  folds it: a subagent's work nests under the
-                                  call that spawned it rather than being
-                                  interleaved with the main thread's. */}
-                              {buildRows(m.tools.map((t) => ({
-                                kind: "tool" as const, ts: t.ts, tool: t.name, target: t.target,
-                                is_error: t.error, output: t.output, note: t.note,
-                                agent_id: t.agentId, agent_type: t.agentType, tool_use_id: t.id,
-                              }))).map((r) => r.kind === "tool" && (
-                                <ToolRow key={r.key} e={r.e} sub={r.children} />
-                              ))}
-                            </ToolFeed>
-                            {!!m.images?.length && (
-                              <div className="flex flex-wrap gap-1.5 mb-1.5">
-                                {m.images.map((img, j) => (
-                                  <img key={j} src={`data:${img.mediaType};base64,${img.data}`} alt="Attached image"
-                                    className="block max-h-40 max-w-full rounded-lg"
-                                    style={{ border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }} />
-                                ))}
+                      {!!active?.messages.length && (
+                        <div className="agx-tl">
+                          {active.messages.map((m, i) => (
+                            <div key={i}>
+                              {/* The seam between what was said before this panel
+                                  adopted the session and what is being said in it
+                                  now — without it, replayed history reads as though
+                                  you had typed it here. */}
+                              {m.historical && !active.messages[i + 1]?.historical && (
+                                <div className="flex items-center gap-2 my-3 text-[9.5px] uppercase tracking-wider t-dim2">
+                                  <span className="flex-1 h-px" style={{ background: "color-mix(in srgb, var(--border) 45%, transparent)" }} />
+                                  <span>resumed here</span>
+                                  <span className="flex-1 h-px" style={{ background: "color-mix(in srgb, var(--border) 45%, transparent)" }} />
+                                </div>
+                              )}
+                              {/* One rail, one column — the same shape as the pull
+                                  request's conversation and the tracker card's
+                                  history, not a phone app's two-sided bubbles. The
+                                  speaker's face sits outside the card, on the rail;
+                                  the card itself is the one neutral surface every
+                                  remark gets, whoever sent it. */}
+                              <div className="agx-ev">
+                                <span className="agx-av"><RoleAvatar role={m.role} agent={active.agent} /></span>
+                                <div className="min-w-0 rounded-xl px-3.5 py-2.5 text-[12px] leading-relaxed break-words"
+                                  style={{ background: "var(--surface-card)", border: EDGE, color: "var(--text)" }}>
+                                  <div className="text-[10px] uppercase tracking-wider mb-1 flex items-center gap-2"
+                                    style={{ color: m.role === "user" ? "var(--text2)" : "var(--info)" }}>
+                                    <span style={{ fontWeight: 600 }}>{m.role === "user" ? "you" : agentLabel(active.agent)}</span>
+                                    <span className="t-dim2 normal-case tracking-normal">{fmtTime(m.ts)}</span>
+                                  </div>
+                                  {m.thinking && <Thinking text={m.thinking} streaming={!!m.streaming && !m.text} />}
+                                  {/* Behind a fold, not in front of the answer. The
+                                      summary line carries the running call and any
+                                      failure; the feed itself is one click away. */}
+                                  <ToolFeed tools={m.tools} streaming={!!m.streaming}>
+                                    {/* Folded the same way the session timeline
+                                        folds it: a subagent's work nests under the
+                                        call that spawned it rather than being
+                                        interleaved with the main thread's. */}
+                                    {buildRows(m.tools.map((t) => ({
+                                      kind: "tool" as const, ts: t.ts, tool: t.name, target: t.target,
+                                      is_error: t.error, output: t.output, note: t.note,
+                                      agent_id: t.agentId, agent_type: t.agentType, tool_use_id: t.id,
+                                    }))).map((r) => r.kind === "tool" && (
+                                      <ToolRow key={r.key} e={r.e} sub={r.children} />
+                                    ))}
+                                  </ToolFeed>
+                                  {!!m.images?.length && (
+                                    <div className="flex flex-wrap gap-1.5 mb-1.5">
+                                      {m.images.map((img, j) => (
+                                        <img key={j} src={`data:${img.mediaType};base64,${img.data}`} alt="Attached image"
+                                          className="block max-h-40 max-w-full rounded-lg"
+                                          style={{ border: EDGE }} />
+                                      ))}
+                                    </div>
+                                  )}
+                                  {!!m.imagesDropped && (
+                                    <div className="mb-1.5 text-[10px] t-dim2 italic">
+                                      {m.imagesDropped} image{m.imagesDropped > 1 ? "s" : ""} sent with this turn, not kept when the chat was restored
+                                    </div>
+                                  )}
+                                  {/* Prose font for what was written, mono for what
+                                      was run — `agx-cu-body` (index.css) is that
+                                      split already, built for a tracker card's
+                                      description: paragraphs in `--font-prose`,
+                                      `code`/`pre`/tables held to the mono stack.
+                                      A reading measure. `82ch` bounds the card
+                                      against the panel, which on a 1600px window
+                                      is a 1400px line the eye would lose the start
+                                      of on every wrap. Characters rather than
+                                      pixels, so it holds when the display size or
+                                      the font changes. */}
+                                  <div className="agx-cu-body" style={{ maxWidth: "82ch" }}>
+                                    {m.text
+                                      ? <Foldable text={m.text}>{(shown) => <Markdown text={shown} />}</Foldable>
+                                      : (m.streaming ? <TypingDots /> : "")}
+                                  </div>
+                                  {m.streaming && m.text && <span className="t-dim2 agx-caret">▍</span>}
+                                </div>
                               </div>
-                            )}
-                            {!!m.imagesDropped && (
-                              <div className="mb-1.5 text-[10px] t-dim2 italic">
-                                {m.imagesDropped} image{m.imagesDropped > 1 ? "s" : ""} sent with this turn, not kept when the chat was restored
-                              </div>
-                            )}
-                            {/* A reading measure. `max-w-[86%]` bounds the
-                                bubble against the panel, which on a 1600px
-                                window is a 1400px line — the eye loses the
-                                start of the next one on every wrap. Characters
-                                rather than pixels, so it holds when the display
-                                size or the font changes. */}
-                            <div style={{ maxWidth: "82ch" }}>
-                              {m.text
-                                ? <Foldable text={m.text}>{(shown) => <Markdown text={shown} />}</Foldable>
-                                : (m.streaming ? <TypingDots /> : "")}
                             </div>
-                            {m.streaming && m.text && <span className="t-dim2 agx-caret">▍</span>}
-                          </div>
-                          </div>
+                          ))}
                         </div>
-                      ))}
+                      )}
                     </div>
                   </div>
 
@@ -1618,7 +1633,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                       <button onClick={toBottom}
                         title="Jump to the newest message and follow again"
                         className="pointer-events-auto mb-2 text-[10px] px-2.5 py-1 rounded-full font-medium shadow-lg"
-                        style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 18%, var(--bg2))", border: "1px solid color-mix(in srgb, var(--success) 45%, transparent)" }}>
+                        style={{ color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 18%, var(--bg2))", border: "1px solid color-mix(in srgb, var(--success) 45%, transparent)" }}>
                         ↓ Jump to latest
                       </button>
                     </div>
@@ -1639,7 +1654,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                       <div className="flex flex-wrap gap-2 mb-2">
                         {active.attachments.map((a) => (
                           <div key={a.id} className="relative group rounded-lg overflow-hidden shrink-0"
-                            style={{ border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}
+                            style={{ border: EDGE }}
                             title={`${a.name} · ${(a.bytes / 1024).toFixed(0)}KB`}>
                             <img src={a.url} alt={a.name} className="block h-14 w-14 object-cover" />
                             <CloseButton onClick={() => dropAttachment(active.id, a.id)} aria-label={`Remove ${a.name}`} style={{ color: "var(--text)", background: "rgba(0,0,0,0.65)" }} className="absolute top-0.5 right-0.5 rounded" />
@@ -1659,7 +1674,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                           <button key={k.name} onClick={() => pickSkill(k.name)}
                             title={`${k.description}${k.calls ? `\n\nRun ${k.calls} time${k.calls === 1 ? "" : "s"}` : ""}`}
                             className="text-[10.5px] px-2 py-1 rounded-md shrink-0 flex items-center gap-1"
-                            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                            style={{ color: "var(--text2)", border: EDGE }}>
                             {pinnedNames.includes(k.name) && <span className="flex" style={{ color: "var(--primary-hover)" }}><StarIcon size={ICON.xs} filled /></span>}
                             /{k.name}
                           </button>
@@ -1684,7 +1699,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                             {active.setupNeeded.command}
                           </code>
                           <button onClick={() => { navigator.clipboard?.writeText(active.setupNeeded!.command); }}
-                            className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>Copy</button>
+                            className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: EDGE }}>Copy</button>
                           <button onClick={() => update(active.id, (c) => { c.setupNeeded = undefined; c.attention = "none"; })}
                             className="ml-auto text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)" }}>Dismiss</button>
                         </div>
@@ -1706,7 +1721,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                             update(active.id, (c) => { c.blockedTool = undefined; });
                           }}
                           className="shrink-0 px-2 py-1 rounded-md text-[10.5px] font-medium"
-                          style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>
+                          style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>
                           Allow {active.blockedTool}
                         </button>
                         <CloseButton onClick={() => update(active.id, (c) => { c.blockedTool = undefined; })} title="Dismiss" className="shrink-0" />
@@ -1717,7 +1732,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                       // the panel's bottom edge, so a menu underneath would be
                       // off-screen.
                       <div className="mb-2 rounded-lg overflow-hidden"
-                        style={{ background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+                        style={{ background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: EDGE }}>
                         {slashMatches.map((k, i) => (
                           <div key={k.name} onMouseDown={(ev) => { ev.preventDefault(); pickSkill(k.name); }}
                             onMouseEnter={() => setSlashIdx(i)}
@@ -1737,7 +1752,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                             ><StarIcon size={ICON.xs} filled={pinnedNames.includes(k.name)} /></button>
                           </div>
                         ))}
-                        <div className="px-2.5 py-1 text-[9.5px] t-dim2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                        <div className="px-2.5 py-1 text-[9.5px] t-dim2" style={{ borderTop: LINE }}>
                           ↑↓ Move · Tab or Enter to pick · keep typing to filter
                         </div>
                       </div>
@@ -1784,7 +1799,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                           : "Attach a file — images are sent as images, text files are quoted into the message"}
                         aria-label="Attach a file"
                         className="shrink-0 grid place-items-center rounded-lg px-3 self-stretch"
-                        style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text3)" }}>
+                        style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: EDGE, color: "var(--text3)" }}>
                         <ClipIcon />
                       </button>
                       {/* Enabled with no chat open, because typing is how you
@@ -1806,7 +1821,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                         onKeyDown={onKey}
                         onPaste={onPaste}
                         placeholder={!usable ? `${agentLabel(active?.agent ?? "claude")} chat unavailable — no local \`${cliName(active?.agent ?? "claude")}\` CLI` : active?.sending ? "Still replying — type anyway, Enter queues it for the next turn" : active?.sessionId ? "Reply… (Enter to send, Shift+Enter newline)" : "Message a new session… (Enter to send)"}
-                        className="agx-scroll flex-1 px-3 py-2 rounded-lg text-[12px] outline-none resize-none" style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }} />
+                        className="agx-scroll flex-1 px-3 py-2 rounded-lg text-[12px] outline-none resize-none" style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: EDGE, color: "var(--text)" }} />
                       {/* Stop stays reachable while a turn is queueing: the
                           two are different intents — "answer this next" and
                           "drop what you're doing" — and hiding either one
@@ -1814,7 +1829,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                           keep. */}
                       {active?.sending && (
                         <button onClick={() => stop(active.id)} title="Interrupt the turn and clear anything queued"
-                          className="shrink-0 px-3.5 rounded-lg text-[11.5px] font-semibold self-stretch" style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}>■ Stop</button>
+                          className="shrink-0 px-3.5 rounded-lg text-[11.5px] font-semibold self-stretch" style={{ color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}>■ Stop</button>
                       )}
                       <button onClick={submit} disabled={!hasTurn || !active?.cwd || !usable} className="shrink-0 px-4 rounded-lg text-[11.5px] font-semibold self-stretch" style={{ color: "var(--text)", background: "color-mix(in srgb, var(--primary) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", opacity: (!hasTurn || !active?.cwd) ? 0.45 : 1 }}>
                         {active?.sending ? "Queue ↵" : "Send ↵"}
@@ -1822,9 +1837,9 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                     </div>
                     <div className="mt-1.5 text-[9.5px] t-dim2">
                       {hint
-                        ? <span style={{ color: "var(--warning)" }}>{hint}</span>
+                        ? <span style={{ color: "var(--warning-ink)" }}>{hint}</span>
                         : <>Runs {cliName(active?.agent ?? "claude")} in {active ? repoName(active.cwd) || "the repo" : "the repo"} · {modesFor(active?.agent ?? "claude").find((x) => x.id === active?.mode)?.label} · tool calls fold away, click to open</>}
-                      {active && active.mode === bypassMode(active.agent) && <span className="inline-flex items-center gap-1" style={{ color: "var(--warning)" }}> · <BoltIcon size={ICON.xs} />runs tools unattended</span>}
+                      {active && active.mode === bypassMode(active.agent) && <span className="inline-flex items-center gap-1" style={{ color: "var(--warning-ink)" }}> · <BoltIcon size={ICON.xs} />runs tools unattended</span>}
                     </div>
                   </div>
                 </div>

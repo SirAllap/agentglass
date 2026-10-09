@@ -23,8 +23,8 @@
  */
 import { useCallback, useState } from "react";
 import { SERVER, authHeaders } from "../../lib/api.ts";
-import { Empty, wash, edge } from "../git/ui.tsx";
-import { Chip } from "../workspace/Chrome.tsx";
+import { Empty, wash } from "../git/ui.tsx";
+import { Chip, LINE } from "../workspace/Chrome.tsx";
 
 interface Rule { id: string; cls: string; text: string; src: string; backed: number }
 interface Precedent { id: number; cls: string; situation: string; decision: string; hisWords: string; at: number; weight: number; source: string }
@@ -222,7 +222,7 @@ export function Ask({ active }: { active: boolean }) {
       </div>
 
       {problem && (
-        <div className="px-4 py-2 text-[11.5px]" style={{ color: "var(--error)", background: wash("--error", 8) }}>
+        <div className="px-4 py-2 text-[11.5px]" style={{ color: "var(--error-ink)", background: wash("--error", 8) }}>
           {problem}
         </div>
       )}
@@ -279,7 +279,7 @@ export function Ask({ active }: { active: boolean }) {
               {/* The certification. Every line above is quoted from the
                   operator's own material, and when nothing of theirs covers
                   the question the finding says exactly that. */}
-              <div className="agx-stamp mt-1.5 inline-block" style={{ color: "var(--success)" }}>
+              <div className="agx-stamp mt-1.5 inline-block" style={{ color: "var(--success-ink)" }}>
                 nothing written by it
               </div>
             </div>
@@ -382,7 +382,7 @@ export function Ask({ active }: { active: boolean }) {
             * first, which is the failure this whole panel is arranged against.
             */}
           {verdict && !verdict.declined && (
-            <div className="px-4 py-3" style={{ borderTop: edge(10), background: wash("--warning", 6) }}>
+            <div className="px-4 py-3" style={{ borderTop: LINE, background: wash("--warning", 6) }}>
               <div className="panel-eyebrow">Nothing of yours covered this — a reading of what you would do</div>
               <div style={{ fontSize: 12.5, color: "var(--text)" }}>{verdict.answer}</div>
               {verdict.why && (

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
+import { INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 
 /**
  * The app's own confirm/prompt, because the browser's belong to the browser.
@@ -82,7 +83,7 @@ export function ConfirmDialog({ pending }: { pending: Pending | null }) {
             <motion.div
               initial={{ opacity: 0, scale: 0.98, y: 6 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.98 }}
               className="pointer-events-auto w-full max-w-[520px] rounded-xl overflow-hidden"
-              style={{ background: "var(--bg2)", border: "1px solid var(--border)", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}
+              style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}
               role="dialog" aria-modal="true"
             >
               <div className="px-4 py-3.5">
@@ -97,16 +98,16 @@ export function ConfirmDialog({ pending }: { pending: Pending | null }) {
                     <input
                       ref={inputRef} value={text} onChange={(e) => setText(e.target.value)}
                       placeholder={pending.input!.placeholder}
-                      className="w-full text-[12px] px-2 py-1.5 rounded outline-none"
-                      style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--text)" }}
+                      className={`w-full ${INPUT}`}
+                      style={INPUT_STYLE}
                     />
                   </div>
                 )}
               </div>
-              <div className="px-4 py-2.5 flex items-center justify-end gap-2" style={{ borderTop: "1px solid var(--border)" }}>
+              <div className="px-4 py-2.5 flex items-center justify-end gap-2" style={{ borderTop: LINE }}>
                 <button onClick={() => pending.resolve(isPrompt ? null : false)}
                   className="text-[11px] px-2.5 py-1 rounded"
-                  style={{ color: "var(--text2)", border: "1px solid var(--border)" }}>
+                  style={{ color: "var(--text2)", border: EDGE }}>
                   {pending.cancelLabel ?? "Cancel"}
                 </button>
                 <button onClick={() => pending.resolve(isPrompt ? text.trim() : true)}

@@ -16,13 +16,22 @@ import type { PrCheckRollup } from "../../../shared/types.ts";
 
 /** Short: a check that fails now is news, and a re-run lands in seconds. */
 const TTL_MS = 60_000;
+/**
+ * How long an answer stands while the list's own reading of the card has not
+ * moved. Each ask is a GraphQL request against the account's 5000 an hour, and
+ * with only the minute above every red card on screen re-asked every minute
+ * and on every Refresh. The aggregate the list carries changes when a run
+ * finishes, re-run or not, so an unchanged aggregate on the same head commit
+ * is the same checks: the answer is kept until it changes, or ten minutes.
+ */
+const SAME_MS = 10 * 60_000;
 const AT_ONCE = 2;
 
-type Entry = { at: number; checks: PrCheckRollup | null };
+type Entry = { at: number; checks: PrCheckRollup | null; sig: string };
 
 const seen = new Map<string, Entry>();
 const inflight = new Set<string>();
-const waiting: { key: string; root: string; number: number }[] = [];
+const waiting: { key: string; root: string; number: number; sig: string }[] = [];
 const listeners = new Set<() => void>();
 let running = 0;
 
@@ -35,8 +44,8 @@ function pump(): void {
     running++;
     inflight.add(job.key);
     api.prRollup(job.root, job.number)
-      .then((r) => { seen.set(job.key, { at: Date.now(), checks: r.ok ? (r.checks ?? null) : null }); })
-      .catch(() => { seen.set(job.key, { at: Date.now(), checks: null }); })
+      .then((r) => { seen.set(job.key, { at: Date.now(), checks: r.ok ? (r.checks ?? null) : null, sig: job.sig }); })
+      .catch(() => { seen.set(job.key, { at: Date.now(), checks: null, sig: job.sig }); })
       .finally(() => { running--; inflight.delete(job.key); tell(); pump(); });
   }
 }
@@ -53,13 +62,14 @@ export function onRollup(fn: () => void): () => void {
  * on screen is the card. Only worth calling for a card whose list rollup claims
  * a failure — everything else is already telling the truth.
  */
-export function rollupOf(root: string, number: number): PrCheckRollup | null {
+export function rollupOf(root: string, number: number, sig = ""): PrCheckRollup | null {
   if (!root || !number) return null;
   const key = keyOf(root, number);
   const hit = seen.get(key);
-  if (hit && Date.now() - hit.at < TTL_MS) return hit.checks;
+  const age = hit ? Date.now() - hit.at : Infinity;
+  if (hit && (sig && hit.sig === sig ? age < SAME_MS : age < TTL_MS)) return hit.checks;
   if (!inflight.has(key) && !waiting.some((w) => w.key === key)) {
-    waiting.push({ key, root, number });
+    waiting.push({ key, root, number, sig });
     pump();
   }
   return hit?.checks ?? null;
@@ -70,9 +80,4 @@ export function refreshRollup(root: string, number: number): void {
   if (!root || !number) return;
   seen.delete(keyOf(root, number));
   rollupOf(root, number);
-}
-
-export function forgetRollups(): void {
-  seen.clear();
-  waiting.length = 0;
 }

@@ -31,6 +31,7 @@ import { termOptions } from "../lib/termPrefs.ts";
 import { themeFromCss } from "./TerminalPanel.tsx";
 import { isRemoteScript } from "../../../shared/deps.ts";
 import { CloseButton } from "./CloseButton.tsx";
+import { EDGE, LINE } from "./workspace/Chrome.tsx";
 
 export function ShellConsole({ command, cwd, onClose }: {
   /** Typed into the shell verbatim, and never followed by a newline. */
@@ -154,7 +155,7 @@ export function ShellConsole({ command, cwd, onClose }: {
   }, []);
 
   return (
-    <div className="mt-2 rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+    <div className="mt-2 rounded-lg overflow-hidden" style={{ border: EDGE }}>
       {/* The command, readable and copyable before it is anything else. The
           copy button is the way out for someone who would rather run it in
           their own terminal, which is a preference worth respecting. */}
@@ -163,12 +164,12 @@ export function ShellConsole({ command, cwd, onClose }: {
         <button
           onClick={() => { void navigator.clipboard?.writeText(command).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }); }}
           className="shrink-0 text-[10px] px-2 py-0.5 rounded"
-          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+          style={{ color: "var(--text2)", border: EDGE }}>
           {copied ? "copied" : "copy"}
         </button>
         <CloseButton onClick={onClose} style={{ color: "var(--text3)" }} title="Close this console" className="shrink-0" />
       </div>
-      <div className="px-2.5 py-1 text-[10px]" style={{ color: "var(--text3)", borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
+      <div className="px-2.5 py-1 text-[10px]" style={{ color: "var(--text3)", borderTop: LINE }}>
         {state === "failed"
           ? "The shell could not be opened — copy the command and run it yourself."
           : state === "opening"

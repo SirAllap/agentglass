@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { DoneIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
 
 /**
  * Pick what a branch is measured and merged against.
@@ -119,7 +120,7 @@ export function BasePicker({
                   top: pos.top, bottom: pos.bottom, right: pos.right,
                   minWidth: 300, maxHeight: pos.maxHeight, overflow: "hidden", zIndex: 9999,
                   background: "color-mix(in srgb, var(--bg2) 97%, black)",
-                  border: "1px solid color-mix(in srgb, var(--border) 70%, transparent)",
+                  border: EDGE,
                   boxShadow: "0 24px 60px -18px rgba(0,0,0,0.7)",
                   backdropFilter: "blur(18px)",
                 }}>
@@ -140,8 +141,8 @@ export function BasePicker({
                     the list is only usable with a filter. */}
                 <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)}
                   placeholder="filter branches…"
-                  className="mx-1.5 mb-1 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
-                  style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+                  className={`mx-1.5 mb-1 shrink-0 ${INPUT}`}
+                  style={INPUT_STYLE} />
                 {/* Padded on both ends: bottom-only put the first branch
                     against the filter field, where it read as part of it. */}
                 <div className="agx-scroll overflow-y-auto overflow-x-hidden py-1.5">
@@ -155,7 +156,7 @@ export function BasePicker({
                     className="w-full text-left px-2.5 py-1.5 flex items-center gap-2"
                     style={{ color: "var(--text3)" }}
                     title="Forget the override and go back to the base this app works out on its own">
-                    <span className="shrink-0 text-[8.5px] px-1 py-px rounded" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>AUTO</span>
+                    <span className="shrink-0 text-[8.5px] px-1 py-px rounded" style={{ color: "var(--text3)", border: EDGE }}>AUTO</span>
                     <span className="min-w-0 flex-1 truncate">work it out for me</span>
                   </button>
                   {shown.slice(0, 200).map((b) => (
@@ -168,8 +169,8 @@ export function BasePicker({
                           the `origin/master` next to it. */}
                       <span className="shrink-0 text-[8.5px] px-1 py-px rounded"
                         style={b.remote
-                          ? { color: "var(--info)", border: "1px solid color-mix(in srgb, var(--info) 35%, transparent)" }
-                          : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                          ? { color: "var(--info-ink)", border: "1px solid color-mix(in srgb, var(--info) 35%, transparent)" }
+                          : { color: "var(--text3)", border: EDGE }}>
                         {b.remote ? "REMOTE" : "LOCAL"}
                       </span>
                       <span className="min-w-0 flex-1 truncate">{b.name}</span>

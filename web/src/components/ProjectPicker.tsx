@@ -32,6 +32,7 @@ import { FolderIcon, MonitorIcon, PlusIcon } from "../lib/glyphIcons.tsx";
 import { GitIcon } from "./workspace/icons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { allOpen, autoPick, clickScope, firstRun, initialTicks, nextScope, openFolders, rootsToAdd, scopeLabel } from "../lib/projectPick.ts";
+import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
 
 /** Set once the user has answered the startup question (either way), so an
  *  unscoped instance doesn't re-ask on every reload. */
@@ -141,7 +142,7 @@ function FolderField({
         // Above the input: this sits low in a modal, and a list hanging below
         // would fall off the viewport on a short window.
         <div className="agx-scroll absolute left-0 right-0 bottom-full mb-1 rounded-lg overflow-y-auto py-1"
-          style={{ maxHeight: 220, zIndex: 3, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 12px 32px -12px rgba(0,0,0,0.7)" }}>
+          style={{ maxHeight: 220, zIndex: 3, background: "var(--surface-card)", border: EDGE, boxShadow: "0 12px 32px -12px rgba(0,0,0,0.7)" }}>
           {sugg.map((e, i) => (
             // onMouseDown, not onClick: a click first blurs the input, and
             // blur-driven dismissal would unmount the row before the click
@@ -159,8 +160,8 @@ function FolderField({
       )}
       <input ref={ref} value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={onKey} onBlur={() => setSugg([])}
         placeholder={placeholder} spellCheck={false} autoComplete="off" autoFocus={autoFocus}
-        className={`w-full rounded-lg outline-none ${small ? "px-3 py-1.5 text-[11px]" : "px-3 py-2 text-[12px]"}`}
-        style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+        className={`w-full ${INPUT}`}
+        style={INPUT_STYLE} />
     </div>
   );
 }
@@ -172,7 +173,7 @@ function AddRow({ icon, title, sub, onClick, disabled }: { icon: ReactNode; titl
   return (
     <button onClick={onClick} disabled={disabled}
       className="agx-btn w-full text-left px-2.5 py-2 rounded-xl flex items-center gap-3 disabled:opacity-50"
-      style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
+      style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: EDGE }}>
       <span className="shrink-0 grid place-items-center rounded-lg text-[13px]"
         style={{ width: 30, height: 30, background: "color-mix(in srgb, var(--primary) 12%, transparent)", color: "var(--primary-hover)" }}>{icon}</span>
       <span className="min-w-0 flex-1">
@@ -439,8 +440,8 @@ export function ProjectPicker({ open, workspaces, known, onClose }: {
                 role="dialog" aria-modal="true" aria-label="Choose a project"
                 initial={{ opacity: 0, scale: 0.95, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 8 }}
                 transition={{ type: "spring", stiffness: 330, damping: 30 }}
-                className="w-[560px] max-w-[95vw] max-h-[85vh] rounded-2xl flex flex-col pointer-events-auto overflow-hidden"
-                style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
+                className="w-[560px] max-w-[95vw] max-h-[85vh] rounded-xl flex flex-col pointer-events-auto overflow-hidden"
+                style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
                 <style>{SCROLLBAR_CSS}</style>
 
                 <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
@@ -457,8 +458,8 @@ export function ProjectPicker({ open, workspaces, known, onClose }: {
                     {!isFirstRun && (
                       <div className="px-4 pt-3 shrink-0">
                         <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter projects…"
-                          className="w-full px-3 py-2 rounded-lg text-[12px] outline-none"
-                          style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+                          className={`w-full ${INPUT}`}
+                          style={INPUT_STYLE} />
                       </div>
                     )}
 
@@ -589,7 +590,7 @@ export function ProjectPicker({ open, workspaces, known, onClose }: {
                           {pending.length === 1 ? "1 project ticked" : `${pending.length} projects ticked`}
                         </span>
                         <button onClick={() => setTicked(initialTicks(workspaces, repos ?? []))} disabled={busy}
-                          className="agx-btn ml-auto text-[11px] px-3 py-1.5 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                          className="agx-btn ml-auto text-[11px] px-3 py-1.5 rounded-lg" style={{ color: "var(--text2)", border: EDGE }}>
                           Reset
                         </button>
                         <button onClick={() => void openScope(pending)} disabled={busy}
@@ -652,8 +653,8 @@ export function ProjectPicker({ open, workspaces, known, onClose }: {
                         <input autoFocus value={url} onChange={(e) => setUrl(e.target.value)} spellCheck={false} autoComplete="off"
                           onKeyDown={(e) => { if (e.key === "Enter" && url.trim()) runClone(); }}
                           placeholder="https://github.com/owner/repo.git  ·  git@github.com:owner/repo.git"
-                          className="w-full px-3 py-2 rounded-lg text-[12px] outline-none"
-                          style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+                          className={`w-full ${INPUT}`}
+                          style={INPUT_STYLE} />
                       </label>
                     ) : (
                       <label className="flex flex-col gap-1">
@@ -661,8 +662,8 @@ export function ProjectPicker({ open, workspaces, known, onClose }: {
                         <input autoFocus value={name} onChange={(e) => setName(e.target.value)} spellCheck={false} autoComplete="off"
                           onKeyDown={(e) => { if (e.key === "Enter" && name.trim()) runCreate(); }}
                           placeholder="my-project"
-                          className="w-full px-3 py-2 rounded-lg text-[12px] outline-none"
-                          style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+                          className={`w-full ${INPUT}`}
+                          style={INPUT_STYLE} />
                       </label>
                     )}
 
@@ -673,7 +674,7 @@ export function ProjectPicker({ open, workspaces, known, onClose }: {
                         {CAN_BROWSE_FOLDER && (
                           <button onClick={() => void chooseFolder(parent || undefined).then((p) => p && setParent(p))} disabled={busy}
                             className="agx-btn text-[11px] px-3 py-2 rounded-lg shrink-0"
-                            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>Browse…</button>
+                            style={{ color: "var(--text2)", border: EDGE }}>Browse…</button>
                         )}
                       </div>
                       {/* Say where it lands before it lands: the name is derived
@@ -687,7 +688,7 @@ export function ProjectPicker({ open, workspaces, known, onClose }: {
                     </div>
 
                     <div className="flex items-center gap-2 mt-1">
-                      <button onClick={back} disabled={busy} className="agx-btn text-[11px] px-3 py-1.5 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>Cancel</button>
+                      <button onClick={back} disabled={busy} className="agx-btn text-[11px] px-3 py-1.5 rounded-lg" style={{ color: "var(--text2)", border: EDGE }}>Cancel</button>
                       <button onClick={mode === "clone" ? runClone : runCreate} disabled={busy || !(mode === "clone" ? url.trim() : name.trim())}
                         className="agx-btn ml-auto text-[11px] px-4 py-1.5 rounded-lg font-medium"
                         style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", opacity: busy || !(mode === "clone" ? url.trim() : name.trim()) ? 0.5 : 1 }}>

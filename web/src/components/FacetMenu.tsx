@@ -5,6 +5,7 @@ import { Avatar } from "./Avatar.tsx";
 import { StatusPill } from "./StatusPill.tsx";
 import { DoneIcon, DotIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 
 /**
  * A multi-select facet dropdown, GitHub-style: a pill that opens a checkbox list
@@ -158,7 +159,7 @@ export function FacetMenu({
                   maxHeight: "min(60vh, 420px)",
                   zIndex: 9999,
                   background: "color-mix(in srgb, var(--bg2) 97%, black)",
-                  border: "1px solid color-mix(in srgb, var(--border) 70%, transparent)",
+                  border: EDGE,
                   boxShadow: "0 24px 60px -18px rgba(0,0,0,0.7)",
                   backdropFilter: "blur(18px)",
                 }}
@@ -169,8 +170,8 @@ export function FacetMenu({
                     value={q}
                     onChange={(e) => { setQ(e.target.value); setCursor(0); }}
                     placeholder={`Filter ${label.toLowerCase()}…`}
-                    className="text-[11px] px-2 py-1 mb-1 rounded-lg bg-transparent"
-                    style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", outline: "none" }}
+                    className={`mb-1 ${INPUT}`}
+                    style={INPUT_STYLE}
                   />
                 )}
                 <div ref={listRef} className="flex flex-col gap-0.5 overflow-y-auto agw-noscrollbar">
@@ -217,11 +218,11 @@ export function FacetMenu({
                     );
                   })}
                 </div>
-                {note && <div className="px-2.5 pt-1.5 text-[9.5px]" style={{ color: "var(--warning)" }}>{note}</div>}
+                {note && <div className="px-2.5 pt-1.5 text-[9.5px]" style={{ color: "var(--warning-ink)" }}>{note}</div>}
                 {mode === "multi" && n > 0 && (
                   <button onClick={() => { onClear(); }}
                     className="mt-1 px-2.5 py-1 rounded-lg text-[10.5px] text-left hover:bg-white/5"
-                    style={{ color: "var(--text3)", borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                    style={{ color: "var(--text3)", borderTop: LINE }}>
                     Clear {label.toLowerCase()}
                   </button>
                 )}

@@ -20,8 +20,40 @@
  * cannot express should add it HERE, where the next view will find it.
  */
 
-import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
+import type { ButtonHTMLAttributes, CSSProperties, KeyboardEvent, ReactNode } from "react";
 import { HIT, ICON } from "../../lib/iconSize.ts";
+import { DoneIcon, RefreshIcon } from "../../lib/glyphIcons.tsx";
+
+/**
+ * The three heights a control comes in, and the one border every one of them
+ * shares.
+ *
+ * Named so the next control reaches for these instead of typing `28` or
+ * `edge(14)` again: `CHIP` already is `min-h-[28px]` (588 uses), and `edge(14)`
+ * is the most-used of the 17 percentages `edge()` is called with (54, against
+ * 52 for the next one down).
+ *
+ * `EDGE` is `edge(14)`'s own string, not a call to it: `git/ui.tsx` imports
+ * `CHIP` from this file already, and calling `edge()` at this module's top
+ * level would make the two files' load order decide which one sees the other
+ * half-initialized. The value cannot drift — `edge()` is one string template,
+ * checked by the slice-1 guard test.
+ */
+export const CTRL_H = { compact: 22, regular: 28, large: 32 } as const;
+export const EDGE = "1px solid color-mix(in srgb, var(--text) 14%, transparent)";
+
+/**
+ * The divider: a rule BETWEEN things (a row separator, a header's bottom
+ * edge, a column's side), as opposed to `EDGE`, which outlines a thing (a
+ * control, a card, a dialog).
+ *
+ * `--surface-line` already existed in index.css for exactly this and was
+ * spelled out as a raw `1px solid ...` string at each site that used it,
+ * next to 17 different `edge(n)` weights doing the same job. Two weights
+ * now: the outline and the rule. An emphasis border (`edge(28)` and up, or a
+ * tinted one) says something on purpose and stays what it is.
+ */
+export const LINE = "1px solid var(--surface-line)";
 
 /**
  * The one shape — and the class that gives it a body.
@@ -49,18 +81,32 @@ export const CHIP = "agx-chip text-[11px] px-2.5 min-h-[28px] inline-flex items-
  *
  * A toolbar toggle is transparent until it is on — the tint IS the state. A
  * control that is always available (the repo picker, the link to GitHub) has no
- * on-state to show, and transparent turns it into grey text: "no parece otra
- * cosa" was the report, about a header where two of them had become captions
- * with arrows after them.
+ * on-state to show, and transparent turns it into grey text that no longer
+ * reads as a control: in one header two of them had become captions with
+ * arrows after them.
  */
 export const CHIP_SURFACE = {
   background: "color-mix(in srgb, var(--text) 5%, transparent)",
-  border: "1px solid color-mix(in srgb, var(--text) 10%, transparent)",
+  border: EDGE,
   color: "var(--text)",
 } as const;
 
 /** The hover half of the same, which cannot be an inline style. */
 export const CHIP_SURFACE_CLS = "hover:brightness-125";
+
+/**
+ * The one text input, `control, large` in the canon table: `rounded-lg`,
+ * `CTRL_H.large` (32, the same row height as a dialog's primary button), a
+ * well fill instead of a card fill, and `EDGE`. Every `<input>` outside the
+ * three structurally-excused ones (§ guard test) reaches for this instead of
+ * typing its own `px-2 py-1 rounded-md border` again — that was the search
+ * box being a third height next to a 28px filter chip and a 22px row action
+ * in the same view.
+ */
+export const INPUT =
+  "text-[12px] px-2.5 h-[32px] rounded-lg bg-[var(--surface-inset)] text-[var(--text)] " +
+  "placeholder:text-[var(--text3)] outline-none transition-colors";
+export const INPUT_STYLE: CSSProperties = { border: EDGE };
 
 /**
  * What a pressed control looks like.
@@ -144,13 +190,13 @@ export function Chip({
     ? {
       background: "color-mix(in srgb, var(--primary) 18%, transparent)",
       border: "1px solid color-mix(in srgb, var(--primary) 34%, transparent)",
-      color: "var(--primary)",
+      color: "var(--primary-ink)",
     }
     : danger
       ? {
         background: "color-mix(in srgb, var(--error) 10%, transparent)",
         border: "1px solid color-mix(in srgb, var(--error) 30%, transparent)",
-        color: "var(--error)",
+        color: "var(--error-ink)",
       }
       : { ...chipBody(hasState, !!resting), ...chipTone(!!on) };
   return (
@@ -255,7 +301,7 @@ export function Tabs<T extends string>({ value, options, onChange, label, panelI
             onKeyDown={(e) => move(e, i)}
             className="agx-tab text-[12px] px-3 min-h-[32px] inline-flex items-center whitespace-nowrap transition-colors"
             style={on
-              ? { color: "var(--primary)", fontWeight: 700, boxShadow: "inset 0 -2px 0 0 var(--primary)" }
+              ? { color: "var(--primary-ink)", fontWeight: 700, boxShadow: "inset 0 -2px 0 0 var(--primary)" }
               : { color: "var(--text3)" }}
           >
             {o.label}
@@ -346,13 +392,14 @@ export function ScopeChip({ label, kind, trailing = "none", on, onClick, title, 
  * reason `CloseButton` exists and is the size it is. A view that hand-rolls 24
  * is both slightly wrong and slightly different, which is the worse half.
  */
-export function IconChip({ onClick, title, children, on, expanded, hasPopup }: {
+export function IconChip({ onClick, title, children, on, expanded, hasPopup, size = HIT }: {
   onClick: () => void;
   title: string;
   children: ReactNode;
   on?: boolean;
   expanded?: boolean;
   hasPopup?: boolean;
+  size?: number;
 }) {
   return (
     <button
@@ -361,7 +408,7 @@ export function IconChip({ onClick, title, children, on, expanded, hasPopup }: {
       {...(expanded !== undefined ? { "aria-expanded": expanded } : {})}
       {...(hasPopup ? { "aria-haspopup": "menu" as const } : {})}
       className="inline-flex items-center justify-center rounded-lg transition-colors shrink-0"
-      style={{ width: HIT, height: HIT, ...chipTone(!!on) }}
+      style={{ width: size, height: size, ...chipTone(!!on) }}
     >
       {children}
     </button>
@@ -371,6 +418,176 @@ export function IconChip({ onClick, title, children, on, expanded, hasPopup }: {
 /** The size an icon inside `IconChip` is drawn at. Named so a call site does not
  *  have to know that the default rung happens to be the right one. */
 export const CHIP_ICON = ICON.md;
+
+/**
+ * `IconChip` at `CTRL_H.regular` (28) instead of `HIT` (26).
+ *
+ * The audit found the 2px step in every header that mixes an icon control
+ * with `CHIP`: `IconChip` was drawn at `HIT`, and `CHIP` is `min-h-[28px]`,
+ * so an icon button and a text chip on the same row never lined up. `HIT`
+ * itself is unchanged — it still answers "how small can a square target be"
+ * for `CloseButton` and the rail — this is only the rung a header control
+ * reaches for instead.
+ */
+export function IconButton(props: Omit<Parameters<typeof IconChip>[0], "size">) {
+  return <IconChip {...props} size={CTRL_H.regular} />;
+}
+
+export type ButtonTone = "plain" | "primary" | "danger" | "ok" | "warn";
+
+const TONE_INK: Record<ButtonTone, string> = {
+  plain: "var(--text)", primary: "var(--bg)", danger: "var(--error-ink)", ok: "var(--success-ink)", warn: "var(--warning-ink)",
+};
+const TONE_HUE: Record<Exclude<ButtonTone, "plain">, string> = {
+  primary: "var(--primary)", danger: "var(--error)", ok: "var(--success)", warn: "var(--warning)",
+};
+
+/**
+ * The one push button: the `CHIP` shape at a `CTRL_H` rung, in one of five
+ * tones.
+ *
+ * Four of these had grown apart — the PR panel's `Btn` (4px corners, 24 and
+ * 28px), the git card's `RowAction` (`CHIP`, 28), Docker's row action (6px
+ * corners, 22) and the browser column's tool (6px, 24) — so the PR Files
+ * toolbar, a Docker row and a git card each drew "a button" at its own height
+ * and radius. They are thin wrappers over this now and keep their own prop
+ * names; the shape is decided here.
+ *
+ * `size`: `compact` (22) for a row, a card or a sub-toolbar, `regular` (28)
+ * for a view header, the same rung as `CHIP` and `RefreshButton`.
+ *
+ * `tone`: a plain button's label is `--text`, not `--text2` — `--text2` is the
+ * tier for labels BESIDE things, and a control read at the contrast of a
+ * caption next to the button it competes with. Its fill is `CHIP_SURFACE`'s,
+ * because a quiet button still needs an edge you can find: transparent with a
+ * half-strength border vanished on the neutral themes, where `--border` sits
+ * close to the surface. `warn` is the amber "this mutates the branch" accent
+ * (update-branch merges the base in), matching Source Control's sync colour.
+ * `primary` is filled and carries the weight: on a neutral theme `--primary`
+ * is a grey, so the label's weight says which is which as well. `tint` is an
+ * arbitrary colour for a caller whose tones are its own (Docker's start/stop).
+ *
+ * `on` makes it a toggle instead: transparent until pressed, `chipTone` when
+ * pressed, no border — the tint IS the state, as in `IconChip`.
+ *
+ * A FIXED height, contents centred, and `leading-none`. Buttons with identical
+ * classes came out different heights, and the cause was the LABEL: `↗` and `⋯`
+ * are not in the UI font, so they arrive from a fallback whose line box is
+ * taller — measured side by side, 17px for a plain label against 21px for one
+ * carrying an arrow. Pinning the line height alone got it to 16/16/16 on one
+ * machine, but a fallback differs per machine, per theme font and per glyph, so
+ * the height stops being derived from the label at all; padding only decides
+ * the width.
+ *
+ * `pending`: this button's own request is in flight. Every action in the PR
+ * panel is a round trip through `gh`, and the only feedback used to be the
+ * button going grey — the same grey it wears when disabled for an unrelated
+ * reason. The spinner goes IN the button, before the label, and the label
+ * stays: a control that swaps its words for "Working…" moves everything beside
+ * it, and you can no longer tell which of three buttons you pressed.
+ *
+ * Its ceiling: shape, size, edge and tone. Hover stays a brightness step, and a
+ * caller that needs more passes its own handlers through.
+ */
+export function Button({
+  size = "regular", tone = "plain", tint, on, square, pending, label,
+  children, disabled, title, className = "", style, ...rest
+}: Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children"> & {
+  size?: "compact" | "regular";
+  tone?: ButtonTone;
+  /** A colour of the caller's own, in place of a tone. */
+  tint?: string;
+  /** A toggle: transparent until on. */
+  on?: boolean;
+  /** Icon-only: as wide as it is tall. */
+  square?: boolean;
+  pending?: boolean;
+  /** The accessible name, for an icon-only button. Also the tooltip unless `title` says otherwise. */
+  label?: string;
+  children: ReactNode;
+}) {
+  const h = CTRL_H[size];
+  const hue = tint ?? (tone === "plain" ? undefined : TONE_HUE[tone]);
+  const skin: CSSProperties = on !== undefined
+    ? chipTone(on)
+    : tint
+      ? { color: tint, background: `color-mix(in srgb, ${tint} 8%, transparent)`, border: `1px solid color-mix(in srgb, ${tint} 32%, transparent)` }
+      : tone === "plain"
+        ? CHIP_SURFACE
+        : {
+          color: TONE_INK[tone],
+          background: tone === "primary" ? hue : `color-mix(in srgb, ${hue} ${tone === "warn" ? 16 : 8}%, transparent)`,
+          border: `1px solid color-mix(in srgb, ${hue} ${tone === "primary" ? 100 : tone === "warn" ? 55 : 85}%, transparent)`,
+        };
+  const text = size === "compact" ? "text-[10.5px]" : "text-[11px]";
+  const pad = square ? "" : size === "compact" ? "px-2" : "px-2.5";
+  return (
+    <button
+      {...rest}
+      disabled={disabled || pending}
+      title={pending ? "Working…" : title ?? label}
+      aria-label={label}
+      aria-busy={pending || undefined}
+      className={`agx-btn ${CHIP_SURFACE_CLS} inline-flex items-center justify-center gap-1 rounded-lg whitespace-nowrap leading-none disabled:opacity-40 ${text} ${pad} ${className}`}
+      style={{
+        height: h, minWidth: square ? h : undefined, width: square ? h : undefined,
+        ...skin,
+        cursor: disabled ? "not-allowed" : "pointer",
+        fontWeight: tone === "primary" ? 600 : 500,
+        ...style,
+      }}
+    >
+      {pending && (
+        <span className="agx-spin mr-0.5 shrink-0" aria-hidden
+          style={{ width: 9, height: 9, borderWidth: 1.5,
+            borderColor: tone === "primary" && !tint && on === undefined ? "color-mix(in srgb, var(--bg) 55%, transparent)" : "currentColor",
+            borderTopColor: "transparent" }} />
+      )}
+      {children}
+    </button>
+  );
+}
+
+/**
+ * The header refresh control, drawn once instead of the twelve looks the
+ * audit found: six spelled the word "Refresh" as visible text, three drew a
+ * bare icon, two bordered one, one combined icon and text — and three of the
+ * twelve hand-rolled the arrow as an inline `<path>` instead of `RefreshIcon`.
+ *
+ * Icon-only everywhere now; the word moves into `title` (also used as the
+ * `aria-label`), which is where a tooltip and a screen reader both already
+ * look for it. `done` is the Git panel's flash of a tick in `--success` once
+ * a refresh that changed nothing on screen still needs to say that it ran —
+ * opt-in, because every other caller has nothing to report back.
+ */
+export function RefreshButton({ onRefresh, busy, done, title, disabled }: {
+  onRefresh: () => void;
+  busy?: boolean;
+  done?: boolean;
+  title: string;
+  disabled?: boolean;
+}) {
+  const showDone = !!done && !busy;
+  return (
+    <button
+      type="button"
+      onClick={onRefresh}
+      disabled={disabled ?? busy}
+      title={title}
+      aria-label={title}
+      className="grid place-items-center rounded-lg shrink-0 transition-colors disabled:opacity-60"
+      style={{
+        width: CTRL_H.regular, height: CTRL_H.regular,
+        ...CHIP_SURFACE,
+        color: showDone ? "var(--success)" : CHIP_SURFACE.color,
+      }}
+    >
+      {showDone
+        ? <DoneIcon size={CHIP_ICON} />
+        : <RefreshIcon size={CHIP_ICON} className={busy ? "animate-spin" : undefined} />}
+    </button>
+  );
+}
 
 /**
  * The filter box a list view puts above its rows.
@@ -395,12 +612,8 @@ export function FilterField({ value, onChange, placeholder, label, className = "
       aria-label={label}
       spellCheck={false}
       autoComplete="off"
-      className={`px-3 py-1.5 rounded-lg text-[11.5px] outline-none ${className}`.trim()}
-      style={{
-        background: "color-mix(in srgb, var(--bg3) 40%, transparent)",
-        border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)",
-        color: "var(--text)",
-      }}
+      className={`${INPUT} ${className}`.trim()}
+      style={INPUT_STYLE}
     />
   );
 }
@@ -414,3 +627,42 @@ export function FilterField({ value, onChange, placeholder, label, className = "
  * writes down and the one most often broken.
  */
 export const GROUP_HEADING = "px-1.5 pt-3 pb-1 text-[10px] uppercase tracking-wider";
+
+/* The conversation's geometry, GitHub's: a big avatar outside the card, a rail
+   running a little way into the card column with the small events sitting on
+   it, and air between entries. Here rather than in the pull request panel
+   because the tracker card's activity draws the same timeline: the numbers and
+   the rules below are one copy, and `TL_CSS` is a string any view can put in
+   its own `<style>` without depending on another view being mounted. */
+export const TL_AVATAR = 40;
+/** Avatar to card. */
+export const TL_GAP = 12;
+/** The card's left edge to the rail. */
+export const TL_RAIL = 16;
+/** Between two entries. */
+export const TL_SPACE = 16;
+/** A small event's text, and a review's threads, start past the rail. */
+export const TL_INDENT = TL_RAIL * 2 + 4;
+
+export const TL_CSS = `
+/* One timeline, one rail, laid out the way github.com lays it out, so who said
+   what reads at a glance: the speaker's face in a column of its own, their
+   remark in a card beside it, and the rail running behind the cards with the
+   small events sitting on it. The card's own surface hides the rail where a
+   card is; between cards, the rail is what says these happened in an order. */
+.agx-tl{position:relative;padding-left:${TL_AVATAR + TL_GAP}px}
+.agx-tl::before{content:"";position:absolute;left:${TL_AVATAR + TL_GAP + TL_RAIL - 1}px;top:0;bottom:0;width:2px;background:var(--surface-line)}
+.agx-ev{position:relative;margin-bottom:${TL_SPACE}px}
+.agx-ev:last-child{margin-bottom:0}
+.agx-tl>.agx-tiny{margin-bottom:${TL_SPACE}px}
+.agx-av{position:absolute;left:-${TL_AVATAR + TL_GAP}px;top:0;display:flex}
+.agx-card{position:relative;background:var(--surface-card)}
+.agx-nest{margin:8px 0 0 ${TL_INDENT}px}
+.agx-node{position:absolute;left:${TL_RAIL - 10}px;top:3px;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:9px;background:var(--bg);border:2px solid var(--surface-line);z-index:1}
+/* A small event — opened, force-pushed, review requested. It sits ON the rail
+   and weighs a fraction of a remark, because it is context rather than
+   something anybody said. */
+.agx-tiny{position:relative;display:flex;align-items:center;gap:7px;font-size:10.5px;color:var(--text3);padding:4px 0 4px ${TL_INDENT}px;min-height:26px}
+.agx-tiny .agx-node{top:3px}
+.agx-tiny b{color:var(--text2);font-weight:500}
+`;

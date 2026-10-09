@@ -12,10 +12,12 @@
 // per pull request in this browser (prNew.ts). Opening a pull request and
 // leaving it moves that mark, so the badge goes out on the board behind you.
 //
-// The two counts agree on purpose. Everything the panel would count is counted
-// here — a review's line comments individually, a bare "commented" review not at
-// all — because a card saying "2 new" over a conversation that then marks three
-// is a card nobody believes twice.
+// The two counts agree where the list can afford it: a bare "commented" review
+// is not counted, and a review carrying a `lines` count counts each line. The
+// list no longer asks for that count (see SEL_TALK in server/src/prs.ts: it was
+// 15 of the 17 points the checks query cost), so on a card a batch of line
+// comments is one remark where the conversation marks each line. The card
+// still lights; its number can be lower than the panel's.
 
 
 import type { PrSummary } from "../../../shared/types.ts";

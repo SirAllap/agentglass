@@ -8,6 +8,7 @@ import { pickIndex, readPick, writePick, type PickedAddress } from "../lib/remot
 import { PairPanel } from "./PairPanel.tsx";
 import { usePoll } from "../lib/usePoll.ts";
 import type { RemoteStatus, RemoteDevice } from "../../../shared/types.ts";
+import { EDGE } from "./workspace/Chrome.tsx";
 
 /**
  * Open the dashboard on your phone.
@@ -189,7 +190,7 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
                 three seconds, and a number that moves inside prose is noise. */}
             {enabled && st.clients.liveCount > 0 && (
               <span className="chip t-mono whitespace-nowrap" style={{
-                color: "var(--success)",
+                color: "var(--success-ink)",
                 background: "color-mix(in srgb, var(--success) 12%, transparent)",
                 borderColor: "color-mix(in srgb, var(--success) 34%, transparent)",
               }}>
@@ -229,7 +230,7 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
               </span>
               <button onClick={() => copy(url)}
                 className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80"
-                style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+                style={{ color: "var(--text2)", border: EDGE }}>
                 {copied === url ? "Copied" : "Copy"}
               </button>
             </span>}
@@ -307,7 +308,7 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
               </p>
               <button onClick={() => copy(st.firewall!.command)}
                 className="t-mono text-[11px] text-left px-2.5 py-1.5 rounded-lg break-all hover:opacity-80 w-full"
-                style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}>
+                style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: EDGE }}>
                 {st.firewall.command}
               </button>
               <p className="m-0 mt-1.5 text-[11.5px] t-dim">
@@ -335,7 +336,7 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
       {enabled !== null && st.tokenRequired && (
         <SettingRow
           align={confirming ? "start" : "center"}
-          label={<span style={{ color: "var(--error)" }}>Revoke this link</span>}
+          label={<span style={{ color: "var(--error-ink)" }}>Revoke this link</span>}
           hint={confirming
             ? "Every device that has this link stops working, including the ones you cannot reach. A new code is generated and the phones you still want will need to scan it again."
             : "Rotates the access code. This is the revoke that reaches a device you no longer have in your hand."}
@@ -343,19 +344,19 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
             <span className="flex items-center gap-2">
               <button onClick={revoke} disabled={busy}
                 className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap font-medium"
-                style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 44%, transparent)", opacity: busy ? 0.5 : 1 }}>
+                style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 44%, transparent)", opacity: busy ? 0.5 : 1 }}>
                 {busy ? "Revoking…" : "Revoke"}
               </button>
               <button onClick={() => setConfirming(false)} disabled={busy}
                 className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80"
-                style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+                style={{ color: "var(--text2)", border: EDGE }}>
                 Keep it
               </button>
             </span>
           ) : (
             <button onClick={() => { setConfirming(true); setRevokeNote(null); }} disabled={busy}
               className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80"
-              style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 32%, transparent)", opacity: busy ? 0.5 : 1 }}>
+              style={{ color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 32%, transparent)", opacity: busy ? 0.5 : 1 }}>
               Revoke
             </button>
           )}
@@ -558,7 +559,7 @@ function Recipe({ port }: { port: number }) {
       </div>
       <div className="t-mono text-[11px] px-2.5 py-2 rounded-lg whitespace-pre-wrap" style={{
         color: "var(--text)", background: "color-mix(in srgb, var(--bg) 70%, transparent)",
-        border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)",
+        border: EDGE,
       }}>
         {`AGENTGLASS_BIND=0.0.0.0 \\\n  AGENTGLASS_TRUST_LAN=1 \\\n  AGENTGLASS_TOKEN=$(openssl rand -base64 24) \\\n  bun run server   # port ${port}`}
       </div>

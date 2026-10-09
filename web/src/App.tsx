@@ -20,7 +20,7 @@ import { subscribeControl } from "./lib/controlBus.ts";
 import { latchChatIntent } from "./lib/chatIntent.ts";
 import type { ControlCmd } from "../../shared/types.ts";
 import { actionFor } from "./lib/keybindings.ts";
-import { claimFind, findChordIsOursToTake, openFind } from "./lib/findScope.ts";
+import { claimFind, findChordIsOursToTake, openFind, scopeHolding } from "./lib/findScope.ts";
 import { FindBar } from "./components/FindBar.tsx";
 import { AlarmCard } from "./components/AlarmCard.tsx";
 import { currentScale } from "./lib/uiScale.ts";
@@ -61,6 +61,7 @@ import { onFinderAt, type FinderTarget } from "./lib/finderTarget.ts";
 import { WindowSwitcher } from "./components/terminal/WindowSwitcher.tsx";
 import { FloatingBench } from "./components/bench/FloatingBench.tsx";
 import { benchTakesBoard, toggleBench, showFile } from "./lib/benchStore.ts";
+import type { BoardKind } from "./lib/boardHost.ts";
 import { PeekFile, isRenderable, type Peek } from "./components/PeekFile.tsx";
 import { clearPeek, peekRequest, subscribePeek } from "./lib/openPeek.ts";
 import { requestFilesReveal } from "./lib/filesReveal.ts";
@@ -85,6 +86,13 @@ import { requestPrJump } from "./lib/prJump.ts";
 import { requestPluginInstall } from "./lib/installPlugin.ts";
 import { subscribeGates, listGates } from "./lib/gateStore.ts";
 import { startMarksSync, syncMarks } from "./lib/marksSync.ts";
+import { EDGE } from "./components/workspace/Chrome.tsx";
+
+/** What the pointer is over. Ctrl+F searches the view under the pointer first:
+ *  with the bench floating over another view, the one you are looking at is
+ *  the one the mouse is on, whatever still holds the focus. */
+let pointerOver: EventTarget | null = null;
+if (typeof window !== "undefined") window.addEventListener("pointerover", (e) => { pointerOver = e.target; }, true);
 
 /** The last segment of a path — a project's name as anyone says it out loud. */
 const leafOf = (p: string): string => p.split("/").filter(Boolean).pop() ?? p;
@@ -235,7 +243,7 @@ export default function App() {
   useEffect(() => onCloseSettings(() => { setSettingsOpen(false); setSettingsJump(null); }), []);
   /* A board goes where the person is reading boards: the bench, when it is open
      on one; the view otherwise. See benchTakesBoard. */
-  const toBoard = useCallback((kind: "pr" | "tasks") => { if (!benchTakesBoard(kind)) goView(kind); }, [goView]);
+  const toBoard = useCallback((kind: BoardKind) => { if (!benchTakesBoard(kind)) goView(kind); }, [goView]);
   useEffect(() => onOpenPrs((j) => { setPrJump(j); toBoard("pr"); }), [toBoard]);
   /* The other half: a sender that knows exactly which pull request it means
      gets the panel's jump, which selects and opens, instead of a search. */
@@ -315,6 +323,8 @@ export default function App() {
   // — a render value captured there would be the one from the mount.
   const filesOpenRef = useRef(filesOpen);
   filesOpenRef.current = filesOpen;
+  const machineOpenRef = useRef(false);
+  machineOpenRef.current = machine != null;
   const wsViewRef = useRef(wsView);
   wsViewRef.current = wsView;
   // The catalog is the one panel that can open *over* the workspace, from the
@@ -791,11 +801,16 @@ export default function App() {
         /* A view with a find of its own — the terminal, the browser — takes it
            from here and opens theirs. One key, several engines; see
            `registerClaim`. */
-        if (claimFind()) return;
+        /* …unless the focus is in a view with no terminal or browser in it:
+           the bench open over a terminal is two views on screen, and the
+           terminal's claim answered a Ctrl+F pressed in the bench. */
+        const own = scopeHolding(pointerOver) ?? scopeHolding(e.target);
+        const ownIsDom = !!own && !own.querySelector(".xterm, webview");
+        if (!ownIsDom && claimFind()) return;
         const sel = window.getSelection?.()?.toString().trim() ?? "";
         // Seeded with the selection, the way every find bar does it — and only
         // when it is short enough to be a word rather than a paragraph.
-        openFind(sel.length && sel.length <= 80 && !sel.includes("\n") ? sel : "");
+        openFind(sel.length && sel.length <= 80 && !sel.includes("\n") ? sel : "", ownIsDom ? own : null);
         return;
       }
 
@@ -913,6 +928,15 @@ export default function App() {
          * raised stays up, and the next Escape puts that away.
          */
         if (filesOpenRef.current) { setFilesOpen(false); return; }
+        /*
+         * The Machine dialog next, and alone, for the same reason. It was
+         * missing from this handler altogether, so Escape closed everything
+         * except it: a pass that pressed Escape after each of its tabs found it
+         * still on top three screens later. A picker inside it stops Escape at
+         * the document, so the key reaches here only when nothing inside
+         * answered it.
+         */
+        if (machineOpenRef.current) { setMachine(null); return; }
         // Escape closes whatever is ON the shell. It never closes the shell —
         // there is nothing behind it to go back to any more.
         setSelected(null);
@@ -1297,7 +1321,7 @@ export default function App() {
         <div className="fixed left-1/2 -translate-x-1/2 z-[60] px-3 py-1.5 rounded-lg text-[11.5px] flex items-center gap-2"
           style={{
             top: filesOpen && paletteH > 0 ? Math.round(paletteH) + 34 : "12vh",
-            background: "var(--bg2)", border: "1px solid var(--border)",
+            background: "var(--surface-card)", border: EDGE,
             color: openErr ? "var(--error)" : "var(--text2)",
           }}>
           {/* Bare: `.agx-spin` carries its own size, border and accent, and the

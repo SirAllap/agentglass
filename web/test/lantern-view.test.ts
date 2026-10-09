@@ -139,6 +139,12 @@ describe("the cards", () => {
       expect(html, s).toContain(s);
     }
   });
+  test("what it said reads in the prose face — a person's or an agent's own words, not the app's mono chrome", () => {
+    const html = renderToStaticMarkup(React.createElement(AgentCard, { r: rich(), onJump: () => {} }));
+    expect(html).toContain("font-family:var(--font-prose)");
+    const stopped = renderToStaticMarkup(React.createElement(NeedsYouCard, { r: waiting("permission") }));
+    expect(stopped).toContain("font-family:var(--font-prose)");
+  });
   test("a line with nothing to say is left out — no dashes, no placeholders", () => {
     const bare: LanternRow = { name: "%9", from: "seen", state: "idle" };
     const html = renderToStaticMarkup(React.createElement(AgentCard, { r: bare }));

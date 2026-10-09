@@ -32,7 +32,9 @@ describe("the rail header and the table header", () => {
 
   it("stops the card pane adding a lead-in of its own", () => {
     // A band plus a padding is the band plus a guess.
-    expect(src).toContain("style={{ paddingTop: 0 }}");
+    // The wrapper around the card carries no padding at all now; the card
+    // owns its own header padding.
+    expect(src).toContain('<div className="flex-1 min-h-0 overflow-hidden text-[11.5px] flex flex-col">');
   });
 
   it("declares that constant once", () => {

@@ -232,6 +232,51 @@ describe("the verdict, as a sentence", () => {
     expect(R.verdictLine(R.reviewVerdict([row("okoro", "awaiting")]))).toBe("Waiting on okoro");
     expect(R.verdictLine(R.reviewVerdict([]))).toBe("No review yet");
   });
+
+  test("cleared only once EVERY changes-requester has been re-asked", () => {
+    // The reported case: `orbit-dev` requested changes, applied them, and was
+    // re-requested. One reviewer, fully re-asked — nobody is left blocking.
+    const v = R.reviewVerdict([{ login: "orbit-dev", state: "changes", again: true, at: "2026-09-02T10:00:00Z" }]);
+    expect(v.kind).toBe("changes");
+    expect(v.cleared).toBe(true);
+  });
+
+  test("not cleared while at least one changes-requester has not been re-asked", () => {
+    const v = R.reviewVerdict([
+      { login: "orbit-dev", state: "changes", again: true, at: "2026-09-02T10:00:00Z" },
+      row("okoro", "changes"),
+    ]);
+    expect(v.kind).toBe("changes");
+    expect(v.cleared).toBeFalsy();
+  });
+});
+
+/*
+ * THE PICKER LISTS PAST REVIEWERS FIRST.
+ *
+ * Screenshot 36: the "Request reviewers" picker showed every collaborator in
+ * GitHub's own request order, with no sign of who had already looked — the
+ * person you would ask again was a name to scroll past, not the one at the
+ * top. A stale approval (commits landed after it) is the one case where
+ * re-asking matters most, so it leads even the other past reviewers.
+ */
+describe("the reviewer picker leads with past reviewers", () => {
+  const panel = readSrc(new URL("../src/components/PrPanel.tsx", import.meta.url), "utf8");
+  const fn = panel.slice(panel.indexOf("function usePrFieldPicker("), panel.indexOf("function CardStatusPick("));
+
+  test("a stale approval sorts before every other past reviewer", () => {
+    expect(fn).toContain("staleApproved");
+    expect(fn).toContain("const reviewed = [...byRecent(staleApproved), ...byRecent(otherPast)];");
+  });
+
+  test("each past reviewer carries their last verdict as a muted hint", () => {
+    expect(fn).toContain("sub: `${mark.said}${r.at ? ` ${ago(r.at)}` : \"\"}`");
+  });
+
+  test("the rest of the collaborators keep their current order after the reviewed group", () => {
+    expect(fn).toContain("const rest = people.filter((p) => !reviewedLogins.has(p.value.toLowerCase()));");
+    expect(fn).toContain("options={[...reviewedOptions, ...rest]}");
+  });
 });
 
 /*
@@ -276,6 +321,82 @@ describe("the Overview and the board agree", () => {
     expect(fn, "and the fourth is the fallthrough").toContain("Reviewed, no verdict");
   });
 
+  test("a fully re-asked changes verdict draws amber, not red, and keeps no Go to it of its own", () => {
+    // Screenshot 24's shape: "Waiting on review by X — Changes applied, asked
+    // to look again", amber, not the still-blocking red row (screenshot 22).
+    const fn = panel.slice(panel.indexOf("function p2Verdict("), panel.indexOf("function ReviewChip("));
+    expect(fn).toContain("if (v.cleared)");
+    expect(fn).toContain("Changes applied, asked to look again.");
+    // The changes branch's own Go to it moved into the review history below.
+    expect(fn.match(/noGoTo: true/g)?.length).toBe(2);
+  });
+
+  test("the merge box's verdict band matches the reason rows' own size, not its own", () => {
+    // Reported alongside the Go to it removal: the band sat at 12px/py-2 while
+    // every row below it (Reason, ReviewHistory) reads at 11.5px/py-1.5 — one
+    // taller line in a stack that is otherwise even.
+    const band = panel.slice(panel.indexOf("const v = p2Verdict(d.humanReview"), panel.indexOf("<ReviewHistory reviews={d.reviews}"));
+    expect(band).toContain('px-3 py-1.5 text-[11.5px]');
+  });
+
+  test("the merge box's own verdict band carries no Go to it any more", () => {
+    // Review history right below it already has a go-to per round, including
+    // this one — a second button beside the band pointed at the same place.
+    const band = panel.slice(panel.indexOf("const v = p2Verdict(d.humanReview"), panel.indexOf("<ReviewHistory reviews={d.reviews}"));
+    expect(band).not.toContain(">Go to it<");
+    expect(band).not.toContain("onGoReview(node, v.url");
+  });
+
+  test("the review history lists past rounds and is gated on a changes or commented one", () => {
+    const fn = panel.slice(panel.indexOf("function ReviewHistory("), panel.indexOf("function Bar("));
+    expect(fn).toContain('r.state === "CHANGES_REQUESTED" || r.state === "COMMENTED"');
+    expect(fn).toContain("Review history</span>");
+  });
+
+  test("the review history drops the author's own replies — they are not a round", () => {
+    // The author's own COMMENTED replies filled the list eight deep
+    // before the one real round anybody needed.
+    const fn = panel.slice(panel.indexOf("function ReviewHistory("), panel.indexOf("function Bar("));
+    expect(fn).toContain("r.author?.toLowerCase() !== authorLc");
+  });
+
+  test("the review history is a real disclosure — a button, a rotating chevron, a count chip", () => {
+    // "Reads as loose text": the collapsed-by-default section used to be a
+    // native <details><summary>, which draws no hover state and no visible
+    // affordance that the heading is a control.
+    const fn = panel.slice(panel.indexOf("function ReviewHistory("), panel.indexOf("function Bar("));
+    expect(fn).not.toContain("<details");
+    expect(fn).toContain("onClick={() => setOpen((o) => !o)}");
+    expect(fn).toContain("aria-expanded={open}");
+    expect(fn).toContain('transform: open ? "rotate(90deg)" : "none"');
+  });
+
+  test("each round is one clickable row, not loose text beside a floating button", () => {
+    const fn = panel.slice(panel.indexOf("function ReviewHistory("), panel.indexOf("function Bar("));
+    // The whole row jumps — onClick on the row's own <button>, not on a
+    // separate control squeezed in at the far edge.
+    expect(fn).toContain("onClick={() => r.url && onGoReview(r.nodeId, r.url)}");
+    expect(fn).toContain("hover:bg-white/5");
+    // House chip for the verdict and for "asked again", not ad hoc pills.
+    expect(fn).toContain("<Chip text={kind.word} tint={kind.tint} />");
+    expect(fn).toContain('<Chip text="asked again"');
+  });
+
+  test("the review history is a flat section on the rows around it, each round on one un-wrapped line", () => {
+    const fn = panel.slice(panel.indexOf("function ReviewHistory("), panel.indexOf("function Bar("));
+    // A boxed, inset panel among full-width rows read as stuck on: the history
+    // takes the same row padding and rule as the Reason rows beside it and
+    // indents its rounds under the heading instead.
+    expect(fn).not.toContain("var(--surface-inset)");
+    expect(fn).not.toContain("rounded-lg");
+    expect(fn).toContain("borderBottom: LINE");
+    expect(fn).toContain("pl-9");
+    expect(fn).toContain("whitespace-nowrap");
+    // The trailing "Go to it" affordance sits inside the row at CTRL_H, not a
+    // bare button floating at the far edge of a wide section.
+    expect(fn).toContain("CTRL_H.compact");
+  });
+
   test("a stale approval's note says whose move it is once asked again", () => {
     /*
      * The band used to say "Commits landed after that review — it does not
@@ -286,5 +407,13 @@ describe("the Overview and the board agree", () => {
     const fn = panel.slice(panel.indexOf("function p2Verdict("), panel.indexOf("function ReviewChip("));
     expect(fn).toContain("it is with them now");
     expect(fn).toContain("it is with you now");
+  });
+
+  test("a stale approval GitHub still counts is green, not amber — amber is for a re-request", () => {
+    // Reported beside the board card reading the identical fact amber: one
+    // truth ("GitHub still counts it"), two colours.
+    const fn = panel.slice(panel.indexOf("function p2Verdict("), panel.indexOf("function ReviewChip("));
+    expect(fn).toContain("const amber = v.askedAgain || !s.counts;");
+    expect(fn).toContain('tint: amber ? "var(--warning)" : "var(--success)"');
   });
 });

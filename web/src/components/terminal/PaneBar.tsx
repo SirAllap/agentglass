@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { ICON } from "../../lib/iconSize.ts";
+import { EDGE } from "../workspace/Chrome.tsx";
 
 /*
  * One bar per pane, hidden under the pane's own bottom edge.
@@ -127,8 +128,8 @@ const PRIO: Record<string, string> = {
 const PLATE = {
   // Opaque, not frosted: this sits over a terminal that repaints constantly,
   // and a backdrop-filter here is a per-frame cost for the whole rectangle.
-  background: "var(--bg2)",
-  border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)",
+  background: "var(--surface-card)",
+  border: EDGE,
   boxShadow: "0 14px 34px -12px var(--shadow)",
 } as const;
 
@@ -291,7 +292,7 @@ export function PaneBar(p: PaneBarProps) {
           onClick={() => { p.onCopy(); setCopied(true); setTimeout(() => setCopied(false), 900); }}
           title="Copy branch name"
           className="agx-btn shrink-0 grid place-items-center rounded"
-          style={{ width: 22, height: 22, color: copied || shout ? "var(--success, #98c379)" : "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}
+          style={{ width: 22, height: 22, color: copied || shout ? "var(--success, #98c379)" : "var(--text3)", border: EDGE }}
         >{copied || shout
           ? icon("M3 8.4l3.4 3.4L13 4.6", ICON.sm)
           : (

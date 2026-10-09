@@ -19,13 +19,14 @@ import type { ProviderUsage } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { api } from "../lib/api.ts";
-import { subscribeProviderUsage, usageOf, busiestOf, providerUsage, resetShort, resetLabel, usedColor, ageLabel, refreshProviderUsage } from "../lib/usageStore.ts";
+import { subscribeProviderUsage, usageOf, busiestOf, providerUsage, resetShort, resetLabel, usedColor, usedTextColor, ageLabel, refreshProviderUsage } from "../lib/usageStore.ts";
 import { providerInContext } from "../lib/providerContext.ts";
 import { windowLabel } from "../../../shared/quota.ts";
 import { stalenessLabel } from "../lib/usageAge.ts";
 import { paceConfig, subscribePaceConfig } from "../lib/paceConfig.ts";
 import { OLD_READING_MS, windowPace } from "../lib/usagePace.ts";
 import { warmDayStrip } from "../lib/dayStrip.ts";
+import { NO_DRAG } from "../lib/dragRegion.ts";
 import { DayStrip, PaceLines, PaceMarker } from "./PlanPace.tsx";
 import { metersMustHide } from "../lib/topbarFit.ts";
 import { subscribe as subscribeChats, listChats, getActiveChatId, getChat } from "../lib/chatStore.ts";
@@ -44,18 +45,14 @@ import { openSettings } from "../lib/openSettings.ts";
 import { appChordFor, chordLabel } from "../lib/keybindings.ts";
 import { FolderIcon, SearchIcon } from "../lib/glyphIcons.tsx";
 import { scopeLabel, scopeTitle } from "../lib/projectPick.ts";
+import { RefreshButton, EDGE, LINE } from "./workspace/Chrome.tsx";
 
 export const TOP_BAR_H = 30;
 
-const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 
 /** The seven-day window's label, asked of the same function that made it rather
  *  than spelled out here, so the two cannot drift apart. */
 const WEEKLY = windowLabel(10080);
-
-/** Anything clickable inside a drag region has to opt out of it, or the window
- *  moves instead of the button firing. */
-const NO_DRAG = { WebkitAppRegion: "no-drag" } as React.CSSProperties;
 
 /**
  * Minimise, maximise, close — drawn by the app because the window is frameless.
@@ -311,11 +308,11 @@ function PlanPanel({ u, age, at, onClose, onRefresh, busy }: {
       <div className="fixed flex flex-col rounded-xl overflow-hidden"
         style={{
           top: at.top, right: at.right, width: 300,
-          background: "var(--bg2)",
-          border: "1px solid var(--border)",
+          background: "var(--surface-card)",
+          border: EDGE,
           boxShadow: "0 22px 48px -20px var(--shadow)",
         }}>
-        <div className="flex items-center gap-2 px-3 py-2.5" style={{ borderBottom: "1px solid var(--border)" }}>
+        <div className="flex items-center gap-2 px-3 py-2.5" style={{ borderBottom: LINE }}>
           <span className="text-[12.5px] font-semibold" style={{ color: "var(--text)" }}>{u.label}</span>
           {u.plan && <span className="chip text-[10px] t-dim">{u.plan}</span>}
           <span className="ml-auto text-[10px]" style={{ color: age ? "var(--warning)" : "var(--text4)" }}>
@@ -324,15 +321,7 @@ function PlanPanel({ u, age, at, onClose, onRefresh, busy }: {
           <button type="button" onClick={() => { onClose(); openSettings("budgets"); }} aria-label="Usage settings…" title="Usage settings…"
                 className="shrink-0 grid place-items-center rounded hover:bg-white/10"
                 style={{ width: MIN_BOX, height: MIN_BOX, color: "var(--text3)" }}><GearIcon size={ICON.xs} /></button>
-          <button onClick={onRefresh} disabled={busy} title="Read the plan again"
-            className="shrink-0 grid place-items-center rounded hover:bg-white/10 disabled:opacity-40"
-            style={{ width: 20, height: 20, color: "var(--text3)" }}>
-            <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2}
-              strokeLinecap="round" strokeLinejoin="round"
-              style={busy ? { animation: "agx-spin 1s linear infinite" } : undefined}>
-              <path d="M21 12a9 9 0 1 1-2.6-6.4" /><path d="M21 3v6h-6" />
-            </svg>
-          </button>
+          <RefreshButton onRefresh={onRefresh} busy={busy} title="Read the plan again" />
         </div>
 
         <div className="flex flex-col gap-3 px-3 py-3">
@@ -344,7 +333,7 @@ function PlanPanel({ u, age, at, onClose, onRefresh, busy }: {
                 <div className="flex items-baseline gap-2">
                   <span className="text-[11.5px]" style={{ color: "var(--text)" }}>{w.label}</span>
                   <span className="ml-auto text-[11px] tabular-nums"
-                    style={{ color: usedColor(w.usedPercent) }}>{w.usedPercent}% used</span>
+                    style={{ color: usedTextColor(w.usedPercent) }}>{w.usedPercent}% used</span>
                 </div>
                 <span className="block rounded-full mt-1.5 relative" style={{ height: 4, background: "color-mix(in srgb, var(--text) 14%, transparent)" }}>
                   <span className="block h-full rounded-full" style={{
@@ -400,7 +389,7 @@ function PlanStrip({ u, age, dim, onOpen, btn }: {
           {i > 0 && <span className="text-[9.5px] hidden md:inline" style={{ color: "var(--text4)" }}>·</span>}
           <span className={`text-[9.5px] tabular-nums whitespace-nowrap ${i === 0 ? "" : "hidden md:inline"}`}
             style={{ color: "var(--text3)", opacity: age ? 0.55 : 1 }}>
-            <b style={{ color: p.hot ? "var(--error)" : "var(--text2)" }}>{p.pct}%</b> used {p.suffix}
+            <b style={{ color: p.hot ? "var(--error-ink)" : "var(--text2)" }}>{p.pct}%</b> used {p.suffix}
           </span>
         </Fragment>
       ))}
@@ -625,8 +614,8 @@ export function TopBar({
         // system, so the first control starts after them. The old header did
         // the same for the same reason; it is not a Mac tax on other platforms.
         paddingLeft: IS_MAC_DESKTOP ? 78 : undefined,
-        background: alarm ? "color-mix(in srgb, var(--warning) 10%, var(--bg2))" : "var(--bg2)",
-        borderBottom: alarm ? "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" : edge(13),
+        background: alarm ? "color-mix(in srgb, var(--warning) 10%, var(--bg2))" : "var(--surface-card)",
+        borderBottom: alarm ? "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" : LINE,
         transition: "background .18s, border-color .18s",
         // This strip IS the title bar: the window is frameless (see
         // electron/main.js), so dragging it is the only way to move the window.
@@ -653,10 +642,13 @@ export function TopBar({
           edge, a hover state and a pressable surface — and the open project
           carries the weight, since "which project am I in" is the one thing
           this corner exists to answer. */}
-      <button onClick={onOpenProject} className="agx-btn flex items-center gap-1.5 shrink-0 min-w-0 rounded-md pl-1.5 pr-1 py-1"
+      <button onClick={onOpenProject} className="agx-btn flex items-center gap-1.5 shrink-0 min-w-0 rounded-md pl-1.5 pr-1"
         title={workspace ? `${scopeTitle(open)}\nClick to switch project` : workspace === null ? "Every repo on this machine — click to open projects" : "Reading the open project…"}
         style={{
           ...NO_DRAG,
+          // 20 tall, like Find a file beside it: five clear either side in the
+          // 30px strip, instead of the padding filling it edge to edge.
+          height: 20,
           border: `1px solid color-mix(in srgb, var(--border) ${workspace ? 55 : 40}%, transparent)`,
           background: workspace ? "color-mix(in srgb, var(--primary) 10%, transparent)" : "color-mix(in srgb, var(--bg3) 45%, transparent)",
         }}>
@@ -687,7 +679,7 @@ export function TopBar({
         */}
       {waiting > 0 && (
         <Item cap="chats" dim={quiet} title="Chats that replied while you were elsewhere">
-          <b className="text-[10.5px] tabular-nums" style={{ color: "var(--success)" }}>{waiting}</b>
+          <b className="text-[10.5px] tabular-nums" style={{ color: "var(--success-ink)" }}>{waiting}</b>
         </Item>
       )}
 
@@ -713,7 +705,7 @@ export function TopBar({
             aria-label="What needs you" aria-expanded={needsOpen}
             className="flex items-center gap-2 px-2.5 py-px rounded-full min-w-0"
             style={{
-              color: "var(--warning)",
+              color: "var(--warning-ink)",
               border: "1px solid color-mix(in srgb, var(--warning) 50%, transparent)",
               background: "color-mix(in srgb, var(--warning) 14%, transparent)",
               maxWidth: "min(52vw, 520px)",
@@ -773,7 +765,7 @@ export function TopBar({
           style={{ display: metersHidden ? "none" : undefined }}>
         {unread ? (
           <Item cap="plan" title={u?.note ?? `No plan reading for ${u?.label ?? "this agent"} right now`}>
-            <span className="text-[9.5px]" style={{ color: "var(--warning)" }}>no reading</span>
+            <span className="text-[9.5px]" style={{ color: "var(--warning-ink)" }}>no reading</span>
           </Item>
         ) : (
           <>
@@ -825,7 +817,7 @@ export function TopBar({
           {/* 14, not 11. On a narrow window this collapses to the glyph alone,
               and a glyph standing in for a whole control is the one thing on a
               bar that cannot be read at the size of a label. */}
-          <span className="flex" style={{ color: "var(--primary)" }}><SearchIcon size={ICON.xs} /></span>
+          <span className="flex" style={{ color: "var(--primary-ink)" }}><SearchIcon size={ICON.xs} /></span>
           <span className="hidden md:block text-[10px] whitespace-nowrap leading-none" style={{ color: "var(--text3)" }}>
             Find a file…
           </span>

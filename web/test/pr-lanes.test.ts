@@ -190,6 +190,16 @@ describe("waiting", () => {
       humanReview: { kind: "changes", who: ["okoro"] } });
     expect(fileInLane(notYet, MINE).reason).toBe("Changes were asked for. The ball is with you.");
   });
+
+  it("matches the amber merge-box wording once every changes-requester is cleared", () => {
+    // Reported: the card footer still read "Changes were asked for... the
+    // ball is with them now" after the merge box had already gone amber for
+    // this exact fact — one truth, two surfaces disagreeing.
+    const cleared = pr({ reviewDecision: "CHANGES_REQUESTED",
+      humanReview: { kind: "changes", who: ["orbit-dev"], askedAgain: true, cleared: true } });
+    expect(fileInLane(cleared, MINE).reason).toBe("Changes applied, and you've asked them to look again — waiting on their review now.");
+    expect(fileInLane(cleared, NEITHER).reason).toContain("Changes applied");
+  });
 });
 
 describe("the board", () => {

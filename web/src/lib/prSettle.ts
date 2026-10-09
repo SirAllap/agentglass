@@ -16,8 +16,11 @@
  * without a browser.
  */
 
-/** The background revalidation of a list nobody is waiting on. */
-export const POLL_MS = 20_000;
+/** The background revalidation of a list nobody is waiting on. Two minutes:
+ *  every GitHub read here spends from one account's GraphQL budget, shared
+ *  with everything else signed in as that person, and twenty seconds was a
+ *  panel that emptied it by itself. Refresh is the button for "now". */
+export const POLL_MS = 120_000;
 
 /** How soon to collect on an unfinished answer. The board completes at about
  *  t=1.0s, so this is the first delay that is reliably after it. */

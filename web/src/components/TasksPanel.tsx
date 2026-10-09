@@ -11,9 +11,13 @@
 // second half is the half nobody builds, and it is the reason a machine ends up
 // with fourteen checkouts nobody can name.
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { BlockedIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DotIcon, IconLabel, KeyboardIcon, LockIcon, MonitorIcon, NoteIcon, PlusIcon, RefreshIcon, SearchIcon } from "../lib/glyphIcons.tsx";
+import { Fragment, type CSSProperties, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { BlockedIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DotIcon, IconLabel, KeyboardIcon, LockIcon, MonitorIcon, NoteIcon, PlusIcon, PullRequestIcon, RefreshIcon, SearchIcon } from "../lib/glyphIcons.tsx";
+import { pickCardPr, cardPrTint, cardPrInk, mergedInk, sortedCardPrs, type CardPr } from "../lib/cardPrPick.ts";
+import { cardPrsOf, onCardPrs, cardPrVersion } from "../lib/cardPrStore.ts";
+import { paintThenRevalidate, PRS_TTL_MS, swr, THREAD_TTL_MS } from "../lib/cardTabCache.ts";
 import { api } from "../lib/api.ts";
+import { Optimistic, commentResolvedPatch } from "../lib/taskOptimistic.ts";
 import { FilterBuilder } from "./tasks/FilterBuilder.tsx";
 import { EMPTY, apply as applyFilters, fieldsOf, liveCount as builtCount, type FilterSet } from "./tasks/filters.ts";
 import type { GitRepoRef, IssueDetail, IssuePr, IssueRow, IssueWork, StartMode, LocalTask, TaskCapability, TasksListResponse, SkillInfo } from "../../../shared/types.ts";
@@ -27,7 +31,7 @@ import { dayToMs, describeWithComment, estimateText, msToDay, parseEstimate, par
 import { branchName, checkoutCommand, commitCommand, worktreeCommand } from "../lib/cardBranch.ts";
 import { neighbours, shortTitle, hopMatches } from "../lib/cardHop.ts";
 import { CardFiles, FileViewer, isViewable } from "./CardFiles.tsx";
-import { Composer } from "./tasks/Composer.tsx";
+import { Composer, COMPOSER_MIN } from "./tasks/Composer.tsx";
 import { readState } from "../lib/boardStaleness.ts";
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { useDismiss } from "../lib/useDismiss.ts";
@@ -42,11 +46,15 @@ import { openSettings } from "../lib/openSettings.ts";
 import { useFindScope } from "../lib/findScope.ts";
 import { handoffTo, setHandoffTo, type HandoffTo } from "../lib/handoffTo.ts";
 import { openPrs, openPr, prRefFromUrl } from "../lib/openPrs.ts";
+import { otherGithubLinks } from "../../../shared/githubLinks.ts";
+import { requestBrowserNav } from "../lib/browserNav.ts";
+import { HAS_BROWSER } from "../lib/desktop.ts";
 import { matchesQuery } from "../lib/boardSearch.ts";
 import { openCard, type CardJump } from "../lib/openCard.ts";
 import type { IssueJump } from "../lib/openIssue.ts";
 import { TASK_SOURCES, shownTaskSources, subscribeTaskSources, type TaskSourceId } from "../lib/taskSources.ts";
-import { CHIP } from "./workspace/Chrome.tsx";
+import { CHIP, CTRL_H, EDGE, IconChip, INPUT, INPUT_STYLE, RefreshButton, LINE, TL_AVATAR, TL_CSS } from "./workspace/Chrome.tsx";
+import { SCROLLBAR_CSS } from "./diff/DiffLines.tsx";
 import { useTaskConnected, visibleTaskSources } from "../lib/taskConnected.ts";
 import { landingSource, rememberTaskSource } from "../lib/taskLanding.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
@@ -57,7 +65,9 @@ import { subscribeReminders, liveReminders, nudgeReminders } from "../lib/remind
 import { parseLocal, toLine, sortTasks, step, checkbox, toggleCheckbox, checkProgress, rootForTask, taskPrompt, lineWith, inUse, typingInto, dueBucket, bucketCounts, dueLabel, stamp, TASK_KEYS, SORTS, type SortMode, type Bucket } from "../lib/taskGrammar.ts";
 import { useSyncExternalStore } from "react";
 import { CloseButton, CloseIcon } from "./CloseButton.tsx";
-import { ICON } from "../lib/iconSize.ts";
+import { HIT, ICON, MIN_BOX } from "../lib/iconSize.ts";
+import { RAIL_W_DEFAULT, RAIL_W_MAX, RAIL_W_MIN, clampRailW, railKey, railSplit } from "../lib/railTree.ts";
+import { boardDue, BOARD_POLL_MS, BOARD_TICK_MS } from "../lib/boardPoll.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { PRIOS, prioLook, Flag } from "../lib/priority.tsx";
 
@@ -125,9 +135,11 @@ function sinceWords(ms: number): string {
   return `the last ${Math.round(hours / 24)} days`;
 }
 
-export function TasksView({ active, onOpenChatWith, cardJump, issueJump }: {
+export function TasksView({ active, onOpenChatWith, onOpenBrowser, cardJump, issueJump }: {
   active: boolean;
   onOpenChatWith?: (cwd: string, prompt: string, title: string) => void;
+  /** Switch to the browser view; a link that is not a card or a pull request opens there. */
+  onOpenBrowser?: () => void;
   /** A pull request asking for the card it came from — see lib/openCard.ts.
    *  It arrives as a prop rather than a subscription because this view is
    *  mounted the first time somebody comes here, which may be the click that
@@ -261,7 +273,7 @@ export function TasksView({ active, onOpenChatWith, cardJump, issueJump }: {
         )}
       </ViewHeader>
       {source === "local" ? <LocalBody active={active} repos={repos} here={root} onOpenChatWith={onOpenChatWith} />
-      : source === "clickup" ? <ClickUpBody active={active} repos={repos} here={root} onOpenChatWith={onOpenChatWith} jump={cardJump} />
+      : source === "clickup" ? <ClickUpBody active={active} repos={repos} here={root} onOpenChatWith={onOpenChatWith} onOpenBrowser={onOpenBrowser} jump={cardJump} />
       : (
         <div className="flex flex-col flex-1 min-h-0">
           {source === "all" && <NowBand onChanged={() => {}} />}
@@ -329,8 +341,8 @@ function IssuesBody({ root, active, jump }: { root: string; active: boolean; jum
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      <div className="flex items-center gap-2 px-4 py-2 shrink-0" style={{ borderBottom: edge(12) }}>
-        <span className="inline-flex rounded-md overflow-hidden" style={{ border: edge(20) }}>
+      <div className="flex items-center gap-2 px-4 py-2 shrink-0" style={{ borderBottom: LINE }}>
+        <span className="inline-flex rounded-md overflow-hidden" style={{ border: EDGE }}>
           {(["open", "closed", "all"] as const).map((s) => (
             <button key={s} onClick={() => setState(s)} className="text-[10.5px] px-2.5 py-1 capitalize"
               style={s === state
@@ -340,23 +352,22 @@ function IssuesBody({ root, active, jump }: { root: string; active: boolean; jum
         </span>
         <button onClick={() => setMine((m) => !m)} className="text-[10.5px] px-2.5 py-1 rounded-md"
           style={mine
-            ? { color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }
-            : { color: "var(--text3)", border: edge(20) }}>Assigned to me</button>
-        <span className="flex items-center gap-1.5 flex-1 min-w-0 px-2 py-1 rounded-md" style={{ background: "var(--bg)", border: edge(20) }}>
+            ? { color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }
+            : { color: "var(--text3)", border: EDGE }}>Assigned to me</button>
+        <span className="flex items-center gap-1.5 flex-1 min-w-0">
           <span className="flex" style={{ color: "var(--text3)" }}><SearchIcon size={ICON.xs} /></span>
           <input value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") load(); }}
             placeholder="Search issues — press ↵" spellCheck={false}
-            className="flex-1 min-w-0 bg-transparent outline-none text-[11px]" style={{ color: "var(--text)" }} />
+            className={`flex-1 min-w-0 ${INPUT}`} style={INPUT_STYLE} />
         </span>
-        <button onClick={load} title="Refresh" className="agx-btn text-[11px] px-2 py-1 rounded-lg"
-          style={{ color: "var(--text2)", border: edge(20) }}><RefreshIcon /></button>
+        <RefreshButton onRefresh={load} title="Refresh" />
       </div>
 
       {note && <NoteStrip note={note} onClose={() => setNote(null)} />}
 
       <div className="flex-1 min-h-0 flex">
-        <div className="flex flex-col min-w-0" style={{ width: "48%", borderRight: edge(12) }}>
-          {error && <div className="p-4 text-[11.5px]" style={{ color: "var(--error)" }}>{error}</div>}
+        <div className="flex flex-col min-w-0" style={{ width: "48%", borderRight: LINE }}>
+          {error && <div className="p-4 text-[11.5px]" style={{ color: "var(--error-ink)" }}>{error}</div>}
           {!rows && !error && <div className="p-4"><Spinner label="Asking GitHub…" className="" /></div>}
           {rows?.length === 0 && <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>Nothing matches.</div>}
           <div className="flex-1 min-h-0 overflow-y-auto agx-scroll">
@@ -409,7 +420,7 @@ function Row({ i, on, work, onPick, onStart }: {
   return (
     <div className="w-full flex items-center gap-2.5 px-4 py-2 hover:bg-white/5"
       style={{
-        borderBottom: edge(7),
+        borderBottom: LINE,
         background: on ? "color-mix(in srgb, var(--primary) 12%, transparent)" : undefined,
         boxShadow: on ? "inset 2px 0 0 0 var(--primary)" : undefined,
       }}>
@@ -420,7 +431,7 @@ function Row({ i, on, work, onPick, onStart }: {
           </span>
           <span className="truncate text-[11.5px]" style={{ color: "var(--text)" }}>{i.title}</span>
           {work && <span className="shrink-0 text-[10px] px-1.5 rounded-full"
-            style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>in progress</span>}
+            style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>in progress</span>}
         </div>
         <div className="flex items-center gap-1.5 mt-1 flex-wrap">
           {i.labels.slice(0, 4).map((l) => (
@@ -435,15 +446,15 @@ function Row({ i, on, work, onPick, onStart }: {
       <div className="relative shrink-0 flex items-center" ref={ref}>
         <button onClick={() => onStart(MODES[0].id)} title={MODES[0].hint}
           className="agx-btn text-[9.5px] px-2 py-1 rounded-l"
-          style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}>
+          style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}>
           Start →
         </button>
         <button onClick={() => setMenu((m) => !m)} aria-label="Other ways to start"
           className="agx-btn text-[9.5px] px-1 py-1 rounded-r"
-          style={{ color: "var(--primary)", borderTop: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", borderRight: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}>▾</button>
+          style={{ color: "var(--primary-ink)", borderTop: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", borderRight: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}>▾</button>
         {menu && (
           <div className="absolute right-0 top-full mt-1 rounded-lg overflow-hidden shadow-2xl"
-            style={{ zIndex: 40, background: "var(--bg2)", border: edge(28), minWidth: 260 }}>
+            style={{ zIndex: 40, background: "var(--surface-card)", border: edge(28), minWidth: 260 }}>
             {MODES.map((m) => (
               <button key={m.id} onClick={() => { setMenu(false); onStart(m.id); }}
                 className="w-full text-left px-3 py-1.5 hover:bg-white/5">
@@ -496,7 +507,7 @@ function Detail({ root, number, onSay, onChanged }: {
     if (r.ok) { load(); onChanged(); }
   };
 
-  if (err) return <div className="p-5 text-[11.5px]" style={{ color: "var(--error)" }}>{err}</div>;
+  if (err) return <div className="p-5 text-[11.5px]" style={{ color: "var(--error-ink)" }}>{err}</div>;
   if (!d) return <div className="p-5"><Spinner label="Reading…" className="" /></div>;
 
   return (
@@ -509,9 +520,9 @@ function Detail({ root, number, onSay, onChanged }: {
         <span className="text-[10px]" style={{ color: "var(--text3)" }}>{d.author} opened this · updated {fmtAgo(new Date(d.updatedAt).getTime())}</span>
         <span className="ml-auto flex items-center gap-1.5">
           <button disabled={busy} onClick={() => void act(() => api.issueClaim(root, number, "Picking this up."))}
-            className="agx-btn text-[10px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: edge(20) }}>Assign to me</button>
+            className="agx-btn text-[10px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: EDGE }}>Assign to me</button>
           <button disabled={busy} onClick={() => void act(() => api.issueState(root, number, d.state === "OPEN"))}
-            className="agx-btn text-[10px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: edge(20) }}>
+            className="agx-btn text-[10px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: EDGE }}>
             {d.state === "OPEN" ? "Close" : "Reopen"}
           </button>
         </span>
@@ -528,26 +539,26 @@ function Detail({ root, number, onSay, onChanged }: {
         <div className="rounded-lg p-3 mb-4"
           style={{ border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", background: "color-mix(in srgb, var(--warning) 8%, transparent)" }}>
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[10px]" style={{ color: "var(--warning)" }}>in progress</span>
+            <span className="text-[10px]" style={{ color: "var(--warning-ink)" }}>in progress</span>
             <span className="text-[10.5px]" style={{ color: "var(--text)" }}>{d.work.branch}</span>
             <span className="text-[9.5px] truncate" style={{ color: "var(--text3)" }}>{d.work.path}</span>
             <button disabled={busy} onClick={() => void act(() => api.issueFinish(root, number, false))}
               className="agx-btn ml-auto text-[10px] px-2 py-1 rounded-lg"
-              style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 50%, transparent)" }}>
+              style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 50%, transparent)" }}>
               Finish & clean up
             </button>
           </div>
           {confirm && (
-            <div className="mt-2 text-[10px]" style={{ color: "var(--error)" }}>
+            <div className="mt-2 text-[10px]" style={{ color: "var(--error-ink)" }}>
               {confirm.length} uncommitted change{confirm.length === 1 ? "" : "s"} there — {confirm.slice(0, 4).join(", ")}
               {confirm.length > 4 ? "…" : ""}.
               <button onClick={() => { setConfirm(null); void act(() => api.issueFinish(root, number, true)); }}
                 className="agx-btn ml-2 px-2 py-0.5 rounded"
-                style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 50%, transparent)" }}>
+                style={{ color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 50%, transparent)" }}>
                 Throw them away and remove it
               </button>
               <button onClick={() => setConfirm(null)} className="agx-btn ml-1.5 px-2 py-0.5 rounded"
-                style={{ color: "var(--text3)", border: edge(20) }}>Keep it</button>
+                style={{ color: "var(--text3)", border: EDGE }}>Keep it</button>
             </div>
           )}
         </div>
@@ -579,10 +590,10 @@ function Detail({ root, number, onSay, onChanged }: {
           issue will close it, one that merely mentions it has promised
           nothing. */}
       {(!!prs.length || prsErr) && (
-        <div className="mb-4 pt-3" style={{ borderTop: edge(10) }}>
+        <div className="mb-4 pt-3" style={{ borderTop: LINE }}>
           <div className={`${EYEBROW} mb-1.5 flex items-center gap-2`} style={{ color: "var(--text4)" }}>
             Pull requests {!!prs.length && <span>{prs.length}</span>}
-            {prsErr && <span style={{ color: "var(--warning)" }}>· could not ask GitHub — this is not “none”</span>}
+            {prsErr && <span style={{ color: "var(--warning-ink)" }}>· could not ask GitHub — this is not “none”</span>}
           </div>
           {prs.map((p) => (
             <div key={p.number} className="flex items-center gap-2 py-1">
@@ -597,13 +608,13 @@ function Detail({ root, number, onSay, onChanged }: {
               }}
                 className="text-left flex-1 min-w-0 rounded px-1 -mx-1 hover:bg-white/5"
                 title="Open this pull request">
-                <span className="tabular-nums" style={{ color: "var(--primary)" }}>#{p.number}</span>
+                <span className="tabular-nums" style={{ color: "var(--primary-ink)" }}>#{p.number}</span>
                 <span className="ml-1.5 text-[10px] tracking-[0.06em] px-1.5 rounded"
                   style={p.state === "MERGED"
-                    ? { color: "#a371f7", background: "#a371f721" }
+                    ? { color: mergedInk(), background: "#a371f721" }
                     : p.state === "CLOSED"
-                    ? { color: "var(--error)", background: "color-mix(in srgb, var(--error) 13%, transparent)" }
-                    : { color: "var(--success)", background: "color-mix(in srgb, var(--success) 13%, transparent)" }}>
+                    ? { color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 13%, transparent)" }
+                    : { color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 13%, transparent)" }}>
                   {p.draft ? "DRAFT" : p.state}
                 </span>
                 {/* Said only of the ones it is true of. A row with nothing here
@@ -616,7 +627,7 @@ function Detail({ root, number, onSay, onChanged }: {
               </button>
               <a href={externalUrl(p.url)} target="_blank" rel="noreferrer noopener"
                 className="agx-btn text-[10px] px-1.5 py-0.5 rounded shrink-0"
-                style={{ color: "var(--text3)", border: edge(20) }} title="Open on GitHub">↗</a>
+                style={{ color: "var(--text3)", border: EDGE }} title="Open on GitHub">↗</a>
             </div>
           ))}
         </div>
@@ -696,11 +707,11 @@ function NowBand({ onChanged }: { onChanged: () => void }) {
   if (!live.length) return null;
   const act = async (fn: Promise<unknown>) => { await fn; await nudgeReminders(); onChanged(); };
   return (
-    <div className="shrink-0" style={{ borderBottom: edge(12), background: "color-mix(in srgb, var(--error) 8%, transparent)" }}>
-      <div className={`${EYEBROW} px-5 pt-2.5 pb-1`} style={{ color: "var(--error)" }}>Now</div>
+    <div className="shrink-0" style={{ borderBottom: LINE, background: "color-mix(in srgb, var(--error) 8%, transparent)" }}>
+      <div className={`${EYEBROW} px-5 pt-2.5 pb-1`} style={{ color: "var(--error-ink)" }}>Now</div>
       {live.map((r) => (
         <div key={r.id} className="flex items-center gap-2.5 px-5 py-2">
-          <span className="tabular-nums shrink-0 text-[12px] font-semibold" style={{ color: "var(--error)" }}>
+          <span className="tabular-nums shrink-0 text-[12px] font-semibold" style={{ color: "var(--error-ink)" }}>
             {hhmm(r.firedAt ?? r.due)}
           </span>
           <span className="flex-1 min-w-0 truncate text-[11.5px]" style={{ color: "var(--text)" }} title={r.title}>{r.title}</span>
@@ -710,9 +721,9 @@ function NowBand({ onChanged }: { onChanged: () => void }) {
             Done
           </button>
           <button onClick={() => void act(api.reminderSnooze(r.id, 15))}
-            className="shrink-0 text-[10px] px-2 py-0.5 rounded" style={{ border: edge(20), color: "var(--text2)" }}>15m</button>
+            className="shrink-0 text-[10px] px-2 py-0.5 rounded" style={{ border: EDGE, color: "var(--text2)" }}>15m</button>
           <button onClick={() => void act(api.reminderSnooze(r.id, 60))}
-            className="shrink-0 text-[10px] px-2 py-0.5 rounded" style={{ border: edge(20), color: "var(--text2)" }}>1h</button>
+            className="shrink-0 text-[10px] px-2 py-0.5 rounded" style={{ border: EDGE, color: "var(--text2)" }}>1h</button>
         </div>
       ))}
     </div>
@@ -761,19 +772,19 @@ function RemindPopover({ task, anchor, onClose, onSet }: {
           facet menus use. */}
       <div className="fixed inset-0" style={{ zIndex: 9998 }} onClick={onClose} />
       <div ref={ref} className="fixed rounded-lg text-[11px] shadow-2xl flex flex-col"
-        style={{ top, right, zIndex: 9999, background: "var(--bg2)", border: edge(28), minWidth: 240, padding: 4 }}>
+        style={{ top, right, zIndex: 9999, background: "var(--surface-card)", border: edge(28), minWidth: 240, padding: 4 }}>
       {presetTimes().map((p) => (
         <button key={p.label} onClick={() => onSet(civilOf(p.at))}
           className="text-left px-2.5 py-1.5 rounded hover:bg-white/5" style={{ color: "var(--text2)" }}>
           {p.label}
         </button>
       ))}
-      <div style={{ borderTop: edge(14), margin: "4px 0" }} />
+      <div style={{ borderTop: LINE, margin: "4px 0" }} />
       <input value={free} autoFocus onChange={(e) => setFree(e.target.value)}
         onKeyDown={(e) => { if (e.key === "Enter" && parsed) { e.preventDefault(); onSet(civilOf(parsed)); } }}
         placeholder="8:30" spellCheck={false}
         className="mx-1 mb-1 px-2 py-1 rounded text-[11px] outline-none"
-        style={{ background: "color-mix(in srgb, var(--bg3) 55%, transparent)", border: edge(14), color: "var(--text)" }} />
+        style={{ background: "color-mix(in srgb, var(--bg3) 55%, transparent)", border: EDGE, color: "var(--text)" }} />
       <div className="px-2 pb-1 text-[9.5px]" style={{ color: "var(--text4)", minHeight: 13 }}>
         {parsed ? `→ ${remindLabel(parsed.getTime())}` : free.trim() ? "a time like 8:30" : ""}
       </div>
@@ -836,11 +847,12 @@ const todayStr = () => {
  * the list behind it knows its own statuses, which is what makes a status
  * picker possible without guessing.
  */
-function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
+function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump }: {
   active: boolean;
   repos: GitRepoRef[];
   here: string;
   onOpenChatWith?: (cwd: string, prompt: string, title: string) => void;
+  onOpenBrowser?: () => void;
   /** "Show me this card" — from the pull-request masthead. See lib/openCard.ts. */
   jump?: CardJump | null;
 }) {
@@ -961,6 +973,16 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
   });
   useEffect(() => { try { localStorage.setItem(RAIL_KEY, railOpen ? "1" : "0"); } catch { /* private mode */ } }, [railOpen]);
   const [railQ, setRailQ] = useState("");
+  /* The rail's width: wide enough for a real list name, and the person's to
+     change. Kept like the card pane's, for the same reason: how you like to
+     read is about you, not about which list is open. */
+  const [railW, setRailW] = useState(() => {
+    try { const n = Number(localStorage.getItem(RAIL_W_KEY)); return Number.isFinite(n) && n > 0 ? clampRailW(n) : RAIL_W_DEFAULT; } catch { return RAIL_W_DEFAULT; }
+  });
+  useEffect(() => { try { localStorage.setItem(RAIL_W_KEY, String(railW)); } catch { /* private mode */ } }, [railW]);
+  const [railDrag, setRailDrag] = useState(false);
+  const railNav = useRef<HTMLElement>(null);
+  const railInput = useRef<HTMLInputElement>(null);
   /* Filtered on both names a board has: what ClickUp calls the list and what it
      calls the view. The rail draws `listName || name`, so matching only the
      drawn one would leave a board findable by a word that is not on screen and
@@ -1011,172 +1033,6 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
     return { loose, groups: [...groups.values()].sort((a, b) => rank(a) - rank(b) || a.folder.localeCompare(b.folder)) };
   }, [railViews, boards]);
 
-  /*
-   * One row of the sidebar, at a depth.
-   *
-   * A function rather than a component so the grouped and ungrouped halves
-   * cannot drift: they were one `.map` and everything about a row — the
-   * right-click menu, the busy dots, which one is lit — belongs to both.
-   */
-  /**
-   * A list, with its own views folded underneath it.
-   *
-   * The twisty is separate from the row on purpose: opening a list's tabs and
-   * opening the list are different intentions, and one target that did both
-   * would mean every glance at the tabs also spent a board read.
-   */
-  const railList = (v: SavedView) => {
-    const kids = v.listId ? listViews[v.listId] : undefined;
-    const links = v.listId ? listLinks[v.listId] ?? [] : [];
-    const open = !!openLists[v.id];
-    return (
-      <Fragment key={v.id}>
-        <div className="flex items-stretch">
-          {/* Only when there is something behind it. The views are read for
-              every list in an open folder, so "no arrow" means "asked, and it
-              has none" rather than "not looked yet" — and an arrow that opens a
-              line saying "no other views" is a control that exists to
-              disappoint. */}
-          {kids?.length || links.length ? (
-            <button onClick={() => openList(v)} aria-expanded={open}
-              title={open ? "Hide this list's views" : `${(kids?.length ?? 0) + links.length} more view${(kids?.length ?? 0) + links.length === 1 ? "" : "s"} on this list in ClickUp`}
-              className="shrink-0 grid place-items-center agx-btn"
-              style={{ width: 16, color: "var(--text4)" }}>
-              <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="currentColor" aria-hidden
-                style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform 120ms ease" }}>
-                <path d="M6 3.5 10.5 8 6 12.5Z" />
-              </svg>
-            </button>
-          ) : <span aria-hidden style={{ width: 16 }} />}
-          <div className="min-w-0 flex-1">{railRow(v, 1)}</div>
-        </div>
-        {open && (!!kids?.length || !!links.length) && (
-          /* Their own guide line, indented past the list's glyph: without it
-             they sat at the list's own indent and read as siblings of it rather
-             than as what it holds. */
-          <div style={{ marginLeft: 24, borderLeft: `1px solid color-mix(in srgb, var(--text) 12%, transparent)` }}>
-            {kids?.map((view) => railRow({
-              id: view.id, name: view.name, listId: v.listId, listName: v.listName ?? v.name,
-              url: "", addedAt: 0, folderId: v.folderId, folderName: v.folderName, spaceName: v.spaceName,
-            }, 1))}
-            {/* And the ones that only exist over there. Marked with the arrow
-                this app uses everywhere for "this leaves", because a row that
-                looks like the others and opens a browser is a small betrayal. */}
-            {links.filter((l) => clickupViewUrl(boards?.folders ?? [], l)).map((l) => (
-              <button key={l.id}
-                onClick={() => { const u = clickupViewUrl(boards?.folders ?? [], l); if (u) openExternal(u); }}
-                title={`${l.name} — opens in ClickUp (${l.type})`}
-                className="w-full text-left flex items-center gap-1.5 py-1 text-[11.5px] agx-btn"
-                style={{ paddingLeft: 8, paddingRight: 10, color: "var(--text4)" }}>
-                <span aria-hidden className="shrink-0 grid place-items-center" style={{ width: 13 }}>
-                  <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor"
-                    strokeWidth={1.6} strokeLinecap="round" aria-hidden>
-                    {l.type === "gantt"
-                      ? <path d="M2.5 4h6M4.5 8h7M2.5 12h4" />
-                      : <path d="M2.5 12.5V8M6.5 12.5V4M10.5 12.5V6M14 12.5V9.5" />}
-                  </svg>
-                </span>
-                <span className="truncate min-w-0 flex-1">{l.name}</span>
-                <span aria-hidden className="shrink-0 text-[9px]" style={{ opacity: 0.7 }}>↗</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </Fragment>
-    );
-  };
-
-  const railRow = (v: SavedView, depth: number) => (
-    <button key={v.id}
-      onClick={() => { setSel(null); setOnLooked(false); closeAddBar(); void load(v.id, false, true); }}
-      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ v, x: e.clientX, y: e.clientY }); }}
-      aria-current={!onLooked && lit === v.id}
-      aria-busy={wanted === v.id}
-      className="w-full text-left flex items-center gap-1.5 py-1 text-[11.5px]"
-      style={{
-        // Inside a folder the guide line already carries the indent, so the row
-        // only owes it a small step. Outside one it starts where the folder
-        // glyph does, so the two columns line up rather than nearly line up.
-        paddingLeft: depth ? 8 : 10, paddingRight: 10,
-        /* The built-in board gets its OWN tint, warm against the boards'
-           primary. It behaves differently from everything under it — it asks
-           the whole workspace rather than reading one board — and it is the
-           row you come back to, so telling it apart at a glance is worth a
-           second colour. */
-        ...(!onLooked && lit === v.id
-          ? v.builtin
-            ? { background: "color-mix(in srgb, var(--success) 18%, transparent)", color: "var(--text)" }
-            : { background: "color-mix(in srgb, var(--primary) 16%, transparent)", color: "var(--text)" }
-          : { color: v.builtin ? "var(--text2)" : "var(--text3)" }),
-      }}
-      title={v.builtin
-        ? "Every card assigned to you, across the workspace — the same list as ClickUp's My Work. Slower than a board (it asks the whole workspace), so it opens on what you last saw."
-        : v.listName ? `${v.listName} · ${v.name}` : v.name}>
-      {/* The built-in one stays marked: beside four board names it reads as a
-          fifth board somebody added, and it is the one that behaves
-          differently. */}
-      {/* YOUR FACE ON THE BUILT-IN ONE. It is the board about a person, and it
-          was marked with the same 6px ring every other "this is different" mark
-          in the app uses — which told you it was different and not what it was.
-          The ring stays as the fallback: no picture, no empty circle. */}
-      {v.builtin && (myFace
-        ? (
-          <img src={myFace} alt="" loading="lazy" referrerPolicy="no-referrer"
-            className={`shrink-0 rounded-full${wanted === v.id ? " animate-pulse" : ""}`}
-            style={{
-              width: 15, height: 15, objectFit: "cover",
-              outline: lit === v.id ? "1.5px solid var(--primary)" : "none", outlineOffset: 1,
-            }} />
-        )
-        : (
-          <span aria-hidden className={`shrink-0${wanted === v.id ? " animate-pulse" : ""}`} style={{
-            width: 6, height: 6, borderRadius: 999,
-            border: `1.5px solid ${lit === v.id ? "var(--primary)" : "var(--text4)"}`,
-          }} />
-        ))}
-      {/*
-        * A saved ClickUp VIEW draws its own name, not its list's.
-        *
-        * The rail drew `listName || name` for everything, which is right for a
-        * list and wrong for a view: `Eng list by start date view` over
-        * `Orbit v2 – Phases 2 & 3` appeared as a second row called
-        * `Orbit v2 – Phases 2 & 3`, directly under the folder's copy of that
-        * same list. A tag saying "view" was the first attempt and it did not
-        * help — two rows with one name and a badge is still two rows with one
-        * name. The name is what tells them apart, so the name is what changes;
-        * which list it is over is in the tooltip, where it was already.
-        */}
-      {/* A list glyph beside every row that is one, so a list and the folder
-          above it are told apart by shape and not only by indent. The built-in
-          board keeps its own ring — it is not a list and does not behave like
-          one. */}
-      {/* THE LIST'S OWN COLOUR, when the tracker gave it one. Not its icon —
-          the emoji is not in the v2 API — but the colour behind that icon is,
-          and it is the half that does the work: `Bugs` is a red one, and a red
-          dot finds it across a rail faster than a name in grey. Falls back to
-          the generic list glyph, which is still what tells a list from the
-          folder above it when there is no colour. */}
-      {/* depth > 0 was wrong: a list pasted by address sits at the ROOT of the
-          bar, not under a folder, and it is the one most likely to be a list
-          somebody picked out on purpose — so it was the one row with no mark
-          at all. Every board that is not the built-in one gets it now. */}
-      {!v.builtin && (
-        <span aria-hidden className="shrink-0 grid place-items-center" style={{ width: 14, color: "var(--text4)" }}>
-          {v.color
-            ? <span className="rounded-full" style={{ width: 8, height: 8, background: v.color }} />
-            : (
-              <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor"
-                strokeWidth={1.6} strokeLinecap="round" aria-hidden>
-                <path d="M2.5 4.5h2M2.5 8h2M2.5 11.5h2M6.75 4.5h6.75M6.75 8h6.75M6.75 11.5h6.75" />
-              </svg>
-            )}
-        </span>
-      )}
-      <span className="truncate min-w-0 flex-1">{v.name && v.listName && v.name !== v.listName ? v.name : (v.listName || v.name)}</span>
-      {wanted === v.id && <span className="shrink-0 animate-pulse" style={{ color: "var(--text3)" }}>…</span>}
-    </button>
-  );
-
   /**
    * What the folded rail says: the board on screen, by the name the rail would
    * draw for it.
@@ -1222,6 +1078,256 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
       for (const v of g.views) if (v.listId) ensureListViews(v.listId);
     }
   }, [railOpen, railGroups, railShut, ensureListViews]);
+
+  /*
+   * The sidebar as a tree: space > folder > list > that list's own views.
+   *
+   * ONE flat description of what is on screen, in reading order, and the
+   * screen draws exactly that. The grouped and ungrouped halves used to be two
+   * code paths that had to agree on the right-click menu, the busy dots and
+   * which row was lit; a single list of rows cannot disagree with itself, and
+   * it is also what the keyboard needs: `railKey` decides where an arrow goes
+   * from these rows alone.
+   *
+   * Nothing here asks ClickUp for anything. The counts are the ones already in
+   * hand: how many lists a folder holds, how many other views a list has (read
+   * once for the twisty), and the cards on the board that is open.
+   */
+  const railFiltering = railQ.trim() !== "";
+  const railRows = useMemo<RailRow[]>(() => {
+    const out: RailRow[] = [];
+    const folders = boards?.folders ?? [];
+    const nameOf = (v: SavedView) => (v.name && v.listName && v.name !== v.listName ? v.name : (v.listName || v.name));
+    /* While a filter is typed, a folded folder opens: the match is the point,
+       and hiding it behind a fold that was set last week reads as "not there". */
+    const shutNow = (k: string) => !railFiltering && railShut[k] === true;
+    const pushList = (v: SavedView, level: number, crumb: string) => {
+      const kids = v.listId ? listViews[v.listId] ?? [] : [];
+      const links = (v.listId ? listLinks[v.listId] ?? [] : []).filter((l) => clickupViewUrl(folders, l));
+      const more = kids.length + links.length;
+      const open = more > 0 && !!openLists[v.id];
+      out.push({
+        key: `l:${v.id}`, level, kind: v.builtin ? "builtin" : "list", label: nameOf(v), v,
+        expanded: more ? open : undefined, more,
+        title: v.builtin
+          ? "Every card assigned to you, across the workspace, the same list as ClickUp's My Work. Slower than a board (it asks the whole workspace), so it opens on what you last saw."
+          : `${crumb}${v.listName && v.name !== v.listName ? `${v.listName} · ${v.name}` : v.name}`,
+        sepAfter: v.builtin,
+      });
+      if (!open) return;
+      for (const view of kids) {
+        out.push({
+          key: `v:${v.id}/${view.id}`, level: level + 1, kind: "view", label: view.name,
+          v: { id: view.id, name: view.name, listId: v.listId, listName: v.listName ?? v.name, url: "", addedAt: 0, folderId: v.folderId, folderName: v.folderName, spaceName: v.spaceName },
+          title: `${view.name}, a view of ${v.listName ?? v.name}`,
+        });
+      }
+      for (const l of links) {
+        out.push({ key: `x:${v.id}/${l.id}`, level: level + 1, kind: "link", label: l.name, link: l, title: `${l.name} opens in ClickUp (${l.type})` });
+      }
+    };
+    for (const v of railGroups.loose) pushList(v, 1, "");
+    const pushFolder = (g: (typeof railGroups.groups)[number], level: number) => {
+      const saved = folders.find((f) => f.id === g.folderId);
+      const shut = shutNow(g.key);
+      const sp = g.space || saved?.spaceName || "";
+      const crumb = sp ? `${sp} › ` : "";
+      out.push({
+        key: g.key, level, kind: "folder", label: g.folder, group: g.key, expanded: !shut, count: g.views.length,
+        folder: saved,
+        title: saved
+          ? `${crumb}${g.folder}: added whole, so a list created in it turns up here on its own. Right-click to take it off.`
+          : `${crumb}${g.folder}`,
+      });
+      if (!shut) for (const v of g.views) pushList(v, level + 1, `${crumb}${g.folder} › `);
+    };
+    /* Folders whose space is unknown stay at the top level, as they were; the
+       rest hang under their space, in the order the spaces first appear. */
+    const spaceOf = (g: (typeof railGroups.groups)[number]) => g.space || folders.find((f) => f.id === g.folderId)?.spaceName || "";
+    for (const g of railGroups.groups) if (!spaceOf(g)) pushFolder(g, 1);
+    const spaces = [...new Set(railGroups.groups.map(spaceOf).filter(Boolean))];
+    for (const s of spaces) {
+      const gs = railGroups.groups.filter((g) => spaceOf(g) === s);
+      const k = `s:${s}`;
+      out.push({ key: k, level: 1, kind: "space", label: s, group: k, expanded: !shutNow(k), count: gs.reduce((n, g) => n + g.views.length, 0), title: `${s}, a space` });
+      if (!shutNow(k)) for (const g of gs) pushFolder(g, 2);
+    }
+    if (looked.length > 0) {
+      out.push({
+        key: "looked", level: 1, kind: "looked", label: "Looked up", count: looked.length,
+        title: "Cards you have opened by id. They are not on any of your boards: this is where you have been, and it is forgotten when the app closes.",
+      });
+    }
+    return out;
+  }, [boards, railGroups, railShut, railFiltering, listViews, listLinks, openLists, looked.length]);
+
+  /* Roving tabindex: the tree is ONE stop in the Tab order. Which row holds it
+     is the one last focused, else the board that is open, else the first. */
+  const [railFocus, setRailFocus] = useState<string | null>(null);
+  const railTree = useRef<HTMLDivElement>(null);
+  /* Written out rather than read from `lit`, which is declared far below this
+     and would be a temporal-dead-zone error the first render a row exists
+     (see `railActive`). */
+  const railLit = wanted ?? data?.view?.id;
+  const railSelected = (r: RailRow) =>
+    r.kind === "looked" ? onLooked : !!r.v && !onLooked && railLit === r.v.id;
+  const railStop = railRows.some((r) => r.key === railFocus)
+    ? railFocus
+    : (railRows.find(railSelected) ?? railRows[0])?.key ?? null;
+  const railToggle = (r: RailRow) => {
+    if (r.group) setRailShut((m) => ({ ...m, [r.group!]: !(m[r.group!] === true) }));
+    else if (r.v && r.kind === "list") openList(r.v);
+  };
+  const railActivate = (r: RailRow) => {
+    if (r.kind === "folder" || r.kind === "space") { railToggle(r); return; }
+    if (r.kind === "looked") { setOnLooked(true); setSel(looked[0]?.id ?? null); return; }
+    if (r.kind === "link") { const u = clickupViewUrl(boards?.folders ?? [], r.link!); if (u) openExternal(u); return; }
+    if (r.v) { setSel(null); setOnLooked(false); closeAddBar(); void load(r.v.id, false, true); }
+  };
+  const railFocusKey = (key: string) => {
+    setRailFocus(key);
+    railTree.current?.querySelector<HTMLElement>(`[data-rail-key="${CSS.escape(key)}"]`)?.focus();
+  };
+  const onRailKey = (e: React.KeyboardEvent) => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    const el = (e.target as HTMLElement).closest<HTMLElement>('[role="treeitem"]');
+    if (!el) return;
+    const at = railRows.findIndex((r) => r.key === el.dataset.railKey);
+    const mv = railKey(railRows, at, e.key);
+    if (!mv) return;
+    e.preventDefault();
+    const r = railRows[mv.index]!;
+    if (mv.kind === "focus") railFocusKey(r.key);
+    else if (mv.kind === "toggle") railToggle(r);
+    else railActivate(r);
+  };
+
+  /*
+   * One row. A function rather than a component for the reason the rest of
+   * this panel is: everything it reads is state up here, and passing it down
+   * would be a prop list as long as the rows are different.
+   *
+   * Hierarchy is told by type and space first and by icons second: a space is
+   * a small-caps caption, a folder is the heaviest thing in the column, a list
+   * is ordinary weight one step quieter, and a list's own views are smaller
+   * again. Indent is one step a level and the guide line for each open
+   * ancestor runs through the middle of that ancestor's twisty, so the eye can
+   * follow a branch down without counting.
+   */
+  const railItem = (r: RailRow, i: number) => {
+    const sel = railSelected(r);
+    const v = r.v;
+    const isBoard = r.kind === "list" || r.kind === "view" || r.kind === "builtin";
+    const busy = !!v && isBoard && wanted === v.id;
+    const tone = r.kind === "builtin" ? "var(--success)" : "var(--primary)";
+    const startsGroup = i > 0 && r.level === 1 && (r.kind === "space" || r.kind === "folder");
+    const [pre, hit, post] = railSplit(r.label, railQ);
+    return (
+      <Fragment key={r.key}>
+        <div role="treeitem" data-rail-key={r.key} aria-level={r.level}
+          aria-expanded={r.expanded}
+          aria-selected={isBoard || r.kind === "looked" ? sel : undefined}
+          aria-busy={busy || undefined}
+          tabIndex={railStop === r.key ? 0 : -1}
+          title={r.title}
+          onFocus={() => setRailFocus(r.key)}
+          onClick={() => railActivate(r)}
+          onContextMenu={(e) => {
+            if (r.folder) { e.preventDefault(); e.stopPropagation(); setFolderMenu({ f: r.folder, x: e.clientX, y: e.clientY }); }
+            else if (v && (r.kind === "list" || r.kind === "builtin")) { e.preventDefault(); e.stopPropagation(); setMenu({ v, x: e.clientX, y: e.clientY }); }
+          }}
+          className="agx-rail-row relative flex items-center select-none"
+          style={{
+            height: HIT, marginInline: 4, paddingLeft: RAIL_PAD + (r.level - 1) * RAIL_STEP, paddingRight: 8,
+            marginTop: startsGroup ? 8 : 0, borderRadius: 6, cursor: "pointer",
+            fontSize: r.kind === "view" || r.kind === "link" ? 11.5 : r.kind === "space" ? 10 : 12,
+            fontWeight: sel || r.kind === "folder" || r.kind === "space" ? 600 : 400,
+            textTransform: r.kind === "space" ? "uppercase" : undefined,
+            letterSpacing: r.kind === "space" ? "0.08em" : undefined,
+            color: sel || r.kind === "folder" ? "var(--text)"
+              : r.kind === "space" || r.kind === "view" ? "var(--text3)"
+              : r.kind === "link" ? "var(--text4)" : "var(--text2)",
+          }}>
+          {/* One guide per open ancestor, through the middle of its twisty. */}
+          {Array.from({ length: r.level - 1 }, (_, k) => (
+            <span key={k} aria-hidden className="absolute" style={{
+              left: RAIL_PAD + k * RAIL_STEP + MIN_BOX / 2 - 1, top: 0, bottom: 0, width: 1,
+              background: "color-mix(in srgb, var(--text) 12%, transparent)",
+            }} />
+          ))}
+          {sel && <span aria-hidden className="absolute" style={{ left: 0, top: 4, bottom: 4, width: 2, borderRadius: 2, background: tone }} />}
+          {/* The twisty is its own target, MIN_BOX wide and the row tall. On a
+              list it opens the list's views without opening the list; on a
+              folder or space the whole row does that and this is only the mark. */}
+          <span aria-hidden data-rail-toggle={r.expanded !== undefined ? "" : undefined}
+            className="shrink-0 grid place-items-center"
+            style={{ width: MIN_BOX, height: HIT, color: "var(--text4)" }}
+            onClick={r.kind === "list" && r.expanded !== undefined ? (e) => { e.stopPropagation(); railToggle(r); } : undefined}>
+            {r.expanded !== undefined && (
+              <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor"
+                strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="agx-rail-chev"
+                style={{ transform: r.expanded ? "rotate(90deg)" : "none" }}>
+                <path d="M6 3.5 10.5 8 6 12.5" />
+              </svg>
+            )}
+          </span>
+          {r.kind !== "space" && (
+            <span aria-hidden className="shrink-0 grid place-items-center" style={{ width: 14, marginRight: 6 }}>
+              {r.kind === "folder" ? (
+                <svg viewBox="0 0 16 16" width={ICON.sm} height={ICON.sm} fill="none" stroke="var(--primary-ink)" strokeWidth={1.5} strokeLinejoin="round">
+                  <path d="M1.75 4.25A1.5 1.5 0 0 1 3.25 2.75h2.4l1.3 1.5h5.8a1.5 1.5 0 0 1 1.5 1.5v6a1.5 1.5 0 0 1-1.5 1.5H3.25a1.5 1.5 0 0 1-1.5-1.5Z" />
+                </svg>
+              ) : r.kind === "builtin" ? (
+                myFace ? (
+                  <img src={myFace} alt="" loading="lazy" referrerPolicy="no-referrer"
+                    className={`rounded-full${busy ? " animate-pulse" : ""}`} style={{ width: 14, height: 14, objectFit: "cover" }} />
+                ) : (
+                  <span className={busy ? "animate-pulse" : undefined} style={{ width: 8, height: 8, borderRadius: 999, border: `1.5px solid ${sel ? tone : "var(--text3)"}` }} />
+                )
+              ) : r.kind === "looked" ? (
+                <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M8 4.5V8l2.5 1.5" /><circle cx="8" cy="8" r="5.5" />
+                </svg>
+              ) : r.kind === "link" ? (
+                <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round">
+                  {r.link?.type === "gantt" ? <path d="M2.5 4h6M4.5 8h7M2.5 12h4" /> : <path d="M2.5 12.5V8M6.5 12.5V4M10.5 12.5V6M14 12.5V9.5" />}
+                </svg>
+              ) : v?.color && r.kind === "list" ? (
+                <span className="rounded-full" style={{ width: 8, height: 8, background: v.color }} />
+              ) : (
+                <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round"
+                  style={{ color: "var(--text4)" }}>
+                  <path d="M2.5 4.5h2M2.5 8h2M2.5 11.5h2M6.75 4.5h6.75M6.75 8h6.75M6.75 11.5h6.75" />
+                </svg>
+              )}
+            </span>
+          )}
+          <span className="truncate min-w-0 flex-1">
+            {hit ? <>{pre}<span style={{ color: "var(--primary-ink)", textDecoration: "underline", textUnderlineOffset: 3 }}>{hit}</span>{post}</> : r.label}
+          </span>
+          {busy && <span aria-hidden className="shrink-0 animate-pulse" style={{ color: "var(--text3)" }}>…</span>}
+          {r.kind === "link" && <span aria-hidden className="shrink-0" style={{ fontSize: 10, opacity: 0.7 }}>↗</span>}
+          {/* Counts, all of them already known. A folder or space: the lists it
+              holds. The open board: its cards. A closed list with other views:
+              how many, as +N, matching the tooltip. */}
+          {r.count !== undefined && (
+            <span className="tabular-nums shrink-0" style={{ fontSize: 10, marginLeft: 6, color: "var(--text4)" }}>{r.count}</span>
+          )}
+          {sel && isBoard && !busy && !!data?.tasks.length && (
+            <span className="tabular-nums shrink-0 rounded-full" title={`${data.tasks.length} cards on this board`}
+              style={{ fontSize: 10, marginLeft: 6, paddingInline: 6, background: `color-mix(in srgb, ${tone} 16%, transparent)`, color: "var(--text)" }}>
+              {data.tasks.length}
+            </span>
+          )}
+          {!sel && r.kind === "list" && r.expanded === false && !!r.more && (
+            <span className="tabular-nums shrink-0" title={`${r.more} more view${r.more === 1 ? "" : "s"} on this list`}
+              style={{ fontSize: 10, marginLeft: 6, color: "var(--text4)" }}>+{r.more}</span>
+          )}
+        </div>
+        {r.sepAfter && <div role="none" aria-hidden style={{ height: 1, margin: "6px 12px 4px", background: "var(--surface-line)" }} />}
+      </Fragment>
+    );
+  };
 
   /* Sidebar or modal. Global for the same reason the width is: how you like to
      read a card is about you, not about which list you are on. Full screen was
@@ -1383,8 +1489,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
    *
    * Set once per board you land on, so an explicit toggle survives the poll.
    */
-  /** What this board costs to ask, which is what decides how often we do. */
-  const pollMs = data?.view?.builtin ? CU_POLL_SLOW_MS : CU_POLL_MS;
+  /** How often an idle board asks again; see lib/boardPoll.ts. */
+  const pollMs = BOARD_POLL_MS;
 
 
   /*
@@ -1446,15 +1552,17 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
      * signal that works in both a browser and the app.
      */
     const looking = () => !document.hidden && document.hasFocus();
-    const tick = () => {
+    const ask = (cause: "tick" | "focus") => {
       if (!looking()) return;
       // Age, not ticks. Asking our own server is free, but it is the thing that
       // makes the server ask ClickUp, so the client keeps its own floor too.
-      if (data?.at && Date.now() - data.at < pollMs) return;
+      if (!boardDue(Date.now(), data?.at, cause)) return;
       void load(data?.view?.id);
     };
+    const tick = () => ask("tick");
+    const onFocus = () => ask("focus");
     /*
-     * Two minutes, and it usually decides to do nothing.
+     * A minute, and it usually decides to do nothing (see lib/boardPoll.ts).
      *
      * This is no longer a poll in any meaningful sense: the server serves from
      * disk and refreshes on its own schedule, so a tick that finds the data
@@ -1465,10 +1573,10 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
      * The listener does the real work. Coming back to the window is when a
      * stale board matters, and it is exactly when nothing else would notice.
      */
-    const t = setInterval(tick, 120_000);
-    window.addEventListener("focus", tick);
-    return () => { clearInterval(t); window.removeEventListener("focus", tick); };
-  }, [active, load, data?.view?.id, data?.at, pollMs]);
+    const t = setInterval(tick, BOARD_TICK_MS);
+    window.addEventListener("focus", onFocus);
+    return () => { clearInterval(t); window.removeEventListener("focus", onFocus); };
+  }, [active, load, data?.view?.id, data?.at]);
 
   /* One list that sits directly in a space. The picker sends its id and
      nothing else — the resolver takes a bare list id, which is the whole
@@ -2261,12 +2369,15 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
     ? <CardDetail t={picked} today={today} statuses={cardStatuses} fields={cardFields} place={cardPlaceShown}
     writable={boards.writeEnabled} repos={repos} here={here}
     onOpenChatWith={onOpenChatWith}
+    onOpenBrowser={onOpenBrowser}
     wide={wide}
     byId={byId} onGo={(id) => setSel(id)} boardPeople={boardPeople}
     skills={skills}
     onNote={(text) => setNote({ ok: true, text })}
     onFresh={(task) => setOver((m) => ({ ...m, [task.id]: task }))}
-    onApply={(key, p) => picked && apply(picked, key, p)}
+    /* A write made here makes the cached thread due, so the next time the card
+       is opened it is read again instead of shown as it was before the edit. */
+    onApply={(key, p) => { if (picked) { threadCache.stale(picked.id); apply(picked, key, p); } }}
     saving={(key) => queue.busy(picked?.id ?? "", key)}
     /* Offered only when it goes somewhere: a card on the board you are already
        looking at has nowhere to take you, and the panel reads any list by id
@@ -2303,7 +2414,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
         <button onClick={() => { setAdding((o) => !o); if (adding) { setUrlText(""); setNote(null); } }}
           aria-expanded={adding}
           className="text-[11px] px-2 py-0.5 rounded-full"
-          style={{ border: edge(14), color: adding ? "var(--text2)" : "var(--text3)" }}
+          style={{ border: EDGE, color: adding ? "var(--text2)" : "var(--text3)" }}
           title={adding ? "Never mind" : "Add a board by pasting its address"}>
           {adding ? <CrossIcon size={ICON.sm} /> : <PlusIcon size={ICON.sm} />}
         </button>
@@ -2327,7 +2438,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           <button onClick={() => setAboutOpen(true)}
             title="What this list is for — the brief, the docs, the team"
             className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full agx-btn"
-            style={{ border: edge(14), color: "var(--text3)" }}>
+            style={{ border: EDGE, color: "var(--text3)" }}>
             About
           </button>
         )}
@@ -2339,7 +2450,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
         <div className="flex-1 flex justify-center min-w-0 px-3">
           <div className="w-full max-w-[560px]">
         <div className="flex items-center gap-2 w-full rounded-lg pl-2.5 py-1 overflow-hidden"
-          style={{ background: "var(--bg2)", border: edge(14) }}>
+          style={{ background: "var(--surface-card)", border: EDGE }}>
           {/* The house floor for an icon-only glyph, which this was well under:
               a text ⌕ at 11px. */}
           <span className="shrink-0 grid place-items-center" style={{ width: 20, height: 20, color: "var(--text3)" }}>
@@ -2435,7 +2546,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
               className="agx-hover shrink-0 grid place-items-center self-stretch"
               style={{
                 width: 34, marginTop: -4, marginBottom: -4,
-                borderLeft: edge(14), color: "var(--text3)",
+                borderLeft: LINE, color: "var(--text3)",
                 background: "color-mix(in srgb, var(--text) 4%, transparent)",
               }}>
               <CloseIcon size={ICON.md} />
@@ -2460,8 +2571,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           title={boards.writeForced ? "Forced on by AGENTGLASS_CLICKUP_WRITE=1" : boards.writeEnabled ? "Changes are allowed — click to stop that" : "Let this app change cards on your board"}
           className="text-[10px] px-2 py-0.5 rounded-full"
           style={boards.writeEnabled
-            ? { color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }
-            : { color: "var(--text4)", border: edge(12) }}>
+            ? { color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }
+            : { color: "var(--text4)", border: EDGE }}>
           read-only
         </button>}
         {/* When it was read AND how long that answer stands for. A timestamp on
@@ -2477,7 +2588,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                 and next to their age, which is the thing it is about to fix —
                 not as a spinner over content nobody asked to have taken away. */}
             {data.revalidating
-              ? <span className="animate-pulse" style={{ color: "var(--primary)" }}>· refreshing</span>
+              ? <span className="animate-pulse" style={{ color: "var(--primary-ink)" }}>· refreshing</span>
               /* A poll that did not land, said where the age of the answer is
                  already stated and in the same quiet hand. This used to be an amber
                  strip across the board, and it worried somebody weekly for a thing
@@ -2499,22 +2610,26 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
         {externalUrl(data?.view?.url) && (
           <a href={externalUrl(data?.view?.url)} target="_blank" rel="noreferrer noopener"
             title={`Open ${data?.view?.name ?? "this board"} in ClickUp`}
-            className="text-[10.5px] px-2 py-0.5 rounded-lg"
-            style={{ border: edge(16), color: "var(--text2)" }}>
+            className={CHIP}
+            style={{ border: EDGE, color: "var(--text2)" }}>
             Open ↗
           </a>
         )}
         {/* Where a card opens. Two, not three: full screen was offered and
             turned down — it covers the table entirely, and in an app that
-            already lives in tabs it does nothing the modal does not. */}
-        <div className="flex rounded-lg overflow-hidden shrink-0" style={{ border: edge(16) }}>
+            already lives in tabs it does nothing the modal does not.
+            `CTRL_H.regular` on the wrapper and each button, not `min-h` alone
+            — this is a joined pill with `overflow-hidden`, and a `min-h` that
+            lets a child grow taller than its sibling clips one side of the
+            border radius. */}
+        <div className="flex rounded-lg overflow-hidden shrink-0" style={{ border: EDGE, height: CTRL_H.regular }}>
           {([["side", "Sidebar"], ["modal", "Modal"]] as const).map(([id, label]) => (
             <button key={id} onClick={() => setCardMode(id)}
               aria-pressed={cardMode === id}
               title={id === "side"
                 ? "Open a card beside the list, in a pane you can drag wider"
                 : "Open a card over the list, with room for a long description"}
-              className="text-[10.5px] px-2 py-0.5"
+              className="text-[11px] px-2.5 inline-flex items-center"
               style={cardMode === id
                 ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)", color: "var(--text)" }
                 : { color: "var(--text3)" }}>
@@ -2526,14 +2641,10 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
             refresh to update only the assigned to me view" — so the button says
             which one it is going to re-read rather than leaving somebody to
             wonder whether pressing it costs the whole sidebar. */}
-        <button onClick={() => void load(data?.view?.id, true, true)} disabled={busy}
+        <RefreshButton onRefresh={() => void load(data?.view?.id, true, true)} busy={busy}
           title={data?.view?.name
             ? `Read ${data.view.name} again now — no other board is touched`
-            : "Read this board again now"}
-          className="text-[10.5px] px-2 py-0.5 rounded-lg"
-          style={{ border: edge(16), color: "var(--text2)", opacity: busy ? 0.5 : 1 }}>
-          {busy ? <RefreshIcon size={ICON.xs} className="animate-spin" /> : "Refresh"}
-        </button>
+            : "Read this board again now"} />
       </div>
 
       {/*
@@ -2576,9 +2687,9 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
 
       {confirmWrite && (
         <div className="px-5 py-2 shrink-0 flex items-center gap-3 flex-wrap"
-          style={{ background: "color-mix(in srgb, var(--warning) 9%, transparent)", borderBottom: edge(10) }}>
+          style={{ background: "color-mix(in srgb, var(--warning) 9%, transparent)", borderBottom: LINE }}>
           <div className="text-[11.5px]" style={{ color: "var(--text2)" }}>
-            <b style={{ color: "var(--warning)" }}>Allow changes to this board?</b>
+            <b style={{ color: "var(--warning-ink)" }}>Allow changes to this board?</b>
             <div className="text-[10.5px]" style={{ color: "var(--text3)" }}>
               Moving a card or assigning yourself fires your workspace's automations and notifies your
               team. Each change still asks first. There is no undo from here.
@@ -2669,7 +2780,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           <button onClick={() => void searchAll()} disabled={searching}
             title="ClickUp has no text search for this token, so this sweeps the most recently updated cards. The first one takes a moment."
             className="text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap disabled:opacity-50"
-            style={{ border: edge(14), color: "var(--text2)" }}>
+            style={{ border: EDGE, color: "var(--text2)" }}>
             {searching ? "searching…" : "search the workspace ⏎"}
           </button>
         )}
@@ -2685,7 +2796,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           className="text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap"
           style={readyOnly
             ? ON_CHIP
-            : { border: edge(14), color: "var(--text2)" }}>
+            : { border: EDGE, color: "var(--text2)" }}>
           {/* The count has to survive the fill: --text3 on the accent is a
               number you cannot read. */}
           ready <span style={{ color: readyOnly ? "var(--bg)" : "var(--text3)", opacity: readyOnly ? 0.75 : 1 }}>{counts.ready}</span>
@@ -2698,7 +2809,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
         <button onClick={() => setMineOnly((v) => !v)} aria-pressed={mineOnly}
           className="text-[11px] pr-2.5 py-0.5 rounded-full whitespace-nowrap inline-flex items-center gap-1.5"
           style={{
-            ...(mineOnly ? ON_CHIP_OK : { border: edge(14), color: "var(--text2)" }),
+            ...(mineOnly ? ON_CHIP_OK : { border: EDGE, color: "var(--text2)" }),
             paddingLeft: myFace ? 3 : 10,
           }}>
           {myFace && (
@@ -2713,7 +2824,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
             className="text-[11px] px-2.5 py-0.5 rounded-full"
             style={tag === t
               ? ON_CHIP
-              : { border: edge(14), color: "var(--text3)" }}>{t}</button>
+              : { border: EDGE, color: "var(--text3)" }}>{t}</button>
         ))}
         <StatusFilter statuses={data?.statuses ?? []} tasks={tasks}
           picked={statusPick} onPick={setStatusPick} />
@@ -2733,10 +2844,10 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           title={showDone
             ? "Every status this board has, finished ones included"
             : `Bring back ${counts.done} card${counts.done === 1 ? "" : "s"} in a finished status — in production, released, won't fix`}
-          className="text-[10.5px] px-2 py-0.5 rounded-lg"
+          className={CHIP}
           style={showDone
-            ? { border: edge(14), color: "var(--text3)" }
-            : { border: "1px solid color-mix(in srgb, var(--text) 22%, transparent)", color: "var(--text2)" }}>
+            ? { border: EDGE, color: "var(--text3)" }
+            : { border: EDGE, color: "var(--text2)" }}>
           {showDone ? "showing everything" : `show ${counts.done} done`}
         </button>
         </>}
@@ -2746,7 +2857,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
             <button onClick={() => { setLooked([]); setOnLooked(false); }}
               title="Forget every card you have looked up"
               className="text-[10.5px] px-2 py-0.5 rounded-lg"
-              style={{ border: edge(14), color: "var(--text3)" }}>
+              style={{ border: EDGE, color: "var(--text3)" }}>
               clear
             </button>
           </>
@@ -2788,7 +2899,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
         */}
       {data?.error && alarming && (
         <div className="px-5 py-1 text-[10.5px] shrink-0 flex items-center gap-2"
-          style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>
+          style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>
           <span className="min-w-0">
             {tasks.length
               ? `Nothing has been read since ${stamp(data.at)} — ${data.error.replace(/\.$/, "")}. These rows may have moved.`
@@ -2804,7 +2915,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           <button onClick={() => void load(data.view?.id, true, true)} disabled={busy}
             className="shrink-0 text-[10px] px-1.5 py-0.5 rounded"
             style={{ border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)",
-              color: "var(--warning)", opacity: busy ? 0.5 : 1 }}>
+              color: "var(--warning-ink)", opacity: busy ? 0.5 : 1 }}>
             {busy ? <RefreshIcon size={ICON.xs} className="animate-spin" /> : "Try now"}
           </button>
         </div>
@@ -2852,15 +2963,15 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
          * now read back out of it. So the day we hold the places came, and the
          * shape ClickUp draws is the shape here.
          */}
-        <nav aria-label="Lists" className="flex flex-col shrink-0 min-w-0"
-          style={{ width: railOpen ? 214 : 34, borderRight: edge(12), transition: "width 120ms ease" }}>
+        <nav ref={railNav} aria-label="Lists" className="relative flex flex-col shrink-0 min-w-0"
+          style={{ width: railOpen ? railW : 34, borderRight: LINE, transition: railDrag ? "none" : "width 120ms ease" }}>
           <div className="flex items-center gap-1 px-1.5 shrink-0"
-            style={{ height: HEAD_H, borderBottom: edge(10) }}>
+            style={{ height: HEAD_H, borderBottom: LINE }}>
             <button onClick={() => setRailOpen((o) => !o)}
               aria-expanded={railOpen}
               title={railOpen ? "Fold the list menu" : "Show the lists"}
-              className="shrink-0 grid place-items-center rounded"
-              style={{ width: 22, height: 22, border: edge(14), color: "var(--text3)" }}>
+              className="shrink-0 grid place-items-center rounded-lg"
+              style={{ width: CTRL_H.large, height: CTRL_H.large, border: EDGE, color: "var(--text3)" }}>
               {/* Drawn rather than typed. `‹` is a text glyph and sits on a text
                   baseline, so centring the box still left it riding high inside
                   it — the alignment cannot be fixed by the box because the gap
@@ -2871,10 +2982,23 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
               </svg>
             </button>
             {railOpen && (
-              <input value={railQ} onChange={(e) => setRailQ(e.target.value)} placeholder="Filter lists…" spellCheck={false}
-                aria-label="Filter lists"
-                className="min-w-0 flex-1 px-2 py-1 rounded text-[11px] outline-none"
-                style={{ background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text)", border: edge(14) }} />
+              <div className="relative min-w-0 flex-1">
+                <input ref={railInput} value={railQ} onChange={(e) => setRailQ(e.target.value)} placeholder="Filter lists…" spellCheck={false}
+                  aria-label="Filter lists"
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape" && railQ) { e.preventDefault(); setRailQ(""); }
+                    else if (e.key === "ArrowDown" && railStop) { e.preventDefault(); railFocusKey(railStop); }
+                  }}
+                  className={`w-full pr-7 ${INPUT}`}
+                  style={INPUT_STYLE} />
+                {railQ && (
+                  <button onClick={() => { setRailQ(""); railInput.current?.focus(); }} aria-label="Clear the filter" title="Clear the filter · Esc"
+                    className="absolute grid place-items-center rounded-lg agx-btn"
+                    style={{ right: 4, top: "50%", transform: "translateY(-50%)", width: MIN_BOX, height: MIN_BOX, color: "var(--text3)" }}>
+                    <CrossIcon size={ICON.xs} />
+                  </button>
+                )}
+              </div>
             )}
           </div>
           {/*
@@ -2901,88 +3025,54 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
             </button>
           )}
           {railOpen && (
-            <div className="agx-scroll flex-1 min-h-0 overflow-y-auto py-1">
-              {railViews.length === 0 && (
-                <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>No list by that name.</div>
-              )}
-              {/* Ungrouped first: the built-in board, and any list whose
-                  folder we do not know yet — a pasted one is only filed once it
-                  has been opened and told us its breadcrumb. */}
-              {railGroups.loose.map((v) => railRow(v, 0))}
-              {railGroups.groups.map((g) => {
-                const shut = railShut[g.key] === true;
-                const savedFolder = (boards?.folders ?? []).find((f) => f.id === g.folderId);
-                return (
-                  /*
-                   * A folder has to look like a folder, and its lists have to
-                   * look like they are inside it.
-                   *
-                   * The first version was a dim caption over rows at the same
-                   * indent, and it read as one flat column with the odd label
-                   * in it — "there is no margin for error, I keep clicking
-                   * where I should not". ClickUp's own sidebar answers this with three
-                   * things and they are all here: a folder glyph, brighter type
-                   * for the folder than for its lists, and a guide line down
-                   * the left of the children so the eye can follow the nesting
-                   * without counting pixels.
-                   */
-                  <div key={g.key} className="mt-1.5">
-                    <button
-                      onClick={() => setRailShut((m) => ({ ...m, [g.key]: !shut }))}
-                      onContextMenu={(e) => {
-                        if (!savedFolder) return;
-                        e.preventDefault(); e.stopPropagation();
-                        setFolderMenu({ f: savedFolder, x: e.clientX, y: e.clientY });
-                      }}
-                      className="w-full text-left flex items-center gap-1.5 pl-1.5 pr-2 py-1 text-[11px] agx-btn rounded"
-                      style={{ color: "var(--text2)" }}
-                      title={savedFolder
-                        ? `${g.space ? `${g.space} · ` : ""}${g.folder} — added whole, so a list created in it turns up here on its own. Right-click to take it off.`
-                        : `${g.space ? `${g.space} · ` : ""}${g.folder}`}>
-                      {/* The twisty and the folder are one target: 20px of it,
-                          which is the smallest square this rail has room for
-                          and still wider than the 9px caret it replaced. */}
-                      <span aria-hidden className="shrink-0 grid place-items-center" style={{ width: 14, color: "var(--text4)" }}>
-                        <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="currentColor" aria-hidden
-                          style={{ transform: shut ? "none" : "rotate(90deg)", transition: "transform 120ms ease" }}>
-                          <path d="M6 3.5 10.5 8 6 12.5Z" />
-                        </svg>
-                      </span>
-                      <span aria-hidden className="shrink-0 grid place-items-center" style={{ width: 14, color: "var(--primary)" }}>
-                        <svg viewBox="0 0 16 16" width={ICON.sm} height={ICON.sm} fill="none" stroke="currentColor"
-                          strokeWidth={1.5} strokeLinejoin="round" aria-hidden>
-                          <path d="M1.75 4.25A1.5 1.5 0 0 1 3.25 2.75h2.4l1.3 1.5h5.8a1.5 1.5 0 0 1 1.5 1.5v6a1.5 1.5 0 0 1-1.5 1.5H3.25a1.5 1.5 0 0 1-1.5-1.5Z" />
-                        </svg>
-                      </span>
-                      <span className="truncate min-w-0 flex-1" style={{ letterSpacing: "0.01em" }}>{g.folder}</span>
-                      <span className="tabular-nums shrink-0 text-[10px]" style={{ color: "var(--text4)" }}>{g.views.length}</span>
-                    </button>
-                    {!shut && (
-                      /* The guide line sits on the children, not on the folder:
-                         it has to stop where the folder's contents stop. */
-                      <div style={{ marginLeft: 14, borderLeft: `1px solid color-mix(in srgb, var(--text) 14%, transparent)` }}>
-                        {g.views.map((v) => railList(v))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              {/* Where you have been, beside the lists rather than inside one —
-                  a card from another list sitting in somebody's sprint reads as
-                  being IN it. Dashed and only while it holds something. */}
-              {looked.length > 0 && (
-                <button onClick={() => { setOnLooked(true); setSel(looked[0]?.id ?? null); }}
-                  aria-current={onLooked}
-                  className="w-full text-left flex items-center gap-1.5 px-2.5 py-1 mt-1 text-[11.5px]"
-                  style={{ color: onLooked ? "var(--text)" : "var(--text3)",
-                    background: onLooked ? "color-mix(in srgb, var(--primary) 14%, transparent)" : "transparent",
-                    borderTop: `1px dashed color-mix(in srgb, var(--text) 22%, transparent)` }}
-                  title="Cards you have opened by id. They are not on any of your boards — this is where you have been, and it is forgotten when the app closes.">
-                  <span className="truncate min-w-0 flex-1">Looked up</span>
-                  <span className="tabular-nums text-[10px]" style={{ color: "var(--text4)" }}>{looked.length}</span>
-                </button>
-              )}
+            <div className="agx-scroll flex-1 min-h-0 overflow-y-auto py-1.5">
+              {railViews.length === 0 && (railFiltering ? (
+                <div className="px-3 py-3 text-[11px]" style={{ color: "var(--text3)" }}>
+                  <div>No list matches “{railQ.trim()}”.</div>
+                  <button onClick={() => { setRailQ(""); railInput.current?.focus(); }}
+                    className="mt-2 rounded-lg px-2 text-[11px] agx-btn" style={{ height: CTRL_H.compact, border: EDGE, color: "var(--text2)" }}>
+                    Clear filter
+                  </button>
+                </div>
+              ) : (
+                <div className="px-3 py-3 text-[11px]" style={{ color: "var(--text3)" }}>No lists yet.</div>
+              ))}
+              {/* One tree: the built-in board and any list whose folder we do
+                  not know yet come first, then spaces and folders, then
+                  where you have been. See `railRows`. */}
+              <div ref={railTree} role="tree" aria-label="ClickUp lists" onKeyDown={onRailKey}>
+                {railRows.map(railItem)}
+              </div>
             </div>
+          )}
+          {railOpen && (
+            <div role="separator" aria-orientation="vertical" tabIndex={0} aria-label="Resize the list menu"
+              aria-valuenow={railW} aria-valuemin={RAIL_W_MIN} aria-valuemax={RAIL_W_MAX}
+              title="Drag to resize · double-click for the usual width"
+              className="agx-rail-grip absolute top-0 bottom-0"
+              style={{ right: -3, width: 6, cursor: "col-resize", zIndex: 5 }}
+              onDoubleClick={() => setRailW(RAIL_W_DEFAULT)}
+              onKeyDown={(e) => {
+                if (e.key === "ArrowLeft") { e.preventDefault(); setRailW((w) => clampRailW(w - (e.shiftKey ? 40 : 12))); }
+                else if (e.key === "ArrowRight") { e.preventDefault(); setRailW((w) => clampRailW(w + (e.shiftKey ? 40 : 12))); }
+                else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setRailW(RAIL_W_DEFAULT); }
+              }}
+              onPointerDown={(e) => {
+                e.preventDefault();
+                (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+                setRailDrag(true);
+                /* Measured from the rail's own left edge rather than by adding
+                   up deltas, so a dropped move cannot leave it behind the pointer. */
+                const left = railNav.current?.getBoundingClientRect().left ?? 0;
+                const move = (ev: PointerEvent) => setRailW(clampRailW(ev.clientX - left));
+                const up = () => {
+                  setRailDrag(false);
+                  window.removeEventListener("pointermove", move);
+                  window.removeEventListener("pointerup", up);
+                };
+                window.addEventListener("pointermove", move);
+                window.addEventListener("pointerup", up);
+              }} />
           )}
         </nav>
         <div className="flex flex-col flex-1 min-w-0">
@@ -3003,32 +3093,28 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
               moment something does: two boxes scrolled independently put the
               heading over the wrong column. */}
           <div className="agx-scroll flex-1 min-w-0 overflow-auto">
-            <div className={`pr-5 ${EYEBROW} sticky top-0 z-10`}
-                style={{ display: "grid", gridTemplateColumns: grid, gap: 14, color: "var(--text4)",
+            <div className={`pr-4 ${EYEBROW} sticky top-0 z-10`}
+                style={{ display: "grid", gridTemplateColumns: grid, gap: 16, color: "var(--text4)",
                   alignItems: "center", height: HEAD_H,
                   minWidth: TABLE_MIN_W, background: "var(--bg)",
-                  borderBottom: edge(10) }}>
+                  borderBottom: LINE }}>
               <span className="agx-stick-head">Task</span>
-              {anyWho && <span className="text-center">Who</span>}
-              {!!squadLabel && <span className="text-center truncate" title={squadLabel}>{squadLabel}</span>}
-              {anySprint && <span>Sprint</span>}
               {/* Centred over the columns they label, because those columns hold
                   two-character numbers in a 30px track — a heading hard against
                   the left of it sits above nothing, and the eye stops pairing the
                   two. `Task` and the rest stay left: they label text that starts
                   at the left. */}
-              {/* Hairlines before Cmts and before Pts, and only there. A rule
-                  between every column stripes the table and reads as a grid you
-                  are meant to study; two of them just say "the numbers start
-                  here" and "this one is not that one" — which is the whole
-                  complaint, since a count and a point score are the same shape.
-                  `edge(6)` is the same weight as the row separators, so it reads
-                  as part of the table rather than as decoration. */}
-              <span className="text-center" style={{ borderLeft: edge(6), paddingLeft: 8, marginLeft: -8 }}>Cmts</span>
-              <span>Due</span>
-              {anyEst && <span className="text-center">Est</span>}
-              <span className="text-center" style={{ borderLeft: edge(6), paddingLeft: 8, marginLeft: -8 }}>Pts</span>
-              <span />
+              {/* One hairline per column boundary, header and rows alike (see
+                  COL_RULE). Task|PR is drawn by the frozen Task cell itself;
+                  every cell after PR draws the one on its own left. */}
+              <span className="text-center" style={COL_RULE}>PR</span>
+              {anyWho && <span className="text-center agx-colrule" style={COL_RULE}>Who</span>}
+              {!!squadLabel && <span className="text-center agx-colrule" style={COL_RULE} title={squadLabel}><span className="truncate">{squadLabel}</span></span>}
+              {anySprint && <span className="agx-colrule" style={COL_RULE}>Sprint</span>}
+              <span className="text-center agx-colrule" style={COL_RULE}>Cmts</span>
+              <span className="agx-colrule" style={COL_RULE}>Due</span>
+              {anyEst && <span className="text-center agx-colrule" style={COL_RULE}>Est</span>}
+              <span className="text-center agx-colrule" style={COL_RULE}>Pts</span>
               {onLooked && <span />}
             </div>
 
@@ -3038,8 +3124,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
             {!onLooked && looksLikeId && !rows.some((t) => (t.customId ?? "").endsWith(q.trim())) && (
               <button onClick={() => void reveal()} disabled={finding}
                 className="w-full text-left px-5 py-3 hover:bg-white/5"
-                style={{ borderBottom: edge(8) }}>
-                <span className="text-[11.5px]" style={{ color: "var(--primary)" }}>
+                style={{ borderBottom: LINE }}>
+                <span className="text-[11.5px]" style={{ color: "var(--primary-ink)" }}>
                   {finding ? `Looking for ${q.trim()}…` : `Fetch card ${q.trim()} from ClickUp →`}
                 </span>
                 <span className="block text-[10px]" style={{ color: "var(--text4)" }}>
@@ -3060,7 +3146,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
               */}
             {onLooked && lookedGroups.map((g, gi) => (
               <div key={g.place} style={{ marginTop: gi ? 18 : 4 }}>
-                <div className="px-5 py-2 flex items-center gap-2.5" style={{ borderTop: gi ? edge(9) : undefined }}>
+                <div className="px-5 py-2 flex items-center gap-2.5" style={{ borderTop: gi ? LINE : undefined }}>
                   <span className={`${EYEBROW}`} style={{ color: "var(--text4)" }}>
                     {g.place}
                   </span>
@@ -3071,6 +3157,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                   // away whole is one nobody prunes.
                   <ClickUpRow key={t.id} t={t} today={today} on={t.id === sel} onPick={() => setSel(t.id)}
                     grid={grid} showWho={anyWho} showSquad={!!squadLabel} showSprint={anySprint} showEst={anyEst} blocked={[]} onHand={handCard}
+                    repos={repos} here={here}
                     onForget={() => { setLooked((cur) => { const left = cur.filter((x) => x.id !== t.id); if (!left.length) setOnLooked(false); return left; }); if (sel === t.id) setSel(null); }} />
                 ))}
               </div>
@@ -3093,7 +3180,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                   : !showDone && counts.done > 0 ? (
                     <>
                       Nothing open here — {counts.done} card{counts.done === 1 ? " is" : "s are"} done or dropped.{" "}
-                      <button onClick={() => setShowDone(true)} style={{ color: "var(--primary)" }}>Show them</button>
+                      <button onClick={() => setShowDone(true)} style={{ color: "var(--primary-ink)" }}>Show them</button>
                     </>
                   )
                   : "This board has nothing open."}
@@ -3111,7 +3198,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                   aria-expanded={!folded[g.status]}
                   title={folded[g.status] ? "Show these" : "Hide these"}
                   className="agx-group-head w-full flex items-center py-2 text-left hover:bg-white/5"
-                  style={{ borderTop: gi ? edge(9) : undefined }}>
+                  style={{ borderTop: gi ? LINE : undefined }}>
                   <span className="agx-stick-group flex items-center gap-2">
                   {/* A drawn chevron, not a text glyph. `▸` at a readable size
                       renders as a speck in this font — it was still a speck
@@ -3138,7 +3225,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                 </button>
                 {!folded[g.status] && g.rows.map((t) => (
                   <ClickUpRow key={t.id} t={t} today={today} on={t.id === sel} onPick={() => setSel(t.id)}
-                    grid={grid} showWho={anyWho} showSquad={!!squadLabel} showSprint={anySprint} showEst={anyEst} blocked={blockedBy(t)} onHand={handCard} />
+                    grid={grid} showWho={anyWho} showSquad={!!squadLabel} showSprint={anySprint} showEst={anyEst} blocked={blockedBy(t)} onHand={handCard}
+                    repos={repos} here={here} />
                 ))}
               </div>
             ))}
@@ -3153,7 +3241,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                   that looks like a rendering fault. The card settles it whatever
                   happens to be underneath. */}
               <div className="flex flex-col items-center gap-3 text-center rounded-xl px-6 py-5"
-                style={{ background: "var(--bg2)", border: edge(20), boxShadow: "0 8px 30px rgba(0,0,0,0.28)" }}>
+                style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 8px 30px rgba(0,0,0,0.28)" }}>
                 <span className="agx-spin" aria-hidden style={{ width: 26, height: 26, borderWidth: 2.5 }} />
                 <div className="text-[12px]" style={{ color: "var(--text)" }}>
                   Reading {boards.views.find((v) => v.id === wanted)?.name ?? "that board"}…
@@ -3169,7 +3257,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           )}
           </div>
           <div className="flex items-center gap-3 px-5 py-1.5 shrink-0 text-[10.5px]"
-            style={{ borderTop: edge(10), color: "var(--text4)" }}>
+            style={{ borderTop: LINE, color: "var(--text4)" }}>
             {/* The provisional board counts itself, and says what it is: "9 of
                 9 · read just now" would be describing a board nobody is looking
                 at. */}
@@ -3178,7 +3266,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
               : <span>{rows.length} of {data?.tasks.length ?? 0}</span>}
             {/* Said, rather than left as a list that stops. */}
             {data?.truncated && (
-              <span style={{ color: "var(--warning)" }}
+              <span style={{ color: "var(--warning-ink)" }}
                 title="More than this was waiting. Open the board in ClickUp to see the rest.">
                 · and more behind it
               </span>
@@ -3245,14 +3333,13 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
             that width from the table you were reading to choose. */}
         {cardMode === "side" && picked && (
         <aside className="flex flex-col shrink-0 min-w-0"
-          style={{ width: cardW, borderLeft: edge(12) }}>
+          style={{ width: cardW, borderLeft: LINE }}>
           {/* No eyebrow over this pane. It said the word "Card" above a card,
               which was already earning its keep only by carrying the width
               button beside it — and the width is dragged from the edge now. A
               heading that labels the obvious costs the card its first line, and
               this pane starts level with the table's own heading instead. */}
-          <div className="agx-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 pb-0 text-[11.5px] flex flex-col"
-            style={{ paddingTop: 0 }}>
+          <div className="flex-1 min-h-0 overflow-hidden text-[11.5px] flex flex-col">
             {cardBody}
           </div>
         </aside>
@@ -3288,8 +3375,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                  below it and the reading area was the smaller half of a screen
                  that had already been given over to one card. */
               style={{ width: "min(1500px, 92vw)", height: "100%", maxHeight: "100%",
-                background: "var(--bg)", border: edge(22), boxShadow: "0 18px 50px rgba(0,0,0,0.45)" }}>
-              <div className="agx-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 pb-0 text-[11.5px] flex flex-col">
+                background: "var(--bg)", border: EDGE, boxShadow: "0 18px 50px rgba(0,0,0,0.45)" }}>
+              <div className="flex-1 min-h-0 overflow-hidden text-[11.5px] flex flex-col">
               {cardBody}
           </div>
             </div>
@@ -3344,7 +3431,8 @@ interface Pending {
  *
  * Dim, small, and not in a card of its own: these are the margin of the
  * conversation. A status change drawn with the weight of a comment is a timeline
- * where you cannot find what somebody said.
+ * where you cannot find what somebody said. Each line is an `agx-tiny` sitting
+ * on the timeline's rail, its face or bullet in the rail's node — see TL_CSS.
  */
 function EventRun({ events, open, onToggle, faceFor }: {
   events: CardEvent[]; open: boolean; onToggle: () => void;
@@ -3356,17 +3444,16 @@ function EventRun({ events, open, onToggle, faceFor }: {
   const foldable = folds({ kind: "events", at: events[0]?.at ?? 0, events, id: "" });
   const rows = foldable && !open ? [] : events;
   return (
-    <div className="mb-3">
+    <div className="agx-ev">
       {rows.map((e, i) => (
-        <div key={`${e.at}-${i}`} className="flex items-baseline gap-2 py-0.5 text-[10.5px]"
-          style={{ color: "var(--text3)" }}
+        <div key={`${e.at}-${i}`} className="agx-tiny"
           /* Why the moves have no name on them, on the row itself rather than
              in a footnote nobody reads. */
           title={e.kind === "status" ? NO_AUTHOR_NOTE : undefined}>
           {/* The face, where ClickUp gives one — the creation does, a move does
               not. Same round 14px as everywhere else, and the bullet keeps the
               rows that have no face aligned with the ones that do. */}
-          {(() => {
+          <span className="agx-node">{(() => {
             const seenWho = e.kind === "seen" ? seenActor(e.text ?? "").who : "";
             const person = seenWho ? faceFor?.(seenWho) : null;
             if (e.avatar) {
@@ -3391,7 +3478,7 @@ function EventRun({ events, open, onToggle, faceFor }: {
                   </span>;
             }
             return <span aria-hidden className="shrink-0 text-center" style={{ width: 14, color: "var(--text4)" }}>·</span>;
-          })()}
+          })()}</span>
           <span className="min-w-0 flex-1">
             {e.kind === "seen" && seenActor(e.text ?? "").who
               ? (() => {
@@ -3416,7 +3503,7 @@ function EventRun({ events, open, onToggle, faceFor }: {
                 off a notification on this machine, not from the API. */}
             {e.kind === "seen" && (
               <span className="ml-1.5 px-1 rounded text-[9.5px]"
-                style={{ color: "var(--text4)", border: edge(14) }}>seen here</span>
+                style={{ color: "var(--text4)", border: EDGE }}>seen here</span>
             )}
             {e.kind === "status" && e.from && e.mins ? (
               <span className="ml-1.5" style={{ color: "var(--text4)" }}>
@@ -3432,9 +3519,9 @@ function EventRun({ events, open, onToggle, faceFor }: {
       ))}
       {foldable && (
         <button onClick={onToggle}
-          className="agx-btn w-full text-left flex items-center gap-1.5 py-1 text-[10.5px]"
+          className="agx-btn agx-tiny w-full text-left"
           style={{ color: "var(--text4)" }}>
-          <span aria-hidden style={{ display: "inline-block", transform: open ? "none" : "rotate(-90deg)" }}>▾</span>
+          <span aria-hidden className="agx-node"><span style={{ display: "inline-block", transform: open ? "none" : "rotate(-90deg)" }}>▾</span></span>
           {open ? "Hide" : `Show ${foldLabel(events.length)}`}
         </button>
       )}
@@ -3474,7 +3561,7 @@ function FieldValue({ f }: { f: CardFieldValue }) {
     return (
       <a href={externalUrl(f.href) || undefined} target="_blank" rel="noreferrer noopener"
         className="text-[11.5px] truncate inline-block max-w-full align-bottom"
-        style={{ color: "var(--primary)" }} title={f.href}>
+        style={{ color: "var(--primary-ink)" }} title={f.href}>
         {f.value} <span aria-hidden style={{ color: "var(--text4)" }}>↗</span>
       </a>
     );
@@ -3561,7 +3648,7 @@ function FieldDate({ t, f, busy, onApply }: {
         });
       }}
       className="text-[11px] px-1.5 py-0.5 rounded outline-none"
-      style={{ background: "transparent", color: "var(--text2)", border: edge(16), colorScheme: "dark" }} />
+      style={{ background: "transparent", color: "var(--text2)", border: EDGE, colorScheme: "dark" }} />
   );
 }
 
@@ -3589,7 +3676,7 @@ function FieldPick({ t, f, spec, busy, onApply }: {
       </button>
       {open && (
         <div className="agx-scroll absolute left-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-y-auto py-1"
-          style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 180, maxHeight: 280 }}>
+          style={{ zIndex: 30, background: "var(--surface-card)", border: edge(28), minWidth: 180, maxHeight: 280 }}>
           {(spec.options ?? []).map((o) => (
             <button key={o.id} className="text-left px-2 py-1.5 hover:bg-white/5"
               onClick={() => {
@@ -3679,15 +3766,15 @@ function AboutList({ name, text, url, onClose }: {
         className="fixed left-1/2 top-1/2 flex flex-col min-h-0 rounded-xl overflow-hidden"
         style={{
           transform: "translate(-50%, -50%)", width: "min(760px, 92vw)", maxHeight: "82vh",
-          background: "var(--bg)", border: edge(22), boxShadow: "0 18px 50px rgba(0,0,0,0.45)",
+          background: "var(--bg)", border: EDGE, boxShadow: "0 18px 50px rgba(0,0,0,0.45)",
         }}>
-        <div className="flex items-center gap-2 px-4 py-2.5 shrink-0" style={{ borderBottom: edge(12) }}>
+        <div className="flex items-center gap-2 px-4 py-2.5 shrink-0" style={{ borderBottom: LINE }}>
           <span className="text-[12.5px]" style={{ color: "var(--text)" }}>{name}</span>
           <span className="text-[10px]" style={{ color: "var(--text4)" }}>what this list is for</span>
           <span className="flex-1" />
           {externalUrl(url ?? "") && (
             <button onClick={() => openExternal(url!)} className="text-[10.5px] px-2 py-0.5 rounded-lg"
-              style={{ border: edge(16), color: "var(--text3)" }}>Open in ClickUp ↗</button>
+              style={{ border: EDGE, color: "var(--text3)" }}>Open in ClickUp ↗</button>
           )}
           <CloseButton onClick={onClose} title="Close (Esc)" />
         </div>
@@ -3739,7 +3826,7 @@ function AboutBody({ text }: { text: string }) {
         /* No count: the empty rows are a mix of section headings (`Docs:`,
            `Team:`) and genuinely missing chips, and a number that lumps them
            together is a number that is wrong. */
-        <div className="mt-3 pt-2 text-[10.5px]" style={{ borderTop: edge(10), color: "var(--text4)" }}>
+        <div className="mt-3 pt-2 text-[10.5px]" style={{ borderTop: LINE, color: "var(--text4)" }}>
           The blanks are ClickUp's own cards — a Doc, a Figma file, a Slack channel. Its API publishes the words and keeps those to itself; open the list there to follow them.
         </div>
       )}
@@ -3760,7 +3847,7 @@ function AboutValue({ text }: { text: string }) {
         if (pr) {
           return (
             <button key={i} onClick={() => openPr(pr.repo, pr.number)} title={`Open #${pr.number} here`}
-              className="underline underline-offset-2" style={{ color: "var(--primary)" }}>
+              className="underline underline-offset-2" style={{ color: "var(--primary-ink)" }}>
               #{pr.number} <span style={{ color: "var(--text4)" }}>{pr.repo}</span>
             </button>
           );
@@ -3768,7 +3855,7 @@ function AboutValue({ text }: { text: string }) {
         if (/^https?:\/\//.test(p)) {
           return (
             <button key={i} onClick={() => openExternal(p)} title={p}
-              className="underline underline-offset-2 break-all" style={{ color: "var(--primary)" }}>{p}</button>
+              className="underline underline-offset-2 break-all" style={{ color: "var(--primary-ink)" }}>{p}</button>
           );
         }
         /* A card id, or a branch that carries one. Both open the card: a branch
@@ -3778,7 +3865,7 @@ function AboutValue({ text }: { text: string }) {
           const id = p.match(/^[A-Z][A-Z0-9]+-\d+/)?.[0] ?? p;
           return (
             <button key={i} onClick={() => openCard(id, id)} title={p.length > id.length ? `${p} — open ${id}` : `Open ${id}`}
-              className="underline underline-offset-2" style={{ color: "var(--primary)" }}>{p}</button>
+              className="underline underline-offset-2" style={{ color: "var(--primary-ink)" }}>{p}</button>
           );
         }
         return <span key={i}>{p}</span>;
@@ -3818,7 +3905,7 @@ function Breadcrumb({ place, className, onList }: {
               ? (
                 <button onClick={go} title={`Open ${p}`}
                   className="agx-btn truncate rounded px-1 -mx-1 hover:underline"
-                  style={{ color: "var(--primary)" }}>{p}</button>
+                  style={{ color: "var(--primary-ink)" }}>{p}</button>
               )
               : <span className="truncate" style={{ color: last ? "var(--text2)" : "var(--text4)" }}>{p}</span>}
           </span>
@@ -3878,8 +3965,8 @@ function AddBoardBar({ value, onValue, onAdd, onClose, busy, editing, folders, o
             onKeyDown={(e) => { if (e.key === "Enter") onAdd(); if (e.key === "Escape") { e.stopPropagation(); onClose(); } }}
             placeholder={editing ? `New address for ${editing} — the board itself is untouched` : "Paste the address of a ClickUp board — the one in your browser's bar"}
             spellCheck={false} autoComplete="off"
-            className="flex-1 min-w-0 text-[11.5px] px-2.5 py-1.5 rounded-lg outline-none"
-            style={{ background: "var(--bg2)", border: edge(18), color: "var(--text)" }} />
+            className={`flex-1 min-w-0 ${INPUT}`}
+            style={INPUT_STYLE} />
           <button onClick={onAdd} disabled={busy || !value.trim()}
             className="text-[11.5px] px-3 py-1.5 rounded-lg"
             style={{ background: "color-mix(in srgb, var(--primary) 20%, transparent)",
@@ -3951,14 +4038,14 @@ function FolderPicker({ folders, busy, onAdd, onAddList }: {
   const on = new Set(folders.map((f) => f.id));
   const spaceName = spaces?.find((x) => x.id === space)?.name ?? "";
 
-  if (err) return <div className="text-[11px] py-1" style={{ color: "var(--error)" }}>{err}</div>;
+  if (err) return <div className="text-[11px] py-1" style={{ color: "var(--error-ink)" }}>{err}</div>;
   if (!spaces) return <div className="text-[11px] py-1" style={{ color: "var(--text4)" }}>Reading your workspace…</div>;
 
   return (
     <div className="flex flex-col gap-1.5">
       <select value={space} onChange={(e) => setSpace(e.target.value)}
         className="text-[11.5px] px-2 py-1.5 rounded-lg self-start min-w-[200px]"
-        style={{ background: "var(--bg2)", border: edge(18), color: "var(--text)" }}>
+        style={{ background: "var(--surface-inset)", border: EDGE, color: "var(--text)" }}>
         {spaces.map((sp) => <option key={sp.id} value={sp.id}>{sp.name}</option>)}
       </select>
       {!found ? (
@@ -3989,7 +4076,7 @@ function FolderPicker({ folders, busy, onAdd, onAddList }: {
                 title={`A list sitting directly in this space${typeof row.list.tasks === "number" ? ` — ${row.list.tasks} task${row.list.tasks === 1 ? "" : "s"}` : ""}. Open it to pick which of its views to add.`}
                 className="text-[11px] px-2 py-1 rounded-lg flex items-center gap-1.5"
                 style={{
-                  border: openList === row.list.id ? "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" : edge(18),
+                  border: openList === row.list.id ? "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" : EDGE,
                   color: openList === row.list.id ? "var(--text)" : "var(--text2)",
                   opacity: busy ? 0.5 : 1,
                 }}>
@@ -4043,21 +4130,21 @@ function ListViews({ listId, busy, onPick }: { listId: string; busy: boolean; on
     return () => { live = false; };
   }, [listId]);
 
-  if (err) return <div className="text-[11px] py-1" style={{ color: "var(--error)" }}>{err}</div>;
+  if (err) return <div className="text-[11px] py-1" style={{ color: "var(--error-ink)" }}>{err}</div>;
   if (!views) return <div className="text-[11px] py-1" style={{ color: "var(--text4)" }}>Reading its views…</div>;
 
   const ql = q.trim().toLowerCase();
   const shown = ql ? views.filter((v) => v.name.toLowerCase().includes(ql)) : views;
 
   return (
-    <div className="flex flex-col gap-1.5 mt-1 p-2 rounded-lg" style={{ border: edge(18), background: "var(--bg2)" }}>
+    <div className="flex flex-col gap-1.5 mt-1 p-2 rounded-lg" style={{ border: EDGE, background: "var(--surface-card)" }}>
       <div className="flex items-center gap-2">
         <span className="text-[10px] uppercase tracking-[0.12em]" style={{ color: "var(--text4)" }}>views in this list</span>
         <span className="tabular-nums text-[10px]" style={{ color: "var(--text4)" }}>{views.length}</span>
         {views.length > 8 && (
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter…"
-            className="ml-auto text-[11px] px-2 py-0.5 rounded outline-none w-[140px]"
-            style={{ background: "var(--bg)", border: edge(18), color: "var(--text)" }} />
+            className={`ml-auto w-[140px] ${INPUT}`}
+            style={INPUT_STYLE} />
         )}
       </div>
       <div className="flex flex-wrap gap-1.5">
@@ -4066,11 +4153,11 @@ function ListViews({ listId, busy, onPick }: { listId: string; busy: boolean; on
         <button disabled={busy} onClick={() => onPick(listId)}
           title="The list, on whichever view ClickUp treats as its default"
           className="text-[11px] px-2 py-1 rounded-lg"
-          style={{ border: edge(18), color: "var(--text3)", opacity: busy ? 0.5 : 1 }}>the list itself</button>
+          style={{ border: EDGE, color: "var(--text3)", opacity: busy ? 0.5 : 1 }}>the list itself</button>
         {shown.map((v) => (
           <button key={v.id} disabled={busy} onClick={() => onPick(v.id)}
             className="text-[11px] px-2 py-1 rounded-lg"
-            style={{ border: edge(18), color: "var(--text2)", opacity: busy ? 0.5 : 1 }}>
+            style={{ border: EDGE, color: "var(--text2)", opacity: busy ? 0.5 : 1 }}>
             <span className="truncate max-w-[190px] inline-block align-bottom">{v.name}</span>
           </button>
         ))}
@@ -4114,7 +4201,7 @@ function Folder({ f, on, busy, onAdd }: {
                 : `${f.lists.length} list${f.lists.length === 1 ? "" : "s"} — added whole, so new ones turn up on their own`}
               className="text-[11px] px-2 py-1 rounded-lg flex items-center gap-1.5"
               style={{
-                border: on ? "1px solid color-mix(in srgb, var(--success) 40%, transparent)" : edge(18),
+                border: on ? "1px solid color-mix(in srgb, var(--success) 40%, transparent)" : EDGE,
                 color: on ? "var(--success)" : "var(--text2)",
                 opacity: busy ? 0.5 : 1,
               }}>
@@ -4136,7 +4223,7 @@ function AddFirstBoard({ value, onValue, onAdd, busy, note, why }: {
   return (
     <div className="flex flex-col items-center justify-center flex-1 gap-3 p-8 text-center">
       <div className="text-[13px]" style={{ color: "var(--text)" }}>Nothing to read yet</div>
-      {why && <div className="text-[11.5px]" style={{ color: "var(--warning)" }}>{why}</div>}
+      {why && <div className="text-[11.5px]" style={{ color: "var(--warning-ink)" }}>{why}</div>}
       <div className="text-[11.5px] max-w-[52ch]" style={{ color: "var(--text3)" }}>
         Once ClickUp is connected, <b style={{ color: "var(--text2)" }}>Assigned to me</b> is here
         without adding anything. To work from a particular board as well, open it in ClickUp and
@@ -4147,8 +4234,8 @@ function AddFirstBoard({ value, onValue, onAdd, busy, note, why }: {
         <input autoFocus value={value} onChange={(e) => onValue(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") onAdd(); }}
           placeholder="Paste a board address" spellCheck={false} autoComplete="off"
-          className="flex-1 min-w-0 text-[11.5px] px-2.5 py-1.5 rounded-lg outline-none"
-          style={{ background: "var(--bg2)", border: edge(18), color: "var(--text)" }} />
+          className={`flex-1 min-w-0 ${INPUT}`}
+          style={INPUT_STYLE} />
         <button onClick={onAdd} disabled={busy || !value.trim()}
           className="text-[11.5px] px-3 py-1.5 rounded-lg"
           style={{ background: "color-mix(in srgb, var(--primary) 20%, transparent)",
@@ -4159,7 +4246,7 @@ function AddFirstBoard({ value, onValue, onAdd, busy, note, why }: {
       </div>
       {note && <div className="text-[11px]" style={{ color: note.ok ? "var(--success)" : "var(--error)" }}>{note.text}</div>}
       <button onClick={() => openSettings("connections")} className="text-[10.5px] px-2 py-1 rounded-lg mt-1"
-        style={{ border: edge(16), color: "var(--text3)" }}>ClickUp settings</button>
+        style={{ border: EDGE, color: "var(--text3)" }}>ClickUp settings</button>
     </div>
   );
 }
@@ -4178,6 +4265,31 @@ const CARD_W_KEY = "agentglass.clickup.cardWidth";
 const RAIL_KEY = "agentglass.clickup.listRail";
 /** Which folders in that rail are folded shut, by folder key. */
 const RAIL_SHUT_KEY = "agentglass.clickup.listRail.shut";
+const RAIL_W_KEY = "agentglass.clickup.listRail.width";
+/** Where a row starts, and how far each level steps in. The guide lines and the
+ *  twisties are placed from these, so they cannot drift from the text. */
+const RAIL_PAD = 6;
+const RAIL_STEP = 12;
+
+/** One visible row of the rail, in reading order. See `railRows`. */
+interface RailRow {
+  key: string;
+  level: number;
+  kind: "space" | "folder" | "list" | "builtin" | "view" | "link" | "looked";
+  label: string;
+  title: string;
+  v?: SavedView;
+  link?: { id: string; name: string; type: string };
+  folder?: SavedFolder;
+  /** The key in the folded-shut map, on a space or a folder. */
+  group?: string;
+  /** Undefined on a leaf: it has no twisty. */
+  expanded?: boolean;
+  count?: number;
+  /** Other views this list has, behind its twisty. */
+  more?: number;
+  sepAfter?: boolean;
+}
 const CARD_MODE_KEY = "agentglass.clickup.cardMode";
 /** The width it goes back to. The old narrow setting, kept as the default
  *  because it is the one most cards are read at. */
@@ -4247,8 +4359,6 @@ const ON_CHIP_OK = {
   background: "var(--success)", border: "1px solid var(--success)", color: "var(--bg)", fontWeight: 600,
 } as const;
 
-const CU_POLL_MS = 60_000;
-const CU_POLL_SLOW_MS = 300_000;
 
 /*
  * The columns, and the ones that come and go.
@@ -4273,6 +4383,22 @@ const CU_POLL_SLOW_MS = 300_000;
  * read: it is not a preference, it is the point where the row stops working.
  */
 const TABLE_MIN_W = 720;
+
+/**
+ * The base of every cell that can wear a column rule, in the heading and in
+ * each row: it stretches to the full height of the row and carries the row's
+ * vertical padding itself, so the hairline (`.agx-colrule`, index.css) runs
+ * from the row's top edge to its bottom edge and meets the next row's and the
+ * heading's. Heading and rows share `cuGrid` and the same right padding, so
+ * the tracks, and so the rules, are at the same x. The hairline is a pseudo
+ * element in the middle of the 16px gap, not a border on the cell: a border
+ * moves the content or the column, and the first attempt at it drew two lines
+ * between Task and PR (the frozen Task cell's own edge, plus this one) and put
+ * the rows' rules 8px off the heading's.
+ */
+const COL_RULE: CSSProperties = {
+  alignSelf: "stretch", display: "grid", alignContent: "center", paddingBlock: 6,
+};
 
 /**
  * The height both headers share.
@@ -4303,10 +4429,16 @@ const cuGrid = (who: boolean, squad: boolean, sprint: boolean, est: boolean, for
   // to have been told, and this column is the one thing on the row that is pure
   // colour — so it pays for the label that says which field it is.
   // Looked-up rows carry a "forget this one" control the board rows do not.
-  // Its own track, not a floating overlay on top of the last column: a button
-  // with nothing under it is easy, a button on top of the ↗ chip is the thing
-  // this table stopped doing.
-  ["1fr", who ? "50px" : "", squad ? "36px" : "", sprint ? "88px" : "", "34px", "72px", est ? "38px" : "", "30px", "40px", forget ? "30px" : ""].filter(Boolean).join(" ");
+  // Its own track, not a floating overlay on top of the last column.
+  // There is no per-row "open in ClickUp" track: the card's sidebar has Open ↗
+  // and the row menu has Open in ClickUp, so a column of arrows was a second
+  // way in that cost 40px of every row.
+  // PR sits right after the title, its own track rather than a layer on top of
+  // it. Fixed width and always present — like
+  // Cmts and Pts, a card with none draws an empty cell rather than shifting
+  // its neighbours. 92px holds the widest chip, "#NNNNN +N"; at 58 it ran
+  // into the avatars.
+  ["1fr", "92px", who ? "50px" : "", squad ? "36px" : "", sprint ? "88px" : "", "34px", "72px", est ? "38px" : "", "30px", forget ? "30px" : ""].filter(Boolean).join(" ");
 
 /**
  * The one custom field worth a column of its own: a coloured drop-down.
@@ -4392,10 +4524,14 @@ function NoteStrip({ note, onClose }: { note: { ok: boolean; text: string; go?: 
   );
 }
 
-function Face({ p, n }: { p: NonNullable<ProviderTask["people"]>[number]; n: number }) {
+function Face({ p, n, size = 18 }: {
+  p: NonNullable<ProviderTask["people"]>[number]; n: number;
+  /** 18 in a row of faces; `TL_AVATAR` for the speaker beside a comment. */
+  size?: number;
+}) {
   const ring = p.me ? "var(--success)" : "transparent";
   const base = {
-    width: 18, height: 18, borderRadius: 999, marginLeft: n ? -5 : 0,
+    width: size, height: size, borderRadius: 999, marginLeft: n ? -5 : 0,
     boxShadow: `0 0 0 1.5px ${ring}, 0 0 0 3px var(--bg)`,
     /*
      * Small, and deliberately so. This orders the faces AMONG THEMSELVES — the
@@ -4420,7 +4556,7 @@ function Face({ p, n }: { p: NonNullable<ProviderTask["people"]>[number]; n: num
   return (
     <span title={p.me ? `${p.name} — you` : p.name}
       className="inline-flex items-center justify-center text-[10px] font-medium"
-      style={{ ...base, position: "relative", background: p.color || "var(--bg4)", color: "#fff" }}>
+      style={{ ...base, position: "relative", background: p.color || "var(--bg4)", color: "#fff", ...(size > 18 ? { fontSize: Math.round(size * 0.35) } : {}) }}>
       {p.initials}
     </span>
   );
@@ -4487,16 +4623,16 @@ const ROW_CHIP = "text-[9.5px] px-1.5 py-0.5 rounded-md whitespace-nowrap";
  */
 const TAG_PILL = "text-[10px] px-1.5 py-0.5 rounded-md whitespace-nowrap leading-none";
 const TAG_FILL = "color-mix(in srgb, var(--text) 6%, transparent)";
-const TAG_EDGE = "1px solid color-mix(in srgb, var(--text) 13%, transparent)";
+const TAG_EDGE = EDGE;
 /** The id is a chip too, and a slightly cooler one, so the eye can still pick
  *  it out of a row of tags without it being a different KIND of thing. */
 const ID_FILL = "color-mix(in srgb, var(--primary) 9%, transparent)";
 
 /*
- * Two rules, and only two: `edge(10)` parts the SECTIONS of a card, `edge(14)` parts
- * the groups inside a menu. There were three, the third being an `edge(12)` in two
- * popovers that nobody chose — a hairline a shade darker than the identical one in the
- * menu beside it.
+ * One rule: `LINE` parts the sections of a card and the groups inside a menu alike.
+ * There were three weights for that one job (10, 12 and 14), the 12 in two popovers
+ * that nobody chose — a hairline a shade darker than the identical one in the menu
+ * beside it.
  */
 
 /**
@@ -4561,7 +4697,7 @@ function PriorityPick({ t, writable, busy, onApply }: {
       </button>
       {open && (
         <div className="absolute left-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-hidden"
-          style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 150 }}>
+          style={{ zIndex: 30, background: "var(--surface-card)", border: edge(28), minWidth: 150 }}>
           {[...PRIOS, { id: "", label: "None", c: "var(--text4)" } as const]
             .filter((o) => o.id !== (t.priority ?? ""))
             .map((o) => (
@@ -4577,7 +4713,7 @@ function PriorityPick({ t, writable, busy, onApply }: {
   );
 }
 
-function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint, showEst, blocked, onHand, onForget }: {
+function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint, showEst, blocked, onHand, onForget, repos, here }: {
   t: ProviderTask; today: string; on: boolean; onPick: () => void;
   grid: string; showWho: boolean; showSquad: boolean; showSprint: boolean; showEst: boolean;
   /** Unfinished cards this one is waiting on. Empty means it can be started. */
@@ -4588,6 +4724,9 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
   /** Drop this card from Looked up. Only that section's rows get the column —
    *  the board proper has nothing to forget. */
   onForget?: () => void;
+  /** Where `clickup/prs` looks for this card's repository — same inputs
+   *  `rootForTask` already takes in the card's own sidebar. */
+  repos: GitRepoRef[]; here: string;
 }) {
   /*
    * The three things you want from a row without opening it.
@@ -4611,17 +4750,36 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
   const now = t.due === today;
   const done = t.statusKind === "done";
   const sq = showSquad ? swatch(t) : null;
+
+  /*
+   * The card's pull requests, read through the shared cache rather than
+   * fetched here: see cardPrStore.ts for why a search per row per render is
+   * not on the table. `useSyncExternalStore` re-renders this one row the
+   * moment the cache's answer lands, without the board re-fetching anything.
+   */
+  useSyncExternalStore(onCardPrs, cardPrVersion, cardPrVersion);
+  const prField = t.custom?.find((c) => /github/i.test(c.name))?.value ?? "";
+  const prCwd = rootForTask(t.list, repos, here) ?? here;
+  const prEntry = cardPrsOf(t.id, t.customId || "", prField, prCwd);
+  const prPick = pickCardPr(prEntry?.prs);
+  const [prMenu, setPrMenu] = useState<{ x: number; y: number } | null>(null);
+  const openCardPr = (p: CardPr) => {
+    const ref = prRefFromUrl(p.url);
+    if (ref) openPr(ref.repo, p.number);
+    else openPrs(String(p.number), p.state === "OPEN" ? "open" : "all");
+  };
+
   return (
     <div role="row" tabIndex={0} aria-current={on ? "true" : undefined} onClick={onPick}
       onKeyDown={(e) => { if (e.key === "Enter") onPick(); }}
       onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY }); }}
-      className="agx-row w-full text-left pr-4 py-1.5 hover:bg-white/5 cursor-pointer items-center"
+      className="agx-row w-full text-left pr-4 hover:bg-white/5 cursor-pointer items-center"
       style={{
         /* 8px of gap put a two-character number a hair from the next one, and
            with everything right-aligned the columns read as one ragged block.
-           14 plus the hairlines below is what separates them; the numbers are
+           16 plus the hairlines below is what separates them; the numbers are
            centred in their own track rather than crowded against its edge. */
-        display: "grid", gridTemplateColumns: grid, gap: 14, borderBottom: edge(6), position: "relative",
+        display: "grid", gridTemplateColumns: grid, gap: 16, borderBottom: LINE, position: "relative",
         /* Matches the heading above it. Without it the row squeezes while the
            heading scrolls, and the two stop lining up. */
         minWidth: TABLE_MIN_W,
@@ -4642,7 +4800,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
           {!!blocked.length && (
             <span className={`${ROW_CHIP} tracking-[0.06em] shrink-0 tabular-nums`}
               title={`Waiting on ${blocked.map((b) => `${shortName(b.title, b.customId ?? b.id)} — ${b.title}`).join("\n")}`}
-              style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 14%, transparent)" }}>
+              style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 14%, transparent)" }}>
               <BlockedIcon size={ICON.xs} className="inline-block align-[-2px] mr-1" />{shortName(blocked[0]!.title, blocked[0]!.customId ?? blocked[0]!.id)}
               {blocked.length > 1 ? ` +${blocked.length - 1}` : ""}
             </span>
@@ -4696,8 +4854,53 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
           ))}
         </div>
       </div>
+      {/* The pull request, own track beside the title. Empty when there is
+          none — like Cmts and Pts — rather than shifting its neighbours. */}
+      <span className="flex items-center min-w-0 overflow-hidden" style={{ ...COL_RULE, display: "flex" }}>
+        {prPick.kind !== "none" && (() => {
+          const shown = prPick.kind === "one" ? prPick.pr : prPick.primary;
+          const restCount = prPick.kind === "many" ? prPick.rest.length : 0;
+          const tint = cardPrTint(shown);
+          const ink = cardPrInk(shown);
+          const label = shown.draft ? "Draft" : shown.state === "MERGED" ? "Merged" : shown.state === "CLOSED" ? "Closed" : "Open";
+          return (
+            <button type="button"
+              onClick={(e) => { e.stopPropagation(); if (prPick.kind === "many") { const r = e.currentTarget.getBoundingClientRect(); setPrMenu({ x: r.left, y: r.bottom + 4 }); } else { openCardPr(shown); } }}
+              className="agx-onrow inline-flex items-center gap-1 rounded-full shrink-0 whitespace-nowrap px-1.5 py-0.5 hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1"
+              style={{
+                color: ink, background: `color-mix(in srgb, ${tint} 13%, transparent)`,
+                border: `1px solid color-mix(in srgb, ${tint} 40%, transparent)`,
+                outlineColor: tint,
+              }}
+              title={`${label} pull request #${shown.number}${shown.author ? (shown.mine ? ", yours" : ` by @${shown.author}`) : ""}${restCount ? ` (+${restCount} more)` : ""} — ${shown.title}`}>
+              <PullRequestIcon size={ICON.xs} />
+              <span className="text-[10.5px] tabular-nums font-mono leading-none">#{shown.number}</span>
+              {restCount > 0 && <span className="text-[9.5px] leading-none" style={{ opacity: 0.85 }}>+{restCount}</span>}
+            </button>
+          );
+        })()}
+        {prMenu && prPick.kind === "many" && (
+          <ContextMenu x={prMenu.x} y={prMenu.y} onClose={() => setPrMenu(null)}>
+            {sortedCardPrs([prPick.primary, ...prPick.rest]).map((p) => (
+              <MenuItem key={p.number} onClick={() => { setPrMenu(null); openCardPr(p); }}>
+                <span className="flex items-center gap-1.5 min-w-0 w-full">
+                  <span className="shrink-0" style={{ width: 7, height: 7, borderRadius: 999, background: cardPrTint(p) }} />
+                  <span className="tabular-nums font-mono shrink-0">#{p.number}</span>
+                  <span className="truncate" style={{ color: "var(--text3)" }}>{p.title}</span>
+                  {p.author && (
+                    <span className="shrink-0 ml-auto pl-3 font-mono text-[10.5px]"
+                      style={{ color: p.mine ? "var(--primary)" : "var(--text4)" }}>
+                      {p.mine ? "you" : `@${p.author}`}
+                    </span>
+                  )}
+                </span>
+              </MenuItem>
+            ))}
+          </ContextMenu>
+        )}
+      </span>
       {showWho && (
-        <span className="flex items-center pl-1">
+        <span className="flex items-center agx-colrule" style={{ ...COL_RULE, display: "flex" }}>
           {(t.people ?? []).slice(0, 3).map((p, n) => <Face key={n} p={p} n={n} />)}
           {(t.people?.length ?? 0) > 3 && (
             <span className="text-[8.5px] ml-1" style={{ color: "var(--text4)" }}>+{(t.people!.length) - 3}</span>
@@ -4712,7 +4915,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
           the value are both on hover, because a colour on its own is only
           learnable by someone who already knows the board. */}
       {showSquad && (
-        <span className="flex items-center justify-center">
+        <span className="flex items-center justify-center agx-colrule" style={{ ...COL_RULE, display: "flex" }}>
           {sq && (
             <span title={`${sq.name}: ${sq.value}`} aria-label={`${sq.name}: ${sq.value}`}
               style={{
@@ -4725,8 +4928,10 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
         </span>
       )}
       {showSprint && (
-        <span className="truncate text-[10.5px]" style={{ color: t.sprint ? "var(--info)" : "var(--text4)" }}
-          title={t.sprint ?? ""}>{t.sprint ?? ""}</span>
+        <span className="agx-colrule" style={COL_RULE}>
+          <span className="truncate text-[10.5px]" style={{ color: t.sprint ? "var(--info)" : "var(--text4)" }}
+            title={t.sprint ?? ""}>{t.sprint ?? ""}</span>
+        </span>
       )}
       {/* Blank when the count is not known, 0 when it is known to be zero. The
           two are different facts and the workspace does not report either on a
@@ -4734,43 +4939,34 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
           on the first sight of a board. Dimmer at zero, because a card nobody
           has commented on is the uninteresting case and should not draw the
           eye the way a thread does. */}
-      <span className="text-[11px] tabular-nums text-center"
+      <span className="text-[11px] tabular-nums text-center agx-colrule"
         title={t.comments == null ? "Not counted yet" : `${t.comments} comment${t.comments === 1 ? "" : "s"}`}
-        // The rule runs the height of the table because every row draws its own
-        // segment; the heading draws the top one.
         style={{
-          borderLeft: edge(6), paddingLeft: 8, marginLeft: -8,
+          ...COL_RULE,
           color: t.comments ? "var(--text3)" : "var(--text4)", opacity: t.comments ? 1 : 0.55,
         }}>
         {t.comments ?? ""}
       </span>
-      <span className="text-[11px] tabular-nums" style={{ color: late ? "var(--error)" : now ? "var(--warning)" : "var(--text3)" }}>
+      <span className="text-[11px] tabular-nums agx-colrule" style={{ ...COL_RULE, color: late ? "var(--error)" : now ? "var(--warning)" : "var(--text3)" }}>
         {dueLabel(t.due, today)}
       </span>
       {/* 11px like every other number in the row. It was 10.5, which on a line of
           figures reads as a column somehow less certain than the ones beside it. */}
       {showEst && (
-        <span className="text-[11px] tabular-nums text-center" style={{ color: "var(--text4)" }}
+        <span className="text-[11px] tabular-nums text-center agx-colrule" style={{ ...COL_RULE, color: "var(--text4)" }}
           title={t.estimateHours ? `${t.estimateHours}h estimated${t.spentHours ? `, ${t.spentHours}h logged` : ""}` : ""}>
           {t.estimateHours ? `${t.estimateHours}h` : ""}
         </span>
       )}
-      <span className="text-[11px] tabular-nums text-center"
-        style={{ color: "var(--text4)", borderLeft: edge(6), paddingLeft: 8, marginLeft: -8 }}>{t.points ?? ""}</span>
-      <span className="text-right">
-        {t.url && (
-          <a href={t.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
-            className={`agx-onrow ${ROW_CHIP} inline-block`}
-            style={{ border: edge(16), color: "var(--text2)" }}>↗</a>
-        )}
-      </span>
-      {/* Its own track, not a layer on top of the ↗ chip above: a row you can
+      <span className="text-[11px] tabular-nums text-center agx-colrule"
+        style={{ ...COL_RULE, color: "var(--text4)" }}>{t.points ?? ""}</span>
+      {/* Its own track, not a layer on top of the last cell: a row you can
           forget lives in the grid like every other cell, and only its opacity
           — never its position — answers the hover. */}
       {onForget && (
         <CloseButton onClick={(e) => { e.stopPropagation(); onForget(); }} title="Forget this one"
           className="agx-onrow justify-self-end"
-          style={{ color: "var(--text3)", background: "var(--bg2)", border: edge(14) }} />
+          style={{ color: "var(--text3)", background: "var(--surface-card)", border: EDGE }} />
       )}
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
@@ -4785,7 +4981,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
               only way to get it was to open the card in a browser and read it
               out of the bar. Next to the ids because it is the third thing this
               row can hand you, and above "Open" because copying is what you
-              came to the menu for; opening has a ↗ on the row itself. */}
+              came to the menu for; opening from the card is the sidebar's Open ↗. */}
           {t.url && (
             <MenuItem onClick={() => copy(t.url, "the card link")}>Copy card URL</MenuItem>
           )}
@@ -4805,7 +5001,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
         /* Out of the grid: this row's columns are measured across every row on
            the board, and a fifth child would shift them all for a second. */
         <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[9.5px] px-1.5 py-0.5 rounded pointer-events-none"
-          style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 16%, var(--bg2))" }}>
+          style={{ color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 16%, var(--bg2))" }}>
           {said} copied
         </span>
       )}
@@ -4860,13 +5056,13 @@ function StatusFilter({ statuses, tasks, picked, onPick }: {
     <div className="relative" ref={box}>
       <button onClick={() => setOpen((o) => !o)} aria-expanded={open}
         className="flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap"
-        style={picked.length ? ON_CHIP : { border: edge(14), color: "var(--text2)" }}>
+        style={picked.length ? ON_CHIP : { border: EDGE, color: "var(--text2)" }}>
         {picked.length ? `${picked.length} selected` : "Status"}
         <span style={{ color: picked.length ? "var(--bg)" : "var(--text4)", opacity: picked.length ? 0.7 : 1 }}>▾</span>
       </button>
       {open && (
         <div className="agx-scroll absolute left-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-y-auto"
-          style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 236, maxHeight: 380 }}>
+          style={{ zIndex: 30, background: "var(--surface-card)", border: edge(28), minWidth: 236, maxHeight: 380 }}>
           {!!picked.length && (
             <button onClick={() => { onPick([]); setOpen(false); }}
               className="text-left px-2.5 py-1.5 text-[10.5px] hover:bg-white/5" style={{ color: "var(--text3)" }}>
@@ -4876,7 +5072,7 @@ function StatusFilter({ statuses, tasks, picked, onPick }: {
           {working.map((s) => <Row key={s.status} s={s} />)}
           {!!finished.length && (
             <div className={`px-2.5 pt-2 pb-1 ${EYEBROW}`}
-              style={{ color: "var(--text4)", borderTop: edge(10) }}>Done</div>
+              style={{ color: "var(--text4)", borderTop: LINE }}>Done</div>
           )}
           {finished.map((s) => <Row key={s.status} s={s} />)}
         </div>
@@ -4908,12 +5104,14 @@ function DepRow({ d, onGo }: { d: ProviderTask; onGo: (id: string) => void }) {
  *
  * They were four bare words in a row — Reply Edit Resolve Delete — under the
  * paragraph, which reads as a line of text somebody forgot to delete rather
- * than as controls: "no parecen ni botones". An icon, a label, a border and a
- * 24px hit area each; the destructive one keeps its own colour and is held
- * apart from the other three by a rule.
+ * than as controls. An icon, a label, a border and the compact control height
+ * each (`CTRL_H.compact`, a control inside a card); the destructive one keeps
+ * its own colour and is held apart from the other three by a rule.
  */
-function CommentAction({ label, title, d, onClick, busy, on, tone }: {
+function CommentAction({ label, title, d, onClick, busy, on, tone, iconOnly }: {
   label: string; title: string; d: string;
+  /** The label stays as the tooltip and aria-label; only the glyph is drawn. */
+  iconOnly?: boolean;
   onClick: () => void;
   busy?: boolean;
   /** Already in that state — Resolve on a resolved comment. */
@@ -4923,9 +5121,10 @@ function CommentAction({ label, title, d, onClick, busy, on, tone }: {
   const colour = on ? (tone ?? "var(--success, #98c379)") : tone && label === "Delete" ? tone : "var(--text3)";
   return (
     <button onClick={onClick} disabled={busy} title={title} aria-label={title} aria-pressed={on || undefined}
-      className="agx-btn inline-flex items-center gap-1 rounded-md px-1.5 text-[10.5px]"
+      className={`agx-btn inline-flex items-center justify-center gap-1 rounded-md text-[10.5px] ${iconOnly ? "" : "px-1.5"}`}
       style={{
-        height: 24,
+        height: CTRL_H.compact,
+        ...(iconOnly ? { width: CTRL_H.compact } : null),
         color: colour,
         border: `1px solid color-mix(in srgb, ${on ? (tone ?? "var(--success, #98c379)") : "var(--text)"} ${on ? 40 : 14}%, transparent)`,
         background: on ? `color-mix(in srgb, ${tone ?? "var(--success, #98c379)"} 12%, transparent)` : "transparent",
@@ -4934,8 +5133,51 @@ function CommentAction({ label, title, d, onClick, busy, on, tone }: {
         strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
         <path d={d} />
       </svg>
-      {label}
+      {!iconOnly && label}
     </button>
+  );
+}
+
+/** The thin bar of SCROLLBAR_CSS, without its arrow buttons. `scrollbar-width`
+ *  makes Chrome ignore the ::-webkit- rules, and its own thin bar still draws a
+ *  ▲ at the top and a ▼ at the bottom (measured in the running app), so this
+ *  pane hands the styling back to the pseudo-elements and hides the buttons. */
+/** The share of the card pane the pinned comment box may take before it scrolls inside. */
+const COMPOSER_SHARE = 0.3;
+const CARD_SCROLL_CSS = ".agx-scroll.agx-cu-scroll{scrollbar-width:auto;scrollbar-color:auto}.agx-cu-scroll::-webkit-scrollbar-button{display:none;width:0;height:0}";
+
+/** Per card, for the life of the window: see lib/cardTabCache.ts. */
+type PrsRead = { prs: { number: number; title: string; state: string; draft?: boolean; url: string; stated?: boolean }[]; err: boolean };
+const prsCache = swr<PrsRead>(PRS_TTL_MS, (v) => !v.err);
+const threadCache = swr<Awaited<ReturnType<typeof api.clickupTask>>>(THREAD_TTL_MS, (r) => !!r.ok);
+
+/** One row of the card's GitHub tab, pull request or other link. The text takes
+ *  the room and the buttons sit at the row's right edge, top-aligned with the
+ *  title line, so both kinds of row put their buttons in the same place. */
+const LINK_ROW = "flex items-start gap-2 py-1";
+const LINK_BUTTONS = "flex items-start gap-1 shrink-0";
+const ROW_SQUARE: CSSProperties = { width: HIT, height: HIT, border: EDGE, color: "var(--text3)" };
+function RowSquare({ href, onClick, title, children }: { href?: string; onClick?: () => void; title: string; children: ReactNode }) {
+  const cls = "agx-btn inline-flex items-center justify-center rounded-lg shrink-0 text-[12px]";
+  return href
+    ? <a href={href} target="_blank" rel="noreferrer noopener" className={cls} style={ROW_SQUARE} title={title} aria-label={title}>{children}</a>
+    : <button onClick={onClick} className={cls} style={ROW_SQUARE} title={title} aria-label={title}>{children}</button>;
+}
+
+/** The copy button of an "Other links" row: says "Copied" for a moment, the way
+ *  the quick-start rows above it do, instead of copying in silence. */
+function CopyLinkChip({ url }: { url: string }) {
+  const [done, setDone] = useState(false);
+  useEffect(() => {
+    if (!done) return;
+    const t = setTimeout(() => setDone(false), 1200);
+    return () => clearTimeout(t);
+  }, [done]);
+  return (
+    <RowSquare title={done ? "Copied" : "Copy the link"}
+      onClick={() => { void navigator.clipboard.writeText(url).then(() => setDone(true)).catch(() => setDone(false)); }}>
+      {done ? <DoneIcon size={ICON.xs} /> : <CopyIcon size={ICON.xs} />}
+    </RowSquare>
   );
 }
 
@@ -4959,7 +5201,7 @@ function CopyRow({ label, value, mono }: { label: string; value: string; mono?: 
       onClick={() => { void navigator.clipboard.writeText(value).then(() => setDone(true)).catch(() => setDone(false)); }}
       title={`Copy: ${value}`}
       className="agx-btn w-full text-left rounded-md px-2 py-1.5 flex items-start gap-2"
-      style={{ border: edge(12), background: "color-mix(in srgb, var(--text) 3%, transparent)" }}>
+      style={{ border: EDGE, background: "color-mix(in srgb, var(--text) 3%, transparent)" }}>
       <span className="min-w-0 flex-1">
         <span className="block text-[9.5px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>{label}</span>
         <span className={`block text-[11px] break-all ${mono ? "font-mono" : ""}`} style={{ color: "var(--text2)" }}>{value}</span>
@@ -5044,8 +5286,8 @@ function EditText({ value, empty, title, width, busy, parse, onSave }: {
           if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setDraft(value); setWhy(""); setEditing(false); }
         }}
         className="text-[11.5px] px-1.5 py-0.5 rounded outline-none"
-        style={{ background: "var(--bg)", color: "var(--text)", border: edge(22), width: width ?? 90 }} />
-      {why && <span className="text-[10px]" style={{ color: "var(--error)" }}>{why}</span>}
+        style={{ background: "var(--bg)", color: "var(--text)", border: EDGE, width: width ?? 90 }} />
+      {why && <span className="text-[10px]" style={{ color: "var(--error-ink)" }}>{why}</span>}
     </span>
   );
 }
@@ -5060,7 +5302,7 @@ function EditDay({ value, busy, title, onSave }: {
       <input type="date" value={msToDay(value)} disabled={busy} title={title}
         onChange={(e) => onSave(dayToMs(e.target.value))}
         className="text-[11px] px-1.5 py-0.5 rounded outline-none"
-        style={{ background: "transparent", color: "var(--text2)", border: edge(16), colorScheme: "dark" }} />
+        style={{ background: "transparent", color: "var(--text2)", border: EDGE, colorScheme: "dark" }} />
       {value != null && !busy && (
         <button className="agx-btn rounded text-[10px]" style={{ color: "var(--text4)" }}
           title="Clear this date" onClick={() => onSave(null)}>Clear</button>
@@ -5120,9 +5362,9 @@ function SprintPick({ t, busy, onApply }: {
       </button>
       {open && (
         <div className="agx-scroll absolute left-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-y-auto py-1"
-          style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 210, maxHeight: 300 }}>
+          style={{ zIndex: 30, background: "var(--surface-card)", border: edge(28), minWidth: 210, maxHeight: 300 }}>
           {loading && <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>Reading the sprints…</div>}
-          {!loading && why && <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--warning)" }}>{why}</div>}
+          {!loading && why && <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--warning-ink)" }}>{why}</div>}
           {(lists ?? []).map((l) => (
             <button key={l.id} className="text-left px-2.5 py-1.5 hover:bg-white/5 text-[11px] truncate"
               style={{ color: l.id === currentSprint?.id ? "var(--info)" : "var(--text2)" }}
@@ -5234,7 +5476,7 @@ function TagEdit({ t, busy, onApply, board }: {
     <span className="flex flex-wrap items-center gap-1">
       {t.tags.map((tag) => (
         <span key={tag} className="inline-flex items-center gap-1 text-[10.5px] px-1.5 py-0.5 rounded-md"
-          style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--text) 7%, transparent)", border: edge(14) }}>
+          style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--text) 7%, transparent)", border: EDGE }}>
           {tag}
           <button className="agx-btn rounded flex" title={`Remove ${tag}`} disabled={busy}
             style={{ color: "var(--text4)" }}
@@ -5264,12 +5506,12 @@ function TagEdit({ t, busy, onApply, board }: {
                 if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setDraft(""); setAdding(false); }
               }}
               className="text-[11px] px-1.5 py-0.5 rounded outline-none"
-              style={{ background: "var(--bg)", color: "var(--text)", border: edge(22), width: 170 }} />
+              style={{ background: "var(--bg)", color: "var(--text)", border: EDGE, width: 170 }} />
           : <button className="agx-btn rounded text-[10.5px]" style={{ color: "var(--text4)" }}
               title="Add a tag" disabled={busy} onClick={() => { setAdding(true); setHot(0); }}>+ tag</button>}
         {adding && (
           <div className="agx-scroll absolute left-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-y-auto py-1"
-            style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 190, maxHeight: 260 }}>
+            style={{ zIndex: 30, background: "var(--surface-card)", border: edge(28), minWidth: 190, maxHeight: 260 }}>
             {!rows.length && (
               <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>
                 {/* "in this space", not "on this board": the list is the whole
@@ -5288,7 +5530,7 @@ function TagEdit({ t, busy, onApply, board }: {
                   onMouseDown={(e) => { e.preventDefault(); add(name); }}
                   className="text-left px-2.5 py-1.5 text-[11px] truncate flex items-center gap-1.5"
                   style={{ background: i === hot ? "color-mix(in srgb, var(--text) 8%, transparent)" : "transparent" }}>
-                  {isNew && <span className="shrink-0 text-[10px]" style={{ color: "var(--info)" }}>+</span>}
+                  {isNew && <span className="shrink-0 text-[10px]" style={{ color: "var(--info-ink)" }}>+</span>}
                   <span className="truncate" style={{ color: isNew ? "var(--info)" : "var(--text2)" }}>{name}</span>
                   {isNew && <span className="shrink-0 text-[9.5px]" style={{ color: "var(--text4)" }}>new tag</span>}
                 </button>
@@ -5319,7 +5561,7 @@ function CardHop({ list, id, onGo }: { list: ProviderTask[]; id: string; onGo: (
         title={hop.prev ? `Previous: ${hop.prev.title}` : "This is the first card on the board"}>‹</button>
       <button
         className="max-w-[280px] flex items-center gap-1.5 rounded px-1.5 py-0.5 text-[10.5px] disabled:opacity-40 disabled:cursor-default hover:bg-white/10 disabled:hover:bg-transparent"
-        style={{ border: edge(14), color: "var(--text2)" }}
+        style={{ border: EDGE, color: "var(--text2)" }}
         disabled={!hop.next}
         onClick={() => hop.next && onGo(hop.next.id)}
         title={hop.next ? `Next: ${hop.next.title}` : "This is the last card on the board"}>
@@ -5330,7 +5572,7 @@ function CardHop({ list, id, onGo }: { list: ProviderTask[]; id: string; onGo: (
       <div className="relative">
         <button onClick={() => setOpen((o) => !o)}
           className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] tabular-nums hover:bg-white/10"
-          style={{ border: edge(14), color: "var(--text3)" }}
+          style={{ border: EDGE, color: "var(--text3)" }}
           title="Open another card of this board, without closing this one">
           {/* A card looked up by id is not in the board's list, and saying
               "0 of 29" would be a lie about where you are rather than a count. */}
@@ -5342,7 +5584,7 @@ function CardHop({ list, id, onGo }: { list: ProviderTask[]; id: string; onGo: (
               backdrop is outside this dialog, so a click here must not reach it. */}
           <div className="fixed inset-0" style={{ zIndex: 40 }} onClick={() => setOpen(false)} />
           <div className="absolute right-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-hidden"
-            style={{ zIndex: 41, background: "var(--bg2)", border: edge(28), width: 380, maxHeight: 360 }}>
+            style={{ zIndex: 41, background: "var(--surface-card)", border: edge(28), width: 380, maxHeight: 360 }}>
             <input autoFocus value={q} onChange={(e) => setQ(e.target.value)}
               placeholder="Filter by id or title"
               /* Escape closes the picker and stops there. Without this it reaches
@@ -5352,8 +5594,8 @@ function CardHop({ list, id, onGo }: { list: ProviderTask[]; id: string; onGo: (
                 if (e.key === "Escape") { e.stopPropagation(); setOpen(false); }
                 else if (e.key === "Enter" && shown[0]) { e.stopPropagation(); onGo(shown[0].id); }
               }}
-              className="px-2.5 py-1.5 text-[11px] outline-none shrink-0"
-              style={{ background: "transparent", color: "var(--text)", borderBottom: edge(16) }} />
+              className={`shrink-0 ${INPUT}`}
+              style={INPUT_STYLE} />
             <div className="agx-scroll overflow-y-auto overflow-x-hidden">
               {shown.length === 0 && (
                 <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text4)" }}>Nothing on this board matches.</div>
@@ -5362,7 +5604,7 @@ function CardHop({ list, id, onGo }: { list: ProviderTask[]; id: string; onGo: (
                 <button key={c.id} onClick={() => { setOpen(false); onGo(c.id); }}
                   className="text-left px-2.5 py-1.5 flex items-center gap-2 hover:bg-white/5"
                   style={c.id === id ? { background: "color-mix(in srgb, var(--primary) 12%, transparent)" } : undefined}>
-                  <span className="text-[10px] tabular-nums shrink-0" style={{ color: "var(--primary)" }}>{c.customId || c.id}</span>
+                  <span className="text-[10px] tabular-nums shrink-0" style={{ color: "var(--primary-ink)" }}>{c.customId || c.id}</span>
                   <span className="truncate text-[11px]" style={{ color: "var(--text2)" }}>{c.title}</span>
                 </button>
               ))}
@@ -5374,7 +5616,10 @@ function CardHop({ list, id, onGo }: { list: ProviderTask[]; id: string; onGo: (
   );
 }
 
-function CardDetail({ t, today, statuses, fields, place, writable, repos, here, onOpenChatWith, onApply, saving, skills, onNote, onFresh, wide, byId, onGo, onOpenList, boardPeople, nav, onClose }: {
+/** A card as a read of it answered: partial until the first answer is in. */
+type CardRead = Partial<TaskDetail> & { ok?: boolean; error?: string };
+
+function CardDetail({ t, today, statuses, fields, place, writable, repos, here, onOpenChatWith, onOpenBrowser, onApply, saving, skills, onNote, onFresh, wide, byId, onGo, onOpenList, boardPeople, nav, onClose }: {
   t: ProviderTask; today: string;
   statuses: ListStatus[]; fields: ListField[];
   /** Space / Folder / List, for the card in hand. */
@@ -5382,6 +5627,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
   writable: boolean;
   repos: GitRepoRef[]; here: string;
   onOpenChatWith?: (cwd: string, prompt: string, title: string) => void;
+  onOpenBrowser?: () => void;
   /**
    * Apply one field, now.
    *
@@ -5429,7 +5675,21 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
      lint could not see either: its lookbehind skipped every receiver, `window`
      included. */
   const { ask, dialog } = useDialogs();
-  const [full, setFull] = useState<(Partial<TaskDetail> & { ok?: boolean; error?: string }) | null>(null);
+  const [serverFull, setFull] = useState<CardRead | null>(null);
+  /* What the pane draws is the card the server last returned with any cheap
+     write still standing over it — see lib/taskOptimistic.ts. One layer per
+     card: a resolve pressed on one card has nothing to say about the next. */
+  const [layerTick, setLayerTick] = useState(0);
+  const layerFail = useRef(onNote);
+  layerFail.current = onNote;
+  const layers = useMemo(() => new Optimistic<CardRead>({
+    onChange: () => setLayerTick((n) => n + 1),
+    onFail: (text) => layerFail.current(text),
+  }), [t.id]);
+  const full = useMemo(() => (serverFull ? layers.view(serverFull) : null), [serverFull, layers, layerTick]);
+  /** Which card is open now, for a write that answers after the pane moved on. */
+  const openCard = useRef(t.id);
+  openCard.current = t.id;
 
   /*
    * A FACE FOR A NAME A SENTENCE CARRIES.
@@ -5615,34 +5875,67 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
   });
   useEffect(() => { try { localStorage.setItem(YOLO_KEY, yolo ? "1" : "0"); } catch { /* private mode */ } }, [yolo]);
 
-  const [prs, setPrs] = useState<{ number: number; title: string; state: string; draft?: boolean; url: string; stated?: boolean }[]>([]);
+  const prField = t.custom?.find((c) => /github/i.test(c.name))?.value ?? "";
+  const prCwd = rootForTask(t.list, repos, here) ?? here;
+  const prKey = [t.id, t.customId || "", prField, prCwd].join("\n");
+  const [prs, setPrs] = useState<PrsRead["prs"]>(() => prsCache.peek(prKey)?.prs ?? []);
   const [prsErr, setPrsErr] = useState(false);
+  /** False until a search for THIS card has answered (or one is cached): the
+   *  empty-state sentence is only true after that. */
+  const [prsLoaded, setPrsLoaded] = useState(() => prsCache.peek(prKey) !== undefined);
+
+  // Read out of text the card already carries: no request, and the targets are
+  // never fetched. See shared/githubLinks.ts.
+  const others = useMemo(
+    () => otherGithubLinks(full?.description, prField),
+    [full?.description, prField],
+  );
+  // A wiki page, an issue or a commit is not something the app draws, so these
+  // leave for the desktop's default browser rather than the in-app one.
+  const openOther = useCallback((url: string) => { openExternal(url); }, []);
+
+
+  /* Keyed on the strings the search is made of, not on `t.custom` or `repos`:
+     those are new objects every time the board re-reads itself, which it does
+     on coming back to the window, and the old effect emptied the list and
+     searched again each time. See lib/cardTabCache.ts. */
+  useEffect(() => {
+    let live = true;
+    const hit = prsCache.peek(prKey);
+    setPrs(hit?.prs ?? []); setPrsErr(false); setPrsLoaded(hit !== undefined);
+    void paintThenRevalidate(prsCache, prKey,
+      () => api.clickupPrs(t.customId || "", prField, prCwd)
+        .then((r): PrsRead => ({ prs: r.prs ?? [], err: !r.ok }))
+        .catch((): PrsRead => ({ prs: [], err: true })),
+      (v) => { if (live) { setPrs(v.prs); setPrsErr(v.err); setPrsLoaded(true); } });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prKey]);
 
   useEffect(() => {
     let live = true;
-    setPrs([]); setPrsErr(false);
-    const field = t.custom?.find((c) => /github/i.test(c.name))?.value ?? "";
-    const cwd = rootForTask(t.list, repos, here) ?? here;
-    void api.clickupPrs(t.customId || "", field, cwd)
-      .then((r) => { if (live) { setPrs(r.prs ?? []); setPrsErr(!r.ok); } })
-      .catch(() => { if (live) setPrsErr(true); });
+    const hit = threadCache.peek(t.id);
+    setFull(hit ?? null); setStatusOpen(false); setAskOpen(false);
+    void paintThenRevalidate(threadCache, t.id, () => {
+      const ticket = layers.readStarted();
+      return api.clickupTask(t.id).then((r) => { if (r.ok) layers.readLanded(ticket); return r; })
+        .catch((): CardRead => ({ ok: false, error: "Could not read the card" }));
+    }, (r) => { if (live) setFull(r); });
     return () => { live = false; };
-  }, [t.id, t.customId, t.custom, t.list, repos, here]);
-
-  useEffect(() => {
-    let live = true;
-    setFull(null); setStatusOpen(false); setAskOpen(false);
-    void api.clickupTask(t.id).then((r) => { if (live) setFull(r); }).catch(() => { if (live) setFull({ ok: false, error: "Could not read the card" }); });
-    return () => { live = false; };
-  }, [t.id]);
+  }, [t.id, layers]);
 
   /* Re-read the card after anything that changes the conversation. The board's
      own poll does not carry comments — they are fetched per card, on demand —
      so a comment posted here would otherwise not appear until the card was
      closed and opened again. */
   const reread = useCallback(() => {
-    void api.clickupTask(t.id).then(setFull).catch(() => { /* the card stays as it was */ });
-  }, [t.id]);
+    threadCache.stale(t.id);
+    const ticket = layers.readStarted();
+    void threadCache.load(t.id, () => api.clickupTask(t.id), { force: true }).then((r) => {
+      if (r.ok) layers.readLanded(ticket);
+      setFull(r);
+    }).catch(() => { /* the card stays as it was */ });
+  }, [t.id, layers]);
 
   /** Whether THIS card is being re-read, so its own button can say so without
    *  the board's Refresh claiming the work. */
@@ -5654,6 +5947,38 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
   const [saying, setSaying] = useState(false);
   const [sayErr, setSayErr] = useState("");
   useEffect(() => { setSay(""); setSayErr(""); }, [t.id]);
+  /* The pinned box: how tall it may grow, and what keeps the list where the
+     reader left it while it does. The cap is a share of the whole pane,
+     measured, because the pane is whatever the window and the dock make it. */
+  const paneRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const [sayCap, setSayCap] = useState(160);
+  const atEnd = useRef(false);
+  const sentRef = useRef(false);
+  useEffect(() => {
+    const pane = paneRef.current;
+    const list = listRef.current;
+    if (!pane || !list) return;
+    const onScroll = () => { atEnd.current = list.scrollHeight - list.scrollTop - list.clientHeight < 4; };
+    list.addEventListener("scroll", onScroll, { passive: true });
+    let last = list.clientHeight;
+    const ro = new ResizeObserver(() => {
+      setSayCap(Math.max(COMPOSER_MIN, Math.round(pane.clientHeight * COMPOSER_SHARE)));
+      /* The box grew or shrank, so the list did the opposite: a reader at the
+         end of the thread stays at the end instead of watching it slide up. */
+      if (list.clientHeight !== last && atEnd.current) list.scrollTop = list.scrollHeight;
+      last = list.clientHeight;
+    });
+    ro.observe(pane); ro.observe(list);
+    return () => { list.removeEventListener("scroll", onScroll); ro.disconnect(); };
+  }, [view]);
+  /* A comment just posted lands at the end of the thread; take the reader there. */
+  useEffect(() => {
+    if (!sentRef.current) return;
+    sentRef.current = false;
+    const list = listRef.current;
+    if (list) list.scrollTop = list.scrollHeight;
+  }, [rows.length]);
   /** Which comment is being answered or edited, and with what. One at a time:
    *  two open boxes on the same thread is a way to post the wrong one. */
   const [replyTo, setReplyTo] = useState<string | null>(null);
@@ -5671,23 +5996,11 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
    * is any use: at `top: 0` a comment header sticks behind this band, opaque and
    * z-20, and disappears exactly as if it had never stuck at all.
    */
-  const cardHead = useRef<HTMLDivElement>(null);
-  const shell = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const head = cardHead.current;
-    const root = shell.current;
-    if (!head || !root) return;
-    const put = () => root.style.setProperty("--cu-head-h", `${Math.round(head.getBoundingClientRect().height)}px`);
-    put();
-    const ro = new ResizeObserver(put);
-    ro.observe(head);
-    return () => ro.disconnect();
-  }, [t.id, view]);
   useEffect(() => setCommentMenu(null), [t.id]);
 
   const lab = { color: "var(--text4)", width: 62 };
   const val = "text-left rounded px-1.5 py-0.5 -mx-1.5 hover:bg-white/5 truncate max-w-full";
-  const line = edge(16);
+  const line = LINE;
 
   /* The statuses that are worth offering: this list's own, minus the one it is
      already in. Never a text box — an invalid status is a 400, and a status
@@ -5747,7 +6060,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
      * showed it, because `bottom-0` holds it to the bottom of that same short
      * box either way.
      */
-    <div ref={shell} className="flex flex-col min-h-full shrink-0">
+    <div ref={paneRef} className="flex flex-col flex-1 min-h-0 min-w-0">
       {/* The id somebody recognises, first and copyable: it is what goes in a
           branch name, a commit and a message to a colleague. The internal one is
           a fallback, not the headline. */}
@@ -5770,7 +6083,196 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           z-20, so it was working and invisible. Measured rather than written
           down — this band holds chips, a title that wraps and a tab row, and its
           height changes with every one of them. */}
-      <div ref={cardHead} className="sticky top-0 z-20 pb-1.5" style={{ background: "var(--bg)" }}>
+      {/* `pt-4` matches the scroller's own `px-4` — the action bar used to
+          touch the modal's top edge, because the scroller carries no top
+          padding (see above) and neither did this sticky band. Side and top
+          are now the same number instead of one of them being zero. */}
+      <div className="shrink-0 px-4 pt-4 pb-2" style={{ background: "var(--bg)" }}>
+        {/* The card's actions live above its identity, not below its text: they
+            are what you reach for after reading, and a long card put them a
+            full scroll away. In the sticky band, so they follow the card. */}
+        <div className="flex items-center gap-1.5 flex-wrap pb-1.5 mb-1.5" style={{ borderBottom: LINE }}>
+        <div className="relative">
+          <button onClick={() => setAskOpen((o) => !o)} className="text-[10.5px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg"
+            style={{ border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", color: "var(--warning-ink)" }}>
+            Hand to Claude ▾
+          </button>
+          {askOpen && (
+            <div className="agx-scroll absolute left-0 top-full mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col overflow-y-auto"
+              style={{ zIndex: 30, background: "var(--surface-card)", border: edge(28), minWidth: 260, maxHeight: 340 }}>
+              {/* Your own skills first, because running one is the thing being
+                  reached for — the plain hand-offs below are the fallback for a
+                  card no skill covers. */}
+              {!!skills.length && (
+                <>
+                  <div className="px-2.5 pt-2 pb-1 flex items-center gap-2">
+                    <span className={`${EYEBROW}`} style={{ color: "var(--text4)" }}>
+                      Run a skill on this card
+                    </span>
+                    <span className="flex-1" />
+                    <input value={skillQ} onChange={(e) => setSkillQ(e.target.value)} placeholder="filter"
+                      spellCheck={false} autoComplete="off"
+                      className="text-[10px] px-1.5 py-0.5 rounded outline-none"
+                      style={{ background: "var(--bg3)", border: EDGE, color: "var(--text)", width: 92 }} />
+                  </div>
+                  {shown.map((sk, i) => {
+                    // One heading between the ones named for it and the rest,
+                    // rather than a filter that would have to be right about
+                    // which of the others take a card. See namedForIt.
+                    const firstOther = !namedForIt(sk) && (i === 0 || namedForIt(shown[i - 1]!));
+                    const modes = skillModes(sk.argument_hint);
+                    const run = (mode?: string) => {
+                      setAskOpen(false);
+                      const cwd = rootForTask(t.list, repos, here);
+                      if (!cwd) { onNote("No checkout to run it in — give the board's list a project name that matches a repo"); return; }
+                      const cmd = skillCommand(sk.name, t) + (mode ? ` ${mode}` : "");
+                      // A tmux window with the agent already running it, which
+                      // is the gesture the issues panel uses.
+                      requestTermIssue(cwd, windowName(t), cmd, true, yolo, t.title);
+                      onNote(`${cmd}${yolo ? " · permissions off" : ""} — opening a window`);
+                    };
+                    return (
+                      <div key={sk.name}>
+                      {firstOther && (
+                        <div className={`px-2.5 pt-2 pb-1 ${EYEBROW}`}
+                          style={{ color: "var(--text4)", borderTop: LINE }}>Also mention ClickUp</div>
+                      )}
+                      <div className="px-2.5 py-1.5 hover:bg-white/5">
+                        <button className="text-left w-full" title={sk.description} onClick={() => run()}>
+                          <div style={{ color: "var(--warning-ink)" }}>
+                            /{sk.name.replace(/^\//, "")} <span style={{ color: "var(--text3)" }}>{t.customId || t.id}</span>
+                          </div>
+                          {sk.description && (
+                            <div className="text-[9.5px] line-clamp-2" style={{ color: "var(--text4)" }}>{sk.description}</div>
+                          )}
+                        </button>
+                        {/* The gears the skill itself advertises. Parsed from
+                            its own invocation line, so a skill that grows a
+                            third mode grows a third button here for free. */}
+                        {!!modes.length && (
+                          <div className="flex items-center gap-1 mt-1">
+                            {modes.map((m) => (
+                              <button key={m} onClick={() => run(m)}
+                                className="text-[9.5px] px-1.5 py-0.5 rounded-full"
+                                style={{ color: "var(--text3)", border: EDGE }}>{m}</button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      </div>
+                    );
+                  })}
+                  {!shown.length && (
+                    <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>No skill matches that.</div>
+                  )}
+                  <div style={{ borderTop: LINE }} />
+                </>
+              )}
+              <div className="px-2.5 pt-2 pb-1 flex items-center gap-2">
+                <span className={`${EYEBROW}`} style={{ color: "var(--text4)" }}>
+                  Or hand it over to write your own
+                </span>
+                <span className="flex-1" />
+                {/* Where it lands. Sits with the rows it governs rather than in
+                    Settings: it is the kind of choice you change because of what
+                    you are about to do, not once a year. */}
+                {(["chat", "term"] as const).map((d) => (
+                  <button key={d} onClick={(e) => { e.stopPropagation(); setHandoffTo(d); setTo(d); }}
+                    title={d === "chat" ? "Open it in the app's chat" : "Open it in a tmux pane, like a skill"}
+                    className="text-[10px] px-1.5 py-0.5 rounded"
+                    style={to === d
+                      ? { background: "color-mix(in srgb, var(--primary) 20%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }
+                      : { border: EDGE, color: "var(--text4)" }}>
+                    {d === "chat" ? <IconLabel icon={<CommentIcon size={ICON.xs} />}>chat</IconLabel> : <IconLabel icon={<MonitorIcon size={ICON.xs} />}>pane</IconLabel>}
+                  </button>
+                ))}
+              </div>
+              {HANDOFFS.map((h) => (
+                <button key={h.id} className="text-left px-2.5 py-1.5 hover:bg-white/5"
+                  style={{ color: "var(--text2)" }}
+                  onClick={() => {
+                    setAskOpen(false);
+                    const cwd = rootForTask(t.list, repos, here);
+                    if (!cwd) { onNote("No checkout to hand this to"); return; }
+                    const text = h.build(t, full?.description ?? "");
+                    // The same two destinations a skill offers, through the same
+                    // two paths — nothing new is invented here.
+                    if (to === "term") { requestTermIssue(cwd, windowName(t), text, true, yolo, t.title); onNote(`${t.customId || t.id} handed to a pane`); }
+                    else onOpenChatWith?.(cwd, text, t.title.slice(0, 60));
+                  }}>
+                  <div>{h.label}</div>
+                  <div className="text-[9.5px]" style={{ color: "var(--text4)" }}>{h.hint}</div>
+                </button>
+              ))}
+              {/* Applies to a skill run, which spawns an agent — not to the
+                  hand-offs above, which only put text in a composer. Sticky,
+                  because whoever wants it once usually wants it all afternoon,
+                  and loud, because it is the setting that lets an agent edit
+                  files without asking. */}
+              {!!skills.length && (
+                <label className="flex items-start gap-2 px-2.5 py-2 cursor-pointer"
+                  style={{ borderTop: LINE }}>
+                  <input type="checkbox" checked={yolo} onChange={(e) => setYolo(e.target.checked)}
+                    style={{ accentColor: "var(--error)", marginTop: 2 }} />
+                  <span>
+                    <span style={{ color: yolo ? "var(--error)" : "var(--text2)" }}>Skip permission prompts</span>
+                    <span className="block text-[9.5px]" style={{ color: "var(--text4)" }}>
+                      The agent edits and runs without asking. Only for a card you already trust.
+                    </span>
+                  </span>
+                </label>
+              )}
+            </div>
+          )}
+        </div>
+        <button onClick={() => void copyIt(t.customId || t.id, "human")} className="text-[10.5px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg"
+          style={{ border: line, color: "var(--text2)" }}>Copy {t.customId ? "PROJ id" : "id"}</button>
+        {/* Beside the id it belongs with, and before Open: the two buttons are
+            the two ways to take this card somewhere else, and the one that
+            leaves the app should not be the only way to get its address. */}
+        {t.url && (
+          <button onClick={() => void copyIt(t.url, "url")} className="text-[10.5px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg"
+            style={{ border: line, color: "var(--text2)" }}
+            title={t.url}>{copied === "url" ? <span className="inline-flex items-center gap-1">copied<DoneIcon size={ICON.xs} /></span> : "Copy URL"}</button>
+        )}
+        {/* Open and Refresh share the far right corner: Copy PROJ id / Copy
+            URL stay grouped with Hand to Claude on the left, and the spacer
+            goes before Open rather than before Refresh, so the two rightmost
+            controls travel together — refresh is always the last control on
+            a toolbar (see the board's own bar, Git, Docker, Lantern). */}
+        <span className="flex-1" />
+        {t.url && (
+          <a href={t.url} target="_blank" rel="noreferrer" className="text-[10.5px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg"
+            style={{ border: line, color: "var(--text2)" }}>Open ↗</a>
+        )}
+        {/*
+          THIS CARD, and only this card.
+         *
+          The Refresh at the top of the board re-reads every card on it — which
+          on a board of 123 is seconds of waiting to see whether one comment
+          landed. `reread` already existed for exactly this shape (it runs after
+          a comment is posted, because the board's poll does not carry
+          comments); it simply had no way to be pressed.
+         *
+          Its own spinner rather than the board's, so it is obvious WHICH thing
+          is being re-read. */}
+        <RefreshButton onRefresh={() => {
+          setRereading(true);
+          const ticket = layers.readStarted();
+          void threadCache.load(t.id, () => api.clickupTask(t.id), { force: true })
+            .then((r) => {
+              if (r.ok) layers.readLanded(ticket);
+              setFull(r);
+              /* And the fields the BOARD owns, or half the card stays as it was
+                 read a minute ago while the other half is current. */
+              if (r.ok && r.task) onFresh?.(r.task);
+            })
+            .catch(() => { /* keep what we have */ })
+            .finally(() => setRereading(false));
+        }}
+          busy={rereading}
+          title="Read this card again — the board keeps whatever it had" />
+      </div>
         {/* The identity chips sit in the SAME band as the table's column titles
             beside them — one height, centred, rather than a top padding chosen
             to look about right. A padding is a guess that has to be re-guessed
@@ -5778,7 +6280,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
             drift because there is only one number. */}
         <div className="flex items-center gap-1.5 flex-wrap" style={{ minHeight: HEAD_H }}>
           <button onClick={() => void copyIt(t.customId || t.id, "human")} className={`${ID_CHIP} tabular-nums`}
-            style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}
+            style={{ color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}
             title={`Copy ${t.customId || t.id} — the id for a branch, a commit or a colleague`}>
             {copied === "human" ? <span className="inline-flex items-center gap-1">copied<DoneIcon size={ICON.xs} /></span> : (t.customId || t.id)}
           </button>
@@ -5786,7 +6288,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
               would otherwise get the same string twice. */}
           {t.customId && t.customId !== t.id && (
             <button onClick={() => void copyIt(t.id, "raw")} className={`${ID_CHIP} tabular-nums`}
-              style={{ color: "var(--text4)", border: edge(16) }}
+              style={{ color: "var(--text4)", border: EDGE }}
               title={`Copy ${t.id} — ClickUp's own id, the one its API and URLs take`}>
               {copied === "raw" ? <span className="inline-flex items-center gap-1">copied<DoneIcon size={ICON.xs} /></span> : t.id}
             </button>
@@ -5794,7 +6296,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           {t.priority && <PriorityChip p={t.priority} />}
           {t.mine && (
             <span className={`${ID_CHIP} tracking-[0.08em]`}
-              style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 15%, transparent)" }}>YOURS</span>
+              style={{ color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 15%, transparent)" }}>YOURS</span>
           )}
           {/* Pushed to the right of the same band rather than laid over the
               header: an overlay would sit on top of a title long enough to
@@ -5810,7 +6312,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
             <button onClick={onClose} aria-label="Close the card"
               title="Close the card (Esc)"
               className={`shrink-0 grid place-items-center rounded-md text-[13px] leading-none ${nav ? "" : "ml-auto"}`}
-              style={{ width: 26, height: 26, color: "var(--error)",
+              style={{ width: 26, height: 26, color: "var(--error-ink)",
                 background: "color-mix(in srgb, var(--error) 14%, transparent)",
                 border: "1px solid color-mix(in srgb, var(--error) 34%, transparent)" }}>
               {/* The house's own glyph rather than a bare ✕ character: the lock
@@ -5860,7 +6362,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
             it is a label — and a card with no conversation should look exactly
             the way it always did. */}
         {(!!rows.length || !!files.length) && (
-          <div className="flex items-center gap-1.5 mt-2.5" style={{ borderBottom: edge(12) }}>
+          <div className="flex items-center gap-1.5 mt-2.5" style={{ borderBottom: LINE }}>
             {([
               ["card", "Card"],
               ...(rows.length ? [["activity", nComments ? `Activity ${nComments}` : "Activity"] as const] : []),
@@ -5892,6 +6394,18 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           </div>
         )}
       </div>
+      {/* Only what is below the tabs scrolls, so the scrollbar starts where the
+          content does and the band above it spans the pane edge to edge — with
+          the scroller around the whole card the bar ran alongside the header,
+          where nothing moves, and the header stopped short of it by the
+          scroller's own side padding. */}
+      {/* The app's own thin scrollbar (the panes that mount it say so: this one
+          never did, so the platform's arrowed bar showed), and its 10px kept
+          in reserve so the header's right edge, the cards' and the refresh
+          button's are one line whether or not the card scrolls: 16px of
+          padding on the left, 4 + the 11px bar on the right. */}
+      <style>{SCROLLBAR_CSS + CARD_SCROLL_CSS}</style>
+      <div ref={listRef} className="agx-scroll agx-cu-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden pl-4 pr-1 [scrollbar-gutter:stable]">
       {/* One at a time. Unmounting the other half is safe here: what the card
           knows — `full`, the fetch, the status options — lives on CardDetail
           itself, not in this subtree, so switching tabs re-renders and never
@@ -5912,7 +6426,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
         * names here, because a workspace calls its fields whatever it likes.
         */}
       <div className="mb-3 rounded-lg px-3 py-2.5 flex flex-wrap items-start"
-        style={{ gap: "14px 20px", background: "color-mix(in srgb, var(--text) 4%, transparent)", border: edge(12) }}>
+        style={{ gap: "14px 20px", background: "color-mix(in srgb, var(--text) 4%, transparent)", border: EDGE }}>
         <div className="flex flex-col gap-1 min-w-0">
           <span className={`${EYEBROW}`} style={{ color: "var(--text4)" }}>status</span>
           <div className="relative">
@@ -5927,7 +6441,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
             </button>
             {statusOpen && (
               <div className="agx-scroll absolute left-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-y-auto"
-                style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 210, maxHeight: 300 }}>
+                style={{ zIndex: 30, background: "var(--surface-card)", border: edge(28), minWidth: 210, maxHeight: 300 }}>
                 {options.map((o) => (
                   <button key={o.status} className="text-left px-2 py-1.5 hover:bg-white/5"
                     onClick={() => {
@@ -6059,7 +6573,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           <CardField label="Sprint">
             {writable
               ? <SprintPick t={t} busy={saving("sprint")} onApply={(p) => onApply("sprint", p)} />
-              : <span style={{ color: "var(--info)" }}>{t.sprint}</span>}
+              : <span style={{ color: "var(--info-ink)" }}>{t.sprint}</span>}
           </CardField>
         )}
         {(writable || t.points != null) && (
@@ -6179,7 +6693,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           A dependency already finished is listed quietly rather than as a
           block: it is history, not an obstacle. */}
       {(!!waits.length || !!blocksThese.length) && (
-        <div className="mb-3 pt-2.5" style={{ borderTop: edge(10) }}>
+        <div className="mb-3 pt-2.5" style={{ borderTop: LINE }}>
           {!!waits.length && (
             <>
               <div className={`${EYEBROW} mb-1.5`} style={{ color: waitsOpen.length ? "var(--error)" : "var(--text4)" }}>
@@ -6217,7 +6731,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
       {/* No heading of ours: these cards open with their own "Description"
           heading, and stacking a label above it read as a stutter. */}
       {full?.description ? (
-        <div className="mb-3 pt-2.5 agx-cu-body" style={{ borderTop: edge(10) }}>
+        <div className="mb-3 pt-2.5 agx-cu-body" style={{ borderTop: LINE }}>
           <Markdown text={full.description} />
         </div>
       ) : null}
@@ -6232,7 +6746,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
         * a paragraph belongs. See cardLayout.ts for how the two are told apart.
         */}
       {!!shape.long.length && (
-        <div className="mb-3 pt-2.5 flex flex-col gap-3" style={{ borderTop: edge(10) }}>
+        <div className="mb-3 pt-2.5 flex flex-col gap-3" style={{ borderTop: LINE }}>
           {shape.long.map((c) => (
             <div key={c.id} className="flex flex-col gap-1">
               <span className={`${EYEBROW}`} style={{ color: "var(--text4)" }}>{fieldLabel(c.name)}</span>
@@ -6258,7 +6772,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
         * you came for the conversation.
         */}
       {!!shape.rows.length && (
-        <div className="mb-3 pt-2.5" style={{ borderTop: edge(10) }}>
+        <div className="mb-3 pt-2.5" style={{ borderTop: LINE }}>
           <button onClick={() => setFieldsOpen((v) => !v)}
             className={`agx-btn w-full text-left flex items-center gap-2 ${EYEBROW} pb-1.5`}
             style={{ color: "var(--text4)" }}>
@@ -6282,7 +6796,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                 const canDate = writable && !spec?.readOnly && spec?.type === "date";
                 return (
                   <div key={c.id} className="grid gap-3 py-1.5 items-baseline"
-                    style={{ gridTemplateColumns: wide ? "200px 1fr" : "minmax(110px, 42%) 1fr", borderBottom: edge(8) }}>
+                    style={{ gridTemplateColumns: wide ? "200px 1fr" : "minmax(110px, 42%) 1fr", borderBottom: LINE }}>
                     <span className="text-[10.5px] min-w-0 truncate flex items-center gap-1" style={{ color: "var(--text4)" }} title={spec?.readOnly ? `${c.name} — marked read-only by its own name` : c.name}>
                       <span className="truncate">{fieldLabel(c.name)}</span>
                       {spec?.readOnly && <span aria-hidden className="flex" title="Marked read-only by its own name"><LockIcon size={ICON.xs} /></span>}
@@ -6305,7 +6819,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
       )}
 
       {!!full?.subtasks?.length && (
-        <div className="mb-3 pt-2.5" style={{ borderTop: edge(10) }}>
+        <div className="mb-3 pt-2.5" style={{ borderTop: LINE }}>
           <div className={`${EYEBROW} mb-1.5`} style={{ color: "var(--text4)" }}>
             Subtasks {full.subtasks.length}
           </div>
@@ -6321,7 +6835,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
       )}
 
       {!!full?.checklists?.length && full.checklists.map((cl, i) => (
-        <div key={i} className="mb-3 pt-2.5" style={{ borderTop: edge(10) }}>
+        <div key={i} className="mb-3 pt-2.5" style={{ borderTop: LINE }}>
           <div className={`${EYEBROW} mb-1.5`} style={{ color: "var(--text4)" }}>{cl.name}</div>
           {cl.items.map((it, j) => (
             <div key={j} className="flex items-center gap-2 py-1 text-[11px]">
@@ -6352,8 +6866,8 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           * a branch named any other way stops being found by either side — see
           * cardBranch.ts.
           */}
-        <div className="mb-3 rounded-lg overflow-hidden" style={{ border: edge(14) }}>
-          <div className="px-3 py-2 text-[11px]" style={{ background: "color-mix(in srgb, var(--text) 4%, transparent)", borderBottom: edge(10), color: "var(--text2)" }}>
+        <div className="mb-3 rounded-lg overflow-hidden" style={{ border: EDGE }}>
+          <div className="px-3 py-2 text-[11px]" style={{ background: "color-mix(in srgb, var(--text) 4%, transparent)", borderBottom: LINE, color: "var(--text2)" }}>
             Quick start
             <div className="text-[10px] mt-0.5" style={{ color: "var(--text4)" }}>
               Put the card id in a branch, a commit or a pull request title and both sides link it by themselves.
@@ -6370,17 +6884,17 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           </div>
         </div>
       {(!!prs.length || prsErr) && (
-        <div className="mb-3 pt-2.5" style={{ borderTop: edge(10) }}>
+        <div className="mb-3 pt-2.5" style={{ borderTop: LINE }}>
           <div className={`${EYEBROW} mb-1.5 flex items-center gap-2`} style={{ color: "var(--text4)" }}>
             Pull requests {!!prs.length && <span>{prs.length}</span>}
             {prsErr && (
-              <span style={{ color: "var(--warning)" }}>
+              <span style={{ color: "var(--warning-ink)" }}>
                 {prs.length ? "· search failed, showing what the card states" : "· could not search GitHub — this is not “none”"}
               </span>
             )}
           </div>
           {prs.map((p) => (
-            <div key={p.number} className="flex items-center gap-2 py-1">
+            <div key={p.number} className={LINK_ROW}>
               <button onClick={() => {
                 const ref = prRefFromUrl(p.url);
                 if (ref) openPr(ref.repo, p.number);
@@ -6388,14 +6902,14 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
               }}
                 className="text-left flex-1 min-w-0 rounded px-1 -mx-1 hover:bg-white/5"
                 title="Open this pull request">
-                <span className="tabular-nums" style={{ color: "var(--primary)" }}>#{p.number}</span>
+                <span className="tabular-nums" style={{ color: "var(--primary-ink)" }}>#{p.number}</span>
                 {p.state && (
                   <span className="ml-1.5 text-[10px] tracking-[0.06em] px-1.5 rounded"
                     style={p.state === "MERGED"
-                      ? { color: "#a371f7", background: "#a371f721" }
+                      ? { color: mergedInk(), background: "#a371f721" }
                       : p.state === "CLOSED"
-                      ? { color: "var(--error)", background: "color-mix(in srgb, var(--error) 13%, transparent)" }
-                      : { color: "var(--success)", background: "color-mix(in srgb, var(--success) 13%, transparent)" }}>
+                      ? { color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 13%, transparent)" }
+                      : { color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 13%, transparent)" }}>
                     {p.draft ? "DRAFT" : p.state}
                   </span>
                 )}
@@ -6404,16 +6918,38 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                 )}
                 <div className="truncate text-[10.5px]" style={{ color: "var(--text3)" }}>{p.title || p.url}</div>
               </button>
-              <a href={p.url} target="_blank" rel="noreferrer" className="text-[10px] px-1.5 py-0.5 rounded shrink-0"
-                style={{ border: edge(16), color: "var(--text3)" }}>↗</a>
+              <div className={LINK_BUTTONS}><RowSquare href={p.url} title="Open on GitHub">↗</RowSquare></div>
             </div>
           ))}
         </div>
       )}
 
-        {!prs.length && !prsErr && (
+        {!prs.length && !prsErr && !prsLoaded && <div className="mb-2"><Spinner label="Looking for pull requests…" className="" /></div>}
+        {!prs.length && !prsErr && prsLoaded && (
           <div className="text-[11px] px-1 pb-2" style={{ color: "var(--text4)" }}>
             No pull request names this card yet.
+          </div>
+        )}
+
+        {!!others.length && (
+          <div className="mb-3 pt-2.5" style={{ borderTop: LINE }}>
+            <div className={`${EYEBROW} mb-1.5 flex items-center gap-2`} style={{ color: "var(--text4)" }}>
+              Other links <span>{others.length}</span>
+            </div>
+            {others.map((l) => (
+              <div key={l.url} className={LINK_ROW}>
+                <button onClick={() => openOther(l.url)}
+                  className="text-left flex-1 min-w-0 rounded px-1 -mx-1 hover:bg-white/5"
+                  title="Open in your browser">
+                  <span className="block truncate text-[11px]" style={{ color: "var(--primary-ink)" }}>{l.title}</span>
+                  <div className="truncate text-[10.5px]" style={{ color: "var(--text3)" }}>{l.path}</div>
+                </button>
+                <div className={LINK_BUTTONS}>
+                  <CopyLinkChip url={l.url} />
+                  <RowSquare title="Open in your browser" onClick={() => openOther(l.url)}>↗</RowSquare>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </>)}
@@ -6428,7 +6964,10 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           because a thread read in the wrong direction is a thread nobody can
           follow and there is nothing else on screen left to say it. */}
       {!!rows.length && (
-        <div className="mb-3 pt-2">
+        <div className="mb-3">
+          {/* The timeline's rules are a string in Chrome.tsx, not a stylesheet
+              the pull request panel happens to have mounted. */}
+          <style>{TL_CSS}</style>
           <div className={`${EYEBROW} mb-1.5`} style={{ color: "var(--text4)" }}>
             Oldest first
           </div>
@@ -6441,10 +6980,17 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
             * backwards. Now they are oldest-first (fixed at the source) and
             * each one is a card with its author, so the eye can count turns.
             *
+            * GitHub's shape, as the pull request conversation draws it: the
+            * speaker's face in a column of its own outside the card, the
+            * remark in a neutral card, and the card's moves on the rail
+            * between them. One face per remark — the header no longer
+            * draws its own.
+            *
             * `1d` is how long ago; `3 Aug 18:21` is when. A thread is read
             * against a working day — "before or after the deploy" — and only
             * the second answers that. Both, since neither replaces the other.
             */}
+          <div className="agx-tl">
           {rows.map((row) => {
             /* What happened to the card, in the place it happened. A run of these
                with nothing said between them is one row — folded past three, or a
@@ -6467,8 +7013,14 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                paragraphs a millimetre apart, where the gap BETWEEN two comments
                was smaller than the gap between two lines inside one, so the
                eye had nothing to cut on and the column read as one block. */
-            <div key={c.id} className="mb-3 rounded-lg px-3.5 py-3"
-              style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", border: edge(10) }}>
+            <div key={c.id} className="agx-ev">
+              {/* The face beside the name, which is how the same comment reads
+                  in ClickUp itself. The API carries it for a comment's author;
+                  for a status change it carries nobody. */}
+              <span className="agx-av">
+                <Face n={0} size={TL_AVATAR} p={{ name: c.who || "—", initials: c.initials ?? "", color: c.color, avatar: c.avatar }} />
+              </span>
+            <div className="agx-card rounded-xl px-3.5 py-3" style={{ border: EDGE }}>
               {/*
                 * Who wrote it, kept under the card's own band for as long as
                 * what they wrote — ClickUp's behaviour, and the reason it took
@@ -6481,13 +7033,8 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                 * neither is readable. The negative margins take it to the
                 * card's edges so nothing shows through at the sides.
                 */}
-              <div className="sticky z-[5] -mx-3.5 -mt-3 px-3.5 pt-3 pb-2 mb-2 flex items-center gap-2 flex-wrap rounded-t-lg"
-                style={{ top: "var(--cu-head-h, 0px)", background: "color-mix(in srgb, var(--bg3) 30%, var(--bg))" }}>
-                {/* The face beside the name, which is how the same comment reads
-                    in ClickUp itself — "I miss seeing who made those changes,
-                    with avatar and name if possible". The API carries it for a
-                    comment's author; for a status change it carries nobody. */}
-                <Face n={0} p={{ name: c.who || "—", initials: c.initials ?? "", color: c.color, avatar: c.avatar }} />
+              <div className="sticky z-[5] -mx-3.5 -mt-3 px-3.5 pt-3 pb-2 mb-2 flex items-center gap-2 flex-wrap rounded-t-xl"
+                style={{ top: 0, background: "var(--surface-card)" }}>
                 <span className="text-[10.5px] font-semibold" style={{ color: "var(--text2)" }}>{c.who || "—"}</span>
                 {!!c.at && (
                   <span className="text-[10px]" style={{ color: "var(--text4)" }}
@@ -6510,7 +7057,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                     disabled={!c.replyList?.length}
                     title={c.replyList?.length ? "Show the replies" : "This thread could not be loaded"}
                     className="text-[10px] px-1.5 py-0.5 rounded inline-flex items-center gap-1.5 hover:opacity-80 disabled:opacity-50"
-                    style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
+                    style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
                     <span style={{ transform: openThreads.has(c.id) ? "none" : "rotate(-90deg)", display: "inline-block" }}>▾</span>
                     {c.replies} {c.replies === 1 ? "reply" : "replies"}
                     {/* The faces, before anything is expanded. Most of what the
@@ -6538,7 +7085,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                   title="More for this comment"
                   aria-label="More for this comment"
                   className="agx-bench-hit ml-auto shrink-0 rounded-md text-[14px] leading-none flex items-center justify-center"
-                  style={{ width: 28, height: 26, color: "var(--text3)", border: edge(16) }}>…</button>
+                  style={{ width: 28, height: 26, color: "var(--text3)", border: EDGE }}>…</button>
               </div>
               {/* Through the markdown renderer, like the description: these
                   carry code spans and tables, and printing them raw is what
@@ -6567,34 +7114,48 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                   the comment is hovered — a row of four buttons under every
                   paragraph turns a conversation into a control panel. */}
               {writable && editing !== c.id && (
-                <div className="agx-hover-show flex items-center gap-1 mt-2">
+                /* Out of the flow. In the flow this row was opacity:0 and
+                   still took its ~22px plus mt-2 under every comment, so a
+                   one-line remark sat in a card with a 43px blank band below
+                   it (measured 13px once the row is gone). Now it floats
+                   inside the card's bottom padding, icon-only so four fit
+                   inside the card at sidebar width: the card hugs
+                   its text, and hovering the card still reveals it. */
+                <div className="agx-hover-show absolute right-2 bottom-1.5 z-[6] flex flex-nowrap items-center gap-1 rounded-lg p-0.5"
+                  style={{ background: "var(--surface-card)" }}>
                   {/* Controls, not a sentence.
                       These were four words in a row under the paragraph and read
-                      as text somebody forgot to delete — "no parecen ni botones".
-                      An icon, a label, a border and a 24px hit area each, with
-                      the destructive one held apart from the other three. */}
-                  <CommentAction label="Reply" title="Answer in this thread"
+                      as text somebody forgot to delete. An icon, a label, a
+                      border and a compact control each, with the destructive
+                      one held apart from the other three. */}
+                  <CommentAction iconOnly label="Reply" title="Answer in this thread"
                     d="M9 14l-5-5 5-5M4 9h9a7 7 0 0 1 7 7v4"
                     onClick={() => { setReplyTo(replyTo === c.id ? null : c.id); setNoteDraft(""); }} />
                   {c.mine && (
-                    <CommentAction label="Edit" title="Edit this comment"
+                    <CommentAction iconOnly label="Edit" title="Edit this comment"
                       d="M4 20h4l10-10a2.8 2.8 0 0 0-4-4L4 16v4z"
                       onClick={() => { setEditing(c.id); setNoteDraft(c.text); setReplyTo(null); }} />
                   )}
-                  <CommentAction label={c.resolved ? "Resolved" : "Resolve"}
+                  <CommentAction iconOnly label={c.resolved ? "Resolved" : "Resolve"}
                     title={c.resolved ? "Mark it unresolved" : "Mark it resolved"}
                     d="M4 12l5 5L20 6" on={!!c.resolved} tone="var(--success, #98c379)"
-                    busy={busyComment === c.id}
                     onClick={() => {
-                      setBusyComment(c.id);
-                      void api.clickupCommentResolve(c.id, !c.resolved).then((r) => {
-                        if (r.ok) reread(); else onNote(r.error ?? "ClickUp refused that");
-                      }).finally(() => setBusyComment(null));
+                      /* Drawn on the press and sent behind — see
+                         lib/taskOptimistic.ts. The read after it is the one
+                         allowed to replace the layer, and only while this
+                         card is still the one open. */
+                      const on = !c.resolved;
+                      const card = t.id;
+                      void layers.run({
+                        patch: commentResolvedPatch(c.id, on),
+                        send: () => api.clickupCommentResolve(c.id, on),
+                        failText: "ClickUp refused that",
+                      }).then((ok) => { if (ok && openCard.current === card) reread(); });
                     }} />
                   {c.mine && (
                     <>
                       <span aria-hidden className="mx-0.5" style={{ width: 1, height: 16, background: "color-mix(in srgb, var(--text) 12%, transparent)" }} />
-                      <CommentAction label="Delete" title="Delete this comment" tone="var(--error)"
+                      <CommentAction iconOnly label="Delete" title="Delete this comment" tone="var(--error)"
                         d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13M10 11v6M14 11v6"
                         busy={busyComment === c.id}
                         onClick={async () => {
@@ -6617,7 +7178,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
               )}
 
               {replyTo === c.id && (
-                <div className="mt-2" style={{ marginLeft: 4, paddingLeft: 12, borderLeft: edge(18) }}>
+                <div className="agx-nest" style={{ paddingLeft: 12, borderLeft: LINE }}>
                   <Composer value={noteDraft} onChange={setNoteDraft} busy={busyComment === c.id} autoFocus
                     placeholder={`Answer ${c.who || "this"}`} sendLabel="Reply"
                     people={members} onNeedPeople={loadMembers}
@@ -6640,8 +7201,8 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                   a reply is never mistaken for the next comment — which is
                   exactly what a flat list of both would produce. */}
               {openThreads.has(c.id) && !!c.replyList?.length && (
-                <div className="mt-3 flex flex-col gap-3"
-                  style={{ marginLeft: 4, paddingLeft: 12, borderLeft: edge(18) }}>
+                <div className="agx-nest flex flex-col gap-3"
+                  style={{ paddingLeft: 12, borderLeft: LINE }}>
                   {c.replyList.map((r) => (
                     <div key={r.id}>
                       <div className="flex items-center gap-2 flex-wrap mb-1.5">
@@ -6698,8 +7259,10 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                 </div>
               )}
             </div>
+            </div>
             );
           })}
+          </div>
         </div>
       )}
 
@@ -6759,14 +7322,25 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
         );
       })()}
 
+      </></MarkdownImages>)}
+
+      {full === null && <div className="mb-3"><Spinner label="Reading the card…" className="" /></div>}
+      </div>
+
       {/* Saying something, from here.
           The card could be read and could not be answered — every note went
           through the website, which is the thing this panel exists to make
-          unnecessary. Below the conversation on purpose: a box above it is a
-          box you write in before reading what is already there. */}
-      {writable && (
-        <div className="mb-3 pt-2" style={{ borderTop: rows.length ? edge(10) : undefined }}>
-          <Composer value={say} onChange={(v) => { setSay(v); setSayErr(""); }} busy={saying}
+          unnecessary.
+
+          Pinned under the scroller, not at the end of what scrolls: at the end
+          of a seventeen-comment thread the box was a full scroll away, and the
+          one control this tab exists for was the one you had to hunt for. The
+          list scrolls above it; the box grows with what is typed up to a
+          share of the pane and scrolls inside after that, so a long draft
+          never squeezes the conversation out. */}
+      {writable && view === "activity" && (
+        <div className="shrink-0 px-4 pt-2 pb-3" style={{ borderTop: LINE }}>
+          <Composer value={say} growTo={sayCap} onChange={(v) => { setSay(v); setSayErr(""); }} busy={saying}
             placeholder="Say something on this card. Markdown, and @ to call somebody."
             sendLabel="Comment"
             people={members}
@@ -6781,218 +7355,17 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                  mention op on the wire (see clickupDelta), which is what
                  ClickUp itself writes and what actually notifies. */
               void api.clickupComment(t.id, say).then((r) => {
-                if (r.ok) { setSay(""); reread(); }
+                if (r.ok) { setSay(""); sentRef.current = true; reread(); }
                 /* Kept, not cleared: a comment refused by the workspace is
                    still the comment somebody wrote, and losing it to a failed
                    request is how people stop trusting the box. */
                 else setSayErr(r.error ?? "ClickUp refused the comment");
               }).catch(() => setSayErr("Could not reach ClickUp")).finally(() => setSaying(false));
             }} />
-          {sayErr && <div className="text-[10.5px] mt-1" style={{ color: "var(--error)" }}>{sayErr}</div>}
+          {sayErr && <div className="text-[10.5px] mt-1" style={{ color: "var(--error-ink)" }}>{sayErr}</div>}
         </div>
       )}
-      </></MarkdownImages>)}
 
-      {full === null && <div className="mb-3"><Spinner label="Reading the card…" className="" /></div>}
-
-      {/*
-        * Pinned to the bottom of the pane, in as little height as it can hold.
-        *
-        * These three are what you press AFTER reading, and a card whose
-        * description runs to two screens put them below all of it — so the last
-        * thing a long card asked of you was to scroll back down past what you
-        * had just read. Sticky costs nothing when the card is short (it sits
-        * where it always did) and saves the scroll when it is not.
-        *
-        * Opaque, not translucent: it has comment text sliding under it, and a
-        * blur here would be a per-frame composite on a pane that scrolls.
-        */}
-      <div className="flex items-center gap-1.5 flex-wrap pt-2 pb-3 mt-auto sticky bottom-0 z-20"
-        style={{ borderTop: edge(10), background: "var(--bg)" }}>
-        <div className="relative">
-          <button onClick={() => setAskOpen((o) => !o)} className="text-[10.5px] px-2 py-1 rounded-lg"
-            style={{ border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", color: "var(--warning)" }}>
-            Hand to Claude ▾
-          </button>
-          {askOpen && (
-            <div className="agx-scroll absolute left-0 bottom-full mb-1 rounded-lg text-[11px] shadow-2xl flex flex-col overflow-y-auto"
-              style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 260, maxHeight: 340 }}>
-              {/* Your own skills first, because running one is the thing being
-                  reached for — the plain hand-offs below are the fallback for a
-                  card no skill covers. */}
-              {!!skills.length && (
-                <>
-                  <div className="px-2.5 pt-2 pb-1 flex items-center gap-2">
-                    <span className={`${EYEBROW}`} style={{ color: "var(--text4)" }}>
-                      Run a skill on this card
-                    </span>
-                    <span className="flex-1" />
-                    <input value={skillQ} onChange={(e) => setSkillQ(e.target.value)} placeholder="filter"
-                      spellCheck={false} autoComplete="off"
-                      className="text-[10px] px-1.5 py-0.5 rounded outline-none"
-                      style={{ background: "var(--bg3)", border: edge(16), color: "var(--text)", width: 92 }} />
-                  </div>
-                  {shown.map((sk, i) => {
-                    // One heading between the ones named for it and the rest,
-                    // rather than a filter that would have to be right about
-                    // which of the others take a card. See namedForIt.
-                    const firstOther = !namedForIt(sk) && (i === 0 || namedForIt(shown[i - 1]!));
-                    const modes = skillModes(sk.argument_hint);
-                    const run = (mode?: string) => {
-                      setAskOpen(false);
-                      const cwd = rootForTask(t.list, repos, here);
-                      if (!cwd) { onNote("No checkout to run it in — give the board's list a project name that matches a repo"); return; }
-                      const cmd = skillCommand(sk.name, t) + (mode ? ` ${mode}` : "");
-                      // A tmux window with the agent already running it, which
-                      // is the gesture the issues panel uses.
-                      requestTermIssue(cwd, windowName(t), cmd, true, yolo, t.title);
-                      onNote(`${cmd}${yolo ? " · permissions off" : ""} — opening a window`);
-                    };
-                    return (
-                      <div key={sk.name}>
-                      {firstOther && (
-                        <div className={`px-2.5 pt-2 pb-1 ${EYEBROW}`}
-                          style={{ color: "var(--text4)", borderTop: edge(10) }}>Also mention ClickUp</div>
-                      )}
-                      <div className="px-2.5 py-1.5 hover:bg-white/5">
-                        <button className="text-left w-full" title={sk.description} onClick={() => run()}>
-                          <div style={{ color: "var(--warning)" }}>
-                            /{sk.name.replace(/^\//, "")} <span style={{ color: "var(--text3)" }}>{t.customId || t.id}</span>
-                          </div>
-                          {sk.description && (
-                            <div className="text-[9.5px] line-clamp-2" style={{ color: "var(--text4)" }}>{sk.description}</div>
-                          )}
-                        </button>
-                        {/* The gears the skill itself advertises. Parsed from
-                            its own invocation line, so a skill that grows a
-                            third mode grows a third button here for free. */}
-                        {!!modes.length && (
-                          <div className="flex items-center gap-1 mt-1">
-                            {modes.map((m) => (
-                              <button key={m} onClick={() => run(m)}
-                                className="text-[9.5px] px-1.5 py-0.5 rounded-full"
-                                style={{ color: "var(--text3)", border: edge(16) }}>{m}</button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                      </div>
-                    );
-                  })}
-                  {!shown.length && (
-                    <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>No skill matches that.</div>
-                  )}
-                  <div style={{ borderTop: edge(14) }} />
-                </>
-              )}
-              <div className="px-2.5 pt-2 pb-1 flex items-center gap-2">
-                <span className={`${EYEBROW}`} style={{ color: "var(--text4)" }}>
-                  Or hand it over to write your own
-                </span>
-                <span className="flex-1" />
-                {/* Where it lands. Sits with the rows it governs rather than in
-                    Settings: it is the kind of choice you change because of what
-                    you are about to do, not once a year. */}
-                {(["chat", "term"] as const).map((d) => (
-                  <button key={d} onClick={(e) => { e.stopPropagation(); setHandoffTo(d); setTo(d); }}
-                    title={d === "chat" ? "Open it in the app's chat" : "Open it in a tmux pane, like a skill"}
-                    className="text-[10px] px-1.5 py-0.5 rounded"
-                    style={to === d
-                      ? { background: "color-mix(in srgb, var(--primary) 20%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }
-                      : { border: edge(14), color: "var(--text4)" }}>
-                    {d === "chat" ? <IconLabel icon={<CommentIcon size={ICON.xs} />}>chat</IconLabel> : <IconLabel icon={<MonitorIcon size={ICON.xs} />}>pane</IconLabel>}
-                  </button>
-                ))}
-              </div>
-              {HANDOFFS.map((h) => (
-                <button key={h.id} className="text-left px-2.5 py-1.5 hover:bg-white/5"
-                  style={{ color: "var(--text2)" }}
-                  onClick={() => {
-                    setAskOpen(false);
-                    const cwd = rootForTask(t.list, repos, here);
-                    if (!cwd) { onNote("No checkout to hand this to"); return; }
-                    const text = h.build(t, full?.description ?? "");
-                    // The same two destinations a skill offers, through the same
-                    // two paths — nothing new is invented here.
-                    if (to === "term") { requestTermIssue(cwd, windowName(t), text, true, yolo, t.title); onNote(`${t.customId || t.id} handed to a pane`); }
-                    else onOpenChatWith?.(cwd, text, t.title.slice(0, 60));
-                  }}>
-                  <div>{h.label}</div>
-                  <div className="text-[9.5px]" style={{ color: "var(--text4)" }}>{h.hint}</div>
-                </button>
-              ))}
-              {/* Applies to a skill run, which spawns an agent — not to the
-                  hand-offs above, which only put text in a composer. Sticky,
-                  because whoever wants it once usually wants it all afternoon,
-                  and loud, because it is the setting that lets an agent edit
-                  files without asking. */}
-              {!!skills.length && (
-                <label className="flex items-start gap-2 px-2.5 py-2 cursor-pointer"
-                  style={{ borderTop: edge(14) }}>
-                  <input type="checkbox" checked={yolo} onChange={(e) => setYolo(e.target.checked)}
-                    style={{ accentColor: "var(--error)", marginTop: 2 }} />
-                  <span>
-                    <span style={{ color: yolo ? "var(--error)" : "var(--text2)" }}>Skip permission prompts</span>
-                    <span className="block text-[9.5px]" style={{ color: "var(--text4)" }}>
-                      The agent edits and runs without asking. Only for a card you already trust.
-                    </span>
-                  </span>
-                </label>
-              )}
-            </div>
-          )}
-        </div>
-        <button onClick={() => void copyIt(t.customId || t.id, "human")} className="text-[10.5px] px-2 py-1 rounded-lg"
-          style={{ border: line, color: "var(--text2)" }}>Copy {t.customId ? "PROJ id" : "id"}</button>
-        {/* Beside the id it belongs with, and before Open: the two buttons are
-            the two ways to take this card somewhere else, and the one that
-            leaves the app should not be the only way to get its address. */}
-        {t.url && (
-          <button onClick={() => void copyIt(t.url, "url")} className="text-[10.5px] px-2 py-1 rounded-lg"
-            style={{ border: line, color: "var(--text2)" }}
-            title={t.url}>{copied === "url" ? <span className="inline-flex items-center gap-1">copied<DoneIcon size={ICON.xs} /></span> : "Copy URL"}</button>
-        )}
-        {t.url && (
-          <a href={t.url} target="_blank" rel="noreferrer" className="text-[10.5px] px-2 py-1 rounded-lg"
-            style={{ border: line, color: "var(--text2)" }}>Open ↗</a>
-        )}
-        {/*
-          THIS CARD, and only this card.
-         *
-          The Refresh at the top of the board re-reads every card on it — which
-          on a board of 123 is seconds of waiting to see whether one comment
-          landed. `reread` already existed for exactly this shape (it runs after
-          a comment is posted, because the board's poll does not carry
-          comments); it simply had no way to be pressed.
-         *
-          Its own spinner rather than the board's, so it is obvious WHICH thing
-          is being re-read. */}
-        <button onClick={() => {
-          setRereading(true);
-          void api.clickupTask(t.id)
-            .then((r) => {
-              setFull(r);
-              /* And the fields the BOARD owns, or half the card stays as it was
-                 read a minute ago while the other half is current. */
-              if (r.ok && r.task) onFresh?.(r.task);
-            })
-            .catch(() => { /* keep what we have */ })
-            .finally(() => setRereading(false));
-        }}
-          disabled={rereading}
-          title="Read this card again — the board keeps whatever it had"
-          className="text-[10.5px] px-2 py-1 rounded-lg flex items-center gap-1.5 disabled:opacity-50"
-          style={{ border: line, color: "var(--text2)" }}>
-          {/* ICON.xs — below twelve a stroked glyph stops resolving at 1x, and
-              the suite says so. It caught this one too. */}
-          <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4}
-            strokeLinecap="round" strokeLinejoin="round" aria-hidden
-            style={rereading ? { animation: "agx-spin 1s linear infinite" } : undefined}>
-            <path d="M21 12a9 9 0 1 1-2.6-6.4" /><path d="M21 3v6h-6" />
-          </svg>
-          {rereading ? "reading…" : "Refresh card"}
-        </button>
-      </div>
       {dialog}
     </div>
   );
@@ -7335,14 +7708,14 @@ function LocalBody({ active, repos, here, onOpenChatWith }: {
             style={bucket === b.id
               ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)",
                   border: "1px solid color-mix(in srgb, var(--primary) 50%, transparent)", color: "var(--text)" }
-              : { border: edge(14), color: "var(--text2)" }}>
+              : { border: EDGE, color: "var(--text2)" }}>
             {b.tone && <span aria-hidden style={{ width: 6, height: 6, borderRadius: 999, background: b.tone }} />}
             {b.label}
             <span style={{ color: "var(--text3)" }}>{counts[b.id]}</span>
           </button>
         ))}
         <span className="flex-1" />
-        <div className="flex rounded-lg overflow-hidden" style={{ border: edge(14) }}>
+        <div className="flex rounded-lg overflow-hidden" style={{ border: EDGE }}>
           {([false, true] as const).map((d) => (
             <button key={String(d)} onClick={() => setShowDone(d)} aria-pressed={showDone === d}
               className="text-[10.5px] px-2.5 py-0.5"
@@ -7357,7 +7730,7 @@ function LocalBody({ active, repos, here, onOpenChatWith }: {
 
       <div className="flex items-center gap-2 px-5 pb-1.5 shrink-0">
         <div className="flex items-center gap-2 flex-1 min-w-0 rounded-lg px-2.5 py-1"
-          style={{ background: "var(--bg2)", border: edge(14) }}>
+          style={{ background: "var(--surface-card)", border: EDGE }}>
           <span className="shrink-0 flex" style={{ color: "var(--text3)" }}><SearchIcon size={ICON.xs} /></span>
           <input ref={barRef} value={input} onChange={(e) => setInput(e.target.value)}
             onKeyDown={async (e) => {
@@ -7422,7 +7795,7 @@ function LocalBody({ active, repos, here, onOpenChatWith }: {
             grid drives every row — see GRID. */}
         <div className={`px-5 py-1 ${EYEBROW} shrink-0`}
           style={{ display: "grid", gridTemplateColumns: GRID, gap: 10, color: "var(--text4)",
-            borderTop: edge(10), borderBottom: edge(10) }}>
+            borderTop: LINE, borderBottom: LINE }}>
           <span /><span>Task</span><span>Project</span><span>Due</span><span>Reminder</span><span />
         </div>
         <div className="agx-scroll flex-1 min-w-0 overflow-y-auto">
@@ -7444,7 +7817,7 @@ function LocalBody({ active, repos, here, onOpenChatWith }: {
         </div>
       </div>
       <aside className="agx-scroll overflow-y-auto overflow-x-hidden p-5 text-[11.5px] shrink-0"
-        style={{ width: 380, borderLeft: edge(12) }}>
+        style={{ width: 380, borderLeft: LINE }}>
         {picked ? <TaskDetail t={picked} today={today} reminder={byTask[picked.uuid] ?? null}
           writable={cap.configured}
           projects={picker.projects} tags={picker.tags}
@@ -7461,7 +7834,7 @@ function LocalBody({ active, repos, here, onOpenChatWith }: {
           they are just no longer the widest thing on screen, which is what made
           the panel read as a terminal. */}
       <div className="flex items-center gap-3 px-5 py-1.5 shrink-0 text-[10.5px]"
-        style={{ borderTop: edge(10), color: "var(--text4)" }}>
+        style={{ borderTop: LINE, color: "var(--text4)" }}>
         <span>{open.length} {open.length === 1 ? "task" : "tasks"}{counts.today ? ` · ${counts.today} today` : ""}</span>
         <span className="flex-1" />
         {keysOpen && (
@@ -7476,7 +7849,7 @@ function LocalBody({ active, repos, here, onOpenChatWith }: {
           </div>
         )}
         <button onClick={() => setKeysOpen((o) => !o)} aria-expanded={keysOpen}
-          className="shrink-0 px-2 py-0.5 rounded-lg" style={{ border: edge(14), color: "var(--text3)" }}>
+          className="shrink-0 px-2 py-0.5 rounded-lg" style={{ border: EDGE, color: "var(--text3)" }}>
           <IconLabel icon={<KeyboardIcon size={ICON.xs} />}>{keysOpen ? "Hide" : "Shortcuts"}</IconLabel>
         </button>
       </div>
@@ -7524,7 +7897,7 @@ function TaskRow({ t, today, on, onPick, marked, onMark, reminder, remindOpen, o
       className="agx-row w-full text-left px-5 py-1.5 hover:bg-white/5 cursor-pointer items-center"
       style={{
         display: "grid", gridTemplateColumns: GRID, gap: 10,
-        borderBottom: edge(6),
+        borderBottom: LINE,
         background: marked
           ? "color-mix(in srgb, var(--primary) 20%, transparent)"
           : on ? "color-mix(in srgb, var(--primary) 13%, transparent)" : undefined,
@@ -7536,7 +7909,7 @@ function TaskRow({ t, today, on, onPick, marked, onMark, reminder, remindOpen, o
           here rather than stealing a column nobody would recognise. */}
       {marked ? (
         <button onClick={(e) => { e.stopPropagation(); onMark?.(); }} aria-label="Unmark"
-          className="flex justify-center" style={{ color: "var(--primary)" }}><DoneIcon size={ICON.xs} /></button>
+          className="flex justify-center" style={{ color: "var(--primary-ink)" }}><DoneIcon size={ICON.xs} /></button>
       ) : onToggle && writable ? (
         <button onClick={(e) => { e.stopPropagation(); onToggle(); }}
           title={isDone ? "Reopen" : "Mark done"}
@@ -7560,9 +7933,9 @@ function TaskRow({ t, today, on, onPick, marked, onMark, reminder, remindOpen, o
             {t.priority && (
               <span className="text-[8.5px] tracking-[0.08em] px-1.5 rounded"
                 style={t.priority === "H"
-                  ? { color: "var(--error)", background: "color-mix(in srgb, var(--error) 13%, transparent)" }
+                  ? { color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 13%, transparent)" }
                   : t.priority === "M"
-                  ? { color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 13%, transparent)" }
+                  ? { color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 13%, transparent)" }
                   : { color: "var(--text3)", background: "color-mix(in srgb, var(--text) 8%, transparent)" }}>
                 {t.priority === "H" ? "HIGH" : t.priority === "M" ? "MED" : "LOW"}
               </span>
@@ -7576,7 +7949,7 @@ function TaskRow({ t, today, on, onPick, marked, onMark, reminder, remindOpen, o
             {progress.total > 0 && (
               <span className={`${TAG_PILL} tabular-nums`}
                 style={progress.done === progress.total
-                  ? { color: "var(--success)", background: "color-mix(in srgb, var(--success) 13%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 30%, transparent)" }
+                  ? { color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 13%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 30%, transparent)" }
                   : { color: "var(--text3)", background: TAG_FILL, border: TAG_EDGE }}>
                 {progress.done}/{progress.total}
               </span>
@@ -7588,7 +7961,7 @@ function TaskRow({ t, today, on, onPick, marked, onMark, reminder, remindOpen, o
       <span className="truncate text-[11px]">
         {t.project && (
           <button onClick={(e) => { e.stopPropagation(); onFilter?.("project", t.project!); }}
-            className="truncate max-w-full" style={{ color: "var(--info)" }}
+            className="truncate max-w-full" style={{ color: "var(--info-ink)" }}
             title={`Only @${t.project}`}>{t.project}</button>
         )}
       </span>
@@ -7626,7 +7999,7 @@ function TaskRow({ t, today, on, onPick, marked, onMark, reminder, remindOpen, o
       <span className="text-right">
         <button onClick={(e) => { e.stopPropagation(); onPick(); }}
           className="agx-onrow text-[10.5px] px-2 py-0.5 rounded-lg"
-          style={{ border: edge(16), color: "var(--text2)" }}>Open →</button>
+          style={{ border: EDGE, color: "var(--text2)" }}>Open →</button>
       </span>
     </div>
   );
@@ -7713,13 +8086,13 @@ function Drop({ label, value, options, onPick, onClear }: {
         style={on
           ? { background: "color-mix(in srgb, var(--primary) 14%, transparent)",
               border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }
-          : { border: edge(14), color: "var(--text2)" }}>
-        {label}{on && <span style={{ color: "var(--primary)" }}>{value}</span>}
+          : { border: EDGE, color: "var(--text2)" }}>
+        {label}{on && <span style={{ color: "var(--primary-ink)" }}>{value}</span>}
         <span style={{ color: "var(--text4)" }}>▾</span>
       </button>
       {open && (
         <div className="absolute left-0 mt-1 rounded-lg text-[11.5px] shadow-2xl flex flex-col overflow-auto"
-          style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 160, maxHeight: 300 }}>
+          style={{ zIndex: 30, background: "var(--surface-card)", border: edge(28), minWidth: 160, maxHeight: 300 }}>
           {onClear && (
             <button onClick={() => { onClear(); setOpen(false); }}
               className="text-left px-2.5 py-1.5 hover:bg-white/5" style={{ color: "var(--text3)" }}>
@@ -7815,17 +8188,16 @@ function NewTask({ projects, tags, onAdd, onClose }: {
     if (ok) onClose();
   };
 
-  const field = { background: "var(--bg2)", border: edge(18), color: "var(--text)" };
   const label = "text-[8.5px] uppercase tracking-[0.18em] mb-1 block";
   return (
     <form id="agx-new" onSubmit={submit} onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } }}
       className="px-5 py-3 flex flex-col gap-2.5"
-      style={{ borderBottom: edge(12), background: "color-mix(in srgb, var(--primary) 6%, transparent)" }}>
+      style={{ borderBottom: LINE, background: "color-mix(in srgb, var(--primary) 6%, transparent)" }}>
       <div>
         <label className={label} style={{ color: "var(--text3)" }} htmlFor="nt-desc">What needs doing</label>
         <input id="nt-desc" ref={first} value={description} onChange={(e) => setDescription(e.target.value)}
           placeholder="Describe the task" spellCheck={false} autoComplete="off"
-          className="w-full text-[12px] px-2 py-1.5 rounded-lg outline-none" style={field} />
+          className={`w-full ${INPUT}`} style={INPUT_STYLE} />
       </div>
       <div className="flex items-end gap-2 flex-wrap">
         <div>
@@ -7838,7 +8210,7 @@ function NewTask({ projects, tags, onAdd, onClose }: {
                 style={priority === p
                   ? { background: "color-mix(in srgb, var(--primary) 20%, transparent)",
                       border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }
-                  : { border: edge(18), color: "var(--text3)" }}>
+                  : { border: EDGE, color: "var(--text3)" }}>
                 {p === null ? "None" : p === "L" ? "Low" : p === "M" ? "Medium" : "High"}
               </button>
             ))}
@@ -7848,18 +8220,18 @@ function NewTask({ projects, tags, onAdd, onClose }: {
           <label className={label} style={{ color: "var(--text3)" }} htmlFor="nt-proj">Project</label>
           <input id="nt-proj" list="agx-projects" value={project} onChange={(e) => setProject(e.target.value)}
             placeholder="none" spellCheck={false} autoComplete="off"
-            className="text-[11px] px-2 py-1 rounded-lg outline-none" style={{ ...field, width: 150 }} />
+            className={`w-[150px] ${INPUT}`} style={INPUT_STYLE} />
         </div>
         <div>
           <label className={label} style={{ color: "var(--text3)" }} htmlFor="nt-tags">Tags</label>
           <input id="nt-tags" list="agx-tags" value={tagText} onChange={(e) => setTagText(e.target.value)}
             placeholder="space separated" spellCheck={false} autoComplete="off"
-            className="text-[11px] px-2 py-1 rounded-lg outline-none" style={{ ...field, width: 170 }} />
+            className={`w-[170px] ${INPUT}`} style={INPUT_STYLE} />
         </div>
         <div>
           <label className={label} style={{ color: "var(--text3)" }} htmlFor="nt-due">Due</label>
           <input id="nt-due" type="date" value={due} onChange={(e) => setDue(e.target.value)}
-            className="text-[11px] px-2 py-1 rounded-lg outline-none" style={field} />
+            className={INPUT} style={INPUT_STYLE} />
         </div>
         <datalist id="agx-projects">{projects.map((p) => <option key={p} value={p} />)}</datalist>
         <datalist id="agx-tags">{tags.map((t) => <option key={t} value={t} />)}</datalist>
@@ -7896,10 +8268,10 @@ function BulkBar({ n, tagging, tag, onTag, onTagging, onRun, onClear }: {
   onClear: () => void;
 }) {
   const btn = "text-[10.5px] px-2 py-1 rounded-lg whitespace-nowrap";
-  const quiet = { border: edge(18), color: "var(--text2)" };
+  const quiet = { border: EDGE, color: "var(--text2)" };
   return (
     <div className="flex items-center gap-1.5 px-4 py-2 flex-wrap"
-      style={{ borderBottom: edge(10), background: "color-mix(in srgb, var(--primary) 8%, transparent)" }}>
+      style={{ borderBottom: LINE, background: "color-mix(in srgb, var(--primary) 8%, transparent)" }}>
       <span className="text-[11px] font-medium mr-1" style={{ color: "var(--text)" }}>
         {n} selected
       </span>
@@ -7909,8 +8281,8 @@ function BulkBar({ n, tagging, tag, onTag, onTagging, onRun, onClear }: {
           <input autoFocus value={tag} onChange={(e) => onTag(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onTagging(false); onTag(""); } }}
             placeholder="tag to add" spellCheck={false}
-            className="text-[10.5px] px-2 py-1 rounded-lg outline-none"
-            style={{ background: "var(--bg2)", border: edge(20), color: "var(--text)", width: 140 }} />
+            className={`w-[140px] ${INPUT}`}
+            style={INPUT_STYLE} />
           <button type="submit" className={btn} style={quiet}>Add</button>
         </form>
       ) : (
@@ -7960,7 +8332,7 @@ function TaskFields({ t, today, projects, tags, onEdit }: {
   const [editingDue, setEditingDue] = useState(false);
 
   const lab = { color: "var(--text4)", width: 62 };
-  const field = { background: "var(--bg2)", border: edge(18), color: "var(--text)" };
+  const field = { background: "var(--surface-card)", border: EDGE, color: "var(--text)" };
   /* A value you can change looks like one: quiet until the pointer is on it,
      then it shows its edge. A row of boxed inputs reads as a settings screen,
      which is what this pane looked like. */
@@ -7977,7 +8349,7 @@ function TaskFields({ t, today, projects, tags, onEdit }: {
               style={t.priority === p
                 ? { background: "color-mix(in srgb, var(--primary) 20%, transparent)",
                     border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }
-                : { border: edge(14), color: "var(--text3)" }}>
+                : { border: EDGE, color: "var(--text3)" }}>
               {p === null ? "None" : PRIO_NAME[p]}
             </button>
           ))}
@@ -8083,13 +8455,13 @@ function TaskDetail({ t, today, reminder, onCancel, writable, onToggleNote, onSh
         : (
           <div className="flex flex-wrap items-center gap-1.5 mb-2">
             {t.priority && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--warning)", border: edge(16) }}>
+              <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--warning-ink)", border: EDGE }}>
                 {t.priority === "H" ? "High" : t.priority === "M" ? "Medium" : "Low"}
               </span>
             )}
-            {t.project && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--info)", border: edge(16) }}>@{t.project}</span>}
+            {t.project && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--info-ink)", border: EDGE }}>@{t.project}</span>}
             {t.tags.map((tag) => (
-              <span key={tag} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: edge(16) }}>{tag}</span>
+              <span key={tag} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: EDGE }}>{tag}</span>
             ))}
           </div>
         )}
@@ -8105,7 +8477,7 @@ function TaskDetail({ t, today, reminder, onCancel, writable, onToggleNote, onSh
         <div className="flex items-center gap-2 mb-4 text-[11px]">
           <span style={{ color: reminder.firedAt ? "var(--error)" : "var(--primary)" }}><IconLabel icon={<ClockIcon size={ICON.xs} />}>{remindLabel(reminder.due)}</IconLabel></span>
           <span className="flex-1" />
-          <button onClick={onCancel} className="text-[10px] px-2 py-0.5 rounded" style={{ border: edge(20), color: "var(--text2)" }}>
+          <button onClick={onCancel} className="text-[10px] px-2 py-0.5 rounded" style={{ border: EDGE, color: "var(--text2)" }}>
             remove
           </button>
         </div>
@@ -8114,13 +8486,13 @@ function TaskDetail({ t, today, reminder, onCancel, writable, onToggleNote, onSh
         <div className="flex items-center gap-1.5 mb-4">
           {onShell && (
             <button onClick={onShell} className="text-[10.5px] px-2 py-1 rounded-lg"
-              style={{ border: edge(18), color: "var(--text2)" }} title="w">
+              style={{ border: EDGE, color: "var(--text2)" }} title="w">
               Shell here
             </button>
           )}
           {onChat && (
             <button onClick={onChat} className="text-[10.5px] px-2 py-1 rounded-lg"
-              style={{ border: edge(18), color: "var(--text2)" }} title="c — the prompt waits in the composer, unsent">
+              style={{ border: EDGE, color: "var(--text2)" }} title="c — the prompt waits in the composer, unsent">
               Ask Claude
             </button>
           )}
@@ -8147,7 +8519,7 @@ function TaskDetail({ t, today, reminder, onCancel, writable, onToggleNote, onSh
           <div className={`${EYEBROW} mt-4 mb-1.5`} style={{ color: "var(--text3)" }}>Links</div>
           {t.urls.map((u) => (
             <a key={u} href={u} target="_blank" rel="noreferrer"
-              className="block text-[10px] break-all mb-1" style={{ color: "var(--info)" }}>{u}</a>
+              className="block text-[10px] break-all mb-1" style={{ color: "var(--info-ink)" }}>{u}</a>
           ))}
         </>
       )}
@@ -8173,7 +8545,7 @@ function LocalStrip({ active, onOpen }: { active: boolean; onOpen: () => void })
     Number(overdue(b, today)) - Number(overdue(a, today)) || (a.due ?? "9").localeCompare(b.due ?? "9"));
   const shown = sorted.slice(0, 5);
   return (
-    <div className="shrink-0" style={{ borderBottom: edge(12) }}>
+    <div className="shrink-0" style={{ borderBottom: LINE }}>
       <button onClick={onOpen}
         className={`w-full text-left ${EYEBROW} px-5 pt-3 pb-1 hover:bg-white/5`}
         style={{ color: "var(--text3)" }}>
@@ -8212,7 +8584,7 @@ function ParseStrip({ input }: { input: string }) {
     p.due ? seg(`→ ${p.due.slice(5)}`, "var(--text3)") : null,
   ].filter(Boolean);
   if (!p.description && bits.length) {
-    return <span className="text-[10px] shrink-0" style={{ color: "var(--error)" }}>That is all labels and no task.</span>;
+    return <span className="text-[10px] shrink-0" style={{ color: "var(--error-ink)" }}>That is all labels and no task.</span>;
   }
   return (
     <span className="text-[10px] shrink-0 flex items-center gap-2 overflow-hidden whitespace-nowrap">
@@ -8300,10 +8672,10 @@ function SearchHits({ asked, rows, looking, onAsk, onPick, onClose }: {
       style={{ background: "color-mix(in srgb, var(--bg) 55%, transparent)" }}
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="agx-scroll w-full max-w-[720px] max-h-[70%] overflow-y-auto rounded-lg shadow-2xl flex flex-col"
-        style={{ background: "var(--bg2)", border: edge(28) }}>
+        style={{ background: "var(--surface-card)", border: edge(28) }}>
         {/* The box, at the top of the list, the way every command palette does
             it: what you typed is here, and typing again searches again. */}
-        <div className="px-3 pt-2.5 pb-2 flex items-center gap-2 shrink-0" style={{ borderBottom: edge(18) }}>
+        <div className="px-3 pt-2.5 pb-2 flex items-center gap-2 shrink-0" style={{ borderBottom: LINE }}>
           <span className="shrink-0 grid place-items-center" style={{ width: 20, height: 20, color: "var(--text3)" }}>
             <svg width={ICON.md} height={ICON.md} viewBox="0 0 24 24" fill="none" stroke="currentColor"
               strokeWidth={2.2} strokeLinecap="round" aria-hidden>
@@ -8318,7 +8690,7 @@ function SearchHits({ asked, rows, looking, onAsk, onPick, onClose }: {
           <CloseButton onClick={onClose} title="Close · Esc" size={ICON.sm} />
         </div>
         <div className="px-3 py-1.5 flex items-center gap-2 text-[10.5px] shrink-0"
-          style={{ color: "var(--text3)", borderBottom: edge(12) }}>
+          style={{ color: "var(--text3)", borderBottom: LINE }}>
           {looking && (
             <span className="agx-spin shrink-0" aria-label="Searching"
               style={{ width: 11, height: 11, borderWidth: 1.5, borderColor: "var(--text3)", borderTopColor: "transparent" }} />
@@ -8347,7 +8719,7 @@ function SearchHits({ asked, rows, looking, onAsk, onPick, onClose }: {
             className="text-left px-3 py-2 flex items-center gap-2 min-w-0"
             style={{ background: i === hot ? "color-mix(in srgb, var(--text) 8%, transparent)" : "transparent" }}>
             <span className="shrink-0 text-[9.5px] px-1 rounded tabular-nums"
-              style={{ color: "var(--primary)", border: edge(22) }}>{t.customId ?? t.id}</span>
+              style={{ color: "var(--primary-ink)", border: EDGE }}>{t.customId ?? t.id}</span>
             <span className="min-w-0 flex-1 truncate text-[12px]" style={{ color: "var(--text)" }}>{t.title}</span>
             <span className="shrink-0 text-[10px] truncate" style={{ color: "var(--text4)", maxWidth: 160 }}>{t.list}</span>
             {/* The reason it is on this list, which is the thing a plain list of

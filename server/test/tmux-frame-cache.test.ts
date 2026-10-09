@@ -14,6 +14,8 @@ import { mkdirSync, rmSync } from "node:fs";
 import { readFrameCached, type TmuxClient } from "../src/tmuxctl.ts";
 import { TEST_TERM } from "./tmuxTerm.ts";
 
+const src = await Bun.file(new URL("../src/terminal.ts", import.meta.url)).text();
+
 const SOCK = "agx-frame-cache";
 const TMPDIR = `/tmp/agx-frame-cache-${process.pid}`;
 const REAL_TMPDIR = process.env.TMUX_TMPDIR;
@@ -96,6 +98,52 @@ describe("readFrameCached shares one spawn across a socket's clients", () => {
     // Windows/panes should be identical object references (shared from cache)
     expect(frame1.windows).toBe(frame2.windows);
     expect(frame1.panes).toBe(frame2.panes);
+  });
+
+  /*
+   * The tab strip learns about a window switch from the sweep armed off the
+   * redraw the switch causes. That sweep shares this cache with the pane's own
+   * poll and every other panel on the socket, so a read from just BEFORE the
+   * switch is nearly always there and under the TTL — and the strip sat on the
+   * old window until the next poll, up to two seconds later. `notBefore` says
+   * "tmux changed at this moment": older reads are refused, and the fresh read
+   * must not be handed the parse of the stale one either.
+   */
+  test("a read from before notBefore is refused, parse included, so a switch shows at once", () => {
+    raw(["new-window", "-d", "-t", "cache", "-n", "two", "sleep 600"]);
+    const before = readFrameCached(client(), 5000, Date.now())!;
+    const was = before.windows.find((w) => w.active)!.name;
+    const other = was === "two" ? "renamed" : "two";
+
+    raw(["select-window", "-t", `cache:${other}`]);
+    const switchedAt = Date.now();
+
+    // Inside the TTL with no floor: still the old answer, which is the trap.
+    expect(readFrameCached(client(), 5000)!.windows.find((w) => w.active)!.name).toBe(was);
+    // With the moment of the switch as the floor: the new one.
+    expect(readFrameCached(client(), 5000, switchedAt)!.windows.find((w) => w.active)!.name).toBe(other);
+    // And the fresh read now serves everybody inside the TTL.
+    expect(readFrameCached(client(), 5000)!.windows.find((w) => w.active)!.name).toBe(other);
+  });
+});
+
+/*
+ * The two callers that know tmux just moved must say so. Source, because the
+ * sweep lives inside ptyOpen with a real shell behind it.
+ */
+describe("the sweeps that follow a change refuse a read from before it", () => {
+  const code = (s: string) => s.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+
+  test("the redraw nudge passes the moment its burst began", () => {
+    const start = src.indexOf("const nudgeTmux = () => {");
+    expect(start).toBeGreaterThan(-1);
+    const body = code(src.slice(start, src.indexOf("\n  };", start)));
+    expect(body).toContain("sweep(from)");
+    expect(body).not.toContain("sweep()");
+  });
+
+  test("a sweep asked for after an action passes the moment it was asked", () => {
+    expect(code(src)).toContain("session.tmuxSweep = () => sweep(Date.now());");
   });
 });
 

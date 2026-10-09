@@ -17,6 +17,7 @@
 import { describe, expect, it } from "bun:test";
 
 const src = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
+const chrome = await Bun.file(new URL("../src/components/workspace/Chrome.tsx", import.meta.url)).text();
 
 describe("a search falls through to the table", () => {
   it("derives what is shown from the query, not only from the stored setting", () => {
@@ -246,7 +247,8 @@ describe("who is talking, in the Humans/Bots filter", () => {
      * so automation arguing on the diff was counted as people: "Humans 8" on a
      * pull request no person had touched but the author.
      */
-    expect(src).toContain('const lane: Lane = t.comments[0]?.isBot ? "bot" : "human";');
+    // The rule lives in prTimeline and is tested there; the panel takes it as given.
+    expect(src).toContain("key: `t${t.id}`, lane: x.lane");
     expect(src).not.toContain('key: `t${t.id}`, lane: "human"');
   });
 });
@@ -267,25 +269,35 @@ describe("a resolved thread arrives folded", () => {
 });
 
 /*
- * Finding what was said while you were away.
+ * Where a thread sits.
  *
- * The logic has a seam and is tested through it in `pr-new.test.ts`. What has
- * no seam is the WIRING, and the wiring is where the original bug lived: a
- * thread entered the timeline at the timestamp of its first comment, so a reply
- * left nine minutes ago sorted two days back and could not be found at all.
- * These are one-literal guards on exactly that.
+ * The order itself is decided in `prTimeline` and tested through it in
+ * `pr-timeline.test.ts`. What has no seam is the WIRING: the conversation used
+ * to place a thread by its last reply and pull it out of its review once it had
+ * been answered, so a reply or a resolve moved it. These are one-literal guards
+ * that the panel draws what prTimeline decides and nothing re-sorts it.
  */
-describe("a thread sorts by when it was last spoken in", () => {
-  it("uses the last comment, not the first, in the timeline entry", () => {
-    expect(src).toContain("ms: threadLastAt(t)");
-    // The old ordering, and the reason for all of this.
-    expect(src).not.toContain("entries.sort((a, b) => (newest ? b.at.localeCompare(a.at) : a.at.localeCompare(b.at)))");
+describe("a thread sits where GitHub puts it", () => {
+  it("takes the order from prTimeline", () => {
+    expect(src).toContain("const timeline = useMemo(() => prTimeline(d), [d]);");
+    expect(src).toContain("for (const x of timeline) {");
   });
 
-  it("pulls a thread out of the review it came with once it has moved on", () => {
-    expect(src).toContain("if (threadMovedOn(t, r.submittedAt)) cameFrom.set(t.id, r.author);");
-    // …and still says where it came from, which is what the nesting was for.
-    expect(src).toContain("from ${cameFrom}'s review");
+  it("no longer promotes a thread by its last reply", () => {
+    expect(src).not.toContain("threadMovedOn(");
+    expect(src).not.toContain("ms: threadLastAt(t)");
+  });
+});
+
+describe("who said what, at a glance", () => {
+  it("hangs the speaker's face beside the card, not inside it", () => {
+    expect(src).toContain("<span className=\"agx-av\"><Avatar login={e.face} size={TL_AVATAR} /></span>");
+    // One face per remark: the card header no longer draws its own.
+    expect(src).not.toContain("<Avatar login={who} size={17} />");
+  });
+
+  it("puts a review's threads under it, past the rail", () => {
+    expect(src).toContain("<div className=\"agx-nest\">{x.threads.map(threadRow)}</div>");
   });
 });
 
@@ -505,8 +517,7 @@ describe("feedback on a request in flight", () => {
     /*
      * Every action here is a round trip through `gh`, and the only feedback was
      * the button going grey — the same grey it wears when it is disabled for a
-     * reason that has nothing to do with you. Reported as the worst thing about
-     * the app: "we have to give feedback on async requests, ALWAYS".
+     * reason that has nothing to do with you.
      */
     expect(src).toContain("pending?: boolean;");
     expect(src).toContain("setBusyWhat(label);");
@@ -518,8 +529,12 @@ describe("feedback on a request in flight", () => {
 
   it("keeps the label, so you can still tell the buttons apart", () => {
     // A control that swaps its words for "Working…" moves everything beside it.
-    expect(src).toContain('<span className="agx-spin mr-1.5 shrink-0" aria-hidden');
-    expect(src).toContain("{children}\n    </button>");
+    // `Btn` hands `pending` to the shared `Button`, which draws the spinner
+    // before the label and never replaces it.
+    expect(src).toContain("pending={pending}");
+    const button = chrome.slice(chrome.indexOf("export function Button("), chrome.indexOf("\n}\n", chrome.indexOf("export function Button(")));
+    expect(button).toContain('<span className="agx-spin mr-0.5 shrink-0" aria-hidden');
+    expect(button).toContain("{children}\n    </button>");
   });
 
   it("says the base is being checked instead of growing a button late", () => {
@@ -786,7 +801,9 @@ describe("what Refresh asks for", () => {
      */
     expect(src).toContain("boardForce.current = true;");
     expect(src).toContain("if (selected != null) loadDetail(selected, true);");
-    expect(src).toContain("forgetRollups();");
+    // Not the checked rollups: one GraphQL request per red card. They are
+    // re-asked when the list shows the card's head or aggregate moved.
+    expect(src).not.toContain("forgetRollups();");
   });
 
   it("forces the board once, and leaves the poll on the cache", () => {

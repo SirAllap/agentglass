@@ -5,6 +5,7 @@ import { openSettings } from "../../lib/openSettings.ts";
 import type { PublicPlugin } from "../../../../shared/types.ts";
 import type { PrNote } from "../../lib/pluginTypes.ts";
 import { Menu, MenuItem, RepoCtx } from "../PrPanel.tsx";
+import { CTRL_H } from "../workspace/Chrome.tsx";
 import { PluginMark } from "./PluginMark.tsx";
 import type { LocalNotes, LocalRun } from "./LocalReview.tsx";
 import { ICON } from "../../lib/iconSize.ts";
@@ -197,15 +198,15 @@ function PluginAction({ p, actions, run, notes, pending, error, onPress, onShowL
   };
 
   return (
-    <div className="shrink-0 flex items-stretch rounded" style={{
+    <div className="shrink-0 flex items-stretch rounded-lg" style={{
       border: `1px solid color-mix(in srgb, ${bad ? "var(--error)" : tint} 50%, transparent)`,
       background: `color-mix(in srgb, ${bad ? "var(--error)" : tint} ${busy || state === "done" ? 14 : 8}%, transparent)`,
     }}>
       <button type="button" onClick={press} disabled={busy}
         title={error ?? runTitle(p.name, run, notes.length)}
         aria-busy={busy || undefined}
-        className="inline-flex items-center gap-1.5 whitespace-nowrap leading-none text-[10px] pl-1.5 pr-2 h-[24px] disabled:cursor-default hover:brightness-125"
-        style={{ color: `color-mix(in srgb, ${bad ? "var(--error)" : tint} 80%, var(--text))`, background: "transparent", border: 0 }}>
+        className="inline-flex items-center gap-1.5 whitespace-nowrap leading-none text-[10.5px] pl-1.5 pr-2 disabled:cursor-default hover:brightness-125"
+        style={{ height: CTRL_H.compact, color: `color-mix(in srgb, ${bad ? "var(--error)" : tint} 80%, var(--text))`, background: "transparent", border: 0 }}>
         {state === "running"
           ? <Pulse color={tint} />
           : <PluginMark name={p.name} icon={p.icon} color={p.color} size={ICON.sm} stamp={p.contentHash} />}
@@ -217,7 +218,7 @@ function PluginAction({ p, actions, run, notes, pending, error, onPress, onShowL
           </span>
         ))}
         {state === "done" && counts.length === 0 && (
-          <span className="text-[9px] uppercase tracking-wide" style={{ color: "var(--success)" }}>clean</span>
+          <span className="text-[9px] uppercase tracking-wide" style={{ color: "var(--success-ink)" }}>clean</span>
         )}
       </button>
       <Menu align="right" title={`More from ${p.name}`} label={<CaretIcon />} bare>

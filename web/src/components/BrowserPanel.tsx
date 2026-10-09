@@ -66,6 +66,7 @@ import {
   SpinnerIcon, StopIcon, TargetIcon, FolderIcon, ContainerIcon, SpaceIcon, CameraIcon, PanelIcon, UpIcon, DownIcon, SplitIcon,
 } from "./browser/icons.tsx";
 import { CheckboxIcon, DoneIcon, SwapIcon } from "../lib/glyphIcons.tsx";
+import { Button, Chip, CTRL_H, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 
 /** Electron's `<webview>` is not in React's JSX catalogue, and its methods are
  *  not on HTMLElement. Narrowed to the handful actually called here rather than
@@ -106,13 +107,8 @@ function SideTool({ on, label, onClick, disabled, children }: {
   label: string; onClick: () => void; disabled?: boolean; on?: boolean; children: React.ReactNode;
 }) {
   return (
-    <button onClick={onClick} disabled={disabled} title={label} aria-label={label}
-      className="agx-btn shrink-0 rounded-md flex items-center justify-center disabled:opacity-25"
-      style={{
-        width: 24, height: 24,
-        color: on ? "var(--primary-hover)" : "var(--text2)",
-        background: on ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent",
-      }}>{children}</button>
+    <Button onClick={onClick} disabled={disabled} label={label} size="compact" square on={!!on}
+      className="shrink-0">{children}</Button>
   );
 }
 
@@ -122,7 +118,7 @@ export function Tool({ on, label, onClick, disabled, tint, children }: {
 }) {
   return (
     <button onClick={onClick} disabled={disabled} title={label} aria-label={label}
-      className="agx-btn shrink-0 rounded-md flex items-center justify-center disabled:opacity-25"
+      className="agx-btn shrink-0 rounded-lg flex items-center justify-center disabled:opacity-25"
       style={{
         width: 30, height: 30,
         color: tint ?? (on ? "var(--primary-hover)" : "var(--text2)"),
@@ -155,7 +151,7 @@ function Favicon({ src }: { src: string | null }) {
   useEffect(() => { setBad(false); }, [src]);
   if (!src || bad) return <span className="shrink-0 opacity-40 flex items-center"><GlobeIcon size={13} /></span>;
   return <img src={src} alt="" onError={() => setBad(true)}
-    className="shrink-0 rounded-[2px]" style={{ width: 14, height: 14, objectFit: "contain" }} />;
+    className="shrink-0 rounded-sm" style={{ width: 14, height: 14, objectFit: "contain" }} />;
 }
 
 /* -------------------------------------------------------------------- view */
@@ -2300,8 +2296,8 @@ export function BrowserView({ active: viewOn, scope }: {
           /* Bigger, and in a box: at 20px with a 12px glyph it read as a speck
              on a row of text, and this is the control that changes what the
              sidebar holds. */
-          className="agx-x shrink-0 grid place-items-center opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 rounded-md"
-          style={{ width: 24, height: 24 }}><CloseIcon size={ICON.md} /></button>
+          className="agx-x shrink-0 grid place-items-center opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 rounded-lg"
+          style={{ width: CLOSE_CELL, height: CLOSE_CELL }}><CloseIcon size={ICON.md} /></button>
       </div>
     );
   };
@@ -2362,7 +2358,7 @@ export function BrowserView({ active: viewOn, scope }: {
         */}
       {!f.open && f.items.filter((i) => liveFor(i)).map((i) => shelfRow(i, depth + 1))}
       {f.open && (
-        <div style={{ marginLeft: depth * 9 + 8, borderLeft: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", paddingLeft: 4 }}>
+        <div style={{ marginLeft: depth * 9 + 8, borderLeft: LINE, paddingLeft: 4 }}>
           {f.items.map((i, n) => (
             <div key={i.id}>{line("folder", f.id, n)}{shelfRow(i, 0, { to: "folder", id: f.id, index: n })}</div>
           ))}
@@ -2407,7 +2403,7 @@ export function BrowserView({ active: viewOn, scope }: {
     <Portal>
       <div className="fixed inset-0" style={{ zIndex: 40 }} onClick={() => setMenuOpen(false)} />
       <div className="fixed rounded-lg text-[11px] py-1 shadow-2xl"
-        style={{ top: menuAtXY.top, right: menuAtXY.right, zIndex: 41, width: Math.max(230, Math.min(320, sideW - 8)), background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }}>
+        style={{ top: menuAtXY.top, right: menuAtXY.right, zIndex: 41, width: Math.max(230, Math.min(320, sideW - 8)), background: "var(--surface-card)", border: EDGE }}>
         {[
           { key: "home", node: menuRow(<HomeIcon size={14} />, "Home"), hint: "", run: () => go(homePage()) },
           { key: "new", node: menuRow(<span style={{ fontSize: 13, lineHeight: 1 }}>+</span>, "New tab"), hint: "Ctrl+T", run: () => setOmni("new") },
@@ -2440,7 +2436,7 @@ export function BrowserView({ active: viewOn, scope }: {
           { key: "zoom", node: menuRow(null, "Zoom back to 100%"), hint: "Ctrl+0", run: () => applyZoom(0) },
           { key: "hide", node: menuRow(<PanelIcon size={14} />, "Hide this bar"), hint: "Ctrl+S", run: () => { setSideOpen(false); setSidebarOpen(false); } },
         ].map((it) => (it.sep ? (
-          <div key={it.key} className="my-1" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} />
+          <div key={it.key} className="my-1" style={{ borderTop: LINE }} />
         ) : (
           <button key={it.key} onClick={() => { setMenuOpen(false); it.run?.(); }}
             className="w-full text-left px-3 py-1.5 flex items-center gap-3" style={{ color: "var(--text2)" }}>
@@ -2448,7 +2444,7 @@ export function BrowserView({ active: viewOn, scope }: {
             {it.hint && <span className="text-[9.5px] shrink-0" style={{ color: "var(--text4)" }}>{it.hint}</span>}
           </button>
         )))}
-        <div className="my-1" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} />
+        <div className="my-1" style={{ borderTop: LINE }} />
         <div className="px-3 pt-1 pb-0.5 text-[9px] tracking-wider uppercase" style={{ color: "var(--text4)" }}>Viewport</div>
         {VIEWPORTS.map((v) => (
           <button key={v.name} onClick={() => { setMenuOpen(false); setViewport(v); }}
@@ -2459,7 +2455,7 @@ export function BrowserView({ active: viewOn, scope }: {
             {v.width ? <span className="text-[9.5px] tabular-nums" style={{ color: "var(--text4)" }}>{v.width}px</span> : null}
           </button>
         ))}
-        <div className="my-1" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} />
+        <div className="my-1" style={{ borderTop: LINE }} />
         {[
           { label: "Import a sidebar from Zen…", run: () => { void bringSidebar(); } },
           { label: "Import logins from a browser…", run: () => openSettings("browser") },
@@ -2474,7 +2470,7 @@ export function BrowserView({ active: viewOn, scope }: {
 
   const sideBody = (
     <div className="flex flex-col h-full min-h-0"
-      style={{ background: "color-mix(in srgb, var(--bg2) 65%, var(--bg))", borderLeft: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
+      style={{ background: "color-mix(in srgb, var(--surface-nav) 65%, var(--bg))", borderLeft: LINE }}>
       {/*
         * The head of the bar, laid out the way Zen lays its own out: the menu
         * and the collapse on the left, the three navigation controls on the
@@ -2497,9 +2493,9 @@ export function BrowserView({ active: viewOn, scope }: {
               setMenuAtXY(r ? { top: r.bottom + 6, right: 6 } : null);
               setMenuOpen((v) => !v);
             }}
-            className="agx-btn shrink-0 rounded-md flex items-center justify-center"
+            className="agx-btn shrink-0 rounded-lg flex items-center justify-center"
             style={{
-              width: 24, height: 24,
+              width: CTRL_H.compact, height: CTRL_H.compact,
               color: menuOpen ? "var(--primary-hover)" : "var(--text3)",
               background: menuOpen ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent",
             }}><MoreIcon /></button>
@@ -2519,7 +2515,7 @@ export function BrowserView({ active: viewOn, scope }: {
           className="min-w-0 flex-1 flex items-center gap-1.5 px-2 rounded-lg text-left"
           style={{
             height: 26, background: "color-mix(in srgb, var(--bg3) 45%, transparent)",
-            border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)",
+            border: EDGE,
           }}>
           <span className="shrink-0 flex items-center" style={{ color: active?.url.startsWith("https://") ? "var(--success)" : "var(--text3)" }}>
             {active?.url.startsWith("https://") ? <LockIcon /> : <GlobeIcon />}
@@ -2602,7 +2598,7 @@ export function BrowserView({ active: viewOn, scope }: {
 
         {/* The folders of THIS space, and the pins that are not in one. */}
         {true && (
-          <div className="mt-1.5" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", paddingTop: 4 }}>
+          <div className="mt-1.5" style={{ borderTop: LINE, paddingTop: 4 }}>
             {shelfTree(shelf.folders, 0)}
             <div data-drop-to="loose" className="rounded-md" style={{ minHeight: carry ? 26 : 0, ...lit("loose") }}>
               {shelf.loose.map((i, n) => (
@@ -2617,7 +2613,7 @@ export function BrowserView({ active: viewOn, scope }: {
           </div>
         )}
 
-        <div className="mt-1" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }} />
+        <div className="mt-1" style={{ borderTop: LINE }} />
 
         {/* What is open and not kept. Everything on the shelf above is drawn
             there instead — one page, one row. */}
@@ -2702,7 +2698,7 @@ export function BrowserView({ active: viewOn, scope }: {
                   title={rows.length
                     ? `Close ${name} — its ${rows.length} page${rows.length === 1 ? "" : "s"} close with it`
                     : `Close ${name} — it has no pages open`}
-                  className="agx-x shrink-0 self-center grid place-items-center opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 rounded-md"
+                  className="agx-x shrink-0 self-center grid place-items-center opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 rounded-lg"
                   style={{ width: CLOSE_CELL, height: CLOSE_CELL }}><CloseIcon size={ICON.md} /></button>
               ) : <span className="shrink-0" style={{ width: CLOSE_CELL }} aria-hidden="true" />}
               </div>
@@ -2713,7 +2709,7 @@ export function BrowserView({ active: viewOn, scope }: {
                    grouping was a change of tint and nothing else. */
                 <div style={{ marginLeft: 12, paddingLeft: 8, borderLeft: `2px solid hsl(${hue} 58% 56% / 0.32)` }}>
                   {rows.map(({ t, n }) => (
-                    <div key={t.id}>
+                    <div key={t.id} className="pt-1">
                       {line("tabs", null, n)}
                       <div {...pressProps("tab", t.id, tabLabel(t))}
                         data-drop-to="tabs" data-drop-index={String(n)}
@@ -2721,7 +2717,7 @@ export function BrowserView({ active: viewOn, scope }: {
                         onClick={() => { if (!dragged.current) show(t.id); }}
                         onMouseDown={(e) => { if (e.button === 1) { e.preventDefault(); close(t.id); } }}
                         title={t.url || "New tab"}
-                        className="group flex items-center gap-2 rounded-md px-1.5 py-1 cursor-default min-w-0"
+                        className="group flex items-center gap-2 rounded-md px-1.5 min-h-[28px] cursor-default min-w-0"
                         style={{
                           /* Its own space's colour, not the theme's accent: on
                              a bar showing four identities, "which one is this"
@@ -2748,14 +2744,14 @@ export function BrowserView({ active: viewOn, scope }: {
                             because it is the same thing — a second drawing for
                             one idea is how a vocabulary stops being one. */}
                         {inspected.has(t.id) && (
-                          <span className="shrink-0" title="the inspector is open on this page" style={{ color: "var(--warning)" }}><CodeIcon size={ICON.xs} /></span>
+                          <span className="shrink-0" title="the inspector is open on this page" style={{ color: "var(--warning-ink)" }}><CodeIcon size={ICON.xs} /></span>
                         )}
                         {/* Same size and the same reddish box as the shelf's ×: one glyph,
                             one meaning, one target big enough to aim at. */}
                         <button onClick={(e) => { e.stopPropagation(); close(t.id); }} aria-label={`Close ${tabLabel(t)}`}
                           title="Close this page"
-                          className="agx-x shrink-0 grid place-items-center opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 rounded-md"
-                          style={{ width: 24, height: 24 }}><CloseIcon size={ICON.md} /></button>
+                          className="agx-x shrink-0 grid place-items-center opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 rounded-lg ml-1"
+                          style={{ width: CLOSE_CELL, height: CLOSE_CELL }}><CloseIcon size={ICON.md} /></button>
                       </div>
                     </div>
                   ))}
@@ -2775,15 +2771,15 @@ export function BrowserView({ active: viewOn, scope }: {
           list it adds to. Between the pages and the spaces, which is where a
           hand goes looking for "and one more". */}
       <div className="shrink-0 flex items-center gap-1 px-1.5 pt-1"
-        style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
+        style={{ borderTop: LINE }}>
         <button onClick={() => setOmni("new")} title="New tab (Ctrl+T)"
-          className="flex-1 min-w-0 flex items-center gap-1.5 px-1.5 py-1 rounded-md text-[10.5px]"
-          style={{ color: "var(--text3)" }}>
+          className="flex-1 min-w-0 flex items-center gap-1.5 px-1.5 rounded-lg text-[10.5px]"
+          style={{ height: CTRL_H.compact, color: "var(--text3)" }}>
           <span style={{ fontSize: 12, lineHeight: 1 }}>+</span> New tab
         </button>
         <button onClick={() => newFolder()} title="New folder" aria-label="New folder"
-          className="shrink-0 grid place-items-center rounded-md"
-          style={{ width: 22, height: 22, color: "var(--text3)" }}><FolderIcon size={13} /></button>
+          className="shrink-0 grid place-items-center rounded-lg"
+          style={{ width: CTRL_H.compact, height: CTRL_H.compact, color: "var(--text3)" }}><FolderIcon size={13} /></button>
       </div>
 
       {/* THE STRIP OF SPACES ALONG THE FOOT IS GONE.
@@ -2794,7 +2790,7 @@ export function BrowserView({ active: viewOn, scope }: {
           one still needs a box, and it appears only while you are naming. */}
       {naming !== null && (
         <div className="shrink-0 px-1.5 py-1.5"
-          style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+          style={{ borderTop: LINE }}>
           <input autoFocus value={naming} placeholder="Name the space, then Enter"
             onChange={(e) => setNaming(e.target.value)}
             onBlur={() => setNaming(null)}
@@ -2802,8 +2798,8 @@ export function BrowserView({ active: viewOn, scope }: {
               if (e.key === "Enter") makeProfile(naming);
               if (e.key === "Escape") { e.stopPropagation(); setNaming(null); }
             }}
-            className="w-full text-[10.5px] px-2 py-1 rounded-md outline-none"
-            style={{ background: "var(--bg2)", color: "var(--text)" }} />
+            className={`w-full ${INPUT}`}
+            style={INPUT_STYLE} />
         </div>
       )}
       <LanesRow />
@@ -2850,8 +2846,8 @@ export function BrowserView({ active: viewOn, scope }: {
         <div className="absolute left-1/2 -translate-x-1/2 rounded-xl shadow-2xl px-2.5 py-2 flex flex-col gap-1.5"
           style={{
             bottom: 14, zIndex: 34, minWidth: 460, maxWidth: "min(680px, 92%)",
-            background: "color-mix(in srgb, var(--bg2) 96%, black)",
-            border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)",
+            background: "color-mix(in srgb, var(--surface-card) 96%, black)",
+            border: EDGE,
           }}>
           <div className="flex items-center gap-2">
             <input ref={findRef} value={find}
@@ -2861,8 +2857,8 @@ export function BrowserView({ active: viewOn, scope }: {
                 if (e.key === "Escape") { e.preventDefault(); closeFind(); }
               }}
               placeholder="Find in page" spellCheck={false}
-              className="flex-1 min-w-0 text-[12px] px-2.5 py-1.5 rounded-lg outline-none bg-transparent"
-              style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }} />
+              className={`flex-1 min-w-0 ${INPUT}`}
+              style={INPUT_STYLE} />
             {/* The tally, where the eye already is. "0 of 0" is the answer to
                 "is this word here at all", and it is the thing the old strip
                 could not say. */}
@@ -2870,9 +2866,9 @@ export function BrowserView({ active: viewOn, scope }: {
               {find.trim() ? `${found?.at ?? 0}/${found?.of ?? 0}` : ""}
             </span>
             <button onClick={() => step(false)} title="Previous match (Shift+Enter)" aria-label="Previous match"
-              className="shrink-0 grid place-items-center rounded" style={{ width: 24, height: 24, color: "var(--text3)" }}><UpIcon /></button>
+              className="shrink-0 grid place-items-center rounded-lg" style={{ width: CTRL_H.compact, height: CTRL_H.compact, color: "var(--text3)" }}><UpIcon /></button>
             <button onClick={() => step(true)} title="Next match (Enter)" aria-label="Next match"
-              className="shrink-0 grid place-items-center rounded" style={{ width: 24, height: 24, color: "var(--text3)" }}><DownIcon /></button>
+              className="shrink-0 grid place-items-center rounded-lg" style={{ width: CTRL_H.compact, height: CTRL_H.compact, color: "var(--text3)" }}><DownIcon /></button>
             <CloseButton onClick={closeFind} title="Close the search" />
           </div>
           <div className="flex items-center gap-4 px-0.5">
@@ -2896,7 +2892,7 @@ export function BrowserView({ active: viewOn, scope }: {
       )}
 
       {active?.failed && (
-        <div className="px-3 py-2 text-[11px] shrink-0" style={{ color: "var(--warning)" }}>{active.failed}</div>
+        <div className="px-3 py-2 text-[11px] shrink-0" style={{ color: "var(--warning-ink)" }}>{active.failed}</div>
       )}
 
       {/* The page and the inspector share what is left of the window: a row when
@@ -2904,7 +2900,7 @@ export function BrowserView({ active: viewOn, scope }: {
           inspector is NOT a layer over the page — it takes room, and the page
           reflows into what is left, which is the whole point of docking it. */}
       <div className="flex-1 min-h-0 flex" style={{ flexDirection: dt && dtSide === "right" ? "row" : "column" }}>
-      <div className="flex-1 min-h-0 relative" style={{ background: "var(--bg2)" }}>
+      <div className="flex-1 min-h-0 relative" style={{ background: "var(--surface-card)" }}>
         {/*
          * What just happened, over the page rather than above it.
          *
@@ -2929,14 +2925,14 @@ export function BrowserView({ active: viewOn, scope }: {
           */}
         {hover && (
           <div className="absolute bottom-0 left-0 max-w-[70%] truncate text-[10.5px] px-2 py-1 rounded-tr-md pointer-events-none"
-            style={{ zIndex: 20, color: "var(--text2)", background: "var(--bg2)",
-              borderTop: "1px solid color-mix(in srgb, var(--text) 12%, transparent)",
-              borderRight: "1px solid color-mix(in srgb, var(--text) 12%, transparent)" }}
+            style={{ zIndex: 20, color: "var(--text2)", background: "var(--surface-card)",
+              borderTop: LINE,
+              borderRight: LINE }}
             title={hover}>{displayUrl(hover)}</div>
         )}
         {note && (
           <div className="agx-zoom-in absolute bottom-3 right-3 text-[10px] px-2.5 py-1.5 rounded-md shadow-lg pointer-events-none"
-            style={{ zIndex: 20, color: "var(--warning)", background: "var(--bg2)",
+            style={{ zIndex: 20, color: "var(--warning-ink)", background: "var(--surface-card)",
               border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }}>{note}</div>
         )}
         {tabs.map((t) => (
@@ -3038,10 +3034,10 @@ export function BrowserView({ active: viewOn, scope }: {
             <div className="absolute flex items-center gap-1" style={{ left: `calc(${splitAt * 100}% + 8px)`, top: 8, zIndex: 13 }}>
               <button onClick={() => { const other = splitId!; setSplitId(activeId); show(other); }}
                 title="Put the bar on this side" aria-label="Swap the sides"
-                className="grid place-items-center rounded-md"
-                style={{ width: 24, height: 24, background: "var(--bg2)", color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }}><SwapIcon size={ICON.sm} /></button>
-              <CloseButton onClick={() => setSplitId(null)} title="Close the split" hit={24}
-                style={{ background: "var(--bg2)", color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }} />
+                className="grid place-items-center rounded-lg"
+                style={{ width: CTRL_H.compact, height: CTRL_H.compact, background: "var(--surface-card)", color: "var(--text3)", border: EDGE }}><SwapIcon size={ICON.sm} /></button>
+              <CloseButton onClick={() => setSplitId(null)} title="Close the split" hit={CTRL_H.compact}
+                style={{ background: "var(--surface-card)", color: "var(--text3)", border: EDGE }} />
             </div>
           </>
         )}
@@ -3128,15 +3124,15 @@ export function BrowserView({ active: viewOn, scope }: {
             }}
             className="shrink-0"
             style={dtSide === "right"
-              ? { width: 5, marginRight: -2, cursor: "col-resize", borderLeft: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }
-              : { height: 5, marginBottom: -2, cursor: "row-resize", borderTop: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }} />
+              ? { width: 5, marginRight: -2, cursor: "col-resize", borderLeft: LINE }
+              : { height: 5, marginBottom: -2, cursor: "row-resize", borderTop: LINE }} />
           <div className="shrink-0 flex flex-col min-w-0"
             style={dtSide === "right" ? { width: dtSize } : { height: dtSize }}>
             {/* Ours, not Chrome's. DevTools' own dock buttons move a window it
                 does not have here, so the two that mean anything are drawn
                 where they work. */}
             <div className="flex items-center gap-1 px-1.5 shrink-0"
-              style={{ height: 24, background: "var(--bg2)", borderBottom: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+              style={{ height: 24, background: "var(--surface-card)", borderBottom: LINE }}>
               <span className="text-[9.5px] tracking-[0.12em] uppercase mr-auto" style={{ color: "var(--text4)" }}>Inspector</span>
               {/* Its own zoom, and only its own. The gesture works inside the
                   pane too (Ctrl+wheel, Ctrl+plus) — these are here because a
@@ -3245,18 +3241,13 @@ export function BrowserView({ active: viewOn, scope }: {
             <div className="absolute rounded-xl shadow-2xl p-3 flex flex-col gap-2"
               style={{
                 zIndex: 49, left: "50%", top: 90, transform: "translateX(-50%)", width: 420,
-                background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)",
+                background: "var(--surface-card)", border: EDGE,
               }}>
               <div className="text-[12px]" style={{ color: "var(--text)" }}>Import from {bringing.label}</div>
               {sh.spaces.length > 1 && (
                 <div className="flex items-center gap-1 flex-wrap">
                   {sh.spaces.map((sp) => (
-                    <button key={sp.id} onClick={() => setBringing({ ...bringing, space: sp.id })}
-                      className="px-2 py-1 rounded-md text-[10.5px]"
-                      style={{
-                        color: sp.id === bringing.space ? "var(--text)" : "var(--text3)",
-                        background: sp.id === bringing.space ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "color-mix(in srgb, var(--text) 6%, transparent)",
-                      }}>{sp.name}</button>
+                    <Chip key={sp.id} on={sp.id === bringing.space} onClick={() => setBringing({ ...bringing, space: sp.id })}>{sp.name}</Chip>
                   ))}
                 </div>
               )}
@@ -3271,7 +3262,7 @@ export function BrowserView({ active: viewOn, scope }: {
                 </span>
               </div>
               <div className="flex items-center gap-1.5">
-                <button onClick={() => {
+                <Button size="compact" tone="primary" onClick={() => {
                   let said = "";
                   editShelf((cur) => {
                     const r = mergeImported(cur, sh, bringing.space);
@@ -3282,11 +3273,8 @@ export function BrowserView({ active: viewOn, scope }: {
                   });
                   setBringing(null);
                   if (said) say(said);
-                }}
-                  className="px-2.5 py-1 rounded-md text-[11px]"
-                  style={{ color: "var(--text)", background: "color-mix(in srgb, var(--primary) 26%, transparent)" }}>Import</button>
-                <button onClick={() => setBringing(null)}
-                  className="px-2.5 py-1 rounded-md text-[11px]" style={{ color: "var(--text3)" }}>Cancel</button>
+                }}>Import</Button>
+                <Button size="compact" onClick={() => setBringing(null)}>Cancel</Button>
               </div>
             </div>
           </>
@@ -3300,7 +3288,7 @@ export function BrowserView({ active: viewOn, scope }: {
         <div className="fixed rounded-md px-2 py-1 text-[10.5px] shadow-2xl pointer-events-none truncate"
           style={{
             left: carry.x + 12, top: carry.y + 12, zIndex: 60, maxWidth: 220,
-            background: "var(--bg2)", color: "var(--text)",
+            background: "var(--surface-card)", color: "var(--text)",
             border: `1px solid color-mix(in srgb, var(--primary) ${carry.at ? 70 : 30}%, transparent)`,
           }}>
           {carry.label}
@@ -3327,7 +3315,7 @@ export function BrowserView({ active: viewOn, scope }: {
             onMouseEnter={() => setPeep(peep)} onMouseLeave={() => setPeep(null)}
             style={{
               top: peep.top, right: peep.right, width: 200, maxHeight: 320, overflowY: "auto", zIndex: 45,
-              background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)",
+              background: "var(--surface-card)", border: EDGE,
             }}>
             <div className="px-1.5 pt-0.5 pb-1 text-[9px] uppercase tracking-[0.12em] flex items-center gap-1.5" style={{ color: "var(--text4)" }}>
               <FolderIcon size={ICON.xs} /> {f.name} <span className="ml-auto tabular-nums">{folderCount(f)}</span>
@@ -3504,12 +3492,12 @@ export function BrowserView({ active: viewOn, scope }: {
                 <MenuItem onClick={shut(() => setOmni("new"))}>{row(<span style={{ fontSize: 13, lineHeight: 1 }}>+</span>, "New tab")}</MenuItem>
                 {!blank && activeId && (
                   <>
-                    <div className="my-1" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} />
+                    <div className="my-1" style={{ borderTop: LINE }} />
                     <MenuItem onClick={shut(() => keep({ kind: "tab", id: activeId }, { to: "loose" }))}>Keep the page you are on</MenuItem>
                     <MenuItem onClick={shut(() => keep({ kind: "tab", id: activeId }, { to: "essentials" }))}>…and in the shortcuts</MenuItem>
                   </>
                 )}
-                <div className="my-1" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} />
+                <div className="my-1" style={{ borderTop: LINE }} />
                 <MenuItem onClick={shut(() => { void bringSidebar(); })}>Import a sidebar from Zen…</MenuItem>
                 <MenuItem onClick={shut(() => { setSideOpen(false); setSidebarOpen(false); })}>Hide this bar — Ctrl+S</MenuItem>
               </>
@@ -3529,7 +3517,7 @@ export function BrowserView({ active: viewOn, scope }: {
             onClick={() => { setOmni(null); setTyped(null); setHint(-1); }} />
           <div className="absolute rounded-xl shadow-2xl p-1.5 flex flex-col gap-0.5"
             style={{
-              zIndex: 39, background: "var(--bg2)",
+              zIndex: 39, background: "var(--surface-card)",
               border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)",
               ...(omni === "new"
                 ? { left: "14%", right: (sideOpen ? sideW : 0) + 40, top: 120 }

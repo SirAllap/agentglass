@@ -22,6 +22,7 @@ import { SettingRow } from "./SettingRow.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { IconLabel, PlusIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--border) ${pct}%, transparent)`;
 const PARAM_TYPES: RecipeParam["type"][] = ["text", "choice", "flag", "repo", "worktree", "branch"];
@@ -88,7 +89,7 @@ export function RecipesPane({ open }: { open: boolean }) {
             <button onClick={() => setRunning(r)} className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
               style={{ border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }}>Run…</button>
             <button onClick={() => setEditing(r)} className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-              style={{ border: edge(20), color: "var(--text2)" }}>Edit</button>
+              style={{ border: EDGE, color: "var(--text2)" }}>Edit</button>
           </span>}
         />
       ))}
@@ -138,14 +139,14 @@ function Editor({ r, repos, onChange, onSave, onDrop, onCancel }: {
    *  front rather than letting the save be the first to find out. */
   const cannotBoot = !!(r.params?.length) || !!r.confirm;
   const inp = "w-full text-[11.5px] px-2 py-1.5 rounded-lg outline-none";
-  const style = { background: "var(--bg2)", border: edge(22), color: "var(--text)" };
+  const style = { background: "var(--surface-card)", border: EDGE, color: "var(--text)" };
   return (
     <div className="rounded-xl p-3 flex flex-col gap-2.5" style={{ border: edge(28), background: "color-mix(in srgb, var(--bg3) 25%, transparent)" }}>
       <div className="flex gap-2 flex-wrap">
         <input value={r.name} onChange={(e) => set({ name: e.target.value })} placeholder="Name — how you will call it"
-          className={inp} style={{ ...style, maxWidth: 220 }} />
+          className={`max-w-[220px] ${INPUT}`} style={INPUT_STYLE} />
         <input value={r.desc} onChange={(e) => set({ desc: e.target.value })} placeholder="What it does"
-          className={`${inp} flex-1 min-w-[180px]`} style={style} />
+          className={`flex-1 min-w-[180px] ${INPUT}`} style={INPUT_STYLE} />
       </div>
 
       {/* One step per line. A textarea rather than a list of rows: these are
@@ -207,24 +208,24 @@ function Editor({ r, repos, onChange, onSave, onDrop, onCancel }: {
         {(r.params ?? []).map((p, i) => (
           <div key={i} className="flex gap-1.5 flex-wrap items-center">
             <input value={p.key} onChange={(e) => set({ params: (r.params ?? []).map((x, j) => j === i ? { ...x, key: e.target.value } : x) })}
-              placeholder="name" className="text-[11px] px-2 py-1 rounded-lg font-mono" style={{ ...style, width: 130 }} />
+              placeholder="name" className={`w-[130px] font-mono ${INPUT}`} style={INPUT_STYLE} />
             <select value={p.type} onChange={(e) => set({ params: (r.params ?? []).map((x, j) => j === i ? { ...x, type: e.target.value as RecipeParam["type"] } : x) })}
               className="text-[11px] px-2 py-1 rounded-lg" style={style}>
               {PARAM_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
             {p.type === "choice" && (
               <input value={(p.options ?? []).join(", ")} onChange={(e) => set({ params: (r.params ?? []).map((x, j) => j === i ? { ...x, options: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) } : x) })}
-                placeholder="one, two, three" className="text-[11px] px-2 py-1 rounded-lg flex-1 min-w-[140px]" style={style} />
+                placeholder="one, two, three" className={`flex-1 min-w-[140px] ${INPUT}`} style={INPUT_STYLE} />
             )}
             {p.type === "flag" && (
               <input value={p.value ?? ""} onChange={(e) => set({ params: (r.params ?? []).map((x, j) => j === i ? { ...x, value: e.target.value } : x) })}
-                placeholder="--rebuild-fe" className="text-[11px] px-2 py-1 rounded-lg font-mono flex-1 min-w-[140px]" style={style} />
+                placeholder="--rebuild-fe" className={`font-mono flex-1 min-w-[140px] ${INPUT}`} style={INPUT_STYLE} />
             )}
             <CloseButton onClick={() => set({ params: (r.params ?? []).filter((_, j) => j !== i) })} style={{ color: "var(--text4)" }} className="rounded" />
           </div>
         ))}
         <button onClick={() => set({ boot: false, params: [...(r.params ?? []), { key: "", label: "", type: "text" }] })}
-          className="self-start text-[10.5px] px-2 py-0.5 rounded" style={{ border: edge(20), color: "var(--text3)" }}><IconLabel icon={<PlusIcon size={ICON.xs} />}>parameter</IconLabel></button>
+          className="self-start text-[10.5px] px-2 py-0.5 rounded" style={{ border: EDGE, color: "var(--text3)" }}><IconLabel icon={<PlusIcon size={ICON.xs} />}>parameter</IconLabel></button>
       </div>
 
       <div className="flex gap-2 flex-wrap pt-1">
@@ -233,7 +234,7 @@ function Editor({ r, repos, onChange, onSave, onDrop, onCancel }: {
         <button onClick={onCancel} className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text3)" }}>Cancel</button>
         <span className="flex-1" />
         {r.id && <button onClick={() => onDrop(r)} className="text-[11px] px-2 py-1 rounded-lg"
-          style={{ border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)", color: "var(--error)" }}>Delete</button>}
+          style={{ border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)", color: "var(--error-ink)" }}>Delete</button>}
       </div>
     </div>
   );
@@ -383,7 +384,7 @@ export function RunDialog({ r, repos, onClose, onNote, onRunStep, targetInTmux }
     onClose();
   };
 
-  const style = { background: "var(--bg2)", border: edge(22), color: "var(--text)" };
+  const style = { background: "var(--surface-card)", border: EDGE, color: "var(--text)" };
   return (
     <div className="rounded-xl p-3 flex flex-col gap-2.5" style={{ border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
       <div className="text-[12px] font-semibold" style={{ color: "var(--text)" }}>Run {r.name}</div>
@@ -407,7 +408,7 @@ export function RunDialog({ r, repos, onClose, onNote, onRunStep, targetInTmux }
               placeholder="—" triggerMaxWidth={220} />
           ) : (
             <input value={values[p.key] ?? ""} onChange={(e) => setValues((v) => ({ ...v, [p.key]: e.target.value }))}
-              className="text-[11.5px] px-2 py-1.5 rounded-lg" style={style} spellCheck={false} />
+              className={INPUT} style={INPUT_STYLE} spellCheck={false} />
           )}
         </label>
       ))}
@@ -419,7 +420,7 @@ export function RunDialog({ r, repos, onClose, onNote, onRunStep, targetInTmux }
       </div>
 
       {preview?.confirm && (
-        <div className="text-[10.5px] px-2 py-1 rounded" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>
+        <div className="text-[10.5px] px-2 py-1 rounded" style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>
           This one is not easily undone. Read the lines above before you run it.
         </div>
       )}
@@ -427,7 +428,7 @@ export function RunDialog({ r, repos, onClose, onNote, onRunStep, targetInTmux }
         <div className="text-[10.5px]" style={{ color: "var(--text4)" }}>Still needs: {preview.missing.join(", ")}</div>
       )}
       {inTmux && (
-        <div className="text-[10.5px] px-2 py-1 rounded" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>
+        <div className="text-[10.5px] px-2 py-1 rounded" style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>
           {where === "the shell" ? "This shell" : "The console"} is inside tmux, so this would type into the pane's program, not a prompt. It runs from a plain shell — detach it (Ctrl-b d) or reopen the app first.
         </div>
       )}

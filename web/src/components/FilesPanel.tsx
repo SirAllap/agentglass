@@ -22,6 +22,7 @@ import { FOLDER, FOLDER_OPEN, guides, iconFor, isNoise } from "../lib/fileIcons.
 import { SearchIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { CloseButton } from "./CloseButton.tsx";
+import { EDGE, LINE } from "./workspace/Chrome.tsx";
 
 /** How a row is drawn depends only on this, so the tree and the search results
  *  cannot drift apart. */
@@ -30,7 +31,6 @@ const MARK_TINT: Record<string, string> = {
   R: "var(--primary)", "?": "var(--text4)", "·": "var(--text4)",
 };
 
-const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 
 export function FilesView({ active }: { active: boolean }) {
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
@@ -111,9 +111,9 @@ function FilesBody({ root, branch, active }: { root: string; branch: string; act
 
   return (
     <div className="flex-1 min-h-0 flex flex-col" key={root}>
-      <div className="flex items-center gap-2 px-5 py-2 shrink-0" style={{ borderBottom: edge(12) }}>
+      <div className="flex items-center gap-2 px-5 py-2 shrink-0" style={{ borderBottom: LINE }}>
         <span className="flex items-center gap-1.5 flex-1 min-w-0 px-2 py-1 rounded-md"
-          style={{ background: "var(--bg)", border: edge(20) }}>
+          style={{ background: "var(--bg)", border: EDGE }}>
           <span className="flex" style={{ color: "var(--text3)" }}><SearchIcon size={ICON.xs} /></span>
           <input value={q} onChange={(e) => setQ(e.target.value)} spellCheck={false} autoComplete="off"
             placeholder={mode === "names" ? "Find a file by name…" : "Search the code of this checkout…"}
@@ -123,7 +123,7 @@ function FilesBody({ root, branch, active }: { root: string; branch: string; act
         {/* Two different questions — where is the file called X, and where is
             the code that says X — so two modes rather than one box that guesses
             which you meant. */}
-        <span className="inline-flex rounded-md overflow-hidden shrink-0" style={{ border: edge(20) }}>
+        <span className="inline-flex rounded-md overflow-hidden shrink-0" style={{ border: EDGE }}>
           {(["names", "contents"] as const).map((m) => (
             <button key={m} onClick={() => setMode(m)}
               className="text-[10.5px] px-3 py-1"
@@ -300,7 +300,7 @@ function Tree({ root, active, onOpen, reveal }: {
     return () => cancelAnimationFrame(id);
   }, [active]);
 
-  if (error) return <div className="p-5 text-[11.5px]" style={{ color: "var(--error)" }}>{error}</div>;
+  if (error) return <div className="p-5 text-[11.5px]" style={{ color: "var(--error-ink)" }}>{error}</div>;
   if (loading && !levels[""]) return <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>Reading the checkout…</div>;
 
   const top = levels[""] ?? [];
@@ -379,7 +379,7 @@ function PathRow({ rel, dir, onOpen, children }: { rel: string; dir?: boolean; o
   const icon = iconFor(name, !!dir);
   return (
     <button onClick={() => onOpen(rel)} className="w-full text-left px-4 py-1.5 hover:bg-white/5" title={rel}
-      style={{ borderBottom: edge(7) }}>
+      style={{ borderBottom: LINE }}>
       <div className="text-[11.5px] truncate flex items-baseline gap-1.5">
         <span className="shrink-0" style={{ color: icon.tint }}>{icon.glyph}</span>
         {cut >= 0 && <span style={{ color: "var(--text4)" }}>{rel.slice(0, cut + 1)}</span>}
@@ -449,7 +449,7 @@ function ContentHits({ root, q, onOpen }: { root: string; q: string; onOpen: (re
               <div key={i} className="flex items-baseline gap-2 text-[11px]">
                 {/* The line number is a coordinate, not prose — its own tint,
                     so the eye can run down the column without reading it. */}
-                <span className="shrink-0 tabular-nums w-[46px] text-right" style={{ color: "var(--info)", opacity: .75 }}>{h.line}</span>
+                <span className="shrink-0 tabular-nums w-[46px] text-right" style={{ color: "var(--info-ink)", opacity: .75 }}>{h.line}</span>
                 <span className="flex-1 min-w-0 truncate" style={{ color: "var(--text2)" }}>
                   {h.len > 0 ? (
                     <>
@@ -475,7 +475,7 @@ const Note = ({ children, tint }: { children: React.ReactNode; tint?: string }) 
 
 const Count = ({ children }: { children: React.ReactNode }) =>
   <div className="px-5 py-1.5 text-[10px] sticky top-0 z-[1]"
-    style={{ color: "var(--text3)", background: "color-mix(in srgb, var(--text) 6%, var(--bg2))", borderBottom: edge(12) }}>{children}</div>;
+    style={{ color: "var(--text3)", background: "color-mix(in srgb, var(--text) 6%, var(--bg2))", borderBottom: LINE }}>{children}</div>;
 
 /**
  * A search that debounces and cannot be overtaken by its own older self.

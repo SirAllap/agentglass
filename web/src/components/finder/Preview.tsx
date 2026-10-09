@@ -21,6 +21,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FileFacts } from "../../../../shared/types.ts";
 import { api } from "../../lib/api.ts";
 import { CODE_FONT_STYLE } from "../diff/DiffLines.tsx";
+import { EDGE } from "../workspace/Chrome.tsx";
 
 /** How long the cursor has to stay on a row before its bytes are fetched.
  *  Long enough that holding ↓ through forty rows fetches nothing. */
@@ -113,7 +114,7 @@ export function Preview({ path, onOpen, onCopyPath, compact }: {
   }
   if (!facts.ok) {
     return (
-      <div className="flex-1 grid place-items-center text-[11px] px-4 text-center" style={{ color: "var(--warning)" }}>
+      <div className="flex-1 grid place-items-center text-[11px] px-4 text-center" style={{ color: "var(--warning-ink)" }}>
         {facts.error ?? "cannot be read"}
       </div>
     );
@@ -158,11 +159,11 @@ export function Preview({ path, onOpen, onCopyPath, compact }: {
               Open
             </button>
           ) : null}
-          {openErr && <span className="text-[9.5px]" style={{ color: "var(--warning)" }}>{openErr}</span>}
+          {openErr && <span className="text-[9.5px]" style={{ color: "var(--warning-ink)" }}>{openErr}</span>}
           {onCopyPath && (
             <button onClick={() => onCopyPath(path)}
               className="text-[10px] px-2 py-0.5 rounded-md min-h-[20px]"
-              style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+              style={{ color: "var(--text3)", border: EDGE }}>
               Copy path
             </button>
           )}
@@ -184,7 +185,7 @@ export function Preview({ path, onOpen, onCopyPath, compact }: {
                 }} />
             </div>
           ) : mediaErr ? (
-            <div className="p-3 text-[11px]" style={{ color: "var(--warning)" }}>{mediaErr}</div>
+            <div className="p-3 text-[11px]" style={{ color: "var(--warning-ink)" }}>{mediaErr}</div>
           ) : facts.kind === "image-convert" && !facts.converter ? (
             /* An image the browser will not draw and this machine cannot
                convert. Saying which tool would do it beats "binary file". */

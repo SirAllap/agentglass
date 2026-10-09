@@ -32,6 +32,7 @@ import { SplitDiff, UnifiedDiff, SCROLLBAR_CSS, SPLIT_SEL_CSS } from "./DiffLine
 import { ThemePicker, Toggle, DiffSettingsLink } from "./DiffControls.tsx";
 import { WarningIcon } from "../../lib/glyphIcons.tsx";
 import { riskColor, riskTitle } from "../../lib/riskView.ts";
+import { INPUT, INPUT_STYLE, EDGE } from "../workspace/Chrome.tsx";
 
 export type PresetDiffProps = {
   open: boolean;
@@ -57,8 +58,8 @@ export function PresetDiff({ open, onClose, changes, title, path, onBack, backLa
               <motion.div
                 initial={{ opacity: 0, scale: 0.95, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 8 }}
                 transition={{ type: "spring", stiffness: 330, damping: 30 }}
-                className="w-[95vw] h-[95vh] rounded-2xl flex flex-col pointer-events-auto outline-none overflow-hidden"
-                style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
+                className="w-[95vw] h-[95vh] rounded-xl flex flex-col pointer-events-auto outline-none overflow-hidden"
+                style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
               >
                 <Inner changes={changes} title={title} path={path} onBack={onBack} backLabel={backLabel} onClose={onClose} />
               </motion.div>
@@ -107,7 +108,7 @@ function Inner({ changes, title, path, onBack, backLabel, onClose }: Omit<Preset
         {onBack && (
           <button onClick={onBack} title={backLabel || "Back"}
             className="shrink-0 px-2.5 py-1 rounded-lg text-[11px] flex items-center gap-1.5"
-            style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg3) 45%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+            style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg3) 45%, transparent)", border: EDGE }}>
             <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none" aria-hidden>
               <path d="M7.5 2.5L4 6l3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
@@ -117,8 +118,8 @@ function Inner({ changes, title, path, onBack, backLabel, onClose }: Omit<Preset
         <p className="min-w-0 text-[12px] truncate" style={{ color: "var(--text)" }}>{title || "Changes"}</p>
         <span className="shrink-0 text-[11px] tabular-nums" style={{ color: "var(--text3)" }}>
           {changes.length} {changes.length === 1 ? "file" : "files"}
-          {" · "}<span style={{ color: "var(--success)" }}>+{totals.add}</span>
-          {" "}<span style={{ color: "var(--error)" }}>−{totals.del}</span>
+          {" · "}<span style={{ color: "var(--success-ink)" }}>+{totals.add}</span>
+          {" "}<span style={{ color: "var(--error-ink)" }}>−{totals.del}</span>
         </span>
         <div className="ml-auto flex items-center gap-2">
           <Toggle on={split} onClick={() => { setSplit(!split); setDiffSplit(!split); }} title="Side by side">split</Toggle>
@@ -136,8 +137,8 @@ function Inner({ changes, title, path, onBack, backLabel, onClose }: Omit<Preset
               <input
                 value={q} onChange={(e) => setQ(e.target.value)}
                 placeholder="Filter by file path…" aria-label="Filter the list" spellCheck={false}
-                className="w-full px-3 py-1.5 rounded-lg text-[11.5px] outline-none"
-                style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", color: "var(--text)" }}
+                className={`w-full ${INPUT}`}
+                style={INPUT_STYLE}
               />
             </div>
           )}
@@ -168,8 +169,8 @@ function Inner({ changes, title, path, onBack, backLabel, onClose }: Omit<Preset
                     </span>
                   ) : null}
                   <span className="shrink-0 text-[10px] tabular-nums">
-                    {c.additions > 0 && <span style={{ color: "var(--success)" }}>+{c.additions}</span>}
-                    {c.deletions > 0 && <span style={{ color: "var(--error)" }}> −{c.deletions}</span>}
+                    {c.additions > 0 && <span style={{ color: "var(--success-ink)" }}>+{c.additions}</span>}
+                    {c.deletions > 0 && <span style={{ color: "var(--error-ink)" }}> −{c.deletions}</span>}
                   </span>
                 </div>
               );

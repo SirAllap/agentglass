@@ -85,3 +85,14 @@ describe("the walker", () => {
     expect(mdfind).toContain("Deliberately NOT `getBoundingClientRect`");
   });
 });
+
+describe("FindBar hook order", () => {
+  it("returns only after its last hook — an early return above one is React #310", async () => {
+    const src = (await Bun.file(new URL("../src/components/FindBar.tsx", import.meta.url)).text())
+      .split("\n").filter((l) => !l.trim().startsWith("//") && !l.trim().startsWith("/*") && !l.trim().startsWith("*")).join("\n");
+    const body = src.slice(src.indexOf("export function FindBar("));
+    const firstReturn = body.indexOf("return null");
+    const lastHook = Math.max(...["useState(", "useEffect(", "useRef(", "useSyncExternalStore("].map((h) => body.lastIndexOf(h)));
+    expect(firstReturn).toBeGreaterThan(lastHook);
+  });
+});

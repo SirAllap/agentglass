@@ -19,7 +19,7 @@ describe("the sub-filter by person", () => {
     // A thread is filed under whoever RAISED it, the same rule the lane uses:
     // a reply inside somebody's thread is part of their remark, not one of
     // your own.
-    expect(src).toContain('lane: "human", author: r.author,');
+    expect(src).toContain('lane: x.lane, author: r.author,');
     expect(src).toContain('lane: "human", author: c.author,');
     expect(src).toContain("author: t.comments[0]?.author,");
   });

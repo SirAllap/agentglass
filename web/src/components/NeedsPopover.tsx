@@ -26,6 +26,7 @@ import { CloseButton } from "./CloseButton.tsx";
 import { paneChoices } from "../lib/panePick.ts";
 import { LAYER } from "../lib/layers.ts";
 import { NEEDS_PANEL_W, needsPanelLeft } from "../lib/needsPanel.ts";
+import { EDGE, LINE } from "./workspace/Chrome.tsx";
 
 export type NeedsItem = {
   /** The agent card key this was raised from. Stable enough for a list key. */
@@ -96,7 +97,7 @@ function Row({ it, exact, hits, onChat, onApprove, onProject, onPane }: {
             project in front of you is how you go looking in the wrong tree. */}
         {it.otherProject && (
           <span className="text-[10px] uppercase tracking-wider px-1.5 py-px rounded shrink-0"
-            style={{ color: "var(--text3)", border: "1px solid var(--border)" }}
+            style={{ color: "var(--text3)", border: EDGE }}
             title={`This is not the project you have open — it lives in ${it.project}`}>
             {it.otherProject}
           </span>
@@ -241,12 +242,12 @@ export function NeedsPopover({ anchorRef, avoidRef, open, items, onClose, onChat
         className="fixed flex flex-col rounded-xl overflow-hidden"
         style={{
           top: at.top, left: at.left, width: NEEDS_PANEL_W,
-          background: "var(--bg2)",
-          border: "1px solid var(--border)",
+          background: "var(--surface-card)",
+          border: EDGE,
           boxShadow: "0 22px 48px -20px var(--shadow)",
         }}
       >
-        <div className="flex items-center gap-2 px-2.5 py-1.5" style={{ borderBottom: "1px solid var(--border)" }}>
+        <div className="flex items-center gap-2 px-2.5 py-1.5" style={{ borderBottom: LINE }}>
           <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>waiting on you</span>
           <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>{items.length}</span>
           <CloseButton onClick={onClose} title="Close (Esc)" className="agx-note-btn ml-auto" />

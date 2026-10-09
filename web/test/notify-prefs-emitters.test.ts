@@ -2,7 +2,7 @@
  * Every client-side push surface asks the diet before it does anything —
  * asserted against the SOURCE, the way board-keeps-its-own.test.ts and its
  * neighbours already pin a rule about wiring rather than about rendering:
- * there is no renderer in this project (CLAUDE.md), so a rule about source is
+ * there is no renderer in this project (AGENTS.md), so a rule about source is
  * asserted against source. Four surfaces, four channels:
  *
  *   fireDesktopAlert (sysNotify.ts)   desktop popup, and the bell record

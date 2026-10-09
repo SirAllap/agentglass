@@ -46,7 +46,7 @@ export function DbNoticeView({ notice, onClose }: { notice: DbNotice; onClose: (
       <div className="flex-1 min-w-0 flex items-center gap-x-2 gap-y-1 flex-wrap break-words">
       {notice.kind === "copied" ? (
         <>
-          <span className="font-semibold" style={{ color: "var(--warning)" }}>history copied</span>
+          <span className="font-semibold" style={{ color: "var(--warning-ink)" }}>history copied</span>
           <span>
             <code>{stray}</code> was copied to <code>{db}</code>, which is the database from now on. The original is
             untouched and no longer used; delete it once you have checked the history here.
@@ -54,7 +54,7 @@ export function DbNoticeView({ notice, onClose }: { notice: DbNotice; onClose: (
         </>
       ) : (
         <>
-          <span className="font-semibold" style={{ color: "var(--warning)" }}>second database not in use</span>
+          <span className="font-semibold" style={{ color: "var(--warning-ink)" }}>second database not in use</span>
           <span>
             This history is <code>{db}</code>. The one at <code>{stray}</code>, in the folder the server started from, is
             not shown.

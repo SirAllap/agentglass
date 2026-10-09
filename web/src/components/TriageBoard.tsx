@@ -18,12 +18,14 @@ import { InfoIcon } from "./settingsNavIcons.tsx";
 import { CircleIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, FlagIcon, RefreshIcon, SearchIcon, StarIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { ALWAYS_OPEN, foldable, foldedLanes, setFoldedLanes, walkable } from "../lib/boardPrefs.ts";
 import type { PrSummary } from "../../../shared/types.ts";
+import { staleApproval } from "../../../shared/mergeBlockers.ts";
 import { LANES, LANE_CAP, board as fileAll, suggestedAction, ACTION_LABEL, type Filed, type LaneId } from "../lib/prLanes.ts";
 import { taskLink, taskLinkTitle } from "../lib/taskLink.ts";
 import { onCard, cardVersion, withCard } from "../lib/prCardStore.ts";
 import { openCard } from "../lib/openCard.ts";
 import { PriorityFlag, CardChip, CardFace, CHIP_H } from "../lib/priority.tsx";
 import { StatusPill } from "./StatusPill.tsx";
+import { CTRL_H, EDGE, LINE } from "./workspace/Chrome.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { askingBehind, behindOf, onBehind } from "../lib/prBehindStore.ts";
 import { onRollup, rollupOf } from "../lib/prRollupStore.ts";
@@ -35,7 +37,6 @@ import { matchIndex, prMatches, stepMatch } from "../lib/prBoardFind.ts";
 import { closeFind, openFind, registerEngine, topScope } from "../lib/findScope.ts";
 import { CloseIcon } from "./CloseButton.tsx";
 
-const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 const TRUNKS = new Set(["main", "master", "trunk", "develop", "development"]);
 
 /** How long nothing may happen before a pull request counts as quiet. */
@@ -167,7 +168,9 @@ export function TriageBoard({
   useEffect(() => onRollup(() => bumpRollup((n) => n + 1)), []);
   const trueChecks = useCallback((p: PrSummary): PrSummary => {
     if (!root || !p.checks || p.checks.failure === 0) return p;
-    const real = rollupOf(root, p.number);
+    /* Keyed by what the list says of it: the answer stands until the head
+       commit or the aggregate moves. See SAME_MS in prRollupStore. */
+    const real = rollupOf(root, p.number, `${p.headSha ?? ""}|${JSON.stringify(p.checks)}`);
     return real ? { ...p, checks: real } : p;
   }, [root]);
 
@@ -492,33 +495,9 @@ export function TriageBoard({
       openFind(find);
       return;
     }
-    // Never while somebody is typing in the filter above.
-    if ((e.target as HTMLElement)?.closest?.("input,textarea")) return;
-    const k = e.key;
-    if (k >= "1" && k <= String(cols.length)) {
-      const i = Number(k) - 1;
-      const id = cols[i]?.id;
-      /* The digit of a folded lane UNFOLDS it rather than doing nothing. The
-         alternative is a number printed in the legend that answers to nobody,
-         which is the bug the focus fix above exists for — twice in one row
-         would be careless. */
-      if (id && isFolded(id)) { e.preventDefault(); toggleFold(id, lanes.get(id)?.length ?? 0); setCur({ lane: i, row: 0 }); return; }
-      if (shown(i).length) { e.preventDefault(); setCur({ lane: i, row: 0 }); }
-      return;
-    }
-    if (k === "j" || k === "ArrowDown") { e.preventDefault(); setCur((c) => ({ ...c, row: Math.min(c.row + 1, Math.max(0, shown(c.lane).length - 1)) })); return; }
-    if (k === "k" || k === "ArrowUp") { e.preventDefault(); setCur((c) => ({ ...c, row: Math.max(0, c.row - 1) })); return; }
-    if (k === "h" || k === "ArrowLeft") { e.preventDefault(); setCur((c) => ({ lane: Math.max(0, c.lane - 1), row: 0 })); return; }
-    if (k === "l" || k === "ArrowRight") { e.preventDefault(); setCur((c) => ({ lane: Math.min(cols.length - 1, c.lane + 1), row: 0 })); return; }
-    if (!at) return;
-    if (k === "Enter") { e.preventDefault(); onOpen(at.number); return; }
-    if (k === "p") { e.preventDefault(); onTogglePin(at); return; }
-    // One key for "do the thing this card is asking for", whatever that is in
-    // this lane — the same button the card draws, so the two cannot drift.
-    /* `a` opens it too. It used to perform the lane's action from the keyboard,
-       which is the same loaded gun as the button — worse, because a cursor you
-       cannot see decides which card it points at. */
-    if (k === "a") { e.preventDefault(); onAct(at, "open"); return; }
+    /* No other keys. The board used to answer 1-4, j/k/h/l, Enter, p and a; the
+       last one fired on Ctrl+Alt+A, the chord that closes and opens the bench,
+       and opened whatever card the cursor was resting on. Nobody used them. */
   };
 
   return (
@@ -558,10 +537,10 @@ export function TriageBoard({
             <span className="block text-[11px] mt-2" style={{ color: "var(--text3)" }}>
               Yours, and the ones you were asked to look at. The board never shows more than that
               {" — "}
-              <button onClick={onShowTable} style={{ color: "var(--primary)" }}>
+              <button onClick={onShowTable} style={{ color: "var(--primary-ink)" }}>
                 {rest > 0 ? `the other ${rest} are a table` : "the rest are a table"}
               </button>.
-              {canLand > 0 && <> <span style={{ color: "var(--success)" }}>{canLand}</span> can land right now.</>}
+              {canLand > 0 && <> <span style={{ color: "var(--success-ink)" }}>{canLand}</span> can land right now.</>}
             </span>
           </>
         )}
@@ -629,7 +608,7 @@ export function TriageBoard({
               <button onClick={() => openFind()}
                 title="Find in these cards — number, title, author, branch, labels, assignees, reviewers"
                 className="agx-btn inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[10.5px]"
-                style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+                style={{ color: "var(--text3)", border: EDGE }}>
                 <SearchIcon size={ICON.xs} />Find in these<span style={{ color: "var(--text4)" }}>⌃F</span>
               </button>
             )}
@@ -693,22 +672,11 @@ export function TriageBoard({
             );
           })}
           <span className="inline-flex items-baseline rounded px-2 py-0.5 text-[10.5px] tabular-nums"
-            style={{ color: "var(--text4)", border: edge(16) }}>
+            style={{ color: "var(--text4)", border: EDGE }}>
             {totalKnown ? `${involved} / ${total}` : `${involved} on the board`}
           </span>
         </div>
       )}
-
-      {/* The keys, printed. A board with a keyboard nobody is told about is a
-          board with no keyboard. */}
-      <div className="shrink-0 flex gap-3 flex-wrap px-4 pb-1.5 text-[9.5px]" style={{ color: "var(--text4)" }}>
-        <span><K>1</K>–<K>{cols.length}</K> lane</span>
-        <span><K>j</K><K>k</K> card</span>
-        <span><K>h</K><K>l</K> across</span>
-        <span><K>⏎</K> open</span>
-        <span><K>a</K> open it</span>
-        <span><K>p</K> pin</span>
-      </div>
 
       {/* Sideways only. The five columns still have to be reachable on a narrow
           window; the up-and-down is each column's own, below. */}
@@ -725,7 +693,7 @@ export function TriageBoard({
                 are in — this is an answer, not a wait.
               </p>
               <button onClick={onShowTable} className="agx-btn mt-3 rounded px-2 py-1 text-[10.5px]"
-                style={{ color: "var(--text2)", border: edge(20) }}>
+                style={{ color: "var(--text2)", border: EDGE }}>
                 {tableLabel}
               </button>
               {/* An empty board is precisely when a pin is the only thing left
@@ -828,7 +796,7 @@ export function TriageBoard({
                         style={{ width: MIN_BOX, height: MIN_BOX, color: "var(--text4)" }}>
                         <InfoIcon size={ICON.xs} />
                       </span>
-                      <span className="ml-auto text-[9px] px-1 rounded shrink-0" style={{ color: "var(--text4)", border: edge(16) }}>{i + 1}</span>
+                      <span className="ml-auto text-[9px] px-1 rounded shrink-0" style={{ color: "var(--text4)", border: EDGE }}>{i + 1}</span>
                       {/*
                         * The fold lives HERE and not on the counts row above.
                         *
@@ -875,7 +843,7 @@ export function TriageBoard({
                       <div aria-hidden>
                         {[0, 1].map((k) => (
                           <div key={k} className="rounded-lg mb-2 animate-pulse"
-                            style={{ height: 74, background: "var(--bg2)", border: edge(16), animationDelay: `${(i * 2 + k) * 0.08}s` }} />
+                            style={{ height: 74, background: "var(--surface-card)", border: EDGE, animationDelay: `${(i * 2 + k) * 0.08}s` }} />
                         ))}
                       </div>
                     ) : (
@@ -897,7 +865,7 @@ export function TriageBoard({
                           <button onClick={() => setOpenLanes((o) => ({ ...o, [l.id]: true }))}
                             title={`Show the other ${more} in this lane`}
                             className="w-full rounded-md py-1 mb-2 text-[10px]"
-                            style={{ color: "var(--text3)", border: edge(16) }}>
+                            style={{ color: "var(--text3)", border: EDGE }}>
                             +{more} more in this lane
                           </button>
                         )}
@@ -905,7 +873,7 @@ export function TriageBoard({
                           <button onClick={() => setOpenLanes((o) => ({ ...o, [l.id]: false }))}
                             title={`Back to the first ${LANE_CAP}`}
                             className="w-full rounded-md py-1 mb-2 text-[10px]"
-                            style={{ color: "var(--text4)", border: edge(12) }}>
+                            style={{ color: "var(--text4)", border: EDGE }}>
                             Show fewer
                           </button>
                         )}
@@ -944,7 +912,7 @@ export function TriageBoard({
         */}
       {!waiting && involved > 0 && (
         <div className="shrink-0 flex flex-wrap items-center gap-2.5 px-4 py-2 text-[10.5px]"
-          style={{ color: "var(--text3)", borderTop: edge(11) }}>
+          style={{ color: "var(--text3)", borderTop: LINE }}>
           {!totalKnown ? (
             <span>How many others are open is not a number this view can trust.</span>
           ) : rest > 0 ? (
@@ -959,7 +927,7 @@ export function TriageBoard({
               : <>everything here moved in the last {QUIET_DAYS} days</>}
           </span>
           <button onClick={onShowTable} className="agx-btn ml-auto rounded px-2 py-0.5"
-            style={{ color: "var(--text2)", border: edge(20) }}>
+            style={{ color: "var(--text2)", border: EDGE }}>
             {tableLabel}
           </button>
         </div>
@@ -1079,7 +1047,25 @@ function cardVerdict(p: PrSummary): {
        * the same reviewer with the re-request icon. `askedAgain` is the same
        * field the changes-requested branch below reads — see `humanVerdict`
        * in prs.ts, which computes it once from `pending` for either kind.
+       *
+       * AMBER IS FOR THE RE-REQUEST, NOT FOR TIME PASSING. This card used to
+       * turn amber the moment ANY commit landed after the approval, whether
+       * or not GitHub still counted it — reported beside the merge box on the
+       * same pull request, which read the identical fact green ("still
+       * counts"). One truth, two colours. `staleApproval` is the merge box's
+       * own answer to whether GitHub counts it; a card has no `gate` (that is
+       * PrDetail-only), so it asks with `reviewDecision` alone, which still
+       * answers the common case right.
        */
+      const counts = staleApproval(p.reviewDecision).counts;
+      if (!v.askedAgain && counts) {
+        return {
+          tint: "var(--success)", glyph: <DoneIcon size={ICON.xs} />, url: v.url,
+          line: (v.mine ? "You approved" : names ? `Approved by ${names}` : "Approved") + " · commits since" + also,
+          aria: names ? `Approved by ${names}; commits have landed since, GitHub still counts it`
+            : "Approved; commits have landed since, GitHub still counts it",
+        };
+      }
       const line = v.askedAgain && v.mine ? "You were asked to look again"
         : v.mine ? "You approved, but it has moved since"
           : (names ? `Approved by ${names}, but it has moved since` : "Approved, but it has moved since") + (v.askedAgain ? " — asked to look again" : "");
@@ -1097,6 +1083,22 @@ function cardVerdict(p: PrSummary): {
     };
   }
   if (v.kind === "changes") {
+    /*
+     * CLEARED: every one of them has been re-asked, so nobody named here is
+     * still the one holding up the merge \u2014 the same amber the merge box
+     * draws for this exact fact (see p2Verdict in PrPanel.tsx). Reported on
+     * the installed build still reading red here after the merge box had
+     * already gone amber: one fact, two surfaces, two answers.
+     */
+    if (v.cleared) {
+      const line = v.mine ? "You were asked to look again"
+        : (names ? `Waiting on review by ${names}` : "Waiting on review") + " \u00b7 Changes applied, asked to look again.";
+      return {
+        tint: "var(--warning)", glyph: <CircleIcon size={ICON.xs} />, url: v.url,
+        line: line + also,
+        aria: (names ? `Waiting on review by ${names}, changes applied and asked to look again` : "Waiting on review, changes applied and asked to look again"),
+      };
+    }
     /*
      * STILL RED, because it still blocks the merge exactly as GitHub shows
      * it \u2014 a re-request does not withdraw the standing review. What was
@@ -1204,8 +1206,8 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
       data-dim={dim ? "1" : undefined}
       className="rounded-lg mb-2 cursor-pointer agx-btn overflow-hidden"
       style={{
-        border: cursor ? "1px solid color-mix(in srgb, var(--primary) 60%, transparent)" : edge(16),
-        background: "var(--bg2)",
+        border: cursor ? "1px solid color-mix(in srgb, var(--primary) 60%, transparent)" : EDGE,
+        background: "var(--surface-card)",
         boxShadow: cursor ? "inset 2px 0 0 var(--primary)" : undefined,
         /* Saturation as well as opacity: these cards are read by colour — green
            lane, red checks, amber waiting — and dimming alone leaves a row of
@@ -1269,7 +1271,7 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
           {(p.openThreads?.open ?? 0) > 0 && (
             <span className="shrink-0 inline-flex items-center rounded-full px-1.5 tabular-nums"
               title={`${p.openThreads!.open}${p.openThreads!.more ? "+" : ""} review thread${p.openThreads!.open === 1 ? "" : "s"} still unresolved`}
-              style={{ fontSize: 9.5, lineHeight: "14px", color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 30%, transparent)" }}>
+              style={{ fontSize: 9.5, lineHeight: "14px", color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 30%, transparent)" }}>
               {p.openThreads!.open}{p.openThreads!.more ? "+" : ""} open
             </span>
           )}
@@ -1421,7 +1423,7 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
         {p.mergeable === "CONFLICTING" && (
           <span className="shrink-0 inline-flex items-center gap-1 rounded px-1"
             style={{
-              color: "var(--error)",
+              color: "var(--error-ink)",
               background: "color-mix(in srgb, var(--error) 12%, transparent)",
               border: "1px solid color-mix(in srgb, var(--error) 35%, transparent)",
             }}
@@ -1457,7 +1459,7 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
           {behind ? (
           <span className="shrink-0 inline-flex items-center gap-0.5 tabular-nums px-1 rounded"
             title={`${behind} commit${behind === 1 ? "" : "s"} on ${p.baseRefName} that this branch does not have — its checks ran against an older base`}
-            style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}>
+            style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}>
             <RefreshIcon size={ICON.xs} />{behind}
           </span>
         ) : asking ? (
@@ -1674,8 +1676,10 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
         {/* One button, and it is the one this lane is asking for. A row of five
             is a row nobody reads; the rest are a click away inside. */}
         <button onClick={(e) => { e.stopPropagation(); onAct(p, "open"); }} disabled={busy}
-          className="agx-btn rounded px-2 py-0.5 text-[10px] disabled:opacity-40 inline-flex items-center gap-1"
-          style={{ color: "var(--text2)", border: edge(20) }}>
+          /* `control, compact`: the in-card button of the canon, 22 tall on the
+             ladder rather than a 24px height of its own from `py-0.5`. */
+          className="agx-btn rounded-lg px-2 text-[10.5px] disabled:opacity-40 inline-flex items-center gap-1"
+          style={{ color: "var(--text2)", border: EDGE, height: CTRL_H.compact }}>
           {/* `busy` is the panel'''s, and on this board only one card can be
               acting at a time — the whole surface disables while it runs. So the
               spinner goes on the card whose action is in flight rather than on
@@ -1689,9 +1693,9 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
           {/* One button, and it opens the pull request.
               It used to perform the lane's action — Merge on a green card,
               Re-run on a red one — and a board is a place you scan and point
-              at, not a place to press Merge from. Reported after pressing
-              "Re-run failed" by accident, twice over, on a card that was under
-              the pointer for a different reason. The verdict still travels: the
+              at, not a place to press Merge from: a card under the pointer for
+              a different reason took an accidental Re-run, twice over. The
+              verdict still travels: the
               lane and its sentence say what wants doing, and the page that can
               do it is one click away. */}
           Open{act === "merge" ? " to merge" : act === "rerun" ? " to re-run" : ""} →
@@ -1755,7 +1759,7 @@ const K = ({ children }: { children: React.ReactNode }) => (
 function PinnedStrip({ list, onOpen }: { list?: { number: number; title: string }[]; onOpen: (n: number) => void }) {
   if (!list?.length) return null;
   return (
-    <div className="shrink-0 flex flex-col min-h-0 mt-2 pt-2" style={{ borderTop: edge(18), maxHeight: "40%" }}>
+    <div className="shrink-0 flex flex-col min-h-0 mt-2 pt-2" style={{ borderTop: LINE, maxHeight: "40%" }}>
       <h4 className="flex items-baseline gap-2 m-0 pb-1 px-0.5 text-[9px] uppercase tracking-wider shrink-0"
         style={{ color: "var(--text3)" }}>
         <span className="flex" style={{ color: "var(--primary-hover)" }}><StarIcon size={ICON.xs} filled /></span> Pinned
@@ -1765,7 +1769,7 @@ function PinnedStrip({ list, onOpen }: { list?: { number: number; title: string 
         {list.map((p) => (
           <button key={p.number} onClick={() => onOpen(p.number)} title={p.title}
             className="agx-btn w-full text-left rounded px-1.5 py-1 mb-1 flex items-baseline gap-1.5"
-            style={{ border: edge(14) }}>
+            style={{ border: EDGE }}>
             <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>#{p.number}</span>
             <span className="min-w-0 truncate text-[10.5px]" style={{ color: "var(--text2)" }}>{p.title}</span>
           </button>

@@ -35,6 +35,7 @@ import { useDismiss } from "../lib/useDismiss.ts";
 import { keepTermFocus } from "../lib/keepFocus.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { IconLabel, PlusIcon, StarIcon } from "../lib/glyphIcons.tsx";
+import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
 
 /**
  * The four git one-liners this row used to hardcode as always-visible chips.
@@ -243,7 +244,7 @@ function CommandRow({ c, font, on, full, onRun, onPin }: {
         <span className="min-w-0 flex-1 truncate t-dim2">{c.desc || "—"}</span>
         {/* Marked, because a saved command and a found one behave differently:
             one is a line, the other can be four and can ask you a question. */}
-        {r && <span className="shrink-0 text-[10px] px-1 rounded" style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>{r.params?.length ? "asks" : "yours"}</span>}
+        {r && <span className="shrink-0 text-[10px] px-1 rounded" style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>{r.params?.length ? "asks" : "yours"}</span>}
       </button>
       {/* Pinned stars stay lit; the rest appear on hover, so a list of 300 rows
           is not 300 competing controls. */}
@@ -536,7 +537,7 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
           title="Ready-to-run project commands: Makefile targets & package scripts, with what each one does. Pin the ones you use."
           className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg whitespace-nowrap"
           style={quiet
-            ? { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", opacity: root && !IS_DEMO ? 1 : 0.5 }
+            ? { color: "var(--text3)", border: EDGE, opacity: root && !IS_DEMO ? 1 : 0.5 }
             : { color: n ? "var(--primary-hover)" : "var(--text2)", background: "color-mix(in srgb, var(--primary) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)", fontWeight: 500, opacity: root && !IS_DEMO ? 1 : 0.5 }}>
           <GearIcon size={ICON.xs} />
           Commands{quiet ? "" : n ? ` (${n})` : cmds ? " (none)" : " …"}<span style={{ color: "var(--text4)" }}>▾</span>
@@ -547,7 +548,7 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
           // yours to type in while the menu is open). The input itself is
           // excluded by the handler, so it can still be clicked into.
           <div onMouseDown={keepTermFocus} className="absolute rounded-lg text-[11px] shadow-2xl flex flex-col"
-            style={{ zIndex: 40, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", width: MENU_W, maxHeight: 420, overflow: "hidden", ...(side === "right" ? { right: 0 } : { left: 0 }), ...(dropUp ? { bottom: "calc(100% + 4px)" } : { top: "calc(100% + 4px)" }) }}>
+            style={{ zIndex: 40, background: "var(--surface-card)", border: EDGE, width: MENU_W, maxHeight: 420, overflow: "hidden", ...(side === "right" ? { right: 0 } : { left: 0 }), ...(dropUp ? { bottom: "calc(100% + 4px)" } : { top: "calc(100% + 4px)" }) }}>
             {/* A real project has more targets than fit on a screen — the repo
                 this was built against has 316 — so scrolling to find `migrate`
                 was the only way to run it. Matches the name and what the target
@@ -555,8 +556,8 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
                 description. */}
             <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)}
               placeholder="filter commands…"
-              className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
-              style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+              className={`m-1.5 shrink-0 ${INPUT}`}
+              style={INPUT_STYLE} />
             <div className="px-2 pb-1.5 shrink-0">
               <button type="button" onClick={() => { setCustomOpen((v) => !v); setCustomError(""); }} disabled={full}
                 className="text-[10.5px] px-2 py-1 rounded-md"
@@ -566,13 +567,13 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
               {customOpen && !full && (
                 <form onSubmit={(e) => { e.preventDefault(); saveCustom(); }} className="mt-1.5 grid grid-cols-[92px_minmax(0,1fr)_auto] gap-1.5 items-center">
                   <input value={customLabel} onChange={(e) => setCustomLabel(e.target.value)} autoFocus placeholder="chip label"
-                    aria-label="Custom command chip label" className="px-2 py-1 rounded outline-none min-w-0"
-                    style={{ background: "var(--bg3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+                    aria-label="Custom command chip label" className={`min-w-0 ${INPUT}`}
+                    style={INPUT_STYLE} />
                   <input value={customCmd} onChange={(e) => setCustomCmd(e.target.value)} placeholder="command, e.g. clear"
-                    aria-label="Custom command" className="px-2 py-1 rounded outline-none min-w-0"
-                    style={{ background: "var(--bg3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+                    aria-label="Custom command" className={`min-w-0 ${INPUT}`}
+                    style={INPUT_STYLE} />
                   <button type="submit" className="px-2 py-1 rounded" style={{ color: "var(--text)", background: "color-mix(in srgb, var(--primary) 18%, transparent)" }}>Pin</button>
-                  {customError && <span className="col-span-3 text-[10px]" style={{ color: "var(--error)" }}>{customError}</span>}
+                  {customError && <span className="col-span-3 text-[10px]" style={{ color: "var(--error-ink)" }}>{customError}</span>}
                 </form>
               )}
             </div>
@@ -640,7 +641,7 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
       <div className="flex items-center gap-1 min-w-0 overflow-hidden" style={quiet ? { display: "none" } : undefined}>
         {pins.map((cmd) => (
           <span key={cmd} className="group flex items-center min-w-0 rounded-md"
-            style={{ border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+            style={{ border: EDGE }}>
             {/* onMouseDown keeps the shell focused; running the chip refocuses
                 it anyway through onRun, but unpinning does not, so both carry
                 the guard rather than only one. */}

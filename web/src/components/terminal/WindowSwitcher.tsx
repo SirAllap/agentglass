@@ -21,6 +21,7 @@ import { STATUS_WORDS } from "../../../../shared/windowStatus.ts";
 import { SearchIcon } from "../../lib/glyphIcons.tsx";
 import { Portal } from "../Portal.tsx";
 import { StatusMark, STATUS_COLOR } from "./StatusMark.tsx";
+import { INPUT, INPUT_STYLE, EDGE, LINE } from "../workspace/Chrome.tsx";
 
 /** While open, the list is re-read this often: a status is a live thing, and
  *  a row that says "working" after its agent asked a question is the one lie
@@ -147,22 +148,22 @@ export function WindowSwitcher({ open, onClose, onGone }: {
         className="fixed inset-x-0 mx-auto flex flex-col overflow-hidden rounded-xl"
         style={{
           zIndex: 2, top: "12vh", width: "min(620px, calc(100vw - 32px))", maxHeight: "64vh",
-          background: "var(--bg2)",
+          background: "var(--surface-card)",
           border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)",
           boxShadow: "0 30px 70px -20px #000",
         }}
         onKeyDown={onKey}
         role="dialog" aria-modal="true" aria-label="Go to a window">
-        <div className="px-2.5 py-2.5 shrink-0" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 10%, transparent)" }}>
+        <div className="px-2.5 py-2.5 shrink-0" style={{ borderBottom: LINE }}>
           <div className="flex items-center gap-2.5 px-2.5 py-2 rounded-md"
-            style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 14%, transparent)" }}>
-            <span className="flex" style={{ color: "var(--primary)" }}><SearchIcon size={ICON.xs} /></span>
+            style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: EDGE }}>
+            <span className="flex" style={{ color: "var(--primary-ink)" }}><SearchIcon size={ICON.xs} /></span>
             <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)}
               spellCheck={false} autoComplete="off"
               placeholder="Go to a window — its name, folder or session"
               role="combobox" aria-expanded="true" aria-controls="agx-window-list"
               aria-activedescendant={ranked[at] ? `agx-win-${ranked[at]!.windowId}` : undefined}
-              className="flex-1 min-w-0 bg-transparent outline-none text-[12.5px]" style={{ color: "var(--text)" }} />
+              className={`flex-1 min-w-0 ${INPUT}`} style={INPUT_STYLE} />
             {waiting > 0 && (
               <span className="shrink-0 text-[10.5px] tabular-nums" style={{ color: STATUS_COLOR.waiting }}>
                 {waiting} waiting
@@ -220,7 +221,7 @@ export function WindowSwitcher({ open, onClose, onGone }: {
         </div>
 
         <div className="shrink-0 flex flex-wrap gap-x-3 gap-y-0.5 px-3 py-1.5 text-[10.5px]"
-          style={{ color: "var(--text4)", borderTop: "1px solid color-mix(in srgb, var(--text) 10%, transparent)" }}>
+          style={{ color: "var(--text4)", borderTop: LINE }}>
           <span>↑↓ choose</span><span>⏎ go</span><span>Alt+1–9 jump</span><span>{chord} next waiting</span><span>esc close</span>
         </div>
       </div>

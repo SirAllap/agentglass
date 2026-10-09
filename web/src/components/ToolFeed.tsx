@@ -15,6 +15,7 @@ import type { ChatTool } from "../lib/chatStore.ts";
 import { toolFeedSummary, toolLabel } from "../lib/toolFeed.ts";
 import { CrossIcon, IconLabel } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { LINE } from "./workspace/Chrome.tsx";
 
 const MONO = { fontFamily: "var(--font-mono, ui-monospace, monospace)" };
 
@@ -40,7 +41,7 @@ export function ToolFeed({ tools, streaming, children }: {
   const tint = failed ? "var(--error)" : "var(--info)";
 
   return (
-    <div className="mb-1.5 pb-1.5" style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+    <div className="mb-1.5 pb-1.5" style={{ borderBottom: LINE }}>
       <button
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
@@ -57,10 +58,10 @@ export function ToolFeed({ tools, streaming, children }: {
             {toolLabel(latest)}
           </span>
         )}
-        {running && <span className="text-[10px] shrink-0" style={{ color: "var(--info)" }}>·</span>}
+        {running && <span className="text-[10px] shrink-0" style={{ color: "var(--info-ink)" }}>·</span>}
         {/* A failure never folds silently. */}
         {failed > 0 && (
-          <span className="text-[10px] tabular-nums ml-auto shrink-0" style={{ color: "var(--error)" }}>
+          <span className="text-[10px] tabular-nums ml-auto shrink-0" style={{ color: "var(--error-ink)" }}>
             <IconLabel icon={<CrossIcon size={ICON.xs} />}>{failed} failed</IconLabel>
           </span>
         )}

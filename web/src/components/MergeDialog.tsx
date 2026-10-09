@@ -10,6 +10,7 @@ import { api } from "../lib/api.ts";
 import { MOD_KEY } from "../lib/format.ts";
 import { WarningIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 
 /**
  * The last question before a pull request lands.
@@ -89,7 +90,7 @@ type Pending = MergeSpec & { resolve: (v: MergeChoice | null) => void };
 
 const FIELD = {
   background: "var(--bg)",
-  border: "1px solid var(--border)",
+  border: EDGE,
   color: "var(--text)",
 } as const;
 
@@ -243,13 +244,13 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
               // longer than any 520px box. Capped at the viewport so a long
               // squash body scrolls inside the dialog, not off the screen.
               className="pointer-events-auto w-full max-w-[760px] max-h-[86vh] flex flex-col rounded-xl overflow-hidden"
-              style={{ background: "var(--bg2)", border: "1px solid var(--border)", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}
+              style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}
               role="dialog" aria-modal="true" aria-label={`${how.label} #${pending.number}`}
             >
               {/* What is landing, and where. GitHub says this above its own
                   form ("wants to merge 21 commits into base from head") and it
                   is the one line that makes the rest of the dialog checkable. */}
-              <div className="px-4 py-3" style={{ borderBottom: "1px solid var(--border)" }}>
+              <div className="px-4 py-3" style={{ borderBottom: LINE }}>
                 <div className="text-[13px] font-medium flex items-baseline gap-2 flex-wrap" style={{ color: "var(--text)" }}>
                   <span>{how.label}</span>
                   <span className="text-[11px] font-normal" style={{ color: "var(--text3)" }}>#{pending.number} · {how.hint}</span>
@@ -272,7 +273,7 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
                 <div className="px-4 py-2.5 text-[11.5px] leading-relaxed flex items-start gap-2"
                   style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--warning) 10%, transparent)",
                     borderBottom: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }}>
-                  <span aria-hidden className="flex" style={{ height: 18, alignItems: "center", color: "var(--warning)" }}><WarningIcon size={ICON.sm} /></span>
+                  <span aria-hidden className="flex" style={{ height: 18, alignItems: "center", color: "var(--warning-ink)" }}><WarningIcon size={ICON.sm} /></span>
                   <span>
                     <b style={{ color: "var(--text)", fontWeight: 500 }}>
                       {pending.awaitingReview!.slice(0, 3).join(", ")}
@@ -305,8 +306,8 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
                       <input
                         ref={subjectRef} value={subject} onChange={(e) => setSubject(e.target.value)}
                         spellCheck={false}
-                        className="w-full text-[12px] px-2.5 py-1.5 rounded outline-none"
-                        style={FIELD}
+                        className={`w-full ${INPUT}`}
+                        style={INPUT_STYLE}
                       />
                     </Field>
                     <Field
@@ -348,7 +349,7 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
                     card IS, so leaving it alone writes nothing at all; moving
                     it is a deliberate pick, made once, here. */}
                 {card.kind !== "none" && (
-                  <div className="pt-2.5" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }}>
+                  <div className="pt-2.5" style={{ borderTop: LINE }}>
                     {card.kind === "loading" && (
                       <Spinner label={`Looking up ${pending.card?.label} on ClickUp…`} className="" />
                     )}
@@ -379,7 +380,7 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
                             <button onClick={allowWrites}
                               title="Let this app change cards on your ClickUp board. The same switch the Tasks panel owns."
                               className="text-[10.5px] px-2 py-1 rounded"
-                              style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>
+                              style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>
                               Allow ClickUp changes
                             </button>
                             <span className="text-[10px]" style={{ color: "var(--text4)" }}>— read-only until you do</span>
@@ -418,12 +419,12 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
                 )}
               </div>
 
-              <div className="px-4 py-2.5 flex items-center gap-2" style={{ borderTop: "1px solid var(--border)" }}>
+              <div className="px-4 py-2.5 flex items-center gap-2" style={{ borderTop: LINE }}>
                 <span className="text-[10px]" style={{ color: "var(--text4)" }}>{MOD_KEY}↵ to confirm · Esc to cancel</span>
                 <span className="ml-auto flex items-center gap-2">
                   <button onClick={() => pending.resolve(null)}
                     className="text-[11px] px-2.5 py-1 rounded"
-                    style={{ color: "var(--text2)", border: "1px solid var(--border)" }}>Cancel</button>
+                    style={{ color: "var(--text2)", border: EDGE }}>Cancel</button>
                   <button
                     onClick={() => pending.resolve(answer())}
                     disabled={!rebase && !subject.trim()}

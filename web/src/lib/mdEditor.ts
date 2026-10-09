@@ -143,3 +143,25 @@ export function newline(s: Sel): Edit | null {
   const caret = s.start + insert.length;
   return { text, start: caret, end: caret };
 }
+
+/** Move an offset off the middle of a surrogate pair. A textarea never reports
+ *  one, but a selection built from a length (start + 2) can, and cutting a pair
+ *  in half leaves two lone halves that render as replacement boxes. */
+const wholeAt = (text: string, i: number, dir: 1 | -1): number => {
+  const lo = text.charCodeAt(i - 1);
+  const hi = text.charCodeAt(i);
+  return lo >= 0xd800 && lo <= 0xdbff && hi >= 0xdc00 && hi <= 0xdfff ? i + dir : i;
+};
+
+/** Put `ins` where the caret is, in place of the selection, and leave the caret
+ *  after it. Offsets are UTF-16 units, as a textarea counts them, so an emoji
+ *  (two units, or a dozen for a ZWJ family) moves the caret by its own length. */
+export function insertText(s: Sel, ins: string): Edit {
+  const lo = Math.min(s.start, s.end);
+  const hi = Math.max(s.start, s.end);
+  // A bare caret inside a pair goes back before it; only a range grows.
+  const a = wholeAt(s.text, lo, -1);
+  const b = lo === hi ? a : wholeAt(s.text, hi, 1);
+  const at = a + ins.length;
+  return { text: s.text.slice(0, a) + ins + s.text.slice(b), start: at, end: at };
+}

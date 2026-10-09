@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { LAYER } from "../lib/layers.ts";
 import { StatusPill } from "./StatusPill.tsx";
+import { EDGE } from "./workspace/Chrome.tsx";
 
 /**
  * A themed replacement for a native <select>.
@@ -180,7 +181,7 @@ export function Select({
                   maxHeight: pos.maxHeight,
                   zIndex: 9999,
                   background: "color-mix(in srgb, var(--bg2) 97%, black)",
-                  border: "1px solid color-mix(in srgb, var(--border) 70%, transparent)",
+                  border: EDGE,
                   boxShadow: "0 24px 60px -18px rgba(0,0,0,0.7)",
                   backdropFilter: "blur(18px)",
                 }}

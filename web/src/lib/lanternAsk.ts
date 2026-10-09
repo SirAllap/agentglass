@@ -15,7 +15,7 @@
  * agent beside it — the same rule Lantern's own `open` follows.
  */
 import { api } from "./api.ts";
-import { activateTab, addTab, benchState, closeTab, openBench, setBenchRoot, tabsFor, READER_SLOT, freeSlot } from "./benchStore.ts";
+import { activateTab, addTab, benchState, closeTab, openBench, setBenchRoot, tabsFor, READER_SLOT, NOTE_SLOT, freeSlot } from "./benchStore.ts";
 
 export const LANTERN_TAB_TITLE = "lantern";
 /** The one bench tab whose close ENDS what it runs: the observer must not
@@ -33,6 +33,7 @@ async function coldSlot(root: string): Promise<number> {
     if (r.ok) for (const n of r.slots) used.add(n);
   } catch { /* tmux could not be asked; the tab list is still a floor */ }
   used.add(READER_SLOT);
+  used.add(NOTE_SLOT);
   for (let n = 1; n <= 99; n++) if (!used.has(n)) return n;
   return freeSlot(root);
 }

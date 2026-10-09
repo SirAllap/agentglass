@@ -18,6 +18,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Portal } from "./Portal.tsx";
 import { LAYER } from "../lib/layers.ts";
 import { matchPalette, paletteEntries, type GitKind, type GitRowState } from "../lib/gitActions.ts";
+import { INPUT, INPUT_STYLE, LINE } from "./workspace/Chrome.tsx";
 
 export interface PaletteRow {
   kind: GitKind;
@@ -94,12 +95,8 @@ export function GitPalette({ rows, onClose }: { rows: PaletteRow[]; onClose: () 
         }}>
         <input ref={inputRef} value={q} onChange={(e) => { setQ(e.target.value); setCursor(0); setArming(null); }}
           placeholder="branch, tag, stash, worktree — or what you want to do to one"
-          className="px-3 py-2.5 text-[12px] outline-none"
-          style={{
-            background: "transparent", color: "var(--text)",
-            borderBottom: "1px solid color-mix(in srgb, var(--text) 14%, transparent)",
-            fontFamily: "var(--font-mono, ui-monospace, monospace)",
-          }} />
+          className={INPUT}
+          style={{ ...INPUT_STYLE, fontFamily: "var(--font-mono, ui-monospace, monospace)" }} />
         <div className="agx-scroll overflow-y-auto overflow-x-hidden py-1">
           {!hits.length && (
             <div className="px-3 py-3 text-[11px]" style={{ color: "var(--text3)" }}>
@@ -124,7 +121,7 @@ export function GitPalette({ rows, onClose }: { rows: PaletteRow[]; onClose: () 
           ))}
         </div>
         <div className="px-3 py-1.5 text-[9.5px] flex gap-3"
-          style={{ color: "var(--text3)", borderTop: "1px solid color-mix(in srgb, var(--text) 12%, transparent)" }}>
+          style={{ color: "var(--text3)", borderTop: LINE }}>
           <span>↑↓ move</span><span>↵ run</span><span>esc close</span>
           <span className="ml-auto">{hits.length} of {entries.length}</span>
         </div>

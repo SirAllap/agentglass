@@ -557,7 +557,10 @@ export const ptyWsUrl = (root: string, cols: number, rows: number, view?: string
    * can be reattached tomorrow and no client can ever point at a session that
    * is not its own. 0 means "not the bench" — see engineBenchArgv.
    */
-  bench = 0) =>
+  bench = 0,
+  /** This bench tab is the checkout's note, in Neovim. No path: the server
+   *  derives the note's file itself. */
+  note = false) =>
   withToken(`${SERVER.replace(/^http/, "ws")}/terminal/pty?root=${encodeURIComponent(root)}&cols=${cols}&rows=${rows}`
     // A single-use ticket for an agent to start in this pane — never the prompt
     // itself, which is kilobytes and has no business in a URL. See
@@ -573,6 +576,7 @@ export const ptyWsUrl = (root: string, cols: number, rows: number, view?: string
     + (view && edit ? "&edit=1" : "")
     // A tab of the bench, which is a session of its own on the engine.
     + (bench ? `&bench=${Math.floor(bench)}` : "")
+    + (bench && note ? "&note=1" : "")
     + (view && line > 1 ? `&line=${Math.floor(line)}` : "")
     + (fresh ? "&fresh=1" : "")
     + (isConsole ? "&console=1" : ""));
@@ -1783,7 +1787,7 @@ const realApi = {
   // --- the floating bench ---
   /** This checkout's note. Empty is the normal state, not an error. */
   benchNote: (root: string) =>
-    get<{ ok: boolean; text: string; at?: number; error?: string }>(`/bench/note?root=${encodeURIComponent(root)}`),
+    get<{ ok: boolean; text: string; at?: number; error?: string; nvim?: boolean }>(`/bench/note?root=${encodeURIComponent(root)}`),
   benchNoteSave: (root: string, text: string) =>
     post<{ ok: boolean; text: string; at?: number; error?: string }>("/bench/note", { root, text }),
   /** Which of this checkout's bench tabs still have a session on the engine. */

@@ -362,13 +362,14 @@ export async function pollCards(now = Date.now()): Promise<CardNote[]> {
 /**
  * How often to look.
  *
- * Three minutes. The call takes about six seconds and costs one request
- * against a budget of a hundred a minute, so the ceiling is not the rate limit
- * — it is that a notification which arrives twenty minutes late is not a
- * notification. Three is inside the window where somebody is still on the same
- * thought.
+ * Six minutes. It was three; each look is two requests (what changed for you,
+ * what changed on your boards) plus a comment read per changed card, so 40 an
+ * hour, all of it while nobody was looking. Six halves that. The ceiling is
+ * that a notification which arrives twenty minutes late is not a notification;
+ * six is still inside the window where somebody is on the same thought, and
+ * opening the Tasks panel or pressing Refresh reads the boards at once anyway.
  */
-export const WATCH_MS = 3 * 60_000;
+export const WATCH_MS = 6 * 60_000;
 
 let timer: ReturnType<typeof setInterval> | null = null;
 

@@ -43,12 +43,12 @@ describe("the list rail", () => {
 
   it("says so when the filter matches nothing", () => {
     // An empty column with a full filter box reads as a broken list.
-    expect(src).toContain("No list by that name.");
+    expect(src).toContain("No list matches");
   });
 
   it("folds, and is remembered folded", () => {
     expect(src).toContain('const RAIL_KEY = "agentglass.clickup.listRail";');
-    expect(src).toContain("width: railOpen ? 214 : 34");
+    expect(src).toContain("width: railOpen ? railW : 34");
   });
 
   it("opens by default, including for somebody who has never set it", () => {
@@ -60,14 +60,12 @@ describe("the list rail", () => {
   it("keeps the built-in board marked", () => {
     /* Beside four board names it reads as a fifth board somebody added, and it
        is the one that behaves differently — no address, ten seconds not one.
-       Asserted on `railRow` rather than on the rail's markup since the rows
-       moved into it: one renderer for the grouped and ungrouped halves, so
-       they cannot drift. */
-    const from = src.indexOf("const railRow = (v: SavedView, depth: number)");
-    const row = src.slice(from, src.indexOf("\n  );", from));
+       One renderer (`railItem`) draws every row, so the halves cannot drift. */
+    const from = src.indexOf("const railItem = (r: RailRow, i: number)");
+    const row = src.slice(from, src.indexOf("\n  };\n", from));
     expect(from).toBeGreaterThan(-1);
-    expect(row).toContain("v.builtin && (");
-    expect(row).toContain("wanted === v.id && <span");
+    expect(row).toContain('r.kind === "builtin"');
+    expect(row).toContain("busy &&");
   });
 
   it("draws ClickUp's own shape: folder, then the lists in it", () => {
@@ -75,9 +73,10 @@ describe("the list rail", () => {
        folder was only known once it had been opened. A folder can be added
        whole now, so its lists arrive knowing where they live. */
     expect(src).not.toContain("Deliberately FLAT.");
-    const rail = railSource();
-    expect(rail).toContain("railGroups.loose.map");
-    expect(rail).toContain("railGroups.groups.map");
+    const from = src.indexOf("const railRows = useMemo");
+    const rows = src.slice(from, src.indexOf("}, [boards, railGroups", from));
+    expect(rows).toContain("railGroups.loose");
+    expect(rows).toContain("railGroups.groups");
     // Folded shut is remembered, or a sidebar of twelve open folders is the
     // flat list again.
     expect(src).toContain('const RAIL_SHUT_KEY = "agentglass.clickup.listRail.shut";');
@@ -87,17 +86,19 @@ describe("the list rail", () => {
     /* A heading inferred from a pasted list's breadcrumb is not a saved folder:
        there is nothing to take off, and offering it would be a menu item that
        cannot work. */
-    const rail = railSource();
-    expect(rail).toContain("if (!savedFolder) return;");
+    const from = src.indexOf("const railItem = (r: RailRow, i: number)");
+    const row = src.slice(from, src.indexOf("\n  };\n", from));
+    expect(row).toContain("if (r.folder) {");
   });
 
   it("keeps Looked up beside the lists, not inside one", () => {
     // A card from another list sitting in somebody's sprint reads as being IN
     // it.
-    const rail = railSource();
-    expect(rail).toContain("Looked up");
-    // Separated from the boards above it rather than filed among them.
-    expect(rail).toContain("1px dashed");
+    const from = src.indexOf("const railRows = useMemo");
+    const rows = src.slice(from, src.indexOf("}, [boards, railGroups", from));
+    // The last row of the tree, at the top level, after every space and folder.
+    expect(rows).toContain('kind: "looked"');
+    expect(rows.indexOf('kind: "looked"')).toBeGreaterThan(rows.indexOf('kind: "space"'));
   });
 
 

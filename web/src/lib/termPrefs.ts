@@ -118,6 +118,7 @@ const SCROLLBACK_KEY = "agentglass-term-scrollback";
 const WORDSEP_KEY = "agentglass-term-wordsep";
 const COPY_ON_SELECT_KEY = "agentglass-term-copy-on-select";
 const RIGHT_CLICK_PASTE_KEY = "agentglass-term-right-click-paste";
+const NOTE_EDITOR_KEY = "agentglass-note-editor";
 const SIZE_KEY = "agentglass-term-size";
 const CURSOR_KEY = "agentglass-term-cursor";
 const LINE_HEIGHT_KEY = "agentglass-term-line-height";
@@ -162,6 +163,30 @@ export const currentWordSeparators = (): string => {
  * a machine where the clipboard is shared with something that reacts to it.
  */
 export const copyOnSelect = (): boolean => read(COPY_ON_SELECT_KEY) !== "0";
+
+/**
+ * What edits a checkout's note. Built-in is the textarea and stays the default;
+ * Neovim runs `nvim` on the same file in a bench terminal.
+ */
+export type NoteEditor = "builtin" | "nvim";
+export const NOTE_EDITORS: { v: NoteEditor; label: string }[] = [
+  { v: "builtin", label: "Built-in" },
+  { v: "nvim", label: "Neovim" },
+];
+export const currentNoteEditor = (): NoteEditor => (read(NOTE_EDITOR_KEY) === "nvim" ? "nvim" : "builtin");
+export function setNoteEditor(v: NoteEditor): void { write(NOTE_EDITOR_KEY, v === "nvim" ? "nvim" : ""); }
+
+/**
+ * Which editor a note tab opens, given the preference and whether the server
+ * found `nvim` (null: not asked yet). Asking for Neovim without it is a
+ * fallback to the textarea, never a dead terminal; `wait` holds the tab until
+ * the answer is in so it does not start the wrong editor and swap.
+ */
+export function noteMode(pref: NoteEditor, nvim: boolean | null): { mode: "builtin" | "nvim" | "wait"; fellBack: boolean } {
+  if (pref !== "nvim") return { mode: "builtin", fellBack: false };
+  if (nvim === null) return { mode: "wait", fellBack: false };
+  return nvim ? { mode: "nvim", fellBack: false } : { mode: "builtin", fellBack: true };
+}
 
 /** Right-click pastes instead of opening the context menu. Off by default: the
  *  menu is what a right click does everywhere else in this app. */

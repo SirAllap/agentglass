@@ -21,7 +21,7 @@
  *     on this machine — see inboxMarks.ts — rather than left out and sending
  *     somebody to a browser for them.
  */
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { InboxItem } from "../../../../shared/types.ts";
 import { api } from "../../lib/api.ts";
 import { byDay, facetCounts, facetOrder, FACETS, filterInbox, inFacet, reasonLabel, searchInbox } from "../../lib/ghInbox.ts";
@@ -34,8 +34,26 @@ import { Spinner } from "../Spinner.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { CommentIcon, DoneIcon, EyeIcon, FlagIcon, HandIcon, InboxIcon, UserIcon } from "../../lib/glyphIcons.tsx";
 import { GitIcon } from "../workspace/icons.tsx";
+import { RefreshButton, INPUT, INPUT_STYLE, EDGE, LINE } from "../workspace/Chrome.tsx";
+import { Optimistic } from "../../lib/prOptimistic.ts";
 
-const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
+/** The list with the given threads set read. A pure patch, kept outside the
+ *  component so the layer it draws — see `Optimistic` — can be exercised
+ *  without mounting anything: `unread` is the one field GitHub's "read" call
+ *  changes, and setting it (never toggling it) is what makes a layer drawn
+ *  twice over the same thread harmless. */
+export const markReadPatch = (ids: string[]) => (items: InboxItem[]): InboxItem[] => {
+  if (!ids.length) return items;
+  const set = new Set(ids);
+  let changed = false;
+  const next = items.map((n) => {
+    if (!set.has(n.id) || !n.unread) return n;
+    changed = true;
+    return { ...n, unread: false };
+  });
+  return changed ? next : items;
+};
+
 
 /** A pull request, an issue, or something with no page of its own here. */
 function Kind({ type }: { type: string }) {
@@ -124,17 +142,32 @@ export function Inbox({ repo, onFlash, onUnread }: {
      them — so the list subscribes rather than copying them into state. */
   const marksTick = useSyncExternalStore(subscribeMarks, () => `${savedIds().length}:${doneIds().length}`, () => "0:0");
 
+  /* The "Read" tick is drawn at once and taken back only if GitHub refuses it —
+     the same layer-over-the-last-answer pattern as the pull request panel's
+     reactions (`prOptimistic.ts`). `onFlash` is read through a ref so the
+     Optimistic instance, and the layers it is holding, survive a re-render
+     that hands this component a new closure for it. */
+  const onFlashRef = useRef(onFlash);
+  onFlashRef.current = onFlash;
+  const [, bumpOptimistic] = useState(0);
+  const optimistic = useMemo(() => new Optimistic<InboxItem[]>({
+    onChange: () => bumpOptimistic((t) => t + 1),
+    onFail: (text) => onFlashRef.current?.(false, text),
+  }), []);
+
   const load = useCallback((force = false) => {
     setBusy(true);
+    const ticket = optimistic.readStarted();
     void api.prsInbox(force)
       .then((r) => {
         setRaw(r.items ?? []);
         setAt(r.at ?? Date.now());
         setErr(r.ok ? (r.error ?? "") : (r.error ?? "GitHub did not answer"));
+        optimistic.readLanded(ticket);
       })
       .catch(() => setErr("Could not reach the server"))
       .finally(() => setBusy(false));
-  }, []);
+  }, [optimistic]);
 
   useEffect(() => { load(); }, [load]);
   /* Polled while it is on screen, at GitHub's own asking distance for this
@@ -144,7 +177,7 @@ export function Inbox({ repo, onFlash, onUnread }: {
     return () => clearInterval(timer);
   }, [load]);
 
-  const all = raw ?? [];
+  const all = optimistic.view(raw ?? []);
   /** Everything on this shelf, in this repository unless asked otherwise. Every
    *  count below is computed from here, so a chip says what pressing it does. */
   const shelved = useMemo(
@@ -174,9 +207,23 @@ export function Inbox({ repo, onFlash, onUnread }: {
 
   const act = async (ids: string[], what: "read" | "unsubscribe") => {
     if (!ids.length) return;
+    if (what === "read") {
+      // Drawn on the press: a bold row goes plain at once, and a refusal takes
+      // it back through onFail rather than a re-read of the whole inbox — see
+      // markReadPatch and prOptimistic.ts. Each thread is its own lane so two
+      // "Read" presses on the same row cannot land out of order.
+      setPicked(new Set());
+      await Promise.all(ids.map((id) => optimistic.run({
+        patch: markReadPatch([id]),
+        send: () => api.prsInboxAct({ act: "read", id }),
+        failText: "Could not mark it read",
+        lane: id,
+      })));
+      return;
+    }
     setBusy(true);
     for (const id of ids) {
-      const r = await api.prsInboxAct(what === "read" ? { act: "read", id } : { act: "unsubscribe", id });
+      const r = await api.prsInboxAct({ act: "unsubscribe", id });
       if (!r.ok) onFlash?.(false, r.error ?? "GitHub refused that");
     }
     setPicked(new Set());
@@ -187,8 +234,9 @@ export function Inbox({ repo, onFlash, onUnread }: {
     if (n.number == null) return;
     // Reading it here is reading it: GitHub marks a thread read when you open
     // the page, and a row that stays bold after you have dealt with it is how
-    // an inbox stops meaning anything.
-    if (n.unread) void api.prsInboxAct({ act: "read", id: n.id }).then(() => load(true));
+    // an inbox stops meaning anything. Goes through `act` so the tick is drawn
+    // at once instead of waiting on this same call.
+    if (n.unread) void act([n.id], "read");
     /* An issue opens in Tasks, which is where this app keeps them; a pull
        request in this very panel. `openIssue` takes the number alone — issues
        are addressed by the checkout on screen, not by `owner/name`. */
@@ -204,7 +252,7 @@ export function Inbox({ repo, onFlash, onUnread }: {
     <div className="flex flex-1 min-h-0">
       {/* The rail: shelves, then the named filters, then the repositories. */}
       <div className="shrink-0 flex flex-col gap-3 px-2 py-2 overflow-y-auto agx-scroll"
-        style={{ width: 190, borderRight: edge(11) }}>
+        style={{ width: 190, borderRight: LINE }}>
         <div className="flex flex-col gap-0.5">
           <Rail mark={<InboxIcon size={ICON.xs} />} label="Inbox" n={unread} on={shelf === "inbox"} hint="Everything not finished" onClick={() => { setShelf("inbox"); setPicked(new Set()); }} />
           <Rail mark={<FlagIcon size={ICON.xs} filled />} label="Saved" n={onShelf(all, "saved").length} on={shelf === "saved"} hint="Kept by you, on this machine — GitHub's API has no shelf for it" onClick={() => { setShelf("saved"); setPicked(new Set()); }} />
@@ -238,7 +286,7 @@ export function Inbox({ repo, onFlash, onUnread }: {
         {/* The one bulk verb GitHub gives that is not per-thread. Per repository
             rather than global, because "all of them everywhere" is a press
             nobody can take back. */}
-        <button className="agx-btn rounded-md px-2 py-1 text-[10.5px] mt-auto" style={{ color: "var(--text3)", border: edge(14) }}
+        <button className="agx-btn rounded-md px-2 py-1 text-[10.5px] mt-auto" style={{ color: "var(--text3)", border: EDGE }}
           disabled={busy || !repo}
           title={`Mark everything in ${repo} as read on GitHub`}
           onClick={async () => {
@@ -260,8 +308,8 @@ export function Inbox({ repo, onFlash, onUnread }: {
 
       {/* The list. */}
       <div className="flex-1 min-w-0 flex flex-col min-h-0">
-        <div className="flex items-center gap-2 px-2.5 py-1.5 shrink-0 flex-wrap" style={{ borderBottom: edge(11) }}>
-          <div className="flex rounded-md overflow-hidden shrink-0" style={{ border: edge(14) }}>
+        <div className="flex items-center gap-2 px-2.5 py-1.5 shrink-0 flex-wrap" style={{ borderBottom: LINE }}>
+          <div className="flex rounded-md overflow-hidden shrink-0" style={{ border: EDGE }}>
             {[["All", false], ["Unread", true]].map(([label, on]) => (
               <button key={String(label)} onClick={() => setUnreadOnly(on as boolean)}
                 className="agx-btn text-[10.5px] px-2 py-0.5"
@@ -273,21 +321,19 @@ export function Inbox({ repo, onFlash, onUnread }: {
           </div>
           <input value={q} onChange={(e) => setQ(e.target.value)} spellCheck={false}
             placeholder="Filter these — title, repo, or #number"
-            className="text-[11px] px-2 py-1 rounded-md outline-none flex-1 min-w-[160px]"
-            style={{ background: "var(--bg2)", color: "var(--text)", border: `1px solid ${q ? "var(--primary)" : "color-mix(in srgb, var(--text) 14%, transparent)"}` }} />
+            className={`flex-1 min-w-[160px] ${INPUT}`}
+            style={q ? { ...INPUT_STYLE, border: "1px solid var(--primary)" } : INPUT_STYLE} />
           <button onClick={() => setNewest((v) => !v)} className="agx-btn rounded-md px-2 py-1 text-[10.5px] shrink-0"
-            style={{ color: "var(--text3)", border: edge(14) }}
+            style={{ color: "var(--text3)", border: EDGE }}
             title="Turn the order round">
             {newest ? "Newest first" : "Oldest first"}
           </button>
-          <button onClick={() => load(true)} disabled={busy} className="agx-btn rounded-md px-2 py-1 text-[10.5px] shrink-0"
-            style={{ color: "var(--text3)", border: edge(14) }} title={at ? `Read ${fmtAgo(at)}` : "Read the inbox again"}>
-            {busy ? "Reading…" : "Refresh"}
-          </button>
+          <RefreshButton onRefresh={() => load(true)} busy={busy}
+            title={at ? `Read ${fmtAgo(at)}` : "Read the inbox again"} />
         </div>
 
         {/* Select all, and what you can do to what is selected. */}
-        <div className="flex items-center gap-2 px-2.5 py-1.5 shrink-0" style={{ borderBottom: edge(11) }}>
+        <div className="flex items-center gap-2 px-2.5 py-1.5 shrink-0" style={{ borderBottom: LINE }}>
           <button className="agx-btn flex items-center gap-2 text-[10.5px] rounded px-1 py-0.5"
             style={{ color: "var(--text2)" }}
             onClick={() => setPicked(allPicked ? new Set() : new Set(rows.map((n) => n.id)))}>
@@ -297,19 +343,19 @@ export function Inbox({ repo, onFlash, onUnread }: {
             <>
               <span className="text-[10.5px] tabular-nums" style={{ color: "var(--text3)" }}>{picked.size} chosen</span>
               <span aria-hidden style={{ width: 1, height: 14, background: "color-mix(in srgb, var(--text) 14%, transparent)" }} />
-              <button className="agx-btn rounded px-2 py-0.5 text-[10.5px]" style={{ color: "var(--text2)", border: edge(14) }}
+              <button className="agx-btn rounded px-2 py-0.5 text-[10.5px]" style={{ color: "var(--text2)", border: EDGE }}
                 disabled={busy} onClick={() => void act([...picked], "read")}>Mark read</button>
-              <button className="agx-btn rounded px-2 py-0.5 text-[10.5px]" style={{ color: "var(--text2)", border: edge(14) }}
+              <button className="agx-btn rounded px-2 py-0.5 text-[10.5px]" style={{ color: "var(--text2)", border: EDGE }}
                 onClick={() => { for (const id of picked) setSaved(id, true); setPicked(new Set()); }}>Save</button>
-              <button className="agx-btn rounded px-2 py-0.5 text-[10.5px]" style={{ color: "var(--text2)", border: edge(14) }}
+              <button className="agx-btn rounded px-2 py-0.5 text-[10.5px]" style={{ color: "var(--text2)", border: EDGE }}
                 disabled={busy}
                 onClick={() => { for (const id of picked) setDone(id, true); void act([...picked], "read"); }}>Done</button>
-              <button className="agx-btn rounded px-2 py-0.5 text-[10.5px]" style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }}
+              <button className="agx-btn rounded px-2 py-0.5 text-[10.5px]" style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }}
                 disabled={busy} onClick={() => void act([...picked], "unsubscribe")}>Unsubscribe</button>
             </>
           )}
           <span className="flex-1" />
-          {err && <span className="text-[10.5px]" style={{ color: "var(--warning)" }} title={err}>GitHub: {err.slice(0, 60)}</span>}
+          {err && <span className="text-[10.5px]" style={{ color: "var(--warning-ink)" }} title={err}>GitHub: {err.slice(0, 60)}</span>}
         </div>
 
         <div className="flex-1 min-h-0 overflow-y-auto agx-scroll">
@@ -322,10 +368,10 @@ export function Inbox({ repo, onFlash, onUnread }: {
           {byDay(rows).map((group) => (
             <div key={group.label}>
               <div className="px-2.5 py-1 text-[9.5px] uppercase tracking-wider sticky top-0 z-10"
-                style={{ color: "var(--text4)", background: "var(--bg)", borderBottom: edge(8) }}>{group.label}</div>
+                style={{ color: "var(--text4)", background: "var(--bg)", borderBottom: LINE }}>{group.label}</div>
               {group.items.map((n) => (
                 <div key={n.id} className="group flex items-start gap-2 px-2.5 py-2"
-                  style={{ borderBottom: edge(8), background: n.unread ? "color-mix(in srgb, var(--primary) 5%, transparent)" : "transparent" }}>
+                  style={{ borderBottom: LINE, background: n.unread ? "color-mix(in srgb, var(--primary) 5%, transparent)" : "transparent" }}>
                   <button className="agx-btn mt-0.5 shrink-0" title={picked.has(n.id) ? "Unpick" : "Pick"}
                     onClick={() => setPicked((s) => { const next = new Set(s); if (next.has(n.id)) next.delete(n.id); else next.add(n.id); return next; })}>
                     <Tick on={picked.has(n.id)} />
@@ -344,7 +390,7 @@ export function Inbox({ repo, onFlash, onUnread }: {
                     </div>
                   </button>
                   <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-md whitespace-nowrap"
-                    style={{ color: "var(--text3)", border: edge(12) }}>{reasonLabel(n.reason)}</span>
+                    style={{ color: "var(--text3)", border: EDGE }}>{reasonLabel(n.reason)}</span>
                   <span className="shrink-0 text-[10px] tabular-nums w-[52px] text-right" style={{ color: "var(--text4)" }}
                     title={new Date(n.at).toLocaleString()}>{fmtAgo(n.at)}</span>
                   {/* Per-row verbs, quiet until the row is pointed at. */}

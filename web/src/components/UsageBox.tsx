@@ -2,7 +2,7 @@ import { useSyncExternalStore } from "react";
 import { Panel } from "./Panel.tsx";
 import {
   subscribeProviderUsage, providerUsage, usageLoaded,
-  usedColor, resetLabel, ageLabel,
+  usedColor, usedTextColor, resetLabel, ageLabel,
 } from "../lib/usageStore.ts";
 import type { ProviderUsage, QuotaWindow } from "../../../shared/types.ts";
 
@@ -17,6 +17,7 @@ import type { ProviderUsage, QuotaWindow } from "../../../shared/types.ts";
  */
 function Meter({ label, used, resets }: { label: string; used: number; resets: string | null }) {
   const color = usedColor(used);
+  const ink = usedTextColor(used);
   const pct = Math.max(0, Math.min(100, used));
   return (
     <div className="flex items-center gap-2 min-w-0"
@@ -38,7 +39,7 @@ function Meter({ label, used, resets }: { label: string; used: number; resets: s
           that is closest to running out, and that one is the headline, where
           it gets the full "resets Wed 3:00 PM" rather than two cramped
           characters. The rest keep it in the row's tooltip. */}
-      <span className="text-[11px] font-semibold tabular-nums shrink-0 w-8 text-right" style={{ color }}>{used}%</span>
+      <span className="text-[11px] font-semibold tabular-nums shrink-0 w-8 text-right" style={{ color: ink }}>{used}%</span>
     </div>
   );
 }
@@ -117,7 +118,7 @@ export function tightestWindow(rows: ProviderUsage[] | null): { provider: string
 
 /** The headline: one number, big, in the colour its level has earned. */
 function Headline({ provider, window: w }: { provider: string; window: QuotaWindow }) {
-  const color = usedColor(w.usedPercent);
+  const color = usedTextColor(w.usedPercent);
   return (
     <div className="shrink-0 pb-2.5" style={{ borderBottom: DIVIDER }}>
       <div className="text-[9px] uppercase tracking-[0.16em] t-dim2">Closest to its limit</div>

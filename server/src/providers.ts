@@ -423,6 +423,9 @@ interface RefreshOutcome { ok: boolean; error?: string; unauthorised?: boolean }
    because "one at a time per board" and "Refresh must actually try" are
    different promises and the second one was quietly losing to the first. */
 const inFlight = new Map<string, { p: Promise<RefreshOutcome>; forced: boolean }>();
+/** When each board's list meta (statuses, fields, breadcrumb) was last read. */
+const metaAt = new Map<string, number>();
+export const META_TTL_MS = 30 * 60_000;
 
 /**
  * What to do after a board fails to read.
@@ -437,7 +440,7 @@ const cooling = new Map<string, { until: number; tries: number; error?: string; 
 const COOL_MIN = 60_000;
 const COOL_MAX = 300_000;
 
-export function __resetViewCache(): void { inFlight.clear(); cooling.clear(); }
+export function __resetViewCache(): void { inFlight.clear(); cooling.clear(); metaAt.clear(); }
 
 /**
  * One board's tasks: what we have now, corrected behind you.
@@ -680,9 +683,21 @@ async function doRefresh(view: SavedView, token: string, force: boolean): Promis
      these caches were written, so every board held one of them and the blurb
      never appeared until something else forced a re-read. A field that only
      shows up for people with an empty cache is a field that looks broken. */
-  if (view.listId && (!statuses.length || !place || description === undefined || force)) {
+  /*
+     * `force` used to be in the condition, so every Refresh press re-read the
+     * list and its fields: 2 of the 4 requests a press cost, for statuses that
+     * change about never (measured on a mock list). Refresh is for the
+     * TASKS. The list's own shape is re-read after META_TTL_MS, or on the first
+     * read after the process starts, whichever comes first.
+     *
+     * The ceiling: a status added or a field renamed in ClickUp shows up on
+     * the board within 30 minutes, not on the next Refresh.
+     */
+  const metaStale = Date.now() - (metaAt.get(view.id) ?? 0) > META_TTL_MS;
+  if (view.listId && (!statuses.length || !place || description === undefined || metaStale)) {
     const l = await listMeta(token, view.listId);
     if (l.ok && l.data) {
+      metaAt.set(view.id, Date.now());
       statuses = l.data.statuses; fields = l.data.fields; place = l.data.place;
       // Assigned rather than merged: a blurb that was deleted in ClickUp has to
       // be able to disappear here too.

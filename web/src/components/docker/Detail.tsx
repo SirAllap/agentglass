@@ -18,6 +18,7 @@ import { CODE_FONT_STYLE } from "../diff/DiffLines.tsx";
 import { Select } from "../Select.tsx";
 import { LogView } from "./LogView.tsx";
 import { healthLabel, healthTint, ownerTitle, portLabel, portUrl } from "../../lib/dockerRow.ts";
+import { INPUT, INPUT_STYLE, EDGE } from "../workspace/Chrome.tsx";
 
 export type DetailSection = "env" | "config" | "top" | "compare";
 
@@ -97,8 +98,8 @@ export function Detail({
           {c.owner && (
             <span className="text-[9.5px] px-1.5 py-0.5 rounded-md shrink-0" title={ownerTitle(c.owner)}
               style={c.owner.foreign
-                ? { color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }
-                : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                ? { color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }
+                : { color: "var(--text3)", border: EDGE }}>
               {c.owner.worktree}{c.owner.branch ? ` · ${c.owner.branch}` : ""}
             </span>
           )}
@@ -107,13 +108,13 @@ export function Detail({
                 would have typed it into. A second, container-only terminal
                 would be a second set of bugs for no extra reach. */}
             {writeEnabled && c.state === "running" && (
-              <button onClick={onExec} className="text-[10px] px-2 py-0.5 rounded min-h-[20px]"
+              <button onClick={onExec} className="text-[10px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg"
                 style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}
                 title={`Open a shell inside ${c.name}`}>Exec</button>
             )}
             <Select value={String(tail)} onChange={(v) => onTail(Number(v))} align="right"
-              className="text-[10px] px-1 py-0.5 rounded outline-none"
-              style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}
+              className="text-[10px] px-2.5 min-h-[28px] rounded-lg outline-none"
+              style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", color: "var(--text2)", border: EDGE }}
               options={[100, 200, 400, 1000, 2000].map((n) => ({ value: String(n), label: `${n} lines` }))} />
           </div>
         </div>
@@ -126,7 +127,7 @@ export function Detail({
           <Fact label="up" title={c.startedAt ? `started ${c.startedAt}` : c.status}>{c.uptime || c.status}</Fact>
           {!!c.restarts && (
             <Fact label="restarts" title="Docker has restarted this container this many times since it was created">
-              <span style={{ color: "var(--warning)" }}>{c.restarts}</span>
+              <span style={{ color: "var(--warning-ink)" }}>{c.restarts}</span>
             </Fact>
           )}
           {stat && c.state === "running" && (
@@ -140,12 +141,12 @@ export function Detail({
                 return url ? (
                   <button key={i} onClick={() => onOpenPort(url)} title={`Open ${url}`}
                     className="text-[9.5px] px-1.5 py-0.5 rounded-md min-h-[20px]"
-                    style={{ color: "var(--info)", border: "1px solid color-mix(in srgb, var(--info) 40%, transparent)", background: "color-mix(in srgb, var(--info) 8%, transparent)" }}>
+                    style={{ color: "var(--info-ink)", border: "1px solid color-mix(in srgb, var(--info) 40%, transparent)", background: "color-mix(in srgb, var(--info) 8%, transparent)" }}>
                     {portLabel(p)} ↗
                   </button>
                 ) : (
                   <span key={i} className="text-[9.5px] px-1.5 py-0.5 rounded-md" title={p.host === null ? "Exposed by the image, not published to the host" : "Published, but not a web port"}
-                    style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                    style={{ color: "var(--text3)", border: EDGE }}>
                     {portLabel(p)}
                   </span>
                 );
@@ -157,7 +158,7 @@ export function Detail({
         {/* The probe's own words, where they belong: next to the state they
             explain. Reading this used to mean going to `docker inspect`. */}
         {c.health === "unhealthy" && c.healthError && (
-          <div className="text-[10px] truncate" style={{ color: "var(--error)" }} title={c.healthError}>{c.healthError}</div>
+          <div className="text-[10px] truncate" style={{ color: "var(--error-ink)" }} title={c.healthError}>{c.healthError}</div>
         )}
       </div>
 
@@ -169,8 +170,8 @@ export function Detail({
         ) : (
           <>
             <input value={envQ} onChange={(e) => setEnvQ(e.target.value)} placeholder="find a variable"
-              className="text-[10px] px-2 py-0.5 rounded-md outline-none w-full max-w-[280px] my-1"
-              style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} />
+              className={`w-full max-w-[280px] my-1 ${INPUT}`}
+              style={INPUT_STYLE} />
             <div className="text-[11px] leading-[1.6]" style={CODE_FONT_STYLE}>
               {shownEnv!.map((line, i) => {
                 const eq = line.indexOf("=");
@@ -246,7 +247,7 @@ function EnvCompare({ c, others }: { c: DockerContainer; others: DockerContainer
       <div className="flex items-center gap-2">
         <Select value={against} onChange={compare}
           className="text-[10px] px-1.5 py-0.5 rounded outline-none max-w-[240px]"
-          style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}
+          style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", color: "var(--text2)", border: EDGE }}
           options={[{ value: "", label: "compare with…" }, ...candidates.map((o) => ({
             value: o.id,
             // The worktree is the thing that makes two identically-named
@@ -264,7 +265,7 @@ function EnvCompare({ c, others }: { c: DockerContainer; others: DockerContainer
         )}
       </div>
 
-      {err && <div className="text-[10.5px]" style={{ color: "var(--warning)" }}>{err}</div>}
+      {err && <div className="text-[10.5px]" style={{ color: "var(--warning-ink)" }}>{err}</div>}
       {rows && !differ.length && <div className="text-[10.5px] t-dim2">Identical, variable for variable.</div>}
 
       {shown.map((r) => (
@@ -279,7 +280,7 @@ function EnvCompare({ c, others }: { c: DockerContainer; others: DockerContainer
                  does. */
               ? <span className="t-dim2">{r.change === "same" ? "•••• identical" : "•••• differs"}</span>
               : r.change === "changed"
-                ? <><span style={{ color: "var(--error)" }}>{r.a || "∅"}</span> → <span style={{ color: "var(--success)" }}>{r.b || "∅"}</span></>
+                ? <><span style={{ color: "var(--error-ink)" }}>{r.a || "∅"}</span> → <span style={{ color: "var(--success-ink)" }}>{r.b || "∅"}</span></>
                 : <span>{r.a ?? r.b}</span>}
           </span>
         </div>

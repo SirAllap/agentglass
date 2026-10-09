@@ -5,13 +5,17 @@ import type { WindowPace } from "../lib/usagePace.ts";
 import { EQ_SUFFIX, fmtTokens } from "../lib/format.ts";
 import { dayCells, lastWeek, stripState, STRIP_HEIGHT, warmDayStrip } from "../lib/dayStrip.ts";
 
-/** The verdict wears the colour of what to do about it, not of how full the bar is. */
+/** The verdict wears the colour of what to do about it, not of how full the bar is.
+ *  This is TEXT sitting directly on the popover's own surface, not a chip
+ *  fill — so it reads through the `-ink` variant `inkTints` already computes,
+ *  never the raw tint (which is picked to sit on a dark chip fill and fails
+ *  4.5:1 read as plain text on a light theme's cream). */
 const VERDICT_COLOR: Record<Verdict, string> = {
-  room: "var(--success)",
+  room: "var(--success-ink)",
   "on-pace": "var(--text2)",
-  "cut-back": "var(--warning)",
-  "used-up": "var(--error)",
-  over: "var(--error)",
+  "cut-back": "var(--warning-ink)",
+  "used-up": "var(--error-ink)",
+  over: "var(--error-ink)",
   "day-off": "var(--text4)",
 };
 

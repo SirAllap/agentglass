@@ -35,7 +35,7 @@
  */
 import type { CSSProperties, ReactNode } from "react";
 import { HIT, ICON } from "../../lib/iconSize.ts";
-import { CHIP } from "../workspace/Chrome.tsx";
+import { Button, CHIP, LINE } from "../workspace/Chrome.tsx";
 
 export const edge = (pct: number): string => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 export const wash = (token: string, pct: number): string => `color-mix(in srgb, var(${token}) ${pct}%, transparent)`;
@@ -263,19 +263,17 @@ export function Chip({ tone = "neutral", children, title, clip }: {
   );
 }
 
-/** The one action a card draws. Hidden until hover or cursor, in its own lane. */
+/** The one action a card draws. Hidden until hover or cursor, in its own lane.
+ *  A `Button` at the `compact` rung: it sits inside a card row. */
 export function RowAction({ label, danger, disabled, onClick, title }: {
   label: string; danger?: boolean; disabled?: boolean; onClick: (e: React.MouseEvent) => void; title?: string;
 }) {
   return (
     <span className="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-      <button onClick={(e) => { e.stopPropagation(); onClick(e); }} disabled={disabled} title={title}
-        className={`${CHIP} font-medium`}
-        style={danger
-          ? { color: "var(--error)", border: `1px solid ${wash("--error", 45)}`, background: wash("--error", 8) }
-          : { color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)" }}>
+      <Button onClick={(e) => { e.stopPropagation(); onClick(e); }} disabled={disabled} title={title}
+        size="compact" tone={danger ? "danger" : "primary"}>
         {label}
-      </button>
+      </Button>
     </span>
   );
 }
@@ -346,7 +344,7 @@ export function GroupHead({ label, count, note, folded, onToggle }: {
 /** The bar over a list. */
 export function Toolbar({ children }: { children: ReactNode }) {
   return (
-    <div className="flex items-center gap-2 flex-wrap px-3 py-2.5" style={{ borderBottom: edge(8) }}>
+    <div className="flex items-center gap-2 flex-wrap px-3 py-2.5" style={{ borderBottom: LINE }}>
       {children}
     </div>
   );

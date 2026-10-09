@@ -13,9 +13,10 @@ import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
 import { fmtAgo } from "../lib/format.ts";
-import { edge, wash } from "./git/ui.tsx";
+import { wash } from "./git/ui.tsx";
 import { ClockIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 
 export interface AgentSchedule {
   id: string; name: string; cwd: string; kind: string; prompt: string; yolo: boolean;
@@ -65,7 +66,7 @@ export function ScheduleDialog({ open, checkouts, onClose, onAdded }: {
   }, [busy, name, cwd, when, prompt, yolo, onAdded, onClose]);
 
   const field = "w-full text-[12px] px-2.5 py-1.5 rounded-md outline-none";
-  const fieldStyle = { background: "var(--bg)", border: edge(14), color: "var(--text)" } as const;
+  const fieldStyle = { background: "var(--bg)", border: EDGE, color: "var(--text)" } as const;
   const label = (t: string, hint?: string) => (
     <div className="flex items-baseline justify-between gap-2 mb-1 min-w-0">
       <span className="text-[9.5px] uppercase tracking-[0.14em] shrink-0" style={{ color: "var(--text4)" }}>{t}</span>
@@ -82,7 +83,7 @@ export function ScheduleDialog({ open, checkouts, onClose, onAdded }: {
           <div className="fixed inset-0 flex items-center justify-center p-6 pointer-events-none" style={{ zIndex: 10005 }}>
             <motion.div initial={{ opacity: 0, scale: 0.98, y: 6 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.98 }}
               className="pointer-events-auto w-full max-w-[560px] rounded-xl overflow-hidden agx-card" role="dialog" aria-modal="true" aria-label="Schedule an agent">
-              <div className="px-5 pt-4 pb-3 flex items-baseline gap-3" style={{ borderBottom: edge(10) }}>
+              <div className="px-5 pt-4 pb-3 flex items-baseline gap-3" style={{ borderBottom: LINE }}>
                 <span aria-hidden className="flex"><ClockIcon size={ICON.md} /></span>
                 <div className="flex-1 min-w-0">
                   <div className="text-[13.5px] font-semibold" style={{ color: "var(--text)" }}>Schedule an agent</div>
@@ -93,16 +94,16 @@ export function ScheduleDialog({ open, checkouts, onClose, onAdded }: {
                 <div className="grid gap-3.5" style={{ gridTemplateColumns: "1fr 160px" }}>
                   <div>
                     {label("Name", "letters, digits, - _ .")}
-                    <input ref={nameRef} value={name} onChange={(e) => setName(e.target.value)} placeholder="nightly-tests" className={field} style={fieldStyle} />
+                    <input ref={nameRef} value={name} onChange={(e) => setName(e.target.value)} placeholder="nightly-tests" className={INPUT} style={INPUT_STYLE} />
                   </div>
                   <div>
                     {label("When", "08:00 · +30m")}
-                    <input value={when} onChange={(e) => setWhen(e.target.value)} placeholder="08:00" className={`${field} tabular-nums`} style={fieldStyle} />
+                    <input value={when} onChange={(e) => setWhen(e.target.value)} placeholder="08:00" className={`tabular-nums ${INPUT}`} style={INPUT_STYLE} />
                   </div>
                 </div>
                 <div>
                   {label("Checkout")}
-                  <input value={cwd} onChange={(e) => setCwd(e.target.value)} list="agx-schedule-checkouts" placeholder="/path/to/a/checkout in the open project" className={field} style={fieldStyle} />
+                  <input value={cwd} onChange={(e) => setCwd(e.target.value)} list="agx-schedule-checkouts" placeholder="/path/to/a/checkout in the open project" className={INPUT} style={INPUT_STYLE} />
                   <datalist id="agx-schedule-checkouts">{checkouts.map((c) => <option key={c} value={c} />)}</datalist>
                 </div>
                 <div>
@@ -117,9 +118,9 @@ export function ScheduleDialog({ open, checkouts, onClose, onAdded }: {
                     <span className="text-[10.5px]" style={{ color: "var(--text4)" }}>Only if Settings allow it — checked again when it fires.</span>
                   </span>
                 </label>
-                {err && <div className="text-[11px]" style={{ color: "var(--error)" }}>{err}</div>}
+                {err && <div className="text-[11px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
                 <div className="flex items-center justify-end gap-2 pt-1">
-                  <button type="button" onClick={onClose} className="agx-btn text-[11px] px-2.5 py-1 rounded-md" style={{ color: "var(--text2)", border: edge(16) }}>Cancel</button>
+                  <button type="button" onClick={onClose} className="agx-btn text-[11px] px-2.5 py-1 rounded-md" style={{ color: "var(--text2)", border: EDGE }}>Cancel</button>
                   <button type="submit" disabled={busy || !name.trim() || !cwd.trim() || !when.trim()}
                     className="agx-btn text-[11px] px-3 py-1 rounded-md font-medium disabled:opacity-50"
                     style={{ color: "var(--text)", background: wash("--primary", 26), border: `1px solid ${wash("--primary", 55)}` }}>
@@ -162,8 +163,8 @@ export function ScheduledSection({ items, onCancel }: { items: AgentSchedule[]; 
               {s.prompt && <div className="text-[11px] line-clamp-2" style={{ color: "var(--text3)" }} title={s.prompt}>{s.prompt}</div>}
               {s.firedAt && <div className="text-[10.5px]" style={{ color: ok ? "var(--text3)" : "var(--error)" }}>{s.result}</div>}
               {!s.firedAt && (
-                <div className="flex justify-end pt-1" style={{ borderTop: edge(8) }}>
-                  <button type="button" onClick={() => onCancel(s.id)} className="agx-btn text-[10.5px] px-2 py-0.5 rounded-md" style={{ color: "var(--text3)", border: edge(16) }} title="Cancel this schedule">Cancel</button>
+                <div className="flex justify-end pt-1" style={{ borderTop: LINE }}>
+                  <button type="button" onClick={() => onCancel(s.id)} className="agx-btn text-[10.5px] px-2 py-0.5 rounded-md" style={{ color: "var(--text3)", border: EDGE }} title="Cancel this schedule">Cancel</button>
                 </div>
               )}
             </div>

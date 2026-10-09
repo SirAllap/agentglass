@@ -27,6 +27,7 @@ import { SettingRow } from "./SettingRow.tsx";
 import { bumpReviewRecipes } from "./PrPanel.tsx";
 import { IconLabel, PlusIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--border) ${pct}%, transparent)`;
 
@@ -172,7 +173,7 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
               <Fragment key={r.id}>
               <SettingRow
                 label={<span className="flex items-center gap-1.5">
-                  {r.skill && <span className="text-[10px] px-1 rounded" style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}>skill</span>}
+                  {r.skill && <span className="text-[10px] px-1 rounded" style={{ color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}>skill</span>}
                   {r.title}
                 </span>}
                 hint={<>
@@ -184,15 +185,15 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
                 </>}
                 control={<span className="flex items-center gap-2">
                   <button onClick={() => setEditing(r)} className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-                    style={{ border: edge(20), color: "var(--text2)" }}>Edit</button>
+                    style={{ border: EDGE, color: "var(--text2)" }}>Edit</button>
                   {r.builtIn && (
                     <button onClick={() => void reset(r)} title="Back to the wording it ships with"
                       className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-                      style={{ border: edge(20), color: "var(--text3)" }}>Reset</button>
+                      style={{ border: EDGE, color: "var(--text3)" }}>Reset</button>
                   )}
                   <button onClick={() => void drop(r)} title={r.builtIn ? "Take it out of the menu" : "Delete it"}
                     className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-                    style={{ border: edge(20), color: "var(--error)" }}>{r.builtIn ? "Hide" : "Delete"}</button>
+                    style={{ border: EDGE, color: "var(--error-ink)" }}>{r.builtIn ? "Hide" : "Delete"}</button>
                 </span>}
               />
               {/* Under the row it belongs to, not at the foot of the page.
@@ -265,7 +266,7 @@ function Editor({ r, skills, projects, presets, onChange, onSave, onCancel }: {
     first.current?.focus();
   }, []);
   const inp = "w-full text-[11.5px] px-2 py-1.5 rounded-lg outline-none";
-  const style = { background: "var(--bg2)", border: edge(22), color: "var(--text)" };
+  const style = { background: "var(--surface-inset)", border: EDGE, color: "var(--text)" };
 
   /* Skills whose name suggests they belong on a pull request go first: this
      list is 60 entries on a real machine and the four that matter here are
@@ -282,7 +283,7 @@ function Editor({ r, skills, projects, presets, onChange, onSave, onCancel }: {
         <label className="flex flex-col gap-1 flex-1 min-w-[200px]">
           <span className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>Title — what the menu shows</span>
           <input ref={first} value={r.title} onChange={(e) => set({ title: e.target.value })} placeholder="What changed since my review"
-            className={inp} style={style} />
+            className={INPUT} style={INPUT_STYLE} />
         </label>
         <label className="flex flex-col gap-1">
           <span className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>Group</span>
@@ -358,7 +359,7 @@ function Editor({ r, skills, projects, presets, onChange, onSave, onCancel }: {
             disabled={!chosen}
             placeholder={chosen?.argument_hint ?? "{number}"}
             onChange={(e) => set({ skill: `/${chosen?.name ?? ""}${e.target.value ? ` ${e.target.value}` : ""}` })}
-            className={`${inp} font-mono`} style={{ ...style, opacity: chosen ? 1 : 0.5 }} />
+            className={`font-mono ${INPUT}`} style={{ ...INPUT_STYLE, opacity: chosen ? 1 : 0.5 }} />
         </label>
       </div>
 
@@ -376,7 +377,7 @@ function Editor({ r, skills, projects, presets, onChange, onSave, onCancel }: {
         {(r.group === "conflicts" ? CONFLICT_TOKENS : TOKENS).map(([tok, what]) => (
           <button key={tok} title={what} onClick={() => set({ body: `${r.body}${tok}` })}
             className="text-[10px] font-mono px-1.5 py-0.5 rounded"
-            style={{ border: edge(20), color: "var(--text3)" }}>{tok}</button>
+            style={{ border: EDGE, color: "var(--text3)" }}>{tok}</button>
         ))}
       </div>
 
@@ -403,7 +404,7 @@ function Editor({ r, skills, projects, presets, onChange, onSave, onCancel }: {
           Save
         </button>
         <button onClick={onCancel} className="text-[12px] px-3 py-1.5 rounded-lg"
-          style={{ border: edge(20), color: "var(--text2)" }}>Cancel</button>
+          style={{ border: EDGE, color: "var(--text2)" }}>Cancel</button>
       </div>
     </div>
   );

@@ -20,6 +20,7 @@ import { LAYER } from "../lib/layers.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { ClockIcon, HandIcon } from "../lib/glyphIcons.tsx";
+import { EDGE } from "./workspace/Chrome.tsx";
 
 /** How long "later" is. Ten minutes is the snooze every clock on earth defaults
  *  to, and a number nobody has to think about is the right one here. */
@@ -68,7 +69,7 @@ export function AlarmCard(
       className="fixed rounded-xl overflow-hidden"
       style={{
         top: 56, right: 16, width: 340, zIndex: LAYER.alarm,
-        background: "var(--bg2)",
+        background: "var(--surface-card)",
         border: "1px solid color-mix(in srgb, var(--warning) 55%, transparent)",
         boxShadow: "0 24px 60px -18px rgba(0,0,0,0.75)",
       }}
@@ -80,8 +81,8 @@ export function AlarmCard(
 
       <div className="p-3.5 flex flex-col gap-2.5">
         <div className="flex items-center gap-2">
-          <span aria-hidden className="flex" style={{ color: "var(--warning)" }}>{deputy ? <HandIcon size={ICON.md} /> : <ClockIcon size={ICON.md} />}</span>
-          <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--warning)" }}>{deputy ? "Clone" : "Reminder"}</span>
+          <span aria-hidden className="flex" style={{ color: "var(--warning-ink)" }}>{deputy ? <HandIcon size={ICON.md} /> : <ClockIcon size={ICON.md} />}</span>
+          <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--warning-ink)" }}>{deputy ? "Clone" : "Reminder"}</span>
           <span className="text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>{alarm.when}</span>
           {/* Closing the card is not answering it: the reminder stays live and
               the list still shows it. Anything else would make the reflex that
@@ -117,7 +118,7 @@ export function AlarmCard(
               className="text-[11px] px-2 py-1 rounded-lg"
               style={{
                 background: "color-mix(in srgb, var(--bg3) 55%, transparent)",
-                border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)",
+                border: EDGE,
                 color: "var(--text3)",
               }}
             >Later</button>
@@ -140,7 +141,7 @@ export function AlarmCard(
             className="text-[11px] px-2 py-1 rounded-lg"
             style={{
               background: "color-mix(in srgb, var(--bg3) 55%, transparent)",
-              border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)",
+              border: EDGE,
               color: "var(--text3)",
             }}
           >Snooze {SNOOZE_MIN}m</button>
@@ -148,7 +149,7 @@ export function AlarmCard(
             <button
               onClick={() => { stopRinging(); onOpenTasks(); }}
               className="ml-auto text-[11px] px-2 py-1 rounded-lg"
-              style={{ color: "var(--primary)" }}
+              style={{ color: "var(--primary-ink)" }}
             >Open the task →</button>
           )}
         </div>

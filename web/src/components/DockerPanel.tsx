@@ -3,6 +3,7 @@
 // stop/restart/rm actions. Images / volumes / networks get their own tabs.
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { PlayIcon, RefreshIcon } from "../lib/glyphIcons.tsx";
+import { Button, RefreshButton, CTRL_H, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
 import type { DockerOverview, DockerContainer, DockerStat, DockerCapability } from "../../../shared/types.ts";
 import { depSpec } from "../../../shared/deps.ts";
@@ -62,22 +63,16 @@ function Bar({ pct, tint }: { pct: number; tint: string }) {
    to components/docker/LogView.tsx when the log stopped being a string this
    panel polled and became a feed that view owns. */
 
-/** One container action. Sized and bordered like every other control in the
- *  app, so a row of them reads as a row of buttons. */
+/** One container action: a square `Button` at the `compact` rung in the
+ *  action's own colour, so a row of them reads as a row of buttons. */
 function DockerAction({ onClick, disabled, tint, title, children }: {
   onClick: () => void; disabled: boolean; tint: string; title: string; children: React.ReactNode;
 }) {
   return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      title={title}
-      aria-label={title}
-      className="w-[22px] h-[22px] grid place-items-center rounded-md text-[10px] leading-none transition-colors disabled:opacity-30"
-      style={{ color: tint, border: `1px solid color-mix(in srgb, ${tint} 32%, transparent)`, background: `color-mix(in srgb, ${tint} 8%, transparent)` }}
+    <Button onClick={onClick} disabled={disabled} label={title} size="compact" square tint={tint}
       onMouseEnter={(e) => { e.currentTarget.style.background = `color-mix(in srgb, ${tint} 24%, transparent)`; }}
       onMouseLeave={(e) => { e.currentTarget.style.background = `color-mix(in srgb, ${tint} 8%, transparent)`; }}
-    >{children}</button>
+    >{children}</Button>
   );
 }
 
@@ -103,7 +98,7 @@ function Stack({ id, label, n, open, active, onToggle, onActivate, children }: {
       <button
         onClick={() => { onActivate(id); onToggle(id); }}
         className="w-full flex items-center gap-2 px-2.5 py-1 sticky top-0 z-20 text-left"
-        style={{ background: "var(--bg2)", borderLeft: `2px solid ${active ? "var(--primary)" : "transparent"}` }}
+        style={{ background: "var(--surface-card)", borderLeft: `2px solid ${active ? "var(--primary)" : "transparent"}` }}
         aria-expanded={open}>
         <span className="text-[10px] t-dim2 w-2 shrink-0">{open ? "▾" : "▸"}</span>
         <span className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: active ? "var(--text)" : "var(--text2)" }}>{label}</span>
@@ -226,7 +221,7 @@ function ContainerRow({ c, stat, active, writeEnabled, busy, dense, onSelect, on
             {c.image}
             {/* A restart count is only news when it is not zero, and then it is
                 the most important thing on the row. */}
-            {c.restarts ? <span style={{ color: "var(--warning)" }}> · {c.restarts} restarts</span> : null}
+            {c.restarts ? <span style={{ color: "var(--warning-ink)" }}> · {c.restarts} restarts</span> : null}
           </span>
         )}
       </span>
@@ -249,7 +244,7 @@ function ContainerRow({ c, stat, active, writeEnabled, busy, dense, onSelect, on
           onClick={(e) => { e.stopPropagation(); onOpenPort(url); }}
           title={`Open ${url}${HAS_BROWSER ? " in the browser tab" : ""}`}
           className="text-[10px] tabular-nums truncate text-left rounded px-1 -mx-1 min-h-[20px]"
-          style={{ color: "var(--info)" }}>
+          style={{ color: "var(--info-ink)" }}>
           {portLabel(port!)} ↗
         </button>
       ) : (
@@ -311,7 +306,7 @@ function DockerMissing({ reason }: { reason?: string }) {
   return (
     <div className="flex-1 grid place-items-center px-6 text-center">
       <div className="max-w-md flex flex-col items-center gap-2">
-        <span className="text-[13px] font-semibold" style={{ color: "var(--warning)" }}>Docker isn't installed</span>
+        <span className="text-[13px] font-semibold" style={{ color: "var(--warning-ink)" }}>Docker isn't installed</span>
         <span className="text-[11.5px]" style={{ color: "var(--text2)" }}>
           {reason || "The docker CLI isn't on your PATH"}. Containers, images, volumes and logs stay empty until it is.
         </span>
@@ -629,7 +624,7 @@ export function DockerView({ active, onOpenBrowser }: {
                       ? `No container is labelled for ${ov.scope.project} (${ov.scope.workspace}) — showing every container on this host`
                       : `Showing containers for ${ov.scope.workspace}`}
                       style={ov.scope.showingAll
-                        ? { background: "color-mix(in srgb, var(--warning) 16%, transparent)", color: "var(--warning)" }
+                        ? { background: "color-mix(in srgb, var(--warning) 16%, transparent)", color: "var(--warning-ink)" }
                         : { background: "color-mix(in srgb, var(--primary) 14%, transparent)", color: "var(--text2)" }}>
                       {ov.scope.showingAll ? `No ${ov.scope.project} containers · showing all` : ov.scope.project}
                     </span>
@@ -643,23 +638,23 @@ export function DockerView({ active, onOpenBrowser }: {
                         the published port — so typing 8000 finds whatever is
                         serving it, which the flat list could never answer. */}
                     <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="filter"
-                      className="text-[10px] px-2 py-0.5 rounded-lg outline-none w-[120px]"
-                      style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} />
+                      className={`w-[120px] ${INPUT}`}
+                      style={INPUT_STYLE} />
                     <button onClick={() => { const next = groupBy === "stack" ? "worktree" : "stack"; setGroupBy(next); try { localStorage.setItem(GROUP_KEY, next); } catch { /* private mode */ } }}
                       title={groupBy === "stack" ? "Group by the checkout each container came from" : "Group by compose project"}
-                      className="text-[10px] px-2 py-0.5 rounded-lg min-h-[20px]"
-                      style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
+                      className="text-[10px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg"
+                      style={{ color: "var(--text3)", border: EDGE }}>
                       by {groupBy}
                     </button>
                     {!writeEnabled && ov?.available && <span className="text-[9.5px] t-dim2">Read-only</span>}
                     <button onClick={() => setDense((v) => !v)} title={dense ? "Show each container's image" : "Fit more containers on screen"}
-                      className="text-[10px] px-2 py-0.5 rounded-lg"
+                      className="text-[10px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg"
                       style={dense
                         ? { color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }
-                        : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
+                        : { color: "var(--text3)", border: EDGE }}>
                       Dense
                     </button>
-                    <button onClick={() => { loadOverview(); loadStats(); }} title="Refresh" className="text-[13px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)" }}><RefreshIcon /></button>
+                    <RefreshButton onRefresh={() => { loadOverview(); loadStats(); }} title="Refresh" />
                   </div>
                 </div>
 
@@ -691,7 +686,7 @@ export function DockerView({ active, onOpenBrowser }: {
                               used to be a heading with a ratio next to it,
                               which meant "is my stack up?" was answered by
                               reading twelve lines. */}
-                          <div className="flex items-center gap-2 px-2.5 py-1 sticky top-0 z-10" style={{ background: "var(--bg2)" }}>
+                          <div className="flex items-center gap-2 px-2.5 py-1 sticky top-0 z-10" style={{ background: "var(--surface-card)" }}>
                             <button onClick={() => toggleStack(st.project)} title={open ? "Collapse" : "Expand"}
                               className="text-[10px] t-dim2 w-3 shrink-0 min-h-[20px] text-left" aria-expanded={open}>{open ? "▾" : "▸"}</button>
                             <span className="text-[10px] uppercase tracking-wider font-semibold truncate" style={{ color: "var(--text2)" }}>{st.project}</span>
@@ -713,7 +708,7 @@ export function DockerView({ active, onOpenBrowser }: {
                                 showing up". */}
                             {st.foreign && st.owner && (
                               <span className="text-[9px] px-1 py-0.5 rounded shrink-0" title={ownerTitle(st.owner)}
-                                style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>
+                                style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>
                                 {st.owner.worktree}
                               </span>
                             )}
@@ -800,12 +795,12 @@ export function DockerView({ active, onOpenBrowser }: {
                           </thead>
                           <tbody className="tabular-nums">
                             {view === "images" && ov.images.map((i) => (
-                              <tr key={i.id} style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", opacity: i.dangling ? 0.55 : 1 }}>
+                              <tr key={i.id} style={{ borderTop: LINE, opacity: i.dangling ? 0.55 : 1 }}>
                                 <td className="py-1.5 pr-4" style={{ color: "var(--text)" }}>{i.repository}</td><td className="py-1.5 pr-4">{i.tag}</td><td className="py-1.5 pr-4">{i.id.slice(0, 12)}</td><td className="py-1.5 pr-4">{i.size}</td><td className="py-1.5 pr-4">{i.created}</td><td className="py-1.5 pr-4">{i.containers}</td>
                               </tr>
                             ))}
                             {view === "networks" && ov.networks.map((n) => (
-                              <tr key={n.id} style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}><td className="py-1.5 pr-4" style={{ color: "var(--text)" }}>{n.name}</td><td className="py-1.5 pr-4">{n.id}</td><td className="py-1.5 pr-4">{n.driver}</td><td className="py-1.5 pr-4">{n.scope}</td></tr>
+                              <tr key={n.id} style={{ borderTop: LINE }}><td className="py-1.5 pr-4" style={{ color: "var(--text)" }}>{n.name}</td><td className="py-1.5 pr-4">{n.id}</td><td className="py-1.5 pr-4">{n.driver}</td><td className="py-1.5 pr-4">{n.scope}</td></tr>
                             ))}
                           </tbody>
                         </table>

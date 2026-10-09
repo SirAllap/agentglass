@@ -27,6 +27,7 @@ import type { ProjectCommand, TerminalCommands, TerminalDisabledReason, TmuxWind
 import { safeAbs, repoRootOf, repoRootOfAsync } from "./git.ts";
 import { terminalActive } from "./loopwatch.ts";
 import { inScope, workspaceRoot, terminalDisabledSource, tmuxTerminal, tmuxPrefix, inScopeReal } from "./config.ts";
+import { noteNvimArgv } from "./bench.ts";
 import { engineAttachArgv, engineBenchArgv, engineConsoleArgv, engineWindowRunning, engineSplitRunning, engineSessionName } from "./tmuxpane.ts";
 import { confHealth, ensureConf } from "./tmuxconf.ts";
 import { readerSocketPath } from "./bench.ts";
@@ -193,7 +194,9 @@ export type PtyWsData = { kind: "pty"; root: string; cols: number; rows: number;
    * tab", and the server builds the session name, so a session on this engine
    * can never be picked by whatever a client puts in a query string.
    */
-  bench?: number };
+  bench?: number;
+  /** A bench tab that is the checkout's note, in Neovim. See noteNvimArgv. */
+  note?: boolean };
 type PtyWs = ServerWebSocket<unknown>;
 
 /**
@@ -906,7 +909,11 @@ export function ptyOpen(ws: PtyWs) {
       wanted!,
     ]
     : null;
-  const benchRuns = d.bench ? (agentRun.length ? agentRun : editorArgv) : null;
+  /* The note's editor, on a bench socket only. Null without nvim, which leaves
+     a plain shell: the client asked /bench/note first and only sends this when
+     it said yes. */
+  const noteRun = d.bench && d.note ? noteNvimArgv(cwd) : null;
+  const benchRuns = d.bench ? (agentRun.length ? agentRun : noteRun ?? editorArgv) : null;
   const engine = d.bench
     ? engineBenchArgv(startIn, d.bench, benchRuns, ticket?.role ? { AGENTGLASS_ROLE: ticket.role } : undefined)
     : d.console
@@ -1068,7 +1075,7 @@ export function ptyOpen(ws: PtyWs) {
    */
   let sawTmux = false;
   let sent = "";
-  const sweep = () => {
+  const sweep = (notBefore = 0) => {
     if (session.closed || session.exited) return;
     const now = tmuxRunning(proc.pid);
     if (now !== sawTmux) {
@@ -1132,7 +1139,7 @@ export function ptyOpen(ws: PtyWs) {
     // ~1.4ms fixed + ~0.05ms/pane (scripts/pane-cost-bench.ts). Small per
     // call; multiplied by session count and the 500ms tick it is the known
     // per-open-pane cost of this sweep, for whoever measures idle CPU next.
-    const frame = session.tmuxClient ? readFrameCached(session.tmuxClient, 450) : null;
+    const frame = session.tmuxClient ? readFrameCached(session.tmuxClient, 450, notBefore) : null;
     if (frame) {
       lastTarget = frame.target;
       // And on disk, so the next run knows where you were. Cheap enough to do
@@ -1414,7 +1421,10 @@ export function ptyOpen(ws: PtyWs) {
       sessions: (frame?.sessions ?? []).map((x) => ({ ...x, locked: locks.has(x.name) })),
     });
   };
-  session.tmuxSweep = sweep;
+  /* Every caller of this has just changed tmux (a click, a rename, a new
+     window) or is catching up after being hidden, so a read taken before the
+     call is the very answer it is trying to replace — see readFrameCached. */
+  session.tmuxSweep = () => sweep(Date.now());
   /*
    * How often to look.
    *
@@ -1478,7 +1488,20 @@ export function ptyOpen(ws: PtyWs) {
     if (session.tmuxNudge) clearTimeout(session.tmuxNudge);
     else nudgeFrom = now;
     const wait = Math.min(70, Math.max(0, 220 - (now - nudgeFrom)));
-    session.tmuxNudge = setTimeout(() => { session.tmuxNudge = null; if (!session.closed) sweep(); }, wait);
+    /*
+     * Refuse any read taken before this burst began. The redraw is how we know
+     * tmux moved, and tmux moves before it draws, so a read from after its
+     * first byte has the switch in it — one from before it does not, and the
+     * frame cache is shared with every panel on the socket and with this
+     * one's own poll, so there almost always is one under 450ms old. Taking
+     * it is what left the strip on the old window until the next poll.
+     *
+     * The ceiling: a switch made while the pane is already streaming lands in
+     * a burst that began before it, so a read from between the two can still
+     * serve — the next nudge, at most ~220ms on, corrects it.
+     */
+    const from = nudgeFrom;
+    session.tmuxNudge = setTimeout(() => { session.tmuxNudge = null; if (!session.closed) sweep(from); }, wait);
   };
 
   /**

@@ -8,6 +8,7 @@ import { friendly } from "../lib/labels.ts";
 import { fmtTime, fmtUsd, fmtMs, agentKey } from "../lib/format.ts";
 import { SearchIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
 
 /** Render an FTS snippet, highlighting the \x01…\x02 matched spans. */
 function Snippet({ text }: { text: string }) {
@@ -195,20 +196,20 @@ export function SearchModal({
               <motion.div
                 initial={{ opacity: 0, scale: 0.97, y: -10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.98, y: -6 }}
                 transition={{ type: "spring", stiffness: 340, damping: 30 }}
-                className="w-[min(820px,94vw)] max-h-[80vh] rounded-2xl flex flex-col overflow-hidden pointer-events-auto"
-                style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
+                className="w-[min(820px,94vw)] max-h-[80vh] rounded-xl flex flex-col overflow-hidden pointer-events-auto"
+                style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
               >
                 <div className="flex items-center gap-2 px-4 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                   <span className="t-dim2 flex"><SearchIcon size={ICON.sm} /></span>
                   <input
                     autoFocus value={q} onChange={(e) => setQ(e.target.value)}
                     placeholder={mode === "fleet" ? "Search prompts, commands, replies, errors…" : mode === "commits" ? "Commit messages… (or a sha prefix)" : mode === "working tree" ? "Grep the working tree…" : "Which commits introduced or removed this string…"}
-                    className="flex-1 bg-transparent outline-none text-[13px]" style={{ color: "var(--text)" }}
+                    className={`flex-1 ${INPUT}`} style={INPUT_STYLE}
                   />
                   {mode !== "fleet" && (
                     <select value={repo} onChange={(e) => setRepo(e.target.value)}
                       className="shrink-0 max-w-[180px] text-[10.5px] px-2 py-1 rounded-md outline-none"
-                      style={{ background: "color-mix(in srgb, var(--bg3) 60%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text2)" }}>
+                      style={{ background: "color-mix(in srgb, var(--bg3) 60%, transparent)", border: EDGE, color: "var(--text2)" }}>
                       {repos.map((r) => <option key={r.root} value={r.root}>{r.root.split("/").pop() || r.root}</option>)}
                     </select>
                   )}
@@ -226,7 +227,7 @@ export function SearchModal({
                 </div>
 
                 <div className="flex-1 min-h-0 overflow-y-auto">
-                  {gErr && <div className="t-dim2 text-center py-10 text-[12px]" style={{ color: "var(--error)" }}>{gErr}</div>}
+                  {gErr && <div className="t-dim2 text-center py-10 text-[12px]" style={{ color: "var(--error-ink)" }}>{gErr}</div>}
                   {mode === "fleet" && (
                     <>
                       {hits === null && <div className="t-dim2 text-center py-14 text-[12px]">{fleetSearchIntro(days, windowMs)}</div>}
@@ -244,10 +245,10 @@ export function SearchModal({
                             <div className="flex items-center gap-2 text-[10px] mb-1">
                               <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ background: f.color }} />
                               <span className="font-medium shrink-0" style={{ color: f.color }}>{f.verb}</span>
-                              {h.tool_name && <span className="chip shrink-0" style={{ color: "var(--info)", background: "color-mix(in srgb, var(--info) 14%, transparent)" }}>{h.tool_name}</span>}
+                              {h.tool_name && <span className="chip shrink-0" style={{ color: "var(--info-ink)", background: "color-mix(in srgb, var(--info) 14%, transparent)" }}>{h.tool_name}</span>}
                               <span className="ml-auto flex items-center gap-2.5 shrink-0 t-dim2 tabular-nums">
                                 {h.duration_ms != null && <span>{fmtMs(h.duration_ms)}</span>}
-                                {h.cost_usd > 0 && <span style={{ color: "var(--success)" }}>{fmtUsd(h.cost_usd)}</span>}
+                                {h.cost_usd > 0 && <span style={{ color: "var(--success-ink)" }}>{fmtUsd(h.cost_usd)}</span>}
                                 <span>{who}</span>
                                 <span>{fmtTime(h.timestamp)}</span>
                               </span>
@@ -268,8 +269,8 @@ export function SearchModal({
                           className="px-4 py-2.5 border-b cursor-pointer transition-colors hover:bg-white/[0.03]"
                           style={{ borderColor: "color-mix(in srgb, var(--border) 22%, transparent)" }}>
                           <div className="flex items-center gap-2 text-[10px] mb-1">
-                            <span className="shrink-0 font-mono" style={{ color: "var(--info)" }}>{c.hash}</span>
-                            <span className="chip shrink-0" style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 12%, transparent)" }}>{mode === "history" ? "pickaxe" : "commit"}</span>
+                            <span className="shrink-0 font-mono" style={{ color: "var(--info-ink)" }}>{c.hash}</span>
+                            <span className="chip shrink-0" style={{ color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 12%, transparent)" }}>{mode === "history" ? "pickaxe" : "commit"}</span>
                             <span className="ml-auto flex items-center gap-2.5 shrink-0 t-dim2 tabular-nums">
                               <span>{c.author}</span>
                               <span>{fmtTime(c.time)}</span>
@@ -282,7 +283,7 @@ export function SearchModal({
                         <div key={`${h.path}:${h.line}:${i}`} onClick={() => void openFileDiff(repo, h.path)}
                           className="px-4 py-2.5 border-b cursor-pointer transition-colors hover:bg-white/[0.03] font-mono text-[11px]"
                           style={{ borderColor: "color-mix(in srgb, var(--border) 22%, transparent)" }}>
-                          <span className="shrink-0" style={{ color: "var(--info)" }}>{h.path}:{h.line}</span>
+                          <span className="shrink-0" style={{ color: "var(--info-ink)" }}>{h.path}:{h.line}</span>
                           <span className="ml-2" style={{ color: "var(--text2)" }}><GrepText text={h.text} q={q} /></span>
                         </div>
                       ))}

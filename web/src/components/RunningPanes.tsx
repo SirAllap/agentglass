@@ -4,6 +4,7 @@ import { fmtAgo } from "../lib/format.ts";
 import { listChats } from "../lib/chatStore.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import type { ChatPane } from "../../../shared/types.ts";
+import { EDGE } from "./workspace/Chrome.tsx";
 
 /**
  * What is actually running, and what belongs to nothing.
@@ -73,7 +74,7 @@ export function RunningPanes({ open }: { open: boolean }) {
       <div className="flex items-baseline gap-2">
         <span className="text-[11px]" style={{ color: "var(--text2)" }}>
           {panes.length === 1 ? "One warm CLI" : `${panes.length} warm CLIs`}
-          {orphans > 0 && <span style={{ color: "var(--warning)" }}> · {orphans} belonging to nothing</span>}
+          {orphans > 0 && <span style={{ color: "var(--warning-ink)" }}> · {orphans} belonging to nothing</span>}
         </span>
         <span className="text-[10px] t-dim2 ml-auto">
           {/* Said rather than implied: somebody who has switched eviction off
@@ -99,7 +100,7 @@ export function RunningPanes({ open }: { open: boolean }) {
             <div className="text-[11.5px] t-mono truncate" style={{ color: "var(--text)" }}>
               {p.name.slice(0, 8)}
               {p.pinned && <span className="chip ml-1.5" style={{ color: "var(--primary-hover)" }}>pinned</span>}
-              {p.orphan && <span className="chip ml-1.5" style={{ color: "var(--warning)" }}>no chat</span>}
+              {p.orphan && <span className="chip ml-1.5" style={{ color: "var(--warning-ink)" }}>no chat</span>}
             </div>
             <div className="text-[10px] t-dim2">
               {p.running
@@ -119,12 +120,12 @@ export function RunningPanes({ open }: { open: boolean }) {
               <div className="flex items-center gap-1.5 shrink-0">
                 <button onClick={() => void end(p)} disabled={busy === p.name}
                   className="text-[10.5px] px-2 py-1 rounded-md"
-                  style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}>
+                  style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}>
                   End it
                 </button>
                 <button onClick={() => setConfirming(null)}
                   className="text-[10.5px] px-2 py-1 rounded-md hover:opacity-80"
-                  style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+                  style={{ color: "var(--text2)", border: EDGE }}>
                   Keep
                 </button>
               </div>
@@ -132,7 +133,7 @@ export function RunningPanes({ open }: { open: boolean }) {
               <button onClick={() => setConfirming(p.name)}
                 title="Kill this pane and free its memory. The chat it belongs to, if any, starts a fresh CLI on its next turn."
                 className="shrink-0 text-[10.5px] px-2 py-1 rounded-md hover:opacity-80"
-                style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+                style={{ color: "var(--text2)", border: EDGE }}>
                 End
               </button>
             )

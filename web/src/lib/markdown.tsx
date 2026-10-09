@@ -18,6 +18,7 @@ import { createContext, memo, useContext, type ReactNode } from "react";
 import { externalUrl } from "./externalUrl.ts";
 import { openInApp } from "./linkRouter.ts";
 import { CodeBlock } from "./mdCode.tsx";
+import { EDGE, LINE } from "../components/workspace/Chrome.tsx";
 
 /*
  * WHO OPENS A PICTURE, when something around the markdown can do it better.
@@ -55,7 +56,7 @@ function MdImage({ src, alt }: { src: string; alt: string }) {
       <img src={src} alt={alt} loading="lazy"
         title={alt || "Open full size"}
         className="rounded-lg max-w-full h-auto"
-        style={{ border: "1px solid color-mix(in srgb, var(--text) 14%, transparent)", maxHeight: 420, objectFit: "contain" }} />
+        style={{ border: EDGE, maxHeight: 420, objectFit: "contain" }} />
     </a>
   );
 }
@@ -269,7 +270,7 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
     // structure the author put there by hand.
     if (/^\s*([-*_])\s*\1\s*\1[\s-*_]*$/.test(line) && !para.length) {
       flushPara(para);
-      blocks.push(<hr key={`r${key++}`} className="my-4 border-0" style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 12%, transparent)" }} />);
+      blocks.push(<hr key={`r${key++}`} className="my-4 border-0" style={{ borderTop: LINE }} />);
       i++;
       continue;
     }
@@ -434,7 +435,7 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
       while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) rows.push(cells(lines[i++]));
       const cellStyle = (n: number) => ({
         textAlign: (align[n] ?? "left") as "left" | "right" | "center",
-        borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)",
+        borderTop: LINE,
       });
       blocks.push(
         // Scrolls on its own rather than widening the bubble: a wide table must

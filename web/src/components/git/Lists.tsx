@@ -435,7 +435,7 @@ function GraphCell({ row, width, selected }: { row?: GraphRow; width: number; se
         left: dotX, top: "50%", transform: "translate(-50%, -50%)",
         width: row.merge ? 9 : 8, height: row.merge ? 9 : 8,
         // Hollow for a merge: the one commit whose content is not its own.
-        background: row.merge ? "var(--bg2)" : colour,
+        background: row.merge ? "var(--surface-card)" : colour,
         border: `2px solid ${colour}`,
         // The selected row's dot gets a halo rather than a bigger size, so the
         // lane it sits in does not appear to move when you walk the list.

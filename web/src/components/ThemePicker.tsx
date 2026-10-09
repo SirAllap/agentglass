@@ -9,6 +9,7 @@ import { ACCENTS, currentAccent, setAccentPref, lastAccent } from "../lib/accent
 import { SERVER, authHeaders } from "../lib/api.ts";
 import { DoneIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { EDGE } from "./workspace/Chrome.tsx";
 
 /* Settings → Appearance.
  *
@@ -113,7 +114,7 @@ export function ThemePicker({ current, onChange }: { current: string; onChange: 
       <button
         onClick={() => setShowAll((v) => !v)}
         className="mt-1.5 w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-[12px]"
-        style={{ border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", background: "color-mix(in srgb, var(--bg3) 22%, transparent)", color: "var(--text3)" }}
+        style={{ border: EDGE, background: "color-mix(in srgb, var(--bg3) 22%, transparent)", color: "var(--text3)" }}
       >
         <span className="inline-block w-2.5 text-[10px]" aria-hidden>{showAll ? "▾" : "▸"}</span>
         <span style={{ color: "var(--text2)" }}>{rest.length} more</span>
@@ -225,7 +226,7 @@ export function AppearancePane({ current, onChange, onAccent }: {
           : desk
             ? <>Your desktop's theme is {desk.name}, one click away. <b style={{ color: "var(--text3)" }}>System</b> follows your OS's dark or light.</>
             : <>A serious neutral pair. <b style={{ color: "var(--text3)" }}>System</b> follows your OS.</>}
-        control={<span className="flex p-0.5 rounded-lg" style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+        control={<span className="flex p-0.5 rounded-lg" style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: EDGE }}>
           {[...(desk ? [{ m: "desktop" as ThemeMode, label: "" }] : []), ...MODES].map(({ m, label }) => {
             const on = mode === m;
             return (
@@ -233,7 +234,7 @@ export function AppearancePane({ current, onChange, onAccent }: {
                 title={m === "desktop" && desk ? `Wear ${desk.name}, your desktop's theme, and follow it when you switch` : undefined}
                 className="px-3 py-1 rounded-md text-[12px] transition-colors"
                 style={on
-                  ? { background: "var(--bg2)", color: "var(--text)", boxShadow: "0 1px 2px rgba(0,0,0,0.25)" }
+                  ? { background: "var(--surface-card)", color: "var(--text)", boxShadow: "0 1px 2px rgba(0,0,0,0.25)" }
                   : { color: "var(--text3)" }}>
                 {m === "desktop" && desk ? <DesktopMark source={desk.source} /> : label}
               </button>

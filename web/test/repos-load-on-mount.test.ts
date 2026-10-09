@@ -34,10 +34,12 @@ describe("when the checkout list is read", () => {
   });
 
   it("leaves the gates that really are about being on screen", () => {
-    /* Two others share the shape and both are correct — a keyboard chord and
-       the console's typing guard mean nothing for a view nobody can see. This
-       counts them so that "delete the gate" cannot be applied wholesale. */
-    expect(src.match(/if \(!open\) return;/g)?.length).toBe(2);
+    /* Three others share the shape and all three are correct — a keyboard
+       chord, the console's typing guard, and the More menu's outside-click
+       listener mean nothing for a view (or a closed menu) nobody can see.
+       This counts them so that "delete the gate" cannot be applied
+       wholesale. */
+    expect(src.match(/if \(!open\) return;/g)?.length).toBe(3);
   });
 
   it("drops a remembered checkout that is no longer in the list", () => {

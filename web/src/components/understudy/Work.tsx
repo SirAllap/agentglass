@@ -31,8 +31,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePoll } from "../../lib/usePoll.ts";
 import { SERVER, authHeaders } from "../../lib/api.ts";
-import { Empty, wash, edge } from "../git/ui.tsx";
-import { Chip } from "../workspace/Chrome.tsx";
+import { Empty, wash } from "../git/ui.tsx";
+import { Chip, EDGE, LINE } from "../workspace/Chrome.tsx";
 import type {
   UnderstudyAsked, UnderstudyShift, UnderstudyWorkItem, UnderstudyWorkRun, UnderstudyHelp,
 } from "../../../../shared/types.ts";
@@ -746,9 +746,9 @@ export function Work({ active, standing, goTo }: {
         */}
       {answered && allowed.length === 0 && (
         <div className="px-4 py-3 flex items-center gap-3 flex-wrap"
-          style={{ borderBottom: edge(10), background: wash("--error", 8), boxShadow: "inset 2px 0 0 var(--error)" }}>
+          style={{ borderBottom: LINE, background: wash("--error", 8), boxShadow: "inset 2px 0 0 var(--error)" }}>
           <div className="flex-1 min-w-[240px]">
-            <span className="text-[12.5px]" style={{ color: "var(--error)" }}>
+            <span className="text-[12.5px]" style={{ color: "var(--error-ink)" }}>
               It has nowhere to work, so it will decline every task — including the ones you add below.
             </span>
             {/* The why and the one action that ends it, under the line that
@@ -776,16 +776,16 @@ export function Work({ active, standing, goTo }: {
         * simply not to be built from. Red means a person is being asked.
         */}
       {help.length > 0 && (
-        <div className="px-4 py-3" style={{ borderBottom: edge(10) }}>
+        <div className="px-4 py-3" style={{ borderBottom: LINE }}>
           {help.map((h, i) => (
             <div key={h.id} className="agx-cloud px-3 py-2.5 mb-1.5 flex gap-3 items-start">
               <span className="agx-revtag"><span>{i + 1}</span></span>
               <div className="flex-1 min-w-0">
                 <div className="text-[12.5px]" style={{ fontWeight: 600 }}>{h.title}</div>
-                <div className="text-[12px] mt-0.5" style={{ color: "var(--error)" }}>{h.question}</div>
+                <div className="text-[12px] mt-0.5" style={{ color: "var(--error-ink)" }}>{h.question}</div>
                 {openHelp && h.tried && (
                   <pre className="m-0 mt-1.5 p-1.5 overflow-auto agx-scroll text-[10.5px] leading-snug whitespace-pre-wrap"
-                    style={{ background: wash("--text", 4), border: edge(8), borderRadius: 4, maxHeight: 150, color: "var(--text3)" }}>
+                    style={{ background: wash("--text", 4), border: EDGE, borderRadius: 4, maxHeight: 150, color: "var(--text3)" }}>
                     {h.tried}
                   </pre>
                 )}
@@ -814,8 +814,8 @@ export function Work({ active, standing, goTo }: {
       )}
 
       {!answered && (
-        <div className="px-4 py-3" style={{ borderBottom: edge(10), background: wash("--error", 8) }}>
-          <span className="text-[12.5px]" style={{ color: "var(--error)" }}>
+        <div className="px-4 py-3" style={{ borderBottom: LINE, background: wash("--error", 8) }}>
+          <span className="text-[12.5px]" style={{ color: "var(--error-ink)" }}>
             The server did not answer, so nothing here is current.
           </span>
         </div>
@@ -992,14 +992,14 @@ export function Work({ active, standing, goTo }: {
 
       {problem && (
         <p role="alert" className="m-0 px-4 py-2 text-[11.5px]"
-          style={{ color: "var(--error)", background: wash("--error", 8), borderBottom: edge(10) }}>
+          style={{ color: "var(--error-ink)", background: wash("--error", 8), borderBottom: LINE }}>
           {problem}
         </p>
       )}
 
       {busy && (
         <p role="status" className="m-0 px-4 py-2 text-[11.5px]"
-          style={{ color: "var(--primary)", background: wash("--primary", 8), borderBottom: edge(10) }}>
+          style={{ color: "var(--primary-ink)", background: wash("--primary", 8), borderBottom: LINE }}>
           {busy} You can close this — it does not stop when the tab does.
         </p>
       )}
@@ -1017,16 +1017,16 @@ export function Work({ active, standing, goTo }: {
         * an agent mid-task is a thing to do deliberately.
         */}
       {noPaneWhy && (
-        <p className="m-0 px-4 py-2 text-[11.5px]" style={{ color: "var(--text3)", borderBottom: edge(10) }}>
+        <p className="m-0 px-4 py-2 text-[11.5px]" style={{ color: "var(--text3)", borderBottom: LINE }}>
           Working, but not where you can watch it — {noPaneWhy}. The run itself is unaffected.
         </p>
       )}
 
       {pane && (
-        <div className="px-4 py-2.5" style={{ borderBottom: edge(10) }}>
+        <div className="px-4 py-2.5" style={{ borderBottom: LINE }}>
           <div className="flex items-baseline gap-2 flex-wrap" style={{ marginBottom: 6 }}>
             <span className="panel-eyebrow" style={{ margin: 0 }}>Over its shoulder</span>
-            <span className="chip" style={{ color: "var(--primary)" }}>{pane}</span>
+            <span className="chip" style={{ color: "var(--primary-ink)" }}>{pane}</span>
             <span className="flex-1" />
             <code className="text-[10.5px]" style={{ color: "var(--text4)" }}>
               tmux select-pane -t {pane}
@@ -1038,7 +1038,7 @@ export function Work({ active, standing, goTo }: {
               spend on the text rather than on truncating it. */}
           <pre ref={overRef} className="m-0 p-2.5 overflow-auto agx-scroll text-[12px] leading-relaxed"
             style={{
-              background: wash("--text", 4), border: edge(8), borderRadius: 4,
+              background: wash("--text", 4), border: EDGE, borderRadius: 4,
               maxHeight: 340, color: "var(--text2)", whiteSpace: "pre",
             }}>
             {over || "waiting for it to print something…"}
@@ -1056,10 +1056,10 @@ export function Work({ active, standing, goTo }: {
         * decoration.
         */}
       {(queued ?? []).length > 0 && (
-        <ul className="list-none p-0 m-0" style={{ borderTop: edge(8) }}>
+        <ul className="list-none p-0 m-0" style={{ borderTop: LINE }}>
           {(queued ?? []).map((q, i) => (
             <li key={q.id} className="agx-work-item flex items-baseline gap-2.5 px-4 py-2"
-              style={{ borderBottom: edge(6) }}>
+              style={{ borderBottom: LINE }}>
               <span className="text-[11px] tabular-nums text-right" style={{ width: 14, color: "var(--text4)" }}>
                 {i + 1}
               </span>
@@ -1087,7 +1087,7 @@ export function Work({ active, standing, goTo }: {
         <div className="text-[10px] pb-1.5 tracking-wide uppercase" style={{ color: "var(--text4)" }}>
           Register of issued sheets
           {runs.length > 0 && <>
-            {" · "}<span style={{ color: "var(--success)" }}>{runs.filter((r) => r.state === "done").length} approved</span>
+            {" · "}<span style={{ color: "var(--success-ink)" }}>{runs.filter((r) => r.state === "done").length} approved</span>
             {runs.some((r) => r.state === "failed" || r.state === "empty" || r.state === "uncommitted") && <>
               {" · "}<span>{runs.filter((r) => r.state === "failed" || r.state === "empty" || r.state === "uncommitted").length} void</span>
             </>}
@@ -1098,7 +1098,7 @@ export function Work({ active, standing, goTo }: {
         ) : (
           <ul className="list-none p-0 m-0 grid gap-2">
             {runs.map((r) => (
-              <li key={r.id} className="grid gap-1 py-1.5" style={{ borderTop: edge(8) }}>
+              <li key={r.id} className="grid gap-1 py-1.5" style={{ borderTop: LINE }}>
                 <div className="flex items-baseline gap-2 flex-wrap">
                   {/* A stamp, not a state name. See `stampFor`: three words
                       replace four, and `void` says the sheet is kept but not
@@ -1141,7 +1141,7 @@ export function Work({ active, standing, goTo }: {
                   // the work is real and it is sitting right there uncommitted.
                   // No discard chip here — unlike `failed`, there is no commit
                   // yet, so the worktree is the ONLY copy of what it did.
-                  <div className="text-[11px]" style={{ color: "var(--warning)" }}>
+                  <div className="text-[11px]" style={{ color: "var(--warning-ink)" }}>
                     Tests pass, but it never committed. Nothing pushed either — go commit it by hand, or look at why it stopped.
                   </div>
                 )}
@@ -1149,7 +1149,7 @@ export function Work({ active, standing, goTo }: {
                   // No commit, nothing uncommitted either — the tree was clean
                   // because nothing was ever written to it. Say that plainly
                   // rather than let it read like a quiet success.
-                  <div className="text-[11px]" style={{ color: "var(--warning)" }}>
+                  <div className="text-[11px]" style={{ color: "var(--warning-ink)" }}>
                     It finished having produced nothing — no commit, and its own last words did not say why that was the right answer.
                   </div>
                 )}
@@ -1183,7 +1183,7 @@ export function Work({ active, standing, goTo }: {
                     </button>
                     {openOutcome === r.id && (
                       <pre className="m-0 mt-1 p-1.5 overflow-auto agx-scroll text-[10.5px] leading-snug"
-                        style={{ background: wash("--text", 4), border: edge(8), borderRadius: 4, maxHeight: 320, color: "var(--text3)" }}>
+                        style={{ background: wash("--text", 4), border: EDGE, borderRadius: 4, maxHeight: 320, color: "var(--text3)" }}>
                         {r.outcome}
                       </pre>
                     )}

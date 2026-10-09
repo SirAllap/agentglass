@@ -26,11 +26,11 @@ describe("a press that starts on a control", () => {
   });
 });
 
-describe("the two ×s in the sidebar", () => {
+describe("the ×s in the sidebar", () => {
   test("are the same size, in the same reddish box", () => {
     // One glyph, one meaning, one target big enough to aim at on a row of text.
-    const both = [...src.matchAll(/className="agx-x [^"]*"\s*\n?\s*style=\{\{ width: 24, height: 24 \}\}><CloseIcon size=\{ICON\.md\} \/>/g)];
-    expect(both).toHaveLength(2);
+    const both = [...src.matchAll(/className="agx-x [^"]*"\s*\n?\s*style=\{\{ width: CLOSE_CELL, height: CLOSE_CELL \}\}><CloseIcon size=\{ICON\.md\} \/>/g)];
+    expect(both).toHaveLength(3);
   });
 
   test("the box is defined once, and it is not the alarm red", () => {

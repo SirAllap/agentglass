@@ -148,7 +148,7 @@ export function Kpis({
       <motion.div {...enter} transition={{ type: "spring", stiffness: 300, damping: 26 }} className="panel flex-row flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3.5">
         <div className="min-w-0 grow">
           <div className="panel-eyebrow">Spend · this window</div>
-          <div className="text-[32px] font-semibold leading-none tabular-nums" style={{ color: "var(--success)" }}>
+          <div className="text-[32px] font-semibold leading-none tabular-nums" style={{ color: "var(--success-ink)" }}>
             {/* The one currency site in the app not routed through fmtUsd —
                 NumberFlow animates a number and takes Intl options, not a
                 formatted string. So it takes fmtUsd's decision instead.

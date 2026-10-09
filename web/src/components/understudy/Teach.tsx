@@ -28,6 +28,7 @@ import { Empty, wash } from "../git/ui.tsx";
 import { fmtBytes } from "../../lib/goneCleanup.ts";
 import { HIT, ICON } from "../../lib/iconSize.ts";
 import { DoneIcon } from "../../lib/glyphIcons.tsx";
+import { INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
 
 interface SourcesBody {
   sources: UnderstudySource[];
@@ -277,8 +278,8 @@ export function Teach({ active }: { active: boolean }) {
                 style={{ color: "var(--phone)", background: wash("--phone", 12), borderColor: "transparent" }}>kept private</span>
             : <span className="chip"
                 title="Your open project. Rows from here may be used for predictions about public work."
-                style={{ color: "var(--success)", background: wash("--success", 10), borderColor: "transparent" }}>open project</span>}
-          {s.recommended && <span className="chip" style={{ color: "var(--primary)", background: wash("--primary", 12), borderColor: "transparent" }}>suggested</span>}
+                style={{ color: "var(--success-ink)", background: wash("--success", 10), borderColor: "transparent" }}>open project</span>}
+          {s.recommended && <span className="chip" style={{ color: "var(--primary-ink)", background: wash("--primary", 12), borderColor: "transparent" }}>suggested</span>}
           {!s.found && <span className="chip" style={{ color: "var(--text4)" }}>not found</span>}
           {s.found && <span className="chip t-dim tabular-nums">{s.files.toLocaleString()} files · {fmtBytes(s.bytes)}</span>}
           {s.added && (
@@ -333,7 +334,7 @@ export function Teach({ active }: { active: boolean }) {
       {!data.terms.ok && (
         <div className="px-4 py-2 text-[11.5px] leading-relaxed"
           style={{ color: "var(--text2)", background: wash("--error", 10), borderBottom: `1px solid ${wash("--error", 30)}` }}>
-          <b style={{ color: "var(--error)" }}>It will not read anything yet.</b> There is no private-terms list at{" "}
+          <b style={{ color: "var(--error-ink)" }}>It will not read anything yet.</b> There is no private-terms list at{" "}
           <span className="tabular-nums">{data.terms.path}</span>. That list is what stops a private name reaching a
           file it should not, and without it this cannot tell "checked, clean" from "could not check" — so it refuses
           rather than guessing. Create the file (one name, word or pattern per line; <span className="tabular-nums">AGENTGLASS_PRIVATE_TERMS</span> points
@@ -452,8 +453,8 @@ export function Teach({ active }: { active: boolean }) {
             onKeyDown={(e) => { if (e.key === "Enter") void add(); }}
             spellCheck={false}
             placeholder="/home/you/notes"
-            className="flex-1 min-w-0 px-2 py-1 text-[11.5px] rounded-lg"
-            style={{ background: wash("--text", 4), border: `1px solid ${wash("--border", 60)}`, color: "var(--text)", fontFamily: "inherit" }}
+            className={`flex-1 min-w-0 ${INPUT}`}
+            style={INPUT_STYLE}
           />
           <Chip onClick={() => void add()}>Add</Chip>
         </div>
@@ -463,7 +464,7 @@ export function Teach({ active }: { active: boolean }) {
       </div>
 
       {problem && (
-        <div className="px-4 py-2 text-[11.5px]" style={{ color: "var(--error)", background: wash("--error", 8) }}>
+        <div className="px-4 py-2 text-[11.5px]" style={{ color: "var(--error-ink)", background: wash("--error", 8) }}>
           {problem}
         </div>
       )}

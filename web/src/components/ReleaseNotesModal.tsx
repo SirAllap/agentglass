@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { Portal } from "./Portal.tsx";
 import { Markdown } from "../lib/markdown.tsx";
 import { CloseButton } from "./CloseButton.tsx";
+import { EDGE } from "./workspace/Chrome.tsx";
 
 /**
  * The notes for one release, in a dialog.
@@ -58,12 +59,12 @@ export function ReleaseNotesModal({ open, tag, notes, title = "What's new", load
                 role="dialog" aria-modal="true" aria-label={tag ? `${title} in ${tag}` : title}
                 initial={{ opacity: 0, scale: 0.96, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.97, y: 8 }}
                 transition={{ type: "spring", stiffness: 340, damping: 30 }}
-                className="w-[720px] max-w-[95vw] rounded-2xl flex flex-col pointer-events-auto overflow-hidden"
-                style={{ maxHeight: "min(78vh, 640px)", background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
+                className="w-[720px] max-w-[95vw] rounded-xl flex flex-col pointer-events-auto overflow-hidden"
+                style={{ maxHeight: "min(78vh, 640px)", background: "var(--surface-card)", border: EDGE, boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
 
                 <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                   <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>{title}</span>
-                  {tag && <span className="chip" style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>{tag}</span>}
+                  {tag && <span className="chip" style={{ color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>{tag}</span>}
                   <CloseButton onClick={onClose} title="Close" className="ml-auto" />
                 </div>
 
@@ -71,7 +72,7 @@ export function ReleaseNotesModal({ open, tag, notes, title = "What's new", load
                   {loading
                     ? <div className="text-[11px] t-dim2">Reading the notes…</div>
                     : error
-                      ? <div className="text-[11px]" style={{ color: "var(--warning)" }}>{error}</div>
+                      ? <div className="text-[11px]" style={{ color: "var(--warning-ink)" }}>{error}</div>
                       : <Markdown text={notes} />}
                   {footnote && !loading && !error && (
                     <div className="mt-4 pt-3 border-t text-[10px] t-dim2" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
@@ -83,7 +84,7 @@ export function ReleaseNotesModal({ open, tag, notes, title = "What's new", load
                 <div className="px-5 py-3 border-t shrink-0 flex justify-end" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                   <button onClick={onClose} autoFocus
                     className="text-[11.5px] px-3 py-1.5 rounded-lg font-medium"
-                    style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 40%, transparent)" }}>
+                    style={{ color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 40%, transparent)" }}>
                     Got it
                   </button>
                 </div>

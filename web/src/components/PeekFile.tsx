@@ -36,6 +36,7 @@ import { findRanges, paint as paintFind, clear as clearFind, step as stepFind, r
 import { groupAt, groupLabel, groupTotals, type ChangeGroup } from "../lib/changeGroups.ts";
 import { IconLabel, SearchIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 
 export type Peek = {
   root: string;
@@ -148,7 +149,7 @@ function ChangeRail({ groups, fileLines, cursor, onGo }: {
 
   return (
     <div className="shrink-0 flex flex-col"
-      style={{ width: 190, borderLeft: "1px solid color-mix(in srgb, var(--text) 12%, transparent)", background: "color-mix(in srgb, var(--text) 3%, transparent)" }}>
+      style={{ width: 190, borderLeft: LINE, background: "color-mix(in srgb, var(--text) 3%, transparent)" }}>
       {/* Where the cursor is, in the file's own words. Blank until the editor
           answers, rather than a guess that would be wrong half the time. */}
       {here?.symbol && (
@@ -156,13 +157,13 @@ function ChangeRail({ groups, fileLines, cursor, onGo }: {
           {here.symbol}
         </div>
       )}
-      <div className="flex items-center gap-1 px-2 pb-1.5 pt-1" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 10%, transparent)" }}>
+      <div className="flex items-center gap-1 px-2 pb-1.5 pt-1" style={{ borderBottom: LINE }}>
         <span className="text-[9.5px] tabular-nums" style={{ color: "var(--text4)" }}>
           {totals.places} {totals.places === 1 ? "place" : "places"}
         </span>
         <span className="ml-auto text-[9.5px] tabular-nums flex gap-1">
           {totals.added > 0 && <span style={{ color: "var(--success, #98c379)" }}>+{totals.added}</span>}
-          {totals.removed > 0 && <span style={{ color: "var(--error)" }}>−{totals.removed}</span>}
+          {totals.removed > 0 && <span style={{ color: "var(--error-ink)" }}>−{totals.removed}</span>}
         </span>
       </div>
 
@@ -212,7 +213,7 @@ function ChangeRail({ groups, fileLines, cursor, onGo }: {
                   <span className="text-[10.5px] tabular-nums" style={{ color: i === at ? "var(--text)" : "var(--text2)" }}>{groupLabel(g)}</span>
                   <span className="ml-auto text-[9.5px] tabular-nums shrink-0">
                     {g.added > 0 && <span style={{ color: "var(--success, #98c379)" }}>+{g.added}</span>}
-                    {g.removed > 0 && <span style={{ color: "var(--error)" }}> −{g.removed}</span>}
+                    {g.removed > 0 && <span style={{ color: "var(--error-ink)" }}> −{g.removed}</span>}
                   </span>
                 </span>
                 {g.symbol && (
@@ -233,7 +234,7 @@ function ChangeRail({ groups, fileLines, cursor, onGo }: {
         </div>
       </div>
 
-      <div className="flex items-center justify-between px-2 py-1" style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 10%, transparent)" }}>
+      <div className="flex items-center justify-between px-2 py-1" style={{ borderTop: LINE }}>
         <span className="flex items-center gap-1">
           <button className="agx-btn rounded grid place-items-center" style={{ width: 20, height: 20, color: "var(--text3)" }}
             title="Previous place (p)" onClick={() => step(-1)}>
@@ -609,24 +610,24 @@ export function PeekFile({ peek, onClose, topPx }: {
         style={{
           zIndex: 9999, top: topPx === undefined ? "6vh" : topPx, bottom: "6vh", left: "8vw", right: "8vw",
           background: "var(--bg)",
-          border: "1px solid color-mix(in srgb, var(--text) 22%, transparent)",
+          border: EDGE,
           boxShadow: "0 40px 90px -24px var(--shadow)",
         }}>
         <div className="flex items-center gap-2 px-3 py-1.5 shrink-0 text-[11px]"
-          style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", background: "var(--bg2)" }}>
+          style={{ borderBottom: LINE, background: "var(--surface-card)" }}>
           {/* Which of the two this is, said at a glance rather than discovered
               by trying to type. A writable editor open on the wrong worktree is
               the failure worth making impossible to walk into, so the branch is
               part of the claim. */}
           <span className="shrink-0 text-[9.5px] px-1.5 py-0.5 rounded-full"
             style={peek.edit
-              ? { color: "var(--success)", border: "1px solid color-mix(in srgb, var(--success) 50%, transparent)" }
-              : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
+              ? { color: "var(--success-ink)", border: "1px solid color-mix(in srgb, var(--success) 50%, transparent)" }
+              : { color: "var(--text3)", border: EDGE }}>
             {peek.edit ? "editable" : "⌦ read-only"}
           </span>
           <span className="min-w-0 truncate" style={{ color: "var(--text)" }}>{peek.label ?? peek.path}</span>
           {peek.branch && (
-            <span className="shrink-0 text-[9.5px] px-1.5 py-0.5 rounded-full truncate" style={{ maxWidth: 220, color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>
+            <span className="shrink-0 text-[9.5px] px-1.5 py-0.5 rounded-full truncate" style={{ maxWidth: 220, color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>
               {peek.branch}
             </span>
           )}
@@ -648,13 +649,13 @@ export function PeekFile({ peek, onClose, topPx }: {
               <button onClick={openFind} disabled={text === null}
                 title="Find in this document (Ctrl+F)"
                 className="agx-btn rounded px-2 py-0.5 text-[10px]"
-                style={{ color: findOpen ? "var(--primary-hover)" : "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)", opacity: text === null ? 0.4 : 1 }}>
+                style={{ color: findOpen ? "var(--primary-hover)" : "var(--text2)", border: EDGE, opacity: text === null ? 0.4 : 1 }}>
                 <IconLabel icon={<SearchIcon size={ICON.xs} />}>Find</IconLabel>
               </button>
               <button onClick={copy} disabled={text === null}
                 title="Copy the markdown source, not the rendering"
                 className="agx-btn rounded px-2 py-0.5 text-[10px]"
-                style={{ color: copied ? "var(--success)" : "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)", opacity: text === null ? 0.4 : 1 }}>
+                style={{ color: copied ? "var(--success)" : "var(--text2)", border: EDGE, opacity: text === null ? 0.4 : 1 }}>
                 {copied ? "Copied" : "Copy"}
               </button>
 
@@ -662,7 +663,7 @@ export function PeekFile({ peek, onClose, topPx }: {
                   they are moving, and because a stepper with no read-out makes
                   you press it to find out where you are. */}
               <span className="flex items-center rounded overflow-hidden"
-                style={{ border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
+                style={{ border: EDGE }}>
                 {/* The functional form, because two clicks in one tick both
                     read the same `size` and the second step is lost. A person
                     hammering A+ is exactly who is trying to change it a lot. */}
@@ -678,7 +679,7 @@ export function PeekFile({ peek, onClose, topPx }: {
               {/* Measure, in characters — the unit that stays true when the
                   size changes. See mdPrefs.ts. */}
               <span className="flex items-center rounded overflow-hidden"
-                style={{ border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
+                style={{ border: EDGE }}>
                 {WIDTHS.map((w) => (
                   <button key={w} onClick={() => setWidth(setMdWidth(w))}
                     title={w === 0 ? "Use the whole pane" : `${w} characters a line`}
@@ -696,7 +697,7 @@ export function PeekFile({ peek, onClose, topPx }: {
               {canReveal() && (
                 <button onClick={() => void reveal()} title="Show this file in the file manager"
                   className="agx-btn rounded px-2 py-0.5 text-[10px]"
-                  style={{ color: revealed ? "var(--error)" : "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
+                  style={{ color: revealed ? "var(--error)" : "var(--text2)", border: EDGE }}>
                   {revealed ?? "Show in folder"}
                 </button>
               )}
@@ -713,13 +714,13 @@ export function PeekFile({ peek, onClose, topPx }: {
           {atRef && (
             <span className="shrink-0 text-[10px] px-2 py-0.5 rounded ml-auto"
               title={`Read from ${peek.ref} — this checkout is not on that branch`}
-              style={{ color: "var(--info)", border: "1px solid color-mix(in srgb, var(--info) 32%, transparent)" }}>
+              style={{ color: "var(--info-ink)", border: "1px solid color-mix(in srgb, var(--info) 32%, transparent)" }}>
               read-only · {peek.ref}
             </span>
           )}
           {canRender && !atRef && (
             <span className={`shrink-0 flex items-center rounded overflow-hidden ${reading ? "" : "ml-auto"}`}
-              style={{ border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
+              style={{ border: EDGE }}>
               <button onClick={() => setReading(true)} title="Render it as markdown"
                 className="agx-btn text-[10px] px-2 py-0.5"
                 style={reading
@@ -763,16 +764,16 @@ export function PeekFile({ peek, onClose, topPx }: {
             }}
             title="Open this file on the bench — it stays open there when you leave this view"
             className={`agx-btn shrink-0 text-[10px] px-2 py-0.5 rounded ${canRender || atRef ? "" : "ml-auto"}`}
-            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
+            style={{ color: "var(--text2)", border: EDGE }}>
             To the bench
           </button>
           <span className="shrink-0" style={{ color: "var(--text3)" }}>
             {reading ? "" : peek.edit ? ":wq to save and close" : ":q to close"}
           </span>
-          <CloseButton onClick={onClose} title="Close" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 18%, transparent)" }} className="agx-btn shrink-0 rounded" />
+          <CloseButton onClick={onClose} title="Close" style={{ color: "var(--text2)", border: EDGE }} className="agx-btn shrink-0 rounded" />
         </div>
         {error ? (
-          <div className="p-4 text-[11.5px]" style={{ color: "var(--error)" }}>{error}</div>
+          <div className="p-4 text-[11.5px]" style={{ color: "var(--error-ink)" }}>{error}</div>
         ) : reading ? (
           <>
           {findOpen && (
@@ -798,7 +799,7 @@ export function PeekFile({ peek, onClose, topPx }: {
                  66 mean sixty-six characters rather than sixty-six of some
                  other face's. See .agx-prose in index.css. */
               style={{ maxWidth: width ? `${width}ch` : "none", fontSize: size }}>
-              {textErr && <div className="text-[12px]" style={{ color: "var(--error)" }}>{textErr}</div>}
+              {textErr && <div className="text-[12px]" style={{ color: "var(--error-ink)" }}>{textErr}</div>}
               {text === null && !textErr && <div className="text-[12px] t-dim">Reading…</div>}
               {/* Markdown only for markdown. A caller that lands anything else
                   in reading mode gets it as it is: the renderer collapses
@@ -812,7 +813,7 @@ export function PeekFile({ peek, onClose, topPx }: {
                 : <pre className="text-[12.5px] leading-relaxed whitespace-pre overflow-x-auto agx-scroll"
                     style={{ fontFamily: "var(--mono, ui-monospace, monospace)" }}>{text}</pre>)}
               {truncated && (
-                <div className="mt-4 text-[11.5px]" style={{ color: "var(--warning)" }}>
+                <div className="mt-4 text-[11.5px]" style={{ color: "var(--warning-ink)" }}>
                   This file is longer than a megabyte and is shown up to there. Open it in the editor
                   for the rest.
                 </div>
@@ -867,12 +868,12 @@ function FindBar({ inputRef, value, onValue, hit, hits, onStep, onClose }: {
   const none = value.trim().length > 0 && hits === 0;
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 shrink-0 text-[11px]"
-      style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", background: "var(--bg2)" }}>
+      style={{ borderBottom: LINE, background: "var(--surface-card)" }}>
       <span className="flex" style={{ color: "var(--text3)" }}><SearchIcon size={ICON.xs} /></span>
       <input ref={inputRef} value={value} onChange={(e) => onValue(e.target.value)}
         spellCheck={false} autoComplete="off" placeholder="Find in this document…"
-        className="flex-1 min-w-0 bg-transparent outline-none text-[12px]"
-        style={{ color: none ? "var(--error)" : "var(--text)" }}
+        className={`flex-1 min-w-0 ${INPUT}`}
+        style={{ ...INPUT_STYLE, color: none ? "var(--error)" : "var(--text)" }}
         onKeyDown={(e) => {
           // Enter walks forward, Shift+Enter back — and they stop here, or the
           // panel's own Escape would close the document instead of the bar.
@@ -889,7 +890,7 @@ function FindBar({ inputRef, value, onValue, hit, hits, onStep, onClose }: {
       <button onClick={() => onStep(1)} disabled={!hits} title="Next (Enter)"
         className="agx-btn shrink-0 rounded px-1.5" style={{ color: hits ? "var(--text2)" : "var(--text4)" }}>↓</button>
       <CloseButton onClick={onClose} title="Close find (esc)"
-        style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 18%, transparent)" }}
+        style={{ color: "var(--text2)", border: EDGE }}
         className="agx-btn shrink-0 rounded" />
     </div>
   );

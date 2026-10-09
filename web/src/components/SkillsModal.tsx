@@ -8,6 +8,7 @@ import { fmtAgo, fmtUsd } from "../lib/format.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { DoneIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
 
 type Kind = "all" | "skill" | "command";
 type Usage = "all" | "used" | "never";
@@ -58,12 +59,12 @@ function SkillCard({ s, isNew, isTop, expanded, onToggle }: { s: SkillInfo; isNe
       }}
     >
       <div className="flex items-center gap-2 min-w-0">
-        <span className="font-semibold text-[12.5px] truncate" style={{ color: "var(--primary)" }}>{invoke}</span>
+        <span className="font-semibold text-[12.5px] truncate" style={{ color: "var(--primary-ink)" }}>{invoke}</span>
         <button
           onClick={copy}
           title={`Copy ${invoke} to clipboard`}
           className="chip shrink-0 cursor-pointer"
-          style={copied ? { color: "var(--success)", borderColor: "color-mix(in srgb, var(--success) 45%, transparent)" } : { color: "var(--text4)" }}
+          style={copied ? { color: "var(--success-ink)", borderColor: "color-mix(in srgb, var(--success) 45%, transparent)" } : { color: "var(--text4)" }}
         >
           {copied ? <span className="inline-flex items-center gap-1">Copied<DoneIcon size={ICON.xs} /></span> : "Copy"}
         </button>
@@ -83,14 +84,14 @@ function SkillCard({ s, isNew, isTop, expanded, onToggle }: { s: SkillInfo; isNe
         <span className="chip">{s.source}</span>
         <span>Added {fmtAgo(s.added)} ago</span>
         {s.copies > 1 && <span>· ×{s.copies} copies</span>}
-        {perRun > 0 && <span className="tabular-nums" style={{ color: "var(--success)" }}>· ~{fmtUsd(perRun)}/run</span>}
+        {perRun > 0 && <span className="tabular-nums" style={{ color: "var(--success-ink)" }}>· ~{fmtUsd(perRun)}/run</span>}
       </div>
       {/* The "reach for this when…" line — the answer to "which skill do I use here?" */}
       {s.when_to_use && (
         <div
           className="mt-1.5 text-[10.5px] leading-snug"
           style={{
-            color: "var(--info)",
+            color: "var(--info-ink)",
             ...(expanded ? {} : { display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as const, overflow: "hidden" }),
           }}
         >
@@ -115,7 +116,7 @@ function SkillCard({ s, isNew, isTop, expanded, onToggle }: { s: SkillInfo; isNe
           </div>
           {s.cost_usd > 0 && (
             <div className="t-dim2">
-              Attributed cost: <span className="tabular-nums" style={{ color: "var(--success)" }}>{fmtUsd(s.cost_usd)}</span> total · ~{fmtUsd(perRun)}/run
+              Attributed cost: <span className="tabular-nums" style={{ color: "var(--success-ink)" }}>{fmtUsd(s.cost_usd)}</span> total · ~{fmtUsd(perRun)}/run
             </div>
           )}
           <div className="t-dim2 truncate" title={s.path}>{s.path}</div>
@@ -221,8 +222,8 @@ export function SkillsModal({ open, onClose }: { open: boolean; onClose: () => v
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 8 }}
               transition={{ type: "spring", stiffness: 330, damping: 30 }}
-              className="w-[min(1320px,96vw)] h-[min(960px,92vh)] rounded-2xl flex flex-col pointer-events-auto"
-              style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
+              className="w-[min(1320px,96vw)] h-[min(960px,92vh)] rounded-xl flex flex-col pointer-events-auto"
+              style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
             >
               <div className="flex items-center justify-between px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                 <div className="flex items-baseline gap-2.5 flex-wrap">
@@ -247,8 +248,8 @@ export function SkillsModal({ open, onClose }: { open: boolean; onClose: () => v
                   value={q}
                   onChange={(e) => setQ(e.target.value)}
                   placeholder="Search skills — name or description…"
-                  className="flex-1 min-w-[180px] px-3 py-1.5 rounded-lg text-[11px] outline-none"
-                  style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }}
+                  className={`flex-1 min-w-[180px] ${INPUT}`}
+                  style={INPUT_STYLE}
                 />
                 <div className="flex gap-1">
                   {(["all", "skill", "command"] as Kind[]).map((k) => (
@@ -291,7 +292,7 @@ export function SkillsModal({ open, onClose }: { open: boolean; onClose: () => v
                 {sections ? (
                   sections.map(({ category: c, items }) => (
                     <div key={c} className="mb-4">
-                      <div className="flex items-baseline gap-2 mb-2 sticky top-0 py-1" style={{ background: "var(--bg2)", zIndex: 1 }}>
+                      <div className="flex items-baseline gap-2 mb-2 sticky top-0 py-1" style={{ background: "var(--surface-card)", zIndex: 1 }}>
                         <span className="panel-eyebrow">{c}</span>
                         <span className="text-[9.5px] t-dim2 tabular-nums">{items.length}</span>
                       </div>

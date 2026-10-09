@@ -103,6 +103,18 @@ export function movesCard(current: string, pick: string): boolean {
 
 const eqStatus = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
+/**
+ * The list's own name for "ready for QA", found by matching rather than
+ * assumed — one workspace spells it "Ready for QA", another "ready for qa",
+ * and the word is theirs, not this app's. Undefined when the list has no such
+ * status, or the card is already sitting in it: either way there is nothing
+ * for a "move to RfQA" control to offer.
+ */
+export function rfqaStatus(statuses: ListStatus[], current: string): string | undefined {
+  const hit = statuses.find((s) => s.status.trim().toLowerCase() === "ready for qa");
+  return hit && !eqStatus(hit.status, current) ? hit.status : undefined;
+}
+
 /** The colour a board gave a status, or nothing — never an invented one. A
  *  made-up colour standing beside real ones reads as a real one. */
 export function statusColor(statuses: ListStatus[], status: string): string | undefined {
