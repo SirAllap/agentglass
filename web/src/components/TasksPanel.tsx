@@ -2874,8 +2874,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
             <button onClick={() => setRailOpen((o) => !o)}
               aria-expanded={railOpen}
               title={railOpen ? "Fold the list menu" : "Show the lists"}
-              className="shrink-0 grid place-items-center rounded"
-              style={{ width: 22, height: 22, border: EDGE, color: "var(--text3)" }}>
+              className="shrink-0 grid place-items-center rounded-lg"
+              style={{ width: CTRL_H.large, height: CTRL_H.large, border: EDGE, color: "var(--text3)" }}>
               {/* Drawn rather than typed. `‹` is a text glyph and sits on a text
                   baseline, so centring the box still left it riding high inside
                   it — the alignment cannot be fixed by the box because the gap
