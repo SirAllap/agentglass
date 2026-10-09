@@ -2985,9 +2985,6 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                 {status === "unauthorized" ? "Token needed" : "Reconnect"}
               </button>
             )}
-            <button type="button" onClick={() => openSettings("terminal")} aria-label="Terminal settings…" title="Terminal settings…"
-                className="shrink-0 grid place-items-center rounded hover:bg-white/10"
-                style={{ width: MIN_BOX, height: MIN_BOX, color: "var(--text3)" }}><GearIcon size={ICON.xs} /></button>
             {!tmuxActive && <button onClick={splitPane} disabled={!root || IS_DEMO || disabled || paneIds.length >= 4} title="Show another shell beside this one" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", opacity: paneIds.length >= 4 ? 0.45 : 1 }}><IconLabel icon={<GridIcon size={ICON.xs} />}>Split</IconLabel></button>}
             {/* The way back, and it lives here because the way out
                 lives in the strip — which is the thing being hidden.
@@ -3009,6 +3006,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                 the other things you press occasionally rather than
                 beside the chip. The left side is the chip and nothing
                 else. */}
+            <MoreMenu>
             <CommandBar root={root} disabled={disabled} font={TERM_FONT} onRun={run} runTargetInTmux={!!sess?.tmux} onClose={focusTerm} quiet />
             {/* Sessions, last on the right — the one control here that
                 is about work you have already done rather than the
@@ -3019,6 +3017,10 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
               onOpen={(sn, how) => { tmuxCmd({ cmd: "resume", id: sn.id, cwd: sn.cwd, split: how.split, yolo: how.yolo }); focusTerm(); }}
               onGo={(at) => { void api.focusPane({ sessionId: at.sessionId, windowId: at.windowId, paneId: at.paneId }); }}
             />
+            </MoreMenu>
+            <button type="button" onClick={() => openSettings("terminal")} aria-label="Terminal settings…" title="Terminal settings…"
+                className="shrink-0 grid place-items-center rounded hover:bg-white/10"
+                style={{ width: MIN_BOX, height: MIN_BOX, color: "var(--text3)" }}><GearIcon size={ICON.xs} /></button>
     </>
   );
   /* Exactly one of the two window lists is ever on screen, and either one can be
@@ -3990,3 +3992,40 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   );
 }
 
+
+
+/* Commands and Sessions, behind one button. Each keeps its own control and its
+   own dropdown; this only stacks them, so a menu that opens from inside it is
+   not an outside click (its dropdown is drawn in a portal with the menu class). */
+function MoreMenu({ children }: { children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: PointerEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (box.current?.contains(t) || t?.closest?.(".agx-menu, [role=menu]")) return;
+      setOpen(false);
+    };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    window.addEventListener("pointerdown", away, true);
+    window.addEventListener("keydown", esc, true);
+    return () => { window.removeEventListener("pointerdown", away, true); window.removeEventListener("keydown", esc, true); };
+  }, [open]);
+  return (
+    <span ref={box} className="relative shrink-0">
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
+        title="Commands and sessions"
+        className="text-[11px] px-2 py-1 rounded-lg flex items-center gap-1"
+        style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+        More <span style={{ color: "var(--text3)" }}>▾</span>
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-1 rounded-lg p-1.5 flex flex-col gap-1 agx-menu"
+          style={{ zIndex: 60, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", boxShadow: "0 12px 30px -10px #000" }}>
+          {children}
+        </div>
+      )}
+    </span>
+  );
+}
