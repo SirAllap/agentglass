@@ -47,9 +47,29 @@ describe("the review", () => {
     expect(reviewLook(pr(), false)?.label).toBe("Needs review");
   });
   test("approved and changes requested", () => {
-    expect(reviewLook(pr({ reviewDecision: "APPROVED" }), false)).toEqual({ label: "Approved", tone: "good" });
+    expect(reviewLook(pr({ reviewDecision: "APPROVED", humanReview: { kind: "approved", who: ["bob-r"] } }), false))
+      .toEqual({ label: "Approved", tone: "good" });
     expect(reviewLook(pr({ reviewDecision: "CHANGES_REQUESTED" }), false)?.tone).toBe("bad");
     expect(reviewLook(pr({ reviewDecision: null }), false)).toBeNull();
+  });
+  /* `reviewDecision: "APPROVED"` because a bot approved it, while the only
+   * human asked for changes: the list said "Approved". */
+  test("a bot's approval is not an approval", () => {
+    const botOnly = pr({ reviewDecision: "APPROVED", humanReview: null });
+    expect(reviewLook(botOnly, false)).toEqual({ label: "Needs review", tone: "warn" });
+    expect(reviewLook(pr({ reviewDecision: "APPROVED", humanReview: { kind: "changes", who: ["bob-r"] } }), false))
+      .toEqual({ label: "Changes requested", tone: "bad" });
+    expect(reviewLook(pr({ reviewDecision: "APPROVED", humanReview: { kind: "awaiting", who: ["bob-r"] } }), true)?.label)
+      .toBe("Needs your review");
+  });
+  test("a person's approval still reads Approved, stale or not counted", () => {
+    const ok = pr({ reviewDecision: "APPROVED", humanReview: { kind: "approved", who: ["bob-r"] } });
+    expect(reviewLook(ok, false)).toEqual({ label: "Approved", tone: "good" });
+    const stale = pr({ reviewDecision: "REVIEW_REQUIRED", humanReview: { kind: "approved", who: ["bob-r"], stale: true } });
+    expect(reviewLook(stale, false)?.tone).toBe("warn");
+  });
+  test("still being read is silence, not a claim", () => {
+    expect(reviewLook(pr({ reviewDecision: "APPROVED", checksLoaded: false }), false)).toBeNull();
   });
 });
 

@@ -29,7 +29,12 @@ export type Inline =
   | { t: "code"; text: string }
   | { t: "link"; href: string; kids: Inline[] }
   | { t: "strong"; kids: Inline[] }
-  | { t: "em"; kids: Inline[] };
+  | { t: "em"; kids: Inline[] }
+  /** A picture written in a sentence, as `![alt](src)` or as the `<img>` tag
+   *  GitHub writes when a screenshot is pasted. Lifted out of the paragraph into
+   *  its own block (`flow`) wherever a block can hold it; drawn as its alt text
+   *  only where one cannot (a heading, a table cell). */
+  | { t: "image"; src: string; alt: string };
 
 export interface ListItem {
   /** `null` for an ordinary bullet; a task list carries its state. */
@@ -249,9 +254,41 @@ function parseLines(lines: string[]): Block[] {
       para.push(at.trim());
       i++;
     }
-    out.push({ t: "p", kids: parseInline(para.join(" ")) });
+    out.push(...flow(parseInline(para.join(" "))));
   }
 
+  return out;
+}
+
+/** The image an inline span stands for, when it is nothing but one: a bare
+ *  picture, or the `[![badge](img)](href)` a README wraps it in. */
+function loneImage(k: Inline): { src: string; alt: string } | null {
+  if (k.t === "image") return k;
+  const only = k.t === "link" && k.kids.length === 1 ? k.kids[0] : undefined;
+  return only?.t === "image" ? only : null;
+}
+
+/**
+ * A run of spans as blocks, with every picture in its own.
+ *
+ * A phone cannot lay an image out inside a sentence, and the old answer —
+ * the alt text as a link — meant a pasted screenshot arrived as a blue word.
+ * The text on either side stays a paragraph, in order, so the picture sits
+ * where the author put it.
+ */
+function flow(kids: Inline[]): Block[] {
+  const out: Block[] = [];
+  let run: Inline[] = [];
+  const flush = (): void => {
+    const blank = run.every((k) => k.t === "text" && !k.text.trim());
+    if (run.length && !blank) out.push({ t: "p", kids: run });
+    run = [];
+  };
+  for (const k of kids) {
+    const img = loneImage(k);
+    if (img) { flush(); out.push({ t: "image", src: img.src, alt: img.alt }); } else run.push(k);
+  }
+  flush();
   return out;
 }
 
@@ -297,10 +334,12 @@ function parseList(lines: string[], from: number): [Block, number] {
 
     const rest = m[3]!;
     const task = TASK.exec(rest);
+    // A picture in an item goes under it, before any nested list.
+    const [lead, ...below] = flow(parseInline(task ? task[2]! : rest));
     items.push({
       checked: task ? task[1]!.toLowerCase() === "x" : null,
-      kids: parseInline(task ? task[2]! : rest),
-      children: [],
+      kids: lead?.t === "p" ? lead.kids : [],
+      children: lead && lead.t !== "p" ? [lead, ...below] : below,
     });
     i++;
   }
@@ -330,6 +369,13 @@ function splitRow(line: string): Inline[][] {
 const CODE_SPAN = /^(`+)([\s\S]*?)\1/;
 const LINK = /^\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/;
 const IMAGE_INLINE = /^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/;
+/** `[![alt](img)](href)` — the `[^\]]*` of LINK would close on the image's own
+ *  bracket and call `![alt` a link to the picture. */
+const IMAGE_LINKED = /^\[(!\[[^\]]*\]\([^)\s]+(?:\s+"[^"]*")?\))\]\([^)\s]+(?:\s+"[^"]*")?\)/;
+/** The tag, with nothing in it that can close early: `[^>]*` is one quantifier. */
+const HTML_IMG = /^(?:<a\b[^>]*>\s*)?<img\b[^>]*>(?:\s*<\/a>)?/i;
+const HTML_SRC = /\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)')/i;
+const HTML_ALT = /\balt\s*=\s*(?:"([^"]*)"|'([^']*)')/i;
 const AUTOLINK = /^<((?:https?):\/\/[^>\s]+)>/;
 /** A bare address, which is how the CU reference is written in this project's
  *  own template. One quantifier and no lookahead: the two adjacent character
@@ -362,15 +408,35 @@ export function parseInline(src: string): Inline[] {
     const code = CODE_SPAN.exec(rest);
     if (code) { flush(); out.push({ t: "code", text: code[2]!.trim() }); i += code[0].length; continue; }
 
-    // An inline image is rare and cannot be laid out inside a sentence, so it
-    // reads as its alt text linked to the file — which is what a reader wants
-    // from `![build status](…)` anyway.
     const img = IMAGE_INLINE.exec(rest);
-    if (img) {
+    if (img) { flush(); out.push({ t: "image", src: img[2]!, alt: img[1]! }); i += img[0].length; continue; }
+
+    const linked = IMAGE_LINKED.exec(rest);
+    if (linked) {
       flush();
-      out.push({ t: "link", href: img[2]!, kids: [{ t: "text", text: img[1] || img[2]! }] });
-      i += img[0].length;
+      const inner = IMAGE_INLINE.exec(linked[1]!)!;
+      out.push({ t: "image", src: inner[2]!, alt: inner[1]! });
+      i += linked[0].length;
       continue;
+    }
+
+    // `<img width="600" src="…">`, which is what GitHub writes for a pasted
+    // screenshot. Raw HTML is dropped everywhere else; a picture is the one tag
+    // whose loss leaves a hole where the evidence was. No http(s) source means
+    // nothing to fetch, so that tag is dropped like the rest.
+    if (rest[0] === "<" || rest.startsWith("<a")) {
+      const tag = HTML_IMG.exec(rest);
+      if (tag) {
+        const src = HTML_SRC.exec(tag[0]);
+        const url = src ? (src[1] ?? src[2] ?? "") : "";
+        flush();
+        if (/^https?:\/\//i.test(url)) {
+          const alt = HTML_ALT.exec(tag[0]);
+          out.push({ t: "image", src: url.replace(/&amp;/g, "&"), alt: alt ? (alt[1] ?? alt[2] ?? "") : "" });
+        }
+        i += tag[0].length;
+        continue;
+      }
     }
 
     const link = LINK.exec(rest);
@@ -420,7 +486,7 @@ export function parseInline(src: string): Inline[] {
 /** The plain text of a run of spans — for a row that has one line to give a
  *  thread, and for tests that care about what was kept rather than how. */
 export function inlineText(kids: Inline[]): string {
-  return kids.map((k) => (k.t === "text" || k.t === "code" ? k.text : inlineText(k.kids))).join("");
+  return kids.map((k) => (k.t === "text" || k.t === "code" ? k.text : k.t === "image" ? k.alt : inlineText(k.kids))).join("");
 }
 
 /**

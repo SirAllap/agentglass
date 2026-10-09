@@ -18,7 +18,7 @@
  * are `completed` with a conclusion of `skipped`, and grouping those with the
  * red ones would report a normal pull request as twenty failures.
  */
-import type { PrCheckJob } from "../../../shared/types.ts";
+import type { PrCheckJob, PrCheckRollup } from "../../../shared/types.ts";
 
 /** The three states a row can be in, which is fewer than GitHub's list on
  *  purpose: what a person standing up needs is red, still-going, or neither. */
@@ -141,4 +141,26 @@ export function foldJobLog(text: string): string {
     out.push(line);
   }
   return out.join("\n");
+}
+
+/** How long to wait before asking for the jobs again: only while one is still
+ *  running, and never otherwise. A finished run cannot change, so polling it is
+ *  requests spent on a screen that is not going to move. */
+export const JOBS_POLL_MS = 15_000;
+export function nextJobsPoll(jobs: readonly PrCheckJob[] | null): number | null {
+  return jobs?.some((j) => standingOf(j).standing === "running") ? JOBS_POLL_MS : null;
+}
+
+/** Did the checks move between two reads? The pull request's screen asks for
+ *  the rollup while something runs — one GraphQL call, where re-reading the
+ *  whole detail is two — and only pays for the detail when this says yes. */
+export function checksMoved(a: PrCheckRollup, b: PrCheckRollup): boolean {
+  return a.total !== b.total || a.success !== b.success || a.failure !== b.failure
+    || a.pending !== b.pending || a.skipped !== b.skipped;
+}
+
+/** The same question for the pull request's own screen. */
+export const DETAIL_POLL_MS = 30_000;
+export function nextDetailPoll(pending: number | undefined): number | null {
+  return pending && pending > 0 ? DETAIL_POLL_MS : null;
 }

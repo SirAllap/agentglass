@@ -318,7 +318,7 @@ export default function PrsScreen(): React.ReactNode {
           options={FILTERS.map((id) => ({
             id,
             label: FILTER_LABEL[id],
-            count: counts ? counts[id] : undefined,
+            count: counts && id !== "all" ? counts[id] : undefined,
           }))}
         />
       </View>

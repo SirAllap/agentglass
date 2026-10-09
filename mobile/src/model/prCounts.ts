@@ -9,10 +9,11 @@
  * source rather than against a screen — there is no renderer in this project.
  */
 
-/** What `/prs/counts` answers with, per repository. */
-export interface PrViewCounts { review: number; mine: number; failing: number; ready: number; all: number }
+/** What `/prs/counts` answers with, per repository — the two views GitHub's
+ *  search can count in one call. "All" has no number: it is the list itself. */
+export interface PrViewCounts { review: number; mine: number }
 
-const ZERO: PrViewCounts = { review: 0, mine: 0, failing: 0, ready: 0, all: 0 };
+const ZERO: PrViewCounts = { review: 0, mine: 0 };
 
 /** Null for an empty list — "nobody answered yet" is not the same fact as
  *  "everybody answered zero", and the caller keeps the old counts on screen
@@ -22,8 +23,5 @@ export function sumPrCounts(counts: PrViewCounts[]): PrViewCounts | null {
   return counts.reduce((sum, c) => ({
     review: sum.review + c.review,
     mine: sum.mine + c.mine,
-    failing: sum.failing + c.failing,
-    ready: sum.ready + c.ready,
-    all: sum.all + c.all,
   }), ZERO);
 }

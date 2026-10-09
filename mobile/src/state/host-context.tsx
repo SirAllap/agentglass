@@ -36,7 +36,7 @@ import { openLive, type LiveHandle, type LiveState } from "../lib/live.ts";
 import { remember, shouldNotify, shouldNotifyTalk } from "../notifications/policy.ts";
 import { alertsDeliverable, raise } from "../notifications/notify.ts";
 import { loadKeepAlivePref, syncKeepAlive, wantKeepAlive } from "../notifications/keepAlive.ts";
-import { noteTalk } from "./pr-talk.ts";
+import { noteChecks, noteTalk } from "./pr-talk.ts";
 import { talkPref } from "../notifications/talkPref.ts";
 import { applyMarks, loadPrMarks, resetMarks } from "./read-marks.ts";
 
@@ -376,6 +376,11 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
             const undo = remember(alert, { lastSeen: seen.current, now });
             void raise(alert).then((d) => { if (!d.ok) undo(); });
           }
+        }
+        // The checks of a pull request moved: an open detail re-reads.
+        if ((frame.type === "ci" || frame.type === "prchecks") && frame.data) {
+          const d = frame.data as { repo?: string; number?: number };
+          if (typeof d.repo === "string" && typeof d.number === "number") noteChecks(d.repo, d.number);
         }
         dirty = true;
         settle();

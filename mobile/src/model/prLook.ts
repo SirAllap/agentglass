@@ -35,12 +35,28 @@ export function ciLook(pr: PrSummary): CiLook {
  *  "needs review" is said as the ask it is. */
 export function reviewLook(pr: PrSummary, forMe: boolean): { label: string; tone: Tone } | null {
   if (pr.isDraft) return { label: "Draft", tone: "neutral" };
-  if (pr.reviewDecision === "APPROVED") return { label: "Approved", tone: "good" };
-  if (pr.reviewDecision === "CHANGES_REQUESTED") return { label: "Changes requested", tone: "bad" };
-  if (pr.reviewDecision === "REVIEW_REQUIRED") {
-    return forMe ? { label: "Needs your review", tone: "warn" } : { label: "Needs review", tone: "warn" };
+  const asked = forMe ? { label: "Needs your review", tone: "warn" as Tone } : { label: "Needs review", tone: "warn" as Tone };
+  /* The verdict is the HUMANS', as on the desktop board. `reviewDecision`
+   * counts a bot's approval, so a pull request one assistant had waved through
+   * read "Approved" here beside a person's "changes requested". */
+  const human = pr.humanReview;
+  if (human && typeof human === "object" && human.kind) {
+    if (human.kind === "changes") return { label: "Changes requested", tone: human.cleared ? "warn" : "bad" };
+    if (human.kind === "approved") {
+      /* Commits landed after it: GitHub's own decision says whether it still
+       * counts, and is the only thing a list row can ask. */
+      return human.stale && pr.reviewDecision !== "APPROVED"
+        ? { label: "Approval out of date", tone: "warn" }
+        : { label: "Approved", tone: "good" };
+    }
+    if (human.kind === "commented") return { label: "Commented", tone: "neutral" };
+    return asked;
   }
-  return null;
+  if (pr.reviewDecision === "CHANGES_REQUESTED") return { label: "Changes requested", tone: "bad" };
+  /* No human verdict. Still being read (the second pass has not landed) is
+   * silence; read and empty means nobody has looked, whatever a bot said. */
+  if (pr.checksLoaded === false) return null;
+  return pr.reviewDecision ? asked : null;
 }
 
 export interface RepoGroup<T> { root: string; name: string; items: T[] }

@@ -14,7 +14,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { PrTalkNote } from "../../../shared/types.ts";
-import { prMarkKey } from "../../../shared/prUnread.ts";
+import { prMarkKey, prSeenKey } from "../../../shared/prUnread.ts";
 
 let globalTick = 0;
 const globalListeners = new Set<() => void>();
@@ -31,6 +31,17 @@ export function noteTalk(n: PrTalkNote): void {
   for (const listen of globalListeners) listen();
 
   const key = prMarkKey(n);
+  perPr.set(key, (perPr.get(key) ?? 0) + 1);
+  for (const listen of perPrListeners.get(key) ?? []) listen();
+}
+
+/** A `ci` or `prchecks` frame: the checks of this one pull request moved.
+ *  Only its own tick — the open detail re-reads, the list does not, because a
+ *  run sends a frame per change and each would be a list read per repository.
+ *  The key is the one a screen derives from the pull request's url
+ *  (`prMarkKey`), spelled out here because these frames carry `owner/name`. */
+export function noteChecks(repo: string, number: number): void {
+  const key = prSeenKey(`github.com/${repo}`, number);
   perPr.set(key, (perPr.get(key) ?? 0) + 1);
   for (const listen of perPrListeners.get(key) ?? []) listen();
 }

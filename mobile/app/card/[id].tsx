@@ -727,7 +727,7 @@ export default function CardScreen(): React.ReactNode {
                         <Text style={{ color: C.text3, fontSize: T.eyebrow }}>{since(c.at, now)}</Text>
                       </View>
                       {c.text ? (
-                        <Text style={{ color: C.text2, fontSize: T.body, lineHeight: 20 }}>{c.text}</Text>
+                        <Md text={c.text} host={host} />
                       ) : (
                         /* ClickUp comments can be an attachment and nothing
                            else, which arrives as empty text. Saying so beats a
@@ -743,7 +743,7 @@ export default function CardScreen(): React.ReactNode {
                             <Text style={{ color: C.text2, fontSize: T.eyebrow, fontWeight: "600" }}>{r.who}</Text>
                             <Text style={{ color: C.text3, fontSize: T.eyebrow }}>{since(r.at, now)}</Text>
                           </View>
-                          <Text style={{ color: C.text3, fontSize: T.small, lineHeight: 18 }}>{r.text}</Text>
+                          <Md text={r.text} host={host} />
                         </View>
                       ))}
                       {c.replies && !(c.replyList ?? []).length ? (

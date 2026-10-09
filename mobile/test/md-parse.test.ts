@@ -258,3 +258,47 @@ describe("plainInline, for a preview with no renderer under it", () => {
     expect(plainInline("3 files failed")).toBe("3 files failed");
   });
 });
+
+/* A pasted screenshot is `<img width="…" src="…">`, and a sentence can carry
+ * `![…](…)`: both arrived as text and a blue word instead of the picture. */
+describe("pictures that are not alone on a line", () => {
+  const shot = "https://github.com/user-attachments/assets/4d1f";
+
+  test("the tag GitHub writes for a pasted screenshot is an image", () => {
+    const blocks = parseMarkdown(`<img width="640" alt="before the fix" src="${shot}" />`);
+    expect(blocks).toEqual([{ t: "image", src: shot, alt: "before the fix" }]);
+  });
+
+  test("an image inside a sentence sits where the author put it", () => {
+    const blocks = parseMarkdown(`Before: ![old](https://x.test/a.png) after: <img src='https://x.test/b.png'> done`);
+    expect(blocks.map((b) => b.t)).toEqual(["p", "image", "p", "image", "p"]);
+    expect((blocks[1] as { src: string }).src).toBe("https://x.test/a.png");
+    expect((blocks[3] as { src: string }).src).toBe("https://x.test/b.png");
+    expect(inlineText((blocks[4] as { kids: never[] }).kids)).toBe(" done");
+  });
+
+  test("a picture inside a link, the badge shape, is the picture", () => {
+    expect(parseMarkdown("[![ci](https://x.test/ci.svg)](https://x.test/runs)"))
+      .toEqual([{ t: "image", src: "https://x.test/ci.svg", alt: "ci" }]);
+    expect(parseMarkdown(`<a href="https://x.test/big"><img src="https://x.test/small.png"></a>`))
+      .toEqual([{ t: "image", src: "https://x.test/small.png", alt: "" }]);
+  });
+
+  test("an image in a list item goes under it, the text stays", () => {
+    const [list] = parseMarkdown("- evidence ![s](https://x.test/s.png)");
+    const item = (list as { items: { kids: never[]; children: Block[] }[] }).items[0]!;
+    expect(inlineText(item.kids)).toBe("evidence ");
+    expect(item.children).toEqual([{ t: "image", src: "https://x.test/s.png", alt: "s" }]);
+  });
+
+  test("a tag with nothing to fetch is dropped, not printed", () => {
+    expect(parseMarkdown(`before <img alt="x"> after`).map((b) => b.t)).toEqual(["p"]);
+    expect(inlineText((parseMarkdown(`before <img src="javascript:alert(1)"> after`)[0] as { kids: never[] }).kids))
+      .toBe("before  after");
+  });
+
+  test("in a heading there is nowhere to put one: its alt text stands in", () => {
+    const [h] = parseMarkdown("# Look ![logo](https://x.test/l.png)");
+    expect(inlineText((h as { kids: never[] }).kids)).toBe("Look logo");
+  });
+});

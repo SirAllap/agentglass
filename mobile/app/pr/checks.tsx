@@ -26,11 +26,11 @@
  * the tail is what is shown first, with the rest one tap behind it.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import type { PrCheckJob } from "../../../shared/types.ts";
 import { ask } from "../../src/lib/api.ts";
-import { byUrgency, foldJobLog, looksFailed, ranFor, standingOf, tailOf } from "../../src/model/checkJobs.ts";
+import { byUrgency, foldJobLog, looksFailed, nextJobsPoll, ranFor, standingOf, tailOf } from "../../src/model/checkJobs.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
 import * as Clipboard from "expo-clipboard";
@@ -71,22 +71,34 @@ export default function ChecksScreen(): React.ReactNode {
   const [logErr, setLogErr] = useState<string | null>(null);
   const [whole, setWhole] = useState(false);
 
-  useEffect(() => {
+  const loadJobs = useCallback(async (): Promise<void> => {
     if (!host || !number || !root) return;
-    let gone = false;
-    void (async () => {
-      const query = `root=${encodeURIComponent(root)}&number=${encodeURIComponent(number)}`;
-      const answer = await ask<{ ok: boolean; jobs?: PrCheckJob[]; error?: string }>(
-        host, `/prs/check-jobs?${query}`,
-      );
-      if (gone) return;
-      if (!answer.ok) { setError(answer.error); return; }
-      if (!answer.value.ok) { setError(answer.value.error || "Those checks could not be read."); return; }
-      setError(null);
-      setJobs(answer.value.jobs ?? []);
-    })();
-    return () => { gone = true; };
+    const query = `root=${encodeURIComponent(root)}&number=${encodeURIComponent(number)}`;
+    const answer = await ask<{ ok: boolean; jobs?: PrCheckJob[]; error?: string }>(
+      host, `/prs/check-jobs?${query}`,
+    );
+    if (!answer.ok) { setError(answer.error); return; }
+    if (!answer.value.ok) { setError(answer.value.error || "Those checks could not be read."); return; }
+    setError(null);
+    setJobs(answer.value.jobs ?? []);
   }, [host, number, root]);
+
+  useEffect(() => { void loadJobs(); }, [loadJobs]);
+
+  /* Ask again while something runs — see nextJobsPoll. One timer per answer,
+     so a slow read never has two in flight. */
+  useEffect(() => {
+    const wait = nextJobsPoll(jobs);
+    if (wait === null) return;
+    const timer = setTimeout(() => { void loadJobs(); }, wait);
+    return () => clearTimeout(timer);
+  }, [jobs, loadJobs]);
+
+  const [pulling, setPulling] = useState(false);
+  const onRefresh = useCallback((): void => {
+    setPulling(true);
+    void loadJobs().finally(() => setPulling(false));
+  }, [loadJobs]);
 
   const ordered = useMemo(() => byUrgency(jobs ?? []), [jobs]);
 
@@ -251,7 +263,10 @@ export default function ChecksScreen(): React.ReactNode {
           </View>
         </>
       ) : (
-        <ScrollView contentContainerStyle={{ padding: SPACE.lg, paddingTop: SPACE.sm, gap: SPACE.xs, paddingBottom: SPACE.xl }}>
+        <ScrollView
+          contentContainerStyle={{ padding: SPACE.lg, paddingTop: SPACE.sm, gap: SPACE.xs, paddingBottom: SPACE.xl }}
+          refreshControl={<RefreshControl refreshing={pulling} onRefresh={onRefresh} tintColor={C.text3} />}
+        >
           {error ? <Card><Label text="Cannot read them" /><Note tone="bad">{error}</Note></Card> : null}
           {jobs === null && !error ? (
             <View style={{ padding: SPACE.xl }}><ActivityIndicator color={C.text3} /></View>

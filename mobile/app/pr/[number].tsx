@@ -23,9 +23,10 @@
  * shape is load-bearing rather than incidental.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Linking, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { checksMoved, nextDetailPoll } from "../../src/model/checkJobs.ts";
+import { ActivityIndicator, Linking, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import type { PrDetail, ReviewRecipe, ReviewRecipesResponse } from "../../../shared/types.ts";
+import type { PrCheckRollup, PrDetail, ReviewRecipe, ReviewRecipesResponse } from "../../../shared/types.ts";
 import { ask } from "../../src/lib/api.ts";
 import { Md, outline } from "../../src/md/Md.tsx";
 import { useAgentglass } from "../../src/state/host-context.tsx";
@@ -188,6 +189,35 @@ export default function PrScreen(): React.ReactNode {
   // subscribes to nothing.
   const talkKey = detail?.url ? prMarkKey(detail) : "";
   useReloadOnTick(usePrTalkTick(talkKey), refresh, talkKey);
+
+  /* The checks move without anybody speaking, and a `ci` frame only comes when
+     a run finishes: while one is still going, ask again (see nextDetailPoll),
+     and let the pull down do the same by hand. */
+  const [pollTick, setPollTick] = useState(0);
+  const stillRunning = detail?.checks.pending;
+  useEffect(() => {
+    const wait = nextDetailPoll(stillRunning);
+    if (wait === null || !host || !root || !detail) return;
+    const timer = setTimeout(() => {
+      void (async () => {
+        const answer = await ask<{ ok: boolean; checks?: PrCheckRollup }>(
+          host, `/prs/rollup?root=${encodeURIComponent(root)}&number=${encodeURIComponent(String(number))}&force=1`,
+        );
+        const now = answer.ok && answer.value.ok ? answer.value.checks : undefined;
+        // Nothing moved: the same timer is armed again by the next render only
+        // if the detail changes, so re-arm here by re-reading nothing but the
+        // rollup's own verdict. A move is what the full read is for.
+        if (now && checksMoved(now, detail.checks)) await refresh();
+        else setPollTick((n) => n + 1);
+      })();
+    }, wait);
+    return () => clearTimeout(timer);
+  }, [detail, stillRunning, host, root, number, refresh, pollTick]);
+  const [pulling, setPulling] = useState(false);
+  const pull = useCallback((): void => {
+    setPulling(true);
+    void refresh().finally(() => setPulling(false));
+  }, [refresh]);
 
   const [handing, setHanding] = useState(false);
   /* `ask=1` opens the Claude menu: Checks sends you back here with it, so a
@@ -554,7 +584,10 @@ export default function PrScreen(): React.ReactNode {
         stays, its scroll offset with it, and React Native stops laying it out.
       */}
       <View style={{ flex: 1, display: pane === "overview" ? "flex" : "none" }}>
-      <ScrollView contentContainerStyle={{ padding: SPACE.lg, gap: SPACE.lg, paddingBottom: SPACE.xl }}>
+      <ScrollView
+        contentContainerStyle={{ padding: SPACE.lg, gap: SPACE.lg, paddingBottom: SPACE.xl }}
+        refreshControl={<RefreshControl refreshing={pulling} onRefresh={pull} tintColor={C.text3} />}
+      >
         {error ? (
           <Card>
             <Label text="Cannot read it" />

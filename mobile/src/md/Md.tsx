@@ -53,14 +53,18 @@ function Spans({ kids, size, color }: { kids: Inline[]; size: number; color: str
         if (k.t === "em") {
           return <Text key={i} style={{ fontStyle: "italic", color, fontSize: size }}><Spans kids={k.kids} size={size} color={color} /></Text>;
         }
+        /* Only where a block cannot hold a picture (a heading, a table cell):
+           its alt text, linked to the file. */
+        const href = k.t === "image" ? k.src : k.href;
+        const kids: Inline[] = k.t === "image" ? [{ t: "text", text: k.alt || k.src }] : k.kids;
         return (
           <Text
             key={i}
             accessibilityRole="link"
-            onPress={() => { void Linking.openURL(k.href).catch(() => { /* no app for it */ }); }}
+            onPress={() => { void Linking.openURL(href).catch(() => { /* no app for it */ }); }}
             style={{ color: C.primary, fontSize: size }}
           >
-            <Spans kids={k.kids} size={size} color={C.primary} />
+            <Spans kids={kids} size={size} color={C.primary} />
           </Text>
         );
       })}
