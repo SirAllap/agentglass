@@ -590,32 +590,27 @@ describe("who is on it", () => {
      * `Avatar` keeps initials as its own fallback, so nothing is lost where
      * there is no face.
      */
-    expect(board).toContain("<Avatar login={login} size={22} />");
+    expect(board).toContain("<Avatar login={login} size={16} />");
     expect(board).not.toContain("r.login.slice(0, 2).toUpperCase()");
   });
 
-  it("is whoever was asked, capped; the author is the face on the identity line", () => {
-    // Past five the card is a contact sheet, and the pull request itself lists them all.
-    expect(board).toContain("(p.reviewers ?? []).map((r) => r.login)");
+  it("the author leads the identity line; whoever the lane header names sits beside the name", () => {
     expect(board).toContain("<Avatar login={p.author} size={20} />");
-    expect(board).toContain(".slice(0, FACES_MAX)");
+    expect(board).toContain("headerPeople.slice(0, HEADER_FACES)");
+    expect(board).not.toContain("agx-prc-foot");
   });
 });
 
 describe("a board is for pointing at, not for pressing", () => {
-  it("opens the pull request instead of performing the lane's action", () => {
+  it("opens the pull request from the card itself: no button row, nothing that performs the lane's action", () => {
     /*
-     * Reported after pressing "Re-run failed" by accident on a card that was
-     * under the pointer for a different reason — and Merge sat in the same
-     * place on the lane next to it.
+     * A Re-run pressed by accident on a card under the pointer for another
+     * reason, and then an Open button nobody used. The whole card is the
+     * button; the lane and its sentence say what wants doing.
      */
-    expect(board).toContain('onAct(p, "open")');
+    expect(board).toContain('<div onClick={onOpen} role="button"');
     expect(board).not.toContain("onAct(p, act)");
-  });
-
-  it("still says what the card is asking for", () => {
-    // The verdict travels; only the press moves.
-    expect(board).toContain('Open{act === "merge" ? " to merge" : act === "rerun" ? " to re-run" : ""}');
+    expect(board).not.toContain('onAct(p, "open")');
   });
 });
 

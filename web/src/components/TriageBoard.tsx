@@ -1182,6 +1182,10 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, cursor, onOpen, onPin,
   const { pre, rest } = splitTitle(p.title);
   const ev = eventLine(p.filed.reason, p.updatedAt);
   const verdict = cardVerdict(p);
+  const hr = p.humanReview as unknown;
+  const headerPeople: string[] = hr && typeof hr === "object" && Array.isArray((hr as { who?: unknown }).who)
+    ? ((hr as { who: unknown[] }).who.filter((x): x is string => typeof x === "string" && x !== ""))
+    : [];
   /*
    * THE CARDS THE BOARDS DO NOT HOLD, asked for one at a time.
    *
@@ -1259,10 +1263,23 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, cursor, onOpen, onPin,
             <span aria-hidden className="rounded"
               style={{ width: 130, height: 8, background: "color-mix(in srgb, var(--text) 12%, transparent)" }} />
           ) : (
-            <span className="truncate flex-1 min-w-0" style={{ color: "var(--text)", fontWeight: 500 }}>
+            <span className="truncate min-w-0" style={{ color: "var(--text)", fontWeight: 500 }}>
               {verdict.line}
             </span>
           )}
+          {/* The people the line names, as faces right after it: who was asked,
+              who approved, who asked for changes. */}
+          {headerPeople.length > 0 && (
+            <span className="shrink-0 flex items-center" aria-hidden>
+              {headerPeople.slice(0, HEADER_FACES).map((login, n) => (
+                <span key={login} className="rounded-full inline-flex"
+                  style={{ marginLeft: n ? -3 : 0, boxShadow: "0 0 0 1.5px var(--surface-card)", position: "relative", zIndex: HEADER_FACES - n }}>
+                  <Avatar login={login} size={16} />
+                </span>
+              ))}
+            </span>
+          )}
+          <span className="flex-1" />
           {/* Open line threads: the number that says whether a "changes
               requested" is one nit or twelve, and whether an approval still
               has something under it. Only when there are any. */}
@@ -1486,64 +1503,13 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, cursor, onOpen, onPin,
               "8d" look exactly like ten reading "1h". */}
           {ev.quiet && <div className="tabular-nums" style={{ fontSize: 10, marginTop: 2, paddingLeft: 18, color: "var(--text3)" }}>{ev.quiet}</div>}
         </div>
-
-        {/* ONE FOOTER, in the same place in every state: Open bottom left,
-            who is on the pull request bottom right. */}
-        <div className="agx-prc-foot flex items-center gap-2">
-          {/* One button, and it is the one this lane is asking for. A row of
-              five is a row nobody reads; the rest are a click away inside.
-              It opens the pull request: it used to perform the lane's
-              action — Merge on a green card, Re-run on a red one — and a
-              card under the pointer for a different reason took an
-              accidental Re-run, twice over. The verdict still travels: the
-              lane and its sentence say what wants doing, and the page that
-              can do it is one click away. */}
-          <button onClick={(e) => { e.stopPropagation(); onAct(p, "open"); }} disabled={busy}
-            className="agx-btn rounded-lg px-2.5 text-[11px] disabled:opacity-40 inline-flex items-center gap-1.5 whitespace-nowrap"
-            style={{ color: "var(--text)", border: EDGE, background: "var(--surface-inset)", height: HIT }}>
-            {/* `busy` is the panel's, and on this board only one card can be
-                acting at a time — the whole surface disables while it runs. So
-                the spinner goes on the card whose action is in flight: `acting`
-                is the number the panel is working on. */}
-            {acting === p.number && (
-              <span className="agx-spin" aria-hidden
-                style={{ width: 8, height: 8, borderWidth: 1.5,
-                  borderColor: act === "merge" ? "color-mix(in srgb, var(--bg) 55%, transparent)" : "currentColor",
-                  borderTopColor: "transparent" }} />
-            )}
-            Open{act === "merge" ? " to merge" : act === "rerun" ? " to re-run" : ""} →
-          </button>
-          {/*
-            * Who is on this pull request, bottom right, where the eye lands last.
-            *
-            * The author and whoever was asked to look at it: those are the two
-            * facts a list row carries, and together they answer "whose is this
-            * and who is holding it". Five at most — past that the card is a
-            * contact sheet, and the pull request itself lists them all.
-            * Overlapped left to right, the way every other row of people in
-            * this app is drawn, so five of them cost the width of two.
-            */}
-          {(p.reviewers?.length ?? 0) > 0 && (
-          <span className="ml-auto shrink-0 flex items-center" role="img"
-            aria-label={`Asked: ${p.reviewers!.map((r) => r.login).join(", ")}`}
-            title={`Asked: ${p.reviewers!.map((r) => r.login).join(", ")}`}>
-            {(p.reviewers ?? []).map((r) => r.login)
-              .filter((l, n, all) => l && l !== p.author && all.indexOf(l) === n)
-              .slice(0, FACES_MAX)
-              .map((login, n) => (
-                <span key={login} className="rounded-full"
-                  style={{ marginLeft: n ? -2 : 0, zIndex: FACES_MAX - n, position: "relative", display: "inline-flex",
-                    boxShadow: "0 0 0 1.5px var(--surface-card)" }}>
-                  <Avatar login={login} size={22} />
-                </span>
-              ))}
-          </span>
-          )}
-        </div>
       </div>
     </div>
   );
 }
+
+/** Faces drawn in a lane header beside the name it says. */
+const HEADER_FACES = 3;
 
 const Tag = ({ children, tint, title }: { children: React.ReactNode; tint?: string; title?: string }) => (
   <span title={title} className="rounded px-1" style={{ color: tint ?? "var(--text3)", border: `1px solid color-mix(in srgb, ${tint ?? "var(--text)"} ${tint ? 34 : 16}%, transparent)` }}>
