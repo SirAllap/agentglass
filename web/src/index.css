@@ -2466,8 +2466,8 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
  * block that is ~340px with its faces) the block itself wraps onto a second
  * row: measured, `flex: none` without this overflowed the card sideways.
  *
- * The copy buttons live in `.agx-trk-fz`, a box at least as wide as the two of
- * them. They are invisible at rest and replace the faces in that same box on
+ * The copy buttons live in `.agx-trk-fz`, a box at least as wide as the two
+ * (three, with an address) of them. They are invisible at rest and replace the faces in that same box on
  * pointer-over or focus-within, so reaching for one moves nothing. Keyboard
  * focus reaches them while they are invisible, and focus-within then shows
  * them. Without a hover (coarse pointer) they take an inline slot instead.
@@ -2489,6 +2489,9 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
   background: color-mix(in srgb, currentColor 22%, transparent) !important;
   border-color: color-mix(in srgb, currentColor 70%, transparent) !important; }
 .agx-trk-fz { position: relative; display: inline-flex; align-items: center; justify-content: flex-end; min-width: 56px; flex: none; }
+/* Three buttons are 78px, not 56: a card that has an address widens its box to
+   fit them, so they never spill left over the status. */
+.agx-trk-fz[data-wide] { min-width: 78px; }
 .agx-trk-faces { display: inline-flex; align-items: center; transition: opacity .12s; }
 .agx-trk-ovl { position: absolute; inset: 0; display: flex; align-items: center; justify-content: flex-end; opacity: 0; pointer-events: none; transition: opacity .12s; }
 .agx-trk:is(:hover, :focus-within) .agx-trk-faces { opacity: 0; }
@@ -2501,11 +2504,13 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
   padding: 4px 8px; border-radius: 6px; font-size: 10px; white-space: nowrap; pointer-events: none;
   background: var(--text); color: var(--bg); box-shadow: 0 4px 12px -4px rgba(0, 0, 0, .4);
 }
-/* The last button's tip hangs from its right edge: centred, it would leave the card. */
-.agx-trk-cp[data-k="name"] .agx-trk-tip { left: auto; right: 0; transform: none; }
+/* The last button's tip hangs from its right edge: centred, it would leave the
+   card. Whichever button is last: a card without a title or an address ends on
+   the id, and its tip would leave the card just the same. */
+.agx-trk-cp:last-child .agx-trk-tip { left: auto; right: 0; transform: none; }
 .agx-trk-cp:is(:hover, :focus-visible) .agx-trk-tip, .agx-trk-cp[data-copied] .agx-trk-tip { display: block; }
 @media (hover: none) and (pointer: coarse) {
-  .agx-trk-fz { min-width: 0; gap: 4px; }
+  .agx-trk-fz, .agx-trk-fz[data-wide] { min-width: 0; gap: 4px; }
   .agx-trk-ovl { position: static; opacity: 1; pointer-events: auto; }
   .agx-trk-faces { opacity: 1 !important; }
 }
