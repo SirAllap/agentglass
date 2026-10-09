@@ -33,7 +33,7 @@ import { ExternalIcon } from "../browser/icons.tsx";
 import { Portal } from "../Portal.tsx";
 import { CloseButton } from "../CloseButton.tsx";
 import { LAYER } from "../../lib/layers.ts";
-import { INPUT, INPUT_STYLE, RefreshButton, EDGE } from "../workspace/Chrome.tsx";
+import { Button, CHIP, CHIP_SURFACE, CHIP_SURFACE_CLS, Chip, EDGE, INPUT, INPUT_STYLE, RefreshButton } from "../workspace/Chrome.tsx";
 import type { Catalogue, InstallSource } from "../../../../shared/types.ts";
 
 /** The list this project publishes, on its own site, and the same document
@@ -223,9 +223,7 @@ export function Market({ installed, onInstalled }: {
         {state.kind === "error" && (
           <div className="agx-settings-gutter py-4 text-[12px] flex items-center gap-3 flex-wrap">
             <span style={{ color: "var(--text2)" }}>The market did not answer: {state.error}</span>
-            <button onClick={() => void load()}
-              className="ml-auto text-[12px] px-2.5 py-1 rounded-lg hover:opacity-80"
-              style={{ color: "var(--text)", border: EDGE }}>Try again</button>
+            <Button className="ml-auto" onClick={() => void load()}>Try again</Button>
           </div>
         )}
 
@@ -246,13 +244,9 @@ export function Market({ installed, onInstalled }: {
 
         {state.kind === "ok" && pages > 1 && (
           <div className="agx-settings-gutter py-3 flex items-center justify-center gap-2 text-[11.5px]">
-            <button onClick={() => setPage(here - 1)} disabled={here === 0}
-              className="px-2 py-0.5 rounded-lg disabled:opacity-40 hover:opacity-80"
-              style={{ color: "var(--text2)", border: EDGE }}>Previous</button>
+            <Button size="compact" onClick={() => setPage(here - 1)} disabled={here === 0}>Previous</Button>
             <span className="t-dim tabular-nums">{here + 1} of {pages}</span>
-            <button onClick={() => setPage(here + 1)} disabled={here >= pages - 1}
-              className="px-2 py-0.5 rounded-lg disabled:opacity-40 hover:opacity-80"
-              style={{ color: "var(--text2)", border: EDGE }}>Next</button>
+            <Button size="compact" onClick={() => setPage(here + 1)} disabled={here >= pages - 1}>Next</Button>
           </div>
         )}
 
@@ -281,14 +275,10 @@ export function Market({ installed, onInstalled }: {
  *  hit area, and the count is inside it so the pair never wraps apart. */
 function TypeChip({ label, count, on, onClick }: { label: string; count: number; on: boolean; onClick: () => void }) {
   return (
-    <button onClick={onClick} aria-pressed={on}
-      className="text-[11.5px] px-2.5 py-1 rounded-full whitespace-nowrap hover:opacity-80 flex items-center gap-1.5"
-      style={on
-        ? { color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }
-        : { color: "var(--text2)", background: "transparent", border: EDGE }}>
+    <Chip on={on} onClick={onClick}>
       {label}
-      <span className="tabular-nums" style={{ color: on ? "var(--primary)" : "var(--text4)" }}>{count}</span>
-    </button>
+      <span className="tabular-nums" style={{ color: on ? "var(--primary-ink)" : "var(--text4)" }}>{count}</span>
+    </Chip>
   );
 }
 
@@ -367,16 +357,10 @@ export function Offer({ entry, owner, onInstalled, mode, was = null }: {
       </div>
 
       <div className="shrink-0 flex items-center gap-2">
-        <button onClick={() => setOpen(true)}
-          className="text-[12px] px-3 py-1.5 rounded-lg whitespace-nowrap hover:opacity-80"
-          style={{ color: "var(--text2)", border: EDGE }}>
-          Details
-        </button>
-        <button onClick={install} disabled={busy}
-          className="text-[12px] px-3 py-1.5 rounded-lg whitespace-nowrap hover:opacity-80 disabled:opacity-50 font-medium"
-          style={{ color: "var(--bg)", background: "var(--primary)" }}>
+        <Button onClick={() => setOpen(true)}>Details</Button>
+        <Button tone="primary" pending={busy} onClick={install}>
           {busy ? (mode === "update" ? "Updating…" : "Installing…") : (mode === "update" ? "Update" : "Install")}
-        </button>
+        </Button>
       </div>
 
       <Details entry={entry} owner={owner} tint={tint} repo={repo} open={open} busy={busy}
@@ -475,16 +459,13 @@ function Details({ entry, owner, tint, repo, open, busy, onClose, onInstall }: {
           <div className="px-5 py-3 border-t shrink-0 flex items-center gap-2" style={{ borderColor: "var(--surface-line)" }}>
             {repo && (
               <a href={repo} target="_blank" rel="noopener noreferrer" title={repo}
-                className="text-[12px] px-3 py-1.5 rounded-lg whitespace-nowrap hover:opacity-80 inline-flex items-center gap-1.5"
-                style={{ color: "var(--text2)", border: EDGE }}>
+                className={`${CHIP} ${CHIP_SURFACE_CLS}`} style={CHIP_SURFACE}>
                 Repository <ExternalIcon size={ICON.xs} />
               </a>
             )}
-            <button onClick={onInstall} disabled={busy}
-              className="ml-auto text-[12px] px-3 py-1.5 rounded-lg whitespace-nowrap hover:opacity-80 disabled:opacity-50 font-medium"
-              style={{ color: "var(--bg)", background: "var(--primary)" }}>
+            <Button tone="primary" className="ml-auto" pending={busy} onClick={onInstall}>
               {busy ? "Installing…" : "Install"}
-            </button>
+            </Button>
           </div>
         </div>
       </div>

@@ -7,6 +7,7 @@
 // the process that scope was minted for. Reviewing that from a terminal is
 // not review, which is the whole reason this file exists.
 import { PluginMark } from "./plugins/PluginMark.tsx";
+import { BackIcon } from "./browser/icons.tsx";
 import { emitControl } from "../lib/controlBus.ts";
 import { closeSettings } from "../lib/openSettings.ts";
 import { clearPluginInstall, pluginInstallRequest, subscribePluginInstall } from "../lib/installPlugin.ts";
@@ -21,7 +22,7 @@ import { api } from "../lib/api.ts";
 import { fmtAgo } from "../lib/format.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import type { DeviceScope, InstallSource, PublicPlugin } from "../../../shared/types.ts";
-import { INPUT, INPUT_STYLE, RefreshButton, EDGE } from "./workspace/Chrome.tsx";
+import { Button, EDGE, INPUT, INPUT_STYLE, RefreshButton } from "./workspace/Chrome.tsx";
 
 /** The one-line "From …" a reviewer reads — a local path plainly, a git
  *  source with its ref if one was pinned, a market install naming the list
@@ -104,16 +105,10 @@ function AddPluginCard({ onInstalled, open, setOpen, prefill }: {
           autoFocus
           className={`t-mono min-w-0 flex-1 ${INPUT}`}
           style={INPUT_STYLE} />
-        <button onClick={install} disabled={busy || !source.trim()}
-          className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80 disabled:opacity-50"
-          style={{ color: "var(--text)", border: EDGE }}>
+        <Button pending={busy} disabled={!source.trim()} onClick={install}>
           {busy ? "Installing…" : "Install"}
-        </button>
-        <button onClick={() => { setOpen(false); setError(null); }} disabled={busy}
-          className="text-[12px] px-2 py-1 rounded-lg whitespace-nowrap hover:opacity-80"
-          style={{ color: "var(--text3)" }}>
-          Cancel
-        </button>
+        </Button>
+        <Button disabled={busy} onClick={() => { setOpen(false); setError(null); }}>Cancel</Button>
       </div>
       {error && <Alert tone="error">{error}</Alert>}
     </div>
@@ -219,11 +214,9 @@ export function PluginsPane({ open, focus }: {
   if (showing && here) {
     return (
       <div className="pb-5">
-        <button onClick={() => setShowing(null)}
-          className="mb-3 inline-flex items-center gap-1.5 text-[12px] hover:opacity-80"
-          style={{ color: "var(--text3)", background: "transparent", border: 0 }}>
-          ← All plugins
-        </button>
+        <Button size="compact" className="mb-3" onClick={() => setShowing(null)}>
+          <BackIcon size={ICON.sm} /> All plugins
+        </Button>
         <div className="flex items-center gap-2.5 mb-3">
           <PluginMark name={here.name} icon={here.icon} color={here.color} size={ICON.lg} stamp={here.contentHash} />
           <div className="min-w-0">
@@ -280,11 +273,7 @@ export function PluginsPane({ open, focus }: {
           {/* In the header, with the other things you do to this list. It was
               a dashed half-width tile at the end of the grid, which on an
               empty list was the only thing there and read as a stray box. */}
-          <button onClick={() => setInstalling(true)} disabled={installing}
-            className="text-[12px] px-2.5 py-1.5 rounded-lg whitespace-nowrap hover:opacity-80 disabled:opacity-50"
-            style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>
-            Install a plugin
-          </button>
+          <Button tone="primary" disabled={installing} onClick={() => setInstalling(true)}>Install a plugin</Button>
         </div>
       </div>
 
@@ -541,16 +530,8 @@ function PluginCard({ plugin, masterOn, onChanged, onSettings }: {
         <span className="text-[10.5px] t-dim">installed {fmtAgo(plugin.installedAt)}</span>
         {confirmRemove ? (
           <span className="flex items-center gap-1.5">
-            <button onClick={remove} disabled={busy}
-              className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap font-medium"
-              style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 44%, transparent)", opacity: busy ? 0.5 : 1 }}>
-              {busy ? "Removing…" : "Remove"}
-            </button>
-            <button onClick={() => { setConfirmRemove(false); setDropSettings(false); }} disabled={busy}
-              className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80"
-              style={{ color: "var(--text2)", border: EDGE }}>
-              Keep it
-            </button>
+            <Button size="compact" tone="danger" pending={busy} onClick={remove}>{busy ? "Removing…" : "Remove"}</Button>
+            <Button size="compact" disabled={busy} onClick={() => { setConfirmRemove(false); setDropSettings(false); }}>Keep it</Button>
           </span>
         ) : (
           <span className="flex items-center gap-1.5">
@@ -561,32 +542,18 @@ function PluginCard({ plugin, masterOn, onChanged, onSettings }: {
             {/* Straight to where it shows up — the answer to "I switched it on,
                 now what". */}
             {hasPanel && plugin.enabled && (
-              <button onClick={() => { emitControl({ cmd: "view", to: "plugins" }); emitControl({ cmd: "esc" }); closeSettings(); }}
-                className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80"
-                style={{ color: tint, border: `1px solid color-mix(in srgb, ${tint} 45%, transparent)`, background: `color-mix(in srgb, ${tint} 10%, transparent)` }}>
-                Open
-              </button>
+              <Button size="compact" tint={tint} onClick={() => { emitControl({ cmd: "view", to: "plugins" }); emitControl({ cmd: "esc" }); closeSettings(); }}>Open</Button>
             )}
             {hasSettings && (
-              <button onClick={onSettings}
-                className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80"
-                style={{ color: "var(--text)", border: EDGE }}>
-                Settings
-              </button>
+              <Button size="compact" onClick={onSettings}>Settings</Button>
             )}
             {updatable && (
-              <button onClick={update} disabled={busy || updating}
-                title="Re-fetch this plugin at its recorded source. A changed declaration will need review again before it can run."
-                className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80 disabled:opacity-50"
-                style={{ color: "var(--text2)", border: EDGE }}>
+              <Button size="compact" pending={updating} disabled={busy} onClick={update}
+                title="Re-fetch this plugin at its recorded source. A changed declaration will need review again before it can run.">
                 {updating ? "Updating…" : "Update"}
-              </button>
+              </Button>
             )}
-            <button onClick={() => setConfirmRemove(true)} disabled={busy}
-              className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80"
-              style={{ color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 32%, transparent)", opacity: busy ? 0.5 : 1 }}>
-              Remove
-            </button>
+            <Button size="compact" tone="danger" disabled={busy} onClick={() => setConfirmRemove(true)}>Remove</Button>
           </span>
         )}
       </div>

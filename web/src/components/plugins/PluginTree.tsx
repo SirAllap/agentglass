@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { Field, UiAction, UiNode, UiOpenPr } from "../../lib/pluginTypes.ts";
 import { openPr } from "../../lib/openPrs.ts";
 import { Markdown } from "../../lib/markdown.tsx";
@@ -10,8 +10,9 @@ import { useDialogs, type ConfirmSpec } from "../ConfirmDialog.tsx";
 import { Row, Chip, type Tone as RowTone } from "../git/ui.tsx";
 import { DoneIcon } from "../../lib/glyphIcons.tsx";
 import { CloseIcon } from "../CloseButton.tsx";
+import { ExternalIcon } from "../browser/icons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
-import { EDGE, LINE, Button as HouseButton } from "../workspace/Chrome.tsx";
+import { EDGE, LINE, Tabs as HouseTabs, Button as HouseButton } from "../workspace/Chrome.tsx";
 
 /**
  * A plugin's screen, drawn with this app's own parts.
@@ -228,8 +229,8 @@ function Node({ node, ctx }: { node: UiNode; ctx: Ctx }): ReactNode {
     case "link":
       return (
         <a href={node.href} onClick={(e) => { e.preventDefault(); openExternal(node.href); }}
-          className="text-[12px] hover:underline" style={{ color: "var(--primary-ink)" }} title={node.href}>
-          {node.text} ↗
+          className="text-[12px] hover:underline inline-flex items-center gap-1" style={{ color: "var(--primary-ink)" }} title={node.href}>
+          {node.text} <ExternalIcon size={ICON.xs} />
         </a>
       );
     case "divider":
@@ -268,25 +269,22 @@ function Tabs({ node, ctx }: { node: Extract<UiNode, { type: "tabs" }>; ctx: Ctx
   // wants its findings showing); follow it when it does.
   useEffect(() => { if (node.selected) setSel(node.selected); }, [node.selected]);
   const cur = node.tabs.find((t) => t.id === sel) ?? node.tabs[0];
+  const panelId = useId();
   return (
     <div className="flex flex-col gap-3 min-w-0">
-      <div role="tablist" className="flex items-center gap-1 min-w-0 overflow-x-auto" style={{ borderBottom: LINE }}>
-        {node.tabs.map((t) => {
-          const on = t.id === cur?.id;
-          return (
-            <button key={t.id} role="tab" aria-selected={on} type="button" onClick={() => setSel(t.id)}
-              className="agx-btn text-[11.5px] px-2.5 h-[30px] inline-flex items-center gap-1.5 whitespace-nowrap"
-              style={{
-                color: on ? "var(--text)" : "var(--text3)", background: "transparent", border: 0, borderRadius: 0,
-                boxShadow: on ? "inset 0 -2px 0 var(--primary)" : "none",
-              }}>
-              {t.label}
-              {t.badge && <span className="text-[10px] tabular-nums px-1 rounded" style={{ background: "var(--surface-inset)", color: "var(--text2)" }}>{t.badge}</span>}
-            </button>
-          );
-        })}
+      <div className="min-w-0 overflow-x-auto" style={{ borderBottom: LINE }}>
+        <HouseTabs<string> label="Sections" panelId={panelId} value={cur?.id ?? ""} onChange={setSel}
+          options={node.tabs.map((t) => ({
+            id: t.id,
+            label: (
+              <span className="inline-flex items-center gap-1.5">
+                {t.label}
+                {t.badge && <span className="text-[10px] tabular-nums px-1 rounded" style={{ background: "var(--surface-inset)", color: "var(--text2)" }}>{t.badge}</span>}
+              </span>
+            ),
+          }))} />
       </div>
-      {cur && <div className="flex flex-col gap-3 min-w-0"><Nodes nodes={cur.children} ctx={ctx} /></div>}
+      {cur && <div id={panelId} role="tabpanel" className="flex flex-col gap-3 min-w-0"><Nodes nodes={cur.children} ctx={ctx} /></div>}
     </div>
   );
 }

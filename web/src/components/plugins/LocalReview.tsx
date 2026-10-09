@@ -6,7 +6,7 @@ import { Markdown } from "../../lib/markdown.tsx";
 import { ago } from "../../lib/fileRecents.ts";
 import { Spinner } from "../Spinner.tsx";
 import { ICON } from "../../lib/iconSize.ts";
-import { EDGE } from "../workspace/Chrome.tsx";
+import { Button, EDGE } from "../workspace/Chrome.tsx";
 
 /**
  * Notes plugins wrote on a pull request, drawn inside the pull request.
@@ -116,19 +116,17 @@ function copyNote(n: LocalNote): void {
 }
 
 function StatusActions({ n, onStatus }: { n: LocalNote; onStatus: (s: NoteStatus) => void }) {
-  const btn = "agx-btn rounded inline-flex items-center leading-none text-[10px] px-2 h-[22px] whitespace-nowrap";
-  const edge = EDGE;
   return (
     <div className="flex items-center gap-1 shrink-0">
       {n.status === "open" ? (
         <>
-          <button type="button" className={btn} style={{ border: edge, color: "var(--success-ink)" }} onClick={() => onStatus("resolved")} title="Fixed, or handled — keeps it out of the open count">Resolve</button>
-          <button type="button" className={btn} style={{ border: edge, color: "var(--text3)" }} onClick={() => onStatus("dismissed")} title="Not a problem — the plugin keeps this answer on its next pass">Dismiss</button>
+          <Button size="compact" tone="ok" onClick={() => onStatus("resolved")} title="Fixed, or handled — keeps it out of the open count">Resolve</Button>
+          <Button size="compact" onClick={() => onStatus("dismissed")} title="Not a problem — the plugin keeps this answer on its next pass">Dismiss</Button>
         </>
       ) : (
-        <button type="button" className={btn} style={{ border: edge, color: "var(--text2)" }} onClick={() => onStatus("open")}>Reopen</button>
+        <Button size="compact" onClick={() => onStatus("open")}>Reopen</Button>
       )}
-      <button type="button" className={btn} style={{ border: edge, color: "var(--text3)" }} onClick={() => copyNote(n)} title="Copy as markdown, to post it yourself if you choose to">Copy</button>
+      <Button size="compact" onClick={() => copyNote(n)} title="Copy as markdown, to post it yourself if you choose to">Copy</Button>
     </div>
   );
 }
@@ -332,11 +330,9 @@ export function LocalStrip({ local, onShow }: { local: LocalNotes; onShow: () =>
             ))}
             {run.meta && <span className="text-[10.5px] truncate shrink-0" style={{ color: "var(--text3)" }}>{run.meta}</span>}
             <span className="text-[10.5px] shrink-0 ml-auto" style={{ color: "var(--text3)" }}>{ago(safeMs(run.finishedAt ?? run.startedAt))}</span>
-            <button type="button" onClick={onShow}
-              className="agx-btn rounded inline-flex items-center leading-none text-[10px] px-2 h-[22px] whitespace-nowrap shrink-0"
-              style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}>
+            <Button size="compact" onClick={onShow} className="shrink-0" style={{ color: "var(--primary-ink)" }}>
               {open.length ? "Show findings" : "Show the run"}
-            </button>
+            </Button>
           </div>
         );
       })}
