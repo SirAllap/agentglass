@@ -3,7 +3,7 @@
  * refuses with a sentence, because the panel's copy can be minutes old and a close
  * fires automations somewhere else. Injected deps: no gh, no network, no writes.
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { unstickClose, unstickReopen, type UnstickServerDeps } from "../src/prs.ts";
 import type { Look, UnstickFacts } from "../../shared/unstick.ts";
 
@@ -22,6 +22,16 @@ function deps(look: Look): UnstickServerDeps & { acted: boolean[] } {
 }
 // `writeGuard` wants a real checkout inside the open project; this repository is one.
 const ROOT = import.meta.dir + "/..";
+
+// The open project is whatever AGENTGLASS_ROOT says, and `bun test` shares one
+// process: about sixty other files set it to a scratch repo and never put it
+// back, so after any of them every call here was refused with "outside the open
+// project" and passed alone. This file opens the project it asserts on, and
+// puts the environment back when it is done.
+const REPO = import.meta.dir + "/../..";
+let savedRoot: string | undefined;
+beforeAll(() => { savedRoot = process.env.AGENTGLASS_ROOT; process.env.AGENTGLASS_ROOT = REPO; });
+afterAll(() => { if (savedRoot === undefined) delete process.env.AGENTGLASS_ROOT; else process.env.AGENTGLASS_ROOT = savedRoot; });
 
 describe("unstickClose: re-checks against a fresh read", () => {
   test("a stuck, eligible pull request is closed", async () => {
