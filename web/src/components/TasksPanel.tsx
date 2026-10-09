@@ -64,7 +64,8 @@ import { subscribeReminders, liveReminders, nudgeReminders } from "../lib/remind
 import { parseLocal, toLine, sortTasks, step, checkbox, toggleCheckbox, checkProgress, rootForTask, taskPrompt, lineWith, inUse, typingInto, dueBucket, bucketCounts, dueLabel, stamp, TASK_KEYS, SORTS, type SortMode, type Bucket } from "../lib/taskGrammar.ts";
 import { useSyncExternalStore } from "react";
 import { CloseButton, CloseIcon } from "./CloseButton.tsx";
-import { HIT, ICON } from "../lib/iconSize.ts";
+import { HIT, ICON, MIN_BOX } from "../lib/iconSize.ts";
+import { RAIL_W_DEFAULT, RAIL_W_MAX, RAIL_W_MIN, clampRailW, railKey, railSplit } from "../lib/railTree.ts";
 import { boardDue, BOARD_POLL_MS, BOARD_TICK_MS } from "../lib/boardPoll.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { PRIOS, prioLook, Flag } from "../lib/priority.tsx";
@@ -971,6 +972,16 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
   });
   useEffect(() => { try { localStorage.setItem(RAIL_KEY, railOpen ? "1" : "0"); } catch { /* private mode */ } }, [railOpen]);
   const [railQ, setRailQ] = useState("");
+  /* The rail's width: wide enough for a real list name, and the person's to
+     change. Kept like the card pane's, for the same reason: how you like to
+     read is about you, not about which list is open. */
+  const [railW, setRailW] = useState(() => {
+    try { const n = Number(localStorage.getItem(RAIL_W_KEY)); return Number.isFinite(n) && n > 0 ? clampRailW(n) : RAIL_W_DEFAULT; } catch { return RAIL_W_DEFAULT; }
+  });
+  useEffect(() => { try { localStorage.setItem(RAIL_W_KEY, String(railW)); } catch { /* private mode */ } }, [railW]);
+  const [railDrag, setRailDrag] = useState(false);
+  const railNav = useRef<HTMLElement>(null);
+  const railInput = useRef<HTMLInputElement>(null);
   /* Filtered on both names a board has: what ClickUp calls the list and what it
      calls the view. The rail draws `listName || name`, so matching only the
      drawn one would leave a board findable by a word that is not on screen and
@@ -1021,172 +1032,6 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
     return { loose, groups: [...groups.values()].sort((a, b) => rank(a) - rank(b) || a.folder.localeCompare(b.folder)) };
   }, [railViews, boards]);
 
-  /*
-   * One row of the sidebar, at a depth.
-   *
-   * A function rather than a component so the grouped and ungrouped halves
-   * cannot drift: they were one `.map` and everything about a row — the
-   * right-click menu, the busy dots, which one is lit — belongs to both.
-   */
-  /**
-   * A list, with its own views folded underneath it.
-   *
-   * The twisty is separate from the row on purpose: opening a list's tabs and
-   * opening the list are different intentions, and one target that did both
-   * would mean every glance at the tabs also spent a board read.
-   */
-  const railList = (v: SavedView) => {
-    const kids = v.listId ? listViews[v.listId] : undefined;
-    const links = v.listId ? listLinks[v.listId] ?? [] : [];
-    const open = !!openLists[v.id];
-    return (
-      <Fragment key={v.id}>
-        <div className="flex items-stretch">
-          {/* Only when there is something behind it. The views are read for
-              every list in an open folder, so "no arrow" means "asked, and it
-              has none" rather than "not looked yet" — and an arrow that opens a
-              line saying "no other views" is a control that exists to
-              disappoint. */}
-          {kids?.length || links.length ? (
-            <button onClick={() => openList(v)} aria-expanded={open}
-              title={open ? "Hide this list's views" : `${(kids?.length ?? 0) + links.length} more view${(kids?.length ?? 0) + links.length === 1 ? "" : "s"} on this list in ClickUp`}
-              className="shrink-0 grid place-items-center agx-btn"
-              style={{ width: 16, color: "var(--text4)" }}>
-              <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="currentColor" aria-hidden
-                style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform 120ms ease" }}>
-                <path d="M6 3.5 10.5 8 6 12.5Z" />
-              </svg>
-            </button>
-          ) : <span aria-hidden style={{ width: 16 }} />}
-          <div className="min-w-0 flex-1">{railRow(v, 1)}</div>
-        </div>
-        {open && (!!kids?.length || !!links.length) && (
-          /* Their own guide line, indented past the list's glyph: without it
-             they sat at the list's own indent and read as siblings of it rather
-             than as what it holds. */
-          <div style={{ marginLeft: 24, borderLeft: `1px solid color-mix(in srgb, var(--text) 12%, transparent)` }}>
-            {kids?.map((view) => railRow({
-              id: view.id, name: view.name, listId: v.listId, listName: v.listName ?? v.name,
-              url: "", addedAt: 0, folderId: v.folderId, folderName: v.folderName, spaceName: v.spaceName,
-            }, 1))}
-            {/* And the ones that only exist over there. Marked with the arrow
-                this app uses everywhere for "this leaves", because a row that
-                looks like the others and opens a browser is a small betrayal. */}
-            {links.filter((l) => clickupViewUrl(boards?.folders ?? [], l)).map((l) => (
-              <button key={l.id}
-                onClick={() => { const u = clickupViewUrl(boards?.folders ?? [], l); if (u) openExternal(u); }}
-                title={`${l.name} — opens in ClickUp (${l.type})`}
-                className="w-full text-left flex items-center gap-1.5 py-1 text-[11.5px] agx-btn"
-                style={{ paddingLeft: 8, paddingRight: 10, color: "var(--text4)" }}>
-                <span aria-hidden className="shrink-0 grid place-items-center" style={{ width: 13 }}>
-                  <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor"
-                    strokeWidth={1.6} strokeLinecap="round" aria-hidden>
-                    {l.type === "gantt"
-                      ? <path d="M2.5 4h6M4.5 8h7M2.5 12h4" />
-                      : <path d="M2.5 12.5V8M6.5 12.5V4M10.5 12.5V6M14 12.5V9.5" />}
-                  </svg>
-                </span>
-                <span className="truncate min-w-0 flex-1">{l.name}</span>
-                <span aria-hidden className="shrink-0 text-[9px]" style={{ opacity: 0.7 }}>↗</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </Fragment>
-    );
-  };
-
-  const railRow = (v: SavedView, depth: number) => (
-    <button key={v.id}
-      onClick={() => { setSel(null); setOnLooked(false); closeAddBar(); void load(v.id, false, true); }}
-      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ v, x: e.clientX, y: e.clientY }); }}
-      aria-current={!onLooked && lit === v.id}
-      aria-busy={wanted === v.id}
-      className="w-full text-left flex items-center gap-1.5 py-1 text-[11.5px]"
-      style={{
-        // Inside a folder the guide line already carries the indent, so the row
-        // only owes it a small step. Outside one it starts where the folder
-        // glyph does, so the two columns line up rather than nearly line up.
-        paddingLeft: depth ? 8 : 10, paddingRight: 10,
-        /* The built-in board gets its OWN tint, warm against the boards'
-           primary. It behaves differently from everything under it — it asks
-           the whole workspace rather than reading one board — and it is the
-           row you come back to, so telling it apart at a glance is worth a
-           second colour. */
-        ...(!onLooked && lit === v.id
-          ? v.builtin
-            ? { background: "color-mix(in srgb, var(--success) 18%, transparent)", color: "var(--text)" }
-            : { background: "color-mix(in srgb, var(--primary) 16%, transparent)", color: "var(--text)" }
-          : { color: v.builtin ? "var(--text2)" : "var(--text3)" }),
-      }}
-      title={v.builtin
-        ? "Every card assigned to you, across the workspace — the same list as ClickUp's My Work. Slower than a board (it asks the whole workspace), so it opens on what you last saw."
-        : v.listName ? `${v.listName} · ${v.name}` : v.name}>
-      {/* The built-in one stays marked: beside four board names it reads as a
-          fifth board somebody added, and it is the one that behaves
-          differently. */}
-      {/* YOUR FACE ON THE BUILT-IN ONE. It is the board about a person, and it
-          was marked with the same 6px ring every other "this is different" mark
-          in the app uses — which told you it was different and not what it was.
-          The ring stays as the fallback: no picture, no empty circle. */}
-      {v.builtin && (myFace
-        ? (
-          <img src={myFace} alt="" loading="lazy" referrerPolicy="no-referrer"
-            className={`shrink-0 rounded-full${wanted === v.id ? " animate-pulse" : ""}`}
-            style={{
-              width: 15, height: 15, objectFit: "cover",
-              outline: lit === v.id ? "1.5px solid var(--primary)" : "none", outlineOffset: 1,
-            }} />
-        )
-        : (
-          <span aria-hidden className={`shrink-0${wanted === v.id ? " animate-pulse" : ""}`} style={{
-            width: 6, height: 6, borderRadius: 999,
-            border: `1.5px solid ${lit === v.id ? "var(--primary)" : "var(--text4)"}`,
-          }} />
-        ))}
-      {/*
-        * A saved ClickUp VIEW draws its own name, not its list's.
-        *
-        * The rail drew `listName || name` for everything, which is right for a
-        * list and wrong for a view: `Eng list by start date view` over
-        * `Orbit v2 – Phases 2 & 3` appeared as a second row called
-        * `Orbit v2 – Phases 2 & 3`, directly under the folder's copy of that
-        * same list. A tag saying "view" was the first attempt and it did not
-        * help — two rows with one name and a badge is still two rows with one
-        * name. The name is what tells them apart, so the name is what changes;
-        * which list it is over is in the tooltip, where it was already.
-        */}
-      {/* A list glyph beside every row that is one, so a list and the folder
-          above it are told apart by shape and not only by indent. The built-in
-          board keeps its own ring — it is not a list and does not behave like
-          one. */}
-      {/* THE LIST'S OWN COLOUR, when the tracker gave it one. Not its icon —
-          the emoji is not in the v2 API — but the colour behind that icon is,
-          and it is the half that does the work: `Bugs` is a red one, and a red
-          dot finds it across a rail faster than a name in grey. Falls back to
-          the generic list glyph, which is still what tells a list from the
-          folder above it when there is no colour. */}
-      {/* depth > 0 was wrong: a list pasted by address sits at the ROOT of the
-          bar, not under a folder, and it is the one most likely to be a list
-          somebody picked out on purpose — so it was the one row with no mark
-          at all. Every board that is not the built-in one gets it now. */}
-      {!v.builtin && (
-        <span aria-hidden className="shrink-0 grid place-items-center" style={{ width: 14, color: "var(--text4)" }}>
-          {v.color
-            ? <span className="rounded-full" style={{ width: 8, height: 8, background: v.color }} />
-            : (
-              <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor"
-                strokeWidth={1.6} strokeLinecap="round" aria-hidden>
-                <path d="M2.5 4.5h2M2.5 8h2M2.5 11.5h2M6.75 4.5h6.75M6.75 8h6.75M6.75 11.5h6.75" />
-              </svg>
-            )}
-        </span>
-      )}
-      <span className="truncate min-w-0 flex-1">{v.name && v.listName && v.name !== v.listName ? v.name : (v.listName || v.name)}</span>
-      {wanted === v.id && <span className="shrink-0 animate-pulse" style={{ color: "var(--text3)" }}>…</span>}
-    </button>
-  );
-
   /**
    * What the folded rail says: the board on screen, by the name the rail would
    * draw for it.
@@ -1232,6 +1077,256 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
       for (const v of g.views) if (v.listId) ensureListViews(v.listId);
     }
   }, [railOpen, railGroups, railShut, ensureListViews]);
+
+  /*
+   * The sidebar as a tree: space > folder > list > that list's own views.
+   *
+   * ONE flat description of what is on screen, in reading order, and the
+   * screen draws exactly that. The grouped and ungrouped halves used to be two
+   * code paths that had to agree on the right-click menu, the busy dots and
+   * which row was lit; a single list of rows cannot disagree with itself, and
+   * it is also what the keyboard needs: `railKey` decides where an arrow goes
+   * from these rows alone.
+   *
+   * Nothing here asks ClickUp for anything. The counts are the ones already in
+   * hand: how many lists a folder holds, how many other views a list has (read
+   * once for the twisty), and the cards on the board that is open.
+   */
+  const railFiltering = railQ.trim() !== "";
+  const railRows = useMemo<RailRow[]>(() => {
+    const out: RailRow[] = [];
+    const folders = boards?.folders ?? [];
+    const nameOf = (v: SavedView) => (v.name && v.listName && v.name !== v.listName ? v.name : (v.listName || v.name));
+    /* While a filter is typed, a folded folder opens: the match is the point,
+       and hiding it behind a fold that was set last week reads as "not there". */
+    const shutNow = (k: string) => !railFiltering && railShut[k] === true;
+    const pushList = (v: SavedView, level: number, crumb: string) => {
+      const kids = v.listId ? listViews[v.listId] ?? [] : [];
+      const links = (v.listId ? listLinks[v.listId] ?? [] : []).filter((l) => clickupViewUrl(folders, l));
+      const more = kids.length + links.length;
+      const open = more > 0 && !!openLists[v.id];
+      out.push({
+        key: `l:${v.id}`, level, kind: v.builtin ? "builtin" : "list", label: nameOf(v), v,
+        expanded: more ? open : undefined, more,
+        title: v.builtin
+          ? "Every card assigned to you, across the workspace, the same list as ClickUp's My Work. Slower than a board (it asks the whole workspace), so it opens on what you last saw."
+          : `${crumb}${v.listName && v.name !== v.listName ? `${v.listName} · ${v.name}` : v.name}`,
+        sepAfter: v.builtin,
+      });
+      if (!open) return;
+      for (const view of kids) {
+        out.push({
+          key: `v:${v.id}/${view.id}`, level: level + 1, kind: "view", label: view.name,
+          v: { id: view.id, name: view.name, listId: v.listId, listName: v.listName ?? v.name, url: "", addedAt: 0, folderId: v.folderId, folderName: v.folderName, spaceName: v.spaceName },
+          title: `${view.name}, a view of ${v.listName ?? v.name}`,
+        });
+      }
+      for (const l of links) {
+        out.push({ key: `x:${v.id}/${l.id}`, level: level + 1, kind: "link", label: l.name, link: l, title: `${l.name} opens in ClickUp (${l.type})` });
+      }
+    };
+    for (const v of railGroups.loose) pushList(v, 1, "");
+    const pushFolder = (g: (typeof railGroups.groups)[number], level: number) => {
+      const saved = folders.find((f) => f.id === g.folderId);
+      const shut = shutNow(g.key);
+      const sp = g.space || saved?.spaceName || "";
+      const crumb = sp ? `${sp} › ` : "";
+      out.push({
+        key: g.key, level, kind: "folder", label: g.folder, group: g.key, expanded: !shut, count: g.views.length,
+        folder: saved,
+        title: saved
+          ? `${crumb}${g.folder}: added whole, so a list created in it turns up here on its own. Right-click to take it off.`
+          : `${crumb}${g.folder}`,
+      });
+      if (!shut) for (const v of g.views) pushList(v, level + 1, `${crumb}${g.folder} › `);
+    };
+    /* Folders whose space is unknown stay at the top level, as they were; the
+       rest hang under their space, in the order the spaces first appear. */
+    const spaceOf = (g: (typeof railGroups.groups)[number]) => g.space || folders.find((f) => f.id === g.folderId)?.spaceName || "";
+    for (const g of railGroups.groups) if (!spaceOf(g)) pushFolder(g, 1);
+    const spaces = [...new Set(railGroups.groups.map(spaceOf).filter(Boolean))];
+    for (const s of spaces) {
+      const gs = railGroups.groups.filter((g) => spaceOf(g) === s);
+      const k = `s:${s}`;
+      out.push({ key: k, level: 1, kind: "space", label: s, group: k, expanded: !shutNow(k), count: gs.reduce((n, g) => n + g.views.length, 0), title: `${s}, a space` });
+      if (!shutNow(k)) for (const g of gs) pushFolder(g, 2);
+    }
+    if (looked.length > 0) {
+      out.push({
+        key: "looked", level: 1, kind: "looked", label: "Looked up", count: looked.length,
+        title: "Cards you have opened by id. They are not on any of your boards: this is where you have been, and it is forgotten when the app closes.",
+      });
+    }
+    return out;
+  }, [boards, railGroups, railShut, railFiltering, listViews, listLinks, openLists, looked.length]);
+
+  /* Roving tabindex: the tree is ONE stop in the Tab order. Which row holds it
+     is the one last focused, else the board that is open, else the first. */
+  const [railFocus, setRailFocus] = useState<string | null>(null);
+  const railTree = useRef<HTMLDivElement>(null);
+  /* Written out rather than read from `lit`, which is declared far below this
+     and would be a temporal-dead-zone error the first render a row exists
+     (see `railActive`). */
+  const railLit = wanted ?? data?.view?.id;
+  const railSelected = (r: RailRow) =>
+    r.kind === "looked" ? onLooked : !!r.v && !onLooked && railLit === r.v.id;
+  const railStop = railRows.some((r) => r.key === railFocus)
+    ? railFocus
+    : (railRows.find(railSelected) ?? railRows[0])?.key ?? null;
+  const railToggle = (r: RailRow) => {
+    if (r.group) setRailShut((m) => ({ ...m, [r.group!]: !(m[r.group!] === true) }));
+    else if (r.v && r.kind === "list") openList(r.v);
+  };
+  const railActivate = (r: RailRow) => {
+    if (r.kind === "folder" || r.kind === "space") { railToggle(r); return; }
+    if (r.kind === "looked") { setOnLooked(true); setSel(looked[0]?.id ?? null); return; }
+    if (r.kind === "link") { const u = clickupViewUrl(boards?.folders ?? [], r.link!); if (u) openExternal(u); return; }
+    if (r.v) { setSel(null); setOnLooked(false); closeAddBar(); void load(r.v.id, false, true); }
+  };
+  const railFocusKey = (key: string) => {
+    setRailFocus(key);
+    railTree.current?.querySelector<HTMLElement>(`[data-rail-key="${CSS.escape(key)}"]`)?.focus();
+  };
+  const onRailKey = (e: React.KeyboardEvent) => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    const el = (e.target as HTMLElement).closest<HTMLElement>('[role="treeitem"]');
+    if (!el) return;
+    const at = railRows.findIndex((r) => r.key === el.dataset.railKey);
+    const mv = railKey(railRows, at, e.key);
+    if (!mv) return;
+    e.preventDefault();
+    const r = railRows[mv.index]!;
+    if (mv.kind === "focus") railFocusKey(r.key);
+    else if (mv.kind === "toggle") railToggle(r);
+    else railActivate(r);
+  };
+
+  /*
+   * One row. A function rather than a component for the reason the rest of
+   * this panel is: everything it reads is state up here, and passing it down
+   * would be a prop list as long as the rows are different.
+   *
+   * Hierarchy is told by type and space first and by icons second: a space is
+   * a small-caps caption, a folder is the heaviest thing in the column, a list
+   * is ordinary weight one step quieter, and a list's own views are smaller
+   * again. Indent is one step a level and the guide line for each open
+   * ancestor runs through the middle of that ancestor's twisty, so the eye can
+   * follow a branch down without counting.
+   */
+  const railItem = (r: RailRow, i: number) => {
+    const sel = railSelected(r);
+    const v = r.v;
+    const isBoard = r.kind === "list" || r.kind === "view" || r.kind === "builtin";
+    const busy = !!v && isBoard && wanted === v.id;
+    const tone = r.kind === "builtin" ? "var(--success)" : "var(--primary)";
+    const startsGroup = i > 0 && r.level === 1 && (r.kind === "space" || r.kind === "folder");
+    const [pre, hit, post] = railSplit(r.label, railQ);
+    return (
+      <Fragment key={r.key}>
+        <div role="treeitem" data-rail-key={r.key} aria-level={r.level}
+          aria-expanded={r.expanded}
+          aria-selected={isBoard || r.kind === "looked" ? sel : undefined}
+          aria-busy={busy || undefined}
+          tabIndex={railStop === r.key ? 0 : -1}
+          title={r.title}
+          onFocus={() => setRailFocus(r.key)}
+          onClick={() => railActivate(r)}
+          onContextMenu={(e) => {
+            if (r.folder) { e.preventDefault(); e.stopPropagation(); setFolderMenu({ f: r.folder, x: e.clientX, y: e.clientY }); }
+            else if (v && (r.kind === "list" || r.kind === "builtin")) { e.preventDefault(); e.stopPropagation(); setMenu({ v, x: e.clientX, y: e.clientY }); }
+          }}
+          className="agx-rail-row relative flex items-center select-none"
+          style={{
+            height: HIT, marginInline: 4, paddingLeft: RAIL_PAD + (r.level - 1) * RAIL_STEP, paddingRight: 8,
+            marginTop: startsGroup ? 8 : 0, borderRadius: 6, cursor: "pointer",
+            fontSize: r.kind === "view" || r.kind === "link" ? 11.5 : r.kind === "space" ? 10 : 12,
+            fontWeight: sel || r.kind === "folder" || r.kind === "space" ? 600 : 400,
+            textTransform: r.kind === "space" ? "uppercase" : undefined,
+            letterSpacing: r.kind === "space" ? "0.08em" : undefined,
+            color: sel || r.kind === "folder" ? "var(--text)"
+              : r.kind === "space" || r.kind === "view" ? "var(--text3)"
+              : r.kind === "link" ? "var(--text4)" : "var(--text2)",
+          }}>
+          {/* One guide per open ancestor, through the middle of its twisty. */}
+          {Array.from({ length: r.level - 1 }, (_, k) => (
+            <span key={k} aria-hidden className="absolute" style={{
+              left: RAIL_PAD + k * RAIL_STEP + MIN_BOX / 2 - 1, top: 0, bottom: 0, width: 1,
+              background: "color-mix(in srgb, var(--text) 12%, transparent)",
+            }} />
+          ))}
+          {sel && <span aria-hidden className="absolute" style={{ left: 0, top: 4, bottom: 4, width: 2, borderRadius: 2, background: tone }} />}
+          {/* The twisty is its own target, MIN_BOX wide and the row tall. On a
+              list it opens the list's views without opening the list; on a
+              folder or space the whole row does that and this is only the mark. */}
+          <span aria-hidden data-rail-toggle={r.expanded !== undefined ? "" : undefined}
+            className="shrink-0 grid place-items-center"
+            style={{ width: MIN_BOX, height: HIT, color: "var(--text4)" }}
+            onClick={r.kind === "list" && r.expanded !== undefined ? (e) => { e.stopPropagation(); railToggle(r); } : undefined}>
+            {r.expanded !== undefined && (
+              <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor"
+                strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="agx-rail-chev"
+                style={{ transform: r.expanded ? "rotate(90deg)" : "none" }}>
+                <path d="M6 3.5 10.5 8 6 12.5" />
+              </svg>
+            )}
+          </span>
+          {r.kind !== "space" && (
+            <span aria-hidden className="shrink-0 grid place-items-center" style={{ width: 14, marginRight: 6 }}>
+              {r.kind === "folder" ? (
+                <svg viewBox="0 0 16 16" width={ICON.sm} height={ICON.sm} fill="none" stroke="var(--primary-ink)" strokeWidth={1.5} strokeLinejoin="round">
+                  <path d="M1.75 4.25A1.5 1.5 0 0 1 3.25 2.75h2.4l1.3 1.5h5.8a1.5 1.5 0 0 1 1.5 1.5v6a1.5 1.5 0 0 1-1.5 1.5H3.25a1.5 1.5 0 0 1-1.5-1.5Z" />
+                </svg>
+              ) : r.kind === "builtin" ? (
+                myFace ? (
+                  <img src={myFace} alt="" loading="lazy" referrerPolicy="no-referrer"
+                    className={`rounded-full${busy ? " animate-pulse" : ""}`} style={{ width: 14, height: 14, objectFit: "cover" }} />
+                ) : (
+                  <span className={busy ? "animate-pulse" : undefined} style={{ width: 8, height: 8, borderRadius: 999, border: `1.5px solid ${sel ? tone : "var(--text3)"}` }} />
+                )
+              ) : r.kind === "looked" ? (
+                <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M8 4.5V8l2.5 1.5" /><circle cx="8" cy="8" r="5.5" />
+                </svg>
+              ) : r.kind === "link" ? (
+                <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round">
+                  {r.link?.type === "gantt" ? <path d="M2.5 4h6M4.5 8h7M2.5 12h4" /> : <path d="M2.5 12.5V8M6.5 12.5V4M10.5 12.5V6M14 12.5V9.5" />}
+                </svg>
+              ) : v?.color && r.kind === "list" ? (
+                <span className="rounded-full" style={{ width: 8, height: 8, background: v.color }} />
+              ) : (
+                <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round"
+                  style={{ color: "var(--text4)" }}>
+                  <path d="M2.5 4.5h2M2.5 8h2M2.5 11.5h2M6.75 4.5h6.75M6.75 8h6.75M6.75 11.5h6.75" />
+                </svg>
+              )}
+            </span>
+          )}
+          <span className="truncate min-w-0 flex-1">
+            {hit ? <>{pre}<span style={{ color: "var(--primary-ink)", textDecoration: "underline", textUnderlineOffset: 3 }}>{hit}</span>{post}</> : r.label}
+          </span>
+          {busy && <span aria-hidden className="shrink-0 animate-pulse" style={{ color: "var(--text3)" }}>…</span>}
+          {r.kind === "link" && <span aria-hidden className="shrink-0" style={{ fontSize: 10, opacity: 0.7 }}>↗</span>}
+          {/* Counts, all of them already known. A folder or space: the lists it
+              holds. The open board: its cards. A closed list with other views:
+              how many, as +N, matching the tooltip. */}
+          {r.count !== undefined && (
+            <span className="tabular-nums shrink-0" style={{ fontSize: 10, marginLeft: 6, color: "var(--text4)" }}>{r.count}</span>
+          )}
+          {sel && isBoard && !busy && !!data?.tasks.length && (
+            <span className="tabular-nums shrink-0 rounded-full" title={`${data.tasks.length} cards on this board`}
+              style={{ fontSize: 10, marginLeft: 6, paddingInline: 6, background: `color-mix(in srgb, ${tone} 16%, transparent)`, color: "var(--text)" }}>
+              {data.tasks.length}
+            </span>
+          )}
+          {!sel && r.kind === "list" && r.expanded === false && !!r.more && (
+            <span className="tabular-nums shrink-0" title={`${r.more} more view${r.more === 1 ? "" : "s"} on this list`}
+              style={{ fontSize: 10, marginLeft: 6, color: "var(--text4)" }}>+{r.more}</span>
+          )}
+        </div>
+        {r.sepAfter && <div role="none" aria-hidden style={{ height: 1, margin: "6px 12px 4px", background: "var(--surface-line)" }} />}
+      </Fragment>
+    );
+  };
 
   /* Sidebar or modal. Global for the same reason the width is: how you like to
      read a card is about you, not about which list you are on. Full screen was
@@ -2867,8 +2962,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
          * now read back out of it. So the day we hold the places came, and the
          * shape ClickUp draws is the shape here.
          */}
-        <nav aria-label="Lists" className="flex flex-col shrink-0 min-w-0"
-          style={{ width: railOpen ? 214 : 34, borderRight: LINE, transition: "width 120ms ease" }}>
+        <nav ref={railNav} aria-label="Lists" className="relative flex flex-col shrink-0 min-w-0"
+          style={{ width: railOpen ? railW : 34, borderRight: LINE, transition: railDrag ? "none" : "width 120ms ease" }}>
           <div className="flex items-center gap-1 px-1.5 shrink-0"
             style={{ height: HEAD_H, borderBottom: LINE }}>
             <button onClick={() => setRailOpen((o) => !o)}
@@ -2886,10 +2981,23 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
               </svg>
             </button>
             {railOpen && (
-              <input value={railQ} onChange={(e) => setRailQ(e.target.value)} placeholder="Filter lists…" spellCheck={false}
-                aria-label="Filter lists"
-                className={`min-w-0 flex-1 ${INPUT}`}
-                style={INPUT_STYLE} />
+              <div className="relative min-w-0 flex-1">
+                <input ref={railInput} value={railQ} onChange={(e) => setRailQ(e.target.value)} placeholder="Filter lists…" spellCheck={false}
+                  aria-label="Filter lists"
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape" && railQ) { e.preventDefault(); setRailQ(""); }
+                    else if (e.key === "ArrowDown" && railStop) { e.preventDefault(); railFocusKey(railStop); }
+                  }}
+                  className={`w-full pr-7 ${INPUT}`}
+                  style={INPUT_STYLE} />
+                {railQ && (
+                  <button onClick={() => { setRailQ(""); railInput.current?.focus(); }} aria-label="Clear the filter" title="Clear the filter · Esc"
+                    className="absolute grid place-items-center rounded-lg agx-btn"
+                    style={{ right: 4, top: "50%", transform: "translateY(-50%)", width: MIN_BOX, height: MIN_BOX, color: "var(--text3)" }}>
+                    <CrossIcon size={ICON.xs} />
+                  </button>
+                )}
+              </div>
             )}
           </div>
           {/*
@@ -2916,88 +3024,54 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
             </button>
           )}
           {railOpen && (
-            <div className="agx-scroll flex-1 min-h-0 overflow-y-auto py-1">
-              {railViews.length === 0 && (
-                <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>No list by that name.</div>
-              )}
-              {/* Ungrouped first: the built-in board, and any list whose
-                  folder we do not know yet — a pasted one is only filed once it
-                  has been opened and told us its breadcrumb. */}
-              {railGroups.loose.map((v) => railRow(v, 0))}
-              {railGroups.groups.map((g) => {
-                const shut = railShut[g.key] === true;
-                const savedFolder = (boards?.folders ?? []).find((f) => f.id === g.folderId);
-                return (
-                  /*
-                   * A folder has to look like a folder, and its lists have to
-                   * look like they are inside it.
-                   *
-                   * The first version was a dim caption over rows at the same
-                   * indent, and it read as one flat column with the odd label
-                   * in it — "there is no margin for error, I keep clicking
-                   * where I should not". ClickUp's own sidebar answers this with three
-                   * things and they are all here: a folder glyph, brighter type
-                   * for the folder than for its lists, and a guide line down
-                   * the left of the children so the eye can follow the nesting
-                   * without counting pixels.
-                   */
-                  <div key={g.key} className="mt-1.5">
-                    <button
-                      onClick={() => setRailShut((m) => ({ ...m, [g.key]: !shut }))}
-                      onContextMenu={(e) => {
-                        if (!savedFolder) return;
-                        e.preventDefault(); e.stopPropagation();
-                        setFolderMenu({ f: savedFolder, x: e.clientX, y: e.clientY });
-                      }}
-                      className="w-full text-left flex items-center gap-1.5 pl-1.5 pr-2 py-1 text-[11px] agx-btn rounded"
-                      style={{ color: "var(--text2)" }}
-                      title={savedFolder
-                        ? `${g.space ? `${g.space} · ` : ""}${g.folder} — added whole, so a list created in it turns up here on its own. Right-click to take it off.`
-                        : `${g.space ? `${g.space} · ` : ""}${g.folder}`}>
-                      {/* The twisty and the folder are one target: 20px of it,
-                          which is the smallest square this rail has room for
-                          and still wider than the 9px caret it replaced. */}
-                      <span aria-hidden className="shrink-0 grid place-items-center" style={{ width: 14, color: "var(--text4)" }}>
-                        <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="currentColor" aria-hidden
-                          style={{ transform: shut ? "none" : "rotate(90deg)", transition: "transform 120ms ease" }}>
-                          <path d="M6 3.5 10.5 8 6 12.5Z" />
-                        </svg>
-                      </span>
-                      <span aria-hidden className="shrink-0 grid place-items-center" style={{ width: 14, color: "var(--primary-ink)" }}>
-                        <svg viewBox="0 0 16 16" width={ICON.sm} height={ICON.sm} fill="none" stroke="currentColor"
-                          strokeWidth={1.5} strokeLinejoin="round" aria-hidden>
-                          <path d="M1.75 4.25A1.5 1.5 0 0 1 3.25 2.75h2.4l1.3 1.5h5.8a1.5 1.5 0 0 1 1.5 1.5v6a1.5 1.5 0 0 1-1.5 1.5H3.25a1.5 1.5 0 0 1-1.5-1.5Z" />
-                        </svg>
-                      </span>
-                      <span className="truncate min-w-0 flex-1" style={{ letterSpacing: "0.01em" }}>{g.folder}</span>
-                      <span className="tabular-nums shrink-0 text-[10px]" style={{ color: "var(--text4)" }}>{g.views.length}</span>
-                    </button>
-                    {!shut && (
-                      /* The guide line sits on the children, not on the folder:
-                         it has to stop where the folder's contents stop. */
-                      <div style={{ marginLeft: 14, borderLeft: `1px solid color-mix(in srgb, var(--text) 14%, transparent)` }}>
-                        {g.views.map((v) => railList(v))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              {/* Where you have been, beside the lists rather than inside one —
-                  a card from another list sitting in somebody's sprint reads as
-                  being IN it. Dashed and only while it holds something. */}
-              {looked.length > 0 && (
-                <button onClick={() => { setOnLooked(true); setSel(looked[0]?.id ?? null); }}
-                  aria-current={onLooked}
-                  className="w-full text-left flex items-center gap-1.5 px-2.5 py-1 mt-1 text-[11.5px]"
-                  style={{ color: onLooked ? "var(--text)" : "var(--text3)",
-                    background: onLooked ? "color-mix(in srgb, var(--primary) 14%, transparent)" : "transparent",
-                    borderTop: `1px dashed color-mix(in srgb, var(--text) 22%, transparent)` }}
-                  title="Cards you have opened by id. They are not on any of your boards — this is where you have been, and it is forgotten when the app closes.">
-                  <span className="truncate min-w-0 flex-1">Looked up</span>
-                  <span className="tabular-nums text-[10px]" style={{ color: "var(--text4)" }}>{looked.length}</span>
-                </button>
-              )}
+            <div className="agx-scroll flex-1 min-h-0 overflow-y-auto py-1.5">
+              {railViews.length === 0 && (railFiltering ? (
+                <div className="px-3 py-3 text-[11px]" style={{ color: "var(--text3)" }}>
+                  <div>No list matches “{railQ.trim()}”.</div>
+                  <button onClick={() => { setRailQ(""); railInput.current?.focus(); }}
+                    className="mt-2 rounded-lg px-2 text-[11px] agx-btn" style={{ height: CTRL_H.compact, border: EDGE, color: "var(--text2)" }}>
+                    Clear filter
+                  </button>
+                </div>
+              ) : (
+                <div className="px-3 py-3 text-[11px]" style={{ color: "var(--text3)" }}>No lists yet.</div>
+              ))}
+              {/* One tree: the built-in board and any list whose folder we do
+                  not know yet come first, then spaces and folders, then
+                  where you have been. See `railRows`. */}
+              <div ref={railTree} role="tree" aria-label="ClickUp lists" onKeyDown={onRailKey}>
+                {railRows.map(railItem)}
+              </div>
             </div>
+          )}
+          {railOpen && (
+            <div role="separator" aria-orientation="vertical" tabIndex={0} aria-label="Resize the list menu"
+              aria-valuenow={railW} aria-valuemin={RAIL_W_MIN} aria-valuemax={RAIL_W_MAX}
+              title="Drag to resize · double-click for the usual width"
+              className="agx-rail-grip absolute top-0 bottom-0"
+              style={{ right: -3, width: 6, cursor: "col-resize", zIndex: 5 }}
+              onDoubleClick={() => setRailW(RAIL_W_DEFAULT)}
+              onKeyDown={(e) => {
+                if (e.key === "ArrowLeft") { e.preventDefault(); setRailW((w) => clampRailW(w - (e.shiftKey ? 40 : 12))); }
+                else if (e.key === "ArrowRight") { e.preventDefault(); setRailW((w) => clampRailW(w + (e.shiftKey ? 40 : 12))); }
+                else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setRailW(RAIL_W_DEFAULT); }
+              }}
+              onPointerDown={(e) => {
+                e.preventDefault();
+                (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+                setRailDrag(true);
+                /* Measured from the rail's own left edge rather than by adding
+                   up deltas, so a dropped move cannot leave it behind the pointer. */
+                const left = railNav.current?.getBoundingClientRect().left ?? 0;
+                const move = (ev: PointerEvent) => setRailW(clampRailW(ev.clientX - left));
+                const up = () => {
+                  setRailDrag(false);
+                  window.removeEventListener("pointermove", move);
+                  window.removeEventListener("pointerup", up);
+                };
+                window.addEventListener("pointermove", move);
+                window.addEventListener("pointerup", up);
+              }} />
           )}
         </nav>
         <div className="flex flex-col flex-1 min-w-0">
@@ -4191,6 +4265,31 @@ const CARD_W_KEY = "agentglass.clickup.cardWidth";
 const RAIL_KEY = "agentglass.clickup.listRail";
 /** Which folders in that rail are folded shut, by folder key. */
 const RAIL_SHUT_KEY = "agentglass.clickup.listRail.shut";
+const RAIL_W_KEY = "agentglass.clickup.listRail.width";
+/** Where a row starts, and how far each level steps in. The guide lines and the
+ *  twisties are placed from these, so they cannot drift from the text. */
+const RAIL_PAD = 6;
+const RAIL_STEP = 12;
+
+/** One visible row of the rail, in reading order. See `railRows`. */
+interface RailRow {
+  key: string;
+  level: number;
+  kind: "space" | "folder" | "list" | "builtin" | "view" | "link" | "looked";
+  label: string;
+  title: string;
+  v?: SavedView;
+  link?: { id: string; name: string; type: string };
+  folder?: SavedFolder;
+  /** The key in the folded-shut map, on a space or a folder. */
+  group?: string;
+  /** Undefined on a leaf: it has no twisty. */
+  expanded?: boolean;
+  count?: number;
+  /** Other views this list has, behind its twisty. */
+  more?: number;
+  sepAfter?: boolean;
+}
 const CARD_MODE_KEY = "agentglass.clickup.cardMode";
 /** The width it goes back to. The old narrow setting, kept as the default
  *  because it is the one most cards are read at. */
