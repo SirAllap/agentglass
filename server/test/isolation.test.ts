@@ -73,6 +73,25 @@ test("no suite deletes HOME or an XDG base without giving it back", () => {
   expect(offenders, `these delete HOME or an XDG base and never restore it: ${offenders.join(", ")}`).toEqual([]);
 });
 
+test("no suite removes the directory of the database the process is on", () => {
+  /* `AGENTGLASS_DB ||=` makes the first file to import db.ts the owner of the
+     database for the whole run, and the directory it chose is gone as soon as
+     that file's afterAll removes it. pr-notify-watch hands DB.dbPath() to a
+     child process, and in the orders that put transcript-light-sweep or
+     transcript-budget first the child died with "unable to open database
+     file" and printed nothing. A file that sets it this way and removes its
+     own directory must ask db.ts where the database is before it does.
+     CEILING: a source rule on the "||=" form; a file that assigns plainly
+     and removes its directory is not judged. */
+  const dir = new URL(".", import.meta.url).pathname;
+  const offenders: string[] = [];
+  for (const f of readdirSync(dir).filter((n) => n.endsWith(".test.ts") && n !== "isolation.test.ts")) {
+    const code = readFileSync(join(dir, f), "utf8").split("\n").filter((l) => !/^\s*(\/\/|\/?\*)/.test(l)).join("\n");
+    if (/AGENTGLASS_DB \|\|=/.test(code) && /rmSync\(dir\b/.test(code) && !code.includes("dbPath()")) offenders.push(f);
+  }
+  expect(offenders, `these own the process's database and remove its directory: ${offenders.join(", ")}`).toEqual([]);
+});
+
 test("every suite in the repository loads it, and loads it first", async () => {
   /* First because bun freezes a builtin's exports the first time anything
      imports it, and the homedir patch has to land before that. Every suite,

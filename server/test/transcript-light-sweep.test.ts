@@ -35,7 +35,11 @@ afterAll(() => {
       try { db.db.run(`DELETE FROM ${t} WHERE session_id IN (${marks})`, FIXTURES); } catch { /* column may not exist */ }
     }
   }
-  rmSync(dir, { recursive: true, force: true });
+  // The database lives in this directory only if this file was the first to import db.ts, and
+  // then it is every later file's database too: one process, one connection, one path. Removing
+  // it here pulls the directory from under a test that hands DB.dbPath() to a child, which then
+  // cannot open it. The preload's sweep removes it when the process ends.
+  if (!db || !db.dbPath().startsWith(dir + "/")) rmSync(dir, { recursive: true, force: true });
 });
 
 let clock = Date.now() - 60_000;
