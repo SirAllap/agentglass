@@ -20,8 +20,9 @@ describe("re-request review from the sidebar", () => {
     expect(body).toContain('title={ask && ask !== "busy" ? `Could not ask again: ${ask}` : "Re-request review"}');
   });
 
-  test("asks through the reviewers endpoint, adding that one login", () => {
-    expect(src).toContain("onAsk={(login) => api.prReviewers(root, d.number, [login], [])}");
+  test("asks through the reviewers endpoint, adding that one login, behind the layer", () => {
+    expect(src).toContain("onAsk={onRerequest}");
+    expect(src).toContain("field(reviewersPatch(d.number, [login], []), () => api.prReviewers(root, d.number, [login], [])");
   });
 
   test("is not offered beside a tick — an approver reads confusing with a ↻ next to it", () => {

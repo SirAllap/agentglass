@@ -5082,6 +5082,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                       )}
                     </div>
                     <PrSidebar d={d} root={root} onEditField={fieldPicker.open}
+                      onRerequest={(login) => field(reviewersPatch(d.number, [login], []), () => api.prReviewers(root, d.number, [login], []), "Re-request did not go out", "reviewers")
+                        .then((ok): PrActionResult => (ok ? { ok: true } : { ok: false, error: "GitHub did not take it" }))}
                       spend={spendChipFor(spendByBranch.get(d.headRefName), spend)} />
                   </div>
                 ) : null}
@@ -7785,12 +7787,15 @@ function pingPrompt(recipes: ReviewRecipe[], ctx: ReviewRecipeContext): string {
   return [skill, expandRecipe(body, ctx).trim()].filter(Boolean).join("\n\n");
 }
 
-function PrSidebar({ d, root, spend, onEditField }: {
+function PrSidebar({ d, root, spend, onEditField, onRerequest }: {
   d: PrDetail;
   root: string;
   /** What this branch cost locally, or null. See spendChipFor. */
   spend?: SpendChip | null;
   onEditField: (field: SidebarField, e: React.MouseEvent<HTMLButtonElement>) => void;
+  /** The ↻ beside an answered reviewer: drawn on the press through the same
+   *  layer the picker uses, so the merge box moves with the dot. */
+  onRerequest: (login: string) => Promise<PrActionResult>;
 }) {
   return (
     /**
@@ -7863,7 +7868,7 @@ function PrSidebar({ d, root, spend, onEditField }: {
                   {v.askedAgain && !v.cleared && <span className="truncate" style={{ color: "var(--text4)" }}>· asked again</span>}
                 </div>
               )}
-              <ReviewerList rows={rows} author={d.author} onAsk={(login) => api.prReviewers(root, d.number, [login], [])} />
+              <ReviewerList rows={rows} author={d.author} onAsk={onRerequest} />
             </>
           );
         })()}

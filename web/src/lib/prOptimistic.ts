@@ -176,10 +176,25 @@ const names = (list: string[], add: string[], remove: string[]) =>
 export const assigneesPatch = (number: number, add: string[], remove: string[]) => (d: PrDetail): PrDetail =>
   d.number === number ? { ...d, assignees: names(d.assignees, add, remove) } : d;
 
+/* The request list AND the verdict drawn from it. The merge box and the
+   sidebar header read `humanReview` (the server's one verdict), the dot beside
+   a name reads `reviewers`; patching only the list drew the dot and left the box
+   saying "then re-request review from X" until the next read. This is the
+   server's own rule (`humanVerdict`): `askedAgain` when any verdict-giver is
+   back in the request list, `cleared` when every changes-requester is.
+   Ceiling: only an approved or changes verdict is recomputed — an "awaiting"
+   or "commented" one has no `who` to re-derive from, and the read that follows
+   the write settles it. */
 export const reviewersPatch = (number: number, add: string[], remove: string[]) => (d: PrDetail): PrDetail => {
   if (d.number !== number) return d;
   const kept = d.reviewers.filter((r) => !remove.includes(r.login));
-  return { ...d, reviewers: [...kept, ...add.filter((l) => !kept.some((r) => r.login === l)).map((login) => ({ login }))] };
+  const reviewers: PrDetail["reviewers"] = [...kept, ...add.filter((l) => !kept.some((r) => r.login === l)).map((login) => ({ login }))];
+  const v = d.humanReview;
+  if (!v || (v.kind !== "changes" && v.kind !== "approved")) return { ...d, reviewers };
+  const asked = new Set(reviewers.filter((r) => !r.isTeam).map((r) => r.login.toLowerCase()));
+  const back = v.who.map((l) => asked.has(l.toLowerCase()));
+  const { cleared: _drop, ...rest } = v;
+  return { ...d, reviewers, humanReview: { ...rest, askedAgain: back.some(Boolean), ...(v.kind === "changes" && back.every(Boolean) ? { cleared: true } : null) } };
 };
 
 export const milestonePatch = (number: number, title: string) => (d: PrDetail): PrDetail =>
