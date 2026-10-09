@@ -37,7 +37,7 @@ import { flashElement } from "../lib/flash.ts";
 import { shaFromHref } from "../lib/commitLink.ts";
 import { isShortRef, openInApp, wantsExternal } from "../lib/linkRouter.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
-import { Button, RefreshButton, ScopeChip, Segmented, Tabs, CTRL_H, EDGE, CHIP_SURFACE, INPUT, INPUT_STYLE, LINE, TL_AVATAR, TL_CSS } from "./workspace/Chrome.tsx";
+import { Button, FilterField, RefreshButton, ScopeChip, Segmented, Tabs, CTRL_H, EDGE, CHIP_SURFACE, INPUT, INPUT_STYLE, LINE, TL_AVATAR, TL_CSS } from "./workspace/Chrome.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import type {
   PrSummary, PrDetail, PrRepoId, PrThread, PrComment, PrReview, PrReviewer, PrCheck, GitRepoRef, FileChange,
@@ -285,6 +285,16 @@ const stateTint = (p: PrSummary): string => {
   if (p.checks.verdict === "green") return "var(--success)";
   return "var(--text3)";
 };
+
+/** The fold marker of a Checks card or row: the house caret, turned a quarter
+ *  when shut, not a typed triangle that changes width between states. */
+function FoldCaret({ open }: { open: boolean }) {
+  return (
+    <span aria-hidden className="shrink-0 flex" style={{ color: "var(--text3)", transform: open ? undefined : "rotate(-90deg)" }}>
+      <CaretIcon size={ICON.xs} />
+    </span>
+  );
+}
 
 function Dot({ tint, title }: { tint: string; title?: string }) {
   return <span title={title} className="inline-block shrink-0 rounded-full" style={{ width: 6, height: 6, background: tint }} />;
@@ -12147,7 +12157,7 @@ export function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyW
     const name = full ? `${k.workflow ? `${k.workflow} / ` : ""}${shortName(k)}` : shortName(k);
     return (
       <div key={id} style={{ borderTop: LINE, background: bad ? "color-mix(in srgb, var(--error) 7%, transparent)" : undefined }}>
-        <div className="flex items-center gap-2 px-2.5 py-1.5">
+        <div className="flex items-center gap-2 px-2.5 py-1.5" style={{ minHeight: CTRL_H.regular }}>
           {/* A failing check is the one row on this tab you came for, so it is
               the one row that opens into somewhere to go next. */}
           <button onClick={() => bad && setOpenCheck(expanded ? null : id)} disabled={!bad}
@@ -12160,7 +12170,7 @@ export function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyW
             <span className="truncate min-w-0 flex-1" title={checkStatusLine(k)} style={{ color: bad ? "var(--error-ink)" : "var(--text3)" }}>
               {k.title || (k.state === "success" ? "" : checkStatusLine(k))}
             </span>
-            {bad && <span className="shrink-0" style={{ color: "var(--text3)" }}>{expanded ? "▾" : "▸"}</span>}
+            {bad && <FoldCaret open={expanded} />}
           </button>
           {/* Scaled to the slowest run on this pull request, so a job that
               dominates the wall time is the one you see without reading a
@@ -12172,9 +12182,9 @@ export function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyW
             {span != null ? formatSpan(span) : k.state === "pending" ? "running" : quiet ? "skipped" : ""}
           </span>
           {k.url
-            ? <a href={externalUrl(k.url)} target="_blank" rel="noreferrer noopener" className="shrink-0 text-[10px]" style={{ color: "var(--text2)" }}
-                title="Open this run on GitHub">Details ↗</a>
-            : <span className="shrink-0 text-[10px] invisible" aria-hidden>Details ↗</span>}
+            ? <a href={externalUrl(k.url)} target="_blank" rel="noreferrer noopener" className="shrink-0 text-[10px] inline-flex items-center gap-0.5 hover:underline" style={{ color: "var(--text2)" }}
+                title="Open this run on GitHub">Details<ArrowIcon size={ICON.xs} /></a>
+            : <span className="shrink-0 text-[10px] inline-flex items-center gap-0.5 invisible" aria-hidden>Details<ArrowIcon size={ICON.xs} /></span>}
         </div>
         {expanded && (
           <div className="flex items-center gap-1.5 flex-wrap px-2.5 pb-2 pt-0.5">
@@ -12208,7 +12218,7 @@ export function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyW
 
   return (
     <div className="text-[11px] flex flex-col gap-2">
-      <div className="flex items-center gap-4 p-3.5 rounded-lg" style={{ border: EDGE, background: "var(--surface-card)" }}>
+      <div className="flex items-center gap-4 p-3.5 rounded-xl" style={{ border: EDGE, background: "var(--surface-card)" }}>
         <span className="shrink-0 rounded-full flex items-center justify-center" aria-hidden
           style={{ width: 56, height: 56, background: `conic-gradient(var(--success) 0 ${okEnd}deg, var(--error) 0 ${badEnd}deg, var(--warning) 0 ${runEnd}deg, color-mix(in srgb, var(--text4) 45%, transparent) 0)` }}>
           <span className="rounded-full flex items-center justify-center" style={{ width: 42, height: 42, background: "var(--surface-card)", color: heroTint }}>
@@ -12239,28 +12249,27 @@ export function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyW
 
       <div className="flex items-center gap-1.5 flex-wrap">
         <Segmented value={filter} options={chips} onChange={setFilter} label="Show checks" />
-        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter checks…" aria-label="Filter checks"
-          className={`ml-auto min-w-0 ${INPUT}`} style={{ ...INPUT_STYLE, height: 24, width: 180 }} />
+        <FilterField value={query} onChange={setQuery} placeholder="Filter checks…" label="Filter checks" className="ml-auto min-w-0 w-48" />
       </div>
 
       {attention.length > 0 && (
-        <div className="rounded-lg overflow-hidden" style={{ border: EDGE, background: `color-mix(in srgb, ${sections.failing.length ? "var(--error)" : "var(--warning)"} 5%, transparent)` }}>
+        <div className="rounded-xl overflow-hidden" style={{ border: EDGE, background: "var(--surface-card)" }}>
           <div className="px-2.5 py-1.5 flex items-center gap-2"><b style={{ fontWeight: 500, color: "var(--text)" }}>Needs attention</b><span className="tabular-nums" style={{ color: "var(--text3)" }}>{attention.length}</span></div>
           {attention.map((k, i) => row(k, i, true))}
         </div>
       )}
       {attention.length === 0 && !filtering && c.total > 0 && (
-        <div className="px-2.5 py-1.5 rounded-lg" style={{ border: EDGE, color: "var(--text3)" }}>Nothing needs you.</div>
+        <div className="px-2.5 py-1.5 rounded-xl" style={{ border: EDGE, background: "var(--surface-card)", color: "var(--text3)" }}>Nothing needs you.</div>
       )}
 
       {cards.map((g) => {
         const isOpen = filtering || (openGroups[g.name] ?? false);
         return (
-          <div key={g.name} className="rounded-lg overflow-hidden" style={{ border: EDGE }}>
+          <div key={g.name} className="rounded-xl overflow-hidden" style={{ border: EDGE, background: "var(--surface-card)" }}>
             <button onClick={() => setOpenGroups((o) => ({ ...o, [g.name]: !isOpen }))} aria-expanded={isOpen}
-              className="w-full text-left flex items-center gap-2 px-2.5 py-2"
-              style={{ background: "color-mix(in srgb, var(--border) 14%, transparent)" }}>
-              <span style={{ color: "var(--text3)" }}>{isOpen ? "▾" : "▸"}</span>
+              className="agx-hover w-full text-left flex items-center gap-2 px-2.5 py-2"
+              style={{ minHeight: CTRL_H.regular }}>
+              <FoldCaret open={isOpen} />
               <b style={{ color: "var(--text)", fontWeight: 500 }}>{g.name}</b>
               <span className="inline-flex items-center gap-0.5 tabular-nums" style={{ color: "var(--success-ink)" }}>{g.passed}<DoneIcon size={ICON.xs} /></span>
               <span className="ml-auto flex gap-0.5" aria-hidden>
@@ -12273,9 +12282,9 @@ export function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyW
       })}
 
       {sections.skipped.length > 0 && (
-        <div className="rounded-lg overflow-hidden" style={{ border: EDGE }}>
-          <button onClick={() => setShowSkipped((v) => !v)} aria-expanded={showSkipped} className="w-full text-left flex items-center gap-2 px-2.5 py-1.5" style={{ color: "var(--text2)" }}>
-            <span style={{ color: "var(--text3)" }}>{showSkipped || filtering ? "▾" : "▸"}</span>
+        <div className="rounded-xl overflow-hidden" style={{ border: EDGE, background: "var(--surface-card)" }}>
+          <button onClick={() => setShowSkipped((v) => !v)} aria-expanded={showSkipped} className="agx-hover w-full text-left flex items-center gap-2 px-2.5 py-1.5" style={{ color: "var(--text2)", minHeight: CTRL_H.regular }}>
+            <FoldCaret open={showSkipped || filtering} />
             {sections.skipped.length} skipped check{sections.skipped.length === 1 ? "" : "s"}
           </button>
           {(showSkipped || filtering) && sections.skipped.map((k, i) => row(k, i, true))}

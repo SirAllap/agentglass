@@ -20,7 +20,7 @@ import { bellState, firedLabel, firedOk, markFireSeen, useFireSeen, presetOf, ru
 import { Select } from "./Select.tsx";
 import { BellIcon } from "./settingsNavIcons.tsx";
 import { CrossIcon, DoneIcon } from "../lib/glyphIcons.tsx";
-import { Button, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { Button, CTRL_H, GROUP_HEADING, INPUT, INPUT_STYLE, LINE } from "./workspace/Chrome.tsx";
 
 const FIXED: { rule: PrWatchRule; hint?: string }[] = [
   { rule: { type: "ci-pass" } },
@@ -89,18 +89,18 @@ export function PrWatchMenu({ root, repo, d }: {
       </Button>
       {open && (
         <div className="absolute z-50 top-full mt-1.5 right-0 rounded-lg agx-menu p-2 flex flex-col gap-1" style={{ minWidth: 268 }} data-pr-watch-menu>
-          <div className="px-1 pb-1 text-[9px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>Notify me when…</div>
+          <div className={GROUP_HEADING} style={{ color: "var(--text4)", paddingTop: 2 }}>Notify me when…</div>
           {FIXED.map(({ rule, hint }) => (
             <Row key={rule.type} on={!!waiting(rule)} onToggle={() => void toggle(rule)}>
               {ruleLabel(rule)}{hint && <span className="block text-[10px]" style={{ color: "var(--text3)" }}>{hint}</span>}
             </Row>
           ))}
-          <div className="px-1 pt-1 text-[9px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>A specific check</div>
+          <div className={GROUP_HEADING} style={{ color: "var(--text4)" }}>A specific check</div>
           {checkRules.map((w) => (
             <Row key={w.id} on onToggle={() => void api.prWatchRemove(w.id).then(fail)}>{ruleLabel(w.rule)}</Row>
           ))}
           <div className="flex gap-1 items-center px-1">
-            <input className={`${INPUT} min-w-0 flex-1`} style={{ ...INPUT_STYLE, height: 24 }} value={match} placeholder="name contains, e.g. evals"
+            <input className={`${INPUT} min-w-0 flex-1`} style={{ ...INPUT_STYLE, height: CTRL_H.compact }} value={match} placeholder="name contains, e.g. evals"
               aria-label="Check name contains" onChange={(e) => setMatch(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") void addCheck(); }} />
             <Select value={on} onChange={(v) => setOn(v as typeof on)} title="When the check" align="right"
@@ -114,7 +114,7 @@ export function PrWatchMenu({ root, repo, d }: {
               ))}
             </div>
           )}
-          <div style={{ height: 1, background: "color-mix(in srgb, var(--border) 26%, transparent)", margin: "4px 0" }} />
+          <div style={{ borderTop: LINE, margin: "4px 0" }} />
           <div className="flex gap-1 flex-wrap px-1">
             <Button size="compact" disabled={!current.length} title={`Every rule ticked here becomes ${repo}'s default`}
               onClick={() => void api.prWatchPreset(root, current, preset?.auto ?? false).then(fail)}>Save as my default</Button>
@@ -129,7 +129,7 @@ export function PrWatchMenu({ root, repo, d }: {
             </Row>
           )}
           {bell.last?.lastText && <div className="px-1 text-[10px]" style={{ color: "var(--text3)" }}>Last: {bell.last.lastText}</div>}
-          {err && <div className="px-1 text-[10px]" style={{ color: "var(--error)" }}>{err}</div>}
+          {err && <div className="px-1 text-[10px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
         </div>
       )}
     </div>
