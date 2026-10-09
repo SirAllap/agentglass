@@ -43,7 +43,7 @@ describe("header/toolbar controls share the refresh button's height", () => {
     const bar = src.slice(start, src.indexOf("RefreshButton onRefresh", start));
     expect(bar).not.toContain('px-2 py-1 rounded-lg"');
     // Refresh follows a `flex-1` spacer, so it is pushed to the bar's far end.
-    expect(bar).toMatch(/<span className="flex-1" \/>\s*\{t\.url && \(\s*<a href=\{t\.url\}/);
+    expect(bar).toMatch(/<span className="flex-1" \/>\s*\{externalUrl\(t\.url\) && \(\s*<a href=\{externalUrl\(t\.url\)\}/);
   });
 
   it("Git header: the view tabs, insights and branch chip carry no bare py-1/py-0.5", async () => {
