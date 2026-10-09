@@ -24,6 +24,7 @@
 import { describe, expect, test, mock } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { stubStorage } from "./stubStorage.ts";
 
 type Failure = {
   reason: "missing" | "spawn" | "exited" | "timeout";
@@ -83,9 +84,7 @@ let identity: "ours" | "foreign" | "down" = "ours";
  * body — the very reason a stub was reached for in the first place.
  */
 (globalThis as any).location ??= { hostname: "127.0.0.1", origin: "http://127.0.0.1:4000", href: "http://127.0.0.1:4000/" };
-(globalThis as any).localStorage ??= {
-  getItem: () => null, setItem: () => {}, removeItem: () => {},
-};
+stubStorage();
 const API_PATH = new URL("../src/lib/api.ts", import.meta.url).pathname;
 const realApiModule = await import(`${API_PATH}?unmocked`);
 mock.module(API_PATH, () => ({

@@ -1,5 +1,8 @@
 import { test, expect, beforeAll, describe } from "bun:test";
 import { readFileSync } from "node:fs";
+import { stubStorage } from "./stubStorage.ts";
+
+stubStorage();
 
 // A chat is bound to one CLI for its life. These pin the three places that
 // binding has to survive or be enforced: which agent a session on the radar
@@ -10,7 +13,6 @@ let store: typeof import("../src/lib/chatStore.ts");
 let derive: typeof import("../src/lib/derive.ts");
 beforeAll(async () => {
   (globalThis as any).location ??= new URL("http://localhost:5173/");
-  (globalThis as any).localStorage ??= { getItem: () => null, setItem: () => {}, removeItem: () => {} };
   store = await import("../src/lib/chatStore.ts");
   derive = await import("../src/lib/derive.ts");
 });

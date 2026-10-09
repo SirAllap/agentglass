@@ -6,12 +6,14 @@
 // because every assumption this parser makes about Codex's vocabulary was read
 // off this capture and nothing else documents it.
 import { test, expect, beforeAll, describe } from "bun:test";
+import { stubStorage } from "./stubStorage.ts";
+
+stubStorage();
 
 let store: typeof import("../src/lib/chatStore.ts");
 let frames: typeof import("../src/lib/codexFrames.ts");
 beforeAll(async () => {
   (globalThis as any).location ??= new URL("http://localhost:5173/");
-  (globalThis as any).localStorage ??= { getItem: () => null, setItem: () => {}, removeItem: () => {} };
   store = await import("../src/lib/chatStore.ts");
   frames = await import("../src/lib/codexFrames.ts");
 });

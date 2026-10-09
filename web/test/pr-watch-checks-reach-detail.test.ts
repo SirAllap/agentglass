@@ -9,10 +9,11 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import type { PrCheck, PrCheckRollup, PrChecksRead, PrDetail, PrSummary, PrWatch } from "../../shared/types.ts";
 import { detailWithChecks, rowWithChecks } from "../src/lib/prRefresh.ts";
+import { stubStorage } from "./stubStorage.ts";
 
+stubStorage();
 let store: typeof import("../src/lib/prWatchStore.ts");
 beforeAll(async () => {
-  (globalThis as any).localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
   (globalThis as any).location = { hostname: "localhost", origin: "http://localhost:4000" };
   store = await import("../src/lib/prWatchStore.ts");
 });

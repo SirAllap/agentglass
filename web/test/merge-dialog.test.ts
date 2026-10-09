@@ -30,6 +30,7 @@
 import { describe, expect, test, mock } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { stubStorage } from "./stubStorage.ts";
 
 /*
  * Two seams, both mocked for the same reason: they are the parts of this
@@ -77,9 +78,7 @@ mock.module(new URL("../src/components/Portal.tsx", import.meta.url).pathname, (
  * runs, which is the throw this mock originally existed to dodge.
  */
 (globalThis as any).location ??= { hostname: "localhost", origin: "http://localhost:4000", href: "http://localhost:4000/" };
-(globalThis as any).localStorage ??= {
-  getItem: () => null, setItem: () => {}, removeItem: () => {},
-};
+stubStorage();
 const API_PATH = new URL("../src/lib/api.ts", import.meta.url).pathname;
 const realApiModule = await import(`${API_PATH}?unmocked`);
 mock.module(API_PATH, () => ({

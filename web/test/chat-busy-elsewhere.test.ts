@@ -1,4 +1,7 @@
 import { test, expect, beforeAll, beforeEach } from "bun:test";
+import { stubStorage } from "./stubStorage.ts";
+
+stubStorage();
 
 // A session has exactly one writer. This browser knows about its own turns and
 // nothing about a turn started on the phone or in a terminal, so it asks the
@@ -10,7 +13,6 @@ let store: typeof import("../src/lib/chatStore.ts");
 let api: typeof import("../src/lib/api.ts")["api"];
 beforeAll(async () => {
   (globalThis as any).location ??= new URL("http://localhost:5173/");
-  (globalThis as any).localStorage ??= { getItem: () => null, setItem: () => {}, removeItem: () => {} };
   api = (await import("../src/lib/api.ts")).api;
   store = await import("../src/lib/chatStore.ts");
 });

@@ -1,5 +1,8 @@
 import { test, expect, beforeAll } from "bun:test";
 import type { WatchEvent } from "../../shared/types.ts";
+import { stubStorage } from "./stubStorage.ts";
+
+stubStorage();
 
 // The chat panel had no live subscription at all: a resumed session was a
 // photograph taken when you clicked. These pin the routing that fixes it — and,
@@ -11,7 +14,6 @@ import type { WatchEvent } from "../../shared/types.ts";
 let store: typeof import("../src/lib/chatStore.ts");
 beforeAll(async () => {
   (globalThis as any).location ??= new URL("http://localhost:5173/");
-  (globalThis as any).localStorage ??= { getItem: () => null, setItem: () => {}, removeItem: () => {} };
   store = await import("../src/lib/chatStore.ts");
 });
 

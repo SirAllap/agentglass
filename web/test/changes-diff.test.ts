@@ -9,13 +9,14 @@
 // it was off by one.
 import { test, expect, beforeAll } from "bun:test";
 import type { DiffHunk } from "../../shared/types.ts";
+import { stubStorage } from "./stubStorage.ts";
 
+stubStorage();
 let rows: typeof import("../src/components/diff/DiffLines.tsx");
 
 beforeAll(async () => {
   // The module pulls in api.ts, which resolves the server address from these
   // at import time; nothing here touches a real DOM, the row builders are pure.
-  (globalThis as any).localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
   (globalThis as any).location = { hostname: "localhost", origin: "http://localhost:4000" };
   rows = await import("../src/components/diff/DiffLines.tsx");
 });

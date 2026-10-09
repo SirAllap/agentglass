@@ -1,4 +1,7 @@
 import { test, expect, beforeAll } from "bun:test";
+import { stubStorage } from "./stubStorage.ts";
+
+stubStorage();
 
 // Seeding a chat from another panel (the PR review prompt, the failing check)
 // only works if the panel is told to show it. It owns selection and cannot be
@@ -9,7 +12,6 @@ import { test, expect, beforeAll } from "bun:test";
 let store: typeof import("../src/lib/chatStore.ts");
 beforeAll(async () => {
   (globalThis as any).location ??= new URL("http://localhost:5173/");
-  (globalThis as any).localStorage ??= { getItem: () => null, setItem: () => {}, removeItem: () => {} };
   store = await import("../src/lib/chatStore.ts");
 });
 
