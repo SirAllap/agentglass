@@ -653,10 +653,13 @@ export function TopBar({
           edge, a hover state and a pressable surface — and the open project
           carries the weight, since "which project am I in" is the one thing
           this corner exists to answer. */}
-      <button onClick={onOpenProject} className="agx-btn flex items-center gap-1.5 shrink-0 min-w-0 rounded-md pl-1.5 pr-1 py-1"
+      <button onClick={onOpenProject} className="agx-btn flex items-center gap-1.5 shrink-0 min-w-0 rounded-md pl-1.5 pr-1"
         title={workspace ? `${scopeTitle(open)}\nClick to switch project` : workspace === null ? "Every repo on this machine — click to open projects" : "Reading the open project…"}
         style={{
           ...NO_DRAG,
+          // 20 tall, like Find a file beside it: five clear either side in the
+          // 30px strip, instead of the padding filling it edge to edge.
+          height: 20,
           border: `1px solid color-mix(in srgb, var(--border) ${workspace ? 55 : 40}%, transparent)`,
           background: workspace ? "color-mix(in srgb, var(--primary) 10%, transparent)" : "color-mix(in srgb, var(--bg3) 45%, transparent)",
         }}>
