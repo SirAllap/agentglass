@@ -22,7 +22,7 @@ import { join } from "node:path";
 
 const HAVE_PY = !!Bun.which("python3");
 const BIN = (name: string) => new URL(`../../bin/${name}`, import.meta.url).pathname;
-const CLIS = ["agentglass-agent", "agentglass-browser", "agentglass-browser-mcp", "agentglass-cockpit-mcp"];
+const CLIS = ["agentglass-agent", "agentglass-browser", "agentglass-browser-mcp", "agentglass-cockpit-mcp", "agentglass-ui", "agentglass-ui-mcp"];
 
 /** Load a CLI as a module without running its main: the same trick the MCP
  *  suite uses, `__name__` set to something other than `__main__`. */

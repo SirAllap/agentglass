@@ -239,6 +239,24 @@ export type UiArgs<Id extends UiActionId> = Args<(typeof UI_ACTIONS)[Id]["args"]
 /** A validated command as it travels: the `ui` wire shape. */
 export type UiCmd = { [Id in UiActionId]: { cmd: "ui"; do: Id; args: UiArgs<Id> } }[UiActionId];
 
+/**
+ * The registry as a caller reads it: every entry at or below `maxLevel`, with
+ * its argument specs, and nothing a function does (`refine`, `legacy`, `chords`
+ * are the server's and the window's business). It is served at
+ * GET /control/actions and is what the agent CLI and the MCP server list from,
+ * so what an agent is told it may call is the registry itself, not a copy that
+ * can fall behind it. An entry above the level the server accepts is left out:
+ * listing a door the server would refuse is a promise it breaks.
+ */
+export function describeUiActions(
+  registry: Readonly<Record<string, UiActionDef>> = UI_ACTIONS, maxLevel: UiLevel = 3,
+): { id: string; level: number; kind: UiKind; surface: string; args: Record<string, ArgSpec> }[] {
+  return Object.entries(registry)
+    // `!(<=)`, as everywhere: an entry with no level is level 3.
+    .filter(([, d]) => d.level <= maxLevel)
+    .map(([id, d]) => ({ id, level: d.level, kind: d.kind, surface: d.surface, args: { ...d.args } }));
+}
+
 // ── validators ──────────────────────────────────────────────────────────────
 
 /** PATH_MAX on Linux. */

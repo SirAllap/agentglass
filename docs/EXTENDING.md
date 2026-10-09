@@ -413,6 +413,37 @@ answer another's request without it; the first answer wins and a duplicate, a
 late one or an unknown `rid` is `{"known":false}`. A caller that holds the machine
 token can do nothing through it that `/control` does not already allow.
 
+### From a session: `agentglass-ui`
+
+An agent does not have to write the `curl`. `bin/agentglass-ui` is the same
+doors as a CLI and `bin/agentglass-ui-mcp` as MCP tools, and neither keeps a
+copy of the registry: they ask the running app what it offers
+(`GET /control/actions`: the registry's entries up to the level the server
+allows, with their argument shapes), so a door added to `shared/uiActions.ts`
+is a verb and a tool with no further change, and `AGENTGLASS_CONTROL_LEVEL=1`
+takes `settings.set` out of both.
+
+```bash
+agentglass-ui list                                  # every door: id, level, kind, arguments
+agentglass-ui state                                 # ui.state
+agentglass-ui read chat                             # ui.read {panel: chat}
+agentglass-ui open settings.open --arg page=diff    # any open-kind door
+agentglass-ui settings list | get <id> | set <id> <value>
+agentglass-ui --as my-agent settings set diff.wrap true
+```
+
+One JSON object per answer, exit `0` when a window ran it and `1` with a one-
+sentence `error` otherwise (no window, a slow window, a change that is off, a
+setting that is not exposed, an argument outside its set; `2` for a usage
+mistake). `--as NAME` (or `AGENTGLASS_UI_AS`) is sent as `as` and shows in the
+action log as `as NAME` next to the setting's id, never its value. The MCP tool
+for an id is the id with dots as underscores under a `ui_` prefix
+(`settings.set` is `ui_settings_set`, `ui.read` is `ui_read`); a contract test
+(`server/test/ui-cli.test.ts`) holds the tool list equal to the registry. What
+an agent should and should not do with them is
+[`skills/ui-control/SKILL.md`](../skills/ui-control/SKILL.md). Ceiling: the MCP
+server can list tools only while the app is running.
+
 **Adding a panel is adding its door.** A new view, Settings page or app chord
 without a registry entry (or a reasoned line in `NOT_AGENT_DOOR`) fails
 `web/test/ui-registry-guard.test.ts`.

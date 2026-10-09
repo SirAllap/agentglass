@@ -55,8 +55,8 @@ import { refreshCodexUsage } from "./codexusage.ts";
 import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, onGateChange, typedReason, GATE_MAX_MS, gateFailClosed, denyByRule, allowByRule, validGateId } from "./gate.ts";
 import { budgetHoldFor } from "./budget.ts";
 import { gateCwd, gateRuleFor } from "./gaterules.ts";
-import { parseControlCmd, controlId, awaitControl, settleControl, parseReply, nextControlRid, callerRequestId, CONTROL_TIMEOUT_ERROR, changedSetting, makeWriteLimiter } from "./control.ts";
-import { isReadAction } from "../../shared/uiActions.ts";
+import { parseControlCmd, controlId, awaitControl, settleControl, parseReply, nextControlRid, callerRequestId, CONTROL_TIMEOUT_ERROR, changedSetting, makeWriteLimiter, controlLevel } from "./control.ts";
+import { isReadAction, describeUiActions, UI_ACTIONS } from "../../shared/uiActions.ts";
 import { outwardAction, outwardLine } from "./outward.ts";
 import { listLanes } from "./lanes.ts";
 import { gateLane, dropBrowserTarget, askBrowser, browserReadyCount, exportAudit, noteBrowserManager, noteBrowserReady, parseAsk, setBrowserSink, settleBrowser, type BrowserOp, runSteps, waitForEvents, recordFrames, traceRecording, auditAsScript, downloadFile, runLanes, withObservation, parseScrape, runScrape } from "./browserdrive.ts";
@@ -3691,6 +3691,17 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     // hosts: loopback without an Origin, or a vouched Origin plus the token. A
     // page on another origin is refused here, which is the case that matters:
     // it must not be able to put a file in front of the person.
+    /*
+     * What /control accepts, as data: the registry's entries at or below the
+     * level this process allows, with their argument specs. The agent CLI and
+     * the MCP server build their commands and their tool lists from this, so
+     * they follow the registry (and AGENTGLASS_CONTROL_LEVEL) with nothing of
+     * their own to keep in step. A read: it names doors, it opens none.
+     */
+    if (pathname === "/control/actions" && req.method === "GET") {
+      const level = controlLevel();
+      return json({ ok: true, level, actions: describeUiActions(UI_ACTIONS, level) });
+    }
     if (pathname === "/control" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       let b: unknown = {};
@@ -3716,7 +3727,11 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // A settings change names its setting in the line (the id and the fact
       // of change, not the value), and is rate limited per caller.
       const setting = changedSetting(cmd);
-      const audit = (ok: boolean, error?: string) => noteAction(clientIp, `/control/${controlId(cmd) ?? "unknown"}`, setting ? { setting } : {}, { ok, error }, who);
+      // `as` is the name a CLI or an MCP server stamps itself with (the browser
+      // CLI's --as): a label for the log line, never a credential.
+      const as = callerRequestId((b as { as?: unknown }).as);
+      const audit = (ok: boolean, error?: string) =>
+        noteAction(clientIp, `/control/${controlId(cmd) ?? "unknown"}`, { ...(setting ? { setting } : {}), ...(as ? { as } : {}) }, { ok, error }, who);
       if (setting && !controlWriteLimit.hit(actorOf(clientIp, who))) {
         audit(false, "rate limited");
         return json({ ok: false, error: "too many settings changes; slow down" }, 429);

@@ -143,6 +143,10 @@ are:
 | `AGENTGLASS_COCKPIT_EXPOSE` | — | `1` → the same opt-in as `--expose` for the cockpit endpoint. `AGENTGLASS_MCP_EXPOSE` does not expose it. |
 | `AGENTGLASS_COCKPIT_ALLOW_HOSTS` | — | Comma-separated extra `Host` names for the cockpit endpoint, as `AGENTGLASS_MCP_ALLOW_HOSTS` is for the browser's. |
 | `AGENTGLASS_COCKPIT_MAX_BYTES` | `16384` | The size ceiling on every cockpit MCP answer. One that would be larger clips long text to 2048 characters wherever it is (a summary, a pasted first prompt, one long message in a conversation), cuts an item still too large on its own further, drops items from the end of its lists (oldest or smallest first) but never a list's first item, and says what it clipped and dropped (`truncated`) and how to ask for less (`narrow`); the JSON is never cut in the middle. |
+| `AGENTGLASS_UI_AS` | — | The name `agentglass-ui` stamps on its calls (the action log shows `as NAME`); the same as `--as`. `agentglass-ui-mcp` defaults to `mcp`. |
+| `AGENTGLASS_UI_MCP_HTTP` | — | `[HOST:]PORT` → serve `agentglass-ui-mcp` over Streamable HTTP instead of stdio; the same as `--http`, with the browser endpoint's fences. Its own variable, so `AGENTGLASS_MCP_HTTP` never starts it. |
+| `AGENTGLASS_UI_MCP_TOKEN` | minted | The Bearer token that endpoint requires, 32+ chars; refused if it equals `AGENTGLASS_TOKEN`, `AGENTGLASS_MCP_TOKEN` or `AGENTGLASS_COCKPIT_TOKEN`. |
+| `AGENTGLASS_UI_MCP_EXPOSE` | — | `1` → the same opt-in as `--expose` for that endpoint. |
 | `AGENTGLASS_COCKPIT_TRANSCRIPTS` | `own` | `all` → the cockpit answers with any session's text — its conversation, timeline, file changes, first prompt and last answer (`cockpit_session`), and its failed tool calls' output (`cockpit_errors`). Otherwise only the caller's own session's: the one Claude Code names in `CLAUDE_CODE_SESSION_ID` when it starts the server over stdio, which any client started from inside that session inherits. Over HTTP no session is the caller's. Another session's text is left out and the answer says so (`withheld`). |
 | `AGENTGLASS_UNDERSTUDY` | — | `0` → force the **Clone** off whatever its settings file says. It can force off, never on: recording must not start because of a variable inherited from a shell. |
 | `AGENTGLASS_PRIVATE_TERMS` | `~/.config/agentglass/private-terms.txt` | The Clone's private-terms list — one pattern per line of names that must never leave a private repository. With the app's own file absent, `~/.config/git/private-terms.txt` is honoured. Without any list the Clone refuses to learn. |
@@ -366,13 +370,14 @@ Every route is behind the token and the origin/Host gates described in [Security
 | `POST /gate` · `GET /gate/{pending,status?id=,history}` · `POST /gate/decide` | The `PreToolUse` gate: hold a call, read the queue, long-poll a decision, the history; answer one. `decide` needs a paired device with `answer` or a vouched origin — a plugin or machine token alone cannot. |
 | `GET /actions?limit=&before=` | Every write the cockpit performed — git, docker, pull requests, gate decisions — with the address it came from. Append-only; unscoped on purpose. |
 | `POST /control` | Drive the dashboard's own UI from outside: open a view, Settings on a page, the machine panel, the bench, a Git modal, the file finder (`{"cmd":"ui","do":"settings.open","args":{"page":"appearance"}}`, with `Authorization: Bearer $AGENTGLASS_TOKEN`). Validated against a closed registry, rebroadcast on `/stream`, one `/actions` line per command; `503` when no window is attached; `settings.set` (level 2) is limited to 30 a minute per caller (`429`) and `AGENTGLASS_CONTROL_LEVEL=1` refuses it. Grants nothing the keyboard lacks. See [`docs/EXTENDING.md`](EXTENDING.md). |
+| `GET /control/actions` | The registry as data: every `/control` door at or below the level this server allows (`AGENTGLASS_CONTROL_LEVEL`), with its kind, level and argument shapes. What `agentglass-ui` and `agentglass-ui-mcp` build their commands and tool list from. `POST /control` also takes an optional `as` (a name, up to 64 letters, digits, `. _ : -`) that the action log shows. |
 | `POST /control/result` | **Not agent-facing.** A window answering a command `/control` is holding open (`{rid, ok, applied, value?, error?}`). Same `trustedCaller` gate as `POST /browser/result`; `rid` is server-minted and only travels on the window sockets; first answer wins, anything else is `{known:false}`. |
 | `GET /export?format=csv\|json` · `?kind=daily` | Download all events (bounded by retention), or the daily totals with the rollup included. |
 | `WS /stream` | Live frames — `initial` · `openTools` · `event` · `session` · `git` · `ci` · `alert` · `control`. Read-only: the socket never accepts commands. |
 
 ### The CLIs in front of the API
 
-Three command-line tools live in `bin/` and are symlinked into `~/.local/bin` by
+Command-line tools live in `bin/` and are symlinked into `~/.local/bin` by
 the Linux installer; on macOS the `.dmg` carries them at
 `agentglass.app/Contents/Resources/bin/`, which the app puts on the PATH of every
 agent it seats — add it to your own shell's PATH (or `ln -s` them into
@@ -437,6 +442,13 @@ over plain `http://` to any host that is not this machine.
   `AGENTGLASS_COCKPIT_TRANSCRIPTS=all`. `--http` serves it over the same transport,
   with the same fences, as the browser's, under its own token
   (`AGENTGLASS_COCKPIT_TOKEN`).
+
+- **`agentglass-ui`** and **`agentglass-ui-mcp`** — the app's own window from a
+  session: `list`, `state`, `read <panel>`, `open <id> --arg k=v`,
+  `settings list|get|set`, `--as NAME` on any of them; the MCP server has one
+  tool per registry entry, generated from `GET /control/actions`. One JSON
+  object per answer, a one-sentence `error` and exit `1` when no window ran it.
+  See [`docs/EXTENDING.md`](EXTENDING.md) and `skills/ui-control/SKILL.md`.
 
 ---
 

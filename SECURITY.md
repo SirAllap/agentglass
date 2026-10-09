@@ -1050,6 +1050,15 @@ the machine token can already do everything through `/control` that a forged
 answer could, so the route widens nothing. This does not stop an agent from
 being talked into acting on text it read: that is why the text is marked.
 
+`bin/agentglass-ui` and `bin/agentglass-ui-mcp` are a front door to those same
+doors and add none: they read `GET /control/actions` (the registry cut at the
+level the server allows, which names doors and opens none) and send what
+`POST /control` already validates. The `as` they send is a label for the action
+log, not a credential and not a gate: a caller can omit it or lie in it, and
+the log's address and device columns say who really asked. The MCP endpoint
+over HTTP has a token of its own (`AGENTGLASS_UI_MCP_TOKEN`), refused if it
+equals the browser's, the cockpit's or the app's.
+
 Beyond the knobs, **scope is itself a boundary**: with a project open, git
 writes and git reads, the terminal, chat, pull-request actions and editor opens
 are all refused outside it.
