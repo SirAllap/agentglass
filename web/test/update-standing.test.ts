@@ -120,7 +120,13 @@ describe("the panel", () => {
     const block = text.slice(at, text.indexOf("\n  };", at));
     const press = block.slice(0, block.indexOf("return act("));
     expect(press).not.toContain("setAsked(");
-    expect(block).toContain("if (r.ok) setAsked(");
+    // The hold is set, and kept for a reload, only inside GitHub's ok.
+    const ok = block.indexOf("if (r.ok) {");
+    expect(ok).toBeGreaterThan(0);
+    const okBody = block.slice(ok, block.indexOf("\n      }", ok));
+    expect(okBody).toContain("setAsked(");
+    expect(okBody).toContain("saveOwnUpdate(");
+    expect(block.split("setAsked(").length).toBe(2);
   });
 });
 

@@ -62,6 +62,7 @@ import {
 import { stuckMinutes, STUCK_AFTER_MS, LAGGING_SENTENCE, type GithubProblem } from "../../../shared/githubStatus.ts";
 import { unknownSinceOf, forgetUnknown } from "../lib/unknownSince.ts";
 import { UnstickDialog } from "./UnstickDialog.tsx";
+import { saveOwnUpdate, loadOwnUpdate } from "../lib/ownUpdateStore.ts";
 import { observeUnstick, noteUpdateTrial, unstickGateFor, lagMature } from "../lib/unstickWatch.ts";
 import { takeUnstick, subscribeUnstick, UNSTICK_TTL_MS } from "../lib/unstickIntent.ts";
 import type { UnstickCard } from "./UnstickDialog.tsx";
@@ -4695,6 +4696,12 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     prevHeadKey.current = headKey;
     refreshBehind(root, d.number, false);
   }, [root, d, headKey]);
+  /* A reload loses `asked`; the session copy puts the hold back for this pull request. */
+  const dNumber = d?.number;
+  useEffect(() => {
+    if (!root || dNumber == null) return;
+    setAsked((cur) => (cur && cur.number === dNumber ? cur : loadOwnUpdate(`${root}#${dNumber}`, dNumber)));
+  }, [root, dNumber]);
   const updateState: UpdateStanding = d
     ? updateStanding({
       now: Date.now(), own: asked && asked.number === d.number ? asked : null,
@@ -4778,7 +4785,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       // What the normal way did, for the Unstick gate: refused as "not caught up", or accepted and left waiting.
       if (r.prLagging) noteUpdateTrial(unstickKey, { kind: "refused", at: Date.now() });
       else if (r.ok && r.requested) noteUpdateTrial(unstickKey, { kind: "requested", at: Date.now(), headBefore });
-      if (r.ok) setAsked({ number: d.number, at: Date.now(), headBefore, note: r.requested ? undefined : r.detail });
+      if (r.ok) {
+        const own = { number: d.number, at: Date.now(), headBefore, note: r.requested ? undefined : r.detail };
+        setAsked(own);
+        saveOwnUpdate(unstickKey, own);
+      }
       return r;
     }))
       .finally(() => refreshBehind(root, d.number));
