@@ -49,7 +49,11 @@ export function surfaces(p: PublicPlugin): Surface[] {
   const c = p.contributes ?? {};
   const out: Surface[] = [];
   for (const panel of c.panels ?? []) {
-    out.push({ icon: <PuzzleIcon size={ICON.sm} />, what: `Panel · ${panel.title}`, where: "in the Plugins view" });
+    out.push({
+      icon: <PuzzleIcon size={ICON.sm} />,
+      what: `${panel.canvas ? "Live panel" : "Panel"} · ${panel.title}`,
+      where: panel.canvas ? "in the Plugins view, drawn as it happens with the app's own parts: it can move things about, never run code or load anything" : "in the Plugins view",
+    });
   }
   if (c.settings?.length) {
     out.push({

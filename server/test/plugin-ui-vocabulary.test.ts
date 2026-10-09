@@ -120,6 +120,15 @@ describe("the manifest", () => {
     expect(consentFingerprint(draws, content(draws))).not.toBe(consentFingerprint(plain, content(plain)));
   });
 
+  test("a panel approved as a static screen cannot start animating: `canvas` is in what was approved", () => {
+    const still = validateManifest({ ...base, contributes: { panels: [{ id: "main", title: "Lint" }] } }) as PluginManifest;
+    const live = validateManifest({ ...base, contributes: { panels: [{ id: "main", title: "Lint", canvas: true }] } }) as PluginManifest;
+    expect(live.contributes.panels?.[0]?.canvas).toBe(true);
+    expect(still.contributes.panels?.[0]?.canvas).toBeUndefined();
+    expect(manifestHash(live)).not.toBe(manifestHash(still));
+    expect(validateManifest({ ...base, contributes: { panels: [{ id: "main", title: "Lint", canvas: "yes" }] } })).toContain("canvas");
+  });
+
   test("a bad contribution loses the plugin rather than being trimmed", () => {
     expect(validateManifest({ ...base, contributes: { panels: [{ id: "Main!", title: "x" }] } })).toContain("panel id");
     expect(validateContributes({ settings: [{ key: "a", type: "list", label: "a" }, { key: "a", type: "list", label: "b" }] }).ok).toBe(false);

@@ -2409,3 +2409,15 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 @media (prefers-reduced-motion: reduce) {
   .agx-rail-row, .agx-rail-chev { transition: none; }
 }
+
+/* A live plugin canvas (PluginCanvas.tsx). One looping motion, a busy light:
+   opacity only, 1.6s a cycle (about 0.6 Hz, far under the 3 Hz a flash may
+   reach) and never a big luminance step. The window sets data-canvas-loop on
+   the few nodes it lets loop (loopingIds), and stops them while the canvas is
+   hidden or off screen; reduced motion turns them all off here as well. */
+@keyframes agx-canvas-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+[data-canvas-loop="pulse"] { animation: agx-canvas-pulse 1.6s ease-in-out infinite; }
+.agx-canvas[data-paused="true"] [data-canvas-loop] { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) {
+  [data-canvas-loop] { animation: none; }
+}

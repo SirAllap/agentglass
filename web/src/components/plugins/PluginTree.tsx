@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { Field, UiAction, UiNode, UiOpenPr } from "../../lib/pluginTypes.ts";
+import type { Tone } from "../../../../shared/pluginUi.ts";
 import { openPr } from "../../lib/openPrs.ts";
 import { Markdown } from "../../lib/markdown.tsx";
 import { openExternal } from "../../lib/externalUrl.ts";
@@ -8,7 +9,7 @@ import { Select } from "../Select.tsx";
 import { Switch } from "../SettingRow.tsx";
 import { useDialogs, type ConfirmSpec } from "../ConfirmDialog.tsx";
 import { Row, Chip } from "../git/ui.tsx";
-import { TO_ROW_TONE } from "../../lib/pluginTones.ts";
+import { TO_ROW_TONE, TONE_COLOR } from "../../lib/pluginTones.ts";
 import { DoneIcon } from "../../lib/glyphIcons.tsx";
 import { CloseIcon } from "../CloseButton.tsx";
 import { ExternalIcon } from "../browser/icons.tsx";
@@ -27,17 +28,6 @@ import { EDGE, LINE, Tabs as HouseTabs, Button as HouseButton } from "../workspa
  * `onAction` is the only way out. A button, a row, a submitted form: each
  * sends the plugin's own action id back to the plugin, and nothing else.
  */
-
-type Tone = "default" | "muted" | "accent" | "success" | "warning" | "danger";
-
-const TONE_COLOR: Record<Tone, string> = {
-  default: "var(--text)",
-  muted: "var(--text3)",
-  accent: "var(--primary)",
-  success: "var(--success)",
-  warning: "var(--warning)",
-  danger: "var(--error)",
-};
 
 const GAP = { sm: 6, md: 12, lg: 20 } as const;
 

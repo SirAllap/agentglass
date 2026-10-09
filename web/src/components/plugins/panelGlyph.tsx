@@ -1,4 +1,5 @@
 import { ICON } from "../../lib/iconSize.ts";
+import type { CanvasIcon } from "../../../../shared/pluginCanvas.ts";
 
 /**
  * The icon a panel names in its manifest, drawn from this set and no other
@@ -31,6 +32,37 @@ export function PanelGlyph({ icon, size = ICON.md }: { icon?: string; size?: num
   return (
     <svg {...svg} width={size} height={size} aria-hidden>
       {PATHS[icon ?? "puzzle"] ?? PATHS.puzzle}
+    </svg>
+  );
+}
+
+/**
+ * The words a live canvas may name as an icon (CANVAS_ICONS in
+ * shared/pluginCanvas.ts), each drawn here in the same hand as the panel
+ * glyphs. Typed over the whole list, so a word added there without a drawing
+ * here does not compile.
+ */
+const CANVAS_PATHS: Record<CanvasIcon, React.ReactNode> = {
+  dot: <circle cx="12" cy="12" r="4.5" fill="currentColor" stroke="none" />,
+  lock: <><rect x="5.5" y="10.5" width="13" height="9.5" rx="2" /><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5" /></>,
+  unlock: <><rect x="5.5" y="10.5" width="13" height="9.5" rx="2" /><path d="M8.5 10.5V8a3.5 3.5 0 0 1 6.6-1.6" /></>,
+  check: PATHS.check!,
+  cross: <><path d="M6.5 6.5l11 11" /><path d="M17.5 6.5l-11 11" /></>,
+  bolt: PATHS.bolt!,
+  alert: <><path d="M12 4l9 15.5H3z" /><path d="M12 10v4" /><path d="M12 17v.01" /></>,
+  clock: <><circle cx="12" cy="12" r="8.5" /><path d="M12 7.5V12l3 2" /></>,
+  eye: PATHS.eye!,
+  database: <><ellipse cx="12" cy="6" rx="7" ry="2.8" /><path d="M5 6v12c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8V6" /><path d="M5 12c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8" /></>,
+  shield: <path d="M12 3.5l7 2.5v5.5c0 4.2-2.8 7.4-7 9-4.2-1.6-7-4.8-7-9V6z" />,
+  arrow: <><path d="M4.5 12h15" /><path d="M13.5 6l6 6-6 6" /></>,
+  gate: <><path d="M5 20V5" /><path d="M19 20V5" /><path d="M5 9h14" /><path d="M5 15h14" /></>,
+  spark: <path d="M12 3.5l2 6.5 6.5 2-6.5 2-2 6.5-2-6.5-6.5-2 6.5-2z" />,
+};
+
+export function CanvasGlyph({ icon, size = ICON.md }: { icon: CanvasIcon; size?: number }) {
+  return (
+    <svg {...svg} width={size} height={size} aria-hidden>
+      {CANVAS_PATHS[icon] ?? CANVAS_PATHS.dot}
     </svg>
   );
 }

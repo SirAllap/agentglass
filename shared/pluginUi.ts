@@ -20,11 +20,12 @@
  * anything that runs. A tone is a word the app maps to its own palette, so a
  * plugin follows the theme, light or dark, without knowing there is one. A
  * sandboxed frame for the screens this vocabulary cannot express is the next
- * thing after this and is not here.
+ * thing after this and is not here. A panel that has to move (a board where
+ * things travel between stages) is the other vocabulary, pluginCanvas.ts.
  */
 
 export type Tone = "default" | "muted" | "accent" | "success" | "warning" | "danger";
-const TONES: readonly Tone[] = ["default", "muted", "accent", "success", "warning", "danger"];
+export const TONES: readonly Tone[] = ["default", "muted", "accent", "success", "warning", "danger"];
 
 /** A click, sent back to the plugin that drew it. `payload` is the plugin's
  *  own data, echoed untouched; the app never reads it. */
@@ -660,7 +661,15 @@ export function validateNote(raw: unknown, now = Date.now()): Ok<Omit<PrNote, "s
 // "writes notes on pull requests". A plugin that draws somewhere it did not
 // declare is refused at the route, not trusted to behave.
 
-export interface PanelContribution { id: string; title: string; icon?: string }
+export interface PanelContribution {
+  id: string;
+  title: string;
+  icon?: string;
+  /** Drawn as a live scene (pluginCanvas.ts) instead of a tree. Declared, so
+   *  the approval screen says it and the manifest hash covers it: a plugin
+   *  cannot start animating after it was approved as a static screen. */
+  canvas?: true;
+}
 
 /**
  * A button in a pull request's header, next to the app's own. Pressing it
@@ -686,6 +695,9 @@ export interface Contributes {
  *  plugin cannot ship an image and every rail entry looks like the others. */
 export const PANEL_ICONS = ["puzzle", "review", "check", "chart", "list", "bell", "bug", "book", "bolt", "eye"] as const;
 
+/** A panel's id and an action's: one to 40 of a-z, 0-9 and -, starting with a letter. */
+export const PANEL_ID_RE = /^[a-z][a-z0-9-]{0,39}$/;
+
 export function validateContributes(raw: unknown): Ok<Contributes> | Err {
   if (raw === undefined) return { ok: true, value: {} };
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, error: "contributes must be an object" };
@@ -703,12 +715,13 @@ export function validateContributes(raw: unknown): Ok<Contributes> | Err {
     for (const p of c.panels) {
       if (!p || typeof p !== "object") return { ok: false, error: "a panel must be an object" };
       const r = p as Record<string, unknown>;
-      if (typeof r.id !== "string" || !/^[a-z][a-z0-9-]{0,39}$/.test(r.id)) return { ok: false, error: "panel id must be 1-40 of a-z, 0-9, - and start with a letter" };
+      if (typeof r.id !== "string" || !PANEL_ID_RE.test(r.id)) return { ok: false, error: "panel id must be 1-40 of a-z, 0-9, - and start with a letter" };
       if (seen.has(r.id)) return { ok: false, error: `panel id "${r.id}" appears twice` };
       seen.add(r.id);
       if (typeof r.title !== "string" || !r.title.trim() || r.title.length > 40) return { ok: false, error: "panel title must be 1-40 characters" };
       const icon = oneOf(r.icon, PANEL_ICONS);
-      out.panels.push({ id: r.id, title: r.title.trim(), ...(icon ? { icon } : {}) });
+      if (r.canvas !== undefined && r.canvas !== true && r.canvas !== false) return { ok: false, error: "panel canvas must be true or false" };
+      out.panels.push({ id: r.id, title: r.title.trim(), ...(icon ? { icon } : {}), ...(r.canvas === true ? { canvas: true as const } : {}) });
     }
   }
   if (c.prNotes !== undefined) {
@@ -728,7 +741,7 @@ export function validateContributes(raw: unknown): Ok<Contributes> | Err {
     for (const a of c.prActions) {
       if (!a || typeof a !== "object") return { ok: false, error: "a pull request action must be an object" };
       const r = a as Record<string, unknown>;
-      if (typeof r.id !== "string" || !/^[a-z][a-z0-9-]{0,39}$/.test(r.id)) return { ok: false, error: "action id must be 1-40 of a-z, 0-9, - and start with a letter" };
+      if (typeof r.id !== "string" || !PANEL_ID_RE.test(r.id)) return { ok: false, error: "action id must be 1-40 of a-z, 0-9, - and start with a letter" };
       if (seen.has(r.id)) return { ok: false, error: `action id "${r.id}" appears twice` };
       seen.add(r.id);
       if (typeof r.label !== "string" || !r.label.trim() || r.label.length > 28) return { ok: false, error: "action label must be 1-28 characters" };

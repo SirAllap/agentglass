@@ -206,6 +206,8 @@ def check_contributes(c):
             seen.add(pid)
             if not _text(p.get("title"), 40):
                 return "panel title must be 1-40 characters"
+            if "canvas" in p and not isinstance(p["canvas"], bool):
+                return "panel canvas must be true or false"
             if p.get("icon") is not None and p["icon"] not in PANEL_ICONS:
                 # The app drops an icon it does not know rather than refusing,
                 # so this is a warning's worth of wrong — but a manifest that

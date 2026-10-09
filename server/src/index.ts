@@ -209,10 +209,11 @@ import {
   contributesOf, isRunning, pluginSettings, pluginOwnSettings, setPluginSettings, resumeEnabledPlugins, stopAllPluginsSync, pluginIcon,
 } from "./plugins.ts";
 import { setPluginSocketHandler, viaPluginSocket } from "./plugin-socket.ts";
+import { CanvasHandle, handleCanvasOps, isCanvasPanel, readBoundedJson, setCanvasResolver } from "./plugin-canvas.ts";
 import {
   setPluginUiHook, setPanel, panelState, setOptions, pushEvent, takeEvents, upsertRun, upsertNotes, notesFor, setNoteStatus, flushPluginNotes,
 } from "./plugin-ui.ts";
-import { validPrRef } from "../../shared/pluginUi.ts";
+import { PANEL_ID_RE, validPrRef } from "../../shared/pluginUi.ts";
 import { readNotifyPrefs, writeNotifyPrefs } from "./notifyPrefs.ts";
 import { fetchCatalogue } from "./plugin-catalogue.ts";
 import { annotate, setAnnotations } from "./inbox-annotations.ts";
@@ -1515,7 +1516,7 @@ const BUDGET_WRITE_ENABLED = process.env.AGENTGLASS_BUDGET_WRITE_DISABLED !== "1
 // it, forgetting a device revokes its credential and leaves whatever it is
 // already holding — an event stream, a terminal — running until it disconnects
 // on its own, which is a revoke in the list and not on the wire.
-type WsData = ({ kind: "events" } | { kind: "notify" } | PtyWsData) & { ip?: string | null; deviceId?: string | null };
+type WsData = ({ kind: "events" } | { kind: "notify" } | { kind: "canvas"; handle?: CanvasHandle } | PtyWsData) & { ip?: string | null; deviceId?: string | null };
 /** The docker reads that start a process per request and have no cache or
  *  single-flight in front of them. See spawncap.ts. */
 const DOCKER_SPAWNS = new Set([
@@ -2837,6 +2838,14 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     // so without this any page in the user's browser could open a socket to
     // localhost and read the whole fleet's prompts, paths and errors as they
     // stream — a read this feed is not meant to give to the open web.
+    // Every live panel's scene, over ONE private socket (plugin-canvas.ts).
+    // Gated like /plugins/panels: FULL_GET for scope, a plugin's own token
+    // refused by kind, and the same origin check as /stream.
+    if (pathname === "/plugins/panels/live") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      if (srv.upgrade(req, { data: { kind: "canvas", ip: clientIp ?? null, deviceId: caller?.device?.id ?? null } })) return undefined as unknown as Response;
+      return new Response("upgrade failed", { status: 426 });
+    }
     if (pathname === "/stream") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       if (srv.upgrade(req, { data: { kind: "events", ip: clientIp ?? null, deviceId: caller?.device?.id ?? null } })) return undefined as unknown as Response;
@@ -5123,7 +5132,9 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const self = pluginOfRequest(req, url);
       if (!self) return json({ ok: false, error: "only a running plugin has a self — this needs its own token" }, 403);
       const c = contributesOf(self);
-      const body = async <T,>(): Promise<T | null> => { try { return (await req.json()) as T; } catch { return null; } };
+      // Read with a ceiling before it is parsed, like the canvas routes: the
+      // only cap there used to be Bun's 32 MB for the whole server.
+      const body = async <T,>(): Promise<T | null> => { const r = await readBoundedJson(req, 4 * 1024 * 1024); return r.ok ? (r.value as T) : null; };
 
       if (pathname === "/plugin/self" && req.method === "GET") {
         return json({ ok: true, name: self, contributes: c, settings: pluginOwnSettings(self) });
@@ -5133,8 +5144,16 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         return json({ ok: true, events: await takeEvents(self, wait) });
       }
       if (req.method !== "POST") return json({ ok: false, error: "not found" }, 404);
+      // Operations on a live canvas (plugin-canvas.ts does all of it).
+      const ops = pathname.match(new RegExp(`^/plugin/self/panel/(${PANEL_ID_RE.source.slice(1, -1)})/ops$`));
+      if (ops) {
+        const r = await handleCanvasOps(self, c, ops[1]!, req, () => pluginOfRequest(req, url) === self);
+        return json(r.body, r.status);
+      }
       if (pathname === "/plugin/self/panel") {
-        const b = await body<{ id?: unknown; tree?: unknown }>();
+        const raw = await readBoundedJson(req, 1_000_000);
+        if (!raw.ok) return json({ ok: false, error: raw.error }, raw.status);
+        const b = raw.value as { id?: unknown; tree?: unknown } | null;
         if (!b || typeof b.id !== "string") return json({ ok: false, error: "id and tree are required" }, 400);
         const r = setPanel(self, c, b.id, b.tree);
         return json(r, r.ok ? 200 : 400);
@@ -8797,6 +8816,13 @@ const server = Bun.serve<WsData>({
         ptyOpen(ws);
         return;
       }
+      if (ws.data?.kind === "canvas") {
+        // Alive from the start, like the pty: a window that is only listening
+        // sends nothing, and the sweep would otherwise call it frozen.
+        alive.set(ws, Date.now());
+        (ws.data as { handle?: CanvasHandle }).handle = new CanvasHandle({ send: (t) => ws.send(t), buffered: () => ws.getBufferedAmount() });
+        return;
+      }
       if (ws.data?.kind === "notify") {
         notifySubs.set(ws, subscribeNotifications((n) => {
           try { ws.send(JSON.stringify(n)); } catch { /* closing */ }
@@ -8836,6 +8862,7 @@ const server = Bun.serve<WsData>({
       alive.delete(ws);
       noteSocket(ws.data?.ip, -1);
       if (ws.data?.kind === "pty") { ptyClose(ws); return; }
+      if (ws.data?.kind === "canvas") { (ws.data as { handle?: CanvasHandle }).handle?.close(); return; }
       if (ws.data?.kind === "notify") {
         // Unsubscribing is what stops the monitor process once the last
         // listener goes, so this must run on every close path.
@@ -8853,6 +8880,7 @@ const server = Bun.serve<WsData>({
       // pty this is a keystroke or a resize, not just the event stream.
       alive.set(ws, Date.now());
       if (ws.data?.kind === "pty") { ptyMessage(ws, msg as string | Buffer); return; }
+      if (ws.data?.kind === "canvas") { (ws.data as { handle?: CanvasHandle }).handle?.message(msg as string | Buffer); return; }
       if (ws.data?.kind === "events" && typeof msg === "string" && msg.length < 512 && msg.startsWith("{")) {
         let f: { type?: unknown; clientId?: unknown; browser?: unknown } = {};
         try { f = JSON.parse(msg); } catch { return; }
@@ -8878,6 +8906,10 @@ const server = Bun.serve<WsData>({
      *  also gets this from every keystroke, above. */
     pong(ws: ServerWebSocket<WsData>) {
       alive.set(ws, Date.now());
+    },
+    /** A canvas socket that was behind has emptied its buffer. */
+    drain(ws: ServerWebSocket<WsData>) {
+      if (ws.data?.kind === "canvas") (ws.data as { handle?: CanvasHandle }).handle?.drain();
     },
   },
 });
@@ -9560,6 +9592,13 @@ const prNotifyKick = process.env.NODE_ENV === "test" ? () => {} : startPrNotifyW
 // A plugin drew something, or wrote notes on a pull request. The frame says
 // only where to look again; what was drawn is fetched over the token.
 setPluginUiHook((f) => broadcast({ type: "plugin", data: f }));
+// Which panels are live canvases of an enabled plugin, for the window's socket
+// (plugin-canvas.ts). Read from the registry each time: an approval that was
+// withdrawn or a plugin that was stopped is the answer, not a cached one.
+setCanvasResolver((plugin, panel) => {
+  const p = listPlugins().find((x) => x.name === plugin);
+  return { canvas: !!p?.enabled && isCanvasPanel(p.contributes, panel), running: !!p && isRunning(plugin) };
+});
 // Plugins that were on before this server went down come back with fresh
 // tokens. After the listener, so their first request finds a server.
 void resumeEnabledPlugins().then((names) => { if (names.length) console.log(`   Plugins     → ${names.join(", ")}`); });

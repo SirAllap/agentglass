@@ -21,6 +21,7 @@ import {
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { mintPluginToken, revokePluginToken } from "./auth.ts";
+import { dropCanvases } from "./plugin-canvas.ts";
 import type { Scope } from "./devices.ts";
 import { cloneUrlError } from "./projectadd.ts";
 import {
@@ -686,6 +687,8 @@ async function startProcess(rec: PluginRecord): Promise<void> {
   // block can never be bypassed by a path that forgets to check first.
   if (blockedEntry(rec.name)) return;
   lastBoxFailure.delete(rec.name);
+  // A run starts on an empty board, whatever the last one left.
+  dropCanvases(rec.name);
   const token = mintPluginToken(rec.scope, rec.name);
   // Whether or not the plugin ends up boxed, it gets a folder of its own —
   // the same folder every time, so a plugin that writes state today can

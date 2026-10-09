@@ -28,6 +28,7 @@ import {
 } from "../../shared/pluginUi.ts";
 import { pluginsConfigDir } from "./plugins.ts";
 import { forgetAnnotations } from "./inbox-annotations.ts";
+import { dropCanvases } from "./plugin-canvas.ts";
 
 export type PluginUiFrame =
   /** `plugin`/`panel` name what was redrawn, so a window fetches that one
@@ -52,6 +53,7 @@ const panels = new Map<string, Map<string, PanelState>>();
 
 export function setPanel(plugin: string, c: Contributes, id: string, raw: unknown): { ok: true } | { ok: false; error: string } {
   if (!c.panels?.some((p) => p.id === id)) return { ok: false, error: `panel "${id}" is not declared in this plugin's manifest` };
+  if (c.panels?.some((p) => p.id === id && p.canvas)) return { ok: false, error: `panel "${id}" is a live canvas: draw it with operations, POST /plugin/self/panel/${id}/ops` };
   const t = validateTree(raw);
   if (!t.ok) return { ok: false, error: t.error };
   let m = panels.get(plugin);
@@ -161,6 +163,7 @@ export function forgetPlugin(plugin: string): void {
   panels.delete(plugin);
   options.delete(plugin);
   forgetAnnotations(plugin);
+  dropCanvases(plugin);
   queues.delete(plugin);
   for (const w of waiters.get(plugin) ?? []) w();
   waiters.delete(plugin);

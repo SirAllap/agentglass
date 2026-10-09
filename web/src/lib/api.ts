@@ -529,6 +529,10 @@ export function adoptServer(next: { origin?: string | null; token?: string | nul
   WS_URL = withToken(SERVER.replace(/^http/, "ws") + "/stream");
 }
 
+/** The private socket every live plugin canvas shares (server/src/plugin-canvas.ts).
+ *  Read at call time, like `WS_URL`, so a re-adopted server is the next one dialled. */
+export const canvasWsUrl = (): string => withToken(SERVER.replace(/^http/, "ws") + "/plugins/panels/live");
+
 /** WebSocket URL for a real PTY shell in `root` (the in-browser terminal). */
 export const ptyWsUrl = (root: string, cols: number, rows: number, view?: string, edit = false, agent?: string,
   /**
