@@ -634,7 +634,7 @@ export function FloatingBench() {
                 */}
               <div
                 className="flex items-center gap-1.5 px-2 py-1.5 shrink-0 cursor-grab active:cursor-grabbing"
-                style={{ background: "color-mix(in srgb, var(--text) 5%, var(--bg2))", borderBottom: LINE }}
+                style={{ background: "color-mix(in srgb, var(--text) 5%, var(--surface-nav))", borderBottom: LINE }}
                 onPointerDown={onBarDown} onPointerMove={onBarMove} onPointerUp={onBarUp} onPointerCancel={onBarUp}>
 
                 <button

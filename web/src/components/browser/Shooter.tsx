@@ -336,7 +336,7 @@ export function Shooter({ view, onNote, onDone }: {
             </button>
             <button onClick={() => void doSave()} disabled={!!busy}
               className="px-3 py-1.5 rounded-lg text-[11.5px] disabled:opacity-50"
-              style={{ background: "color-mix(in srgb, var(--primary) 30%, var(--bg2))", color: "var(--text)", border: BORDER }}>
+              style={{ background: "color-mix(in srgb, var(--primary) 30%, var(--surface-card))", color: "var(--text)", border: BORDER }}>
               {busy === "save" ? "Saving…" : "Download"}
             </button>
           </>

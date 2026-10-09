@@ -2570,7 +2570,7 @@ function DepGrid({ deps, muted }: { deps: DepReport[]; muted?: boolean }) {
       {deps.map((d) => (
         <span key={d.id} title={`${d.title} — ${d.what}`}
           className="flex items-center gap-2 px-2 py-1 rounded-lg min-w-0"
-          style={{ border: EDGE, background: "color-mix(in srgb, var(--bg2) 50%, transparent)" }}>
+          style={{ border: EDGE, background: "color-mix(in srgb, var(--surface-inset) 50%, transparent)" }}>
           <span className="shrink-0 rounded-full" aria-hidden style={{ width: 6, height: 6, background: statusColor(d) }} />
           <span className="t-mono text-[11px] truncate" style={{ color: "var(--text2)" }}>{d.bin}</span>
         </span>

@@ -2470,7 +2470,7 @@ export function BrowserView({ active: viewOn, scope }: {
 
   const sideBody = (
     <div className="flex flex-col h-full min-h-0"
-      style={{ background: "color-mix(in srgb, var(--bg2) 65%, var(--bg))", borderLeft: LINE }}>
+      style={{ background: "color-mix(in srgb, var(--surface-nav) 65%, var(--bg))", borderLeft: LINE }}>
       {/*
         * The head of the bar, laid out the way Zen lays its own out: the menu
         * and the collapse on the left, the three navigation controls on the
@@ -2846,7 +2846,7 @@ export function BrowserView({ active: viewOn, scope }: {
         <div className="absolute left-1/2 -translate-x-1/2 rounded-xl shadow-2xl px-2.5 py-2 flex flex-col gap-1.5"
           style={{
             bottom: 14, zIndex: 34, minWidth: 460, maxWidth: "min(680px, 92%)",
-            background: "color-mix(in srgb, var(--bg2) 96%, black)",
+            background: "color-mix(in srgb, var(--surface-card) 96%, black)",
             border: EDGE,
           }}>
           <div className="flex items-center gap-2">

@@ -227,7 +227,7 @@ export function BenchTerm({ root, slot, view, line, edit, agent, type, note, act
       <div ref={host} className="w-full h-full" />
       {state !== "live" && (
         <div className="absolute inset-x-0 bottom-0 px-3 py-1.5 text-[10.5px]"
-          style={{ color: state === "gone" ? "var(--error)" : "var(--text3)", background: "color-mix(in srgb, var(--bg2) 92%, transparent)" }}>
+          style={{ color: state === "gone" ? "var(--error)" : "var(--text3)", background: "color-mix(in srgb, var(--surface-card) 92%, transparent)" }}>
           {state === "opening"
             ? "Attaching to this tab's session…"
             : (why ?? "This tab's session ended. Close the tab, or open a new one.")}
