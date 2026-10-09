@@ -17,6 +17,7 @@
 import { ttlRead, forgetReads } from "./ttlread.ts";
 import { singleFlight } from "./singleflight.ts";
 import { learnFromRead } from "./checkRuns.ts";
+import { readCheckFailures, cachedSummaries, type LogRead, type AnnotationsRead, type CheckAnnotation } from "./ciFailures.ts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { failed } from "./refused.ts";
 import { homedir, tmpdir } from "node:os";
@@ -4766,6 +4767,102 @@ export async function jobLog(rootIn: unknown, jobIdIn: unknown): Promise<{ ok: b
   return { ok: true, text, truncated };
 }
 
+/** GitHub's own words for "slow down": a 429, or a 403 that says rate limit. */
+const RATE_LIMITED = /rate limit|HTTP 429|abuse detection/i;
+
+/** When the core budget comes back, in ms. `rate_limit` itself is free, so asking costs nothing. */
+async function coreResetAt(): Promise<number | null> {
+  const r = await gh(["api", "rate_limit", "--jq", ".resources.core.reset"]);
+  const n = Number(r.stdout.trim());
+  return r.code === 0 && Number.isFinite(n) && n > 0 ? n * 1000 : null;
+}
+
+async function ghFailure(stderr: string): Promise<{ ok: false; kind: "budget"; resetAt: number | null } | { ok: false; kind: "error"; error: string }> {
+  if (RATE_LIMITED.test(stderr)) return { ok: false, kind: "budget", resetAt: await coreResetAt() };
+  return { ok: false, kind: "error", error: stderr.trim().split("\n")[0] || "could not read it from GitHub" };
+}
+
+/**
+ * One job's log, whole, or why not. `-i` puts the response headers in front of
+ * the body, and the headers are the ones of the blob the redirect lands on, so
+ * `Content-Length` is known before a byte of the log is: a log over the cap is
+ * stopped there instead of being downloaded to be thrown away. Without a length
+ * the cap is applied as bytes arrive.
+ */
+async function readLogCapped(nameWithOwner: string, jobId: string, maxBytes: number): Promise<LogRead> {
+  const bin = ghBin();
+  if (!bin) return { ok: false, kind: "error", error: "gh not found" };
+  const proc = Bun.spawn([bin, "api", "-i", "--allow-escape-sequences", `repos/${nameWithOwner}/actions/jobs/${jobId}/logs`], {
+    stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, GH_PROMPT_DISABLED: "1", NO_COLOR: "1" },
+  });
+  const timer = setTimeout(() => { try { proc.kill(); } catch { /* gone */ } }, 90_000);
+  const stderrP = new Response(proc.stderr).text();
+  const chunks: Uint8Array[] = [];
+  let total = 0, bodyAt = -1, status = 0, length = 0;
+  let verdict: LogRead | null = null;
+  try {
+    for await (const chunk of proc.stdout as unknown as AsyncIterable<Uint8Array>) {
+      chunks.push(chunk); total += chunk.length;
+      if (bodyAt < 0) {
+        const head = Buffer.concat(chunks).toString("latin1");
+        const end = head.indexOf("\r\n\r\n");
+        if (end < 0) continue;
+        bodyAt = end + 4;
+        status = Number(/^HTTP\/[\d.]+ (\d+)/.exec(head)?.[1] ?? 0);
+        length = Number(/^content-length:\s*(\d+)/im.exec(head.slice(0, end))?.[1] ?? 0);
+        if (status === 200 && length > maxBytes) { verdict = { ok: false, kind: "toolarge", bytes: length }; break; }
+      }
+      if (status === 200 && bodyAt >= 0 && total - bodyAt > maxBytes) { verdict = { ok: false, kind: "toolarge", bytes: total - bodyAt }; break; }
+    }
+  } finally { clearTimeout(timer); }
+  if (verdict) { try { proc.kill(); } catch { /* gone */ } return verdict; }
+  const code = await proc.exited;
+  const stderr = await stderrP;
+  if (status === 410) return { ok: false, kind: "expired" };
+  if (code !== 0 || status !== 200) return ghFailure(stderr || `HTTP ${status}`);
+  return { ok: true, text: Buffer.concat(chunks).subarray(bodyAt).toString("utf8"), bytes: total - bodyAt };
+}
+
+async function readAnnotations(nameWithOwner: string, jobId: string): Promise<AnnotationsRead> {
+  const r = await gh(["api", `repos/${nameWithOwner}/check-runs/${jobId}/annotations?per_page=50`]);
+  if (r.code !== 0) return ghFailure(r.stderr || r.stdout);
+  try {
+    const rows = JSON.parse(r.stdout) as any[];
+    const items: CheckAnnotation[] = (Array.isArray(rows) ? rows : []).map((a) => ({
+      level: String(a.annotation_level ?? ""), path: String(a.path ?? ""), line: Number(a.start_line ?? 0), title: a.title ? String(a.title) : undefined, message: String(a.message ?? ""),
+    }));
+    return { ok: true, items };
+  } catch { return { ok: false, kind: "error", error: "GitHub's answer was not readable" }; }
+}
+
+/**
+ * The failing part of one failed check, for the panel: what the cache has, else
+ * GitHub's annotations and the job's log, cut down to the failures (see
+ * ciFailures.ts for the order and the reasons). Lazy by construction — nothing
+ * calls this until a failed check is opened — and `force` is "Read it anyway".
+ */
+export async function checkFailures(rootIn: unknown, jobIdIn: unknown, hints: { attempt?: unknown; step?: unknown }, force = false) {
+  const jobId = String(jobIdIn ?? "");
+  if (!/^\d+$/.test(jobId)) return { ok: false as const, kind: "error" as const, error: "invalid job", requests: 0 };
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return { ok: false as const, kind: "error" as const, error: "no GitHub remote on this repository", requests: 0 };
+  const attempt = Number(hints.attempt);
+  return readCheckFailures(repo.key, jobId, {
+    attempt: Number.isInteger(attempt) && attempt > 0 ? attempt : undefined,
+    step: typeof hints.step === "string" && hints.step ? hints.step.slice(0, 200) : undefined,
+  }, {
+    annotations: () => readAnnotations(repo.nameWithOwner, jobId),
+    log: (max) => readLogCapped(repo.nameWithOwner, jobId, max),
+  }, { force });
+}
+
+/** What is already known about these jobs' failures. Reads the cache only: not one GitHub request. */
+export async function cachedCheckFailures(rootIn: unknown, jobsIn: unknown) {
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return { ok: false as const, error: "no GitHub remote on this repository" };
+  return { ok: true as const, summaries: cachedSummaries(repo.key, String(jobsIn ?? "").split(",").filter(Boolean)) };
+}
+
 /**
  * The jobs behind this pull request's checks, so a check can be opened.
  *
@@ -4797,6 +4894,8 @@ export async function checkJobs(rootIn: unknown, number: unknown): Promise<{ ok:
         startedAt: j.started_at ?? null,
         completedAt: j.completed_at ?? null,
         url: j.html_url ?? "",
+        attempt: Number.isInteger(j.run_attempt) ? j.run_attempt : undefined,
+        failedStep: (j.steps ?? []).find((st: any) => st?.conclusion === "failure")?.name || undefined,
       });
     }
   }

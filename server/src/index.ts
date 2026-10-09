@@ -148,7 +148,7 @@ import { measureFile } from "./filemeasure.ts";
 import { editorCursor } from "./editorwhere.ts";
 import {
   listPrs, prDetail, prDiff, prAsset, ghCapability, submitReview, addComment, replyToThread,
-  editComment, deleteComment, hideComment, unhideComment, setFileViewed, setAssignees, setMilestone, viewCounts, jobLog, checkJobs, rerunJobs, addLineComment, mentionables, facetOptions, applySuggestion, fileSlice,
+  editComment, deleteComment, hideComment, unhideComment, setFileViewed, setAssignees, setMilestone, viewCounts, jobLog, checkJobs, checkFailures, cachedCheckFailures, rerunJobs, addLineComment, mentionables, facetOptions, applySuggestion, fileSlice,
   setThreadResolved, react, editPr, setLabels, setReviewers, setDraft, updateBranch,
   rerunFailedChecks, mergePr, closePr, filesSince, codeowners, prepareReviewPrompt, pendingReviewFor, branchUrl, subscribeCi, subscribeTalk, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
   prBaseOf,
@@ -7205,6 +7205,16 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     }
     if (pathname === "/prs/job-log") {
       return json(await jobLog(url.searchParams.get("root") || "", url.searchParams.get("job") || ""));
+    }
+    if (pathname === "/prs/check-failures-cached") {
+      return json(await cachedCheckFailures(url.searchParams.get("root") || "", url.searchParams.get("jobs") || ""));
+    }
+    if (pathname === "/prs/check-failures") {
+      return json(await checkFailures(
+        url.searchParams.get("root") || "", url.searchParams.get("job") || "",
+        { attempt: url.searchParams.get("attempt"), step: url.searchParams.get("step") },
+        url.searchParams.get("force") === "1",
+      ));
     }
     if (pathname === "/prs/check-jobs") {
       return json(await checkJobs(url.searchParams.get("root") || "", url.searchParams.get("number") || ""));

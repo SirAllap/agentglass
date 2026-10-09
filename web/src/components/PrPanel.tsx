@@ -29,6 +29,9 @@ import { onAppBack } from "../lib/desktop.ts";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { diffSplit, diffWrap, diffNoWhitespace, setDiffNoWhitespace } from "../lib/diffPrefs.ts";
 import { Portal } from "./Portal.tsx";
+import { CheckFailuresPanel } from "./CheckFailures.tsx";
+import { failureRowText, jobFor } from "../lib/checkFailures.ts";
+import { failureKey, loadCached, readOf, summaryOf, useFailureStore } from "../lib/checkFailuresStore.ts";
 import { MergeBox } from "./MergeBox.tsx";
 import { mergePath, type PathAction } from "../../../shared/mergePath.ts";
 import { buildReviewStory, relative, stamp, type StoryVerdict } from "../../../shared/reviewStory.ts";
@@ -12132,6 +12135,23 @@ export function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyW
   const share = (n: number) => (c.total ? (n / c.total) * 360 : 0);
   const okEnd = share(c.success), badEnd = okEnd + share(c.failure), runEnd = badEnd + share(c.pending);
 
+  // "2 failing tests" on a failed row: what was read this session, else what the server's cache
+  // holds (one request that never reaches GitHub). A check nobody has opened says what it always did.
+  useFailureStore();
+  useEffect(() => {
+    const ids = d.checksAll.filter((k) => k.state === "failure").map((k) => jobFor(k, jobs)?.id).filter((x): x is string => !!x);
+    if (ids.length) void loadCached(root, ids);
+  }, [root, jobs, d.checksAll]);
+  const failureText = (k: PrCheck): string | null => {
+    const job = k.state === "failure" ? jobFor(k, jobs) : undefined;
+    if (!job) return null;
+    const key = failureKey(root, job.id);
+    const read = readOf(key);
+    if (read?.ok) return failureRowText({ source: read.source, count: read.failures.length, more: read.more });
+    const s = summaryOf(key);
+    return s ? failureRowText(s) : null;
+  };
+
   const row = (k: PrCheck, i: number, full: boolean) => {
     const bad = k.state === "failure";
     const id = `${checkLabel(k)}::${k.url ?? i}`;
@@ -12161,7 +12181,7 @@ export function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyW
                 the one red check that blocks from the three that do not. */}
             {k.required && <Chip text="Required" tint="var(--text2)" title="GitHub will not merge until this one passes" />}
             <span className="truncate min-w-0 flex-1" title={checkStatusLine(k)} style={{ color: bad ? "var(--error-ink)" : "var(--text3)" }}>
-              {k.title || (k.state === "success" ? "" : checkStatusLine(k))}
+              {failureText(k) ?? (k.title || (k.state === "success" ? "" : checkStatusLine(k)))}
             </span>
             {bad && <FoldCaret open={expanded} />}
           </button>
@@ -12202,6 +12222,7 @@ export function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyW
         )}
         {/* The log, here. It used to say "the log lives on GitHub" and send you
             to a browser for the one thing you opened the check to read. */}
+        {expanded && (() => { const job = jobFor(k, jobs); return job ? <CheckFailuresPanel root={root} check={k} job={job} /> : null; })()}
         {expanded && <JobLog root={root} name={k.name} jobs={jobs} />}
       </div>
     );

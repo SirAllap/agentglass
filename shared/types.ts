@@ -3641,6 +3641,60 @@ export interface PrCheckJob {
   startedAt: string | null;
   completedAt: string | null;
   url: string;
+  /** Which attempt of the run this job belongs to (a re-run is a new attempt with new job ids). */
+  attempt?: number;
+  /** The name of the step that failed ("Tests (server)"), the human title when a log names no test. */
+  failedStep?: string;
+}
+
+/** One failing test (or file, or step) cut out of a CI job. */
+export interface CiFailure {
+  kind: "bun" | "pytest" | "django" | "jest" | "tsc" | "step" | "annotation";
+  /** The test, the file or the step that failed. */
+  title: string;
+  /** At most 4 KB, redacted, no escape bytes and no timestamps. */
+  excerpt: string;
+  /** The same failure on another run is the same signature: title plus the first message line, volatile parts removed. */
+  signature: string;
+  truncated: boolean;
+}
+
+/** What the client knows about the job and the server only guesses: used to key the cache and to title a step. */
+export interface CheckFailuresHints { attempt?: number; step?: string }
+
+/**
+ * What `/prs/check-failures` answers. `state` is about the LOG: `read` (it was
+ * read), `expired` (GitHub keeps logs 90 days), `toolarge` (over the 25 MB the
+ * panel reads unasked; `sizeBytes` says how big), `unparsed` (read, and nothing in
+ * it names a failure). `failures` may still hold what GitHub's annotations kept.
+ * `requests` is what this call cost on GitHub, 0 when it came from the cache.
+ */
+export type CheckFailures =
+  | {
+      ok: true;
+      state: "read" | "expired" | "toolarge" | "unparsed";
+      source: "log" | "annotations" | "step" | "none";
+      framework: CiFailure["kind"] | null;
+      failures: CiFailure[];
+      /** Failures found beyond the ten kept. */
+      more: number;
+      readBytes: number;
+      sizeBytes?: number;
+      step?: string;
+      at: number;
+      cached: boolean;
+      requests: number;
+    }
+  | { ok: false; kind: "budget"; resetAt: number | null; requests: number }
+  | { ok: false; kind: "error"; error: string; requests: number };
+
+/** What the cache already knows of a job's failures, for wording a row without asking GitHub. */
+export interface CheckFailureSummary {
+  state: Extract<CheckFailures, { ok: true }>["state"];
+  source: Extract<CheckFailures, { ok: true }>["source"];
+  count: number;
+  more: number;
+  titles: string[];
 }
 
 export interface PrChecklistItem { checked: boolean; text: string }
