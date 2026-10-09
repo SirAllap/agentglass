@@ -29,14 +29,15 @@ const sorted = (xs: number[]) => [...xs].sort((a, b) => a - b);
 export function median(xs: number[]): number {
   if (!xs.length) return 0;
   const s = sorted(xs), m = s.length >> 1;
-  return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2);
+  // Indexes are in range: the empty case returned above.
+  return s.length % 2 ? s[m]! : Math.round((s[m - 1]! + s[m]!) / 2);
 }
 
 /** Nearest rank: the value 90% of runs came in at or under. */
 export function percentile(xs: number[], p: number): number {
   if (!xs.length) return 0;
   const s = sorted(xs);
-  return s[Math.min(s.length - 1, Math.max(0, Math.ceil(p * s.length) - 1))];
+  return s[Math.min(s.length - 1, Math.max(0, Math.ceil(p * s.length) - 1))]!;
 }
 
 /** Median and p90 of the newest `BASELINE_RUNS` durations (newest first). Null when there are none. */
