@@ -55,7 +55,7 @@ describe("the diff's own find, which stays", () => {
     // and walking to the board put its bar on a view you could not see.
     const at = pr.indexOf("const onWinKey = (e: KeyboardEvent) => {");
     const body = pr.slice(at, at + 1200);
-    expect(body).toContain("checkVisibility");
+    expect(body).toContain("onScreen(frameRef.current)");
     expect(body).toContain("frameRef.current");
   });
 

@@ -20,6 +20,7 @@
 // 4. Nothing waits on the network. `gh` costs a second or more per call and the
 //    server has one thread; every read is a cached answer with its age shown.
 import { dataInk } from "../lib/contrast.ts";
+import { onScreen } from "../lib/findScope.ts";
 import { PluginPrActions } from "./plugins/PluginPrActions.tsx";
 import { useLocalNotes, groupByRun, RunCard, NoteCard, LocalMark, LocalGlyph, LocalStrip, sortNotes, type LocalNotes, type LocalNote } from "./plugins/LocalReview.tsx";
 import { createContext, Fragment, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
@@ -9530,7 +9531,8 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
    * over to the board, press Ctrl+F, and the diff's find opened on a view you
    * could not see. `checkVisibility` on this tab's own box is the honest test —
    * it answers no for a `visibility: hidden` ancestor, which is exactly how a
-   * background view is hidden.
+   * background view is hidden — but only when asked with `visibilityProperty`,
+   * which `onScreen` does.
    *
    * `capture: true`, and it matters: the shell's own find bar listens on the
    * same window. Capture runs first, so this one gets to decide, and stopping
@@ -9543,9 +9545,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
       // A terminal owns its own keys — a peeked file is being read in nvim, and
       // Ctrl+F there is page-down.
       if ((e.target as HTMLElement)?.closest?.(".xterm")) return;
-      const box = frameRef.current as (HTMLElement & { checkVisibility?: () => boolean }) | null;
-      if (!box) return;
-      if (typeof box.checkVisibility === "function" ? !box.checkVisibility() : !box.offsetParent) return;
+      if (!onScreen(frameRef.current)) return;
       e.preventDefault();
       e.stopPropagation();
       setFind((cur) => cur ?? "");

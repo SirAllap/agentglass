@@ -15,7 +15,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
-  closeFind, findChordIsOursToTake, findHidden, findState, openFind, pushScope,
+  closeFind, findChordIsOursToTake, findHidden, findState, onScreen, openFind, pushScope,
   registerEngine, runQuery, scopeHolding as findScopeHolding, stepFind, topScope, type FindEngine,
 } from "../src/lib/findScope.ts";
 
@@ -375,5 +375,34 @@ describe("a bar opened for one window", () => {
     off();
     closeFind();
     expect(findHidden()).toBe(false);
+  });
+});
+
+describe("onScreen: the Files tab's own Ctrl+F asks the same question the scopes do", () => {
+  it("a box in a view on screen is on screen", () => {
+    expect(onScreen(el("files"))).toBe(true);
+  });
+  it("a box in a view hidden with visibility is not, though its display is intact", () => {
+    // checkVisibility() with no options says true here: this is the old bug.
+    expect(onScreen(hiddenView("files"))).toBe(false);
+  });
+  it("a box that is not mounted is not", () => {
+    expect(onScreen(null)).toBe(false);
+  });
+  it("without checkVisibility the offsetParent decides", () => {
+    const old = (offsetParent: unknown) => ({ offsetParent } as unknown as HTMLElement);
+    expect(onScreen(old({}))).toBe(true);
+    expect(onScreen(old(null))).toBe(false);
+  });
+});
+
+describe("the Files tab's window Ctrl+F handler", () => {
+  const src = readFileSync(new URL("../src/components/PrPanel.tsx", import.meta.url), "utf8");
+  const at = src.indexOf("const onWinKey = (");
+  const body = src.slice(at, src.indexOf("window.removeEventListener(\"keydown\", onWinKey", at));
+  it("asks onScreen, not a bare checkVisibility() that cannot see visibility: hidden", () => {
+    expect(at).toBeGreaterThan(0);
+    expect(body).toContain("onScreen(frameRef.current)");
+    expect(body.split("\n").filter((l) => !l.trim().startsWith("//")).join("\n")).not.toContain("checkVisibility");
   });
 });

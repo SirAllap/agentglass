@@ -135,7 +135,18 @@ type MaybeVisible = HTMLElement & { checkVisibility?: (o?: { visibilityProperty?
  * mdFind already asks it this way.
  */
 function showing(el: HTMLElement | null): boolean {
-  if (!el || !el.childElementCount) return false;
+  return !!el && !!el.childElementCount && onScreen(el);
+}
+
+/**
+ * Whether a box is on screen, as the workspace hides views: `visibility: hidden`.
+ * Every window-level Ctrl+F that decides "is this mine" asks it here, because
+ * the Files tab's own handler asked `checkVisibility()` with no options and took
+ * the chord from the board in front of it whenever a PR had been left open in a
+ * hidden view. `offsetParent` is the fallback and catches `display: none` only.
+ */
+export function onScreen(el: HTMLElement | null): boolean {
+  if (!el) return false;
   const e = el as MaybeVisible;
   return typeof e.checkVisibility === "function" ? e.checkVisibility({ visibilityProperty: true }) : !!el.offsetParent;
 }
