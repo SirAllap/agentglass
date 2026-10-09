@@ -23,6 +23,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { TriageBoard } from "../src/components/TriageBoard.tsx";
 import { LANES, LANE_CAP } from "../src/lib/prLanes.ts";
+import { CHIP_H } from "../src/lib/priority.tsx";
 
 const board = await Bun.file(new URL("../src/components/TriageBoard.tsx", import.meta.url)).text();
 import type { PrSummary } from "../../shared/types.ts";
@@ -488,19 +489,24 @@ describe("the pin is a target you can hit", () => {
     return card.slice(Math.max(0, at - 400), at + 200);
   };
 
-  it("is at least 26px square", () => {
-    const b = pinBtn(render({ mine: [pr(1)] }), 1);
-    const w = Number(b.match(/width:\s*([0-9]+)px/)?.[1] ?? 0);
-    const h = Number(b.match(/height:\s*([0-9]+)px/)?.[1] ?? 0);
-    expect(w).toBeGreaterThanOrEqual(26);
-    expect(h).toBeGreaterThanOrEqual(26);
+  it("is the number chip's height with a mouse and at least 26px square on a touch screen", () => {
+    // The size is two custom properties on the group and a class on the button:
+    // a media query for a coarse pointer cannot be written in an inline style.
+    const html = render({ mine: [pr(1)] });
+    const card = html.slice(html.indexOf('data-pr="1"'));
+    const at = card.indexOf('aria-label="Pin');
+    const pin = card.slice(card.lastIndexOf("<button", at), card.indexOf(">", at));
+    expect(pin).toContain("agx-prc-ib");
+    expect(Number(card.match(/--ib:\s*([0-9]+)px/)?.[1] ?? 0)).toBe(CHIP_H + 2);
+    expect(Number(card.match(/--ib-hit:\s*([0-9]+)px/)?.[1] ?? 0)).toBeGreaterThanOrEqual(26);
   });
 
-  it("sits on the title row, where every card has one", () => {
-    // Before the sentence and before the action, so its position cannot depend
+  it("sits on the identity line beside the number, where every card has one", () => {
+    // Before the title and before the action, so its position cannot depend
     // on how long either of them is.
     const html = render({ mine: [pr(1)] });
     const card = html.slice(html.indexOf('data-pr="1"'));
+    expect(card.indexOf('aria-label="Pin')).toBeLessThan(card.indexOf("agx-prc-title"));
     expect(card.indexOf('aria-label="Pin')).toBeLessThan(card.indexOf("↳"));
   });
 
@@ -638,7 +644,8 @@ describe("the number on a card", () => {
     expect(board).toContain("copied === p.number");
     expect(board).toContain("<DoneIcon size={ICON.xs} />");
     expect(board).toContain("<CopyIcon size={ICON.xs} />");
-    expect(board).toContain("border: `1px solid color-mix(in srgb, ${copied === p.number ? \"var(--success) 50%\" : \"var(--border) 55%\"}, transparent)`,");
+    expect(board).toContain("border: copyEdge(copied === p.number),");
+    expect(board).toContain("`1px solid color-mix(in srgb, ${done ? \"var(--success) 50%\" : \"var(--border) 55%\"}, transparent)`");
   });
 });
 
@@ -666,14 +673,44 @@ describe("a red card", () => {
 });
 
 describe("taking a card away with you", () => {
-  it("copies its link, beside the pin and the same size", () => {
+  /* The number, the link and the pin are one group on the identity line, right
+     after the number and before the age. They used to be split: the number on
+     the identity line, the link and the pin in a block of their own at the end
+     of the title row, which took the title's width. */
+  const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
+  const idRow = board.slice(board.indexOf('className="agx-prc-id"'), board.indexOf('<div title={p.title} className="agx-prc-title'));
+  const group = idRow.slice(idRow.indexOf('className="agx-prc-grp'), idRow.indexOf("{ago(p.updatedAt)}"));
+
+  it("copies its link, beside the number and the pin", () => {
     /* The number copies the number — what goes in a branch or a commit. This is
        the other thing a card gets taken away as: a link to paste into a
        message. */
     expect(board).toContain("copyLink()");
     expect(board).toContain('navigator.clipboard?.writeText(p.url || "")');
-    // Same house box (HIT) as the star it sits next to.
-    expect(board.split("width: HIT, height: HIT").length - 1).toBe(2);
+  });
+  it("keeps the number, the link and the pin in one group on the identity line, before the age", () => {
+    expect(idRow).not.toBe("");
+    for (const call of ["copyNumber(p.number)", "copyLink()", "onPin()"]) {
+      expect(group, call).toContain(call);
+    }
+    expect(group.indexOf("copyNumber(")).toBeLessThan(group.indexOf("copyLink()"));
+    expect(group.indexOf("copyLink()")).toBeLessThan(group.indexOf("onPin()"));
+  });
+  it("keeps each control's label, pressed state and click guard", () => {
+    expect(group).toContain("aria-label={`Copy the link to #${p.number}`}");
+    expect(group).toContain("aria-pressed={pinned}");
+    expect(group.split("e.stopPropagation()").length - 1).toBe(3);
+  });
+  it("has no separate action block, and the layout has no area for one", () => {
+    expect(board).not.toContain("agx-prc-ac");
+    expect(css).not.toContain("agx-prc-ac");
+    expect(css).not.toMatch(/grid-template-areas:[^;]*\bac\b/);
+  });
+  it("sizes the link and the pin from the number chip, HIT on a touch screen", () => {
+    expect(group).toContain("CHIP_H + 2");
+    expect(group).toContain("HIT");
+    expect(css).toMatch(/\.agx-prc-ib \{ width: var\(--ib\); height: var\(--ib\); \}/);
+    expect(css).toMatch(/pointer: coarse\) \{\s*\.agx-prc-ib \{ width: var\(--ib-hit\)/);
   });
 });
 

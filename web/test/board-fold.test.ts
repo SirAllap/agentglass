@@ -249,7 +249,7 @@ describe("the card's header", () => {
 
   test("the pin and the link are the same size as each other", () => {
     /*
-     * Scoped to the two controls that sit side by side in 26×26 boxes, and not
+     * Scoped to the two controls that sit side by side in the same square (`agx-prc-ib`), and not
      * to every icon on the card — the first draft of this assertion counted
      * the whole card, saw 12, 14 and 16, and failed on a difference that is
      * the design: the mark inside the number chip is 12 because it sits beside
@@ -258,8 +258,8 @@ describe("the card's header", () => {
      * What reads as carelessness is not a spread across a card. It is two
      * ADJACENT controls, in identical boxes, drawn at different sizes.
      */
-    const boxes = [...card().matchAll(/<button[^>]*width:26px[^>]*>[\s\S]*?<\/button>/g)].map((m) => m[0]);
-    expect(boxes.length, "the pin and the link, in their 26×26 boxes").toBe(2);
+    const boxes = [...card().matchAll(/<button[^>]*agx-prc-ib[^>]*>[\s\S]*?<\/button>/g)].map((m) => m[0]);
+    expect(boxes.length, "the pin and the link, in their one square").toBe(2);
     const sizes = boxes.map((b) => b.match(/width="(\d+)"/)?.[1]);
     expect(new Set(sizes).size, `drawn at ${sizes.join(" and ")}`).toBe(1);
   });

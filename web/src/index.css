@@ -2429,26 +2429,40 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
  * ITSELF (a container, not the viewport — the lane's width is what changes, and
  * it changes with the window, the fold state and the number of lanes).
  *
- * Narrow: identity line, then the title with the link and the pin at its end,
- * then where it stands, what happened last, and the footer. Past 760px the
- * standing zone and the footer become a right column, and the link and the pin
- * move up to the identity line so the title keeps the whole of the left.
+ * Narrow: identity line, then the title, then where it stands, what happened
+ * last, and the footer. Past 760px the standing zone and the footer become a
+ * right column. The number, the link and the pin sit together on the identity
+ * line at every width, so the title keeps the whole of the left.
  */
 .agx-prc { container-type: inline-size; container-name: agx-prc; }
 .agx-prc-main {
   display: grid; align-items: center; gap: 4px 8px; padding: 8px 14px;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas: "id id" "tt ac" "st st" "ev ev";
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "id" "tt" "st" "ev";
 }
 .agx-prc-id { grid-area: id; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; min-height: 20px; white-space: nowrap; color: var(--text3); font-size: 10.5px; }
 .agx-prc-title { grid-area: tt; align-self: start; min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
-.agx-prc-ac { grid-area: ac; align-self: start; display: flex; }
+/* The three buttons of the group say they are buttons on a mouse: a tint and a
+   ring that sit ON TOP of whatever the state painted (the green of a copy, the
+   tint of a pin), as shadows, because the state is an inline style and a
+   background here would lose to it. */
+.agx-prc-cp { cursor: pointer; }
+.agx-prc-cp:hover {
+  box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--primary) 14%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--primary) 40%, transparent);
+}
+/* The link and the pin: the number chip's height (CHIP_H + 2) on a mouse, HIT on
+   a touch screen. Both come from the card as --ib and --ib-hit. */
+.agx-prc-ib { width: var(--ib); height: var(--ib); }
+@media (hover: none) and (pointer: coarse) {
+  .agx-prc-ib { width: var(--ib-hit); height: var(--ib-hit); }
+}
 .agx-prc-stand { grid-area: st; min-width: 0; }
 .agx-prc-event { grid-area: ev; }
 @container agx-prc (min-width: 760px) {
   .agx-prc-main {
-    grid-template-columns: minmax(0, 1fr) auto 352px;
-    grid-template-areas: "id ac st" "tt tt st" "ev ev st";
+    grid-template-columns: minmax(0, 1fr) 352px;
+    grid-template-areas: "id st" "tt st" "ev st";
     column-gap: 8px;
   }
   .agx-prc-title { -webkit-line-clamp: 2; }

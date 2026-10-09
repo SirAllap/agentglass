@@ -12,7 +12,7 @@
 // Nothing is fetched for this. It reads the two lists the panel already loads
 // for the pill counts — see stakeFrom in prLanes.ts — so the board costs what
 // the pill row cost, and the numbers cannot disagree with their source.
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { HIT, ICON, MIN_BOX } from "../lib/iconSize.ts";
 import { InfoIcon } from "./settingsNavIcons.tsx";
 import { CircleIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, FlagIcon, LinkIcon, RefreshIcon, SearchIcon, StarIcon, WarningIcon } from "../lib/glyphIcons.tsx";
@@ -1186,6 +1186,10 @@ function cardVerdict(p: PrSummary): {
   };
 }
 
+/** The edge of the number chip, and of the link once it has copied: green after a copy. */
+const copyEdge = (done: boolean) =>
+  `1px solid color-mix(in srgb, ${done ? "var(--success) 50%" : "var(--border) 55%"}, transparent)`;
+
 function CardView({ p, hasTaskProvider, repoUses, pinned, cursor, onOpen, onPin, onAct, busy, acting, dim, root, unread }: {
   p: Card; hasTaskProvider: boolean;
   /** This repository links work items at all: see prCardBlock.ts. */
@@ -1386,19 +1390,50 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, cursor, onOpen, onPin,
             * swapped glyph of another width moved the row at the moment you
             * were looking at it.
             */}
+          {/* The number, the link and the pin are one group: the three things you
+              take away from a card, side by side and wrapping as one. The link and
+              the pin are as tall as the number chip so the row does not grow, and
+              HIT on a touch screen, where a 20px square is a target to aim at. The
+              whole square is the button rather than the glyph inside it: the pin
+              used to be a 22px glyph in a corner, a target you aim at rather than
+              one you hit. */}
+          <span className="agx-prc-grp flex items-center gap-1 shrink-0"
+            style={{ "--ib": `${CHIP_H + 2}px`, "--ib-hit": `${HIT}px` } as CSSProperties}>
           <button onClick={(e) => { e.stopPropagation(); copyNumber(p.number); }}
             aria-live="polite"
             title={copied === p.number ? "Copied!" : `Copy #${p.number}`}
-            className="agx-btn shrink-0 tabular-nums inline-flex items-center gap-1 px-1.5 rounded-md text-[10px]"
+            className="agx-btn agx-prc-cp shrink-0 tabular-nums inline-flex items-center gap-1 px-1.5 rounded-md text-[10px]"
             style={{
               height: CHIP_H + 2,
               color: copied === p.number ? "var(--success)" : "var(--text2)",
-              border: `1px solid color-mix(in srgb, ${copied === p.number ? "var(--success) 50%" : "var(--border) 55%"}, transparent)`,
+              border: copyEdge(copied === p.number),
               background: "var(--surface-inset)",
             }}>
             #{p.number}
             {copied === p.number ? <DoneIcon size={ICON.xs} /> : <CopyIcon size={ICON.xs} />}
           </button>
+          <button onClick={(e) => { e.stopPropagation(); copyLink(); }}
+            title={copiedLink ? "Copied!" : `Copy the link to #${p.number}`}
+            aria-label={`Copy the link to #${p.number}`}
+            className="agx-btn agx-prc-cp agx-prc-ib shrink-0 grid place-items-center rounded-md"
+            style={{ lineHeight: 1,
+              color: copiedLink ? "var(--success)" : "var(--text3)",
+              border: copiedLink ? copyEdge(true) : "none",
+              background: copiedLink ? "var(--surface-inset)" : "transparent" }}>
+            {copiedLink ? <DoneIcon size={ICON.xs} /> : <LinkIcon size={ICON.xs} />}
+          </button>
+          <button onClick={(e) => { e.stopPropagation(); onPin(); }}
+            title={pinned ? `Unpin #${p.number}` : `Pin #${p.number} to the bar at the top`}
+            aria-label={pinned ? `Unpin #${p.number}` : `Pin #${p.number}`}
+            aria-pressed={pinned}
+            className="agx-btn agx-prc-cp agx-prc-ib shrink-0 grid place-items-center rounded-md"
+            style={{ lineHeight: 1,
+              color: pinned ? "var(--primary-hover)" : "var(--text3)",
+              border: pinned ? "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" : "none",
+              background: pinned ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent" }}>
+            <StarIcon size={ICON.xs} filled={pinned} />
+          </button>
+          </span>
           {/* Beside the number, before the title: the title is what a card IS
               and this is what it WANTS. */}
           {unread && <UnreadBadge u={unread} />}
@@ -1425,33 +1460,6 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, cursor, onOpen, onPin,
           style={{ fontSize: 13, lineHeight: 1.4, color: "var(--text)", overflowWrap: "anywhere" }}>
           {pre && <span className="font-medium" style={{ color: "var(--text3)" }}>{pre} | </span>}{rest}
         </div>
-        {/* The link and the pin, on the title row on a narrow card and at the end
-            of the identity line on a wide one. The pin is 26px, in the one place
-            every card has in common, and the whole square is the button rather
-            than the star inside it: it used to be a 22px glyph in a corner, a
-            target you aim at rather than one you hit. */}
-        <div className="agx-prc-ac">
-          <button onClick={(e) => { e.stopPropagation(); copyLink(); }}
-            title={copiedLink ? "Copied!" : `Copy the link to #${p.number}`}
-            aria-label={`Copy the link to #${p.number}`}
-            className="agx-btn shrink-0 grid place-items-center rounded-md"
-            style={{ width: HIT, height: HIT, lineHeight: 1,
-              color: copiedLink ? "var(--success)" : "var(--text3)", background: "transparent" }}>
-            {copiedLink ? <DoneIcon size={ICON.md} /> : <LinkIcon size={ICON.md} />}
-          </button>
-          <button onClick={(e) => { e.stopPropagation(); onPin(); }}
-            title={pinned ? `Unpin #${p.number}` : `Pin #${p.number} to the bar at the top`}
-            aria-label={pinned ? `Unpin #${p.number}` : `Pin #${p.number}`}
-            aria-pressed={pinned}
-            className="agx-btn shrink-0 grid place-items-center rounded-md"
-            style={{ width: HIT, height: HIT, lineHeight: 1,
-              color: pinned ? "var(--primary-hover)" : "var(--text3)",
-              border: pinned ? "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" : "none",
-              background: pinned ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent" }}>
-            <StarIcon size={ICON.md} filled={pinned} />
-          </button>
-        </div>
-
         {/*
           * WHERE IT STANDS: the checks as a word and a bar, never as colour
           * alone — "red" has to be sayable to somebody who cannot see it.
