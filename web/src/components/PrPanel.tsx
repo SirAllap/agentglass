@@ -51,7 +51,7 @@ import { updateBranchMove, prConflicted, gitSaysClean as cleanMerge } from "../l
 import { depSpec } from "../../../shared/deps.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { useMergeDialog } from "./MergeDialog.tsx";
-import { mergeCardRef, mergeNote, statusColor } from "../lib/cardMove.ts";
+import { mergeCardRef, mergeNote, statusColor, rfqaStatus } from "../lib/cardMove.ts";
 import { cardPlan, cardPlanNote } from "../lib/cardPlan.ts";
 import { cardOf, askingCard, onCard, forgetCard, forgetCards, cardVersion, withCard } from "../lib/prCardStore.ts";
 import { PeoplePick } from "./PeoplePick.tsx";
@@ -7489,8 +7489,67 @@ function CardPeoplePick({ task, query, onSaid }: { task: ProviderTask; query: st
     </>
   );
 }
+/**
+ * One press: send the card to the list's own "ready for QA" status and clear
+ * every assignee, because handing off work and staying on the card is the
+ * mistake this exists to stop. Hidden rather than disabled when the list has
+ * no such status or the card is already in it — a control with nothing to do
+ * is not a control, it is a question nobody asked.
+ *
+ * The status list is fetched on mount rather than on hover the way the status
+ * picker's is: hover cannot decide whether to show a button at all. One extra
+ * read per card the sidebar already opened for.
+ */
+function CardRfqaButton({ task, query, onSaid, ask }: {
+  task: ProviderTask; query: string; onSaid: (s: string) => void;
+  ask: (spec: { title: string; body?: string; confirmLabel?: string; danger?: boolean }) => Promise<boolean>;
+}) {
+  const [statuses, setStatuses] = useState<CuStatus[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let live = true;
+    if (!task.listId) { setStatuses([]); return; }
+    void api.clickupList(task.listId)
+      .then((r) => { if (live) setStatuses(r?.ok ? (r.statuses ?? []) : []); })
+      .catch(() => { if (live) setStatuses([]); });
+    return () => { live = false; };
+  }, [task.listId]);
+
+  const target = statuses ? rfqaStatus(statuses, task.status) : undefined;
+  if (!target) return null;
+
+  const move = async () => {
+    if (busy) return;
+    const said = await ask({
+      title: `Move ${query} to Ready for QA and unassign everyone?`,
+      confirmLabel: "Move to RfQA",
+    });
+    if (!said) return;
+    setBusy(true);
+    onSaid("moving…");
+    // One request: the same write the status picker and the people picker each
+    // make half of — see cardMove's note on the three-call version racing its
+    // own `updated` stamp.
+    const rem = (task.people ?? []).map((p) => p.id).filter((n): n is number => n != null);
+    const r = await api.clickupCard(task.id, { status: target, rem }, task.updated)
+      .catch(() => ({ ok: false, error: "Could not reach the server" }));
+    setBusy(false);
+    onSaid(r.ok ? `now ${target} · unassigned` : `!${r.error || "ClickUp refused that"}`);
+    if (r.ok) forgetCard(query);
+  };
+
+  return (
+    <button onClick={() => { void move(); }} disabled={busy}
+      className="agx-btn text-[10.5px] px-2 py-0.5 rounded disabled:opacity-50"
+      title={`Move to ${target} and unassign everyone`}
+      style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
+      Move to RfQA
+    </button>
+  );
+}
 function CardFacts({ d, root }: { d: PrDetail; root: string }) {
   const setup = useClickupSetup();
+  const { ask, dialog } = useDialogs();
   /* Whether the agent here can post to Slack — see server/src/slackreach.ts.
      Asked once per mount rather than baked in: somebody connects the
      integration without restarting agentglass, and a button that only appears
@@ -7592,6 +7651,7 @@ function CardFacts({ d, root }: { d: PrDetail; root: string }) {
                 style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
                 Note on card
               </button>
+              <CardRfqaButton task={task} query={query} onSaid={setSaid} ask={ask} />
               {said && <span className="text-[10px]" style={{ color: said.startsWith("!") ? "var(--warning)" : "var(--success)" }}>{said.replace(/^!/, "")}</span>}
             </div>
 
@@ -7660,6 +7720,7 @@ function CardFacts({ d, root }: { d: PrDetail; root: string }) {
           </>
         )}
       </div>
+      {dialog}
     </SidebarSection>
   );
 }
