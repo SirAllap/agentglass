@@ -662,8 +662,8 @@ export function Btn({ children, onClick, disabled, danger, primary, ok, warn, ti
    * Every action in this panel is a round trip through `gh`, which is a second
    * or two on a good day, and the only feedback was the button going grey — the
    * same grey it wears when it is disabled for a reason that has nothing to do
-   * with you. Reported as the worst thing about the app: "we have to give
-   * feedback on async requests, ALWAYS".
+   * with you. An async request with no feedback of its own is the defect, on
+   * every button, every time.
    *
    * The spinner goes IN the button, before the label, and the label stays: a
    * control that swaps its words for "Working…" moves everything beside it, and

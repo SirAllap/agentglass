@@ -263,8 +263,8 @@ export function PluginsPane({ open, focus }: {
       {/* THE BOARD, and it used to be a shelf: a tinted, bordered zone with
           every card stacked one-per-row inside it. That zone was doing the
           job the cards should do — one box holding boxes reads as a single
-          object with a wall of text in it, which is what "so blended with
-          settings that it confuses" was describing. The cards are the shape
+          object with a wall of text in it, blended into the settings around
+          it until it was hard to tell apart. The cards are the shape
           now; there is nothing behind them but the page. */}
       <div className="flex items-center gap-2.5 pb-3 flex-wrap">
         <span className="text-[13.5px] font-semibold" style={{ color: "var(--text)" }}>Installed</span>

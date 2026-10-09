@@ -68,9 +68,9 @@ export const CHIP = "agx-chip text-[11px] px-2.5 min-h-[28px] inline-flex items-
  *
  * A toolbar toggle is transparent until it is on — the tint IS the state. A
  * control that is always available (the repo picker, the link to GitHub) has no
- * on-state to show, and transparent turns it into grey text: the report was
- * that it no longer looked like a control at all, about a header where two of
- * them had become captions with arrows after them.
+ * on-state to show, and transparent turns it into grey text that no longer
+ * reads as a control: in one header two of them had become captions with
+ * arrows after them.
  */
 export const CHIP_SURFACE = {
   background: "color-mix(in srgb, var(--text) 5%, transparent)",

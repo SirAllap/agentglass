@@ -1694,9 +1694,9 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
           {/* One button, and it opens the pull request.
               It used to perform the lane's action — Merge on a green card,
               Re-run on a red one — and a board is a place you scan and point
-              at, not a place to press Merge from. Reported after pressing
-              "Re-run failed" by accident, twice over, on a card that was under
-              the pointer for a different reason. The verdict still travels: the
+              at, not a place to press Merge from: a card under the pointer for
+              a different reason took an accidental Re-run, twice over. The
+              verdict still travels: the
               lane and its sentence say what wants doing, and the page that can
               do it is one click away. */}
           Open{act === "merge" ? " to merge" : act === "rerun" ? " to re-run" : ""} →
