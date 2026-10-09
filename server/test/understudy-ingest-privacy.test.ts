@@ -18,14 +18,35 @@
  * Both tests use a jail with its own terms file, so the suite never reads the
  * developer's real one and never writes near their real policy.
  */
-import { describe, expect, test, beforeAll } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync } from "node:fs";
+import { describe, expect, test, beforeAll, afterAll } from "bun:test";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 let jail: string;
 let U: typeof import("../src/understudy.ts");
 let ING: typeof import("../src/understudy-ingest.ts");
+
+/* bun runs every file in ONE process. The ingest compiles its rules into
+   `$XDG_CONFIG_HOME/agentglass/policy`, and `ask()` reads them back from the
+   same place at call time — so an XDG_CONFIG_HOME left pointing at this jail
+   handed its rules to whichever test asked the bank a question next
+   (seat-recall's "empty bank" answered with a rule). Put back what was found. */
+const was = {
+  db: process.env.AGENTGLASS_DB,
+  xdg: process.env.XDG_CONFIG_HOME,
+  terms: null as string | null,
+};
+const restore = (k: "AGENTGLASS_DB" | "XDG_CONFIG_HOME", v: string | undefined) => {
+  if (v === undefined) delete process.env[k]; else process.env[k] = v;
+};
+
+afterAll(() => {
+  restore("AGENTGLASS_DB", was.db);
+  restore("XDG_CONFIG_HOME", was.xdg);
+  U?.__setPrivateTermsPath(was.terms);
+  rmSync(jail, { recursive: true, force: true });
+});
 
 beforeAll(async () => {
   jail = mkdtempSync(join(tmpdir(), "agx-ingest-privacy-"));
@@ -35,6 +56,7 @@ beforeAll(async () => {
   process.env.XDG_CONFIG_HOME = join(jail, "config");
   U = await import("../src/understudy.ts");
   ING = await import("../src/understudy-ingest.ts");
+  was.terms = U.__privateTermsPath();
 });
 
 const writeTerms = (lines: string[]) => {
