@@ -22,6 +22,13 @@ const FILES = [
   "src/components/plugins/CanvasBoard.tsx",
   "src/components/plugins/canvasRead.ts",
   "src/components/plugins/canvasBoard.css",
+  "src/components/plugins/CanvasSheet.tsx",
+  "src/components/plugins/CanvasDock.tsx",
+  "src/components/plugins/canvasSheet.css",
+  "src/components/plugins/canvasDock.css",
+  "src/lib/canvasOrbit.ts",
+  "src/lib/canvasFlash.ts",
+  "src/lib/canvasView.ts",
 ] as const;
 const sources = new Map(await Promise.all(FILES.map(async (f) => [f, await Bun.file(`${ROOT}${f}`).text()] as const)));
 
@@ -33,7 +40,7 @@ export function strip(src: string): string {
 export const FORBIDDEN: { name: string; re: RegExp; sample: string }[] = [
   { name: "innerHTML and its kin", re: /\b(?:innerHTML|outerHTML|insertAdjacentHTML|dangerouslySetInnerHTML|srcdoc)\b/, sample: "el.innerHTML = x" },
   { name: "a DOM lookup (a scene id must never reach a selector)", re: /\b(?:querySelector(?:All)?|getElementById|getElementsBy\w+|closest|matches)\s*\(/, sample: 'root.querySelector("#" + id)' },
-  { name: "an image", re: /<img\b|\bnew Image\b|\bbackgroundImage\b|\burl\(/, sample: "<img src={x} />" },
+  { name: "an image", re: /<img\b|\bnew Image\b|\bbackgroundImage\b|\burl\((?!#)/, sample: "<img src={x} />" },
   { name: "a link", re: /<a[\s>]|\bhref\s*=|\bopenExternal\b|\bwindow\.open\b|\blocation\s*[.=]/, sample: '<a href="x">' },
   { name: "a frame or embed", re: /<(?:iframe|object|embed|webview|script)\b/i, sample: "<iframe />" },
   { name: "a style built as a string", re: /\bcssText\b|setAttribute\(\s*["']style|\bstyle\s*=\s*\{\s*`|\bstyle\s*=\s*["'{]\s*\w+\s*\+/, sample: "style={`color:${x}`}" },
@@ -107,6 +114,47 @@ describe("what a scene can ask the person", () => {
     expect(view).toContain("askAs");
     expect([...view.matchAll(/(?<![.\w])ask\(/g)].length).toBe(1); // the wrapper itself
     expect(/ask:\s*askAs/.test(view)).toBe(true);
+  });
+});
+
+describe("a sheet and a dock", () => {
+  test("an id attribute in the sheet is made from useId, never from a scene's id", () => {
+    const src = strip(sources.get("src/components/plugins/CanvasSheet.tsx")!);
+    const ids = [...src.matchAll(/\bid=\{([^}]*)\}/g)].map((m) => m[1]!);
+    expect(ids.length).toBeGreaterThan(2);
+    // The hatch's clip id carries the scene id only after it has lost everything but letters and digits, behind the useId.
+    for (const i of ids) expect(i).toMatch(/uid|clip/);
+    expect(src).toMatch(/const clip = `\$\{uid\}-clip-\$\{hx\.id\.replace\(ID_RE, ""\)\}`/);
+    expect(/\bid="/.test(src)).toBe(false);
+  });
+
+  test("the sheet puts no scene text into a style: a tone is a table lookup and the rest is a clamped number", () => {
+    for (const f of ["src/components/plugins/CanvasSheet.tsx", "src/components/plugins/CanvasDock.tsx"] as const) {
+      const src = strip(sources.get(f)!);
+      const lookups = [...src.matchAll(/TONE_(?:COLOR|INK)\[([^\]]+)\]/g)].map((m) => m[1]!);
+      expect(lookups.length, f).toBeGreaterThan(1);
+      expect(lookups.filter((k) => !/^(?:tone(?: === "default" \? "(?:muted|default)" : tone)?|toneOf\(.+\))$/.test(k)), f).toEqual([]);
+      expect(/\bstyle=\{\{[^}]*\bn\.(?:label|text|title|value|hint|unit|chip)\b/.test(src), f).toBe(false);
+    }
+  });
+
+  test("a sheet is paint only: no animation, no transition, no filter, and the svg takes no pointer", () => {
+    const css = strip(sources.get("src/components/plugins/canvasSheet.css")!);
+    expect(/@keyframes|\banimation\b|\btransition\b|\bfilter\b|backdrop-filter|\bblur\(/.test(css)).toBe(false);
+    expect(css).toMatch(/\.cv-svg\s*\{[^}]*pointer-events:\s*none/);
+  });
+
+  test("a fold is clamped where it becomes a height, and a hidden fold is inert", () => {
+    const src = strip(sources.get("src/components/plugins/CanvasDock.tsx")!);
+    expect(src).toMatch(/int\(n\.h, 160, 760/);
+    expect(src).toMatch(/int\(n\.hNarrow, 160, 760/);
+    expect(src).toContain('inert: ""');
+  });
+
+  test("the window draws a gated scene: the flash limiter is between the reducer and the view", () => {
+    const view = strip(sources.get("src/components/plugins/PluginCanvas.tsx")!);
+    expect(view).toMatch(/const drawn = useDrawnScene\(state\.scene, reduced\)/);
+    expect(view).toMatch(/const scene = drawn;/);
   });
 });
 

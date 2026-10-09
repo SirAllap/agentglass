@@ -440,6 +440,60 @@ path) and no plugin CSS. A board holds at most 2 per scene, traces at most 12
 points, bays at most 64 slots and gates at most 60 pips; a `core` or `press` that
 is busy counts as two looping animations (a core spins and pulses, a press has two jaws), a busy token as one. A board holds only parts and edges directly; everything else goes in a part or a bay.
 
+**An instrument sheet** is the third way to draw a live panel, for a plugin whose
+subject is a ring: stations round an orbit, a rate limiter's window, a clock that
+counts to the next poll. A `board` is about what is next to what; a sheet is about
+where on a ring. The plugin says what sits at which angle and the app does the
+projection, the depth, the label columns, the paint and the motion. Angles are
+degrees, 0 = right, growing clockwise, and an angle is below 360, never 360. An
+out-of-range prop refuses the op by name; nothing is clamped into a different
+meaning.
+
+| Type | Lives in | Props (`*` required; ranges inclusive unless "below") |
+|---|---|---|
+| `sheet` | the root, a stack, a row or a `fold`; one per `fit` | `w`* 320-1200, `h`* 200-700 (integers), `fit`* `wide \| narrow`, `material: plain \| inset`, `label` (read aloud), `key` up to 4 `{shape: ring \| dot \| diamond, label}` (the legend, top right) |
+| `orb` | a sheet; at most 1 | `cx`* 0-1200, `cy`* 0-700, `r`* 8-300 (integers), `light` 0 to below 360 (where the lit side faces), `bands` 0-8, `terminator`, `tone`, `halo` |
+| `plane` | a sheet; at most 2 | `cx`*, `cy`*, `rx`* 40-600 (integers), `tilt`* 15-90 (the angle it is seen from: 90 is a circle, 27 an ellipse .454 as tall as wide), `roll` -45 to 45, `depth` 0-1 (near moons grow and far ones shrink by up to 35 percent of it), `label` |
+| `band` | a plane; at most 4 | `r0`*, `r1`* (0.2-1.6 of the plane's `rx`, `r1 > r0`), `from`* 0 to below 360, `to`* above `from` and at most `from + 360` (a sector across 0 is `330` to `390`), `layer: back \| front \| all`, `segments` 1-60 and `lit` 0-`segments` (a 30-sector gate is one node; each segment is at least 1 degree), `tone`, `halo` |
+| `ticks` | a plane; at most 1 | `count`* 8-120, `mark` (every nth is longer), `lit` 0-16 (the last marks before the hand), `passed`, `until` (an epoch in ms) with `period` in seconds (1-86400): the window works out the passed marks and the hand once a second, so a clock costs the plugin no operations; `until` wins over `passed`. `side: out \| in`, `numerals` up to 4 `{at, text}` of 1-3 characters, `tone` |
+| `hatch` | a sheet; at most 2 | `of`* (an orb, or a band of that sheet), `from`*, `to`*, `gap`* 6-24, `angle` 0 to below 180. The lines cover the shape, at most 80 |
+| `reticle` | a plane; at most 1 | `of`* (a token of that plane), `chip` (plain text, top left) |
+| `dock` | the root, a stack or a row | `title`*, `value`, `unit`, `hint`, `hint2`, `tone`, `selected`, `here` (the stop of a journey you are at), `leg: idle \| busy \| flowing` (the trace into it), `action`; holds one `gauge` |
+| `fold` | the root, a stack or a row | `h`* 160-760 and `hNarrow` (the height when the panel is narrow), `open` (the first state), `label`, `action` |
+
+A `token` in a plane gains `at`* (it is refused outside a plane, and a token in a
+plane without it), `size: lg`, `shape: ring \| dot \| diamond`, `halo`, `trail`
+0-12 slices with `trailSpan` 5-120 degrees (a fading tail behind it), `leader:
+left \| right \| below \| none` (its label on a hairline; the app stacks each margin
+column and drops what does not fit, saying how many), `value` and `unit` (a second
+line); its `count` is the number in the moon. An `edge` between two tokens of one
+plane follows the plane; `breakAt` 0-1 with `breakGap` 0.02-0.5 cuts a gap with end
+marks, the open breaker. A `gauge` gains `shape: ticks` (`max` 8-120) and
+`segments` (`max` up to 12), `mark` 0-1 (a tick on an arc, ring or bar: a p95, a
+threshold) and `values`, 1-3 concentric arcs on an arc.
+
+Rules a reviewer can lean on. The window shows the sheet whose `fit` matches the
+PANEL's width (900 px is the line), so build the narrow one rather than hoping the
+wide one scales. A fold's `h`, `hNarrow` and `open` are set when it is added and a
+`set` of them is refused: a control never moves under the pointer because a
+plugin toggled a drawer. Whether it is open is the person's, kept across a
+reconnect; the plugin hears of it only through the fold's `action`. Pressing a
+dock opens the first fold and runs the dock's `action`. A sheet costs what it
+draws: every SVG element is priced (`halo` 1, a trail slice 1, ticks and bands
+and hatches one path each however many marks), at most 320 per sheet, and a `set`
+that would pass it, on this node or on the plane it sits on, is refused with the
+number. What a node points at (a reticle's token, a hatch's shape, an edge's
+ends) is checked on the whole scene after every batch, so a `move` cannot leave
+one dangling, and a `remove` takes what pointed at the node with it. A moon is
+never drawn larger than 24 units. A moon that gets a new `at` travels to it (a
+tween, 420 ms, counted among the 64) and jumps under reduced motion. The props
+that carry a lot of light (`tone`, `lit`, `halo`, `light`, `terminator`,
+`material`, `shape`, `leg`, `selected`, `here`) are drawn at most once per 400 ms
+per node, 1 s under reduced motion, whatever rate they arrive at. In dark `halo` is
+a soft disc behind the thing, in light the same flag is an accent ring: one
+prop, two looks. Nothing in a sheet takes the pointer except a `dock` and a
+`fold`'s bar, and nothing can be placed or painted outside the sheet's box.
+
 What the app does so the plugin does not have to: lays everything out, routes the
 wires, maps `tone` and `icon` (fixed lists) onto the theme, light and dark, and
 draws it all in the house style. Under `prefers-reduced-motion` every duration is
@@ -447,7 +501,7 @@ draws it all in the house style. Under `prefers-reduced-motion` every duration i
 animate, everything pauses when the panel is hidden, at most 64 loops and 64
 one-shots run at once (the rest draw still), and `ms` is at most 2000.
 
-What it holds: 400 nodes, 128 KB of scene, 6 levels deep, labels of at most 120
+What it holds: 400 nodes, 128 KB of scene, 8 levels deep, labels of at most 120
 characters, a `disclosure` of at most 8000, 100 ops and 64 KB per request (the
 body is cut off at the limit before it is parsed), and a budget of 60 ops a second
 with a burst of 200 (a request costs at least one, so a loop of empty ones is

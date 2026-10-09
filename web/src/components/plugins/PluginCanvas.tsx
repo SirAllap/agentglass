@@ -9,13 +9,17 @@ import {
   pileSplit, planFlip, rectOrAncestor, routeEdge, sparkPoints, type Point, type Rect,
 } from "../../lib/canvasGeometry.ts";
 import { CanvasMotion, FLOW_BUSY_MS, FLOW_MARKS, TRAVEL_MS } from "../../lib/canvasMotion.ts";
+import { LUMA_MS, LUMA_MS_REDUCED, gateScene, type GateState } from "../../lib/canvasFlash.ts";
+import { useAtTween, usePanelFit } from "../../lib/canvasView.ts";
 import { TONE_COLOR, TONE_INK } from "../../lib/pluginTones.ts";
 import { ICON } from "../../lib/iconSize.ts";
 import { useDialogs, type ConfirmSpec } from "../ConfirmDialog.tsx";
 import { Spinner } from "../Spinner.tsx";
 import { Button as HouseButton, CHIP, CHIP_SURFACE, CHIP_SURFACE_CLS, EDGE, chipTone } from "../workspace/Chrome.tsx";
 import { boardLeaf, type BoardHandle } from "./CanvasBoard.tsx";
-import { fixed, fmt, iconOf, num, str, toneOf } from "./canvasRead.ts";
+import { CanvasSheet } from "./CanvasSheet.tsx";
+import { Dock, Fold, GaugeGlyph, isGlyphShape, useFoldPhaseOf } from "./CanvasDock.tsx";
+import { fixed, fmt, iconOf, int, num, str, toneOf } from "./canvasRead.ts";
 import { CanvasGlyph } from "./panelGlyph.tsx";
 import { PluginNotRunning } from "./PluginNotRunning.tsx";
 
@@ -135,6 +139,31 @@ function useNow(tick: boolean): number {
   return now;
 }
 
+/**
+ * The scene as it is DRAWN: luminance-bearing props (an orb's light, a lit
+ * band, a halo, a tone) take a new value at most once per 400 ms per node, 1 s
+ * under reduced motion (canvasFlash.ts). The scene the reducer holds stays
+ * exact; a plugin that flips a big state sixty times a second cannot flash the
+ * window. The held value is applied by a timer, not by the next frame.
+ */
+function useDrawnScene(scene: CanvasScene, reduced: boolean): CanvasScene {
+  const gate = useRef<GateState | undefined>(undefined);
+  const [tick, setTick] = useState(0);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const out = useMemo(() => {
+    void tick;
+    const r = gateScene(gate.current, scene, Date.now(), reduced ? LUMA_MS_REDUCED : LUMA_MS);
+    gate.current = r.state;
+    return { shown: r.state.shown, nextAt: r.nextAt };
+  }, [scene, reduced, tick]);
+  useEffect(() => {
+    clearTimeout(timer.current);
+    if (out.nextAt !== undefined) timer.current = setTimeout(() => setTick((t) => t + 1), Math.max(0, out.nextAt - Date.now()));
+    return () => clearTimeout(timer.current);
+  }, [out]);
+  return out.shown;
+}
+
 // ---------------------------------------------------------------- the canvas
 
 interface Pending { before: Map<string, Rect> | null; ops: CanvasOp[] }
@@ -161,7 +190,8 @@ export function PluginCanvas({ plugin, panel, running, onAction }: Props) {
   const motion = motionRef.current;
 
   const unseen = useUnseen(wrapRef);
-  const { scene } = state;
+  const drawn = useDrawnScene(state.scene, reduced);
+  const scene = drawn;
   const kids = useMemo(() => childrenIndex(scene), [scene]);
   const parentOf = useMemo(() => {
     const m = new Map<string, string | undefined>();
@@ -171,8 +201,20 @@ export function PluginCanvas({ plugin, panel, running, onAction }: Props) {
   const loops = useMemo(() => loopingIds(scene, reduced), [scene, reduced]);
   const byId = useMemo(() => new Map(scene.map((n) => [n.id, n] as const)), [scene]);
   const traces = useMemo(() => boardRoutes(scene), [scene]);
-  const hasCountdown = useMemo(() => scene.some((n) => n.type === "countdown"), [scene]);
+  const edges = useMemo(() => scene.filter((n) => n.type === "edge"), [scene]);
+  // A countdown, and a clock's ticks that count to a time, need the 1 Hz ticker; nothing else does.
+  const hasCountdown = useMemo(() => scene.some((n) => n.type === "countdown" || (n.type === "ticks" && n.until !== undefined)), [scene]);
   const now = useNow(hasCountdown && !unseen);
+  const fit = usePanelFit(wrapRef);
+  const at = useAtTween(scene, reduced, unseen);
+  // Whether a fold is open is the window's: it survives a reconnect and is reset by nobody but the plugin or panel changing.
+  const [folds, setFolds] = useState<ReadonlyMap<string, boolean>>(new Map());
+  useEffect(() => { setFolds(new Map()); }, [plugin, panel]);
+  const setFold = useCallback((id: string, open: boolean) => setFolds((m) => new Map(m).set(id, open)), []);
+  const revealFold = useCallback(() => {
+    const f = sceneRef.current.find((n) => n.type === "fold");
+    if (f) setFolds((m) => (m.get(f.id) ?? f.open === true) ? m : new Map(m).set(f.id, true));
+  }, []);
 
   const stopped = !running || state.gone || (state.loaded && !state.running);
 
@@ -212,10 +254,10 @@ export function PluginCanvas({ plugin, panel, running, onAction }: Props) {
     const parents = new Map<string, string | undefined>();
     for (const n of sc) parents.set(n.id, n.parent);
     const byEdge = new Map<string, Point[]>();
-    const boardIds = new Set(sc.filter((b) => b.type === "board").map((b) => b.id));
+    const boardIds = new Set(sc.filter((b) => b.type === "board" || b.type === "plane").map((b) => b.id));
     for (const e of sc) {
       if (e.type !== "edge") continue;
-      // A board's traces are placed by the board, in its own units.
+      // A board's traces are placed by the board, in its own units; an edge in a plane follows the plane, drawn by its sheet.
       if (e.parent !== undefined && boardIds.has(e.parent)) continue;
       const from = str(e.from), to = str(e.to);
       if (!from || !to || from === to) continue;
@@ -402,7 +444,8 @@ export function PluginCanvas({ plugin, panel, running, onAction }: Props) {
   // The plugin's name on every question it asks: a dialog is the app's own
   // chrome, and a scene must not be able to borrow its voice anonymously.
   const askAs = useCallback((spec: ConfirmSpec) => ask({ ...spec, title: `${plugin}: ${spec.title}` }), [ask, plugin]);
-  const ctx: Ctx = { kids, loops, now, stopped, refFor, onAction, ask: askAs, scene, routes: traces, marks, boards, draw: drawNode };
+  const view: CanvasView = { fit, reduced, now, at, folds, setFold, revealFold };
+  const ctx: Ctx = { kids, loops, now, stopped, refFor, onAction, ask: askAs, scene, edges, routes: traces, marks, boards, draw: drawNode, view };
 
   const roots = kids.get(undefined) ?? [];
   const empty = !state.loaded || (roots.length === 0 && !scene.some((n) => n.type === "edge"));
@@ -468,6 +511,20 @@ function Wires({ scene, routes, loops, marks }: { scene: CanvasScene; routes: Ro
 
 // ---------------------------------------------------------------- nodes
 
+/** What the window knows about a sheet and a fold that the scene does not say. */
+export interface CanvasView {
+  fit: "wide" | "narrow";
+  reduced: boolean;
+  now: number;
+  /** The angle each moon is drawn at while it travels. */
+  at: ReadonlyMap<string, number>;
+  /** Folds the person has opened or closed; absent = what the plugin added it as. */
+  folds: ReadonlyMap<string, boolean>;
+  setFold: (id: string, open: boolean) => void;
+  /** A dock was pressed: open the first fold if it is shut. */
+  revealFold: () => void;
+}
+
 export interface Ctx {
   kids: Map<string | undefined, CanvasNode[]>;
   loops: ReadonlySet<string>;
@@ -477,6 +534,8 @@ export interface Ctx {
   onAction: CanvasActionFn;
   ask: (spec: ConfirmSpec) => Promise<boolean>;
   scene: CanvasScene;
+  /** The edges of the scene (`kids` leaves them out). */
+  edges: readonly CanvasNode[];
   /** Every board trace, in board units (`boardRoutes`). */
   routes: ReadonlyMap<string, Point[]>;
   marks: Map<string, SVGElement>;
@@ -485,6 +544,7 @@ export interface Ctx {
   draw: (n: CanvasNode, ctx: Ctx) => ReactNode;
   /** Inside a board: leaves take the board's look. */
   inBoard?: boolean;
+  view: CanvasView;
 }
 
 const grown = (n: CanvasNode): CSSProperties => {
@@ -581,6 +641,12 @@ function NodeView({ node: n, ctx }: { node: CanvasNode; ctx: Ctx }): ReactNode {
     }
     case "gauge":
       return <Gauge node={n} refCb={ref} />;
+    case "dock":
+      return <Dock node={n} ctx={ctx} refCb={ref} />;
+    case "fold":
+      return <Fold node={n} ctx={ctx} refCb={ref} />;
+    case "sheet":
+      return <SheetHost node={n} ctx={ctx} />;
     case "countdown":
       return (
         <div ref={ref} className="min-w-0">
@@ -637,6 +703,17 @@ function Lane({ node: n, ctx, refCb, loop }: { node: CanvasNode; ctx: Ctx; refCb
   );
 }
 
+/** A sheet is drawn only when its `fit` is the panel's; the other stays in the scene and costs nothing. */
+function SheetHost({ node: n, ctx }: { node: CanvasNode; ctx: Ctx }) {
+  const phase = useFoldPhaseOf();
+  if (n.fit !== ctx.view.fit) return null;
+  return (
+    <div ref={ctx.refFor(n.id)} className="min-w-0 cv-sheet-host" style={{ flex: `0 1 ${int(n.w, 320, 1200, 776)}px`, maxWidth: "100%" }}>
+      <CanvasSheet sheet={n} kids={ctx.kids} edges={ctx.edges} view={{ now: ctx.view.now, phase, at: ctx.view.at }} />
+    </div>
+  );
+}
+
 function Gauge({ node: n, refCb }: { node: CanvasNode; refCb: (el: HTMLElement | null) => void }) {
   const value = num(n.value) ?? 0, max = num(n.max) ?? 1;
   const f = fraction(value, max);
@@ -644,7 +721,9 @@ function Gauge({ node: n, refCb }: { node: CanvasNode; refCb: (el: HTMLElement |
   const label = str(n.label);
   const c = DIAL / 2, r = c - 6;
   let shape: ReactNode;
-  if (n.shape === "arc") {
+  if (isGlyphShape(n)) {
+    shape = <GaugeGlyph node={n} />;
+  } else if (n.shape === "arc") {
     shape = (
       <svg width={DIAL} height={DIAL} viewBox={`0 0 ${DIAL} ${DIAL}`} aria-hidden>
         <path d={arcPath(c, c, r, -135, 135)} fill="none" stroke="var(--surface-line)" strokeWidth={5} strokeLinecap="round" />
@@ -676,7 +755,7 @@ function Gauge({ node: n, refCb }: { node: CanvasNode; refCb: (el: HTMLElement |
       </div>
     );
   }
-  const dial = n.shape === "arc" || n.shape === "ring";
+  const dial = isGlyphShape(n) || n.shape === "arc" || n.shape === "ring";
   return (
     <div ref={refCb} role="meter" aria-label={label ?? "gauge"} aria-valuemin={0} aria-valuemax={max} aria-valuenow={value}
       className={`min-w-0 flex gap-2 ${dial ? "items-center" : "flex-col"}`}>

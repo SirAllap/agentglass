@@ -25,7 +25,12 @@
  * layout: a machine is about where things are, and measured routing cannot say
  * "this trace runs under that part".
  *
- * What a board cannot do, chosen: no rotation, no free drawing (a trace is a
+ * A scene can also hold a SHEET (canvasSheet.ts): an SVG instrument of fixed
+ * size, a body and a tilted ring of stations with a clock round it. A sheet
+ * does tilt and roll, but only as two numbers on a plane, never as a transform
+ * the plugin writes; what a board cannot do holds for it too.
+ *
+ * What a board cannot do, chosen: no rotation of a part, no free drawing (a trace is a
  * short list of integer points, never a path string), and no plugin CSS. A
  * part's box is not checked against its board when it is written, because a
  * later `set` on the board could make it wrong; the window clips to the board.
@@ -37,51 +42,19 @@
  * one-shots and `activity` states the app animates itself, and every one of
  * them collapses to nothing under `prefers-reduced-motion`.
  */
-import { TONES, type Tone } from "./pluginUi.ts";
+import { ACTION_ID_RE, CANVAS_ACTIVITY, CANVAS_ID_RE, CANVAS_LIMITS, INVISIBLE, SHEET_LIMITS, action, activity, bool, idRef, num, oneOf, shortStr, toneCheck, unitStr, type CanvasActivity, type Check } from "./canvasChecks.ts";
 
-export const CANVAS_LIMITS = {
-  /** Nodes in one scene. A busy board is dozens; 400 is a runaway plugin. */
-  nodes: 400,
-  /** The scene serialised, measured after every apply. 400 nodes of the
-   *  longest strings would otherwise be megabytes held per panel. */
-  sceneBytes: 128 * 1024,
-  /** Nesting under the root. */
-  depth: 6,
-  /** Any short string: labels, titles, units. */
-  label: 120,
-  /** `disclosure` text, drawn as plain text in a <pre>. */
-  disclosure: 8_000,
-  spark: 120,
-  options: 8,
-  /** Operations in one POST, and the body they arrive in, checked BEFORE it
-   *  is parsed (server/src/plugin-canvas.ts). */
-  batchOps: 100,
-  bodyBytes: 64 * 1024,
-  /** Longest motion a plugin may ask for. */
-  ms: 2_000,
-  /** Looping animations at once (a flowing edge is CANVAS_FLOW_MARKS of them).
-   *  Past it they draw still: a hundred spinning rings is a fan, not information. */
-  loops: 64,
-  /** Simultaneous one-shot motions (`move`, `animate`) the window runs. */
-  tweens: 64,
-  payloadBytes: 8_192,
-  /** Boards in one scene: a stage is a machine, and two is a machine and the
-   *  thing it is compared with. */
-  boards: 2,
-  /** Points in one trace (2 is a straight run, 12 is a wiring harness). */
-  points: 12,
-  /** Slots in one bay, `cols * rows`. The window draws a slot per cell. */
-  slots: 64,
-  /** Pips in one gate, each a cell of the window's own drawing. */
-  pips: 60,
-} as const;
+import { ADD_ONLY, EDGE_EXTRA, GAUGE_EXTRA, GAUGE_SHAPES, SHEET_CONTAINERS, SHEET_REQUIRED, SHEET_SPEC, SHEET_TYPES, TOKEN_EXTRA, contextError, dependants, invariantError, sceneError, sheetPlaceError } from "./canvasSheet.ts";
+
+export { CANVAS_ACTIVITY, CANVAS_ID_RE, CANVAS_LIMITS, SHEET_LIMITS };
+export type { CanvasActivity };
+
+
 
 /** The board's own units: a part and a point are placed in these, and the
  *  window scales the stage as a whole. */
 export const CANVAS_BOARD_MAX = { w: 2400, h: 1600 } as const;
 
-export const CANVAS_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
-const ACTION_ID_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
 
 /** A word the app maps to its own glyph. A plugin ships no image. */
 export const CANVAS_ICONS = ["dot", "lock", "unlock", "check", "cross", "bolt", "alert", "clock", "eye", "database", "shield", "arrow", "gate", "spark"] as const;
@@ -91,16 +64,15 @@ export type CanvasIcon = (typeof CANVAS_ICONS)[number];
 export const CANVAS_EASINGS = ["linear", "ease", "ease-in", "ease-out", "ease-in-out", "spring"] as const;
 export type CanvasEasing = (typeof CANVAS_EASINGS)[number];
 
-export const CANVAS_ACTIVITY = ["idle", "busy", "flowing"] as const;
-export type CanvasActivity = (typeof CANVAS_ACTIVITY)[number];
 
-export const CANVAS_CONTAINERS = ["stack", "row", "lane", "board", "part", "bay"] as const;
+export const CANVAS_CONTAINERS = ["stack", "row", "lane", "board", "part", "bay", ...SHEET_CONTAINERS] as const;
 export const CANVAS_TYPES = [
   "stack", "row", "lane", "board", "part", "bay",
   "token", "label", "counter", "stat", "badge", "icon", "spark", "gauge", "countdown",
   "edge",
   "button", "segmented", "disclosure",
   "gate", "press", "core", "item", "lamp",
+  ...SHEET_TYPES,
 ] as const;
 export type CanvasType = (typeof CANVAS_TYPES)[number];
 
@@ -137,37 +109,10 @@ type Err = { ok: false; error: string };
 
 // ---------------------------------------------------------------- props
 
-/** A validator returns the cleaned value, or `undefined` for "not valid".
- *  `null` from the plugin means "unset" and is handled before these run. */
-type Check = (v: unknown) => unknown;
-
-/** Control, zero-width and bidi-override characters: a label that reads one
- *  way and sorts or pastes another is how a "Cancel" gets to say "Allow". */
-const INVISIBLE = /[\p{Cc}\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/u;
-const shortStr: Check = (v) => (typeof v === "string" && v.length <= CANVAS_LIMITS.label && !INVISIBLE.test(v) ? v : undefined);
-const oneOf = <T extends string>(allowed: readonly T[]): Check => (v) =>
-  typeof v === "string" && (allowed as readonly string[]).includes(v) ? v : undefined;
-const toneCheck: Check = oneOf(TONES as readonly Tone[]);
-const bool: Check = (v) => (typeof v === "boolean" ? v : undefined);
-const num = (min: number, max: number, int = false): Check => (v) =>
-  typeof v === "number" && Number.isFinite(v) && v >= min && v <= max && (!int || Number.isInteger(v)) ? v : undefined;
-const idRef: Check = (v) => (typeof v === "string" && CANVAS_ID_RE.test(v) ? v : undefined);
 const iconCheck: Check = oneOf(CANVAS_ICONS);
-const activity: Check = oneOf(CANVAS_ACTIVITY);
 const gap: Check = oneOf(["sm", "md", "lg"] as const);
 const grow: Check = num(1, 4, true);
-const size: Check = oneOf(["sm", "md"] as const);
-
-const action: Check = (v) => {
-  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
-  const a = v as Record<string, unknown>;
-  if (typeof a.id !== "string" || !ACTION_ID_RE.test(a.id)) return undefined;
-  if (a.payload === undefined) return { id: a.id };
-  let json: string;
-  try { json = JSON.stringify(a.payload); } catch { return undefined; }
-  if (typeof json !== "string" || json.length > CANVAS_LIMITS.payloadBytes) return undefined;
-  return { id: a.id, payload: JSON.parse(json) };
-};
+const size: Check = oneOf(["sm", "md", "lg"] as const);
 
 const sparkValues: Check = (v) => {
   if (!Array.isArray(v) || v.length > CANVAS_LIMITS.spark) return undefined;
@@ -213,9 +158,6 @@ const points: Check = (v) => {
   return out;
 };
 
-/** A unit sits last in its element, so a bidi override there reorders what follows it. */
-const unitStr: Check = (v) => (typeof v === "string" && v.length <= 16 && !INVISIBLE.test(v) ? v : undefined);
-
 const text = (max: number): Check => (v) => (typeof v === "string" && v.length <= max ? v : undefined);
 
 /** Props each type accepts. Anything else is refused by name, so a typo and an
@@ -224,16 +166,16 @@ const SPEC: Record<CanvasType, Record<string, Check>> = {
   stack: { gap, grow },
   row: { gap, grow, align: oneOf(["start", "center", "between"] as const), wrap: bool },
   lane: { title: shortStr, state: oneOf(["open", "closed", "sealed"] as const), layout: oneOf(["list", "grid", "pile"] as const), icon: iconCheck, activity, tone: toneCheck, grow },
-  token: { label: shortStr, tone: toneCheck, size, count: num(0, 1e9, true), icon: iconCheck, activity },
+  token: { label: shortStr, tone: toneCheck, size, count: num(0, 1e9, true), icon: iconCheck, activity, ...TOKEN_EXTRA },
   label: { text: shortStr, tone: toneCheck, size, mono: bool },
   counter: { label: shortStr, value: num(-1e12, 1e12), unit: unitStr, tone: toneCheck, digits: num(0, 6, true), prefix: (v) => (typeof v === "string" && v.length <= 4 && !INVISIBLE.test(v) ? v : undefined), style: oneOf(["plain", "odometer"] as const) },
   stat: { label: shortStr, value: shortStr, hint: shortStr, tone: toneCheck },
   badge: { text: shortStr, tone: toneCheck },
   icon: { icon: iconCheck, tone: toneCheck, label: shortStr },
   spark: { values: sparkValues, tone: toneCheck },
-  gauge: { shape: oneOf(["arc", "ring", "bar", "pips", "needle"] as const), value: num(0, 1e9), max: num(1, 1e9), label: shortStr, tone: toneCheck, digits: num(0, 4, true), hideMax: bool },
+  gauge: { shape: oneOf(["arc", "ring", "bar", "pips", "needle", ...GAUGE_SHAPES] as const), ...GAUGE_EXTRA, value: num(0, 1e9), max: num(1, 1e9), label: shortStr, tone: toneCheck, digits: num(0, 4, true), hideMax: bool },
   countdown: { until: num(0, 8.64e15), label: shortStr, tone: toneCheck, shape: oneOf(["text", "ring"] as const), period: num(1, 86_400, true) },
-  edge: { from: idRef, to: idRef, activity, tone: toneCheck, label: shortStr, kind: oneOf(["trace", "control", "seal"] as const), points },
+  edge: { from: idRef, to: idRef, activity, tone: toneCheck, label: shortStr, kind: oneOf(["trace", "control", "seal"] as const), points, ...EDGE_EXTRA },
   button: { label: shortStr, action, tone: oneOf(["primary", "default", "danger"] as const), confirm: shortStr, disabled: bool },
   segmented: { label: shortStr, options, value: (v) => (typeof v === "string" && ACTION_ID_RE.test(v) ? v : undefined), action, style: oneOf(["chips", "lever"] as const) },
   disclosure: { title: shortStr, text: text(CANVAS_LIMITS.disclosure), open: bool },
@@ -245,6 +187,7 @@ const SPEC: Record<CanvasType, Record<string, Check>> = {
   core: { title: shortStr, value: shortStr, unit: unitStr, hint: shortStr, hint2: shortStr, activity, tone: toneCheck },
   item: { title: shortStr, rank: num(1, 999, true), meta: shortStr, badge: shortStr, badgeTone: toneCheck, dim: bool, selected: bool, action },
   lamp: { tone: toneCheck, label: shortStr, on: bool },
+  ...SHEET_SPEC,
 };
 
 /** What a type needs before it can be drawn. */
@@ -253,6 +196,7 @@ const REQUIRED: Partial<Record<CanvasType, string[]>> = {
   icon: ["icon"], spark: ["values"], gauge: ["shape", "value", "max"], countdown: ["until"],
   edge: ["from", "to"], button: ["label", "action"], segmented: ["options", "value", "action"], disclosure: ["title", "text"],
   board: ["w", "h"], part: ["x", "y", "w", "h"], bay: ["cols", "rows"], gate: ["state"], item: ["title"],
+  ...SHEET_REQUIRED,
 };
 
 const isContainer = (t: CanvasType) => (CANVAS_CONTAINERS as readonly string[]).includes(t);
@@ -273,15 +217,22 @@ function placeError(w: Working, n: CanvasNode, parent: CanvasNode | undefined, m
   if (n.type === "part" && pt !== "board") return "a part lives directly in a board";
   if (n.type === "bay" && pt !== "part") return "a bay lives directly in a part";
   if (pt === "bay" && n.type !== "token") return "a bay holds only tokens";
-  if (n.type === "edge" && parent && pt !== "board") return "an edge lives at the root or directly in a board";
+  if (n.type === "edge" && parent && pt !== "board" && pt !== "plane") return "an edge lives at the root, directly in a board or directly in a plane";
   if (n.type === "edge" && n.points !== undefined && pt !== "board") return "an edge with points lives directly in a board";
-  return undefined;
+  return sheetPlaceError(n, parent);
 }
 
 /** A bay's grid is checked on what the node would be, not on the op. */
 function slotsError(n: CanvasNode): string | undefined {
   return n.type === "bay" && typeof n.cols === "number" && typeof n.rows === "number" && n.cols * n.rows > CANVAS_LIMITS.slots
     ? `a bay holds at most ${CANVAS_LIMITS.slots} slots (cols x rows)` : undefined;
+}
+
+/** Everything a node may be given where it sits: its place, its slots, what it
+ *  may say in that place and the rules that span its props. Run on the node as
+ *  it WOULD be, for add, set and move alike. */
+function shapeError(w: Working, n: CanvasNode, parent: CanvasNode | undefined, moving: boolean): string | undefined {
+  return placeError(w, n, parent, moving) ?? slotsError(n) ?? contextError(n, parent) ?? invariantError(n);
 }
 
 /** A gauge never reads past full: clamped where the prop is written, add or set. */
@@ -307,12 +258,28 @@ function cleanProps(type: CanvasType, raw: Record<string, unknown>, what: string
 
 // ---------------------------------------------------------------- reducer
 
+/** The working copy of a scene a batch changes. Copy on write: a node is
+ *  cloned the first time an op touches it and not before, so what comes out
+ *  shares every untouched node with what went in. The window memoises on that
+ *  (a sheet whose nodes are the same objects is not redrawn), and the input is
+ *  never mutated. The cost: `scene` out holds the caller's node objects, so a
+ *  caller must treat a node as frozen. */
 class Working {
   byId = new Map<string, CanvasNode>();
   order: CanvasNode[];
+  private readonly owned = new Set<CanvasNode>();
   constructor(scene: CanvasScene) {
-    this.order = scene.map((n) => ({ ...n }));
+    this.order = [...scene];
     for (const n of this.order) this.byId.set(n.id, n);
+  }
+  /** The node to write to: a private copy, in the same place in the scene. */
+  own(n: CanvasNode): CanvasNode {
+    if (this.owned.has(n)) return n;
+    const c = { ...n };
+    this.order[this.order.indexOf(n)] = c;
+    this.byId.set(c.id, c);
+    this.owned.add(c);
+    return c;
   }
   kids(parent: string | undefined): CanvasNode[] { return this.order.filter((n) => (n.parent ?? undefined) === parent); }
   depthOf(id: string | undefined): number {
@@ -346,6 +313,7 @@ class Working {
   /** Put `n` among `parent`'s children, before `before` or last. */
   place(n: CanvasNode, parent: string | undefined, before: string | undefined): boolean {
     this.order = this.order.filter((x) => x !== n);
+    this.owned.add(n);
     if (before !== undefined) {
       const b = this.byId.get(before);
       if (!b || b === n || (b.parent ?? undefined) !== parent) return false;
@@ -400,7 +368,7 @@ function applyOne(w: Working, raw: unknown, i: number): Ok<CanvasOp> | Err {
       const before = optRef(o.before, "before");
       if (isErr(before)) return before;
       const node: CanvasNode = { id, type, ...props.value };
-      const where = placeError(w, node, p === undefined ? undefined : w.byId.get(p), false) ?? slotsError(node);
+      const where = shapeError(w, node, p === undefined ? undefined : w.byId.get(p), false);
       if (where) return { ok: false, error: `${at}: ${where}` };
       w.byId.set(id, node);
       if (!w.place(node, p, before)) { w.byId.delete(id); return { ok: false, error: `${at}: "before" is not a child of that parent` }; }
@@ -412,13 +380,15 @@ function applyOne(w: Working, raw: unknown, i: number): Ok<CanvasOp> | Err {
       if (!o.props || typeof o.props !== "object" || Array.isArray(o.props)) return { ok: false, error: `${at}: set needs props` };
       const props = cleanProps(n.type, o.props as Record<string, unknown>, at, true);
       if (!props.ok) return props;
+      for (const k of ADD_ONLY[n.type] ?? []) if (hasOwn(props.value, k)) return { ok: false, error: `${at}: ${k} of a ${n.type} is set when it is added and never changed` };
       // What the node WOULD be: a half-applied set is never left in the scene.
       const merged: CanvasNode = { ...n };
       for (const [k, v] of Object.entries(props.value)) { if (v === null) delete merged[k]; else merged[k] = v; }
-      const where = placeError(w, merged, n.parent === undefined ? undefined : w.byId.get(n.parent), true) ?? slotsError(merged);
+      const where = shapeError(w, merged, n.parent === undefined ? undefined : w.byId.get(n.parent), true);
       if (where) return { ok: false, error: `${at}: ${where}` };
-      for (const k of Object.keys(props.value)) { if (merged[k] === undefined) delete n[k]; else n[k] = merged[k]; }
-      clampGauge(n.type, n);
+      const mine = w.own(n);
+      for (const k of Object.keys(props.value)) { if (merged[k] === undefined) delete mine[k]; else mine[k] = merged[k]; }
+      clampGauge(mine.type, mine);
       return { ok: true, value: { op: "set", id: n.id, props: props.value } };
     }
     case "move": {
@@ -432,7 +402,7 @@ function applyOne(w: Working, raw: unknown, i: number): Ok<CanvasOp> | Err {
         if (!isContainer(pn.type)) return { ok: false, error: `${at}: ${pn.type} cannot hold children` };
         if (w.subtree(n.id).has(parent)) return { ok: false, error: `${at}: a node cannot move into itself` };
       }
-      const where = placeError(w, n, parent === undefined ? undefined : w.byId.get(parent), true);
+      const where = shapeError(w, n, parent === undefined ? undefined : w.byId.get(parent), true);
       if (where) return { ok: false, error: `${at}: ${where}` };
       if (w.depthOf(parent) + w.heightOf(n.id) > CANVAS_LIMITS.depth) return { ok: false, error: `${at}: deeper than ${CANVAS_LIMITS.depth}` };
       const before = optRef(o.before, "before");
@@ -444,7 +414,7 @@ function applyOne(w: Working, raw: unknown, i: number): Ok<CanvasOp> | Err {
       if (isErr(ms)) return ms;
       const easing = o.easing === undefined ? undefined : oneOf(CANVAS_EASINGS)(o.easing);
       if (o.easing !== undefined && easing === undefined) return { ok: false, error: `${at}: unknown easing` };
-      if (!w.place(n, parent, before)) return { ok: false, error: `${at}: "before" is not a child of that parent` };
+      if (!w.place(w.own(n), parent, before)) return { ok: false, error: `${at}: "before" is not a child of that parent` };
       return { ok: true, value: { op: "move", id: n.id, ...(o.parent !== undefined ? { parent: parent ?? null } : {}), ...(before ? { before } : {}), ...(via ? { via } : {}), ...(ms !== undefined ? { ms } : {}), ...(easing ? { easing: easing as CanvasEasing } : {}) } };
     }
     case "remove": {
@@ -452,7 +422,7 @@ function applyOne(w: Working, raw: unknown, i: number): Ok<CanvasOp> | Err {
       if (typeof n === "string") return { ok: false, error: n };
       const gone = w.subtree(n.id);
       // A wire to something that is gone is not left dangling.
-      for (const e of w.order) if (e.type === "edge" && (gone.has(e.from as string) || gone.has(e.to as string))) gone.add(e.id);
+      for (const id of dependants(w.order, gone)) gone.add(id);
       w.removeSet(gone);
       return { ok: true, value: { op: "remove", id: n.id } };
     }
@@ -498,6 +468,8 @@ function runOps(w: Working, raw: unknown[]): Ok<CanvasOp[]> | Err {
   let bytes: number;
   try { bytes = sizeOf(w.order); } catch { return { ok: false, error: "scene is not JSON" }; }
   if (bytes > CANVAS_LIMITS.sceneBytes) return { ok: false, error: `scene would be over ${CANVAS_LIMITS.sceneBytes} bytes` };
+  const across = sceneError(w.order);
+  if (across) return { ok: false, error: across };
   return { ok: true, value: ops };
 }
 
