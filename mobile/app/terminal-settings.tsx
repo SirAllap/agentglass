@@ -14,11 +14,15 @@
  * the front. Somebody driving an agent wants Escape, Ctrl+C and nothing else.
  * A fixed order is one guess made for everybody.
  *
- * ── why buttons and not a drag handle ────────────────────────────────────
- * Orca's own list drags, and dragging is nicer. It is also a gesture library,
- * a scroll conflict on a list inside a scroll view, and a reorder that fights
- * the keyboard on the screen where the keyboard is the point. Two arrows are
- * duller and work with one thumb on a bus, which is where this is used.
+ * ── a drag handle, and the arrows beside it ─────────────────────────────
+ * The handle is the fast way: put a key where you want it in one move. It is
+ * a PanResponder on the handle alone, with the page's scroll switched off for
+ * as long as the finger is down — a gesture library would be a dependency for
+ * one list, and a drag that starts anywhere on the row would fight the scroll
+ * the screen needs. The two arrows stay: a drag is no use to somebody using a
+ * switch or a screen reader, and a one-place nudge is still one thumb tap on
+ * a bus. Ceiling: the row follows the finger and lands on release; the rows it
+ * passes do not slide out of the way.
  *
  * ── and why the bar can never be emptied ─────────────────────────────────
  * The last visible key cannot be hidden. An empty bar is a terminal with no
@@ -27,12 +31,12 @@
  * lives in the model (see canHide) and this screen simply does not draw the
  * switch.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, Pressable, ScrollView, Text, View } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Alert, Animated, PanResponder, Pressable, ScrollView, Text, View } from "react-native";
 import { Stack } from "expo-router";
 import { usePaletteTick } from "../src/state/use-palette.ts";
 import { ACCESSORY_KEYS } from "../src/terminal/keys.ts";
-import { canHide, move, reset, rows, toggle } from "../src/terminal/keyLayout.ts";
+import { canHide, dropIndex, move, moveTo, reset, rows, toggle } from "../src/terminal/keyLayout.ts";
 import {
   MAX_CUSTOM, add, bytesFor, mintId, problemWith, remove,
 } from "../src/terminal/customKeys.ts";
@@ -77,9 +81,19 @@ export default function TerminalSettingsScreen(): React.ReactNode {
   const onBar = list.filter((r) => r.shown);
   const offBar = list.filter((r) => !r.shown);
   const [adding, setAdding] = useState(false);
+  /* A row is being dragged: the page must not scroll under the finger. */
+  const [dragging, setDragging] = useState(false);
 
   const keyRow = (row: (typeof list)[number], i: number): React.ReactNode => (
-    <View key={row.key.id} style={{ flexDirection: "row", alignItems: "center", gap: SPACE.md, minHeight: 56, paddingLeft: SPACE.lg, paddingRight: SPACE.sm }}>
+    <DragRow
+      key={row.key.id}
+      draggable={row.shown}
+      label={`Drag ${row.key.spoken} to a new place on the bar`}
+      index={i}
+      count={shownCount}
+      onHold={setDragging}
+      onDrop={(to) => change(moveTo(layout, catalogue, row.key.id, to))}
+    >
       <Keycap label={row.key.label} off={!row.shown} />
       <Text numberOfLines={1} style={{ color: row.shown ? C.text : C.text3, fontSize: 14.5, flex: 1 }}>{row.key.spoken}</Text>
       {/* Only for what is on the bar: reordering something hidden moves it
@@ -104,11 +118,11 @@ export default function TerminalSettingsScreen(): React.ReactNode {
       >
         <Switch on={row.shown} disabled={row.shown && !canHide(layout, catalogue, row.key.id)} />
       </Pressable>
-    </View>
+    </DragRow>
   );
 
   return (
-    <ScrollView contentContainerStyle={{ padding: SPACE.lg, paddingTop: SPACE.xs, gap: SPACE.xs, paddingBottom: SPACE.xl }}>
+    <ScrollView scrollEnabled={!dragging} contentContainerStyle={{ padding: SPACE.lg, paddingTop: SPACE.xs, gap: SPACE.xs, paddingBottom: SPACE.xl }}>
       <Stack.Screen
         options={{
           title: "Key bar",
@@ -232,6 +246,78 @@ export default function TerminalSettingsScreen(): React.ReactNode {
         </View>
       </Sheet>
     </ScrollView>
+  );
+}
+
+/** Every key row is this tall, so a drop's distance is a count of rows. */
+const ROW = 56;
+
+/**
+ * One row of the list, and the handle that drags it.
+ *
+ * The row follows the finger vertically and the drop is worked out on release
+ * from how far it travelled (see `dropIndex`). The responder is on the handle
+ * only, and refuses to give the gesture up: the page's ScrollView would
+ * otherwise take it the moment the finger drifts, which is the drag ending in
+ * the middle with the key nowhere. Only the keys on the bar can be dragged;
+ * the rows under "Off the bar" draw no handle but keep its width so the
+ * keycaps line up.
+ */
+function DragRow({ draggable, label, index, count, onHold, onDrop, children }: {
+  draggable: boolean;
+  label: string;
+  index: number;
+  count: number;
+  onHold: (held: boolean) => void;
+  onDrop: (to: number) => void;
+  children: React.ReactNode;
+}): React.ReactNode {
+  const y = useRef(new Animated.Value(0)).current;
+  const [lifted, setLifted] = useState(false);
+  /* The responder is built once; what it reads is kept current here. */
+  const now = useRef({ index, count, onHold, onDrop });
+  now.current = { index, count, onHold, onDrop };
+
+  /* Back to rest, however the gesture ended. */
+  const putDown = (): void => { y.setValue(0); setLifted(false); now.current.onHold(false); };
+
+  const pan = useRef(PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onPanResponderTerminationRequest: () => false,
+    onPanResponderGrant: () => { setLifted(true); now.current.onHold(true); },
+    onPanResponderMove: (_, g) => {
+      const { index: at, count: n } = now.current;
+      // The row cannot leave the list: stop it at either end.
+      y.setValue(Math.max(-at * ROW, Math.min((n - 1 - at) * ROW, g.dy)));
+    },
+    onPanResponderRelease: (_, g) => {
+      const { index: at, count: n, onDrop: drop } = now.current;
+      const to = dropIndex(at, g.dy, ROW, n);
+      putDown();
+      if (to !== at) drop(to);
+    },
+    onPanResponderTerminate: putDown,
+  })).current;
+
+  return (
+    <Animated.View style={{
+      flexDirection: "row", alignItems: "center", gap: SPACE.md, height: ROW, paddingLeft: SPACE.xs, paddingRight: SPACE.sm,
+      transform: [{ translateY: y }], zIndex: lifted ? 10 : 0, elevation: lifted ? 6 : 0,
+      backgroundColor: lifted ? C.bg3 : "transparent",
+    }}>
+      {draggable ? (
+        <View
+          {...pan.panHandlers}
+          accessible
+          accessibilityRole="button"
+          accessibilityLabel={label}
+          style={{ width: 36, height: TAP, alignItems: "center", justifyContent: "center" }}
+        >
+          <Glyph name="grip" color={C.text3} size={22} />
+        </View>
+      ) : <View style={{ width: 36 }} />}
+      {children}
+    </Animated.View>
   );
 }
 

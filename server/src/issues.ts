@@ -23,6 +23,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, basename } from "node:path";
 import { gh, ghGraphql } from "./prs.ts";
+import type { IssueViewCounts } from "../../shared/types.ts";
 import { git, safeAbs } from "./git.ts";
 import { addWorktree, removeWorktree } from "./gitwork.ts";
 import { inScopeReal } from "./config.ts";
@@ -224,6 +225,47 @@ export async function listIssues(rootIn: unknown, opts: { state?: string; assign
   } catch (e) {
     return { ok: false, issues: [], error: failed("issues/list", e, "the issues could not be read") };
   }
+}
+
+/**
+ * The three searches behind the numbers on the issue filters, one per tab.
+ *
+ * Separate from the fetch so the search text is asserted without a network:
+ * `is:issue` is what keeps pull requests out of a count GitHub otherwise
+ * makes over both, and `@me` is the same spelling the pull-request counts use.
+ */
+export function issueCountSearches(repo: string): { mine: string; open: string; all: string } {
+  return {
+    mine: `repo:${repo} is:issue is:open assignee:@me`,
+    open: `repo:${repo} is:issue is:open`,
+    all: `repo:${repo} is:issue`,
+  };
+}
+
+const ISSUE_COUNTS_QUERY = `query($a:String!,$b:String!,$c:String!){
+  mine:search(query:$a,type:ISSUE,first:0){issueCount}
+  open:search(query:$b,type:ISSUE,first:0){issueCount}
+  all:search(query:$c,type:ISSUE,first:0){issueCount}
+}`;
+
+/** Null when any of the three is missing: a count of 0 that is really "GitHub
+ *  did not answer" would read as an empty repository. */
+export function countsFromAnswer(d: any): IssueViewCounts | null {
+  const n = (x: any): number | null => (typeof x?.issueCount === "number" ? x.issueCount : null);
+  const mine = n(d?.mine), open = n(d?.open), all = n(d?.all);
+  return mine === null || open === null || all === null ? null : { mine, open, all };
+}
+
+export async function issueCounts(rootIn: unknown): Promise<{ ok: boolean; counts?: IssueViewCounts; error?: string }> {
+  const root = safeAbs(rootIn);
+  if (!root) return { ok: false, error: "no directory given" };
+  if (!inScopeReal(root)) return { ok: false, error: "outside the open project" };
+  const repo = await repoOf(root);
+  if (!repo) return { ok: false, error: "no GitHub repository here" };
+  const q = issueCountSearches(repo);
+  const res = await ghGraphql<any>(ISSUE_COUNTS_QUERY, { a: q.mine, b: q.open, c: q.all });
+  const counts = countsFromAnswer(res?.data);
+  return counts ? { ok: true, counts } : { ok: false, error: "could not read the counts" };
 }
 
 /**

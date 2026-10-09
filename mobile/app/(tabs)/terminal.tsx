@@ -143,9 +143,10 @@ interface AgentOffer {
   /** Whether this CLI has a skip-permissions flag at all. */
   canBypass: boolean;
 }
+import { closeWords, titleProblem, windowRequest } from "../../src/terminal/windowActions.ts";
 import { bestSession, pendingTab, readStrip, sessionsOf, type PendingTab, type Tab } from "../../src/terminal/tabs.ts";
 import type { PanesResponse } from "../../../shared/types.ts";
-import { Btn, Card, Label, Note, Sheet, SheetRow, TAP, Toggle } from "../../src/ui.tsx";
+import { Btn, Card, Field, Label, Note, Sheet, SheetRow, TAP, Toggle } from "../../src/ui.tsx";
 import { C, MONO, RADIUS, SPACE, T, currentLook, ink } from "../../src/theme.ts";
 
 /**
@@ -666,6 +667,12 @@ function TerminalPane(): React.ReactNode {
   const [more, setMore] = useState(false);
   /** Every session and window on the machine, opened from the title. */
   const [sessionsOpen, setSessionsOpen] = useState(false);
+  /** The window whose Rename / Close sheet is open, the name being typed, and
+   *  what the computer said when it refused. */
+  const [managing, setManaging] = useState<Tab | null>(null);
+  const [newName, setNewName] = useState("");
+  const [manageBusy, setManageBusy] = useState(false);
+  const [manageWhy, setManageWhy] = useState<string | null>(null);
   /*
    * Arriving FOR a window: "Open in terminal" on a started issue sends the
    * worktree and the window name. Picked as soon as the strip lists it, and
@@ -1116,6 +1123,34 @@ function TerminalPane(): React.ReactNode {
     });
   }, [host]);
 
+  /* Rename or close the window `managing` names. The strip is re-read on
+     success rather than patched: the computer is the one that knows what the
+     windows are now, and a closed window's pane drops out of `active` by the
+     rule `load` already has for a pane that went away. */
+  const windowDo = useCallback(async (tab: Tab, op: "rename" | "kill-window", title?: string): Promise<void> => {
+    if (!host || !tab.windowId) return;
+    /* The sheet holds the tab as it was when it opened. Before anything
+       irreversible, the strip's own answer must still say this pane is in this
+       window: after the computer's tmux restarted, `@4` can be another window
+       under the same session name. */
+    if (strip?.find((t) => t.paneId === tab.paneId)?.windowId !== tab.windowId) {
+      setManageWhy("That window changed on the computer. Close this and open it again from the list.");
+      return;
+    }
+    setManageBusy(true);
+    setManageWhy(null);
+    const answer = await ask<{ ok: boolean; stderr?: string }>(host, "/terminal/tmux/windows", {
+      method: "POST", body: windowRequest(tab, op, title),
+    });
+    setManageBusy(false);
+    if (!answer.ok || !answer.value.ok) {
+      setManageWhy(answer.ok ? answer.value.stderr || "The computer did not do it." : answer.error);
+      return;
+    }
+    setManaging(null);
+    void load();
+  }, [host, load, strip]);
+
   /*
    * Re-read the panes while this screen is on screen, and only then.
    *
@@ -1519,6 +1554,7 @@ function TerminalPane(): React.ReactNode {
   const sessions = sessionsOf(all);
   const tabs = all.filter((t) => !session || t.session === session);
   const open = tabs.find((t) => t.paneId === active) ?? pendingTab(pendingOpen.current, active);
+  const nameProblem = managing && newName !== managing.windowName ? titleProblem(newName) : null;
 
   /* Asked when the menu opens rather than on the way into the screen: a list
      of past sessions is not what anybody arrives for, and it is a read against
@@ -2711,26 +2747,83 @@ function TerminalPane(): React.ReactNode {
               {windows.map((tab) => {
                 const asking = gates.some((g) => g.pane === tab.paneId);
                 return (
-                  <SheetRow
-                    key={tab.paneId}
-                    label={tab.label}
-                    sub={[
-                      leafOf(tab.where),
-                      asking ? "waiting on you" : tab.agent ? "agent running" : "",
-                    ].filter(Boolean).join(" · ")}
-                    on={tab.paneId === active}
-                    onPress={() => {
-                      setSessionsOpen(false);
-                      setSession(name);
-                      setActive(tab.paneId);
-                      setWhy(null);
-                    }}
-                  />
+                  <View key={tab.paneId} style={{ flexDirection: "row", alignItems: "center" }}>
+                    <View style={{ flex: 1 }}>
+                      <SheetRow
+                        label={tab.label}
+                        sub={[
+                          leafOf(tab.where),
+                          asking ? "waiting on you" : tab.agent ? "agent running" : "",
+                        ].filter(Boolean).join(" · ")}
+                        on={tab.paneId === active}
+                        onPress={() => {
+                          setSessionsOpen(false);
+                          setSession(name);
+                          setActive(tab.paneId);
+                          setWhy(null);
+                        }}
+                      />
+                    </View>
+                    {/* Beside the row and not inside it: the row is the
+                        thing you tap to go there, and a window is renamed or
+                        closed far less often than it is opened. */}
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Rename or close ${tab.label}`}
+                      onPress={() => {
+                        setSessionsOpen(false);
+                        setNewName(tab.windowName);
+                        setManageWhy(null);
+                        setManaging(tab);
+                      }}
+                      style={({ pressed }) => ({
+                        width: TAP, height: TAP, alignItems: "center", justifyContent: "center", opacity: pressed ? 0.6 : 1,
+                      })}
+                    >
+                      <Glyph name="more" color={K.text3} size={20} />
+                    </Pressable>
+                  </View>
                 );
               })}
             </View>
           );
         })}
+      </Sheet>
+
+      <Sheet open={!!managing} onClose={() => setManaging(null)} title={managing?.label ?? "Window"}>
+        {managing ? (
+          <View style={{ gap: SPACE.md, paddingBottom: SPACE.md }}>
+            <Field
+              label="Name"
+              value={newName}
+              onChangeText={(t) => { setNewName(t); setManageWhy(null); }}
+              onSubmitEditing={() => { if (!nameProblem) void windowDo(managing, "rename", newName); }}
+            />
+            {/* Said only once something was typed: an empty field is not yet
+                a mistake. */}
+            {manageWhy ?? nameProblem ? <Note tone="bad">{manageWhy ?? nameProblem}</Note> : null}
+            <Btn
+              label="Rename"
+              tone="primary"
+              busy={manageBusy}
+              disabled={newName === managing.windowName || !!nameProblem}
+              onPress={() => { void windowDo(managing, "rename", newName); }}
+            />
+            <Btn
+              label="Close window"
+              tone="danger"
+              busy={manageBusy}
+              onPress={() => Alert.alert(
+                "Close this window?",
+                closeWords(managing),
+                [
+                  { text: "Keep it", style: "cancel" },
+                  { text: "Close window", style: "destructive", onPress: () => { void windowDo(managing, "kill-window"); } },
+                ],
+              )}
+            />
+          </View>
+        ) : null}
       </Sheet>
 
       <Sheet open={picking} onClose={() => setPicking(false)} title="New window">

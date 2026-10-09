@@ -68,19 +68,31 @@ describe("a tick that changes nothing", () => {
     expect(again.changed).toBe(false);
   });
 
-  test("even when a pane's ids moved, which the strip does not show", () => {
+  test("even when the session's id moved, which the strip does not show", () => {
     /*
-     * The session and window IDS are on the wire and are drawn nowhere at all.
-     * Repainting on those would be repainting on somebody's tmux housekeeping.
-     * The directory is NOT in this list any more: the tab carries it whole,
-     * because Source control and Files open from it, and a `cd` to another
-     * checkout has to reach them. The next test holds that.
+     * The session id is on the wire and drawn nowhere at all. Repainting on it
+     * would be repainting on somebody's tmux housekeeping. The directory is
+     * NOT in this list any more: the tab carries it whole, because Source
+     * control and Files open from it, and a `cd` to another checkout has to
+     * reach them. The next test holds that. Nor is the window's id — see the
+     * test after it.
      */
     const again = readStrip(first(ONE), {
       canAttach: true,
-      panes: [pane({ sessionId: "$7", windowId: "@9" })],
+      panes: [pane({ sessionId: "$7" })],
     });
     expect(again.changed).toBe(false);
+  });
+
+  test("but a window that got a new id is a new tab, because close addresses it", () => {
+    // Rename and close name the window by its id. A tab holding the old one
+    // would aim at a window that is gone, or at one that took its number.
+    const again = readStrip(first(ONE), {
+      canAttach: true,
+      panes: [pane({ windowId: "@9" })],
+    });
+    expect(again.changed).toBe(true);
+    if (again.changed) expect(again.tabs[0]!.windowId).toBe("@9");
   });
 
   test("but a pane that changed directory is a change", () => {

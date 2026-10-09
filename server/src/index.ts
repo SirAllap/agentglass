@@ -110,7 +110,7 @@ import { listPortsAsync, listResources, spaceFor, killPort } from "./machine.ts"
 import { gitLocks, removeStaleLock } from "./gitlocks.ts";
 import { procDetail, revealEnv } from "./procdetail.ts";
 import {
-  listIssues, issueDetail, issuePullRequests, startIssue, finishIssue, claimIssue, commentIssue, setIssueState, currentWork,
+  listIssues, issueCounts, issueDetail, issuePullRequests, startIssue, finishIssue, claimIssue, commentIssue, setIssueState, currentWork,
 } from "./issues.ts";
 import { currentRuns, runById, runActivity, startRun, adoptPane, finishRun } from "./runs.ts";
 import { failed } from "./refused.ts";
@@ -188,7 +188,7 @@ import { claudeModels } from "./claudemodels.ts";
 import { codexStream, codexModels, codexTranscript, codexCwd, CODEX_ENABLED, CODEX_BYPASS_ALLOWED } from "./codex.ts";
 import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_BYPASS_ALLOWED } from "./antigravity.ts";
 import { hermesStream, hermesModels, HERMES_ENABLED, hermesBypassAllowed } from "./hermes.ts";
-import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs, reloadEngineConf, tmuxCapability, engineWindowRunning, engineSessionName, tmux } from "./tmuxpane.ts";
+import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs, reloadEngineConf, tmuxCapability, engineWindowRunning, engineSessionName, tmux, validSessionName } from "./tmuxpane.ts";
 import { takeLease, endLease, leaseHeld, reapLeases } from "./panelease.ts";
 import { runAgentInteractivePane } from "./understudy-pane.ts";
 import { startScanner, ownsSession, knownProjects, projectsKnownAtStart, resyncScope, scanningEnabled } from "./transcripts.ts";
@@ -5992,6 +5992,9 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         limit: Number(url.searchParams.get("limit") || 60),
       }));
     }
+    if (pathname === "/issues/counts") {
+      return json(await issueCounts(url.searchParams.get("root") || ""));
+    }
     if (pathname === "/issues/detail") {
       return json(await issueDetail(url.searchParams.get("root") || "", url.searchParams.get("number")));
     }
@@ -8339,9 +8342,9 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       }
     }
 
-    if (pathname === "/terminal/tmux/windows") {
+    if (pathname === "/terminal/tmux/windows" && req.method === "GET") {
       const name = String(url.searchParams.get("session") ?? "");
-      if (!validPaneName(name)) return json({ ok: false, error: "invalid session" }, 400);
+      if (!validSessionName(name)) return json({ ok: false, error: "invalid session" }, 400);
       return json({ ok: true, windows: await windowTree(name) });
     }
 
@@ -8350,9 +8353,13 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const name = String(b.session ?? "");
-      if (!validPaneName(name)) return json({ ok: false, error: "invalid session" }, 400);
-      const cwd = gitSafeAbs(b.cwd);
-      if (!cwd || !fsExists(cwd)) return json({ ok: false, error: "that directory is not available" }, 400);
+      if (!validSessionName(name)) return json({ ok: false, error: "invalid session" }, 400);
+      // A directory is only for a window or pane that STARTS somewhere. Closing
+      // or renaming one needs none, and asking for it made a window whose
+      // checkout had since been deleted impossible to close.
+      const needsCwd = b.op === "new" || b.op === "split";
+      const cwd = (needsCwd ? gitSafeAbs(b.cwd) : "") ?? "";
+      if (needsCwd && (!cwd || !fsExists(cwd))) return json({ ok: false, error: "that directory is not available" }, 400);
       let res: { ok: boolean; stdout: string; stderr: string };
       switch (b.op) {
         case "new":

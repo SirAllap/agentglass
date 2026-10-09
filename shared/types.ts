@@ -4643,6 +4643,8 @@ export interface IssuePr {
 }
 export interface IssuePrsReport { ok: boolean; prs: IssuePr[]; error?: string }
 export interface IssuesReport { ok: boolean; issues: IssueRow[]; error?: string }
+/** What the issue filters count: yours, open, everything. `/issues/counts`. */
+export interface IssueViewCounts { mine: number; open: number; all: number }
 export interface IssueStartResult {
   ok: boolean; error?: string; work?: IssueWork; prompt?: string; cwd?: string;
 }

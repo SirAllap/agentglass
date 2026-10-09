@@ -30,6 +30,6 @@ describe("pendingTab", () => {
 
   test("the active pane IS the one just opened — a tab to bridge with", () => {
     const tab = pendingTab(PENDING, "%9");
-    expect(tab).toEqual({ paneId: "%9", label: "atlas", session: "atlas", where: "/home/x/code/atlas", agent: false });
+    expect(tab).toEqual({ paneId: "%9", label: "atlas", session: "atlas", where: "/home/x/code/atlas", agent: false, windowId: "", windowName: "", windowPanes: 1 });
   });
 });

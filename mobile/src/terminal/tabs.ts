@@ -40,6 +40,15 @@ export interface Tab {
   where: string;
   /** An agent is running under this pane. The reason to open it. */
   agent: boolean;
+  /** tmux's id for the window this pane is in (`@3`) — what rename and close
+   *  address. Empty for a pane the strip has not listed yet, which has nothing
+   *  to rename. */
+  windowId: string;
+  /** The window's own name, without the index the label leads with. */
+  windowName: string;
+  /** How many panes the window has: closing a window closes all of them, and
+   *  the confirmation says so. */
+  windowPanes: number;
 }
 
 /**
@@ -180,6 +189,9 @@ function tabsOf(panes: readonly AgentPane[], keepOwnDetached: boolean): Tab[] {
         // checkout were empty. The screens draw the leaf themselves.
         where: pane.path,
         agent: pane.agentCwds.length > 0,
+        windowId: pane.windowId,
+        windowName: pane.windowName,
+        windowPanes: group.length,
       });
     });
   }
@@ -229,7 +241,7 @@ export interface PendingTab {
  */
 export function pendingTab(pending: PendingTab | null, active: string | null): Tab | null {
   if (!pending || !active || pending.paneId !== active) return null;
-  return { paneId: pending.paneId, label: pending.label, session: pending.session, where: pending.where, agent: false };
+  return { paneId: pending.paneId, label: pending.label, session: pending.session, where: pending.where, agent: false, windowId: "", windowName: "", windowPanes: 1 };
 }
 
 /** Either the strip moved, and here is the whole of it, or it did not and there
