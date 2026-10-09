@@ -103,18 +103,20 @@ naming a level is the answer, not a puzzle. Ask the person.
   me the diff settings"): that runs at once, even over their typing. A call that
   carries no name (`--as`) is `now` too, so keep the name.
 - **Show me without taking the chat away.** `view.open`, `pane.open`,
-  `workspace.toggle` (and the doors that land on a view: `chat.new`, `git.*`,
+  `workspace.toggle` (and the doors that land on a view: `chat.new`,
   `lantern.schedule`, `terminal.resume`) replace the whole window, and the person
   loses the conversation where you are talking to them. For "show me" prefer what
   floats over the current view and leaves the chat where it is: `panel.open`,
   `machine.open`, `peek.file`, the bench (`bench.toggle`, `bench.file`,
-  `bench.board`), `settings.open`. (`git.modal` is not one of these: it lands on
-  the Git view first.) Use a view switch only when what they asked to see is that
-  view. Then say in chat, BEFORE you switch, what you are about to show and where
-  you are putting them; and when you have shown it, switch back with `view.open`
-  to where they were (`agentglass-ui read view` tells you). The window also leaves
-  them a "Back to <view> · <your name>" chip for a minute, one click, so keep
-  the name on the call.
+  `bench.board`), `settings.open`, and the Git modals (`git.modal` for Insights,
+  Bisect and the git palette, `git.compare`, `git.blame`, `git.rebase`). A Git
+  modal opens over the view they are on, on the checkout the Git view is on, and
+  the person closes it from the modal itself; the view does not change. Use a
+  view switch only when what they asked to see is that view. Then say in chat, BEFORE you switch, what you are
+  about to show and where you are putting them; and when you have shown it, you
+  switch back with `view.open` to where they were (`agentglass-ui read view` tells you).
+  The window also leaves them a "Back to <view> · <your name>" chip for a minute,
+  one click, so keep the name on the call.
 - **Do not change a setting you were not asked to.** A setting is the person's
   taste, and "this would look better" is not a request.
 - **Undo a change** by setting the value back to `prev`, which the answer

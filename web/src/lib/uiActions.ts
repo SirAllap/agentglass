@@ -118,10 +118,12 @@ export const UI_HANDLERS: { [Id in UiActionId]: Handler<Id> } = {
   "bench.file": (a) => { showFile(a.root, `${a.root}/${a.path}`, { title: baseName(a.path) }); },
   "bench.board": (a) => { showBoard(a.root, a.kind); },
   "peek.file": (a) => openPeek({ root: a.root, path: `${a.root}/${a.path}`, label: a.path }),
-  "git.modal": (a, c) => { latchGitModal({ which: a.which }); c.goView("git"); },
-  "git.compare": (a, c) => { latchGitModal({ which: "compare", base: a.base }); c.goView("git"); },
-  "git.blame": (a, c) => { latchGitModal({ which: "blame", path: a.path }); c.goView("git"); },
-  "git.rebase": (a, c) => { latchGitModal({ which: "rebase", base: a.base }); c.goView("git"); },
+  // The Git modals draw over the current view (they are portals); the Git view
+  // is mounted hidden for them, never switched to. See lib/gitModalIntent.ts.
+  "git.modal": (a) => { latchGitModal({ which: a.which }); },
+  "git.compare": (a) => { latchGitModal({ which: "compare", base: a.base }); },
+  "git.blame": (a) => { latchGitModal({ which: "blame", path: a.path }); },
+  "git.rebase": (a) => { latchGitModal({ which: "rebase", base: a.base }); },
   "event.open": async (a, c) => { if (!(await c.openEvent(a.id))) throw new Error("no recent event has that id"); },
   "session.open": (a, c) => c.openSession(a.id, a.app),
   "whatsnew.open": () => showWhatsNew(),

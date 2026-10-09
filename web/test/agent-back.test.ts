@@ -84,7 +84,7 @@ describe("every door that can replace the view is armed", async () => {
       const m = /^\s+"([a-z.]+)":\s*(.*)$/.exec(l);
       if (m && /c\.goView\(|c\.workspace\(/.test(m[2]!)) found.push(m[1]!);
     }
-    expect(found.length).toBeGreaterThan(5);
+    expect(found.length).toBeGreaterThan(3);
     for (const id of found) expect(VIEW_SWITCHERS as readonly string[], id).toContain(id);
   });
 
@@ -102,13 +102,13 @@ describe("the skill an agent reads says how to show without taking the chat", as
 
   it("the rule is there, and names the overlays, the switchers, saying so first and switching back", () => {
     expect(at).toBeGreaterThan(0);
-    for (const w of ["panel.open", "machine.open", "peek.file", "bench", "view.open", "pane.open", "workspace.toggle", "BEFORE", "switch back", "Back to"]) {
+    for (const w of ["panel.open", "machine.open", "peek.file", "bench", "git.modal", "view.open", "pane.open", "workspace.toggle", "BEFORE", "switch back", "Back to"]) {
       expect(rule, w).toContain(w);
     }
   });
 
   it("every door it calls an overlay is not a view switcher", () => {
-    for (const id of ["panel.open", "machine.open", "peek.file", "bench.toggle", "bench.file", "bench.board"]) {
+    for (const id of ["panel.open", "machine.open", "peek.file", "bench.toggle", "bench.file", "bench.board", "git.modal", "git.compare", "git.blame", "git.rebase"]) {
       expect(VIEW_SWITCHERS as readonly string[], id).not.toContain(id);
     }
   });

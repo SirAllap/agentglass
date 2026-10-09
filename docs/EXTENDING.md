@@ -320,7 +320,7 @@ curl -sS http://localhost:4000/control \
 | `project.picker`, `windows.switcher`, `bench.toggle` | — | the project picker, the window switcher, the bench |
 | `bench.file`, `peek.file` | `root`: absolute, `path`: under it | a file on the bench / in the viewer (reading) |
 | `bench.board` | `root`, `kind`: `pr`\|`tasks`\|`files` | a board as a bench tab |
-| `git.modal` | `which`: `insights`\|`bisect`\|`palette` | that modal of the Git view |
+| `git.modal` | `which`: `insights`\|`bisect`\|`palette` | that modal, over the current view (the view does not change) |
 | `git.compare`, `git.blame`, `git.rebase` | `base` (a ref), `path` (under the checkout), `base` | those modals. The rebase editor only draws the plan: nothing moves until the person presses Start |
 | `event.open` | `id`: a whole number | the event modal, for an event in the window's feed or the server's recent list (otherwise `ok:false`, "no recent event has that id") |
 | `session.open` | `id`, `app?` | the session modal |
