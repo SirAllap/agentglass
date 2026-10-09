@@ -24,7 +24,7 @@ import { mintPluginToken, revokePluginToken } from "./auth.ts";
 import type { Scope } from "./devices.ts";
 import { cloneUrlError } from "./projectadd.ts";
 import {
-  type InstallSource, FULL_COMMIT, contentHash, pluginGitUrlError, pluginRefError, walkPluginDir,
+  type InstallSource, FULL_COMMIT, contentHash, expandHome, pluginGitUrlError, pluginRefError, walkPluginDir,
 } from "./plugin-sources.ts";
 import { pluginGitEnv, PLUGIN_GIT_CONFIG } from "./plugin-env.ts";
 import { fetchCatalogue } from "./plugin-catalogue.ts";
@@ -1152,7 +1152,7 @@ export async function installPlugin(input: InstallInput): Promise<{ ok: true; pl
   let source: InstallSource;
   if (typeof input === "string") {
     if (!input.trim()) return { ok: false, error: "Provide a local path or a git URL" };
-    const s = input.trim();
+    const s = expandHome(input.trim(), process.env.HOME ?? homedir());
     if (isAbsolute(s)) {
       source = { kind: "local-path", path: s };
     } else {

@@ -41,6 +41,16 @@ const HTTPS_NO_AUTH = /^https:\/\/(?!.*@)[^\s]+$/i;
 const SSH_URL = /^ssh:\/\/[^\s]+$/i;
 const SCP_LIKE = /^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:[^\s]+$/;
 
+/** `~/…` (or a bare `~`) as the person's home folder. The install box is
+ *  typed by hand and every path elsewhere in the app is shown as `~/…`, so
+ *  pasting one back used to fall through to the git-URL check and fail with
+ *  "does not look like a plugin URL". `~user/` is not expanded. */
+export function expandHome(s: string, home: string): string {
+  if (s === "~") return home;
+  if (s.startsWith("~/")) return home.replace(/\/+$/, "") + s.slice(1);
+  return s;
+}
+
 /** Why this cannot be a plugin's git source, or null when it can. Stricter
  *  than `projectadd.ts`'s `cloneUrlError`: that one accepts plain `http://`
  *  and a URL with embedded credentials because it clones a project the
