@@ -4993,9 +4993,9 @@ function DepRow({ d, onGo }: { d: ProviderTask; onGo: (id: string) => void }) {
  *
  * They were four bare words in a row — Reply Edit Resolve Delete — under the
  * paragraph, which reads as a line of text somebody forgot to delete rather
- * than as controls: "no parecen ni botones". An icon, a label, a border and a
- * 24px hit area each; the destructive one keeps its own colour and is held
- * apart from the other three by a rule.
+ * than as controls. An icon, a label, a border and the compact control height
+ * each (`CTRL_H.compact`, a control inside a card); the destructive one keeps
+ * its own colour and is held apart from the other three by a rule.
  */
 function CommentAction({ label, title, d, onClick, busy, on, tone }: {
   label: string; title: string; d: string;
@@ -5010,7 +5010,7 @@ function CommentAction({ label, title, d, onClick, busy, on, tone }: {
     <button onClick={onClick} disabled={busy} title={title} aria-label={title} aria-pressed={on || undefined}
       className="agx-btn inline-flex items-center gap-1 rounded-md px-1.5 text-[10.5px]"
       style={{
-        height: 24,
+        height: CTRL_H.compact,
         color: colour,
         border: `1px solid color-mix(in srgb, ${on ? (tone ?? "var(--success, #98c379)") : "var(--text)"} ${on ? 40 : 14}%, transparent)`,
         background: on ? `color-mix(in srgb, ${tone ?? "var(--success, #98c379)"} 12%, transparent)` : "transparent",
@@ -6881,9 +6881,9 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                 <div className="agx-hover-show flex flex-wrap items-center gap-1 mt-2">
                   {/* Controls, not a sentence.
                       These were four words in a row under the paragraph and read
-                      as text somebody forgot to delete — "no parecen ni botones".
-                      An icon, a label, a border and a 24px hit area each, with
-                      the destructive one held apart from the other three. */}
+                      as text somebody forgot to delete. An icon, a label, a
+                      border and a compact control each, with the destructive
+                      one held apart from the other three. */}
                   <CommentAction label="Reply" title="Answer in this thread"
                     d="M9 14l-5-5 5-5M4 9h9a7 7 0 0 1 7 7v4"
                     onClick={() => { setReplyTo(replyTo === c.id ? null : c.id); setNoteDraft(""); }} />
