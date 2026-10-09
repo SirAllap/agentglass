@@ -70,7 +70,7 @@ import { refreshRollup } from "../lib/prRollupStore.ts";
 import { overlayDetail, refreshPlan } from "../lib/prRefresh.ts";
 import {
   anchorId, bootstrapSince, clearSeen, foldedIdx, markAllSeen, newKeys, newSince, onSeenChange, readSeen,
-  reviewSpeaks, threadLastAt, threadMovedOn, writeSeen, type NewAtom,
+  reviewSpeaks, writeSeen, type NewAtom,
 } from "../lib/prNew.ts";
 import { unreadOf, type Unread } from "../lib/prUnread.ts";
 import { quoteReply } from "../lib/prQuote.ts";
@@ -105,7 +105,7 @@ import { useClickupSetup } from "../lib/clickupSetup.ts";
 import type { ListStatus as CuStatus, ListMember as CuMember, ProviderTask } from "../../../shared/providers.ts";
 import { CloseButton, CloseIcon } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { AgentIcon, ArrowIcon, AttachIcon, BlockedIcon, BoltIcon, BranchIcon, CaretIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, EditIcon, EyeIcon, FileIcon, FlagIcon, IconLabel, LinkIcon, MergeIcon, MoreIcon, PlusIcon, RefreshIcon, SearchIcon, SparkleIcon, StarIcon, TagIcon, UndoIcon, UserIcon } from "../lib/glyphIcons.tsx";
+import { AgentIcon, ArrowIcon, AttachIcon, BlockedIcon, BoltIcon, BranchIcon, CaretIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CommitIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, EditIcon, EyeIcon, FileIcon, FlagIcon, IconLabel, LinkIcon, MergeIcon, MoreIcon, PlusIcon, RefreshIcon, SearchIcon, SparkleIcon, StarIcon, TagIcon, UndoIcon, UserIcon } from "../lib/glyphIcons.tsx";
 import { PrIcon } from "./workspace/icons.tsx";
 import { CardChip } from "../lib/priority.tsx";
 import { ColumnsIcon, InboxIcon, QuoteIcon } from "./settingsNavIcons.tsx";
@@ -114,6 +114,7 @@ import { TriageBoard } from "./TriageBoard.tsx";
 import { Inbox } from "./prs/Inbox.tsx";
 import { FileRail } from "./FileRail.tsx";
 import { Optimistic, reactionPatch, bodyPatch, resolvedPatch, labelsPatch } from "../lib/prOptimistic.ts";
+import { prTimeline } from "../lib/prTimeline.ts";
 
 /**
  * The second half of a merge, named once.
@@ -10638,7 +10639,7 @@ function ThreadSnippet({ hunk, line }: { hunk?: string; line?: number | null }) 
   );
 }
 
-function Thread({ t, onResolve, onReply, onApply, busy, inline, newSet, cameFrom }: {
+function Thread({ t, onResolve, onReply, onApply, busy, inline, newSet }: {
   t: PrThread; onResolve: (t: PrThread) => void; onReply: (t: PrThread, body: string) => Promise<boolean>;
   onApply?: (t: PrThread, text: string) => void; busy: boolean;
   /** The comments said since this browser last looked, by `${threadId}:${id}`.
@@ -10646,10 +10647,6 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline, newSet, cameFrom
    *  the diff is somewhere you went deliberately, not somewhere you are being
    *  told to look. */
   newSet?: Set<string>;
-  /** The review this thread was submitted with, when it has been pulled out to
-   *  the top of the timeline for having moved on since. Without this the
-   *  promotion loses the one thing the nesting was for. */
-  cameFrom?: string;
   /** Rendered anchored under its line in the diff, not in the file's thread
    *  list: drop the path (obvious from where it sits) and the duplicated code
    *  snippet (the line is right above it). */
@@ -10729,11 +10726,6 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline, newSet, cameFrom
             : `${t.path}${t.line ? `:${t.line}` : ""}`}
         </span>
         {t.isOutdated && <Chip text="outdated" tint="var(--text3)" title="The code under this comment has changed since" />}
-        {/* Where it came from, now that it no longer sits under it. */}
-        {cameFrom && (
-          <Chip text={`from ${cameFrom}'s review`} tint="var(--text3)"
-            title="Submitted with that review, and answered since — so it is shown at the time of its last reply rather than the review's" />
-        )}
         <span className="ml-auto flex items-center gap-1.5 shrink-0">
           {/* How much conversation, and when it last moved. A thread carries two
               dates and only one of them was ever on screen: "opened two days
@@ -10938,6 +10930,25 @@ function TimelineEvent({ e }: { e: PrEvent }) {
   );
 }
 
+/** Commits pushed back to back, as GitHub prints them: who, how many, and the
+ *  subjects. The Commits tab has the rest. */
+function CommitsEvent({ commits }: { commits: PrCommit[] }) {
+  const first = commits[0];
+  if (!first) return null;
+  return (
+    <div className="agx-tiny" style={{ alignItems: "flex-start", flexDirection: "column", gap: 2 }}>
+      <span><b>{first.author || "somebody"}</b> added {commits.length} commit{commits.length === 1 ? "" : "s"}
+        {first.committedAt && <span style={{ color: "var(--text3)" }}> · {ago(first.committedAt)}</span>}</span>
+      {commits.map((c) => (
+        <span key={c.oid} className="flex gap-2 min-w-0 w-full">
+          <code style={{ ...CODE_FONT_STYLE, color: "var(--text3)" }}>{c.short}</code>
+          <span className="truncate" style={{ color: "var(--text2)" }}>{c.message}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 /**
  * A minimap of what is new, down the side of the timeline.
  *
@@ -11102,6 +11113,8 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   const [pCursor, setPCursor] = useState(-1);
   useEffect(() => { setPerson(null); setPCursor(-1); }, [who]);
   const tlRef = useRef<HTMLDivElement>(null);
+  /** GitHub's order and grouping, decided off the panel — see prTimeline. */
+  const timeline = useMemo(() => prTimeline(d), [d]);
 
   /*
    * Walk to the next thing said since you last looked.
@@ -11156,155 +11169,113 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
      "New" is showing and you are left staring at nothing with no clue why. */
   useEffect(() => { if (who === "new" && !atoms.length) setWho("all"); }, [who, atoms.length, setWho]);
   const kb = Math.round(lanes.bots.reduce((n, c) => n + c.body.length, 0) / 1024);
-  const reviewAuthors = new Set(lanes.humans.map((r) => r.author));
-
-  /*
-   * The threads that have moved on since the review they were submitted with.
-   *
-   * A review owns its threads, and that grouping is the meaning of a "requested
-   * changes": the verdict, with its reasons under it. But it is also what
-   * buries a live argument — the review is dated two days ago, so everything
-   * nested under it sits two days back on the page however recently anybody
-   * spoke. Measured on a real one: a reply nine minutes old, three comments
-   * deep, in the middle of a long page, and no sign anywhere that it existed.
-   *
-   * So a thread that has been answered SINCE its review comes out to the top
-   * level and takes its place by its last reply. It keeps a chip naming the
-   * review it came from, so the grouping is still readable — trading one loss
-   * for another would not be a fix.
-   */
-  const cameFrom = new Map<string, string>();
-  for (const r of lanes.humans) {
-    for (const t of d.threads) {
-      if (t.comments[0]?.author !== r.author) continue;
-      if (threadMovedOn(t, r.submittedAt)) cameFrom.set(t.id, r.author);
-    }
-  }
-  const orphanThreads = d.threads.filter(
-    (t) => cameFrom.has(t.id) || !reviewAuthors.has(t.comments[0]?.author ?? ""),
-  );
-
   /** Who said it, so the timeline can be narrowed to one kind of voice. An
    *  `event` is nobody speaking — a push, a label — and belongs to neither
    *  side, so it shows in the whole timeline and in no filtered view. */
   type Lane = "human" | "bot" | "event" | "local";
-  /** `ms` is what the timeline sorts on, and for a thread it is its LAST
-   *  comment. It used to be the first, which is the ordering bug this whole
-   *  feature was written for. */
-  /* `author` is whoever's remark this row IS — for a thread, whoever raised it,
-     the same rule the lane uses. Absent on events, which nobody said. */
-  type Entry = { at: string; ms: number; key: string; lane: Lane; author?: string; hot?: number; node: React.ReactNode; body: React.ReactNode };
+  /* `author` is whoever's remark this row IS — for a review, its reviewer, and
+     for a thread standing alone, whoever raised it. Absent on events, which
+     nobody said. `ms` is where the row sits, and it is GitHub's slot for it —
+     see prTimeline for why a reply or a resolve never moves one. */
+  type Entry = { ms: number; key: string; lane: Lane; author?: string; hot?: number; node: React.ReactNode; body: React.ReactNode };
   const entries: Entry[] = [];
-  const ms = (iso: string) => Date.parse(iso) || 0;
   /** How many of the things said since your last visit are inside this one. */
   const hotOf = (keys: string[]) => keys.filter((k) => newSet.has(k)).length;
   const threadHot = (t: PrThread) => hotOf(t.comments.map((c) => `${t.id}:${c.id}`));
+  const threadNode = (t: PrThread) =>
+    <span style={{ color: t.isResolved ? "var(--success)" : "var(--warning)" }}>{t.isResolved ? <DoneIcon size={ICON.xs} /> : <CircleIcon size={ICON.xs} />}</span>;
+  const threadRow = (t: PrThread) =>
+    <Thread key={t.id} t={t} onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy} newSet={newSet} />;
 
-  for (const [i, r] of lanes.humans.entries()) {
-    const mine = d.threads.filter((t) => t.comments[0]?.author === r.author && !cameFrom.has(t.id));
-    const tone = r.state === "CHANGES_REQUESTED" ? "chg" : r.state === "APPROVED" ? "appr" : undefined;
-    entries.push({
-      at: r.submittedAt, ms: ms(r.submittedAt), key: `r${i}`, lane: "human", author: r.author,
-      hot: hotOf([`r${r.author}-${r.submittedAt}`]) + mine.reduce((n, t) => n + threadHot(t), 0),
-      node: <span style={{ color: tone === "chg" ? "var(--error)" : tone === "appr" ? "var(--success)" : "var(--text3)" }}>
-        {r.state === "CHANGES_REQUESTED" ? <CrossIcon size={ICON.xs} /> : r.state === "APPROVED" ? <DoneIcon size={ICON.xs} /> : <CommentIcon size={ICON.xs} />}</span>,
-      body: (
-        <>
-          <span id={anchorId(`r${r.author}-${r.submittedAt}`)} />
-          <Card who={r.author} when={ago(r.submittedAt)} url={r.url} tone={tone}
-            fresh={newSet.has(`r${r.author}-${r.submittedAt}`)}
-            edited={r.editedAt} assoc={r.association} nodeId={r.nodeId} reactions={r.reactions} onReact={onReact}
-            {...acts({ author: r.author, nodeId: r.nodeId, body: r.body, kind: "issue" })}
-            chip={r.state === "CHANGES_REQUESTED" ? <Chip text="requested changes" tint="var(--error)" />
-              : r.state === "APPROVED" ? <Chip text="approved" tint="var(--success)" /> : undefined}>
-            {r.body ? <Md body={r.body} />
-              : <span style={{ color: "var(--text3)" }}>({r.state.toLowerCase().replace("_", " ")}, no note)</span>}
+  for (const x of timeline) {
+    if (x.kind === "review") {
+      const r = x.review;
+      const anchor = `r${r.author}-${r.submittedAt}`;
+      const tone = r.isBot ? "bot" : r.state === "CHANGES_REQUESTED" ? "chg" : r.state === "APPROVED" ? "appr" : undefined;
+      const verdict = r.state === "CHANGES_REQUESTED" ? <Chip text="requested changes" tint="var(--error)" />
+        : r.state === "APPROVED" ? <Chip text="approved" tint="var(--success)" /> : undefined;
+      entries.push({
+        ms: x.ms, key: anchor, lane: x.lane, author: r.author,
+        hot: hotOf([anchor]) + x.threads.reduce((n, t) => n + threadHot(t), 0),
+        node: r.isBot ? <span style={{ color: "var(--info-ink)" }}><AgentIcon size={ICON.xs} /></span>
+          : <span style={{ color: tone === "chg" ? "var(--error)" : tone === "appr" ? "var(--success)" : "var(--text3)" }}>
+            {r.state === "CHANGES_REQUESTED" ? <CrossIcon size={ICON.xs} /> : r.state === "APPROVED" ? <DoneIcon size={ICON.xs} /> : <CommentIcon size={ICON.xs} />}</span>,
+        body: (
+          <>
+            <span id={anchorId(anchor)} />
+            {/* A review with no note of its own is a line, as on GitHub: the
+                threads under it are what it said. */}
+            {r.body.trim() ? (
+              <Card who={r.author} when={ago(r.submittedAt)} url={r.url} tone={tone}
+                fresh={newSet.has(anchor)}
+                edited={r.editedAt} assoc={r.association} nodeId={r.nodeId} reactions={r.reactions} onReact={onReact}
+                {...(r.isBot ? {} : acts({ author: r.author, nodeId: r.nodeId, body: r.body, kind: "issue" }))}
+                chip={r.isBot ? <Chip text="automation" tint="var(--info)" /> : verdict}>
+                <Md body={r.body} />
+              </Card>
+            ) : (
+              <div className="agx-tiny">
+                <span><b>{r.author}</b> {r.state === "APPROVED" ? "approved these changes" : r.state === "CHANGES_REQUESTED" ? "requested changes" : "reviewed"} <span style={{ color: "var(--text3)" }}>· {ago(r.submittedAt)}</span></span>
+              </div>
+            )}
+            {x.threads.length > 0 && (
+              <div className="pl-3 ml-2" style={{ borderLeft: "2px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+                {x.threads.map(threadRow)}
+              </div>
+            )}
+          </>
+        ),
+      });
+    } else if (x.kind === "thread") {
+      const t = x.thread;
+      entries.push({ ms: x.ms, key: `t${t.id}`, lane: x.lane, author: t.comments[0]?.author, hot: threadHot(t), node: threadNode(t), body: threadRow(t) });
+    } else if (x.kind === "comment" && !x.comment.isBot) {
+      const c = x.comment;
+      entries.push({
+        ms: x.ms, key: `c${c.id}`, lane: "human", author: c.author, hot: hotOf([`c${c.id}`]),
+        node: <span style={{ color: "var(--text3)" }}><CommentIcon size={ICON.xs} /></span>,
+        body: <><span id={anchorId(`c${c.id}`)} />
+          <Card who={c.author} when={ago(c.createdAt)} url={c.url} fresh={newSet.has(`c${c.id}`)}
+            edited={c.editedAt} assoc={c.association} nodeId={c.nodeId} reactions={c.reactions} onReact={onReact}
+            {...acts({ author: c.author, nodeId: c.nodeId, body: c.body, kind: "issue" })}><Md body={c.body} /></Card></>,
+      });
+    } else if (x.kind === "comment") {
+      const c = x.comment;
+      entries.push({
+        ms: x.ms, key: `b${c.id}`, lane: "bot", author: c.author, hot: hotOf([`c${c.id}`]),
+        node: <span style={{ color: "var(--info-ink)" }}><AgentIcon size={ICON.xs} /></span>,
+        body: (
+          <Card who={c.author} when={ago(c.createdAt)} url={c.url} tone="bot" chip={<Chip text="automation" tint="var(--info)" />}
+            nodeId={c.nodeId} reactions={c.reactions} onReact={onReact}>
+            {/* Rendered, not dumped. In full these used to be a <pre> of the raw
+                source, so a coverage report arrived as `<!-- Pytest Coverage
+                Comment -->` and a wall of pipe characters — the one shape of
+                comment that most needs a table to be a table. It goes through the
+                same Md as everything else: the table renders, the <details> folds,
+                and the shields.io badge becomes a pill instead of a broken image. */}
+            {raw
+              ? <Md body={c.body} />
+              : <span style={{ color: "var(--text2)" }}>{c.digest || "(Nothing worth pulling out)"}</span>}
           </Card>
-          {mine.length > 0 && (
-            <div className="pl-3 ml-2" style={{ borderLeft: "2px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
-              {mine.map((t) => <Thread key={t.id} t={t} onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy} newSet={newSet} />)}
-            </div>
-          )}
-        </>
-      ),
-    });
-  }
-  for (const c of lanes.humanComments) {
-    entries.push({
-      at: c.createdAt, ms: ms(c.createdAt), key: `c${c.id}`, lane: "human", author: c.author, hot: hotOf([`c${c.id}`]),
-      node: <span style={{ color: "var(--text3)" }}><CommentIcon size={ICON.xs} /></span>,
-      body: <><span id={anchorId(`c${c.id}`)} />
-        <Card who={c.author} when={ago(c.createdAt)} url={c.url} fresh={newSet.has(`c${c.id}`)}
-          edited={c.editedAt} assoc={c.association} nodeId={c.nodeId} reactions={c.reactions} onReact={onReact}
-          {...acts({ author: c.author, nodeId: c.nodeId, body: c.body, kind: "issue" })}><Md body={c.body} /></Card></>,
-    });
-  }
-  for (const t of orphanThreads) {
-    /*
-     * Whose voice this is, read off the thread rather than assumed.
-     *
-     * It was hard-coded to "human", so every line comment an automation wrote
-     * was filed as a person: reported from a pull request nobody had touched
-     * except the author, where the Humans tab counted eight and the whole
-     * eight were a bot arguing on the diff. The filter exists to answer "has a
-     * PERSON said anything", and it was answering "has anything been said".
-     *
-     * Read off whoever OPENED it, not off "does any human appear in it". A
-     * thread is one row in this timeline and the row is headed by the person
-     * who raised the point; a reply inside somebody else's thread is part of
-     * their remark, not a remark of your own. It is also the only rule that can
-     * say "Humans 0" on a pull request where only automation has raised
-     * anything — which is the answer he came looking for.
-     */
-    const lane: Lane = t.comments[0]?.isBot ? "bot" : "human";
-    entries.push({
-      // Its LAST comment, not its first. A thread nobody has touched sorts
-      // exactly where it always did; one that has just been answered arrives
-      // where the answer belongs.
-      at: t.comments[0]?.createdAt ?? "", ms: threadLastAt(t), key: `t${t.id}`, lane, author: t.comments[0]?.author, hot: threadHot(t),
-      node: <span style={{ color: t.isResolved ? "var(--success)" : "var(--warning)" }}>{t.isResolved ? <DoneIcon size={ICON.xs} /> : <CircleIcon size={ICON.xs} />}</span>,
-      body: <Thread t={t} onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy}
-        newSet={newSet} cameFrom={cameFrom.get(t.id)} />,
-    });
-  }
-  for (const [i, r] of lanes.botReviews.entries()) {
-    entries.push({
-      at: r.submittedAt, ms: ms(r.submittedAt), key: `br${i}`, lane: "bot", node: <span style={{ color: "var(--info-ink)" }}><AgentIcon size={ICON.xs} /></span>,
-      body: <Card who={r.author} when={ago(r.submittedAt)} url={r.url} tone="bot"
-        nodeId={r.nodeId} reactions={r.reactions} onReact={onReact}
-        chip={<Chip text="automation" tint="var(--info)" />}><Md body={r.body} /></Card>,
-    });
-  }
-  for (const c of lanes.bots) {
-    entries.push({
-      at: c.createdAt, ms: ms(c.createdAt), key: `b${c.id}`, lane: "bot", hot: hotOf([`c${c.id}`]),
-      node: <span style={{ color: "var(--info-ink)" }}><AgentIcon size={ICON.xs} /></span>,
-      body: (
-        <Card who={c.author} when={ago(c.createdAt)} url={c.url} tone="bot" chip={<Chip text="automation" tint="var(--info)" />}
-          nodeId={c.nodeId} reactions={c.reactions} onReact={onReact}>
-          {/* Rendered, not dumped. In full these used to be a <pre> of the raw
-              source, so a coverage report arrived as `<!-- Pytest Coverage
-              Comment -->` and a wall of pipe characters — the one shape of
-              comment that most needs a table to be a table. It goes through the
-              same Md as everything else: the table renders, the <details> folds,
-              and the shields.io badge becomes a pill instead of a broken image. */}
-          {raw
-            ? <Md body={c.body} />
-            : <span style={{ color: "var(--text2)" }}>{c.digest || "(Nothing worth pulling out)"}</span>}
-        </Card>
-      ),
-    });
-  }
-
-  // The events between the remarks: pushes, renames, labels, the merge itself.
-  // Without them the conversation reads as if nothing happened between comments
-  // — the force-push that invalidated a review simply is not there.
-  for (const [i, e] of d.timeline.entries()) {
-    entries.push({
-      at: e.at, ms: ms(e.at), key: `e${i}`, lane: "event",
-      node: <span style={{ color: EVENT_TINT[e.kind] ?? "var(--text3)" }}>{EVENT_GLYPH[e.kind] ?? "•"}</span>,
-      body: <TimelineEvent e={e} />,
-    });
+        ),
+      });
+    } else if (x.kind === "event") {
+      // The events between the remarks: pushes, renames, labels, the merge
+      // itself. Without them the conversation reads as if nothing happened
+      // between comments — the force-push that invalidated a review is not there.
+      const e = x.event;
+      entries.push({
+        ms: x.ms, key: x.key, lane: "event",
+        node: <span style={{ color: EVENT_TINT[e.kind] ?? "var(--text3)" }}>{EVENT_GLYPH[e.kind] ?? "•"}</span>,
+        body: <TimelineEvent e={e} />,
+      });
+    } else {
+      entries.push({
+        ms: x.ms, key: x.key, lane: "event",
+        node: <span style={{ color: "var(--text3)" }}><CommitIcon size={ICON.xs} /></span>,
+        body: <CommitsEvent commits={x.commits} />,
+      });
+    }
   }
 
   // What plugins said about this pull request, on this machine only: one
@@ -11314,7 +11285,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   if (local) {
     for (const g of groupByRun(local)) {
       entries.push({
-        at: new Date(g.ms).toISOString(), ms: g.ms, key: g.key, lane: "local",
+        ms: g.ms, key: g.key, lane: "local",
         node: <span style={{ color: "var(--primary-ink)" }}><LocalGlyph size={ICON.xs} /></span>,
         body: g.run
           ? <RunCard run={g.run} notes={g.notes} publisher={local.publishers[g.run.plugin]} onStatus={local.setStatus} onOpenFile={onOpenFile} md={localMd} />
