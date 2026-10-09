@@ -15,7 +15,7 @@ import { join } from "node:path";
 const dir = mkdtempSync(join(tmpdir(), "agx-ci-failures-"));
 process.env.XDG_CONFIG_HOME = dir;
 process.env.AGENTGLASS_DB = join(dir, "p.db");
-const { extractFailures, redact, signature, annotationFailures, readCheckFailures, storedFailures, MAX_EXCERPT, MAX_FAILURES } = await import("../src/ciFailures.ts");
+const { extractFailures, redact, signature, annotationFailures, outputFailures, readCheckFailures, storedFailures, MAX_EXCERPT, MAX_FAILURES } = await import("../src/ciFailures.ts");
 const { db } = await import("../src/db.ts");
 type Src = import("../src/ciFailures.ts").FailureSources;
 
@@ -263,11 +263,12 @@ describe("annotations", () => {
 });
 
 // ── the order of reads, and what is kept ───────────────────────────────────
-function sources(o: { ann?: unknown; log?: unknown } = {}) {
+function sources(o: { ann?: unknown; log?: unknown; out?: unknown } = {}) {
   const calls: string[] = [];
   const src: Src = {
     annotations: async () => { calls.push("annotations"); return (o.ann ?? { ok: true, items: [] }) as never; },
     log: async (max) => { calls.push(`log<=${max}`); return (o.log ?? { ok: true, text: BUN, bytes: BUN.length }) as never; },
+    output: async () => { calls.push("output"); return (o.out ?? { ok: true, output: null }) as never; },
   };
   return { src, calls };
 }
@@ -389,5 +390,83 @@ describe("readCheckFailures", () => {
     await readCheckFailures("github.com/acme/orbit", job(), {}, other.src, { now: t0 + 91 * 86_400_000 });
     expect(db.prepare(`SELECT count(*) AS n FROM ci_failure_items WHERE job_id = ?`).get(id)).toEqual({ n: 0 });
     expect(db.prepare(`SELECT count(*) AS n FROM ci_failure_reads WHERE job_id = ?`).get(id)).toEqual({ n: 0 });
+  });
+});
+
+// ── a check an app posted: no job log, only its own output ─────────────────
+const GATE = { title: "Critical file requirements not met", summary: "❌ Core: missing checklist item: \"Add a performance item to Testing Criteria\"", text: "" };
+
+describe("outputFailures", () => {
+  test("the title and the summary are the failure", () => {
+    const r = outputFailures(GATE);
+    expect(r.failures).toHaveLength(1);
+    expect(r.failures[0]).toMatchObject({ kind: "output", title: "Critical file requirements not met" });
+    expect(r.failures[0]!.excerpt).toContain("missing checklist item");
+  });
+  test("summary and text are kept together, in that order", () => {
+    const r = outputFailures({ title: "t", summary: "first", text: "second" });
+    expect(r.failures[0]!.excerpt).toBe("first\n\nsecond");
+  });
+  test("a check that wrote nothing has no failure to show", () => {
+    expect(outputFailures({ title: "", summary: "  ", text: "" }).failures).toEqual([]);
+  });
+  test("what an app wrote is redacted like a log", () => {
+    const r = outputFailures({ title: "deploy gate", summary: "token ghp_abcdefghijklmnopqrstuvwxyz0123456789 for jane@example.com", text: "" });
+    expect(JSON.stringify(r)).not.toContain("ghp_abc");
+    expect(JSON.stringify(r)).not.toContain("jane@");
+  });
+  test("a long summary is capped, keeping both ends", () => {
+    const r = outputFailures({ title: "t", summary: `start\n${"x".repeat(10_000)}\nend`, text: "" });
+    expect(r.failures[0]!.truncated).toBe(true);
+    expect(r.failures[0]!.excerpt.length).toBeLessThanOrEqual(MAX_EXCERPT + 20);
+  });
+});
+
+describe("readCheckFailures when there is no job log", () => {
+  test("a 404 on the log is a check an app posted: its own output is shown, in three requests", async () => {
+    const { src, calls } = sources({ log: { ok: false, kind: "notfound" }, out: { ok: true, output: GATE } });
+    const r = await readCheckFailures("github.com/acme/orbit", job(), {}, src);
+    expect(calls).toEqual(["annotations", "log<=25000000", "output"]);
+    expect(r).toMatchObject({ ok: true, state: "nolog", source: "output", requests: 3 });
+    if (r.ok) expect(r.failures[0]).toMatchObject({ kind: "output", title: "Critical file requirements not met" });
+  });
+
+  test("it is kept: opened again it costs nothing", async () => {
+    const id = job();
+    await readCheckFailures("github.com/acme/orbit", id, {}, sources({ log: { ok: false, kind: "notfound" }, out: { ok: true, output: GATE } }).src);
+    const again = sources();
+    const r = await readCheckFailures("github.com/acme/orbit", id, {}, again.src);
+    expect(again.calls).toEqual([]);
+    expect(r).toMatchObject({ state: "nolog", source: "output", cached: true });
+  });
+
+  test("annotations are enough: the output is not asked for", async () => {
+    const { src, calls } = sources({ log: { ok: false, kind: "notfound" }, ann: { ok: true, items: [{ level: "failure", path: "web/src/board.ts", line: 12, message: "boom" }] } });
+    const r = await readCheckFailures("github.com/acme/orbit", job(), {}, src);
+    expect(calls).toEqual(["annotations", "log<=25000000"]);
+    expect(r).toMatchObject({ ok: true, state: "nolog", source: "annotations" });
+  });
+
+  test("a check with no log and no output says so, with nothing invented", async () => {
+    const { src } = sources({ log: { ok: false, kind: "notfound" }, out: { ok: true, output: null } });
+    expect(await readCheckFailures("github.com/acme/orbit", job(), {}, src)).toMatchObject({ ok: true, state: "nolog", source: "none", failures: [] });
+  });
+
+  test("an expired log falls back to the output too: it outlives the 90 days", async () => {
+    const { src } = sources({ log: { ok: false, kind: "expired" }, out: { ok: true, output: GATE } });
+    expect(await readCheckFailures("github.com/acme/orbit", job(), {}, src)).toMatchObject({ ok: true, state: "expired", source: "output" });
+  });
+
+  test("too large is not a reason to ask for the output: the log is there", async () => {
+    const { src, calls } = sources({ log: { ok: false, kind: "toolarge", bytes: 64_000_000 } });
+    await readCheckFailures("github.com/acme/orbit", job(), {}, src);
+    expect(calls).not.toContain("output");
+  });
+
+  test("a spent budget on the output read is shown and not kept", async () => {
+    const id = job();
+    const { src } = sources({ log: { ok: false, kind: "notfound" }, out: { ok: false, kind: "budget", resetAt: 1_790_000_000_000 } });
+    expect(await readCheckFailures("github.com/acme/orbit", id, {}, src)).toMatchObject({ ok: false, kind: "budget" });
+    expect(storedFailures("github.com/acme/orbit", id, 1)).toBeNull();
   });
 });

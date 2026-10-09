@@ -3649,7 +3649,7 @@ export interface PrCheckJob {
 
 /** One failing test (or file, or step) cut out of a CI job. */
 export interface CiFailure {
-  kind: "bun" | "pytest" | "django" | "jest" | "tsc" | "step" | "annotation";
+  kind: "bun" | "pytest" | "django" | "jest" | "tsc" | "step" | "annotation" | "output";
   /** The test, the file or the step that failed. */
   title: string;
   /** At most 4 KB, redacted, no escape bytes and no timestamps. */
@@ -3666,14 +3666,16 @@ export interface CheckFailuresHints { attempt?: number; step?: string }
  * What `/prs/check-failures` answers. `state` is about the LOG: `read` (it was
  * read), `expired` (GitHub keeps logs 90 days), `toolarge` (over the 25 MB the
  * panel reads unasked; `sizeBytes` says how big), `unparsed` (read, and nothing in
- * it names a failure). `failures` may still hold what GitHub's annotations kept.
+ * it names a failure), `nolog` (GitHub has no job log for this id: an app or a
+ * script posted the check). `failures` may still hold what GitHub's annotations
+ * or the check's own output kept.
  * `requests` is what this call cost on GitHub, 0 when it came from the cache.
  */
 export type CheckFailures =
   | {
       ok: true;
-      state: "read" | "expired" | "toolarge" | "unparsed";
-      source: "log" | "annotations" | "step" | "none";
+      state: "read" | "expired" | "toolarge" | "unparsed" | "nolog";
+      source: "log" | "annotations" | "output" | "step" | "none";
       framework: CiFailure["kind"] | null;
       failures: CiFailure[];
       /** Failures found beyond the ten kept. */

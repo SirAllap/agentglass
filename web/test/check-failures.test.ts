@@ -48,6 +48,17 @@ describe("one answer, one screen", () => {
   test("read, and nothing in it: not recognised, not an invented failure", () => {
     expect(failureView(read({ state: "unparsed", source: "none", failures: [] })).kind).toBe("unparsed");
   });
+  test("a check an app posted shows its own message, whether it never had a log or the log expired", () => {
+    const msg = F("Critical file requirements not met", "missing checklist item", "output");
+    expect(failureView(read({ state: "nolog", source: "output", framework: null, failures: [msg], readBytes: 0 }))).toMatchObject({ kind: "output", why: "nolog" });
+    expect(failureView(read({ state: "expired", source: "output", framework: null, failures: [msg], readBytes: 0 }))).toMatchObject({ kind: "output", why: "expired" });
+  });
+  test("no log and no message: its own screen, not an error", () => {
+    expect(failureView(read({ state: "nolog", source: "none", framework: null, failures: [], readBytes: 0 })).kind).toBe("nolog");
+  });
+  test("annotations on a check with no log are still a failure list", () => {
+    expect(failureView(read({ state: "nolog", source: "annotations", framework: null, failures: [F("web/src/board.ts:12", "boom", "annotation")], readBytes: 0 })).kind).toBe("failures");
+  });
   test("a spent budget carries the time it comes back; an error carries its words", () => {
     expect(failureView({ ok: false, kind: "budget", resetAt: 1_790_000_000_000, requests: 1 })).toEqual({ kind: "budget", resetAt: 1_790_000_000_000 });
     expect(failureView({ ok: false, kind: "error", error: "boom", requests: 1 })).toEqual({ kind: "error", error: "boom" });
@@ -145,9 +156,9 @@ const prPanel = await Bun.file(new URL("../src/components/PrPanel.tsx", import.m
 describe("the screen, against its source", () => {
   const code = (t: string) => t.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
 
-  test("'Open full log' is drawn once, in the footer every state shares", () => {
-    expect(code(src).split("Open full log").length - 1).toBe(1);
-    expect(src).toContain("<Footer url=");
+  test("the way out is drawn once, in the footer every state shares; only its words change", () => {
+    expect(code(src).split("<Footer ").length - 1).toBe(1);
+    expect(code(src).split("<a href={href}").length - 1).toBe(1);
   });
   test("opening the check is the only thing that asks: the effect that loads is keyed on the job, not on a timer", () => {
     expect(code(src)).not.toMatch(/setInterval|setTimeout\([^)]*load\(/);
@@ -157,7 +168,7 @@ describe("the screen, against its source", () => {
     expect(prPanel).toMatch(/\{expanded && \(\(\) => \{ const job = jobFor\(k, jobs\); return job \? <CheckFailuresPanel/);
   });
   test("every state in the mockup has its words", () => {
-    for (const w of ["Log expired", "Too large", "No test named", "Budget spent", "Read it anyway", "Reading the log…", "GitHub no longer has this log", "GitHub’s hourly budget is used up", "The log names no failing test"]) expect(src).toContain(w);
+    for (const w of ["Open on GitHub", "Posted by an app", "This check has no log", "Log expired", "Too large", "No test named", "Budget spent", "Read it anyway", "Reading the log…", "GitHub no longer has this log", "GitHub’s hourly budget is used up", "The log names no failing test"]) expect(src).toContain(w);
   });
   test("surfaces and borders are the house's: tokens and EDGE/LINE, no raw colour", () => {
     expect(code(src)).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgb\(|var\(--bg2\)/);

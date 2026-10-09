@@ -63,13 +63,13 @@ function FailureRow({ f, open, onToggle, first }: { f: CiFailure; open: boolean;
 }
 
 /** Bottom of every state: the way out on the left, the one thing that can be done about the state on the right. */
-function Footer({ url, note, action }: { url: string; note?: ReactNode; action?: ReactNode }) {
+function Footer({ url, label = "Open full log", note, action }: { url: string; label?: string; note?: ReactNode; action?: ReactNode }) {
   const href = externalUrl(url);
   return (
     <div className="flex items-center gap-2 px-2.5 py-1.5" style={{ borderTop: LINE, minHeight: 40 }}>
       {href
         ? <a href={href} target="_blank" rel="noreferrer noopener" className="shrink-0 text-[10.5px] inline-flex items-center gap-1 hover:underline" style={{ color: "var(--primary-ink)" }}>
-            <ArrowIcon size={ICON.xs} />Open full log
+            <ArrowIcon size={ICON.xs} />{label}
           </a>
         : <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>No link to the log</span>}
       <span className="ml-auto min-w-0 truncate text-[10px] tabular-nums" style={{ color: "var(--text3)" }}>{note}</span>
@@ -135,6 +135,7 @@ export function CheckFailuresPanel({ root, check, job }: { root: string; check: 
   const retry = (force: boolean) => void load(root, job.id, hints, force);
   const age = logAgeDays(check.completedAt);
 
+  const noJobLog = view.kind === "output" || view.kind === "nolog";
   let body: ReactNode;
   let note: ReactNode;
   let action: ReactNode;
@@ -180,6 +181,32 @@ export function CheckFailuresPanel({ root, check, job }: { root: string; check: 
       );
       break;
     }
+    case "output": {
+      const f = view.read.failures[0]!;
+      const expired = view.why === "expired";
+      body = (
+        <div className="px-2.5 py-2.5 flex flex-col gap-1.5">
+          <div>{expired ? <Tag tone="warn" title="GitHub no longer has the log"><ClockIcon size={ICON.xs} />Log expired</Tag> : <Tag><FileIcon size={ICON.xs} />Posted by an app</Tag>}</div>
+          <Heading>{expired ? "GitHub no longer has the log. This is the check’s own message" : "This check has no log. This is its own message"}</Heading>
+          <div className="rounded-lg overflow-hidden" style={{ border: EDGE }}>
+            <div className="flex items-center gap-2 px-2.5 py-1 text-[10px]" style={{ color: "var(--text3)", background: "var(--surface-inset)", ...CODE_FONT_STYLE }}>
+              <span className="truncate" title={f.title}>{f.title}</span>
+              <span className="ml-auto"><CopyFailure f={f} /></span>
+            </div>
+            <Excerpt text={f.excerpt} />
+          </div>
+          {!expired && <Body>An app or a script posted this check through GitHub’s Checks API, so GitHub keeps no job log for it. Open it on GitHub for anything beyond what it wrote.</Body>}
+        </div>
+      );
+      break;
+    }
+    case "nolog":
+      body = (
+        <StateBox tag={<Tag><FileIcon size={ICON.xs} />No log</Tag>} title="This check has no log">
+          <Body>An app or a script posted it, not a job that ran, so GitHub keeps no log for it, and it left no message. Open it on GitHub to see where it came from.</Body>
+        </StateBox>
+      );
+      break;
     case "expired":
       body = (
         <StateBox tag={<Tag tone="warn"><ClockIcon size={ICON.xs} />Log expired</Tag>} title="GitHub no longer has this log">
@@ -228,7 +255,8 @@ export function CheckFailuresPanel({ root, check, job }: { root: string; check: 
   return (
     <div className="mx-2.5 mb-2 rounded-xl overflow-hidden text-[11px]" style={{ border: EDGE, background: "var(--surface-card)" }}>
       {body}
-      <Footer url={job.url || check.url || ""} note={note} action={action} />
+      {/* An app-posted check has no job log: its own page is where more would be, so that is the link. */}
+      <Footer url={noJobLog ? check.url || job.url || "" : job.url || check.url || ""} label={noJobLog ? "Open on GitHub" : "Open full log"} note={note} action={action} />
     </div>
   );
 }

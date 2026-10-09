@@ -261,6 +261,27 @@ export function annotationFailures(items: CheckAnnotation[]): { failures: CiFail
   return { failures: kept, more: Math.max(0, all.length - kept.length) };
 }
 
+// ── a check's own output ──────────────────────────────────────────────────
+/** What a check run says about itself: the title and summary it posted. */
+export interface CheckOutput { title: string; summary: string; text: string }
+
+/**
+ * A check an app or a script posted through the Checks API (a "Critical file
+ * requirements" gate, a coverage bot) is a check run with an id of its own, not
+ * an Actions job: GitHub has no job log for it and `/actions/jobs/<id>/logs` is a
+ * 404 by design. What it has is its OUTPUT, and that is the whole failure: the
+ * message its author wrote for whoever opens it. This is also all that outlives
+ * a job's 90 days of log.
+ */
+export function outputFailures(out: CheckOutput): { failures: CiFailure[]; more: number } {
+  const title = out.title.trim();
+  const body = [out.summary, out.text].map((x) => x.trim()).filter(Boolean).join("\n\n");
+  if (!title && !body) return { failures: [], more: 0 };
+  const first = body.split("\n").find((l) => l.trim())?.trim() ?? "";
+  const { text, truncated } = cap((body || title).split("\n"));
+  return { failures: [redactAll({ kind: "output", title: title || first.slice(0, 120), excerpt: text, signature: signature(title || first, first), truncated })], more: 0 };
+}
+
 // ── the cache ─────────────────────────────────────────────────────────────
 db.exec(`
 CREATE TABLE IF NOT EXISTS ci_failure_reads (
@@ -345,7 +366,13 @@ export function cachedSummaries(repo: string, jobIds: string[]): Record<string, 
 export type LogRead =
   | { ok: true; text: string; bytes: number }
   | { ok: false; kind: "expired" }
+  /** A 404 on the log: the id is not an Actions job (a check an app posted), or the repository is not visible to this token. */
+  | { ok: false; kind: "notfound" }
   | { ok: false; kind: "toolarge"; bytes: number }
+  | { ok: false; kind: "budget"; resetAt: number | null }
+  | { ok: false; kind: "error"; error: string };
+export type OutputRead =
+  | { ok: true; output: CheckOutput | null }
   | { ok: false; kind: "budget"; resetAt: number | null }
   | { ok: false; kind: "error"; error: string };
 export type AnnotationsRead =
@@ -356,6 +383,8 @@ export type AnnotationsRead =
 export interface FailureSources {
   annotations(): Promise<AnnotationsRead>;
   log(maxBytes: number): Promise<LogRead>;
+  /** The check run's own title and summary: asked only when there is no log to read (one request). */
+  output(): Promise<OutputRead>;
 }
 
 const inflight = new Map<string, Promise<CheckFailures>>();
@@ -416,11 +445,18 @@ async function readFresh(
       out = { ok: true, state: "unparsed", source: "none", framework: null, failures: [], more: 0, readBytes: log.bytes, step: hints.step, at: now, cached: false, requests };
     }
   } else {
-    // expired or too large: the log is not coming, say so, and show what annotations kept.
-    const withAnn = fromAnnotations.failures.length > 0;
+    // No log is coming (expired, not an Actions job, too large). What GitHub's annotations kept comes first; then,
+    // when there is none and the log is gone rather than just big, the check's own output — one more request.
+    let failures = fromAnnotations.failures, more = fromAnnotations.more;
+    let source: Ok["source"] = failures.length ? "annotations" : "none";
+    if (!failures.length && (log.kind === "expired" || log.kind === "notfound")) {
+      const o = await src.output(); requests++;
+      if (!o.ok) return o.kind === "budget" ? { ok: false, kind: "budget", resetAt: o.resetAt, requests } : { ok: false, kind: "error", error: o.error, requests };
+      if (o.output) { const f = outputFailures(o.output); failures = f.failures; more = f.more; if (failures.length) source = "output"; }
+    }
     out = {
-      ok: true, state: log.kind === "expired" ? "expired" : "toolarge", source: withAnn ? "annotations" : "none", framework: null,
-      failures: fromAnnotations.failures, more: fromAnnotations.more, readBytes: 0, sizeBytes: log.kind === "toolarge" ? log.bytes : undefined,
+      ok: true, state: log.kind === "expired" ? "expired" : log.kind === "notfound" ? "nolog" : "toolarge", source, framework: null,
+      failures, more, readBytes: 0, sizeBytes: log.kind === "toolarge" ? log.bytes : undefined,
       step: hints.step, at: now, cached: false, requests,
     };
   }

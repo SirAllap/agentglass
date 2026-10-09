@@ -17,7 +17,7 @@
 import { ttlRead, forgetReads } from "./ttlread.ts";
 import { singleFlight } from "./singleflight.ts";
 import { learnFromRead } from "./checkRuns.ts";
-import { readCheckFailures, cachedSummaries, type LogRead, type AnnotationsRead, type CheckAnnotation } from "./ciFailures.ts";
+import { readCheckFailures, cachedSummaries, type LogRead, type AnnotationsRead, type OutputRead, type CheckAnnotation } from "./ciFailures.ts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { failed } from "./refused.ts";
 import { homedir, tmpdir } from "node:os";
@@ -4779,6 +4779,9 @@ async function coreResetAt(): Promise<number | null> {
 
 async function ghFailure(stderr: string): Promise<{ ok: false; kind: "budget"; resetAt: number | null } | { ok: false; kind: "error"; error: string }> {
   if (RATE_LIMITED.test(stderr)) return { ok: false, kind: "budget", resetAt: await coreResetAt() };
+  // GitHub's own line ("gh: Not Found (HTTP 404)") says nothing a person can act on: say what it means.
+  if (/HTTP 403|Resource not accessible/i.test(stderr)) return { ok: false, kind: "error", error: "GitHub refused to show this to this account's token (HTTP 403). The token may lack read access to Actions or checks for this repository." };
+  if (/HTTP 404|Not Found/i.test(stderr)) return { ok: false, kind: "error", error: "GitHub has no record of this check for this account: it may be in a repository this account cannot read, or older than GitHub keeps it." };
   return { ok: false, kind: "error", error: stderr.trim().split("\n")[0] || "could not read it from GitHub" };
 }
 
@@ -4819,12 +4822,15 @@ async function readLogCapped(nameWithOwner: string, jobId: string, maxBytes: num
   const code = await proc.exited;
   const stderr = await stderrP;
   if (status === 410) return { ok: false, kind: "expired" };
+  if (status === 404) return { ok: false, kind: "notfound" };
   if (code !== 0 || status !== 200) return ghFailure(stderr || `HTTP ${status}`);
   return { ok: true, text: Buffer.concat(chunks).subarray(bodyAt).toString("utf8"), bytes: total - bodyAt };
 }
 
 async function readAnnotations(nameWithOwner: string, jobId: string): Promise<AnnotationsRead> {
   const r = await gh(["api", `repos/${nameWithOwner}/check-runs/${jobId}/annotations?per_page=50`]);
+  // A 404 here is "no such check run": the log read that follows says what that means, so it is not an error yet.
+  if (r.code !== 0 && /HTTP 404/.test(r.stderr + r.stdout)) return { ok: true, items: [] };
   if (r.code !== 0) return ghFailure(r.stderr || r.stdout);
   try {
     const rows = JSON.parse(r.stdout) as any[];
@@ -4833,6 +4839,17 @@ async function readAnnotations(nameWithOwner: string, jobId: string): Promise<An
     }));
     return { ok: true, items };
   } catch { return { ok: false, kind: "error", error: "GitHub's answer was not readable" }; }
+}
+
+async function readCheckOutput(nameWithOwner: string, jobId: string): Promise<OutputRead> {
+  const r = await gh(["api", `repos/${nameWithOwner}/check-runs/${jobId}`, "--jq", "{title: (.output.title // \"\"), summary: (.output.summary // \"\"), text: (.output.text // \"\")}"]);
+  if (r.code !== 0) {
+    if (/HTTP 404/.test(r.stderr + r.stdout)) return { ok: true, output: null };
+    const f = await ghFailure(r.stderr || r.stdout);
+    return f;
+  }
+  try { return { ok: true, output: JSON.parse(r.stdout) as { title: string; summary: string; text: string } }; }
+  catch { return { ok: false, kind: "error", error: "GitHub's answer was not readable" }; }
 }
 
 /**
@@ -4853,6 +4870,7 @@ export async function checkFailures(rootIn: unknown, jobIdIn: unknown, hints: { 
   }, {
     annotations: () => readAnnotations(repo.nameWithOwner, jobId),
     log: (max) => readLogCapped(repo.nameWithOwner, jobId, max),
+    output: () => readCheckOutput(repo.nameWithOwner, jobId),
   }, { force });
 }
 

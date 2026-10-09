@@ -63,6 +63,9 @@ export type FailureView =
   | { kind: "loading" }
   | { kind: "failures"; read: Read; notice: "expired" | "toolarge" | null }
   | { kind: "no-test"; read: Read }
+  /** A check an app or a script posted: no job log, its own message is the failure. `why`: it never had one, or it expired. */
+  | { kind: "output"; read: Read; why: "nolog" | "expired" }
+  | { kind: "nolog"; read: Read }
   | { kind: "expired"; read: Read }
   | { kind: "toolarge"; read: Read; size: number; canForce: boolean }
   | { kind: "unparsed"; read: Read }
@@ -74,6 +77,8 @@ export function failureView(r: CheckFailures | undefined): FailureView {
   if (!r) return { kind: "loading" };
   if (!r.ok) return r.kind === "budget" ? { kind: "budget", resetAt: r.resetAt } : { kind: "error", error: r.error };
   if (r.state === "read" && r.source === "step") return { kind: "no-test", read: r };
+  if (r.source === "output" && r.failures.length) return { kind: "output", read: r, why: r.state === "expired" ? "expired" : "nolog" };
+  if (r.state === "nolog" && !r.failures.length) return { kind: "nolog", read: r };
   if (r.failures.length) return { kind: "failures", read: r, notice: r.state === "expired" || r.state === "toolarge" ? r.state : null };
   if (r.state === "expired") return { kind: "expired", read: r };
   if (r.state === "toolarge") return { kind: "toolarge", read: r, size: r.sizeBytes ?? 0, canForce: (r.sizeBytes ?? 0) <= FORCE_CAP };

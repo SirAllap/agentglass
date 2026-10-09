@@ -29,12 +29,15 @@ const BODY = [
 ].join("\n");
 writeFileSync(join(dir, "body.txt"), BODY);
 writeFileSync(join(dir, "ann-empty.json"), "[]");
+writeFileSync(join(dir, "out-gate.json"), JSON.stringify({ title: "Critical file requirements not met", summary: "missing checklist item: add a performance item", text: "" }));
+writeFileSync(join(dir, "out-none.json"), JSON.stringify({ title: "", summary: "", text: "" }));
 writeFileSync(join(dir, "ann-none.json"), JSON.stringify([{ annotation_level: "failure", path: ".github", start_line: 1, message: "Process completed with exit code 2." }]));
 
 const stub = join(dir, "gh");
 writeFileSync(stub, `#!/bin/sh
 echo "$*" >> "$AGX_STUB_CALLS"
 case "$*" in
+  *"check-runs/"*"--jq"*) cat "$AGX_STUB_OUTPUT" ;;
   *annotations*) cat "$AGX_STUB_ANN" ;;
   *rate_limit*) echo 1790000000 ;;
   *"/logs"*)
@@ -42,6 +45,7 @@ case "$*" in
       ok) printf 'HTTP/1.1 200 OK\\r\\nContent-Length: %s\\r\\nContent-Type: text/plain\\r\\n\\r\\n' "$(wc -c < "$AGX_STUB_BODY")"; cat "$AGX_STUB_BODY" ;;
       nolength) printf 'HTTP/1.1 200 OK\\r\\nContent-Type: text/plain\\r\\n\\r\\n'; cat "$AGX_STUB_BODY" ;;
       big) printf 'HTTP/1.1 200 OK\\r\\nContent-Length: 64000000\\r\\n\\r\\n'; exec sleep 30 ;;
+      notfound) printf 'HTTP/1.1 404 Not Found\\r\\n\\r\\n{"message":"Not Found"}'; echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;
       gone) printf 'HTTP/1.1 410 Gone\\r\\n\\r\\n{"message":"Gone"}'; echo "gh: Gone (HTTP 410)" >&2; exit 1 ;;
       limited) echo "gh: API rate limit exceeded for user ID 1. (HTTP 403)" >&2; exit 1 ;;
       broken) echo "gh: Internal Server Error (HTTP 500)" >&2; exit 1 ;;
@@ -51,7 +55,7 @@ esac
 chmodSync(stub, 0o755);
 
 let nextJob = 7000;
-async function read(mode: string, o: { ann?: string; job?: string; force?: boolean; cap?: string } = {}) {
+async function read(mode: string, o: { ann?: string; out?: string; job?: string; force?: boolean; cap?: string } = {}) {
   const calls = join(dir, `calls-${mode}-${nextJob}.txt`);
   writeFileSync(calls, "");
   const job = o.job ?? String(++nextJob);
@@ -61,7 +65,7 @@ async function read(mode: string, o: { ann?: string; job?: string; force?: boole
   const proc = Bun.spawn([process.execPath, "-e", script], {
     env: {
       PATH: `${dir}:${process.env.PATH}`, HOME: dir, NODE_ENV: "test", XDG_CONFIG_HOME: dir, XDG_DATA_HOME: dir, XDG_CACHE_HOME: dir, AGENTGLASS_STATE_DIR: dir, AGENTGLASS_DB: join(dir, "t.db"),
-      AGX_STUB_CALLS: calls, AGX_STUB_MODE: mode, AGX_STUB_BODY: join(dir, "body.txt"), AGX_STUB_ANN: join(dir, o.ann ?? "ann-empty.json"),
+      AGX_STUB_CALLS: calls, AGX_STUB_MODE: mode, AGX_STUB_BODY: join(dir, "body.txt"), AGX_STUB_ANN: join(dir, o.ann ?? "ann-empty.json"), AGX_STUB_OUTPUT: join(dir, o.out ?? "out-gate.json"),
     },
     stdout: "pipe", stderr: "pipe",
   });
@@ -108,10 +112,10 @@ describe("a failed check, read through gh", () => {
     expect(ms).toBeLessThan(10_000);
   });
 
-  it("an expired log (410) says so, costs the same two requests, and is kept", async () => {
+  it("an expired log (410) says so, falls back to the check's own output (a third request), and is kept", async () => {
     const { got, lines } = await read("gone", { job: "7788" });
-    expect(got).toMatchObject({ ok: true, state: "expired", requests: 2 });
-    expect(lines).toHaveLength(2);
+    expect(got).toMatchObject({ ok: true, state: "expired", source: "output", requests: 3 });
+    expect(lines).toHaveLength(3);
     expect((await read("gone", { job: "7788" })).lines).toHaveLength(0);
   });
 
@@ -140,5 +144,20 @@ describe("a failed check, read through gh", () => {
     const { got, lines } = await read("ok", { job: "12abc" });
     expect(got).toMatchObject({ ok: false, kind: "error", error: "invalid job" });
     expect(lines).toHaveLength(0);
+  });
+
+  it("a 404 on the log is a check an app posted: it shows the check's own message, not GitHub's error", async () => {
+    const { got, lines } = await read("notfound");
+    expect(got).toMatchObject({ ok: true, state: "nolog", source: "output", requests: 3 });
+    expect(got.failures[0]).toMatchObject({ kind: "output", title: "Critical file requirements not met" });
+    expect(got.failures[0].excerpt).toContain("missing checklist item");
+    expect(JSON.stringify(got)).not.toContain("HTTP 404");
+    expect(lines).toHaveLength(3);
+    expect(lines[2]).toContain("check-runs/");
+  });
+
+  it("no log and no message: it says there is nothing, in the state, with no error", async () => {
+    const { got } = await read("notfound", { out: "out-none.json" });
+    expect(got).toMatchObject({ ok: true, state: "nolog", source: "none", failures: [] });
   });
 });
