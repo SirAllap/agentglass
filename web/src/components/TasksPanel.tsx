@@ -48,7 +48,7 @@ import { matchesQuery } from "../lib/boardSearch.ts";
 import { openCard, type CardJump } from "../lib/openCard.ts";
 import type { IssueJump } from "../lib/openIssue.ts";
 import { TASK_SOURCES, shownTaskSources, subscribeTaskSources, type TaskSourceId } from "../lib/taskSources.ts";
-import { CHIP, CTRL_H, EDGE, INPUT, INPUT_STYLE, RefreshButton, LINE } from "./workspace/Chrome.tsx";
+import { CHIP, CTRL_H, EDGE, INPUT, INPUT_STYLE, RefreshButton, LINE, TL_AVATAR, TL_CSS } from "./workspace/Chrome.tsx";
 import { useTaskConnected, visibleTaskSources } from "../lib/taskConnected.ts";
 import { landingSource, rememberTaskSource } from "../lib/taskLanding.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
@@ -3348,7 +3348,8 @@ interface Pending {
  *
  * Dim, small, and not in a card of its own: these are the margin of the
  * conversation. A status change drawn with the weight of a comment is a timeline
- * where you cannot find what somebody said.
+ * where you cannot find what somebody said. Each line is an `agx-tiny` sitting
+ * on the timeline's rail, its face or bullet in the rail's node — see TL_CSS.
  */
 function EventRun({ events, open, onToggle, faceFor }: {
   events: CardEvent[]; open: boolean; onToggle: () => void;
@@ -3360,17 +3361,16 @@ function EventRun({ events, open, onToggle, faceFor }: {
   const foldable = folds({ kind: "events", at: events[0]?.at ?? 0, events, id: "" });
   const rows = foldable && !open ? [] : events;
   return (
-    <div className="mb-3">
+    <div className="agx-ev">
       {rows.map((e, i) => (
-        <div key={`${e.at}-${i}`} className="flex items-baseline gap-2 py-0.5 text-[10.5px]"
-          style={{ color: "var(--text3)" }}
+        <div key={`${e.at}-${i}`} className="agx-tiny"
           /* Why the moves have no name on them, on the row itself rather than
              in a footnote nobody reads. */
           title={e.kind === "status" ? NO_AUTHOR_NOTE : undefined}>
           {/* The face, where ClickUp gives one — the creation does, a move does
               not. Same round 14px as everywhere else, and the bullet keeps the
               rows that have no face aligned with the ones that do. */}
-          {(() => {
+          <span className="agx-node">{(() => {
             const seenWho = e.kind === "seen" ? seenActor(e.text ?? "").who : "";
             const person = seenWho ? faceFor?.(seenWho) : null;
             if (e.avatar) {
@@ -3395,7 +3395,7 @@ function EventRun({ events, open, onToggle, faceFor }: {
                   </span>;
             }
             return <span aria-hidden className="shrink-0 text-center" style={{ width: 14, color: "var(--text4)" }}>·</span>;
-          })()}
+          })()}</span>
           <span className="min-w-0 flex-1">
             {e.kind === "seen" && seenActor(e.text ?? "").who
               ? (() => {
@@ -3436,9 +3436,9 @@ function EventRun({ events, open, onToggle, faceFor }: {
       ))}
       {foldable && (
         <button onClick={onToggle}
-          className="agx-btn w-full text-left flex items-center gap-1.5 py-1 text-[10.5px]"
+          className="agx-btn agx-tiny w-full text-left"
           style={{ color: "var(--text4)" }}>
-          <span aria-hidden style={{ display: "inline-block", transform: open ? "none" : "rotate(-90deg)" }}>▾</span>
+          <span aria-hidden className="agx-node"><span style={{ display: "inline-block", transform: open ? "none" : "rotate(-90deg)" }}>▾</span></span>
           {open ? "Hide" : `Show ${foldLabel(events.length)}`}
         </button>
       )}
@@ -4403,10 +4403,14 @@ function NoteStrip({ note, onClose }: { note: { ok: boolean; text: string; go?: 
   );
 }
 
-function Face({ p, n }: { p: NonNullable<ProviderTask["people"]>[number]; n: number }) {
+function Face({ p, n, size = 18 }: {
+  p: NonNullable<ProviderTask["people"]>[number]; n: number;
+  /** 18 in a row of faces; `TL_AVATAR` for the speaker beside a comment. */
+  size?: number;
+}) {
   const ring = p.me ? "var(--success)" : "transparent";
   const base = {
-    width: 18, height: 18, borderRadius: 999, marginLeft: n ? -5 : 0,
+    width: size, height: size, borderRadius: 999, marginLeft: n ? -5 : 0,
     boxShadow: `0 0 0 1.5px ${ring}, 0 0 0 3px var(--bg)`,
     /*
      * Small, and deliberately so. This orders the faces AMONG THEMSELVES — the
@@ -4431,7 +4435,7 @@ function Face({ p, n }: { p: NonNullable<ProviderTask["people"]>[number]; n: num
   return (
     <span title={p.me ? `${p.name} — you` : p.name}
       className="inline-flex items-center justify-center text-[10px] font-medium"
-      style={{ ...base, position: "relative", background: p.color || "var(--bg4)", color: "#fff" }}>
+      style={{ ...base, position: "relative", background: p.color || "var(--bg4)", color: "#fff", ...(size > 18 ? { fontSize: Math.round(size * 0.35) } : {}) }}>
       {p.initials}
     </span>
   );
@@ -6696,6 +6700,9 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           follow and there is nothing else on screen left to say it. */}
       {!!rows.length && (
         <div className="mb-3 pt-2">
+          {/* The timeline's rules are a string in Chrome.tsx, not a stylesheet
+              the pull request panel happens to have mounted. */}
+          <style>{TL_CSS}</style>
           <div className={`${EYEBROW} mb-1.5`} style={{ color: "var(--text4)" }}>
             Oldest first
           </div>
@@ -6708,10 +6715,17 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
             * backwards. Now they are oldest-first (fixed at the source) and
             * each one is a card with its author, so the eye can count turns.
             *
+            * GitHub's shape, as the pull request conversation draws it: the
+            * speaker's face in a column of its own outside the card, the
+            * remark in a neutral card, and the card's moves on the rail
+            * between them. One face per remark — the header no longer
+            * draws its own.
+            *
             * `1d` is how long ago; `3 Aug 18:21` is when. A thread is read
             * against a working day — "before or after the deploy" — and only
             * the second answers that. Both, since neither replaces the other.
             */}
+          <div className="agx-tl">
           {rows.map((row) => {
             /* What happened to the card, in the place it happened. A run of these
                with nothing said between them is one row — folded past three, or a
@@ -6734,8 +6748,14 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                paragraphs a millimetre apart, where the gap BETWEEN two comments
                was smaller than the gap between two lines inside one, so the
                eye had nothing to cut on and the column read as one block. */
-            <div key={c.id} className="mb-3 rounded-lg px-3.5 py-3"
-              style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", border: EDGE }}>
+            <div key={c.id} className="agx-ev">
+              {/* The face beside the name, which is how the same comment reads
+                  in ClickUp itself. The API carries it for a comment's author;
+                  for a status change it carries nobody. */}
+              <span className="agx-av">
+                <Face n={0} size={TL_AVATAR} p={{ name: c.who || "—", initials: c.initials ?? "", color: c.color, avatar: c.avatar }} />
+              </span>
+            <div className="agx-card rounded-xl px-3.5 py-3" style={{ border: EDGE }}>
               {/*
                 * Who wrote it, kept under the card's own band for as long as
                 * what they wrote — ClickUp's behaviour, and the reason it took
@@ -6748,13 +6768,8 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                 * neither is readable. The negative margins take it to the
                 * card's edges so nothing shows through at the sides.
                 */}
-              <div className="sticky z-[5] -mx-3.5 -mt-3 px-3.5 pt-3 pb-2 mb-2 flex items-center gap-2 flex-wrap rounded-t-lg"
-                style={{ top: "var(--cu-head-h, 0px)", background: "color-mix(in srgb, var(--bg3) 30%, var(--bg))" }}>
-                {/* The face beside the name, which is how the same comment reads
-                    in ClickUp itself — "I miss seeing who made those changes,
-                    with avatar and name if possible". The API carries it for a
-                    comment's author; for a status change it carries nobody. */}
-                <Face n={0} p={{ name: c.who || "—", initials: c.initials ?? "", color: c.color, avatar: c.avatar }} />
+              <div className="sticky z-[5] -mx-3.5 -mt-3 px-3.5 pt-3 pb-2 mb-2 flex items-center gap-2 flex-wrap rounded-t-xl"
+                style={{ top: "var(--cu-head-h, 0px)", background: "var(--surface-card)" }}>
                 <span className="text-[10.5px] font-semibold" style={{ color: "var(--text2)" }}>{c.who || "—"}</span>
                 {!!c.at && (
                   <span className="text-[10px]" style={{ color: "var(--text4)" }}
@@ -6834,7 +6849,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                   the comment is hovered — a row of four buttons under every
                   paragraph turns a conversation into a control panel. */}
               {writable && editing !== c.id && (
-                <div className="agx-hover-show flex items-center gap-1 mt-2">
+                <div className="agx-hover-show flex flex-wrap items-center gap-1 mt-2">
                   {/* Controls, not a sentence.
                       These were four words in a row under the paragraph and read
                       as text somebody forgot to delete — "no parecen ni botones".
@@ -6884,7 +6899,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
               )}
 
               {replyTo === c.id && (
-                <div className="mt-2" style={{ marginLeft: 4, paddingLeft: 12, borderLeft: LINE }}>
+                <div className="agx-nest" style={{ paddingLeft: 12, borderLeft: LINE }}>
                   <Composer value={noteDraft} onChange={setNoteDraft} busy={busyComment === c.id} autoFocus
                     placeholder={`Answer ${c.who || "this"}`} sendLabel="Reply"
                     people={members} onNeedPeople={loadMembers}
@@ -6907,8 +6922,8 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                   a reply is never mistaken for the next comment — which is
                   exactly what a flat list of both would produce. */}
               {openThreads.has(c.id) && !!c.replyList?.length && (
-                <div className="mt-3 flex flex-col gap-3"
-                  style={{ marginLeft: 4, paddingLeft: 12, borderLeft: LINE }}>
+                <div className="agx-nest flex flex-col gap-3"
+                  style={{ paddingLeft: 12, borderLeft: LINE }}>
                   {c.replyList.map((r) => (
                     <div key={r.id}>
                       <div className="flex items-center gap-2 flex-wrap mb-1.5">
@@ -6965,8 +6980,10 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                 </div>
               )}
             </div>
+            </div>
             );
           })}
+          </div>
         </div>
       )}
 

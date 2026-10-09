@@ -113,11 +113,12 @@ be its value there.
 | `dataInk` | `inkFor` for a colour that came with the data | `web/src/lib/contrast.ts` |
 | `TIER_TARGET` | `--text2` 7, `--text3` 5, `--text4` 4 | `web/src/lib/contrast.ts` |
 | `floorTiers` | lifts the text tiers to their targets, in order | `web/src/lib/contrast.ts` |
-| `TL_AVATAR` | 40 | `web/src/components/PrPanel.tsx` |
-| `TL_GAP` | 12 | `web/src/components/PrPanel.tsx` |
-| `TL_RAIL` | 16 | `web/src/components/PrPanel.tsx` |
-| `TL_SPACE` | 16 | `web/src/components/PrPanel.tsx` |
-| `TL_INDENT` | `TL_RAIL * 2 + 4` | `web/src/components/PrPanel.tsx` |
+| `TL_AVATAR` | 40 | `web/src/components/workspace/Chrome.tsx` |
+| `TL_GAP` | 12 | `web/src/components/workspace/Chrome.tsx` |
+| `TL_RAIL` | 16 | `web/src/components/workspace/Chrome.tsx` |
+| `TL_SPACE` | 16 | `web/src/components/workspace/Chrome.tsx` |
+| `TL_INDENT` | `TL_RAIL * 2 + 4` | `web/src/components/workspace/Chrome.tsx` |
+| `TL_CSS` | the `agx-tl` timeline rules, for a view's own `<style>` | `web/src/components/workspace/Chrome.tsx` |
 
 The `--*-ink` variables have no line in a stylesheet: `inkTints` writes one for
 each entry of `TINT_KEYS` when a theme is applied, so the test checks that the

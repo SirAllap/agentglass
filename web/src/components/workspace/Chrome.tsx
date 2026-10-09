@@ -627,3 +627,42 @@ export function FilterField({ value, onChange, placeholder, label, className = "
  * writes down and the one most often broken.
  */
 export const GROUP_HEADING = "px-1.5 pt-3 pb-1 text-[10px] uppercase tracking-wider";
+
+/* The conversation's geometry, GitHub's: a big avatar outside the card, a rail
+   running a little way into the card column with the small events sitting on
+   it, and air between entries. Here rather than in the pull request panel
+   because the tracker card's activity draws the same timeline: the numbers and
+   the rules below are one copy, and `TL_CSS` is a string any view can put in
+   its own `<style>` without depending on another view being mounted. */
+export const TL_AVATAR = 40;
+/** Avatar to card. */
+export const TL_GAP = 12;
+/** The card's left edge to the rail. */
+export const TL_RAIL = 16;
+/** Between two entries. */
+export const TL_SPACE = 16;
+/** A small event's text, and a review's threads, start past the rail. */
+export const TL_INDENT = TL_RAIL * 2 + 4;
+
+export const TL_CSS = `
+/* One timeline, one rail, laid out the way github.com lays it out, so who said
+   what reads at a glance: the speaker's face in a column of its own, their
+   remark in a card beside it, and the rail running behind the cards with the
+   small events sitting on it. The card's own surface hides the rail where a
+   card is; between cards, the rail is what says these happened in an order. */
+.agx-tl{position:relative;padding-left:${TL_AVATAR + TL_GAP}px}
+.agx-tl::before{content:"";position:absolute;left:${TL_AVATAR + TL_GAP + TL_RAIL - 1}px;top:0;bottom:0;width:2px;background:var(--surface-line)}
+.agx-ev{position:relative;margin-bottom:${TL_SPACE}px}
+.agx-ev:last-child{margin-bottom:0}
+.agx-tl>.agx-tiny{margin-bottom:${TL_SPACE}px}
+.agx-av{position:absolute;left:-${TL_AVATAR + TL_GAP}px;top:0;display:flex}
+.agx-card{position:relative;background:var(--surface-card)}
+.agx-nest{margin:8px 0 0 ${TL_INDENT}px}
+.agx-node{position:absolute;left:${TL_RAIL - 10}px;top:3px;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:9px;background:var(--bg);border:2px solid var(--surface-line);z-index:1}
+/* A small event — opened, force-pushed, review requested. It sits ON the rail
+   and weighs a fraction of a remark, because it is context rather than
+   something anybody said. */
+.agx-tiny{position:relative;display:flex;align-items:center;gap:7px;font-size:10.5px;color:var(--text3);padding:4px 0 4px ${TL_INDENT}px;min-height:26px}
+.agx-tiny .agx-node{top:3px}
+.agx-tiny b{color:var(--text2);font-weight:500}
+`;

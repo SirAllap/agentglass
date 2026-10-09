@@ -37,7 +37,7 @@ import { flashElement } from "../lib/flash.ts";
 import { shaFromHref } from "../lib/commitLink.ts";
 import { isShortRef, openInApp, wantsExternal } from "../lib/linkRouter.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
-import { Button, RefreshButton, ScopeChip, Segmented, Tabs, CTRL_H, EDGE, CHIP_SURFACE, INPUT, INPUT_STYLE, LINE } from "./workspace/Chrome.tsx";
+import { Button, RefreshButton, ScopeChip, Segmented, Tabs, CTRL_H, EDGE, CHIP_SURFACE, INPUT, INPUT_STYLE, LINE, TL_AVATAR, TL_CSS } from "./workspace/Chrome.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import type {
   PrSummary, PrDetail, PrRepoId, PrThread, PrComment, PrReview, PrReviewer, PrCheck, GitRepoRef, FileChange,
@@ -683,20 +683,6 @@ export function Btn({ children, onClick, disabled, danger, primary, ok, warn, ti
  * descendants — a heading inside a comment, a cell inside a table — which
  * inline styles cannot reach. `.agx-md` scopes every one of them.
  */
-/* The conversation's geometry, GitHub's: a big avatar outside the card, a rail
-   running a little way into the card column with the small events sitting on
-   it, and air between entries. Named once because the CSS below and the rows
-   in Conversation both lean on them. */
-const TL_AVATAR = 40;
-/** Avatar to card. */
-const TL_GAP = 12;
-/** The card's left edge to the rail. */
-const TL_RAIL = 16;
-/** Between two entries. */
-const TL_SPACE = 16;
-/** A small event's text, and a review's threads, start past the rail. */
-const TL_INDENT = TL_RAIL * 2 + 4;
-
 export const MD_CSS = `
 /* Feedback, so a press is legible before the work behind it finishes.
    :active answers within one frame; :focus-visible keeps the keyboard
@@ -713,26 +699,7 @@ export const MD_CSS = `
    empty beside text that stopped in mid-air. GitHub caps nothing here either,
    so the same pull request read narrower in the app than on the page it came
    from. Reading comfort on a wide display is what the panel width is for. */
-/* One timeline, one rail, laid out the way github.com lays it out, so who said
-   what reads at a glance: the speaker's face in a column of its own, their
-   remark in a card beside it, and the rail running behind the cards with the
-   small events sitting on it. The card's own surface hides the rail where a
-   card is; between cards, the rail is what says these happened in an order. */
-.agx-tl{position:relative;padding-left:${TL_AVATAR + TL_GAP}px}
-.agx-tl::before{content:"";position:absolute;left:${TL_AVATAR + TL_GAP + TL_RAIL - 1}px;top:0;bottom:0;width:2px;background:var(--surface-line)}
-.agx-ev{position:relative;margin-bottom:${TL_SPACE}px}
-.agx-ev:last-child{margin-bottom:0}
-.agx-tl>.agx-tiny{margin-bottom:${TL_SPACE}px}
-.agx-av{position:absolute;left:-${TL_AVATAR + TL_GAP}px;top:0;display:flex}
-.agx-card{position:relative;background:var(--surface-card)}
-.agx-nest{margin:8px 0 0 ${TL_INDENT}px}
-.agx-node{position:absolute;left:${TL_RAIL - 10}px;top:3px;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:9px;background:var(--bg);border:2px solid var(--surface-line);z-index:1}
-/* A small event — opened, force-pushed, review requested. It sits ON the rail
-   and weighs a fraction of a remark, because it is context rather than
-   something anybody said. */
-.agx-tiny{position:relative;display:flex;align-items:center;gap:7px;font-size:10.5px;color:var(--text3);padding:4px 0 4px ${TL_INDENT}px;min-height:26px}
-.agx-tiny .agx-node{top:3px}
-.agx-tiny b{color:var(--text2);font-weight:500}
+${TL_CSS}
 /* menus — .agx-menu itself now lives in index.css: it was defined HERE, in a
    <style> this component injects, so a menu in any other panel had no
    background until somebody had opened a pull request. See index.css. */
