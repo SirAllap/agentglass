@@ -416,6 +416,11 @@ export function watchDesktopPalette(): void {
       const r = await fetch(`${SERVER}/desktop/palette`, { headers: authHeaders() });
       if (r.ok) { next = ((await r.json()) as { palette: Answer | null }).palette; answered = true; }
     } catch { /* no server yet, or none at all (the static demo) */ }
+    /* A poll that got no answer says nothing about the desktop. Read as "no
+       palette", it dropped the desktop's mode to the OS's Porcelain for as long
+       as the server took to answer again — a white window for a few seconds,
+       whenever the server was busy or restarting. What is on screen stays. */
+    if (!answered) return;
     const changed = (next?.stamp ?? "") !== stamp;
     stamp = next?.stamp ?? "";
     desktop = next?.theme ?? null;
