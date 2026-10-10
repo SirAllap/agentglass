@@ -97,7 +97,21 @@ function materializeBridge(src: string): string {
     return src; // let the spawn fail loudly rather than silently degrade
   }
 }
-const BRIDGE = materializeBridge(bridgeFile);
+let BRIDGE = materializeBridge(bridgeFile);
+/**
+ * The bridge was written once at start-up into a private /tmp directory, and a
+ * /tmp cleaner (systemd-tmpfiles, a reaper timer) removes an idle directory
+ * after hours or days while the server keeps running. Every terminal attach
+ * after that failed with `python3: can't open file '/tmp/agentglass-bridge-…/
+ * pty_bridge.py'` until the server restarted, on a phone that was perfectly
+ * connected. So the path is checked at each spawn and re-extracted when gone.
+ * Pure over its inputs so the case is testable without a real cleaner.
+ */
+export function ensureBridge(current: string, src: string, exists: (p: string) => boolean, make: (src: string) => string): string {
+  if (current === src || exists(current)) return current;
+  return make(src);
+}
+const liveBridge = (): string => (BRIDGE = ensureBridge(BRIDGE, bridgeFile, existsSync, materializeBridge));
 // A ceiling, not a working limit: the panel is meant to hold many shells at
 // once (tmux-style), so this only exists to stop a runaway client forking
 // processes without bound. Each idle shell costs a pty and a sleeping process.
@@ -1018,7 +1032,7 @@ export function ptyOpen(ws: PtyWs) {
     // Built on `env`, not on baseEnv: the shim's variables were folded in above
     // and rebuilding from the base would silently drop them.
     env = { ...env, AGENTGLASS_PTY_SIZE_FILE: join(sizeDir, "size") };
-    argv = [...(HAS_SETSID ? ["setsid"] : []), PYTHON, BRIDGE, ...run];
+    argv = [...(HAS_SETSID ? ["setsid"] : []), PYTHON, liveBridge(), ...run];
   } else if (HAS_SCRIPT) {
     env = { ...env, COLUMNS: String(cols), LINES: String(rows) };
     argv = [...(HAS_SETSID ? ["setsid"] : []), "script", "-qfec", `exec ${run.map(shq).join(" ")}`, "/dev/null"];
