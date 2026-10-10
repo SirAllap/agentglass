@@ -14,6 +14,8 @@ kept in one place.
 
 ## Released
 
+- **v0.23.2** — **Release tags are signed again, so the in-app update accepts them.**
+  - **In-app update.** The updater only installs a tag signed by the pinned release key. The tags from v0.20.0 to v0.23.1 were annotated but not signed, so every install that updates from source refused them. v0.23.2 is signed. The release workflow now checks the signature before it publishes, so an unsigned tag fails there and not on an installed app.
 - **v0.23.1** — **Fixes from testing v0.23.0 by hand.**
   - **tmux restore.** A window of three or more panes comes back with its panes in the order they were captured, each in its own slot, in both resume modes. When the crash-loop guard skips a restore, Settings now says so.
   - **Pull requests.** Update branch no longer says "Synced" when it could not read the branch on GitHub to see whether it moved, and the "requested" hold survives a window reload.

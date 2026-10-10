@@ -45,6 +45,18 @@ jobs:
             exit 1
           fi
 
+          # The updater refuses a tag that is not signed by the pinned release key
+          # (electron/release-allowed-signers), so a release cut from an unsigned
+          # tag is one nobody can install in-app. v0.20 to v0.23.1 went out that
+          # way. Fail here, before a public release exists, not on an installed app.
+          if ! git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="$PWD/electron/release-allowed-signers" \
+                 -c gpg.program=false -c gpg.openpgp.program=false -c gpg.x509.program=false \
+                 verify-tag "refs/tags/$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "::error::$GITHUB_REF_NAME is not signed by the pinned release key (electron/release-allowed-signers): the in-app update would refuse it." >&2
+            echo "Re-cut it with the release key: git -c gpg.format=ssh -c user.signingkey=<release key> tag -s --cleanup=verbatim $GITHUB_REF_NAME -F <notes>" >&2
+            exit 1
+          fi
+
           # Every tag is signed now (the updater refuses an unsigned one), and
           # %(contents) includes the trailing signature armor along with the
           # message — dropped here so a release's public notes are the
