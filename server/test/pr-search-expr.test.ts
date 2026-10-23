@@ -123,3 +123,22 @@ describe("people", () => {
     expect(expr("involves:ana")).toContain("involves:ana");
   });
 });
+
+describe("the viewer's own closed pull requests", () => {
+  test("author:me is GitHub's @me, in any case", () => {
+    expect(expr("author:me")).toContain("author:@me");
+    expect(expr("author:ME")).toContain("author:@me");
+    expect(expr("author:@me")).toContain("author:@me");
+  });
+  test("merged and closed-without-merging are two searches, not one mixed list", () => {
+    const merged = expr("author:@me is:merged", "all", "all");
+    const unmerged = expr("author:@me is:closed is:unmerged", "all", "all");
+    expect(merged).toContain("is:merged");
+    expect(merged).not.toContain("is:open");
+    expect(unmerged).toContain("is:closed");
+    expect(unmerged).toContain("is:unmerged");
+  });
+  test("a login that merely starts with me is not rewritten", () => {
+    expect(expr("author:meg")).toContain("author:meg");
+  });
+});

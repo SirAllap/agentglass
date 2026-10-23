@@ -1713,7 +1713,8 @@ function searchExpr(repo: PrRepoId, filter: PrFilter, state: PrState, query?: st
       continue;
     }
     const q = QUALIFIER[key];
-    if (q) { parts.push(`${q}:${quoteQ(value)}`); continue; }
+    /* `me` is the account gh is signed in as, GitHub's `@me`. */
+    if (q) { parts.push(`${q}:${quoteQ(key === "author" && value.toLowerCase() === "me" ? "@me" : value)}`); continue; }
     if (key === "checks") {
       const st = value.toLowerCase() === "green" ? "success" : value.toLowerCase() === "red" ? "failure" : "pending";
       parts.push(`status:${st}`);
@@ -1722,6 +1723,10 @@ function searchExpr(repo: PrRepoId, filter: PrFilter, state: PrState, query?: st
     if (key === "is") {
       if (value.toLowerCase() === "draft") parts.push("draft:true");
       else if (value.toLowerCase() === "ready") parts.push("draft:false");
+      /* Merged and closed-without-merging are the two halves of "closed". */
+      else if (value.toLowerCase() === "merged") parts.push("is:merged");
+      else if (value.toLowerCase() === "unmerged") parts.push("is:unmerged");
+      else if (value.toLowerCase() === "closed") parts.push("is:closed");
       continue;
     }
     if (key === "sort") continue; // ordering is decided below, not by the user's text

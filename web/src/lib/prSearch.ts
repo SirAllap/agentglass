@@ -93,6 +93,7 @@ export function toServerQuery(query: string, logins: ReadonlySet<string> = new S
   const free = toks.filter((t) => !isQualifier(t));
   const words = normalizeFree(free.join(" ")).split(/\s+/).filter(Boolean)
     .map((w) => {
+      if (w.toLowerCase() === "@me") return "author:@me";
       const bare = w.replace(/^@/, "");
       if (logins.has(bare.toLowerCase())) return `involves:${bare}`;
       const key = refKey(w);
@@ -101,11 +102,14 @@ export function toServerQuery(query: string, logins: ReadonlySet<string> = new S
   return [...toks.filter(isQualifier), ...words].join(" ");
 }
 
+/** `me` / `@me`: the viewer, whom GitHub knows as `@me`; never a login to open a board for. */
+export const isMe = (v: string): boolean => /^@?me$/i.test(v);
+
 /** The login a box is about: a person qualifier's value, or a bare word that is a known login. */
 export function personIn(query: string, logins: ReadonlySet<string> = new Set()): string | null {
   for (const t of query.trim().split(/\s+/).filter(Boolean)) {
     const m = /^(?:author|assignee|reviewer|reviewed-by|involves):"?([^"\s]+)"?$/i.exec(t);
-    if (m) return m[1];
+    if (m) return isMe(m[1]) ? null : m[1];
     const bare = t.replace(/^@/, "");
     if (!isQualifier(t) && logins.has(bare.toLowerCase())) return bare;
   }

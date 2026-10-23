@@ -23,7 +23,7 @@ describe("a search is a section of the board", () => {
   it("derives what is shown from the query, not only from the stored setting", () => {
     // The inbox is a third surface and wins over both, so it is in the gate
     // too. The lanes give way to the result rows, inside the same board.
-    expect(src).toContain("const boardShown = boardOn && !searching && !inboxOn && !metricsOn;");
+    expect(src).toContain("const boardShown = boardOn && !searching && !inboxOn && !metricsOn && !closedOn;");
     expect(src).toContain("const searching = query.trim().length > 0;");
   });
 

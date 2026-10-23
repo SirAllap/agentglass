@@ -217,6 +217,10 @@ export function TriageBoard({
     why?: (p: PrSummary) => string | null;
     title: string;
     rows: PrSummary[];
+    /** The rows split under their own headings, each with its count and its own
+     *  Load more (the viewer's merged and closed-without-merging). When set,
+     *  `rows` is every section's rows together and drives the heading count. */
+    sections?: { id: string; label: string; rows: PrSummary[]; total: number | null; loading: boolean; failed?: boolean; /** Present only while another page exists. */ more?: () => void }[];
     /** The list is being fetched and has nothing to show yet. */
     loading: boolean;
     /** What an empty answer says. */
@@ -644,44 +648,16 @@ export function TriageBoard({
        modifier check above is what keeps that chord out. */
   };
 
-  if (results) {
-    return (
-      <div ref={frame} data-board tabIndex={0} onKeyDown={onKey} className="flex flex-col h-full min-h-0 outline-none">
-        <div className="shrink-0 px-4 pt-2 pb-1.5 flex items-center gap-2 text-[12.5px]">
-          <b className="text-[15px] font-semibold tabular-nums">{resultsHeading(results.rows.length)}</b>
-          <span className="min-w-0 truncate" style={{ color: "var(--text3)" }} title={results.title}>{results.title}</span>
-          <button onClick={results.onBack} className="agx-btn ml-auto shrink-0 rounded px-2 py-1 text-[10.5px]"
-            style={{ color: "var(--text2)", border: EDGE }}>
-            Back to the board
-          </button>
-        </div>
-        {/* A search that is still out: the cards stay, and this says so. */}
-        <div aria-hidden className="shrink-0 h-0.5 mx-4 rounded-full"
-          style={{ background: results.loading && results.rows.length > 0 ? "color-mix(in srgb, var(--primary) 55%, transparent)" : "transparent" }}
-          {...(results.loading && results.rows.length > 0 ? { role: "progressbar" } : {})} />
-        <div className="flex-1 min-h-0 overflow-y-auto agx-scroll px-4 pb-3" data-results>
-          {results.loading && results.rows.length === 0 ? (
-            <div aria-hidden className="grid gap-2.5" style={{ gridTemplateColumns: `repeat(auto-fill, ${resultColumn(RESULT_COLUMNS)})` }}>
-              {[0, 1, 2, 3].map((k) => (
-                <div key={k} className="rounded-lg animate-pulse"
-                  style={{ height: 74, background: "var(--surface-card)", border: EDGE, animationDelay: `${k * 0.08}s` }} />
-              ))}
-            </div>
-          ) : results.rows.length === 0 ? (
-            <p className="m-0 text-[11px]" style={{ color: "var(--text3)" }}>{results.empty}</p>
-          ) : (
-            /* The same card as the lanes, on a grid: a search result is a pull
-               request, and the board has one way to draw those. Dimmed while
-               the next page loads, so what is there is still readable. */
+  const resultGrid = (rows: PrSummary[], more: { loading: boolean; onMore: () => void } | undefined, dim: boolean) => (
             <div className="grid gap-x-2.5 items-start"
-              style={{ gridTemplateColumns: `repeat(auto-fill, ${resultColumn(RESULT_COLUMNS)})`, opacity: results.loading ? 0.7 : 1, transition: "opacity .15s" }}>
-              {results.rows.map((r) => {
+              style={{ gridTemplateColumns: `repeat(auto-fill, ${resultColumn(RESULT_COLUMNS)})`, opacity: dim ? 0.7 : 1, transition: "opacity .15s" }}>
+              {rows.map((r) => {
                 const p = trueChecks(r);
                 const base: Filed = p.state === "MERGED" ? { lane: "others", reason: "Merged." }
                   : p.state === "CLOSED" ? { lane: "others", reason: "Closed without merging." }
                   : stillReading(p) ? { lane: "others", reason: "Reading its checks…" }
                   : fileInLane(p, { mine: false, asked: false });
-                const why = results.why?.(p);
+                const why = results?.why?.(p);
                 const filed: Filed = why ? { ...base, reason: `${base.reason} · ${why}` } : base;
                 return (
                   <CardView key={p.number} p={{ ...p, filed }} hasTaskProvider={hasTaskProvider} repoUses={repoUses}
@@ -698,6 +674,54 @@ export function TriageBoard({
                 </button>
               )}
             </div>
+  );
+
+  if (results) {
+    return (
+      <div ref={frame} data-board tabIndex={0} onKeyDown={onKey} className="flex flex-col h-full min-h-0 outline-none">
+        <div className="shrink-0 px-4 pt-2 pb-1.5 flex items-center gap-2 text-[12.5px]">
+          <b className="text-[15px] font-semibold tabular-nums">{resultsHeading(results.rows.length)}</b>
+          <span className="min-w-0 truncate" style={{ color: "var(--text3)" }} title={results.title}>{results.title}</span>
+          <button onClick={results.onBack} className="agx-btn ml-auto shrink-0 rounded px-2 py-1 text-[10.5px]"
+            style={{ color: "var(--text2)", border: EDGE }}>
+            Back to the board
+          </button>
+        </div>
+        {/* A search that is still out: the cards stay, and this says so. */}
+        <div aria-hidden className="shrink-0 h-0.5 mx-4 rounded-full"
+          style={{ background: results.loading && results.rows.length > 0 ? "color-mix(in srgb, var(--primary) 55%, transparent)" : "transparent" }}
+          {...(results.loading && results.rows.length > 0 ? { role: "progressbar" } : {})} />
+        <div className="flex-1 min-h-0 overflow-y-auto agx-scroll px-4 pb-3" data-results>
+          {!results.sections && results.loading && results.rows.length === 0 ? (
+            <div aria-hidden className="grid gap-2.5" style={{ gridTemplateColumns: `repeat(auto-fill, ${resultColumn(RESULT_COLUMNS)})` }}>
+              {[0, 1, 2, 3].map((k) => (
+                <div key={k} className="rounded-lg animate-pulse"
+                  style={{ height: 74, background: "var(--surface-card)", border: EDGE, animationDelay: `${k * 0.08}s` }} />
+              ))}
+            </div>
+          ) : !results.sections && results.rows.length === 0 ? (
+            <p className="m-0 text-[11px]" style={{ color: "var(--text3)" }}>{results.empty}</p>
+          ) : (
+            /* The same card as the lanes, on a grid: a search result is a pull
+               request, and the board has one way to draw those. Dimmed while
+               the next page loads, so what is there is still readable. */
+            results.sections ? (
+              <div className="flex flex-col gap-3">
+                {results.sections.map((sec) => (
+                  <section key={sec.id} data-section={sec.id}>
+                    <h3 className="m-0 mb-1.5 flex items-baseline gap-2 text-[12px] font-semibold">
+                      {sec.label}
+                      <span className="tabular-nums font-normal" style={{ color: "var(--text3)" }}>{sec.total ?? sec.rows.length}</span>
+                    </h3>
+                    {sec.rows.length === 0
+                      ? <p className="m-0 text-[11px]" style={{ color: "var(--text3)" }}>
+                          {sec.loading ? "Reading…" : sec.failed ? "Could not read this list." : "None."}
+                        </p>
+                      : resultGrid(sec.rows, sec.more ? { loading: sec.loading, onMore: sec.more } : undefined, sec.loading)}
+                  </section>
+                ))}
+              </div>
+            ) : resultGrid(results.rows, more, results.loading)
           )}
         </div>
       </div>

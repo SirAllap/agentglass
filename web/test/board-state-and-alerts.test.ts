@@ -40,7 +40,7 @@ describe("PR board has no state axis", () => {
   });
 
   it("a view pill clears the search and pressing the lit one again goes back to everything", () => {
-    expect(pr).toContain('setInboxOn(false); setMetricsOn(false); setFilter("all"); setQuery(""); setBoardView(boardView === v.id ? "all" : (v.id as BoardView));');
+    expect(pr).toContain('setInboxOn(false); setMetricsOn(false); setClosedOn(false); setFilter("all"); setQuery(""); setBoardView(boardView === v.id ? "all" : (v.id as BoardView));');
   });
 });
 

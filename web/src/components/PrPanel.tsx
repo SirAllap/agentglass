@@ -100,6 +100,7 @@ import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, parseShieldBadge
 import { afterViewed, fileAtFloor, stepFileIndex, verticalScrollerOf } from "../lib/prNav.ts";
 import { buildFileTree, treeOrder, type TreeNode } from "../lib/prFileTree.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
+import { CLOSED_SECTIONS, useMyClosed, type ClosedSectionId } from "../lib/prClosed.ts";
 import { knownLogins, matchedAs, normalizeFree, personIn, searchPool, singleLogin, toServerQuery } from "../lib/prSearch.ts";
 import { refsIn, refWhy, withBranchHits } from "../lib/prRefs.ts";
 import { useRefBranches } from "../lib/refBranches.ts";
@@ -2968,7 +2969,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * cleared — they were never touched.
    */
   const [searchRules, setSearchRules] = useState<FilterSet>(EMPTY_RULES);
-  const searchingNow = query.trim().length > 0;
+  /* The "Closed" pill: the viewer's own merged and closed pull requests, in two
+     sections (lib/prClosed.ts). The board's rules stay out of it, like a search. */
+  const [closedOn, setClosedOn] = useState(false);
+  const searchingNow = query.trim().length > 0 || closedOn;
   useEffect(() => { if (!searchingNow) setSearchRules(EMPTY_RULES); }, [searchingNow]);
   const activeRules = searchingNow ? searchRules : rules;
   const setActiveRules = searchingNow ? setSearchRules : setRules;
@@ -2989,6 +2993,19 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const shownPrs = unreadOnly ? unreadPrs : basePrs;
   /* Cards of a search the second pass never reached fill themselves in, in one batched request. */
   const visiblePrs = useRowDetails(root, shownPrs, query.trim().length > 0);
+  /* Closed view: one request per page of each section, on the pill and on Load
+     more; the filter bar's words and the rules narrow what came, locally. */
+  const myClosed = useMyClosed(root, closedOn);
+  const closedMerged = useRowDetails(root, myClosed.sections.merged.rows, closedOn);
+  const closedUnmerged = useRowDetails(root, myClosed.sections.unmerged.rows, closedOn);
+  const closedSections = useMemo(() => CLOSED_SECTIONS.map((def) => {
+    const sec = myClosed.sections[def.id];
+    const rows = applyRulesKeepUnread(
+      applyFilters(def.id === "merged" ? closedMerged : closedUnmerged, { ...filters, text: normalizeFree(filters.text) }),
+      activeRules, readPrField, isRuleExempt);
+    return { id: def.id as ClosedSectionId, label: def.label, rows, total: sec.total, loading: sec.loading, failed: sec.failed, more: sec.hasNext ? () => myClosed.more(def.id) : undefined };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [myClosed, closedMerged, closedUnmerged, filters, activeRules, seenMarks]);
 
   const facets = useMemo(() => buildFacets(prs, filters, facetOpts), [prs, filters, facetOpts]);
 
@@ -3032,7 +3049,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   /* CI metrics: the repository's checks against their own history. Another view of the same exclusive row as the Inbox. */
   const [metricsOn, setMetricsOn] = useState(false);
   /* The lanes: open work, nothing typed in the search box. */
-  const boardShown = boardOn && !searching && !inboxOn && !metricsOn;
+  const boardShown = boardOn && !searching && !inboxOn && !metricsOn && !closedOn;
   /* The rest of the board's surface: a search, or the closed and merged ones,
      drawn as rows in the same panel. The lanes are a triage of OPEN work and
      filing a merged pull request would put it under "Blocked". */
@@ -4944,10 +4961,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             <Pill on={inboxOn} icon={<InboxIcon size={ICON.xs} />} label="Inbox"
               title="What happened while you were away — GitHub's notifications, filtered to this repository"
               count={inboxUnread || undefined} countTint="warning"
-              onClick={() => { setMetricsOn(false); setInboxOn(true); }} />
+              onClick={() => { setMetricsOn(false); setClosedOn(false); setInboxOn(true); }} />
             <Pill on={metricsOn} icon={<ChartIcon size={ICON.xs} />} label="CI"
               title="Every check of this repository against its own history — slow, passed on a re-run, drifting"
-              onClick={() => { setInboxOn(false); setMetricsOn(true); }} />
+              onClick={() => { setInboxOn(false); setClosedOn(false); setMetricsOn(true); }} />
             <span className="self-center shrink-0" style={{ width: 1, height: 12, background: "color-mix(in srgb, var(--text) 14%, transparent)" }} />
             {VIEWS.filter((v) => v.id !== "all").map((v) => {
               const n = boardViewCounts[v.id as BoardView] ?? null;
@@ -4955,9 +4972,14 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               return (
                 <Pill key={v.id} on={on} label={v.label} title={v.hint}
                   dot={v.tint ?? undefined} count={n ?? undefined}
-                  onClick={() => { setInboxOn(false); setMetricsOn(false); setFilter("all"); setQuery(""); setBoardView(boardView === v.id ? "all" : (v.id as BoardView)); }} />
+                  onClick={() => { setInboxOn(false); setMetricsOn(false); setClosedOn(false); setFilter("all"); setQuery(""); setBoardView(boardView === v.id ? "all" : (v.id as BoardView)); }} />
               );
             })}
+            {/* Not a lane and not a search: a second press is the way back, and
+                the box and the bar are left as they were. */}
+            <Pill on={closedOn && !inboxOn && !metricsOn} label="Closed"
+              title="Your merged pull requests and the ones closed without merging, newest first"
+              onClick={() => { setInboxOn(false); setMetricsOn(false); setClosedOn((v) => !v); }} />
           </div>
           {/* Always, once the repository is known — not "once rows arrived".
               The bar is built from the rows, so gating it on them made it drop
@@ -5021,10 +5043,17 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 viewer={personLogin ?? undefined}
                 person={personLogin ? { onBack: backToMine, more: person.state.kind === "ready" && person.state.more } : undefined}
                 others={boardWide && !personLogin ? boardOthersShown : undefined}
-                more={!personLogin && resultsShown && listState.hasNext && listState.cursor 
+                more={!personLogin && resultsShown && !closedOn && listState.hasNext && listState.cursor 
                   ? { loading: listState.loading, onMore: () => { if (listState.cursor) setPages((p) => [...p, listState.cursor!]); } }
                   : undefined}
-                results={resultsShown && !personLogin ? {
+                results={resultsShown && !personLogin && closedOn ? {
+                  title: "your pull requests, merged and closed without merging",
+                  rows: closedSections.flatMap((x) => x.rows),
+                  sections: closedSections,
+                  loading: closedSections.some((x) => x.loading),
+                  empty: "No merged or closed pull request of yours.",
+                  onBack: () => setClosedOn(false),
+                } : resultsShown && !personLogin ? {
                   title: answered ? `for “${query.trim()}”, every state` : `in the loaded pull requests — press ⏎ to search them all`,
                   why: (p) => refWhy(p, refKeys) ?? matchedAs(p, personIn(query, logins)),
                   rows: visiblePrs,
