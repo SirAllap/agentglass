@@ -680,6 +680,9 @@
   display: none;
 }
 .agx-hover:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
+/* A lane's whole title bar folds it: a soft wash of the lane's own colour. */
+.agx-lane-bar { cursor: pointer; transition: background-color 120ms; }
+.agx-lane-bar:hover { background: color-mix(in srgb, var(--lane) 12%, transparent); }
 /* The keyboard's cursor over a search result — the same tint `.agx-hover`
    already uses for a mouse over one, so a row highlighted by ↑/↓ reads as
    the thing a click would land on, not a new kind of mark nobody has seen

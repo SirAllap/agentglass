@@ -198,7 +198,7 @@ describe("the lane that cannot be folded", () => {
   });
 });
 
-describe("what the keyboard walks", () => {
+describe("what the find walks", () => {
   /*
    * The half a render cannot show, and the half that had no test at all: a
    * cursor on a card behind a 44px strip looks exactly like a cursor on a

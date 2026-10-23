@@ -12,12 +12,13 @@
 // Nothing is fetched for this. It reads the two lists the panel already loads
 // for the pill counts — see stakeFrom in prLanes.ts — so the board costs what
 // the pill row cost, and the numbers cannot disagree with their source.
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { HIT, ICON, MIN_BOX } from "../lib/iconSize.ts";
 import { InfoIcon } from "./settingsNavIcons.tsx";
 import { CircleIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, FlagIcon, LinkIcon, PinIcon, RefreshIcon, SearchIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { FACES_MAX, eventLine, splitTitle, standing } from "../lib/prCardZones.ts";
-import { ALWAYS_OPEN, foldable, foldedLanes, setFoldedLanes, walkable } from "../lib/boardPrefs.ts";
+import { ALWAYS_OPEN, boardScroll, foldable, foldedLanes, laneSorts, setBoardScroll, setFoldedLanes, setLaneSorts, walkable } from "../lib/boardPrefs.ts";
+import { SORT_KEYS, SORT_LABEL, sortCards, type SortKey } from "../lib/prSort.ts";
 import type { PrSummary } from "../../../shared/types.ts";
 import { staleApproval } from "../../../shared/mergeBlockers.ts";
 import { LANES, lanesFor, LANE_CAP, board as fileAll, fileInLane, suggestedAction, ACTION_LABEL, viewKeeps, viewIsWide, type BoardView, type Filed, type LaneId } from "../lib/prLanes.ts";
@@ -355,7 +356,7 @@ export function TriageBoard({
    *
    * `LANES` is the policy; this is the screen. Only one lane opts out of being
    * shown empty — see `hideWhenEmpty` — and everything downstream counts
-   * columns rather than lanes so the keyboard's 1–5, the h/l walk and the grid
+   * columns rather than lanes so the counts and the grid
    * template all agree with what is in front of you.
    */
   const cols = useMemo(
@@ -478,33 +479,22 @@ export function TriageBoard({
       return next;
     });
   }, [folded]);
+  /* Sort order per lane, persisted like the folds. The default is never
+     stored, and sorting is a view over the cards already in hand: no request. */
+  const [sorts, setSorts] = useState<Record<string, SortKey>>(() => laneSorts(laneIds));
+  const sortOf = useCallback((id: string): SortKey => sorts[id] ?? "default", [sorts]);
+  const setSort = useCallback((id: string, k: SortKey) => {
+    setSorts((cur) => {
+      const next = { ...cur, [id]: k };
+      setLaneSorts(next);
+      return next;
+    });
+  }, []);
   const frame = useRef<HTMLDivElement>(null);
-  /*
-   * THE KEYS DID NOTHING, AND THE ROW BELOW THE COUNTS SAID THEY DID.
-   *
-   * Reported: "that legend doesn't work at all, it is a lie" — the strip
-   * that reads `1–4 lane · j k card · h l across · ⏎ open · a open it · p pin`.
-   * It was not lying about which keys exist; every one of them is handled in
-   * `onKey` below. They were UNREACHABLE. The handler hangs off this div, the
-   * div is `tabIndex={0}`, and nothing in this file ever focused it — a grep
-   * for `.focus()` on `frame` returned nothing, and the only other use of the
-   * ref was a `scrollIntoView`. Arriving at the board from the view rail left
-   * the focus wherever it had been, so six advertised shortcuts answered to
-   * nobody.
-   *
-   * ON MOUNT IS ON ARRIVAL HERE, and that is not a coincidence worth relying
-   * on quietly: the board is mounted conditionally (`boardShown && repo && …`
-   * in PrPanel) and the whole PR view is unmounted when it is not the view on
-   * screen — `KEEP_RUNNING` in Workspace.tsx holds only the terminal and the
-   * chat. So this effect runs when the board appears and not while it sits
-   * behind another view. If either of those ever changes, this becomes a focus
-   * steal, which is the failure it is guarded against below.
-   *
-   * The guard is the whole risk of the fix. Taking focus from somebody who is
-   * typing is worse than the bug: the next character goes to a board that
-   * reads `p` as "pin this". So a field that is already focused keeps it, and
-   * the keys start working on the next click anywhere else.
-   */
+  /* The frame takes focus on arrival so ⌃F reaches the board's find. A field
+     that is already focused keeps it: stealing focus from somebody typing is
+     worse than the bug. The board mounts only while it is the view on screen,
+     so this runs on arrival and not while it sits behind another view. */
   useEffect(() => {
     const held = document.activeElement as HTMLElement | null;
     const typing = !!held && (
@@ -512,20 +502,47 @@ export function TriageBoard({
     );
     if (!typing) frame.current?.focus({ preventScroll: true });
   }, []);
-  // Keyboard navigation walks exactly what is drawn — an opened lane included,
-  // or j past the cap would step onto a card nobody can see.
+  // The find walks exactly what is drawn — an opened lane included, or it
+  // would step onto a card past the cap that nobody can see.
   const shown = useCallback((i: number) => {
     const id = cols[i]?.id ?? "review";
     /* A folded lane walks as empty, which is the app's own answer three times
-       over — `DockerPanel.ordered` says it out loud: "so j/k walks what is on
-       screen, skipping collapsed stacks rather than jumping into a container
-       nobody can see". Without this the cursor sits on a card behind a 44px
+       over — `DockerPanel.ordered` says it out loud: skip collapsed stacks
+       rather than jump into a container nobody can see. Without this the find steps onto a card behind a 44px
        strip: the heal below only rescues an EMPTY lane, and a folded lane with
        six cards in it reports six. */
-    return walkable(lanes.get(id) ?? [], {
+    return walkable(sortCards(lanes.get(id) ?? [], sortOf(id)), {
       folded: isFolded(id), opened: !!openLanes[id], cap: LANE_CAP,
     });
-  }, [lanes, cols, openLanes, isFolded]);
+  }, [lanes, cols, openLanes, isFolded, sortOf]);
+
+  /* Where the board was left: the sideways scroll and each lane's own, per
+     repository, restored once the lanes are drawn and written (debounced) as
+     they move. Local storage only, no request. */
+  const scrollKey = repoKey ?? "repo";
+  const hScroll = useRef<HTMLDivElement>(null);
+  const laneScrolls = useRef(new Map<string, HTMLDivElement>());
+  const saved = useRef<ReturnType<typeof boardScroll> | null>(null);
+  const restored = useRef(false);
+  const writeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const remember = useCallback(() => {
+    if (!restored.current) return;
+    if (writeTimer.current) clearTimeout(writeTimer.current);
+    writeTimer.current = setTimeout(() => {
+      const lanesY: Record<string, number> = {};
+      for (const [id, el] of laneScrolls.current) lanesY[id] = Math.round(el.scrollTop);
+      setBoardScroll(scrollKey, { x: Math.round(hScroll.current?.scrollLeft ?? 0), lanes: lanesY });
+    }, 200);
+  }, [scrollKey]);
+  useEffect(() => () => { if (writeTimer.current) clearTimeout(writeTimer.current); }, []);
+  const drawnLanes = face === "rows";
+  useLayoutEffect(() => {
+    if (!drawnLanes || restored.current) return;
+    saved.current ??= boardScroll(scrollKey);
+    if (hScroll.current) hScroll.current.scrollLeft = saved.current.x;
+    for (const [id, el] of laneScrolls.current) el.scrollTop = saved.current.lanes[id] ?? 0;
+    restored.current = true;
+  }, [drawnLanes, scrollKey]);
 
   /*
    * The app's find bar, driving this board.
@@ -604,35 +621,9 @@ export function TriageBoard({
     });
   }, []);
 
-  /*
-   * j and k walk the cards that are DRAWN, in reading order (lane by lane, or
-   * the result rows), and Enter opens the one the cursor is on. The cursor is a
-   * pull request number, not an index, so a refresh that moves the cards does
-   * not move it to a different one; when its card is gone it simply starts
-   * again from the first.
-   */
-  const [cur, setCur] = useState<number | null>(null);
-  const walk = (dir: 1 | -1) => {
-    const order = results ? results.rows.map((r) => r.number) : cols.flatMap((_, i) => shown(i).map((p) => p.number));
-    if (!order.length) return;
-    const at = cur == null ? -1 : order.indexOf(cur);
-    const to = order[at < 0 ? (dir > 0 ? 0 : order.length - 1) : (at + dir + order.length) % order.length]!;
-    setCur(to);
-    requestAnimationFrame(() => {
-      frame.current?.querySelector<HTMLElement>(`[data-pr="${to}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
-    });
-  };
+  /* The board is mouse-driven: no card cursor, no j/k. Cards are buttons and
+     links, so Tab reaches them the ordinary way. */
   const onKey = (e: React.KeyboardEvent) => {
-    if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-      const tag = (e.target as HTMLElement)?.tagName ?? "";
-      if (!/INPUT|TEXTAREA|SELECT/.test(tag)) {
-        const k = e.key.toLowerCase();
-        if (k === "j" || e.key === "ArrowDown") { e.preventDefault(); e.stopPropagation(); walk(1); return; }
-        if (k === "k" || e.key === "ArrowUp") { e.preventDefault(); e.stopPropagation(); walk(-1); return; }
-        /* Enter on a focused button is that button's own press. */
-        if (e.key === "Enter" && cur != null && !/BUTTON|A/.test(tag)) { e.preventDefault(); e.stopPropagation(); onOpen(cur); return; }
-      }
-    }
     /* ⌃F opens the app's own find bar, seeded with whatever is already being
        searched — the board no longer has a field of its own, and the bar is
        driving this search either way (see the engine above). */
@@ -641,11 +632,6 @@ export function TriageBoard({
       openFind(find);
       return;
     }
-    /* No other keys. The board used to answer 1-4, h/l, p and a as well; the
-       last one fired on Ctrl+Alt+A, the chord that closes and opens the bench,
-       and opened whatever card the cursor was resting on. Nobody used them.
-       j, k and Enter are back because the list they replaced had them, and the
-       modifier check above is what keeps that chord out. */
   };
 
   const resultGrid = (rows: PrSummary[], more: { loading: boolean; onMore: () => void } | undefined, dim: boolean) => (
@@ -662,7 +648,7 @@ export function TriageBoard({
                 return (
                   <CardView key={p.number} p={{ ...p, filed }} hasTaskProvider={hasTaskProvider} repoUses={repoUses}
                     pinned={pinned(p.number)} onOpen={() => onOpen(p.number)} onPin={() => onTogglePin(p)}
-                    onAct={onAct} busy={busy} acting={acting} cursor={cur === p.number} root={root}
+                    onAct={onAct} busy={busy} acting={acting} root={root}
                     unread={unreadOf(p, repoKey, readSeen())} onOpenBase={onOpen} />
                 );
               })}
@@ -912,7 +898,7 @@ export function TriageBoard({
 
       {/* Sideways only. The five columns still have to be reachable on a narrow
           window; the up-and-down is each column's own, below. */}
-      <div className="flex-1 min-h-0 overflow-x-auto overflow-y-hidden agx-scroll px-4 pb-3">
+      <div ref={hScroll} onScroll={remember} className="flex-1 min-h-0 overflow-x-auto overflow-y-hidden agx-scroll px-4 pb-3">
         {face === "failed" || face === "filtered" ? (
           /* Neither is the answer "nothing", and each says which it is: a read
              that failed has no number to give, and rows the filters hid are
@@ -963,10 +949,11 @@ export function TriageBoard({
             gridTemplateColumns: cols.map((l) => (isFolded(l.id) ? "44px" : `${LANE_WIDTH_PX}px`)).join(" "),
           }}>
             {cols.map((l, i) => {
-              const all = lanes.get(l.id) ?? [];
+              const all = sortCards(lanes.get(l.id) ?? [], sortOf(l.id));
               const opened = !!openLanes[l.id];
               const rows = opened ? all : all.slice(0, LANE_CAP);
               const more = all.length - rows.length;
+              const canFold = foldable(l.id, all.length);
               return (
                 /* A column is a box of its own height: heading fixed, cards
                    scrolling under it. `min-h-0` on both the column and its
@@ -997,8 +984,8 @@ export function TriageBoard({
                     <button onClick={() => toggleFold(l.id, all.length)}
                       aria-expanded={false}
                       title={`${all.length} ${l.label} — unfold`}
-                      className="flex-1 min-h-0 w-full flex flex-col items-center gap-1.5 pt-2 pb-3 overflow-hidden agx-hover"
-                      style={{ color: l.tint }}>
+                      className="flex-1 min-h-0 w-full flex flex-col items-center gap-1.5 pt-2 pb-3 overflow-hidden agx-lane-bar"
+                      style={{ color: l.tint, "--lane": l.tint } as CSSProperties}>
                       <span className="text-[13px] tabular-nums shrink-0">{waiting ? "—" : all.length}</span>
                       <span className="truncate" style={{
                         writingMode: "vertical-rl", transform: "rotate(180deg)",
@@ -1023,7 +1010,9 @@ export function TriageBoard({
                       * is read once — when you are learning what a lane means —
                       * not on every glance for ever after.
                       */}
-                    <h3 className="flex items-center gap-2 m-0 pt-2 pb-2 px-0.5 text-[11px] font-semibold" style={{ color: l.tint }}>
+                    <h3 onClick={canFold ? () => toggleFold(l.id, all.length) : undefined}
+                      className={`flex items-center gap-2 m-0 py-2 px-1.5 text-[11px] font-semibold rounded-sm${canFold ? " agx-lane-bar" : ""}`}
+                      style={{ color: l.tint, "--lane": l.tint } as CSSProperties}>
                       <span className="text-[13px] tabular-nums">{waiting ? "—" : all.length}</span>
                       <span className="uppercase tracking-wide truncate">{l.label}</span>
                       {/*
@@ -1041,12 +1030,23 @@ export function TriageBoard({
                         * Same fix as the card's: a real icon at a size off the
                         * app's ladder, matching its neighbour.
                         */}
-                      <span title={l.why} aria-label={l.why} role="note"
+                      <span title={l.why} aria-label={l.why} role="note" onClick={(e) => e.stopPropagation()}
                         className="shrink-0 grid place-items-center rounded-full cursor-help"
                         style={{ width: MIN_BOX, height: MIN_BOX, color: "var(--text4)" }}>
                         <InfoIcon size={ICON.xs} />
                       </span>
-                      <span className="ml-auto text-[9px] px-1 rounded shrink-0" style={{ color: "var(--text4)", border: EDGE }}>{i + 1}</span>
+                      {/* Sort: in every lane and in every state, in the same place, so
+                          nothing beside it moves. Its value is the visible state. */}
+                      <select value={sortOf(l.id)} data-sort={l.id}
+                        onChange={(e) => setSort(l.id, e.target.value as SortKey)}
+                        onClick={(e) => e.stopPropagation()}
+                        aria-label={`Sort ${l.label}`}
+                        title={sortOf(l.id) === "default" ? "Sort this lane" : `Sorted by ${SORT_LABEL[sortOf(l.id)].toLowerCase()}`}
+                        className="ml-auto shrink-0 rounded text-[10px] font-normal agx-btn"
+                        style={{ height: MIN_BOX, maxWidth: 140, color: "var(--text3)", background: "transparent", border: EDGE }}>
+                        {SORT_KEYS.map((k) => <option key={k} value={k}>{SORT_LABEL[k]}</option>)}
+                      </select>
+                      <span className="text-[9px] px-1 rounded shrink-0" style={{ color: "var(--text4)", border: EDGE }}>{i + 1}</span>
                       {/*
                         * The fold lives HERE and not on the counts row above.
                         *
@@ -1066,8 +1066,8 @@ export function TriageBoard({
                         * five columns — a lane that cannot be folded under a
                         * heading reading `0 NEEDS YOUR REVIEW`.
                         */}
-                      {foldable(l.id, all.length) && (
-                        <button onClick={() => toggleFold(l.id, all.length)}
+                      {canFold && (
+                        <button onClick={(e) => { e.stopPropagation(); toggleFold(l.id, all.length); }}
                           aria-expanded
                           title={`Fold ${l.label} — its ${all.length} stay counted`}
                           className="shrink-0 grid place-items-center rounded agx-hover"
@@ -1086,7 +1086,8 @@ export function TriageBoard({
                       reads as clipped — "the Show fewer button looks sort of
                       eaten away". Cards had `mb-2` between them and nothing after
                       the final one. */}
-                  <div className="flex-1 min-h-0 overflow-y-auto agx-scroll pb-2">
+                  <div ref={(el) => { if (el) laneScrolls.current.set(l.id, el); else laneScrolls.current.delete(l.id); }}
+                    onScroll={remember} className="flex-1 min-h-0 overflow-y-auto agx-scroll pb-2">
                     {waiting ? (
                       /* The shape of the thing being waited for, and no text:
                          a lane cannot honestly say how many it will hold. */
@@ -1102,7 +1103,7 @@ export function TriageBoard({
                           <CardView key={p.number} p={p} hasTaskProvider={hasTaskProvider} repoUses={repoUses}
                             pinned={pinned(p.number)} onOpen={() => onOpen(p.number)} onPin={() => onTogglePin(p)}
                             onAct={onAct} busy={busy} acting={acting}
-                            dim={!matches(p) || (onlyLane !== null && onlyLane !== l.id)} cursor={cur === p.number} root={root}
+                            dim={!matches(p) || (onlyLane !== null && onlyLane !== l.id)} root={root}
                             unread={unread.get(p.number)}
                             stack={stacks.of(p.number)} factsOf={factsOf} lit={lit === p.number} onLit={setLit} onOpenBase={onOpen} />
                         ))}
@@ -1380,7 +1381,7 @@ function cardVerdict(p: PrSummary): {
 const copyEdge = (done: boolean) =>
   `1px solid color-mix(in srgb, ${done ? "var(--success) 50%" : "var(--border) 55%"}, transparent)`;
 
-function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, busy, acting, dim, cursor, root, unread, stack, factsOf, lit, onLit, onOpenBase }: {
+function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, busy, acting, dim, root, unread, stack, factsOf, lit, onLit, onOpenBase }: {
   p: Card; hasTaskProvider: boolean;
   /** This repository links work items at all: see prCardBlock.ts. */
   repoUses: boolean;
@@ -1398,8 +1399,6 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
    * the shape means something.
    */
   dim?: boolean;
-  /** The keyboard (j and k) is on this card. */
-  cursor?: boolean;
   /** Where to ask how far behind this branch is. Absent means do not ask. */
   root?: string;
   /** The stack this pull request is in, or null: see prStack.ts. */
@@ -1479,7 +1478,6 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
     <div ref={cardEl} onClick={onOpen} role="button" tabIndex={-1} data-pr={p.number}
       data-dim={dim ? "1" : undefined}
       data-lit={lit ? "1" : undefined}
-      data-cursor={cursor ? "1" : undefined}
       className={`rounded-lg mb-2 cursor-pointer agx-btn agx-prc overflow-hidden${stack ? " agx-stk-card" : ""}`}
       style={{
         minHeight: stack ? spineHeight(stack.spine) : undefined,
@@ -1492,7 +1490,6 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
            every word legible, which is the difference between "not this one"
            and "gone". */
         ...(dim ? { opacity: 0.32, filter: "saturate(0.25)" } : null),
-        ...(cursor ? { outline: "2px solid var(--primary)", outlineOffset: -2 } : null),
         transition: "opacity 120ms ease, filter 120ms ease",
       }}>
       {/*

@@ -711,7 +711,7 @@ describe("taking a card away with you", () => {
  * renders. What has to hold is the shape — that the focus happens, and that it
  * is guarded — and a server render cannot see either.
  */
-describe("the shortcuts the legend promises", () => {
+describe("what the board still does with the keyboard", () => {
   const SRC = readFileSync(new URL("../src/components/TriageBoard.tsx", import.meta.url), "utf8");
   /** Comments here name the very things these assertions are about. */
   const bare = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
@@ -734,27 +734,19 @@ describe("the shortcuts the legend promises", () => {
     expect(bare).toContain("preventScroll: true");
   });
 
-  it("the board answers j, k and Enter only, and never with a modifier held", () => {
-    // Ctrl+Alt+A closes and opens the bench; the board's `a` read it as "open
-    // this card" and opened whatever the cursor rested on. Those keys went; j,
-    // k and Enter came back because the list they replaced had them, behind a
-    // modifier guard so the chord stays out.
-    expect(bare).toContain("!e.ctrlKey && !e.metaKey && !e.altKey");
-    for (const k of ['"h"', '"l"', '"p"', '"a"']) {
-      expect(bare, `the board still handles ${k}`).not.toContain(`k === ${k}`);
-    }
-    expect(SRC).not.toContain("</K> pin<");
-    expect(SRC).not.toContain("</K> open it<");
-  });
-
-  it("no card paints a keyboard cursor until a key has moved it", () => {
-    // One card used to wear a blue border and a left strip for ever, which read
-    // as a pull request state. The cursor starts on nothing.
+  it("the board has no keyboard cursor: no j/k, no arrow walk, no painted card", () => {
+    // The board is mouse-driven. Cards are buttons and links; Tab reaches them.
+    expect(bare).not.toMatch(/k === "[jk]"/);
+    expect(bare).not.toContain('"ArrowDown"');
+    expect(bare).not.toContain('"ArrowUp"');
+    expect(bare).not.toContain("data-cursor");
+    expect(bare).not.toContain("const walk");
+    expect(bare).not.toContain("setCur(");
+    // ⌃F, the app's find, is the one key the board still answers.
+    expect(bare).toContain('e.key.toLowerCase() === "f"');
     const html = render({ review: [pr(1), pr(2)], mine: [pr(3)], total: 3 });
     expect(drawn(html, "review")).toBeGreaterThan(0);
-    expect(html).not.toContain('data-cursor="1"');
-    expect(html).not.toContain("inset 2px 0 0");
-    expect(SRC).toContain("useState<number | null>(null)");
+    expect(html).not.toContain('data-cursor');
   });
 });
 
