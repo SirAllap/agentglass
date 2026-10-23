@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { DeviceScope, PublicPlugin } from "../../../../shared/types.ts";
 import { CopyIcon, EyeIcon, NoteIcon, HandIcon } from "../../lib/glyphIcons.tsx";
 import { CommandIcon, PuzzleIcon, ShieldIcon, SlidersIcon } from "../settingsNavIcons.tsx";
+import { PLUGIN_READ_WORDS } from "../../../../shared/pluginUi.ts";
 import { describeSandbox, type SandboxGrant } from "../../../../shared/pluginSandbox.ts";
 import { boxWording, neighbourKeyWording, processIsBoxed, processWillNotStart } from "../../lib/pluginBoxState.ts";
 import { HIT, ICON } from "../../lib/iconSize.ts";
@@ -87,6 +88,13 @@ export function surfaces(p: PublicPlugin): Surface[] {
       icon: <HandIcon size={ICON.sm} />,
       what: `Buttons on its findings: ${noteActions.map((a) => a.label).join(", ")}`,
       where: "next to Reply and Resolve on each finding it wrote; pressing one tells the plugin, never GitHub",
+    });
+  }
+  for (const read of c.reads ?? []) {
+    out.push({
+      icon: <EyeIcon size={ICON.sm} />,
+      what: PLUGIN_READ_WORDS[read] ?? `A read this app does not know: ${read}`,
+      where: "built on this machine, bounded, and refused whole if it holds anything that looks like a secret; nothing is sent to GitHub",
     });
   }
   return out;

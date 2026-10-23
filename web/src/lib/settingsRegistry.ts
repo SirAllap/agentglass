@@ -56,6 +56,7 @@ import { searchEngine, setSearchEngine } from "./browserPrefs.ts";
 import { DEFAULT_SEARCH_ENGINE, SEARCH_ENGINE_LABELS, type SearchEngine } from "./browserUrl.ts";
 import { countedSpacesNow, countedSpacesText, setCountedSpaces } from "./clickupPrefs.ts";
 import { countedUnitsNow, setCountedUnits } from "./jiraUnits.ts";
+import { sessionReadReposNow, setSessionReadRepos } from "./sessionReads.ts";
 import { taskLanding, setTaskLanding, type TaskLanding } from "./taskLanding.ts";
 import { TASK_SOURCES, taskSourceShown, setTaskSourceShown, shownTaskSources, type TaskSourceId } from "./taskSources.ts";
 import { bindings, rebind, DEFAULTS as DEFAULT_BINDINGS, LABELS as KEY_LABELS, type ActionId } from "./keybindings.ts";
@@ -467,6 +468,28 @@ const jira: SettingDef[] = [
   }),
 ];
 
+// ── review prompts: what a review plugin may be given ──────────────────────
+
+/** Repositories as one comma-separated string of owner/name, "" for none. */
+const repoNames = accepting((raw: unknown): string | null => {
+  if (typeof raw !== "string") return null;
+  const names = raw.split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+  if (names.length > 200 || names.some((x) => !/^[a-z0-9_.-]+\/[a-z0-9_.-]+$/.test(x))) return null;
+  return [...new Set(names)].join(",");
+}, "comma-separated owner/name repositories (up to 200), or \"\" for none");
+
+const reviewSessions: SettingDef[] = [
+  // Level 3: an agent can read which repositories are shared, never widen it. What a review
+  // plugin may read about the owner's work is the owner's alone to allow.
+  defineSetting({
+    id: "plugins.sessionReads.repos", page: "review-prompts", section: "Review sessions", label: "Let review plugins read the authoring session", default: "",
+    read: () => sessionReadReposNow().join(","), validate: repoNames,
+    // Saved through /plugins/session-reads; a refusal puts the old list back.
+    write: (v) => { setSessionReadRepos(splitIds(v)); },
+    display: (v) => (splitIds(v).join(", ") || "none: nothing is shared"),
+  }),
+];
+
 // ── keys: the single-letter shortcuts ───────────────────────────────────────
 
 // Not here: the view chords and the "even inside a shell" app chord. Those are
@@ -483,7 +506,7 @@ const keys: SettingDef[] = (Object.keys(KEY_LABELS) as ActionId[]).map((a) => de
 
 // ── the registry ────────────────────────────────────────────────────────────
 
-export const SETTING_DEFS: readonly SettingDef[] = [...appearance, ...diff, ...terminal, ...terminalMore, ...rail, ...notifications, ...browser, ...tasks, ...clickup, ...jira, ...keys];
+export const SETTING_DEFS: readonly SettingDef[] = [...appearance, ...diff, ...terminal, ...terminalMore, ...rail, ...notifications, ...browser, ...tasks, ...clickup, ...jira, ...reviewSessions, ...keys];
 
 /** Which panes (and, for Terminal, which groups) have been migrated. A row in
  *  here must carry a settingId or be marked agentExempt; a guard test reads this. */
@@ -499,6 +522,8 @@ export const MIGRATED: Readonly<Record<string, "all" | readonly string[]>> = {
   clickup: [""],
   /* Only what is not the connection: the token, the site and the write switch are in NEVER_ON_PAGE. */
   jira: [""],
+  /* Only the section about what a review plugin may be given; the prompt editor is not a setting yet. */
+  "review-prompts": ["Review sessions"],
   keys: "all",
 };
 
@@ -506,7 +531,7 @@ export const MIGRATED: Readonly<Record<string, "all" | readonly string[]>> = {
  *  the two lists, so adding a page forces a decision rather than a silent gap. */
 export const NOT_YET_MIGRATED = [
   "prefs", "hooks", "lantern", "understudy", "budgets", "recipes",
-  "review-prompts", "saved-replies", "connections", "engines", "orchestration", "remote", "plugins", "tmux", "privacy", "about", "log", "onboarding",
+  "saved-replies", "connections", "engines", "orchestration", "remote", "plugins", "tmux", "privacy", "about", "log", "onboarding",
 ] as const;
 
 /**

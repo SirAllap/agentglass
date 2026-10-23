@@ -842,6 +842,21 @@ export interface NoteActionContribution { id: string; label: string }
 export const NOTE_ACTIONS_MAX = 4;
 export const NOTE_ACTION_LABEL_MAX = 24;
 
+/**
+ * What a plugin may ask the app to READ about the person's work, beyond what
+ * its scope already shows. Each is a named door, off until the manifest names
+ * it and the person approves the declaration; `sessions` is further off
+ * until the person allows it for a repository (docs/PLUGINS.md, "Review
+ * plugin contract").
+ */
+export const PLUGIN_READS = ["sessions"] as const;
+export type PluginRead = (typeof PLUGIN_READS)[number];
+export const PLUGIN_READS_MAX = 2;
+/** The declaration screen's sentence for each, in the words of what it lets the plugin see. */
+export const PLUGIN_READ_WORDS: Record<PluginRead, string> = {
+  sessions: "Can read a redacted summary of the agent session that wrote a pull request (only in repositories you allow)",
+};
+
 export interface Contributes {
   settings?: Field[];
   panels?: PanelContribution[];
@@ -850,6 +865,9 @@ export interface Contributes {
   /** Extra buttons on each of the plugin's own findings. Declared under
    *  `contributes` so the approval hash covers them. */
   noteActions?: NoteActionContribution[];
+  /** Reads of the person's work the plugin asks for. Under `contributes` so
+   *  the approval hash covers them: adding one re-asks. */
+  reads?: PluginRead[];
   /** Puts a badge and a sort order on Inbox rows. See `InboxAnnotation`. */
   inboxAnnotations?: boolean;
 }
@@ -924,6 +942,16 @@ export function validateContributes(raw: unknown): Ok<Contributes> | Err {
       if (typeof r.label !== "string" || !r.label.trim() || r.label.trim().length > NOTE_ACTION_LABEL_MAX) return { ok: false, error: `finding action label must be 1-${NOTE_ACTION_LABEL_MAX} characters` };
       out.noteActions.push({ id: r.id, label: r.label.trim() });
     }
+  }
+  if (c.reads !== undefined) {
+    if (!Array.isArray(c.reads) || c.reads.length > PLUGIN_READS_MAX) return { ok: false, error: `contributes.reads must be a list of at most ${PLUGIN_READS_MAX}` };
+    const seen = new Set<string>();
+    for (const r of c.reads) {
+      if (typeof r !== "string" || !(PLUGIN_READS as readonly string[]).includes(r)) return { ok: false, error: `contributes.reads: unknown value ${JSON.stringify(typeof r === "string" ? r.slice(0, 40) : r)}; allowed: ${PLUGIN_READS.join(", ")}` };
+      if (seen.has(r)) return { ok: false, error: `contributes.reads: "${r}" appears twice` };
+      seen.add(r);
+    }
+    out.reads = [...seen] as PluginRead[];
   }
   return { ok: true, value: out };
 }

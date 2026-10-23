@@ -30,6 +30,11 @@ import { bumpReviewRecipes } from "./PrPanel.tsx";
 import { IconLabel, PlusIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { Button, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { Select } from "./Select.tsx";
+import { SELECT_BOX } from "./SettingsKit.tsx";
+import { Toggle } from "./SettingRow.tsx";
+import { setting } from "../lib/settingsRegistry.ts";
+import { useSessionReads } from "../lib/sessionReads.ts";
 
 const GROUPS: { id: ReviewRecipeGroup; label: string; what: string }[] = [
   { id: "reviewing", label: "Reviewing", what: "Somebody else's pull request." },
@@ -105,6 +110,13 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
   /* The note on the card is written to a ClickUp card, so it is offered only
      where there is one. Unknown counts as connected: taskConnected fails open. */
   const [hasCards, setHasCards] = useState(true);
+
+  /* Which repositories review plugins may read the authoring session of. Nothing until the
+     person adds one; the server holds the list and refuses every other repository. */
+  const reads = useSessionReads();
+  const allowed = reads?.repos ?? [];
+  const pickable = (reads?.known ?? []).filter((r) => !allowed.includes(r));
+  const setAllowed = (next: string[]) => { setting("plugins.sessionReads.repos").set(next.join(",")); };
 
   const load = useCallback(async () => {
     try { const r = await api.prPrompts(); setList(r.recipes ?? []); } catch { setList([]); }
@@ -207,6 +219,30 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
           </SettingsCard>
         );
       })}
+
+      {/* Not a prompt, and here because this is the page about handing a pull request to a
+          reviewer: what else the reviewer may be given. Off for every repository until added. */}
+      <SettingsCard title="Review sessions"
+        desc="A review plugin that asks for it can read a short summary of the agent session that wrote a pull request.">
+        <SettingRow
+          settingId="plugins.sessionReads.repos"
+          label="Let review plugins read the authoring session"
+          hint="Shared, for the repositories below only: the first request, the files the agent wrote, how many tools it used, and its closing summary — cut short, with home paths hidden. Never the transcript or any tool output. If anything in it looks like a secret, nothing is shared and the plugin is told why."
+          control={<Select
+            align="right"
+            style={SELECT_BOX}
+            value=""
+            placeholder={pickable.length ? "Add a repository…" : "No other repository"}
+            disabled={!pickable.length}
+            onChange={(v) => { if (v && !allowed.includes(v)) setAllowed([...allowed, v]); }}
+            options={pickable.map((r) => ({ value: r, label: r }))}
+          />} />
+        {allowed.map((r) => (
+          <Toggle key={r} on label={r} hint="Allowed. Turn off to stop sharing from this repository."
+            onClick={() => setAllowed(allowed.filter((x) => x !== r))} />
+        ))}
+        {!allowed.length && <EmptyState>No repository is shared. Review plugins are told it is not allowed.</EmptyState>}
+      </SettingsCard>
 
       {!hidden && (
         <div className="pb-4 text-[12px]" style={{ color: "var(--text4)" }}>

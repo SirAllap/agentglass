@@ -300,7 +300,7 @@ into the manifest hash, so a plugin that starts drawing somewhere new is asked
 about again. A manifest with no `contributes` hashes exactly as it did before
 drawing existed, so upgrading the app clears no approval.
 
-Six places a plugin can appear:
+Six places a plugin can appear (and one thing it can ask to read, `reads`, below the table):
 
 | Contribution | Where it shows | What the plugin sends |
 |---|---|---|
@@ -310,6 +310,11 @@ Six places a plugin can appear:
 | `noteActions` | Extra buttons on each finding **of that plugin**, after Reply, Resolve, Dismiss and Copy. At most 4, a label of at most 24 characters | Nothing to draw: a press is the `note-action` event |
 | `prActions` | A button in every pull request's header, in the plugin's own colour, with the rest of its actions under a caret | Nothing to draw: the button's state is read from the plugin's runs on that pull request |
 | `inboxAnnotations` | A small badge on Inbox rows, and a "Sort: <plugin>" choice in the Inbox's toolbar | A badge, a tip and a number per row (below). It cannot hide a row |
+
+`reads` (at most 2 values, today only `"sessions"`) draws nothing: it asks the
+app for a read of the person's work. The approval screen says so in plain words
+and, being under `contributes`, the manifest hash covers it. What it opens, and
+what keeps it shut, is *The session that wrote a pull request*, below.
 
 Everything goes through the plugin's own channel, `/plugin/self/…`, over its own
 token. That channel is open at any scope, because drawing is not a power over
@@ -736,7 +741,9 @@ on an app without it.
 | Manifest `contributes.noteActions` `[{id, label}]` | plugin to app | **new (2)** | An older app ignores the key and draws no buttons. Declare it under `contributes`, never beside it, so the approval hash covers it |
 | `GET /prs/detail`, `/prs/diff`, `/prs/compare-diff`, `/prs/tree-at`, `/prs/list?label=`, `/prs/rollup`, `/prs/check-failures-cached`, `/prs/failing-tests`, `/prs/check-metrics`, `/prs/codeowners`, `/prs/locate` | plugin to app | existing | `{ok: true, missing}` and `gh:` root refusals handled; fall back to `gh` on an older app |
 | `GET /clickup/task?id=`, `/jira/task` | plugin to app | existing | An absent card is no section, never an error |
-| `GET /prs/sessions?root&number` (manifest `reads: ["sessions"]`) | plugin to app | planned, not in 2 | |
+| Manifest `contributes.reads` `["sessions"]` | plugin to app | **new (2)** | At most 2 values, today only `sessions`; an unknown one is refused. An older app ignores the key and `/prs/sessions` does not exist (404). Under `contributes`, so the approval hash covers it |
+| `GET /prs/sessions?root=&number=` (read scope) | plugin to app | **new (2)** | Off twice over, see *The session that wrote a pull request*. `{sessions: []}` when nothing matches; `403`, `422` and `429` below |
+| `GET /plugins/session-reads` (read scope) | plugin to app | **new (2)** | `{repos: [...]}`, the repositories the person allowed, so a settings screen can say "not allowed here" |
 
 Nothing in this table can post to GitHub. The plugin never holds a write path
 there: the one way a finding's words leave the machine is still the person's
@@ -833,6 +840,59 @@ plugin that adds a button is asked about again. A press arrives as
 What it does is the plugin's: an action that writes code should be a person's
 press on the plugin's side too, and the app only ever sends this event for a
 declared action on one of that plugin's own findings, while it runs.
+
+**The session that wrote a pull request.** A reviewer who knows what the
+author's agent was asked, and what it said it did, can check the diff against
+both. That is also the most private thing the app holds, so the door is shut by
+default and three separate things must be true before it opens:
+
+1. the manifest declares `"contributes": {"reads": ["sessions"]}` and the person
+   approved it (the screen says *Can read a redacted summary of the agent
+   session that wrote a pull request (only in repositories you allow)*);
+2. the person added the repository to *Settings → Review prompts → Review
+   sessions* (`plugins.sessionReads.repos`, empty by default);
+3. nothing in the brief looks like a secret.
+
+`GET /prs/sessions?root=<owner/name or a checkout>&number=<n>`, with the
+plugin's own token. The head branch comes from what the app already holds for
+the pull request (a pull request it has never shown costs one read, then it is
+held); there is no polling and nothing is sent to GitHub. Sessions are matched
+the way the spend panel matches them: the branch a turn recorded, else the
+branch the checkout it ran in has out now. No checkout of the repository on
+this machine, or no session, is `{"ok": true, "sessions": []}`, never an error.
+
+```json
+{ "ok": true,
+  "sessions": [
+    { "id": "s_3f9a1c0b7d2e4a65",
+      "agent": "claude-code",
+      "startedAt": 1792183000000, "endedAt": 1792190100000,
+      "request": "Export should respect the user's timezone (ORBIT-1042)…",
+      "files": ["src/export/csv.ts", "test/export.test.ts"],
+      "tools": { "Bash": 14, "Edit": 6, "Read": 21 },
+      "summary": "Export now formats dates in the viewer's timezone; added a test …",
+      "truncated": { "request": false, "summary": false, "files": false } } ],
+  "truncated": true }
+```
+
+Newest first, at most 3. `id` is a hash of the session id, not the id. `request`
+is the first thing the person asked and `summary` the agent's last message, each
+cut at 1,500 characters (`truncated.request`, `truncated.summary`); `files` are
+the paths the agent wrote, at most 60, relative to the repository (anything
+outside it, and every home directory, as `~/…`); `tools` counts tool calls by
+kind. Never a transcript, a tool's output or the environment. The top-level
+`truncated` appears only when the whole answer was cut to fit 24 KB (file lists
+shed first, then the oldest sessions). A count of the person's corrections is
+not here: the app does not derive one.
+
+| Status | Body | Meaning |
+|---|---|---|
+| `403` | `{ok: false, error, missing: ["manifest" \| "repository"]}` | One or both permissions are missing; `missing` says which, never what the person has allowed |
+| `422` | `{ok: false, error: "secret-like text found in the session brief", kinds: [...]}` | Something in a session looks like a secret (`github-token`, `api-key`, `slack-token`, `aws-key`, `jwt`, `credential-assignment`, `bearer-token`, `long-token`, `private-key`). The answer is refused whole, never redacted, and the text is never echoed or logged |
+| `429` | `{ok: false, error}` + `Retry-After` | More than 60 answered requests an hour for this plugin |
+| `400` | `{ok: false, error}` | No `root`, or a `number` that is not a pull request number |
+
+A 40- or 64-digit hex run (a commit or a file hash) is not counted as a secret.
 
 ## From the terminal
 

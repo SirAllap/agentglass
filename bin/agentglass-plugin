@@ -251,8 +251,24 @@ def check_contributes(c):
             label = a.get("label")
             if not isinstance(label, str) or not label.strip() or len(label.strip()) > 24:
                 return "finding action label must be 1-24 characters"
+    if "reads" in c:
+        reads = c["reads"]
+        if not isinstance(reads, list) or len(reads) > 2:
+            return "contributes.reads must be a list of at most 2"
+        seen = set()
+        for r in reads:
+            if not isinstance(r, str) or r not in READS:
+                shown = json.dumps(r[:40] if isinstance(r, str) else r)
+                return f"contributes.reads: unknown value {shown}; allowed: {', '.join(READS)}"
+            if r in seen:
+                return f'contributes.reads: "{r}" appears twice'
+            seen.add(r)
     return None
 
+
+# `contributes.reads`, from shared/pluginUi.ts (PLUGIN_READS, PLUGIN_READ_WORDS).
+READS = ("sessions",)
+READ_WORDS = {"sessions": "Can read a redacted summary of the agent session that wrote a pull request (only in repositories you allow)"}
 
 # The sandbox block, from shared/pluginSandbox.ts. Same rules, same words.
 NEVER_MOUNTABLE = ("~/.config/agentglass", "~/.ssh", "~/.gnupg", "/run/user", "~/.local/share/keyrings")
@@ -588,6 +604,8 @@ def declaration(plugin):
         draws.append(f'a button, "{a.get("label")}", in every pull request')
     if c.get("noteActions"):
         draws.append("buttons on its findings: " + ", ".join(a.get("label", "") for a in c["noteActions"]))
+    for r in c.get("reads") or []:
+        draws.append(READ_WORDS.get(r, f"a read the app does not know: {r}"))
     return {"scope": plugin.get("scope"), "runs": plugin.get("entrypoint"), "draws": draws}
 
 

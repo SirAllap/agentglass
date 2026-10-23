@@ -2150,6 +2150,10 @@ const realApi = {
    *  See shared/notifyPrefs.ts. */
   notifyPrefs: () => get<{ ok: boolean; prefs: NotifyPrefs }>("/notify/prefs"),
   setNotifyPrefs: (prefs: NotifyPrefs) => post<{ ok: boolean; prefs: NotifyPrefs }>("/notify/prefs", prefs),
+  /** Which repositories a review plugin may read the authoring session of
+   *  (`plugins.sessionReads.repos`), and the ones the app has a checkout of to pick from. */
+  sessionReads: () => get<{ ok: boolean; repos: string[]; known: string[] }>("/plugins/session-reads"),
+  setSessionReads: (repos: string[]) => post<{ ok: boolean; repos: string[] }>("/plugins/session-reads", { repos }),
   /** Read marks every device on this server shares. See marksSync.ts. */
   getMarks: (kind?: MarkKind, since?: number) => {
     const q = new URLSearchParams();
@@ -2837,6 +2841,8 @@ const demoApi: typeof realApi = {
   pluginAction: (_p: string, _panel: string | undefined, _a: UiAction, _v?: Record<string, unknown>) => D({ ok: false, error: "not available in the demo" }),
   notifyPrefs: () => D({ ok: true, prefs: DEFAULT_NOTIFY_PREFS }),
   setNotifyPrefs: (_p: NotifyPrefs) => D({ ok: false, prefs: DEFAULT_NOTIFY_PREFS }),
+  sessionReads: () => D({ ok: true, repos: [] as string[], known: [] as string[] }),
+  setSessionReads: (_r: string[]) => D({ ok: false, repos: [] as string[] }),
   // The demo has no other device to agree with; its marks stay in the page.
   getMarks: (_kind?: MarkKind, _since?: number) => D({ marks: [] as MarkRow[], now: Date.now() }),
   postMarks: (_ops: MarkOp[]) => D({ ok: true, changed: [] as MarkRow[] }),

@@ -122,6 +122,7 @@ export const SETTINGS_ROWS: SettingsRowRaw[] = [
   { pane: "remote", section: "Remote access", label: "No dashboard build to serve", hint: "" },
   { pane: "remote", section: "Remote access", label: "Private-network origins are not trusted", hint: "" },
   { pane: "remote", section: "Remote access", label: "Reading network state…", hint: "" },
+  { pane: "review-prompts", section: "Review sessions", label: "Let review plugins read the authoring session", hint: "", settingId: "plugins.sessionReads.repos" },
   { pane: "tasks", section: "Opens on", label: "Tasks view opens on", hint: "", settingId: "tasks.landing" },
   { pane: "terminal", section: "Bench note", label: "Note editor", hint: "Neovim opens the same note file in a terminal on the bench. Without nvim installed the built-in editor is used.", settingId: "terminal.noteEditor" },
   { pane: "terminal", section: "History and selection", label: "Scrollback", hint: "", settingId: "terminal.scrollback" },

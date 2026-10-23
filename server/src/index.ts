@@ -189,7 +189,7 @@ import {
   prBranches, githubStatusCached, prsForBranch, prForHead, nodeIdOk, locateRepo, isForeignRoot } from "./prs.ts";
 import { treeAtTar } from "./treeAt.ts";
 import { planCheckOnBase, startCheckOnBase, checkOnBaseStatus, cancelCheckOnBase } from "./checkOnBasePr.ts";
-import { repoSpend } from "./spend.ts";
+import { checkoutBranches, repoSpend, spendRows } from "./spend.ts";
 import { repoMetrics } from "./checkRuns.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, lastTmuxTarget, sessionTitle, TERMINAL_ENABLED, PTY_BACKEND, type PtyWsData } from "./terminal.ts";
@@ -252,6 +252,7 @@ import {
 } from "./plugin-ui.ts";
 import { PANEL_ID_RE, PLUGIN_CONTRACT, validPrRef } from "../../shared/pluginUi.ts";
 import { readNotifyPrefs, writeNotifyPrefs } from "./notifyPrefs.ts";
+import { answerSessions, normalizeRepo, RATE_PER_HOUR, sessionFacts, sessionReadRepos, sessionsGate, setSessionReadRepos, takeSessionsSlot } from "./prsessions.ts";
 import { fetchCatalogue } from "./plugin-catalogue.ts";
 import { annotate, setAnnotations } from "./inbox-annotations.ts";
 import {
@@ -279,6 +280,32 @@ let lastUnderstudyLearn: import("./understudy-ingest.ts").IngestResult | null = 
  * the same shape as the actuator's runner and for the same reason: a module
  * that can start a process is a module every fence has to be re-argued around.
  */
+
+/**
+ * Which checkout on this machine is owner/name. The open project first, then
+ * the picker's sweep; see the `/prs/locate` route for why in that order.
+ */
+function locateCheckout(want: string): Promise<{ ok: true; root: string } | { ok: false; error: string }> {
+  return singleFlight(`locate:${want}`, async () => {
+    const paths = getChanges(300, undefined, false).map((c) => c.file_path);
+    const known = knownProjects().map((p) => p.path);
+    /*
+     * The open project FIRST, and it is not an optimisation.
+     *
+     * `ignoreScope` is the picker's sweep, and it deliberately leaves out
+     * the scoped project and folds linked worktrees into the project they
+     * belong to. Both of those are right for a picker and wrong here: the
+     * pull request being read is usually in the project that is open, or
+     * in one of its worktrees, and asking the picker's sweep for it
+     * answered "no checkout of it on this machine" while the app was
+     * showing that very repository.
+     */
+    const scoped = await discoverRepos(paths, known, {});
+    const root = await locateRepo(want, scoped.map((r) => r.root))
+      ?? await locateRepo(want, (await discoverRepos(paths, known, { ignoreScope: true })).map((r) => r.root));
+    return root ? { ok: true as const, root } : { ok: false as const, error: `no checkout of ${want} on this machine` };
+  });
+}
 
 /** Checkouts the loop may work in. The open project, and today only that. */
 /**
@@ -5620,6 +5647,26 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       broadcast({ type: "notify-prefs", data: prefs });
       return json({ ok: true, prefs });
     }
+    /* Which repositories the person lets review plugins read the authoring session of
+       (`plugins.sessionReads.repos`). Reading it is open to a plugin so its settings can
+       say "not allowed here"; changing it is `full` scope and the CSRF check, like the
+       rest of /plugins. */
+    if (pathname === "/plugins/session-reads" && req.method === "GET") {
+      /* `known`: the repositories the app already has a checkout of, as owner/name, for the picker.
+         Remembered per checkout by prs.ts (repoIdFor), so this is no `git` call once warm. */
+      const known = new Set<string>();
+      for (const root of await openProjectRepos().catch(() => [] as string[])) {
+        const id = await prRepoIdFor(root).catch(() => null);
+        if (id) known.add(id.nameWithOwner.toLowerCase());
+      }
+      return json({ ok: true, repos: sessionReadRepos(), known: [...known].sort() });
+    }
+    if (pathname === "/plugins/session-reads" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { repos?: unknown };
+      try { b = (await req.json()) as { repos?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      return json({ ok: true, repos: setSessionReadRepos(b.repos) });
+    }
     // Read marks, synced between devices — see marks.ts. Reading them is a
     // GET like any other; writing them is `answer` scope (auth.ts), because a
     // phone that may reply to a pull request may certainly say it has read one.
@@ -8238,6 +8285,38 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const root = prRouteRoot(asked);
       return json(await branchBehind(root, Number(url.searchParams.get("number") ?? 0), url.searchParams.get("force") === "1"));
     }
+    /* The agent session(s) that wrote a pull request, as a redacted brief — only to a
+       running plugin whose manifest declares `reads: ["sessions"]`, only in a repository
+       the person allowed, and refused whole when anything in it looks like a secret.
+       See prsessions.ts for the three locks and what the brief holds. */
+    if (pathname === "/prs/sessions") {
+      const self = pluginOfRequest(req, url);
+      if (!self) return json({ ok: false, error: "only a running plugin reads this, with its own token" }, 403);
+      const asked = (url.searchParams.get("root") ?? "").trim();
+      const number = Number(url.searchParams.get("number") ?? 0);
+      if (!asked) return json({ ok: false, error: "root is required: owner/name or a checkout" }, 400);
+      if (!Number.isInteger(number) || number <= 0) return json({ ok: false, error: "invalid pull request number" }, 400);
+      const bare = normalizeRepo(asked);
+      const wanted = bare && !asked.startsWith("/") ? bare : null;
+      const repoOf = wanted ?? (inScopeReal(asked) ? (await prRepoIdFor(asked))?.nameWithOwner ?? null : null);
+      const gate = sessionsGate(contributesOf(self), repoOf);
+      if (!gate.ok) return json({ ok: false, error: gate.error, missing: gate.missing }, 403);
+      const slot = takeSessionsSlot(self);
+      if (!slot.ok) return new Response(JSON.stringify({ ok: false, error: `at most ${RATE_PER_HOUR} session reads an hour per plugin; try again in ${slot.retryAfterSec}s` }), {
+        status: 429, headers: { "content-type": "application/json", "retry-after": String(slot.retryAfterSec), ...cors } });
+      // No checkout of it here is not an error: there is nothing to read.
+      const local = wanted ? await locateCheckout(wanted) : { ok: true as const, root: asked };
+      if (!local.ok) return json({ ok: true, sessions: [] });
+      const pr = await prBranches(local.root, number);
+      if (!pr) return json({ ok: true, sessions: [] });
+      const out = await answerSessions(local.root, pr.head, {
+        rows: (r) => spendRows(r, RETENTION_DAYS ? Date.now() - RETENTION_DAYS * 86_400_000 : 0),
+        checkouts: checkoutBranches,
+        facts: sessionFacts,
+      });
+      // The kinds of text found, never the text; and nothing is logged here.
+      return out.ok ? json({ ok: true, sessions: out.sessions, ...(out.truncated ? { truncated: true } : {}) }) : json({ ok: false, error: out.error, kinds: out.kinds }, out.status);
+    }
     /* What this project's agents have spent, by branch and by checkout — the
        whole repository in one answer, because the board looks its rows up in it
        rather than asking per pull request. Scoped like every other read here:
@@ -8398,25 +8477,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
        */
       const want = url.searchParams.get("repo") || "";
       if (!/^[\w.-]+\/[\w.-]+$/.test(want)) return json({ ok: false, error: "repo must be owner/name" }, 400);
-      return json(await singleFlight(`locate:${want}`, async () => {
-        const paths = getChanges(300, undefined, false).map((c) => c.file_path);
-        const known = knownProjects().map((p) => p.path);
-        /*
-         * The open project FIRST, and it is not an optimisation.
-         *
-         * `ignoreScope` is the picker's sweep, and it deliberately leaves out
-         * the scoped project and folds linked worktrees into the project they
-         * belong to. Both of those are right for a picker and wrong here: the
-         * pull request being read is usually in the project that is open, or
-         * in one of its worktrees, and asking the picker's sweep for it
-         * answered "no checkout of it on this machine" while the app was
-         * showing that very repository.
-         */
-        const scoped = await discoverRepos(paths, known, {});
-        const root = await locateRepo(want, scoped.map((r) => r.root))
-          ?? await locateRepo(want, (await discoverRepos(paths, known, { ignoreScope: true })).map((r) => r.root));
-        return root ? { ok: true, root } : { ok: false, error: `no checkout of ${want} on this machine` };
-      }));
+      return json(await locateCheckout(want));
     }
     if (pathname === "/prs/detail") {
       return json(await prDetail(
