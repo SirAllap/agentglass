@@ -272,4 +272,5 @@ agentglass-ui --as my-agent jira move ORBIT-1042 --id 51 --updated <state.update
   level the server does not allow. `agentglass-ui list` is the truth.
 - "not exposed": that setting is not one an agent may touch, now or yet. Panels
   with no reader (the credential ones) are named in `state` under `notCovered`,
-  with the reason.
+  with the reason. What an agent has no door to at all is under `refusedForAgents`:
+  publishing a local review as a GitHub comment is the person's click and nothing else.

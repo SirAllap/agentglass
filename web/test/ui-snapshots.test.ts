@@ -8,7 +8,7 @@
  * fixture that is polite proves nothing about the place the rule exists for.
  */
 import { describe, expect, it } from "bun:test";
-import { READ_PANELS, READ_PANELS_NOW, READ_PANELS_LATE, UNTRUSTED_MAX_BYTES, UI_READ_NOT_COVERED, SETTINGS_PAGE_IDS } from "../../shared/uiActions.ts";
+import { READ_PANELS, READ_PANELS_NOW, READ_PANELS_LATE, UNTRUSTED_MAX_BYTES, UI_READ_NOT_COVERED, UI_REFUSED_FOR_AGENTS, SETTINGS_PAGE_IDS } from "../../shared/uiActions.ts";
 import { DEFAULT_NOTIFY_PREFS } from "../../shared/notifyPrefs.ts";
 import type { PendingGate } from "../../shared/types.ts";
 import {
@@ -346,6 +346,8 @@ describe("ui.state", () => {
     expect(r.state.open).not.toContain("help");
     expect((r.state.readers as { panel: string }[]).map((x) => x.panel)).toEqual([...READ_PANELS]);
     expect(r.state.notCovered).toEqual(Object.keys(UI_READ_NOT_COVERED));
+    expect(r.state.refusedForAgents).toEqual(Object.keys(UI_REFUSED_FOR_AGENTS));
+    expect(r.state.refusedForAgents).toContain("pr.review.publish");
   });
 
   it("every Settings page is described by a reader or named as not covered, never both", () => {

@@ -266,6 +266,8 @@ export function upsertRun(plugin: string, c: Contributes, raw: unknown): { ok: t
   // The person's answer to a needs-ok run stands until the plugin moves the
   // run on; a plugin repeating needs-ok while it waits does not unsay it.
   if (i >= 0 && s.runs[i]!.state === "needs-ok" && run.state === "needs-ok" && s.runs[i]!.decision) run.decision = s.runs[i]!.decision;
+  // Likewise the app's own record of a publication: a plugin cannot send it and a re-run of the same id does not erase it.
+  if (i >= 0 && s.runs[i]!.published) run.published = s.runs[i]!.published;
   if (run.costUsd !== undefined && !recordCost(s, plugin, run)) return { ok: false, error: "this plugin's notes are over their size limit" };
   if (i < 0 && s.runs.filter((x) => x.plugin === plugin).length >= MAX_RUNS_PER_PLUGIN) {
     return { ok: false, error: `this plugin already keeps ${MAX_RUNS_PER_PLUGIN} runs` };
@@ -385,7 +387,7 @@ export async function replyAsPlugin(plugin: string, c: Contributes, raw: unknown
   }
   recent.push(now);
   replyLog.set(plugin, recent);
-  n.replies = [...(n.replies ?? []), { id: replyId(), text: v.value.text, at: now, by: `agent:${plugin}`, postedOnGitHub: false }];
+  n.replies = [...(n.replies ?? []), { id: replyId(), text: v.value.text, at: now, by: `agent:${plugin}` }];
   n.updatedAt = now;
   save();
   onChange({ kind: "pr", repo: n.repo, number: n.number });
@@ -576,10 +578,6 @@ export function setNoteStatus(plugin: string, id: string, status: unknown): { ok
   return { ok: true };
 }
 
-/** What comments on the pull request for a reply. Handed in, so this file
- *  never reaches GitHub on its own and a test can see whether it was asked to. */
-export type GitHubPoster = (note: PrNote & { plugin: string }, body: string) => Promise<{ ok: boolean; error?: string }>;
-
 export interface NoteAnswer {
   status?: unknown;
   reply?: unknown;
@@ -588,22 +586,11 @@ export interface NoteAnswer {
   number?: unknown;
   /** `"user"` or `"agent:<name>"`. */
   by: string;
-  /** Whether this caller may comment on GitHub (full scope). */
-  mayPost: boolean;
 }
 
 export type NoteAnswered =
-  | { ok: true; status: NoteStatus; replies: NoteReply[]; posted: boolean; postError?: string }
+  | { ok: true; status: NoteStatus; replies: NoteReply[] }
   | { ok: false; error: string };
-
-/** The line a GitHub reader sees first, so a comment that came out of a local
- *  finding is never taken for the reply of a person to a person. The finding's
- *  words go in code spans: an `@name` in a title must not notify anybody. */
-export function githubReplyBody(n: PrNote & { plugin: string }, text: string): string {
-  const code = (t: string) => "`" + t.replace(/`/g, "'").replace(/\s+/g, " ").slice(0, 200) + "`";
-  const where = n.path ? ` at ${code(`${n.path}${n.line ? `:${n.line}` : ""}`)}` : "";
-  return `> Reply to an automated finding from ${code(n.plugin)}${where}: ${code(n.title)}\n\n${text}`;
-}
 
 let replySeq = 0;
 function replyId(): string {
@@ -612,12 +599,11 @@ function replyId(): string {
 
 /**
  * The person (or an agent for them) answers a finding: a reply, a status, or
- * both in one step. Everything is checked before anything is stored or sent.
- * GitHub is reached only when the request asks for it, the caller may, and
- * `post` was given; if that comment fails the reply is still kept, and the
- * answer says so. There is no retry: a second try is a second comment.
+ * both in one step. Everything is checked before anything is stored. A reply
+ * stays on this machine: the only way a finding's words reach GitHub is the
+ * person publishing the review as one comment (review-publish.ts).
  */
-export async function answerNote(plugin: string, id: string, a: NoteAnswer, post: GitHubPoster | null): Promise<NoteAnswered> {
+export function answerNote(plugin: string, id: string, a: NoteAnswer): NoteAnswered {
   let status: NoteStatus | undefined;
   if (a.status !== undefined) {
     if (typeof a.status !== "string" || !(NOTE_STATUSES as readonly string[]).includes(a.status)) {
@@ -625,7 +611,7 @@ export async function answerNote(plugin: string, id: string, a: NoteAnswer, post
     }
     status = a.status as NoteStatus;
   }
-  let reply: { text: string; postToGitHub: boolean } | undefined;
+  let reply: { text: string } | undefined;
   if (a.reply !== undefined) {
     const v = validateReplyInput(a.reply);
     if (!v.ok) return v;
@@ -643,30 +629,11 @@ export async function answerNote(plugin: string, id: string, a: NoteAnswer, post
     if (ref.repo !== n.repo || ref.number !== n.number) return { ok: false, error: "that note is on another pull request" };
   }
   if (reply && (n.replies?.length ?? 0) >= REPLIES_PER_NOTE) return { ok: false, error: `a finding keeps at most ${REPLIES_PER_NOTE} replies` };
-  if (reply?.postToGitHub) {
-    if (!a.mayPost) return { ok: false, error: "commenting on GitHub needs full scope" };
-    if (!post) return { ok: false, error: "commenting on GitHub is not available here" };
-  }
-
-  let posted = false;
-  let postError: string | undefined;
-  if (reply?.postToGitHub && post) {
-    try {
-      const r = await post(n, githubReplyBody(n, reply.text));
-      posted = r.ok;
-      if (!r.ok) postError = r.error || "GitHub refused the comment";
-    } catch (e) {
-      postError = e instanceof Error ? e.message : "GitHub refused the comment";
-    }
-  }
-
-  // The post above awaited: the note may have been removed meanwhile.
-  const cur = find();
-  if (!cur) return { ok: false, error: "no such note" };
+  const cur = n;
   const now = Date.now();
   let added: NoteReply | undefined;
   if (reply) {
-    added = { id: replyId(), text: reply.text, at: now, by: a.by, postedOnGitHub: posted };
+    added = { id: replyId(), text: reply.text, at: now, by: a.by };
     if (status === "resolved" || status === "dismissed") added.withStatus = status;
     cur.replies = [...(cur.replies ?? []), added];
   }
@@ -682,7 +649,18 @@ export async function answerNote(plugin: string, id: string, a: NoteAnswer, post
     ...(cur.replies?.length ? { replies: cur.replies } : {}),
   });
   onChange({ kind: "pr", repo: cur.repo, number: cur.number });
-  return { ok: true, status: cur.status, replies: cur.replies ?? [], posted, ...(postError ? { postError } : {}) };
+  return { ok: true, status: cur.status, replies: cur.replies ?? [] };
+}
+
+/** The app records that the person published this run's review. Called by the
+ *  publish route only, after a human click; no plugin route reaches it. */
+export function markRunPublished(plugin: string, runId: string, published: NonNullable<PrRun["published"]>): boolean {
+  const run = load().runs.find((x) => x.plugin === plugin && x.id === runId);
+  if (!run) return false;
+  run.published = published;
+  save();
+  onChange({ kind: "pr", repo: run.repo, number: run.number });
+  return true;
 }
 
 /** Removing a plugin removes what it wrote. Disabling one does not: a review

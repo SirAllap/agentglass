@@ -14,7 +14,7 @@ import {
 import { NoteCard, ReplyComposer, ReplyThread, type LocalNote } from "../src/components/plugins/LocalReview.tsx";
 import type { NoteReply } from "../src/lib/pluginTypes.ts";
 
-const reply = (id: string, over: Partial<NoteReply> = {}): NoteReply => ({ id, text: `text ${id}`, at: Date.now() - 120_000, by: "user", postedOnGitHub: false, ...over });
+const reply = (id: string, over: Partial<NoteReply> = {}): NoteReply => ({ id, text: `text ${id}`, at: Date.now() - 120_000, by: "user", ...over });
 const note = (over: Partial<LocalNote> = {}): LocalNote => ({
   id: "f-1", plugin: "acme-review", repo: "acme/orbit", number: 1042, severity: "critical", title: "Guard runs after the loop",
   status: "open", createdAt: 1_700_000_000_000, updatedAt: 1_700_000_000_000, ...over,
@@ -51,8 +51,8 @@ describe("composer rules", () => {
     expect(composerKey({ key: "a", ctrlKey: true })).toBeNull();
   });
 
-  test("a fresh draft never has the GitHub box ticked", () => {
-    expect(FRESH_DRAFT).toEqual({ text: "", postToGitHub: false });
+  test("a fresh draft is just an empty text: there is no way to send a reply to GitHub", () => {
+    expect(FRESH_DRAFT).toEqual({ text: "" });
   });
 
   test("an open finding offers all three, a closed one only Save", () => {
@@ -63,10 +63,11 @@ describe("composer rules", () => {
 
   test("the composer renders its buttons, the counter and an unticked box", () => {
     const open = md(React.createElement(ReplyComposer, { status: "open", onSend: async () => ({ ok: true }), onClose() {} }));
-    for (const label of ["Cancel", "Save reply", "Resolve with reply", "Dismiss with reply", "Also post on the pull request on GitHub", `0 / ${REPLY_MAX_CHARS}`]) {
+    for (const label of ["Cancel", "Save reply", "Resolve with reply", "Dismiss with reply", `0 / ${REPLY_MAX_CHARS}`]) {
       expect(open).toContain(label);
     }
-    expect(open).not.toContain("checked");
+    expect(open).not.toContain("GitHub");
+    expect(open).not.toContain("checkbox");
     const closed = md(React.createElement(ReplyComposer, { status: "resolved", onSend: async () => ({ ok: true }), onClose() {} }));
     expect(closed).toContain("Save reply");
     expect(closed).not.toContain("Resolve with reply");
@@ -78,12 +79,12 @@ describe("thread", () => {
   test("author, time, tags and text; oldest first as given", () => {
     const html = md(React.createElement(ReplyThread, {
       status: "resolved",
-      replies: [reply("a", { text: "Checking this one." }), reply("b", { text: "Fixed in 3f9a2c1.", withStatus: "resolved", postedOnGitHub: true })],
+      replies: [reply("a", { text: "Checking this one." }), reply("b", { text: "Fixed in 3f9a2c1.", withStatus: "resolved" })],
     }));
     expect(html).toContain("You");
     expect(html).toContain("2m ago");
     expect(html).toContain("resolved with this reply");
-    expect(html).toContain("posted on GitHub");
+    expect(html).not.toContain("posted on GitHub");
     expect(html.indexOf("Checking this one.")).toBeLessThan(html.indexOf("Fixed in 3f9a2c1."));
   });
 
@@ -101,9 +102,9 @@ describe("thread", () => {
     expect(html).toContain("&lt;img");
   });
 
-  test("tags: none for a plain reply, both when both apply", () => {
+  test("tags: none for a plain reply, what the reply did", () => {
     expect(replyTags(reply("a"))).toEqual([]);
-    expect(replyTags(reply("a", { withStatus: "dismissed", postedOnGitHub: true }))).toEqual(["dismissed with this reply", "posted on GitHub"]);
+    expect(replyTags(reply("a", { withStatus: "dismissed" }))).toEqual(["dismissed with this reply"]);
   });
 });
 
@@ -145,31 +146,22 @@ describe("collapse", () => {
   });
 });
 
-describe("the GitHub box", () => {
-
-  test("it is asked about only when ticked, before the request, and a refusal sends nothing", () => {
-    const body = fn(review, "const reply = useCallback(");
-    const ask = body.indexOf("gh.current.approve(");
-    const send = body.indexOf("api.pluginNoteReply(");
-    expect(ask).toBeGreaterThan(0);
-    expect(send).toBeGreaterThan(ask);
-    expect(body.slice(0, ask)).toContain("if (draft.postToGitHub)");
-    expect(body).toContain("cancelled: true");
-    // The checkout travels only with a ticked reply.
-    expect(body).toContain("draft.postToGitHub && gh.current");
+describe("a reply never reaches GitHub", () => {
+  test("GUARD: no GitHub box, no root, no confirm in the reply path", () => {
+    const at = review.indexOf("const reply = useCallback(");
+    const body = review.slice(at, review.indexOf("const pressAction", at));
+    expect(at).toBeGreaterThan(0);
+    expect(body).toContain("api.pluginNoteReply(");
+    expect(body).not.toMatch(/postToGitHub|approve|root|gh\.current/);
+    expect(review).not.toMatch(/postToGitHub|postedOnGitHub|Also post on the pull request/);
+    expect(lib).not.toMatch(/postToGitHub|postedOnGitHub/);
+    expect(pr).not.toMatch(/This will comment on GitHub as you, on/);
   });
 
-  test("it resets to off after a successful use and not before", () => {
+  test("it resets after a successful use and not before", () => {
     const body = fn(review, "const send = async (to?: NoteStatus)");
     expect(body).toContain("if (r.ok) setDraft(FRESH_DRAFT)");
     expect(review).toContain("useState<ReplyDraft>(FRESH_DRAFT)");
-  });
-
-  test("the question is the app's own dialog and says whose name it goes under", () => {
-    const i = pr.indexOf("approve: (n, draft) => ask(");
-    expect(i).toBeGreaterThan(0);
-    const q = pr.slice(i, i + 500);
-    expect(q).toContain("This will comment on GitHub as you");
   });
 
   test("the lib never reaches the network and the card never posts by itself", () => {

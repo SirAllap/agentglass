@@ -26,6 +26,17 @@ type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? Partial<T[K]> : T
    pretending to know which it was would be wrong on the common case. */
 type ClickUpWrite = { ok: boolean; error?: string; conflict?: boolean; unauthorised?: boolean; task?: ProviderTask };
 /** One link type a Jira site has: the phrase for each side ("blocks" / "is blocked by"). */
+export interface PublishBody {
+  plugin: string; repo: string; number: number; root: string; runId?: string;
+  options: import("../../../shared/reviewPublish.ts").PublishOptions;
+  /** The dialog's edited text; absent when the person did not touch it. */
+  markdown?: string;
+}
+export interface PublishPreview {
+  ok: boolean; error?: string; markdown?: string; chars?: number; openCount?: number; omitted?: number; stale?: boolean;
+  existing?: { commentId: string; url: string } | null;
+}
+
 export type JiraLinkKind = { id: string; name: string; inward: string; outward: string };
 /** One field of a Jira card's Details, as `/jira/edit` takes it (see server/src/jiraEdit.ts). */
 export type JiraEditAsk = { field: string; value?: string | boolean | null; add?: string; remove?: string };
@@ -2176,10 +2187,13 @@ const realApi = {
     get<{ ok: boolean; prs: PrNotesSummary[] }>(`/plugins/pr-notes/summary?repo=${encodeURIComponent(repo)}${Object.keys(heads).length ? `&heads=${Object.entries(heads).map(([n, h]) => `${n}:${h}`).join(",")}` : ""}`),
   pluginNoteStatus: (plugin: string, id: string, status: NoteStatus) =>
     post<{ ok: boolean; error?: string }>("/plugins/pr-notes/status", { plugin, id, status }),
-  /** Answer a finding: a reply, a status, or both in one request. `root` is
-   *  the checkout, needed only when the reply is also posted on GitHub. */
-  pluginNoteReply: (plugin: string, id: string, body: { status?: NoteStatus; reply: { text: string; postToGitHub: boolean }; root?: string }) =>
-    post<{ ok: boolean; error?: string; status?: NoteStatus; replies?: NoteReply[]; posted?: boolean; postError?: string }>("/plugins/pr-notes/status", { plugin, id, ...body }),
+  /** Answer a finding: a reply, a status, or both in one request. A reply stays on this machine. */
+  pluginNoteReply: (plugin: string, id: string, body: { status?: NoteStatus; reply: { text: string } }) =>
+    post<{ ok: boolean; error?: string; status?: NoteStatus; replies?: NoteReply[] }>("/plugins/pr-notes/status", { plugin, id, ...body }),
+  /** Publish review: read-only. Builds the comment and finds the one it would edit. */
+  pluginPublishPreview: (body: PublishBody) => post<PublishPreview>("/plugins/pr-notes/publish-preview", body),
+  /** Publish review: the person's click. One plain comment, created or edited. */
+  pluginPublish: (body: PublishBody) => post<{ ok: boolean; error?: string; url?: string; edited?: boolean }>("/plugins/pr-notes/publish", body),
   /** Approve run / Skip on a run that waits for the person's OK. */
   pluginRunDecision: (plugin: string, id: string, decision: "approve" | "skip") =>
     post<{ ok: boolean; error?: string }>("/plugins/pr-run-decision", { plugin, id, decision }),
@@ -2851,7 +2865,9 @@ const demoApi: typeof realApi = {
   pluginPrNotes: (_repo: string, _n: number) => D({ ok: true, runs: [], notes: [], publishers: {} } as PluginPrNotes),
   pluginPrNotesSummary: (_repo: string, _h: Record<number, string>) => D({ ok: true, prs: [] as PrNotesSummary[] }),
   pluginNoteStatus: (_p: string, _id: string, _s: NoteStatus) => D({ ok: false, error: "not available in the demo" }),
-  pluginNoteReply: (_p: string, _id: string, _b: { status?: NoteStatus; reply: { text: string; postToGitHub: boolean }; root?: string }) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string; status?: NoteStatus; replies?: NoteReply[]; posted?: boolean; postError?: string }),
+  pluginPublishPreview: (_b: PublishBody) => D({ ok: false, error: "not available in the demo" } as PublishPreview),
+  pluginPublish: (_b: PublishBody) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string; url?: string; edited?: boolean }),
+  pluginNoteReply: (_p: string, _id: string, _b: { status?: NoteStatus; reply: { text: string } }) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string; status?: NoteStatus; replies?: NoteReply[] }),
   pluginRunDecision: (_p: string, _id: string, _d: "approve" | "skip") => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string }),
   pluginNoteAction: (_p: string, _id: string, _n: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string }),
   pluginPrOpen: (_repo: string, _n: number) => D({ ok: true }),

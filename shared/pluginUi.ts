@@ -23,6 +23,7 @@
  * thing after this and is not here. A panel that has to move (a board where
  * things travel between stages) is the other vocabulary, pluginCanvas.ts.
  */
+import type { PublishOptions } from "./reviewPublish.ts";
 
 export type Tone = "default" | "muted" | "accent" | "success" | "warning" | "danger";
 export const TONES: readonly Tone[] = ["default", "muted", "accent", "success", "warning", "danger"];
@@ -565,8 +566,8 @@ export function validateTree(raw: unknown): Ok<UiNode> | Err {
 // the app already shows. A reviewer, a linter or a CI watcher all say the
 // same kind of thing — "at this line of this commit, this" — so that is the
 // shape, and PrPanel draws it beside GitHub's own threads, marked as local.
-// Notes never go to GitHub by themselves. The one path is a person's reply
-// with its GitHub box ticked (answerNote in server/src/plugin-ui.ts).
+// Notes never go to GitHub by themselves. The one path is the person
+// publishing the review as one comment (server/src/review-publish.ts).
 
 /** The review-plugin contract this app speaks (docs/PLUGINS.md, "Review plugin
  *  contract"). Sent in `GET /plugin/self`; an app from before it sends none,
@@ -595,6 +596,13 @@ export interface PrRun {
   meta?: string;
   /** What the run cost, in US dollars, as the plugin counts it. */
   costUsd?: number;
+  /** Which agent and which model did the pass, as plain short names. `meta`
+   *  stays free display text and is never parsed for these. */
+  agent?: string;
+  model?: string;
+  /** Set by the app alone when the person publishes this run's review as a
+   *  pull-request comment; a plugin cannot send it. */
+  published?: { at: number; url: string; commit?: string; options?: PublishOptions };
   /** The person's answer to a `needs-ok` run, kept until the plugin moves the
    *  run to another state. Written by the app only; a plugin cannot send it. */
   decision?: "approve" | "skip";
@@ -607,6 +615,8 @@ export interface PrRun {
 export const RUN_STATES = ["queued", "running", "needs-ok", "done", "failed", "cancelled"] as const;
 export type RunState = (typeof RUN_STATES)[number];
 export const COST_USD_MAX = 1000;
+export const RUN_AGENT_MAX = 40;
+export const RUN_MODEL_MAX = 80;
 
 /** A cost as it is kept: four decimals, a number between 0 and COST_USD_MAX. */
 export function validCostUsd(v: unknown): Ok<number> | Err {
@@ -698,8 +708,6 @@ export interface NoteReply {
   at: number;
   /** `"user"`, or `"agent:<name>"` for a reply an agent sent for the person. */
   by: string;
-  /** Whether this text was also commented on the pull request on GitHub. */
-  postedOnGitHub: boolean;
   /** The status this reply was sent together with, when it changed it. */
   withStatus?: "resolved" | "dismissed";
 }
@@ -725,8 +733,8 @@ export function validReplyBy(v: unknown): v is string {
   return v === "user" || (typeof v === "string" && REPLY_BY_RE.test(v));
 }
 
-/** The `reply` of a status request: `{ text, postToGitHub? }`. */
-export function validateReplyInput(raw: unknown): Ok<{ text: string; postToGitHub: boolean }> | Err {
+/** The `reply` of a status request: `{ text }`. Any other key is ignored; a reply never leaves the machine on its own. */
+export function validateReplyInput(raw: unknown): Ok<{ text: string }> | Err {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, error: "reply must be an object with a text" };
   const r = raw as Record<string, unknown>;
   if (typeof r.text !== "string") return { ok: false, error: "reply.text must be a string" };
@@ -734,8 +742,7 @@ export function validateReplyInput(raw: unknown): Ok<{ text: string; postToGitHu
   const text = cleanReplyText(r.text);
   if (!text) return { ok: false, error: "reply.text is empty" };
   if (text.length > REPLY_MAX_CHARS) return { ok: false, error: `reply.text is over ${REPLY_MAX_CHARS} characters` };
-  if (r.postToGitHub !== undefined && typeof r.postToGitHub !== "boolean") return { ok: false, error: "reply.postToGitHub must be true or false" };
-  return { ok: true, value: { text, postToGitHub: r.postToGitHub === true } };
+  return { ok: true, value: { text } };
 }
 
 const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
@@ -765,6 +772,11 @@ export function validateRun(raw: unknown, now = Date.now()): Ok<PrRun> | Err {
   if (typeof r.sha === "string" && SHA_RE.test(r.sha)) out.sha = r.sha;
   if (typeof r.summary === "string") out.summary = r.summary.slice(0, UI_LIMITS.long);
   if (typeof r.meta === "string") out.meta = r.meta.slice(0, 200);
+  for (const [key, max] of [["agent", RUN_AGENT_MAX], ["model", RUN_MODEL_MAX]] as const) {
+    if (typeof r[key] !== "string") continue;
+    const v = cleanReplyText(r[key] as string).replace(/\s+/g, " ").slice(0, max).trim();
+    if (v) out[key] = v;
+  }
   const fin = validMs(r.finishedAt);
   if (fin !== undefined) out.finishedAt = fin;
   if (r.costUsd !== undefined) {

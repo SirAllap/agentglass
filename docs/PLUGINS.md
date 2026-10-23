@@ -607,12 +607,10 @@ it into account. Removing a plugin removes its notes; disabling it keeps them
 readable. Removing it keeps what was chosen on its settings page, so a reinstall
 comes back configured; the remove dialog (or `--drop-settings`) clears them too.
 
-The one way a note's words leave the machine is a **reply** the person sends with
-*Also post on the pull request on GitHub* ticked (off every time, confirmed once
-more before it goes). The app comments as the person, through the same path the
-pull request view uses for comments — never through the plugin's token, which
-the plugin does not have for this — and the comment starts by saying it answers
-an automated finding. A plugin only ever receives the text.
+The one way a note's words leave the machine is the person pressing
+**Publish review…** (*Publishing a review* below): one comment, built from the
+run, only when they press it. A reply never goes to GitHub, and a plugin only
+ever receives the text.
 
 ### Replies under a finding
 
@@ -622,7 +620,7 @@ per finding; tags and control characters are stripped. Each one is
 
 ```json
 { "id": "r_lq3x9k2a1b4c", "text": "Fixed in 3f9a2c1: the guard now runs before the loop.",
-  "at": 1792190000000, "by": "user", "postedOnGitHub": false, "withStatus": "resolved" }
+  "at": 1792190000000, "by": "user", "withStatus": "resolved" }
 ```
 
 `by` is `"user"`, or `"agent:<name>"` for a reply an agent sent for the person.
@@ -639,11 +637,11 @@ keeps everything it had, so a plugin that ignores them works as before:
   "status": "resolved",
   "at": 1792190000000,
   "reply": { "id": "r_lq3x9k2a1b4c", "text": "Fixed in 3f9a2c1: the guard now runs before the loop.",
-             "at": 1792190000000, "by": "user", "postedOnGitHub": false, "withStatus": "resolved" },
+             "at": 1792190000000, "by": "user", "withStatus": "resolved" },
   "replies": [
-    { "id": "r_lq3x8w0z9y8x", "text": "Checking this one.", "at": 1792189400000, "by": "user", "postedOnGitHub": false },
+    { "id": "r_lq3x8w0z9y8x", "text": "Checking this one.", "at": 1792189400000, "by": "user" },
     { "id": "r_lq3x9k2a1b4c", "text": "Fixed in 3f9a2c1: the guard now runs before the loop.",
-      "at": 1792190000000, "by": "user", "postedOnGitHub": false, "withStatus": "resolved" }
+      "at": 1792190000000, "by": "user", "withStatus": "resolved" }
   ]
 }
 ```
@@ -661,16 +659,14 @@ POST /plugins/pr-notes/status
 { "plugin": "acme-review", "id": "f-df05fe5d61f441",
   "repo": "acme/orbit", "number": 1042,          // optional; if sent, must be the note's own pull request
   "status": "resolved",                          // optional: omit to only reply
-  "reply": { "text": "Fixed in 3f9a2c1.", "postToGitHub": false },
-  "root": "/path/to/a/checkout" }                // only read when postToGitHub is true
-→ { "ok": true, "status": "resolved", "replies": [ … ], "posted": false }
+  "reply": { "text": "Fixed in 3f9a2c1." } }
+→ { "ok": true, "status": "resolved", "replies": [ … ] }
 ```
 
-Send `status`, `reply` or both; both is one request. `postToGitHub: true` needs
-full scope and a `root` that is a checkout of the note's repository; without
-both it is refused and nothing is saved. If GitHub refuses the comment, the
-reply is still kept, `posted` is `false` and `postError` says why; nothing
-retries. An agent that sends the `X-Agentglass-Agent` header is recorded as
+Send `status`, `reply` or both; both is one request. The reply stays on this
+machine; an old request that still sends `postToGitHub` is answered as a plain
+local reply, and a reply stored with the old `postedOnGitHub` flag keeps
+working (the flag is ignored). An agent that sends the `X-Agentglass-Agent` header is recorded as
 `agent:<name>`. `GET /plugins/pr-notes?repo=acme/orbit&number=1042` (read scope)
 returns `replies` inside each note.
 
@@ -713,6 +709,49 @@ A worked plugin that uses all four is
 your labelled pull requests with the agent you choose, inside a sandbox, and
 keeps the findings in the pull request view.
 
+### Publishing a review
+
+The person can post a local review as **one** plain comment on the pull
+request (**Publish review…**, in the pull request header and the run header).
+Nothing from the local review reaches GitHub before they press **Post
+comment** in that dialog. It is never an approval and never a change request,
+and no plugin token, agent header or door can reach it: both routes below
+answer `403` to them, and the action is listed in `ui.state` under
+`refusedForAgents` with the reason.
+
+By default the comment holds the header (agent, model, commit, cost, date), the
+verdict and the **open** findings. The person ticks anything more: resolved,
+dismissed, their replies, info-level findings. The verdict comes from the
+findings alone: an open critical or high is "needs changes before merge", an
+open medium or low "minor issues open", none "no open findings". Text is
+escaped (no raw HTML, `@name` cannot notify anybody, home directories become
+`~`), a comment over 60,000 characters drops the lowest severities as counts,
+and a finding that looks like it holds a credential stops the publish, naming
+its id and never echoing it. The last line is the marker
+`<!-- agentglass-review:<plugin> -->`: publishing again after a push **edits**
+that comment (found by the marker, written by the signed-in user) instead of
+adding one.
+
+```
+POST /plugins/pr-notes/publish-preview        // read-only: nothing is written anywhere
+{ "plugin": "acme-review", "repo": "acme/orbit", "number": 1042,
+  "root": "/path/to/a/checkout",              // a checkout of that repository
+  "runId": "run-7",                           // optional: default is the latest finished run
+  "options": { "includeHeader": true, "includeOpen": true, "includeResolved": false,
+               "includeDismissed": false, "includeReplies": false, "includeInfo": false } }
+→ { "ok": true, "markdown": "…", "chars": 1284, "openCount": 1, "omitted": 0,
+    "existing": { "commentId": "IC_kwDOabc", "url": "https://github.com/acme/orbit/pull/1042#issuecomment-1" } | null,
+    "stale": false }
+
+POST /plugins/pr-notes/publish                // the person's click
+{ …the same, "markdown": "…" }                // markdown optional: the dialog's edited text
+→ { "ok": true, "url": "https://github.com/acme/orbit/pull/1042#issuecomment-1", "edited": false }
+```
+
+A published run carries `published: { at, url, commit }`, written by the app
+alone and kept when the plugin sends the run again. A failed post keeps
+everything local and answers `400` with the reason; nothing retries.
+
 ### Review plugin contract
 
 A plugin that reviews pull requests talks to the app through the routes and
@@ -728,6 +767,7 @@ on an app without it.
 | Item | Direction | Status | The other side must tolerate |
 |---|---|---|---|
 | `POST /plugin/self/pr/run` `{id, repo, number, sha, state, title, summary, meta, startedAt, finishedAt}` | plugin to app | existing | |
+| &nbsp;&nbsp;`agent`, `model` | plugin to app | **new (2)** | An old app drops them; the published comment then shows `-` |
 | &nbsp;&nbsp;`state: "needs-ok"`, `costUsd` | plugin to app | **new (2)** | An old app refuses `needs-ok` (400, names the states it knows) and drops `costUsd` |
 | `POST /plugin/self/pr/notes` `{notes: [{id, severity, title, body, path, line, sha, runId}]}` | plugin to app | existing | |
 | &nbsp;&nbsp;`agreement {k, n}`, `by[]` | plugin to app | **new (2)** | An old app drops them |
@@ -746,8 +786,23 @@ on an app without it.
 | `GET /plugins/session-reads` (read scope) | plugin to app | **new (2)** | `{repos: [...]}`, the repositories the person allowed, so a settings screen can say "not allowed here" |
 
 Nothing in this table can post to GitHub. The plugin never holds a write path
-there: the one way a finding's words leave the machine is still the person's
-reply with its box ticked (*Replies under a finding*).
+there: the one way a finding's words leave the machine is the person
+publishing the review (*Publishing a review*).
+
+**Who ran the pass.** `agent` (a short name such as `claude`, 40 characters) and
+`model` (a model id or empty, 80) go in the run next to `meta`. Both are kept
+trimmed, on one line, tags and control characters gone, and cut to their limit;
+either may be left out. `meta` stays display text and is never parsed: the
+published comment's table reads `agent`, `model`, `costUsd` and `sha` only, and
+shows `-` for what the run does not carry.
+
+```json
+POST /plugin/self/pr/run
+{ "id": "run-7", "repo": "acme/orbit", "number": 1042, "sha": "3f9a2c1",
+  "state": "done", "title": "Local review", "costUsd": 0.4,
+  "agent": "claude", "model": "claude-sonnet-5-5",
+  "meta": "local-review · $0.40 · 82 s · whole pull request", "startedAt": 1792190000000 }
+```
 
 **A run waiting for the person's OK.** A plugin that estimates a run's cost can
 hold it back when the estimate is over what the person set:
@@ -813,7 +868,7 @@ person:
 POST /plugin/self/pr/notes/reply
 { "id": "f-df05fe5d61f441", "text": "The guard now runs before the loop in 3f9a2c1." }
 → { "ok": true, "replies": [ { "id": "r_lq3x9k2a1b4c", "text": "…", "at": 1792190000000,
-                                "by": "agent:acme-review", "postedOnGitHub": false } ] }
+                                "by": "agent:acme-review" } ] }
 ```
 
 It is stored in the finding's thread with `by` set to `agent:<plugin name>`,

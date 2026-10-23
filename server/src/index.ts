@@ -157,6 +157,7 @@ import { appsForAll, launchApp, mimeOf, setDefaultApp } from "./openwith.ts";
 import { actionsFor, deleteAction, listActions, readAction, runAction, saveAction } from "./finderactions.ts";
 import { fsRun, fsReadOp, fsJobs, fsPathsOf, fsGate, fsWantsJson } from "./fsroute.ts";
 import { mediaFacts, posterFrame } from "./mediafacts.ts";
+import { previewReview, publishReview, cleanPublishOptions, type PublishDeps, type PublishRequest } from "./review-publish.ts";
 import { browseDir, browseReal, fileBytes, fileFacts, previewSlice, openInDesktop, pagePolicy, revealInFileManager } from "./browse.ts";
 import { fileGitFacts } from "./fileGit.ts";
 import { benchEdit, benchEnd, benchLive, finderEditEnd, finderEditSave, finderEditState, readNote, writeNote } from "./bench.ts";
@@ -248,7 +249,7 @@ import {
 import { setPluginSocketHandler, viaPluginSocket } from "./plugin-socket.ts";
 import { CanvasHandle, handleCanvasOps, isCanvasPanel, readBoundedJson, setCanvasResolver } from "./plugin-canvas.ts";
 import {
-  setPluginUiHook, setPanel, panelState, setOptions, pushEvent, takeEvents, upsertRun, upsertNotes, notesFor, answerNote, replyAsPlugin, costByDay, decideRun, pressNoteAction, type GitHubPoster, flushPluginNotes, summaryFor,
+  setPluginUiHook, setPanel, panelState, setOptions, pushEvent, takeEvents, upsertRun, upsertNotes, notesFor, answerNote, replyAsPlugin, costByDay, decideRun, pressNoteAction, flushPluginNotes, summaryFor, markRunPublished,
 } from "./plugin-ui.ts";
 import { PANEL_ID_RE, PLUGIN_CONTRACT, validPrRef } from "../../shared/pluginUi.ts";
 import { readNotifyPrefs, writeNotifyPrefs } from "./notifyPrefs.ts";
@@ -1757,6 +1758,18 @@ function mayChangePolicy(req: Request, caller: Caller | null): boolean {
   if (caller?.principal || caller?.kind === "plugin") return false;
   if (caller?.kind === "device") return scopeAllows(caller.scope, "full");
   return mayHostBrowser(req);
+}
+
+/**
+ * Who may post a local review to GitHub: the person's own click, the same
+ * people as the policy and nobody else. Every credential an agent on this
+ * machine holds is refused: the machine token, a seat's, an understudy's, a
+ * plugin's, and any request that presents an agent's name. The ui-control door
+ * lists this action as refused for agents (UI_REFUSED_FOR_AGENTS).
+ */
+function mayPublishReview(req: Request, caller: Caller | null): boolean {
+  if (req.headers.get("x-agentglass-agent")) return false;
+  return mayChangePolicy(req, caller);
 }
 
 /** A project root as a policy key: absolute and plain, or nothing. */
@@ -5730,27 +5743,66 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     }
     if (pathname === "/plugins/pr-notes/status" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
-      let b: { plugin?: unknown; id?: unknown; status?: unknown; reply?: unknown; repo?: unknown; number?: unknown; root?: unknown };
+      let b: { plugin?: unknown; id?: unknown; status?: unknown; reply?: unknown; repo?: unknown; number?: unknown };
       try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       if (typeof b.plugin !== "string" || typeof b.id !== "string") return json({ ok: false, error: "plugin and id are required" }, 400);
       // Who is answering: an agent says so with the header its CLI sends (the
       // same honesty system as presentedWorker); anything else is the person.
       const agent = req.headers.get("x-agentglass-agent");
       const by = agent && /^[A-Za-z0-9_.-]{1,60}$/.test(agent) ? `agent:${agent}` : "user";
-      // The only path from a note to GitHub. It runs when the request asked
-      // for it AND the caller is full scope; `answerNote` enforces both, and
-      // this poster only checks the checkout belongs to the note's repository.
-      const poster: GitHubPoster = async (n, body) => {
-        const id = await prRepoIdFor(b.root);
-        if (!id || id.nameWithOwner.toLowerCase() !== n.repo.toLowerCase()) return { ok: false, error: `that project is not a checkout of ${n.repo}` };
-        const r = await addComment(b.root, n.number, body);
-        return r.ok ? { ok: true } : { ok: false, error: r.error };
-      };
-      const r = await answerNote(b.plugin, b.id, {
-        status: b.status, reply: b.reply, repo: b.repo, number: b.number, by,
-        mayPost: (caller?.scope ?? "full") === "full",
-      }, poster);
+      const r = answerNote(b.plugin, b.id, { status: b.status, reply: b.reply, repo: b.repo, number: b.number, by });
       return json(r, r.ok ? 200 : 400);
+    }
+    if ((pathname === "/plugins/pr-notes/publish-preview" || pathname === "/plugins/pr-notes/publish") && req.method === "POST") {
+      /*
+       * One organized comment from a local review. The preview reads and writes
+       * nothing; the publish is a person's click and nothing else (mayPublishReview).
+       * Both answer 403 to a plugin token, an agent's header or the machine token.
+       */
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      if (!mayPublishReview(req, caller)) {
+        return json({ ok: false, error: "publishing a review on GitHub is the person's own click; an agent or a plugin cannot do it" }, 403);
+      }
+      let b: { plugin?: unknown; repo?: unknown; number?: unknown; runId?: unknown; root?: unknown; options?: unknown; markdown?: unknown };
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const ref = typeof b.plugin === "string" ? notesFor(b.repo, b.number) : null;
+      if (typeof b.plugin !== "string" || !ref) return json({ ok: false, error: "plugin, repo (owner/name) and number are required" }, 400);
+      const runs = ref.runs.filter((r) => r.plugin === b.plugin);
+      const run = (typeof b.runId === "string" ? runs.find((r) => r.id === b.runId) : [...runs].reverse().find((r) => r.state === "done") ?? runs[runs.length - 1]);
+      if (!run) return json({ ok: false, error: "that plugin has no review on this pull request" }, 404);
+      const rid = await prRepoIdFor(b.root);
+      if (!rid || rid.nameWithOwner.toLowerCase() !== run.repo.toLowerCase()) return json({ ok: false, error: `that project is not a checkout of ${run.repo}` }, 400);
+      const pr: PublishRequest = {
+        plugin: b.plugin, repo: run.repo, number: run.number, run,
+        notes: ref.notes.filter((n) => n.plugin === b.plugin && (!n.runId || n.runId === run.id)),
+        options: cleanPublishOptions(b.options),
+      };
+      const deps: PublishDeps = {
+        read: async () => {
+          const cap = await ghCapability();
+          if (!cap.available || !cap.authed) return { ok: false, error: cap.reason ?? "GitHub is not available" };
+          const d = await prDetail(b.root, run.number);
+          if (!d.ok || !d.detail) return { ok: false, error: d.error ?? "could not read the pull request" };
+          const det = d.detail as { headSha?: string; comments?: { nodeId: string; author: string; body: string; url: string }[] };
+          return { ok: true, viewer: cap.login ?? "", headSha: det.headSha, comments: det.comments ?? [] };
+        },
+        create: async (body) => {
+          const r = await addComment(b.root, run.number, body);
+          return r.ok ? { ok: true, url: r.detail } : { ok: false, error: r.error };
+        },
+        edit: async (nodeId, body) => {
+          const r = await editComment(b.root, nodeId, body, "issue");
+          return r.ok ? { ok: true } : { ok: false, error: r.error };
+        },
+      };
+      if (pathname.endsWith("/publish-preview")) {
+        const r = await previewReview(pr, deps);
+        return json(r, r.ok ? 200 : 400);
+      }
+      const r = await publishReview(pr, typeof b.markdown === "string" ? b.markdown : undefined, deps);
+      if (!r.ok) return json(r, 400);
+      markRunPublished(b.plugin, run.id, { at: Date.now(), url: r.url, options: pr.options, ...(r.commit ? { commit: r.commit } : {}) });
+      return json({ ok: true, url: r.url, edited: r.edited });
     }
     if (pathname === "/plugins/pr-notes/cost" && req.method === "GET") {
       // Read-only: what a plugin's runs cost, per day, for the Usage screen.

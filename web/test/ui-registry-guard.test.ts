@@ -49,6 +49,7 @@ const NOT_AGENT_DOOR: {
   settingsPages: {},
   chords: {},
   dialogs: {
+    "plugins/PublishReview.tsx": "Publish review posts one comment on GitHub as the person; it is their own click and is refused for agents (UI_REFUSED_FOR_AGENTS), so no door stages it",
     "Portal.tsx": "the portal primitive every dialog draws through, not a dialog itself",
     "AgentChangeChip.tsx": OUTPUT,
     "AskedBanners.tsx": OUTPUT,

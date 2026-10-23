@@ -11,6 +11,7 @@ import type { LocalNotes, LocalRun } from "./LocalReview.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { notReadyChip } from "../../lib/prNotesChip.ts";
 import { loadNotesSummary, notesSummaryVersion, onNotesSummary, refreshOnNotes, summariesOf } from "../../lib/prNotesSummaryStore.ts";
+import { PublishReview } from "./PublishReview.tsx";
 
 /**
  * What a plugin can do to the pull request you are reading, in its header.
@@ -48,10 +49,11 @@ const STALE_MS = 24 * 60 * 60_000;
 
 let cache: { at: number; plugins: PublicPlugin[] } | null = null;
 
-export function PluginPrActions({ number, local, onShowLocal, headSha }: {
+export function PluginPrActions({ number, local, onShowLocal, root, headSha }: {
   number: number;
-  /** The head the pull request is on now: what a review has to have covered
-   *  before it can say the pull request is not ready. */
+  /** The checkout, and the pull request's head: what Publish review… posts from and compares with,
+   *  and what a review has to have covered before it can say the pull request is not ready. */
+  root: string;
   headSha?: string;
   /** What plugins have written here — the runs are what the button reads. */
   local: LocalNotes;
@@ -139,10 +141,19 @@ export function PluginPrActions({ number, local, onShowLocal, headSha }: {
   }, [repo, number, headSha]);
   const notReady = repo ? notReadyChip(summariesOf(repo).get(number)) : null;
   if (!repo) return null;
+  // A review can be published whether or not its plugin is running now.
+  const latest = new Map<string, LocalRun>();
+  for (const r of local.runs) {
+    const cur = latest.get(r.plugin);
+    if (!cur || r.startedAt > cur.startedAt) latest.set(r.plugin, r);
+  }
+  const publish = [...latest.values()].map((run) => (
+    <PublishReview key={`publish-${run.plugin}`} run={run} notes={local.notes} root={root} headSha={headSha} />
+  ));
   const rows = plugins
     .filter((p) => p.enabled && p.running && (p.contributes?.prActions?.length ?? 0) > 0)
     .map((p) => ({ p, actions: p.contributes!.prActions! }));
-  if (rows.length === 0) return notReady ? <NotReady chip={notReady} onShowLocal={onShowLocal} /> : null;
+  if (rows.length === 0) return notReady ? <><NotReady chip={notReady} onShowLocal={onShowLocal} />{publish}</> : <>{publish}</>;
 
   const press = async (p: PublicPlugin, id: string) => {
     setPending({ plugin: p.name, at: Date.now() });
@@ -164,6 +175,7 @@ export function PluginPrActions({ number, local, onShowLocal, headSha }: {
           pending={pending?.plugin === p.name ? pending.at : 0} error={pending === null ? error : null}
           onPress={(id) => { void press(p, id); }} onShowLocal={onShowLocal} />
       ))}
+      {publish}
     </>
   );
 }

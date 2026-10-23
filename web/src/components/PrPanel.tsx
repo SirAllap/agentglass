@@ -23,6 +23,7 @@ import { withoutAuthor, authorLeftOutHint } from "../lib/reviewerPick.ts";
 import { dataInk } from "../lib/contrast.ts";
 import { onScreen } from "../lib/findScope.ts";
 import { PluginPrActions } from "./plugins/PluginPrActions.tsx";
+import { PublishReview } from "./plugins/PublishReview.tsx";
 import { useLocalNotes, groupByRun, RunCard, NoteCard, LocalMark, LocalStrip, sortNotes, type LocalNotes, type LocalNote } from "./plugins/LocalReview.tsx";
 import { createContext, Fragment, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { handoffTo } from "../lib/handoffTo.ts";
@@ -4423,16 +4424,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   /* What plugins wrote on this pull request, kept here and never on GitHub —
      the Conversation draws the runs, the Files tab draws the notes at their
      lines. */
-  const local = useLocalNotes(repo?.nameWithOwner, selected, {
-    root,
-    // The one question before a reply leaves the machine, worded like the
-    // app's other writes to GitHub: what goes, where, as whom.
-    approve: (n, draft) => ask({
-      title: `Comment on #${n.number} on GitHub?`,
-      body: `This will comment on GitHub as you, on ${n.repo}#${n.number}, as a reply to a local finding.\n\n${draft.text.length > 400 ? `${draft.text.slice(0, 400)}…` : draft.text}`,
-      confirmLabel: "Post comment",
-    }),
-  });
+  const local = useLocalNotes(repo?.nameWithOwner, selected);
   /* "Show me what the plugin wrote", from the header button, from the strip on
      the Overview, and from a link that opened this pull request asking for it.
      One move — the Conversation, filtered to the local lane — because a button
@@ -5346,7 +5338,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                              the pull request is re-read afterwards. */
                           onSaveComment={(nodeId, kind, body) => act("Save", () => api.prEditComment(root, nodeId, body, kind))}
                           onHideComment={(nodeId, on) => void act(on ? "Hide" : "Unhide", () => api.prHideComment(root, nodeId, on))}
-                          local={local}
+                          local={local} root={root}
                           onOpenFile={(path) => { setTab("files"); setSelFile(path); }}
                         />
                       )}
@@ -6320,7 +6312,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
             them. */}
         <ReviewMenu d={d} canTerm={!!onReviewInTerminal}
           onPick={(recipe, where) => (where === "term" ? onReviewInTerminal?.(recipe) : onLocalReview(recipe))} />
-        <PluginPrActions number={d.number} local={local} onShowLocal={onShowLocal} headSha={d.headSha} />
+        <PluginPrActions number={d.number} local={local} onShowLocal={onShowLocal} root={root} headSha={d.headSha} />
         {/* The panel's own Btn, like its neighbour. A hand-rolled anchor with
             its own padding beside a Btn is two heights in a row of two. */}
         {/* `small`, like the Menu it stands beside. Without it this was the
@@ -8859,7 +8851,7 @@ function Masthead({ root, repo, d, busy, local, stackUi, onOpenPr, onShowLocal, 
             read, not because it is the better place to send somebody. */}
         <ReviewMenu d={d} canTerm={!!onReviewInTerminal}
           onPick={(recipe, where) => (where === "term" ? onReviewInTerminal?.(recipe) : onLocalReview(recipe))} />
-        <PluginPrActions number={d.number} local={local} onShowLocal={onShowLocal} headSha={d.headSha} />
+        <PluginPrActions number={d.number} local={local} onShowLocal={onShowLocal} root={root} headSha={d.headSha} />
         {/* Out of the overflow, because it is the most-pressed thing in it.
             "Open on GitHub" is what you reach for whenever this panel does not
             do the thing — and burying the escape hatch two clicks deep is the
@@ -11811,8 +11803,10 @@ function NewRail({ container, atoms, onGo, depKey }: {
 }
 
 function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onReact, onApply, busy, who, onWho,
-  atoms, newSet, onMarkRead, sinceMine, onUnmarkRead, viewer, onSaveComment, onHideComment, local, onOpenFile }: {
+  atoms, newSet, onMarkRead, sinceMine, onUnmarkRead, viewer, onSaveComment, onHideComment, local, onOpenFile, root }: {
   d: PrDetail;
+  /** The checkout the Publish review… control posts from. */
+  root: string;
   lanes: { humans: PrReview[]; botReviews: PrReview[]; humanComments: PrComment[]; bots: PrComment[] };
   raw: boolean; onRaw: (v: boolean) => void;
   onResolve: (t: PrThread) => void; onReply: (t: PrThread, body: string) => Promise<boolean>;
@@ -12070,7 +12064,8 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
         ms: g.ms, key: g.key, lane: "local",
         node: <span style={{ color: "var(--primary-ink)" }}><EyeIcon size={ICON.xs} /></span>,
         body: <div className="agx-note">{g.run
-          ? <RunCard run={g.run} notes={g.notes} publisher={local.publishers[g.run.plugin]} onStatus={local.setStatus} onReply={local.reply} onOpenFile={onOpenFile} md={localMd} noteActions={local.noteActions} onAction={(n, id) => { void local.pressAction(n, id); }} onDecide={(r, d) => { void local.decideRun(r, d); }} />
+          ? <RunCard run={g.run} notes={g.notes} publisher={local.publishers[g.run.plugin]} onStatus={local.setStatus} onReply={local.reply} onOpenFile={onOpenFile} md={localMd} noteActions={local.noteActions} onAction={(n, id) => { void local.pressAction(n, id); }} onDecide={(r, d) => { void local.decideRun(r, d); }}
+            publish={<PublishReview run={g.run} notes={local.notes} root={root} headSha={d.headSha} />} />
           : <div className="flex flex-col gap-1.5">{g.notes.map((n) => <NoteCard key={`${n.plugin}/${n.id}`} n={n} md={localMd} onStatus={(st) => local.setStatus(n, st)} onReply={(d, st) => local.reply(n, d, st)} onOpenFile={onOpenFile} actions={local.noteActions[n.plugin]} onAction={(id) => { void local.pressAction(n, id); }} />)}</div>}</div>,
       });
     }

@@ -234,7 +234,7 @@ describe("plugin reply route", () => {
     expect(r.ok).toBe(true);
     const t = storedNote().replies!;
     expect(t).toHaveLength(1);
-    expect(t[0]).toMatchObject({ by: `agent:${P}`, text: "The guard moved above the loop in 3f9a2c1.", postedOnGitHub: false });
+    expect(t[0]).toMatchObject({ by: `agent:${P}`, text: "The guard moved above the loop in 3f9a2c1." });
     expect(r.ok && r.replies).toEqual(t);
     expect(await takeEvents(P, 0)).toEqual([]);
   });
@@ -287,7 +287,7 @@ describe("plugin reply route", () => {
   test("postToGitHub in the body is ignored: the reply is local and says so", async () => {
     seed();
     await replyAsPlugin(P, C, { id: "f-1", text: "x", postToGitHub: true, reply: { postToGitHub: true } });
-    expect(storedNote().replies![0]!.postedOnGitHub).toBe(false);
+    expect(storedNote().replies![0]).not.toHaveProperty("postedOnGitHub");
   });
   test("a plugin sending the finding again keeps the thread", async () => {
     seed();
