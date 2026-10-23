@@ -369,8 +369,8 @@ curl -sS http://localhost:4000/control \
 holds a `SettingDef` per exposed setting; the Settings row calls `def.set(v)`
 and so does `settings.set`, so a value is checked and stored exactly as a click
 would (the def wraps the pref module's own setter). Exposed:
-Appearance (mode, palette, accent, density, interface font size, a translucent window — the desktop app's only, and refused in a browser tab with the reason — and reduce motion), Diff, Rail (which drawer a view sits in), Terminal, three Notifications
-settings (quiet mode, checks only when approved, conversation), the browser's
+Appearance (mode, palette, accent, density, interface font size, a translucent window — the desktop app's only, and refused in a browser tab with the reason — and reduce motion), Diff, Rail (which drawer a view sits in, and whether Chat, Lantern and Tasks wear a count), Terminal, four Notifications
+settings (quiet mode, the volume — quiet, normal or loud — checks only when approved, conversation), the browser's
 search engine, Tasks (where it opens, which sources show) and the single-key
 shortcuts (`keys.binding.<action>`; a key another action holds is refused in the
 module's words). Any other id answers "not exposed", and some are meant to: the

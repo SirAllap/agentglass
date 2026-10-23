@@ -58,6 +58,7 @@ describe("rows in a migrated pane", () => {
 /** Each family of defs, and the settingId template its rows are drawn with. */
 const FAMILIES: [string, string][] = [
   ["rail.place.", "settingId={`rail.place.${v.id}`}"],
+  ["rail.badge.", "settingId={`rail.badge.${v.id}`}"],
   ["tasks.source.", "settingId={`tasks.source.${id}`}"],
   ["keys.binding.", "settingId={`keys.binding.${id}`}"],
 ];

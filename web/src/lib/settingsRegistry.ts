@@ -54,7 +54,8 @@ import {
   copyOnSelect, setCopyOnSelect, currentNoteEditor, setNoteEditor, NOTE_EDITORS, currentScrollback, setScrollback,
   SCROLLBACK_SIZES, DEFAULT_SCROLLBACK, currentWordSeparators, setWordSeparators, DEFAULT_WORD_SEPARATORS, type NoteEditor,
 } from "./termPrefs.ts";
-import { notifyQuiet, setNotifyQuiet } from "./sysNotify.ts";
+import { COUNTED_VIEWS, railBadgeOn, setRailBadge } from "./railBadges.ts";
+import { notifyQuiet, setNotifyQuiet, appNotify, setAppNotify } from "./sysNotify.ts";
 import { ciOnlyApproved, setCiOnlyApproved, CI_ONLY_APPROVED_DEFAULT } from "./ciNotifyPref.ts";
 import { talkNotify, setTalkNotify, TALK_NOTIFY_DEFAULT, type TalkNotify } from "./talkNotify.ts";
 import { searchEngine, setSearchEngine } from "./browserPrefs.ts";
@@ -353,6 +354,12 @@ const rail: SettingDef[] = VIEWS.map((v) => defineSetting({
   restore: (t) => saveRail(t as ReturnType<typeof railIds>),
 }));
 
+// One per view that wears a count on the rail (lib/railBadges.ts).
+const railBadges: SettingDef[] = (Object.keys(COUNTED_VIEWS) as (keyof typeof COUNTED_VIEWS)[]).map((id) => defineSetting({
+  id: `rail.badge.${id}`, page: "rail", section: "What is on the rail", label: `${VIEWS.find((v) => v.id === id)?.label ?? id}: count badge`, level: 2, default: true,
+  read: () => railBadgeOn(id), validate: bool, write: (v) => setRailBadge(id, v as boolean),
+}));
+
 // ── terminal: the rest of the pane ──────────────────────────────────────────
 
 const MOUSE = "Mouse and clipboard";
@@ -414,6 +421,15 @@ const notifications: SettingDef[] = [
   defineSetting({
     id: "notifications.quiet", page: "notifications", section: "How it reaches you", label: "Quiet — only what is stopped interrupts", level: 2, default: true,
     read: () => notifyQuiet(), validate: bool, write: (v) => setNotifyQuiet(v as boolean),
+  }),
+  // The two switches under one word. Quiet is `notifications.quiet`; with it off,
+  // "agentglass's own notifications" (chats finishing, branches behind, checks going
+  // red) decides whether the rest interrupts: off is Normal, on is Loud.
+  defineSetting({
+    id: "notifications.volume", page: "notifications", section: "How it reaches you", label: "Volume", level: 2, default: "quiet",
+    read: () => (notifyQuiet() ? "quiet" : appNotify() ? "loud" : "normal"),
+    validate: oneOf(["quiet", "normal", "loud"] as const),
+    write: (v) => { setNotifyQuiet(v === "quiet"); if (v !== "quiet") setAppNotify(v === "loud"); },
   }),
   defineSetting({
     id: "notifications.ciOnlyApproved", page: "notifications", section: "Pull requests", label: "Checks: only when the pull request is approved", level: 2,
@@ -536,7 +552,7 @@ const keys: SettingDef[] = (Object.keys(KEY_LABELS) as ActionId[]).map((a) => de
 
 // ── the registry ────────────────────────────────────────────────────────────
 
-export const SETTING_DEFS: readonly SettingDef[] = [...appearance, ...diff, ...terminal, ...terminalMore, ...rail, ...notifications, ...browser, ...tasks, ...clickup, ...jira, ...reviewSessions, ...keys];
+export const SETTING_DEFS: readonly SettingDef[] = [...appearance, ...diff, ...terminal, ...terminalMore, ...rail, ...railBadges, ...notifications, ...browser, ...tasks, ...clickup, ...jira, ...reviewSessions, ...keys];
 
 /** Which panes (and, for Terminal, which groups) have been migrated. A row in
  *  here must carry a settingId or be marked agentExempt; a guard test reads this. */
