@@ -530,7 +530,8 @@ function Recipe({ port }: { port: number }) {
   return (
     <SettingRow
       label="Start the server with the network open"
-      hint={<>
+      hint="The server can only be opened to the network by the process that starts it."
+      detail={{ summary: "Why, and what to run first", body: <>
         <span className="block">
           Only the process that started the server can change what it listens on, and in a browser tab that
           is not this page. Start it like this instead:
@@ -539,7 +540,7 @@ function Recipe({ port }: { port: number }) {
           Run <span className="t-mono">bun run build</span> first, so the same port serves the dashboard as
           well as the API. The desktop app has this as a switch.
         </span>
-      </>}
+      </> }}
       below={<CommandLine command={`AGENTGLASS_BIND=0.0.0.0 \\\n  AGENTGLASS_TRUST_LAN=1 \\\n  AGENTGLASS_TOKEN=$(openssl rand -base64 24) \\\n  bun run server   # port ${port}`} />}
     />
   );

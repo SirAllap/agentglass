@@ -1067,8 +1067,8 @@ function ActivityPane({ open }: { open: boolean }) {
   if (!rows.length) {
     return (
       <SettingsCard title="What this app has done">
-        <SettingRow label="Nothing yet"
-          hint="Every write this dashboard performs — staging, discarding, pushing, merging, container actions, gate decisions — is recorded here as it happens." />
+        <SettingRow label="Nothing yet" hint="Every write this dashboard makes is recorded here as it happens."
+          detail={{ summary: "What counts as a write", body: "Staging, discarding, pushing, merging, container actions and gate decisions." }} />
       </SettingsCard>
     );
   }

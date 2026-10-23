@@ -90,7 +90,7 @@ export const SETTINGS_ROWS: SettingsRowRaw[] = [
   { pane: "log", section: "Orchestration", label: "Nothing from an orchestrator or the policy yet", hint: "What a chair does through the app, and when a rule turns on or off, is listed here." },
   { pane: "log", section: "What this app has done", label: "Loading…", hint: "" },
   { pane: "log", section: "What this app has done", label: "Newest first, kept indefinitely", hint: "The changes you made, not telemetry." },
-  { pane: "log", section: "What this app has done", label: "Nothing yet", hint: "" },
+  { pane: "log", section: "What this app has done", label: "Nothing yet", hint: "Every write this dashboard makes is recorded here as it happens." },
   { pane: "notifications", section: "From other apps", label: "How much of the message", hint: "Full shows the text; Who shows only who it was from.", agentNever: "reads other applications' notifications into this app: what they say is theirs" },
   { pane: "notifications", section: "From other apps", label: "Mirror this machine's notifications", hint: "", agentNever: "reads other applications' notifications into this app: what they say is theirs" },
   { pane: "notifications", section: "How it reaches you", label: "Chime this session", hint: "Only this window, until you quit.", agentExempt: true },
