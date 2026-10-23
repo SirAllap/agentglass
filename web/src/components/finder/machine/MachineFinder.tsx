@@ -15,7 +15,7 @@ import { api } from "../../../lib/api.ts";
 import { FolderStore, type FolderState } from "../../../lib/finderFolders.ts";
 import { columnWidth, fitWidth, previewFits, stripLayout, previewWidth, sidebarWidth } from "../../../lib/finderColumns.ts";
 import { back as histBack, canBack, canForward, forward as histForward, here as histHere, startHistory, visit, type History } from "../../../lib/finderHistory.ts";
-import { readMachineSnap, snapApplies, writeMachineSnap } from "../../../lib/finderMachineState.ts";
+import { readMachineSnap, openingOf, writeMachineSnap } from "../../../lib/finderMachineState.ts";
 import { finderKey } from "../../../lib/finderKeys.ts";
 import { clickSelect, extendBy, extendSelect, selectAll, selectedFooter, single, toggleCursor, type Choice } from "../../../lib/finderSelect.ts";
 import {
@@ -65,12 +65,14 @@ const BIG = 2000;
 
 const basename = (p: string) => p.slice(p.lastIndexOf("/") + 1) || "/";
 
-export function MachineFinder({ home, workspace, start, wantFile, onWanted, places, target, onPlace, onBench, onClose: closeNow }: {
+export function MachineFinder({ home, workspace, start, wantFile, onWanted, places, target, onTargetDone, onPlace, onBench, onClose: closeNow }: {
   home: string;
   /** Where to open, and where to go when the palette's own place changes. */
   start: string;
   /** A path somebody clicked in a terminal: its folder opens and it is selected. Null when there is none. */
   target?: string | null;
+  /** The finder has acted on `target`: the palette forgets it, so the next opening comes back where the finder was closed instead of replaying it. */
+  onTargetDone?: () => void;
   places: readonly DiskPlace[];
   /** The finder went somewhere on purpose (sidebar, path bar, up): the palette remembers it as the place. */
   onPlace: (path: string) => void;
@@ -108,7 +110,15 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   const setPrefs = useCallback((p: Partial<Prefs>) => setPrefsState((cur) => { const n = { ...cur, ...p }; savePrefs(n); return n; }), []);
 
   /* Where it was left, if that is still where the palette says it is: a chip or a link that moved the place wins over the memory. */
-  const [back] = useState(() => { const s = loadSnap(); return s && snapApplies(s, start || home || "/") ? s : null; });
+  const [back] = useState(() => {
+    const s = loadSnap(), at = start || home || "/";
+    const o = openingOf(s, at, target ?? null);
+    // One line per opening, so a finder that came back somewhere else says why.
+    console.debug(`[finder] opens from ${o.from}`, o.from === "snapshot" ? o.snap.trail[o.snap.trail.length - 1] : o.at);
+    /* A pending request moves the finder once its path is checked (below); until then, and for widths and scroll, the memory stands. */
+    const mem = openingOf(s, at, null);
+    return mem.from === "snapshot" ? mem.snap : null;
+  });
   const [trail, setTrail] = useState<string[]>(() => back?.trail ?? [start || home || "/"]);
   const [sel, setSel] = useState<(string | null)[]>(() => back?.sel ?? [null]);
   /* Folder tabs: each is only the folder it shows; the active one follows wherever the finder goes. */
@@ -205,6 +215,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   /* A typed path goes where the path bar goes, and a file also gets selected so
      its preview shows. It asks what the path is before moving: a half-typed name
      is nothing yet, and the finder stays where it was until the path is real. */
+  const targetDone = useRef(onTargetDone); targetDone.current = onTargetDone;
   useEffect(() => {
     if (!target) return;
     let live = true;
@@ -217,6 +228,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
         const file = f.kind === "dir" ? externalPlace(at, wantedNow.current ?? null).name : basename(target);
         wantedNow.current = null;
         const move = folderTargetMove(trailRef.current[0]!, at, file);
+        targetDone.current?.();
         if (move === "stay") return;
         guarded("external", () => { setHist((h) => visit(h, move.dir)); setTrail([move.dir]); setSel([move.name]); setFocusCol(0); setPeek(false); setSidePage(false); })();
       }).catch(() => { /* not a place yet */ });

@@ -38,7 +38,16 @@ export function snapApplies(s: MachineSnap, start: string): boolean {
   return s.origin !== undefined ? s.origin === start : s.trail[0] === start;
 }
 
-export const writeMachineSnap = (s: MachineSnap): string => JSON.stringify(s);
+export type Opening = { from: "request"; at: string } | { from: "snapshot"; snap: MachineSnap } | { from: "start"; at: string };
+
+/** Where a finder that is mounting opens. A request still pending (a link or chip made while it was closed) wins; then where it was left, whatever the view, the sidebar or the kind of place (Recent, the Trash, a mount); then the palette's place. The view and the sidebar are prefs of their own and are not decided here. A request is one shot: the palette forgets it once the finder has acted on it, or every reopening would replay it. */
+export function openingOf(snap: MachineSnap | null, start: string, request: string | null): Opening {
+  if (request) return { from: "request", at: request };
+  if (snap && snapApplies(snap, start)) return { from: "snapshot", snap };
+  return { from: "start", at: start };
+}
+
+export const writeMachineSnap =(s: MachineSnap): string => JSON.stringify(s);
 
 const num = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 

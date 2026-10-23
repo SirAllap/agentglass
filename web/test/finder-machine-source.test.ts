@@ -78,3 +78,23 @@ describe("the door on the engine", () => {
     expect(body).not.toContain("readFile");
   });
 });
+
+describe("a request is one shot", () => {
+  // The palette keeps the path it was asked for in its query; left there, every later mount replayed it and reopened the finder in that folder instead of where it was closed.
+  const finder = texts.find(([f]) => f === "MachineFinder.tsx")![1];
+  test("the palette forgets the path once the finder has acted on it", () => {
+    const el = palette.slice(palette.indexOf("<MachineFinder "), palette.indexOf("/>", palette.indexOf("<MachineFinder ")));
+    expect(el).toMatch(/onTargetDone=\{\(\) => setQ\(""\)\}/);
+  });
+  test("the finder says so whether it moved or was already there", () => {
+    const at = finder.indexOf("void api.previewFacts(target)");
+    expect(at).toBeGreaterThan(0);
+    const body = finder.slice(at, finder.indexOf("}).catch(", at));
+    expect(body.match(/targetDone\.current\?\.\(\)/g)?.length).toBe(1);
+    expect(body.indexOf("targetDone.current?.()")).toBeLessThan(body.indexOf('move === "stay"'));
+  });
+  test("where it opens is decided by openingOf, not inline", () => {
+    expect(finder).toMatch(/openingOf\(/);
+    expect(finder).not.toMatch(/snapApplies\(s, start/);
+  });
+});

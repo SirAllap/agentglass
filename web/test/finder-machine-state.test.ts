@@ -5,7 +5,8 @@
  * columns are not each a child of the one before, or a number that is not one.
  */
 import { describe, expect, test } from "bun:test";
-import { readMachineSnap, snapApplies, writeMachineSnap, type MachineSnap } from "../src/lib/finderMachineState.ts";
+import { openingOf, readMachineSnap, snapApplies, writeMachineSnap, type MachineSnap } from "../src/lib/finderMachineState.ts";
+import { RECENT } from "../src/lib/finderMiller.ts";
 
 const snap: MachineSnap = {
   v: 1, trail: ["/home/ann", "/home/ann/code", "/home/ann/code/orbit"], sel: ["code", "orbit", "README.md"], focusCol: 2,
@@ -83,5 +84,45 @@ describe("reopen: the last place wins, an outside move is consumed once", () => 
     expect(old.origin).toBeUndefined();
     expect(snapApplies(old, "/home/ann")).toBe(true);
     expect(snapApplies(old, "/home/ann/code")).toBe(false);
+  });
+});
+
+/*
+ * Reopening lands where it was closed, in every view and every kind of place.
+ * Measured: a path the palette had been asked for (a terminal link, a click in a
+ * preview) stayed in its query after the finder had gone there, and every later
+ * mount replayed it as a fresh request, so closing in a project folder and
+ * reopening a second later landed in the folder of the old link. A request is
+ * one shot: once the finder has acted on it, the next opening has none.
+ */
+describe("reopening", () => {
+  const home = "/home/ann";
+  const places: [string, string[]][] = [
+    ["a project folder", [home, `${home}/Documents`, `${home}/Documents/orbit`]],
+    ["Recent", ["recent:"]],
+    ["the Trash", [`${home}/.local/share/Trash/files`]],
+    ["a remote mount", ["/run/user/1000/gvfs/sftp:host=build.example", "/run/user/1000/gvfs/sftp:host=build.example/srv"]],
+  ];
+  // the view (Columns / Icons / List) and the sidebar (open, rail, hidden) are prefs of their own; the place is the same whichever is on
+  for (const view of ["columns", "icons", "list"])
+    for (const side of ["open", "rail", "hidden"])
+      for (const [what, trail] of places)
+        test(`${what}, ${view} view, sidebar ${side}: navigate, close, reopen = same folder`, () => {
+          const t = trail[0] === "recent:" ? [RECENT] : trail;
+          const closed = readMachineSnap(writeMachineSnap({ ...snap, origin: home, trail: t, sel: t.map(() => null), focusCol: t.length - 1, scroll: {}, dragged: {} }))!;
+          const o = openingOf(closed, home, null);
+          expect(o.from).toBe("snapshot");
+          if (o.from === "snapshot") expect(o.snap.trail).toEqual(t);
+        });
+  test("a request made while it was closed wins over where it was left", () => {
+    const closed = readMachineSnap(writeMachineSnap({ ...snap, origin: home }))!;
+    expect(openingOf(closed, home, "/srv/orbit")).toEqual({ from: "request", at: "/srv/orbit" });
+  });
+  test("a link that moved the place while it was closed wins over the memory", () => {
+    const closed = readMachineSnap(writeMachineSnap({ ...snap, origin: home }))!;
+    expect(openingOf(closed, "/srv/orbit", null)).toEqual({ from: "start", at: "/srv/orbit" });
+  });
+  test("nothing remembered: the palette's place", () => {
+    expect(openingOf(null, home, null)).toEqual({ from: "start", at: home });
   });
 });
