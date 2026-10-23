@@ -90,7 +90,7 @@ export type WebviewEl = HTMLElement & {
   loadURL(url: string): Promise<void>;
   getTitle(): string;
   executeJavaScript(code: string): Promise<unknown>;
-  capturePage(rect?: { x: number; y: number; width: number; height: number }): Promise<{ toDataURL(): string }>;
+  capturePage(rect?: { x: number; y: number; width: number; height: number }): Promise<Shot>;
   openDevTools(): void;
   closeDevTools(): void;
   isDevToolsOpened(): boolean;
@@ -203,29 +203,25 @@ export function __wakeFirstTab(on: boolean): void { wakeFirst = on; }
 const CLOSE_CELL = 20;
 
 /**
- * A small picture of an awake tab for the island's overview: at most 1.5 s
- * (a hidden guest can take its time or never answer), an empty capture is no
- * picture, and it is scaled to 480 px wide as a JPEG so five tabs are not five
- * full-resolution PNGs held in memory.
+ * A small picture of a tab for the island's overview. The guest's own
+ * NativeImage is resized natively to 480 px and encoded as JPEG: no decode and
+ * no canvas on the page's thread, which is what an every-few-seconds refresh
+ * can afford. At most 1.5 s (a hidden guest can take its time or never answer);
+ * an empty capture is no picture.
  */
-async function pictureOf(w: { capturePage(): Promise<{ toDataURL(): string }> } | undefined): Promise<string | null> {
+type Shot = { toDataURL(): string; isEmpty?(): boolean; resize?(o: { width: number; quality?: string }): { toJPEG?(q: number): Uint8Array; toDataURL(): string } };
+async function pictureOf(w: { capturePage(): Promise<Shot> } | undefined): Promise<string | null> {
   if (!w) return null;
   const shot = await Promise.race([
-    w.capturePage().then((i) => i.toDataURL()).catch(() => ""),
-    new Promise<string>((r) => setTimeout(() => r(""), 1500)),
+    w.capturePage().catch(() => null),
+    new Promise<null>((r) => setTimeout(() => r(null), 1500)),
   ]);
-  if (!shot || shot.length < 64) return null;
+  if (!shot || shot.isEmpty?.()) return null;
   try {
-    const img = new Image();
-    img.src = shot;
-    await img.decode();
-    if (!img.width) return null;
-    const k = Math.min(1, 480 / img.width);
-    const c = document.createElement("canvas");
-    c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
-    c.getContext("2d")?.drawImage(img, 0, 0, c.width, c.height);
-    return c.toDataURL("image/jpeg", 0.82);
-  } catch { return shot; }
+    const small = shot.resize ? shot.resize({ width: 480, quality: "good" }) : shot;
+    const url = small.toDataURL();
+    return url && url.length > 64 ? url : null;
+  } catch { return null; }
 }
 
 export function BrowserView({ active: viewOn, scope }: {
@@ -608,7 +604,26 @@ export function BrowserView({ active: viewOn, scope }: {
      browserDrive, filled while this panel is up. */
   const [landings, setLandings] = useState<Record<string, ActLanding>>({});
   useEffect(() => onActLanded((l) => setLandings((m) => ({ ...m, [l.tab]: l }))), []);
+  /* The last picture seen of each tab, for the overview: it opens with these
+     at once instead of waiting on a capture. Refreshed while an agent acts on
+     the tab in front (at most every 3 s, only while it is on screen, since a
+     hidden guest gives no picture) and whenever the overview opens. Kept in a
+     ref: a new picture must not re-render the panel. */
+  const shots = useRef(new Map<string, string>());
+  const shotAt = useRef(new Map<string, number>());
+  const snapTab = useCallback(async (id: string) => {
+    const src = await pictureOf(els.current.get(id) as never);
+    if (src) shots.current.set(id, src);
+    return src;
+  }, []);
   const spaceName = useCallback((id: string) => profileName(profilesRef.current, id), []);
+  useEffect(() => {
+    if (!activeId || !landings[activeId]) return;
+    const now = Date.now();
+    if (now - (shotAt.current.get(activeId) ?? 0) < 3000) return;
+    shotAt.current.set(activeId, now);
+    void snapTab(activeId);
+  }, [landings, activeId, snapTab]);
   const actsRef = useRef<Activity>(acts);
   actsRef.current = acts;
   /** §12: did the ask now being served say `--show`? Written by the ask handler
@@ -3044,11 +3059,12 @@ export function BrowserView({ active: viewOn, scope }: {
             doing={active && landings[active.id] ? presenceLabel(landings[active.id]!.verb, landings[active.id]!.name, landings[active.id]!.key) : ""}
             address={active?.url && active.url !== BLANK ? displayUrl(active.url) : ""}
             canBack={!!active?.canBack} canForward={!!active?.canForward} loading={!!active?.loading}
-            onShow={show} onClose={(id) => { close(id); setLandings((m) => { const { [id]: _gone, ...rest } = m; return rest; }); }} onNew={() => setOmni("new")} onAddress={() => setOmni("edit")}
+            onShow={show} onClose={(id) => { close(id); shots.current.delete(id); setLandings((m) => { const { [id]: _gone, ...rest } = m; return rest; }); }} onNew={() => setOmni("new")} onAddress={() => setOmni("edit")}
             onBack={() => el()?.goBack()} onForward={() => el()?.goForward()} onReload={() => el()?.reload()} onStop={() => el()?.stop()}
             onMenu={(r) => { setMenuAtXY({ top: r.bottom + 6, right: Math.max(6, window.innerWidth - r.right) }); setMenuOpen(true); }}
             onToggle={(id) => { const a = actsRef.current[id]; if (a) dispatchAct({ type: "pause", tab: id, paused: !a.paused }); }}
-            picture={(id) => pictureOf(els.current.get(id))}
+            picture={snapTab}
+            lastPicture={(id) => shots.current.get(id) ?? null}
             onTucked={setIslandTucked} />
         )}
         {hover && (

@@ -17,10 +17,11 @@
  *            count on each box and one sentence on top. For the person only —
  *            no agent verb reads or drives it.
  *
- * Opening flies the page you were on into its own card (its picture, taken
- * when the overview opens), so you see where it went. Pictures are taken only
- * then and only of awake tabs: a sleeping tab has no page, so it shows its
- * initial. Ceiling: folders and the shelf live in the classic list, not here.
+ * Each card shows the last picture seen of its tab (kept by the panel), so
+ * the overview opens at once; the page in front is refreshed as it opens. A
+ * sleeping tab has no page, so it shows its initial, and a background tab's
+ * picture is as old as the last time it was in front. Ceiling: folders and the
+ * shelf live in the classic list, not here.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { BrowserTab } from "../../lib/browserTabs.ts";
@@ -54,8 +55,10 @@ export interface IslandProps {
   onStop: () => void;
   onMenu: (at: DOMRect) => void;
   onToggle: (tab: string) => void;
-  /** A picture of an awake tab, or null. Called only while the overview opens. */
+  /** A fresh picture of an awake tab, or null. */
   picture: (id: string) => Promise<string | null>;
+  /** The last picture seen of a tab, at once, or null. */
+  lastPicture: (id: string) => string | null;
   /** Tells the panel when the island has tucked, so the dock goes too. */
   onTucked: (tucked: boolean) => void;
 }
@@ -99,62 +102,36 @@ export function BrowserIsland(p: IslandProps) {
   const heldBoxes = groups.filter((g) => g.held).length;
 
   /*
-   * The page and the overview never move at the same time. Opening, a copy of
-   * the page covers the live page pixel for pixel, the dark backdrop fades in
-   * BEHIND it, and only the copy moves: it shrinks into its card. Closing runs
-   * it back over a backdrop that stays opaque, and the overlay is removed in one
-   * frame only once the copy has landed full size, so the live page it reveals
-   * is the same picture in the same place. Growing the clip from the pill while
-   * a copy shrank showed the real page and its copy at once (reported on
-   * GitHub: "it minimises into the overview, then maximises over itself").
+   * Opening and closing are a fade with a 1.5 % zoom on one layer, as CSS
+   * transitions, so they can be reversed halfway and look the same every
+   * time. Measured on the installed app, a copy of the page flying into its
+   * card stuttered: Electron draws here without the GPU, and a transform over
+   * the whole page repaints all of it every frame. The box itself never
+   * animates its size when it opens or closes (is-snap), only what is on it.
    */
-  const [closing, setClosing] = useState(false);
+  const [shown, setShown] = useState(false);
   const [snap, setSnap] = useState(false);
+  const closer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unsnap = () => requestAnimationFrame(() => requestAnimationFrame(() => setSnap(false)));
-  const fly = useCallback((src: string, card: Element | null, outward: boolean) => {
-    const b = box.current?.parentElement, c = card?.querySelector(".agx-isl-thumb");
-    if (!b || !c || calmNow()) return null;
-    const s = b.getBoundingClientRect(), r = c.getBoundingClientRect(), k = r.width / s.width;
-    const img = document.createElement("img");
-    img.src = src; img.className = "agx-isl-fly"; img.alt = "";
-    b.appendChild(img);
-    c.classList.add("is-hold");
-    const full = { transform: "translate(0px, 0px) scale(1)", borderRadius: "0px" };
-    const at = { transform: `translate(${r.left - s.left}px, ${r.top - s.top}px) scale(${k})`, borderRadius: `${12 / k}px` };
-    const a = img.animate(outward ? [full, at] : [at, full], { duration: outward ? 520 : 420, easing: "cubic-bezier(0.32, 0.72, 0, 1)", fill: "forwards" });
-    const done = a.finished.catch(() => {}).then(() => { if (outward) { img.remove(); c.classList.remove("is-hold"); } });
-    return { done, remove: () => { img.remove(); c.classList.remove("is-hold"); } };
-  }, []);
-
-  const show = useCallback(async () => {
-    if (open) return;
+  const show = useCallback(() => {
+    if (closer.current) { clearTimeout(closer.current); closer.current = null; }
     const front = activeId;
-    // the copy has to exist before anything moves; 250 ms at most, else the overview just fades in
-    const src = front ? await Promise.race([p.picture(front).catch(() => null), new Promise<null>((r) => setTimeout(() => r(null), 250))]) : null;
-    setPics(front && src ? { [front]: src } : {});
-    setSnap(true);
-    setOpen(true);
-    unsnap();
-    if (src && front) requestAnimationFrame(() => { fly(src, box.current?.querySelector(`[data-tab="${front}"]`) ?? null, true); });
-    for (const t of tabs) {
-      if (t.asleep || t.id === front) continue;
-      void p.picture(t.id).catch(() => null).then((pic) => { if (pic) setPics((m) => ({ ...m, [t.id]: pic })); });
-    }
-  }, [open, tabs, activeId, p, fly]);
+    const now: Record<string, string> = {};
+    for (const t of tabs) { const src = p.lastPicture(t.id); if (src) now[t.id] = src; }
+    setPics(now);
+    if (!open) { setSnap(true); setOpen(true); unsnap(); }
+    requestAnimationFrame(() => setShown(true));
+    // the page in front is the one worth refreshing; a hidden guest gives no picture
+    if (front) void p.picture(front).then((src) => { if (src) setPics((m) => ({ ...m, [front]: src })); });
+  }, [open, tabs, activeId, p]);
   const hide = useCallback((pick?: string) => {
-    if (!open || closing) return;
-    const id = pick ?? activeId;
+    if (!open) return;
     if (pick && pick !== activeId) p.onShow(pick);
-    const finish = () => { setSnap(true); setOpen(false); setClosing(false); setPics({}); unsnap(); };
-    const flight = id && pics[id] ? fly(pics[id]!, box.current?.querySelector(`[data-tab="${id}"]`) ?? null, false) : null;
-    if (!flight) { finish(); return; }
-    setClosing(true);
-    void flight.done.then(() => {
-      finish();
-      // the copy goes one frame after the overlay, so no frame shows neither
-      requestAnimationFrame(() => requestAnimationFrame(flight.remove));
-    });
-  }, [open, closing, activeId, pics, fly, p]);
+    setShown(false);
+    if (closer.current) clearTimeout(closer.current);
+    closer.current = setTimeout(() => { closer.current = null; setSnap(true); setOpen(false); unsnap(); }, 170);
+  }, [open, activeId, p]);
+  useEffect(() => () => { if (closer.current) clearTimeout(closer.current); }, []);
 
   /* Escape is the overview's alone while it is up: other window handlers
      (the address box, the panel) must not close something else on the same key. */
@@ -169,11 +146,11 @@ export function BrowserIsland(p: IslandProps) {
   // focus lands on the page you were on once, when it opens, never again on a re-render
   useEffect(() => { if (open) box.current?.querySelector<HTMLElement>(".agx-isl-card.is-on")?.focus({ preventScroll: true }); }, [open]);
 
-  const cls = "agx-isl" + (open ? " is-open" : "") + (closing ? " is-closing" : "") + (snap ? " is-snap" : "") + (tucked ? " is-tucked" : "") + (yours ? " is-yours" : "") + (act?.paused ? " is-taken" : "");
+  const cls = "agx-isl" + (open ? " is-open" : "") + (shown ? " is-shown" : "") + (snap ? " is-snap" : "") + (tucked ? " is-tucked" : "") + (yours ? " is-yours" : "") + (act?.paused ? " is-taken" : "");
   const dot = act?.paused ? "is-taken" : working ? "is-working" : "";
   return (
     <>
-      {open && <div className="agx-isl-scrim" onClick={() => hide()} />}
+      {open && <div className={"agx-isl-scrim" + (shown ? " is-shown" : "")} onClick={() => hide()} />}
       <div ref={box} className={cls} role={open ? "dialog" : undefined} aria-label={open ? "Every tab" : undefined}>
         {!open && (
           <>
@@ -196,11 +173,11 @@ export function BrowserIsland(p: IslandProps) {
                 </button>
                 <button type="button" className="agx-isl-addr" onClick={p.onAddress} title="Type an address (Ctrl+L)">{p.address || "Type an address"}</button>
                 <button type="button" className="agx-isl-ib" aria-label="Menu" onClick={(e) => p.onMenu(e.currentTarget.getBoundingClientRect())}><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="3.5" cy="8" r="1.2" /><circle cx="8" cy="8" r="1.2" /><circle cx="12.5" cy="8" r="1.2" /></svg></button>
-                <button type="button" className="agx-isl-count" aria-label="Show every tab" onClick={() => void show()}>{tabs.length}</button>
+                <button type="button" className="agx-isl-count" aria-label="Show every tab" onClick={show}>{tabs.length}</button>
                 {act?.paused && <button type="button" className="agx-isl-hand" onClick={() => active && p.onToggle(active.id)}>Hand back</button>}
               </div>
             ) : (
-              <button type="button" className="agx-isl-status" aria-label="Show every tab" onClick={() => void show()}>
+              <button type="button" className="agx-isl-status" aria-label="Show every tab" onClick={show}>
                 <LivingMark size={17} style={{ color: "#a78bfa" }} />
                 <span className="agx-isl-title">{active?.title || (active ? host(active.url) : "")}</span>
                 <span className="agx-isl-doing"><span className={"agx-isl-dot " + dot} /><span className="agx-isl-doing-t">{act!.agent} · {p.doing || "working"}</span></span>
@@ -209,6 +186,7 @@ export function BrowserIsland(p: IslandProps) {
             )}
           </>
         )}
+        {open && <div className="agx-isl-veil" aria-hidden />}
         {open && (
           <div className="agx-isl-mc">
             <div className="agx-isl-head">
