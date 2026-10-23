@@ -39,8 +39,11 @@ export interface TmuxWindowDetail extends TmuxWindow {
 const WINDOW_RE = /^@\d+$/;
 const PANE_RE = /^%\d+$/;
 /** `#{window_layout}`: a checksum, then sizes, offsets, pane ids and braces —
- *  nothing a shell would read, and nothing else is accepted for `-t` either. */
-export const LAYOUT_RE = /^[0-9a-f]{4},[0-9x,{}\[\]]+$/;
+ *  nothing a shell would read, and nothing else is accepted for `-t` either.
+ *  tmux 3.8 writes it as JSON (`{"V":2,"L":{"t":"h",…,"I":"%0"}}`) and still
+ *  takes it back through `select-layout`; measured on 3.8, where the classic
+ *  pattern alone refused every layout and each split came back stacked. */
+export const LAYOUT_RE = /^(?:[0-9a-f]{4},[0-9x,{}\[\]]+|\{"V":\d+,"L":\{[0-9A-Za-z":,%{}\[\]-]+\}\})$/;
 
 /**
  * A free-form field, escaped by tmux itself before it reaches a row.

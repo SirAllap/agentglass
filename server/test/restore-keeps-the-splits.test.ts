@@ -34,7 +34,15 @@ const S = `agxsplits${process.pid}`;
 
 /** The shape of a layout without its sizes: `{` is side by side, `[` is
  *  stacked — the one character this whole file is about. */
-const shape = (layout: string) => layout.replace(/[0-9a-f]{4},/, "").replace(/\d+x\d+,\d+,\d+(,\d+)?/g, "P");
+const shape = (layout: string) => {
+  // tmux 3.8 writes the layout as JSON: "h" is side by side, "v" is stacked.
+  if (layout.startsWith("{")) {
+    const walk = (n: { t: string; c?: unknown[] }): string =>
+      n.t === "p" ? "P" : `P${n.t === "h" ? "{" : "["}${(n.c ?? []).map((k) => walk(k as typeof n)).join(",")}${n.t === "h" ? "}" : "]"}`;
+    return walk(JSON.parse(layout).L);
+  }
+  return layout.replace(/[0-9a-f]{4},/, "").replace(/\d+x\d+,\d+,\d+(,\d+)?/g, "P");
+};
 /** kill-server returns while the old server is still on its way out; a
  *  new-session that arrives before the socket is released lands on the dying
  *  server and is refused. Measured on the CI runner, never on a developer
