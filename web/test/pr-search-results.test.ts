@@ -118,7 +118,7 @@ describe("a search has rules of its own", () => {
     const c = code(panel);
     expect(c).toContain("const activeRules = searchingNow ? searchRules : rules;");
     expect(c).toContain("[pool, answered, filters, activeRules");
-    expect(c).toContain("<FilterBuilder fields={ruleFields} value={activeRules}");
+    expect(c).toContain("<FilterBuilder bare fields={ruleFields} value={activeRules}");
     expect(c).toContain("rules: activeRules, setRules: setActiveRules");
   });
   it("the counts are one number: nothing walks the scope for an 'of 200'", () => {

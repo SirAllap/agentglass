@@ -1,22 +1,22 @@
 import { useState } from "react";
-import { FacetMenu } from "./FacetMenu.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { LAYER } from "../lib/layers.ts";
 import { applyPick, atToken, loadUse, recordPicks, suggestPeople } from "../lib/personUsage.ts";
-import { SEARCH_HINT } from "../lib/prSearch.ts";
+import { SEARCH_HINT, SEARCH_PLACEHOLDER } from "../lib/prSearch.ts";
 import { ICON } from "../lib/iconSize.ts";
-import {
-  serializeQuery, toggleFacet, setSort, DEFAULT_SORT, SORT_OPTIONS,
-  type FilterState, type FacetView, type SortTok,
-} from "../lib/prFilter.ts";
+import { serializeQuery, toggleFacet, type FilterState, type FacetView } from "../lib/prFilter.ts";
 import { SearchIcon } from "../lib/glyphIcons.tsx";
 import { CloseIcon } from "./CloseButton.tsx";
 import { EDGE, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 /**
- * The PR list's filter bar (#pulldash-style): a query input, a wrapping row of
- * GitHub-style facet pills, a Sort pill, and a row of removable chips for what
- * is active.
+ * The PR list's filter controls: a query input, the unread chip, the rule
+ * builder and saved sets (passed in as `builder`), and a row of removable chips
+ * for what is active.
+ *
+ * It draws a FRAGMENT, not a bar of its own: the panel's header is the one bar,
+ * and these are the parts of it that belong to the filter. The chips row takes a
+ * line of its own (`basis-full`) and exists only while something is narrowing.
  *
  * Every control edits ONE thing — the query string — through parse/serialize, so
  * the bar and the dropdowns are always the same filter. This component holds no
@@ -93,11 +93,16 @@ export function PrFilterBar({
     chips.push({ key: "text", label: `"${filters.text.trim()}"`, onRemove: () => emit({ ...filters, text: "" }) });
   }
   const border = "1px solid color-mix(in srgb, var(--border) 45%, transparent)";
+  /* The full syntax is a popover under the box while it has focus; the box
+     itself says only what Enter does, so it fits the one bar. */
+  const [focused, setFocused] = useState(false);
 
   return (
-    <div className="px-2 py-1.5 border-b shrink-0 flex flex-col gap-1.5" style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)" }}>
-      {/* Query input — the source of truth every pill also writes to. */}
-      <div className="flex items-center gap-1.5">
+    <>
+      {/* Query input — the source of truth every pill also writes to. Grows to
+          fill the line and wraps to a line of its own when the others leave it
+          under 16rem, so it is never cut and nothing sits over it. */}
+      <div className="agx-prbar-search flex items-center gap-1.5 min-w-0" style={{ flex: "1 1 20rem", minWidth: "16rem", maxWidth: "36rem" }}>
         {/* Said next to the box doing the filtering, because it is a caveat on
             the number of rows below it: "3 of 25 read" and "3 of 93 read" are
             different answers to the same search, and only one of them means
@@ -126,11 +131,18 @@ export function PrFilterBar({
             if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); onSearch(); }
           }}
           role="combobox" aria-expanded={menuOpen} aria-autocomplete="list" aria-controls="pr-at-people"
-          placeholder={SEARCH_HINT}
-          title={SEARCH_HINT}
+          onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+          placeholder={SEARCH_PLACEHOLDER}
+          aria-label={SEARCH_HINT}
           spellCheck={false}
           className={`w-full ${INPUT}`}
           style={INPUT_STYLE} />
+        {focused && !menuOpen && (
+          <div role="note" className="absolute left-0 right-0 top-full mt-1 rounded-lg px-3 py-2 text-[11px] pointer-events-none"
+            style={{ zIndex: LAYER.menu, border: EDGE, color: "var(--text2)", background: "color-mix(in srgb, var(--bg2) 98%, black)", boxShadow: "0 18px 44px -18px rgba(0,0,0,.8)" }}>
+            {SEARCH_HINT}
+          </div>
+        )}
         {menuOpen && (
           <div id="pr-at-people" role="listbox" className="absolute left-0 right-0 top-full mt-1 rounded-lg overflow-y-auto agx-scroll"
             style={{ zIndex: LAYER.menu, maxHeight: 260, border: EDGE, background: "color-mix(in srgb, var(--bg2) 98%, black)", boxShadow: "0 18px 44px -18px rgba(0,0,0,.8)" }}>
@@ -191,9 +203,7 @@ export function PrFilterBar({
         )}
       </div>
 
-      {/* Facet pills — wrap in the narrow sidebar; each menu floats via a Portal. */}
-      <div className="flex flex-wrap items-center gap-1">
-        {!!unread?.count && (
+      {!!unread?.count && (
           <button onClick={unread.onToggle} aria-pressed={unread.on}
             title={unread.on
               ? "Showing only the pull requests somebody has spoken on since you last looked. Press again for all of them."
@@ -230,23 +240,10 @@ export function PrFilterBar({
             so every menu they had is a field in it, and a query string still
             fills it through `queryToRules`. */}
         {builder}
-        <div className="ml-auto">
-          <FacetMenu
-            label="Sort"
-            mode="radio"
-            align="right"
-            pillActive={filters.sort !== DEFAULT_SORT}
-            options={SORT_OPTIONS.map((o) => ({ value: o.value, label: o.label, count: 0 }))}
-            selected={[filters.sort]}
-            onToggle={(v) => emit(setSort(filters, v as SortTok))}
-            onClear={() => emit(setSort(filters, DEFAULT_SORT))}
-          />
-        </div>
-      </div>
 
       {/* Active-filter chips + count. Only when something is narrowing the list. */}
       {chips.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1">
+        <div className="agx-prbar-chips flex flex-wrap items-center gap-1 basis-full">
           {chips.map((c) => (
             <button key={c.key} onClick={c.onRemove}
               className="text-[9.5px] pl-2 pr-1 py-0.5 rounded-full flex items-center gap-1 hover:opacity-80"
@@ -261,6 +258,6 @@ export function PrFilterBar({
           <span className="ml-auto text-[10px] tabular-nums shrink-0" style={{ color: "var(--text3)" }}>{total} match{total === 1 ? "" : "es"}</span>
         </div>
       )}
-    </div>
+    </>
   );
 }

@@ -2878,3 +2878,13 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 [data-machine-finder] .agx-strata-md th { user-select: none; -webkit-user-select: none; }
 /* An Icons tile answers the pointer only over its picture and its name, as Strata's does; the blank of the card does not light up. */
 .agx-tile-part:hover { background: color-mix(in srgb, var(--primary) 8%, transparent); }
+
+/* The pull-request list header is ONE bar. On a panel narrower than 1500px the
+   search leaves it for a line of its own below, and the rest stays put: the
+   views, the saved sets, the "⋯" menu and the refresh keep their places. The
+   active-filter chips follow the search, whichever line it is on. */
+.agx-prbar { container: agx-prbar / inline-size; }
+.agx-prbar-chips { order: 11; }
+@container agx-prbar (max-width: 1499px) {
+  .agx-prbar-search { order: 10; flex: 1 1 100% !important; max-width: none !important; }
+}

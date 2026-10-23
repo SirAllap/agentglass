@@ -136,7 +136,7 @@ import { mergeBlockedWhy, checksLine, checksStanding, checksShort, githubWillMer
 import { mergeBlockers, mergeRefusal, autoMergeRefusal } from "../../../shared/mergeBlockers.ts";
 import { pageRanOut } from "../lib/prPager.ts";
 import { viewIsWide, viewKeeps, board as fileBoard, stakeFrom, type BoardView } from "../lib/prLanes.ts";
-import { parseQuery, applyFilters, applyRulesKeepUnread, buildFacets, readPrField, builderFields, queryToRules, type RepoFacets } from "../lib/prFilter.ts";
+import { parseQuery, applyFilters, applyRulesKeepUnread, buildFacets, readPrField, builderFields, queryToRules, serializeQuery, setSort, DEFAULT_SORT, SORT_OPTIONS, type RepoFacets, type SortTok } from "../lib/prFilter.ts";
 import { CodeBlock as MdCodeBlock } from "../lib/mdCode.tsx";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
 import { cardRef, chipAction } from "../lib/cardRef.ts";
@@ -1372,6 +1372,31 @@ function ReviewerMark({ state, again }: { state: ReviewerState; again?: boolean 
 }
 
 /**
+ * The repository, once, as one control: the name opens a menu holding the two
+ * ways out to GitHub. They were two chips (`acme/orbit ↗` and `PRs ↗`) and each
+ * cost a fixed width in a row that has to hold the whole filter bar too; both
+ * leave the app, so both say so with their arrow in the menu.
+ */
+function RepoMenu({ repo }: { repo: string }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLSpanElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  const go = (to: string) => { close(); openExternal(`https://github.com/${repo}${to}`); };
+  return (
+    <span ref={box} className="inline-flex min-w-0">
+      <ScopeChip label={repo} trailing="menu" on={open} title="Open this repository on GitHub, or its pull requests"
+        className="min-w-0" onClick={() => setOpen((v) => !v)} />
+      {open && (
+        <AnchoredMenu anchor={box} align="left" onClose={close}>
+          <MenuItem onClick={() => go("")}>{repo} ↗</MenuItem>
+          <MenuItem onClick={() => go("/pulls")}>PRs ↗</MenuItem>
+        </AnchoredMenu>
+      )}
+    </span>
+  );
+}
+
+/**
  * The pins, centred on the bar.
  *
  * The ones you keep coming back to, one click from wherever you are. This panel
@@ -1393,7 +1418,10 @@ function ReviewerMark({ state, again }: { state: ReviewerState; again?: boolean 
  * capsule must not move them. It also means the pins sit in the same place in
  * both views, which is the point of putting them in a shared bar at all.
  */
-function PinnedCapsule({ pinned, pinState, selected, current, onOpen }: {
+function PinnedCapsule({ flow, pinned, pinState, selected, current, onOpen }: {
+  /** In the list view the header is one wrapping bar, so the capsule takes its place in it
+   *  instead of floating over the middle of it. */
+  flow?: boolean;
   pinned: Pin[];
   /** The rollup for a pinned pull request, when the current list happens to
    *  carry it. A pin from another scope has no state to show and shows none. */
@@ -1409,8 +1437,8 @@ function PinnedCapsule({ pinned, pinState, selected, current, onOpen }: {
   const currentPinned = !!current && isPinned(current.repo, current.number);
 
   return (
-    <div className="absolute left-1/2 -translate-x-1/2 flex items-center pointer-events-none"
-      style={{ maxWidth: "40%" }}>
+    <div className={flow ? "flex items-center min-w-0" : "absolute left-1/2 -translate-x-1/2 flex items-center pointer-events-none"}
+      style={flow ? undefined : { maxWidth: "40%" }}>
       <div className="flex items-center gap-1.5 min-w-0 pointer-events-auto">
         {/* The tack is the label: it says "pinned" without taking the width a
             word would, and it is the same glyph as the button that put the
@@ -4740,7 +4768,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
        * open a card reads as a different screen rather than as the same one,
        * one level down.
        */}
-      <div className={`${viewHeaderClass} relative`} style={viewHeaderStyle}>
+      <div className={`${viewHeaderClass} relative ${selected == null ? "agx-prbar flex-wrap gap-y-1.5" : ""}`}
+        style={selected == null ? { ...viewHeaderStyle, height: "auto", maxHeight: "none", paddingTop: 6, paddingBottom: 6 } : viewHeaderStyle}>
         <h2 className="sr-only">Pull Requests</h2>
         {/* No repo/worktree picker here: pull requests belong to the GitHub
             remote, and every worktree of a repo shares that one remote — so the
@@ -4779,14 +4808,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 rounded-md at half the padding, which made the pull-request
                 header's first control visibly smaller than the Terminal's and
                 the Git panel's doing the same job one keystroke away. */}
-            {([
-              { to: "", label: repo.nameWithOwner, hint: `Open ${repo.nameWithOwner} on GitHub`, grow: true },
-              { to: "/pulls", label: "PRs", hint: "Open this repository's pull requests on GitHub", grow: false },
-            ] as const).map((b) => (
-              <ScopeChip key={b.to} label={b.label} trailing="external" title={b.hint}
-                className={b.grow ? "min-w-0" : "shrink-0"}
-                onClick={() => openExternal(`https://github.com/${repo.nameWithOwner}${b.to}`)} />
-            ))}
+            <RepoMenu repo={repo.nameWithOwner} />
           </span>
         )}
 
@@ -4815,7 +4837,105 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
           </>
         )}
 
-        <PinnedCapsule
+        {/* ONE bar in the list view: the views, the search, the saved sets, the
+            "⋯" menu and the refresh are the same row, wrapping only when the
+            window cannot hold them. The detail view keeps the header it had. */}
+        {selected == null && (
+          <>
+            <span className="shrink-0" style={{ width: 1, height: 15, background: "color-mix(in srgb, var(--border) 65%, transparent)" }} />
+        <div className="flex items-center gap-1 shrink-0" role="tablist" aria-label="Pull request views">
+          {/*
+            * The board first, and it is not a filter.
+            *
+            * "Mine" and "Needs my review" were two mutually exclusive pills,
+            * so the two populations you care about could never be on screen
+            * together. On the board they are two lanes. The pills stay for
+            * the scopes that are NOT about you — those are a table, and the
+            * table is today's list, untouched.
+            */}
+          {/* Its number is the only one on this row counting things nobody
+              has looked at yet, so it keeps the warning colour when it is not
+              the view you are in. */}
+          <Pill on={inboxOn} icon={<InboxIcon size={ICON.xs} />} label="Inbox"
+            title="What happened while you were away — GitHub's notifications, filtered to this repository"
+            count={inboxUnread || undefined} countTint="warning"
+            onClick={() => { setMetricsOn(false); setClosedOn(false); setInboxOn(true); }} />
+          <Pill on={metricsOn} icon={<ChartIcon size={ICON.xs} />} label="CI"
+            title="Every check of this repository against its own history — slow, passed on a re-run, drifting"
+            onClick={() => { setInboxOn(false); setClosedOn(false); setMetricsOn(true); }} />
+          <span className="self-center shrink-0" style={{ width: 1, height: 12, background: "color-mix(in srgb, var(--text) 14%, transparent)" }} />
+          {VIEWS.filter((v) => v.id !== "all").map((v) => {
+            const n = boardViewCounts[v.id as BoardView] ?? null;
+            const on = !inboxOn && !metricsOn && boardShown && boardView === v.id;
+            return (
+              <Pill key={v.id} on={on} label={v.label} title={v.hint}
+                dot={v.tint ?? undefined} count={n ?? undefined}
+                onClick={() => { setInboxOn(false); setMetricsOn(false); setClosedOn(false); setFilter("all"); setQuery(""); setBoardView(boardView === v.id ? "all" : (v.id as BoardView)); }} />
+            );
+          })}
+          {/* Not a lane and not a search: a second press is the way back, and
+              his filters are not applied here unless he applies them. */}
+          <Pill on={closedOn && !inboxOn && !metricsOn} label="Closed"
+            title="Your merged pull requests and the ones closed without merging, newest first"
+            onClick={() => { setInboxOn(false); setMetricsOn(false); setClosedOn((v) => !v); }} />
+        </div>
+        {/* Always, once the repository is known — not "once rows arrived".
+            The bar is built from the rows, so gating it on them made it drop
+            in a second late and shove the board down. It draws its own
+            placeholder row until it has something to count. */}
+        {repo && (
+          <PrFilterBar
+            query={query}
+            filters={filters}
+            facets={facets}
+            onQuery={setQuery}
+            onSearch={runSearch}
+            onPickPerson={setPersonLogin}
+            people={mentions?.users ?? null}
+            pending={wanted.trim() !== serverQuery.trim()}
+            searching={listState.loading}
+            shown={visiblePrs.length}
+            unread={{
+              count: unreadPrs.length,
+              on: unreadOnly,
+              onToggle: () => setUnreadOnly((v) => !v),
+              /* Same population the chip counts — `unreadPrs`, not a second
+                 pass over `basePrs` that could drift from it. Mark first,
+                 then drop the filter: pressing this while it is narrowed to
+                 "unread" would otherwise leave the table showing zero rows
+                 with nothing on screen to say why. */
+              onMarkAllRead: () => {
+                markAllSeen(unreadPrs.map((p) => p.number), repo?.key, Date.now());
+                setUnreadOnly(false);
+              },
+            }}
+      /* How much of the scope the filter actually saw. A count that says "12"
+         over a scope of ninety-three, having read twenty-five of them, is a
+         number nobody can act on. */
+            total={searching ? visiblePrs.length : listState.total ?? prs.length}
+            /* The half the pills cannot say: `is not`, `is set`, and rules
+               joined together. Handed the same fields the pills offer, so the
+               two lists can never disagree about what a field is. */
+            builder={(
+              <>
+                <FilterPresets api={presetsApi} counts={presetCountsById} rules={activeRules} fields={ruleFields}
+                  hotkeys={active && selected == null}
+                  onEditRule={editPresetRule}
+                  onOpenFilters={() => setBuilderOpenSignal((n) => n + 1)}
+                  sort={{
+                    options: SORT_OPTIONS.map((o) => ({ value: o.value, label: o.label })),
+                    value: filters.sort, lit: filters.sort !== DEFAULT_SORT,
+                    onPick: (v) => setQuery(serializeQuery(setSort(filters, v as SortTok))),
+                  }} />
+                {/* No button of its own: the "⋯" menu opens it, and the panel hangs off this anchor. */}
+                <FilterBuilder bare fields={ruleFields} value={activeRules} onChange={setActiveRules} openSignal={builderOpenSignal} />
+              </>
+            )}
+          />
+        )}          </>
+        )}
+
+        <PinnedCapsule flow={selected == null}
           pinned={pinned} pinState={pinState} selected={selected}
           current={selected != null && d && repo ? { repo: repo.nameWithOwner, number: d.number, title: d.title } : null}
           onOpen={openPr}
@@ -4945,89 +5065,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       <div className="flex flex-1 min-h-0">
         {selected == null ? (
         <div className="flex flex-col min-h-0 flex-1 min-w-0">
-          <div className="flex gap-1 flex-wrap px-2 py-1.5 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--text) 11%, transparent)" }}>
-            {/*
-              * The board first, and it is not a filter.
-              *
-              * "Mine" and "Needs my review" were two mutually exclusive pills,
-              * so the two populations you care about could never be on screen
-              * together. On the board they are two lanes. The pills stay for
-              * the scopes that are NOT about you — those are a table, and the
-              * table is today's list, untouched.
-              */}
-            {/* Its number is the only one on this row counting things nobody
-                has looked at yet, so it keeps the warning colour when it is not
-                the view you are in. */}
-            <Pill on={inboxOn} icon={<InboxIcon size={ICON.xs} />} label="Inbox"
-              title="What happened while you were away — GitHub's notifications, filtered to this repository"
-              count={inboxUnread || undefined} countTint="warning"
-              onClick={() => { setMetricsOn(false); setClosedOn(false); setInboxOn(true); }} />
-            <Pill on={metricsOn} icon={<ChartIcon size={ICON.xs} />} label="CI"
-              title="Every check of this repository against its own history — slow, passed on a re-run, drifting"
-              onClick={() => { setInboxOn(false); setClosedOn(false); setMetricsOn(true); }} />
-            <span className="self-center shrink-0" style={{ width: 1, height: 12, background: "color-mix(in srgb, var(--text) 14%, transparent)" }} />
-            {VIEWS.filter((v) => v.id !== "all").map((v) => {
-              const n = boardViewCounts[v.id as BoardView] ?? null;
-              const on = !inboxOn && !metricsOn && boardShown && boardView === v.id;
-              return (
-                <Pill key={v.id} on={on} label={v.label} title={v.hint}
-                  dot={v.tint ?? undefined} count={n ?? undefined}
-                  onClick={() => { setInboxOn(false); setMetricsOn(false); setClosedOn(false); setFilter("all"); setQuery(""); setBoardView(boardView === v.id ? "all" : (v.id as BoardView)); }} />
-              );
-            })}
-            {/* Not a lane and not a search: a second press is the way back, and
-                the box and the bar are left as they were. */}
-            <Pill on={closedOn && !inboxOn && !metricsOn} label="Closed"
-              title="Your merged pull requests and the ones closed without merging, newest first"
-              onClick={() => { setInboxOn(false); setMetricsOn(false); setClosedOn((v) => !v); }} />
-          </div>
-          {/* Always, once the repository is known — not "once rows arrived".
-              The bar is built from the rows, so gating it on them made it drop
-              in a second late and shove the board down. It draws its own
-              placeholder row until it has something to count. */}
-          {repo && (
-            <PrFilterBar
-              query={query}
-              filters={filters}
-              facets={facets}
-              onQuery={setQuery}
-              onSearch={runSearch}
-              onPickPerson={setPersonLogin}
-              people={mentions?.users ?? null}
-              pending={wanted.trim() !== serverQuery.trim()}
-              searching={listState.loading}
-              shown={visiblePrs.length}
-              unread={{
-                count: unreadPrs.length,
-                on: unreadOnly,
-                onToggle: () => setUnreadOnly((v) => !v),
-                /* Same population the chip counts — `unreadPrs`, not a second
-                   pass over `basePrs` that could drift from it. Mark first,
-                   then drop the filter: pressing this while it is narrowed to
-                   "unread" would otherwise leave the table showing zero rows
-                   with nothing on screen to say why. */
-                onMarkAllRead: () => {
-                  markAllSeen(unreadPrs.map((p) => p.number), repo?.key, Date.now());
-                  setUnreadOnly(false);
-                },
-              }}
-        /* How much of the scope the filter actually saw. A count that says "12"
-           over a scope of ninety-three, having read twenty-five of them, is a
-           number nobody can act on. */
-              total={searching ? visiblePrs.length : listState.total ?? prs.length}
-              /* The half the pills cannot say: `is not`, `is set`, and rules
-                 joined together. Handed the same fields the pills offer, so the
-                 two lists can never disagree about what a field is. */
-              builder={(
-                <>
-                  <FilterBuilder fields={ruleFields} value={activeRules} onChange={setActiveRules} openSignal={builderOpenSignal} />
-                  <FilterPresets api={presetsApi} counts={presetCountsById} rules={activeRules} fields={ruleFields}
-                    hotkeys={active && selected == null}
-                    onEditRule={editPresetRule} />
-                </>
-              )}
-            />
-          )}
           <div ref={listRef} tabIndex={-1} onKeyDown={onListKey} className="flex-1 overflow-y-auto min-h-0 agx-scroll outline-none">
             {metricsOn ? (
               <CiMetrics root={projectRoot} repo={repo?.nameWithOwner ?? ""} active={active && selected == null} />

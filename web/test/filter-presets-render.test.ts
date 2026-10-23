@@ -35,20 +35,17 @@ const none: FilterSet = { join: "and", rules: [] };
 const some: FilterSet = { join: "and", rules: [rule("r1")] };
 
 const draw = (a: PresetsApi, rules: FilterSet = none, counts: Record<string, number> = {}) =>
-  renderToStaticMarkup(React.createElement(FilterPresets, { api: a, counts, rules, fields, hotkeys: false, onEditRule: noop }));
+  renderToStaticMarkup(React.createElement(FilterPresets, { api: a, counts, rules, fields, hotkeys: false, onEditRule: noop, onOpenFilters: noop, sort: { options: [{ value: "updated", label: "Recently updated" }], value: "updated", lit: false, onPick: noop } }));
 const three = [mk("a", "Mine"), mk("b", "Pre-QA"), mk("c", "In development")];
 const chipsOf = (html: string) => [...html.matchAll(/data-chip="([^"]+)"/g)].map((m) => m[1]);
-const saveButton = (html: string) => /<button[^>]*>\s*<span>Save<\/span>/.exec(html)?.[0] ?? "";
+// The one "⋯" control: Filters, Save and Sort used to be three buttons, and are its rows now.
+const saveButton = (html: string) => /<button[^>]*aria-label="Filters, save and sort"[^>]*>/.exec(html)?.[0] ?? "";
 
 describe("the empty row", () => {
-  test("teaches in one line and still has its Save slot, disabled with no rules", () => {
+  test("draws no chips and still has its \"⋯\" control", () => {
     const html = draw(api());
-    expect(html).toContain("it becomes a one-click chip here");
     expect(chipsOf(html)).toEqual([]);
-    const save = saveButton(html);
-    expect(save).not.toBe("");
-    expect(save).toContain("disabled");
-    expect(save).toContain("Build a filter first");
+    expect(saveButton(html)).not.toBe("");
   });
 });
 
@@ -117,36 +114,22 @@ describe("more than four", () => {
   });
 });
 
-describe("the Save slot", () => {
-  test("rules and nothing on: enabled, and it opens a name field", () => {
-    const save = saveButton(draw(api({ presets: three }), some));
-    expect(save).not.toContain("disabled");
-    expect(save).toContain('aria-haspopup="dialog"');
-  });
-
-  test("a preset on and unchanged: disabled, and says why", () => {
-    const save = saveButton(draw(api({ presets: three, activeId: "b", active: three[1] }), some));
-    expect(save).toContain("disabled");
-    expect(save).toContain("Nothing has changed since");
-  });
-
-  test("a preset on and modified: enabled, and it opens a menu", () => {
-    const save = saveButton(draw(api({ presets: three, activeId: "b", active: three[1], modified: true }), some));
-    expect(save).not.toContain("disabled");
-    expect(save).toContain('aria-haspopup="menu"');
-  });
-
-  test("a full list with nothing on: disabled at the limit", () => {
-    const full = Array.from({ length: MAX_PRESETS }, (_, i) => mk(`p${i}`, `Set ${i}`));
-    const save = saveButton(draw(api({ presets: full }), some));
-    expect(save).toContain("disabled");
-    expect(save).toContain(`${MAX_PRESETS} presets is the limit`);
-  });
-
-  test("the slot is drawn in every state: it is the same control, never added or removed", () => {
+describe("the \"⋯\" control", () => {
+  // Its menu is a portal, so what is asserted here is the button; the rows'
+  // disabled reasons (nothing to save, nothing changed, the limit) are in the
+  // component's own source and are exercised in the browser.
+  test("is a menu button, drawn in every state: the same control, never added or removed", () => {
     for (const a of [api(), api({ presets: three }), api({ presets: three, activeId: "a", active: three[0], modified: true })]) {
-      expect(saveButton(draw(a, some))).not.toBe("");
+      const btn = saveButton(draw(a, some));
+      expect(btn).not.toBe("");
+      expect(btn).toContain('aria-haspopup="menu"');
+      expect(btn).not.toContain("disabled");
     }
+  });
+
+  test("a changed preset says so in its title", () => {
+    const btn = saveButton(draw(api({ presets: three, activeId: "b", active: three[1], modified: true }), some));
+    expect(btn).toContain("has changed");
   });
 });
 

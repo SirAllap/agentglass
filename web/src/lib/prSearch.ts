@@ -44,6 +44,9 @@ export const stillReading = (p: Pick<PrSummary, "checksLoaded">): boolean => p.c
  * Ceiling: a bare login is recognised only when a card in hand carries it, so a
  * colleague nobody has loaded yet needs `author:name` once.
  */
+/** The box's own words; the long form above is the popover under it and the accessible name. */
+export const SEARCH_PLACEHOLDER = "Search or filter · ⏎ searches all PRs";
+
 export const SEARCH_HINT = "Filter these, or press ⏎ to search every pull request: a number (#123), a card key (ORBIT-1042), author:name, assignee:name, reviewer:name, or words from the title";
 
 const NUMBER = /^#?(\d+)$/;
