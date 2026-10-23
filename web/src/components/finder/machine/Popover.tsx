@@ -11,8 +11,8 @@ import { ICON } from "../../../lib/iconSize.ts";
 import { LAYER } from "../../../lib/layers.ts";
 import { DoneIcon } from "../../../lib/glyphIcons.tsx";
 import { StrataIcon } from "./StrataIcon.tsx";
-import { EDGE, LINE } from "../../workspace/Chrome.tsx";
-import { MENU_ROW } from "../../../lib/finderMenu.ts";
+import { EDGE } from "../../workspace/Chrome.tsx";
+import { MENU_ROW, MENU_ROW_H, MENU_ROW_TALL, MENU_RULE } from "../../../lib/finderMenu.ts";
 import { useMenuKeys } from "./useMenuKeys.ts";
 
 export function Popover({ anchor, onClose, width = 220, children, label }: { anchor: DOMRect; onClose: () => void; width?: number; children: ReactNode; label: string }) {
@@ -48,14 +48,14 @@ export function Popover({ anchor, onClose, width = 220, children, label }: { anc
 }
 
 export function MenuCap({ children }: { children: ReactNode }) {
-  return <div className="px-3.5 pt-2 pb-1 text-[10.5px] uppercase tracking-[0.1em]" style={{ color: "var(--text3)", fontWeight: 600 }}>{children}</div>;
+  return <div className="px-4 pt-1.5 pb-0.5 text-[10.5px] uppercase tracking-[0.1em]" style={{ color: "var(--text3)", fontWeight: 600 }}>{children}</div>;
 }
 
-/** `icon`: the name of one of Strata's action icons, drawn in the accent before the label, as Strata's menus do. */
-export function MenuItem({ children, onClick, on, hint, disabled, icon, danger }: { children: ReactNode; onClick: () => void; on?: boolean; hint?: string; disabled?: boolean; icon?: string; danger?: boolean }) {
+/** `tall`: the roomy row of the column sort menu. `icon`: the name of one of Strata's action icons, drawn in the accent before the label, as Strata's menus do. `danger` paints the row in the error colour. */
+export function MenuItem({ children, onClick, on, hint, disabled, icon, tall, danger }: { children: ReactNode; onClick: () => void; on?: boolean; hint?: string; disabled?: boolean; icon?: string; tall?: boolean; danger?: boolean }) {
   return (
     <button role="menuitemcheckbox" aria-checked={on} disabled={disabled} onClick={onClick}
-      className={`${MENU_ROW} flex items-center gap-2 px-3 text-left disabled:opacity-40`} style={{ minHeight: 34, color: danger ? "var(--error-ink)" : "var(--text)" }}>
+      className={`${MENU_ROW} flex items-center gap-2 px-3 text-left disabled:opacity-40`} style={{ minHeight: tall ? MENU_ROW_TALL : MENU_ROW_H, color: danger ? "var(--error-ink)" : "var(--text)" }}>
       {icon && <span style={{ color: danger ? "var(--error-ink)" : "var(--primary-ink)" }}><StrataIcon set="act" name={icon} size={ICON.sm} /></span>}
       <span className="flex-1 min-w-0 truncate">{children}</span>
       {hint && <span className="text-[10.5px]" style={{ color: "var(--text4)" }}>{hint}</span>}
@@ -64,4 +64,4 @@ export function MenuItem({ children, onClick, on, hint, disabled, icon, danger }
   );
 }
 
-export const MenuRule = () => <div className="my-1" style={{ borderTop: LINE }} />;
+export const MenuRule = () => <div className="my-1" style={{ borderTop: MENU_RULE }} />;

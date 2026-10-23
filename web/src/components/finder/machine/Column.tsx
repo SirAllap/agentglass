@@ -168,12 +168,12 @@ export function Column({ dir: folderPath, title, filterSignal, width, onResize, 
         <Popover anchor={menu} onClose={() => setMenu(null)} width={240} label="Sort">
           <MenuCap>Sort by</MenuCap>
           {(["name", "size", "modified", "type"] as const).map((k) => (
-            <MenuItem key={k} on={prefs.sortKey === k} onClick={() => { onSort(k); setMenu(null); }}>
+            <MenuItem tall key={k} on={prefs.sortKey === k} onClick={() => { onSort(k); setMenu(null); }}>
               {k === "name" ? "Name" : k === "size" ? "Size" : k === "modified" ? "Modified" : "Type"}
             </MenuItem>
           ))}
           <MenuRule />
-          <MenuItem on={prefs.foldersFirst} onClick={() => onPref({ foldersFirst: !prefs.foldersFirst })}>Folders first</MenuItem>
+          <MenuItem tall on={prefs.foldersFirst} onClick={() => onPref({ foldersFirst: !prefs.foldersFirst })}>Folders first</MenuItem>
           <MenuRule />
           <MenuItem disabled={isDefaultSort(prefs) && !!prefs.defSort} onClick={() => { onPref(makeDefaultSort(prefs)); setMenu(null); }}>Make this the default sort</MenuItem>
           <MenuItem disabled={isDefaultSort(prefs)} onClick={() => { onPref(resetSort(prefs)); setMenu(null); }}>Reset to default sort</MenuItem>

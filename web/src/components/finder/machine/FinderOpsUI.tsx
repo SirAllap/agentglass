@@ -89,7 +89,7 @@ export function ContextMenu({ at, head, groups, onPick, onClose }: {
       </div>
       {sub && (
         <div ref={subEl} role="menu" data-finder-menu aria-label="Actions" className="fixed rounded-lg text-[12px] shadow-2xl py-1.5"
-          style={{ width: 260, ...subPlace(sub.rect, 260, sub.items.length * (MENU_ROW_H + 2) + 12), background: "var(--surface-card)", border: EDGE, color: "var(--text)", maxHeight: "calc(100vh - 16px)", overflowY: "auto" }}>
+          style={{ width: 260, ...subPlace(sub.rect, 260, sub.items.length * (MENU_ROW_H + 1) + 12), background: "var(--surface-card)", border: EDGE, color: "var(--text)", maxHeight: "calc(100vh - 16px)", overflowY: "auto" }}>
           {sub.items.map((i) => (
             <button key={i.action ?? i.id} role="menuitem" disabled={i.disabled} title={i.disabled ? i.label : undefined} onClick={() => onPick(i)}
               className={`${MENU_ROW} flex items-center gap-2.5 px-3 text-left disabled:opacity-40`} style={{ minHeight: MENU_ROW_H }}>
