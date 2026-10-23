@@ -122,11 +122,11 @@ async function ask(card: string) {
 }
 
 describe("clickup/prs says which pull request is whose", () => {
-  it("answers each card's search with the link kind, in the one search it already made", async () => {
+  it("answers each card's searches (text and branch) with the link kind, once per row", async () => {
     const a = await ask("ORBIT-2001");
     const b = await ask("ORBIT-2002");
-    expect(a.search).toHaveLength(1);
-    expect(b.search).toHaveLength(1);
+    expect(a.search).toHaveLength(2);
+    expect(b.search).toHaveLength(2);
     const brief = (r: { got: { prs: { number: number; link: string; belongsTo?: string }[] } }) =>
       r.got.prs.map((p) => [p.number, p.link, p.belongsTo ?? null]);
     expect(brief(a)).toEqual([[102, "mention", "ORBIT-2002"], [101, "own", null]]);

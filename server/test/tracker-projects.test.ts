@@ -154,15 +154,16 @@ describe("the choice, over HTTP", () => {
 });
 
 describe("GET /jira/prs", () => {
-  step("one search, and only the rows that name the key stay", async () => {
+  step("a text search and a branch search, and only the rows that name the key stay", async () => {
     writeFileSync(calls, "");
     const r = await get("/jira/prs?key=ORBIT-1042");
     expect(r.status).toBe(200);
     expect(r.body.ok).toBe(true);
     expect(r.body.prs.map((p: { number: number }) => p.number)).toEqual([91]);
     expect(r.body.prs[0]).toMatchObject({ number: 91, link: "own", mine: true });
-    expect(ghCalls().length).toBe(1);
+    expect(ghCalls().length).toBe(2);
     expect(ghCalls()[0]).toContain("--search ORBIT-1042");
+    expect(ghCalls()[1]).toContain("--search head:ORBIT-1042");
   });
 
   step("a key that is not one is refused before gh is asked", async () => {
