@@ -167,6 +167,30 @@ cleared, a running instance is stopped, and the reviewer is asked again. Every
 update re-asks, a typo fix included: a consent prompt that is only *sometimes*
 honest teaches people to click through it faster than one that always is.
 
+### Updating
+
+`agentglass-plugin update <name>` (and the Update button) goes back to where the
+install came from:
+
+- **A git install** re-fetches its URL at the ref it recorded.
+- **A market install** re-reads the catalogue named in its source, finds its
+  entry, and installs what the entry lists *now*. It does not re-fetch the
+  commit it was pinned to at install time, which is the same commit again. The
+  new tree is held to the entry's `sha256` exactly like a fresh install; a tree
+  that hashes to something else is refused and the installed copy is left as it
+  was.
+- **A local folder** has no upstream; copy it in again.
+
+The answer says what happened, for example
+`acme-review updated from 1a2b3c4 to 9f8e7d6, sha256 verified; needs approval: yes`.
+An entry that has not moved answers `acme-review is already at the listed version
+(1a2b3c4)` and changes nothing; an entry that was removed from the catalogue
+answers that it is no longer listed. Settings and keys stay. Approval follows the
+rule above: a changed manifest, sandbox or entrypoint asks again, an unchanged
+one does not. The Market tab offers the same update when an installed plugin's
+entry moved to another commit or another hash; it reads the catalogue once when
+the tab opens, and does not poll.
+
 `~/.config/agentglass/plugins.json` records, per plugin, its source (git URL and
 ref, local path, or catalogue plus entry id), the commit it resolved to, the
 content hash, the fingerprint that was approved, whether it is enabled, and when
@@ -577,6 +601,7 @@ keeps the findings in the pull request view.
     agentglass-plugin list --json
     agentglass-plugin enable <name> --approve
     agentglass-plugin disable | update | remove <name>
+    agentglass-plugin update <name> --full           # with the whole plugin record
     agentglass-plugin remove <name> --drop-settings  # its settings go too
     agentglass-plugin settings <name>               # what it holds
     agentglass-plugin settings <name> style=security

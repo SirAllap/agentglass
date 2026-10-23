@@ -138,7 +138,9 @@ export function offerFor(entry: Entry, have: InstallSource | null): "install" | 
   if (have.kind !== "marketplace") return null;
   const listed = entry.source.ref;
   if (!listed || !COMMIT.test(listed)) return null;
-  return have.plugin.ref === listed ? null : "update";
+  // The same commit under another hash is a listing that changed its mind.
+  if (have.plugin.ref !== listed) return "update";
+  return entry.sha256 && have.plugin.sha256 && entry.sha256 !== have.plugin.sha256 ? "update" : null;
 }
 
 export function Market({ installed, onInstalled }: {

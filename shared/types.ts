@@ -5300,6 +5300,20 @@ export type InstallSource =
       plugin: { url: string; ref: string | null; sha256?: string };
     };
 
+/** What an update did, in the words the window and the terminal both print. */
+export interface PluginUpdateReport {
+  /** False when there was nothing newer to install; the plugin is untouched. */
+  changed: boolean;
+  /** The ref installed before and the one installed now (or still), null for a default branch. */
+  from: string | null;
+  to: string | null;
+  /** The tree was held to a content hash the source named. */
+  sha256Verified: boolean;
+  /** The plugin cannot run until somebody approves what it now declares. */
+  needsApproval: boolean;
+  message: string;
+}
+
 export interface PublicPlugin {
   name: string;
   publisher: string;

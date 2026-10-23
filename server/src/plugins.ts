@@ -30,6 +30,7 @@ import {
 import { pluginGitEnv, PLUGIN_GIT_CONFIG } from "./plugin-env.ts";
 import { fetchCatalogue } from "./plugin-catalogue.ts";
 import type { GuardedFetchOptions } from "./net.ts";
+import type { PluginUpdateReport } from "../../shared/types.ts";
 import { blockedEntry, type BlockEntry } from "./plugin-blocklist.ts";
 import { type Contributes, type Field, RESERVED_KEYS, redactSecrets, validateContributes } from "../../shared/pluginUi.ts";
 import { type PluginSandbox, validateSandbox } from "../../shared/pluginSandbox.ts";
@@ -1531,31 +1532,82 @@ export async function installFromCatalogue(
   }
 }
 
+export type PluginUpdateResult = { ok: true; plugin: PublicPlugin; update: PluginUpdateReport } | { ok: false; error: string };
+
+const shortRef = (ref: string | null): string => (ref === null ? "the default branch" : FULL_COMMIT.test(ref) ? ref.slice(0, 7) : ref);
+
 /**
- * Re-fetch a git-backed install at its recorded URL and ref — the update
- * this page otherwise has no way to trigger. Same path as a first install:
- * `finishInstall` re-derives the fingerprint from what actually came back,
- * so an update that changed the manifest or the entrypoint's code loses its
- * approval exactly like an install typed in fresh would, and never
- * re-enables itself. A local-path install has no upstream to re-fetch —
- * that source is copied in again by hand, not updated.
+ * Update an install from where it came from.
+ *
+ * A git install re-fetches its own URL and ref. A marketplace install does NOT
+ * re-fetch the ref it was pinned to at install time, which is the same commit
+ * again: it re-reads the catalogue it came from and installs what that lists
+ * now, held to the listed content hash like a fresh install. An entry that
+ * moved on is installed; one that did not, or is gone, is said so and nothing
+ * is touched. Either way `finishInstall` re-derives the fingerprint from what
+ * arrived, so a changed declaration loses its approval exactly like an install
+ * typed in fresh, and an unchanged one keeps it. A local-path install has no
+ * upstream — that source is copied in again by hand.
  */
-export async function updatePlugin(name: string): Promise<{ ok: true; plugin: PublicPlugin } | { ok: false; error: string }> {
+export async function updatePlugin(
+  name: string,
+  /** For the test, which serves the catalogue itself — see fetchCatalogue. */
+  guard: GuardedFetchOptions = {},
+): Promise<PluginUpdateResult> {
   const store = read();
   const existing = store.plugins.find((p) => p.name === name);
   if (!existing) return { ok: false, error: "no such plugin" };
-  if (existing.source.kind === "local-path") return { ok: false, error: "A local install has no upstream to re-fetch" };
-  const { url, ref, sha256 } = existing.source.kind === "git"
-    ? { url: existing.source.url, ref: existing.source.ref, sha256: undefined }
-    : { url: existing.source.plugin.url, ref: existing.source.plugin.ref, sha256: existing.source.plugin.sha256 };
+  const src = existing.source;
+  if (src.kind === "local-path") return { ok: false, error: "A local install has no upstream to re-fetch" };
+
+  let source: InstallSource = src;
+  let target: { url: string; ref: string | null; sha256?: string } = src.kind === "git"
+    ? { url: src.url, ref: src.ref }
+    : { url: src.plugin.url, ref: src.plugin.ref, sha256: src.plugin.sha256 };
+  const from = src.kind === "git" ? src.ref : src.plugin.ref;
+
+  if (src.kind === "marketplace") {
+    const fetched = await fetchCatalogue(src.marketplace.url, guard);
+    if (!fetched.ok) return { ok: false, error: fetched.error };
+    // The folder is named by the entry id (see finishInstall's expectName), so
+    // the id is the name this install was made under.
+    const entry = fetched.catalogue.plugins.find((p) => p.id === existing.name);
+    if (!entry) return { ok: false, error: `${name} is no longer listed in the catalogue it was installed from; nothing was changed` };
+    if (entry.source.url === src.plugin.url && entry.source.ref === src.plugin.ref && entry.sha256 === src.plugin.sha256) {
+      return {
+        ok: true, plugin: { ...existing, ...liveState(existing) },
+        update: {
+          changed: false, from, to: from, sha256Verified: false,
+          needsApproval: existing.approvedFingerprint !== existing.fingerprint,
+          message: `${name} is already at the listed version (${shortRef(from)})`,
+        },
+      };
+    }
+    target = { url: entry.source.url, ref: entry.source.ref, sha256: entry.sha256 };
+    source = {
+      kind: "marketplace",
+      marketplace: { ...src.marketplace },
+      plugin: { url: entry.source.url, ref: entry.source.ref, ...(entry.sha256 ? { sha256: entry.sha256 } : {}) },
+    };
+  }
 
   const staging = mkdtempSync(join(tmpdir(), "agx-plugin-"));
   try {
-    const r = await fetchInto(staging, url, ref, sha256);
+    const r = await fetchInto(staging, target.url, target.ref, target.sha256);
     if (!r.ok) return r;
+    if (source.kind === "marketplace") source.marketplace.resolvedCommit = await resolveHead(staging);
     // Updated in place: whatever arrives must still be the plugin that is
     // installed here, or it would land in another plugin's folder.
-    return await finishInstall(staging, existing.source, existing.name);
+    const done = await finishInstall(staging, source, existing.name);
+    if (!done.ok) return done;
+    const needsApproval = done.plugin.approvedFingerprint !== done.plugin.fingerprint;
+    return {
+      ok: true, plugin: done.plugin,
+      update: {
+        changed: true, from, to: target.ref, sha256Verified: Boolean(target.sha256), needsApproval,
+        message: `${name} updated from ${shortRef(from)} to ${shortRef(target.ref)}${target.sha256 ? ", sha256 verified" : ""}; needs approval: ${needsApproval ? "yes" : "no"}`,
+      },
+    };
   } finally {
     rmSync(staging, { recursive: true, force: true });
   }

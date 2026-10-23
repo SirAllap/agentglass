@@ -595,7 +595,7 @@ describe("kill list", () => {
  */
 describe("a pinned catalogue entry installs its commit or nothing", () => {
   const PLUGINS_TS = new URL("../src/plugins.ts", import.meta.url).pathname;
-  let root = "", pinned = "", tip = "", pinnedHash = "";
+  let root = "", pinned = "", tip = "", pinnedHash = "", tipHash = "";
   const realGit = Bun.which("git") ?? "/usr/bin/git";
 
   const run = (cwd: string, ...args: string[]) => {
@@ -611,7 +611,10 @@ describe("a pinned catalogue entry installs its commit or nothing", () => {
     const repo = join(root, "fixtures", "acme", "orbit-clock");
     mkdirSync(repo, { recursive: true });
     run(repo, "init", "-q", "-b", "main");
-    writeFileSync(join(repo, MANIFEST_NAME), JSON.stringify({ ...okManifest, name: "orbit-clock", entrypoint: "sh run.sh" }));
+    writeFileSync(join(repo, MANIFEST_NAME), JSON.stringify({
+      ...okManifest, name: "orbit-clock", entrypoint: "sh run.sh",
+      contributes: { settings: [{ key: "apiKey", type: "secret", label: "Key" }, { key: "mode", type: "select", label: "Mode", options: ["off", "live"], default: "off" }] },
+    }));
     writeFileSync(join(repo, "run.sh"), "echo listed\n");
     run(repo, "add", "-A");
     run(repo, "commit", "-q", "-m", "listed");
@@ -622,6 +625,7 @@ describe("a pinned catalogue entry installs its commit or nothing", () => {
     writeFileSync(join(repo, "run.sh"), "echo something else\n");
     run(repo, "commit", "-q", "-am", "after");
     tip = run(repo, "rev-parse", "HEAD");
+    tipHash = contentHash(repo, walkPluginDir(repo).files);
 
     mkdirSync(join(root, "bin"));
     writeFileSync(join(root, "bin", "git"),
@@ -631,7 +635,11 @@ describe("a pinned catalogue entry installs its commit or nothing", () => {
 
   afterAll(() => { try { rmSync(root, { recursive: true, force: true }); } catch { /* fine */ } });
 
-  type Out = { result: { ok: boolean; error?: string; plugin?: { resolvedCommit: string | null; installDir: string; source: unknown } }; runSh: string | null; listed: number; update?: { ok: boolean; error?: string }; runShAfterUpdate?: string | null; log: string };
+  type Out = {
+    result: { ok: boolean; error?: string; plugin?: { resolvedCommit: string | null; installDir: string; source: unknown } }; runSh: string | null; listed: number;
+    update?: { ok: boolean; error?: string; plugin?: { source: { plugin: { ref: string | null } }; settings?: Record<string, unknown> }; update?: { changed: boolean; from: string | null; to: string | null; sha256Verified: boolean; needsApproval: boolean; message: string } };
+    runShAfterUpdate?: string | null; modeAfterUpdate?: unknown; keyAfterUpdate?: unknown; log: string;
+  };
 
   /** One install in a fresh child with its own config, data and database.
    *  `gitconfig` is the user's global git config for that child, and
@@ -643,11 +651,12 @@ describe("a pinned catalogue entry installs its commit or nothing", () => {
     if (how.gitconfig !== undefined) writeFileSync(globalConfig, how.gitconfig);
     const script = join(at, "run.ts");
     writeFileSync(script, `
-      import { installFromCatalogue, installPlugin, updatePlugin, listPlugins } from ${JSON.stringify(PLUGINS_TS)};
+      import { installFromCatalogue, installPlugin, updatePlugin, listPlugins, setPluginSettings, pluginOwnSettings } from ${JSON.stringify(PLUGINS_TS)};
       import { existsSync, readFileSync } from "node:fs";
       import { join } from "node:path";
       const op = JSON.parse(process.env.OP);
-      const guard = { hostCheck: async () => null, fetchImpl: (async () => new Response(JSON.stringify(op.catalogue), { status: 200 })) };
+      let served = op.catalogue;
+      const guard = { hostCheck: async () => null, fetchImpl: (async () => new Response(JSON.stringify(served), { status: 200 })) };
       const result = op.kind === "catalogue"
         ? await installFromCatalogue("https://catalogue.example/plugins.json", op.id, guard)
         : op.kind === "local"
@@ -656,8 +665,13 @@ describe("a pinned catalogue entry installs its commit or nothing", () => {
       const at = (r) => r.ok && existsSync(join(r.plugin.installDir, "run.sh")) ? readFileSync(join(r.plugin.installDir, "run.sh"), "utf8") : null;
       const out = { result, runSh: at(result), listed: listPlugins().length };
       if (op.update && result.ok) {
-        out.update = await updatePlugin(result.plugin.name);
+        if (op.settings) setPluginSettings(result.plugin.name, op.settings);
+        if (op.updateCatalogue !== undefined) served = op.updateCatalogue;
+        out.update = await updatePlugin(result.plugin.name, guard);
         out.runShAfterUpdate = at(result);
+        const own = pluginOwnSettings(result.plugin.name);
+        out.modeAfterUpdate = own.mode;
+        out.keyAfterUpdate = own.apiKey;
       }
       console.log(JSON.stringify(out));
     `);
@@ -716,12 +730,59 @@ describe("a pinned catalogue entry installs its commit or nothing", () => {
     expect(r.listed).toBe(0);
   }, 30_000);
 
-  test("an update of a pinned install fetches the same commit and checks the same hash", async () => {
-    const r = await install({ kind: "catalogue", id: "orbit-clock", catalogue: catalogue(entry()), update: true });
+  const moved = () => catalogue(entry({ source: { kind: "git", url: "https://github.com/acme/orbit-clock", ref: tip }, sha256: tipHash }));
+
+  test("an update reads the catalogue again and installs the commit it lists now", async () => {
+    const r = await install({ kind: "catalogue", id: "orbit-clock", catalogue: catalogue(entry()), updateCatalogue: moved(), update: true });
     expect(r.update?.error ?? "").toBe("");
     expect(r.update?.ok).toBe(true);
+    expect(r.runShAfterUpdate).toBe("echo something else\n");
+    expect(r.update?.update).toMatchObject({ changed: true, from: pinned, to: tip, sha256Verified: true });
+    expect(r.update?.update?.message).toContain(`${pinned.slice(0, 7)} to ${tip.slice(0, 7)}`);
+    expect(r.update?.update?.message).toContain("needs approval: ");
+    expect(r.update?.plugin?.source.plugin.ref).toBe(tip);
+    expect(r.log).toContain(`fetch -q --depth 1 -- https://github.com/acme/orbit-clock ${tip}`);
+  }, 30_000);
+
+  test("an update keeps the settings and the key, and a plugin that was never approved still asks", async () => {
+    const r = await install({
+      kind: "catalogue", id: "orbit-clock", catalogue: catalogue(entry()), updateCatalogue: moved(), update: true,
+      settings: { mode: "live", apiKey: "sk-orbit-test-0000" },
+    });
+    expect(r.update?.ok).toBe(true);
+    expect(r.modeAfterUpdate).toBe("live");
+    expect(r.keyAfterUpdate).toBe("sk-orbit-test-0000");
+    expect(r.update?.update?.needsApproval).toBe(true);
+  }, 30_000);
+
+  test("an entry that has not moved says so and fetches nothing", async () => {
+    const r = await install({ kind: "catalogue", id: "orbit-clock", catalogue: catalogue(entry()), updateCatalogue: catalogue(entry()), update: true });
+    expect(r.update?.ok).toBe(true);
+    expect(r.update?.update).toMatchObject({ changed: false, from: pinned, to: pinned });
+    expect(r.update?.update?.message).toContain("already at the listed version");
+    expect(r.log.match(/fetch -q/g)?.length).toBe(1);
+  }, 30_000);
+
+  test("an entry that is gone says it is no longer listed and leaves the install alone", async () => {
+    const r = await install({
+      kind: "catalogue", id: "orbit-clock", catalogue: catalogue(entry()),
+      updateCatalogue: catalogue(entry({ id: "orbit-other" })), update: true,
+    });
+    expect(r.update?.ok).toBe(false);
+    expect(r.update?.error).toContain("no longer listed");
     expect(r.runShAfterUpdate).toBe("echo listed\n");
-    expect(r.log.match(new RegExp(`fetch -q --depth 1 -- \\S+ ${pinned}`, "g"))?.length).toBe(2);
+    expect(r.log.match(/fetch -q/g)?.length).toBe(1);
+  }, 30_000);
+
+  test("a new listing whose hash does not match is refused and the old install stays", async () => {
+    const r = await install({
+      kind: "catalogue", id: "orbit-clock", catalogue: catalogue(entry()), settings: { mode: "live" },
+      updateCatalogue: catalogue(entry({ source: { kind: "git", url: "https://github.com/acme/orbit-clock", ref: tip }, sha256: pinnedHash })), update: true,
+    });
+    expect(r.update?.ok).toBe(false);
+    expect(r.update?.error).toContain("hash");
+    expect(r.runShAfterUpdate).toBe("echo listed\n");
+    expect(r.modeAfterUpdate).toBe("live");
   }, 30_000);
 
   test("a git install typed with a commit id installs that commit", async () => {
