@@ -15,7 +15,6 @@
 import { HIT } from "../../lib/iconSize.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../lib/api.ts";
-import { Markdown } from "../../lib/markdown.tsx";
 import { putCard } from "../../lib/prCardStore.ts";
 import { TRACKERS } from "../../lib/trackerApi.ts";
 import { OfferedPeople } from "../../lib/trackerComment.ts";
@@ -23,13 +22,16 @@ import type { Mentionable } from "../../lib/mentions.ts";
 import type { ProviderTask, TaskDetail } from "../../../../shared/providers.ts";
 import { Composer, COMPOSER_MIN } from "../tasks/Composer.tsx";
 import { EDGE, LINE } from "../workspace/Chrome.tsx";
-import { readJiraLinks, type JiraLinks } from "../../lib/jiraLinks.ts";
+import { readJiraLinks, setJiraWeb, type JiraLinks } from "../../lib/jiraLinks.ts";
 import { JiraProps } from "./JiraFacts.tsx";
 import { EditNote } from "./EditNote.tsx";
 import { useJiraEdit, type JiraEditUi } from "./useJiraEdit.ts";
-import { nowOf } from "../../lib/jiraEdit.ts";
+import { nowOf, stepFor } from "../../lib/jiraEdit.ts";
 import { keepThreads } from "../../lib/jiraThreads.ts";
 import { JiraActivity, type CommentAct } from "./JiraActivity.tsx";
+import { JiraDescription } from "./JiraDescription.tsx";
+import { LinkedBlock, SubtasksBlock, WebLinksBlock, type JoinAct } from "./JiraJoins.tsx";
+import { madeLink, webAddress } from "../../lib/jiraJoins.ts";
 import { AttachmentsSection, LinkedSection, Section, SubtasksSection, WebLinksSection } from "./JiraSections.tsx";
 import { Spinner } from "../Spinner.tsx";
 import { JiraCardPrs } from "./JiraCardPrs.tsx";
@@ -83,14 +85,14 @@ export function JiraCard({ t, header, writes, onTask }: {
   const editing = useJiraEdit({
     cardKey: key, stamp: (detail?.task ?? t).updated ?? 0,
     onDone: (r) => {
-      setDetail((d) => (d ? { ...d, task: r.task, ...(r.facts ? { facts: r.facts } : {}), ...(r.edit ? { edit: r.edit } : {}) } : d));
+      setDetail((d) => (d ? { ...d, task: r.task, ...(r.facts ? { facts: r.facts } : {}), ...(r.edit ? { edit: r.edit } : {}), ...(r.description !== undefined ? { description: r.description } : {}) } : d));
       onTaskRef.current(r.task); putCard(key, r.task);
     },
     onStale: refresh,
   });
   const ed: JiraEditUi = {
     edit: writes ? detail?.edit : undefined, busy: editing.busy, run: editing.run,
-    now: nowOf(detail?.task ?? t, detail?.facts, detail?.edit),
+    now: nowOf(detail?.task ?? t, detail?.facts, detail?.edit, detail?.description),
   };
 
   /* The card's remote links: one request, shared with the Development section (lib/jiraLinks.ts), so opening a card costs two in all. */
@@ -192,6 +194,55 @@ export function JiraCard({ t, header, writes, onTask }: {
     },
   } : undefined;
 
+  /* What the card is joined to: each change is one write whose answer is the card again (or its list of addresses), so nothing is read twice.
+     The comments stay as they were: a write here did not touch them, and the answer left their threads out. */
+  const take = (sent: TaskDetail) => {
+    setDetail((d) => (d ? { ...sent, comments: d.comments } : sent));
+    onTaskRef.current(sent.task); putCard(key, sent.task);
+  };
+  const joinAct: JoinAct = {
+    subtask: async (title) => {
+      const r = await api.jiraSubtask(key, title).catch(() => null);
+      if (!r) return "Could not reach agentglass";
+      if (!r.ok) return r.error || "Jira refused that sub-task";
+      if (r.detail) take(r.detail); else void read();
+      return null;
+    },
+    relate: async (other, way) => {
+      const r = await api.jiraRelate(key, other, way.typeId, way.outward).catch(() => null);
+      if (!r) return { error: "Could not reach agentglass" };
+      if (!r.ok) return { error: r.error || "Jira refused that link" };
+      if (r.already) return { error: `${key} ${way.phrase} ${other} is already there` };
+      if (!r.detail) { void read(); return {}; }
+      take(r.detail);
+      return { made: madeLink(r.detail.linked, other, way) };
+    },
+    unrelate: async (l) => {
+      const r = await api.jiraUnrelate(key, l.id).catch(() => null);
+      if (!r) return "Could not reach agentglass";
+      if (!r.ok) return r.error || "Jira refused that change";
+      if (r.detail) take(r.detail); else void read();
+      return null;
+    },
+    webAdd: async (url, title) => {
+      const r = await api.jiraWebLink(key, url, title).catch(() => null);
+      if (!r) return { error: "Could not reach agentglass" };
+      if (!r.ok || !r.web) return { error: r.error || "Jira refused that address" };
+      setLinks(setJiraWeb(key, r.web));
+      if (r.already) return { error: "That address is already on the card" };
+      const at = webAddress(url);
+      return { made: r.web.find((w) => w.url === at) };
+    },
+    webRemove: async (w) => {
+      const r = await api.jiraWebUnlink(key, w.id).catch(() => null);
+      if (!r) return "Could not reach agentglass";
+      if (!r.ok || !r.web) return r.error || "Jira refused that change";
+      setLinks(setJiraWeb(key, r.web));
+      return null;
+    },
+    onRowTask: (t) => setDetail((d) => (d ? { ...d, subtasks: d.subtasks.map((x) => (x.id === t.id ? t : x)) } : d)),
+  };
+
   const send = () => {
     if (!say.trim() || saying) return;
     setSaying(true); setSayErr(""); setSayWarn("");
@@ -219,17 +270,12 @@ export function JiraCard({ t, header, writes, onTask }: {
         <JiraProps t={detail?.task ?? t} writable={writes} onTask={onTask} facts={detail?.facts} ed={ed} />
         {detail && (
           <>
-            <Section id="description" title="Description">
-              <div className="agx-cu-body min-w-0 break-words">
-                {detail.description.trim()
-                  ? <Markdown text={detail.description} />
-                  : <span style={{ color: "var(--text4)" }}>No description.</span>}
-              </div>
-            </Section>
+            <JiraDescription text={detail.description} edit={detail.edit} writes={writes} url={t.url} busy={editing.busy === "description"}
+              onSave={(md) => { const step = stepFor("description", { value: md }, ed.now); return step ? editing.run(step) : Promise.resolve(false); }} />
             <AttachmentsSection files={detail.attachments ?? []} />
-            <SubtasksSection rows={detail.subtasks} />
-            <LinkedSection linked={detail.linked ?? []} />
-            <WebLinksSection links={links ? links.web : null} error={links?.error ?? ""} />
+            {writes ? <SubtasksBlock rows={detail.subtasks} parent={detail.task} writable act={joinAct} /> : <SubtasksSection rows={detail.subtasks} />}
+            {writes ? <LinkedBlock linked={detail.linked ?? []} card={key} writable act={joinAct} /> : <LinkedSection linked={detail.linked ?? []} />}
+            {writes ? <WebLinksBlock links={links ? links.web : null} error={links?.error ?? ""} writable card={key} act={joinAct} /> : <WebLinksSection links={links ? links.web : null} error={links?.error ?? ""} />}
             <Section id="development" title="Development">
               <JiraCardPrs query={key} writable={writes} quiet={!writes} mentions={mentions} />
             </Section>

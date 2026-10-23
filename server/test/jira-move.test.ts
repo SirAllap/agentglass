@@ -186,6 +186,16 @@ function suite(flavor: FakeFlavor) {
         expect(fake.state.issues["ORBIT-1042"]!.statusId).toBe("2");
       });
 
+      test("a card whose updated cannot be read is refused, and nothing is written", async () => {
+        const at = upd("ORBIT-1042");
+        fake.state.issues["ORBIT-1042"]!.updated = "not a date";
+        const r = await move("ORBIT-1042", "21", at);
+        expect(r.ok).toBe(false);
+        expect(r.conflict).toBeUndefined();
+        expect(wire()).toEqual(["GET /issue/ORBIT-1042"]);
+        expect(fake.state.issues["ORBIT-1042"]!.statusId).toBe("2");
+      });
+
       test("no stamp to compare with is refused before anything is sent", async () => {
         for (const bad of [0, -1, Number.NaN]) {
           const r = await move("ORBIT-1042", "21", bad);

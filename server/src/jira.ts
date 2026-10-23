@@ -1179,7 +1179,8 @@ export async function moveIssue(creds: JiraCreds, key: string, transitionId: str
   }
   const f = isObj(seen.data) && isObj(seen.data.fields) ? seen.data.fields : {};
   const now = epoch(f.updated);
-  if (now && now !== updated) return { ok: false, conflict: true, error: "Somebody changed this card while you had it open, reloaded" };
+  if (!now) return unreadable();
+  if (now !== updated) return stale();
 
   // Moves differ by project, issue type and status, so that is the memo's key.
   const status = isObj(f.status) ? f.status : {};
@@ -1403,6 +1404,8 @@ export async function readBefore(creds: JiraCreds, key: string, fields: string):
   return { f: isObj(seen.data) && isObj(seen.data.fields) ? seen.data.fields : {}, id: isObj(seen.data) ? idText(seen.data.id) : "" };
 }
 
+/** A read whose `updated` cannot be parsed proves nothing about the card: no write goes behind it. */
+export const unreadable = (): WriteOutcome => ({ ok: false, error: "Nothing was changed: could not tell whether the card moved since you opened it. Reload it and try again" });
 export const stale = (): WriteOutcome => ({ ok: false, conflict: true, error: "Somebody changed this card while you had it open, reloaded" });
 
 /** Why Jira refused an assignee write, in our words. */
@@ -1429,7 +1432,8 @@ export async function setAssignee(creds: JiraCreds, key: string, to: string | nu
   const before = await readBefore(creds, key, "updated,status,assignee");
   if ("stop" in before) return before.stop;
   const now = epoch(before.f.updated);
-  if (now && now !== updated) return stale();
+  if (!now) return unreadable();
+  if (now !== updated) return stale();
 
   const put = await jiraCall<unknown>(creds, `/rest/api/${apiOf(creds)}/issue/${encodeURIComponent(key)}/assignee`, {
     method: "PUT",
@@ -1580,7 +1584,8 @@ export async function handOff(creds: JiraCreds, key: string, updated: number, ch
   if ("stop" in before) return before.stop;
   const f = before.f;
   const now = epoch(f.updated);
-  if (now && now !== updated) return stale();
+  if (!now) return unreadable();
+  if (now !== updated) return stale();
   const status = isObj(f.status) ? f.status : {};
   const statusName = str(status.name);
   const project = isObj(f.project) ? str(f.project.key) : K.slice(0, K.lastIndexOf("-"));

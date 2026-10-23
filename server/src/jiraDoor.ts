@@ -25,17 +25,18 @@
  */
 import type { ProviderTask, TaskDetail } from "../../shared/providers.ts";
 import { UNTRUSTED_MAX_BYTES } from "../../shared/uiActions.ts";
-import { ISSUE_KEY, linkPullRequestStored, movesStored, jiraWriteEnabled, remoteLinksAllStored } from "./jira.ts";
+import { ISSUE_KEY, linkPullRequestStored, moveStored, movesStored, jiraWriteEnabled, remoteLinksAllStored } from "./jira.ts";
 import { ACTIVITY_KINDS, activityStored, type ActivityKind } from "./jiraActivity.ts";
 import { deleteCommentStored, detailStored, editCommentStored, commentStored } from "./jiraComments.ts";
 import { editStored, type EditAsk } from "./jiraEdit.ts";
+import { addWebLinkStored, createSubtaskStored, linkKindsStored, relateCardsStored, removeWebLinkStored, unrelateCardsStored } from "./jiraRelate.ts";
 import { jiraSteps, runStepBody, STEP_KEYS } from "./jiraSteps.ts";
 import { rememberOwnMove } from "./jirawatch.ts";
 
-export const DOOR_VERBS = ["card", "moves", "links", "activity", "steps", "step", "link", "edit", "comment", "comment-edit", "comment-delete"] as const;
+export const DOOR_VERBS = ["card", "moves", "links", "linktypes", "activity", "steps", "step", "link", "edit", "comment", "comment-edit", "comment-delete", "move", "subtask", "relate", "unrelate", "weblink", "unweblink"] as const;
 export type DoorVerb = (typeof DOOR_VERBS)[number];
 /** The verbs that change the site. The rest read. */
-export const DOOR_ACTING: readonly DoorVerb[] = ["step", "link", "edit", "comment", "comment-edit", "comment-delete"];
+export const DOOR_ACTING: readonly DoorVerb[] = ["step", "link", "edit", "comment", "comment-edit", "comment-delete", "move", "subtask", "relate", "unrelate", "weblink", "unweblink"];
 export const isActing = (v: string): boolean => (DOOR_ACTING as readonly string[]).includes(v);
 
 /**
@@ -124,14 +125,14 @@ export function cardParts(t: ProviderTask): { state: Record<string, unknown>; un
  * flag), so no verb has to spell Jira's per-field way of clearing; a flag is `true` or `false` as text or as a boolean.
  */
 export function editAsk(b: Record<string, unknown>): EditAsk | string {
-  const ask: EditAsk = { field: b.field, value: b.value, add: b.add, remove: b.remove };
+  const ask: EditAsk = { field: b.field, value: b.value, add: b.add, remove: b.remove, mentions: Array.isArray(b.mentions) ? b.mentions : undefined };
   if (b.clear !== undefined && typeof b.clear !== "boolean") return "clear must be true or false";
   if (b.clear === true) {
     if (b.value !== undefined || b.add !== undefined || b.remove !== undefined) return "clear takes no value: it only takes one off";
     if (b.field === "duedate" || b.field === "start" || b.field === "parent") ask.value = null;
-    else if (b.field === "originalEstimate" || b.field === "remainingEstimate") ask.value = "";
+    else if (b.field === "originalEstimate" || b.field === "remainingEstimate" || b.field === "description") ask.value = "";
     else if (b.field === "flag") ask.value = false;
-    else return "clear applies to duedate, start, parent, flag and the estimates";
+    else return "clear applies to description, duedate, start, parent, flag and the estimates";
   }
   if (b.field === "flag" && typeof ask.value === "string") {
     const low = ask.value.toLowerCase();
@@ -175,7 +176,7 @@ function listsOf(d: TaskDetail): { state: Record<string, unknown>; untrusted: Re
     },
     untrusted: {
       ...(d.subtasks.length ? { subtasks: d.subtasks.slice(0, ROWS_MAX).map(row) } : null),
-      ...(linked.length ? { linked: linked.slice(0, ROWS_MAX).map((l) => ({ phrase: clip(l.phrase, 60), ...row(l.task) })) } : null),
+      ...(linked.length ? { linked: linked.slice(0, ROWS_MAX).map((l) => ({ phrase: clip(l.phrase, 60), linkId: l.id, ...row(l.task) })) } : null),
       ...(files.length ? { attachments: files.slice(0, ROWS_MAX).map((a) => ({ name: clip(a.title, 160), size: a.size, ...(a.who ? { by: clip(a.who, 80) } : null) })) } : null),
       ...(facts.length ? { details: facts.map((f) => ({ label: f.label, value: clip(f.value, 200) })) } : null),
     },
@@ -213,7 +214,7 @@ async function readLinks(key: string): Promise<DoorAnswer> {
     body: {
       ok: true, key: key.toUpperCase(),
       state: { linkCount: web.length, pullRequests: web.filter((w) => w.pr).length, ...(web.length > ROWS_MAX ? { notShown: web.length - ROWS_MAX } : null) },
-      untrusted: { links: web.slice(0, ROWS_MAX).map((w) => ({ title: clip(w.title, 160), url: clip(w.url, 300), ...(w.pr ? { pullRequest: true } : null) })) },
+      untrusted: { links: web.slice(0, ROWS_MAX).map((w) => ({ id: w.id, title: clip(w.title, 160), url: clip(w.url, 300), ...(w.pr ? { pullRequest: true } : null) })) },
     },
   };
 }
@@ -256,6 +257,16 @@ async function readMoves(key: string): Promise<DoorAnswer> {
   };
 }
 
+/** The site's link types, in the words of each side: what `relate` takes as `type`, and which way `direction` reads. A site's own words, so they are data. */
+async function readLinkTypes(): Promise<DoorAnswer> {
+  const r = await linkKindsStored();
+  if (!r.ok || !r.data) return { status: 200, body: { ok: false, error: r.error ?? "Jira did not answer", ...(r.throttled ? { throttled: true } : null) } };
+  return {
+    status: 200,
+    body: { ok: true, state: { count: r.data.length }, untrusted: { types: r.data.map((k) => ({ id: k.id, name: clip(k.name, 80), out: clip(k.outward, 80), in: clip(k.inward, 80) })) } },
+  };
+}
+
 /** The three steps as the owner configured them, by whether they are on; their blocks name statuses a team chose. */
 function readSteps(): DoorAnswer {
   const { steps } = jiraSteps();
@@ -283,6 +294,8 @@ export async function runDoor(verb: string, b: Record<string, unknown>): Promise
       return ISSUE_KEY.test(key) ? readMoves(key) : refuse("That is not a Jira card id");
     case "links":
       return ISSUE_KEY.test(key) ? readLinks(key) : refuse("That is not a Jira card id");
+    case "linktypes":
+      return readLinkTypes();
     case "activity":
       return ISSUE_KEY.test(key) ? readActivity(key, b.kind, b.start) : refuse("That is not a Jira card id");
     case "steps":
@@ -320,7 +333,7 @@ export async function runDoor(verb: string, b: Record<string, unknown>): Promise
       return written(r);
     }
     case "comment-edit": {
-      const r = await editCommentStored(key, String(b.id ?? ""), typeof b.text === "string" ? b.text : "", []);
+      const r = await editCommentStored(key, String(b.id ?? ""), typeof b.text === "string" ? b.text : "", Array.isArray(b.mentions) ? b.mentions : undefined);
       return written(r, r.comment ? { commentId: r.comment.id, edited: true } : {});
     }
     case "comment-delete": {
@@ -328,6 +341,35 @@ export async function runDoor(verb: string, b: Record<string, unknown>): Promise
       if (b.confirm !== true) return refuse("Deleting a comment cannot be undone: pass confirm true to say you mean it");
       const r = await deleteCommentStored(key, String(b.id ?? ""));
       return written(r, r.removed ? { removed: true } : {});
+    }
+    case "move": {
+      const r = await moveStored(key, String(b.id ?? ""), typeof b.updated === "number" ? b.updated : 0);
+      // The watch must not announce the move an agent made as news, the same as for the person's own.
+      if (r.ok && r.task && r.was) rememberOwnMove({ ...r.task, status: r.was }, r.task.status);
+      return written(r, r.was !== undefined ? { moved: true } : {});
+    }
+    case "subtask": {
+      const r = await createSubtaskStored(key, b.title);
+      return written(r, r.ok ? { created: true, ...(r.created ? { subtask: r.created } : null) } : {});
+    }
+    case "relate": {
+      const r = await relateCardsStored(key, { other: b.other, typeId: b.type, outward: b.direction === "out" ? true : b.direction === "in" ? false : undefined });
+      return written(r, r.ok ? { linked: !r.already, ...(r.already ? { already: true } : null) } : {});
+    }
+    case "unrelate": {
+      // The screen asks the person first; an agent says it meant it, which is the same sentence in a different mouth.
+      if (b.confirm !== true) return refuse("Taking a link off is not undone here: pass confirm true to say you mean it");
+      const r = await unrelateCardsStored(key, b.id);
+      return written(r, r.ok ? { removed: true } : {});
+    }
+    case "weblink": {
+      const r = await addWebLinkStored(key, b.url, b.title);
+      return written(r, r.ok ? { linked: !r.already, ...(r.already ? { already: true } : null), webLinks: r.web?.length ?? 0 } : {});
+    }
+    case "unweblink": {
+      if (b.confirm !== true) return refuse("Taking an address off is not undone here: pass confirm true to say you mean it");
+      const r = await removeWebLinkStored(key, b.id);
+      return written(r, r.ok ? { removed: true, webLinks: r.web?.length ?? 0 } : {});
     }
     default:
       return refuse(`That is not a card verb: ${DOOR_VERBS.join(", ")}`);

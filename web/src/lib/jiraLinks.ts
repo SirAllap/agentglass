@@ -57,6 +57,21 @@ export function addJiraLink(key: string, link: JiraLink): JiraLinks {
   return value;
 }
 
+/**
+ * A write just changed the card's web addresses: what the site now lists, without asking again. The pull requests among them
+ * are the rows whose address is still there; one the write ADDED is not in `links` yet (its number and state come from a read),
+ * so that card is read again in the background and the Development tab catches up.
+ */
+export function setJiraWeb(key: string, web: CardWebLink[]): JiraLinks {
+  const cur = held.get(key)?.value ?? { links: [], web: [], error: "" };
+  const value = { links: cur.links.filter((l) => web.some((w) => w.url === l.url)), web, error: "" };
+  const adds = web.some((w) => w.pr && !cur.links.some((l) => l.url === w.url));
+  held.set(key, { at: adds ? 0 : Date.now(), value });
+  changed();
+  if (adds) void readJiraLinks(key);
+  return value;
+}
+
 export function forgetJiraLinks(): void { held.clear(); pending.clear(); changed(); }
 
 /** Most rows the tab will hold: a card quoting a whole release's pull requests is not a list of its own. */

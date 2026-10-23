@@ -32,10 +32,11 @@
  * suggestions are the first page Jira's autocomplete gives for what was typed.
  */
 import {
-  CARD_FIELDS, ISSUE_KEY, NOT_CONNECTED, WRITE_OFF, apiOf, cardPointsField, epoch, jiraCall, jiraWriteEnabled, memoOk, priorities, siteFields, stale, storedCreds,
+  CARD_FIELDS, ISSUE_KEY, NOT_CONNECTED, WRITE_OFF, apiOf, cardPointsField, epoch, jiraCall, jiraWriteEnabled, memoOk, priorities, siteFields, stale, unreadable, storedCreds,
   taskContext, toTask, withStored, type JiraCreds, type JiraFieldIds, type JiraPriorities, type JiraResult,
 } from "./jira.ts";
-import { factsOf, offeredFields } from "./jiraCardRead.ts";
+import { editableBody, markdownToAdf, markdownToWiki, readMentions } from "./jiraAdf.ts";
+import { factsOf, fullReader, offeredFields, textReader } from "./jiraCardRead.ts";
 import type { CardEdit, CardFact } from "../../shared/providers.ts";
 import type { WriteOutcome } from "./trackerTypes.ts";
 
@@ -43,12 +44,14 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
 /** The edits this module knows. Anything else is refused by name. */
-export const EDIT_FIELDS = ["summary", "priority", "labels", "duedate", "start", "parent", "flag", "originalEstimate", "remainingEstimate"] as const;
+export const EDIT_FIELDS = ["summary", "description", "priority", "labels", "duedate", "start", "parent", "flag", "originalEstimate", "remainingEstimate"] as const;
 export type EditField = (typeof EDIT_FIELDS)[number];
 
 /** What Jira's flag field takes to mean "flagged". */
 export const FLAG_VALUE = "Impediment";
 const MAX_TITLE = 255;
+/** Jira's own limit is 32,767 characters; Markdown grows a little on the way. */
+const MAX_DESCRIPTION = 30_000;
 const PRIORITY_ID = /^\d{1,9}$/;
 const LABEL = /^[^\s,]{1,255}$/;
 /** "2h 30m", "1w 2d": the units Jira's time tracking reads. */
@@ -61,7 +64,7 @@ export function isDay(v: unknown): v is string {
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
 }
 
-export interface EditAsk { field: unknown; value?: unknown; add?: unknown; remove?: unknown }
+export interface EditAsk { field: unknown; value?: unknown; add?: unknown; remove?: unknown; /** The people a description names, as a comment sends them. */ mentions?: unknown }
 export interface EditIds { start?: string; flag?: string }
 export type Plan =
   | { ok: true; field: EditField; /** The key `editmeta.fields` must list for this write. */ gate: string; body: Record<string, unknown> }
@@ -80,6 +83,15 @@ export function planEdit(ask: EditAsk, ids: EditIds, v: 2 | 3): Plan {
       if (/[\r\n]/.test(t)) return no("A title is one line");
       if (t.length > MAX_TITLE) return no(`A title is at most ${MAX_TITLE} characters`);
       return { ok: true, field: "summary", gate: "summary", body: { fields: { summary: t } } };
+    }
+    case "description": {
+      // Markdown in, the site's own format out. Empty takes the description off: `null` clears it on both flavours.
+      if (typeof ask.value !== "string") return no("A description is text");
+      const t = ask.value.trim();
+      if (t.length > MAX_DESCRIPTION) return no("That description is too long for Jira");
+      if (!t) return { ok: true, field: "description", gate: "description", body: { fields: { description: null } } };
+      const roster = readMentions(ask.mentions, v);
+      return { ok: true, field: "description", gate: "description", body: { fields: { description: v === 3 ? markdownToAdf(t, roster) : markdownToWiki(t, roster) } } };
     }
     case "priority": {
       if (typeof ask.value !== "string" || !PRIORITY_ID.test(ask.value)) return no("That is not a priority this site offers");
@@ -127,13 +139,18 @@ export function editOf(offered: Set<string> | null, ids: EditIds, list: JiraPrio
   if (!offered) return null;
   const fields: string[] = [];
   for (const f of ["summary", "priority", "labels", "duedate"]) if (offered.has(f)) fields.push(f);
+  // The description is offered for editing only when Markdown can hold all of it; otherwise the pane says so and points at Jira.
+  let descriptionLocked = false;
+  if (offered.has("description") && card && "description" in card) {
+    if (editableBody(card.description, v)) fields.push("description"); else descriptionLocked = true;
+  }
   if (v === 3 && offered.has("parent")) fields.push("parent");
   if (ids.start && offered.has(ids.start)) fields.push("start");
   if (ids.flag && offered.has(ids.flag)) fields.push("flag");
   if (offered.has("timetracking")) fields.push("originalEstimate", "remainingEstimate");
   const options = list ? list.ids.map((id, i) => ({ id, name: list.names[i] ?? id })) : [];
   const now = card && isObj(card.priority) && str(card.priority.id) ? { id: str(card.priority.id), name: str(card.priority.name) || str(card.priority.id) } : null;
-  return { fields, priorities: offered.has("priority") ? options : [], ...(now ? { priority: now } : {}), reply: v === 3 };
+  return { fields, priorities: offered.has("priority") ? options : [], ...(now ? { priority: now } : {}), reply: v === 3, ...(descriptionLocked ? { descriptionLocked } : {}) };
 }
 
 // --- what a card's edit screen listed when it was opened here ---------------
@@ -149,9 +166,11 @@ const offeredFor = (key: string): Set<string> | null => {
 };
 export const __forgetOffered = (): void => offers.clear();
 
+/** Said when the stored description has parts Markdown would lose. */
+export const HOLDS_MORE = "This description has parts Markdown cannot keep (a table, a panel, an image or a colour). Open it in Jira to change it";
 const NOT_OFFERED = "This card does not let you change that here";
 
-export type EditOutcome = WriteOutcome & { facts?: CardFact[]; edit?: CardEdit };
+export type EditOutcome = WriteOutcome & { facts?: CardFact[]; edit?: CardEdit; /** The description as it now stands, in Markdown. */ description?: string };
 
 /** Why Jira refused an edit, in our words. */
 function refusal(r: JiraResult<unknown>): EditOutcome {
@@ -179,21 +198,34 @@ export async function editCard(creds: JiraCreds, key: string, ask: EditAsk, upda
   const v = apiOf(creds);
   const found = await siteFields(creds);
   const ids = found.ok && found.data ? found.data : null;
-  const plan = planEdit(ask, { start: ids?.start, flag: ids?.flag }, v);
-  if (!plan.ok) return plan;
+  const first = planEdit(ask, { start: ids?.start, flag: ids?.flag }, v);
+  if (!first.ok) return first;
+  let plan = first;
   const upper = key.toUpperCase();
   const known = offeredFor(upper);
   if (known && !known.has(plan.gate)) return { ok: false, error: NOT_OFFERED };
 
-  const seen = await jiraCall<unknown>(creds, `/rest/api/${v}/issue/${encodeURIComponent(upper)}?fields=updated${known ? "" : "&expand=editmeta"}`, { fresh: true });
+  const seen = await jiraCall<unknown>(creds, `/rest/api/${v}/issue/${encodeURIComponent(upper)}?fields=updated${plan.field === "description" ? ",description" : ""}${known ? "" : "&expand=editmeta"}`, { fresh: true });
   if (!seen.ok) return { ok: false, unauthorised: seen.unauthorised, error: `Nothing was changed: could not check the card first. ${seen.error ?? "Jira did not answer"}` };
   const offered = known ?? offeredFields(seen.data);
   if (!offered) return { ok: false, error: "Nothing was changed: Jira did not say which fields this card lets you change" };
   if (!offered.has(plan.gate)) return { ok: false, error: NOT_OFFERED };
   const now = epoch(isObj(seen.data) && isObj(seen.data.fields) ? seen.data.fields.updated : undefined);
-  if (now && now !== updated) return stale();
+  if (!now) return unreadable();
+  if (now !== updated) return stale();
 
-  const fields = readFields(ids);
+  // A description that Markdown cannot hold whole is not rewritten from Markdown: that is how a table or a panel is flattened.
+  if (plan.field === "description") {
+    const stored = isObj(seen.data) && isObj(seen.data.fields) ? seen.data.fields.description : undefined;
+    if (!editableBody(stored, v)) return { ok: false, error: HOLDS_MORE };
+    // Words with no list of people keep the people the description already names, as a comment's edit does.
+    if (ask.mentions === undefined) {
+      const again = planEdit({ ...ask, mentions: fullReader(v, {})(stored ?? null).mentions }, { start: ids?.start, flag: ids?.flag }, v);
+      if (again.ok) plan = again;
+    }
+  }
+
+  const fields = plan.field === "description" ? `${readFields(ids)},description` : readFields(ids);
   const base = `/rest/api/${v}/issue/${encodeURIComponent(upper)}`;
   const put = await jiraCall<unknown>(creds, base, { method: "PUT", body: plan.body });
   if (!put.ok) return refusal(put);
@@ -206,7 +238,7 @@ export async function editCard(creds: JiraCreds, key: string, ask: EditAsk, upda
   const list = await priorities(creds);
   const facts = factsOf(back.data.fields, { start: ids?.start, flag: ids?.flag, team: ids?.team }, offered);
   const edit = editOf(offered, { start: ids?.start, flag: ids?.flag }, list.ok && list.data ? list.data : null, v, back.data.fields);
-  return { ok: true, task, facts, ...(edit ? { edit } : {}) };
+  return { ok: true, task, facts, ...(edit ? { edit } : {}), ...(plan.field === "description" ? { description: textReader(v, {})(back.data.fields.description ?? null) } : {}) };
 }
 
 export async function editStored(key: string, ask: EditAsk, updated: number): Promise<EditOutcome> {

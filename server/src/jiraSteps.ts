@@ -34,7 +34,7 @@ import type { HandoffUnassign, JiraBlockOutcome, JiraHandoffRule, JiraStep, Jira
 import { prAddress } from "../../shared/taskref.ts";
 import {
   ISSUE_KEY, NOT_ACCEPTED, NOT_CONNECTED, WRITE_OFF, apiOf, assigneeBody, assignRefusal, badPerson, epoch, handoffMoves, handoffRules, isObj, jiraCall,
-  jiraWriteEnabled, linkPullRequest, movesPath, personId, personName, projectKey, readBefore, readIssue, readSettingsFile, stale, storedCreds, str, writeSettingsKey,
+  jiraWriteEnabled, linkPullRequest, movesPath, personId, personName, projectKey, readBefore, readIssue, readSettingsFile, stale, unreadable, storedCreds, str, writeSettingsKey,
   type HandoffMove, type HandoffOutcome, type JiraCreds, type JiraResult,
 } from "./jira.ts";
 import { commentOn } from "./jiraComments.ts";
@@ -246,7 +246,8 @@ async function runStepOnce(creds: JiraCreds, key: string, updated: number, which
   if ("stop" in before) return before.stop;
   const f = before.f;
   const now = epoch(f.updated);
-  if (now && now !== updated) return stale();
+  if (!now) return unreadable();
+  if (now !== updated) return stale();
   const status = isObj(f.status) ? f.status : {};
   const statusName = str(status.name);
   const project = isObj(f.project) ? str(f.project.key) : K.slice(0, K.lastIndexOf("-"));

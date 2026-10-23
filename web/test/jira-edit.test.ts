@@ -5,13 +5,13 @@
  * the rule about what is drawn is asserted against the source that draws it.
  */
 import { describe, expect, test } from "bun:test";
-import { canEdit, nowOf, parseEstimate, parseParent, parseTitle, priorityInk, priorityOptions, stepFor, type EditNow } from "../src/lib/jiraEdit.ts";
+import { canEdit, descriptionMode, nowOf, parseEstimate, parseParent, parseTitle, priorityInk, priorityOptions, stepFor, type EditNow } from "../src/lib/jiraEdit.ts";
 import type { CardEdit, ProviderTask } from "../../shared/providers.ts";
 
 const read = (p: string) => Bun.file(new URL(`../src/${p}`, import.meta.url)).text();
 
 const NOW: EditNow = {
-  title: "Retry the export", priority: { id: "3", name: "Medium" }, due: "2026-03-01", start: "", parent: "ORBIT-7", flagged: false,
+  title: "Retry the export", description: "Old words", priority: { id: "3", name: "Medium" }, due: "2026-03-01", start: "", parent: "ORBIT-7", flagged: false,
   originalEstimate: "2h", remainingEstimate: "",
 };
 
@@ -109,7 +109,7 @@ describe("what is read off the card", () => {
       { id: "flag", label: "Flagged", value: "Impediment", raw: "1", field: "flag", tone: "flag" },
       { id: "originalEstimate", label: "Original estimate", value: "2h", raw: "2h", field: "originalEstimate" },
     ], { fields: [], reply: true, priorities: [], priority: { id: "3", name: "Medium" } });
-    expect(now).toEqual({ title: "T", priority: { id: "3", name: "Medium" }, due: "2026-03-01", start: "2026-02-01", parent: "ORBIT-7", flagged: true, originalEstimate: "2h", remainingEstimate: "" });
+    expect(now).toEqual({ title: "T", description: "", priority: { id: "3", name: "Medium" }, due: "2026-03-01", start: "2026-02-01", parent: "ORBIT-7", flagged: true, originalEstimate: "2h", remainingEstimate: "" });
   });
   test("a control exists only for a field the edit screen offered", () => {
     expect(canEdit({ fields: ["summary"], reply: true, priorities: [] }, "summary")).toBe(true);
@@ -138,9 +138,9 @@ describe("the pane draws a control only when writing is on and the card offers t
     const hook = await read("components/jira/useJiraEdit.ts");
     expect(hook).toContain("if (r.conflict) cb.current.onStale();");
     expect(hook).toContain("Changed in Jira meanwhile: reloaded, nothing sent");
-    expect(hook).toContain("cb.current.onDone({ task: r.task, facts: r.facts, edit: r.edit });");
+    expect(hook).toContain("cb.current.onDone({ task: r.task, facts: r.facts, edit: r.edit,");
     // One edit at a time: the card's stamp moves with each.
-    expect(hook).toContain("if (going.current) return;");
+    expect(hook).toContain("if (going.current) return false;");
   });
 });
 
@@ -150,5 +150,43 @@ describe("the day box in a light theme", () => {
     const day = src.slice(src.indexOf("export function EditDay("), src.indexOf("\n}\n", src.indexOf("export function EditDay(")));
     expect(day).toContain("colorScheme: schemeOfTheme()");
     expect(day).not.toContain('colorScheme: "dark"');
+  });
+});
+
+describe("the description", () => {
+  const offered = (o: Partial<CardEdit> = {}): CardEdit => ({ fields: ["summary", "description"], reply: true, priorities: [], ...o });
+
+  test("a change reads as changed, written or cleared, and goes back with the words that were there", () => {
+    const a = stepFor("description", { value: "  New words  " }, NOW)!;
+    expect(a).toEqual({ ask: { field: "description", value: "New words" }, said: "Description changed", undo: { field: "description", value: "Old words" } });
+    expect(stepFor("description", { value: "x" }, { ...NOW, description: "" })!.said).toBe("Description written");
+    const gone = stepFor("description", { value: " " }, NOW)!;
+    expect(gone).toMatchObject({ ask: { field: "description", value: "" }, said: "Description cleared", undo: { field: "description", value: "Old words" } });
+  });
+
+  test("the control is a box when offered, a sentence when the site offers it but Markdown would lose part, and nothing otherwise", () => {
+    expect(descriptionMode(offered())).toBe("edit");
+    expect(descriptionMode(offered({ fields: ["summary"], descriptionLocked: true }))).toBe("locked");
+    expect(descriptionMode(offered({ fields: ["summary"] }))).toBe("none");
+    expect(descriptionMode(undefined)).toBe("none");
+  });
+
+  test("the pencil keeps its place in every state, and the way to Jira is drawn only when it is locked", async () => {
+    const src = await read("components/jira/JiraDescription.tsx");
+    const fn = src.slice(src.indexOf("export function JiraDescription("));
+    expect(fn).toContain('aside={mode === "none" ? undefined');
+    expect(fn).toContain('busy={mode === "locked"}');
+    expect(fn).toContain('mode === "locked" && (');
+    expect(fn).toContain("Open in Jira");
+    expect(fn).toContain("Ctrl+Enter saves");
+    expect(fn).toContain('e.key === "Escape"');
+  });
+
+  test("the pane saves through the one edit and takes the new words from its answer", async () => {
+    const card = await read("components/jira/JiraCard.tsx");
+    expect(card).toContain('stepFor("description"');
+    expect(card).toContain("r.description !== undefined");
+    const hook = await read("components/jira/useJiraEdit.ts");
+    expect(hook).toContain("landed = true;");
   });
 });

@@ -18,6 +18,8 @@ import type { CardEdit, CardFact, ProviderTask } from "../../../shared/providers
 /** What the card holds now, as the controls read it. Dates are `YYYY-MM-DD`, estimates the site's own "2h 30m". */
 export interface EditNow {
   title: string;
+  /** The description as Markdown, as the pane has it. */
+  description: string;
   priority: { id: string; name: string } | null;
   due: string;
   start: string;
@@ -28,6 +30,14 @@ export interface EditNow {
 }
 
 export interface EditStep { ask: JiraEditAsk; said: string; undo: JiraEditAsk | null }
+
+/**
+ * What the description's control is: a box to write in, the sentence that says Markdown would lose part of it, or
+ * nothing at all (writing off, or the site does not let this card's description change).
+ */
+export type DescriptionMode = "edit" | "locked" | "none";
+export const descriptionMode = (edit: CardEdit | undefined): DescriptionMode =>
+  canEdit(edit, "description") ? "edit" : edit?.descriptionLocked ? "locked" : "none";
 
 /** Whether the card's edit screen offers this field. */
 export const canEdit = (edit: CardEdit | undefined, field: string): boolean => !!edit?.fields.includes(field);
@@ -74,6 +84,10 @@ export function stepFor(field: string, to: { value?: string | boolean | null; ad
       const v = String(to.value ?? "").trim();
       return { ask: { field, value: v }, said: `Title: “${brief(now.title)}” → “${brief(v)}”`, undo: { field, value: now.title } };
     }
+    case "description": {
+      const v = String(to.value ?? "").trim();
+      return { ask: { field, value: v }, said: v ? (now.description.trim() ? "Description changed" : "Description written") : "Description cleared", undo: { field, value: now.description } };
+    }
     case "priority": {
       const id = String(to.value ?? "");
       return { ask: { field, value: id }, said: `Priority: ${now.priority?.name ?? "none"} → ${to.name ?? id}`, undo: now.priority ? { field, value: now.priority.id } : null };
@@ -110,10 +124,10 @@ export function stepFor(field: string, to: { value?: string | boolean | null; ad
 }
 
 /** What a card holds now, read off the card and its Details, for `stepFor` to say what changed. */
-export function nowOf(t: ProviderTask, facts: readonly CardFact[] | undefined, edit: CardEdit | undefined): EditNow {
+export function nowOf(t: ProviderTask, facts: readonly CardFact[] | undefined, edit: CardEdit | undefined, description = ""): EditNow {
   const raw = (id: string): string => facts?.find((f) => f.id === id)?.raw ?? "";
   return {
-    title: t.title, priority: edit?.priority ?? null, due: t.due ?? "", start: raw("start"), parent: t.parent?.key ?? "",
+    title: t.title, description, priority: edit?.priority ?? null, due: t.due ?? "", start: raw("start"), parent: t.parent?.key ?? "",
     flagged: raw("flag") === "1", originalEstimate: raw("originalEstimate"), remainingEstimate: raw("remainingEstimate"),
   };
 }

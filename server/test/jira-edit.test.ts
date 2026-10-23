@@ -236,6 +236,76 @@ function suite(flavor: FakeFlavor) {
       expect(fake.state.issues["ORBIT-1042"]!.summary).not.toBe("Retry the export");
     });
 
+    test("a card whose updated cannot be read is refused, never written behind", async () => {
+      fake.state.issues["ORBIT-1042"]!.updated = "not a date";
+      const r = await E.editStored("ORBIT-1042", { field: "summary", value: "Retry the export" }, stamp);
+      expect(r).toMatchObject({ ok: false });
+      expect(r.conflict).toBeUndefined();
+      expect(writes()).toEqual([]);
+      expect(fake.state.issues["ORBIT-1042"]!.summary).not.toBe("Retry the export");
+    });
+
+    describe("the description", () => {
+      const issue = () => fake.state.issues["ORBIT-1042"]!;
+      const who = dc ? { id: "grace", stored: "[~grace]" } : { id: "acc-0002", stored: '"type":"mention"' };
+      const reopen = async () => (await K.detailStored("ORBIT-1042")).data!.detail;
+      const withTable = () => { issue().description = dc ? "Before\n\n||Board||Seconds||\n|small|2|" : { version: 1, type: "doc", content: [{ type: "table", content: [{ type: "tableRow", content: [{ type: "tableCell", content: [{ type: "paragraph", content: [{ type: "text", text: "small" }] }] }] }] }] }; };
+
+      test("a description with only what Markdown holds is offered, and written in three requests", async () => {
+        expect((await reopen()).edit!.fields).toContain("description");
+        expect((await reopen()).edit!.descriptionLocked).toBeUndefined();
+        fake.requests.length = 0;
+        const r = await E.editStored("ORBIT-1042", { field: "description", value: "Retry **twice**, then stop.\n\n- one\n- two" }, stamp);
+        expect(r.ok).toBe(true);
+        expect(r.description).toBe("Retry **twice**, then stop.\n\n- one\n- two");
+        expect(fake.requests.map((q) => `${q.method} ${q.path.split("/").slice(-1)[0]}`)).toEqual(["GET ORBIT-1042", "PUT ORBIT-1042", "GET ORBIT-1042"]);
+        expect(fake.requests[0]!.query.fields).toBe("updated,description");
+        expect(typeof issue().description).toBe(dc ? "string" : "object");
+        expect(JSON.stringify(issue().description)).toContain(dc ? "*twice*" : '"strong"');
+      });
+
+      test("a description with a table is not offered, and an edit of it is refused with no write", async () => {
+        withTable();
+        const open = await reopen();
+        expect(open.edit!.fields).not.toContain("description");
+        expect(open.edit!.descriptionLocked).toBe(true);
+        const before = JSON.stringify(issue().description);
+        fake.requests.length = 0;
+        const r = await E.editStored("ORBIT-1042", { field: "description", value: "Flattened" }, open.task.updated!);
+        expect(r).toMatchObject({ ok: false, error: E.HOLDS_MORE });
+        expect(writes()).toEqual([]);
+        expect(JSON.stringify(issue().description)).toBe(before);
+      });
+
+      test("an empty text takes the description off", async () => {
+        await E.editStored("ORBIT-1042", { field: "description", value: "Something" }, stamp);
+        const now = (await reopen()).task.updated!;
+        const r = await E.editStored("ORBIT-1042", { field: "description", value: "  " }, now);
+        expect(r).toMatchObject({ ok: true, description: "" });
+        expect(issue().description ?? null).toBe(null);
+      });
+
+      test("a description that is not text, or too long, is refused before any request", async () => {
+        fake.requests.length = 0;
+        expect(await E.editStored("ORBIT-1042", { field: "description", value: 7 }, stamp)).toMatchObject({ ok: false });
+        expect(await E.editStored("ORBIT-1042", { field: "description", value: "x".repeat(30_001) }, stamp)).toMatchObject({ ok: false });
+        expect(fake.requests).toEqual([]);
+      });
+
+      test("at the door, words alone keep the people the description names; a field the screen does not offer is refused", async () => {
+        const first = await E.editStored("ORBIT-1042", { field: "description", value: "ask @Grace Sample", mentions: [{ id: who.id, name: "Grace Sample" }] }, stamp);
+        expect(first.ok).toBe(true);
+        expect(JSON.stringify(issue().description)).toContain(who.stored);
+        const now = (await reopen()).task.updated!;
+        const r = await D.runDoor("edit", { key: "ORBIT-1042", field: "description", value: "ask again @Grace Sample", updated: now });
+        expect(r.status).toBe(200);
+        expect(JSON.stringify(issue().description)).toContain(who.stored);
+        const cleared = await D.runDoor("edit", { key: "ORBIT-1042", field: "description", clear: true, updated: (await reopen()).task.updated });
+        expect(cleared.status).toBe(200);
+        expect(issue().description ?? null).toBe(null);
+      });
+    });
+
     test("with writing to Jira switched off nothing is sent", async () => {
       delete process.env.AGENTGLASS_JIRA_WRITE;
       const r = await E.editStored("ORBIT-1042", { field: "summary", value: "Retry the export" }, stamp);
@@ -353,6 +423,15 @@ function suite(flavor: FakeFlavor) {
       const flat = await K.editCommentStored("ORBIT-1042", c.id, "hello @Ada Example", []);
       expect(flat.ok).toBe(true);
       expect(JSON.stringify(fake.state.issues["ORBIT-1042"]!.comments.find((x) => x.id === c.id)!.body)).not.toContain(dc ? "[~ada]" : '"type":"mention"');
+    });
+
+    test("an edit at the door that sends only words keeps the people the comment names", async () => {
+      const who = dc ? "ada" : "acc-0001";
+      const first = await K.commentStored("ORBIT-1042", "hello @Ada Example", [{ id: who, name: "Ada Example" }]);
+      const c = first.detail!.comments.filter((x) => x.mine).at(-1)!;
+      const r = await D.runDoor("comment-edit", { key: "ORBIT-1042", id: c.id, text: "hello again @Ada Example" });
+      expect(r.body).toMatchObject({ ok: true });
+      expect(JSON.stringify(fake.state.issues["ORBIT-1042"]!.comments.find((x) => x.id === c.id)!.body)).toContain(dc ? "[~ada]" : '"type":"mention"');
     });
 
     test("somebody else's comment is refused after the read and never written", async () => {

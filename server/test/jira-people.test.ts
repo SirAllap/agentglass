@@ -136,6 +136,15 @@ function suite(flavor: FakeFlavor) {
     });
 
     describe("setting the assignee", () => {
+      test("a card whose updated cannot be read is refused and nothing is written", async () => {
+        const at = upd("ORBIT-1042");
+        fake.state.issues["ORBIT-1042"]!.updated = "not a date";
+        const r = await J.setAssigneeStored("ORBIT-1042", null, at);
+        expect(r.ok).toBe(false);
+        expect(r.conflict).toBeUndefined();
+        expect(writes()).toEqual([]);
+      });
+
       test("assign: check, PUT, read back; the body names the person as the flavor does", async () => {
         const r = await J.setAssigneeStored("ORBIT-1001", grace, upd("ORBIT-1001"));
         expect(r.ok).toBe(true);

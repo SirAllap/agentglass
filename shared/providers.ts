@@ -1083,7 +1083,7 @@ export interface CardFact {
  * switched off or the site named no fields: a control is drawn only for what is listed here.
  */
 export interface CardEdit {
-  /** Edit keys the site offers on this card: summary, priority, labels, duedate, start, parent, flag, originalEstimate, remainingEstimate. */
+  /** Edit keys the site offers on this card: summary, description, priority, labels, duedate, start, parent, flag, originalEstimate, remainingEstimate. */
   fields: string[];
   /** The priorities this card may take, most urgent first. */
   priorities: { id: string; name: string }[];
@@ -1091,6 +1091,8 @@ export interface CardEdit {
   priority?: { id: string; name: string };
   /** Whether a comment can be answered in a thread (Cloud) or only added (Data Center). */
   reply: boolean;
+  /** The site lets the description be changed, but it holds parts Markdown would lose (a table, a panel, an image): the pane says so and points at Jira. */
+  descriptionLocked?: boolean;
 }
 
 /** A link from the card to a page: any address, not only a pull request. */

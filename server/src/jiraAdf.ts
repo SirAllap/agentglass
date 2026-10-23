@@ -33,6 +33,25 @@ export interface ReadText { text: string; mentions: Mention[] }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
+const MAX_MENTIONS = 50;
+/** A Cloud account id (`5b10a2844c20165700ede21g`, `712020:2b6e...`). */
+export const ACCOUNT_ID = /^[A-Za-z0-9:._-]{1,128}$/;
+/** A Data Center login, as it goes inside `[~name]`. */
+export const LOGIN = /^[^\s[\]|~{}]{1,255}$/;
+
+/** The people a comment names, as the caller sent them; anything malformed is dropped. */
+export function readMentions(raw: unknown, v: 2 | 3): Mention[] {
+  if (!Array.isArray(raw)) return [];
+  const out: Mention[] = [];
+  for (const m of raw.slice(0, MAX_MENTIONS)) {
+    if (!isObj(m)) continue;
+    const id = str(m.id), name = str(m.name).trim();
+    if (!(v === 3 ? ACCOUNT_ID : LOGIN).test(id) || !name || name.length > 100 || /[\n\r]/.test(name)) continue;
+    out.push({ id, name });
+  }
+  return out;
+}
+
 /** Only a link a reader can follow safely is kept as a link. */
 const SAFE_URL = /^(?:https?:\/\/|mailto:)[^\s<>"'`]+$/i;
 
@@ -811,4 +830,67 @@ function wikiInline(s: string, names: Record<string, string>, mentions: Mention[
     i++;
   }
   return out;
+}
+
+// ===========================================================================
+// Whether a stored description can be edited as Markdown without losing any of it
+// ===========================================================================
+
+/** What Markdown holds and writes back as it was: the nodes and marks `markdownToAdf` makes, less tables. */
+const KEPT_NODES = new Set(["paragraph", "heading", "bulletList", "orderedList", "listItem", "codeBlock", "rule", "blockquote", "text", "hardBreak", "mention"]);
+const KEPT_MARKS = new Set(["strong", "em", "code", "strike", "link"]);
+
+/** A node as the round trip must give it back: the attributes Markdown carries, neighbouring runs of one kind joined. */
+function canon(n: AdfNode): unknown {
+  const a = isObj(n.attrs) ? n.attrs : {};
+  const attrs: Record<string, unknown> =
+    n.type === "heading" ? { level: a.level }
+    : n.type === "codeBlock" ? { language: str(a.language) }
+    : n.type === "orderedList" ? { order: Number(a.order) || 1 }
+    : n.type === "mention" ? { id: a.id }
+    : {};
+  const marks = (n.marks ?? []).map((m) => ({ type: m.type, ...(m.type === "link" ? { href: isObj(m.attrs) ? m.attrs.href : "" } : null) }))
+    .sort((x, y) => x.type.localeCompare(y.type));
+  const kids: unknown[] = [];
+  for (const k of (n.content ?? []).map(canon)) {
+    const prev = kids[kids.length - 1] as { type?: string; text?: string; marks?: unknown } | undefined;
+    const me = k as { type?: string; text?: string; marks?: unknown };
+    if (prev && prev.type === "text" && me.type === "text" && JSON.stringify(prev.marks) === JSON.stringify(me.marks)) prev.text = (prev.text ?? "") + (me.text ?? "");
+    else kids.push(k);
+  }
+  return { type: n.type, attrs, ...(n.type === "text" ? { text: n.text ?? "", marks } : { content: kids }) };
+}
+
+function onlyKept(n: unknown, depth: number): boolean {
+  if (!isObj(n) || depth > 12 || !KEPT_NODES.has(str(n.type))) return false;
+  if (Array.isArray(n.marks) && !n.marks.every((m) => isObj(m) && KEPT_MARKS.has(str(m.type)))) return false;
+  return (Array.isArray(n.content) ? n.content : []).every((k) => onlyKept(k, depth + 1));
+}
+
+/**
+ * Whether a stored description survives Markdown both ways: every node and
+ * mark in it is one Markdown holds, and reading it as Markdown and writing that
+ * back gives the same document. A panel, a table, media, an expand, a task list,
+ * an emoji, a smart link, a colour or an underline fails it, and the pane then
+ * says so and sends the person to Jira instead of flattening the page.
+ * Empty is editable. Data Center's wiki text is held to the same round trip as text.
+ *
+ * Ceiling: the round trip is judged on structure (kind, level, language, link
+ * address, mention id, marks) and on words; ids Jira puts on a node and the
+ * attributes of a table or a panel are not compared, which is why those never pass.
+ */
+export function editableBody(body: unknown, v: 2 | 3): boolean {
+  if (body == null || body === "") return true;
+  if (v === 2) {
+    // A table's cells are not Markdown's to keep, as on Cloud, even where the text happens to come back.
+    if (typeof body !== "string" || /^\s*\|/m.test(body)) return false;
+    const now = wikiToMarkdown(body);
+    const flat = (s: string) => s.replace(/\r\n?/g, "\n").trim();
+    return flat(markdownToWiki(now.text, now.mentions)) === flat(body);
+  }
+  if (!isObj(body) || body.type !== "doc" || !Array.isArray(body.content)) return false;
+  if (!body.content.every((n) => onlyKept(n, 0))) return false;
+  const now = adfToMarkdown(body);
+  const back = markdownToAdf(now.text, now.mentions);
+  return JSON.stringify((body.content as AdfNode[]).map(canon)) === JSON.stringify(back.content.map(canon));
 }

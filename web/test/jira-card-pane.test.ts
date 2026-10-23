@@ -84,7 +84,7 @@ describe("the pane's shape, read from source", () => {
     const c = await src("../src/components/jira/JiraCard.tsx");
     expect(c).not.toContain("<CardTabs");
     const at = (w: string) => c.indexOf(w);
-    const order = ["<JiraProps", 'id="description"', "<AttachmentsSection", "<SubtasksSection", "<LinkedSection", "<WebLinksSection", 'id="development"', "<JiraActivity"];
+    const order = ["<JiraProps", "<JiraDescription", "<AttachmentsSection", "<SubtasksSection", "<LinkedSection", "<WebLinksSection", 'id="development"', "<JiraActivity"];
     for (const w of order) expect(at(w)).toBeGreaterThan(-1);
     const found = order.map(at);
     expect(found).toEqual(found.toSorted((x, y) => x - y));

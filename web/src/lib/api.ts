@@ -23,6 +23,8 @@ type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? Partial<T[K]> : T
    because this provider answers 401 for a card that does not exist and a code
    pretending to know which it was would be wrong on the common case. */
 type ClickUpWrite = { ok: boolean; error?: string; conflict?: boolean; unauthorised?: boolean; task?: ProviderTask };
+/** One link type a Jira site has: the phrase for each side ("blocks" / "is blocked by"). */
+export type JiraLinkKind = { id: string; name: string; inward: string; outward: string };
 /** One field of a Jira card's Details, as `/jira/edit` takes it (see server/src/jiraEdit.ts). */
 export type JiraEditAsk = { field: string; value?: string | boolean | null; add?: string; remove?: string };
 /** A Jira write's answer: ClickUp's shape, plus `partial` when only some of it landed (a warning, never plain success). */
@@ -1488,7 +1490,19 @@ const realApi = {
     post<ClickUpWrite & { removed?: boolean }>("/jira/comment/delete", { key, id }),
   /** One field of a card's Details. `updated` is the stamp the person saw; the answer is the card, its Details and what it still lets them change. */
   jiraEdit: (key: string, ask: JiraEditAsk, updated: number) =>
-    post<ClickUpWrite & { facts?: CardFact[]; edit?: CardEdit }>("/jira/edit", { key, ...ask, updated }),
+    post<ClickUpWrite & { facts?: CardFact[]; edit?: CardEdit; /** Set when the description was the field: it as it now stands, in Markdown. */ description?: string }>("/jira/edit", { key, ...ask, updated }),
+  /** What a card is joined to (server/src/jiraRelate.ts). The answer of a sub-task or a link is the card again; of an address, the card's whole list of them. */
+  jiraLinkTypes: () => get<{ ok: boolean; error?: string; throttled?: boolean; kinds?: JiraLinkKind[] }>("/jira/link-types"),
+  jiraSubtask: (key: string, title: string) =>
+    post<ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string; created?: string }>("/jira/subtask", { key, title }),
+  jiraRelate: (key: string, other: string, typeId: string, outward: boolean) =>
+    post<ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string; already?: boolean }>("/jira/relate", { key, other, typeId, outward }),
+  jiraUnrelate: (key: string, id: string) =>
+    post<ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string }>("/jira/relate/remove", { key, id }),
+  jiraWebLink: (key: string, url: string, title: string) =>
+    post<ClickUpWrite & { web?: CardWebLink[]; already?: boolean }>("/jira/weblink", { key, url, title }),
+  jiraWebUnlink: (key: string, id: string) =>
+    post<ClickUpWrite & { web?: CardWebLink[] }>("/jira/weblink/remove", { key, id }),
   /** Labels the site knows that start with what was typed. */
   jiraLabels: (q: string) => get<{ ok: boolean; error?: string; throttled?: boolean; labels?: string[] }>(`/jira/labels?q=${encodeURIComponent(q)}`),
   providerTasks: (force = false) =>
@@ -2914,6 +2928,12 @@ const demoApi: typeof realApi = {
   jiraCommentEdit: (_k: string, _i: string, _t: string, _m?: { id: string; name: string }[]) => D({ ok: false, error: "not available in the demo" }),
   jiraCommentDelete: (_k: string, _i: string) => D({ ok: false, error: "not available in the demo" }),
   jiraEdit: (_k: string, _a: JiraEditAsk, _u: number) => D({ ok: false, error: "not available in the demo" }),
+  jiraLinkTypes: () => D({ ok: false, kinds: [] as JiraLinkKind[], error: "not available in the demo" }),
+  jiraSubtask: (_k: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraRelate: (_k: string, _o: string, _t: string, _w: boolean) => D({ ok: false, error: "not available in the demo" }),
+  jiraUnrelate: (_k: string, _i: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraWebLink: (_k: string, _u: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraWebUnlink: (_k: string, _i: string) => D({ ok: false, error: "not available in the demo" }),
   jiraLabels: (_q: string) => D({ ok: true, labels: [] as string[] }),
   providerTasks: (_f?: boolean) => D({ tasks: [], more: false, at: 0 }),
   recipes: (_r?: string) => D({ recipes: [] }),

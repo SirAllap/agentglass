@@ -110,8 +110,9 @@ naming a level is the answer, not a puzzle. Ask the person.
 ## A Jira card
 
 A card on a Jira site is not a window, so it is not a door in the list above:
-`agentglass-ui jira ...` (MCP: `ui_jira_card`, `ui_jira_moves`, `ui_jira_links`, `ui_jira_activity`, `ui_jira_steps`,
-`ui_jira_step`, `ui_jira_link`, `ui_jira_edit`, `ui_jira_comment`, `ui_jira_comment-edit`, `ui_jira_comment-delete`) talks to the same routes the screen uses, under
+`agentglass-ui jira ...` (MCP: `ui_jira_card`, `ui_jira_moves`, `ui_jira_links`, `ui_jira_linktypes`, `ui_jira_activity`, `ui_jira_steps`,
+`ui_jira_linktypes`, `ui_jira_step`, `ui_jira_link`, `ui_jira_edit`, `ui_jira_comment`, `ui_jira_comment-edit`, `ui_jira_comment-delete`,
+`ui_jira_move`, `ui_jira_subtask`, `ui_jira_relate`, `ui_jira_unrelate`, `ui_jira_weblink`, `ui_jira_unweblink`) talks to the same routes the screen uses, under
 the same switch.
 
 ```bash
@@ -128,6 +129,13 @@ agentglass-ui --as my-agent jira edit ORBIT-1042 --field duedate --clear --updat
 agentglass-ui --as my-agent jira comment ORBIT-1042 --text "Fixed in the next build" --reply-to 30004   # a comment; --reply-to threads it (Cloud)
 agentglass-ui --as my-agent jira comment-edit ORBIT-1042 --id 30004 --text "Fixed in 0.24"            # your own comment only
 agentglass-ui --as my-agent jira comment-delete ORBIT-1042 --id 30004 --confirm                        # your own, for good
+agentglass-ui --as my-agent jira linktypes           # the site's link types: ids, and the phrase for each side
+agentglass-ui --as my-agent jira subtask ORBIT-1042 --title "Write the draft"                        # a sub-task under it
+agentglass-ui --as my-agent jira relate ORBIT-1042 --other ORBIT-1050 --type 10000 --direction out   # ORBIT-1042 "blocks" ORBIT-1050, once
+agentglass-ui --as my-agent jira unrelate ORBIT-1042 --id 10034 --confirm                            # a linkId from `card`
+agentglass-ui --as my-agent jira weblink ORBIT-1042 https://docs.acme.example/note --title "Design note"
+agentglass-ui --as my-agent jira unweblink ORBIT-1042 --id 10869 --confirm                           # an id from `links`
+agentglass-ui --as my-agent jira move ORBIT-1043 --id 31 --updated <state.updated>                  # a sub-task changes status like any card
 ```
 
 - `step` runs what the owner configured (the move, the comment, the link) as one
@@ -135,15 +143,20 @@ agentglass-ui --as my-agent jira comment-delete ORBIT-1042 --id 30004 --confirm 
   card first, and if the answer is a `409` conflict the card moved, so read it
   again and decide again rather than retry. `--to`, `--stay`, `--clear`,
   `--assign` and `--comment` answer a block that asks when it runs.
-- `edit` changes one field per call: `summary`, `priority` (an id), `labels` (`--add` or
+- `edit` changes one field per call: `summary`, `description` (`--value` is Markdown, refused with a sentence when the stored one holds a table, panel, image or colour Markdown would lose: send the person to Jira), `priority` (an id), `labels` (`--add` or
   `--remove` one), `duedate`, `start` (`2026-01-31`), `parent` (a card id), `flag`
   (`--value true`), `originalEstimate`, `remainingEstimate` (`2h 30m`); `--clear` takes
-  a date, the parent, the flag or an estimate off. A field the card's own edit screen
+  the description, a date, the parent, the flag or an estimate off. A field the card's own edit screen
   does not offer is refused before it is sent, and a `409` means the card moved since
   `--updated`: read it again. `comment-edit` and `comment-delete` work only on a
   comment of the connected account, and delete needs `--confirm` because it cannot be
   undone (the screen asks first).
-- **`step`, `link`, `edit`, `comment`, `comment-edit` and `comment-delete` change a shared site, with no click from the person.**
+- `relate` reads which side the card is on: `--direction out` is the card that holds the phrase
+  `linktypes` calls `out` ("blocks"), `in` the other. A link already there answers `already` and sends
+  nothing. `unrelate` and `unweblink` need `--confirm` and take only an id the card itself holds (`card`
+  lists each linked card's `linkId`, `links` each address's `id`). `weblink` takes `http` and `https`
+  only. `subtask` uses the project's own sub-task type; `move` is the card's move by an id from `moves`.
+- **`step`, `link`, `edit`, `comment`, `comment-edit`, `comment-delete`, `move`, `subtask`, `relate`, `unrelate`, `weblink` and `unweblink` change a shared site, with no click from the person.**
   They run only when the owner has done two things: started the server at
   control level 3, and switched Jira writes on. On a server as it starts
   (level 2), at level 1 or read-only, each is refused with a `403` and a

@@ -22,8 +22,10 @@ const WHY_NOT = "\u0000why";
  * empty one. `updated` rides along with the write, so a card that changed while
  * this was open comes back as a conflict.
  */
-export function TrackerStatusPick({ tracker, task, query, onSaid, onTask }: {
+export function TrackerStatusPick({ tracker, task, query, onSaid, onTask, align }: {
   tracker: Tracker; task: ProviderTask; query: string; onSaid: (s: string) => void;
+  /** Which edge of the control the list lines up with: `right` where the control sits at the end of a row. */
+  align?: "left" | "right";
   /** The card after a move, for a list that holds its own copy (its new stamp rides the next write). */
   onTask?: (t: ProviderTask) => void;
 }) {
@@ -62,7 +64,7 @@ export function TrackerStatusPick({ tracker, task, query, onSaid, onTask }: {
 
   return (
     <span className="min-w-0" onMouseEnter={load}>
-      <Select value={CURRENT} onChange={(v) => { void move(v); }} onOpen={load} busy={busy} title="Status" options={options} />
+      <Select value={CURRENT} onChange={(v) => { void move(v); }} onOpen={load} busy={busy} title="Status" options={options} align={align} />
     </span>
   );
 }

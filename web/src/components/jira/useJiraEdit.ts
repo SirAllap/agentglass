@@ -21,14 +21,15 @@ export interface JiraEditUi {
   /** The field being saved, or "". */
   busy: string;
   now: EditNow;
-  run: (step: EditStep) => void;
+  /** Says whether the change landed, so a box can stay open on a refusal and close on success. */
+  run: (step: EditStep) => Promise<boolean>;
 }
 
 export function useJiraEdit(o: {
   cardKey: string;
   /** The card's stamp as the pane has it; read at the moment an edit is sent. */
   stamp: number;
-  onDone: (r: { task: ProviderTask; facts?: CardFact[]; edit?: CardEdit }) => void;
+  onDone: (r: { task: ProviderTask; facts?: CardFact[]; edit?: CardEdit; description?: string }) => void;
   /** The card moved under the person: read it again. */
   onStale: () => void;
 }) {
@@ -45,17 +46,19 @@ export function useJiraEdit(o: {
   // A said line belongs to the card it was said about.
   useEffect(() => { setNote(null); setBusy(""); going.current = false; }, [o.cardKey]);
 
-  const run = useCallback((step: EditStep) => {
-    if (going.current) return;
+  const run = useCallback(async (step: EditStep): Promise<boolean> => {
+    if (going.current) return false;
     going.current = true;
     const forKey = keyRef.current;
     setBusy(step.ask.field); setNote(null);
-    void api.jiraEdit(forKey, step.ask, stamp.current)
+    let landed = false;
+    await api.jiraEdit(forKey, step.ask, stamp.current)
       .catch(() => ({ ok: false as const, error: "Could not reach agentglass" } as Awaited<ReturnType<typeof api.jiraEdit>>))
       .then((r) => {
         if (forKey !== keyRef.current) return;
         if (r.ok && r.task) {
-          cb.current.onDone({ task: r.task, facts: r.facts, edit: r.edit });
+          landed = true;
+          cb.current.onDone({ task: r.task, facts: r.facts, edit: r.edit, ...(r.description !== undefined ? { description: r.description } : {}) });
           setNote({ text: step.said, ...(step.undo ? { undo: step.undo } : {}) });
         } else {
           // The server's sentence for a moved card is longer than the line has room for; this one says the same in what fits.
@@ -64,11 +67,12 @@ export function useJiraEdit(o: {
         }
       })
       .finally(() => { going.current = false; if (forKey === keyRef.current) setBusy(""); });
+    return landed;
   }, []);
 
   const undo = useCallback(() => {
     const ask = note?.undo;
-    if (ask) run({ ask, said: `Put back (${note.text})`, undo: null });
+    if (ask) void run({ ask, said: `Put back (${note.text})`, undo: null });
   }, [note, run]);
 
   return { busy, note, run, undo, clear: () => setNote(null) };

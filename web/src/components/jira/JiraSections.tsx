@@ -45,13 +45,13 @@ export function Section({ id, title, count, aside, children }: { id: string; tit
     <section className="mb-5 min-w-0" aria-label={title}>
       <div className="flex items-center gap-2 mb-1.5 min-w-0">
         <button onClick={() => { remember(id, !shut); setShut(!shut); }} aria-expanded={!shut}
-          className="agx-btn flex items-center gap-1.5 min-w-0 text-[10px] uppercase tracking-wide" style={{ color: "var(--text3)" }}>
+          className="agx-btn flex items-center gap-1.5 shrink-0 text-[10px] uppercase tracking-wide" style={{ color: "var(--text3)" }}>
           <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden
             style={{ transform: shut ? "rotate(-90deg)" : "none", transition: "transform 120ms" }}><path d="m6 9 6 6 6-6" /></svg>
           <span className="truncate">{title}</span>
           {count !== undefined && count !== "" && <span className="tabular-nums" style={{ color: "var(--text4)" }}>{count}</span>}
         </button>
-        {aside && <span className="ml-auto shrink-0 text-[10px]" style={{ color: "var(--text4)" }}>{aside}</span>}
+        {aside && <span className="ml-auto min-w-0 flex justify-end text-[10px]" style={{ color: "var(--text4)" }}>{aside}</span>}
       </div>
       {!shut && children}
     </section>
@@ -71,19 +71,39 @@ export function TypeMark({ type }: { type?: string }) {
   );
 }
 
-/** One card in a list: its kind, key, title, priority and status; a click opens the card in the app. */
-function CardRow({ t, title }: { t: ProviderTask; title?: string }) {
+/**
+ * One card in a list: its kind, key, title, priority and status; a click on the row opens the card in the app.
+ * `tail` replaces the status mark where the row has a control for it (a sub-task's own status), and `after` sits at
+ * the row's end, outside the button that opens the card (a remove control): a control inside a button is not a control.
+ */
+export function CardRow({ t, title, tail, after }: { t: ProviderTask; title?: string; tail?: ReactNode; after?: ReactNode }) {
   const k = t.customId ?? t.id;
   const done = t.statusKind === "done";
   return (
-    <button onClick={() => openCard(k, k, "jira")} title={title ?? `Open ${k}`}
-      className="agx-btn flex items-center gap-2 min-w-0 w-full text-left text-[11px] py-1.5" style={{ borderBottom: LINE }}>
-      <TypeMark type={t.issueType} />
-      <span className="tabular-nums shrink-0" style={{ color: "var(--text3)", textDecoration: done ? "line-through" : undefined }}>{k}</span>
-      <span className="flex-1 min-w-0 truncate" style={{ color: done ? "var(--text3)" : "var(--text)" }}>{t.title}</span>
-      {t.priority && <span className="shrink-0 inline-flex" title={prioLook(t.priority).label}><Flag c={prioLook(t.priority).c} on /></span>}
-      <StatusPill status={t.status} color={t.statusColor} dim={done} />
-    </button>
+    <div className="flex items-center gap-2 min-w-0 w-full" style={{ borderBottom: LINE }}>
+      <button onClick={() => openCard(k, k, "jira")} title={title ?? `Open ${k}`}
+        className="agx-btn flex items-center gap-2 min-w-0 flex-1 text-left text-[11px] py-1.5">
+        <TypeMark type={t.issueType} />
+        <span className="tabular-nums shrink-0" style={{ color: "var(--text3)", textDecoration: done ? "line-through" : undefined }}>{k}</span>
+        <span className="flex-1 min-w-0 truncate" style={{ color: done ? "var(--text3)" : "var(--text)" }}>{t.title}</span>
+        {t.priority && <span className="shrink-0 inline-flex" title={prioLook(t.priority).label}><Flag c={prioLook(t.priority).c} on /></span>}
+        {tail === undefined && <StatusPill status={t.status} color={t.statusColor} dim={done} />}
+      </button>
+      {tail}
+      {after}
+    </div>
+  );
+}
+
+/** Jira's progress line for sub-tasks: how much of the bar is done. */
+export function Progress({ rows }: { rows: ProviderTask[] }) {
+  const done = rows.filter((r) => r.statusKind === "done").length;
+  const pct = Math.round((done / rows.length) * 100);
+  return (
+    <div className="h-1 rounded-full mb-1.5 overflow-hidden" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={`${pct}% of the subtasks are done`}
+      style={{ background: "color-mix(in srgb, var(--text) 10%, transparent)" }}>
+      <div className="h-full rounded-full" style={{ width: `${pct}%`, background: "var(--success)" }} />
+    </div>
   );
 }
 
@@ -91,13 +111,9 @@ function CardRow({ t, title }: { t: ProviderTask; title?: string }) {
 export function SubtasksSection({ rows }: { rows: ProviderTask[] }) {
   if (!rows.length) return null;
   const done = rows.filter((r) => r.statusKind === "done").length;
-  const pct = Math.round((done / rows.length) * 100);
   return (
     <Section id="subtasks" title="Subtasks" count={rows.length} aside={`${done} of ${rows.length} done`}>
-      <div className="h-1 rounded-full mb-1.5 overflow-hidden" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={`${pct}% of the subtasks are done`}
-        style={{ background: "color-mix(in srgb, var(--text) 10%, transparent)" }}>
-        <div className="h-full rounded-full" style={{ width: `${pct}%`, background: "var(--success)" }} />
-      </div>
+      <Progress rows={rows} />
       <div className="flex flex-col">{rows.map((s) => <CardRow key={s.id} t={s} />)}</div>
     </Section>
   );

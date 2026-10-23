@@ -68,9 +68,10 @@ import workflowFixture from "./jira/workflow.json";
  * clauses and `order by key|updated|rank`; the permission model is a list of
  * denied issue keys per action, not a role system; there is no pagination on
  * comments. There are no sprint endpoints (a sprint is only the value on a
- * card), no field types on transition screens, no link write, no permission
- * model for remote links, and subtasks are listed from the fixture rather than
- * derived from `parent`.
+ * card), no field types on transition screens, no permission model for remote links. A
+ * sub-task made through `POST /issue` is listed under its parent; the seeded ones are listed
+ * from the fixture rather than derived from `parent`. The link writes and `createmeta` follow the
+ * shapes a real sandbox answered (201 with no body for a link, 204 for both deletes).
  * Data Center in particular: wiki markup is stored and returned as given, never
  * parsed or rendered; people are the fixed directory, with the email always
  * shown; one version's behaviour (9.x) stands for all of Server and Data Center.
@@ -207,6 +208,8 @@ export interface FakeState {
   links: FakeLink[];
   remoteLinks: Record<string, FakeRemoteLink[]>;
   nextRemoteLinkId: number;
+  /** Projects whose create metadata lists no sub-task type: a site that did not turn them on. */
+  noSubtaskIn: string[];
   /** When true, search answers from the data as it was at the last reset,
    *  the way a real index can trail a write. */
   searchLags: boolean;
@@ -322,6 +325,7 @@ function seedState(flavor: FakeFlavor): FakeState {
     links: structuredClone([...boardExtras.links, ...cardExtras.links]),
     remoteLinks: structuredClone(boardExtras.remoteLinks) as Record<string, FakeRemoteLink[]>,
     nextRemoteLinkId: 20000,
+    noSubtaskIn: [],
     commentCap: null,
   };
 }
@@ -550,6 +554,9 @@ function runJql(jql: string, issues: Record<string, FakeIssue>, dc: boolean): Fa
     let m: RegExpExecArray | null;
     const q = (s: string) => s.replace(/^"|"$/g, "");
     if ((m = /^project\s*(!?=)\s*(.+)$/i.exec(c))) rows = rows.filter((i) => (i.projectKey === q(m![2]).toUpperCase()) === (m![1] === "="));
+    else if ((m = /^project\s+in\s*\(([^)]*)\)$/i.exec(c))) { const want = m[1].split(",").map((v) => q(v.trim()).toUpperCase()); rows = rows.filter((i) => want.includes(i.projectKey)); }
+    // The text search the pane's pickers use: a phrase inside the title (the real index also reads the description and comments).
+    else if ((m = /^text\s*~\s*"(.*)"$/i.exec(c))) rows = rows.filter((i) => i.summary.toLowerCase().includes(m![1].toLowerCase()));
     else if (/^assignee\s*=\s*currentUser\(\)$/i.test(c)) rows = rows.filter((i) => i.assignee === myselfFixture.accountId);
     else if ((m = /^assignee\s+is\s+(not\s+)?empty$/i.exec(c))) rows = rows.filter((i) => (i.assignee === null) === !m![1]);
     else if ((m = /^assignee\s*=\s*(.+)$/i.exec(c))) {
@@ -869,6 +876,67 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
       return dc ? json(200, { token: q, suggestions: all.map((l) => ({ label: l, html: l })) }) : json(200, { results: all.map((l) => ({ value: l, displayName: l })) });
     }
 
+    // What a new card may be: the types a project offers, the sub-task type among them. Cloud pages them under the project, Data Center lists them in `createmeta`.
+    const TYPES = [["10000", "Epic", false], ["10001", "Story", false], ["10002", "Task", false], ["10003", "Bug", false], ["10043", "Sub-task", true]] as const;
+    const typeObjects = (project = "") => TYPES.filter(([, , subtask]) => !(subtask && live.noSubtaskIn.includes(project))).map(([id, name, subtask]) => ({ id, name, subtask }));
+    if (m === "GET" && !dc && (r = /^\/issue\/createmeta\/([^/]+)\/issuetypes$/.exec(path))) {
+      const list = typeObjects(r[1]);
+      return json(200, { startAt: 0, maxResults: 50, total: list.length, issueTypes: list });
+    }
+    if (m === "GET" && dc && path === "/issue/createmeta") {
+      return json(200, { projects: String(query.projectKeys ?? "").split(",").filter(Boolean).map((k) => ({ key: k, issuetypes: typeObjects(k) })) });
+    }
+    // A new card. Only what a sub-task needs is modelled: a parent, a title, a type that is a sub-task type exactly when there is a parent.
+    if (m === "POST" && path === "/issue") {
+      const f = ((body ?? {}) as { fields?: { project?: { key?: string }; parent?: { key?: string }; summary?: string; issuetype?: { id?: string } } }).fields ?? {};
+      const type = TYPES.find(([id]) => id === f.issuetype?.id);
+      if (!type) return bad({ issuetype: "Specify a valid issue type" });
+      if (typeof f.summary !== "string" || !f.summary.trim()) return bad({ summary: "You must specify a summary of the issue." });
+      const parent = f.parent?.key ? live.issues[f.parent.key] : undefined;
+      if (type[2] && !parent) return bad({ parent: "Sub-task must be created with a parent." });
+      if (!type[2] && f.parent?.key) return bad({ issuetype: "Issues of this type cannot have a parent." });
+      if (parent && parent.issueType === "Sub-task") return bad({ parent: "Sub-tasks cannot have sub-tasks." });
+      const project = f.project?.key ?? parent?.projectKey ?? "";
+      const n = Math.max(0, ...Object.values(live.issues).filter((i) => i.projectKey === project).map((i) => Number(i.key.split("-")[1]))) + 1;
+      const key = `${project}-${n}`;
+      const made: FakeIssue = {
+        id: String(30000 + n), key, projectKey: project, summary: f.summary, issueType: type[1], priorityId: "3", labels: [], parentKey: parent?.key ?? null,
+        reporter: "acc-0001", created: stamp(++live.tick), statusId: "1", assignee: null, resolution: null, description: null, updated: stamp(++live.tick),
+        comments: [], rank: `0|z${String(n).padStart(5, "0")}:`, sprints: [], points: null, pointsIn: "primary", team: null, subtasks: [],
+      };
+      live.issues[key] = made;
+      if (parent) { parent.subtasks = [...parent.subtasks, key]; bump(parent); }
+      return json(201, { id: made.id, key, self: `${PREFIX}/issue/${made.id}` });
+    }
+    // Links between two cards. `inwardIssue` is the one that holds the OUTWARD phrase: "A blocks B" is `inwardIssue` A, `outwardIssue` B,
+    // which a real site answered the same way (A then lists B under `outwardIssue`).
+    if (m === "POST" && path === "/issueLink") {
+      const b = (body ?? {}) as { type?: { name?: string; id?: string }; inwardIssue?: { key?: string }; outwardIssue?: { key?: string } };
+      const type = linkTypes.issueLinkTypes.find((t) => (b.type?.id !== undefined ? t.id === b.type.id : t.name === b.type?.name));
+      if (!type) return bad({}, ["No issue link type with name '" + String(b.type?.name ?? b.type?.id) + "' found."]);
+      const from = live.issues[String(b.inwardIssue?.key)], to = live.issues[String(b.outwardIssue?.key)];
+      if (!from || !to) return notFound(String(!from ? b.inwardIssue?.key : b.outwardIssue?.key));
+      if (from.key === to.key) return bad({}, ["Cannot link an issue to itself."]);
+      const id = String(10100 + live.links.length + live.tick);
+      live.links.push({ id, type: type.name, from: from.key, to: to.key });
+      bump(from); bump(to);
+      return json(201, null);
+    }
+    if (m === "DELETE" && (r = /^\/issueLink\/([^/]+)$/.exec(path))) {
+      const at = live.links.findIndex((l) => l.id === r![1]);
+      if (at < 0) return json(404, { errorMessages: ["No issue link with id '" + r[1] + "' exists."], errors: {} });
+      const gone = live.links.splice(at, 1)[0]!;
+      for (const k of [gone.from, gone.to]) if (live.issues[k]) bump(live.issues[k]!);
+      return json(204, null);
+    }
+    if (m === "DELETE" && (r = /^\/issue\/([^/]+)\/remotelink\/(\d+)$/.exec(path))) {
+      const list = live.remoteLinks[decodeURIComponent(r[1])] ?? [];
+      const at = list.findIndex((l) => String(l.id) === r![2]);
+      if (at < 0) return json(404, { errorMessages: ["Issue link does not exist"], errors: {} });
+      list.splice(at, 1);
+      return json(204, null);
+    }
+
     if ((r = /^\/issue\/([^/]+)(?:\/(transitions|assignee|comment|remotelink|changelog|worklog))?$/.exec(path))) {
       const key = decodeURIComponent(r[1]);
       const sub = r[2];
@@ -892,6 +960,12 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
         if ("summary" in f) {
           if (typeof f.summary !== "string" || !f.summary.trim()) return bad({ summary: "You must specify a summary of the issue." });
           issue.summary = f.summary;
+        }
+        // As the site is: a Cloud site takes an ADF document, a Data Center site wiki text, and `null` takes it off.
+        if ("description" in f) {
+          const d = f.description;
+          if (d !== null && (dc ? typeof d !== "string" : typeof d !== "object")) return bad({ description: "Operation value must be a string" });
+          issue.description = d;
         }
         if ("priority" in f) {
           const id = (f.priority as { id?: string } | null)?.id;

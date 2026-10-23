@@ -366,6 +366,17 @@ function suite(flavor: FakeFlavor) {
     });
 
     describe("what is refused before a write", () => {
+      test("a card whose updated cannot be read is refused: no step, no write", async () => {
+        setup("handoff", [{ type: "move", statusNames: ["In Review"] }, { type: "comment", text: "Opened {pr}" }]);
+        const at = upd("ORBIT-1042");
+        fake.state.issues["ORBIT-1042"]!.updated = "not a date";
+        const r = await run("ORBIT-1042", "handoff", {}, PR, at);
+        expect(r.ok).toBe(false);
+        expect(r.conflict).toBeUndefined();
+        expect(writes().length).toBe(0);
+        expect(status("ORBIT-1042")).toBe("In Progress");
+      });
+
       test("a stamp that is not the one the person saw: 409, and no write", async () => {
         setup("handoff", [{ type: "move", statusNames: ["In Review"] }, { type: "unassign", who: "all" }, { type: "comment", text: "Opened {pr}" }]);
         const r = await run("ORBIT-1042", "handoff", {}, PR, upd("ORBIT-1042") - 1000);

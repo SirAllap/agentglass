@@ -22,10 +22,11 @@
  * Jira's own are.
  */
 import { CARD_FIELDS, ISSUE_KEY, apiOf, idText, cardPointsField, jiraCall, jiraWriteEnabled, memoOk, priorities, siteFields, taskContext, toTask, withStored, type JiraCreds, type JiraResult, type TaskContext } from "./jira.ts";
-import { adfToMarkdown, markdownToAdf, markdownToWiki, wikiToMarkdown, type Mention } from "./jiraAdf.ts";
+import { ACCOUNT_ID, LOGIN, adfToMarkdown, markdownToAdf, markdownToWiki, readMentions, wikiToMarkdown, type Mention } from "./jiraAdf.ts";
+export { readMentions };
 import { worklogEvents } from "./jiraActivity.ts";
 import { editOf, rememberOffered } from "./jiraEdit.ts";
-import { attachmentsOf, commentRows, factsOf, linkedOf, offeredFields, textReader } from "./jiraCardRead.ts";
+import { attachmentsOf, commentRows, factsOf, fullReader, linkedOf, offeredFields, textReader } from "./jiraCardRead.ts";
 import type { TaskDetail, ProviderTask } from "../../shared/providers.ts";
 import type { WriteOutcome } from "./trackerTypes.ts";
 
@@ -38,11 +39,6 @@ const initialsOf = (name: string): string =>
 /** Jira's own limit is 32,767 characters; Markdown grows a little on the way. */
 const MAX_COMMENT = 30_000;
 const PEOPLE_PAGE = 20;
-const MAX_MENTIONS = 50;
-/** A Cloud account id (`5b10a2844c20165700ede21g`, `712020:2b6e...`). */
-const ACCOUNT_ID = /^[A-Za-z0-9:._-]{1,128}$/;
-/** A Data Center login, as it goes inside `[~name]`. */
-const LOGIN = /^[^\s[\]|~{}]{1,255}$/;
 
 /** Who a person is to Jira: Cloud names them by account id, Data Center by key, then login. */
 const personId = (u: Record<string, unknown>): string => str(u.accountId) || str(u.key) || str(u.name);
@@ -162,19 +158,6 @@ export function mentionable(creds: JiraCreds, key: string, q: string): Promise<J
   });
 }
 
-/** The people a comment names, as the caller sent them; anything malformed is dropped. */
-export function readMentions(raw: unknown, v: 2 | 3): Mention[] {
-  if (!Array.isArray(raw)) return [];
-  const out: Mention[] = [];
-  for (const m of raw.slice(0, MAX_MENTIONS)) {
-    if (!isObj(m)) continue;
-    const id = str(m.id), name = str(m.name).trim();
-    if (!(v === 3 ? ACCOUNT_ID : LOGIN).test(id) || !name || name.length > 100 || /[\n\r]/.test(name)) continue;
-    out.push({ id, name });
-  }
-  return out;
-}
-
 /** The body a comment is sent with, in the format this site speaks. */
 export function commentBody(markdown: string, mentions: Mention[], v: 2 | 3): { body: unknown } {
   return { body: v === 3 ? markdownToAdf(markdown, mentions) : markdownToWiki(markdown, mentions) };
@@ -264,11 +247,13 @@ export async function editComment(creds: JiraCreds, key: string, id: string, mar
   if (!text) return { ok: false, error: "A comment cannot be empty: delete it instead" };
   if (text.length > MAX_COMMENT) return { ok: false, error: "That comment is too long for Jira" };
   const v = apiOf(creds);
-  const body = commentBody(text, readMentions(rawMentions, v), v);
-  if (v === 3 ? !(body.body as { content: unknown[] }).content.length : !str(body.body).trim()) return { ok: false, error: "A comment cannot be empty: delete it instead" };
   const upper = key.toUpperCase();
   const own = await ownComment(creds, upper, id);
   if ("stop" in own) return own.stop;
+  // No list at all (an agent that only sent words) keeps the people the comment already names; a list, even an empty one, is the caller's say.
+  const roster = rawMentions === undefined ? fullReader(v, {})(own.raw.body).mentions : readMentions(rawMentions, v);
+  const body = commentBody(text, roster, v);
+  if (v === 3 ? !(body.body as { content: unknown[] }).content.length : !str(body.body).trim()) return { ok: false, error: "A comment cannot be empty: delete it instead" };
   const put = await jiraCall<unknown>(creds, `/rest/api/${v}/issue/${encodeURIComponent(upper)}/comment/${id}`, { method: "PUT", body });
   if (!put.ok) return commentRefusal(put, "change");
   const rows = isObj(put.data) ? commentRows([put.data], v, own.me, [put.data.author]).comments : [];

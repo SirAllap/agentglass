@@ -6699,8 +6699,25 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname === "/jira/edit" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
-      const r = await jiraEditCard(String(b.key ?? ""), { field: b.field, value: b.value, add: b.add, remove: b.remove }, typeof b.updated === "number" ? b.updated : 0);
+      const r = await jiraEditCard(String(b.key ?? ""), { field: b.field, value: b.value, add: b.add, remove: b.remove, mentions: b.mentions }, typeof b.updated === "number" ? b.updated : 0);
       return json(r, r.ok ? 200 : r.conflict ? 409 : 400);
+    }
+    /* What a card is joined to (jiraRelate.ts): a sub-task, a link to another card and a web address, each behind the write switch.
+       The link types are a read. A removal is by an id the card itself holds; the answer is the card again, or the card's addresses. */
+    if (req.method === "GET" && pathname === "/jira/link-types") {
+      const r = await jiraLinkKinds();
+      return json(r.ok ? { ok: true, kinds: r.data ?? [] } : { ok: false, kinds: [], error: r.error, ...(r.throttled ? { throttled: true } : null) });
+    }
+    if (req.method === "POST" && (pathname === "/jira/subtask" || pathname === "/jira/relate" || pathname === "/jira/relate/remove" || pathname === "/jira/weblink" || pathname === "/jira/weblink/remove")) {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const key = String(b.key ?? "").trim();
+      const r = pathname === "/jira/subtask" ? await jiraSubtask(key, b.title)
+        : pathname === "/jira/relate" ? await jiraRelate(key, { other: b.other, typeId: b.typeId, outward: b.outward })
+        : pathname === "/jira/relate/remove" ? await jiraUnrelate(key, b.id)
+        : pathname === "/jira/weblink" ? await jiraWebLink(key, b.url, b.title)
+        : await jiraWebUnlink(key, b.id);
+      return json(r, r.ok ? 200 : 400);
     }
     if (req.method === "GET" && pathname === "/jira/labels") {
       const r = await jiraLabels(url.searchParams.get("q") ?? "");
@@ -10610,6 +10627,7 @@ startCardWatch((n) => broadcast({ type: "card", data: n }));
 /* The same bell for a connected Jira: one search every six minutes, nothing
    at all while Jira is not connected. See jirawatch.ts. */
 import { startJiraWatch, rememberOwnMove as jiraRememberOwnMove, rememberOwnAssign as jiraRememberOwnAssign } from "./jirawatch.ts";
+import { linkKindsStored as jiraLinkKinds, createSubtaskStored as jiraSubtask, relateCardsStored as jiraRelate, unrelateCardsStored as jiraUnrelate, addWebLinkStored as jiraWebLink, removeWebLinkStored as jiraWebUnlink } from "./jiraRelate.ts";
 import { detailStored as jiraDetailRead, mentionableStored as jiraMentionable, commentStored as jiraCommentOn, editCommentStored as jiraCommentEdit, deleteCommentStored as jiraCommentDelete } from "./jiraComments.ts";
 import { editStored as jiraEditCard, labelSuggestionsStored as jiraLabels } from "./jiraEdit.ts";
 startJiraWatch((n) => broadcast({ type: "card", data: n }));
