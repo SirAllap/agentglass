@@ -29,7 +29,6 @@ const WRITE_KINDS: { kind: WriteKind; label: string; hint: string }[] = [
 const n = JIRA.nouns;
 
 const Value = ({ children }: { children: ReactNode }) => <span className="text-[13px]">{children}</span>;
-const runsOn = (s: JiraStatus): string => (s.deployment === "cloud" || (!s.deployment && s.kind === "cloud") ? "Jira Cloud" : "Jira Data Center");
 const signIn = (s: JiraStatus): string => (s.auth === "bearer" ? "Personal access token" : "Account and token");
 
 /** What the page is handed: everything it draws, and what a press asks for. Nothing in here reaches the network. */

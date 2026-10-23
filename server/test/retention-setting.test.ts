@@ -6,7 +6,7 @@
  * because it is in config.json. Under a scratch XDG_CONFIG_HOME, which
  * config.ts insists on from a test.
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

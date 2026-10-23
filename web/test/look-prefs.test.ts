@@ -161,7 +161,7 @@ describe("the first frame and the stylesheet agree with the module", () => {
       for (const e of readdirSync(d)) {
         const p = join(d, e);
         if (statSync(p).isDirectory()) walk(p);
-        else if (/\.tsx$/.test(p)) for (const m of readFileSync(p, "utf8").matchAll(/(?<![\w-])text-\[(\d+(?:\.\d+)?)px\]/g)) sizes.add(m[1]!);
+        else if (p.endsWith(".tsx")) for (const m of readFileSync(p, "utf8").matchAll(/(?<![\w-])text-\[(\d+(?:\.\d+)?)px\]/g)) sizes.add(m[1]!);
       }
     };
     walk(join(SRC, "src"));
