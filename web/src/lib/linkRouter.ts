@@ -87,7 +87,7 @@ export function classifyLink(raw: string | null | undefined, opts: { shortRef?: 
   if (u.protocol !== "https:" && u.protocol !== "http:") return null;
   const url = u.href;
   // Credentials in a URL are a disguise (`https://github.com@evil.example/`
-  // parses to evil.example, but `https://github.com:<password>@…` is worth refusing too).
+  // parses to evil.example, but `https://github.com:x@…` is worth refusing too).
   if (hasUrlCredentials(u)) return { kind: "external", url };
   const host = u.hostname.toLowerCase();
   const seg = u.pathname.split("/").filter(Boolean);
