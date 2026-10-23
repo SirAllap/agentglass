@@ -62,7 +62,7 @@ type DesktopBridge = {
   chooseFolder?: (start?: string) => Promise<string | null>;
   /** Absent on shells built before the browser could zoom. */
   onBrowserZoom?: (fn: (level: number) => void) => () => void;
-  onBrowserOpenTab?: (fn: (url: string) => void) => () => void;
+  onBrowserOpenTab?: (fn: (url: string, opener?: number) => void) => () => void;
   /** Absent on shells built before the browser had its own keyboard. */
   onBrowserKey?: (fn: (key: string) => void) => () => void;
   onBrowserSearch?: (fn: (text: string) => void) => () => void;
@@ -385,7 +385,7 @@ export function onBrowserInspect(fn: (at: { x: number; y: number }) => void): ()
  * a tab. A no-op unsubscribe on an older shell, so the caller can wire it
  * unconditionally.
  */
-export function onBrowserOpenTab(fn: (url: string) => void): () => void {
+export function onBrowserOpenTab(fn: (url: string, opener?: number) => void): () => void {
   const b = bridge();
   return b?.onBrowserOpenTab ? b.onBrowserOpenTab(fn) : () => {};
 }

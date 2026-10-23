@@ -170,6 +170,25 @@ export function closeTab(tabs: BrowserTab[], id: string): { tabs: BrowserTab[]; 
   return { tabs: rest, activeId: next.id };
 }
 
+/**
+ * Where a tab a page opened goes: beside the tab that opened it, in that tab's
+ * profile and jar. It went beside whichever tab was in front, in the owner's
+ * own profile, so a link in an agent's container opened with the owner's
+ * cookies. `idOf` is a tab's WebContents id. A page that named no opener (an
+ * older shell) keeps the tab in front; an opener that is none of ours is
+ * `null`, because no profile is a safe guess for a page nobody can attribute:
+ * the front tab's is the owner's cookies, a named one may be another agent's.
+ */
+export function popupHome(
+  tabs: readonly Pick<BrowserTab, "id" | "profile" | "partition">[], idOf: (tabId: string) => number | undefined,
+  opener: number | undefined, activeId: string | undefined,
+): { from: string | undefined; profile: string | undefined; partition?: string } | null {
+  if (opener === undefined) return { from: activeId, profile: undefined };
+  const t = tabs.find((x) => idOf(x.id) === opener);
+  if (!t) return null;
+  return { from: t.id, profile: t.profile, ...(t.partition ? { partition: t.partition } : {}) };
+}
+
 /** Add one after the tab it was opened from — a link opened in a new tab
  *  belongs beside its parent, not at the far end of the strip. */
 export function addTab(tabs: BrowserTab[], url: string, afterId?: string, profile?: string, shelfId?: string, partition?: string): { tabs: BrowserTab[]; tab: BrowserTab } | { error: string } {

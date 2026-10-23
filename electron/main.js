@@ -3880,7 +3880,8 @@ function guardWebviews(win, opts = {}) {
         // test — see above.
         || /\b(width|height)=/.test(String(features || ""));
       if (!wantsWindow) {
-        win.webContents.send("ag:browser-open-tab", safe);
+        // The opener's id, so the tab opens in the opener's profile, beside it.
+        win.webContents.send("ag:browser-open-tab", safe, guest.id);
         return { action: "deny" };
       }
       return {
@@ -4046,7 +4047,7 @@ function guardWebviews(win, opts = {}) {
         canBack: canNav(guest, -1),
         canForward: canNav(guest, 1),
         on: {
-          openTab: (/** @type {string} */ url) => win.webContents.send("ag:browser-open-tab", url),
+          openTab: (/** @type {string} */ url) => win.webContents.send("ag:browser-open-tab", url, guest.id),
           copyText: (/** @type {string} */ text) => clipboard.writeText(String(text || "")),
           openExternal: (/** @type {string} */ url) => { void shell.openExternal(url); },
           copyImage: () => { try { guest.copyImageAt(params.x, params.y); } catch { /* gone */ } },

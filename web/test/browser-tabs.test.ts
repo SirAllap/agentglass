@@ -8,7 +8,8 @@
  * show and no way back.
  */
 import { beforeEach, describe, expect, it } from "bun:test";
-import { addTab, closeTab, isBlank, listable, MAX_TABS, newTab, patchTab, pruneBlank, stepTab, tabLabel, withInspected, __resetTabIds } from "../src/lib/browserTabs.ts";
+import { readFileSync } from "node:fs";
+import { addTab, closeTab, popupHome, isBlank, listable, MAX_TABS, newTab, patchTab, pruneBlank, stepTab, tabLabel, withInspected, __resetTabIds } from "../src/lib/browserTabs.ts";
 
 beforeEach(__resetTabIds);
 
@@ -297,5 +298,51 @@ describe("the inspector mark", () => {
        that closed mid-flight. Adding it would light a mark on nothing. */
     const one = withInspected(new Set(), "t1", true);
     expect(withInspected(one, "", true)).toBe(one);
+  });
+});
+
+describe("a page that opens a tab", () => {
+  /* A link with target=_blank in an agent's container tab opened in the
+     owner's own profile, beside whatever tab was in front: the agent's page
+     got the owner's cookies. */
+  const tabs = [
+    { id: "t1", profile: "" },
+    { id: "t2", profile: "orbit-agent" },
+    { id: "t3", profile: "orbit-agent", partition: "persist:agx-eph-1" },
+  ] as never;
+  const ids: Record<string, number> = { t1: 40, t2: 41, t3: 42 };
+  const idOf = (id: string) => ids[id];
+
+  it("opens beside its opener, in the opener's profile, not the front tab's", () => {
+    expect(popupHome(tabs, idOf, 41, "t1")).toEqual({ from: "t2", profile: "orbit-agent" });
+  });
+  it("keeps an ephemeral opener's own jar", () => {
+    expect(popupHome(tabs, idOf, 42, "t1")).toEqual({ from: "t3", profile: "orbit-agent", partition: "persist:agx-eph-1" });
+  });
+  it("stays the owner's when the owner's tab opened it", () => {
+    expect(popupHome(tabs, idOf, 40, "t2")).toEqual({ from: "t1", profile: "" });
+  });
+  it("is refused when the opener is none of ours, rather than guessed", () => {
+    /* No profile is a safe guess for a page nobody can attribute: the front
+       tab's is the owner's cookies, and a named one may be another agent's. */
+    expect(popupHome(tabs, idOf, 99, "t1")).toBeNull();
+  });
+  it("falls back to the tab in front only when the page named no opener", () => {
+    expect(popupHome(tabs, idOf, undefined, "t2")).toEqual({ from: "t2", profile: undefined });
+  });
+});
+
+describe("the popup is wired from the page to the panel", () => {
+  const read = (f: string) => readFileSync(new URL(f, import.meta.url), "utf8");
+  it("sends the opener's id from both places a guest asks for a tab", () => {
+    const main = read("../../electron/main.js");
+    expect(main).toContain('win.webContents.send("ag:browser-open-tab", safe, guest.id)');
+    expect(main).toContain('win.webContents.send("ag:browser-open-tab", url, guest.id)');
+  });
+  it("hands it through the bridge and opens in the opener's profile and jar", () => {
+    expect(read("../../electron/preload.js")).toContain("fn(String(url), typeof opener === \"number\" ? opener : undefined)");
+    const panel = read("../src/components/BrowserPanel.tsx");
+    expect(panel).toContain("popupHome(tabsRef.current, idOf, opener, activeId)");
+    expect(panel).toContain("open(url, home.from, home.profile, undefined, home.partition)");
   });
 });

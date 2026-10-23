@@ -188,10 +188,10 @@ contextBridge.exposeInMainWorld("agentglass", {
   /** A page in the built-in browser asked for a window — a middle click, a
    *  `target="_blank"`, an OAuth popup. It used to be handed to the OS
    *  browser because there was nowhere else to put it; now it becomes a tab.
-   * @param {(url: string) => void} fn */
+   * @param {(url: string, opener?: number) => void} fn */
   onBrowserOpenTab: (fn) => {
     /** @type {IpcListener} */
-    const h = (_e, url) => fn(String(url));
+    const h = (_e, url, opener) => fn(String(url), typeof opener === "number" ? opener : undefined);
     ipcRenderer.on("ag:browser-open-tab", h);
     return () => ipcRenderer.removeListener("ag:browser-open-tab", h);
   },

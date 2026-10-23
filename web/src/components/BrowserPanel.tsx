@@ -28,7 +28,7 @@ import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
 import { BROWSER_PARTITION, HAS_BROWSER, IS_DESKTOP, applySessionSettings, browserDevtools, browserDevtoolsClose, browserDevtoolsRect, browserDevtoolsZoom, browserCdp, browserZoom, browserShelfRead, captureFullPage, cookieSources, onDevtoolsZoom, onDevtoolsOpen, onBrowserZoom, onBrowserOpenTab, onBrowserKey, onBrowserSearch, onBrowserInspect, setActiveBrowserGuest, setGuestOwner, openEphemeralTab, closeEphemeralTab } from "../lib/desktop.ts";
 import { buildSearchUrl, displayUrl, normalizeNavigationUrl } from "../lib/browserUrl.ts";
 import { BLANK, homePage, searchEngine, zoomLevel, setZoomLevel as saveZoom, zoomPercent, stepZoom, ZOOM_MIN, ZOOM_MAX, devtoolsSide, setDevtoolsSide, devtoolsSize, setDevtoolsSize, devtoolsZoom, setDevtoolsZoom, sidebarOpen, setSidebarOpen, sidebarWidth, setSidebarWidth, type DevtoolsSide } from "../lib/browserPrefs.ts";
-import { addTab, closeTab, listable, newTab, patchTab, pruneBlank, sleepingTab, stepTab, tabLabel, wake, withInspected, type BrowserTab } from "../lib/browserTabs.ts";
+import { addTab, closeTab, listable, newTab, patchTab, popupHome, pruneBlank, sleepingTab, stepTab, tabLabel, wake, withInspected, type BrowserTab } from "../lib/browserTabs.ts";
 import { dropsBefore, isDrag, parseDrop, type DropAt } from "../lib/browserDrag.ts";
 import {
   MAX_ESSENTIALS, allItems, emptyShelf, findByUrl, folderCount, insertFolder, place, readShelves, removeItem, saveShelves,
@@ -1178,9 +1178,9 @@ export function BrowserView({ active: viewOn, scope }: {
    */
   useEffect(() => onBrowserZoom((level) => { void applyZoom(level); }), [applyZoom]);
 
-  const open = useCallback((url: string, from?: string, profile?: string, shelfId?: string) => {
+  const open = useCallback((url: string, from?: string, profile?: string, shelfId?: string, partition?: string) => {
     setTabs((prev) => {
-      const r = addTab(prev, url, from, profile, shelfId);
+      const r = addTab(prev, url, from, profile, shelfId, partition);
       if ("error" in r) { say(r.error); return prev; }
       setActiveId(r.tab.id);
       return r.tabs;
@@ -1340,7 +1340,12 @@ export function BrowserView({ active: viewOn, scope }: {
   /* A page that opened a window used to be handed to the OS browser, because a
      single-page view had nowhere to put it. Now it goes beside the tab it came
      from — which is what makes an OAuth popup finish inside the app. */
-  useEffect(() => onBrowserOpenTab((url) => open(url, activeId)), [open, activeId]);
+  useEffect(() => onBrowserOpenTab((url, opener) => {
+    const idOf = (id: string) => { try { return els.current.get(id)?.getWebContentsId(); } catch { return undefined; } };
+    const home = popupHome(tabsRef.current, idOf, opener, activeId);
+    if (!home) { say("A page that is no longer open asked for a tab; it was not opened."); return; }
+    open(url, home.from, home.profile, undefined, home.partition);
+  }), [open, activeId]);
 
   /*
    * The chords, arriving from the shell because the page had the focus.
