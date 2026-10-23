@@ -112,18 +112,25 @@ export function BrowserIsland(p: IslandProps) {
     void a.finished.catch(() => {}).finally(() => { img.remove(); c.classList.remove("is-hold"); });
   }, []);
 
-  const busy = useRef(false);
-  const show = useCallback(async () => {
-    if (busy.current) return;
-    busy.current = true;
-    const awake = tabs.filter((t) => !t.asleep);
-    const got = await Promise.all(awake.map(async (t) => [t.id, await p.picture(t.id).catch(() => null)] as const));
-    const next: Record<string, string> = {};
-    for (const [id, src] of got) if (src) next[id] = src;
-    busy.current = false;
-    setPics(next);
+  /* Opens at once. Waiting for every tab's picture first held the overview
+     shut for 1.5 s whenever a background tab was slow to answer (measured
+     on the installed app: a hidden DuckDuckGo tab never answered). Now the
+     page in front is asked first and gets 250 ms for its flight; every other
+     picture fills its card when it arrives, and a card without one shows its
+     initial until then. */
+  const show = useCallback(() => {
+    setPics({});
     setOpen(true);
-    if (activeId && next[activeId]) requestAnimationFrame(() => fly(next[activeId]!, box.current?.querySelector(`[data-tab="${activeId}"]`) ?? null, true));
+    const front = activeId;
+    const first = front ? p.picture(front).catch(() => null) : Promise.resolve(null);
+    void Promise.race([first, new Promise<null>((r) => setTimeout(() => r(null), 250))]).then((src) => {
+      if (src && front) requestAnimationFrame(() => fly(src, box.current?.querySelector(`[data-tab="${front}"]`) ?? null, true));
+    });
+    for (const t of tabs) {
+      if (t.asleep) continue;
+      const got = t.id === front ? first : p.picture(t.id).catch(() => null);
+      void got.then((src) => { if (src) setPics((m) => ({ ...m, [t.id]: src })); });
+    }
   }, [tabs, activeId, p, fly]);
   const hide = useCallback((pick?: string) => {
     const id = pick ?? activeId;
@@ -174,11 +181,11 @@ export function BrowserIsland(p: IslandProps) {
                 </button>
                 <button type="button" className="agx-isl-addr" onClick={p.onAddress} title="Type an address (Ctrl+L)">{p.address || "Type an address"}</button>
                 <button type="button" className="agx-isl-ib" aria-label="Menu" onClick={(e) => p.onMenu(e.currentTarget.getBoundingClientRect())}><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="3.5" cy="8" r="1.2" /><circle cx="8" cy="8" r="1.2" /><circle cx="12.5" cy="8" r="1.2" /></svg></button>
-                <button type="button" className="agx-isl-count" aria-label="Show every tab" onClick={() => void show()}>{tabs.length}</button>
+                <button type="button" className="agx-isl-count" aria-label="Show every tab" onClick={show}>{tabs.length}</button>
                 {act?.paused && <button type="button" className="agx-isl-hand" onClick={() => active && p.onToggle(active.id)}>Hand back</button>}
               </div>
             ) : (
-              <button type="button" className="agx-isl-status" aria-label="Show every tab" onClick={() => void show()}>
+              <button type="button" className="agx-isl-status" aria-label="Show every tab" onClick={show}>
                 <LivingMark size={17} style={{ color: "#a78bfa" }} />
                 <span className="agx-isl-title">{active?.title || (active ? host(active.url) : "")}</span>
                 <span className="agx-isl-doing"><span className={"agx-isl-dot " + dot} />{act!.agent} · {p.doing || "working"}</span>
