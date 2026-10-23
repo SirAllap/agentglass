@@ -206,7 +206,7 @@ describe("Check my setup", () => {
     const c = checkSetup(p, [], OPENCODE_AND_CLAUDE);
     expect(c.chair).toBe(`${title("claude")} sonnet would run the main agent.`);
     expect(c.roles.map((r) => r.line)).toEqual([
-      `Scouts would run on ${title("opencode")}.`,
+      `Scouts would run on ${title("opencode")} opencode/big-pickle.`,
       `Builders would run on ${title("claude")} sonnet.`,
       `Verifiers would run on ${title("claude")} haiku.`,
     ]);
@@ -214,7 +214,7 @@ describe("Check my setup", () => {
   test("a rule that holds shows up as the reason, and an engine that is not ready is skipped with the reason", () => {
     const p = applyPreset({ ...policy(), base: { ...policy().base, workers: { ...policy().base.workers, builder: { value: [{ engine: "hermes", model: "" }], ask: false } } } }, "claude-orchestrates", OPENCODE_AND_CLAUDE)!;
     const c = checkSetup(p, [state({ ruleId: presetRuleId("claude-orchestrates"), active: true })], OPENCODE_AND_CLAUDE);
-    expect(c.roles[1]!.line).toBe(`Builders would run on ${title("opencode")}, from rule "Quick setup: ${title("claude")} orchestrates".`);
+    expect(c.roles[1]!.line).toBe(`Builders would run on ${title("opencode")} opencode/big-pickle, from rule "Quick setup: ${title("claude")} orchestrates".`);
   });
   test("a chain with nothing ready says nobody and why", () => {
     const p: Policy = { ...policy(), base: { ...policy().base, workers: { ...policy().base.workers, builder: { value: [{ engine: "hermes", model: "" }], ask: false } } } };
@@ -247,6 +247,13 @@ describe("Check my setup", () => {
     const line = c.rules.find((r) => r.id === presetRuleId("all-on-claude"))!.line;
     expect(line).not.toContain("already in the answers above");
     expect(line).toBe('It holds now and applies to scouts and verifiers; "Builders on Codex" comes first for builders.');
+  });
+  test("a role whose first choice cannot start says who takes over, in words", () => {
+    const r = { id: "mine", name: "Hermes first", enabled: true, when: [{ kind: "always" as const }], workers: { builder: [{ engine: "hermes", model: "" }, { engine: "opencode", model: "" }] } };
+    const c = checkSetup({ ...policy(), rules: [r] }, [state({ ruleId: "mine", active: true })], OPENCODE_AND_CLAUDE);
+    const line = c.roles.find((x) => x.id === "builder")!.line;
+    expect(line).toContain("opencode/big-pickle");
+    expect(line).toContain(`because ${title("hermes")} needs an update, so it takes over`);
   });
   test("a rule that loses every field it names says it does not apply", () => {
     const first = { id: "first", name: "Everything on OpenCode", enabled: true, when: [{ kind: "always" as const }], workers: { scout: [{ engine: "opencode", model: "" }], builder: [{ engine: "opencode", model: "" }], verifier: [{ engine: "opencode", model: "" }] } };

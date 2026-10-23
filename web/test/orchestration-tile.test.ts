@@ -12,7 +12,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { agentProvider } from "../../shared/agentKinds.ts";
 import type { EngineReadiness } from "../../shared/types.ts";
 import { EngineTile } from "../src/components/orchestration/EngineTile.tsx";
-import { engineLetter } from "../src/components/orchestration/orchestrationCopy.ts";
+import { engineLetter, engineTileState } from "../src/components/orchestration/orchestrationCopy.ts";
 
 const title = (id: string) => agentProvider(id)!.title;
 const engine = (id: string, over: Partial<EngineReadiness> = {}): EngineReadiness => ({
@@ -81,5 +81,27 @@ describe("the tile's source", () => {
     expect(code).toContain("engineTileState(");
     expect(code).toContain("var(--success");
     expect(code).toContain("var(--error");
+  });
+});
+
+describe("a worker tile names the model it will really run", () => {
+  const OC = [engine("opencode")];
+  test("an OpenCode entry on its default shows the engine's default, not 'default model'", () => {
+    const html = tile({ engine: "opencode", model: "", readiness: OC });
+    expect(html).toContain("opencode/big-pickle");
+    expect(html).not.toContain("default model");
+    expect(html).toContain("Ready");
+  });
+  test("an explicit model is shown as typed, and an engine that picks its own still says so", () => {
+    expect(tile({ engine: "opencode", model: "acme/orbit-1", readiness: OC })).toContain("acme/orbit-1");
+    expect(tile({ engine: "claude", model: "" })).toContain("default model");
+    expect(tile({ engine: "opencode", model: "", role: "orchestrator", readiness: OC })).toContain("default model");
+  });
+  test("an engine that needs a model and has none to fall back on says so instead of Ready", () => {
+    const bare = { ...agentProvider("opencode")!, seatModel: undefined };
+    const s = engineTileState("opencode", "worker", OC, false, "", bare);
+    expect(s.word).toBe("Needs a model");
+    expect(s.reason).toContain("pick one");
+    expect(engineTileState("opencode", "worker", OC, false, "acme/orbit-1", bare).word).toBe("Ready");
   });
 });

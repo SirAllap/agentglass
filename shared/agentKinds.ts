@@ -269,6 +269,8 @@ export interface Provider extends AgentKind {
   modelFlag?: string;
   /** The model a chair on this engine starts with when nobody chose one. */
   seatModel?: string;
+  /** Its headless form refuses to run without a model: an empty one resolves to `seatModel`. */
+  headlessNeedsModel?: boolean;
   lock?: LockSpelling;
   probe?: ProbeFacet;
   run?: RunSpelling;
@@ -477,6 +479,7 @@ export const AGENT_PROVIDERS: Provider[] = [
     tab: true,
     modelFlag: "--model",
     seatModel: "opencode/big-pickle",
+    headlessNeedsModel: true,
     // Captured from 1.18.32 (server/test/fixtures/screens/opencode/). The
     // working line says `esc interrupt`, not Claude's `esc to interrupt`; the
     // box is rows of `┃` over a mode line (`Build · <model>`); and a release
@@ -514,6 +517,13 @@ export const AGENT_PROVIDERS: Provider[] = [
     lock: { via: "file", env: "QWEN_CODE_SYSTEM_SETTINGS_PATH" },
   },
 ];
+
+/** The model a worker on this engine runs: the one the chain names, or, for an
+ *  engine whose headless form cannot start without one, the engine's own default
+ *  (`seatModel`, the one canonical copy). "" is an engine that picks its own,
+ *  and also an engine that needs one and has none to fall back on. */
+export const workerModelFor = (engine: string, model: string, p: Provider | undefined = agentProvider(engine)): string =>
+  model || (p?.headlessNeedsModel ? p.seatModel ?? "" : "");
 
 export const agentProvider = (id: string): Provider | undefined =>
   AGENT_PROVIDERS.find((p) => p.id === id);

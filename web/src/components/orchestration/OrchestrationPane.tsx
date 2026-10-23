@@ -19,7 +19,7 @@ import { EngineTile } from "./EngineTile.tsx";
 import { RolePicker } from "./RolePicker.tsx";
 import { rowId } from "../../lib/settingsIndex.ts";
 import {
-  ASK_HINT, BACK_LABEL, CHAIN_TAIL, baseChoice, fineTuneRow, pickedLine, pickUndoable, roleWord, scopeWords, usageLeft, type Picked, LIMIT_RANGE, NO_WORKER_ENGINE, openingScope, recallScope, SAFETY, safetyIsDefault, rememberScope, chainWords, exhausted, notReady, readyFor, ruleBadge, ruleHolds, ruleLine,
+  ASK_HINT, BACK_LABEL, CHAIN_TAIL, choiceWords, baseChoice, fineTuneRow, pickedLine, pickUndoable, roleWord, scopeWords, usageLeft, type Picked, LIMIT_RANGE, NO_WORKER_ENGINE, openingScope, recallScope, SAFETY, safetyIsDefault, rememberScope, chainWords, exhausted, notReady, readyFor, ruleBadge, ruleHolds, ruleLine,
   stepLimit, withAsk, withBaseChoice, withEnvelopes, withLimits, withRule, withRuleEnabled, withoutRule, type Field,
 } from "./orchestrationCopy.ts";
 
@@ -228,7 +228,10 @@ export function OrchestrationView(p: OrchestrationViewProps) {
   const choiceRow = (field: Field, label: string, hint: string, resolved: Resolved | undefined) => {
     const role = field === "orchestrator" ? "orchestrator" as const : "worker" as const;
     const ask = field === "orchestrator" ? policy.base.orchestrator : policy.base.workers[field];
-    const c = ask.value[0]!;
+    const baseC = ask.value[0]!;
+    // One story per row: while a rule holds this field, its choice is what runs, so it is what the row shows.
+    const byRule = resolved?.ok && resolved.from === "rule" ? resolved : null;
+    const c = byRule ? byRule.choice : baseC;
     const bad = notReady(c, role, resolved, readiness);
     const chairLock = field === "orchestrator" ? { engine: c.engine, why: "The main agent's engine is set when it opens; another engine comes later." } : undefined;
     const workerGlobal = field !== "orchestrator" && root !== "";
@@ -237,7 +240,10 @@ export function OrchestrationView(p: OrchestrationViewProps) {
     const undoable = picked?.field === field && pickUndoable(policy, picked);
     return (
       <SettingRow key={field} label={label} hint={hint} disabled={inherited}
-        status={<ChoiceStatus bad={bad} checking={!readiness} />}
+        status={<>
+          {byRule && <StatusBadge tone="off">From a rule</StatusBadge>}
+          <ChoiceStatus bad={bad} checking={!readiness} />
+        </>}
         control={<EngineTile engine={c.engine} model={c.model} role={role} readiness={readiness} />}
         actions={
           <>
@@ -266,7 +272,17 @@ export function OrchestrationView(p: OrchestrationViewProps) {
                 <button type="button" className="agx-field-link" onClick={p.onOpenEngines}>See Agent engines</button>
               </p>
             )}
-            {workerGlobal && <p className="m-0 text-[12px]" style={{ color: "var(--text3)" }}>Worker roles are global. Change them on All projects, or name them in a rule here.</p>}
+            {byRule && (
+              <p className="m-0 text-[12px]" style={{ color: "var(--text3)" }}>From the rule “{byRule.ruleName ?? byRule.ruleId}”. Without it: {choiceWords(baseC)}.{" "}
+                {!inherited && byRule.ruleId && <button type="button" className="agx-field-link" disabled={locked} onClick={(e) => openSheet(byRule.ruleId!, e.currentTarget)}>Edit the rule</button>}
+              </p>
+            )}
+            {workerGlobal && (
+              <p className="m-0 text-[12px]" style={{ color: "var(--text3)" }}>
+                Worker roles are the same for every project.{" "}
+                <button type="button" className="agx-field-link" onClick={() => p.onRoot("")}>Switch to All projects</button> to change them.
+              </p>
+            )}
           </div>} />
     );
   };
@@ -321,7 +337,7 @@ export function OrchestrationView(p: OrchestrationViewProps) {
       <QuickSetup policy={policy} root={root} readiness={readiness} states={states} inherited={inherited} busy={busy}
         note={notes.quick} onSave={save} onOpenEngines={p.onOpenEngines} />
 
-      <SettingsCard title="Main agent" desc="Decides the plan and hands the work out."
+      <SettingsCard title="Main agent" desc={root !== "" && !chairNow ? "Decides the plan and hands the work out. No main agent is running now; this is what the next one will use." : "Decides the plan and hands the work out."}
         status={root === "" ? <StatusBadge tone="off">All projects</StatusBadge>
           : chairNow ? <StatusBadge tone="ok">{chairNow}</StatusBadge> : <StatusBadge tone="off">Not open</StatusBadge>}>
         {choiceRow("orchestrator", "Engine and model", "What a new main agent opens with. Running sessions are never moved.", resolution?.orchestrator)}

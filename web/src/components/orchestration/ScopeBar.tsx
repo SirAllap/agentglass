@@ -52,7 +52,7 @@ export function ScopeBar({ root, projects, overrides, inherited, busy, note, onR
   ];
   if (searching) return null;
   return (
-    <div ref={bar} data-scope-bar className="sticky -top-8 z-10 grid gap-1.5 pt-2 pb-2.5 mb-4"
+    <div ref={bar} data-scope-bar className="sticky -top-8 z-10 grid gap-1.5 pt-2 pb-2.5 mb-4 agx-settings-x"
       style={{ background: "var(--bg)", borderBottom: LINE }}>
       {/* Segmented's chips, but allowed to run onto a second line: the list grows with the person's projects. */}
       <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Settings for">

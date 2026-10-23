@@ -115,6 +115,21 @@ describe("a rule's row, in each state", () => {
   });
 });
 
+describe("a worker row while a rule holds it", () => {
+  const r = rule("a", { workers: { builder: [{ engine: "opencode", model: "" }] } });
+  const html = view({ policy: { ...base(), rules: [r] }, states: [st("a", { active: true })] });
+  test("shows the rule's choice with the base as a second line, and a way to edit the rule", () => {
+    const row = rowOf(html, "Builder");
+    expect(row).toContain("opencode/big-pickle");
+    expect(row).toContain("From a rule");
+    expect(row).toContain("Without it:");
+    expect(row).toContain(">Edit the rule<");
+  });
+  test("a project on the general setting cannot edit it from there", () => {
+    expect(rowOf(view({ policy: { ...base(), rules: [r] }, states: [st("a", { active: true })], root: "/work/orbit", scope: "global" }), "Builder")).not.toContain("Edit the rule");
+  });
+});
+
 describe("the page, in its other states", () => {
   test("no conditions: the empty state says the choices above always apply", () => {
     expect(view()).toContain("No conditions. The choices above always apply.");
@@ -152,7 +167,11 @@ describe("the page, in its other states", () => {
     const html = view({ root: "/work/orbit", scope: "project" });
     expect(html).toContain("Use the general setting");
     expect(html).not.toContain("Set for this project");
-    expect(html).toContain("Worker roles are global.");
+    expect(html).toContain("Worker roles are the same for every project.");
+    expect(html).toContain("Switch to All projects");
+  });
+  test("the scope bar insets like the cards under it", () => {
+    expect(view()).toMatch(/data-scope-bar="true" class="[^"]*agx-settings-x/);
   });
   test("All projects says the main agent's model is a project's choice, once its tiles are open", () => {
     expect(view({ openPicker: "orchestrator" })).toContain("The main agent&#x27;s model is a project&#x27;s choice: pick a project above.");

@@ -10,7 +10,7 @@
  * inside it; the envelope starts at the narrow default and may be widened only
  * to the person's ceiling, and never to a remote effect (envelope.ts).
  */
-import { agentProvider } from "../../../shared/agentKinds.ts";
+import { agentProvider, workerModelFor } from "../../../shared/agentKinds.ts";
 import { chainFor, envelopeWithin, resolve, type Chain, type Envelope, type EngineChoice, type Policy, type RuleFacts } from "../../../shared/orchestration.ts";
 import type { EngineReadiness } from "../../../shared/types.ts";
 import { workerRole, type WorkerRole } from "../../../shared/workerRoles.ts";
@@ -140,6 +140,14 @@ export function planWorker(
 
   const why = headlessRefusal(choice.engine);
   if (why) return { ok: false, error: why };
+
+  // An entry left on "default model" for an engine that cannot start without
+  // one runs the engine's own default, and the person is told which.
+  const model = workerModelFor(choice.engine, choice.model);
+  if (model !== choice.model) {
+    choice = { ...choice, model };
+    because = [...because, `${label({ engine: choice.engine, model: "" })} has no model named in the chain, so it ran its default, ${model}`];
+  }
 
   return {
     ok: true, role, choice, envelope,

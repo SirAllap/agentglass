@@ -2,7 +2,7 @@ import type { CSSProperties } from "react";
 import { agentProvider } from "../../../../shared/agentKinds.ts";
 import type { EngineReadiness } from "../../../../shared/types.ts";
 import { CTRL_H, EDGE, tintEdge } from "../workspace/Chrome.tsx";
-import { DEFAULT_MODEL, engineLetter, engineTileState, type EngineTileState } from "./orchestrationCopy.ts";
+import { engineLetter, engineTileState, tileModel, type EngineTileState } from "./orchestrationCopy.ts";
 
 /**
  * One engine as the page draws it: a neutral letter, its name from the
@@ -37,7 +37,7 @@ export interface EngineTileProps {
 }
 
 export function EngineTile(p: EngineTileProps) {
-  const s = engineTileState(p.engine, p.role, p.readiness, !!p.limitHit);
+  const s = engineTileState(p.engine, p.role, p.readiness, !!p.limitHit, p.model);
   const name = agentProvider(p.engine)?.title ?? p.engine;
   const hue = HUE[s.tone];
   const surface: CSSProperties = {
@@ -54,7 +54,7 @@ export function EngineTile(p: EngineTileProps) {
       </span>
       <span className="grid min-w-0 text-left gap-0.5">
         <span className="text-[12px] font-medium break-words" style={{ color: "var(--text)" }}>{name}</span>
-        <span className="t-mono text-[10px] truncate" style={{ color: "var(--text3)" }}>{p.model || DEFAULT_MODEL}</span>
+        <span className="t-mono text-[10px] truncate" style={{ color: "var(--text3)" }}>{tileModel(p.engine, p.role, p.model ?? "")}</span>
         <span className="inline-flex items-center gap-1.5 text-[10px]" style={{ color: INK[s.tone] }}>
           <span aria-hidden className="inline-block rounded-full shrink-0" style={{
             width: 6, height: 6, background: hue ?? "transparent", boxShadow: hue ? undefined : `inset 0 0 0 1px ${INK[s.tone]}`,

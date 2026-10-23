@@ -2372,6 +2372,19 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const tabBodyRef = useRef<HTMLDivElement>(null);
   const tabScroll = useRef<Record<string, number>>({});
   useEffect(() => { tabScroll.current = {}; }, [selected]);
+  /* The sidebar sticks inside this scroller and scrolls on its own, so its
+     height cap has to be the scroller's visible height. A cap from the window
+     (100vh minus a guess) is taller than what is left under the header, and the
+     bottom of the sidebar then rides along with the body instead of scrolling. */
+  useLayoutEffect(() => {
+    const el = tabBodyRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const set = () => el.style.setProperty("--pr-body-h", `${el.clientHeight}px`);
+    set();
+    const ro = new ResizeObserver(set);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [tab, selected]);
   /* Before paint, or the old offset is on screen for a frame and the jump is
      the thing you see instead of the thing you asked for. */
   useLayoutEffect(() => {
@@ -8795,7 +8808,7 @@ function PrSidebar({ d, root, spend, onEditField, onRerequest }: {
      * a long label wants truncating, never a second axis.
      */
     <aside className="sticky top-0 shrink-0 w-[248px] pl-4 hidden lg:block overflow-y-auto overflow-x-hidden agx-scroll overscroll-contain"
-      style={{ borderLeft: LINE, maxHeight: "calc(100vh - 6rem)" }}>
+      style={{ borderLeft: LINE, maxHeight: "calc(var(--pr-body-h, 100vh) - 1.5rem)" }}>
       <SidebarSection title="Reviewers" onEdit={(e) => onEditField("reviewers", e)}>
         {(() => {
           /*

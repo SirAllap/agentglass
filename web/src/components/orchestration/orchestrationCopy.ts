@@ -8,7 +8,7 @@
  * provider table, verdicts from the readiness probe, and the sentence a
  * refusal carries is the server's own.
  */
-import { agentProvider, engineProviders } from "../../../../shared/agentKinds.ts";
+import { agentProvider, engineProviders, workerModelFor } from "../../../../shared/agentKinds.ts";
 import {
   CHAIN_MAX, DEFAULT_CEILING, DEFAULT_LIMITS, DEFAULT_WORKER_ENVELOPE, GAUGED_PROVIDERS, ROLE_IDS, resolve,
   type Chain, type EngineChoice, type Envelope, type Policy, type PolicyRule, type Resolution, type Resolved, type Trigger, type UsageProviderId,
@@ -556,7 +556,11 @@ export function checkSetup(policy: Policy, states: readonly PolicyRuleState[], r
     const who = rolePlural(id).replace(/^./, (c) => c.toUpperCase());
     if (!r.ok) return { id, line: `${who} would have nobody: ${stop(r.why)}` };
     const via = r.from === "rule" ? `, from rule "${r.ruleName ?? r.ruleId}"` : "";
-    return { id, line: `${who} would run on ${choiceWords(r.choice)}${via}.` };
+    const ran = { ...r.choice, model: workerModelFor(r.choice.engine, r.choice.model) };
+    const rc = r.from === "rule" ? policy.rules.find((x) => x.id === r.ruleId) : undefined;
+    const first = (rc?.workers?.[id] ?? policy.base.workers[id].value)[0];
+    const took = r.position > 0 && first ? `, because ${blockedClause(first.engine, "worker", readiness)}, so it takes over` : "";
+    return { id, line: `${who} would run on ${choiceWords(ran)}${via}${took}.` };
   });
 
   const rules = policy.rules.map((rule) => {
@@ -649,7 +653,7 @@ export function testItNow(policy: Policy, facts: { on(ruleId: string): boolean }
 
 /** One engine as a tile shows it: a word and a tone, never colour alone. */
 export interface EngineTileState { tone: "ok" | "warn" | "err" | "checking"; word: string; reason: string }
-export function engineTileState(id: string, role: "orchestrator" | "worker", readiness: readonly EngineReadiness[] | null, limitHit: boolean): EngineTileState {
+export function engineTileState(id: string, role: "orchestrator" | "worker", readiness: readonly EngineReadiness[] | null, limitHit: boolean, model = "", provider = agentProvider(id)): EngineTileState {
   if (!readiness) return { tone: "checking", word: "Checking", reason: "Checking this machine." };
   const r = readiness.find((e) => e.id === id);
   if (!r) return { tone: "err", word: "Unchecked", reason: "This machine has not been checked for it yet." };
@@ -658,6 +662,9 @@ export function engineTileState(id: string, role: "orchestrator" | "worker", rea
   if (!v.ok) {
     const word = state === "missing" ? "Not installed" : state === "signin" ? "Sign in" : state === "old" ? "Needs update" : "Not ready";
     return { tone: "err", word, reason: v.why ?? `${engineTitle(id)} cannot take the ${role} role here.` };
+  }
+  if (role === "worker" && provider?.headlessNeedsModel && !workerModelFor(id, model, provider)) {
+    return { tone: "warn", word: "Needs a model", reason: `${engineTitle(id)} cannot start without a model: pick one.` };
   }
   if (limitHit) return { tone: "warn", word: "Limit hit", reason: `${engineTitle(id)} has run out of plan in a window.` };
   return { tone: "ok", word: "Ready", reason: `${engineTitle(id)} is ready.` };
@@ -668,6 +675,11 @@ export const engineLetter = (id: string): string => (agentProvider(id)?.title ??
 
 /** What a tile calls an engine that has no model named: the engine picks its own. */
 export const DEFAULT_MODEL = "default model";
+
+/** The model a tile names: what a worker will really run, so an engine that
+ *  needs one shows its default instead of "default model". */
+export const tileModel = (id: string, role: "orchestrator" | "worker", model: string): string =>
+  (role === "worker" ? workerModelFor(id, model) : model) || DEFAULT_MODEL;
 
 /** The picture's one "Because" line: the rules that moved a job, by name, or the plain settings. */
 export function flowBecause(nodes: readonly FlowNode[], policy: Policy): string {
