@@ -44,11 +44,11 @@ describe("house tokens", () => {
 
 describe("only the Machine tab changes", () => {
   test("the palette swaps its body for the finder when the tab is Machine and the box is empty", () => {
-    expect(palette).toContain('const finderOn = tab === "machine" && !q.trim()');
+    expect(palette).toContain('const finderOn = tab === "machine" && (!q.trim() || looksLikePath(q))');
     expect(palette).toContain("{finderOn ? (");
     expect(palette).toContain("<MachineFinder");
   });
-  test("a query hands the tab back: finderOn is false the moment the box has text", () => {
+  test("words hand the tab back: finderOn is false once the box has text that is not a path", () => {
     const line = palette.split("\n").find((l) => l.includes("const finderOn"))!;
     expect(line).toContain("!q.trim()");
   });
@@ -64,5 +64,18 @@ describe("the door on the engine", () => {
     const gate = server.slice(start, server.indexOf('if (pathname === "/browse/list")', start));
     expect(gate).toContain("FS_BROWSE_ENABLED");
     expect(gate).toContain("heldBackFrom");
+  });
+  test("/preview/file sits inside that gate, reads through previewSlice, and never serves a script", () => {
+    const gateAt = server.indexOf('pathname === "/browse" || pathname === "/browse/list"');
+    const at = server.indexOf('if (pathname === "/preview/file") {');
+    expect(at).toBeGreaterThan(gateAt);
+    // Still inside the same `if` as FS_BROWSE_ENABLED: nothing closes it in between.
+    expect(server.indexOf("FS_BROWSE_ENABLED", gateAt)).toBeLessThan(at);
+    const body = server.slice(at, server.indexOf('if (pathname === "/preview/raw"', at));
+    expect(body).toContain("previewSlice(");
+    expect(body).toContain("localBrowse");
+    expect(body).toMatch(/content-security-policy"?:\s*"sandbox;/);
+    expect(body).toContain("nosniff");
+    expect(body).not.toContain("readFile");
   });
 });

@@ -1,7 +1,7 @@
 /*
  * The bench: a window that floats over whatever view you are in.
  *
- * The problem it answers is the same one the file palette answers, one floor
+ * The problem it answers is the same one the finder answers, one floor
  * up. A shell, the file you were reading, a note, an agent — each of those
  * lives in a VIEW, so reaching one costs leaving the diff or the pull request
  * you were reading, and the trip back is the expensive part. This does not take

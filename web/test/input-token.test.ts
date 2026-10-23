@@ -63,7 +63,7 @@ const ALLOWED: { file: string; marker: string; why: string }[] = [
   { file: "FilesPanel.tsx", marker: 'placeholder={mode === "names" ? "Find a file by name…"',
     why: "icon and a clear button share the pill's one border with the input; moving it onto the input would put them outside it" },
 
-  { file: "FilePalette.tsx", marker: "placeholder={active.placeholder}",
+  { file: "FilePalette.tsx", marker: "placeholder={PLACEHOLDER[tab]}",
     why: "icon and a conditional PlaceChip share the pill's one border with the input" },
 
   { file: "TasksPanel.tsx", marker: "ref={searchBox} value={q}",

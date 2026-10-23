@@ -13,12 +13,18 @@ export type Act =
   | { t: "move"; key: string }
   | { t: "enter" }
   | { t: "up" }
+  | { t: "back" }
+  | { t: "forward" }
+  | { t: "home" }
   | { t: "preview" }
   | { t: "hidden" }
   | { t: "sidebar" }
   | { t: "path" }
   | { t: "copy" }
-  | { t: "help" };
+  | { t: "help" }
+  | { t: "refresh" }
+  | { t: "filter" }
+  | { t: "view"; view: "columns" | "icons" | "list" };
 
 export interface KeyIn { key: string; ctrl: boolean; meta: boolean; shift: boolean; alt: boolean }
 export interface Ctx {
@@ -28,16 +34,32 @@ export interface Ctx {
   hasSelection: boolean;
 }
 
-const MOVES = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End"]);
+const MOVES = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"]);
 
 export function finderKey(k: KeyIn, ctx: Ctx): Act | null {
   if (k.key === "F1") return { t: "help" };
+  if (k.key === "F5") return { t: "refresh" };
   if (ctx.inField) return null;
-  if (k.alt) return null;
+  if (k.alt) {
+    if (k.ctrl || k.meta || k.shift) return null;
+    switch (k.key) {
+      case "ArrowLeft": return { t: "back" };
+      case "ArrowRight": return { t: "forward" };
+      case "ArrowUp": return { t: "up" };
+      case "Home": return { t: "home" };
+      default: return null;
+    }
+  }
   if (k.ctrl || k.meta) {
     if (k.shift) return null;
     switch (k.key.toLowerCase()) {
-      case "h": return { t: "hidden" };
+      case "h": case ".": return { t: "hidden" };
+      case "f": return { t: "filter" };
+      case "1": return { t: "view", view: "columns" };
+      case "2": return { t: "view", view: "icons" };
+      case "3": return { t: "view", view: "list" };
+      case "arrowup": return { t: "move", key: "Home" };
+      case "arrowdown": return { t: "move", key: "End" };
       case "b": return { t: "sidebar" };
       case "l": return { t: "path" };
       case "c": return ctx.hasSelection ? null : { t: "copy" };

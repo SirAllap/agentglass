@@ -107,13 +107,15 @@ export interface Cursor { col: number; row: number }
 export interface ColShape { rows: number; sel: number | null; dirs: number[] }
 
 /** Where an arrow key puts the cursor. Never throws and never leaves the grid. */
-export function keyStep(at: Cursor, key: string, cols: readonly ColShape[]): Cursor {
+export function keyStep(at: Cursor, key: string, cols: readonly ColShape[], page = 10): Cursor {
   const col = cols[at.col];
   if (!col) return at;
   const last = col.rows - 1;
   switch (key) {
     case "ArrowDown": return col.rows ? { col: at.col, row: Math.min(last, at.row + 1) } : at;
     case "ArrowUp": return col.rows ? { col: at.col, row: Math.max(0, at.row - 1) } : at;
+    case "PageDown": return col.rows ? { col: at.col, row: Math.min(last, at.row + Math.max(1, page)) } : at;
+    case "PageUp": return col.rows ? { col: at.col, row: Math.max(0, at.row - Math.max(1, page)) } : at;
     case "Home": return col.rows ? { col: at.col, row: 0 } : at;
     case "End": return col.rows ? { col: at.col, row: last } : at;
     case "ArrowRight": {
@@ -158,6 +160,7 @@ export function completePath(input: string, home: string, dirs: readonly string[
 /** What a folder row's badge says. The server stops counting at 9999. */
 export function itemsLabel(n: number | null): string {
   if (n === null) return "";
+  if (n === 0) return "No items";
   return n >= 9999 ? "9999+ items" : n === 1 ? "1 item" : `${n} items`;
 }
 
@@ -172,6 +175,8 @@ export interface Prefs {
   group: boolean;
   sizes: boolean;
   sidebar: boolean;
+  /** With `sidebar` on: the icon rail instead of the full list. */
+  rail: boolean;
   sortKey: SortKey;
   sortDir: SortDir;
 }
@@ -180,7 +185,7 @@ export const TEXT_MIN = 11;
 export const TEXT_MAX = 18;
 
 export const DEFAULT_PREFS: Prefs = {
-  view: "columns", preview: true, density: "compact", textSize: 13, hidden: false, group: false, sizes: true, sidebar: true,
+  view: "columns", preview: true, density: "compact", textSize: 13, hidden: false, group: false, sizes: true, sidebar: true, rail: false,
   sortKey: "name", sortDir: "asc",
 };
 
@@ -201,6 +206,7 @@ export function readPrefs(raw: string | null): Prefs {
     group: flag(o.group, d.group),
     sizes: flag(o.sizes, d.sizes),
     sidebar: flag(o.sidebar, d.sidebar),
+    rail: flag(o.rail, d.rail),
     sortKey: pick(o.sortKey, ["name", "size", "modified"], d.sortKey),
     sortDir: pick(o.sortDir, ["asc", "desc"], d.sortDir),
   };
@@ -274,3 +280,54 @@ export function canEdit(name: string): boolean {
 
 /** "Open in nvim" for a row: a link is never offered, because the bench would follow it to wherever it points, outside the boundary this list was judged by. */
 export const canEditRow = (r: Pick<Row, "name" | "kind" | "locked">): boolean => r.kind !== "link" && !r.locked && canEdit(r.name);
+
+/* ----------------------------------------------------------------- sidebar */
+
+export type SidebarMode = "full" | "rail" | "hidden";
+export const sidebarMode = (p: Pick<Prefs, "sidebar" | "rail">): SidebarMode => (!p.sidebar ? "hidden" : p.rail ? "rail" : "full");
+
+/** Strata's one toggle, for the button and Ctrl+B alike: full, then the icon rail, then hidden, then full again. */
+export const nextSidebar = (m: SidebarMode): SidebarMode => (m === "full" ? "rail" : m === "rail" ? "hidden" : "full");
+export const sidebarPrefs = (m: SidebarMode): Pick<Prefs, "sidebar" | "rail"> => ({ sidebar: m !== "hidden", rail: m === "rail" });
+
+/** The tooltip names what the next press does, not what the sidebar is. */
+export function sidebarTip(m: SidebarMode, keys: string): string {
+  return m === "full" ? `Compact sidebar (${keys})` : m === "rail" ? `Hide sidebar (${keys})` : `Show sidebar (${keys})`;
+}
+
+/* ------------------------------------------------------------ footer count */
+
+/** Decimal units, one decimal only when there is one: 999 B, 12.3 kB, 4 MB. */
+export function formatSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "";
+  if (bytes < 1000) return `${Math.round(bytes)} B`;
+  const units = ["kB", "MB", "GB", "TB"];
+  let v = bytes, i = -1;
+  do { v /= 1000; i++; } while (v >= 999.95 && i < units.length - 1);
+  const t = Math.round(v * 10) / 10;
+  return `${Number.isInteger(t) ? t : t.toFixed(1)} ${units[i]}`;
+}
+
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+
+/** The right-hand side of the footer: what the column holds, or what is selected. */
+export function footerCount(total: number | null, sel: Pick<Row, "kind" | "bytes" | "items"> | null): string {
+  if (!sel) return total === null ? "" : plural(total, "item");
+  if (isFolder(sel)) return "1 folder selected";
+  return `1 file selected${sel.bytes === null ? " (size unavailable)" : ` (${formatSize(sel.bytes)})`}`;
+}
+
+/** What kind of thing a file is, in a word: the third part of the preview's "Size · Modified · Type". */
+export function typeLabel(kind: string, mime: string, name: string): string {
+  if (kind === "dir") return "Folder";
+  const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toUpperCase() : "";
+  const base = kind === "text" ? "Text" : kind === "image" || kind === "image-convert" ? "Image" : kind === "pdf" ? "PDF document" : kind === "audio" ? "Audio" : kind === "video" ? "Video" : "Binary file";
+  return ext && kind !== "pdf" && ext.length <= 5 ? `${base} (${ext})` : base || mime;
+}
+
+/** The List view's Type column: "Folder", or the extension said as a word. */
+export function kindWord(r: Pick<Row, "name" | "kind" | "items">): string {
+  if (isFolder(r)) return "Folder";
+  const dot = r.name.lastIndexOf(".");
+  return dot > 0 && dot < r.name.length - 1 ? `${r.name.slice(dot + 1).toUpperCase()} file` : "File";
+}

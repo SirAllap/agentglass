@@ -5,8 +5,7 @@
 // VirtualList, and the tiles are a VirtualList of tile ROWS (a row holds as
 // many tiles as fit, so the window is still arithmetic).
 import { ago } from "../../../lib/fileRecents.ts";
-import { isFolder, itemsLabel, type Display, type Prefs, type Row, type SortKey } from "../../../lib/finderMiller.ts";
-import { humanBytes } from "../../../lib/paletteModel.ts";
+import { formatSize, isFolder, itemsLabel, kindWord, type Display, type Prefs, type Row, type SortKey } from "../../../lib/finderMiller.ts";
 import { ICON } from "../../../lib/iconSize.ts";
 import { LINE } from "../../workspace/Chrome.tsx";
 import { RowIcon } from "./Column.tsx";
@@ -45,7 +44,7 @@ export function IconsView({ display, selName, width, onPick, onOpen, label }: {
   );
 }
 
-const COLS = "minmax(0,1fr) 92px 112px";
+const COLS = "minmax(0,1fr) 92px 112px 112px";
 
 export function ListView({ display, selName, rowH, prefs, onPick, onOpen, onSort, label }: {
   display: Display; selName: string | null; rowH: number; prefs: Prefs; onPick: (r: Row) => void; onOpen: (r: Row) => void; onSort: (k: SortKey) => void; label: string;
@@ -59,7 +58,7 @@ export function ListView({ display, selName, rowH, prefs, onPick, onOpen, onSort
   return (
     <div className="flex-1 min-h-0 min-w-0 flex flex-col">
       <div className="grid items-center gap-2 px-3.5 text-[11px] shrink-0" style={{ gridTemplateColumns: COLS, minHeight: 28, borderBottom: LINE }}>
-        {head("name", "Name")}{head("size", "Size", true)}{head("modified", "Modified")}
+        {head("name", "Name")}{head("size", "Size", true)}<span className="px-1" style={{ color: "var(--text3)" }}>Type</span>{head("modified", "Modified")}
       </div>
       <VirtualList count={display.items.length} rowH={rowH} label={label} className="flex-1" keepInView={at < 0 ? null : display.itemOfRow[at]}
         render={(i) => {
@@ -70,8 +69,9 @@ export function ListView({ display, selName, rowH, prefs, onPick, onOpen, onSort
             <div key={r.name} role="option" aria-selected={r.name === selName} onClick={() => onPick(r)} onDoubleClick={() => onOpen(r)}
               className="grid items-center gap-2 px-3.5 mx-1 rounded-md cursor-pointer"
               style={{ gridTemplateColumns: COLS, height: rowH, color: r.locked ? "var(--text4)" : "var(--text)", ...selStyle(r.name === selName) }}>
-              <span className="flex items-center gap-2 min-w-0"><span className="shrink-0 flex" style={{ color: isFolder(r) ? "var(--warning-ink)" : "var(--text3)" }}><RowIcon row={r} /></span><span className="truncate">{r.name}</span></span>
-              <span className="text-right tabular-nums text-[11px]" style={{ color: "var(--text3)" }}>{isFolder(r) ? itemsLabel(r.items) : r.bytes !== null ? humanBytes(r.bytes) : ""}</span>
+              <span className="flex items-center gap-2 min-w-0"><span className="shrink-0 flex"><RowIcon row={r} /></span><span className="truncate">{r.name}</span></span>
+              <span className="text-right tabular-nums text-[11px]" style={{ color: "var(--text3)" }}>{isFolder(r) ? itemsLabel(r.items) : r.bytes !== null ? formatSize(r.bytes) : ""}</span>
+              <span className="text-[11px] truncate" style={{ color: "var(--text3)" }}>{kindWord(r)}</span>
               <span className="text-[11px] truncate" style={{ color: "var(--text3)" }} title={new Date(r.mtime).toLocaleString()}>{ago(r.mtime)}</span>
             </div>
           );

@@ -148,7 +148,7 @@ import {
 import { fileText, fileToTemp, fileTree, findFiles, grepFiles, listRefs, filesExist, heldBackFrom, heldBackTest, HELD_BACK, filesReach, gitReadRefusal, gitReadTest } from "./files.ts";
 import { diskFind, diskGrep, diskPlaces } from "./disk.ts";
 import { browseBatch } from "./browselist.ts";
-import { browseDir, fileBytes, fileFacts, openInDesktop, pagePolicy, revealInFileManager } from "./browse.ts";
+import { browseDir, fileBytes, fileFacts, previewSlice, openInDesktop, pagePolicy, revealInFileManager } from "./browse.ts";
 import { fileGitFacts } from "./fileGit.ts";
 import { benchEdit, benchEnd, benchLive, readNote, writeNote } from "./bench.ts";
 import {
@@ -7464,6 +7464,30 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (pathname === "/browse") return json(browseDir(url.searchParams.get("path") || "", url.searchParams.get("hidden") === "1", localBrowse));
       if (pathname === "/preview/facts") return json(fileFacts(url.searchParams.get("path") || "", localBrowse));
       if (pathname === "/preview/git") return json(await fileGitFacts(url.searchParams.get("path") || "", localBrowse));
+      /* The Machine tab's viewers: a slice of the file, never the whole of it in
+         memory. `cap` serves the head of a big text file; `Range` is what lets an
+         <audio> or <video> seek. Same boundary as the folder list (previewSlice). */
+      if (pathname === "/preview/file") {
+        const capQ = url.searchParams.get("cap");
+        const cap = capQ !== null && Number.isFinite(Number(capQ)) ? Number(capQ) : undefined;
+        const r = await previewSlice(url.searchParams.get("path") || "", localBrowse, { range: req.headers.get("range"), cap });
+        if (!r.ok) return json({ error: r.error }, r.status);
+        return new Response(r.body, {
+          status: r.status,
+          headers: {
+            ...cors,
+            ...r.headers,
+            "access-control-expose-headers": "x-agx-size, x-agx-truncated, content-range",
+            "content-type": r.mime,
+            "cache-control": "no-store",
+            // Bytes to be drawn, never a document with a script in it: an svg or
+            // an html file opened directly here gets no scripts, no network, and
+            // an opaque origin.
+            "content-security-policy": "sandbox; default-src 'none'; img-src 'self' data: blob:; media-src 'self'; style-src 'unsafe-inline'",
+            "x-content-type-options": "nosniff",
+          },
+        });
+      }
       if (pathname === "/preview/raw" || pathname === "/preview/page") {
         const r = await fileBytes(url.searchParams.get("path") || "", localBrowse);
         if (!r.ok) return json({ error: r.error }, 404);

@@ -147,7 +147,7 @@ describe("completing a typed path", () => {
 
 describe("labels", () => {
   test("a folder says how many items, and a capped count says so", () => {
-    expect(itemsLabel(0)).toBe("0 items");
+    expect(itemsLabel(0)).toBe("No items");
     expect(itemsLabel(1)).toBe("1 item");
     expect(itemsLabel(9999)).toBe("9999+ items");
     expect(itemsLabel(null)).toBe("");

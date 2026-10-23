@@ -3959,7 +3959,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
   }, [capturingChord]);
 
   /*
-   * And the same again for an app action — the file palette.
+   * And the same again for an app action — the finder.
    *
    * A third capture rather than a branch inside the second, for the reason the
    * comment above gives about the first two: while one of these is listening it

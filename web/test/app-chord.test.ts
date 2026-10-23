@@ -1,5 +1,5 @@
 /*
- * The key that opens the file palette, and why it is a preference.
+ * The key that opens the finder, and why it is a preference.
  *
  * It is the only binding in the app that reaches past a running shell — the
  * terminal is told to hand it over instead of writing it to the PTY. That makes
@@ -118,7 +118,7 @@ describe("moving it", () => {
     // palette's chord would shadow it and the palette setting would look dead.
     const r = kb.rebindChord("git", "mod+shift+p");
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toContain("Find a file");
+    if (!r.ok) expect(r.error).toContain("Finder");
   });
 
   it("survives a reload", () => {

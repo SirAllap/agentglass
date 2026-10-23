@@ -702,10 +702,10 @@ export function chooseRun(o: {
  * May the bench open this file in an editor?
  *
  * The workspace, a copy this server wrote, or anything the finder is allowed
- * to read. The last one is the regression: the palette's Machine tab lists
+ * to read. The last one is the regression: the finder lists
  * ~/Documents and offers the file, but this door only knew the workspace, so
  * the bench tab opened on a plain shell prompt and nvim never started. One
- * door per question: if the palette may read it, the editor may show it.
+ * door per question: if the finder may read it, the editor may show it.
  */
 export function viewableFile(wanted: string | null, tempCopy: boolean): boolean {
   return !!wanted && (inScopeReal(wanted) || tempCopy || browseReal(wanted) !== null);

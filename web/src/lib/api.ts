@@ -1313,6 +1313,23 @@ const realApi = {
    * app's token on every request and an `<img>` cannot carry a header. The
    * caller owns the URL and must revoke it — see Preview.tsx, which does.
    */
+  /** The text of a file up to `cap` bytes, from the slice route: `size` is the
+   *  whole file and `truncated` says whether the cap cut it. */
+  previewText: async (path: string, cap: number): Promise<{ ok: true; text: string; size: number; truncated: boolean } | { ok: false; error: string }> => {
+    try {
+      const r = await fetch(`${SERVER}/preview/file?path=${encodeURIComponent(path)}&cap=${cap}`, { headers: authHeaders() });
+      if (!r.ok) {
+        const why = await r.json().catch(() => null) as { error?: string } | null;
+        return { ok: false, error: why?.error ?? `the engine refused it (${r.status})` };
+      }
+      return { ok: true, text: await r.text(), size: Number(r.headers.get("x-agx-size") ?? 0), truncated: r.headers.get("x-agx-truncated") === "1" };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  },
+  /** A file's own URL for an element that can carry no header — <img>, <audio>,
+   *  <video>, a frame — so the browser can ask for ranges itself. */
+  previewUrl: (path: string): string => withToken(`${SERVER}/preview/file?path=${encodeURIComponent(path)}`),
   previewBlob: async (path: string): Promise<{ ok: true; url: string; mime: string } | { ok: false; error: string }> => {
     try {
       const r = await fetch(`${SERVER}/preview/raw?path=${encodeURIComponent(path)}`, { headers: authHeaders() });
@@ -2697,6 +2714,8 @@ const demoApi: typeof realApi = {
   previewFacts: (path: string) => D({ ok: false, path, name: "", kind: "binary", mime: "", bytes: 0, mtime: 0, error: "the demo has no filesystem" } as FileFacts),
   previewGit: () => D({ ok: true, repo: false } as FileGitFacts),
   previewBlob: async () => ({ ok: false as const, error: "the demo has no filesystem" }),
+  previewText: async () => ({ ok: false as const, error: "the demo has no filesystem" }),
+  previewUrl: () => "",
   previewOpen: () => D({ ok: false, error: "the demo has no filesystem" }),
   previewReveal: () => D({ ok: false, error: "the demo has no filesystem" }),
   diskGrep: () => D({ ok: false, hits: [], files: 0, truncated: false, via: "", error: "the demo has no filesystem" } as GrepReport),

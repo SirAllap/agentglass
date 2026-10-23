@@ -439,7 +439,7 @@ export function TopBar({
   workspaces?: readonly string[];
   onOpenProject: () => void;
   onOpenPalette: () => void;
-  /** Open the file finder. It had a chord and nothing else, which makes it a
+  /** Open the finder. It had a chord and nothing else, which makes it a
    *  feature you have to be told about — reported as exactly that. */
   onOpenFiles: () => void;
   /**
@@ -646,7 +646,7 @@ export function TopBar({
         title={workspace ? `${scopeTitle(open)}\nClick to switch project` : workspace === null ? "Every repo on this machine — click to open projects" : "Reading the open project…"}
         style={{
           ...NO_DRAG,
-          // 20 tall, like Find a file beside it: five clear either side in the
+          // 20 tall, like the finder beside it: five clear either side in the
           // 30px strip, instead of the padding filling it edge to edge.
           height: 20,
           border: `1px solid color-mix(in srgb, var(--border) ${workspace ? 55 : 40}%, transparent)`,
@@ -787,7 +787,7 @@ export function TopBar({
             going to learn it from a 9.5px pill. The strip is 30px tall and
             every millimetre of it is contested. */}
         {/*
-          * Find a file — shaped like the thing it opens, not like a chip.
+          * The finder — shaped like the thing it opens, not like a chip.
           *
           * It was a bare ⌕ the size of the ⌘K badge beside it, and it read as
           * one more status pill: "it is tiny and does not draw the eye". A
@@ -811,7 +811,7 @@ export function TopBar({
             widest part of the button by some way, and somebody reading the
             placeholder is looking for the box rather than for the key. It is
             still on the tooltip, where a label belongs. */}
-        <button onClick={onOpenFiles} title={`Find a file (${chordLabel(appChordFor("files.palette"))})`}
+        <button onClick={onOpenFiles} title={`Finder (${chordLabel(appChordFor("files.palette"))})`}
           className="agx-topbar-find group flex items-center gap-1.5 shrink-0 rounded"
           style={{ height: 20, paddingInline: 6, ...NO_DRAG }}>
           {/* 14, not 11. On a narrow window this collapses to the glyph alone,
@@ -819,7 +819,7 @@ export function TopBar({
               bar that cannot be read at the size of a label. */}
           <span className="flex" style={{ color: "var(--primary-ink)" }}><SearchIcon size={ICON.xs} /></span>
           <span className="hidden md:block text-[10px] whitespace-nowrap leading-none" style={{ color: "var(--text3)" }}>
-            Find a file…
+            Finder
           </span>
         </button>
         {/* Only in fullscreen. Windowed, the desktop already has a clock two

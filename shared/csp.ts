@@ -79,7 +79,9 @@ export const CSP_DIRECTIVES: readonly string[] = [
      on: the QR code ends at "add to home screen", which is the manifest. */
   "manifest-src 'self'",
   "font-src 'self' data:",
-  "media-src 'self' data: blob:",
+  /* Audio and video the finder plays come from the sidecar, which is a different
+     origin from the desktop page: `'self'` alone would refuse them. */
+  "media-src 'self' data: blob: http://127.0.0.1:* http://localhost:*",
   /* 'self' covers the WebSocket back to this same origin — the terminal, the
      notifications stream, the live feed. That is CSP3's rule (a ws:// URL
      matches 'self' when the document is http:// on the same host and port) and
@@ -88,7 +90,9 @@ export const CSP_DIRECTIVES: readonly string[] = [
      the desktop origin, whose sidecar is a different origin from the page. */
   "connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*",
   "worker-src 'self' blob:",
-  "frame-src 'self'",
+  /* The finder's PDF viewer frames a file the sidecar serves; Rendered HTML is
+     a srcdoc, which no frame-src judges. */
+  "frame-src 'self' http://127.0.0.1:* http://localhost:*",
   "child-src 'self'",
   "object-src 'none'",
   "base-uri 'none'",

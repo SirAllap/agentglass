@@ -507,7 +507,7 @@
 }
 .agx-market-row { transition: background-color 120ms ease; }
 .agx-market-row:hover { background: color-mix(in srgb, var(--text) 3.5%, transparent); }
-/* A row or segment in the file palette that is a button: the same 6% text tint
+/* A row or segment in the finder that is a button: the same 6% text tint
    the app's other hovers use, and nothing else moves. */
 .agx-pal-hit { transition: background-color 120ms ease; }
 .agx-pal-hit:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
@@ -2822,3 +2822,14 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-skel { background: linear-gradient(90deg, var(--bg3), var(--bg2), var(--bg3)); background-size: 200% 100%; animation: agx-skel-sh 1.4s linear infinite; }
 @keyframes agx-skel-sh { to { background-position: -200% 0; } }
 @media (prefers-reduced-motion: reduce) { .agx-skel { animation: none; } }
+
+/* The Machine preview's markdown: nothing in it may be wider than the pane. */
+.agx-prose-pane pre,
+.agx-prose-pane .agx-scroll,
+.agx-prose-pane .agx-scroll * { white-space: pre-wrap; overflow-wrap: anywhere; }
+.agx-prose-pane .agx-scroll { overflow-x: hidden; }
+.agx-prose-pane img { max-width: 100%; height: auto; }
+.agx-prose-pane table { display: block; max-width: 100%; overflow-x: auto; }
+
+/* A row of the finder's columns answers the pointer before it is clicked, as Strata's do. */
+.agx-fm-row:hover { background: color-mix(in srgb, var(--primary) 8%, transparent); }

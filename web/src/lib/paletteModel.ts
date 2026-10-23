@@ -1,4 +1,4 @@
-// The file palette's decisions, pulled out of the screen so they can be tested.
+// The finder's decisions, pulled out of the screen so they can be tested.
 //
 // There is no renderer in this project, so a rule that lives inside a component
 // is a rule nobody can break on purpose and watch go red. Everything here is a

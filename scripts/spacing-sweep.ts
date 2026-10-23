@@ -290,7 +290,7 @@ for (const p of panes) if (await byText(`^${p.replace(/[.*+?^${}()|[\]\\]/g, "\\
 await escape();
 
 for (const [label, name] of [["Skills catalog", "Skills"], ["Notifications", "Notifications"],
-  ["Search anything (⌘K)", "Search"], ["Find a file (Ctrl+Shift+P)", "FindFile"]] as const) {
+  ["Search anything (⌘K)", "Search"], ["Finder (Ctrl+Shift+P)", "FindFile"]] as const) {
   if (await byLabel(label, 2000)) { await scan(`modal:${name}`, true); await escape(); }
 }
 await byLabel("Git", 2400);

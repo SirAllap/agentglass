@@ -19,7 +19,7 @@
  * rule is loosened here — this is a third door into the same two rooms, not a
  * new room.
  */
-import { opendirSync, readdirSync, statSync, lstatSync, readFileSync } from "node:fs";
+import { opendirSync, readdirSync, statSync, lstatSync, openSync, readSync, closeSync } from "node:fs";
 import { failed } from "./refused.ts";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { diskAllows, diskEnabled, diskRoots } from "./disk.ts";
@@ -387,6 +387,13 @@ const TEXT_EXT = new Set([
   ".xml", ".svg", ".patch", ".diff", ".gitignore", ".dockerfile", ".makefile", ".mk", ".gradle",
 ]);
 
+/** Audio and video by extension, with the type a player needs: `audio/*` is a
+ *  pattern for an Accept header, not something a response can be. */
+const MEDIA_MIME: Record<string, string> = {
+  ".mp4": "video/mp4", ".m4v": "video/mp4", ".webm": "video/webm", ".mkv": "video/x-matroska", ".mov": "video/quicktime",
+  ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg", ".opus": "audio/ogg", ".flac": "audio/flac", ".m4a": "audio/mp4",
+};
+
 export type PreviewKind = "image" | "image-convert" | "text" | "pdf" | "video" | "audio" | "binary" | "dir";
 
 export interface FileFacts {
@@ -431,8 +438,7 @@ export function kindOf(abs: string, head?: Buffer): { kind: PreviewKind; mime: s
   if (IMAGE_MIME[ext]) return { kind: "image", mime: IMAGE_MIME[ext]! };
   if (IMAGE_CONVERTIBLE.has(ext)) return { kind: "image-convert", mime: "application/octet-stream" };
   if (ext === ".pdf") return { kind: "pdf", mime: "application/pdf" };
-  if ([".mp4", ".webm", ".mkv", ".mov", ".m4v"].includes(ext)) return { kind: "video", mime: ext === ".webm" ? "video/webm" : "video/mp4" };
-  if ([".mp3", ".wav", ".ogg", ".flac", ".m4a", ".opus"].includes(ext)) return { kind: "audio", mime: "audio/*" };
+  if (MEDIA_MIME[ext]) return { kind: MEDIA_MIME[ext]!.startsWith("video/") ? "video" : "audio", mime: MEDIA_MIME[ext]! };
   if (TEXT_EXT.has(ext) || basename(abs).toLowerCase() === "makefile" || basename(abs).toLowerCase() === "dockerfile") {
     return { kind: "text", mime: "text/plain; charset=utf-8" };
   }
@@ -527,8 +533,11 @@ export function fileFacts(pathIn: unknown, local = false): FileFacts {
 
   let head: Buffer | undefined;
   try {
-    const fd = readFileSync(abs, { flag: "r" });
-    head = fd.subarray(0, Math.min(fd.length, 64 * 1024));
+    // Text needs its first TEXT_HEAD bytes; a picture's size lives in its first
+    // few KB or, for a jpeg behind a big EXIF block, within a few hundred. Never
+    // the whole file: that is what made selecting a 50 MB log take a second.
+    const fd = readHead(abs, TEXT_HEAD) ?? Buffer.alloc(0);
+    head = fd.subarray(0, 64 * 1024);
     const { kind, mime } = kindOf(abs, head);
 
     if (kind === "image") {
@@ -540,7 +549,7 @@ export function fileFacts(pathIn: unknown, local = false): FileFacts {
     }
     if (kind === "text") {
       const text = fd.subarray(0, TEXT_HEAD).toString("utf8");
-      return { ...base, kind, mime, text, textTruncated: fd.length > TEXT_HEAD };
+      return { ...base, kind, mime, text, textTruncated: st.size > TEXT_HEAD };
     }
     return { ...base, kind, mime };
   } catch (e) {
@@ -589,8 +598,71 @@ export async function fileBytes(pathIn: unknown, local = false): Promise<{ ok: t
   return { ok: true, body: out, mime: "image/png" };
 }
 
-function readHead(abs: string): Buffer | undefined {
-  try { return readFileSync(abs).subarray(0, 64 * 1024); } catch { return undefined; }
+/** The first 64 KB, read as 64 KB: `readFileSync` of a 50 MB log to look at its
+ *  first bytes was the whole cost of selecting it. */
+function readHead(abs: string, n = 64 * 1024): Buffer | undefined {
+  let fd: number | undefined;
+  try {
+    fd = openSync(abs, "r");
+    const buf = Buffer.alloc(n);
+    return buf.subarray(0, readSync(fd, buf, 0, n, 0));
+  } catch { return undefined; } finally { if (fd !== undefined) try { closeSync(fd); } catch { /* gone */ } }
+}
+
+/** What one response of the file route may carry: a preview is a look, not a download. */
+export const FILE_CAP = 64 * 1024 * 1024;
+
+/** One plain `bytes=a-b`, `a-` or `-n` range against a file of `size` bytes.
+ *  null: not a range worth honouring (serve the whole). A multi-range is one of
+ *  those: no player sends it and a multipart body is a second thing to get wrong. */
+export function parseRange(h: string | null | undefined, size: number): { start: number; end: number } | "unsatisfiable" | null {
+  const m = /^bytes=(\d*)-(\d*)$/.exec((h ?? "").trim());
+  if (!m || (m[1] === "" && m[2] === "")) return null;
+  let start: number, end: number;
+  if (m[1] === "") { const n = Number(m[2]); if (n === 0) return "unsatisfiable"; start = Math.max(0, size - n); end = size - 1; }
+  else { start = Number(m[1]); end = m[2] === "" ? size - 1 : Math.min(Number(m[2]), size - 1); }
+  return start >= size || start > end ? "unsatisfiable" : { start, end };
+}
+
+export type PreviewSlice =
+  | { ok: true; status: 200 | 206; mime: string; size: number; headers: Record<string, string>; body: Blob }
+  | { ok: false; status: number; error: string; headers?: Record<string, string> };
+
+/**
+ * A file, or a slice of it, for the viewers: images, pdf, audio and video
+ * straight into their elements (so Range works), text and json with a byte cap.
+ *
+ * The boundary is `browseReal`'s — the folder list's own — and what is judged is
+ * what is opened. Never the whole file in memory: the body is a lazy slice of
+ * the file on disk, which Bun streams.
+ */
+export async function previewSlice(pathIn: unknown, local: boolean, opts: { range?: string | null; cap?: number }): Promise<PreviewSlice> {
+  const abs = browseReal(pathIn, local);
+  if (!abs) return { ok: false, status: 403, error: refusal(safeAbs(pathIn) ?? "") };
+  let st;
+  try { st = statSync(abs); } catch { return { ok: false, status: 404, error: "no such file" }; }
+  if (st.isDirectory()) return { ok: false, status: 400, error: "that is a folder" };
+  // A fifo or a device never ends; opening one would hang the answer.
+  if (!st.isFile()) return { ok: false, status: 400, error: "not a regular file" };
+
+  const size = st.size;
+  const { mime } = kindOf(abs, readHead(abs));
+  const file = Bun.file(abs);
+  const base = { "accept-ranges": "bytes", "x-agx-size": String(size) };
+  const range = parseRange(opts.range, size);
+  if (range === "unsatisfiable") return { ok: false, status: 416, error: "range not satisfiable", headers: { "content-range": `bytes */${size}` } };
+  if (range) {
+    const end = Math.min(range.end, range.start + FILE_CAP - 1);
+    return { ok: true, status: 206, mime, size, body: file.slice(range.start, end + 1),
+      headers: { ...base, "content-range": `bytes ${range.start}-${end}/${size}`, "content-length": String(end - range.start + 1) } };
+  }
+  const cap = opts.cap !== undefined ? Math.max(0, Math.min(opts.cap, FILE_CAP)) : FILE_CAP;
+  if (opts.cap === undefined && size > FILE_CAP) {
+    return { ok: false, status: 413, error: `this file is ${(size / 1048576).toFixed(0)} MB, more than the 64 MB a preview reads at once` };
+  }
+  const n = Math.min(size, cap);
+  return { ok: true, status: 200, mime, size, body: file.slice(0, n),
+    headers: { ...base, "content-length": String(n), ...(n < size ? { "x-agx-truncated": "1" } : {}) } };
 }
 
 /** The places a browse can start from: the same list the machine search offers,
@@ -642,7 +714,7 @@ export function openInDesktop(pathIn: unknown, local = false): { ok: boolean; wi
  *
  * A folder is shown as itself and a file as the folder that holds it. Both the
  * path asked for and the folder it lands on go through `browseReal`, the gate
- * every read here goes through: a file the palette may read but whose folder it
+ * every read here goes through: a file the finder may read but whose folder it
  * may not would otherwise hand the file manager a listing of siblings the
  * palette itself refuses to show.
  */

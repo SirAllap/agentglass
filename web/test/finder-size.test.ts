@@ -12,7 +12,7 @@ test("the box is a fixed height, not one derived from content", () => {
 });
 
 test("the panel takes its box from finderSize and does not size to content", () => {
-  const at = src.indexOf('aria-label="Find a file"');
+  const at = src.indexOf('aria-label="Finder"');
   expect(at).toBeGreaterThan(0);
   const open = src.lastIndexOf("<motion.div", at);
   const tag = src.slice(open, at).split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");

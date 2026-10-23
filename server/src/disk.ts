@@ -7,7 +7,7 @@
  * ~/Documents, the export somebody dropped in ~/Downloads — none of them live
  * in a git checkout, so none of them were reachable, and reading one meant
  * leaving for a file manager and coming back to find your place again. Which
- * is the exact trip the palette exists to remove.
+ * is the exact trip the finder exists to remove.
  *
  * Everything else under /files/ is bounded by the open project on purpose (see
  * config.ts): a cockpit pointed at one repository must not hand out reads of

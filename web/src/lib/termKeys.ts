@@ -42,7 +42,7 @@ export function isPluckChord(e: { key: string; ctrlKey?: boolean; metaKey?: bool
 /**
  * Chords the app claims before the shell sees them.
  *
- * The file palette is the case this exists for: it has to open while a shell
+ * The finder is the case this exists for: it has to open while a shell
  * has focus — that is the entire point of it — and xterm would otherwise send
  * the keystroke down the PTY as well, so the palette would open AND readline
  * would act on the same keypress.

@@ -1,4 +1,4 @@
-// Find a file from wherever you are.
+// The finder, from wherever you are.
 //
 // Files is a view, so reaching it costs leaving whatever you were doing —
 // usually a terminal, which is precisely where you were when you needed the
@@ -25,15 +25,14 @@
 // query, selected result, open file, scroll and drawer come back exactly, also
 // after a restart (finderState.ts).
 import { HIT, ICON } from "../lib/iconSize.ts";
-import { ClockIcon, CodeFileIcon, FileIcon, FolderIcon, HomeIcon, ImageFileIcon, NoteIcon, SearchIcon } from "../lib/glyphIcons.tsx";
+import { CodeFileIcon, FileIcon, FolderIcon, HomeIcon, ImageFileIcon, NoteIcon, SearchIcon } from "../lib/glyphIcons.tsx";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { api, SERVER, withToken } from "../lib/api.ts";
-import { requestFilesReveal } from "../lib/filesReveal.ts";
 import { recents, remember, forget, subscribeRecents, ago } from "../lib/fileRecents.ts";
 import { reduceSelection } from "../lib/finderSelection.ts";
-import { completion, looksLikePath, parseQuery, passesFilters, readPath, scoreMatch } from "../lib/finderQuery.ts";
+import { completion, finderTarget, looksLikePath, parseQuery, passesFilters, readPath, scoreMatch } from "../lib/finderQuery.ts";
 import { FileView, type Jump } from "./finder/FileView.tsx";
 import { MachineFinder } from "./finder/machine/MachineFinder.tsx";
 import { InfoRail } from "./finder/InfoRail.tsx";
@@ -49,34 +48,22 @@ import { appChordFor, chordLabel, isAppChord } from "../lib/keybindings.ts";
 import { LAYER } from "../lib/layers.ts";
 import { FINDER_BOX, FINDER_MARGIN } from "../lib/finderSize.ts";
 import { shortPath } from "../lib/shortPath.ts";
-import { afterJump, dirsFirst, humanBytes, pageUrl, fileKind, focusSelection, followBox, needsPlaces, pathBar, pathInputText, placeSections, shortenHome, switchTab, type BrowseState, type PlaceRow } from "../lib/paletteModel.ts";
-import type { DiskPlace, FsEntry, GitRepoRef, GrepHit } from "../../../shared/types.ts";
+import { afterJump, dirsFirst, humanBytes, pageUrl, fileKind, focusSelection, followBox, needsPlaces, pathBar, pathInputText, shortenHome, switchTab, type BrowseState } from "../lib/paletteModel.ts";
+import type { DiskPlace, GitRepoRef, GrepHit } from "../../../shared/types.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { FileViewer } from "./CardFiles.tsx";
 import type { CardAttachment } from "../../../shared/providers.ts";
 import type { FinderTarget } from "../lib/finderTarget.ts";
 import { INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 
-export type PaletteTab = "names" | "contents" | "recent" | "machine";
+/** What the finder is showing. There is one mode, the finder itself; "recent" is
+ *  the sidebar's Recent entry, a list you leave with the button in the top bar. */
+export type Face = "machine" | "recent";
 
-/*
- * The fourth question is not about the checkout at all.
- *
- * "Where is that document" — the evidence folder for a ticket, the note in
- * ~/Documents, the export somebody left in ~/Downloads — is asked as often as
- * the other three and none of them could answer it, because all three are
- * bounded by the repository. Reading one meant leaving the app for a file
- * manager, which is the trip this palette exists to remove.
- *
- * Last in the row, deliberately: the three that were here keep the order your
- * hands already know, so ⇥⇥ still lands where it used to.
- */
-const TABS: { id: PaletteTab; label: string; placeholder: string }[] = [
-  { id: "names", label: "Name", placeholder: "Find a file or folder by name…" },
-  { id: "contents", label: "Contents", placeholder: "Search the code of this checkout…" },
-  { id: "recent", label: "Recent", placeholder: "Filter what you have opened…" },
-  { id: "machine", label: "Machine", placeholder: "Find a document anywhere in your home folder…" },
-];
+const PLACEHOLDER: Record<Face, string> = {
+  machine: "Search this folder, or type a path…",
+  recent: "Filter what you have opened…",
+};
 
 /** One row of the result list, whatever produced it. Kept as data rather than
  *  as JSX so the keyboard can index into it without asking the DOM. */
@@ -229,17 +216,20 @@ export function FilePalette({
    * not only component state. See finderState.ts.
    */
   const [saved] = useState<FinderSnapshot>(() => restore(readSnap()));
-  const [tab, setTab] = useState<PaletteTab>(saved.tab);
-  const [q, setQ] = useState(saved.tabs[saved.tab]?.q ?? "");
+  /* A snapshot from before the tabs went: names and contents were folder
+     searches of a checkout, and the finder's own box is that now. */
+  const face0: Face = saved.tab === "recent" ? "recent" : "machine";
+  const [tab, setTab] = useState<Face>(face0);
+  const [q, setQ] = useState(saved.tabs[face0]?.q ?? "");
   /* What the tabs that are not showing were looking at — see `switchTab`. */
-  const stash = useRef<Partial<Record<PaletteTab, BrowseState>>>(
-    Object.fromEntries((Object.entries(saved.tabs) as [PaletteTab, TabView][]).map(([t, v]) => [t, { q: v.q, browsePath: v.browsePath }])));
+  const stash = useRef<Partial<Record<Face, BrowseState>>>(
+    Object.fromEntries((Object.entries(saved.tabs) as [Face, TabView][]).map(([t, v]) => [t, { q: v.q, browsePath: v.browsePath }])));
   /* The other half of what a tab remembers: its selection and chips. */
-  const viewStash = useRef<Partial<Record<PaletteTab, { sel: string | null; exts: string[] }>>>(
-    Object.fromEntries((Object.entries(saved.tabs) as [PaletteTab, TabView][]).map(([t, v]) => [t, { sel: v.sel, exts: v.exts }])));
+  const viewStash = useRef<Partial<Record<Face, { sel: string | null; exts: string[] }>>>(
+    Object.fromEntries((Object.entries(saved.tabs) as [Face, TabView][]).map(([t, v]) => [t, { sel: v.sel, exts: v.exts }])));
   /** The saved selection, waiting for its results to arrive. */
-  const pendingSel = useRef<string | null>(saved.tabs[saved.tab]?.sel ?? null);
-  const [exts, setExts] = useState<string[]>(saved.tabs[saved.tab]?.exts ?? []);
+  const pendingSel = useRef<string | null>(saved.tabs[face0]?.sel ?? null);
+  const [exts, setExts] = useState<string[]>(saved.tabs[face0]?.exts ?? []);
   const [drawerW, setDrawerW] = useState(saved.drawerW);
   const [collapsed, setCollapsed] = useState(saved.collapsed);
   const [showInfo, setShowInfo] = useState(true);
@@ -271,10 +261,8 @@ export function FilePalette({
    *  a path drawn as `/home/somebody/Documents` wastes four crumbs on a name
    *  nobody needs to read. */
   const [homeDir, setHomeDir] = useState("");
-  const [placeRecents, setPlaceRecents] = useState<string[]>(readPlaceRecents);
+  const [, setPlaceRecents] = useState<string[]>(readPlaceRecents);
   const [placeErr, setPlaceErr] = useState<string | null>(null);
-  const [refs, setRefs] = useState<{ local: string[]; remote: string[]; head?: string }>({ local: [], remote: [] });
-  const [refOpen, setRefOpen] = useState(false);
   /*
    * Browsing, which is the half the finder never had.
    *
@@ -283,12 +271,12 @@ export function FilePalette({
    * the list is a FOLDER rather than a result set — for every tab, so the four
    * of them stop behaving differently depending on which backend answers.
    */
-  const [browsePath, setBrowsePath] = useState<string | null>(saved.tabs[saved.tab]?.browsePath ?? null);
+  const [browsePath, setBrowsePath] = useState<string | null>(saved.tabs[face0]?.browsePath ?? null);
   const [browsed, setBrowsed] = useState<BrowseReport | null>(null);
   const [showHidden, setShowHidden] = useState(readHidden);
   const [cursor, setCursor] = useState(0);
   /** Change tab and take that tab's own folder and box with it. */
-  const goTab = useCallback((to: PaletteTab) => {
+  const goTab = useCallback((to: Face) => {
     const r = switchTab(stash.current, tab, { q, browsePath }, to);
     stash.current = r.stash;
     viewStash.current = { ...viewStash.current, [tab]: { sel: selAbsRef.current, exts } };
@@ -388,13 +376,6 @@ export function FilePalette({
   useEffect(() => { setRef(readRef(root)); }, [root]);
   useEffect(() => { saveRef(root, ref); }, [root, ref]);
 
-  useEffect(() => {
-    if (!open || !root) return;
-    api.filesRefs(root)
-      .then((r) => setRefs(r.ok ? { local: r.local, remote: r.remote, head: r.head } : { local: [], remote: [] }))
-      .catch(() => setRefs({ local: [], remote: [] }));
-  }, [open, root]);
-
   // Focus the field on open, and select what is in it: reopening with the last
   // query still there is useful (you are refining), but only if the first thing
   // you type replaces it rather than appending to it.
@@ -418,24 +399,22 @@ export function FilePalette({
     const tail = looksLikePath(t) ? t.slice(t.lastIndexOf("/") + 1) : t;
     return hasGlob(tail);
   }, [q]);
-  const found = useSearch(
-    () => (tab === "names" ? api.filesFind(root, q, ref || undefined) : null),
-    [tab === "names", root, q.trim(), ref],
-    !!root && tab === "names" && q.trim().length > 0 && !globAsked,
-  );
-  const grepped = useSearch(
-    () => (tab === "contents" ? api.filesGrep(root, q, ref || undefined) : null),
-    [tab === "contents", root, q.trim(), ref],
-    !!root && tab === "contents" && q.trim().length >= 2,
+  /* The one chip in the box: names (the default) or what is inside the files, both
+     of the folder the finder has open. */
+  const [byText, setByText] = useState(false);
+  const inside = useSearch(
+    () => (tab === "machine" && byText ? api.diskGrep(place, q) : null),
+    [tab === "machine" && byText, place, q.trim()],
+    !!place && tab === "machine" && byText && q.trim().length >= 2,
   );
 
   /* Its own call, not `filesFind` with a flag: that one is bounded by the open
      project and includes hidden files, and both are right for a checkout and
      wrong for a home folder. See server/src/disk.ts. */
   const onDisk = useSearch(
-    () => (tab === "machine" ? api.diskFind(place, q) : null),
-    [tab === "machine", place, q.trim()],
-    !!place && tab === "machine" && q.trim().length >= 2 && !globAsked,
+    () => (tab === "machine" && !byText ? api.diskFind(place, q) : null),
+    [tab === "machine" && !byText, place, q.trim()],
+    !!place && tab === "machine" && !byText && q.trim().length >= 2 && !globAsked,
   );
 
   /* The third argument is the server snapshot, and without it this component
@@ -500,14 +479,15 @@ export function FilePalette({
 
   /* The Machine tab with nothing typed IS the file manager (finder/machine). A
      query, even one letter, hands the tab back to the search it always was. */
-  const finderOn = tab === "machine" && !q.trim() && !!homeDir && !placeErr;
+  const finderOn = tab === "machine" && (!q.trim() || looksLikePath(q)) && !!homeDir && !placeErr;
+  /* What a typed path points at: the finder opens its folder and selects it. */
+  const finderTo = useMemo(() => (finderOn && q.trim() ? finderTarget(q, homeDir, place || homeDir) : null), [finderOn, q, homeDir, place]);
   const at = useMemo(() => {
     if (finderOn) return null;
     if (typedPath) return typedPath.dir;
     if (browsePath) return browsePath;
-    if (asked.text.trim() && !(globAsked && tab !== "contents")) return null;
+    if (asked.text.trim() && !globAsked) return null;
     if (tab === "machine") return place || null;
-    if (tab === "names") return root || null;
     return null;
   }, [finderOn, typedPath, browsePath, asked.text, tab, place, root, globAsked]);
 
@@ -552,28 +532,8 @@ export function FilePalette({
         ? { kind: "dir", rel: e.name, abs: `${base}/${e.name}`, items: e.items, mtime: e.mtime, locked: e.locked, why: e.why }
         : { kind: "file", rel: e.name, abs: `${base}/${e.name}`, bytes: e.bytes, mtime: e.mtime, locked: e.locked, why: e.why }));
     }
-    if (tab === "machine") {
-      const d = onDisk.data;
-      if (!d?.ok) return [];
-      // Folders first here too, and they matter more on this tab: naming a
-      // folder is how you say "search in there", which is what picking one does.
-      return [
-        ...(d.dirs ?? []).map((rel): Row => ({ kind: "dir", rel })),
-        ...d.files.map((rel): Row => ({ kind: "file", rel })),
-      ];
-    }
-    if (tab === "names") {
-      const d = found.data;
-      if (!d?.ok) return [];
-      // Folders first — typing `guest-checkout-v2` names a place, and forty
-      // files from inside it are forty ways of not saying so.
-      return [
-        ...(d.dirs ?? []).map((rel): Row => ({ kind: "dir", rel })),
-        ...d.files.map((rel): Row => ({ kind: "file", rel })),
-      ];
-    }
-    if (tab === "contents") {
-      const d = grepped.data;
+    if (tab === "machine" && byText) {
+      const d = inside.data;
       if (!d?.ok) return [];
       // Grouped by file: ten matches in one file is one place to go, not ten.
       const out: Row[] = [];
@@ -584,12 +544,21 @@ export function FilePalette({
       }
       return out;
     }
+    if (tab === "machine") {
+      const d = onDisk.data;
+      if (!d?.ok) return [];
+      // Folders first: naming a folder is how you say "search in there".
+      return [
+        ...(d.dirs ?? []).map((rel): Row => ({ kind: "dir", rel })),
+        ...d.files.map((rel): Row => ({ kind: "file", rel })),
+      ];
+    }
     const needle = q.trim().toLowerCase();
     return recent
       .filter((r) => (root ? r.root === root : true))
       .filter((r) => !needle || (hasGlob(needle) ? matchGlob(needle, r.rel) : r.rel.toLowerCase().includes(needle)))
       .map((r): Row => ({ kind: "recent", rel: r.rel, at: r.at, root: r.root, gone: gone.has(`${r.root}\u0000${r.rel}`), abs: `${r.root}/${r.rel}` }));
-  }, [tab, at, browsed, found.data, grepped.data, onDisk.data, recent, q, root, gone]);
+  }, [tab, at, browsed, byText, inside.data, onDisk.data, recent, q, root, gone]);
 
   /** Where a row IS, whichever tab produced it — the one thing every backend
    *  knew and none of them handed over, and what the preview pane needs. */
@@ -623,7 +592,7 @@ export function FilePalette({
     if (!at || !needle) return filtered;
     /* A pattern keeps what it matches, in the order the folder had. Scoring it
        as a fuzzy name is what answered "Nothing in here matches" to `*.png`. */
-    if (hasGlob(needle) && tab !== "contents") return filtered.filter((r) => matchGlob(needle, r.rel));
+    if (hasGlob(needle) && !byText) return filtered.filter((r) => matchGlob(needle, r.rel));
     return filtered
       .map((r) => ({ r, score: scoreMatch(r.rel, needle, exact) }))
       .filter((x) => x.score >= 0)
@@ -681,20 +650,16 @@ export function FilePalette({
   const { viewFiles, viewRows } = useMemo(() => {
     const files: CardAttachment[] = [];
     const rowsOf: Row[] = [];
-    // A file found on a branch is not on disk, so it has nothing to draw.
-    const onBranch = !!ref && tab === "names" && !at;
-    if (!onBranch) {
-      for (const r of shown) {
-        if (r.kind === "dir" || (r.kind === "recent" && r.gone) || !VIEWABLE.test(r.rel)) continue;
-        const abs = absOf(r);
-        if (!abs) continue;
-        const url = withToken(`${SERVER}/preview/raw?path=${encodeURIComponent(abs)}`);
-        files.push({ id: abs, title: abs.slice(abs.lastIndexOf("/") + 1), ext: (/\.(\w+)$/.exec(abs)?.[1] ?? "").toLowerCase(), size: r.kind === "file" ? r.bytes ?? 0 : 0, url, thumb: url });
-        rowsOf.push(r);
-      }
+    for (const r of shown) {
+      if (r.kind === "dir" || (r.kind === "recent" && r.gone) || !VIEWABLE.test(r.rel)) continue;
+      const abs = absOf(r);
+      if (!abs) continue;
+      const url = withToken(`${SERVER}/preview/raw?path=${encodeURIComponent(abs)}`);
+      files.push({ id: abs, title: abs.slice(abs.lastIndexOf("/") + 1), ext: (/\.(\w+)$/.exec(abs)?.[1] ?? "").toLowerCase(), size: r.kind === "file" ? r.bytes ?? 0 : 0, url, thumb: url });
+      rowsOf.push(r);
     }
     return { viewFiles: files, viewRows: rowsOf };
-  }, [shown, absOf, ref, tab, at]);
+  }, [shown, absOf]);
   const viewImage = useCallback((row: Row) => {
     const i = viewRows.indexOf(row);
     if (i >= 0) setViewAt(i);
@@ -751,7 +716,6 @@ export function FilePalette({
     /* A folder's bench action is a shell in it; a file's is the editor. */
     if (row.kind === "dir") { onBench(benchOpen("terminal", abs, project)); onClose(); return; }
     if (IMAGEY.test(row.rel)) return;
-    if (ref && tab === "names" && !at && row.kind !== "recent") { void onOpenFile(root, row.rel, branch, ref); onClose(); return; }
     onBench(benchOpen("edit", abs, project));
     onClose();
   }, [absOf, ref, tab, at, root, branch, onOpenFile, onBench, onClose]);
@@ -880,14 +844,6 @@ export function FilePalette({
       }
       return;
     }
-    if (e.key === "Tab") {
-      // Tab cycles the three questions. It is free here — there is exactly one
-      // field and one list, so there is nothing else for it to move between.
-      e.preventDefault();
-      const i = TABS.findIndex((t) => t.id === tab);
-      goTab(TABS[(i + (e.shiftKey ? TABS.length - 1 : 1)) % TABS.length]!.id);
-      return;
-    }
     // ⌘⏎ / ctrl+⏎ is the second thing a row can do: the editor for a picture,
     // the Files view for a folder. One key, one meaning — "not the obvious one".
     if (e.key === "Enter") { e.preventDefault(); openRow(shown[cursor], e.metaKey || e.ctrlKey); return; }
@@ -913,7 +869,7 @@ export function FilePalette({
   const selAbs = selRow ? absOf(selRow) : null;
   selAbsRef.current = selAbs;
   /* The selection that survives a close: see finderState.rememberedSel. */
-  const lastSel = useRef<string | null>(saved.tabs[saved.tab]?.sel ?? null);
+  const lastSel = useRef<string | null>(saved.tabs[face0]?.sel ?? null);
   lastSel.current = rememberedSel(lastSel.current, open, selAbs);
   const openRef = useRef(open);
   openRef.current = open;
@@ -933,8 +889,6 @@ export function FilePalette({
   const source: FileSource | null = useMemo(() => {
     if (!open || !selRow || !selAbs) return null;
     if (selRow.kind === "recent" && selRow.gone) return null;
-    const onRef = !!ref && tab === "names" && !at && selRow.kind !== "recent";
-    if (onRef) return selRow.kind === "dir" ? null : { abs: null, root, rel: selRow.rel, ref };
     const rootOf = selRow.kind === "recent" ? selRow.root : at || tab === "machine" ? selAbs.slice(0, selAbs.lastIndexOf("/")) : root;
     return { abs: selAbs, root: rootOf, rel: selAbs.slice(selAbs.lastIndexOf("/") + 1) };
     // A row is a new object per render; its path is what identifies it.
@@ -974,9 +928,9 @@ export function FilePalette({
   const flushSnap = useCallback(() => {
     saveTimer.current = null;
     const tabs: FinderSnapshot["tabs"] = {};
-    for (const t of TABS) {
-      const b = stash.current[t.id]; const v = viewStash.current[t.id];
-      if (t.id !== tab && (b || v)) tabs[t.id] = { q: b?.q ?? "", browsePath: b?.browsePath ?? null, sel: v?.sel ?? null, exts: v?.exts ?? [] };
+    for (const t of ["machine", "recent"] as const) {
+      const b = stash.current[t]; const v = viewStash.current[t];
+      if (t !== tab && (b || v)) tabs[t] = { q: b?.q ?? "", browsePath: b?.browsePath ?? null, sel: v?.sel ?? null, exts: v?.exts ?? [] };
     }
     tabs[tab] = { q, browsePath, sel: lastSel.current, exts };
     snap.current = { ...snap.current, v: 1, tab, tabs, drawerW, collapsed };
@@ -1042,8 +996,7 @@ export function FilePalette({
     else void api.previewOpen(p);
   };
 
-  const active = TABS.find((t) => t.id === tab)!;
-  const status = tab === "names" ? found : tab === "contents" ? grepped : tab === "machine" ? onDisk : null;
+    const status = tab === "machine" ? (byText ? inside : onDisk) : null;
 
   const unit = at ? (shown.length === 1 ? "item" : "items") : (shown.length === 1 ? "result" : "results");
   const sectionAt = outlineAt >= 0 ? outline[outlineAt]?.label ?? null : null;
@@ -1085,7 +1038,7 @@ export function FilePalette({
               boxShadow: "0 30px 70px -20px #000",
             }}
             onKeyDown={onKey}
-            role="dialog" aria-modal="true" aria-label="Find a file">
+            role="dialog" aria-modal="true" aria-label="Finder">
 
             {/* the top bar: the question, where it is asked, how many answers,
                 which of the four questions, and the way through them.
@@ -1105,36 +1058,15 @@ export function FilePalette({
                 style={{ background: "var(--bg)", border: "1.5px solid color-mix(in srgb, var(--text) 80%, transparent)" }}>
                 <span className="flex" style={{ color: "var(--text3)" }}><SearchIcon size={ICON.xs} /></span>
                 <input ref={inputRef} data-finder-box value={q} onChange={(e) => { setBoxMirror(null); setQ(e.target.value); }}
-                  spellCheck={false} autoComplete="off" placeholder={active.placeholder}
+                  spellCheck={false} autoComplete="off" placeholder={PLACEHOLDER[tab]}
                   className="flex-1 min-w-0 bg-transparent outline-none text-[13px]" style={{ color: "var(--text)" }} />
-                {/* One control, not two.
-                    Two chips meant two decisions for one question, and the
-                    question does not divide that way: reading a branch is the
-                    same answer from any checkout of the repository, because they
-                    share the object store. What actually varies is a single
-                    thing — what am I searching — so it is asked once. */}
-                {tab === "machine" && (
-                  <PlaceChip
-                    place={place} places={places} recents={placeRecents} error={placeErr} homeDir={homeDir}
-                    openState={[pickOpen, setPickOpen]}
-                    onPick={(p) => {
-                      setPlaceRecents(rememberPlace(p));
-                      setPlace(p); setBrowsePath(null); setQ("");
-                      setPickOpen(false); inputRef.current?.focus();
-                    }} />
-                )}
-                {tab !== "recent" && tab !== "machine" && (
-                  <ScopeChip
-                    repo={repo} repos={repos} ref_={ref} refs={refs}
-                    openState={[pickOpen, setPickOpen]}
-                    onPickRoot={(r) => {
-                      // Choosing a copy means "what is on that disk", so it also
-                      // answers the version — which is what made the two-control
-                      // version feel like it was asking twice.
-                      setRoot(r); setRef(""); saveRef(r, ""); setBrowsePath(null);
-                      setPickOpen(false); inputRef.current?.focus();
-                    }}
-                    onPickRef={(r) => { setRef(r); setPickOpen(false); inputRef.current?.focus(); }} />
+                {tab === "machine" && q.trim() && !looksLikePath(q) && (
+                  <button type="button" aria-pressed={byText} onClick={() => { setByText((v) => !v); inputRef.current?.focus(); }}
+                    title={byText ? "Searching inside the files of this folder" : "Search inside the files of this folder"}
+                    className="agx-btn shrink-0 text-[10.5px] px-2 py-0.5 rounded-full"
+                    style={byText ? { background: "var(--text)", color: "var(--bg)", fontWeight: 600 } : { border: EDGE, color: "var(--text3)" }}>
+                    Contents
+                  </button>
                 )}
                 {tab === "recent" && (
                   <RepoChip repo={repo} repos={repos} openState={[pickOpen, setPickOpen]}
@@ -1148,17 +1080,10 @@ export function FilePalette({
                 )}
               </div>
 
-              <div className="flex items-center rounded-md overflow-hidden shrink-0" role="tablist" aria-label="What to search"
-                style={{ border: EDGE, background: "var(--bg)" }}>
-                {TABS.map((t) => (
-                  <button key={t.id} role="tab" aria-selected={t.id === tab}
-                    onClick={() => { goTab(t.id); inputRef.current?.focus(); }}
-                    className="text-[11.5px] px-3 py-1.5"
-                    style={t.id === tab ? { background: "var(--text)", color: "var(--bg)", fontWeight: 500 } : { color: "var(--text3)" }}>
-                    {t.label}
-                  </button>
-                ))}
-              </div>
+              {tab === "recent" && (
+                <button className="agx-btn rounded-md text-[11.5px] px-3 py-1.5 shrink-0" style={{ border: EDGE, color: "var(--text2)" }}
+                  onClick={() => { goTab("machine"); inputRef.current?.focus(); }}>← Finder</button>
+              )}
 
               {!finderOn && (
               <div className="flex items-center gap-1.5 shrink-0 text-[11px]" style={{ color: "var(--text3)" }}>
@@ -1201,7 +1126,7 @@ export function FilePalette({
 
             {/* the drawer, the reader and the rail */}
             {finderOn ? (
-              <MachineFinder home={homeDir} start={place || homeDir} places={places}
+              <MachineFinder home={homeDir} start={place || homeDir} places={places} target={finderTo}
                 onPlace={(p) => { setPlaceRecents(rememberPlace(p)); setPlace(p); setBrowsePath(null); }}
                 onBench={(p, mode) => { onBench(benchOpen(mode, p, root)); onClose(); }}
                 onRecent={() => goTab("recent")} />
@@ -1323,7 +1248,7 @@ export function FilePalette({
               <span className="hidden md:inline">Ctrl+I info</span>
               <span className="hidden lg:inline">{at ? "← up · ⇥ completes a path" : "type ~/ or ../ to move around"}</span>
               <span className="ml-auto truncate" aria-live="off">
-                {chordLabel(appChordFor("files.palette"))} hides · {resumeLine({ file: file.name || null, section: sectionAt, tab: active.label, q })}
+                {chordLabel(appChordFor("files.palette"))} hides · {resumeLine({ file: file.name || null, section: sectionAt, tab: tab === "recent" ? "Recent" : "Finder", q })}
               </span>
             </div>
             )}
@@ -1345,7 +1270,7 @@ export function FilePalette({
 /* --------------------------------------------------------------- the list */
 
 function Answers({ tab, q, root, place, placeErr, rows, cursor, status, onPick, onDouble, browsing, browseError, needle }: {
-  tab: PaletteTab; q: string; root: string; place: string; placeErr: string | null; rows: Row[]; cursor: number;
+  tab: Face; q: string; root: string; place: string; placeErr: string | null; rows: Row[]; cursor: number;
   status: { pending: boolean; error: string | null; data: { ok: boolean; error?: string; via?: string; truncated?: boolean } | null } | null;
   onPick: (row: Row, i: number) => void;
   /** A picture opens in the viewer on a double-click; nothing else does. */
@@ -1378,8 +1303,7 @@ function Answers({ tab, q, root, place, placeErr, rows, cursor, status, onPick, 
     if (!place) return <Note>Nowhere to search yet — pick a folder with the chip on the right.</Note>;
     if (q.trim().length < 2) return <Note>Two letters at least — one matches most of a home folder.</Note>;
   } else if (!root) return <Note>No checkout to search. Open a repository first.</Note>;
-  if (tab === "contents" && q.trim().length < 2) return <Note>Two letters at least — one matches every file there is.</Note>;
-  if (tab !== "recent" && !q.trim()) return <Note>Type to search {tab === "names" ? "for a file or a folder" : "the code"}.</Note>;
+  if (tab !== "recent" && !q.trim()) return <Note>Type to search this folder.</Note>;
   if (status?.pending) return <Note>Searching…</Note>;
   if (status && !status.data) return <Note tint="var(--error)">{status.error ?? "the search failed"}</Note>;
   if (status?.data?.error) return <Note tint="var(--error)">{status.data.error}</Note>;
@@ -1662,477 +1586,6 @@ function RepoChip({ repo, repos, openState, onPick }: {
 
 /* ------------------------------------------------------------- the place */
 
-/**
- * Which folder of the machine the search is asking.
- *
- * The checkout chip's sibling, and deliberately not the same control: a
- * checkout has a branch and a repository behind it, and this has neither — a
- * document on disk is one folder and one version. What it needs instead is a
- * way in for a path nobody put in a menu, which is most of them: the field at
- * the top filters the list until you type something that looks like a path,
- * and then it completes directories the way the project picker does, because
- * that is the habit those keys already have.
- *
- * The list is in a Portal for the same reason RepoChip's is — the palette
- * clips its children, so a menu drawn inside it loses its left half.
- */
-function PlaceChip({ place, places, recents, error, homeDir, openState, onPick }: {
-  place: string; places: DiskPlace[]; recents: string[]; error: string | null; homeDir: string;
-  openState: [boolean, (v: boolean) => void]; onPick: (path: string) => void;
-}) {
-  const [open, setOpen] = openState;
-  const btn = useRef<HTMLButtonElement>(null);
-  const [box, setBox] = useState<{ top: number; right: number } | null>(null);
-  const [typed, setTyped] = useState("");
-  const [sugg, setSugg] = useState<FsEntry[]>([]);
-  const field = useMenuField(open);
-
-  useEffect(() => {
-    if (!open) { setTyped(""); setSugg([]); return; }
-    const put = () => {
-      const r = btn.current?.getBoundingClientRect();
-      if (r) setBox({ top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) });
-    };
-    put();
-    window.addEventListener("resize", put);
-    return () => window.removeEventListener("resize", put);
-  }, [open]);
-
-  /** A path, as opposed to a filter — the same test the project picker uses,
-   *  so the same input means the same thing in both. */
-  const isPath = (v: string) => v.startsWith("/") || v.startsWith("~");
-
-  useEffect(() => {
-    const v = typed.trim();
-    if (!open || !isPath(v)) { setSugg([]); return; }
-    let live = true;
-    const t = setTimeout(() => {
-      api.fsComplete(v).then((r) => { if (live) setSugg(r.entries.slice(0, 12)); })
-        .catch(() => { if (live) setSugg([]); });
-    }, 140);
-    return () => { live = false; clearTimeout(t); };
-  }, [typed, open]);
-
-  const label = places.find((p) => p.path === place)?.label
-    ?? (place ? place.split("/").filter(Boolean).pop() ?? place : "Pick a folder");
-
-  const typedIsPath = isPath(typed.trim());
-  /* Two sections like a file manager's sidebar — see `placeSections`. A typed
-     path replaces them with what the disk completes it to. */
-  const sections = placeSections(typedIsPath ? [] : places, typedIsPath ? [] : recents, place, typed, homeDir);
-  const completions: PlaceRow[] = sugg.map((e) => ({ path: e.path, name: e.name, sub: shortenHome(e.path, homeDir), home: false, recent: false }));
-  const flat = typedIsPath ? completions : sections.flat;
-  /* One cursor over both sections. A typed path starts with none, so ⏎ means
-     "go where I typed" until an arrow key picks a row. */
-  const [cur, setCur] = useState(0);
-  useEffect(() => { setCur(typedIsPath ? -1 : 0); }, [typed, typedIsPath, open]);
-  useEffect(() => {
-    listEl.current?.querySelector<HTMLElement>(`[data-place="${cur}"]`)?.scrollIntoView({ block: "nearest" });
-  }, [cur]);
-  const listEl = useRef<HTMLDivElement>(null);
-
-  const Item = ({ r, i }: { r: PlaceRow; i: number }) => (
-    <button key={`${r.recent ? "r" : "p"}:${r.path}`} data-place={i} onClick={() => onPick(r.path)} onMouseEnter={() => setCur(i)}
-      role="option" aria-selected={i === cur}
-      className="agx-pal-hit text-left px-2.5 flex items-center gap-2 rounded-md"
-      style={{
-        width: "calc(100% - 12px)", margin: "0 6px", minHeight: HIT,
-        ...(i === cur ? { background: "color-mix(in srgb, var(--primary) 16%, transparent)", boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--primary) 40%, transparent)" }
-          : r.path === place ? { background: "color-mix(in srgb, var(--text) 6%, transparent)" } : null),
-      }}>
-      <span className="shrink-0 flex" style={{ color: "var(--text2)" }}>
-        {r.home ? <HomeIcon size={ICON.md} /> : r.recent ? <ClockIcon size={ICON.md} /> : <FolderIcon size={ICON.md} />}
-      </span>
-      <span className="shrink-0 max-w-[45%] truncate" style={{ color: "var(--text)", fontWeight: r.recent ? 600 : 500 }}>{r.name}</span>
-      <span className="ml-auto min-w-0 truncate text-[10.5px]" style={{ color: "var(--text3)" }} title={r.path}>{r.sub}</span>
-    </button>
-  );
-  const onFieldKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    // Escape is the menu's, one level up — see menuKeys.
-    // Tab takes the first completion, Enter takes what you typed —
-    // the two things those keys mean in a shell.
-    if (e.key === "ArrowDown" || (e.key === "n" && e.ctrlKey)) { e.preventDefault(); setCur((c) => (flat.length ? (c + 1) % flat.length : -1)); return; }
-    if (e.key === "ArrowUp" || (e.key === "p" && e.ctrlKey)) { e.preventDefault(); setCur((c) => (flat.length ? (c <= 0 ? flat.length - 1 : c - 1) : -1)); return; }
-    if (e.key === "Tab") { e.preventDefault(); if (sugg.length) setTyped(`${sugg[0]!.path}/`); return; }
-    if (e.key === "Enter") {
-      e.preventDefault();
-      const row = flat[cur];
-      if (row) onPick(row.path);
-      else if (typedIsPath) onPick(typed.trim().replace(/\/+$/, ""));
-    }
-  };
-
-  const heading = (text: string) => (
-    <div className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider" style={{ color: "var(--text2)" }}>{text}</div>
-  );
-
-  return (
-    <>
-      <button ref={btn} onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 text-[10.5px] px-2 py-1 rounded-md max-w-[220px] shrink-0"
-        style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: EDGE, color: "var(--text2)" }}
-        title={place ? `Searching ${place}` : "Pick a folder on this machine"}>
-        <span className="truncate min-w-0">{label}</span>
-        <span className="shrink-0" style={{ color: "var(--text3)" }}>▾</span>
-      </button>
-      {open && box && (
-        <Portal z={LAYER.menu}>
-          <div className="fixed inset-0" onClick={() => setOpen(false)} />
-          <div className="fixed rounded-lg text-[11px] shadow-2xl flex flex-col overflow-hidden"
-            style={{
-              top: box.top, right: box.right,
-              width: "min(520px, calc(100vw - 16px))", maxHeight: "min(420px, 60vh)",
-              background: "var(--surface-card)", border: edge(30),
-            }}
-            onKeyDown={menuKeys(() => setOpen(false))}>
-            <div className="px-3 pt-2 pb-1.5 shrink-0 flex flex-col gap-1" style={{ borderBottom: LINE }}>
-              <div className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text2)" }}>Where on this machine</div>
-              <div className="text-[10.5px]" style={{ color: "var(--text3)" }}>your home folder and what is under it — hidden folders are never searched</div>
-            </div>
-            <input ref={field} value={typed} onChange={(e) => setTyped(e.target.value)}
-              placeholder="Filter, or type a path like ~/Documents…" spellCheck={false} autoComplete="off"
-              onKeyDown={onFieldKey}
-              className={`m-1.5 shrink-0 ${INPUT}`}
-              style={INPUT_STYLE} />
-            <div ref={listEl} role="listbox" aria-label="Places on this machine" className="agx-scroll overflow-y-auto overflow-x-hidden pb-1.5" style={{ minHeight: 0 }}>
-              {error && <div className="px-3 py-2" style={{ color: "var(--error-ink)" }}>{error}</div>}
-              {typedIsPath && completions.map((r, i) => <Item key={r.path} r={r} i={i} />)}
-              {typedIsPath && !sugg.length && (
-                <div className="px-3 py-2" style={{ color: "var(--text3)" }}>Nothing under that path yet — ⏎ searches it anyway.</div>
-              )}
-              {!typedIsPath && sections.places.length > 0 && heading("Places")}
-              {!typedIsPath && sections.places.map((r, i) => <Item key={r.path} r={r} i={i} />)}
-              {!typedIsPath && sections.recent.length > 0 && heading("Recent")}
-              {!typedIsPath && sections.recent.map((r, i) => <Item key={r.path} r={r} i={sections.places.length + i} />)}
-              {!error && !flat.length && !typedIsPath && (
-                <div className="px-3 py-2" style={{ color: "var(--text3)" }}>No folder matches “{typed.trim()}”. Type a path to go straight there.</div>
-              )}
-            </div>
-          </div>
-        </Portal>
-      )}
-    </>
-  );
-}
-
-/**
- * What the search is looking at — one control for one question.
- *
- * There were two: a checkout picker and a branch picker, side by side. That was
- * two decisions for a question that does not divide, and it was reported as
- * exactly that — "the first picks the directory and the second the branch, I
- * don't really understand either".
- *
- * It does not divide because worktrees of one repository SHARE the object
- * store: `origin/master` is the same answer whichever of them you ask. The only
- * thing a particular checkout can answer that the others cannot is what is on
- * ITS disk right now, uncommitted work included. So there is one list, and
- * every row in it is a complete answer:
- *
- *   working copies   a folder, with what it currently holds — and your edits
- *   branches         a version, read without checking anything out
- *
- * Picking a working copy also decides the repository, which is why the branch
- * list below is the one belonging to it.
- */
-function ScopeChip({ repo, repos, ref_, refs, openState, onPickRoot, onPickRef }: {
-  repo: GitRepoRef | null; repos: GitRepoRef[];
-  ref_: string; refs: { local: string[]; remote: string[]; head?: string };
-  openState: [boolean, (v: boolean) => void];
-  onPickRoot: (root: string) => void;
-  onPickRef: (ref: string) => void;
-}) {
-  const [open, setOpen] = openState;
-  const btn = useRef<HTMLButtonElement>(null);
-  const [box, setBox] = useState<{ top: number; right: number } | null>(null);
-  const [filter, setFilter] = useState("");
-  const field = useMenuField(open);
-
-  useEffect(() => {
-    if (!open) { setFilter(""); return; }
-    const place = () => {
-      const r = btn.current?.getBoundingClientRect();
-      if (r) setBox({ top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) });
-    };
-    place();
-    window.addEventListener("resize", place);
-    return () => window.removeEventListener("resize", place);
-  }, [open]);
-
-  const q = filter.trim().toLowerCase();
-  const hit = (x: string) => !q || x.toLowerCase().includes(q);
-  const copies = repos.filter((r) => hit(`${r.root} ${r.branch} ${r.name}`));
-  const local = refs.local.filter(hit);
-  const remote = refs.remote.filter(hit);
-  const nRefs = refs.local.length + refs.remote.length;
-
-  const here = repo ? (repo.root.split("/").pop() || repo.name) : "no checkout";
-  return (
-    <>
-      <button ref={btn} onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 text-[10.5px] px-2 py-1 rounded-md max-w-[320px] shrink-0"
-        title={repo
-          ? `Searching ${repo.root}${ref_ ? ` at ${ref_}` : " — what is on disk now"}`
-          : "Pick something to search"}
-        style={ref_
-          ? { background: "color-mix(in srgb, var(--info) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--info) 45%, transparent)", color: "var(--info-ink)" }
-          : { background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: EDGE, color: "var(--text2)" }}>
-        {/* The folder always, and the version only when it is not the disk —
-            a bare folder name is the ordinary case and needs no second word. */}
-        <span className="truncate min-w-0">{here}{ref_ ? ` · ${ref_}` : ""}</span>
-        <span className="shrink-0" style={{ color: ref_ ? "var(--info)" : "var(--text3)" }}>▾</span>
-      </button>
-      {open && box && (
-        <Portal z={LAYER.menu}>
-          <div className="fixed inset-0" onClick={() => setOpen(false)} />
-          <div className="fixed rounded-lg text-[11px] shadow-2xl flex flex-col overflow-hidden"
-            style={{
-              top: box.top, right: box.right, width: "min(560px, calc(100vw - 16px))",
-              maxHeight: "min(460px, 66vh)", background: "var(--surface-card)", border: edge(30),
-            }}
-            onKeyDown={menuKeys(() => setOpen(false))}>
-            <div className="px-3 pt-2 pb-1.5 shrink-0 flex flex-col gap-1" style={{ borderBottom: LINE }}>
-              <div className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text2)" }}>What to search</div>
-              <div className="text-[10px]" style={{ color: "var(--text4)" }}>
-                a copy on disk, or any branch — reading a branch checks nothing out
-              </div>
-            </div>
-            <input ref={field} value={filter} onChange={(e) => setFilter(e.target.value)}
-              placeholder={`Filter ${repos.length} copies and ${nRefs} branches…`} spellCheck={false}
-              onKeyDown={(e) => {
-                // Escape is the menu's, one level up — see menuKeys.
-                // Enter takes the only thing left, which is what you typed towards.
-                if (e.key !== "Enter") return;
-                const only = copies.length + local.length + remote.length;
-                if (only !== 1) return;
-                e.preventDefault();
-                if (copies[0]) onPickRoot(copies[0].root);
-                else onPickRef(local[0] ?? remote[0]!);
-              }}
-              className={`m-1.5 shrink-0 ${INPUT}`}
-              style={INPUT_STYLE} />
-            <div className="agx-scroll overflow-y-auto overflow-x-hidden py-1.5" style={{ minHeight: 0 }}>
-              {copies.length + local.length + remote.length === 0 && (
-                <div className="px-3 py-2" style={{ color: "var(--text3)" }}>Nothing matches “{filter.trim()}”.</div>
-              )}
-              {copies.length > 0 && <Group first hint="what is on disk now, your uncommitted work included">Working copies</Group>}
-              {copies.map((r) => (
-                <button key={r.root} onClick={() => onPickRoot(r.root)}
-                  className="w-full text-left px-3 py-1.5 flex flex-col gap-1"
-                  style={{ background: r.root === repo?.root && !ref_ ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
-                  <span className="flex items-center gap-2 min-w-0">
-                    <span className="truncate" style={{ color: "var(--text)" }}>{shortPath(r.root)}</span>
-                    {r.worktreeOf && (
-                      <span className="shrink-0 text-[8.5px] px-1 rounded"
-                        style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }}>WT</span>
-                    )}
-                  </span>
-                  <span className="text-[9.5px] truncate" style={{ color: "var(--text4)" }}>on {r.branch}</span>
-                </button>
-              ))}
-              {/* Named after the repository they belong to, because the list
-                  above can span several and the branches below cannot. */}
-              {local.length > 0 && <Group hint={`in ${repo?.name ?? "this repository"} — nothing is checked out`}>Branches</Group>}
-              {local.map((r) => (
-                <RefRow key={`l:${r}`} name={r} on={r === ref_} head={r === refs.head} onPick={onPickRef} />
-              ))}
-              {remote.length > 0 && <Group hint="as of the last fetch">Remote branches</Group>}
-              {remote.map((r) => (
-                <RefRow key={`r:${r}`} name={r} on={r === ref_} remote onPick={onPickRef} />
-              ))}
-            </div>
-          </div>
-        </Portal>
-      )}
-    </>
-  );
-}
-
-/**
- * Which branch the search is asking, when it is not this working tree.
- *
- * Its own control beside the checkout rather than a mode on it, because they
- * are two different narrowings and you set them independently: the checkout is
- * WHERE the repository is, the ref is WHEN. Defaults to the working tree —
- * what is on disk now, including the things you have not committed — and says
- * so in words, since "no ref" would read as "no filter" rather than as an
- * answer.
- */
-function RefChip({ value, refs, openState, onPick }: {
-  value: string;
-  refs: { local: string[]; remote: string[]; head?: string };
-  openState: [boolean, (v: boolean) => void]; onPick: (ref: string) => void;
-}) {
-  const [open, setOpen] = openState;
-  const btn = useRef<HTMLButtonElement>(null);
-  const [box, setBox] = useState<{ top: number; right: number } | null>(null);
-  const [filter, setFilter] = useState("");
-  const field = useMenuField(open);
-
-  useEffect(() => {
-    if (!open) { setFilter(""); return; }
-    const place = () => {
-      const r = btn.current?.getBoundingClientRect();
-      if (r) setBox({ top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) });
-    };
-    place();
-    window.addEventListener("resize", place);
-    return () => window.removeEventListener("resize", place);
-  }, [open]);
-
-  const on = !!value;
-  /*
-   * A filter, because a real repository has dozens of branches.
-   *
-   * Fifty-four of them here, so the list is a scroll rather than a choice — and
-   * you already know the name you want, which is the case a filter answers and
-   * a list does not. Matched on the whole name so `1042` finds
-   * `feat/WEB-1042-something` from the middle, the way you actually remember a
-   * branch.
-   */
-  const q = filter.trim().toLowerCase();
-  const keep = (xs: string[]) => (q ? xs.filter((x) => x.toLowerCase().includes(q)) : xs);
-  const local = keep(refs.local);
-  const remote = keep(refs.remote);
-  const total = refs.local.length + refs.remote.length;
-  const shown = local.length + remote.length;
-  return (
-    <>
-      <button ref={btn} onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 text-[10.5px] px-2 py-1 rounded-md max-w-[200px] shrink-0"
-        title={on
-          ? `Searching ${value} — read from the object store, nothing is checked out`
-          : "Searching this working tree. Pick a branch to search one you are not on."}
-        style={on
-          ? { background: "color-mix(in srgb, var(--info) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--info) 45%, transparent)", color: "var(--info-ink)" }
-          : { background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: EDGE, color: "var(--text3)" }}>
-        <span className="truncate min-w-0">{on ? value : "working tree"}</span>
-        <span className="shrink-0" style={{ color: on ? "var(--info)" : "var(--text3)" }}>▾</span>
-      </button>
-      {open && box && (
-        <Portal z={LAYER.menu}>
-          <div className="fixed inset-0" onClick={() => setOpen(false)} />
-          <div className="fixed rounded-lg text-[11px] shadow-2xl flex flex-col overflow-hidden"
-            style={{
-              top: box.top, right: box.right, width: "min(420px, calc(100vw - 16px))",
-              maxHeight: "min(360px, 55vh)", background: "var(--surface-card)", border: edge(30),
-            }}
-            onKeyDown={menuKeys(() => setOpen(false))}>
-            {/* Only once there are enough to hunt through. Below that the list
-                IS the answer and a field in front of it is one more thing to
-                get past. */}
-            <div className="px-3 pt-2 pb-1.5 shrink-0 flex flex-col gap-1" style={{ borderBottom: LINE }}>
-              <div className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text2)" }}>Which version</div>
-              <div className="text-[10px]" style={{ color: "var(--text4)" }}>of the checkout on the left — nothing is checked out to look</div>
-            </div>
-            {total > 8 && (
-              <input ref={field} value={filter} onChange={(e) => setFilter(e.target.value)}
-                placeholder={`Filter ${total} branches…`} spellCheck={false}
-                onKeyDown={(e) => {
-                  // Enter takes the only one left, which is what you were
-                  // typing towards. Escape is the menu's — see menuKeys.
-                  if (e.key === "Enter" && shown === 1) { e.preventDefault(); onPick(local[0] ?? remote[0]!); }
-                }}
-                className={`m-1.5 shrink-0 ${INPUT}`}
-                style={INPUT_STYLE} />
-            )}
-            <div className="agx-scroll overflow-y-auto overflow-x-hidden py-1.5" style={{ minHeight: 0 }}>
-              {/* The working tree stays reachable whatever is typed: it is not
-                  a branch, so filtering it out with the branch names would take
-                  away the way back. */}
-              <button onClick={() => onPick("")}
-                className="w-full text-left px-3 py-1.5 flex flex-col gap-0.5"
-                style={{ background: !on ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
-                <span style={{ color: "var(--text)" }}>working tree</span>
-                <span className="text-[9.5px]" style={{ color: "var(--text4)" }}>what is on disk now, uncommitted changes included</span>
-              </button>
-              {total === 0 && (
-                <div className="px-3 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>
-                  No branches here yet.
-                </div>
-              )}
-              {total > 0 && shown === 0 && (
-                <div className="px-3 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>
-                  No branch matches “{filter.trim()}”.
-                </div>
-              )}
-              {/* Local first: a branch in this repository that this worktree is
-                  not on is the one you could not look at any other way without
-                  checking it out. */}
-              {local.length > 0 && <Group first hint="in this repository, not checked out">Local</Group>}
-              {local.map((r) => (
-                <RefRow key={`l:${r}`} name={r} on={r === value} head={r === refs.head} onPick={onPick} />
-              ))}
-              {remote.length > 0 && <Group hint="last fetched — not what the server has right now">Remote</Group>}
-              {remote.map((r) => (
-                <RefRow key={`r:${r}`} name={r} on={r === value} remote onPick={onPick} />
-              ))}
-            </div>
-            {/* Said once, at the bottom, because it is the thing people
-                reasonably fear about a control that names another branch — and
-                the whole reason it can offer a branch list safely at all. */}
-            <div className="px-3 py-1.5 text-[9.5px] shrink-0"
-              style={{ borderTop: LINE, color: "var(--text4)" }}>
-              Read from the object store. Nothing is checked out, fetched or moved — this
-              only changes what the search answers.
-            </div>
-          </div>
-        </Portal>
-      )}
-    </>
-  );
-}
-
-/**
- * A heading that holds its ground while the list scrolls under it.
- *
- * Local and remote branches share a naming convention and often a name — `main`
- * and `origin/main` sit four rows apart — so which group you are in has to be
- * readable at the moment you click, not only at the moment you scrolled past
- * the label. Sticky, tinted, and ruled off above, so the two never read as one
- * list.
- */
-const Group = ({ children, hint, first }: { children: React.ReactNode; hint: string; first?: boolean }) => (
-  <div className="sticky top-0 z-[1] px-3 pt-3 pb-1 flex items-baseline gap-2"
-    style={{
-      background: "color-mix(in srgb, var(--text) 7%, var(--bg2))",
-      borderTop: first ? "none" : LINE,
-      borderBottom: LINE,
-    }}>
-    <span className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text2)" }}>{children}</span>
-    <span className="text-[9px]" style={{ color: "var(--text4)" }}>{hint}</span>
-  </div>
-);
-
-function RefRow({ name, on, head, remote, onPick }: {
-  name: string; on: boolean; head?: boolean; remote?: boolean; onPick: (r: string) => void;
-}) {
-  return (
-    <button onClick={() => onPick(name)}
-      className="w-full text-left px-3 py-1.5 flex items-center gap-2"
-      style={{ background: on ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
-      {/* Two letters rather than a colour: `main` and `origin/main` are four
-          rows apart and answer differently, and a filtered list can put them
-          next to each other with no heading in between. */}
-      <span className="shrink-0 text-[8px] w-[22px] text-center rounded"
-        style={remote
-          ? { color: "var(--info-ink)", border: "1px solid color-mix(in srgb, var(--info) 30%, transparent)" }
-          : { color: "var(--text3)", border: EDGE }}>
-        {remote ? "RM" : "LO"}
-      </span>
-      <span className="truncate min-w-0" style={{ color: "var(--text)" }}>{name}</span>
-      {/* The one this worktree is already on. Searching it is the same answer
-          as the working tree minus anything uncommitted, and saying so stops
-          that being a surprise. */}
-      {head && (
-        <span className="ml-auto shrink-0 text-[8.5px] px-1 rounded"
-          style={{ color: "var(--text3)", border: EDGE }}>
-          checked out here
-        </span>
-      )}
-    </button>
-  );
-}
 
 const Note = ({ children, tint }: { children: React.ReactNode; tint?: string }) =>
   <div className="px-4 py-6 text-[11.5px]" style={{ color: tint ?? "var(--text3)" }}>{children}</div>;

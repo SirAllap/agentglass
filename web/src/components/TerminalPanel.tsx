@@ -881,7 +881,7 @@ function createSession(root: string, agentTicket?: string): Sess {
     if (e.ctrlKey && e.shiftKey && !e.altKey && (e.key === "C" || e.key === "c") && !term.hasSelection() && copyPaneBranch()) return false;
     if (isFindChord(e) && panelFind()) return false;
     if (isPluckChord(e) && panelPluck()) return false;
-    // The app's own chords — today the file palette. Returning false keeps the
+    // The app's own chords — today the finder. Returning false keeps the
     // keystroke out of the PTY; the window listener in App still sees it, so
     // the palette opens and the shell never hears about it.
     if (isAppChord(e)) return false;

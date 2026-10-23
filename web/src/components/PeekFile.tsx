@@ -261,7 +261,7 @@ export function PeekFile({ peek, onClose, topPx }: {
    * Where the top edge goes, in pixels, when something above has to stay
    * visible.
    *
-   * The file palette is that something: it stays open after it opens a
+   * The finder is that something: it stays open after it opens a
    * document so the next result is a keystroke rather than another search, and
    * it was landing on the document's first lines — covering precisely what you
    * opened it to read. The two share the screen instead of fighting for it.
@@ -480,7 +480,7 @@ export function PeekFile({ peek, onClose, topPx }: {
    * Ctrl+F, listened for on the WINDOW rather than on this panel.
    *
    * It was on the panel, and that made it unreachable in the case it is most
-   * wanted: the file palette opens this viewer and stays on top, so the caret
+   * wanted: the finder opens this viewer and stays on top, so the caret
    * is in the palette's field and the keystroke never reached the document at
    * all. Reported as the feature not being there — which, from where it was
    * pressed, it was not.

@@ -1,5 +1,5 @@
 /*
- * The agentglass config folder in the file palette.
+ * The agentglass config folder in the finder.
  *
  * It holds the server's API token, credentials, paired devices and plugin
  * secrets, and was shut whole; its owner also keeps theme.json and config.json
