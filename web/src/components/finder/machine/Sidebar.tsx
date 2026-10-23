@@ -15,6 +15,7 @@ import { activates } from "../../../lib/finderPointer.ts";
 import { Popover, MenuItem } from "./Popover.tsx";
 import { deviceIcon, lockButton, releaseButton, type LockButton, type ReleaseButton } from "../../../lib/finderVolumes.ts";
 import { LINE } from "../../workspace/Chrome.tsx";
+import { SIDEBAR_EDGE, SIDEBAR_SURFACE } from "../../../lib/finderContrast.ts";
 import { sideMenu, visiblePlaces, type SideAct, type SideTarget } from "../../../lib/finderSidebarMenu.ts";
 
 /** Strata's default order: home, trash, network, recent, desktop, documents, downloads, music, pictures, videos. */
@@ -131,7 +132,7 @@ export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, o
   return (
     <div className="relative shrink-0 flex min-h-0" style={{ width }}>
       <nav aria-label="Places" data-finder-sidebar data-mode={mode} {...dnd} className="agx-scroll overflow-y-auto overflow-x-hidden flex-1 min-w-0 py-1.5 px-1 text-[12px] flex flex-col gap-0.5"
-        style={{ borderRight: LINE, background: "var(--surface-nav)" }}>
+        style={{ borderRight: SIDEBAR_EDGE, background: SIDEBAR_SURFACE }}>
         {visiblePlaces(places, hidden).map((p) => row(p))}
         {shownPins.length > 0 && !rail && <div className="px-2.5 pt-2 pb-0.5 text-[10px] uppercase" style={{ color: "var(--text4)" }}>Pinned</div>}
         {shownPins.length > 0 && rail && <div role="separator" className="mx-1 my-1" style={{ borderTop: LINE }} />}

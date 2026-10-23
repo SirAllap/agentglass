@@ -59,7 +59,8 @@ describe("rows 119 and 123: the Icons cards", () => {
   });
   test("a 14 px details line under the name: the items of a folder, the size of a file", () => {
     expect(views).toContain("data-details");
-    expect(views).toMatch(/height: 14, lineHeight: "14px"/);
+    expect(views).toContain("height: CARD.details");
+    expect(views).toContain("lineHeight: `${CARD.details}px`");
   });
 });
 

@@ -58,11 +58,12 @@ export function FinderSearch({ home, onTarget, onClose }: { home: string; onTarg
               else if (e.key === "Enter") { e.preventDefault(); choose(hot, e.altKey); }
               else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); onClose(); }
             }} />
+          {status === "building" && <span role="status" aria-label="Indexing files…" title="Indexing files…" className="agx-spin shrink-0" />}
           <button type="button" className="agx-btn rounded-md grid place-items-center shrink-0" style={{ width: 26, height: 26, color: contents ? "var(--primary-ink)" : "var(--text3)" }} title="Search settings" aria-label="Search settings" aria-haspopup="menu"
             onClick={(e) => setMenu(e.currentTarget.getBoundingClientRect())}><StrataIcon set="act" name="sliders-horizontal" size={ICON.sm} /></button>
         </div>
         <div ref={list} role="listbox" aria-label="Results" className="agx-scroll flex-1 min-h-0 overflow-y-auto" style={{ minHeight: 200 }}>
-          {note ? <div className="h-full grid place-items-center text-[12px] p-6 text-center" style={{ color: "var(--text3)", minHeight: 200 }}>{note}</div> : rows.map((r, i) => (
+          {note ? <div className="h-full grid place-items-center text-[12px] p-6 text-center" style={{ color: "var(--text3)", minHeight: 200 }}><span className="whitespace-pre-line">{note}</span></div> : rows.map((r, i) => (
             <div key={`${r.path}:${r.line ?? ""}`} role="option" aria-selected={i === hot} onMouseMove={() => setHot(i)} onClick={() => choose(i, false)}
               className="flex items-center gap-3 px-3.5 cursor-pointer" style={{ minHeight: 56, borderBottom: LINE, background: i === hot ? "color-mix(in srgb, var(--primary) 38%, var(--surface-card))" : undefined }}>
               <PathIcon path={r.path} name={r.path.slice(r.path.lastIndexOf("/") + 1)} isDir={r.dir} size={30} />

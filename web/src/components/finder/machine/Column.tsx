@@ -56,7 +56,9 @@ export function RowIcon({ row, size = ICON.sm, dir }: { row: Row; size?: number;
   return <PathIcon path={dir ? joinPath(dir, row.name) : undefined} name={row.name} isDir={isFolder(row)} broken={row.broken === true} size={size} />;
 }
 
-export function Column({ fill, dir: folderPath, title, filterSignal, width, onResize, onFit, state, display, selName, chosen, focused, prefs, rowH, filter, onFilter, onPick, onOpen, onTab, onReveal, onFocusChild, onSlow, onSlowCancel, onFocusCol, onRefresh, onSort, recent, onPref, scrollTop, onScrollTop, edit, cut, finding, onFinding, onClosePane, onSpace }: {
+export function Column({ enter, fill, dir: folderPath, title, filterSignal, width, onResize, onFit, state, display, selName, chosen, focused, prefs, rowH, filter, onFilter, onPick, onOpen, onTab, onReveal, onFocusChild, onSlow, onSlowCancel, onFocusCol, onRefresh, onSort, recent, onPref, scrollTop, onScrollTop, edit, cut, finding, onFinding, onClosePane, onSpace }: {
+  /** Opened after the finder settled: it slides in, as Strata's new columns do. */
+  enter?: boolean;
   /** The folder this column lists: a right click in it says where it landed. */
   dir: string;
   title: string;
@@ -113,10 +115,16 @@ export function Column({ fill, dir: folderPath, title, filterSignal, width, onRe
 }) {
   const [menu, setMenu] = useState<DOMRect | null>(null);
   const [hover, setHover] = useState(false);
+  const [entering] = useState(!!enter);
+  /** An autofit moves the edge over 220 ms; a drag follows the pointer and must not lag. */
+  const [fitting, setFitting] = useState(false);
+  const fit = () => { setFitting(true); setTimeout(() => setFitting(false), COLUMN_TRANSITION_MS + 40); onFit(); };
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => { if (filterSignal > 0) { onFinding(true); setTimeout(() => focusEnd(input.current), 0); } }, [filterSignal]); // eslint-disable-line react-hooks/exhaustive-deps
   const selItem = (() => { const i = display.rows.findIndex((r) => r.name === selName); return i < 0 ? null : display.itemOfRow[i]!; })();
   const loading = !state || !state.done;
+  const spin = useAfter(loading, SPINNER_DELAY_MS);
+  const skeleton = useAfter(loading && !state?.rows.length, SKELETON_GRACE_MS);
   const btn = "agx-btn rounded-md grid place-items-center shrink-0";
   // Under this a row has no room for a count or a size beside the name, and the name comes first.
   const tight = width < TIGHT_W;
@@ -124,14 +132,14 @@ export function Column({ fill, dir: folderPath, title, filterSignal, width, onRe
   const open = (e: React.MouseEvent<HTMLButtonElement>) => setMenu(e.currentTarget.getBoundingClientRect());
 
   return (
-    <section aria-label={`Folder ${title}`} data-dir={folderPath} onMouseDown={onFocusCol} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} data-hovered={hover ? "" : undefined} className="relative flex flex-col min-h-0 shrink-0"
-      style={{ width, ...(fill ? { flexGrow: 1 } : null), borderRight: LINE, scrollSnapAlign: "start", background: COLUMNS_SURFACE }}>
+    <section aria-label={`Folder ${title}`} data-dir={folderPath} className={`relative flex flex-col min-h-0 shrink-0${entering ? " agx-col-enter" : ""}`} onMouseDown={onFocusCol} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} data-hovered={hover ? "" : undefined}
+      style={{ width, transition: fitting ? `width ${COLUMN_TRANSITION_MS}ms cubic-bezier(0.16, 1, 0.3, 1)` : undefined, ...(fill ? { flexGrow: 1 } : null), borderRight: LINE, scrollSnapAlign: "start", background: COLUMNS_SURFACE }}>
       {/* The column that has the keyboard wears a bar on top; a colour alone would not survive a theme that has no accent to spare. */}
       <div aria-hidden className="absolute left-0 right-0 top-0" style={{ height: 3, background: focused ? "var(--primary)" : "transparent", zIndex: 2 }} />
       <div role="separator" aria-orientation="vertical" aria-label={`Resize ${title}`} aria-valuenow={Math.round(width)} tabIndex={-1}
         title="Drag to resize, double-click to fit"
         className="absolute top-0 bottom-0 agx-col-edge" style={{ right: 0, width: 6, cursor: "col-resize", zIndex: 3, touchAction: "none" }}
-        onDoubleClick={onFit}
+        onDoubleClick={fit}
         onPointerDown={(e) => {
           if (!activates(e.button, "mousedown")) return;
           e.preventDefault(); e.stopPropagation();
@@ -143,10 +151,11 @@ export function Column({ fill, dir: folderPath, title, filterSignal, width, onRe
         }}
         onKeyDown={(e) => {
           if (e.key === "ArrowLeft" || e.key === "ArrowRight") { e.preventDefault(); e.stopPropagation(); onResize(dragWidth(width, e.key === "ArrowLeft" ? -16 : 16)); }
-          else if (e.key === "Enter" || e.key === "0") { e.preventDefault(); e.stopPropagation(); onFit(); }
+          else if (e.key === "Enter" || e.key === "0") { e.preventDefault(); e.stopPropagation(); fit(); }
         }} />
       <header className="flex items-center gap-1 shrink-0" style={{ minHeight: 31, padding: "5px 5px 4px 12px", borderBottom: LINE, background: hover ? "color-mix(in srgb, var(--primary) 7%, transparent)" : undefined }}>
         <b className="flex-1 min-w-0 flex text-[12px]" title={folderPath} aria-label={title} style={{ color: titleColor(focused), fontWeight: 700 }}><MiddleText text={title} /></b>
+        {loading && spin && <span role="status" aria-label="Loading" className="agx-spin shrink-0" style={{ marginRight: 4 }} />}
         <button className={btn} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Refresh (F5)" aria-label="Refresh" onClick={onRefresh}><StrataIcon set="act" name="refresh" size={ICON.md} /></button>
         <button className={btn} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} aria-label={(recent?.dir ?? prefs.sortDir) === "asc" ? "Ascending — click to reverse" : "Descending — click to reverse"}
           title={(recent?.dir ?? prefs.sortDir) === "asc" ? "Ascending — click to reverse" : "Descending — click to reverse"} onClick={() => onSort(recent?.key ?? prefs.sortKey)}>
@@ -170,7 +179,7 @@ export function Column({ fill, dir: folderPath, title, filterSignal, width, onRe
         </div>
       ) : display.items.length === 0 && !(edit && edit.was === null) ? (
         <div data-surface tabIndex={focused ? 0 : -1} className="flex-1 min-h-0 grid place-items-center p-6 text-center text-[12px] outline-none" style={{ color: "var(--text3)" }}>
-          {loading ? "Reading…" : filter ? `Nothing here is called “${filter}”.` : state && state.hiddenSkipped ? `This directory is empty. ${state.hiddenSkipped} hidden ${state.hiddenSkipped === 1 ? "item" : "items"} left out.` : "This directory is empty"}
+          {loading ? (skeleton ? <ColumnSkeleton rowH={rowH} /> : null) : filter ? `Nothing here is called “${filter}”.` : state && state.hiddenSkipped ? `This directory is empty. ${state.hiddenSkipped} hidden ${state.hiddenSkipped === 1 ? "item" : "items"} left out.` : "This directory is empty"}
         </div>
       ) : (
         <>
@@ -189,7 +198,7 @@ export function Column({ fill, dir: folderPath, title, filterSignal, width, onRe
               <div key={r.name} role="option" data-row={r.name} data-folder={dir && !r.locked ? "" : undefined} draggable={!r.locked && !(edit && edit.was === r.name)} aria-selected={sel} aria-disabled={r.locked || undefined} title={r.why ?? r.name}
                 onMouseDown={noRange} {...rowPointer("columns", r, { onPick, onOpen, onTab, onReveal, onFocusChild, onSlow, onSlowCancel, filtered: filter !== "", trash: inTrash(folderPath) })}
                 className="agx-fm-row flex items-center gap-2 px-2.5 mx-1 rounded-md cursor-pointer"
-                style={{ opacity: cut?.has(r.name) ? CUT_OPACITY : undefined, height: rowH, color: r.locked ? "var(--text4)" : "var(--text)", ...rowPaint(rowTone(sel, focused)) }}>
+                style={{ opacity: cut?.has(r.name) ? CUT_OPACITY : undefined, height: rowH, color: r.locked ? "var(--text4)" : "var(--text)", ...rowPaint(rowTone(sel, focused), r.name === selName) }}>
                 <span data-icon className="shrink-0 flex">{!r.locked && !dir && isThumbable(r.name) ? <Thumb path={joinPath(folderPath, r.name)} size={ROW_THUMB} radius={3} fallback={<RowIcon row={r} dir={folderPath} />} /> : <RowIcon row={r} dir={folderPath} />}</span>
                 {edit && edit.was === r.name ? <InlineName key="ren" edit={edit} rowH={rowH - 4} icon={null} /> : <NameCell name={rowLabel(r.name)} />}
                 {dir ? (
@@ -264,6 +273,40 @@ export function FilterField({ inputRef, value, total, title, onChange, onDone, n
           else if (a === "activate") nav.onActivate();
         }}
         className={`${INPUT} w-full`} style={INPUT_STYLE} />
+    </div>
+  );
+}
+
+/** Strata's column timings: the slide of a new column and of an autofit (COLUMN_TRANSITION), the spinner's delay (COLUMN_SPINNER_DELAY) and the grace before a skeleton replaces a blank (loading_skeleton/delay.rs). */
+export const COLUMN_TRANSITION_MS = 220;
+export const SPINNER_DELAY_MS = 120;
+export const SKELETON_GRACE_MS = 150;
+
+/** True once `on` has been true for `ms`; false the moment it is not. */
+export function useAfter(on: boolean, ms: number): boolean {
+  const [late, setLate] = useState(false);
+  useEffect(() => {
+    if (!on) { setLate(false); return; }
+    const t = setTimeout(() => setLate(true), ms);
+    return () => clearTimeout(t);
+  }, [on, ms]);
+  return on && late;
+}
+
+/** The widths of the grey name blocks, in turn (loading_skeleton.rs name_width). */
+export const SKELETON_NAMES = [96, 72, 112, 84, 104, 64] as const;
+/** Eighteen rows: an icon, a name and a count, drawn as blocks while a folder is read. */
+export function ColumnSkeleton({ rowH }: { rowH: number }) {
+  return (
+    <div role="img" aria-label="Loading directory" className="self-stretch w-full overflow-hidden pointer-events-none" style={{ paddingTop: 4, alignSelf: "start" }}>
+      {Array.from({ length: 18 }, (_, i) => (
+        <div key={i} className="flex items-center gap-2 px-2.5 mx-1" style={{ height: rowH }}>
+          <span className="agx-skeleton shrink-0 rounded" style={{ width: 17, height: 17 }} />
+          <span className="agx-skeleton rounded" style={{ width: SKELETON_NAMES[i % SKELETON_NAMES.length], height: 10 }} />
+          <span className="flex-1" />
+          <span className="agx-skeleton rounded" style={{ width: 24, height: 8 }} />
+        </div>
+      ))}
     </div>
   );
 }

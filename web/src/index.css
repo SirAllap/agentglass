@@ -2841,6 +2841,13 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 /* A row of the finder's columns answers the pointer before it is clicked, as Strata's do. */
 /* What a drag would drop on: a folder row, a column, a place in the sidebar, the Trash. */
 [data-drop-on] { outline: 2px solid var(--primary); outline-offset: -2px; background: color-mix(in srgb, var(--primary) 14%, transparent); border-radius: 6px; }
+.agx-col-enter { animation: agx-col-enter 220ms cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes agx-col-enter { from { transform: translate(-24px, 0); opacity: 0; } to { transform: translate(0, 0); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .agx-col-enter { animation: none; } }
+.agx-list-heading { background: transparent; border-radius: 0; transition: background 160ms ease-out, color 160ms ease-out; }
+.agx-list-heading:hover { background: color-mix(in srgb, var(--primary) 15%, transparent); color: var(--text); }
+.agx-list-heading:active { background: color-mix(in srgb, var(--primary) 22%, transparent); color: var(--primary-ink); transform: scale(0.97); }
+.agx-list-heading:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
 .agx-fm-row:hover { background: color-mix(in srgb, var(--primary) 8%, transparent); }
 /* A row's size or count badge is drawn at rest only on the chosen row; the pointer on any row brings its own. */
 .agx-fm-badge { opacity: 0; }

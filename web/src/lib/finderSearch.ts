@@ -32,7 +32,7 @@ export const partialResults = (status: "idle" | "building" | "ready", _found: nu
 
 /** What the empty and the unanswered states say. */
 export function emptyText(q: string, status: "idle" | "building" | "ready", found: number): string {
-  if (!q.trim()) return "Type to search Home and mounted local drives";
+  if (!q.trim()) return "Type to search Home and mounted local drives\nFuzzy matching · try a name or path fragment";
   if (found > 0) return "";
   return status === "building" ? "Searching…" : "No matching files or folders";
 }

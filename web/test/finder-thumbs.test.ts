@@ -17,14 +17,14 @@ describe("thumbnail size", () => {
     expect(readPrefs(JSON.stringify({ thumb: "big" })).thumb).toBe(64);
     expect(readPrefs(JSON.stringify({ thumb: 100.4 })).thumb).toBe(100);
   });
-  test("the tile grows with the picture and never below the old 112 × 92", () => {
-    expect(tileSize(32)).toEqual({ w: 112, h: 92 });
-    expect(tileSize(64)).toEqual({ w: 112, h: 108 });
-    expect(tileSize(256).w).toBe(288);
-    expect(tileSize(256).h).toBe(300);
+  test("the tile is Strata's card: the picture + 12, a 70 px caption block with its gaps, never narrower than 120", () => {
+    expect(tileSize(32)).toEqual({ w: 120, h: 32 + 74 });
+    expect(tileSize(64)).toEqual({ w: 120, h: 64 + 74 });
+    expect(tileSize(256).w).toBe(272);
+    expect(tileSize(256).h).toBe(330);
   });
   test("tiles per line follow the tile", () => {
-    expect(tilesPerRow(912, 64)).toBe(8);
+    expect(tilesPerRow(912, 64)).toBe(7);
     expect(tilesPerRow(912, 256)).toBe(3);
     expect(tilesPerRow(10, 256)).toBe(1);
   });

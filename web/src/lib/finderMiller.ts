@@ -8,6 +8,7 @@
  * visible window is 35 DOM nodes however far the list is scrolled, which is
  * what `visibleWindow` is for and the only reason a folder that size scrolls.
  */
+import { readListW } from "./finderList.ts";
 import { fileKind } from "./paletteModel.ts";
 import { READ_WIDTH_DEFAULT, readWidthOf, type ReadWidth } from "./finderPreview.ts";
 
@@ -229,6 +230,10 @@ export interface Prefs {
   thumb: number;
   /** The full sidebar's width in pixels, as dragged. */
   sideW: number;
+  /** The List view's column widths: Name (0 = the rest), Size, Type, Modified (lib/finderList). */
+  listW: number[];
+  /** The width a new column opens at: the last one dragged or fitted (Strata's browser_column_width). */
+  colW: number;
   /** The reading column of a markdown or text preview: 66 / 80 / 100 characters or the whole pane. */
   readW: ReadWidth;
   /** Choosing a folder opens its column (Strata: "Mirror columns selection"). */
@@ -265,7 +270,7 @@ export const TEXT_MAX = 18;
 
 export const DEFAULT_PREFS: Prefs = {
   view: "columns", preview: true, density: "compact", textSize: 13, hidden: false, group: false, sizes: true, sidebar: true, rail: false,
-  sortKey: "name", sortDir: "asc", foldersFirst: true, thumb: THUMB_DEFAULT, sideW: 201, readW: READ_WIDTH_DEFAULT, mirror: true, f1: true, peek: false, autoplay: false, renderDocs: true, hiddenPlaces: [],
+  sortKey: "name", sortDir: "asc", foldersFirst: true, thumb: THUMB_DEFAULT, sideW: 201, colW: 300, listW: [0, 90, 120, 150], readW: READ_WIDTH_DEFAULT, mirror: true, f1: true, peek: false, autoplay: false, renderDocs: true, hiddenPlaces: [],
 };
 
 function readSortChoice(v: unknown): SortChoice | null {
@@ -300,6 +305,8 @@ export function readPrefs(raw: string | null): Prefs {
     ...(readSortChoice(o.defSort) ? { defSort: readSortChoice(o.defSort)! } : {}),
     thumb: typeof o.thumb === "number" && Number.isFinite(o.thumb) ? Math.min(THUMB_MAX, Math.max(THUMB_MIN, Math.round(o.thumb))) : d.thumb,
     sideW: typeof o.sideW === "number" && Number.isFinite(o.sideW) ? Math.min(360, Math.max(169, Math.round(o.sideW))) : d.sideW,
+    listW: readListW(o.listW),
+    colW: typeof o.colW === "number" && Number.isFinite(o.colW) ? Math.min(800, Math.max(300, Math.round(o.colW))) : d.colW,
     readW: readWidthOf(o.readW),
     mirror: flag(o.mirror, d.mirror),
     f1: flag(o.f1, d.f1),
@@ -466,8 +473,16 @@ export function kindWord(r: Pick<Row, "name" | "kind" | "items">): string {
 
 /* ------------------------------------------------------------- icons view */
 
-/** A tile: the picture, a line or two of name, and room round them. Never smaller than the icon tile it replaced. */
-export const tileSize = (thumb: number): { w: number; h: number } => ({ w: Math.max(112, thumb + 32), h: Math.max(92, thumb + 44) });
+/**
+ * A tile as Strata's Icons card measures it (ui/icons_cell.rs icons_card_extent): the picture with 6 px round it, a 4 px
+ * gap, two 18 px lines of name, a 14 px details line and 4 px under it, in a slot that is never narrower than 120 px
+ * with the 4 px between cards counted. `h` includes those 4 px between rows.
+ */
+export const CARD = { pad: 6, gap: 4, line: 18, lines: 2, details: 14, padY: 4, spacing: 4, minSlot: 120 } as const;
+export const tileSize = (thumb: number): { w: number; h: number } => ({
+  w: Math.max(thumb + CARD.pad * 2 + CARD.spacing, CARD.minSlot),
+  h: thumb + CARD.pad * 2 + CARD.gap + CARD.line * CARD.lines + CARD.details + CARD.padY + CARD.spacing,
+});
 
 /**
  * The first item of the tile row at the top of an Icons view. Stored in items, not pixels: a tile row holds a different

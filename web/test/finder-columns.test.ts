@@ -81,7 +81,7 @@ describe("the column edge", () => {
   test("is a keyboard-reachable separator that drags and refits on double-click", async () => {
     const t = await Bun.file(new URL("../src/components/finder/machine/Column.tsx", import.meta.url)).text();
     expect(t).toContain('role="separator"');
-    expect(t).toContain("onDoubleClick={onFit}");
+    expect(t).toContain("onDoubleClick={fit}");
     expect(t).toContain("setPointerCapture");
     expect(t).toContain("dragWidth(");
     expect(t).not.toMatch(/width: 232/);
@@ -213,7 +213,7 @@ describe("autofit beside the preview", () => {
     const t = await Bun.file(new URL("../src/components/finder/machine/MachineFinder.tsx", import.meta.url)).text();
     expect(t).toContain("measure, columnRoom)");
     expect(t).toContain("const columnRoom = stripAvail ?? (mainBox.w || undefined);");
-    expect(t).toContain("columnWidth(dragged[c.path], columnRoom)");
+    expect(t).toContain("columnWidth(dragged[c.path] ?? prefs.colW, columnRoom)");
     expect(t).not.toContain("mainBox.w || undefined)),");
   });
 });

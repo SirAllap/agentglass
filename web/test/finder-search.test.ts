@@ -37,7 +37,7 @@ describe("the list", () => {
     expect(cut.endsWith("/plan.md")).toBe(true);
   });
   test("empty states", () => {
-    expect(emptyText("", "idle", 0)).toBe("Type to search Home and mounted local drives");
+    expect(emptyText("", "idle", 0)).toBe("Type to search Home and mounted local drives\nFuzzy matching · try a name or path fragment");
     expect(emptyText("pl", "ready", 3)).toBe("");
     expect(emptyText("pl", "ready", 0)).toBe("No matching files or folders");
     expect(emptyText("pl", "building", 0)).toBe("Searching…");

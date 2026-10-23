@@ -25,7 +25,7 @@ describe("row 81: the filter placeholder counts the folder", () => {
 
 describe("row 106 and 109: the List's headings", () => {
   test("Type sorts like Name, Size and Modified", () => {
-    expect(views).toContain('head("type", "Type")');
+    expect(views).toContain('head(2, "type", "Type")');
     expect(views).not.toMatch(/<span[^>]*>Type<\/span>/);
   });
   test("Modified is drawn with strataWhen, not the short ago()", () => {

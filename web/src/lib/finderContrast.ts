@@ -12,6 +12,9 @@
 
 export const COLUMNS_SURFACE = "var(--bg)";
 export const PREVIEW_SURFACE = "var(--surface-card)";
+/** The sidebar is on strata_surface like the preview, and its right edge is the border at 0.6 alpha (style.css `.sidebar-shell`). */
+export const SIDEBAR_SURFACE = PREVIEW_SURFACE;
+export const SIDEBAR_EDGE = "1px solid color-mix(in srgb, var(--surface-line) 60%, transparent)";
 
 /** How a row of a column is drawn: the selection of the column that has the keyboard, the quiet trace of the choice in a parent column, or nothing. */
 export type RowTone = "active" | "parent" | "none";
@@ -27,11 +30,16 @@ export const showsBadge = (selected: boolean, columnActive: boolean): boolean =>
 /** A column title is bright only while that column has the keyboard. */
 export const titleColor = (columnActive: boolean): string => (columnActive ? "var(--text)" : "var(--text3)");
 
-/** The fill and ring a row wears for its tone. A parent column keeps a plain, low fill with no ring, so only one place on screen carries the accent. */
-export function rowPaint(tone: RowTone): { background?: string; boxShadow?: string; fontWeight: number } {
+/**
+ * The fill and ring a row wears for its tone. The fill is the selection and every selected row has it; the ring is
+ * Strata's keyboard cursor (docs/keyboard-navigation.md), a text-contrast outline on the one current row of the column
+ * that has the keyboard, so a range of filled rows still has exactly one ring. A parent column keeps a plain, low fill
+ * with no ring, so only one place on screen carries the accent.
+ */
+export function rowPaint(tone: RowTone, cursor = true): { background?: string; boxShadow?: string; fontWeight: number } {
   if (tone === "active") return {
     background: "color-mix(in srgb, var(--primary) 16%, transparent)",
-    boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--primary) 38%, transparent)",
+    ...(cursor ? { boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--text) 70%, transparent)" } : {}),
     fontWeight: 600,
   };
   if (tone === "parent") return { background: "color-mix(in srgb, var(--text) 9%, transparent)", fontWeight: 600 };

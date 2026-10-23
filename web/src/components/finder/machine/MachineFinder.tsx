@@ -18,7 +18,7 @@ import { back as histBack, canBack, canForward, forward as histForward, here as 
 import { readMachineSnap, openingOf, scrollWithout, writeMachineSnap } from "../../../lib/finderMachineState.ts";
 import { backspaceAct, escapeAct, finderKey, finderOwnsChord, leftAct, upFromFirst, windowChord } from "../../../lib/finderKeys.ts";
 import { boxOf, dismissChoice, marqueeChoice, type Box } from "../../../lib/finderSelect.ts";
-import { clickSelect, extendBy, extendSelect, selectAll, selectedFooter, single, toggleCursor, type Choice } from "../../../lib/finderSelect.ts";
+import { clickSelect, extendBy, extendSelect, footerDescription, selectAll, selectedFooter, single, toggleCursor, type Choice } from "../../../lib/finderSelect.ts";
 import {
   DEFAULT_PREFS, TEXT_MAX, TEXT_MIN, tileSize, canEditRow, footerTotal, selectsHidden, displayRows, opensOnPick, footerCount, gridStep, indexOfName, isFolder, joinPath, keyStep, nextSidebar, parentOf, readPrefs, rowHeight, sidebarMode, sidebarPrefs, sidebarTip, writePrefs,
   type ColShape, type Display, type Prefs, type Row, type SortKey,
@@ -421,9 +421,12 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   /* Beside the preview the strip is as many whole columns as fit, so it shrinks to its first column: that is no measure of what a column may take. The room is what the finder leaves. */
   const stripAvail = previewInline && prefs.view === "columns" && prevDrag === undefined ? stripRoom(box.w, sideTaken) : undefined;
   const columnRoom = stripAvail ?? (mainBox.w || undefined);
+  /* Columns opened after the first moment slide in; the ones that come back with the finder do not. */
+  const [settled, setSettled] = useState(false);
+  useEffect(() => { const t = setTimeout(() => setSettled(true), 900); return () => clearTimeout(t); }, []);
   const widths = useMemo(
-    () => columns.map((c) => columnWidth(dragged[c.path], columnRoom)),
-    [columns, dragged, columnRoom]);
+    () => columns.map((c) => columnWidth(dragged[c.path] ?? prefs.colW, columnRoom)),
+    [columns, dragged, columnRoom, prefs.colW]);
   // A folder row that is selected has its own column; the selection that matters for the preview is the deepest one.
   const deepest = (() => {
     for (let c = trail.length - 1; c >= 0; c--) {
@@ -945,6 +948,13 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
     return `${footerCount(footerTotal(n.total, lastCol?.display.rows.length ?? 0, filters[lastCol?.path ?? ""] ?? ""), deepest?.row ?? null)}${!deepest && !n.done ? " so far" : ""}`;
   })();
 
+  /* The screen reader's second sentence for the count: the breakdown, or how much of the folder is chosen. */
+  const describedCount = (() => {
+    const col = liveMulti ? liveMulti.col : deepest ? deepest.col : last;
+    const rows = columns[col]?.display.rows ?? [];
+    return footerDescription(rows, liveMulti ? liveMulti.choice.names.size : deepest ? 1 : 0);
+  })();
+
   const tool = "agx-btn rounded-md grid place-items-center shrink-0";
   /** What a sidebar row's menu does: hiding a place is Strata's Unpin on it, and Settings turns it back on. */
   const onSideAct = (act: SideAct, t: SideTarget) => {
@@ -993,7 +1003,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
               ) : prefs.view === "columns" ? (
                 <ColumnsRow widths={widths} active={focusCol}>
                   {columns.map((c, i) => (
-                    <Column key={c.path} cut={cutIn(c.path)} fill={!previewInline && i === columns.length - 1} dir={c.path} title={isRecent(c.path) ? "Recent" : basename(c.path)} filterSignal={filterTick.col === i ? filterTick.n : 0} width={widths[i]!} onResize={(w) => setDragged((d) => ({ ...d, [c.path]: w }))} onFit={() => setDragged((d) => ({ ...d, [c.path]: fitWidth(c.state?.rows.map((r) => r.name) ?? [], measure, columnRoom) }))} state={c.state} display={c.display} selName={sel[i] ?? null} chosen={liveMulti?.col === i ? liveMulti.choice.names : null} focused={i === focusCol} prefs={prefs} rowH={rowH}
+                    <Column key={c.path} enter={settled} cut={cutIn(c.path)} fill={!previewInline && i === columns.length - 1} dir={c.path} title={isRecent(c.path) ? "Recent" : basename(c.path)} filterSignal={filterTick.col === i ? filterTick.n : 0} width={widths[i]!} onResize={(w) => { setDragged((d) => ({ ...d, [c.path]: w })); setPrefs({ colW: w }); }} onFit={() => { const w = fitWidth(c.state?.rows.map((r) => r.name) ?? [], measure, columnRoom); setDragged((d) => ({ ...d, [c.path]: w })); setPrefs({ colW: w }); }} state={c.state} display={c.display} selName={sel[i] ?? null} chosen={liveMulti?.col === i ? liveMulti.choice.names : null} focused={i === focusCol} prefs={prefs} rowH={rowH}
                       filter={filters[c.path] ?? ""} onFilter={(v) => setFilters((f) => ({ ...f, [c.path]: v }))}
                       scrollTop={scrolls.current[c.path]} onScrollTop={(t) => onScrollTop(c.path, t)} onPick={(r, m) => onPickMod(i, r, m)} onTab={(r) => newTab(joinPath(c.path, r.name))} onReveal={(r) => revealRow(c.path, r)} onSlow={(r, e) => onSlowClick(i, r, e)} onSlowCancel={cancelSlow} onFocusChild={() => { if (trail.length > i + 1) setFocusCol(i + 1); }} onOpen={(r) => { if (!r.locked) { if (isFolder(r)) go(joinPath(c.path, r.name)); else openDefault(joinPath(c.path, r.name)); } }}
                       finding={findAt === c.path} onFinding={(on) => openFind(c.path, on)} onClosePane={i > 0 ? () => closeColumn(i) : undefined} onSpace={() => act({ t: "space" })}
@@ -1007,7 +1017,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
                   {lastCol.state?.error ? <div className="p-3 text-[12px]" role="alert" style={{ color: "var(--warning-ink)" }}>{lastCol.state.error}</div>
                     : prefs.view === "icons"
                       ? <IconsView cut={cutIn(lastCol.path)} density={prefs.density} firstItem={iconsFirst.current[lastCol.path]} onFirstItem={(i) => onIconsFirst(lastCol.path, i)} filtered={(filters[lastCol.path] ?? "") !== ""} peek={folderPeek.peek} display={lastCol.display} dir={lastCol.path} thumb={prefs.thumb} selName={sel[last] ?? null} chosen={liveMulti?.col === last ? liveMulti.choice.names : null} width={mainBox.w} label={`Entries of ${basename(lastCol.path)}`} onPick={(r, m) => onPickMod(last, r, m)} onTab={(r) => newTab(joinPath(lastCol.path, r.name))} onReveal={(r) => revealRow(lastCol.path, r)} onSlow={(r, e) => onSlowClick(last, r, e)} onSlowCancel={cancelSlow} onOpen={(r) => (isFolder(r) && !r.locked ? go(joinPath(lastCol.path, r.name)) : !r.locked && openDefault(joinPath(lastCol.path, r.name)))} />
-                      : <ListView cut={cutIn(lastCol.path)} scrollTop={scrolls.current[lastCol.path]} onScrollTop={(t) => onScrollTop(lastCol.path, t)} filtered={(filters[lastCol.path] ?? "") !== ""} peek={folderPeek.peek} dir={lastCol.path} display={lastCol.display} selName={sel[last] ?? null} chosen={liveMulti?.col === last ? liveMulti.choice.names : null} rowH={rowH} prefs={prefs} label={`Entries of ${basename(lastCol.path)}`} recent={isRecent(lastCol.path) ? recentSort : undefined} onSort={(k) => (isRecent(lastCol.path) ? onRecentSort(k) : k !== "recency" && onSort(k))} onPick={(r, m) => onPickMod(last, r, m)} onTab={(r) => newTab(joinPath(lastCol.path, r.name))} onReveal={(r) => revealRow(lastCol.path, r)} onSlow={(r, e) => onSlowClick(last, r, e)} onSlowCancel={cancelSlow} onOpen={(r) => (isFolder(r) && !r.locked ? go(joinPath(lastCol.path, r.name)) : !r.locked && openDefault(joinPath(lastCol.path, r.name)))} />}
+                      : <ListView cut={cutIn(lastCol.path)} scrollTop={scrolls.current[lastCol.path]} onScrollTop={(t) => onScrollTop(lastCol.path, t)} widths={prefs.listW} onWidths={(w) => setPrefs({ listW: w })} filtered={(filters[lastCol.path] ?? "") !== ""} peek={folderPeek.peek} dir={lastCol.path} display={lastCol.display} selName={sel[last] ?? null} chosen={liveMulti?.col === last ? liveMulti.choice.names : null} rowH={rowH} prefs={prefs} label={`Entries of ${basename(lastCol.path)}`} recent={isRecent(lastCol.path) ? recentSort : undefined} onSort={(k) => (isRecent(lastCol.path) ? onRecentSort(k) : k !== "recency" && onSort(k))} onPick={(r, m) => onPickMod(last, r, m)} onTab={(r) => newTab(joinPath(lastCol.path, r.name))} onReveal={(r) => revealRow(lastCol.path, r)} onSlow={(r, e) => onSlowClick(last, r, e)} onSlowCancel={cancelSlow} onOpen={(r) => (isFolder(r) && !r.locked ? go(joinPath(lastCol.path, r.name)) : !r.locked && openDefault(joinPath(lastCol.path, r.name)))} />}
                 </div>
               ) : null}
             </div>
@@ -1039,7 +1049,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
             title="Show all file-view shortcuts (F1)" onClick={() => setHelp(true)}><kbd className="text-[10px]" style={{ fontFamily: "inherit", fontWeight: 600 }}>F1</kbd> Shortcuts</button>
         )}
         <span className="flex-1" />
-        <span className="truncate" aria-live="polite">{note ?? count}</span>
+        <span className="truncate" aria-live="polite" aria-description={describedCount}>{note ?? count}</span>
       </footer>
       {band && <div aria-hidden className="fixed pointer-events-none rounded-sm" style={{ left: band.left, top: band.top, width: band.right - band.left, height: band.bottom - band.top, zIndex: 3, background: "color-mix(in srgb, var(--primary) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 55%, transparent)" }} />}
       {held && (
@@ -1074,6 +1084,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
 function ColumnsRow({ children, widths, active }: { children: React.ReactNode; widths: number[]; active: number }) {
   const el = useRef<HTMLDivElement>(null);
   const pad = useRef<HTMLDivElement>(null);
+  const placed = useRef(false);
   const key = widths.join(",");
   /* The strip's own width is part of the layout: the preview and the sidebar settle after the first pass, and a scroll worked out against the old width left the leftmost column sliced. */
   const { w: page } = useBox(el);
@@ -1084,7 +1095,10 @@ function ColumnsRow({ children, widths, active }: { children: React.ReactNode; w
     const e = el.current, p = pad.current; if (!e || !p) return;
     const t = stripLayout(widths, active, e.clientWidth, e.scrollLeft);
     p.style.width = `${t.pad}px`;
-    e.scrollLeft = t.scroll;
+    // Strata scrolls to a column it opens; the first layout, and a person who asked for less motion, jump.
+    if (placed.current && Math.abs(e.scrollLeft - t.scroll) > 1 && !matchMedia("(prefers-reduced-motion: reduce)").matches) e.scrollTo({ left: t.scroll, behavior: "smooth" });
+    else e.scrollLeft = t.scroll;
+    placed.current = true;
     // `key` is the widths themselves.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, active, page]);

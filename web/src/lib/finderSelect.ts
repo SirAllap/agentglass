@@ -86,6 +86,18 @@ export function selectedFooter(rows: readonly Row[], c: Choice): string {
   return `${parts} selected${size}`;
 }
 
+/**
+ * What a screen reader is told about the footer beside its words (Strata's accessible description of the count):
+ * with nothing chosen, "3 files, 2 folders"; with something chosen, "2 of 5 items selected." and the one thing the size
+ * leaves out. The plural follows the total, as Strata's does; the selected count fills in afterwards.
+ */
+export function footerDescription(rows: readonly Pick<Row, "kind" | "items">[], selected: number): string {
+  const total = rows.length;
+  if (selected > 0) return `${selected} of ${total} ${total === 1 ? "item" : "items"} selected. Size includes selected files only; folder contents are not counted.`;
+  const dirs = rows.filter((r) => isFolder(r)).length;
+  return `${plural(total - dirs, "file")}, ${plural(dirs, "folder")}`;
+}
+
 /** How many rows Shift+arrow or Shift+page moves the cursor: a row (or a line of tiles), or a page; down is positive. */
 export function extendBy(by: "up" | "down" | "pageUp" | "pageDown" | "home" | "end", page: number, perRow: number): number {
   // Shift+Home / Shift+End: to the first or the last row; extendSelect stops at the ends.
