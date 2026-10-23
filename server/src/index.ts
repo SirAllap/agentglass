@@ -248,7 +248,7 @@ import {
 import { setPluginSocketHandler, viaPluginSocket } from "./plugin-socket.ts";
 import { CanvasHandle, handleCanvasOps, isCanvasPanel, readBoundedJson, setCanvasResolver } from "./plugin-canvas.ts";
 import {
-  setPluginUiHook, setPanel, panelState, setOptions, pushEvent, takeEvents, upsertRun, upsertNotes, notesFor, answerNote, replyAsPlugin, costByDay, decideRun, pressNoteAction, type GitHubPoster, flushPluginNotes,
+  setPluginUiHook, setPanel, panelState, setOptions, pushEvent, takeEvents, upsertRun, upsertNotes, notesFor, answerNote, replyAsPlugin, costByDay, decideRun, pressNoteAction, type GitHubPoster, flushPluginNotes, summaryFor,
 } from "./plugin-ui.ts";
 import { PANEL_ID_RE, PLUGIN_CONTRACT, validPrRef } from "../../shared/pluginUi.ts";
 import { readNotifyPrefs, writeNotifyPrefs } from "./notifyPrefs.ts";
@@ -5665,6 +5665,21 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // needs no second request to know what to draw.
       const noteActions = Object.fromEntries(listPlugins().filter((p) => p.running && p.contributes.noteActions?.length).map((p) => [p.name, p.contributes.noteActions!] as const));
       return json({ ok: true, ...r, publishers: Object.fromEntries(names), noteActions });
+    }
+    if (pathname === "/plugins/pr-notes/summary" && req.method === "GET") {
+      // `heads=12:abc1234,13:def5678` is the list's own head per pull request,
+      // so `stale` can be answered here without asking GitHub anything.
+      const heads: Record<number, string> = {};
+      for (const part of (url.searchParams.get("heads") ?? "").split(",")) {
+        const m = /^(\d{1,9}):([0-9a-fA-F]{7,64})$/.exec(part.trim());
+        if (m) heads[Number(m[1])] = m[2]!;
+      }
+      const one = url.searchParams.get("head");
+      const num = url.searchParams.get("number");
+      if (one && num && /^[0-9a-fA-F]{7,64}$/.test(one)) heads[Number(num)] = one;
+      const r = summaryFor(url.searchParams.get("repo"), num, heads);
+      if (!r) return json({ ok: false, error: "repo (owner/name) is required, and number must be a pull request number" }, 400);
+      return json({ ok: true, ...r });
     }
     if (pathname === "/plugins/pr-notes/status" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();

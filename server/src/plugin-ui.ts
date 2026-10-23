@@ -23,7 +23,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import {
-  type Contributes, type Field, type FieldOption, type NoteReply, type NoteStatus, type PrNote, type PrRun, type UiAction, type UiNode,
+  type Contributes, type Field, type FieldOption, type NoteReply, type NoteStatus, type PrNote, type PrNotesSummary, type PrRun, type UiAction, type UiNode,
   NOTE_STATUSES, REPLIES_PER_NOTE, coerceValue, validateReplyInput, validReplyBy, resolveSettings, validateNote, validateRun, validateTree, validPrRef,
 } from "../../shared/pluginUi.ts";
 import { pluginsConfigDir } from "./plugins.ts";
@@ -184,7 +184,7 @@ export const COST_DAYS_KEPT = 90;
 
 let pathOverride: string | null = null;
 /** Test seam, the `__setSavedRepliesPath` shape. */
-export function __setPluginNotesPath(p: string | null): void { pathOverride = p; cache = null; }
+export function __setPluginNotesPath(p: string | null): void { pathOverride = p; cache = null; summaryCache = null; }
 
 function notesPath(): string {
   return pathOverride ?? join(pluginsConfigDir(), "plugin-notes.json");
@@ -221,6 +221,9 @@ function load(): NotesStore {
  *  request that caused it. */
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 function save(): void {
+  // Every write to the store passes here, so this is the one place the
+  // summary read is thrown away.
+  summaryCache = null;
   if (saveTimer) return;
   saveTimer = setTimeout(() => { saveTimer = null; saveNow(); }, 250);
 }
@@ -455,6 +458,105 @@ export function notesFor(repo: unknown, number: unknown): { runs: (PrRun & { plu
     runs: s.runs.filter((r) => r.repo === ref.repo && r.number === ref.number).sort((a, b) => a.startedAt - b.startedAt),
     notes: s.notes.filter((n) => n.repo === ref.repo && n.number === ref.number),
   };
+}
+
+/**
+ * What each pull request's notes add up to, for a board that must not open
+ * every conversation to draw a chip.
+ *
+ * A pure read of the store above: no GitHub request, and the per-request work
+ * is a map lookup. The sums are kept until the next write to the store
+ * (`save` drops them), so a board load costs one pass over the notes however
+ * many times it is asked. The head the caller says is the pull request's
+ * current one is NOT cached: it is the list's fact and moves with every push,
+ * and `stale` is one string comparison at read time.
+ *
+ * `idea` counts with `info`: neither one is a defect, and a chip with six
+ * severities would be a chip nobody reads.
+ */
+const SUMMARY_SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
+type SummarySeverity = (typeof SUMMARY_SEVERITIES)[number];
+
+interface SummaryBase {
+  repo: string;
+  number: number;
+  open: Record<SummarySeverity, number>;
+  resolved: number;
+  dismissed: number;
+  lastReviewAt: number | null;
+  plugins: string[];
+  reviewedSha: string | null;
+}
+let summaryCache: Map<string, SummaryBase> | null = null;
+
+function summaryBases(): Map<string, SummaryBase> {
+  if (summaryCache) return summaryCache;
+  const s = load();
+  const out = new Map<string, SummaryBase>();
+  const at = (repo: string, number: number): SummaryBase => {
+    const k = `${repo}#${number}`;
+    let b = out.get(k);
+    if (!b) {
+      b = { repo, number, open: { critical: 0, high: 0, medium: 0, low: 0, info: 0 }, resolved: 0, dismissed: 0, lastReviewAt: null, plugins: [], reviewedSha: null };
+      out.set(k, b);
+    }
+    return b;
+  };
+  // The head a review covered is the one on the newest finished run; notes
+  // only stand in for a plugin that writes none.
+  const runAt = new Map<string, number>();
+  for (const r of s.runs) {
+    if (r.state !== "done") continue;
+    const b = at(r.repo, r.number);
+    const key = `${r.repo}#${r.number}`;
+    const t = r.finishedAt ?? r.startedAt;
+    if (b.lastReviewAt === null || t > b.lastReviewAt) b.lastReviewAt = t;
+    if (r.sha && t >= (runAt.get(key) ?? 0)) { b.reviewedSha = r.sha; runAt.set(key, t); }
+    if (!b.plugins.includes(r.plugin)) b.plugins.push(r.plugin);
+  }
+  const noteAt = new Map<string, number>();
+  for (const n of s.notes) {
+    const b = at(n.repo, n.number);
+    const key = `${n.repo}#${n.number}`;
+    if (n.status === "open") b.open[n.severity === "idea" ? "info" : n.severity]++;
+    else if (n.status === "resolved") b.resolved++;
+    else b.dismissed++;
+    if (!b.plugins.includes(n.plugin)) b.plugins.push(n.plugin);
+    if (runAt.has(key)) continue;
+    if (n.sha && n.updatedAt >= (noteAt.get(key) ?? 0)) { b.reviewedSha = n.sha; noteAt.set(key, n.updatedAt); }
+    if (b.lastReviewAt === null || n.updatedAt > b.lastReviewAt) b.lastReviewAt = n.updatedAt;
+  }
+  summaryCache = out;
+  return out;
+}
+
+const sameSha = (a: string, b: string) => {
+  const x = a.toLowerCase(), y = b.toLowerCase();
+  return x === y || (Math.min(x.length, y.length) >= 7 && (x.startsWith(y) || y.startsWith(x)));
+};
+
+/** `heads` maps a pull request number to its current head sha, when the
+ *  caller knows it; without one `headSha` and `stale` are null. */
+export function summaryFor(repo: unknown, number: unknown, heads: Record<number, string> = {}): { prs: PrNotesSummary[] } | null {
+  if (typeof repo !== "string" || !/^[\w.-]+\/[\w.-]+$/.test(repo)) return null;
+  let only: number | null = null;
+  if (number !== null && number !== undefined && number !== "") {
+    const ref = validPrRef(repo, number);
+    if (!ref) return null;
+    only = ref.number;
+  }
+  const prs: PrNotesSummary[] = [];
+  for (const b of summaryBases().values()) {
+    if (b.repo !== repo || (only !== null && b.number !== only)) continue;
+    const head = heads[b.number] ?? null;
+    prs.push({
+      ...b, open: { ...b.open }, plugins: [...b.plugins],
+      headSha: head,
+      stale: head && b.reviewedSha ? !sameSha(head, b.reviewedSha) : null,
+    });
+  }
+  prs.sort((a, b) => a.number - b.number);
+  return { prs };
 }
 
 /** The person marked a note. Stored, and told to the plugin that wrote it. */

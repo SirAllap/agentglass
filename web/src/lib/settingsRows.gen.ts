@@ -87,6 +87,7 @@ export const SETTINGS_ROWS: SettingsRowRaw[] = [
   { pane: "notifications", section: "Interrupt me for", label: "Alarm voice", hint: "A reminder you set takes the screen and rings until it is answered.", agentNever: "decides whether an agent blocked on the owner can reach them: notifications are the owner's to silence" },
   { pane: "notifications", section: "Pull requests", label: "Checks: only when the pull request is approved", hint: "", settingId: "notifications.ciOnlyApproved" },
   { pane: "notifications", section: "Pull requests", label: "Conversation: when somebody says something", hint: "", settingId: "notifications.talk" },
+  { pane: "notifications", section: "Pull requests", label: "Review findings block merge-ready pull requests", hint: "", agentNever: "decides whether a reviewer's findings hold a pull request out of the green lane: an agent that could switch it off could clear its own findings from the board" },
   { pane: "onboarding", section: "What is left to set up", label: "A provider is connected", hint: "" },
   { pane: "onboarding", section: "What is left to set up", label: "An agent is wired in", hint: "" },
   { pane: "onboarding", section: "What is left to set up", label: "The pane engine is ready", hint: "" },

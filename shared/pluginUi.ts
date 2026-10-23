@@ -615,6 +615,25 @@ export function validCostUsd(v: unknown): Ok<number> | Err {
   return { ok: true, value: Math.round(v * 1e4) / 1e4 };
 }
 
+/** One pull request's notes added up: `GET /plugins/pr-notes/summary`. */
+export interface PrNotesSummary {
+  repo: string;
+  number: number;
+  /** Open findings by severity; `idea` is counted under `info`. */
+  open: { critical: number; high: number; medium: number; low: number; info: number };
+  resolved: number;
+  dismissed: number;
+  /** When the newest finished review ended, or null when there is none. */
+  lastReviewAt: number | null;
+  plugins: string[];
+  /** The head the newest review covered, when the plugin said. */
+  reviewedSha: string | null;
+  /** The head the caller said is current; null when it did not say. */
+  headSha: string | null;
+  /** The review covered an older head than `headSha`; null when either is unknown. */
+  stale: boolean | null;
+}
+
 export interface PrNote {
   id: string;
   runId?: string;

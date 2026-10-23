@@ -55,6 +55,10 @@ import { closeFind, openFind, registerEngine, topScope } from "../lib/findScope.
 import { CloseIcon } from "./CloseButton.tsx";
 import { boardFace } from "../lib/boardFace.ts";
 import { useClickupSetup } from "../lib/clickupSetup.ts";
+import { chipFor, gateFacts, notReadyChip, type ChipTone } from "../lib/prNotesChip.ts";
+import { headsOf, loadNotesSummary, notesSummaryVersion, onNotesSummary, refreshOnNotes, summariesOf } from "../lib/prNotesSummaryStore.ts";
+import { onReviewGate, reviewGateOn } from "../lib/reviewGatePref.ts";
+import type { PrNotesSummary } from "../../../shared/pluginUi.ts";
 
 /** The tracker bar's tint: the app's own accent, the one an unranked card chip already wears. */
 const ACCENT = "var(--accent, var(--primary))";
@@ -94,7 +98,7 @@ type Card = PrSummary & { filed: Filed };
 
 export function TriageBoard({
   mine, review, total, hasTaskProvider, pinned,
-  onOpen, onTogglePin, onShowTable, onAct, busy, acting, loading, settling, failed, hidden, onRetry, root, repoKey,
+  onOpen, onTogglePin, onShowTable, onAct, busy, acting, loading, settling, failed, hidden, onRetry, root, repoKey, repoSlug,
   onlyUnread, onOnlyUnread, unfiltered, others, results, more, viewer, person,
 }: {
   /** The `mine` scope, as the panel already has it. */
@@ -107,7 +111,8 @@ export function TriageBoard({
    *  taskLink.ts for why a convention-shaped id is hidden without one. */
   hasTaskProvider: boolean;
   pinned: (n: number) => boolean;
-  onOpen: (n: number) => void;
+  /** `to: "notes"` lands on the Conversation, filtered to what plugins wrote. */
+  onOpen: (n: number, to?: "notes") => void;
   onTogglePin: (p: PrSummary) => void;
   onShowTable: () => void;
   /** Perform the card's one suggested action. Only the ones this app can
@@ -165,6 +170,9 @@ export function TriageBoard({
    * belong to this project, so nothing is drawn. See prSeenKey.
    */
   repoKey?: string;
+  /** `owner/name`: what the local review's notes are stored under. Absent
+   *  means no chips and no gate, which is the board as it was. */
+  repoSlug?: string;
   /**
    * The filter bar's own switch, not a second one kept here.
    *
@@ -274,6 +282,21 @@ export function TriageBoard({
   /* Whether the repository's page is on this board at all. Counted from the
      * view, not from `others` being non-empty: an empty page is still "wide". */
   const wide = BOARD_IS_WIDE && !!others;
+  /* What the plugins' reviews say about these cards: ONE read for the board,
+     asked again when a card's head moves or a plugin writes (see
+     prNotesSummaryStore.ts). The gate is a second switch on the same data and
+     is OFF unless the person turned it on, in which case `gateOf` is absent and
+     the filing below is the one it always was. */
+  const notesTick = useSyncExternalStore(onNotesSummary, notesSummaryVersion, notesSummaryVersion);
+  const gateOn = useSyncExternalStore(onReviewGate, reviewGateOn, reviewGateOn);
+  const headsKey = useMemo(() => JSON.stringify(headsOf([...mine, ...review, ...(others ?? [])])), [mine, review, others]);
+  useEffect(() => {
+    if (!repoSlug || viewer) return;
+    const heads = JSON.parse(headsKey) as Record<number, string>;
+    void loadNotesSummary(repoSlug, heads);
+    return refreshOnNotes(repoSlug, () => heads);
+  }, [repoSlug, viewer, headsKey]);
+  const summaries = viewer ? summariesOf(undefined) : summariesOf(repoSlug);
   const lanes = useMemo(() => {
     // De-duplicated by number before filing: a pull request that is both yours
     // and asked of you arrives twice, and would otherwise be drawn twice.
@@ -283,10 +306,11 @@ export function TriageBoard({
     const r = new Set(review.map((p) => p.number));
     const filed = fileAll([...by.values()], (p) => ({ mine: m.has(p.number), asked: r.has(p.number) }),
       (p) => (root && p.checks?.failing?.length ? failureHint(p.checks.failing, (job) => summaryOf(failureKey(root, job))) : null),
-      viewer);
+      viewer,
+      gateOn ? (p) => gateFacts(summaries.get(p.number)) : undefined);
     return filed;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mine, review, others, wide, trueChecks, bumpRollup, root, failureTick, knownTick, viewer]);
+  }, [mine, review, others, wide, trueChecks, bumpRollup, root, failureTick, knownTick, viewer, gateOn, notesTick]);
 
   const cards = useMemo(() => [...lanes.values()].flat(), [lanes]);
   /* Per repository: this board IS one repository's, so the answer is read off
@@ -644,6 +668,7 @@ export function TriageBoard({
                 return (
                   <CardView key={p.number} p={{ ...p, filed }} hasTaskProvider={hasTaskProvider} repoUses={repoUses}
                     pinned={pinned(p.number)} onOpen={() => onOpen(p.number)} onPin={() => onTogglePin(p)}
+                    notes={summaries.get(p.number)} onOpenNotes={() => onOpen(p.number, "notes")}
                     onAct={onAct} busy={busy} acting={acting} root={root}
                     unread={unreadOf(p, repoKey, readSeen())} onOpenBase={onOpen} />
                 );
@@ -1046,6 +1071,7 @@ export function TriageBoard({
                         {rows.map((p) => (
                           <CardView key={p.number} p={p} hasTaskProvider={hasTaskProvider} repoUses={repoUses}
                             pinned={pinned(p.number)} onOpen={() => onOpen(p.number)} onPin={() => onTogglePin(p)}
+                            notes={summaries.get(p.number)} onOpenNotes={() => onOpen(p.number, "notes")}
                             onAct={onAct} busy={busy} acting={acting}
                             dim={!matches(p) || (onlyLane !== null && onlyLane !== l.id)} root={root}
                             unread={unread.get(p.number)}
@@ -1373,7 +1399,7 @@ function cardVerdict(p: PrSummary): {
 const copyEdge = (done: boolean) =>
   `1px solid color-mix(in srgb, ${done ? "var(--success) 50%" : "var(--border) 55%"}, transparent)`;
 
-function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, busy, acting, dim, root, unread, stack, factsOf, lit, onLit, onOpenBase }: {
+function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, notes, onOpenNotes, onAct, busy, acting, dim, root, unread, stack, factsOf, lit, onLit, onOpenBase }: {
   p: Card; hasTaskProvider: boolean;
   /** This repository links work items at all: see prCardBlock.ts. */
   repoUses: boolean;
@@ -1402,6 +1428,8 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
   /** Open the pull request a token names, inside this app. */
   onOpenBase?: (n: number) => void;
   onOpen: () => void; onPin: () => void;
+  /** What a plugin's review said about this pull request, when one did. */
+  notes?: PrNotesSummary; onOpenNotes?: () => void;
   onAct: (p: PrSummary, what: "open" | "merge" | "rerun") => void; busy?: boolean;
 }) {
   /* Asked for the first time by whoever draws the card, which is the thing that
@@ -1728,6 +1756,7 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
                 {st.failing}
               </span>
             )}
+            {!fin && onOpenNotes && <NotesChip notes={notes} lane={p.filed.lane} onOpen={onOpenNotes} />}
             {p.labels.slice(0, 1).map((l) => (
               <span key={l.name} className="truncate inline-flex items-center rounded-md px-1.5"
                 title={l.name}
@@ -1882,6 +1911,36 @@ function FinishedBody({ p }: { p: PrSummary }) {
         </>
       )}
     </div>
+  );
+}
+
+const NOTES_TONE: Record<ChipTone, string> = {
+  error: "var(--error)", warning: "var(--warning)", ok: "var(--success)", dim: "var(--text3)",
+};
+
+/**
+ * What a plugin's review said, as a chip the size of the others in this row.
+ *
+ * In the green lane a review of the CURRENT head that left critical or high
+ * findings open says "Not ready" in place of the findings count: the same
+ * facts the opt-in gate files on, so the chip and the lane cannot disagree.
+ * It only says it; the card stays in its lane unless the gate is on. Pressing
+ * it opens the pull request on the notes, not on the overview.
+ */
+function NotesChip({ notes, lane, onOpen }: { notes?: PrNotesSummary; lane: LaneId; onOpen: () => void }) {
+  const hold = lane === "land" ? notReadyChip(notes) : null;
+  const chip = hold ? { text: hold.text, tone: "error" as ChipTone, title: hold.title } : chipFor(notes);
+  if (!chip) return null;
+  const tint = NOTES_TONE[chip.tone];
+  return (
+    <button type="button" onClick={(e) => { e.stopPropagation(); onOpen(); }} data-notes-chip={chip.tone}
+      title={`${chip.title} — press to read the notes`}
+      className="agx-btn shrink-0 inline-flex items-center rounded-md px-1.5 whitespace-nowrap text-[10.5px]"
+      style={{ height: CHIP_H + 2, color: chip.tone === "dim" ? "var(--text3)" : `color-mix(in srgb, ${tint} 80%, var(--text))`,
+        background: `color-mix(in srgb, ${tint} ${chip.tone === "dim" ? 8 : 12}%, transparent)`,
+        border: LINE, borderColor: `color-mix(in srgb, ${tint} ${chip.tone === "dim" ? 22 : 35}%, transparent)` }}>
+      {chip.text}
+    </button>
   );
 }
 

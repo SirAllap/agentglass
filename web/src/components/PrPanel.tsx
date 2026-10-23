@@ -1879,7 +1879,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    *  it — editing a body is a mode, not a box wedged into the read view. */
   const [editingBody, setEditingBody] = useState(false);
   /** Open a pull request as a page. Back returns to the list, cursor intact. */
-  const openPr = useCallback((n: number) => { setSelected(n); setTab("overview"); setEditingBody(false); }, []);
+  const openPr = useCallback((n: number, to?: "notes") => {
+    setSelected(n); setEditingBody(false);
+    // The board's review chip: straight to what the plugin wrote.
+    if (to === "notes") { setConvWho("local"); setTab("conversation"); } else setTab("overview");
+  }, []);
   const backToList = useCallback(() => { setSelected(null); setDetailErr(""); setEditingBody(false); }, []);
 
   /*
@@ -5033,7 +5037,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                    looked" marks are written under — see the `key` this panel
                    builds for them. A different spelling of the same repository
                    would give every card a badge for ever. */
-                repoKey={repo.key}
+                repoKey={repo.key} repoSlug={repo.nameWithOwner}
                 onAct={(p, what) => {
                   // Only what this app can really do. `merge` uses the method
                   // the panel already remembers, so the board never quietly
@@ -6316,7 +6320,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
             them. */}
         <ReviewMenu d={d} canTerm={!!onReviewInTerminal}
           onPick={(recipe, where) => (where === "term" ? onReviewInTerminal?.(recipe) : onLocalReview(recipe))} />
-        <PluginPrActions number={d.number} local={local} onShowLocal={onShowLocal} />
+        <PluginPrActions number={d.number} local={local} onShowLocal={onShowLocal} headSha={d.headSha} />
         {/* The panel's own Btn, like its neighbour. A hand-rolled anchor with
             its own padding beside a Btn is two heights in a row of two. */}
         {/* `small`, like the Menu it stands beside. Without it this was the
@@ -8855,7 +8859,7 @@ function Masthead({ root, repo, d, busy, local, stackUi, onOpenPr, onShowLocal, 
             read, not because it is the better place to send somebody. */}
         <ReviewMenu d={d} canTerm={!!onReviewInTerminal}
           onPick={(recipe, where) => (where === "term" ? onReviewInTerminal?.(recipe) : onLocalReview(recipe))} />
-        <PluginPrActions number={d.number} local={local} onShowLocal={onShowLocal} />
+        <PluginPrActions number={d.number} local={local} onShowLocal={onShowLocal} headSha={d.headSha} />
         {/* Out of the overflow, because it is the most-pressed thing in it.
             "Open on GitHub" is what you reach for whenever this panel does not
             do the thing — and burying the escape hatch two clicks deep is the

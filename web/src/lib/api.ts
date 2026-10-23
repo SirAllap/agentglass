@@ -1,6 +1,6 @@
 import { deskGated } from "./deskGate.ts";
 import { forgetShared, sharedRead } from "./sharedRead.ts";
-import type { UiAction, Field, NoteReply, NoteStatus, PluginPanel, PluginPrNotes } from "./pluginTypes.ts";
+import type { UiAction, Field, NoteReply, NoteStatus, PluginPanel, PluginPrNotes, PrNotesSummary } from "./pluginTypes.ts";
 import type { ImportedPlace } from "./desktop.ts";
 import type { Policy } from "../../../shared/orchestration.ts";
 import type { PinnedPlace, PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/types.ts";
@@ -2166,6 +2166,10 @@ const realApi = {
   /** Runs and notes plugins wrote on one pull request. Local only. */
   pluginPrNotes: (repo: string, number: number) =>
     get<PluginPrNotes>(`/plugins/pr-notes?repo=${encodeURIComponent(repo)}&number=${number}`),
+  /** What each pull request's notes add up to: one read for a whole board.
+   *  `heads` is the list's own head per pull request, so `stale` is answered here. */
+  pluginPrNotesSummary: (repo: string, heads: Record<number, string>) =>
+    get<{ ok: boolean; prs: PrNotesSummary[] }>(`/plugins/pr-notes/summary?repo=${encodeURIComponent(repo)}${Object.keys(heads).length ? `&heads=${Object.entries(heads).map(([n, h]) => `${n}:${h}`).join(",")}` : ""}`),
   pluginNoteStatus: (plugin: string, id: string, status: NoteStatus) =>
     post<{ ok: boolean; error?: string }>("/plugins/pr-notes/status", { plugin, id, status }),
   /** Answer a finding: a reply, a status, or both in one request. `root` is
@@ -2839,6 +2843,7 @@ const demoApi: typeof realApi = {
   pluginSettings: (_name: string) => D({ ok: false, fields: [] as Field[], values: {}, error: "not available in the demo" }),
   pluginSettingsSave: (_name: string, _v: Record<string, unknown>) => D({ ok: false, error: "not available in the demo" }),
   pluginPrNotes: (_repo: string, _n: number) => D({ ok: true, runs: [], notes: [], publishers: {} } as PluginPrNotes),
+  pluginPrNotesSummary: (_repo: string, _h: Record<number, string>) => D({ ok: true, prs: [] as PrNotesSummary[] }),
   pluginNoteStatus: (_p: string, _id: string, _s: NoteStatus) => D({ ok: false, error: "not available in the demo" }),
   pluginNoteReply: (_p: string, _id: string, _b: { status?: NoteStatus; reply: { text: string; postToGitHub: boolean }; root?: string }) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string; status?: NoteStatus; replies?: NoteReply[]; posted?: boolean; postError?: string }),
   pluginRunDecision: (_p: string, _id: string, _d: "approve" | "skip") => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string }),

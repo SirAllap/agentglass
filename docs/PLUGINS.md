@@ -669,6 +669,40 @@ retries. An agent that sends the `X-Agentglass-Agent` header is recorded as
 `agent:<name>`. `GET /plugins/pr-notes?repo=acme/orbit&number=1042` (read scope)
 returns `replies` inside each note.
 
+### What the board reads: the summary
+
+The board does not open every conversation to draw a card. One read, from the
+same store the notes live in (nothing is asked of GitHub), adds each pull
+request's notes up:
+
+```
+GET /plugins/pr-notes/summary?repo=acme/orbit[&number=1042][&heads=1042:3f9a2c1,1043:b81d0e4]
+→ { "ok": true, "prs": [ {
+      "repo": "acme/orbit", "number": 1042,
+      "open": { "critical": 2, "high": 0, "medium": 1, "low": 0, "info": 0 },
+      "resolved": 3, "dismissed": 1,
+      "lastReviewAt": 1792190000000, "plugins": ["acme-review"],
+      "reviewedSha": "3f9a2c1…", "headSha": "3f9a2c1", "stale": false } ] }
+```
+
+`idea` notes count under `info`. `reviewedSha` is the `sha` of the newest
+finished run (a plugin that writes no runs is read from its notes). `heads`, or
+`head` with `number`, is the pull request's current head as the caller knows
+it; with it `stale` says whether the review covered an older commit, without it
+`headSha` and `stale` are `null`. **Send `sha` on your runs**: a review whose
+head is unknown is never called stale and never holds a pull request.
+
+What the app does with it:
+
+- a chip on each card ("2 critical open", "reviewed · clean", "stale review");
+- "Not ready: n open", only as a chip, where a review of the current head left
+  critical or high findings open;
+- an opt-in setting, **Review findings block merge-ready pull requests**
+  (Settings → Notifications → Pull requests, off by default), that files such a
+  pull request under Blocked with "n open critical findings from local-review"
+  until they are resolved, dismissed or fixed in a new review of the new head.
+  A stale review never blocks. A per-repository override is not there yet.
+
 A worked plugin that uses all four is
 [local-review](https://github.com/SirAllap/agentglass-local-review): it reviews
 your labelled pull requests with the agent you choose, inside a sandbox, and
