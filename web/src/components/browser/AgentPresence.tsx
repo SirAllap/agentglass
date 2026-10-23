@@ -17,7 +17,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { AgentStateKey, TabAgent } from "../../lib/browserAgentActivity.ts";
-import { PRESENCE_LINGER_MS, agentState, lapKeyframes, presenceLabel, travelMs } from "../../lib/browserAgentActivity.ts";
+import { PRESENCE_LINGER_MS, agentState, lapKeyframes, pointerAt, presenceLabel, travelMs } from "../../lib/browserAgentActivity.ts";
 import type { ActLanding } from "../../lib/browserDrive.ts";
 import { LivingMark } from "../Logo.tsx";
 
@@ -81,7 +81,7 @@ export function AgentPresence({ agent, landing, onToggle, quiet = false }: {
 
   useEffect(() => {
     if (!landing) return;
-    const x = Math.round(landing.x + Math.min(34, landing.w / 2)), y = Math.round(landing.y + landing.h / 2);
+    const { x, y } = pointerAt(landing, root.current?.clientWidth ?? 0);
     const travel = calmNow() ? 0 : travelMs(x - last.current.x, y - last.current.y);
     last.current = { x, y };
     setGhost((g) => ({ x, y, travel, label: presenceLabel(landing.verb, landing.name, landing.key), seq: (g?.seq ?? 0) + 1 }));

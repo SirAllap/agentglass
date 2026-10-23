@@ -158,6 +158,19 @@ export function agentState(a: Pick<TabAgent, "working" | "paused" | "op">): { ke
   return { key, word: STATE_WORD[key] };
 }
 
+/**
+ * Where the drawn pointer's tip goes, in the panel's pixels, for an act that
+ * landed on a rect in the guest's. The guest has a zoom of its own, so its CSS
+ * pixel is not the panel's: placed unconverted, the pointer drifted further off
+ * the lower the element sat (a row off mid-page, three rows near the bottom).
+ * Converted through the two viewport widths; -3/-2 puts the arrow's tip, not
+ * its box, on the point.
+ */
+export function pointerAt(l: { x: number; y: number; w: number; h: number; vw: number }, panelWidth: number): { x: number; y: number } {
+  const k = l.vw > 0 && panelWidth > 0 ? panelWidth / l.vw : 1;
+  return { x: Math.round((l.x + Math.min(34, l.w / 2)) * k) - 3, y: Math.round((l.y + l.h / 2) * k) - 2 };
+}
+
 /** The pointer's travel time: grows with the distance, clamped so a short hop stays quick and a long one never drags. */
 export function travelMs(dx: number, dy: number): number {
   return Math.round(Math.min(240, Math.max(110, 90 + Math.hypot(dx, dy) * 0.25)));

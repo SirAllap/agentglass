@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { FLASH_MS, flashScript } from "../src/lib/browserDrive.ts";
 import { describe, expect, test } from "bun:test";
 import {
-  LOG_MAX, activityReducer, actionOf, agentLabel, agentState, ago, flashPlan, isActVerb, lapKeyframes, pausedRefusal, presenceLabel, travelMs, type Activity,
+  LOG_MAX, activityReducer, actionOf, agentLabel, agentState, pointerAt, ago, flashPlan, isActVerb, lapKeyframes, pausedRefusal, presenceLabel, travelMs, type Activity,
 } from "../src/lib/browserAgentActivity.ts";
 
 const begin = (s: Activity, tab = "t1", agent = "orbit-ci") => activityReducer(s, { type: "begin", tab, agent });
@@ -206,5 +206,18 @@ describe("the dock's state word", () => {
   test("the op of the ask begun is kept on the tab", () => {
     const s = activityReducer({}, { type: "begin", tab: "t1", agent: "orbit-ci", op: "type" });
     expect(s.t1!.op).toBe("type");
+  });
+});
+
+describe("where the pointer lands", () => {
+  // A guest zoomed out to 2319 CSS px inside a 2514 px panel put the pointer rows below the element.
+  test("converts guest pixels to the panel's through the two widths", () => {
+    const l = { x: 100, y: 600, w: 200, h: 40, vw: 2319 };
+    const p = pointerAt(l, 2514);
+    expect(p.y).toBe(Math.round(620 * (2514 / 2319)) - 2);
+    expect(p.x).toBe(Math.round(134 * (2514 / 2319)) - 3);
+  });
+  test("an unzoomed guest is taken as it is", () => {
+    expect(pointerAt({ x: 10, y: 20, w: 40, h: 10, vw: 800 }, 800)).toEqual({ x: 27, y: 23 });
   });
 });

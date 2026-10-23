@@ -2124,14 +2124,15 @@ export function flashScript(plan: Exclude<FlashPlan, null>, ms = FLASH_MS, draw 
     const editor = e.isContentEditable || e.tagName === "INPUT" || e.tagName === "TEXTAREA" || e.tagName === "SELECT" || e.getAttribute("role") === "textbox";
     const name = (e.getAttribute("aria-label") || e.getAttribute("placeholder") || (e.labels && e.labels[0] && e.labels[0].innerText)
       || (editor ? "" : e.innerText) || "").trim().replace(/\\s+/g, " ").slice(0, 40);
-    return { kind: "ok", x: r.left, y: r.top, w: r.width, h: r.height, name };`;
+    return { kind: "ok", x: r.left, y: r.top, w: r.width, h: r.height, vw: innerWidth, name };`;
   return plan.kind === "focus"
     ? `(() => { const e = document.activeElement; if (!e || e === document.body) return { kind: "none" }; ${body} })()`
     : resolveOne(locatorLit(plan.selector), body, true);
 }
 
-/** Where an agent's act landed on a tab, in the guest's viewport pixels. */
-export interface ActLanding { tab: string; verb: string; key: string; x: number; y: number; w: number; h: number; name: string }
+/** Where an agent's act landed, in the guest's CSS pixels; `vw` is the guest's
+ *  viewport width in the same pixels, so the panel can convert to its own. */
+export interface ActLanding { tab: string; verb: string; key: string; x: number; y: number; w: number; h: number; vw: number; name: string }
 
 /* One slot, the idiom the bus uses: the panel draws the pointer, and this file
    must not import the panel. Nobody listening is the normal case off-desktop. */
@@ -2154,10 +2155,10 @@ function aimAt(el: DrivableWebview, ask: BrowserAskFrame): void {
   const tab = typeof ask.args.atTab === "string" ? ask.args.atTab : "";
   try {
     void Promise.resolve(el.executeJavaScript(flashScript(plan, FLASH_MS, false))).then((r) => {
-      const h = r as { kind?: string; x?: number; y?: number; w?: number; h?: number; name?: string } | null;
+      const h = r as { kind?: string; x?: number; y?: number; w?: number; h?: number; vw?: number; name?: string } | null;
       if (!tab || !landed || h?.kind !== "ok" || typeof h.x !== "number") return;
       landed({ tab, verb: ask.op, key: typeof ask.args.key === "string" ? ask.args.key : "",
-        x: h.x, y: h.y ?? 0, w: h.w ?? 0, h: h.h ?? 0, name: h.name ?? "" });
+        x: h.x, y: h.y ?? 0, w: h.w ?? 0, h: h.h ?? 0, vw: h.vw ?? 0, name: h.name ?? "" });
     }).catch(() => { /* the page moved on */ });
   } catch { /* not attached */ }
 }
