@@ -2394,3 +2394,15 @@ describe("an act counts a transparent control as there", () => {
     expect(code).not.toContain("opacity");
   });
 });
+
+describe("a page that does not load", () => {
+  // A failed load answered with the webview bridge's own sentence, which read as the browser breaking.
+  test("says Chromium's reason in words, without the bridge's wrapping", async () => {
+    const { loadFailure } = await import("../src/lib/browserDrive.ts");
+    const m = loadFailure("Error invoking remote method 'GUEST_VIEW_MANAGER_CALL': Error: ERR_NAME_NOT_RESOLVED (-105) loading 'https://orbit.invalid/'");
+    expect(m).not.toContain("GUEST_VIEW_MANAGER_CALL");
+    expect(m).toContain("ERR_NAME_NOT_RESOLVED");
+    expect(m).toContain("does not resolve");
+    expect(loadFailure("ERR_SOMETHING_NEW (-999)")).toBe("ERR_SOMETHING_NEW (-999)");
+  });
+});

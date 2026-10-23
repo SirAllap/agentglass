@@ -1490,6 +1490,25 @@ async function settleAfterAct(
   return effect;
 }
 
+/* Chromium's code, said in words. A failed loadURL came back as "Error
+   invoking remote method 'GUEST_VIEW_MANAGER_CALL': Error: ERR_... (-111)",
+   the bridge's sentence rather than the page's, and an agent read it as the
+   browser breaking. The code stays in the answer; the bridge's wrapping goes. */
+const LOAD_ERRORS: Array<[RegExp, string]> = [
+  [/ERR_NAME_NOT_RESOLVED/, "the address does not resolve"],
+  [/ERR_(TUNNEL|PROXY)_CONNECTION_FAILED/, "the connection to it failed on the way out (the proxy or the egress guard could not reach it)"],
+  [/ERR_CONNECTION_(REFUSED|RESET|CLOSED)/, "the server refused or dropped the connection"],
+  [/ERR_(CONNECTION_)?TIMED_OUT/, "the server did not answer in time"],
+  [/ERR_INTERNET_DISCONNECTED/, "this machine is offline"],
+  [/ERR_UNSAFE_PORT/, "Chromium refuses that port for any page"],
+  [/ERR_CERT_/, "its certificate is not trusted"],
+];
+export function loadFailure(msg: string): string {
+  const bare = msg.replace(/^Error invoking remote method '[^']*': (Error: )?/, "");
+  const said = LOAD_ERRORS.find(([re]) => re.test(bare))?.[1];
+  return said ? `${bare}: ${said}` : bare;
+}
+
 /** `open`'s navigation, shared with `checkup`: load, wait for it to finish,
  *  and refuse to call it a success when the browser never moved. `explain`
  *  turns a failed load's bare Chromium code into a reason when the caller
@@ -1514,7 +1533,10 @@ async function navigateTo(
     // `settled` is the authority either way: a genuinely bad address still
     // arrives as did-fail-load with its own reason.
     const msg = e instanceof Error ? e.message : String(e);
-    if (!msg.includes("(-3)") && !msg.includes("ERR_ABORTED")) return { ok: false, error: msg };
+    if (!msg.includes("(-3)") && !msg.includes("ERR_ABORTED")) {
+      const why = loadFailure(msg);
+      return { ok: false, error: explain ? await explain(why) : why };
+    }
   }
   const err = await nav;
   if (err) return { ok: false, error: explain ? await explain(err) : err };
