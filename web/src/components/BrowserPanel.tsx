@@ -20,7 +20,7 @@
 // and whatever an agent was doing on it. `visibility`, never `display:none` —
 // a display:none ancestor measures 0x0, and a guest resized to nothing comes
 // back reflowed to a single column.
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { CloseButton } from "./CloseButton.tsx";
 import { LanesRow } from "./LanesRow.tsx";
 import { Portal } from "./Portal.tsx";
@@ -45,8 +45,9 @@ import {
 import { VIEWPORTS, type Viewport } from "../lib/browserViewport.ts";
 import { browserNav, clearBrowserNav, subscribeBrowserNav } from "../lib/browserNav.ts";
 import { clientId, serveBrowserAsk, setBrowserAskHandler } from "../lib/browserBus.ts";
+import { activityReducer, actionOf, agentLabel, pausedRefusal, type Activity } from "../lib/browserAgentActivity.ts";
 import { api } from "../lib/api.ts";
-import { forgetAgentZoom, reapplyZoom, applyGuestZoom, setPageZoomer, crossContainerRefusal, mintTakesThePane, type GuestZoom, type DrivableWebview } from "../lib/browserDrive.ts";
+import { forgetAgentZoom, reapplyZoom, applyGuestZoom, setPageZoomer, crossContainerRefusal, mintTakesThePane, notePopup, type GuestZoom, type DrivableWebview } from "../lib/browserDrive.ts";
 import { onBrowserTabs } from "../lib/browserBus.ts";
 import { COLLECTOR } from "../lib/browserObserve.ts";
 import { PagePicker } from "./browser/PagePicker.tsx";
@@ -63,8 +64,9 @@ import { suggest, type Suggestion } from "../lib/suggest.ts";
 import {
   BackIcon, BlankPageIcon, CloseIcon, CodeIcon, ExternalIcon, ForwardIcon, GlobeIcon,
   HomeIcon, LockIcon, MoreIcon, NoteIcon, PenIcon, ReloadIcon, SearchIcon,
-  SpinnerIcon, StopIcon, TargetIcon, FolderIcon, ContainerIcon, SpaceIcon, CameraIcon, PanelIcon, UpIcon, DownIcon, SplitIcon,
+  SpinnerIcon, StopIcon, TargetIcon, FolderIcon, ContainerIcon, SpaceIcon, CameraIcon, PanelIcon, UpIcon, DownIcon, SplitIcon, PauseIcon,
 } from "./browser/icons.tsx";
+import { AgentChip, AgentPill } from "./browser/AgentBadge.tsx";
 import { CheckboxIcon, DoneIcon, SwapIcon } from "../lib/glyphIcons.tsx";
 import { Button, Chip, CTRL_H, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 
@@ -566,6 +568,12 @@ export function BrowserView({ active: viewOn, scope }: {
    *  answer `profiles` and to refuse a `newtab` into one that does not exist. */
   const profilesRef = useRef<BrowserProfile[]>([]);
   profilesRef.current = profiles;
+  /** Which agent is driving which tab, whether it is mid-ask, and whether the
+   *  person has taken the tab back. Read by the ask handler through a ref for
+   *  the same reason as the lists above. */
+  const [acts, dispatchAct] = useReducer(activityReducer, {} as Activity);
+  const actsRef = useRef<Activity>(acts);
+  actsRef.current = acts;
   /** §12: did the ask now being served say `--show`? Written by the ask handler
    *  one statement before `TabOps.open` reads it — see the note there for why a
    *  ref is safe here and an argument was not available. */
@@ -999,6 +1007,27 @@ export function BrowserView({ active: viewOn, scope }: {
           return;
         }
       }
+      /* The person has this tab: an agent's ask is answered, not served. Same
+         early reply as the refusal above, so it is instant rather than a 45 s
+         timeout, and it comes before anything reaches the guest. */
+      if (owner && actsRef.current[owner.id]?.paused) {
+        void api.browserResult({
+          id: ask.id, ok: false, client: clientId(),
+          error: pausedRefusal(typeof ask.args.as === "string" ? ask.args.as : ""),
+        }).catch(() => { /* already timed out */ });
+        return;
+      }
+      /* The tab shows who is driving it and whether it is mid-ask; the log row
+         is written when the answer is known. */
+      const agent = agentLabel(ask.args.as, owner?.profile ? profileName(profilesRef.current, owner.profile) : "default");
+      const serve = (wv: DrivableWebview | null) => {
+        if (!owner) { void serveBrowserAsk(wv, ask); return; }
+        dispatchAct({ type: "begin", tab: owner.id, agent });
+        serveBrowserAsk(wv, ask).then(
+          (ok) => dispatchAct({ type: "end", tab: owner.id, action: actionOf(ask, ok, Date.now()) }),
+          () => dispatchAct({ type: "end", tab: owner.id, action: actionOf(ask, false, Date.now()) }),
+        );
+      };
       /* §8: the answer says which tab it came from and whose container that is.
          Resolved HERE and nowhere else — `runBrowserAsk` is handed one webview
          and cannot name it — so it rides down on the frame and is stamped onto
@@ -1015,7 +1044,7 @@ export function BrowserView({ active: viewOn, scope }: {
          session is answered "there is no browser view in this window" while the
          panel sits there mounted and asleep — and the CLI then opens the view,
          which is the app taking the screen off whoever was typing. */
-      if (target) { void serveBrowserAsk(target as unknown as DrivableWebview, ask); return; }
+      if (target) { serve(target as unknown as DrivableWebview); return; }
       setTabs((prev) => (prev.find((t) => t.id === targetId)?.asleep ? wake(prev, targetId) : prev));
       // A beat for the guest to attach. Long enough on this machine, and the
       // ask is answered either way rather than left hanging.
@@ -1024,7 +1053,7 @@ export function BrowserView({ active: viewOn, scope }: {
            ask to have run and left its own answer in the ref. */
         mintShow.current = ask.args.show === true;
         mintEphemeral.current = ask.args.ephemeral === true;
-        void serveBrowserAsk(els.current.get(targetId) as unknown as DrivableWebview | null, ask);
+        serve(els.current.get(targetId) as unknown as DrivableWebview | null);
       }, 1200);
     });
     return () => setBrowserAskHandler(null);
@@ -1178,10 +1207,11 @@ export function BrowserView({ active: viewOn, scope }: {
    */
   useEffect(() => onBrowserZoom((level) => { void applyZoom(level); }), [applyZoom]);
 
-  const open = useCallback((url: string, from?: string, profile?: string, shelfId?: string, partition?: string) => {
+  const open = useCallback((url: string, from?: string, profile?: string, shelfId?: string, opened?: (id: string) => void, partition?: string) => {
     setTabs((prev) => {
       const r = addTab(prev, url, from, profile, shelfId, partition);
       if ("error" in r) { say(r.error); return prev; }
+      opened?.(r.tab.id);
       setActiveId(r.tab.id);
       return r.tabs;
     });
@@ -1196,6 +1226,7 @@ export function BrowserView({ active: viewOn, scope }: {
       ].slice(0, 25);
     }
     els.current.delete(id);
+    dispatchAct({ type: "forget", tab: id });
     setTabs((prev) => {
       const r = closeTab(prev, id);
       setActiveId(r.activeId);
@@ -1344,7 +1375,7 @@ export function BrowserView({ active: viewOn, scope }: {
     const idOf = (id: string) => { try { return els.current.get(id)?.getWebContentsId(); } catch { return undefined; } };
     const home = popupHome(tabsRef.current, idOf, opener, activeId);
     if (!home) { say("A page that is no longer open asked for a tab; it was not opened."); return; }
-    open(url, home.from, home.profile, undefined, home.partition);
+    open(url, home.from, home.profile, undefined, (id) => notePopup(opener, id, url), home.partition);
   }), [open, activeId]);
 
   /*
@@ -2530,7 +2561,17 @@ export function BrowserView({ active: viewOn, scope }: {
         </div>
         <SideTool label="Hide this bar (Ctrl+S)"
           onClick={() => { setSideOpen(false); setSidebarOpen(false); }}><PanelIcon /></SideTool>
-        <span className="flex-1" />
+        {/* The spacer stays a spacer in every state; the chip only fills it. */}
+        <span className="flex-1 min-w-0 flex items-center justify-end gap-0.5 pr-0.5">
+          {active && acts[active.id] && <AgentChip agent={acts[active.id]!} />}
+          {/* One control in both states: pressed means the tab is yours and the
+              agent's asks are refused; pressing again hands it back. */}
+          {active && acts[active.id] && (
+            <SideTool on={acts[active.id]!.paused}
+              label={acts[active.id]!.paused ? "Hand this tab back to the agent" : "Take this tab over: refuse the agent's asks"}
+              onClick={() => dispatchAct({ type: "pause", tab: active.id, paused: !acts[active.id]!.paused })}><PauseIcon /></SideTool>
+          )}
+        </span>
         <SideTool label="Back" onClick={() => el()?.goBack()} disabled={!active?.canBack}><BackIcon /></SideTool>
         <SideTool label="Forward" onClick={() => el()?.goForward()} disabled={!active?.canForward}><ForwardIcon /></SideTool>
         <SideTool label={active?.loading ? "Stop" : "Reload"}
@@ -2768,6 +2809,7 @@ export function BrowserView({ active: viewOn, scope }: {
                           ? <span className="shrink-0" style={{ color: "var(--text3)" }}><SpinnerIcon /></span>
                           : <Favicon src={t.icon} />}
                         <span className="min-w-0 flex-1 truncate text-[11px]">{tabLabel(t)}</span>
+                        {acts[t.id] && <AgentPill agent={acts[t.id]!} />}
                         {/* Which one is the other half. Without it a split reads as one tab
                             being active and another one being, somehow, also on screen. */}
                         {split && t.id === splitId && (

@@ -198,6 +198,17 @@ describe("what may be asked", () => {
     expect("ask" in parseAsk("forward", { selector: "ignored" })).toBe(true);
   });
 
+  test("eval takes a timeout between 100 ms and 40 s, whole milliseconds", () => {
+    const ok = parseAsk("eval", { js: "1+1", timeoutMs: 2500 });
+    expect("ask" in ok && ok.ask.args.timeoutMs).toBe(2500);
+    const none = parseAsk("eval", { js: "1+1" });
+    expect("ask" in none && none.ask.args.timeoutMs).toBeUndefined();
+    for (const timeoutMs of [99, 40_001, 1.5, "soon", -1]) {
+      const bad = parseAsk("eval", { js: "1+1", timeoutMs });
+      expect("error" in bad && bad.error).toContain("timeoutMs must be 100..40000");
+    }
+  });
+
   test("an unknown verb is refused rather than relayed", () => {
     expect("error" in parseAsk("eval", { code: "fetch('/steal')" })).toBe(true);
     expect("error" in parseAsk("screenshot", {})).toBe(true);

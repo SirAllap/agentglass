@@ -41,6 +41,20 @@ navigation, with no earlier look, or after a look you only saw part of
 (`--max-tokens`, `--summary`), you get the full answer with `delta:false` and a
 `reason`. Plain `observe` is always the full page.
 
+A page that is mostly below the fold or a menu you already know the id of does
+not need the whole tree:
+
+```bash
+agentglass-browser observe --viewport         # only what is on screen; `outOfView` counts the rest
+agentglass-browser observe --root e12         # only the subtree of e12 (refused if e12 is gone)
+```
+
+Both are looks at a part: they are not a baseline, so they neither replace nor
+break the one `--delta` is measured against, and they cannot be combined with
+it. Unnamed layout wrappers (`role` presentation/none/generic with no name,
+id or test id) are left out of every tree, counted in `wrappers`, and an empty
+`name` is not written.
+
 The baseline (and `checkup`'s "since your last checkup") is kept per `--as`
 name; callers without one share a single baseline, so pass `--as` to get your own.
 
@@ -70,13 +84,65 @@ advice and do not count. A screenshot path only when something failed
 ## Then the whole interaction in ONE call
 
 ```bash
-agentglass-browser do "click #save" "waitfor #done" --observe
+agentglass-browser do "click #save" "wait #done" --observe
 ```
 
 Starting this process costs ~69 ms before it says a word, so six separate verbs
 spend most of a second on startup alone. `do` spends it once. Measured: **618 ms
 → 94 ms** for six verbs. Steps stop at the first failure, which comes back with
 its own console errors and failed requests.
+
+Every round you spend re-reads everything above it, so the count of calls is
+the cost. Three rules:
+
+1. **Act, wait for the end state and look, in ONE call.** A form is one
+   `fill --field e3=... --field e4=... --submit --observe`; a click that should
+   lead somewhere is `do "click e9" "wait #done" --observe`. Do not split an
+   action from the look that checks it.
+2. **Trust the receipt.** `click` and `press` already say whether the page
+   navigated, errored, opened a dialog or opened a tab (`effect.popups`:
+   `[{page, url}]`, so the next call is `--page <page>`), and `--observe`
+   already shows the page after. `fill` names any field the page changed
+   from what you typed (`changedByPage`); no entry means every value took. Do
+   not observe again to confirm what the answer just told you; look again
+   only when it says something you did not expect.
+   An act waits up to 3 s for its selector to appear and for a passing
+   overlay to clear, so do not `wait` before a click on something that is
+   about to render. An id the page re-rendered is refused with the id that
+   replaced it (`... is now e43`): repeat the call with that one.
+3. **Stop when the result is on the page.** The task is done the moment the
+   page shows it (a confirmation, the new URL, the saved value). Do not check
+   it a second way, take a screenshot "to be sure", or re-read the page.
+
+## A loop or a condition is ONE `script` call
+
+A task with a loop or a condition is one `script` call, not a round per verb.
+CODE is Python (a quoted string, or `-` for a heredoc). Every verb is a
+function that returns its value or raises `BrowserError` with the server's
+sentence; `print()` and a variable named `result` come back in one JSON answer
+with the page after (a delta when you observed it before; `--no-observe` drops
+it).
+
+```bash
+agentglass-browser script --as review - <<'PY'
+for n in range(20):
+    rows = extract(fields={"names": ".orders td.name"})
+    if "Acme Ltd" in str(rows):
+        break
+    click("#next")
+else:
+    raise BrowserError("Acme Ltd is not on the first 20 pages")
+click("tr.row-acme button.open")
+result = {"opened_on_page": n + 1}
+PY
+```
+
+Verbs: `open observe click type press select wait waitfor text read links extract
+eval`, `fill({sel: value}, submit=True)`, and `b("op", **args)` for any other.
+A failure stops the script with `line N: <sentence>`; the printed output and the
+final observe still come back. The ceiling is 200 verb calls and 120 s. The
+code runs with the CLI's own rights, the same your shell already has. `script`
+is CLI-only: the MCP tools have no equivalent.
 
 ## Wait for something instead of polling for it
 
@@ -180,6 +246,13 @@ share one, so an id used after a navigation, on another tab, or after the node
 was removed is refused with a sentence that says which — and the fix is always
 the same, `observe` again and use the new ids.
 
+**Inside a component or a frame.** `observe` also lists what is inside open
+shadow roots and same-origin iframes, marked `in: "shadow"` or `in: "frame"`
+(with `frame`, the iframe's name or position), and their ids work in every verb
+(`click e42`, `fill --field e43=x`). Locators look in the page first and in
+those only when the page has no match. Closed shadow roots and cross-origin
+frames are not reachable and are left out without an error.
+
 **Or name it, and skip the look.** When you already know what a thing is
 called — you wrote the page, or just read it — every verb that takes a
 selector takes a locator too (CLI and MCP alike):
@@ -207,7 +280,11 @@ what went wrong.
 
 **JavaScript is yours.** `eval` reads the app's own runtime — a store, a
 component's state, `document.visibilityState`. `eval --file` for anything a
-shell would mangle. `addInitScript` runs in the page now and, in principle,
+shell would mangle. A script gets 10 s (`--timeout-ms`, at most 40000): one that
+never finishes, a promise nobody settles or a loop, is stopped and answered
+`ok:false` with `executionStopped` in the value (`mayHaveLateEffects` too for a
+pending promise, which keeps running in the page) — and it may have changed the
+page before it stopped, so look before you retry. `addInitScript` runs in the page now and, in principle,
 before the page's own scripts; this browser drops it after a navigation, so
 register it again after one. For errors thrown during load, use `checkup`.
 

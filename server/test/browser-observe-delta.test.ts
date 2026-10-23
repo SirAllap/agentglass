@@ -65,6 +65,37 @@ describe("the relay keeps each caller's baseline", () => {
     expect("ask" in plain && plain.ask.args.delta).toBeUndefined();
   });
 
+  test("viewport and root are accepted, malformed or with delta they are not", () => {
+    const v = parseAsk("observe", { viewport: true, root: "e12" });
+    expect("ask" in v && v.ask.args.viewport).toBe(true);
+    expect("ask" in v && v.ask.args.root).toBe("e12");
+    const plain = parseAsk("observe", {});
+    expect("ask" in plain && plain.ask.args.viewport).toBeUndefined();
+    expect("ask" in plain && plain.ask.args.root).toBeUndefined();
+    for (const root of ["12", "e12; x", "", 12]) {
+      const bad = parseAsk("observe", { root });
+      expect("error" in bad && bad.error).toContain("root must be an id");
+    }
+    const both = parseAsk("observe", { delta: true, viewport: true });
+    expect("error" in both && both.error).toContain("delta compares whole pages");
+    const both2 = parseAsk("observe", { delta: true, root: "e1" });
+    expect("error" in both2).toBe(true);
+    // Other verbs do not take them.
+    const c = parseAsk("console", { viewport: true, root: "e1" });
+    expect("ask" in c && c.ask.args.viewport).toBeUndefined();
+  });
+
+  test("a scoped look carries no doc, so it does not move the caller's baseline", async () => {
+    let n = 0;
+    const asks = windowRecording((a) => (a.args.viewport === true
+      ? { ok: true, value: { url: "u", tree: [] } }
+      : { ok: true, value: { url: "u", doc: "d1", seq: ++n } }));
+    await observe({ as: "orbit-a" });
+    await observe({ viewport: true, as: "orbit-a" });
+    await observe({ delta: true, as: "orbit-a" });
+    expect(asks[2]!.args.base).toEqual({ doc: "d1", seq: 1 });
+  });
+
   test("the first delta has no base; the next carries what the last answer said", async () => {
     const asks = windowRecording();
     await observe({ delta: true, as: "orbit-a" });

@@ -587,6 +587,29 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
       expect(askedArgs[1]?.delta, "a plain observe asked for a delta").toBeUndefined();
     });
 
+    step("eval --timeout-ms is sent, and only when given", async () => {
+      await openWindow();
+      asked = []; askedArgs = [];
+      answers = { eval: { ok: true, value: { value: 1 } } };
+      expect((await cli("eval", "1+1", "--timeout-ms", "2500")).code).toBe(0);
+      expect((await cli("eval", "1+1")).code).toBe(0);
+      expect(askedArgs.map((x) => x.timeoutMs)).toEqual([2500, undefined]);
+    });
+
+    step("observe --viewport and --root ask for a part of the page, and never with --delta", async () => {
+      await openWindow();
+      asked = []; askedArgs = [];
+      answers = { observe: { ok: true, value: { url: "u", title: "t", tree: [], outOfView: 4, console: [], network: [] } } };
+      expect((await cli("observe", "--viewport")).code).toBe(0);
+      expect((await cli("observe", "--root", "e12")).code).toBe(0);
+      expect((await cli("observe")).code).toBe(0);
+      expect(askedArgs.map((x) => [x.viewport, x.root])).toEqual([[true, undefined], [undefined, "e12"], [undefined, undefined]]);
+      const both = await cli("observe", "--delta", "--viewport");
+      expect(both.code).toBe(2);
+      expect(both.err).toContain("--delta compares whole pages");
+      expect(askedArgs).toHaveLength(3);
+    });
+
     step("a look the caller only sees part of says so, so it never becomes a delta's baseline", async () => {
       await openWindow();
       asked = []; askedArgs = [];

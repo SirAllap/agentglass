@@ -2655,6 +2655,14 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
         if (!Number.isInteger(n) || n < 100 || n > 200_000) return { error: "max must be 100..200000" };
         args.max = n;
       }
+      /* How long the script gets before the call stops waiting for it (10 s
+         when absent). Under the 45 s the relay itself waits for an eval, so
+         the answer that names the timeout is the one that arrives. */
+      if (b.timeoutMs !== undefined) {
+        const n = Number(b.timeoutMs);
+        if (!Number.isInteger(n) || n < 100 || n > 40_000) return { error: "timeoutMs must be 100..40000" };
+        args.timeoutMs = n;
+      }
       break;
     }
     case "addInitScript": {
@@ -2768,6 +2776,20 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
          (`observeTracked`), because a caller asserting its own baseline can
          only be wrong in ways nothing here could see. */
       if (op === "observe" && (b.delta === true || b.delta === "true")) args.delta = true;
+      /* A look at part of the page: the viewport, or the subtree of one
+         element. Neither is a baseline (the page stores no snapshot for it), so
+         neither can be a delta: a diff against a part would call the rest of
+         the page removed. */
+      if (op === "observe") {
+        if (b.viewport === true || b.viewport === "true") args.viewport = true;
+        if (b.root !== undefined) {
+          if (typeof b.root !== "string" || !/^e[0-9]+$/.test(b.root)) return { error: "root must be an id from an observation, like e12" };
+          args.root = b.root;
+        }
+        if (args.delta === true && (args.viewport === true || args.root !== undefined)) {
+          return { error: "delta compares whole pages: leave out viewport and root, or leave out delta" };
+        }
+      }
       break;
     }
     case "resize": {

@@ -310,3 +310,12 @@ export function SplitIcon({ size = 14 }: P) {
     </svg>
   );
 }
+
+export function PauseIcon({ size = ICON.md }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <path d="M9 6.5v11" />
+      <path d="M15 6.5v11" />
+    </svg>
+  );
+}

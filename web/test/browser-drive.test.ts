@@ -6,11 +6,14 @@
  * a template instead of being encoded, a click that reports success having hit
  * nothing, and a typed value that a framework throws away on its next render.
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { globalStubs } from "./stubGlobal";
-import { claimAgentZoom, forgetAgentZoom, reapplyZoom, resetBrowserSettings, resetStableIds, runBrowserAsk, type DrivableWebview } from "../src/lib/browserDrive.ts";
+import { claimAgentZoom, forgetAgentZoom, reapplyZoom, resetBrowserSettings, notePopup, resetStableIds, runBrowserAsk, setFindWaitMs, type DrivableWebview } from "../src/lib/browserDrive.ts";
 import { cookieSetParams as buildCookie } from "../src/lib/cookieSet.ts";
 const stubGlobal = globalStubs();
+/* An act verb looks again for a selector that matches nothing; fast here. */
+beforeAll(() => setFindWaitMs(1000));
+afterAll(() => setFindWaitMs());
 
 const canary = () => (globalThis as unknown as { __canary: { hit: number } }).__canary;
 
@@ -92,6 +95,8 @@ function fakeGuestWithCookies(host = "example.com") {
   };
   return fakeGuest((code) => new Function("document", `return ${code}`)(document));
 }
+
+const DRIVE_SRC = await Bun.file(new URL("../src/lib/browserDrive.ts", import.meta.url)).text();
 
 describe("driving a page", () => {
   test("a navigation the egress guard refused says why, not just ERR_TUNNEL_CONNECTION_FAILED", async () => {
@@ -309,6 +314,41 @@ describe("driving a page", () => {
     const r = await runBrowserAsk(el, ask("click", { selector: ".save" }));
     expect(r.ok).toBe(false);
     expect(r.error).toContain("covered by e42 .modal-backdrop");
+  });
+
+  test("a click the page refused is not tried again: the gate is the page's last word", async () => {
+    const el = fakeGuest(() => ({ kind: "blocked", reason: "disabled" }));
+    await runBrowserAsk(el, ask("click", { selector: ".save" }));
+    expect(el.ran.filter((c) => c.includes("__got")).length).toBe(1);
+  });
+
+  test("a selector that matches nothing yet is looked for again until it does", async () => {
+    let n = 0;
+    const el = fakeGuest((c) => (c.includes("__got") && !c.includes("data-agx-flash") && ++n < 3 ? { kind: "none" } : { kind: "ok" }));
+    const r = await runBrowserAsk(el, ask("click", { selector: ".save" }));
+    expect(r.ok).toBe(true);
+    expect(n).toBe(3);
+  });
+
+  test("a click that opened a tab says which, so the next call can go there", async () => {
+    const el = Object.assign(fakeGuest((c) => {
+      if (c.includes("__got")) {
+        notePopup(7, "t9-terms", "https://example.com/terms");
+        notePopup(8, "t3-other", "https://example.com/elsewhere");
+      }
+      return { kind: "ok" };
+    }), { getWebContentsId: () => 7 });
+    const r = await runBrowserAsk(el, ask("click", { selector: "a" }));
+    expect((r.value as any).effect.popups).toEqual([{ page: "t9-terms", url: "https://example.com/terms" }]);
+    // The next act did not open it: it is not that act's to report.
+    const again = await runBrowserAsk(el, ask("click", { selector: "a" }));
+    expect((again.value as any).effect.popups).toBeUndefined();
+  });
+
+  test("and a click that opened nothing carries no popups at all", async () => {
+    const el = Object.assign(fakeGuest(), { getWebContentsId: () => 11 });
+    const r = await runBrowserAsk(el, ask("click", { selector: "a" }));
+    expect((r.value as any).effect.popups).toBeUndefined();
   });
 
   test("dblclick, rightclick and hover go through the same gate as click", async () => {
@@ -1371,6 +1411,87 @@ describe("eval's wrapper stays synchronous unless asked", () => {
     // is almost never the one on screen.
     expect(src, "rAF does not fire on a tab that is not painting").not.toContain("requestAnimationFrame");
     expect(src).toContain("setTimeout");
+  });
+
+  /*
+   * A script that never finishes held the verb until the relay gave up at 45 s
+   * with a sentence about the browser not responding, and a loop took the whole
+   * tab with it. The call now ends on its own clock, and the answer says what
+   * is known: it stopped, and the page may have been changed before it did.
+   */
+  describe("eval that never finishes", () => {
+    type Call = { method: string; params?: unknown };
+    /** A DevTools relay that answers, recording what it was asked. `blocked`
+     *  stands for a page whose main thread is stuck in a loop: it answers
+     *  nothing until the execution is terminated. */
+    function relay(blocked: boolean) {
+      const calls: Call[] = [];
+      let freed = !blocked;
+      const waiting: Array<() => void> = [];
+      const cdp = async (method: string, params?: unknown) => {
+        calls.push({ method, params });
+        if (method === "Runtime.terminateExecution") { freed = true; waiting.splice(0).forEach((f) => f()); return { ok: true, result: {} }; }
+        if (!freed) await new Promise<void>((r) => waiting.push(r));
+        return { ok: true, result: { result: { value: 1 } } };
+      };
+      return { calls, cdp };
+    }
+    const never = () => new Promise(() => {});
+
+    test("the timer is held to the ceiling the relay allows, and a value that is not a number is the default", () => {
+      const line = DRIVE_SRC.split("\n").find((l) => l.includes("if (Number.isFinite(askedMs)) evalMs ="));
+      expect(line).toContain("askedMs > EVAL_TIMEOUT_MAX_MS ? EVAL_TIMEOUT_MAX_MS : askedMs < 0 ? 0 : askedMs");
+      expect(DRIVE_SRC).toContain("let evalMs = EVAL_TIMEOUT_MS;");
+      expect(DRIVE_SRC).toContain("const EVAL_TIMEOUT_MAX_MS = 40_000;");
+    });
+
+    test("a promise that never settles is given up on, with the caveat", async () => {
+      const el = fakeGuest(never);
+      const { calls, cdp } = relay(false);
+      const t0 = Date.now();
+      const r = await runBrowserAsk(el, ask("eval", { js: "new Promise(() => {})", await: true, timeoutMs: 40 }),
+        undefined, undefined, undefined, cdp);
+      expect(Date.now() - t0).toBeLessThan(2000);
+      expect(r.ok).toBe(false);
+      expect(r.error).toContain("did not finish in 0.04s");
+      expect(r.error).toContain("it may have changed the page before it stopped");
+      expect(r.value).toEqual({ executionStopped: true, mayHaveLateEffects: true });
+      // The page still answered, so there was nothing to terminate.
+      expect(calls.map((c) => c.method)).not.toContain("Runtime.terminateExecution");
+    });
+
+    test("a loop that blocks the page is terminated through the protocol", async () => {
+      const el = fakeGuest(never);
+      const { calls, cdp } = relay(true);
+      const r = await runBrowserAsk(el, ask("eval", { js: "(() => { for (;;) {} })()", timeoutMs: 40 }),
+        undefined, undefined, undefined, cdp);
+      expect(r.ok).toBe(false);
+      expect(r.error).toContain("did not finish in 0.04s");
+      expect(r.value).toEqual({ executionStopped: true, mayHaveLateEffects: false });
+      expect(calls.map((c) => c.method)).toContain("Runtime.terminateExecution");
+    });
+
+    test("a loop the shell cannot terminate says so instead of claiming it stopped", async () => {
+      const el = fakeGuest(never);
+      const cdp = async () => ({ ok: false, error: "no debugger seat" });
+      const r = await runBrowserAsk(el, ask("eval", { js: "(() => { for (;;) {} })()", timeoutMs: 40 }),
+        undefined, undefined, undefined, cdp);
+      expect(r.ok).toBe(false);
+      expect((r.value as { executionStopped: boolean }).executionStopped).toBe(false);
+      expect(r.error).toContain("could not be stopped");
+    });
+
+    test("a script that finishes in time is answered as before, and the clock is cleared", async () => {
+      const el = fakeGuest(() => ({ __agxOk: true, __agxV: 2 }));
+      const r = await runBrowserAsk(el, ask("eval", { js: "1+1", timeoutMs: 40 }));
+      expect(r).toEqual({ ok: true, value: { value: 2, truncated: false } });
+    });
+
+    test("the default is ten seconds, and the page is told nothing about it", async () => {
+      const el = fakeGuest(() => ({ __agxOk: true, __agxV: 2 }));
+      await runBrowserAsk(el, ask("eval", { js: "1+1" }));
+      expect(el.ran[0]).not.toContain("10000");
+    });
   });
 
   test("both still catch the page's throw in the page", async () => {

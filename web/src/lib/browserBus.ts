@@ -266,7 +266,8 @@ function guestIdOf(el: DrivableWebview | null): number | undefined | null {
   } catch { return null; }
 }
 
-export async function serveBrowserAsk(el: DrivableWebview | null, ask: BrowserAskFrame): Promise<void> {
+/** Resolves to whether the answer was a success, so the panel can write it in a tab's log. */
+export async function serveBrowserAsk(el: DrivableWebview | null, ask: BrowserAskFrame): Promise<boolean> {
   /* Tabs are answered before the webview is consulted: they are about WHICH
      page, not about the page. `open --as NAME` joins them here too — see the
      note beside `case "open"` in serveTabs for why a plain `open` must NOT
@@ -274,12 +275,12 @@ export async function serveBrowserAsk(el: DrivableWebview | null, ask: BrowserAs
   if (TAB_OPS.has(ask.op) || (ask.op === "open" && typeof ask.args.profile === "string")) {
     const reply = await serveTabs(ask);
     try { await api.browserResult({ client: clientId(), id: ask.id, ...reply }); } catch { /* already timed out */ }
-    return;
+    return (reply as { ok?: boolean }).ok !== false;
   }
   if (ask.op === "health") {
     const reply = await serveHealth(el);
     try { await api.browserResult({ client: clientId(), id: ask.id, ...reply }); } catch { /* already timed out */ }
-    return;
+    return (reply as { ok?: boolean }).ok !== false;
   }
   /*
    * S9: which agent this guest's requests should be attributed to, for the
@@ -444,6 +445,7 @@ export async function serveBrowserAsk(el: DrivableWebview | null, ask: BrowserAs
     : { ok: false, error: "the browser view is not open in this window" };
   const withDiagnosis = await attachDiagnosis(el, ask.op, reply);
   try { await api.browserResult({ client: clientId(), id: ask.id, ...withDiagnosis }); } catch { /* the ask has already timed out */ }
+  return (withDiagnosis as { ok?: boolean }).ok !== false;
 }
 
 /**
