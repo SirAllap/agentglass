@@ -56,7 +56,7 @@ describe("where it is wired", () => {
   it("the card pane draws the section, once, with the write switch", async () => {
     const src = strip(await pane.text());
     expect(src.match(/<JiraCardPrs /g)?.length).toBe(1);
-    expect(src).toContain("<JiraCardPrs query={key} writable={writes} quiet={!writes} mentions={mentions} />");
+    expect(src).toContain("<JiraCardPrs query={key} writable={writes} quiet={!writes} mentions={mentions} dev={dev} />");
   });
 
   it("nothing in the store polls", async () => {

@@ -240,6 +240,13 @@ export interface FakeState {
   links: FakeLink[];
   remoteLinks: Record<string, FakeRemoteLink[]>;
   nextRemoteLinkId: number;
+  /**
+   * What the site's development tool holds, by ISSUE ID (the dev-status endpoints take the numeric id): `tool` is the
+   * instance type the summary names, the lists are the `detail` rows as that tool answers them. A card with no entry is a
+   * card nothing named; `devPanel: false` plays a site whose dev-status path is not there (404).
+   */
+  dev: Record<string, { tool: string; pullRequests?: any[]; branches?: any[]; commits?: any[]; builds?: any[]; buildCounts?: { ok: number; failed: number } }>;
+  devPanel: boolean;
   /** Projects whose create metadata lists no sub-task type: a site that did not turn them on. */
   noSubtaskIn: string[];
   /** A board's own quick filters (`jql` is what a toggle ANDs into the read), its sprints and what it answers to a rank write. */
@@ -364,6 +371,8 @@ function seedState(flavor: FakeFlavor): FakeState {
     fields: structuredClone(flavor === "datacenter" ? fieldFixture.datacenter : fieldFixture.cloud),
     boards: structuredClone(boardFixture.boards),
     links: structuredClone([...boardExtras.links, ...cardExtras.links]),
+    dev: {},
+    devPanel: true,
     remoteLinks: structuredClone(boardExtras.remoteLinks) as Record<string, FakeRemoteLink[]>,
     nextRemoteLinkId: 20000,
     noSubtaskIn: [],
@@ -1192,6 +1201,28 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
       return json(204, null);
     }
 
+    // The Development panel's own API: not under /rest/api, so `path` is whole here.
+    if (m === "GET" && (r = /^\/rest\/dev-status\/latest\/issue\/(summary|detail)$/.exec(path))) {
+      if (!live.devPanel) return json(404, { errorMessages: ["Not Found"], errors: {} });
+      const held = live.dev[String(query.issueId)];
+      const rows = held ? { pullrequest: held.pullRequests ?? [], branch: held.branches ?? [], repository: held.commits ?? [], build: held.builds ?? [] } : null;
+      if (r[1] === "summary") {
+        const one = (kind: "pullrequest" | "branch" | "repository" | "build", extra: Record<string, unknown> = {}) => {
+          const n = rows ? (kind === "repository" ? rows.repository.reduce((a: number, x: any) => a + (x.commits?.length ?? 0), 0) : rows[kind].length) : 0;
+          return { overall: { count: n, lastUpdated: null, dataType: kind, ...extra }, byInstanceType: n && held ? { [held.tool]: { count: n, name: held.tool } } : {} };
+        };
+        return json(200, { errors: [], configErrors: [], summary: {
+          pullrequest: one("pullrequest", { stateCount: 0, state: "OPEN", open: true }),
+          build: one("build", { failedBuildCount: held?.buildCounts?.failed ?? 0, successfulBuildCount: held?.buildCounts?.ok ?? 0, unknownBuildCount: 0 }),
+          repository: one("repository"), branch: one("branch"),
+          review: { overall: { count: 0, lastUpdated: null, dataType: "review" }, byInstanceType: {} },
+        } });
+      }
+      const kind = String(query.dataType) as "pullrequest" | "branch" | "repository" | "build";
+      if (!held || query.applicationType !== held.tool || !rows || !(kind in rows)) return json(200, { errors: [], detail: [] });
+      const field = { pullrequest: "pullRequests", branch: "branches", repository: "repositories", build: "builds" }[kind];
+      return json(200, { errors: [], detail: [{ [field]: rows[kind], _instance: { name: held.tool, type: held.tool } }] });
+    }
     if ((r = /^\/issue\/([^/]+)(?:\/(transitions|assignee|comment|remotelink|changelog|worklog))?$/.exec(path))) {
       const key = decodeURIComponent(r[1]);
       const sub = r[2];

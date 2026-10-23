@@ -9,12 +9,12 @@
  * not on every render.
  */
 import { api } from "./api.ts";
-import type { CardWebLink } from "../../../shared/providers.ts";
+import type { CardDevPr, CardWebLink } from "../../../shared/providers.ts";
 import { prMentions } from "../../../shared/taskref.ts";
 
 /** Where a row came from: a real remote link, or an address somebody wrote in the card's words. */
-export type LinkWhere = "link" | "comment" | "description";
-export interface JiraLink { url: string; number: number; title: string; resolved: boolean; where?: LinkWhere }
+export type LinkWhere = "link" | "comment" | "description" | "dev";
+export interface JiraLink { url: string; number: number; title: string; resolved: boolean; where?: LinkWhere; dev?: CardDevPr }
 /** `web` is every remote link of the card, the pull requests among them; `links` is the pull requests alone. */
 export type JiraLinks = { links: JiraLink[]; web: CardWebLink[]; error: string };
 

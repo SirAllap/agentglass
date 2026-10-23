@@ -13,6 +13,8 @@
  */
 import { useEffect, useState } from "react";
 import { readJiraLinks, addJiraLink, withMentions, type JiraLink, type JiraLinks, type LinkWhere } from "../../lib/jiraLinks.ts";
+import { approvalsOf, withDev } from "../../lib/jiraDev.ts";
+import type { CardDev } from "../../../../shared/providers.ts";
 import { api } from "../../lib/api.ts";
 import { openPr, openPrs, prRefFromUrl } from "../../lib/openPrs.ts";
 import { prAddress } from "../../../../shared/taskref.ts";
@@ -27,12 +29,20 @@ export const WHERE_LABEL: Record<LinkWhere, string> = {
   link: "linked on the card",
   comment: "mentioned in a comment",
   description: "mentioned in the description",
+  dev: "known to the development tool",
 };
 
 export function openLinked(url: string, number: number): void {
   const ref = prRefFromUrl(url);
   if (ref) openPr(ref.repo, ref.number);
   else openPrs(String(number), "all");
+}
+
+/** What the development tool adds to a pull request, as short parts that wrap as the pane narrows: who wrote it, where it goes, who approved. */
+export function devParts(l: JiraLink): string[] {
+  const d = l.dev;
+  if (!d) return [];
+  return [d.author && `by ${d.author}`, approvalsOf(d), d.from && d.into && `${d.from} into ${d.into}`].filter((x): x is string => !!x);
 }
 
 /** The rows and the box, from what is already known; the data and the writing live in `JiraCardPrs`. */
@@ -50,7 +60,12 @@ export function JiraPrsView({ links, error, writable, said, busy, draft, onDraft
       {links !== null && !error && !links.length && <div className="text-[10.5px]" style={{ color: "var(--text4)" }}>No pull request is linked on the card.</div>}
       {links?.map((l) => (
         <div key={l.url} className="text-[11px]">
-          <CardPrDetailRow p={{ number: l.number, title: l.title, state: "", url: l.url }} onOpen={() => openLinked(l.url, l.number)} trailing={null} />
+          <CardPrDetailRow p={{ number: l.number, title: l.title, state: l.dev?.state ?? "", url: l.url }} onOpen={() => openLinked(l.url, l.number)} trailing={null} />
+          {devParts(l).length > 0 && (
+            <div className="flex flex-wrap gap-x-2 text-[10px] pl-1 min-w-0" style={{ color: "var(--text3)" }}>
+              {devParts(l).map((x, i) => <span key={x} className="min-w-0 break-all">{i > 0 ? "· " : ""}{x}</span>)}
+            </div>
+          )}
           {l.where && <div className="text-[10px] pl-1" style={{ color: "var(--text4)" }}>{WHERE_LABEL[l.where]}</div>}
         </div>
       ))}
@@ -71,8 +86,10 @@ export function JiraPrsView({ links, error, writable, said, busy, draft, onDraft
   );
 }
 
-export function JiraCardPrs({ query, writable, quiet, mentions }: {
+export function JiraCardPrs({ query, writable, quiet, mentions, dev }: {
   query: string; writable: boolean; quiet?: boolean;
+  /** What the site's development tool holds for the card, read by the pane (lib/jiraDev.ts); null or absent draws nothing extra. */
+  dev?: CardDev | null;
   /** Addresses in the card's own words, from the detail read the pane already made (never a request of this section's own). */
   mentions?: JiraLink[];
 }) {
@@ -98,5 +115,5 @@ export function JiraCardPrs({ query, writable, quiet, mentions }: {
     setDraft("");
     setSaid(r.linked ? "Linked on the card." : "Already linked on the card.");
   };
-  return <JiraPrsView links={v ? withMentions(v.links, mentions ?? []) : null} error={v?.error ?? ""} writable={writable} said={said} busy={busy} draft={draft} onDraft={setDraft} onLink={() => void link()} quiet={quiet} />;
+  return <JiraPrsView links={v ? withDev(withMentions(v.links, mentions ?? []), dev?.prs ?? []) : null} error={v?.error ?? ""} writable={writable} said={said} busy={busy} draft={draft} onDraft={setDraft} onLink={() => void link()} quiet={quiet} />;
 }

@@ -118,6 +118,18 @@ describe("the card door", () => {
     expect((r.body.untrusted.moves as { toStatus: string }[]).map((m) => m.toStatus)).toContain("In Review");
   });
 
+  step("card: what the site's development tool holds is on the door, counts in state and its words under untrusted; a card with none carries no key", async () => {
+    const none = await door(b, "card", { key: "ORBIT-1042" });
+    expect(none.body.state.development).toBeUndefined();
+    expect(none.body.untrusted.development).toBeUndefined();
+    b.fake.state.dev[b.fake.state.issues["ORBIT-1042"]!.id] = { tool: "GitHub", pullRequests: [{ name: "Retry the export", url: "https://github.com/acme/orbit/pull/2196", status: "MERGED", reviewers: [{ name: "Bo Sample", approved: true }] }] };
+    const r = await door(b, "card", { key: "ORBIT-1042" });
+    expect(r.body.state.development).toMatchObject({ pullRequests: 1, branches: 0, commits: 0, builds: 0 });
+    expect(JSON.stringify(r.body.state)).not.toContain("Retry the export");
+    expect(r.body.untrusted.development.pullRequests).toMatchObject([{ title: "Retry the export", state: "MERGED", approvedBy: ["Bo Sample"] }]);
+    b.fake.state.dev = {};
+  });
+
   step("card: what the pane draws beside the words is on the door too, ids in state and every typed string under untrusted", async () => {
     const r = await door(b, "card", { key: "ORBIT-1050" });
     expect(r.body.state).toMatchObject({ linkedCount: 5, subtasksDone: 0, subtasksTotal: 0, attachmentCount: 0 });

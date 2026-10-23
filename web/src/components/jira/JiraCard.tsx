@@ -19,7 +19,7 @@ import { putCard } from "../../lib/prCardStore.ts";
 import { TRACKERS } from "../../lib/trackerApi.ts";
 import { OfferedPeople } from "../../lib/trackerComment.ts";
 import type { Mentionable } from "../../lib/mentions.ts";
-import type { ProviderTask, TaskDetail } from "../../../../shared/providers.ts";
+import type { CardDev, ProviderTask, TaskDetail } from "../../../../shared/providers.ts";
 import { Composer, COMPOSER_MIN } from "../tasks/Composer.tsx";
 import { EDGE, LINE } from "../workspace/Chrome.tsx";
 import { readJiraLinks, setJiraWeb, type JiraLinks } from "../../lib/jiraLinks.ts";
@@ -39,6 +39,8 @@ import { AttachmentsBlock, type FileAct } from "./JiraFiles.tsx";
 import { LinkedSection, Section, SubtasksSection, WebLinksSection } from "./JiraSections.tsx";
 import { Spinner } from "../Spinner.tsx";
 import { JiraCardPrs } from "./JiraCardPrs.tsx";
+import { JiraDevLists } from "./JiraDev.tsx";
+import { countsLine, readJiraDev } from "../../lib/jiraDev.ts";
 import { mentionsOfCard } from "../../lib/jiraLinks.ts";
 
 /** The box may grow to this share of the pane, then scrolls inside; the ClickUp card's share. */
@@ -107,6 +109,15 @@ export function JiraCard({ t, header, writes, onTask }: {
     void readJiraLinks(key).then((r) => { if (on) setLinks(r); });
     return () => { on = false; };
   }, [key]);
+  /* What the site's development tool holds, one request when the card has been read (its numeric id is in the read); null is nothing to draw. */
+  const [dev, setDev] = useState<CardDev | null>(null);
+  const issueId = detail?.task.id ?? "";
+  useEffect(() => {
+    let on = true;
+    setDev(null);
+    if (/^\d+$/.test(issueId)) void readJiraDev(issueId).then((d) => { if (on) setDev(d); });
+    return () => { on = false; };
+  }, [issueId]);
   // The pull requests the card's own words name, from the read already made.
   const mentions = useMemo(() => (detail ? mentionsOfCard(detail) : []), [detail]);
 
@@ -312,8 +323,9 @@ export function JiraCard({ t, header, writes, onTask }: {
             {writes ? <SubtasksBlock rows={detail.subtasks} parent={detail.task} writable act={joinAct} /> : <SubtasksSection rows={detail.subtasks} />}
             {writes ? <LinkedBlock linked={detail.linked ?? []} card={key} writable act={joinAct} /> : <LinkedSection linked={detail.linked ?? []} />}
             {writes ? <WebLinksBlock links={links ? links.web : null} error={links?.error ?? ""} writable card={key} act={joinAct} /> : <WebLinksSection links={links ? links.web : null} error={links?.error ?? ""} />}
-            <Section id="development" title="Development">
-              <JiraCardPrs query={key} writable={writes} quiet={!writes} mentions={mentions} />
+            <Section id="development" title="Development" aside={dev ? <span className="truncate" title="What the development tool connected to this site holds for the card">{countsLine(dev.counts)}</span> : undefined}>
+              <JiraCardPrs query={key} writable={writes} quiet={!writes} mentions={mentions} dev={dev} />
+              <JiraDevLists dev={dev} />
             </Section>
             <JiraActivity cardKey={key} act={act} comments={detail.comments} moreComments={more} worklog={detail.events ?? []} worklogMore={detail.worklogMore ?? 0} tracking={detail.tracking} work={writes && detail.tracking ? work : undefined}
               onMoreComments={(page, left) => { setDetail((d) => (d ? { ...d, comments: [...d.comments, ...page] } : d)); setMore(left); }} />

@@ -1127,6 +1127,39 @@ export interface CardEdit {
   descriptionLocked?: boolean;
 }
 
+/**
+ * What a Jira site knows about a card from the development tool connected to it (GitHub for Jira and the like):
+ * the pull requests, branches, commits and builds it has seen name the card. Every string is somebody's words.
+ * `state` is the vocabulary the pull request chip already uses (OPEN, MERGED, CLOSED); a site's "declined" is CLOSED.
+ */
+export interface CardDevPr {
+  url: string;
+  title: string;
+  state: "OPEN" | "MERGED" | "CLOSED" | "";
+  author?: string;
+  /** Who was asked, and whether they approved. */
+  reviewers: { name: string; approved: boolean }[];
+  from?: string;
+  into?: string;
+  repo?: string;
+  comments: number;
+  updated: number;
+}
+export interface CardDevBranch { name: string; url: string; repo: string }
+export interface CardDevCommit { id: string; message: string; url: string; author?: string; at: number }
+export interface CardDevBuild { name: string; url: string; state: "passed" | "failed" | "running" | ""; at: number }
+export interface CardDev {
+  /** What the site counted, which can be more than the rows it was asked for (rows are cut at ROWS). */
+  counts: { pullRequests: number; branches: number; commits: number; builds: number };
+  /** Builds that passed / failed among those counted; the summary carries these without a detail read. */
+  buildsPassed: number;
+  buildsFailed: number;
+  prs: CardDevPr[];
+  branches: CardDevBranch[];
+  commits: CardDevCommit[];
+  builds: CardDevBuild[];
+}
+
 /** A link from the card to a page: any address, not only a pull request. */
 export interface CardWebLink {
   id: string;

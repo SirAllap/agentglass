@@ -116,7 +116,7 @@ A card on a Jira site is not a window, so it is not a door in the list above:
 the same switch.
 
 ```bash
-agentglass-ui --as my-agent jira card ORBIT-1042     # facts in state, the words in untrusted: description, comments, subtasks, linked cards, files by name, Details
+agentglass-ui --as my-agent jira card ORBIT-1042     # facts in state, the words in untrusted: description, comments, subtasks, linked cards, files by name, Details, and what the site's development tool holds (counts in state.development, rows under untrusted)
 agentglass-ui --as my-agent jira links ORBIT-1042    # every web link on it, pull requests included
 agentglass-ui --as my-agent jira activity ORBIT-1042 --kind history   # what happened on it, 100 at a time (--start <state.next> for the next page)
 agentglass-ui --as my-agent jira moves ORBIT-1042    # where it can go from here

@@ -120,6 +120,7 @@ import { trackerProjects, setTrackerChoice } from "./trackerProjects.ts";
 import { holdCard as holdJiraCard } from "./jiraprcards.ts";
 import { ISSUE_KEY, connectJira, jiraStatus, setJiraWrites, jiraWriteEnabled, readIssue, findIssue, mine as jiraMine, searchText as jiraSearchText, withStored as withJira } from "./jira.ts";
 import { ACTIVITY_KINDS, activityStored as jiraActivity, type ActivityKind } from "./jiraActivity.ts";
+import { devStored as jiraDev } from "./jiraDev.ts";
 import { movesStored as jiraMoves, moveStored as jiraMove, remoteLinksStored as jiraLinks, remoteLinksAllStored as jiraLinksAll, linkPullRequestStored as jiraLink } from "./jira.ts";
 import {
   assignableStored as jiraAssignable, setAssigneeStored as jiraSetAssignee, handOffStored as jiraHandOff,
@@ -6432,6 +6433,15 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (req.method === "GET" && pathname === "/jira/links") {
       const r = await jiraLinksAll((url.searchParams.get("key") ?? "").trim());
       return json(r.ok && r.data ? { ok: true, links: r.data.links, web: r.data.web } : { ok: false, links: [], web: [], error: r.error });
+    }
+    /*
+     * `GET /jira/dev?id=`: what the site's development tool (GitHub for Jira and the like) knows about a card, by its numeric id,
+     * which the card read already carries. Read once when the card is opened, never polled. `dev` is null whenever there is
+     * nothing to show (no tool connected, a panel that is not there, a shape that changed): that is an answer, not an error.
+     */
+    if (req.method === "GET" && pathname === "/jira/dev") {
+      const r = await jiraDev((url.searchParams.get("id") ?? "").trim());
+      return json({ ok: true, dev: r.ok ? r.data ?? null : null });
     }
     /*
      * `GET /jira/activity?key=&kind=history|worklog|comments&startAt=`: one page of what happened on a card, read when its

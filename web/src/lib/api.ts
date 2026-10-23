@@ -8,7 +8,7 @@ import type { CheckOnBasePlan, CheckOnBaseStatus } from "../../../shared/checkOn
 import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, EnginesReport, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest } from "../../../shared/types.ts";
 import type { JiraUnits } from "../../../shared/jiraStatusUnits.ts";
 import type { WorkSend } from "./jiraWorklog.ts";
-import type { CardEdit, CardFact, ProvidersResponse, JiraBlockOutcome, JiraConnectResult, JiraHandoffRule, JiraMoves, JiraPerson, JiraSettings, JiraStep, JiraStepChoice, JiraStepKey, JiraStepPr, JiraSteps, JiraStepsRead, JiraStatus, JiraViews, JiraViewRead, JiraBoardContext, JiraViewChoice, JiraProjectChoice, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, CardWebLink, CardEvent, TrackerChoice } from "../../../shared/providers.ts";
+import type { CardEdit, CardFact, ProvidersResponse, JiraBlockOutcome, JiraConnectResult, JiraHandoffRule, JiraMoves, JiraPerson, JiraSettings, JiraStep, JiraStepChoice, JiraStepKey, JiraStepPr, JiraSteps, JiraStepsRead, JiraStatus, JiraViews, JiraViewRead, JiraBoardContext, JiraViewChoice, JiraProjectChoice, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, CardDev, CardWebLink, CardEvent, TrackerChoice } from "../../../shared/providers.ts";
 import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from "../../../shared/notifyPrefs.ts";
 import type { CheckMetric } from "../../../shared/checkBaseline.ts";
 import type { UiReply } from "../../../shared/uiActions.ts";
@@ -1414,6 +1414,8 @@ const realApi = {
   /** The pull requests a card is linked to on the Jira site: one request, read when the card is opened. */
   jiraLinks: (key: string) =>
     get<{ ok: boolean; links: { url: string; number: number; title: string; resolved: boolean }[]; web?: CardWebLink[]; error?: string }>(`/jira/links?${new URLSearchParams({ key })}`),
+  /** What the site's development tool holds for a card, by its numeric id: `dev` is null when there is nothing to show. */
+  jiraDev: (id: string) => get<{ ok: boolean; dev: CardDev | null }>(`/jira/dev?${new URLSearchParams({ id })}`),
   /** Put a pull request on a card as a remote link. Refused by the server unless Jira writes are switched on. */
   jiraLink: (key: string, url: string, title = "") =>
     post<{ ok: boolean; linked?: boolean; url?: string; error?: string }>("/jira/link", { key, url, title }),
@@ -2912,6 +2914,7 @@ const demoApi: typeof realApi = {
   jiraWrites: (_o: boolean) => D({ ok: false, error: "not available in the demo" }),
   jiraPrs: (_k: string, _r?: string) => D({ ok: true, prs: [] }),
   jiraLinks: (_k: string) => D({ ok: true, links: [] as { url: string; number: number; title: string; resolved: boolean }[] }),
+  jiraDev: (_i: string) => D({ ok: true, dev: null as CardDev | null }),
   jiraLink: (_k: string, _u: string, _t?: string) => D({ ok: false, error: "not available in the demo" }),
   jiraProjectPrs: (_p: string, _r?: string) => D({ ok: true, byCard: {} as Record<string, CardPr[]> }),
   trackerProjects: (_r?: boolean) => D({ ok: true, projects: {}, repos: [] }),

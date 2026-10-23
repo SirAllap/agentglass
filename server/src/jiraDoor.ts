@@ -23,13 +23,14 @@
  * change history is not here yet. The lists a card carries (subtasks, linked cards, files, Details) are cut to
  * ROWS_MAX rows each, with the count of the rest in `state`.
  */
-import type { ProviderTask, TaskDetail } from "../../shared/providers.ts";
+import type { CardDev, ProviderTask, TaskDetail } from "../../shared/providers.ts";
 import { UNTRUSTED_MAX_BYTES } from "../../shared/uiActions.ts";
 import { ISSUE_KEY, linkPullRequestStored, moveStored, movesStored, jiraWriteEnabled, remoteLinksAllStored } from "./jira.ts";
 import { ACTIVITY_KINDS, activityStored, type ActivityKind } from "./jiraActivity.ts";
 import { deleteCommentStored, detailStored, editCommentStored, commentStored } from "./jiraComments.ts";
 import { editStored, type EditAsk } from "./jiraEdit.ts";
 import { addWebLinkStored, createSubtaskStored, linkKindsStored, relateCardsStored, removeWebLinkStored, unrelateCardsStored } from "./jiraRelate.ts";
+import { devStored } from "./jiraDev.ts";
 import { rankStored } from "./jiraRank.ts";
 import { attachFileStored, removeFileStored, UPLOAD_MAX } from "./jiraFiles.ts";
 import { jiraSteps, runStepBody, STEP_KEYS } from "./jiraSteps.ts";
@@ -213,6 +214,26 @@ function listsOf(d: TaskDetail): { state: Record<string, unknown>; untrusted: Re
   };
 }
 
+/**
+ * What the site's development tool knows about the card, as a card answer carries it: counts in `state`, the rows (titles,
+ * branch names, commit messages: somebody's words) in `untrusted`. Nothing at all when the site has nothing, as the screen.
+ */
+export function developmentParts(dev: CardDev | null): { state: Record<string, unknown>; untrusted: Record<string, unknown> } {
+  if (!dev) return { state: {}, untrusted: {} };
+  const pr = dev.prs.map((p) => ({ url: clip(p.url, 300), title: clip(p.title, 160), state: p.state, ...(p.author ? { author: clip(p.author, 80) } : null), approvedBy: p.reviewers.filter((r) => r.approved).map((r) => clip(r.name, 80)), ...(p.from ? { from: clip(p.from, 120) } : null), ...(p.into ? { into: clip(p.into, 120) } : null) }));
+  return {
+    state: { development: { ...dev.counts, buildsPassed: dev.buildsPassed, buildsFailed: dev.buildsFailed } },
+    untrusted: {
+      development: {
+        pullRequests: pr,
+        branches: dev.branches.map((b) => ({ name: clip(b.name, 120), url: clip(b.url, 300), repo: clip(b.repo, 80) })),
+        commits: dev.commits.map((c) => ({ id: c.id, message: clip(c.message, 160), url: clip(c.url, 300) })),
+        builds: dev.builds.map((b) => ({ name: clip(b.name, 120), state: b.state, url: clip(b.url, 300) })),
+      },
+    },
+  };
+}
+
 /** The whole card for a read: the task, its description and its comments, newest kept when the budget runs out. */
 async function readCard(key: string): Promise<DoorAnswer> {
   const r = await detailStored(key);
@@ -220,6 +241,7 @@ async function readCard(key: string): Promise<DoorAnswer> {
   const { detail, more } = r.data;
   const { state, untrusted } = cardParts(detail.task);
   const lists = listsOf(detail);
+  const development = developmentParts((await devStored(detail.task.id)).data ?? null);
   // The head of the budget goes to the description, the rest to the comments from the newest back.
   const half = Math.floor(UNTRUSTED_MAX_BYTES / 2);
   const description = clip(detail.description ?? "", half);
@@ -228,8 +250,8 @@ async function readCard(key: string): Promise<DoorAnswer> {
     status: 200,
     body: {
       ok: true, key: key.toUpperCase(),
-      state: { ...state, ...lists.state, commentsShown: comments.length, ...(more ? { commentsNotShown: more } : null), writes: jiraWriteEnabled() },
-      untrusted: { ...untrusted, ...lists.untrusted, description, comments },
+      state: { ...state, ...lists.state, ...development.state, commentsShown: comments.length, ...(more ? { commentsNotShown: more } : null), writes: jiraWriteEnabled() },
+      untrusted: { ...untrusted, ...lists.untrusted, ...development.untrusted, description, comments },
     },
   };
 }
