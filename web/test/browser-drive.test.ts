@@ -2376,3 +2376,13 @@ describe("cookies --set with attributes goes through the protocol, not document.
     expect(r.ok).toBe(false);
   });
 });
+
+describe("an act counts a transparent control as there", () => {
+  test("opacity 0 is not hidden: a custom checkbox is the real input at opacity 0", async () => {
+    const src = await Bun.file(new URL("../src/lib/browserDrive.ts", import.meta.url)).text();
+    const body = src.slice(src.indexOf("function actionable("), src.indexOf("if (visible && enabled && stable)"));
+    const code = body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+    expect(code).toContain("const visible = rect.width > 0");
+    expect(code).not.toContain("opacity");
+  });
+});

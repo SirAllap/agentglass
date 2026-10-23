@@ -986,8 +986,12 @@ function actionable(timeoutMs = 3000): string {
       if (e.scrollIntoView) e.scrollIntoView({ block: "center", inline: "center" });
       const rect = e.getBoundingClientRect();
       const style = getComputedStyle(e);
+      /* Opacity is NOT part of it, as in Playwright: a transparent control is
+         still there to be clicked, and a custom checkbox is drawn exactly that
+         way — the real input at opacity 0 over a styled label. Counting it as
+         hidden refused TodoMVC's toggle after a 6 s wait (measured). */
       const visible = rect.width > 0 && rect.height > 0
-        && style.visibility !== "hidden" && style.display !== "none" && Number(style.opacity) !== 0;
+        && style.visibility !== "hidden" && style.display !== "none";
       const enabled = !${DISABLED}(e);
       // Two reads of the same rect agreeing is "stable" — an element still
       // animating into place never matches its own previous frame. The
