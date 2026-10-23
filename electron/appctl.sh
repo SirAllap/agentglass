@@ -228,6 +228,36 @@ _capture_restart() {
   [ -n "$APPCTL_RESTART_ARGV" ] || return 0
 }
 
+# Spawn "$APP/agentglass" "${args[@]}" with "${env[@]}" through Hyprland, using
+# the instance signature and runtime dir start_app borrowed. Reads start_app's
+# locals (dynamic scope). Fails, so the caller can fall back, when there is no
+# hyprctl or no signature to talk to. Hyprland's Lua config takes
+# hl.exec_cmd; the older dispatcher takes `exec`, so the second is the fallback.
+_start_via_compositor() {
+  command -v hyprctl >/dev/null 2>&1 || return 1
+  local sig="" rt="" e a cmd out
+  for e in "${env[@]}"; do
+    case "$e" in
+      HYPRLAND_INSTANCE_SIGNATURE=*) sig=${e#*=} ;;
+      XDG_RUNTIME_DIR=*) rt=${e#*=} ;;
+    esac
+  done
+  rt=${rt:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}}
+  [ -n "$sig" ] || sig=$(ls "$rt/hypr" 2>/dev/null | head -n 1)
+  [ -n "$sig" ] || return 1
+  cmd="env"
+  for e in "${env[@]}"; do cmd+=" $(printf '%q' "$e")"; done
+  cmd+=" $(printf '%q' "$APP/agentglass")"
+  for a in "${args[@]}"; do cmd+=" $(printf '%q' "$a")"; done
+  local lua=${cmd//\\/\\\\}
+  lua=${lua//\"/\\\"}
+  out=$(HYPRLAND_INSTANCE_SIGNATURE="$sig" XDG_RUNTIME_DIR="$rt" hyprctl eval "hl.exec_cmd(\"$lua\")" 2>&1) \
+    && [ "$out" = "ok" ] && return 0
+  out=$(HYPRLAND_INSTANCE_SIGNATURE="$sig" XDG_RUNTIME_DIR="$rt" hyprctl dispatch exec "$cmd" 2>&1) \
+    && [ "$out" = "ok" ] && return 0
+  return 1
+}
+
 # Reopen what stop_app took down, if it took anything down.
 #
 # Deliberately not "launch the app": an install run while nothing was open
@@ -238,7 +268,7 @@ start_app() {
   [ -n "$APPCTL_RESTART_ARGV" ] || return 0
   [ -x "$APP/agentglass" ] || return 1
 
-  local args=() env=() line
+  local args=() env=() line _appctl_borrowed=""
   # argv[0] is dropped: it may be the ~/.local/bin symlink, or a path into an
   # install directory that has just been replaced. The binary to run is the one
   # we installed, by definition.
@@ -261,6 +291,7 @@ start_app() {
       v=$(printf '%s\n' "$sess" | sed -n "s/^$k=//p" | head -n 1)
       [ -n "$v" ] && [ -z "${!k:-}" ] && env+=("$k=$v")
     done
+    _appctl_borrowed=1
     case " ${env[*]} " in
       *" WAYLAND_DISPLAY="*|*" DISPLAY="*) ;;
       *)
@@ -271,6 +302,17 @@ start_app() {
   fi
 
   echo "==> reopening (${#args[@]} arg(s)${env:+, scoped})"
+  # From a shell with no display the window must be spawned by the compositor.
+  # Measured on a Hyprland desktop reopened over ssh: the process borrowed the
+  # six session variables above and the window mapped at full size, but painted
+  # nothing (grim showed the wallpaper) for as long as it ran, while the same
+  # binary started by `hyprctl` painted at once. Adding the platform-hint
+  # variables to the borrowed set did not change that, so the borrowed
+  # environment is not the cause worth chasing: ask the compositor. Only the
+  # scoping goes through the command; the compositor's own environment is the
+  # session's. Anywhere else (no Hyprland, no socket) the direct launch below
+  # stays.
+  if [ -n "${_appctl_borrowed:-}" ] && _start_via_compositor; then return 0; fi
   # Detached from this shell in its own session, so the app outlives the install
   # script rather than dying with the terminal it was rebuilt from. `setsid`
   # where there is one; a plain background job is the fallback, and the `disown`

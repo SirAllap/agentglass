@@ -16,7 +16,7 @@ import type { OrchestrationViewProps } from "../src/components/orchestration/Orc
 import { agentProvider } from "../../shared/agentKinds.ts";
 import { composePolicy, defaultStored, type Policy } from "../../shared/orchestration.ts";
 import type { EngineReadiness } from "../../shared/types.ts";
-import { presetOffers } from "../src/components/orchestration/orchestrationCopy.ts";
+import { OWN_SETTING, openingScope, appliedLine, applyPreset, backAvailable, backOf, presetInForce, presetOffers, scopeWords } from "../src/components/orchestration/orchestrationCopy.ts";
 
 const DIR = join(import.meta.dir, "..", "src", "components", "orchestration");
 const strip = (s: string) => s.replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
@@ -126,5 +126,89 @@ describe("the card's source", () => {
   test("the storage is read inside a guard", () => {
     expect(quick).toMatch(/try \{[\s\S]*localStorage\.getItem[\s\S]*\} catch/);
     expect(quick).toMatch(/try \{[\s\S]*localStorage\.setItem[\s\S]*\} catch/);
+  });
+});
+
+describe("an applied preset says so", () => {
+  const ready = [engine("claude"), engine("opencode")];
+  test("a preset in force is active, and the others stay applicable", () => {
+    const applied = applyPreset(base(), "claude-orchestrates", ready)!;
+    expect(presetInForce(applied, "claude-orchestrates", ready)).toBe(true);
+    expect(presetInForce(base(), "claude-orchestrates", ready)).toBe(false);
+    const offers = presetOffers(ready, applied);
+    expect(offers.find((o) => o.id === "claude-orchestrates")!.active).toBe(true);
+    expect(offers.find((o) => o.id === "all-on-claude")!.active).toBe(false);
+    expect(presetOffers(ready, base()).some((o) => o.active)).toBe(false);
+  });
+  test("the card shows a check and the scope instead of an Apply", () => {
+    const applied = applyPreset(base(), "claude-orchestrates", ready)!;
+    const row = rowOf(view({ policy: applied, readiness: ready }), "Claude Code orchestrates, others work");
+    expect(row).toContain("Active for all projects");
+    expect(row).not.toMatch(/>Apply</);
+    expect(rowOf(view({ policy: applied, readiness: ready }), "All workers on Claude Code")).toMatch(/>Apply</);
+    expect(scopeWords("/home/me/code/orbit")).toBe("orbit");
+  });
+  test("the line under the card says what changed and where the rule is", () => {
+    expect(appliedLine("Quick setup: x", true)).toContain('Added rule "Quick setup: x"');
+    expect(appliedLine("Quick setup: x", false)).toContain("nothing changed");
+    expect(quick).toContain("See it in Rules below");
+    expect(quick).toContain("scrollIntoView");
+  });
+  test("pressing a preset already in force saves nothing and keeps the way back", () => {
+    const at = quick.indexOf("const apply = async");
+    const body = quick.slice(at, quick.indexOf("\n  };", at));
+    const guard = body.indexOf("presetInForce(");
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(body.indexOf("p.onSave("));
+    expect(body.slice(guard, body.indexOf("p.onSave("))).toContain("return;");
+    expect(guard).toBeLessThan(body.indexOf("writeBack("));
+  });
+  test("the way back stays while the stored policy is what applying left", () => {
+    const applied = applyPreset(base(), "claude-orchestrates", ready)!;
+    const back = backOf(base(), applied, "t");
+    expect(backAvailable(back, applied)).toBe(true);
+    expect(backAvailable(back, applyPreset(applied, "claude-orchestrates", ready)!)).toBe(true);
+  });
+});
+
+describe("the scope is remembered", () => {
+  const PANE = strip(readFileSync(join(DIR, "OrchestrationPane.tsx"), "utf8"));
+  test("the last choice wins while it is on offer, else the project the app shows, else all projects", () => {
+    const ps = ["/w/orbit", "/w/acme"];
+    expect(openingScope("/w/acme", ps, "/w/orbit")).toBe("/w/acme");
+    expect(openingScope("", ps, "/w/orbit")).toBe("");
+    expect(openingScope(null, ps, "/w/orbit")).toBe("/w/orbit");
+    expect(openingScope("/w/gone", ps, "/w/orbit")).toBe("/w/orbit");
+    expect(openingScope(null, ps, null)).toBe("");
+    expect(openingScope(null, ps, "/w/other")).toBe("");
+  });
+  test("the page stores the choice in a guard and opens on it", () => {
+    expect(PANE).toMatch(/try \{ return localStorage\.getItem\(SCOPE_KEY\)[\s\S]*?catch/);
+    expect(PANE).toMatch(/try \{ localStorage\.setItem\(SCOPE_KEY[\s\S]*?catch/);
+    expect(PANE).toContain("useState(() => readScope() ?? \"\")");
+    expect(PANE).toContain("onRoot={pick}");
+    expect(PANE).toContain("if (!chosen.current) setRoot(openingScope(");
+  });
+  test("a project with its own setting has a dot and says so in its title", () => {
+    const html = view({ projects: ["/w/orbit", "/w/acme"], overrides: ["/w/orbit"] });
+    expect(html).toContain(`/w/orbit — ${OWN_SETTING}`);
+    expect(html).not.toContain(`/w/acme — ${OWN_SETTING}`);
+  });
+});
+
+describe("an opened editor is brought to the eye", () => {
+  const PANE = strip(readFileSync(join(DIR, "OrchestrationPane.tsx"), "utf8"));
+  test("opening a new rule scrolls its row into view, focuses its first field, and honours reduced motion", () => {
+    const at = PANE.indexOf("function revealEditor(");
+    const body = PANE.slice(at, PANE.indexOf("\n}\n", at));
+    expect(body).toContain("scrollIntoView(");
+    expect(body).toContain("prefers-reduced-motion: reduce");
+    expect(body).toContain(".focus(");
+    expect(PANE).toContain('if (editing === "new") revealEditor("new-rule")');
+    expect(PANE).toContain('label="New rule"');
+  });
+  test("both buttons that open it set the same state the effect watches", () => {
+    expect(PANE).toContain('setEditing("new"); }}>Add a fallback rule');
+    expect(PANE).toContain('"new"); }}>Add a rule') ;
   });
 });

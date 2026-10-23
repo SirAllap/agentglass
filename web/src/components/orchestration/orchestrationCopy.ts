@@ -347,7 +347,7 @@ const PRESET_TITLE: Record<PresetId, () => string> = {
   "save-my-plan": () => `Save my ${claudeTitle()} plan`,
 };
 
-export interface PresetOffer { id: PresetId; title: string; says: string[]; blocked: string | null; confirm: string }
+export interface PresetOffer { id: PresetId; title: string; says: string[]; blocked: string | null; confirm: string; ruleName: string | null; active: boolean }
 
 /** What each card says it will set, in plain words, and why it cannot apply if it cannot. */
 export function presetOffers(readiness: readonly EngineReadiness[] | null, policy: Policy | null = null): PresetOffer[] {
@@ -355,14 +355,34 @@ export function presetOffers(readiness: readonly EngineReadiness[] | null, polic
     const title = PRESET_TITLE[id]();
     const built = presetRule(id, readiness, policy);
     const confirm = `Applying adds one rule; nothing already running is moved. "${BACK_LABEL}" undoes it while nothing else has changed.`;
-    if ("blocked" in built) return { id, title, says: [], blocked: built.blocked, confirm };
+    if ("blocked" in built) return { id, title, says: [], blocked: built.blocked, confirm, ruleName: null, active: false };
+    const active = !!policy && presetInForce(policy, id, readiness);
     const line = `${ruleLine(built.rule)} ${CHAIN_TAIL}`;
     const says = id === "claude-orchestrates" ? [`The chair stays ${claudeTitle()}.`, line]
       : id === "save-my-plan" ? [line, "Scouts and verifiers keep the engines they have."]
       : [line];
-    return { id, title, says, blocked: null, confirm };
+    return { id, title, says, blocked: null, confirm, ruleName: built.rule.name, active };
   });
 }
+
+/**
+ * True when applying the preset would change nothing: the policy already holds
+ * exactly the rule it would write, in the place it would put it. Applying such
+ * a preset must not save, or the way back recorded by the first press is lost
+ * to a write that did nothing.
+ */
+export function presetInForce(p: Policy, id: PresetId, readiness: readonly EngineReadiness[] | null): boolean {
+  const next = applyPreset(p, id, readiness);
+  return !!next && JSON.stringify(next) === JSON.stringify(p);
+}
+
+/** Where a preset's rule lives, in the words the card uses: a project's folder name, or every project. */
+export const scopeWords = (root: string): string =>
+  root === "" ? "all projects" : root.split("/").filter(Boolean).pop() ?? root;
+
+/** The one line under Quick setup after a press: what changed, and where the rule is. */
+export const appliedLine = (ruleName: string, changed: boolean): string =>
+  changed ? `Added rule "${ruleName}".` : `Already active, so nothing changed. The rule is "${ruleName}".`;
 
 /**
  * The policy with a preset's rule added, or null when it cannot apply here.
@@ -482,3 +502,17 @@ export function checkSetup(policy: Policy, states: readonly PolicyRuleState[], r
   });
   return { chair, roles, rules };
 }
+
+// ── which scope the page opens on ─────────────────────────────────────────
+
+/**
+ * The scope the page opens on: the one last chosen in this window while it is
+ * still on offer ("" is All projects and always is), else the project the app
+ * is showing, else All projects. A project that has gone from the list is not
+ * opened on, so a stale choice never reads as an empty setting.
+ */
+export function openingScope(stored: string | null, projects: readonly string[], current: string | null): string {
+  if (stored !== null && (stored === "" || projects.includes(stored))) return stored;
+  return current && projects.includes(current) ? current : "";
+}
+export const OWN_SETTING = "has its own setting";

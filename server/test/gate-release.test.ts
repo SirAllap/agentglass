@@ -508,7 +508,11 @@ describe("the desktop app hands its key to the two ends that use it, and nowhere
        the point: a fifth use is a change somebody has to look at. */
     expect(sent).toContain('"/browser/ready", { client, on, manager: true }, deskHeader())');
     expect(sent).toContain('"/browser/ready", { client, on, lanes }, deskHeader())');
-    expect([...sent.matchAll(/deskHeader\(\)/g)]).toHaveLength(4);
+    /* The fifth is the orchestration policy: which engine runs and what a worker
+       may do is the person's to change, so the window proves it with the desk
+       key and an agent's machine token cannot (mayChangePolicy on the server). */
+    expect(sent).toContain('"/orchestration", { root, policy }, deskHeader())');
+    expect([...sent.matchAll(/deskHeader\(\)/g)]).toHaveLength(5);
   });
 });
 

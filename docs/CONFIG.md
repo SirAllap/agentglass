@@ -413,7 +413,9 @@ chair stays Claude Code and the workers go to the other ready engines (refused,
 with the reason, when the chair is another engine or a rule moves it), all
 workers on Claude Code, or builders moved off Claude Code when its weekly plan is nearly
 spent. Applying one adds a single rule whose id starts with `preset-` through the
-same `POST /orchestration` the page already uses, and leaves the base, the
+same `POST /orchestration` the page already uses, says under the card which rule it
+added and links to it, shows the setup as active once it is in force (pressing it
+again changes nothing and keeps the way back), and leaves the base, the
 envelope and the limits as they were; **Back to what it was** removes only the
 rule that was added and puts the earlier rules back in their order. It is
 offered only while the stored policy is exactly what applying left; after any

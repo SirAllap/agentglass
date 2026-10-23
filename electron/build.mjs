@@ -352,6 +352,14 @@ copyFileSync(resolve(HERE, "self-update.sh"), resolve(HERE, "staging/self-update
 // checks a signature against THIS file, never against $SRC's own copy — see
 // self-update.sh's comment on why that distinction is load-bearing.
 copyFileSync(resolve(HERE, "release-allowed-signers"), resolve(HERE, "staging/release-allowed-signers"));
+// The Claude model catalogue rides beside the sidecar, because that is where
+// claudemodels.ts looks in a packaged app (dirname(process.execPath)). It is
+// read from disk at runtime, so `bun build --compile` does not carry it, and
+// this block is the one place every build path passes through — a local
+// `make desktop-install`, the self-update that calls it, and CI's
+// `--provenance-only` run. Measured: the local build had no copy, so the
+// installed app offered a single fallback model in every Claude picker.
+copyFileSync(resolve(REPO, "shared/claude-models.json"), resolve(HERE, "staging/claude-models.json"));
 console.log(`==> build-info: ${version} ${identity.stamp}${baseTag ? ` (${baseTag}+${distance})` : ""} from ${REPO}`);
 if (!identity.tree) {
   // No git, so nothing here can be proved. Said plainly rather than dressed up

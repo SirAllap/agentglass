@@ -14,7 +14,7 @@ import type { EngineReadiness, EnginesReport } from "../../../../shared/types.ts
 import { RuleForm } from "./RuleForm.tsx";
 import { QuickSetup } from "./QuickSetup.tsx";
 import {
-  ASK_HINT, CHAIN_TAIL, LIMIT_RANGE, NO_WORKER_ENGINE, chainWords, engineOptions, exhausted, notReady, readyFor, ruleBadge, ruleHolds, ruleLine,
+  ASK_HINT, CHAIN_TAIL, LIMIT_RANGE, NO_WORKER_ENGINE, OWN_SETTING, openingScope, chainWords, engineOptions, exhausted, notReady, readyFor, ruleBadge, ruleHolds, ruleLine,
   stepLimit, withAsk, withBaseChoice, withEnvelopes, withLimits, withRule, withRuleEnabled, withoutRule, type Field,
 } from "./orchestrationCopy.ts";
 
@@ -126,6 +126,8 @@ export interface OrchestrationViewProps {
   /** "" is All projects. */
   root: string;
   projects: string[];
+  /** The projects that have a setting of their own. */
+  overrides?: string[];
   /** null until the probe has answered: every engine reads "Checking". */
   readiness: EngineReadiness[] | null;
   states: PolicyRuleState[];
@@ -148,6 +150,7 @@ export function OrchestrationView(p: OrchestrationViewProps) {
   const { policy, readiness, states, root, notes, busy } = p;
   const [editing, setEditing] = useState<string | null>(p.openRule ?? null);
   const [seed, setSeed] = useState<PolicyRule | null>(null);
+  useEffect(() => { if (editing === "new") revealEditor("new-rule"); }, [editing, seed]);
   const [env, setEnv] = useState({ ceiling: policy.ceiling, workerDefault: policy.workerDefault });
   // A save, or a project switch, brings a policy the draft did not make.
   useEffect(() => { setEnv({ ceiling: policy.ceiling, workerDefault: policy.workerDefault }); }, [policy]);
@@ -261,7 +264,9 @@ export function OrchestrationView(p: OrchestrationViewProps) {
         <SettingRow label="Scope"
           hint={root === "" ? "The setting every project without its own uses." : inherited ? `${baseName(root)} has no setting of its own, so it uses the general one, shown here as it is.` : `${baseName(root)} has its own setting.`}
           below={<Segmented label="Applies to" value={root} onChange={p.onRoot}
-            options={[{ id: "", label: "All projects" }, ...p.projects.map((r) => ({ id: r, label: baseName(r), title: r }))]} />} />
+            options={[{ id: "", label: "All projects" }, ...p.projects.map((r) => ((p.overrides ?? []).includes(r)
+              ? { id: r, label: <>{baseName(r)}<span aria-hidden className="inline-block rounded-full ml-1.5 align-middle" style={{ width: 6, height: 6, background: "var(--primary)" }} /></>, title: `${r} — ${OWN_SETTING}` }
+              : { id: r, label: baseName(r), title: r }))]} />} />
         <Note text={notes.scope} />
       </SettingsCard>
 
@@ -333,8 +338,33 @@ export function OrchestrationView(p: OrchestrationViewProps) {
   );
 }
 
+/**
+ * An editor opens in the Rules card, which can be far below the button that
+ * asked for it. Bring it to the eye and put the cursor in its first field; the
+ * scroll is instant when the person asked for less motion.
+ */
+function revealEditor(row: string): void {
+  const el = document.querySelector<HTMLElement>(`[data-row="${row}"]`);
+  if (!el) return;
+  const calm = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  el.scrollIntoView({ block: "center", behavior: calm ? "auto" : "smooth" });
+  el.querySelector<HTMLElement>("input, select, button")?.focus({ preventScroll: true });
+}
+
+const SCOPE_KEY = "agx.orchestration.scope";
+function readScope(): string | null {
+  try { return localStorage.getItem(SCOPE_KEY); } catch { return null; }
+}
+function writeScope(root: string): void {
+  try { localStorage.setItem(SCOPE_KEY, root); } catch { /* no storage: the page opens on the project the app shows */ }
+}
+
 export function OrchestrationPane() {
-  const [root, setRoot] = useState("");
+  // Remembered for this window, so leaving Settings and coming back does not
+  // read as the project's setting being lost. Never chosen: the project the app shows.
+  const chosen = useRef<boolean>(readScope() !== null);
+  const [root, setRoot] = useState(() => readScope() ?? "");
+  const pick = useCallback((r: string) => { chosen.current = true; writeScope(r); setRoot(r); }, []);
   const [loaded, setLoaded] = useState<{ policy: Policy; scope: "project" | "global"; overrides: string[] } | null>(null);
   const [report, setReport] = useState<EnginesReport | null>(null);
   const [states, setStates] = useState<PolicyRuleState[]>([]);
@@ -359,7 +389,12 @@ export function OrchestrationPane() {
 
   useEffect(() => {
     void api.engines().then((r) => { if (alive.current) setReport(r); }).catch(() => { /* the rows say "checking" until it answers */ });
-    void api.projects().then((r) => { if (alive.current) setWorkspaces(r.workspaces ?? (r.workspace ? [r.workspace] : [])); }).catch(() => { /* no project switch without a list */ });
+    void api.projects().then((r) => {
+      if (!alive.current) return;
+      const ws = r.workspaces ?? (r.workspace ? [r.workspace] : []);
+      setWorkspaces(ws);
+      if (!chosen.current) setRoot(openingScope(null, ws, ws[0] ?? null));
+    }).catch(() => { /* no project switch without a list */ });
   }, []);
   useEffect(() => { loadPolicy(root); }, [root, loadPolicy]);
 
@@ -397,10 +432,10 @@ export function OrchestrationPane() {
     );
   }
   return (
-    <OrchestrationView policy={loaded.policy} scope={loaded.scope} root={root} projects={projects}
+    <OrchestrationView policy={loaded.policy} scope={loaded.scope} root={root} projects={projects} overrides={loaded.overrides}
       readiness={report?.engines ?? null} states={states}
       seat={root && seat ? { live: seat.live && !!seat.seat, model: seat.seat?.model ?? "", models: seat.models } : null}
-      notes={notes} busy={busy} onRoot={setRoot} onSave={save} onScope={(o) => void setScope(o)}
+      notes={notes} busy={busy} onRoot={pick} onSave={save} onScope={(o) => void setScope(o)}
       onOpenEngines={() => openSettings("engines")} />
   );
 }

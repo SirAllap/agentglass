@@ -18,6 +18,10 @@
     "$XDG_CONFIG_HOME/agentglass/claude-models.json (~/.config/agentglass/), or",
     "point AGENTGLASS_CLAUDE_MODELS at a file.",
     "",
+    "Rows without a scheduled_shutdown_date are models with no retirement",
+    "announced: they are offered until a date is written down. No date is",
+    "invented to fill the column.",
+    "",
     "Fable 5.1's dates are the day it was first SEEN offered by the CLI on a",
     "machine here, not a published date — nothing publishes one this file can",
     "read. They are an honest floor: the model answers today, and the shutdown",
@@ -25,6 +29,48 @@
     "offering it for ever. Correct them the day a real date exists."
   ],
   "models": [
+    {
+      "id": "claude-sonnet-5-5",
+      "display_name": "Claude Sonnet 5.5",
+      "status": "active"
+    },
+    {
+      "id": "claude-opus-5-5",
+      "display_name": "Claude Opus 5.5",
+      "status": "active"
+    },
+    {
+      "id": "claude-opus-5-5[1m]",
+      "display_name": "Claude Opus 5.5 · 1M",
+      "status": "active",
+      "_note": "Same model, asking for the 1M context window; see the note on claude-opus-5[1m]."
+    },
+    {
+      "id": "claude-fable-5-1",
+      "display_name": "Claude Fable 5.1",
+      "status": "active",
+      "release_date": "2026-09-07",
+      "scheduled_shutdown_date": "2027-09-07"
+    },
+    {
+      "id": "claude-haiku-5-5",
+      "display_name": "Claude Haiku 5.5",
+      "status": "active"
+    },
+    {
+      "id": "claude-haiku-4-5",
+      "display_name": "Claude Haiku 4.5",
+      "status": "active",
+      "release_date": "2025-10-15",
+      "scheduled_shutdown_date": "2026-10-15"
+    },
+    {
+      "id": "claude-sonnet-5",
+      "display_name": "Claude Sonnet 5",
+      "status": "active",
+      "release_date": "2026-06-30",
+      "scheduled_shutdown_date": "2027-06-30"
+    },
     {
       "id": "claude-opus-5",
       "display_name": "Claude Opus 5",
@@ -41,20 +87,6 @@
       "_note": "Same model, asking for the 1M context window. Not a duplicate: the suffix is what `claude` reads to pick a window behind an LLM gateway or on Bedrock / Vertex / Foundry, where the plain id really does mean 200k. On the first-party API the two are the same choice."
     },
     {
-      "id": "claude-sonnet-5",
-      "display_name": "Claude Sonnet 5",
-      "status": "active",
-      "release_date": "2026-06-30",
-      "scheduled_shutdown_date": "2027-06-30"
-    },
-    {
-      "id": "claude-fable-5-1",
-      "display_name": "Claude Fable 5.1",
-      "status": "active",
-      "release_date": "2026-09-07",
-      "scheduled_shutdown_date": "2027-09-07"
-    },
-    {
       "id": "claude-fable-5",
       "display_name": "Claude Fable 5",
       "status": "superseded",
@@ -62,11 +94,9 @@
       "scheduled_shutdown_date": "2027-06-09"
     },
     {
-      "id": "claude-haiku-4-5",
-      "display_name": "Claude Haiku 4.5",
-      "status": "active",
-      "release_date": "2025-10-15",
-      "scheduled_shutdown_date": "2026-10-15"
+      "id": "claude-opus-4-8",
+      "display_name": "Claude Opus 4.8",
+      "status": "superseded"
     },
     {
       "id": "claude-sonnet-4-6",

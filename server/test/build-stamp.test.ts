@@ -58,6 +58,7 @@ function fixture() {
   write(dir, "web/src/App.tsx", "export const App = () => null\n");
   write(dir, "server/src/index.ts", "export const serve = () => 0\n");
   write(dir, "shared/types.ts", "export type T = 1\n");
+  write(dir, "shared/claude-models.json", "{\"models\":[]}\n");
   write(dir, "hooks/hook.py", "print(1)\n");
   // Inside a hashed root, packaged by nothing.
   write(dir, "web/test/App.test.tsx", "test('x', () => {})\n");

@@ -86,12 +86,8 @@ jobs:
           bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig \
             --target=${{ matrix.bunTarget }} server/src/index.ts \
             --outfile "electron/staging/agentglass-server${ext}"
-          # The Claude model catalogue is read from disk at runtime, not
-          # imported, so --compile does not carry it. It goes beside the sidecar
-          # because that is where claudemodels.ts looks in a packaged app
-          # (dirname(process.execPath)). Without this the desktop build falls
-          # back to a single model id and the dropdown looks broken.
-          cp shared/claude-models.json electron/staging/claude-models.json
+          # The Claude model catalogue is staged by electron/build.mjs
+          # (--provenance-only below), the same step the local build uses.
 
       # A static tmux rides along for the pane engine (scripts/build-tmux-static.sh),
       # so a machine without tmux still gets tabs, splits and persistence — the
