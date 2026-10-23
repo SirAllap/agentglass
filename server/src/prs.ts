@@ -5455,6 +5455,23 @@ async function syncLocalHead(root: string, number: number): Promise<string> {
  * `--ff-only` on the merge, git refuses rather than moving history sideways.
  */
 export async function fastForwardLocal(root: string, st: PrLocalHead): Promise<string> {
+  // Two syncs into one checkout fight over its HEAD and index ("cannot lock ref
+  // 'HEAD'", measured on four at once), so they take turns. Different checkouts
+  // — the usual case of several pull requests, one worktree each — never wait,
+  // and a branch checked out nowhere has no tree to protect.
+  if (!st.worktree) return fastForwardNow(root, st);
+  const turn = checkoutTurn.get(st.worktree) ?? Promise.resolve();
+  const mine = turn.then(() => fastForwardNow(root, st));
+  const tail = mine.catch(() => "");
+  checkoutTurn.set(st.worktree, tail);
+  try { return await mine; }
+  finally { if (checkoutTurn.get(st.worktree) === tail) checkoutTurn.delete(st.worktree); }
+}
+
+/** The last sync queued on each checkout path; see fastForwardLocal. */
+const checkoutTurn = new Map<string, Promise<string>>();
+
+async function fastForwardNow(root: string, st: PrLocalHead): Promise<string> {
   const up = await upstreamOf(root, st.branch);
   if (!up) return "left your local copy alone — it tracks no remote";
   const fetched = await gitAsync(root, ["fetch", up.remote, up.remoteBranch]);

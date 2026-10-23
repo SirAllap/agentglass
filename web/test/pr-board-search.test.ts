@@ -652,8 +652,8 @@ describe("how far behind, on the page and on the board", () => {
     /* Dropped first, the store re-asks GitHub for a number that has not changed
        yet and caches the old one all over again — the same stale count by
        another route. */
-    expect(src).toContain(".finally(() => refreshBehind(root, d.number));");
-    expect(src).not.toContain("forgetOneBehind(root, d.number);");
+    expect(src).toContain("        refreshBehind(root, num);");
+    expect(src).not.toContain("forgetOneBehind(root, num);");
   });
 
   it("re-asks while you are looking at it, and on Refresh", () => {

@@ -2239,8 +2239,14 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
          `tmux` in this very pane, which made a button's availability depend on
          something you did in a shell. It opens on the engine now, which is
          always there. */
+      /* Every path out of here answers, because the button that sent this
+         tells the person what happened and used to say "Claude is on it" for
+         a request this handler had dropped. `n` is the client's request number. */
+      const answer = (ok: boolean, error = "") => ctl(ws, { t: "issue", n: msg.n, ok, ...(error ? { error } : {}) });
       const cwd = safeAbs(msg.cwd);
-      if (!cwd || !inScope(cwd) || !existsSync(cwd)) return;
+      if (!cwd) { answer(false, "that folder is not an absolute path"); return; }
+      if (!existsSync(cwd)) { answer(false, `${basename(cwd)} no longer exists on disk`); return; }
+      if (!inScope(cwd)) { answer(false, `${basename(cwd)} is outside the open project — open its parent folder, or the repo it belongs to`); return; }
       const name = typeof msg.name === "string" ? msg.name : "issue";
       const prompt = typeof msg.prompt === "string" ? msg.prompt : "";
       const title = sessionTitle(msg.title);
@@ -2288,9 +2294,9 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
         /* Into the session this client is attached to — see the note on
            `engineWindowRunning`. A button a person pressed opens where they
            are looking, full stop. */
-        void engineWindowRunning(cwd, name, argv, cwd, undefined, here, true).then(() => s.tmuxSweep?.());
+        void engineWindowRunning(cwd, name, argv, cwd, undefined, here, true).then((w) => { answer(!!w, w ? "" : "the engine would not open a window"); s.tmuxSweep?.(); });
       } else {
-        void engineWindowRunning(cwd, name, [], cwd, undefined, here, true).then(() => s.tmuxSweep?.());
+        void engineWindowRunning(cwd, name, [], cwd, undefined, here, true).then((w) => { answer(!!w, w ? "" : "the engine would not open a window"); s.tmuxSweep?.(); });
       }
       return;
     }

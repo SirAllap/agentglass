@@ -592,6 +592,8 @@ export type PtyServerFrame =
    * terminal that died.
    */
   | { t: "openfail"; error: string }
+  /** The answer to a `cmd: "issue"`: `n` is the request number the client sent. */
+  | { t: "issue"; n?: number; ok: boolean; error?: string }
   /** The shell ended by itself. The socket closes right behind this. */
   | { t: "exit"; code: number | null }
   /** The server is refusing, and saying why — "that pane is gone", a disabled
@@ -651,7 +653,7 @@ export type PtyClientFrame =
   /** Start work on an issue in a window of the user's tmux. `agent` opens the
    *  CLI in it, `yolo` buys exactly one flag, and `title` is data that
    *  `sessionTitle` sanitises before it reaches an argv array. */
-  | { t: "tmux"; cmd: "issue"; cwd: string; name?: string; prompt?: string; agent?: boolean; yolo?: boolean; title?: string; model?: string; effort?: string }
+  | { t: "tmux"; cmd: "issue"; n?: number; cwd: string; name?: string; prompt?: string; agent?: boolean; yolo?: boolean; title?: string; model?: string; effort?: string }
   /** The tab strip's four window commands, plus take-over. Kept in step with
    *  `TmuxAction` in server/src/tmuxctl.ts, which is what runs them. */
   /** `fit` sizes the tmux window to THIS client — see tmuxctl.ts, and the

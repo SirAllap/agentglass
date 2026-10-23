@@ -118,7 +118,7 @@ describe("the panel", () => {
     const at = text.indexOf("const doUpdateBranch = (syncLocal: boolean) => {");
     expect(at).toBeGreaterThan(0);
     const block = text.slice(at, text.indexOf("\n  };", at));
-    const press = block.slice(0, block.indexOf("return act("));
+    const press = block.slice(0, block.indexOf("return api.prUpdateBranch("));
     expect(press).not.toContain("setAsked(");
     // The hold is set, and kept for a reload, only inside GitHub's ok.
     const ok = block.indexOf("if (r.ok) {");

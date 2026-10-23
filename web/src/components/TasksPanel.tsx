@@ -430,8 +430,9 @@ async function start(root: string, number: number, mode: StartMode, say: (ok: bo
   if ((mode === "claude" || mode === "shell" || mode === "plan") && r.cwd) {
     // A shell opens with nothing in it; the other two carry the prompt the
     // server wrote.
-    requestTermIssue(r.cwd, `i${number}`, mode === "shell" ? "" : (r.prompt ?? ""), mode !== "shell");
-    say(true, `${r.work.branch} — opening a tmux window`);
+    const done = await requestTermIssue(r.cwd, `i${number}`, mode === "shell" ? "" : (r.prompt ?? ""), mode !== "shell");
+    if (done.ok) say(true, `${r.work.branch} — opening a tmux window`);
+    else say(false, `${r.work.branch} is ready, but no window opened: ${done.error}`);
   } else {
     say(true, `${r.work.branch} at ${r.work.path}`);
   }
@@ -2281,8 +2282,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
     if (!cwd) { setNote({ ok: false, text: "No checkout to hand this to — no repo matches that list" }); return; }
     const text = `${t.customId || t.id} — ${t.title}`;
     if (handoffTo() === "term") {
-      requestTermIssue(cwd, windowName(t), text, true, false, t.title);
-      setNote({ ok: true, text: `${t.customId || t.id} handed to a pane` });
+      void requestTermIssue(cwd, windowName(t), text, true, false, t.title)
+        .then((done) => setNote(done.ok ? { ok: true, text: `${t.customId || t.id} handed to a pane` } : { ok: false, text: `Not handed over: ${done.error}` }));
     } else if (onOpenChatWith) onOpenChatWith(cwd, text, t.title.slice(0, 60));
     else setNote({ ok: false, text: "Chat is not available here" });
   }, [repos, here, onOpenChatWith]);
@@ -5920,8 +5921,8 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                       const cmd = skillCommand(sk.name, t) + (mode ? ` ${mode}` : "");
                       // A tmux window with the agent already running it, which
                       // is the gesture the issues panel uses.
-                      requestTermIssue(cwd, windowName(t), cmd, true, yolo, t.title);
-                      onNote(`${cmd}${yolo ? " · permissions off" : ""} — opening a window`);
+                      void requestTermIssue(cwd, windowName(t), cmd, true, yolo, t.title)
+                        .then((done) => onNote(done.ok ? `${cmd}${yolo ? " · permissions off" : ""} — opening a window` : `Not started: ${done.error}`));
                     };
                     return (
                       <div key={sk.name}>
@@ -5989,7 +5990,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                     const text = h.build(t, full?.description ?? "");
                     // The same two destinations a skill offers, through the same
                     // two paths — nothing new is invented here.
-                    if (to === "term") { requestTermIssue(cwd, windowName(t), text, true, yolo, t.title); onNote(`${t.customId || t.id} handed to a pane`); }
+                    if (to === "term") { void requestTermIssue(cwd, windowName(t), text, true, yolo, t.title).then((done) => onNote(done.ok ? `${t.customId || t.id} handed to a pane` : `Not handed over: ${done.error}`)); }
                     else onOpenChatWith?.(cwd, text, t.title.slice(0, 60));
                   }}>
                   <div>{h.label}</div>
@@ -7373,7 +7374,10 @@ function LocalBody({ active, repos, here, onOpenChatWith }: {
       return;
     }
     const name = `t${t.uuid.slice(0, 6)}`;
-    if (how === "shell") { requestTermIssue(cwd, name, "", false); return; }
+    if (how === "shell") {
+      void requestTermIssue(cwd, name, "", false).then((done) => { if (!done.ok) setNote({ ok: false, text: `No shell opened: ${done.error}` }); });
+      return;
+    }
     if (!onOpenChatWith) { setNote({ ok: false, text: "Chat is not available here" }); return; }
     onOpenChatWith(cwd, taskPrompt(t), t.description.slice(0, 60));
   }, [repos, here, onOpenChatWith]);

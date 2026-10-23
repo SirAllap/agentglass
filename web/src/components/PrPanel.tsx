@@ -73,6 +73,7 @@ import type { UnstickFacts, UnstickGate } from "../../../shared/unstick.ts";
 import { factsOf } from "../../../shared/unstick.ts";
 import { updateStanding, awaitingChecksOf, updateHeld, updateHeldTitle, stalledNote, REQUEST_WINDOW_MS, type UpdateStanding } from "../../../shared/justUpdated.ts";
 import { noteKnownBlock } from "../lib/prKnownBlock.ts";
+import { enterFlight, leaveFlight, inFlight } from "../lib/updateFlight.ts";
 import { updateBranchMove, branchNoticeJump, prConflicted, gitSaysClean as cleanMerge, type BranchNotice } from "../lib/updateBranch.ts";
 import { depSpec } from "../../../shared/deps.ts";
 import { CardRef, StatusMove } from "./StepCard.tsx";
@@ -2086,9 +2087,18 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
      whole visit. The refresh button reads `running` instead — reading is the
      one thing this mode is for. */
   const readOnly = away?.root.startsWith("gh:") === true;
-  const busy = running || readOnly;
+  /* "Update branch" is not one of the writes `running` covers. Each pull request
+     has its own flight (lib/updateFlight.ts): GitHub merges the base into each
+     head on its own, so pressing it on one must not grey the same button on the
+     next — it did, with the spinner of a press that never happened. A pull
+     request with its own update on the way still greys its OWN other writes. */
+  const [updating, setUpdating] = useState<ReadonlySet<string>>(() => new Set());
+  const updatingRef = useRef<ReadonlySet<string>>(updating);
+  const updatingHere = detail != null && inFlight(updating, root, detail.number);
+  const busy = running || readOnly || updatingHere;
   /** The label passed to `act` for the request in flight — see Btn `pending`. */
-  const [busyWhat, setBusyWhat] = useState("");
+  const [busyWhatAct, setBusyWhat] = useState("");
+  const busyWhat = updatingHere ? "Update branch" : busyWhatAct;
   /* One scroller serves every tab, so each tab's place in it is remembered here
      and put back on the way in. Cleared when the pull request changes: a new
      page starts at the top, whatever the last one was showing. */
@@ -3504,7 +3514,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const [branchRef, setBranchRef] = useState<{ number: number; sha: string; at: number } | null>(null);
   const headSeen = useRef<{ key: string; at: number }>({ key: "", at: 0 });
   const prevHeadKey = useRef("");
-  const [asked, setAsked] = useState<{ number: number; at: number; headBefore: string; note?: string } | null>(null);
+  /* By repository + number: a press that comes back after another pull request was
+     opened must not take that one's hold, or its refusal, with it. */
+  const [asked, setAsked] = useState<Record<string, { at: number; headBefore: string; note?: string }>>({});
   const [nowTick, setNowTick] = useState(0);
   /*
    * "Update branch" refused because base and head conflict.
@@ -3515,7 +3527,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * refused on: `updatedAt` moves with a push, and a push is exactly what can
    * make the refusal untrue.
    */
-  const [refusedUpdate, setRefusedUpdate] = useState<{ number: number; updatedAt: string } | null>(null);
+  const [refusedUpdate, setRefusedUpdate] = useState<Record<string, string>>({});
 
   /* `busy` is state: two presses in the same tick both read false. The ref is
      what makes the second one a no-op, the disabled attribute only what shows it. */
@@ -3539,7 +3551,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       // cached round trip; believing an error about what did not change costs
       // the next decision.
       loadList(true);
-      if (selected != null) loadDetail(selected, true);
+      if (selected != null && selectedRef.current === selected) loadDetail(selected, true);
       return r.ok;
     } catch (e) { flash(false, String(e)); return false; }
     finally { actLock.current = false; setBusy(false); setBusyWhat(""); }
@@ -4384,8 +4396,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
         `This working directory is the same project, but not the pull request. Work out why the job is failing and propose the fix. Do not change any files yet.` +
         (check.url ? `\n\nThe run is at ${check.url}.` : "");
       if (to === "term") {
-        requestTermIssue(r.cwd, `check-${detail.number}`, prompt, true);
-        flash(true, `#${detail.number} is waiting in a pane`);
+        const done = await requestTermIssue(r.cwd, `check-${detail.number}`, prompt, true);
+        if (done.ok) flash(true, `#${detail.number} is waiting in a pane`);
+        else flash(false, `Not started: ${done.error}`);
       } else {
         onOpenChatWith!(r.cwd, prompt, `Check on #${detail.number}`);
         flash(true, `#${detail.number} is waiting in chat`);
@@ -4512,11 +4525,17 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const dNumber = d?.number;
   useEffect(() => {
     if (!root || dNumber == null) return;
-    setAsked((cur) => (cur && cur.number === dNumber ? cur : loadOwnUpdate(`${root}#${dNumber}`, dNumber)));
+    setAsked((cur) => {
+      const k = `${root}#${dNumber}`;
+      if (cur[k]) return cur;
+      const stored = loadOwnUpdate(k, dNumber);
+      return stored ? { ...cur, [k]: stored } : cur;
+    });
   }, [root, dNumber]);
+  const askedHere = d ? asked[`${root}#${d.number}`] : undefined;
   const updateState: UpdateStanding = d
     ? updateStanding({
-      now: Date.now(), own: asked && asked.number === d.number ? asked : null,
+      now: Date.now(), own: askedHere ?? null,
       headSha: d.headSha ?? d.commits[d.commits.length - 1]?.oid,
       headCommittedAt: d.commits[d.commits.length - 1]?.committedAt,
       checksTotal: d.checks?.total ?? 0,
@@ -4529,12 +4548,12 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
      timeout at the deadline that re-reads the pull request once (the head may
      have moved without the poll having seen it) and re-renders. Not a poll. */
   useEffect(() => {
-    if (!asked) return;
-    const left = asked.at + REQUEST_WINDOW_MS - Date.now();
+    if (!askedHere) return;
+    const left = askedHere.at + REQUEST_WINDOW_MS - Date.now();
     if (left <= 0) return;
     const t = setTimeout(() => { setNowTick((n) => n + 1); if (selected != null) loadDetail(selected, true); }, left + 250);
     return () => clearTimeout(t);
-  }, [asked, selected, loadDetail]);
+  }, [askedHere, selected, loadDetail]);
   void nowTick;
 
   /*
@@ -4590,21 +4609,39 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
      is the first read that could see an empty rollup, so the record is made in the
      `.then`, before `act` re-reads. */
   const doUpdateBranch = (syncLocal: boolean) => {
-    if (!d) return;
+    if (!d || readOnly) return;
+    const num = d.number;
+    const key = `${root}#${num}`;
+    // One flight per pull request; a second press on THIS one is the double press act() used to catch.
+    const flying = enterFlight(updatingRef.current, key);
+    if (!flying) return;
+    updatingRef.current = flying;
+    setUpdating(flying);
     const headBefore = d.headSha ?? d.commits[d.commits.length - 1]?.oid ?? "";
-    return act("Update branch", () => api.prUpdateBranch(root, d.number, syncLocal).then((r) => {
-      if (r.conflict) setRefusedUpdate({ number: d.number, updatedAt: d.updatedAt });
+    const updatedAt = d.updatedAt;
+    return api.prUpdateBranch(root, num, syncLocal).then((r) => {
+      if (r.conflict) setRefusedUpdate((cur) => ({ ...cur, [key]: updatedAt }));
       // What the normal way did, for the Unstick gate: refused as "not caught up", or accepted and left waiting.
-      if (r.prLagging) noteUpdateTrial(unstickKey, { kind: "refused", at: Date.now() });
-      else if (r.ok && r.requested) noteUpdateTrial(unstickKey, { kind: "requested", at: Date.now(), headBefore });
+      if (r.prLagging) noteUpdateTrial(key, { kind: "refused", at: Date.now() });
+      else if (r.ok && r.requested) noteUpdateTrial(key, { kind: "requested", at: Date.now(), headBefore });
       if (r.ok) {
-        const own = { number: d.number, at: Date.now(), headBefore, note: r.requested ? undefined : r.detail };
-        setAsked(own);
-        saveOwnUpdate(unstickKey, own);
+        const own = { number: num, at: Date.now(), headBefore, note: r.requested ? undefined : r.detail };
+        setAsked((cur) => ({ ...cur, [key]: { at: own.at, headBefore, note: own.note } }));
+        saveOwnUpdate(key, own);
       }
+      flash(r.ok, r.ok ? (r.detail || `#${num} Update branch — done`) : (r.error || `#${num} Update branch failed`));
       return r;
-    }))
-      .finally(() => refreshBehind(root, d.number));
+    })
+      .catch((e) => { flash(false, String(e)); })
+      .finally(() => {
+        const left = leaveFlight(updatingRef.current, key);
+        updatingRef.current = left;
+        setUpdating(left);
+        loadList(true);
+        // The detail is ONE slot: refetching A while B is on screen would paint A over B.
+        if (selectedRef.current === num) loadDetail(num, true);
+        refreshBehind(root, num);
+      });
   };
 
   /* What the dialog was opened on, taken once when it opens. It does not follow `d`: the run's own
@@ -5266,7 +5303,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                           conversationCount={d.comments.length + d.reviews.length + d.threads.length}
                           behind={behind} behindAsking={behindAsking} localHead={localHead} busyWhat={busyWhat}
                           conflictFiles={conflictFiles}
-                          updateRefused={!!refusedUpdate && refusedUpdate.number === d.number && refusedUpdate.updatedAt === d.updatedAt}
+                          updateRefused={refusedUpdate[`${root}#${d.number}`] === d.updatedAt}
                           onEditRequest={() => setEditingBody(true)}
                           onToggleTask={doToggleTask}
                           onLocalReview={(recipe) => doLocalReview(undefined, recipe)}
@@ -5319,7 +5356,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                           onGoMoved={() => { setTab("files"); setWantSince((n) => n + 1); }}
                           awaitingChecks={awaitingChecks}
                           unknownSince={unknownSince} githubProblem={stuck || prLagging ? ghProblem : null} prLagging={prLagging}
-                          updateState={updateState} updateNote={asked && asked.number === d.number ? asked.note : undefined}
+                          updateState={updateState} updateNote={askedHere?.note}
                           unstickOffer={!!unstickGate?.show} onUnstick={openUnstick}
                           lagTryable={prLagging && lagMature(unstickKey)}
                         />
@@ -5676,13 +5713,16 @@ function ConflictActions({ root, number, branch, base, repo, title, disabled }: 
             ),
             () => api.prConflictPrompt({ worktree: p.root, files: p.conflicts, number, repo, branch, base, title }),
           );
-          requestTermIssue(p.root, `conflict-${number}`, h.prompt, true, false, "", h.model, h.effort);
-          // Held until here, not released after prepare(): the ask is fetched
-          // with a timeout, and a second press in that window opened a second tab.
+          // Held until the terminal has ANSWERED, not until it was asked: this
+          // used to claim "Claude is on it" for a request the server refused,
+          // or one no terminal view was mounted to take, and no window ever
+          // opened. A second press while waiting is also what opened a second tab.
+          const done = await requestTermIssue(p.root, `conflict-${number}`, h.prompt, true, false, "", h.model, h.effort);
           setBusy("");
           // It opens somewhere you are not looking. Without this the button
           // did its whole job in silence and read as broken.
-          setNote(`Claude is on it in a tmux window — "conflict-${number}", in ${p.root.split("/").pop()}`);
+          if (done.ok) setNote(`Claude is on it in a tmux window — "conflict-${number}", in ${p.root.split("/").pop()}`);
+          else setErr(`Claude was not started: ${done.error}`);
         }} disabled={disabled || !!busy} primary
         title={`Open a tmux window in that worktree with Claude, told which side is which and which files are in conflict.`}>
         {busy === "claude" ? "Preparing…" : <><SparkleIcon size={ICON.xs} />Hand to Claude in a terminal</>}
@@ -6197,7 +6237,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
           {d.mergeable === "CONFLICTING" && gitSaysClean && !updateRefused && (
             <Reason tint="var(--success)" glyph={<DoneIcon size={ICON.xs} />}>
               <b style={{ color: "var(--text)", fontWeight: 500 }}>Already resolved</b> — git merged
-              {" "}{d.headRefName} into {d.baseRefName} just now and found nothing to settle.
+              {" "}<RefPill name={d.headRefName} /> into <RefPill name={d.baseRefName} /> just now and found nothing to settle.
               <span className="block mt-1" style={{ color: "var(--text3)" }}>
                 GitHub still says it conflicts; it works that out lazily and keeps the old answer for
                 a minute or two after a push. Nothing to do.
@@ -8494,8 +8534,9 @@ function AskInChat({ d, root }: { d: PrDetail; root: string }) {
                   // The agent's window opens in a checkout; a read-only visit has none.
                   if (root.startsWith("gh:")) setSaid("no agent can be started here — there is no checkout of this repository on this machine");
                   else {
-                    requestTermIssue(root, `slack-${d.number}`, text, true, false, `Ping about #${d.number}`);
-                    setOpen(false); setSaid(`an agent has it in a tmux tab — "slack-${d.number}"`);
+                    void requestTermIssue(root, `slack-${d.number}`, text, true, false, `Ping about #${d.number}`)
+                      .then((done) => setSaid(done.ok ? `an agent has it in a tmux tab — "slack-${d.number}"` : `no agent was started: ${done.error}`));
+                    setOpen(false);
                   }
                 }}>
                 Hand to a tmux tab
@@ -11705,6 +11746,18 @@ function TimelineEvent({ e }: { e: PrEvent }) {
 
 /** Commits pushed back to back, as GitHub prints them: who, how many, and the
  *  subjects. The Commits tab has the rest. */
+/** A branch name in running text, as the same chip the header uses. */
+function RefPill({ name }: { name: string }) {
+  return <code className="px-1 py-0.5 rounded text-[10.5px]" style={{ ...CODE_FONT_STYLE, color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 12%, transparent)", overflowWrap: "anywhere" }}>{name}</code>;
+}
+
+/** A merge commit's subject with its branch names as chips; any other subject is plain text. */
+function CommitSubject({ message }: { message: string }) {
+  const m = /^(Merge (?:remote-tracking )?(?:branch )?)'?([^'\s]+)'?( of \S+)?( into )(\S+)(.*)$/.exec(message);
+  if (!m) return <>{message}</>;
+  return <>{m[1]}<RefPill name={m[2]!} />{m[3]}{m[4]}<RefPill name={m[5]!} />{m[6]}</>;
+}
+
 function CommitsEvent({ commits }: { commits: PrCommit[] }) {
   const first = commits[0];
   if (!first) return null;
@@ -11715,7 +11768,7 @@ function CommitsEvent({ commits }: { commits: PrCommit[] }) {
       {commits.map((c) => (
         <span key={c.oid} className="flex gap-2 min-w-0 w-full">
           <code style={{ ...CODE_FONT_STYLE, color: "var(--text3)" }}>{c.short}</code>
-          <span className="truncate" style={{ color: "var(--text2)" }}>{c.message}</span>
+          <span className="min-w-0" style={{ color: "var(--text2)", overflowWrap: "anywhere" }}><CommitSubject message={c.message} /></span>
         </span>
       ))}
     </div>
@@ -12123,7 +12176,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   const opened = (
     <div key="opened" className="agx-tiny">
       <span className="agx-node"><PlusIcon size={ICON.xs} /></span>
-      <span><b>{d.author}</b> opened this pull request from <code style={{ ...CODE_FONT_STYLE, color: "var(--primary-ink)" }}>{d.headRefName}</code> into <code style={{ ...CODE_FONT_STYLE, color: "var(--text2)" }}>{d.baseRefName}</code></span>
+      <span><b>{d.author}</b> opened this pull request from <RefPill name={d.headRefName} /> into <RefPill name={d.baseRefName} /></span>
     </div>
   );
   /* The real force-push events now come from the timeline with their own

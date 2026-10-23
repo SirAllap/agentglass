@@ -203,6 +203,11 @@ function inline(text: string, keyBase: string, depth = 0): ReactNode[] {
  *  all of it again to produce identical output is the single most expensive
  *  thing that panel can do, and its one prop is a string, so the check is free.
  */
+/** A column whose every cell is short (a row number, a flag) keeps its natural width instead of the floor the others get. */
+export function narrowColumns(header: string[], rows: string[][]): boolean[] {
+  return header.map((h, n) => h.length <= 6 && rows.every((r) => (r[n] ?? "").length <= 6));
+}
+
 export const Markdown = memo(function Markdown({ text }: { text: string }) {
   const lines = text.split("\n");
   const blocks: ReactNode[] = [];
@@ -433,6 +438,7 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
       i += 2;
       const rows: string[][] = [];
       while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) rows.push(cells(lines[i++]));
+      const narrow = narrowColumns(header, rows);
       const cellStyle = (n: number) => ({
         textAlign: (align[n] ?? "left") as "left" | "right" | "center",
         borderTop: LINE,
@@ -440,12 +446,12 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
       blocks.push(
         // Scrolls on its own rather than widening the bubble: a wide table must
         // not force the whole conversation into a horizontal scroll.
-        <div key={`t${key++}`} className="my-2 overflow-x-auto agx-scroll">
+        <div key={`t${key++}`} className="my-2 overflow-x-auto agx-scroll agx-md-table">
           <table className="text-[0.95em]" style={{ borderCollapse: "collapse" }}>
             <thead>
               <tr>
                 {header.map((h, n) => (
-                  <th key={n} className="px-2.5 py-1.5 font-semibold whitespace-nowrap"
+                  <th key={n} data-narrow={narrow[n] || undefined} className="px-2.5 py-1.5 font-semibold whitespace-nowrap"
                     style={{ textAlign: (align[n] ?? "left") as "left" | "right" | "center", color: "var(--text)" }}>
                     {inline(h, `th${key}-${n}`)}
                   </th>
@@ -456,7 +462,7 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
               {rows.map((r, ri) => (
                 <tr key={ri}>
                   {r.map((c, n) => (
-                    <td key={n} className="px-2.5 py-1.5 align-top" style={cellStyle(n)}>{inline(c, `td${key}-${ri}-${n}`)}</td>
+                    <td key={n} data-narrow={narrow[n] || undefined} className="px-2.5 py-1.5 align-top" style={cellStyle(n)}>{inline(c, `td${key}-${ri}-${n}`)}</td>
                   ))}
                 </tr>
               ))}

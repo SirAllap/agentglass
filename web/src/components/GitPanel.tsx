@@ -1065,12 +1065,13 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const askClaudeInTerminal = async () => {
     if (handing.current) return;
     handing.current = true;
-    const h = await conflictPrompt().finally(() => { handing.current = false; });
-    requestTermIssue(root, "conflicts", h.prompt, true, false, "", h.model, h.effort);
+    const h = await conflictPrompt().catch((e) => { handing.current = false; throw e; });
+    const done = await requestTermIssue(root, "conflicts", h.prompt, true, false, "", h.model, h.effort).finally(() => { handing.current = false; });
     // It opens a tmux window somewhere you are not looking, and until this said
     // so the button read as broken: it worked perfectly, silently, and people
-    // pressed it again.
-    flash(true, `Claude is on it in a tmux window — "conflicts", in ${repoRef?.name ?? "this repo"}`);
+    // pressed it again. It says what the terminal answered, not what was asked.
+    if (done.ok) flash(true, `Claude is on it in a tmux window — "conflicts", in ${repoRef?.name ?? "this repo"}`);
+    else flash(false, `Claude was not started: ${done.error}`);
   };
 
   /**

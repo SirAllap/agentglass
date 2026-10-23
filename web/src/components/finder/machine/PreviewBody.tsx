@@ -257,7 +257,7 @@ function MarkdownView({ facts, readW }: { facts: FileFacts; readW: ReadWidth }) 
   return (
     <div className="min-w-0 flex flex-col gap-3" style={CODE_FONT_STYLE}>
       {hasRawHtml(facts.text) && <div role="note" className="rounded-md px-2.5 py-1.5 text-[11px]" style={{ border: EDGE, background: "var(--surface-card)", color: "var(--text2)" }}>Raw HTML is shown as inert text in Markdown previews.</div>}
-      <div ref={ref} className="agx-prose agx-prose-pane agx-strata-md mx-auto w-full min-w-0" style={{ ...CODE_FONT_STYLE, fontSize: 11.5, maxWidth: readMaxWidth(readW), overflowWrap: "anywhere" }}>
+      <div ref={ref} className="agx-prose agx-prose-pane agx-strata-md mx-auto w-full min-w-0" style={{ ...CODE_FONT_STYLE, fontSize: "calc(11.5px * var(--fz, 1))", maxWidth: readMaxWidth(readW), overflowWrap: "anywhere" }}>
         <Markdown text={facts.text ?? ""} />
         {facts.textTruncated && note(`Only the first part of this ${humanBytes(facts.bytes)} file is rendered. Open in nvim for the rest.`, true)}
       </div>

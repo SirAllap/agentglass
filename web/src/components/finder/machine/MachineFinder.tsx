@@ -20,7 +20,7 @@ import { backspaceAct, escapeAct, finderKey, finderOwnsChord, leftAct, upFromFir
 import { boxOf, dismissChoice, marqueeChoice, type Box } from "../../../lib/finderSelect.ts";
 import { clickSelect, extendBy, extendSelect, footerDescription, selectAll, selectedFooter, single, toggleCursor, type Choice } from "../../../lib/finderSelect.ts";
 import {
-  DEFAULT_PREFS, TEXT_MAX, TEXT_MIN, tileSize, canEditRow, footerTotal, selectsHidden, displayRows, opensOnPick, footerCount, gridStep, indexOfName, isFolder, joinPath, keyStep, nextSidebar, parentOf, readPrefs, rowHeight, sidebarMode, sidebarPrefs, sidebarTip, writePrefs,
+  DEFAULT_PREFS, TEXT_MAX, TEXT_MIN, fzScale, tileSize, canEditRow, footerTotal, selectsHidden, displayRows, opensOnPick, footerCount, gridStep, indexOfName, isFolder, joinPath, keyStep, nextSidebar, parentOf, readPrefs, rowHeight, sidebarMode, sidebarPrefs, sidebarTip, writePrefs,
   type ColShape, type Display, type Prefs, type Row, type SortKey,
 } from "../../../lib/finderMiller.ts";
 import { activates, bandRows, EDGE_TICK_MS, edgeStep, emptyClickSelectsFirst, fileUris, historyClaims, inTrash, MARQUEE_SLOP, pointerAction, SLOW_CLICK_MS, slowClickRenames, springMs, startsMarqueeAt, wheelTextStep, type BandLayout, type DropKind } from "../../../lib/finderPointer.ts";
@@ -760,6 +760,11 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   useEffect(() => { if (hadOverlay.current && !overlay) setTimeout(() => { if (!document.activeElement?.closest("[data-finder-sidebar]")) focusFilesRef.current(); }, 0); hadOverlay.current = overlay; }, [overlay]);
   /* Ctrl and the wheel over the finder: its text size, as Strata's (a listener that is not passive, or the browser zooms the page instead). */
   const textRef = useRef(prefs.textSize); textRef.current = prefs.textSize;
+  // The menus portal out of the Finder, so the scale is handed to them on the document and taken back on the way out.
+  useEffect(() => {
+    document.documentElement.style.setProperty("--fz", String(fzScale(prefs.textSize)));
+    return () => { document.documentElement.style.removeProperty("--fz"); };
+  }, [prefs.textSize]);
   useEffect(() => {
     const el = root.current; if (!el) return;
     const on = (e: WheelEvent) => {
@@ -983,7 +988,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
     else if (t.kind === "device" && act !== "customize" && act !== "properties") devices.onVolumeAct(t.volume, act);
   };
   return (
-    <div ref={root} data-machine-finder onAuxClick={onHistoryButton} onContextMenu={noNativeMenu} {...dnd} onMouseMove={(e) => { pointerDir.current = (e.target as HTMLElement).closest<HTMLElement>("[data-dir]")?.dataset.dir ?? null; }} onMouseUp={(e) => { if (historyClaims(pointerAction(prefs.view, "empty", e.button, 1), { back: canBack(hist), forward: canForward(hist) })) e.preventDefault(); }} className="relative flex-1 min-h-0 min-w-0 flex flex-col" style={{ fontSize: prefs.textSize, color: "var(--text)" }}>
+    <div ref={root} data-machine-finder onAuxClick={onHistoryButton} onContextMenu={noNativeMenu} {...dnd} onMouseMove={(e) => { pointerDir.current = (e.target as HTMLElement).closest<HTMLElement>("[data-dir]")?.dataset.dir ?? null; }} onMouseUp={(e) => { if (historyClaims(pointerAction(prefs.view, "empty", e.button, 1), { back: canBack(hist), forward: canForward(hist) })) e.preventDefault(); }} className="relative flex-1 min-h-0 min-w-0 flex flex-col" style={{ fontSize: prefs.textSize, color: "var(--text)", ["--fz" as string]: fzScale(prefs.textSize) }}>
       <FinderTabs tabs={tabs} home={home} onNew={() => newTab()} onSelect={(i) => toTab(selectTab(tabs, i))} onClose={(i) => toTab(closeTab(tabs, i))} />
       <div data-finder-topbar className="flex items-center gap-1.5 px-2.5 py-1.5 shrink-0" style={{ borderBottom: LINE }}>
         <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", opacity: sideOn ? 1 : 0.7 }} aria-pressed={sideOn} title={sidebarTip(compact ? (sidePage ? "full" : "hidden") : sideMode, "Ctrl+B")} aria-label="Toggle sidebar (Ctrl+B)"
