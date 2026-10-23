@@ -3298,9 +3298,9 @@ export function BrowserView({ active: viewOn, scope }: {
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3" data-agx-empty="1"
             style={{ background: "var(--bg)" }}>
             <span style={{ color: "var(--text3)", opacity: 0.3 }}><BlankPageIcon size={40} /></span>
-            <span className="text-[11.5px]" style={{ color: "var(--text3)" }}>Nothing is open</span>
+            <span className="text-[11px]" style={{ color: "var(--text3)" }}>Nothing is open</span>
             <button type="button" onClick={() => setOmni("new")}
-              className="text-[11.5px] px-3 py-1.5 rounded-md"
+              className="text-[11px] px-3 py-1.5 rounded-md"
               style={{ background: "var(--surface-card)", color: "var(--text2)", border: LINE }}>New tab</button>
           </div>
         )}
