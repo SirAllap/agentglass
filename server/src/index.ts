@@ -182,11 +182,12 @@ import {
   listPrs, prDetail, prDiff, prAsset, ghCapability, submitReview, addComment, replyToThread,
   editComment, deleteComment, hideComment, unhideComment, setFileViewed, setAssignees, setMilestone, viewCounts, jobLog, checkJobs, checkFailures, cachedCheckFailures, failingTestsFor, rerunJobs, addLineComment, mentionables, facetOptions, applySuggestion, fileSlice,
   setThreadResolved, react, editPr, setLabels, setReviewers, setDraft, updateBranch,
-  rerunFailedChecks, mergePr, closePr, unstickLook, unstickClose, unstickReopen, filesSince, compareDiff, codeowners, prepareReviewPrompt, pendingReviewFor, branchUrl, subscribeCi, subscribeTalk, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
+  rerunFailedChecks, mergePr, closePr, unstickLook, unstickClose, unstickReopen, filesSince, compareDiff, treeAtTarget, codeowners, prepareReviewPrompt, pendingReviewFor, branchUrl, subscribeCi, subscribeTalk, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
   prBaseOf,
   ghRateLimit,
   branchBehind, localHead, prRollup, prRowDetails, personBoard, refBranchRows, repoIdFor as prRepoIdFor, subscribeTalkSeen,
   prBranches, githubStatusCached, prsForBranch, prForHead, nodeIdOk, locateRepo, isForeignRoot } from "./prs.ts";
+import { treeAtTar } from "./treeAt.ts";
 import { planCheckOnBase, startCheckOnBase, checkOnBaseStatus, cancelCheckOnBase } from "./checkOnBasePr.ts";
 import { repoSpend } from "./spend.ts";
 import { repoMetrics } from "./checkRuns.ts";
@@ -8380,6 +8381,14 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         url.searchParams.get("from") || "",
         url.searchParams.get("to") || "",
       ));
+    }
+    /* A commit's files as a tar, from the local checkout — see treeAt.ts. Read-only, no GitHub request. */
+    if (pathname === "/prs/tree-at") {
+      const t = await treeAtTarget(url.searchParams.get("root") || "", url.searchParams.get("sha") || "", url.searchParams.get("number"));
+      if (!t.ok) return json(t.missing ? { ok: true, missing: t.missing, error: t.error } : t, t.missing ? 200 : 400);
+      const tar = await treeAtTar(t.root, t.sha);
+      if (!tar.ok) return json(tar, 400);
+      return new Response(tar.body, { headers: { "content-type": "application/x-tar", "x-tree-sha": t.sha, "x-tree-files": String(tar.files), "cache-control": "no-store", ...cors } });
     }
     if (pathname === "/prs/commit-diff") {
       return json(await prCommitDiff(url.searchParams.get("root") || "", url.searchParams.get("sha") || ""));

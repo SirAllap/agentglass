@@ -6195,6 +6195,44 @@ export async function compareDiff(rootIn: unknown, numberIn: unknown, fromIn: un
   return { ok: true, text: d.stdout };
 }
 
+/**
+ * Which commit of which checkout GET /prs/tree-at may export: the same gate as
+ * `compareDiff`. The root must be a local checkout inside the scope the token
+ * reaches (a `gh:` root has none and is refused), `sha` 7-40 hex that resolves to
+ * a commit this checkout holds (nothing is fetched). With a `number`, the commit
+ * must also be part of that pull request, an ancestor of (or equal to) the head
+ * `prDetail` holds.
+ */
+export async function treeAtTarget(rootIn: unknown, shaIn: unknown, numberIn?: unknown): Promise<
+  { ok: true; root: string; sha: string } | { ok: false; error: string; missing?: string }
+> {
+  const sha = String(shaIn || "").trim();
+  if (!/^[0-9a-f]{7,40}$/i.test(sha)) return { ok: false, error: "invalid commit" };
+  const asked = safeAbs(rootIn);
+  const root = asked ? repoRootOf(asked) : null;
+  if (!root) return { ok: false, error: "not a git checkout" };
+  // Unlike the diff, this hands out whole files: both what was asked and the repository it sits in must be inside the open project.
+  if (!inScopeReal(asked) || !inScopeReal(root)) return { ok: false, error: "that checkout is outside the open project" };
+  const r = await gitAsync(root, ["rev-parse", "--verify", "--quiet", `${sha}^{commit}`]);
+  const oid = r.stdout.trim();
+  if (r.code !== 0 || !/^[0-9a-f]{40}$/.test(oid)) return { ok: false, missing: sha, error: "that commit is not in this checkout" };
+  if (numberIn !== undefined && numberIn !== null && numberIn !== "") {
+    const number = Number(numberIn);
+    if (!Number.isInteger(number) || number <= 0) return { ok: false, error: "invalid pull request number" };
+    const got = await prDetail(rootIn, number);
+    if (!got.ok || !got.detail) return { ok: false, error: got.error || "could not read the pull request" };
+    const head = got.detail.headSha;
+    if (!head) return { ok: false, error: "could not read the head commit" };
+    const h = await gitAsync(root, ["rev-parse", "--verify", "--quiet", `${head}^{commit}`]);
+    const headOid = h.stdout.trim();
+    if (h.code !== 0 || !/^[0-9a-f]{40}$/.test(headOid)) return { ok: false, missing: head, error: "the pull request's head is not in this checkout" };
+    const anc = await gitAsync(root, ["merge-base", "--is-ancestor", oid, headOid]);
+    if (anc.code === 1) return { ok: false, error: `${sha} is not part of this pull request` };
+    if (anc.code !== 0) return { ok: false, error: (anc.stderr || "").trim().split("\n")[0] || "could not check that commit" };
+  }
+  return { ok: true, root, sha: oid };
+}
+
 export async function commitDiff(rootIn: unknown, shaIn: unknown): Promise<{ ok: boolean; text?: string; error?: string }> {
   const sha = String(shaIn || "").trim();
   if (!/^[0-9a-f]{7,40}$/i.test(sha)) return { ok: false, error: "invalid commit" };
