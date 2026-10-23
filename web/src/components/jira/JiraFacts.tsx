@@ -89,7 +89,7 @@ export function JiraHead({ t, writable, onTask, onRefresh, refreshing, ed, follo
   // A said line belongs to the card it was said about.
   useEffect(() => { setSaid(""); }, [t.id]);
   return (
-    <div className="px-4 pt-4 pb-2 flex flex-col gap-2 min-w-0">
+    <div className="px-4 pt-3 pb-1.5 flex flex-col gap-1.5 min-w-0">
       <CardActionBar id={key} url={t.url} copied={copied} onCopy={(v, w) => void copy(v, w)}
         onRefresh={onRefresh ?? (() => undefined)} refreshing={!!refreshing}
         marks={follow ? <JiraFollow ui={follow} writes={writable} cardKey={key} /> : undefined}

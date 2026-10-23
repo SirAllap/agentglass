@@ -12,7 +12,6 @@
  * comments). A comment is one write and the card read back, and that answer
  * replaces the thread, so posting costs no second read here.
  */
-import { HIT } from "../../lib/iconSize.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../lib/api.ts";
 import { putCard } from "../../lib/prCardStore.ts";
@@ -45,8 +44,6 @@ import { mentionsOfCard } from "../../lib/jiraLinks.ts";
 
 /** The box may grow to this share of the pane, then scrolls inside; the ClickUp card's share. */
 const COMPOSER_SHARE = 0.3;
-/** The line under the header that says what a change did: its height, kept whether or not there is anything to say. */
-const NOTE_H = HIT + 8; // the dismiss box plus the note's own bottom padding
 /** Typing after `@` asks Jira once the keys have paused this long. */
 const PEOPLE_WAIT_MS = 250;
 
@@ -308,8 +305,8 @@ export function JiraCard({ t, header, writes, onTask }: {
     <div ref={paneRef} className="flex flex-col flex-1 min-w-0 min-h-0">
       <div className="shrink-0" style={{ background: "var(--bg)" }}>
         {header({ onRefresh: refresh, refreshing, ed, follow })}
-        {/* One line is kept for what a change says, empty or not, so what it says never moves the controls under it. */}
-        <div style={{ minHeight: ed.edit ? NOTE_H : 0 }}><EditNote note={editing.note} busy={!!editing.busy} onUndo={editing.undo} onClose={editing.clear} /></div>
+        {/* No height is held for what a change says: an empty reserve was a 34 px blank band under every title. The note takes its line only while there is one, and the header sits above the scroll, so no control moves. */}
+        <EditNote note={editing.note} busy={!!editing.busy} onUndo={editing.undo} onClose={editing.clear} />
       </div>
       <div ref={listRef} className="agx-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 py-3">
         {err && <div className="text-[11px] mb-3" role="alert" style={{ color: "var(--error-ink)" }}>{err}</div>}

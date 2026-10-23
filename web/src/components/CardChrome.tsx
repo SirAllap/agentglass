@@ -94,15 +94,20 @@ export function CardTitle({ title, copied, onCopy, children }: {
   /** What stands in for the title's text where it can be typed over; the copy button stays. */
   children?: React.ReactNode;
 }) {
+  const copy = (
+    <button onClick={() => onCopy(title, "title")}
+      className="inline-flex items-center justify-center align-middle ml-1.5 rounded hover:bg-white/10"
+      style={{ width: 20, height: 20, color: copied === "title" ? "var(--success)" : "var(--text4)" }}
+      title="Copy the title" aria-label={copied === "title" ? "Title copied" : "Copy the title"}>
+      {copied === "title" ? <DoneIcon size={ICON.sm} /> : <CopyIcon size={ICON.sm} />}
+    </button>
+  );
+  // The last word and the button are one unbreakable unit, so a full last line never leaves the icon alone on the next one.
+  const cut = title.lastIndexOf(" ") + 1;
   return (
     <h2 className="text-[13px] font-semibold leading-snug" style={{ color: "var(--text)", textWrap: "balance" }}>
-      {children ?? title}
-      <button onClick={() => onCopy(title, "title")}
-        className="inline-flex items-center justify-center align-middle ml-1.5 rounded hover:bg-white/10"
-        style={{ width: 20, height: 20, color: copied === "title" ? "var(--success)" : "var(--text4)" }}
-        title="Copy the title" aria-label={copied === "title" ? "Title copied" : "Copy the title"}>
-        {copied === "title" ? <DoneIcon size={ICON.sm} /> : <CopyIcon size={ICON.sm} />}
-      </button>
+      {children ?? title.slice(0, cut)}
+      {children ? copy : <span style={{ whiteSpace: "nowrap" }}>{title.slice(cut)}{copy}</span>}
     </h2>
   );
 }

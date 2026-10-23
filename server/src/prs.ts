@@ -43,6 +43,7 @@ import { cardIdIn } from "../../shared/cardRef.ts";
 import { hasCredential, redacted } from "./credentials.ts";
 import { problemFromSummary, STATUS_SUMMARY_URL, type GithubProblem } from "../../shared/githubStatus.ts";
 import { factsOf, unstickLive, NO_WORDS, type Look } from "../../shared/unstick.ts";
+import { hasUrlCredentials } from "../../shared/urlCredentials.ts";
 
 /** Same escape hatch the git writes use, so one variable disables both. */
 const WRITE_ENABLED = process.env.AGENTGLASS_GIT_WRITE_DISABLED !== "1";
@@ -4071,7 +4072,9 @@ export function assetAllowed(raw: string): URL | null {
   if (ASSET_HOSTS.includes(h)) return u;
   if (ASSET_HOST_SUFFIXES.some((s) => h.endsWith(s))) return u;
   // A Jira person's picture: exact hosts, no userinfo (see shared/avatarHost.ts).
-  if (isJiraAvatarHost(h) && !u.username && !Reflect.get(u, "pass" + "word")) return u;
+  if (isJiraAvatarHost(h) && !hasUrlCredentials(u)) return u;
+  // The celebratory gifs the Reviewsaur bot embeds in its comments: its own folder only, never the whole site.
+  if (h === "reviewsaur.com" && u.pathname.startsWith("/dino-gifs/") && !hasUrlCredentials(u) && !u.port) return u;
   return null;
 }
 
@@ -4090,7 +4093,7 @@ async function fetchJiraAvatar(first: URL): Promise<Response | null> {
     const res = await fetch(u.toString(), { headers: { accept: "image/*" }, redirect: "manual", signal: AbortSignal.timeout(20_000) });
     if (res.status < 300 || res.status >= 400) return res;
     const next = (() => { try { return new URL(res.headers.get("location") || "", u); } catch { return null; } })();
-    if (!next || next.protocol !== "https:" || next.username || next.password || !isJiraAvatarHost(next.hostname)) return null;
+    if (!next || next.protocol !== "https:" || hasUrlCredentials(next) || !isJiraAvatarHost(next.hostname)) return null;
     u = next;
   }
   return null;
