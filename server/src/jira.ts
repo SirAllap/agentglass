@@ -46,8 +46,8 @@ import { dirname, join } from "node:path";
 import { guardedFetch, privateAddress, type GuardedFetchOptions } from "./net.ts";
 import { isIP } from "node:net";
 import { clearCredential, redacted, secretFor, setCredential } from "./credentials.ts";
-import type { CallResult } from "./trackerTypes.ts";
-import type { JiraAuth, JiraConnectResult, JiraDeployment, JiraKind, JiraStatus, ProviderTask } from "../../shared/providers.ts";
+import type { CallResult, WriteOutcome } from "./trackerTypes.ts";
+import type { JiraAuth, JiraConnectResult, JiraDeployment, JiraKind, JiraMove, JiraMoves, JiraStatus, ProviderTask } from "../../shared/providers.ts";
 
 const TIMEOUT_MS = 8_000;
 const MEMO_TTL_MS = 10 * 60_000;
@@ -202,6 +202,7 @@ export function forgetJira(): void {
   generation++;
   flying.clear();
   memo.clear();
+  mineHeld.clear();
   holdUntil = 0;
   holdSentence = "";
   lastRemaining = null;
@@ -353,7 +354,11 @@ async function callOnce<T>(creds: JiraCreds, pathname: string, o: CallOpts): Pro
 }
 
 /** Answers that hold still, asked once per ten minutes. Only a success is kept. */
-async function memoOk<T>(creds: JiraCreds, key: string, run: () => Promise<CallResult<T>>): Promise<CallResult<T>> {
+async function memoOk<T>(
+  creds: JiraCreds,
+  key: string,
+  run: () => Promise<CallResult<T>>,
+): Promise<CallResult<T>> {
   const k = `${baseOverride ?? ""}|${fingerprintOf(creds)}|${key}`;
   const hit = memo.get(k);
   if (hit && Date.now() - hit.at < MEMO_TTL_MS) return hit.r;
@@ -595,10 +600,10 @@ const taskContext = async (creds: JiraCreds): Promise<TaskContext> => {
 };
 
 /** One card by its key or its numeric id. One request, plus the priority list when it is not remembered. */
-export async function readIssue(creds: JiraCreds, ref: string): Promise<JiraResult<ProviderTask>> {
+export async function readIssue(creds: JiraCreds, ref: string, o: { fresh?: boolean } = {}): Promise<JiraResult<ProviderTask>> {
   if (!/^(?:\d{1,19}|[A-Za-z][A-Za-z0-9_]*-\d+)$/.test(ref)) return { ok: false, error: "That is not a Jira card id" };
   const [r, cx] = await Promise.all([
-    jiraCall<unknown>(creds, `/rest/api/${apiOf(creds)}/issue/${encodeURIComponent(ref)}?fields=${CARD_FIELDS.join(",")}`),
+    jiraCall<unknown>(creds, `/rest/api/${apiOf(creds)}/issue/${encodeURIComponent(ref)}?fields=${CARD_FIELDS.join(",")}`, { fresh: o.fresh }),
     taskContext(creds),
   ]);
   if (!r.ok) return { ...r, data: undefined };
@@ -653,10 +658,11 @@ export interface JiraTasks { tasks: ProviderTask[]; truncated: boolean }
  * cap cut the list short. A page that fails is the answer: a search that lost
  * its second page never reads as a short list.
  */
-export async function searchJql(creds: JiraCreds, jql: string, o: { pages?: number } = {}): Promise<JiraResult<JiraTasks>> {
+export async function searchJql(creds: JiraCreds, jql: string, o: { pages?: number; optional?: boolean; light?: boolean } = {}): Promise<JiraResult<JiraTasks>> {
   if (!boundedJql(jql)) return { ok: false, error: "Refusing to search Jira without a restriction" };
   const pages = Math.max(1, o.pages ?? SEARCH_PAGES);
-  const cx = taskContext(creds);
+  // `light`: a caller that never shows a priority does not pay for the list.
+  const cx = o.light ? Promise.resolve<TaskContext>({ site: creds.site, priorities: null, me: redacted("jira")?.accountId }) : taskContext(creds);
   const tasks: ProviderTask[] = [];
   const keep = async (issues: unknown): Promise<void> => {
     const c = await cx;
@@ -668,7 +674,7 @@ export async function searchJql(creds: JiraCreds, jql: string, o: { pages?: numb
     let start = 0;
     for (let page = 0; page < pages; page++) {
       const r = await jiraCall<{ issues?: unknown[]; maxResults?: number }>(creds, "/rest/api/2/search",
-        { method: "POST", body: { jql, fields: CARD_FIELDS, maxResults: SEARCH_PAGE, startAt: start } });
+        { method: "POST", optional: o.optional, body: { jql, fields: CARD_FIELDS, maxResults: SEARCH_PAGE, startAt: start } });
       if (!r.ok) return { ...r, data: undefined };
       const issues = Array.isArray(r.data?.issues) ? r.data!.issues! : [];
       await keep(issues);
@@ -684,7 +690,7 @@ export async function searchJql(creds: JiraCreds, jql: string, o: { pages?: numb
   let token: string | undefined;
   for (let page = 0; page < pages; page++) {
     const r = await jiraCall<{ issues?: unknown[]; isLast?: boolean; nextPageToken?: string }>(creds, "/rest/api/3/search/jql",
-      { method: "POST", body: { jql, fields: CARD_FIELDS, maxResults: SEARCH_PAGE, ...(token ? { nextPageToken: token } : {}) } });
+      { method: "POST", optional: o.optional, body: { jql, fields: CARD_FIELDS, maxResults: SEARCH_PAGE, ...(token ? { nextPageToken: token } : {}) } });
     if (!r.ok) return { ...r, data: undefined };
     await keep(r.data?.issues);
     token = typeof r.data?.nextPageToken === "string" && r.data.nextPageToken ? r.data.nextPageToken : undefined;
@@ -696,7 +702,35 @@ export async function searchJql(creds: JiraCreds, jql: string, o: { pages?: numb
 /** What is on you and not done, newest change first. Bounded by the assignee. */
 export const MINE_JQL = "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC";
 
-export const mine = (creds: JiraCreds): Promise<JiraResult<JiraTasks>> => searchJql(creds, MINE_JQL);
+/**
+ * The Tasks tab asks for this on every visit and every return to the window, so
+ * an answer is kept for a minute and a second ask while one is in the air joins
+ * it: at most one search a minute for the site, however many windows or phones look.
+ * `fresh` (the Refresh button) skips both and replaces what is kept. Only a
+ * success is kept, so a failed read is never served again as if it were news.
+ */
+const MINE_TTL_MS = 60_000;
+const mineHeld = new Map<string, { at: number; r?: JiraResult<JiraTasks>; run?: Promise<JiraResult<JiraTasks>> }>();
+
+export function mine(creds: JiraCreds, o: { fresh?: boolean } = {}): Promise<JiraResult<JiraTasks>> {
+  const k = `${baseOverride ?? ""}|${fingerprintOf(creds)}`;
+  const hit = mineHeld.get(k);
+  if (!o.fresh && hit) {
+    if (hit.run) return hit.run;
+    if (hit.r && Date.now() - hit.at < MINE_TTL_MS) return Promise.resolve(hit.r);
+  }
+  const gen = generation;
+  const run = searchJql(creds, MINE_JQL).then((r) => {
+    if (gen !== generation) return r;
+    const now = mineHeld.get(k);
+    // A newer ask took the slot while this was in the air: leave it its own.
+    if (now && now.run !== run) return r;
+    if (r.ok) mineHeld.set(k, { at: Date.now(), r }); else if (now?.run === run) mineHeld.delete(k);
+    return r;
+  });
+  mineHeld.set(k, { at: hit?.at ?? 0, r: hit?.r, run });
+  return run;
+}
 
 /** Text goes inside a quoted phrase; the characters that end one, or that the text index reads as operators, become spaces. */
 const searchPhrase = (raw: string): string =>
@@ -842,4 +876,161 @@ export function setJiraWrites(on: boolean): void {
   const p = settingsPath();
   mkdirSync(dirname(p), { recursive: true });
   writeFileSync(p, JSON.stringify({ writes: on }, null, 2) + "\n");
+}
+
+// ---------------------------------------------------------------------------
+// moving a card: one transition per click
+// ---------------------------------------------------------------------------
+
+/*
+ * A card has no status to set. Its workflow offers moves (transitions) from
+ * where it stands, each leading to a status, and only those can be made. The
+ * names of the moves and of the statuses are the site's: nothing here knows
+ * one, and "ready for review" is a setting somebody picks from this list, not
+ * a word looked for in it.
+ *
+ * Ceiling: one move per call. Reaching a distant status through several moves
+ * is not here, and neither is a form for the fields a screen may ask for: a
+ * move that needs one is listed with `needs` and refused when asked for.
+ */
+
+const ISSUE_KEY = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
+const FIELD_KEY = /^[A-Za-z0-9_.-]{1,64}$/;
+const WRITE_OFF = "Writing to Jira is switched off";
+
+/** What a workflow's `transitions` answer says, as moves. Unreadable entries are dropped, never guessed. */
+export function toMoves(raw: unknown): JiraMove[] {
+  const list = isObj(raw) && Array.isArray(raw.transitions) ? raw.transitions : [];
+  const moves: JiraMove[] = [];
+  for (const t of list) {
+    if (!isObj(t) || t.isAvailable === false) continue;
+    const id = idText(t.id);
+    const to = isObj(t.to) ? t.to : {};
+    const toStatus = str(to.name);
+    if (!id || !toStatus) continue;
+    const cat = isObj(to.statusCategory) ? to.statusCategory : {};
+    const catKey = str(cat.key);
+    // Every required field on the move's screen. A default value is no promise
+    // that a move without it is accepted, so it is not an exception.
+    const needs = isObj(t.fields)
+      ? Object.entries(t.fields).filter(([k, v]) => isObj(v) && v.required === true && FIELD_KEY.test(k)).map(([k]) => k)
+      : [];
+    const color = CATEGORY_COLOR[str(cat.colorName)];
+    moves.push({
+      id,
+      name: str(t.name),
+      label: toStatus,
+      toStatus,
+      toKind: catKey === "done" ? "done" : catKey === "new" || catKey === "indeterminate" ? "open" : "other",
+      ...(color ? { color } : null),
+      ...(needs.length ? { needs } : null),
+    });
+  }
+  // Two moves into one status (a quick path and a long one) must not read as one.
+  const seen = new Map<string, number>();
+  for (const m of moves) seen.set(m.label, (seen.get(m.label) ?? 0) + 1);
+  for (const m of moves) if ((seen.get(m.label) ?? 0) > 1 && m.name) m.label = `${m.toStatus} (${m.name})`;
+  return moves;
+}
+
+const movesPath = (creds: JiraCreds, key: string): string =>
+  `/rest/api/${apiOf(creds)}/issue/${encodeURIComponent(key)}/transitions?expand=transitions.fields`;
+
+/**
+ * The moves the card has now. An empty list is Jira's answer for a missing
+ * permission and for a finished workflow alike, so it comes back with a
+ * sentence about the person and never as "no statuses". One request, and
+ * nothing is kept from it: a permission can change between two looks.
+ */
+export async function movesOf(creds: JiraCreds, key: string): Promise<JiraResult<JiraMoves>> {
+  if (!ISSUE_KEY.test(key)) return { ok: false, error: "That is not a Jira card id" };
+  const r = await jiraCall<unknown>(creds, movesPath(creds, key));
+  if (!r.ok) return { ...r, data: undefined };
+  const options = toMoves(r.data);
+  return { ok: true, data: options.length ? { options } : { options, cannot: `You cannot move ${key.toUpperCase()}` } };
+}
+
+/** The sentence for a write Jira refused with a 400: its own words are never passed on. */
+const NOT_ACCEPTED = "Jira did not accept that move. The card may have moved on, or you cannot move it";
+
+/**
+ * Make one move, and give back the card as it is afterwards.
+ *
+ * In order, and each step may end it: the write switch, the inputs, a read of
+ * `updated` (refused as a conflict when it is not the one the person saw), the
+ * move's screen (refused with no write when it asks for a field), the POST,
+ * and a read of the card. Three requests, plus one when the site's moves for
+ * this status are not remembered yet.
+ *
+ * The reads that bracket the write skip the in-flight merge: a read of this
+ * card already in the air from before the write would be handed back as the
+ * card "after" it.
+ */
+export async function moveIssue(creds: JiraCreds, key: string, transitionId: string, updated: number): Promise<WriteOutcome> {
+  if (!jiraWriteEnabled()) return { ok: false, error: WRITE_OFF };
+  if (!ISSUE_KEY.test(key)) return { ok: false, error: "That is not a Jira card id" };
+  if (!/^\d{1,10}$/.test(transitionId)) return { ok: false, error: "That is not one of this card's moves" };
+  // A write with nothing to compare against would go out unchecked.
+  if (!Number.isFinite(updated) || updated <= 0) return { ok: false, error: "Nothing was changed: reload the card and try again" };
+  const v = apiOf(creds);
+
+  const seen = await jiraCall<unknown>(creds, `/rest/api/${v}/issue/${encodeURIComponent(key)}?fields=updated,status,project,issuetype`, { fresh: true });
+  if (!seen.ok) {
+    // A read that failed says nothing about whether the card moved: not a
+    // conflict, and not a green light either.
+    return { ok: false, unauthorised: seen.unauthorised, error: `Nothing was changed: could not check the card first. ${seen.error ?? "Jira did not answer"}` };
+  }
+  const f = isObj(seen.data) && isObj(seen.data.fields) ? seen.data.fields : {};
+  const now = epoch(f.updated);
+  if (now && now !== updated) return { ok: false, conflict: true, error: "Somebody changed this card while you had it open, reloaded" };
+
+  // Moves differ by project, issue type and status, so that is the memo's key.
+  const status = isObj(f.status) ? f.status : {};
+  const type = isObj(f.issuetype) ? f.issuetype : {};
+  const where = `${str(isObj(f.project) ? f.project.key : "")}|${idText(type.id) || str(type.name)}|${idText(status.id) || str(status.name)}`;
+  const listed = (fresh: boolean): Promise<CallResult<JiraMove[]>> => {
+    const run = async (): Promise<CallResult<JiraMove[]>> => {
+      const r = await jiraCall<unknown>(creds, movesPath(creds, key), { fresh: true });
+      return r.ok ? { ok: true, data: toMoves(r.data) } : { ...r, data: undefined };
+    };
+    return fresh ? run() : memoOk(creds, `moves|${where}`, run);
+  };
+  // An empty list kept from an earlier look (a permission since granted) falls
+  // through to the fresh read below, because it holds no such move.
+  let moves = await listed(false);
+  if (!moves.ok) return { ok: false, unauthorised: moves.unauthorised, error: `Nothing was changed: could not read the card's moves. ${moves.error ?? "Jira did not answer"}` };
+  let move = moves.data?.find((m) => m.id === transitionId);
+  if (!move) {
+    // The remembered list may be older than a permission or a workflow edit.
+    moves = await listed(true);
+    if (!moves.ok) return { ok: false, unauthorised: moves.unauthorised, error: `Nothing was changed: could not read the card's moves. ${moves.error ?? "Jira did not answer"}` };
+    if (!moves.data?.length) return { ok: false, error: `You cannot move ${key.toUpperCase()}` };
+    move = moves.data.find((m) => m.id === transitionId);
+    if (!move) return { ok: false, error: "That move is not available any more: reload the card" };
+  }
+  if (move.needs?.length) {
+    return { ok: false, error: `That move needs ${move.needs.join(", ")}, which cannot be filled in here yet` };
+  }
+
+  const post = await jiraCall<unknown>(creds, `/rest/api/${v}/issue/${encodeURIComponent(key)}/transitions`, {
+    method: "POST",
+    body: { transition: { id: transitionId } },
+  });
+  if (!post.ok) {
+    if (post.status === 409) return { ok: false, conflict: true, error: "Somebody changed this card while you were moving it, reloaded" };
+    if (post.status === 400) return { ok: false, error: NOT_ACCEPTED };
+    return { ok: false, unauthorised: post.unauthorised, error: post.error };
+  }
+  // Read back, never assumed: a workflow can run its own steps on the way in.
+  const back = await readIssue(creds, key, { fresh: true });
+  if (!back.ok || !back.data) return { ok: false, error: `The card was moved, but could not be read back. Reload it. ${back.error ?? ""}`.trim() };
+  return { ok: true, task: back.data, was: str(status.name) };
+}
+
+/** The stored connection's moves, or the sentence that says there is none. */
+export const movesStored = (key: string): Promise<JiraResult<JiraMoves>> => withStored((c) => movesOf(c, key));
+
+export async function moveStored(key: string, transitionId: string, updated: number): Promise<WriteOutcome> {
+  const c = storedCreds();
+  return c ? moveIssue(c, key, transitionId, updated) : { ok: false, error: NOT_CONNECTED };
 }

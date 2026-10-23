@@ -27,7 +27,7 @@ export type NotifyTarget =
   | { kind: "pane"; pane: string }
   | { kind: "file"; root: string; path: string }
   | { kind: "url"; url: string }
-  | { kind: "card"; id: string; label: string };
+  | { kind: "card"; id: string; label: string; tracker?: "jira" };
 
 /** Go to a target, or do the one thing that saves the trip there. */
 export type NotifyAction =

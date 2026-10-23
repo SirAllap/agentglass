@@ -1175,7 +1175,7 @@ export default function App() {
     // The card the notification is about, in Tasks — the same errand the pull
     // request masthead sends, so it lands on the board that holds it when there
     // is one and under Looked up when there is not.
-    if (g.kind === "card") { openCard(g.id, g.label); return; }
+    if (g.kind === "card") { openCard(g.id, g.label, g.tracker); return; }
     /*
      * The pane the agent is in — resolved here rather than carried whole.
      *

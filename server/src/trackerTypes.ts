@@ -25,6 +25,8 @@ export interface WriteOutcome {
   error?: string;
   /** The task as it stands after the write, re-read rather than assumed. */
   task?: ProviderTask;
+  /** The status the card left, for the watch to tell its own move from somebody else's. */
+  was?: string;
   /** Somebody else changed it between the read and the write. */
   conflict?: boolean;
   /**

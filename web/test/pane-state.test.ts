@@ -92,7 +92,7 @@ describe("the panes the window holds read the pref modules the rows call", () =>
     const t = P.readTasks();
     expect(t.landing).toBe("github");
     expect(t.shown).toMatchObject({ github: true, clickup: false });
-    expect([...t.order].sort()).toEqual(["clickup", "github", "local"]);
+    expect([...t.order].sort()).toEqual(["clickup", "github", "jira", "local"]);
   });
 
   it("appearance carries the mode and the accent and nothing else", () => {

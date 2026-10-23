@@ -91,6 +91,30 @@ export function looksLikeOurs(
 }
 
 /**
+ * Whose card it is, once more than ClickUp is in play: the answer of
+ * `trackerFor` in trackerApi.ts, which this file cannot import (it imports this
+ * one).
+ */
+export interface CardOwner {
+  owner: "clickup" | "jira" | null;
+  /** The Jira site's address, for opening a card that was only named by its id. */
+  jiraSite?: string;
+}
+
+/**
+ * What the readers below need of the ClickUp setup. `ownerOf` is absent on
+ * every machine without Jira, which is what keeps their answer the one they
+ * always gave; where it is present it replaces the `looksLikeOurs` test, and is
+ * asked with the same `whenUnknown` that test would have been.
+ */
+export interface RefSetup {
+  connected: boolean;
+  prefix?: string;
+  noCustomIds?: boolean;
+  ownerOf?: (ref: CardRef, whenUnknown: boolean) => CardOwner;
+}
+
+/**
  * What the chip should DO — the three answers above, as one decision instead
  * of a condition spread across some JSX.
  *
@@ -109,12 +133,21 @@ export function looksLikeOurs(
  */
 export function chipAction(
   ref: CardRef | null,
-  setup: { connected: boolean; prefix?: string; noCustomIds?: boolean } | null,
+  setup: RefSetup | null,
 ): { in: "tasks" } | { in: "away"; url: string } | null {
   // Null setup is "the answer has not arrived", not "no". Saying nothing until
   // it has is what stops the chip appearing and then vanishing.
   if (!ref || !setup) return null;
-  if (setup.connected && looksLikeOurs(ref, setup.prefix, true, setup.noCustomIds)) return { in: "tasks" };
+  if (setup.ownerOf) {
+    // Jira is connected too and `trackerFor` is the one that says whose it is.
+    const o = setup.ownerOf(ref, true);
+    if (o.owner === "clickup" && setup.connected) return { in: "tasks" };
+    // Jira cards have no view in the board yet, so the chip opens the card on its site.
+    if (o.owner === "jira") {
+      const url = ref.url ?? (o.jiraSite ? `https://${o.jiraSite}/browse/${ref.label}` : undefined);
+      return url ? { in: "away", url } : null;
+    }
+  } else if (setup.connected && looksLikeOurs(ref, setup.prefix, true, setup.noCustomIds)) return { in: "tasks" };
   // Everything else is the shared rule: an address opens, a bare id does not.
   const away = chipFor(ref, false);
   return away && "open" in away ? { in: "away", url: away.open } : null;

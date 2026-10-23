@@ -289,13 +289,13 @@ describe("a person's list", () => {
 
   test("an empty list is ok and empty; a failing search is an error and has no list", async () => {
     fake.fail({ path: "/search/jql", empty: true, times: 1 });
-    expect(await J.withStored((c) => J.mine(c))).toEqual({ ok: true, data: { tasks: [], truncated: false } });
+    expect(await J.withStored((c) => J.mine(c, { fresh: true }))).toEqual({ ok: true, data: { tasks: [], truncated: false } });
     fake.fail({ path: "/search/jql", status: 500, times: 1 });
-    const bad = await J.withStored((c) => J.mine(c));
+    const bad = await J.withStored((c) => J.mine(c, { fresh: true }));
     expect(bad).toMatchObject({ ok: false, error: "Could not reach Jira" });
     expect(bad.data).toBeUndefined();
     fake.fail({ path: "/search/jql", garbage: true, times: 1 });
-    expect((await J.withStored((c) => J.mine(c))).ok).toBe(false);
+    expect((await J.withStored((c) => J.mine(c, { fresh: true }))).ok).toBe(false);
   });
 
   test("a page that fails after the first one fails the search; it is never a short list", async () => {

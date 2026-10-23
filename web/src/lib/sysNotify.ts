@@ -76,7 +76,7 @@ export type SystemNote = {
      * is what the row shows, since `ORBIT-1042` is what somebody recognises and
      * `86dyn…` is not.
      */
-    | { kind: "card"; id: string; label: string }
+    | { kind: "card"; id: string; label: string; tracker?: "jira" }
     /**
      * The tmux pane an agent is sitting in.
      *

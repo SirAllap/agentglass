@@ -1,7 +1,7 @@
 /*
  * A pass-through in front of the stand-in Jira that also reads the JQL it is
- * sent, because the stand-in's query reader does not understand `IN (...)` or
- * `text ~`. Everything is forwarded as it came (a search can be made to fail from its Nth call on); a search that carries `text ~`
+ * sent, because the stand-in's query reader does not understand `IN (...)`,
+ * `text ~` or a relative `updated >=`. Everything is forwarded as it came (a search can be made to fail from its Nth call on); a search that carries `text ~`
  * is answered as if it had asked for one project, and the query as sent is
  * kept in `jql` so a test can assert on what a real site would have received.
  */
@@ -28,6 +28,9 @@ export function startJiraProxy(target: string, answerAs = "project = ORBIT", o: 
             // Searches past this many answer 500, to see a list that loses a later page.
             if (o.failSearchAfter !== undefined && jql.length > o.failSearchAfter) return new Response("{}", { status: 500 });
             if (/\btext\s*~/i.test(b.jql)) body = JSON.stringify({ ...b, jql: answerAs });
+            // The stand-in's clock is fixed in January, so a relative `updated >= -Nm`
+            // window would match nothing: that one clause is dropped and the rest is kept.
+            else if (/\bupdated\s*>=/i.test(b.jql)) body = JSON.stringify({ ...b, jql: b.jql.replace(/\s+and\s+updated\s*>=\s*-\d+m/i, "") });
           }
         } catch { /* forwarded as it came */ }
       }

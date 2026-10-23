@@ -17,7 +17,7 @@ import type { HandoffConfig, HandoffUnassign, ListStatus } from "../../../shared
 import { planOf } from "../../../shared/stepBlocks.ts";
 import type { ReviewRecipeContext } from "../../../shared/types.ts";
 import { expandRecipe } from "../../../shared/recipeText.ts";
-import { cardRef, looksLikeOurs } from "./cardRef.ts";
+import { cardRef, looksLikeOurs, type RefSetup } from "./cardRef.ts";
 
 /**
  * The card to offer moving, or nothing.
@@ -41,11 +41,14 @@ import { cardRef, looksLikeOurs } from "./cardRef.ts";
  */
 export function mergeCardRef(
   pr: { headRefName?: string; title?: string; body?: string },
-  setup: { connected: boolean; prefix?: string; noCustomIds?: boolean } | null,
+  setup: RefSetup | null,
 ): { label: string; query: string } | null {
   if (!setup?.connected) return null;
   const ref = cardRef(pr);
   if (!ref) return null;
+  /* With Jira connected too, whose card this is was settled by `trackerFor`. A
+     Jira card is not moved from here: its status arrives with transitions. */
+  if (setup.ownerOf) return setup.ownerOf(ref, false).owner === "clickup" ? { label: ref.label, query: ref.query } : null;
   if (ref.from === "url") return { label: ref.label, query: ref.query };
   if (!looksLikeOurs(ref, setup?.prefix, false, setup?.noCustomIds)) return null;
   return { label: ref.label, query: ref.query };
@@ -257,7 +260,7 @@ export function statusColor(statuses: ListStatus[], status: string): string | un
  */
 export function mergeNote(
   merged: boolean,
-  move: { asked: boolean; ok?: boolean; to?: string; error?: string; unauthorised?: boolean; extra?: string },
+  move: { asked: boolean; ok?: boolean; to?: string; error?: string; unauthorised?: boolean; extra?: string; tracker?: "ClickUp" | "Jira" },
 ): string {
   if (!merged) return "Merge failed";
   if (!move.asked) return "Merged";
@@ -268,6 +271,7 @@ export function mergeNote(
    * this token" reads as a hiccup and the next move is a retry that will be
    * refused in exactly the same way. Where to go instead is the actual news.
    */
-  if (move.unauthorised) return "Merged — the card did not move: ClickUp refused this token. Reconnect it in Settings.";
-  return `Merged — but the card did not move: ${move.error || "ClickUp refused"}`;
+  const name = move.tracker ?? "ClickUp";
+  if (move.unauthorised) return `Merged — the card did not move: ${name} refused this token. Reconnect it in Settings.`;
+  return `Merged — but the card did not move: ${move.error || `${name} refused`}`;
 }

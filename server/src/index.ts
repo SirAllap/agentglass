@@ -116,7 +116,9 @@ import {
 } from "./issues.ts";
 import { currentRuns, runById, runActivity, startRun, adoptPane, finishRun } from "./runs.ts";
 import { failed } from "./refused.ts";
+import { trackerProjects, setTrackerChoice } from "./trackerProjects.ts";
 import { connectJira, jiraStatus, setJiraWrites, jiraWriteEnabled, readIssue, findIssue, mine as jiraMine, searchText as jiraSearchText, withStored as withJira } from "./jira.ts";
+import { movesStored as jiraMoves, moveStored as jiraMove } from "./jira.ts";
 import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, addClickupFolder, refreshFoldersIfStale, replaceViewUrl, readView } from "./providers.ts";
 import { clickupPrefs, setClickupPrefs, settleFirstRun } from "./clickupPrefs.ts";
 import { savedViews, savedFolders, currentView, setCurrent, removeView, removeFolder, knownCardPrefix, knownNoCustomIds, boardHolding, setWritesAllowed, patchCachedTask } from "./clickupviews.ts";
@@ -6285,6 +6287,32 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       return json(r, r.ok ? 200 : 400);
     }
     /*
+     * Which tracker each repository's cards live in, and the pull requests that
+     * name a Jira card. One block: the choice is read by the card chip and the
+     * merge form, and `/jira/prs` is the same search `/clickup/prs` runs, asked
+     * with the card's key and no ClickUp id.
+     */
+    if (pathname === "/tracker/projects" && req.method === "GET") {
+      // The repositories to offer a choice for are asked for, because naming
+      // them reads each known project's remote (cached five minutes by prs.ts).
+      const repos = url.searchParams.get("repos") === "1"
+        ? [...new Set((await Promise.all(knownProjects().slice(0, 60).map((p) => prRepoIdFor(p.path).catch(() => null)))).flatMap((r) => r ? [r.nameWithOwner] : []))].sort()
+        : undefined;
+      return json({ ok: true, projects: trackerProjects(), ...(repos ? { repos } : null) });
+    }
+    if (pathname === "/tracker/projects" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = setTrackerChoice(b.repo, b.tracker);
+      return json(r, r.ok ? 200 : 400);
+    }
+    if (pathname === "/jira/prs" && req.method === "GET") {
+      const key = (url.searchParams.get("key") ?? "").trim();
+      // A key is letters, digits and underscores, a hyphen, digits. It is handed to `gh --search`, so nothing else goes through.
+      if (!/^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(key)) return json({ ok: false, prs: [], error: "That is not a Jira card id" });
+      return json(await cardPullRequests(key, undefined, prRouteRoot(url.searchParams.get("root") ?? "")));
+    }
+    /*
      * Jira. `/jira/connect` is the second route that receives a token, and like
      * `/providers/connect` it answers with who you are and never with the
      * credential, the email or the address as typed. It is on the understudy's
@@ -6305,7 +6333,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error });
     }
     if (req.method === "GET" && (pathname === "/jira/mine" || pathname === "/jira/search")) {
-      const r = await withJira((c) => pathname === "/jira/mine" ? jiraMine(c) : jiraSearchText(c, url.searchParams.get("q") ?? ""));
+      const r = await withJira((c) => pathname === "/jira/mine" ? jiraMine(c, { fresh: url.searchParams.get("fresh") === "1" }) : jiraSearchText(c, url.searchParams.get("q") ?? ""));
       return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error, ...(r.throttled ? { throttled: true } : null) });
     }
     if (pathname === "/jira/connect" && req.method === "POST") {
@@ -6320,6 +6348,23 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (typeof b.on !== "boolean") return json({ ok: false, error: "on must be true or false" }, 400);
       setJiraWrites(b.on);
       return json({ ok: true, writes: jiraWriteEnabled() });
+    }
+    /*
+     * Moving a card. The list is a read, answered 200 like the other Jira reads
+     * (an empty list carries the sentence "You cannot move ..."). The move is a
+     * write: ClickUp's status codes, 409 for a card that changed underneath.
+     */
+    if (req.method === "GET" && pathname === "/jira/transitions") {
+      const r = await jiraMoves(url.searchParams.get("key") ?? "");
+      return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error, ...(r.throttled ? { throttled: true } : null) });
+    }
+    if (pathname === "/jira/transition" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = await jiraMove(String(b.key ?? ""), String(b.transitionId ?? ""), typeof b.updated === "number" ? b.updated : 0);
+      // The watch must not announce the person's own move as news.
+      if (r.ok && r.task && r.was) jiraRememberOwnMove({ ...r.task, status: r.was }, r.task.status);
+      return json(r, r.ok ? 200 : r.conflict ? 409 : 400);
     }
     /* Boards, saved by pasting their address. Reads and one write path, and
        the write path refuses unless AGENTGLASS_CLICKUP_WRITE=1 — see
@@ -10031,6 +10076,10 @@ subscribeNotifications((n) => {
    what they had, and who did not starts from the defaults. See settleFirstRun. */
 settleFirstRun(hasCredential("clickup"));
 startCardWatch((n) => broadcast({ type: "card", data: n }));
+/* The same bell for a connected Jira: one search every six minutes, nothing
+   at all while Jira is not connected. See jirawatch.ts. */
+import { startJiraWatch, rememberOwnMove as jiraRememberOwnMove } from "./jirawatch.ts";
+startJiraWatch((n) => broadcast({ type: "card", data: n }));
 /* Re-asks the open pull request lists a real client has looked at, on a timer,
    so a comment posted while nobody is on the PRs tab still reaches `noteTalk`
    the next time somebody could actually be told about it. See prWatch.ts. Off

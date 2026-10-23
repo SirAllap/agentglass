@@ -93,7 +93,7 @@ describe("a value that is not valid is refused and stores nothing", () => {
     ["notifications.talk", ["all", true, ""]],
     ["notifications.quiet", ["off", 0]],
     ["browser.searchEngine", ["yahoo", "DuckDuckGo", 1, "https://evil.example/?q="]],
-    ["tasks.landing", ["jira", "", 1]],
+    ["tasks.landing", ["gone", "", 1]],
     ["keys.binding.view.git", ["", 7, null, "x".repeat(17)]],
   ];
   for (const [id, values] of bad) {
@@ -124,6 +124,7 @@ describe("a refusal by the pref module itself reaches the caller in its words", 
   it("the last visible task source stays visible, and the caller hears it", () => {
     expect(def("tasks.source.github").set(false).ok).toBe(true);
     expect(def("tasks.source.local").set(false).ok).toBe(true);
+    expect(def("tasks.source.jira").set(false).ok).toBe(true);
     const before = snapshot();
     const r = def("tasks.source.clickup").set(false);
     expect(r).toEqual({ ok: false, error: "at least one task source stays shown" });

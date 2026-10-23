@@ -44,6 +44,7 @@ import { chipTarget } from "../lib/chipTarget.ts";
 import { openPr } from "../lib/openPrs.ts";
 import { openCard } from "../lib/openCard.ts";
 import { cardRef, chipAction } from "../lib/cardRef.ts";
+import { useOwnerSetup } from "../lib/trackerView.ts";
 import { PaneBar, BAR_MIN_H, BAR_MIN_W, SEAM_ZONE } from "./terminal/PaneBar.tsx";
 import { paneFoot } from "../lib/paneBox.ts";
 import { paneActionsMode, subscribePaneActions } from "../lib/paneActionsPref.ts";
@@ -1674,7 +1675,7 @@ function PaneBarFor({ foot, near, blocked, flash, at, pr, onDown, onGit, onDiff,
   selection?: string;
   onAsk?: () => void;
 }) {
-  const setup = useClickupSetup();
+  const setup = useOwnerSetup(useClickupSetup());
   const branch = at.worktreeOf ? at.branch : at.name;
   const ref = useMemo(() => cardRef({ headRefName: at.branch }), [at.branch]);
   const go = chipAction(ref, setup);
@@ -1687,6 +1688,8 @@ function PaneBarFor({ foot, near, blocked, flash, at, pr, onDown, onGit, onDiff,
        pane bar on a machine that never set one up sent a lookup per hover,
        each answered with the same "not connected". */
     if (!ref || !setup?.connected) { setPrio(null); return; }
+    /* With Jira connected too, a card that is Jira's is not looked up in ClickUp. */
+    if (setup.ownerOf && setup.ownerOf(ref, true).owner !== "clickup") { setPrio(null); return; }
     const key = ref.query;
     const seen = cardPrioCache.get(key);
     if (seen) { setPrio(seen.priority); return; }
@@ -1699,7 +1702,7 @@ function PaneBarFor({ foot, near, blocked, flash, at, pr, onDown, onGit, onDiff,
       })
       .catch(() => { /* the card does without a colour */ });
     return () => { live = false; };
-  }, [ref, setup?.connected]);
+  }, [ref, setup?.connected, setup?.ownerOf]);
   return (
     <PaneBar
       foot={foot}
@@ -2142,7 +2145,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   /* The card behind the focused pane's branch, resolved the way the chip beside
      it resolves one: the same `cardRef` + `chipAction` pair, so the key and the
      chip cannot disagree about where a card lives. */
-  const cuSetup = useClickupSetup();
+  const cuSetup = useOwnerSetup(useClickupSetup());
   useEffect(() => {
     const ref = chipWt?.branch ? cardRef({ headRefName: chipWt.branch }) : null;
     const go = ref ? chipAction(ref, cuSetup) : null;

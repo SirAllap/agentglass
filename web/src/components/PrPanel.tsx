@@ -142,6 +142,7 @@ import { conflictBriefing, conflictHandoff } from "../lib/conflictBrief.ts";
 import { openCard } from "../lib/openCard.ts";
 import { openIssue } from "../lib/openIssue.ts";
 import { useClickupSetup } from "../lib/clickupSetup.ts";
+import { useOwnerSetup } from "../lib/trackerView.ts";
 import { writeBlock } from "../lib/cardWrites.ts";
 import type { ListStatus as CuStatus, ListMember as CuMember, ProviderTask, HandoffUnassign } from "../../../shared/providers.ts";
 import { CloseButton, CloseIcon } from "./CloseButton.tsx";
@@ -431,7 +432,7 @@ function PrCardChip({ pr, card }: {
    *  colour and the status beside the id. Absent is "we have not seen it". */
   card?: PrSummary["card"];
 }) {
-  const setup = useClickupSetup();
+  const setup = useOwnerSetup(useClickupSetup(), useContext(RepoCtx));
   const ref = useMemo(() => cardRef(pr), [pr.headRefName, pr.title, pr.body]);
   const go = chipAction(ref, setup);
   if (!ref || !go) return null;
@@ -1943,7 +1944,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   // reference that is actually ClickUp's. A Jira shop's `ABC-12-thing` branch
   // looks identical, and offering to move a card that does not exist is worse
   // than offering nothing.
-  const clickup = useClickupSetup();
+  const [repo, setRepo] = useState<PrRepoId | null>(null);
+  /* With Jira connected too, this carries who owns a card id; without it, it is the plain ClickUp setup. */
+  const clickup = useOwnerSetup(useClickupSetup(), repo?.nameWithOwner);
 
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [root, setRoot] = useState("");
@@ -1953,7 +1956,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     () => repos.find((r) => r.root === root)?.worktreeOf ?? root,
     [repos, root],
   );
-  const [repo, setRepo] = useState<PrRepoId | null>(null);
   /** The panel opens on what is waiting on you, not on what you wrote — that
    *  is the question a review dashboard exists to answer. If nothing is waiting
    *  the first load falls through to your own pull requests once, so opening it
@@ -4204,15 +4206,16 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       // than quietly winning.
       /* Without "Also assign" this is the status write it always was; with it, the same single
          write carries the person too (one card, one request), never a second call racing `updated`. */
-      const r = await (move.write ? api.clickupCard(move.id, move.write, move.updated) : api.clickupStatus(move.id, move.to, move.updated))
+      const r = await (move.tracker === "jira" ? api.jiraTransition(move.id, move.to, move.updated)
+        : move.write ? api.clickupCard(move.id, move.write, move.updated) : api.clickupStatus(move.id, move.to, move.updated))
         .catch((e) => ({ ok: false, error: String(e) }));
       // The chip and the board's row read the status from the store: hand it the
       // write's own answer rather than wait out its minute.
-      const query = mergeCardRef(detail, clickup)?.query;
+      const query = move.tracker === "jira" ? move.query : mergeCardRef(detail, clickup)?.query;
       if (r.ok && query) putCard(query, "task" in r ? r.task : undefined);
       const ex = r.ok ? await sendMergeExtras() : null;
       flash(r.ok && (!ex || ex.ok), mergeNote(true, {
-        asked: true, ok: r.ok, to: move.to, extra: [move.note, ex?.ok ? ex.done.join(" · ") : ex ? `but ${ex.error}` : ""].filter(Boolean).join(" · ") || undefined,
+        asked: true, ok: r.ok, to: move.toLabel ?? move.to, ...(move.tracker === "jira" ? { tracker: "Jira" as const } : null), extra: [move.note, ex?.ok ? ex.done.join(" · ") : ex ? `but ${ex.error}` : ""].filter(Boolean).join(" · ") || undefined,
         unauthorised: "unauthorised" in r ? r.unauthorised : undefined,
         error: r.ok ? undefined : ("conflict" in r && r.conflict ? "somebody moved it while this was open" : r.error),
       }));
@@ -7531,7 +7534,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
    */
   onPlan: (plan: { lines: string[]; run: () => Promise<boolean> }) => void;
 }) {
-  const setup = useClickupSetup();
+  const setup = useOwnerSetup(useClickupSetup(), useContext(RepoCtx));
   /* Writes off: the controls stay where they are, disabled, and the plan below
      is built from nothing picked, so it has no lines, the button downstairs is
      plain Done and nothing is sent. */
@@ -8414,7 +8417,7 @@ function CardReadyForQaButton({ task, query, onSaid, ask, author, pr }: {
   );
 }
 function CardFacts({ d }: { d: PrDetail }) {
-  const setup = useClickupSetup();
+  const setup = useOwnerSetup(useClickupSetup(), useContext(RepoCtx));
   const { ask, dialog } = useDialogs();
   /* The note on the card is the only thing this section writes. Telling
      somebody in chat is `AskInChat`, which does not need a card at all. */
@@ -8605,7 +8608,7 @@ function pingPrompt(recipes: ReviewRecipe[], ctx: ReviewRecipeContext): string {
  * window with it.
  */
 function AskInChat({ d, root }: { d: PrDetail; root: string }) {
-  const setup = useClickupSetup();
+  const setup = useOwnerSetup(useClickupSetup(), useContext(RepoCtx));
   const recipes = useReviewRecipes();
   const repoName = useContext(RepoCtx);
   /* Whether the agent here can post to Slack — see server/src/slackreach.ts.

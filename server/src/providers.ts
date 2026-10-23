@@ -20,6 +20,7 @@ import { whoAmI, workspaces, clickupTasks, clickupCached, forgetAll, credentialG
 import { cardWatchTrouble, forgetWatch } from "./clickupwatch.ts";
 import { forget as forgetClickupIndex } from "./clickupindex.ts";
 import { disconnectJira, jiraRefused } from "./jira.ts";
+import { forgetJiraWatch } from "./jirawatch.ts";
 
 const found = (bin: string): boolean => !!Bun.which(bin);
 
@@ -197,7 +198,7 @@ export async function connectProvider(id: ProviderId, token: string): Promise<Co
 
 export async function disconnectProvider(id: ProviderId, o: { forgetBoards?: boolean } = {}): Promise<ConnectResult> {
   // Jira keeps its own memory (holds, memo, refused latch) beside the credential.
-  if (id === "jira") disconnectJira(); else clearCredential(id);
+  if (id === "jira") { disconnectJira(); forgetJiraWatch(); } else clearCredential(id);
   // The cached list goes too. Leaving it would show somebody else's tasks after
   // a disconnect, which is the one thing a disconnect must not do.
   if (id === "clickup") {

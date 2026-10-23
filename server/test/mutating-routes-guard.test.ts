@@ -87,6 +87,8 @@ const MUTATING = [
   // Jira: connect stores a credential, writes flips the switch every later write asks.
   `pathname === "/jira/connect"`,
   `pathname === "/jira/writes"`,
+  `pathname === "/tracker/projects" && req.method === "POST"`,
+  `pathname === "/jira/transition"`,
   `pathname.startsWith("/tasks/write/")`,
   `pathname.startsWith("/tasks/remind")`,
   // The read marks every device syncs through. Not dangerous, but durable and

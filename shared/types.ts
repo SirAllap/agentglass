@@ -2076,7 +2076,9 @@ export interface CardNote {
    * workspace with two people called Ada in it makes that difference the whole feature.
    */
   kind: "assigned" | "status" | "comment" | "mention";
-  /** ClickUp's own id, which is what opens the card. */
+  /** The tracker the card is in. Absent means ClickUp, which is all there was. */
+  tracker?: "jira";
+  /** ClickUp's own id, which is what opens the card; a Jira card's key. */
   id: string;
   /** What a person calls it — `ORBIT-1042` — falling back to the internal id. */
   label: string;

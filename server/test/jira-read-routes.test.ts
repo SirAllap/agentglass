@@ -118,6 +118,17 @@ describe("the read routes", () => {
     expect(proxy.jql.at(-1)).toBe('project in ("ORBIT", "ACME") AND text ~ "sync board" ORDER BY updated DESC');
   });
 
+  step("the list is kept for a minute, and Refresh (fresh=1) asks again", async () => {
+    const searches = () => fake.requests.filter((q) => q.path === "/search/jql").length;
+    const before = searches();
+    const again = await get("/jira/mine");
+    expect(again.body.ok).toBe(true);
+    expect(searches()).toBe(before);
+    const forced = await get("/jira/mine?fresh=1");
+    expect(forced.body.ok).toBe(true);
+    expect(searches()).toBeGreaterThan(before);
+  });
+
   step("a bad id, a missing card and an empty search are sentences with a 200", async () => {
     expect((await get("/jira/task?id=ORBIT-1042/transitions")).body).toEqual({ ok: false, error: "That is not a Jira card id" });
     expect((await get("/jira/task?id=ORBIT-9999")).body).toEqual({ ok: false, error: "ORBIT-9999 was not found or you cannot see it" });
@@ -127,7 +138,7 @@ describe("the read routes", () => {
 
   step("a rate limit is reported as throttled", async () => {
     fake.fail({ path: "/search/jql", status: 429, retryAfter: 30, reason: "jira-burst-based", times: 1 });
-    const r = await get("/jira/mine");
+    const r = await get("/jira/mine?fresh=1");
     expect(r.body).toMatchObject({ ok: false, throttled: true });
     expect(r.body.error).toContain("try again in 30s");
   });

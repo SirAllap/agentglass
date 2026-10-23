@@ -24,7 +24,9 @@ import { api } from "../lib/api.ts";
 import { browserPlaces, CAN_IMPORT_COOKIES, cookieSources, importCookies, forgetCookies, type CookieSource, type CookieImportReply } from "../lib/desktop.ts";
 import { loadProfiles } from "../lib/browserProfiles.ts";
 import { addVisible, allSites, bestSource, dropVisible, lockedWhy, reachable, siteView } from "../lib/cookiePick.ts";
-import { PROVIDERS, type ProviderSpec, type ProviderStatus, type ProviderState } from "../../../shared/providers.ts";
+import { PROVIDERS, type ProviderSpec, type ProviderStatus, type ProviderState, type TrackerChoice } from "../../../shared/providers.ts";
+import { useTrackerSetup } from "../lib/trackerSetup.ts";
+import { rememberTrackerChoices } from "../lib/trackerView.ts";
 import { __forgetClickupPrefs } from "../lib/clickupPrefs.ts";
 import { __forgetClickupSpaces } from "../lib/clickupSpaces.ts";
 import { ClickUpPane, CardSkillsRow } from "./ClickUpPane.tsx";
@@ -3674,6 +3676,48 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
   );
 }
 
+/**
+ * Which tracker each repository's cards live in. Only drawn when both ClickUp
+ * and Jira are connected: with one, there is nothing to choose and no setting
+ * to show. "Auto" reads the id's prefix (see trackerFor); the buttons are for
+ * the repository where that cannot tell.
+ */
+function CardTrackerSection() {
+  const setup = useTrackerSetup();
+  const both = !!setup?.clickup && !!setup?.jira;
+  const [rows, setRows] = useState<{ repos: string[]; chosen: Record<string, Exclude<TrackerChoice, "auto">> } | null>(null);
+  const [note, setNote] = useState("");
+  useEffect(() => {
+    if (!both) return;
+    let live = true;
+    void api.trackerProjects(true).then((r) => {
+      if (!live || !r.ok) return;
+      const chosen = r.projects ?? {};
+      setRows({ repos: [...new Set([...(r.repos ?? []), ...Object.keys(chosen)])].sort(), chosen });
+    }).catch(() => { /* the section stays empty rather than guessing */ });
+    return () => { live = false; };
+  }, [both]);
+  if (!both) return null;
+  const pick = async (repo: string, v: TrackerChoice) => {
+    const r = await api.setTrackerProject(repo, v);
+    if (!r.ok) { setNote(r.error ?? "Could not save that"); return; }
+    setNote("");
+    rememberTrackerChoices(r.projects ?? {});
+    setRows((cur) => cur && { ...cur, chosen: r.projects ?? {} });
+  };
+  return (
+    <Section title="Card tracker" desc="Which tracker a repository's cards live in. Auto reads the id's prefix.">
+      {!rows?.repos.length && <p className="px-3.5 py-2 text-[11px] t-dim2">No repositories to choose for yet.</p>}
+      {rows?.repos.map((repo) => (
+        <Choice<TrackerChoice> key={repo} label={repo} hint="Where a card id in this repository's branches and pull requests is looked up."
+          value={rows.chosen[repo.toLowerCase()] ?? "auto"} onPick={(v) => void pick(repo, v)}
+          options={[{ v: "auto", label: "Auto" }, { v: "clickup", label: "ClickUp" }, { v: "jira", label: "Jira" }]} />
+      ))}
+      {note && <p className="px-3.5 pb-2 text-[11px]" style={{ color: "var(--error-ink)" }}>{note}</p>}
+    </Section>
+  );
+}
+
 export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, theme, onTheme, jump }: {
   open: boolean; onClose: () => void; sound: boolean; onSound: () => void;
   /** Somebody asked for a pane and maybe a row on it — see openSettings(pane,
@@ -4846,6 +4890,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       </button>
                     </p>
                   </Section>
+                  <CardTrackerSection />
                   </>
                   )}
                   {ql && show("privacy") && <PageMatchHeading id="privacy" onOpen={() => { setPane("privacy" as Pane); setQ(""); }} />}

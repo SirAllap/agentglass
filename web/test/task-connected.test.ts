@@ -12,7 +12,7 @@ import type { TaskSourceId } from "../src/lib/taskSources.ts";
 const ALL: TaskSourceId[] = ["github", "local", "clickup"];
 
 const set = (...on: TaskSourceId[]): TaskConnected =>
-  ({ github: on.includes("github"), local: on.includes("local"), clickup: on.includes("clickup") });
+  ({ github: on.includes("github"), local: on.includes("local"), clickup: on.includes("clickup"), jira: on.includes("jira") });
 
 describe("which sources reach the bar", () => {
   test("only the ones that are set up", () => {

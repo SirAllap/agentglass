@@ -35,6 +35,10 @@ export type AuthKind = "cli" | "token" | "none";
 
 export type ProviderId = "github" | "gitlab" | "taskwarrior" | "clickup" | "jira";
 
+/** Which tracker a repository's cards live in. "auto" is the absence of a choice. */
+export const TRACKER_CHOICES = ["auto", "clickup", "jira"] as const;
+export type TrackerChoice = (typeof TRACKER_CHOICES)[number];
+
 export interface ProviderSpec {
   id: ProviderId;
   title: string;
@@ -114,6 +118,26 @@ export interface JiraStatus {
   prefixes: string[];
   writes: boolean;
 }
+
+/**
+ * One move a Jira workflow offers a card from where it stands now. `id` is the
+ * transition's, `label` the status it leads to (the site's own words, never
+ * ours). `needs` names the screen fields the move cannot be made without: a
+ * move with `needs` is shown and not offered, because there is no form for them.
+ */
+export interface JiraMove {
+  id: string;
+  /** The transition's own name, e.g. a verb a team chose. */
+  name: string;
+  label: string;
+  toStatus: string;
+  toKind: "open" | "done" | "other";
+  color?: string;
+  needs?: string[];
+}
+
+/** The answer to `GET /jira/transitions`. An empty list always carries `cannot`. */
+export interface JiraMoves { options: JiraMove[]; cannot?: string }
 
 /** What a provider is doing right now, as one of four answers a person can act
  *  on. Deliberately not a boolean: "installed but not logged in" and "not

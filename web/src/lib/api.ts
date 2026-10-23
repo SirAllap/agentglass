@@ -5,7 +5,7 @@ import type { PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/typ
 import type { AskedAlert } from "../../../shared/notifyPayload.ts";
 import type { CheckOnBasePlan, CheckOnBaseStatus } from "../../../shared/checkOnBase.ts";
 import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest } from "../../../shared/types.ts";
-import type { ProvidersResponse, JiraConnectResult, JiraStatus, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr } from "../../../shared/providers.ts";
+import type { ProvidersResponse, JiraConnectResult, JiraMoves, JiraStatus, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, TrackerChoice } from "../../../shared/providers.ts";
 import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from "../../../shared/notifyPrefs.ts";
 import type { CheckMetric } from "../../../shared/checkBaseline.ts";
 import type { UiReply } from "../../../shared/uiActions.ts";
@@ -1387,13 +1387,27 @@ const realApi = {
     post<JiraConnectResult>("/jira/connect", { email, site, token }),
   jiraStatus: () => get<JiraStatus>("/jira/status"),
   jiraWrites: (on: boolean) => post<{ ok: boolean; error?: string; writes?: boolean }>("/jira/writes", { on }),
+  /** The pull requests that name a Jira card, by its key. Same answer as `clickupPrs`. */
+  jiraPrs: (key: string, root = "") =>
+    get<{ ok: boolean; prs: CardPr[]; error?: string }>(`/jira/prs?${new URLSearchParams({ key, root })}`),
+  /** Which tracker each repository's cards live in, keyed by lower-case `owner/name`. Absent is auto. */
+  trackerProjects: (withRepos = false) =>
+    get<{ ok: boolean; projects?: Record<string, Exclude<TrackerChoice, "auto">>; repos?: string[] }>(`/tracker/projects${withRepos ? "?repos=1" : ""}`),
+  setTrackerProject: (repo: string, tracker: TrackerChoice) =>
+    post<{ ok: boolean; error?: string; projects?: Record<string, Exclude<TrackerChoice, "auto">> }>("/tracker/projects", { repo, tracker }),
   /** One Jira card by its key or numeric id. */
   jiraTask: (id: string) => get<{ ok: boolean; error?: string; task?: ProviderTask }>(`/jira/task?id=${encodeURIComponent(id)}`),
   /** A card from what was typed: `ORBIT-1042`, or a bare number tried against the site's projects. */
   jiraFind: (q: string) => get<{ ok: boolean; error?: string; task?: ProviderTask; asked?: string }>(`/jira/find?q=${encodeURIComponent(q)}`),
   /** What is assigned to you and not done. `truncated` when the page cap cut it short. */
-  jiraMine: () => get<{ ok: boolean; error?: string; tasks?: ProviderTask[]; truncated?: boolean; throttled?: boolean }>("/jira/mine"),
+  jiraMine: (fresh = false) => get<{ ok: boolean; error?: string; tasks?: ProviderTask[]; truncated?: boolean; throttled?: boolean }>(`/jira/mine${fresh ? "?fresh=1" : ""}`),
   jiraSearch: (q: string) => get<{ ok: boolean; error?: string; tasks?: ProviderTask[]; truncated?: boolean; throttled?: boolean }>(`/jira/search?q=${encodeURIComponent(q)}`),
+  /** The moves a Jira card has from where it is. An empty list carries `cannot`, the sentence for it. */
+  jiraTransitions: (key: string) =>
+    get<{ ok: boolean; error?: string; throttled?: boolean } & Partial<JiraMoves>>(`/jira/transitions?key=${encodeURIComponent(key)}`),
+  /** One move, with the `updated` the person saw; the server refuses it as a conflict if the card has moved since. */
+  jiraTransition: (key: string, transitionId: string, updated: number) =>
+    post<ClickUpWrite>("/jira/transition", { key, transitionId, updated }),
   providerTasks: (force = false) =>
     get<ProviderTasksResponse>(`/tasks/provider${force ? "?force=1" : ""}`),
 
@@ -2727,10 +2741,15 @@ const demoApi: typeof realApi = {
   jiraConnect: (_e: string, _s: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
   jiraStatus: () => D({ connected: false, site: null, kind: null, auth: null, api: null, deployment: null, account: null, prefixes: [], writes: false }),
   jiraWrites: (_o: boolean) => D({ ok: false, error: "not available in the demo" }),
+  jiraPrs: (_k: string, _r?: string) => D({ ok: true, prs: [] }),
+  trackerProjects: (_r?: boolean) => D({ ok: true, projects: {}, repos: [] }),
+  setTrackerProject: (_r: string, _t: TrackerChoice) => D({ ok: false, error: "not available in the demo" }),
   jiraTask: (_i: string) => D({ ok: false, error: "not available in the demo" }),
   jiraFind: (_q: string) => D({ ok: false, error: "not available in the demo" }),
-  jiraMine: () => D({ ok: false, error: "not available in the demo" }),
+  jiraMine: (_fresh?: boolean) => D({ ok: false, error: "not available in the demo" }),
   jiraSearch: (_q: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraTransitions: (_k: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraTransition: (_k: string, _t: string, _u: number) => D({ ok: false, error: "not available in the demo" }),
   providerTasks: (_f?: boolean) => D({ tasks: [], more: false, at: 0 }),
   recipes: (_r?: string) => D({ recipes: [] }),
   recipeSave: (_r: Recipe) => D({ ok: false, error: "not available in the demo" }),

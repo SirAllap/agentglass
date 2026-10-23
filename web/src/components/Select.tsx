@@ -37,6 +37,8 @@ export type SelectOption = {
   dim?: boolean;
   /** A mark drawn before the label, here and on the closed trigger (a priority's flag). */
   icon?: React.ReactNode;
+  /** Shown and not offered: a pick of it does nothing. `hint` says why (a Jira move that needs a field). */
+  disabled?: boolean;
   /** The row drawn as this instead of a label (a coloured chip): the label still names it for the keyboard and a screen reader. */
   node?: React.ReactNode;
 };
@@ -150,7 +152,12 @@ export function Select({
   // Focus goes back where it came from, or it lands on <body> and a keyboard
   // user has to tab in from the top of the page again.
   const close = () => { setOpen(false); btnRef.current?.focus(); };
-  const pick = (v: string) => { onChange(v); close(); };
+  const pick = (v: string) => {
+    // A disabled row is read, not chosen; the list stays open so the reason can be read.
+    if (options.find((o) => o.value === v)?.disabled) return;
+    onChange(v);
+    close();
+  };
   /* No focus handed back: the trigger is in a window that is being hidden, and
      a hidden window refuses focus. */
   useCloseWithOwner(() => setOpen(false), { open, from: btnRef });
@@ -217,10 +224,11 @@ export function Select({
                   <button key={o.value} onClick={() => pick(o.value)}
                     role="option"
                     aria-selected={o.value === value}
+                    aria-disabled={o.disabled || undefined}
                     tabIndex={-1}
                     onMouseEnter={() => setCursor(i)}
-                    className="px-2.5 py-1.5 rounded-lg text-[11.5px] text-left whitespace-nowrap hover:bg-white/5 flex items-center gap-3"
-                    style={i === cursor
+                    className={`px-2.5 py-1.5 rounded-lg text-[11.5px] text-left whitespace-nowrap flex items-center gap-3 ${o.disabled ? "opacity-50 cursor-default" : "hover:bg-white/5"}`}
+                    style={o.disabled ? { color: "var(--text4)" } : i === cursor
                       ? { background: "color-mix(in srgb, var(--primary) 26%, transparent)", color: "var(--primary-hover)" }
                       : o.value === value
                       ? { background: "color-mix(in srgb, var(--primary) 20%, transparent)", color: "var(--primary-hover)" }

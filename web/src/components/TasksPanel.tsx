@@ -66,6 +66,7 @@ import type { IssueJump } from "../lib/openIssue.ts";
 import { TASK_SOURCES, shownTaskSources, subscribeTaskSources, type TaskSourceId } from "../lib/taskSources.ts";
 import { CHIP, CTRL_H, EDGE, IconChip, INPUT, INPUT_STYLE, RefreshButton, LINE, TL_AVATAR, TL_CSS } from "./workspace/Chrome.tsx";
 import { SCROLLBAR_CSS } from "./diff/DiffLines.tsx";
+import { JiraBody } from "./JiraTasks.tsx";
 import { useTaskConnected, visibleTaskSources } from "../lib/taskConnected.ts";
 import { landingSource, rememberTaskSource } from "../lib/taskLanding.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
@@ -234,8 +235,9 @@ export function TasksView({ active, onOpenChatWith, onOpenBrowser, cardJump, iss
      tab if you have since wandered to another source. */
   useEffect(() => {
     if (!cardJump) return;
-    setForced("clickup");
-    setSource("clickup");
+    const which = cardJump.tracker === "jira" ? "jira" : "clickup";
+    setForced(which);
+    setSource(which);
   }, [cardJump?.n]);
 
   /* The same errand for a GitHub issue. "All" would do — it renders the issue
@@ -285,7 +287,8 @@ export function TasksView({ active, onOpenChatWith, onOpenBrowser, cardJump, iss
         )}
       </ViewHeader>
       {source === "local" ? <LocalBody active={active} repos={repos} here={root} onOpenChatWith={onOpenChatWith} />
-      : source === "clickup" ? <ClickUpBody active={active} repos={repos} here={root} onOpenChatWith={onOpenChatWith} onOpenBrowser={onOpenBrowser} jump={cardJump} />
+      : source === "clickup" ? <ClickUpBody active={active} repos={repos} here={root} onOpenChatWith={onOpenChatWith} onOpenBrowser={onOpenBrowser} jump={cardJump?.tracker === "jira" ? null : cardJump} />
+      : source === "jira" ? <JiraBody active={active} jump={cardJump} />
       : (
         <div className="flex flex-col flex-1 min-h-0">
           {source === "all" && <NowBand onChanged={() => {}} />}

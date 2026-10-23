@@ -34,7 +34,7 @@ describe("what the Tasks view offers", () => {
   test("hiding one takes it out and leaves the rest", () => {
     setTaskSourceShown("clickup", false);
     expect(taskSourceShown("clickup")).toBe(false);
-    expect(shownTaskSources()).toEqual(["github", "local"]);
+    expect(shownTaskSources()).toEqual(["github", "local", "jira"]);
   });
 
   test("the last one cannot be hidden", () => {
@@ -42,6 +42,7 @@ describe("what the Tasks view offers", () => {
     // except finding this page again.
     setTaskSourceShown("clickup", false);
     setTaskSourceShown("local", false);
+    setTaskSourceShown("jira", false);
     expect(setTaskSourceShown("github", false)).toBe(true);
     expect(shownTaskSources()).toEqual(["github"]);
   });
@@ -72,19 +73,19 @@ describe("the order they sit in", () => {
 
   test("a move is one step, and the ends do not wrap", () => {
     expect(moveTaskSource("clickup", -1)).toBe(true);
-    expect(orderedTaskSources()).toEqual(["github", "clickup", "local"]);
+    expect(orderedTaskSources()).toEqual(["github", "clickup", "local", "jira"]);
     // Already last after two moves up would be first — check the real end.
     expect(moveTaskSource("github", -1)).toBe(false);
-    expect(moveTaskSource("local", 1)).toBe(false);
-    expect(orderedTaskSources()).toEqual(["github", "clickup", "local"]);
+    expect(moveTaskSource("jira", 1)).toBe(false);
+    expect(orderedTaskSources()).toEqual(["github", "clickup", "local", "jira"]);
   });
 
   test("the bar follows the order, hidden ones dropped", () => {
     moveTaskSource("clickup", -1);
     moveTaskSource("clickup", -1);
     setTaskSourceShown("github", false);
-    expect(orderedTaskSources()).toEqual(["clickup", "github", "local"]);
-    expect(shownTaskSources()).toEqual(["clickup", "local"]);
+    expect(orderedTaskSources()).toEqual(["clickup", "github", "local", "jira"]);
+    expect(shownTaskSources()).toEqual(["clickup", "local", "jira"]);
   });
 
   test("moving steps over a hidden source rather than past it invisibly", () => {
@@ -93,8 +94,8 @@ describe("the order they sit in", () => {
     // later would reveal an order nobody asked for.
     setTaskSourceShown("local", false);
     expect(moveTaskSource("clickup", -1)).toBe(true);
-    expect(orderedTaskSources()).toEqual(["github", "clickup", "local"]);
-    expect(shownTaskSources()).toEqual(["github", "clickup"]);
+    expect(orderedTaskSources()).toEqual(["github", "clickup", "local", "jira"]);
+    expect(shownTaskSources()).toEqual(["github", "clickup", "jira"]);
   });
 
   test("a stored order from another version is reconciled, not trusted", () => {
@@ -103,7 +104,7 @@ describe("the order they sit in", () => {
     // duplicate is collapsed — React would render the same key twice.
     store.set("agentglass.tasks.order", JSON.stringify(["clickup", "gone", "clickup"]));
     __forgetTaskSources();
-    expect(orderedTaskSources()).toEqual(["clickup", "github", "local"]);
+    expect(orderedTaskSources()).toEqual(["clickup", "github", "local", "jira"]);
   });
 
   test("rubbish on disk is ignored rather than fatal", () => {
