@@ -15,9 +15,9 @@
  * Ceiling: the pointer arrives AFTER the act (the landing is reported when the
  * act is done), and page zoom other than 100 % puts it off by the zoom factor.
  */
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { AgentStateKey, Steady, TabAgent } from "../../lib/browserAgentActivity.ts";
-import { PRESENCE_LINGER_MS, STATE_HOLD_MS, STEADY_INIT, agentState, isActVerb, stateOf, steadyStep, lapKeyframes, pointerAt, presenceLabel, travelMs } from "../../lib/browserAgentActivity.ts";
+import { PRESENCE_LINGER_MS, STATE_HOLD_MS, STEADY_INIT, agentState, isActVerb, stateOf, steadyStep, lapKeyframes, lookAt, pointerAt, presenceLabel, travelMs } from "../../lib/browserAgentActivity.ts";
 import type { ActLanding } from "../../lib/browserDrive.ts";
 import { LivingMark } from "../Logo.tsx";
 
@@ -153,6 +153,24 @@ export function AgentPresence({ agent, landing, url = "", onToggle, quiet = fals
     setGhost((g) => ({ x, y, travel, label: presenceLabel(landing.verb, landing.name, landing.key), seq: (g?.seq ?? 0) + 1 }));
   }, [landing]);
 
+  /* The alien on Take over looks at where the agent's pointer lands: pupils <=1.5px,
+     head <=6deg, from the same ghost state the arrow is drawn from. It looks at the
+     landing, not along the glide (the glide is <=240ms and the eyes ease 200ms).
+     No pointer, a stale one or reduced motion: it looks forward. */
+  const dock = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const d = dock.current, r = root.current, g = d?.querySelector(".agx-al-head");
+    if (!d || !r || !g) return;
+    let lx = 0, ly = 0, tilt = 0;
+    if (ghost && !stale && !calmNow()) {
+      const a = g.getBoundingClientRect(), p = r.getBoundingClientRect();
+      ({ lx, ly, tilt } = lookAt(p.left + ghost.x + 3 - (a.left + a.width / 2), p.top + ghost.y + 2 - (a.top + a.height / 2)));
+    }
+    d.style.setProperty("--agx-lx", lx.toFixed(2));
+    d.style.setProperty("--agx-ly", ly.toFixed(2));
+    d.style.setProperty("--agx-tilt", tilt.toFixed(2));
+  }, [ghost, stale, state.key, agent.paused]);
+
   const shown = live ? " agx-presence-on" : "";
   return (
     <div ref={root} className={"agx-presence" + shown} aria-hidden={!agent.paused && !live}>
@@ -172,19 +190,78 @@ export function AgentPresence({ agent, landing, url = "", onToggle, quiet = fals
         </div>
       )}
       {(live || agent.paused) && !quiet && (
-        <div className={"agx-presence-dock is-" + state.key} role="status" aria-live="polite">
-          <LivingMark size={24} className="agx-presence-mark" style={{ color: "var(--agx-dock-mark)" }} />
+        <div ref={dock} className={"agx-presence-dock is-" + state.key} role="status" aria-live="polite">
+          <span className="agx-presence-well"><LivingMark size={28} className="agx-presence-mark" style={{ color: "var(--agx-dock-mark)" }} /></span>
           <div className="agx-presence-who">
             <span className="agx-presence-task" title={`${agent.agent} (this agent's container name)`}>{agent.agent}</span>
-            {/* Keyed by the state, so a new one comes in instead of the text swapping in place. */}
-            <span key={state.key} className="agx-presence-state"><StateIcon k={state.key} />{state.word}</span>
+            {/* Always there: a dock whose chip comes and goes changes size under the person's hand. */}
+            <span className="agx-presence-state"><Swap k={state.key} min={86}><StateIcon k={state.key} />{state.word}</Swap></span>
           </div>
-          <button type="button" className={agent.paused ? "is-primary" : ""} onClick={onToggle}>
-            {agent.paused ? "Hand back" : "Take over"}
+          <button type="button" className={agent.paused ? "is-back" : ""} onClick={onToggle} aria-label={agent.paused ? "Hand back" : "Take over"}>
+            <Swap k={agent.paused ? "back" : "take"}>{agent.paused ? <><SparkGlyph />Hand back</> : <><AlienGlyph />Take over</>}</Swap>
           </button>
         </div>
       )}
     </div>
+  );
+}
+
+/* A word or icon that changes crosses over instead of swapping in place: the new
+   one rises in, the old one lifts out, and the host's width follows the new one,
+   so what sits beside it slides rather than jumps. Transform, opacity, blur and
+   width only; the out layer is aria-hidden so a reader hears one word. */
+function Swap({ k, min = 0, children }: { k: string; min?: number; children: ReactNode }) {
+  const [st, setSt] = useState<{ k: string; node: ReactNode; old: { k: string; node: ReactNode } | null }>({ k, node: children, old: null });
+  if (st.k !== k) setSt({ k, node: children, old: { k: st.k, node: st.node } });
+  useEffect(() => {
+    if (!st.old) return;
+    const t = setTimeout(() => setSt((x) => ({ ...x, old: null })), 280);
+    return () => clearTimeout(t);
+  }, [st.old]);
+  const cur = useRef<HTMLSpanElement | null>(null);
+  const [w, setW] = useState<number | undefined>(undefined);
+  useLayoutEffect(() => { if (cur.current) setW(Math.max(cur.current.offsetWidth, min)); }, [st.k, min]);
+  return (
+    <span className="agx-sw" style={{ width: w }}>
+      {st.old && <span key={"o" + st.old.k} className="agx-sw-lay is-out" aria-hidden>{st.old.node}</span>}
+      <span key={"n" + st.k} ref={cur} className="agx-sw-lay is-in">{st.node}</span>
+    </span>
+  );
+}
+
+/* Take over: a small alien, our planet's visitor. The eyes widen on hover and
+   blink on press (CSS), and look at the agent's pointer (lookAt). */
+function AlienGlyph() {
+  return (
+    <svg className="agx-gl agx-al" viewBox="0 0 24 24" aria-hidden>
+      <defs><clipPath id="agx-al-clip"><path d="M12 2.4c-5 0-8.4 4.1-8.4 8.7 0 4.8 3.9 9.6 7.2 10.4.4.1.9.1 1.4 0 3.3-.8 7.2-5.6 7.2-10.4 0-4.6-3.4-8.7-7.4-8.7Z" /></clipPath></defs>
+      <g className="agx-al-head">
+        <path fill="currentColor" d="M12 2.4c-5 0-8.4 4.1-8.4 8.7 0 4.8 3.9 9.6 7.2 10.4.4.1.9.1 1.4 0 3.3-.8 7.2-5.6 7.2-10.4 0-4.6-3.4-8.7-7.4-8.7Z" />
+        <g clipPath="url(#agx-al-clip)"><g className="agx-al-eyes">
+          <path className="agx-al-eye" fill="var(--agx-dock-take)" d="M5.9 9.9c2.1-.5 4.7.7 5.4 3.3-2.3.5-4.9-.5-5.4-3.3Z" />
+          <path className="agx-al-eye" fill="var(--agx-dock-take)" d="M18.1 9.9c-2.1-.5-4.7.7-5.4 3.3 2.3.5 4.9-.5 5.4-3.3Z" />
+        </g></g>
+        <path d="M10.6 17.4h2.8" stroke="var(--agx-dock-take)" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+      </g>
+    </svg>
+  );
+}
+
+/* Hand back: the AI's own little visitor, a star with eyes inside the planet's
+   orbit. It pulses and a dot circles it at rest, leans in on hover, blinks on press. */
+function SparkGlyph() {
+  return (
+    <svg className="agx-gl agx-sp" viewBox="0 0 24 24" aria-hidden>
+      <g transform="rotate(-32 12 12)">
+        <ellipse className="agx-sp-ring" cx="12" cy="12" rx="10.5" ry="4" fill="none" stroke="currentColor" strokeWidth="1.3" />
+        <g className="agx-sp-x"><g className="agx-sp-y"><circle cx="12" cy="12" r="1.55" fill="#e9defd" /></g></g>
+      </g>
+      <g className="agx-sp-lift">
+        <path className="agx-sp-star" fill="currentColor" d="M12 3.2C13 8.3 15.7 11 20.8 12 15.7 13 13 15.7 12 20.8 11 15.7 8.3 13 3.2 12 8.3 11 11 8.3 12 3.2Z" />
+        <ellipse className="agx-sp-eye" cx="10.35" cy="12" rx="1.1" ry="1.45" fill="#7c4de8" />
+        <ellipse className="agx-sp-eye" cx="13.65" cy="12" rx="1.1" ry="1.45" fill="#7c4de8" />
+      </g>
+    </svg>
   );
 }
 
@@ -203,6 +280,7 @@ export function StateIcon({ k }: { k: AgentStateKey }) {
     case "thinking": return <svg {...p} stroke="none" fill="currentColor"><circle className="agx-st-dot" cx="3.5" cy="8" r="1.5" /><circle className="agx-st-dot" cx="8" cy="8" r="1.5" /><circle className="agx-st-dot" cx="12.5" cy="8" r="1.5" /></svg>;
     case "done": return <svg {...p}><circle cx="8" cy="8" r="6" /><path className="agx-st-tick" d="m5.4 8.2 1.8 1.8 3.4-3.6" /></svg>;
     case "waiting": return <svg {...p}><circle cx="8" cy="8" r="6" /><path d="M8 4.8V8l2.2 1.4" /></svg>;
+    case "working": return <svg {...p}><circle cx="8" cy="8" r="2.2" fill="currentColor" stroke="none" /><circle cx="8" cy="8" r="5.6" /></svg>;
     case "yours": return <svg {...p}><path d="M5.5 8V3.8a1.2 1.2 0 0 1 2.4 0V7m0-1.2a1.2 1.2 0 0 1 2.4 0V7.5m0-.7a1.2 1.2 0 0 1 2.4 0v2.7a4.5 4.5 0 0 1-4.5 4.5h-.4a4 4 0 0 1-3.2-1.6L2.8 10a1.2 1.2 0 0 1 1.9-1.4L5.5 9.6" /></svg>;
   }
 }

@@ -180,3 +180,26 @@ describe("an island's +", () => {
     expect(panel).toMatch(/onNew=\{\(space\) => \{ if \(space !== undefined\) switchTo\(space\); setOmni\("new"\); \}\}/);
   });
 });
+
+describe("the dock keeps one footprint", () => {
+  // A chip that came and went made the capsule shrink and sag with the state.
+  test("the chip is always drawn, and a changing word crosses over instead of swapping", () => {
+    expect(presence).toContain('<span className="agx-presence-state"><Swap k={state.key} min={86}>');
+    expect(presence).not.toMatch(/\?\s*<span className="agx-presence-state"/);
+    expect(presence).toContain('<Swap k={agent.paused ? "back" : "take"}>');
+    expect(presence).toContain('className="agx-sw-lay is-out" aria-hidden');
+  });
+  test("Take over wears the alien and Hand back the spark, and the alien looks from the ghost's state", () => {
+    expect(presence).toContain("<><SparkGlyph />Hand back</> : <><AlienGlyph />Take over</>");
+    expect(presence).toContain("lookAt(p.left + ghost.x");
+    expect(presence).toContain("if (ghost && !stale && !calmNow())");
+  });
+  test("reduced motion stops the follow, the pulse and the crossfade", async () => {
+    const css = await Bun.file(new URL("../src/index.css", import.meta.url)).text();
+    const rm = css.slice(css.indexOf("@media (prefers-reduced-motion: reduce) {\n  .agx-presence-ghost"));
+    const body = rm.slice(0, rm.indexOf("\n}\n"));
+    expect(body).toContain(".agx-presence-dock button * { animation: none; }");
+    expect(body).toContain(".agx-al-head, .agx-al-eyes { transform: none; transition: none; }");
+    expect(body).toContain(".agx-sw-lay.is-out { opacity: 0; }");
+  });
+});

@@ -2970,7 +2970,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
  * Cost: the rim, haze and dock are painted once when acting starts; per frame
  * only the satellite (transform) and the pointer's glide (transform) move.
  */
-:root { --agx-mark: #8b5cf6; --agx-contact: #10b981; --agx-ease: cubic-bezier(0.23, 1, 0.32, 1); --agx-move: cubic-bezier(0.65, 0, 0.35, 1); }
+:root { --agx-mark: #8b5cf6; --agx-contact: #10b981; --agx-ease: cubic-bezier(0.23, 1, 0.32, 1); --agx-move: cubic-bezier(0.65, 0, 0.35, 1); --agx-out: cubic-bezier(0.16, 1, 0.3, 1); }
 .agx-presence { position: absolute; inset: 0; pointer-events: none; z-index: 15; }
 .agx-presence-glass { position: absolute; inset: 0; pointer-events: auto; cursor: default; outline: none; }
 .agx-presence-rim { position: absolute; inset: 0; opacity: 0; transition: opacity 180ms ease-out; }
@@ -2995,22 +2995,24 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--agx-mark) 22%, transparent), 0 6px 16px -8px rgba(40, 20, 90, .35); }
 /* The dock: the island's own glass, so the agent's two places on the page read
    as one object. Dark in both themes, like the island. */
-.agx-presence-dock { pointer-events: auto; position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; align-items: center; gap: 12px;
-  max-width: calc(100% - 32px); padding: 8px 8px 8px 12px; border-radius: 18px; color: #f2f0f7; --agx-dock-mark: #a78bfa; --agx-dock-yours: #fbbf24;
+.agx-presence-dock { pointer-events: auto; position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; align-items: center; gap: 10px;
+  max-width: calc(100% - 32px); padding: 6px; border-radius: 22px; color: #f2f0f7; --agx-dock-mark: #a78bfa; --agx-dock-yours: #fbbf24; --agx-dock-take: #f59e0b;
+  transition: box-shadow 300ms var(--agx-out);
   background: rgba(22, 19, 31, .94); -webkit-backdrop-filter: blur(18px) saturate(170%); backdrop-filter: blur(18px) saturate(170%);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 0 0 1px color-mix(in srgb, var(--agx-mark) 34%, transparent), 0 18px 40px -18px rgba(40, 20, 90, .55);
   animation: agx-dock-in 360ms var(--agx-ease); }
 @keyframes agx-dock-in { from { opacity: 0; transform: translate(-50%, 8px) scale(.98); filter: blur(2px); } }
-.agx-presence-mark { flex: none; }
+.agx-presence-well { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 16px;
+  background: color-mix(in srgb, var(--agx-dock-mark) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--agx-dock-mark) 26%, transparent); }
+.agx-presence-mark { flex: none; transition: color 300ms var(--agx-out); }
 .agx-presence-dock.is-yours { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 0 0 1px color-mix(in srgb, var(--agx-dock-yours) 45%, transparent), 0 18px 40px -18px rgba(40, 20, 90, .55); --agx-dock-mark: var(--agx-dock-yours); }
-.agx-presence-who { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.agx-presence-who { display: flex; flex-direction: column; gap: 4px; min-width: 112px; }
 .agx-presence-task { font-size: 12.5px; font-weight: 600; letter-spacing: -.005em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* As wide as the longest word, so the dock and Take over stay put as the state changes. */
-.agx-presence-state { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; min-width: 96px; height: 20px; padding: 0 8px 0 6px; border-radius: 10px;
+.agx-presence-state { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; height: 20px; padding: 0 8px 0 6px; border-radius: 10px;
   font-size: 11px; font-weight: 500; letter-spacing: .01em; color: #c4b5fd; background: color-mix(in srgb, var(--agx-mark) 18%, transparent);
-  animation: agx-state-in 180ms ease-out; }
-@keyframes agx-state-in { from { opacity: 0; transform: translateY(2px); } }
-.agx-presence-dock.is-thinking .agx-presence-state { color: rgba(242, 240, 247, .72); background: rgba(255, 255, 255, .08); }
+  transition: background-color 280ms ease-out, color 280ms ease-out; }
+.agx-presence-dock.is-thinking .agx-presence-state, .agx-presence-dock.is-waiting .agx-presence-state, .agx-presence-dock.is-working .agx-presence-state { color: rgba(242, 240, 247, .72); background: rgba(255, 255, 255, .08); }
 .agx-presence-dock.is-yours .agx-presence-state { color: var(--agx-dock-yours); background: color-mix(in srgb, var(--agx-dock-yours) 16%, transparent); }
 .agx-presence-state svg { flex: none; overflow: visible; }
 .agx-st-ring { transform-origin: 6px 5.5px; animation: agx-st-ring 900ms ease-out infinite; }
@@ -3028,15 +3030,51 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-st-dot:nth-child(2) { animation-delay: .15s; }
 .agx-st-dot:nth-child(3) { animation-delay: .3s; }
 @keyframes agx-st-dot { 0%, 60%, 100% { opacity: .35; } 30% { opacity: 1; } }
-.agx-presence-dock button { flex: none; min-width: 92px; height: 28px; padding: 0 12px; border-radius: 10px; border: 0; font-size: 12px; font-weight: 500; cursor: pointer;
-  background: rgba(255, 255, 255, .08); color: #f2f0f7; transition: transform 120ms var(--agx-ease), background 160ms ease; }
-.agx-presence-dock button:hover { background: rgba(255, 255, 255, .14); }
+/* A word or icon that changes crosses over (Swap in AgentPresence.tsx): the host's width follows the new layer. */
+.agx-sw { position: relative; display: block; flex: none; align-self: stretch; transition: width 260ms var(--agx-out); }
+.agx-presence-state .agx-sw { height: 20px; }
+.agx-sw-lay { position: absolute; left: 0; top: 0; bottom: 0; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.agx-presence-dock button .agx-sw-lay { gap: 8px; }
+.agx-sw-lay.is-in { animation: agx-sw-in 260ms var(--agx-out) both; }
+.agx-sw-lay.is-out { animation: agx-sw-out 200ms var(--agx-out) both; pointer-events: none; }
+@keyframes agx-sw-in { from { opacity: 0; filter: blur(3px); transform: translateY(5px); } }
+@keyframes agx-sw-out { to { opacity: 0; filter: blur(3px); transform: translateY(-5px); } }
+.agx-presence-dock button { flex: none; display: inline-flex; align-items: center; height: 40px; padding: 0 16px 0 10px; border-radius: 16px; border: 0; cursor: pointer; font: inherit; font-size: 13px; font-weight: 700; letter-spacing: -.005em;
+  background: var(--agx-dock-take); color: #2a1700; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .35), 0 6px 16px -8px rgba(245, 158, 11, .8);
+  transition: transform 150ms var(--agx-ease), background-color 280ms ease-out, box-shadow 280ms ease-out, color 280ms ease-out; }
+.agx-presence-dock button:hover { background: #fbbf24; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), 0 8px 22px -6px rgba(245, 158, 11, .95); }
 .agx-presence-dock button:active { transform: scale(.97); }
 .agx-presence-dock button:focus-visible { outline: 2px solid #a78bfa; outline-offset: 2px; }
-.agx-presence-dock button.is-primary { background: var(--agx-dock-yours); color: #16131f; }
+.agx-presence-dock button.is-back { background: var(--agx-mark); color: #fff; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .25), 0 6px 16px -8px rgba(139, 92, 246, .9); }
+.agx-presence-dock button.is-back:hover { background: #9a70f8; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .3), 0 8px 22px -6px rgba(139, 92, 246, .95); }
+.agx-gl { display: block; flex: none; width: 24px; height: 24px; overflow: visible; transition: transform 150ms var(--agx-ease); }
+.agx-presence-dock button:hover .agx-gl { transform: translateY(-1px) rotate(-7deg) scale(1.08); }
+.agx-presence-dock button.is-back:hover .agx-gl { transform: translateX(-2px); }
+/* The alien watches the agent's pointer (lookAt): pupils and head ease 200ms, transform only. */
+.agx-al-head { transform-box: fill-box; transform-origin: 50% 100%; transform: rotate(calc(var(--agx-tilt, 0) * 1deg)); transition: transform 200ms ease-out; }
+.agx-al-eyes { transform: translate(calc(var(--agx-lx, 0) * 1px), calc(var(--agx-ly, 0) * 1px)); transition: transform 200ms ease-out; }
+.agx-al-eye, .agx-sp-eye { transform-box: fill-box; transform-origin: center; transition: transform 150ms var(--agx-ease); }
+.agx-presence-dock button:hover .agx-al-eye, .agx-presence-dock button:hover .agx-sp-eye { transform: scaleY(1.2); }
+.agx-presence-dock button:active .agx-al-eye, .agx-presence-dock button:active .agx-sp-eye { transform: scaleY(.15); }
+/* The spark: pulses and a dot circles it at rest, leans in on hover, blinks on press. */
+.agx-sp-star, .agx-sp-lift, .agx-sp-x, .agx-sp-y, .agx-sp-ring { transform-box: fill-box; transform-origin: center; }
+.agx-sp-star { animation: agx-sp-pulse 2.8s ease-in-out infinite; }
+@keyframes agx-sp-pulse { 50% { transform: scale(1.07); } }
+.agx-sp-x { animation: agx-sp-x 2s cubic-bezier(.37, 0, .63, 1) infinite alternate; }
+.agx-sp-y { animation: agx-sp-y 2s cubic-bezier(.37, 0, .63, 1) infinite alternate -1s; }
+@keyframes agx-sp-x { from { transform: translateX(-10.5px); } to { transform: translateX(10.5px); } }
+@keyframes agx-sp-y { from { transform: translateY(-4px); } to { transform: translateY(4px); } }
+.agx-sp-lift { transition: transform 150ms var(--agx-ease); }
+.agx-sp-ring { opacity: .5; transition: opacity 150ms ease-out; }
+.agx-presence-dock button:hover .agx-sp-lift { transform: rotate(14deg) scale(1.14); }
+.agx-presence-dock button:hover .agx-sp-ring { opacity: .9; }
+.agx-presence-dock button:active .agx-sp-lift { transform: rotate(0) scale(.86); }
 @media (prefers-reduced-motion: reduce) {
   .agx-presence-ghost { transition-property: opacity; }
-  .agx-presence-dock, .agx-presence-state, .agx-presence-state * { animation: none; }
+  .agx-presence-dock, .agx-presence-state, .agx-presence-state *, .agx-presence-dock button * { animation: none; }
+  .agx-sw { transition-duration: 1ms; }
+  .agx-sw-lay.is-out { opacity: 0; }
+  .agx-al-head, .agx-al-eyes { transform: none; transition: none; }
 }
 @media (prefers-reduced-transparency: reduce) { .agx-presence-dock { background: #16131f; -webkit-backdrop-filter: none; backdrop-filter: none; } }
 

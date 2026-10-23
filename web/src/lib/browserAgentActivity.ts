@@ -151,7 +151,7 @@ export function presenceLabel(verb: string, name: string, key = ""): string {
   return n ? `${doing} ${clip(n, 32)}` : doing;
 }
 
-export type AgentStateKey = "clicking" | "typing" | "navigating" | "scrolling" | "pointing" | "reading" | "scripting" | "thinking" | "yours" | "waiting" | "done";
+export type AgentStateKey = "clicking" | "typing" | "navigating" | "scrolling" | "pointing" | "reading" | "scripting" | "thinking" | "yours" | "waiting" | "done" | "working";
 
 const STATE_OF: Record<string, AgentStateKey> = {
   click: "clicking", dblclick: "clicking", rightclick: "clicking", check: "clicking", drag: "clicking", upload: "clicking",
@@ -161,14 +161,14 @@ const STATE_OF: Record<string, AgentStateKey> = {
 };
 const STATE_WORD: Record<AgentStateKey, string> = {
   clicking: "Clicking", typing: "Typing", navigating: "Navigating", scrolling: "Scrolling",
-  pointing: "Pointing", reading: "Reading", scripting: "Scripting", thinking: "Thinking", yours: "You have it", waiting: "Waiting", done: "Done",
+  pointing: "Pointing", reading: "Reading", scripting: "Scripting", thinking: "Thinking", yours: "You have it", waiting: "Waiting", done: "Done", working: "Working",
 };
 
 export const stateOf = (key: AgentStateKey) => ({ key, word: STATE_WORD[key] });
 
 /** One word for what the agent is doing now: a state, not an account of it. Anything that is not an act is a read. */
 export function agentState(a: Pick<TabAgent, "working" | "paused" | "op">): { key: AgentStateKey; word: string } {
-  const key: AgentStateKey = a.paused ? "yours" : a.working > 0 ? STATE_OF[a.op ?? ""] ?? "reading" : "thinking";
+  const key: AgentStateKey = a.paused ? "yours" : a.working > 0 ? STATE_OF[a.op ?? ""] ?? (a.op ? "reading" : "working") : "thinking";
   return { key, word: STATE_WORD[key] };
 }
 
@@ -229,7 +229,7 @@ export function steadyStep<K extends string>(s: Steady<K>, raw: K | null, now: n
 }
 
 /** The busiest of a container's tabs speaks for the box. */
-const RANK: Record<AgentStateKey, number> = { yours: 5, clicking: 4, typing: 4, navigating: 4, scrolling: 4, pointing: 4, reading: 4, scripting: 4, thinking: 3, waiting: 2, done: 1 };
+const RANK: Record<AgentStateKey, number> = { yours: 5, clicking: 4, typing: 4, navigating: 4, scrolling: 4, pointing: 4, reading: 4, scripting: 4, working: 4, thinking: 3, waiting: 2, done: 1 };
 export function boxState(states: Array<{ key: AgentStateKey; word: string } | null>): { key: AgentStateKey; word: string } | null {
   return states.reduce<{ key: AgentStateKey; word: string } | null>((best, s) => (s && (!best || RANK[s.key] > RANK[best.key]) ? s : best), null);
 }
@@ -268,4 +268,13 @@ export function lapKeyframes(W: number, H: number, inset = 7, r = 10, arcSteps =
   for (let k = 1; k < pts.length; k++) d.push(d[k - 1] + Math.hypot(pts[k].x - pts[k - 1].x, pts[k].y - pts[k - 1].y));
   const total = d[d.length - 1] || 1;
   return pts.map((p, k) => ({ offset: d[k] / total, transform: `translate(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px) rotate(${p.a.toFixed(1)}deg)` }));
+}
+
+export const LOOK_PX = 1.5, TILT_DEG = 6;
+/** Pupil offset and head tilt for a pointer (dx, dy) px away: full strength from ~90px, none on top of it. */
+export function lookAt(dx: number, dy: number): { lx: number; ly: number; tilt: number } {
+  const d = Math.hypot(dx, dy);
+  if (d < 1) return { lx: 0, ly: 0, tilt: 0 };
+  const k = Math.min(1, d / 90) * LOOK_PX / d;
+  return { lx: dx * k, ly: dy * k, tilt: Math.max(-1, Math.min(1, dx / 160)) * TILT_DEG };
 }

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { FLASH_MS, flashScript } from "../src/lib/browserDrive.ts";
 import { describe, expect, test } from "bun:test";
 import {
-  LOG_MAX, steadyStep, STEADY_INIT, CANDIDATE_MS, MIN_SHOW_MS, activityReducer, actionOf, agentLabel, doneMayMark, agentState, boxState, pointerAt, tabState, ago, flashPlan, isActVerb, lapKeyframes, pausedRefusal, presenceLabel, travelMs, type Activity,
+  LOG_MAX, steadyStep, STEADY_INIT, CANDIDATE_MS, MIN_SHOW_MS, activityReducer, actionOf, agentLabel, doneMayMark, agentState, boxState, lookAt, pointerAt, tabState, ago, flashPlan, isActVerb, lapKeyframes, pausedRefusal, presenceLabel, travelMs, type Activity,
 } from "../src/lib/browserAgentActivity.ts";
 
 const begin = (s: Activity, tab = "t1", agent = "orbit-ci") => activityReducer(s, { type: "begin", tab, agent });
@@ -229,6 +229,8 @@ describe("the dock's state word", () => {
     expect(st(1, "fill")).toBe("Typing");
     expect(st(1, "back")).toBe("Navigating");
     expect(st(1, "observe")).toBe("Reading");
+    // Busy with no named op: neutral, not a guess at a read.
+    expect(st(1)).toBe("Working");
     expect(st(0, "click")).toBe("Thinking");
     expect(st(1, "click", true)).toBe("You have it");
   });
@@ -323,5 +325,22 @@ describe("steadyStep: a word shown to a person holds still", () => {
   test("eval is Scripting, ranked like a read", () => {
     expect(agentState({ working: 1, paused: false, op: "eval" }).word).toBe("Scripting");
     expect(boxState([{ key: "scripting", word: "Scripting" }, { key: "thinking", word: "Thinking" }])?.word).toBe("Scripting");
+  });
+});
+
+describe("the alien's look at the agent's pointer", () => {
+  const len = (o: { lx: number; ly: number }) => Math.hypot(o.lx, o.ly);
+  test("pupils never leave 1.5px and the head never tips past 6 degrees, however far the pointer", () => {
+    for (const [dx, dy] of [[900, 40], [-900, -700], [0, 2000], [60, -30]]) {
+      const l = lookAt(dx, dy);
+      expect(len(l)).toBeLessThanOrEqual(1.5 + 1e-9);
+      expect(Math.abs(l.tilt)).toBeLessThanOrEqual(6);
+    }
+  });
+  test("points toward the pointer, and looks forward when it is on top of the alien", () => {
+    expect(lookAt(200, 0).lx).toBeGreaterThan(1.4);
+    expect(lookAt(-200, 0).tilt).toBeLessThan(0);
+    expect(lookAt(0, -200).ly).toBeLessThan(-1.4);
+    expect(lookAt(0.2, 0.2)).toEqual({ lx: 0, ly: 0, tilt: 0 });
   });
 });
