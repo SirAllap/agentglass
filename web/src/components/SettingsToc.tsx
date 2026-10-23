@@ -31,7 +31,7 @@ export function SettingsToc({ scope, scroller, page }: {
     let raf = 0;
     const read = () => {
       const cards = [...root.querySelectorAll<HTMLElement>("section.agx-scard")]
-        .map((el) => ({ el, title: el.querySelector(".agx-settings-head-t")?.textContent ?? "", tone: CARD_DOT[el.dataset.tone ?? ""] ?? el.querySelector(".agx-badge")?.getAttribute("data-tone") ?? null }))
+        .map((el) => ({ el, title: el.querySelector(".agx-settings-head-t")?.textContent ?? "", tone: CARD_DOT[el.dataset.tone ?? ""] ?? el.querySelector(".agx-scard-head .agx-badge")?.getAttribute("data-tone") ?? null }))
         .filter((c) => c.title.trim());
       const next = tocItems(cards);
       // Anchors go on the cards themselves, so a link is a plain scroll to an id.

@@ -33,7 +33,7 @@ export function PreviewBox({ children, vars, label }: { children: ReactNode; var
 
 /** The chip a drawn (not real-component) preview carries, so nobody takes it for a capture. */
 export function DrawnChip() {
-  return <StatusBadge tone="warn">Drawn, not a capture</StatusBadge>;
+  return <StatusBadge tone="off">Drawn, not a capture</StatusBadge>;
 }
 
 export function PreviewNote({ children }: { children: ReactNode }) {

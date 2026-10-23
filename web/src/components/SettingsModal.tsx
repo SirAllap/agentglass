@@ -38,6 +38,7 @@ import { checkedLine } from "../lib/providerFreshness.ts";
 import { fmtAgo, minutesAgo } from "../lib/format.ts";
 import type { ActionRecord, GateRecord, UnderstudyClassRow } from "../../../shared/types.ts";
 import { mergeActivity, gateLine, actorLabel, activityDays, filterActivity, type ActivityFilter, type ActivityRow, type ActivityRun } from "../lib/activity.ts";
+import { useStableFlow } from "./useStableFlow.ts";
 import { ingestUpdate, isUpdateAvailable } from "../lib/updateStore.ts";
 import { ReleaseNotesModal } from "./ReleaseNotesModal.tsx";
 import { installedNotes, type NotesTarget } from "../lib/whatsNew.ts";
@@ -4282,6 +4283,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
   const navPane = pane.startsWith("plugin:") ? "plugins" : pane;
   const navTab = TABS.find((x) => x.id === navPane);
   const colRef = useRef<HTMLDivElement | null>(null);
+  useStableFlow(colRef, [open, pane, q]);
   const tabIcons = useMemo(() => new Map(tabs.map((t) => [t.id as string, t.icon])), [tabs]);
   /* What a page says about itself after it opened: it failed to read what it shows, or a write is out.
      The facts above are one read per open; these are the pages' own, so they turn the nav dot and the
@@ -4305,7 +4307,6 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
     ...NO_FACTS, ...facts,
     connectionsNeed: badges.connections ?? null,
     remoteLive: badges.remote ? badges.remote === "live" : null,
-    logNeed: logDigest === null || logDigest === "failed" ? null : logDigest.quiet ? 0 : logDigest.crashLoops.length + logDigest.spikes.length,
     clickupConnected: cuConnected,
   }), problems), [facts, badges, logDigest, cuConnected, problems]);
 

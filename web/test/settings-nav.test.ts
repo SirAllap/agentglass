@@ -109,14 +109,15 @@ describe("the marks come from real facts, and only those", () => {
     expect(navMarks(facts({ clickupConnected: false })).clickup).toBeUndefined();
   });
 
-  test("About: a log with something in it outranks an update, an update outranks nothing", () => {
-    expect(navMarks(facts({ logNeed: 2, updateAvailable: true })).about).toMatchObject({ state: "needs", count: 2 });
-    expect(navMarks(facts({ logNeed: 0, updateAvailable: true })).about).toMatchObject({ state: "update" });
-    expect(navMarks(facts({ logNeed: 0, updateAvailable: false })).about).toBeUndefined();
+  test("About: only an update marks it; a log with warnings in it never does", () => {
+    // A crash loop or a spike in the server log is something to read, not something
+    // the person can do: it must not paint "needs you" on About, the menu or the rail.
+    expect(navMarks(facts({ updateAvailable: true })).about).toMatchObject({ state: "update" });
+    expect(navMarks(facts({ updateAvailable: false })).about).toBeUndefined();
   });
 
   test("a page with no fact behind it never gets a mark, whatever else is true", () => {
-    const all = navMarks(facts({ hooksWired: true, tmuxOk: true, connectionsNeed: 2, remoteLive: true, logNeed: 1, clickupConnected: true, jiraConnected: true, lanternWatching: true, updateAvailable: true, notificationsOn: true }));
+    const all = navMarks(facts({ hooksWired: true, tmuxOk: true, connectionsNeed: 2, remoteLive: true, clickupConnected: true, jiraConnected: true, lanternWatching: true, updateAvailable: true, notificationsOn: true }));
     for (const id of ["prefs", "appearance", "rail", "keys", "terminal", "diff", "browser", "tasks", "engines", "orchestration", "understudy", "budgets", "recipes", "review-prompts", "saved-replies", "plugins", "privacy"]) {
       expect(all[id]).toBeUndefined();
     }
@@ -131,9 +132,13 @@ describe("page header chips follow the mark", () => {
     expect(headerChips("terminal", { state: "none" })).toEqual([]);
   });
 
-  test("needs-you is a count in the right grammar", () => {
-    expect(headerChips("hooks", { state: "needs", count: 1 })).toEqual([{ tone: "warn", text: "1 needs you" }]);
-    expect(headerChips("connections", { state: "needs", count: 3 })).toEqual([{ tone: "warn", text: "3 need you" }]);
+  test("needs-you names what needs the person, never a bare count", () => {
+    expect(headerChips("hooks", { state: "needs", count: 1, title: "Claude Code hooks are not wired in" })).toEqual([{ tone: "warn", text: "Claude Code hooks are not wired in" }]);
+    expect(headerChips("connections", { state: "needs", count: 3, title: "3 tools or services need setup" })).toEqual([{ tone: "warn", text: "3 tools or services need setup" }]);
+  });
+  test("every needs mark the facts can produce carries its sentence", () => {
+    const m = navMarks(facts({ hooksWired: false, tmuxOk: false, connectionsNeed: 2, pluginsNeed: 1 }));
+    for (const id of ["hooks", "tmux", "connections", "plugins"]) expect(m[id]?.title, id).toBeTruthy();
   });
 
   test("an update is a chip", () => {
@@ -295,6 +300,6 @@ describe("the Plugins page's mark", () => {
   });
   test("the header says how many run", () => {
     expect(headerChips("plugins", { state: "on", count: 2 })).toEqual([{ tone: "ok", text: "2 running" }]);
-    expect(headerChips("plugins", { state: "needs", count: 1 })).toEqual([{ tone: "warn", text: "1 needs you" }]);
+    expect(headerChips("plugins", { state: "needs", count: 1, title: "1 plugin waits for your approval" })).toEqual([{ tone: "warn", text: "1 plugin waits for your approval" }]);
   });
 });

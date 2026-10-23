@@ -88,7 +88,6 @@ export interface NavFacts {
   /** A paired device is connected right now. */
   remoteLive: boolean | null;
   /** Crash loops and spikes in the server log; 0 is quiet. */
-  logNeed: number | null;
   clickupConnected: boolean | null;
   jiraConnected: boolean | null;
   lanternWatching: boolean | null;
@@ -100,7 +99,7 @@ export interface NavFacts {
 }
 
 export const NO_FACTS: NavFacts = {
-  hooksWired: null, tmuxOk: null, connectionsNeed: null, remoteLive: null, logNeed: null,
+  hooksWired: null, tmuxOk: null, connectionsNeed: null, remoteLive: null,
   clickupConnected: null, jiraConnected: null, lanternWatching: null, updateAvailable: null, notificationsOn: null,
   pluginsRunning: null, pluginsNeed: null,
 };
@@ -118,11 +117,11 @@ export function navMarks(f: NavFacts): Record<string, PageMark> {
   const out: Record<string, PageMark> = {};
   const set = (id: string, m: PageMark | null) => { if (m) out[id] = m; };
   set("hooks", f.hooksWired === null ? null : f.hooksWired
-    ? { state: "on" } : { state: "needs", count: 1, title: "The Claude Code hooks are not wired in" });
+    ? { state: "on" } : { state: "needs", count: 1, title: "Claude Code hooks are not wired in" });
   set("tmux", f.tmuxOk === null ? null : f.tmuxOk
     ? { state: "on" } : { state: "needs", count: 1, title: "tmux is not on this machine" });
   set("connections", f.connectionsNeed === null || f.connectionsNeed <= 0 ? null
-    : { state: "needs", count: f.connectionsNeed, title: `${f.connectionsNeed} ${f.connectionsNeed === 1 ? "thing wants" : "things want"} something` });
+    : { state: "needs", count: f.connectionsNeed, title: `${f.connectionsNeed} ${f.connectionsNeed === 1 ? "tool or service needs" : "tools or services need"} setup` });
   set("remote", onOff(f.remoteLive));
   set("clickup", f.clickupConnected ? { state: "on" } : null);
   set("jira", onOff(f.jiraConnected));
@@ -130,8 +129,7 @@ export function navMarks(f: NavFacts): Record<string, PageMark> {
   set("notifications", onOff(f.notificationsOn));
   if (f.pluginsNeed) set("plugins", { state: "needs", count: f.pluginsNeed, title: `${f.pluginsNeed} ${f.pluginsNeed === 1 ? "plugin waits" : "plugins wait"} for your approval` });
   else if (f.pluginsRunning) set("plugins", { state: "on", count: f.pluginsRunning, title: `${f.pluginsRunning} running` });
-  if (f.logNeed !== null && f.logNeed > 0) set("about", { state: "needs", count: f.logNeed, title: "The server log has a crash loop or a spike worth a look" });
-  else if (f.updateAvailable) set("about", { state: "update", title: "An update is ready" });
+  if (f.updateAvailable) set("about", { state: "update", title: "An update is ready" });
   return out;
 }
 
@@ -207,8 +205,9 @@ function markChips(id: string, mark: PageMark): HeaderChip[] {
   if (mark.state === "on" && w.on) return [{ tone: "ok", text: w.on }];
   if (mark.state === "off" && w.off) return [{ tone: "off", text: w.off }];
   if (mark.state === "needs") {
-    const n = typeof mark.count === "number" ? mark.count : null;
-    return [{ tone: "warn", text: n === null ? `${mark.count ?? ""} needs you`.trim() : `${n} ${n === 1 ? "needs" : "need"} you` }];
+    /* Says what, in the page's own words: a count of "needs you" with nothing
+       named is a mark nobody can act on. */
+    return [{ tone: "warn", text: mark.title ?? "Needs you" }];
   }
   if (mark.state === "update") return [{ tone: "info", text: "Update available" }];
   return [];
