@@ -705,6 +705,8 @@ export const TL_CSS = `
 .agx-av{position:absolute;left:-${TL_AVATAR + TL_GAP}px;top:0;display:flex}
 .agx-card{position:relative;background:var(--surface-card)}
 .agx-nest{margin:8px 0 0 ${TL_INDENT}px}
+/* A card with no avatar beside it: indented past the node, like a small event's text, so the node sits on the rail outside the card. */
+.agx-note{margin-left:${TL_INDENT}px;min-width:0}
 .agx-node{position:absolute;left:${TL_RAIL - 10}px;top:3px;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:9px;background:var(--bg);border:2px solid var(--surface-line);z-index:1}
 /* A small event — opened, force-pushed, review requested. It sits ON the rail
    and weighs a fraction of a remark, because it is context rather than

@@ -23,7 +23,7 @@ import { withoutAuthor, authorLeftOutHint } from "../lib/reviewerPick.ts";
 import { dataInk } from "../lib/contrast.ts";
 import { onScreen } from "../lib/findScope.ts";
 import { PluginPrActions } from "./plugins/PluginPrActions.tsx";
-import { useLocalNotes, groupByRun, RunCard, NoteCard, LocalMark, LocalGlyph, LocalStrip, sortNotes, type LocalNotes, type LocalNote } from "./plugins/LocalReview.tsx";
+import { useLocalNotes, groupByRun, RunCard, NoteCard, LocalMark, LocalStrip, sortNotes, type LocalNotes, type LocalNote } from "./plugins/LocalReview.tsx";
 import { createContext, Fragment, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { handoffTo } from "../lib/handoffTo.ts";
 import { isBackButton } from "../lib/mouseBack.ts";
@@ -12055,10 +12055,10 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
     for (const g of groupByRun(local)) {
       entries.push({
         ms: g.ms, key: g.key, lane: "local",
-        node: <span style={{ color: "var(--primary-ink)" }}><LocalGlyph size={ICON.xs} /></span>,
-        body: g.run
+        node: <span style={{ color: "var(--primary-ink)" }}><EyeIcon size={ICON.xs} /></span>,
+        body: <div className="agx-note">{g.run
           ? <RunCard run={g.run} notes={g.notes} publisher={local.publishers[g.run.plugin]} onStatus={local.setStatus} onOpenFile={onOpenFile} md={localMd} />
-          : <div className="flex flex-col gap-1.5">{g.notes.map((n) => <NoteCard key={`${n.plugin}/${n.id}`} n={n} md={localMd} onStatus={(st) => local.setStatus(n, st)} onOpenFile={onOpenFile} />)}</div>,
+          : <div className="flex flex-col gap-1.5">{g.notes.map((n) => <NoteCard key={`${n.plugin}/${n.id}`} n={n} md={localMd} onStatus={(st) => local.setStatus(n, st)} onOpenFile={onOpenFile} />)}</div>}</div>,
       });
     }
   }
