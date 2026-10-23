@@ -11,7 +11,7 @@ import { useState } from "react";
 import { HIT, ICON } from "../../lib/iconSize.ts";
 import { InfoIcon } from "../../lib/glyphIcons.tsx";
 import { CloseButton } from "../CloseButton.tsx";
-import { GROUP_BY, countCell, railTitle, type AreaRow, type GroupBy, type GroupPref, type ThenBy } from "../../lib/jiraAreas.ts";
+import { GROUP_BY, barSegments, railTitle, rowText, type AreaRow, type GroupBy, type GroupPref, type ThenBy } from "../../lib/jiraAreas.ts";
 import { epicTone, sprintLine } from "../../lib/jiraBoardContext.ts";
 import type { JiraBoardSprint } from "../../../../shared/providers.ts";
 import { Segmented, EDGE } from "../workspace/Chrome.tsx";
@@ -19,6 +19,12 @@ import { Select } from "../Select.tsx";
 
 /** What the rail's Sprints entry and an Area are called when picked: an epic's key, or this. */
 export const SPRINTS = "@sprints";
+
+/** The key chip and the right-hand text of a rail row keep one width each, so the bars line up. */
+const KEY_W = 62;
+const TEXT_W = 52;
+const BAR_MIN = 30;
+const LEGEND: readonly [string, string][] = [["var(--success)", "done"], ["var(--warning)", "open in the sprint"], ["var(--text4)", "other open"]];
 
 const CAPTION = "text-[8.5px] uppercase tracking-[0.18em] px-3 pt-3 pb-1";
 const row = (on: boolean) => ({
@@ -41,19 +47,32 @@ export function JiraAreaRail({ project, areas, sprint, now, points, sel, onPick,
   truncated: boolean;
 }) {
   const line = sprint ? sprintLine(sprint, now) : null;
-  const cell = (a: AreaRow) => countCell(a, truncated);
-  const railRow = (a: AreaRow) => (
-    <button key={a.key} onClick={() => onPick(sel === a.key ? null : a.key)} aria-pressed={sel === a.key}
-      title={`${a.name} (${a.key}): ${cell(a).title}, ${a.inSprint} in the sprint`}
-      className="agx-rail-row w-full flex items-center gap-2 text-left" style={row(sel === a.key)}>
-      <span aria-hidden className="shrink-0 rounded-full" style={{ width: 8, height: 8, background: `var(${epicTone(a.color)})` }} />
-      <span className="min-w-0 flex-1" style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", overflowWrap: "anywhere" }}>{railTitle(a.name)}</span>
-      <span className="shrink-0 truncate" style={{ color: "var(--text4)", fontSize: 10, fontWeight: 400, maxWidth: 56 }}>{a.key}</span>
-      <span className="tabular-nums shrink-0" style={{ color: "var(--text3)", fontSize: 11, fontVariantNumeric: "tabular-nums" }}>
-        <span style={{ color: a.total - a.done > 0 ? "var(--text2)" : "var(--text4)" }}>{cell(a).lead}</span><span style={{ color: "var(--text4)" }}>{cell(a).rest}</span>
-      </span>
-    </button>
-  );
+  const railRow = (a: AreaRow) => {
+    const seg = barSegments(a);
+    const txt = rowText(a, truncated);
+    return (
+      <button key={a.key} onClick={() => onPick(sel === a.key ? null : a.key)} aria-pressed={sel === a.key}
+        title={txt.title} className="agx-rail-row w-full flex items-start gap-2.5 text-left" style={row(sel === a.key)}>
+        <span aria-hidden className="shrink-0 rounded-full" style={{ width: 8, height: 8, marginTop: 5, background: `var(${epicTone(a.color)})` }} />
+        <span className="min-w-0 flex-1 flex flex-col" style={{ gap: 4 }}>
+          <span style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", overflowWrap: "anywhere", lineHeight: 1.3 }}>{railTitle(a.name)}</span>
+          <span className="flex items-center min-w-0" style={{ gap: 8 }}>
+            {/* A fixed width for the key (a longer key just widens its own chip) and for the text: every bar starts and ends at the same x, whatever the row says. */}
+            <span className="shrink-0 text-center whitespace-nowrap" style={{ minWidth: KEY_W, boxSizing: "border-box", padding: "1px 7px", borderRadius: 999, fontSize: 9.5, fontWeight: 400, color: "var(--text3)", background: "color-mix(in srgb, var(--text) 8%, transparent)" }}>{a.key}</span>
+            <span aria-hidden className="flex-1 flex overflow-hidden" data-testid="jira-rail-bar"
+              style={{ minWidth: BAR_MIN, height: 5, borderRadius: 3, background: txt.tone === "none" ? undefined : "color-mix(in srgb, var(--text) 10%, transparent)",
+                backgroundImage: txt.tone === "none" ? "repeating-linear-gradient(90deg, color-mix(in srgb, var(--text) 16%, transparent) 0 3px, transparent 3px 6px)" : undefined }}>
+              <span style={{ width: `${seg.done}%`, background: "var(--success)" }} />
+              <span style={{ width: `${seg.sprint}%`, background: "var(--warning)" }} />
+              <span style={{ width: `${seg.other}%`, background: "var(--text4)" }} />
+            </span>
+            <span className="shrink-0 text-right" style={{ width: TEXT_W, fontSize: 10.5, fontVariantNumeric: "tabular-nums", fontWeight: txt.tone === "open" ? 600 : txt.tone === "done" ? 500 : 400,
+              color: txt.tone === "open" ? "var(--text)" : txt.tone === "done" ? "var(--success)" : "var(--text4)" }}>{txt.text}</span>
+          </span>
+        </span>
+      </button>
+    );
+  };
   return (
     <div role="group" aria-label={`${project} areas`} data-testid="jira-areas-rail" style={{ borderTop: EDGE, marginTop: 8 }}>
       <div className={CAPTION} style={{ color: "var(--text4)" }}>{project} · Areas</div>
@@ -63,6 +82,13 @@ export function JiraAreaRail({ project, areas, sprint, now, points, sel, onPick,
       {areas.filter((a) => a.group === "area").map(railRow)}
       {areas.some((a) => a.group === "epic") && <div className={CAPTION} style={{ color: "var(--text4)" }}>Epics</div>}
       {areas.filter((a) => a.group === "epic").map(railRow)}
+      {areas.length > 0 && (
+        <div className="flex flex-wrap items-center px-3 py-2" style={{ gap: "2px 10px", fontSize: 10, color: "var(--text3)" }} data-testid="jira-rail-legend">
+          {LEGEND.map(([c, label]) => (
+            <span key={label} className="inline-flex items-center gap-1"><span aria-hidden style={{ width: 8, height: 8, borderRadius: 2, background: c }} />{label}</span>
+          ))}
+        </div>
+      )}
       {truncated && areas.length > 0 && <div className="px-3 py-1 text-[10.5px]" style={{ color: "var(--text4)" }}>Counts are at least: the project is larger than what is read.</div>}
       {sprint && (
         <>

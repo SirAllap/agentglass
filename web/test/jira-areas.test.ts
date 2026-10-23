@@ -4,6 +4,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { headChips, areaCards, areaLine, areaName, areaRows, epicLabel, defaultPref, groupAreas, groupKeyed, parsePref, prefText } from "../src/lib/jiraAreas.ts";
+import { barSegments, rowText } from "../src/lib/jiraAreas.ts";
 import { OPEN_EPICS_MAX, countCell, emptyBodyText, railTitle, underClause } from "../../shared/jiraAreas.ts";
 import type { JiraBoardEpic, ProviderTask } from "../../shared/providers.ts";
 
@@ -162,4 +163,37 @@ describe("what is remembered of the grouping", () => {
     expect(parsePref(JSON.stringify({ by: "nonsense", split: "none" }), true, def)).toEqual(def);
   });
   test("the sprint view starts as status then area", () => { expect(defaultPref(true)).toEqual({ by: "status", split: "area" }); });
+});
+
+describe("the rail row's progress bar and its words", () => {
+  const sum = (s: { done: number; sprint: number; other: number }) => s.done + s.sprint + s.other;
+  test("open cards: done | in the sprint | other open, in that order", () => {
+    expect(barSegments({ total: 10, done: 5, inSprint: 2 })).toEqual({ done: 50, sprint: 20, other: 30 });
+    expect(rowText({ name: "Mobile", key: "ORBIT-980", total: 10, done: 5, inSprint: 2 }, false))
+      .toEqual({ text: "5 open", tone: "open", title: "Mobile (ORBIT-980): 5 of 10 done · 5 open · 2 in the sprint" });
+  });
+  test("nothing open: the bar is all done and the text says done", () => {
+    expect(barSegments({ total: 4, done: 4, inSprint: 0 })).toEqual({ done: 100, sprint: 0, other: 0 });
+    expect(rowText({ name: "Admin", key: "ORBIT-984", total: 4, done: 4, inSprint: 0 }, false)).toMatchObject({ text: "done", tone: "done" });
+  });
+  test("no card read is a dash and an empty bar, never done", () => {
+    expect(barSegments({ total: 0, done: 0, inSprint: 0 })).toEqual({ done: 0, sprint: 0, other: 0 });
+    expect(rowText({ name: "[EPIC] Flutter", key: "ORBIT-27", total: 0, done: 0, inSprint: 0 }, false))
+      .toEqual({ text: "—", tone: "none", title: "Flutter (ORBIT-27): no cards read" });
+  });
+  test("a truncated read says at least", () => {
+    expect(rowText({ name: "Game", key: "ORBIT-982", total: 51, done: 41, inSprint: 2 }, true).title)
+      .toBe("Game (ORBIT-982): 41 of at least 51 done · 10 open · 2 in the sprint");
+  });
+  test("more in the sprint than open (done cards also in it) is held to what is open", () => {
+    const s = barSegments({ total: 10, done: 8, inSprint: 6 });
+    expect(s).toEqual({ done: 80, sprint: 20, other: 0 });
+    expect(rowText({ name: "A", key: "ORBIT-1", total: 10, done: 8, inSprint: 6 }, false).title).toContain("2 open · 2 in the sprint");
+  });
+  test("the stretches never add to more than the bar", () => {
+    for (let total = 1; total <= 40; total++) for (let done = 0; done <= total; done++) for (const inSprint of [0, 1, 3, total, total + 5]) {
+      expect(sum(barSegments({ total, done, inSprint }))).toBeLessThanOrEqual(100 + 1e-9);
+    }
+    expect(sum(barSegments({ total: 3, done: 1, inSprint: 1 }))).toBeGreaterThan(99.8);
+  });
 });

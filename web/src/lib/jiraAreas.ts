@@ -48,7 +48,43 @@ export function parsePref(raw: string | null | undefined, hasAreas: boolean, fal
 export const prefText = (p: GroupPref): string => JSON.stringify(p);
 
 export { areaName, areaRows, countCell, emptyBodyText, epicLabel, railTitle, headChips, type AreaRow } from "../../../shared/jiraAreas.ts";
-import { areaName } from "../../../shared/jiraAreas.ts";
+import { areaName, railTitle, type AreaRow } from "../../../shared/jiraAreas.ts";
+
+/** Tenths of a percent, rounded down so three stretches never add to more than the bar. */
+const tenths = (n: number, of: number): number => Math.floor((n / of) * 1000);
+
+/**
+ * The three stretches of a rail row's bar, as percentages of the row's cards: done, open in the active sprint, other
+ * open, in that order. A card in the sprint that is also done counts as done only, so the sprint stretch is capped at
+ * what is open; the three never add to more than 100. No card read: all zero (the row draws a dashed empty bar).
+ */
+export function barSegments(a: Pick<AreaRow, "total" | "done" | "inSprint">): { done: number; sprint: number; other: number } {
+  if (a.total <= 0) return { done: 0, sprint: 0, other: 0 };
+  const done = Math.min(a.done, a.total);
+  const open = a.total - done;
+  const sprint = Math.min(Math.max(a.inSprint, 0), open);
+  const d = tenths(done, a.total);
+  const s = tenths(sprint, a.total);
+  // What is left of the bar after the two, unless every open card is in the sprint (then nothing is "other", rounding aside).
+  const other = sprint === open ? 0 : 1000 - d - s;
+  return { done: d / 10, sprint: s / 10, other: other / 10 };
+}
+
+/**
+ * What stands at the right of a rail row, and what hovering the row says. The text is what is LEFT: "N open", "done"
+ * once nothing is open, "—" where no card was read (zero cards is not "done"). A truncated read says "at least".
+ */
+export function rowText(a: Pick<AreaRow, "name" | "key" | "total" | "done" | "inSprint">, truncated: boolean): { text: string; tone: "open" | "done" | "none"; title: string } {
+  const who = `${railTitle(a.name)} (${a.key})`;
+  if (a.total <= 0) return { text: "—", tone: "none", title: `${who}: no cards read` };
+  const open = Math.max(0, a.total - a.done);
+  const total = truncated ? `at least ${a.total}` : `${a.total}`;
+  return {
+    text: open === 0 ? "done" : `${open} open`,
+    tone: open === 0 ? "done" : "open",
+    title: `${who}: ${a.done} of ${total} done \u00b7 ${open} open \u00b7 ${Math.min(a.inSprint, open)} in the sprint`,
+  };
+}
 
 /** An Area's cards, in the order the read gave them. */
 export const areaCards = (tasks: readonly ProviderTask[], key: string): ProviderTask[] => tasks.filter((t) => t.parent?.key === key);
