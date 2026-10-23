@@ -28,6 +28,7 @@ import type { DiskPlace } from "../../../../../shared/types.ts";
 import { EDGE, LINE } from "../../workspace/Chrome.tsx";
 import { Column, type Mod } from "./Column.tsx";
 import { AppearanceMenu, FinderSettings, HelpSheet } from "./FinderChrome.tsx";
+import { externalPlace } from "../../../lib/finderMiller.ts";
 import { exitDecision, type Exit } from "../../../lib/finderEdit.ts";
 import { FinderPathBar } from "./FinderPathBar.tsx";
 import { FinderSearch } from "./FinderSearch.tsx";
@@ -55,7 +56,7 @@ const BIG = 2000;
 
 const basename = (p: string) => p.slice(p.lastIndexOf("/") + 1) || "/";
 
-export function MachineFinder({ home, workspace, start, places, target, onPlace, onBench, onRecent, onClose: closeNow }: {
+export function MachineFinder({ home, workspace, start, wantFile, onWanted, places, target, onPlace, onBench, onRecent, onClose: closeNow }: {
   home: string;
   /** Where to open, and where to go when the palette's own place changes. */
   start: string;
@@ -64,6 +65,10 @@ export function MachineFinder({ home, workspace, start, places, target, onPlace,
   places: readonly DiskPlace[];
   /** The finder went somewhere on purpose (sidebar, path bar, up): the palette remembers it as the place. */
   onPlace: (path: string) => void;
+  /** A file the request named (a path clicked in a terminal): selected in `start`, its preview open. */
+  wantFile?: { dir: string; name: string } | null;
+  /** The request has been applied: the palette forgets it, so reopening the finder by hand does not replay it. */
+  onWanted?: () => void;
   /** The workspace root: the key of the Editing tab's nvim session. */
   workspace: string;
   onBench: (path: string, mode: "edit" | "terminal") => void;
@@ -162,8 +167,24 @@ export function MachineFinder({ home, workspace, start, places, target, onPlace,
   useEffect(() => {
     if (!start || start === seen.current) return;
     seen.current = start;
-    guarded("external", () => { setHist((h) => visit(h, start)); setTrail([start]); setSel([null]); setFocusCol(0); })();
+    const at = externalPlace(start, wantFile ?? null);
+    guarded("external", () => { setHist((h) => visit(h, at.dir)); setTrail([at.dir]); setSel([at.name]); setFocusCol(0); setPeek(false); })();
   }, [start, guarded]);
+
+  /* A request that names a file in the place the finder is already in changes no `start`, so it is read on its own. */
+  const wanted = useRef<typeof wantFile>(null);
+  /* The file the request named, kept until the path field has echoed the folder back (below): that echo is a folder target and must not clear the selection. */
+  const wantedNow = useRef<typeof wantFile>(null);
+  useEffect(() => {
+    if (!wantFile || wantFile === wanted.current) return;
+    wanted.current = wantFile;
+    const at = externalPlace(start, wantFile);
+    if (!at.name) return;
+    wantedNow.current = wantFile;
+    seen.current = at.dir;
+    guarded("external", () => { setHist((h) => visit(h, at.dir)); setTrail([at.dir]); setSel([at.name]); setFocusCol(0); setPeek(false); setSidePage(false); })();
+    onWanted?.();
+  }, [wantFile, start, guarded, onWanted]);
 
   /* A typed path goes where the path bar goes, and a file also gets selected so
      its preview shows. It asks what the path is before moving: a half-typed name
@@ -177,7 +198,7 @@ export function MachineFinder({ home, workspace, start, places, target, onPlace,
         const at = f.kind === "dir" ? target : parentOf(target);
         if (!at) return;
         seen.current = at;
-        guarded("external", () => { setHist((h) => visit(h, at)); setTrail([at]); setSel([f.kind === "dir" ? null : basename(target)]); setFocusCol(0); setPeek(false); setSidePage(false); })();
+        guarded("external", () => { setHist((h) => visit(h, at)); setTrail([at]); setSel([f.kind === "dir" ? externalPlace(at, wantedNow.current ?? null).name : basename(target)]); wantedNow.current = null; setFocusCol(0); setPeek(false); setSidePage(false); })();
       }).catch(() => { /* not a place yet */ });
     }, 150);
     return () => { live = false; clearTimeout(t); };

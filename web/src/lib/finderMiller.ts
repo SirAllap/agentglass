@@ -372,3 +372,14 @@ export function isThumbable(name: string): boolean {
   const dot = name.lastIndexOf(".");
   return dot > 0 && THUMBABLE.has(name.slice(dot + 1).toLowerCase());
 }
+
+/**
+ * Where a request from outside puts the finder: the palette's place, and the
+ * file inside it when the request named one (a path clicked in a terminal).
+ * A file wanted in some other folder than the place is not applied, so a stale
+ * request cannot select a name in the wrong listing.
+ */
+export function externalPlace(start: string, want: { dir: string; name: string } | null): { dir: string; name: string | null } {
+  const same = !!want && want.dir.replace(/\/+$/, "") === start.replace(/\/+$/, "");
+  return { dir: start, name: same ? want!.name : null };
+}
