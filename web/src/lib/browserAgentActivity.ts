@@ -24,11 +24,11 @@ const ACT_VERBS = new Set([
 const FLASH_VERBS = new Set(["click", "dblclick", "rightclick", "check", "fill", "type", "press", "select"]);
 
 export interface AgentAction { verb: string; target: string; ok: boolean; at: number }
-export interface TabAgent { agent: string; working: number; paused: boolean; log: AgentAction[] }
+export interface TabAgent { agent: string; working: number; paused: boolean; log: AgentAction[]; /** The verb of the last ask begun. */ op?: string }
 export type Activity = Record<string, TabAgent>;
 
 export type ActivityEvent =
-  | { type: "begin"; tab: string; agent: string }
+  | { type: "begin"; tab: string; agent: string; op?: string }
   | { type: "end"; tab: string; action: AgentAction | null }
   | { type: "pause"; tab: string; paused: boolean }
   | { type: "forget"; tab: string };
@@ -37,7 +37,7 @@ export function activityReducer(state: Activity, ev: ActivityEvent): Activity {
   const cur = state[ev.tab];
   switch (ev.type) {
     case "begin":
-      return { ...state, [ev.tab]: { agent: ev.agent, working: (cur?.working ?? 0) + 1, paused: cur?.paused ?? false, log: cur?.log ?? [] } };
+      return { ...state, [ev.tab]: { agent: ev.agent, working: (cur?.working ?? 0) + 1, paused: cur?.paused ?? false, log: cur?.log ?? [], op: ev.op } };
     case "end": {
       if (!cur) return state;
       const log = ev.action ? [...cur.log, ev.action].slice(-LOG_MAX) : cur.log;
@@ -137,6 +137,25 @@ export function presenceLabel(verb: string, name: string, key = ""): string {
   if (verb === "press") return key ? `${doing} ${clip(key, 16)}` : doing;
   const n = name.trim();
   return n ? `${doing} ${clip(n, 32)}` : doing;
+}
+
+export type AgentStateKey = "clicking" | "typing" | "navigating" | "scrolling" | "pointing" | "reading" | "thinking" | "yours";
+
+const STATE_OF: Record<string, AgentStateKey> = {
+  click: "clicking", dblclick: "clicking", rightclick: "clicking", check: "clicking", drag: "clicking", upload: "clicking",
+  type: "typing", fill: "typing", press: "typing", select: "typing",
+  open: "navigating", back: "navigating", forward: "navigating", reload: "navigating", newtab: "navigating",
+  scroll: "scrolling", hover: "pointing",
+};
+const STATE_WORD: Record<AgentStateKey, string> = {
+  clicking: "Clicking", typing: "Typing", navigating: "Navigating", scrolling: "Scrolling",
+  pointing: "Pointing", reading: "Reading", thinking: "Thinking", yours: "You have it",
+};
+
+/** One word for what the agent is doing now: a state, not an account of it. Anything that is not an act is a read. */
+export function agentState(a: Pick<TabAgent, "working" | "paused" | "op">): { key: AgentStateKey; word: string } {
+  const key: AgentStateKey = a.paused ? "yours" : a.working > 0 ? STATE_OF[a.op ?? ""] ?? "reading" : "thinking";
+  return { key, word: STATE_WORD[key] };
 }
 
 /** The pointer's travel time: grows with the distance, clamped so a short hop stays quick and a long one never drags. */

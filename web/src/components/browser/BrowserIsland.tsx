@@ -40,7 +40,6 @@ export interface IslandProps {
   /** A profile id ("" is the default) as the person named it. */
   spaceName: (profile: string) => string;
   /** The last thing the agent did on the page in front, in a few words. */
-  doing: string;
   /** The page in front's address as the bar shows it. */
   address: string;
   canBack: boolean;
@@ -204,7 +203,7 @@ export function BrowserIsland(p: IslandProps) {
               <button type="button" className="agx-isl-status" aria-label="Show every tab" onClick={show}>
                 <LivingMark size={17} style={{ color: "#a78bfa" }} />
                 <span className="agx-isl-title">{active?.title || (active ? host(active.url) : "")}</span>
-                <span className="agx-isl-doing"><span className={"agx-isl-dot " + dot} /><span className="agx-isl-doing-t">{act!.agent} · {working ? p.doing || "working" : "thinking"}</span></span>
+                <span className="agx-isl-doing"><span className={"agx-isl-dot " + dot} /><span className="agx-isl-doing-t">{act!.agent}</span></span>
                 <span className="agx-isl-num" title={`${tabs.length} tabs open`}>{tabs.length}</span>
               </button>
             )}

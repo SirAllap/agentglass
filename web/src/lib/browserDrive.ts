@@ -2096,7 +2096,11 @@ export const FLASH_MS = 600;
  * flash that does not happen, never an error for the agent.
  */
 export function flashScript(plan: Exclude<FlashPlan, null>, ms = FLASH_MS, draw = true): string {
+  /* The aim brings the element to where the act will put it, instantly, so the
+     pointer lands on the element and not on the one that was there before the
+     act scrolled (a list's third row clicked, the pointer on the fourth). */
   const body = `
+    if (${!draw} && e.scrollIntoView) e.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
     const r = e.getBoundingClientRect();
     if (!r.width && !r.height) return { kind: "none" };
     if (${draw}) {

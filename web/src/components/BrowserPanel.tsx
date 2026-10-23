@@ -45,7 +45,7 @@ import {
 import { VIEWPORTS, type Viewport } from "../lib/browserViewport.ts";
 import { browserNav, clearBrowserNav, subscribeBrowserNav } from "../lib/browserNav.ts";
 import { clientId, serveBrowserAsk, setBrowserAskHandler } from "../lib/browserBus.ts";
-import { activityReducer, actionOf, agentLabel, pausedRefusal, presenceLabel, type Activity } from "../lib/browserAgentActivity.ts";
+import { activityReducer, actionOf, agentLabel, pausedRefusal, type Activity } from "../lib/browserAgentActivity.ts";
 import { api } from "../lib/api.ts";
 import { forgetAgentZoom, reapplyZoom, applyGuestZoom, setPageZoomer, crossContainerRefusal, mintTakesThePane, notePopup, onActLanded, type ActLanding, type GuestZoom, type DrivableWebview } from "../lib/browserDrive.ts";
 import { AgentPresence } from "./browser/AgentPresence.tsx";
@@ -1074,7 +1074,7 @@ export function BrowserView({ active: viewOn, scope }: {
       const agent = agentLabel(ask.args.as, owner?.profile ? profileName(profilesRef.current, owner.profile) : "default");
       const serve = (wv: DrivableWebview | null) => {
         if (!owner) { void serveBrowserAsk(wv, ask); return; }
-        dispatchAct({ type: "begin", tab: owner.id, agent });
+        dispatchAct({ type: "begin", tab: owner.id, agent, op: ask.op });
         if (owner.agent !== agent) patch(owner.id, { agent });
         serveBrowserAsk(wv, ask).then(
           (ok) => dispatchAct({ type: "end", tab: owner.id, action: actionOf(ask, ok, Date.now()) }),
@@ -3056,7 +3056,6 @@ export function BrowserView({ active: viewOn, scope }: {
         {!classic && !IS_DEMO && (
           <BrowserIsland tabs={tabs} activeId={activeId} acts={acts}
             spaceName={spaceName}
-            doing={active && landings[active.id] ? presenceLabel(landings[active.id]!.verb, landings[active.id]!.name, landings[active.id]!.key) : ""}
             address={active?.url && active.url !== BLANK ? displayUrl(active.url) : ""}
             canBack={!!active?.canBack} canForward={!!active?.canForward} loading={!!active?.loading}
             onShow={show} onClose={(id) => { close(id); shots.current.delete(id); setLandings((m) => { const { [id]: _gone, ...rest } = m; return rest; }); }} onNew={() => setOmni("new")} onAddress={() => setOmni("edit")}

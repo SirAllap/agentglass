@@ -2992,25 +2992,52 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-presence-label { position: absolute; left: 18px; top: 20px; white-space: nowrap; font-size: 11px; font-weight: 500; line-height: 1; padding: 4px 8px; border-radius: 7px;
   color: color-mix(in srgb, var(--agx-mark) 70%, var(--text)); background: color-mix(in srgb, var(--bg) 86%, transparent);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--agx-mark) 22%, transparent), 0 6px 16px -8px rgba(40, 20, 90, .35); }
+/* The dock: the island's own glass, so the agent's two places on the page read
+   as one object. Dark in both themes, like the island. */
 .agx-presence-dock { pointer-events: auto; position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; align-items: center; gap: 12px;
-  max-width: calc(100% - 32px); padding: 8px 8px 8px 12px; border-radius: 14px;
-  background: color-mix(in srgb, var(--bg) 88%, transparent); -webkit-backdrop-filter: blur(18px) saturate(170%); backdrop-filter: blur(18px) saturate(170%);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent), 0 18px 40px -20px rgba(40, 20, 90, .35);
+  max-width: calc(100% - 32px); padding: 8px 8px 8px 12px; border-radius: 18px; color: #f2f0f7; --agx-dock-mark: #a78bfa; --agx-dock-yours: #fbbf24;
+  background: rgba(22, 19, 31, .94); -webkit-backdrop-filter: blur(18px) saturate(170%); backdrop-filter: blur(18px) saturate(170%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 0 0 1px color-mix(in srgb, var(--agx-mark) 34%, transparent), 0 18px 40px -18px rgba(40, 20, 90, .55);
   animation: agx-dock-in 360ms var(--agx-ease); }
-@keyframes agx-dock-in { from { opacity: 0; transform: translate(-50%, 8px); filter: blur(2px); } }
-.agx-presence-dock.is-yours { background: color-mix(in srgb, var(--warning) 10%, var(--bg)); }
+@keyframes agx-dock-in { from { opacity: 0; transform: translate(-50%, 8px) scale(.98); filter: blur(2px); } }
+.agx-presence-mark { flex: none; }
+.agx-presence-dock.is-yours { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 0 0 1px color-mix(in srgb, var(--agx-dock-yours) 45%, transparent), 0 18px 40px -18px rgba(40, 20, 90, .55); --agx-dock-mark: var(--agx-dock-yours); }
 .agx-presence-who { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.agx-presence-task { font-size: 12.5px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.agx-presence-sub { font-size: 11px; color: var(--text3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.agx-presence-dock button { flex: none; height: 26px; padding: 0 12px; border-radius: 7px; border: 0; font-size: 12px; font-weight: 500; cursor: pointer;
-  background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text2); transition: transform 120ms var(--agx-ease), background 160ms ease; }
+.agx-presence-task { font-size: 12.5px; font-weight: 600; letter-spacing: -.005em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* As wide as the longest word, so the dock and Take over stay put as the state changes. */
+.agx-presence-state { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; min-width: 96px; height: 20px; padding: 0 8px 0 6px; border-radius: 10px;
+  font-size: 11px; font-weight: 500; letter-spacing: .01em; color: #c4b5fd; background: color-mix(in srgb, var(--agx-mark) 18%, transparent);
+  animation: agx-state-in 200ms var(--agx-ease); }
+@keyframes agx-state-in { from { opacity: 0; transform: translateY(4px); } }
+.agx-presence-dock.is-thinking .agx-presence-state { color: rgba(242, 240, 247, .72); background: rgba(255, 255, 255, .08); }
+.agx-presence-dock.is-yours .agx-presence-state { color: var(--agx-dock-yours); background: color-mix(in srgb, var(--agx-dock-yours) 16%, transparent); }
+.agx-presence-state svg { flex: none; overflow: visible; }
+.agx-st-ring { transform-origin: 6px 5.5px; animation: agx-st-ring 900ms ease-out infinite; }
+@keyframes agx-st-ring { from { opacity: .9; transform: scale(.3); } to { opacity: 0; transform: scale(1); } }
+.agx-st-caret { animation: agx-st-blink 1s steps(2, start) infinite; }
+@keyframes agx-st-blink { to { visibility: hidden; } }
+.agx-st-needle { transform-origin: 8px 8px; animation: agx-st-spin 1.6s var(--agx-ease) infinite; }
+@keyframes agx-st-spin { to { transform: rotate(360deg); } }
+.agx-st-up { animation: agx-st-nudge 900ms ease-in-out infinite; }
+.agx-st-down { animation: agx-st-nudge 900ms ease-in-out infinite reverse; }
+@keyframes agx-st-nudge { 50% { transform: translateY(-1px); } }
+.agx-st-pupil { animation: agx-st-look 2.4s ease-in-out infinite; }
+@keyframes agx-st-look { 30%, 45% { transform: translateX(1.5px); } 70%, 85% { transform: translateX(-1.5px); } }
+.agx-st-dot { animation: agx-st-dot 1.2s ease-in-out infinite; }
+.agx-st-dot:nth-child(2) { animation-delay: .15s; }
+.agx-st-dot:nth-child(3) { animation-delay: .3s; }
+@keyframes agx-st-dot { 0%, 60%, 100% { opacity: .35; } 30% { opacity: 1; } }
+.agx-presence-dock button { flex: none; min-width: 92px; height: 28px; padding: 0 12px; border-radius: 10px; border: 0; font-size: 12px; font-weight: 500; cursor: pointer;
+  background: rgba(255, 255, 255, .08); color: #f2f0f7; transition: transform 120ms var(--agx-ease), background 160ms ease; }
+.agx-presence-dock button:hover { background: rgba(255, 255, 255, .14); }
 .agx-presence-dock button:active { transform: scale(.97); }
-.agx-presence-dock button.is-primary { background: var(--text); color: var(--bg); }
+.agx-presence-dock button:focus-visible { outline: 2px solid #a78bfa; outline-offset: 2px; }
+.agx-presence-dock button.is-primary { background: var(--agx-dock-yours); color: #16131f; }
 @media (prefers-reduced-motion: reduce) {
   .agx-presence-ghost { transition-property: opacity; }
-  .agx-presence-dock { animation: none; }
+  .agx-presence-dock, .agx-presence-state, .agx-presence-state * { animation: none; }
 }
-@media (prefers-reduced-transparency: reduce) { .agx-presence-dock { background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; } }
+@media (prefers-reduced-transparency: reduce) { .agx-presence-dock { background: #16131f; -webkit-backdrop-filter: none; backdrop-filter: none; } }
 
 /*
  * THE ISLAND (components/browser/BrowserIsland.tsx). A box that is always the

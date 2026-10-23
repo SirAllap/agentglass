@@ -13,9 +13,10 @@ describe("island pill", () => {
     expect(presence).toContain("const live = useAgentLive(agent);");
   });
 
-  // Between two acts the agent's pill said "working" next to a grey dot.
-  test("says working only while an act runs", () => {
-    expect(island).toContain('{working ? p.doing || "working" : "thinking"}');
+  // The pill named the act and the dock repeated it: the state lives in the dock only.
+  test("names the agent and nothing it is doing", () => {
+    expect(island).toContain('<span className="agx-isl-doing-t">{act!.agent}</span>');
+    expect(island).not.toContain("p.doing");
   });
 });
 

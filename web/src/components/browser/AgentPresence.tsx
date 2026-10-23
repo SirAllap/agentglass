@@ -16,8 +16,8 @@
  * act is done), and page zoom other than 100 % puts it off by the zoom factor.
  */
 import { useEffect, useRef, useState } from "react";
-import type { TabAgent } from "../../lib/browserAgentActivity.ts";
-import { PRESENCE_LINGER_MS, lapKeyframes, presenceLabel, travelMs } from "../../lib/browserAgentActivity.ts";
+import type { AgentStateKey, TabAgent } from "../../lib/browserAgentActivity.ts";
+import { PRESENCE_LINGER_MS, agentState, lapKeyframes, presenceLabel, travelMs } from "../../lib/browserAgentActivity.ts";
 import type { ActLanding } from "../../lib/browserDrive.ts";
 import { LivingMark } from "../Logo.tsx";
 
@@ -52,6 +52,7 @@ export function AgentPresence({ agent, landing, onToggle, quiet = false }: {
   const lap = useRef<Animation | null>(null);
   const last = useRef({ x: 48, y: 40 });
   const live = useAgentLive(agent);
+  const state = agentState(agent);
   const liveRef = useRef(live);
   liveRef.current = live;
   const [ghost, setGhost] = useState<{ x: number; y: number; label: string; travel: number; seq: number } | null>(null);
@@ -105,13 +106,12 @@ export function AgentPresence({ agent, landing, onToggle, quiet = false }: {
         </div>
       )}
       {(live || agent.paused) && !quiet && (
-        <div className={"agx-presence-dock" + (agent.paused ? " is-yours" : "")} role="status" aria-live="polite">
-          <LivingMark size={22} style={{ color: "var(--agx-mark)" }} />
+        <div className={"agx-presence-dock is-" + state.key} role="status" aria-live="polite">
+          <LivingMark size={24} className="agx-presence-mark" style={{ color: "var(--agx-dock-mark)" }} />
           <div className="agx-presence-who">
-            <span className="agx-presence-task">{agent.paused ? "You have this tab" : `${agent.agent} is driving this tab`}</span>
-            <span className="agx-presence-sub">
-              {agent.paused ? `${agent.agent} waits; its asks are refused until you hand it back` : (agent.working > 0 ? ghost?.label ?? "working" : "thinking")}
-            </span>
+            <span className="agx-presence-task">{agent.agent}</span>
+            {/* Keyed by the state, so a new one comes in instead of the text swapping in place. */}
+            <span key={state.key} className="agx-presence-state"><StateIcon k={state.key} />{state.word}</span>
           </div>
           <button type="button" className={agent.paused ? "is-primary" : ""} onClick={onToggle}>
             {agent.paused ? "Hand back" : "Take over"}
@@ -120,4 +120,20 @@ export function AgentPresence({ agent, landing, onToggle, quiet = false }: {
       )}
     </div>
   );
+}
+
+/* One small drawing per state, in the dock's chip. Stroked at 1.75 on a 16 grid
+   like the house icons; the moving part of each is in CSS (.agx-st-*). */
+function StateIcon({ k }: { k: AgentStateKey }) {
+  const p = { width: 14, height: 14, viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: 1.75, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
+  switch (k) {
+    case "clicking": return <svg {...p}><path d="M6 5.5 12.5 8 9.6 9l-1 3z" /><circle className="agx-st-ring" cx="6" cy="5.5" r="3.5" /></svg>;
+    case "typing": return <svg {...p}><rect x="1.5" y="4" width="13" height="8" rx="2" /><path className="agx-st-caret" d="M5 10h6" /></svg>;
+    case "navigating": return <svg {...p}><circle cx="8" cy="8" r="6" /><path className="agx-st-needle" d="m10.5 5.5-1.6 3.4-3.4 1.6 1.6-3.4z" /></svg>;
+    case "scrolling": return <svg {...p}><path className="agx-st-up" d="m5 6 3-3 3 3" /><path className="agx-st-down" d="m5 10 3 3 3-3" /></svg>;
+    case "pointing": return <svg {...p}><path d="M4 2.5 12 7l-3.6.9L6.8 11.5z" /></svg>;
+    case "reading": return <svg {...p}><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z" /><circle className="agx-st-pupil" cx="8" cy="8" r="2" /></svg>;
+    case "thinking": return <svg {...p} stroke="none" fill="currentColor"><circle className="agx-st-dot" cx="3.5" cy="8" r="1.5" /><circle className="agx-st-dot" cx="8" cy="8" r="1.5" /><circle className="agx-st-dot" cx="12.5" cy="8" r="1.5" /></svg>;
+    case "yours": return <svg {...p}><path d="M5.5 8V3.8a1.2 1.2 0 0 1 2.4 0V7m0-1.2a1.2 1.2 0 0 1 2.4 0V7.5m0-.7a1.2 1.2 0 0 1 2.4 0v2.7a4.5 4.5 0 0 1-4.5 4.5h-.4a4 4 0 0 1-3.2-1.6L2.8 10a1.2 1.2 0 0 1 1.9-1.4L5.5 9.6" /></svg>;
+  }
 }

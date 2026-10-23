@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { FLASH_MS, flashScript } from "../src/lib/browserDrive.ts";
 import { describe, expect, test } from "bun:test";
 import {
-  LOG_MAX, activityReducer, actionOf, agentLabel, ago, flashPlan, isActVerb, lapKeyframes, pausedRefusal, presenceLabel, travelMs, type Activity,
+  LOG_MAX, activityReducer, actionOf, agentLabel, agentState, ago, flashPlan, isActVerb, lapKeyframes, pausedRefusal, presenceLabel, travelMs, type Activity,
 } from "../src/lib/browserAgentActivity.ts";
 
 const begin = (s: Activity, tab = "t1", agent = "orbit-ci") => activityReducer(s, { type: "begin", tab, agent });
@@ -190,5 +190,21 @@ describe("the presence drawn over a driven tab", () => {
   });
   test("a page too small for the rounded path gets no lap rather than a broken one", () => {
     expect(lapKeyframes(20, 20)).toEqual([]);
+  });
+});
+
+describe("the dock's state word", () => {
+  const st = (working: number, op?: string, paused = false) => agentState({ working, op, paused }).word;
+  test("one capitalised word per kind of act, a read for the rest, Thinking between asks", () => {
+    expect(st(1, "click")).toBe("Clicking");
+    expect(st(1, "fill")).toBe("Typing");
+    expect(st(1, "back")).toBe("Navigating");
+    expect(st(1, "observe")).toBe("Reading");
+    expect(st(0, "click")).toBe("Thinking");
+    expect(st(1, "click", true)).toBe("You have it");
+  });
+  test("the op of the ask begun is kept on the tab", () => {
+    const s = activityReducer({}, { type: "begin", tab: "t1", agent: "orbit-ci", op: "type" });
+    expect(s.t1!.op).toBe("type");
   });
 });
