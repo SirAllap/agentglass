@@ -814,7 +814,7 @@ describe("the repository on the board, and results as cards", () => {
   });
 
   it("the two queues ignore the repository's page", () => {
-    const html = render({ view: "mine", mine: [pr(1)], review: [], others: [theirs(10, { fail: 2 })], total: -1 });
+    const html = render({ view: "all", mine: [pr(1)], review: [], others: [theirs(10, { fail: 2 })], total: -1 });
     expect(html).toContain('data-pr="1"');
     expect(html).not.toContain('data-pr="10"');
   });
