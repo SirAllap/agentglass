@@ -2573,6 +2573,8 @@ export function BrowserView({ active: viewOn, scope }: {
       <div className="fixed rounded-lg text-[11px] py-1 shadow-2xl"
         style={{ top: menuAtXY.top, right: menuAtXY.right, zIndex: 41, width: Math.max(230, Math.min(320, sideW - 8)), background: "var(--surface-card)", border: EDGE }}>
         {[
+          // First in the classic bar: it is the way back, and buried at the bottom nobody found it.
+          { key: "chrome", node: menuRow(<PanelIcon size={14} />, classic ? "Back to the island" : "Classic tab list"), hint: "", run: () => { const c = !classic; setClassic(c); setClassicChrome(c); if (c) { setSideOpen(true); setSidebarOpen(true); } } },
           { key: "home", node: menuRow(<HomeIcon size={14} />, "Home"), hint: "", run: () => go(homePage()) },
           { key: "new", node: menuRow(<span style={{ fontSize: 13, lineHeight: 1 }}>+</span>, "New tab"), hint: "Ctrl+T", run: () => setOmni("new") },
           { key: "keep", node: menuRow(<FolderIcon size={13} />, "Keep this page"), hint: "", run: () => { if (activeId) keep({ kind: "tab", id: activeId }, { to: "loose" }); } },
@@ -2602,7 +2604,6 @@ export function BrowserView({ active: viewOn, scope }: {
             say("Opened in your browser");
           } },
           { key: "zoom", node: menuRow(null, "Zoom back to 100%"), hint: "Ctrl+0", run: () => applyZoom(0) },
-          { key: "chrome", node: menuRow(<PanelIcon size={14} />, classic ? "Use the island" : "Classic tab list"), hint: "", run: () => { const c = !classic; setClassic(c); setClassicChrome(c); if (c) { setSideOpen(true); setSidebarOpen(true); } } },
           ...(classic ? [{ key: "hide", node: menuRow(<PanelIcon size={14} />, "Hide this bar"), hint: "Ctrl+S", run: () => { setSideOpen(false); setSidebarOpen(false); } }] : []),
         ].map((it) => (it.sep ? (
           <div key={it.key} className="my-1" style={{ borderTop: LINE }} />

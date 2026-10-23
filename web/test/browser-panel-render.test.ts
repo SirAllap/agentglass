@@ -345,3 +345,14 @@ describe("the ⋯ menu", () => {
     expect(src.split("{barMenu}").length).toBe(2);
   });
 });
+
+describe("the classic bar's menu", () => {
+  test("starts with the way back to the island", async () => {
+    const src = await Bun.file(new URL("../src/components/BrowserPanel.tsx", import.meta.url)).text();
+    const start = src.indexOf("const barMenu = ");
+    expect(start).toBeGreaterThan(-1);
+    const back = src.indexOf('"Back to the island"', start), home = src.indexOf('"Home"', start);
+    expect(back).toBeGreaterThan(start);
+    expect(back).toBeLessThan(home);
+  });
+});
