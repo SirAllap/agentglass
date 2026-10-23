@@ -106,6 +106,31 @@ export function SettingsCard({ title, desc, status, actions, children, label, fo
 }
 
 /**
+ * The segmented control: an inset track with the chosen option raised on the
+ * page's ground. For a short, exclusive choice that belongs in a row's control
+ * column: Window's display size, a 12h/24h clock, a preset. `label` names the
+ * question for a screen reader. Not a tab bar: it swaps a value, not a panel.
+ */
+export function SegControl<T extends string>({ value, options, onPick, label, disabled }: {
+  value: T | undefined;
+  options: readonly { v: T; label: ReactNode }[];
+  onPick: (v: T) => void;
+  label: string;
+  disabled?: boolean;
+}) {
+  return (
+    <span className="agx-seg" role="group" aria-label={label}>
+      {options.map((o) => (
+        <button key={o.v} type="button" onClick={() => onPick(o.v)} disabled={disabled}
+          aria-pressed={value === o.v} className="agx-seg-b disabled:cursor-not-allowed">
+          {o.label}
+        </button>
+      ))}
+    </span>
+  );
+}
+
+/**
  * The verdict on one thing, as a chip: a dot and a few words. One family for a
  * row, a card header and the page header alike.
  *

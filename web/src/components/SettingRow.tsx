@@ -74,6 +74,9 @@ export function choiceIsWide(labels: readonly string[]): boolean {
   return labels.reduce((n, l) => n + l.length + 4, 0) >= 30;
 }
 
+/** Secondary words behind a named disclosure. */
+export type RowDetail = { summary: string; body: React.ReactNode };
+
 export function SettingRow({ label, hint, control, status, actions, below, detail, rowRef, rowProps, minHeight, onClick, href, download, disabled, role, ariaChecked, align, modified, settingId, wide }: {
   /** The SettingDef this row binds to (web/src/lib/settingsRegistry.ts), written
    *  BEFORE `label` so the settings index generator reads it with the row. Also
@@ -96,9 +99,10 @@ export function SettingRow({ label, hint, control, status, actions, below, detai
   /** The stacked slot under the description, full width: forms, text fields,
    *  previews, lists. Not on a row that is itself a button or a link. */
   below?: React.ReactNode;
-  /** Secondary detail in a named disclosure under the description. Not on a
-   *  row that is itself a button or a link. */
-  detail?: { summary: string; body: React.ReactNode };
+  /** Secondary detail in a named disclosure under the description. A row that
+   *  is itself a button or a link cannot hold a <details>, so its disclosure is
+   *  drawn as the next sibling, tucked under the row (`.agx-row-more`). */
+  detail?: RowDetail;
   /** A plain row only: measured by a caller that holds its height while it
    *  waits for an answer, so the page does not jump when the answer lands. */
   rowRef?: React.Ref<HTMLDivElement>;
@@ -135,6 +139,7 @@ export function SettingRow({ label, hint, control, status, actions, below, detai
   // plain rows only (see the props).
   const stacked = operable ? undefined : below;
   const more = operable ? undefined : detail;
+  const moreBelow = operable && detail ? <div className="agx-row-more"><Disclosure summary={detail.summary}>{detail.body}</Disclosure></div> : null;
   // Status, actions and anything stacked hang from the top: a badge centred
   // against a three-line description lands in the middle of nowhere, and it
   // must not move when the description grows a line.
@@ -181,12 +186,15 @@ export function SettingRow({ label, hint, control, status, actions, below, detai
   // from the label text so it can never fall out of sync with what the row
   // is now called.
   const dataRow = rowId(textOf(label));
-  if (href) return <a href={href} download={download} className={cls} style={style} data-row={dataRow}>{body}</a>;
+  if (href) return <><a href={href} download={download} className={cls} style={style} data-row={dataRow}>{body}</a>{moreBelow}</>;
   const dataSetting = settingId ? { "data-setting-id": settingId } : undefined;
   if (onClick) {
     return (
-      <button onClick={onClick} disabled={disabled} role={role} aria-checked={ariaChecked}
-        className={`${cls} text-left disabled:cursor-not-allowed`} style={style} data-row={dataRow} {...dataSetting}>{body}</button>
+      <>
+        <button onClick={onClick} disabled={disabled} role={role} aria-checked={ariaChecked}
+          className={`${cls} text-left disabled:cursor-not-allowed`} style={style} data-row={dataRow} {...dataSetting}>{body}</button>
+        {moreBelow}
+      </>
     );
   }
   return <div ref={rowRef} className={cls} data-row={dataRow} {...dataSetting} {...rowProps} style={{ ...style, ...rowProps?.style }}>{body}</div>;
@@ -278,8 +286,10 @@ export function Fold({ label, hint, children, defaultOpen }: {
   );
 }
 
-export function Toggle({ on, onClick, label, hint, disabled, modified, settingId }: {
+export function Toggle({ on, onClick, label, hint, disabled, modified, settingId, detail }: {
   on: boolean; onClick: () => void; label: string; hint: string;
+  /** The longer words behind a "Details" link under the row; the hint stays one line. */
+  detail?: RowDetail;
   /** See SettingRow. */
   settingId?: string; agentExempt?: boolean; agentNever?: string;
   /** Differs from the shipped default: SettingRow draws the dot. */
@@ -289,7 +299,7 @@ export function Toggle({ on, onClick, label, hint, disabled, modified, settingId
   disabled?: boolean;
 }) {
   return (
-    <SettingRow label={label} hint={hint} onClick={onClick} disabled={disabled} modified={modified} settingId={settingId}
+    <SettingRow label={label} hint={hint} onClick={onClick} disabled={disabled} modified={modified} settingId={settingId} detail={detail}
       role="switch" ariaChecked={on}
       /* A real switch: position carries the state, so it reads at a glance
          instead of having to be parsed. */
