@@ -1749,6 +1749,11 @@ const realApi = {
       resolvedLocally?: { branch: string; ahead: number };
       error?: string }>(
       `/prs/conflict-files?root=${encodeURIComponent(root)}&number=${number}`),
+  /** One conflicted file of that preview with its markers, read from git's
+   *  object database. `noMarkers`: a modify/delete conflict has none. */
+  prConflictFile: (root: string, number: number, path: string) =>
+    get<ConflictFile & { noMarkers?: boolean }>(
+      `/prs/conflict-file?root=${encodeURIComponent(root)}&number=${number}&path=${encodeURIComponent(path)}`),
   /** How far behind its base a pull request's branch is. Its own call: it costs
    *  about 600ms, and the detail should not wait on an offer. */
   /** The pull requests on a branch: one out of it, any number into it. By
@@ -3156,6 +3161,7 @@ const demoApi: typeof realApi = {
     }
     : { ok: false }),
   prConflict: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
+  prConflictFile: (_r: string, _n: number, _p: string) => D({ ok: false, segments: [], blocks: [], lines: 0, stamp: "", error: "not available in the demo" } as ConflictFile),
   prConflictFiles: (_r: string, _n: number) => D({ ok: false, conflicts: [] as string[], clean: false, error: "not available in the demo" }),
   clickupWhere: (_i: string) => D({ ok: false }),
   clickupSearchStream: async (_q: string, _f: boolean, _o: (t: ProviderTask[]) => void, _s?: AbortSignal) =>

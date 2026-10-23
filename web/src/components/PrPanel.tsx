@@ -154,6 +154,7 @@ import { writeBlock } from "../lib/cardWrites.ts";
 import type { ListStatus as CuStatus, ListMember as CuMember, ProviderTask, HandoffUnassign } from "../../../shared/providers.ts";
 import { CloseButton, CloseIcon } from "./CloseButton.tsx";
 import { HIT, ICON, MIN_BOX } from "../lib/iconSize.ts";
+import { ConflictPeek } from "./ConflictPeek.tsx";
 import { EDGE_FADE_PX, edgeMask, stepX, useTabStripScroll } from "../lib/tabStrip.ts";
 import { isTrunkBranch, type Stack } from "../lib/prStack.ts";
 import { usePrStacks } from "../lib/usePrStacks.ts";
@@ -6083,6 +6084,8 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
   const upState: UpdateStanding = updateState === "pr-lagging" && lagTryable ? "idle" : (updateState ?? "idle");
   const stuckNow = stuckMinutes(unknownSince, Date.now()) != null;
   const [allFiles, setAllFiles] = useState(false);
+  /** The conflicting file whose markers are open, if any. */
+  const [peekPath, setPeekPath] = useState<string | null>(null);
   /* GitHub's own "mergeable" — see githubWillMerge for why that is not only
      CLEAN. */
   const canMerge = githubWillMerge(d.mergeState);
@@ -6521,7 +6524,13 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
               {conflictFiles.stale && <span style={{ color: "var(--text3)" }}> (from your last fetch — GitHub could not be reached)</span>}
               <span className="block mt-1 font-mono text-[10.5px]" style={{ color: "var(--text2)" }}>
                 {(allFiles ? conflictFiles.files : conflictFiles.files.slice(0, 5)).map((f) => (
-                  <span key={f} className="block truncate" title={f}>{f}</span>
+                  <span key={f} className="block">
+                    <button className="block w-full text-left truncate" title={f}
+                      aria-expanded={peekPath === f}
+                      style={{ minHeight: MIN_BOX, color: peekPath === f ? "var(--primary-ink)" : undefined }}
+                      onClick={() => setPeekPath((p) => (p === f ? null : f))}>{f}</button>
+                    {peekPath === f && <ConflictPeek root={root} number={d.number} path={f} />}
+                  </span>
                 ))}
               </span>
             </Reason>

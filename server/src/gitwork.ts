@@ -4521,6 +4521,10 @@ export interface ConflictPreview {
    * not, so the banner can say what pushing would send.
    */
   resolvedLocally?: { branch: string; ahead: number };
+  /** The tree git wrote for the merge, conflicted files included with their
+   *  markers. It is what lets one file be read back without merging again; an
+   *  unreachable object, so gc may take it — conflictPreviewFile asks again. */
+  tree?: string;
   error?: string;
 }
 
@@ -4612,6 +4616,7 @@ export async function conflictPreview(rootIn: unknown, base: string, head: strin
   // Line 1 is the written tree's oid; the conflicted paths follow, and a blank
   // line ends them before git's own commentary.
   const lines = r.stdout.split("\n");
+  const tree = lines[0]!.trim();
   const conflicts: string[] = [];
   for (const l of lines.slice(1)) { if (!l.trim()) break; conflicts.push(l); }
 
@@ -4637,6 +4642,7 @@ export async function conflictPreview(rootIn: unknown, base: string, head: strin
 
   const v: ConflictPreview = {
     ok: true, conflicts, clean: r.code === 0,
+    ...(/^[0-9a-f]{40,64}$/.test(tree) ? { tree } : {}),
     ...(stale ? { stale: true } : {}),
     ...(resolvedLocally ? { resolvedLocally } : {}),
   };
@@ -4961,6 +4967,13 @@ export function conflictFile(rootIn: unknown, relIn: unknown): ConflictFile {
   let text: string;
   try { text = readFileSync(join(root, rels[0]!), "utf8"); }
   catch { return { ok: false, ...empty, error: "cannot read that file" }; }
+  return parseConflictText(text);
+}
+
+/** The size and binary refusals and the parse, shared by the file on disk and
+ *  the one read out of a preview tree. */
+function parseConflictText(text: string): ConflictFile {
+  const empty = { segments: [], blocks: [], lines: 0, stamp: "" };
   // A binary file has no lines to choose between, so whole-file is the only
   // resolution — saying so beats rendering its bytes.
   if (text.includes("\u0000")) return { ok: false, ...empty, error: "binary file — resolve it whole" };
@@ -4982,6 +4995,49 @@ export function conflictFile(rootIn: unknown, relIn: unknown): ConflictFile {
     lines: text.split("\n").length,
     stamp: contentStamp(text),
   };
+}
+
+/**
+ * One conflicted file of a pull request, read out of the tree the preview
+ * merge wrote — nothing is checked out and nothing is merged again.
+ *
+ * Only a path the preview itself named is read, so this cannot be pointed at an
+ * arbitrary blob. A modify/delete conflict has no markers (git keeps the
+ * surviving side as it is), which `noMarkers` says rather than showing a file
+ * that looks resolved.
+ */
+export async function conflictPreviewFile(
+  rootIn: unknown, base: string, head: string, number: number, path: unknown,
+): Promise<ConflictFile & { noMarkers?: boolean }> {
+  const empty = { segments: [], blocks: [], lines: 0, stamp: "" };
+  const fail = (error: string) => ({ ok: false, ...empty, error });
+  if (typeof path !== "string" || !path) return fail("invalid path");
+  const root = repoRoot(rootIn);
+  if (!root) return fail("not a git repository root");
+  const read = async (v: ConflictPreview) => {
+    if (!v.ok) return { error: v.error ?? "could not compare those branches" };
+    if (!v.conflicts.includes(path)) return { error: "that file is not in the conflict list" };
+    if (!v.tree) return { error: "git did not report a merge tree" };
+    const obj = `${v.tree}:${path}`;
+    // Size first: the cap should refuse a generated artefact before it is
+    // read into memory, not after.
+    const size = await gitAsync(root, ["cat-file", "-s", obj]);
+    if (size.code !== 0) return { gone: true as const };
+    if (Number(size.stdout.trim()) > CONFLICT_FILE_MAX) return { error: "too big to preview here — open it in your editor" };
+    const blob = await gitAsync(root, ["cat-file", "blob", obj]);
+    return blob.code === 0 ? { text: blob.stdout } : { gone: true as const };
+  };
+  let got = await read(await conflictPreview(root, base, head, number));
+  if ("gone" in got) {
+    // The tree is unreachable, so gc or a prune can have taken it while the
+    // cache still named it. Forget the answer and merge once more.
+    for (const k of previewCache.keys()) if (k.startsWith(`${root}\u0000`)) previewCache.delete(k);
+    got = await read(await conflictPreview(root, base, head, number));
+  }
+  if ("gone" in got) return fail("git has no content for that file in the merge — it may be deleted on one side");
+  if ("error" in got) return fail(got.error!);
+  const parsed = parseConflictText(got.text);
+  return parsed.ok && !parsed.blocks.length ? { ...parsed, noMarkers: true } : parsed;
 }
 
 export function conflictBlocks(rootIn: unknown, relIn: unknown): {

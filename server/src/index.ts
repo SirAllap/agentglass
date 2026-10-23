@@ -76,7 +76,7 @@ import {
   refs, listSnapshots, createSnapshot, restoreSnapshot, deleteSnapshot,
   applyHunk, logGraph, mergeBranch, rebaseBranch, renameBranch, resetTo,
   worktreesWithState as gitWorktrees, addWorktree, removeWorktree, worktreeLeftovers, rescueLeftovers, fixWorktreeOwnership, startAutoFetch, setAutoFetchAudience, autoFetchWhenSomeoneComes, syncFromBase, setBase, setGitChangeHook, setMergedVerdictHook, setPrBaseHook,
-  conflicts as gitConflicts, resolveWith, conflictBlocks, conflictFile, resolveBlocks, mergeSession, reopenConflict, stoppedRefusal, conflictPreview, mergeAbort, mergeContinue, baseCandidates, undoMerge, mergeInfo,
+  conflicts as gitConflicts, resolveWith, conflictBlocks, conflictFile, resolveBlocks, mergeSession, reopenConflict, stoppedRefusal, conflictPreview, conflictPreviewFile, mergeAbort, mergeContinue, baseCandidates, undoMerge, mergeInfo,
   cherryPick, cherryPickContinue, cherryPickAbort,
   revertCommit, amendCommit, squashCommits,
   rebaseSteps, runRebase, compareRefs,
@@ -8050,6 +8050,15 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // The number goes through: a pull request from a fork has no branch on
       // origin, and refs/pull/<n>/head is the only ref that always exists.
       return json(await conflictPreview(root, pr.base, pr.head, number));
+    }
+    /* One file of that preview, markers and all, read out of the tree the
+       preview merge wrote. Read-only; the path must be one the preview named. */
+    if (pathname === "/prs/conflict-file") {
+      const root = prRouteRoot(url.searchParams.get("root") ?? "");
+      const number = Number(url.searchParams.get("number") ?? 0);
+      const pr = await prBranches(root, number);
+      if (!pr) return json({ ok: false, segments: [], blocks: [], lines: 0, stamp: "", error: "could not read that pull request's branches" });
+      return json(await conflictPreviewFile(root, pr.base, pr.head, number, url.searchParams.get("path")));
     }
     /* The pull requests on a branch — one out of it, any number into it. Asked
        of GitHub by name rather than filtered out of a scope, because a scope is

@@ -17,7 +17,7 @@ import { join } from "node:path";
 
 const dir = realpathSync(mkdtempSync(join(tmpdir(), "agx-preview-")));
 process.env.AGENTGLASS_ROOT = dir;
-const { conflictPreview } = await import("../src/gitwork.ts");
+const { conflictPreview, conflictPreviewFile } = await import("../src/gitwork.ts");
 
 let repo = "";
 const git = (...args: string[]) =>
@@ -157,5 +157,67 @@ describe("when the fetch cannot happen", () => {
     expect(r.ok).toBe(true);
     expect(r.stale).toBe(true);
     expect(r.conflicts.length).toBe(7);
+  });
+});
+
+describe("reading one conflicted file", () => {
+  it("returns the conflict blocks git wrote, and leaves the checkout alone", async () => {
+    const before = git("status", "--porcelain").stdout.toString();
+    const r = await conflictPreviewFile(repo, "main", "feat", 0, "a.txt");
+    expect(r.ok).toBe(true);
+    expect(r.noMarkers).toBeUndefined();
+    expect(r.blocks.length).toBe(1);
+    expect(r.blocks[0]!.ours).toEqual(["ours"]);
+    expect(r.blocks[0]!.theirs).toEqual(["theirs"]);
+    expect(git("status", "--porcelain").stdout.toString()).toBe(before);
+  });
+
+  it("refuses a path the preview did not name", async () => {
+    // quiet.txt exists and is clean: the endpoint is for conflicts, not a way
+    // to read any blob in the merge.
+    for (const p of ["quiet.txt", "../../etc/passwd", "only-on-feat.txt", ""]) {
+      const r = await conflictPreviewFile(repo, "main", "feat", 0, p);
+      expect(r.ok).toBe(false);
+      expect(r.blocks).toEqual([]);
+    }
+  });
+
+  it("says a binary file has nothing to preview", async () => {
+    git("checkout", "-q", "-b", "bin-a", "main");
+    writeFileSync(join(repo, "logo.bin"), Buffer.from([0, 1, 2, 3]));
+    git("add", "-A"); git("commit", "-qm", "bin a");
+    git("checkout", "-q", "-b", "bin-b", "main");
+    writeFileSync(join(repo, "logo.bin"), Buffer.from([0, 9, 8, 7]));
+    git("add", "-A"); git("commit", "-qm", "bin b");
+    git("fetch", "-q", "origin");
+    const r = await conflictPreviewFile(repo, "bin-a", "bin-b", 0, "logo.bin");
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("binary");
+  });
+
+  it("says a delete/modify conflict has no markers instead of showing a resolved file", async () => {
+    git("checkout", "-q", "-b", "pruner", "main");
+    git("rm", "-q", "quiet.txt");
+    git("commit", "-qm", "drop it");
+    git("checkout", "-q", "-b", "keeper", "main");
+    writeFileSync(join(repo, "quiet.txt"), "still wanted\n");
+    git("commit", "-qam", "keep it");
+    git("fetch", "-q", "origin");
+    const r = await conflictPreviewFile(repo, "pruner", "keeper", 0, "quiet.txt");
+    expect(r.ok).toBe(true);
+    expect(r.noMarkers).toBe(true);
+    expect(r.blocks).toEqual([]);
+  });
+
+  it("merges again when the cached tree was pruned", async () => {
+    // merge-tree's tree is unreachable, so gc can take it while the minute of
+    // cache still names it.
+    const first = await conflictPreview(repo, "main", "feat");
+    expect(first.tree).toMatch(/^[0-9a-f]{40,64}$/);
+    git("prune", "--expire=now");
+    expect(git("cat-file", "-e", first.tree!).exitCode).not.toBe(0);
+    const r = await conflictPreviewFile(repo, "main", "feat", 0, "b.txt");
+    expect(r.ok).toBe(true);
+    expect(r.blocks.length).toBe(1);
   });
 });
