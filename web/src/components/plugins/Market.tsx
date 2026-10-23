@@ -33,7 +33,7 @@ import { ExternalIcon } from "../browser/icons.tsx";
 import { Portal } from "../Portal.tsx";
 import { CloseButton } from "../CloseButton.tsx";
 import { LAYER } from "../../lib/layers.ts";
-import { Button, CHIP, CHIP_SURFACE, CHIP_SURFACE_CLS, Chip, EDGE, INPUT, INPUT_STYLE, RefreshButton } from "../workspace/Chrome.tsx";
+import { Button, CHIP, CHIP_SURFACE, CHIP_SURFACE_CLS, Chip, EDGE, INPUT, INPUT_STYLE, LINE, RefreshButton } from "../workspace/Chrome.tsx";
 import { SettingRow } from "../SettingRow.tsx";
 import { PLUGIN_CTRL_H } from "../../lib/pluginCard.ts";
 import { SettingsCard, StatusBadge } from "../SettingsKit.tsx";
@@ -323,7 +323,7 @@ export function Offer({ entry, owner, onInstalled, mode, was = null }: {
         of things to pick from needs its rows told apart at a glance), what it
         is, where it draws, and one filled button at the bottom of every card. */}
     <article className="flex flex-col gap-2.5 p-3.5 min-w-0 rounded-xl"
-      style={{ background: "var(--surface-card)", border: "1px solid var(--surface-line)", boxShadow: "var(--surface-lift)" }}>
+      style={{ background: "var(--surface-card)", border: LINE, boxShadow: "var(--surface-lift)" }}>
       <div className="flex items-center gap-3 min-w-0">
         <span aria-hidden className="agx-market-tile shrink-0 grid place-items-center rounded-lg text-[15px] font-semibold" style={{
           width: 36, height: 36, color: tint,
@@ -332,13 +332,13 @@ export function Offer({ entry, owner, onInstalled, mode, was = null }: {
         }}>{(entry.title || entry.id).trim().charAt(0).toUpperCase()}</span>
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2 min-w-0">
-            <span className="text-[13.5px] font-semibold truncate" style={{ color: "var(--text)" }}>{entry.title || entry.id}</span>
+            <span className="text-[13.5px] font-semibold break-words" style={{ color: "var(--text)" }}>{entry.title || entry.id}</span>
             {entry.source.ref && (
               <span className="t-mono text-[10.5px] px-1.5 rounded-md shrink-0 inline-flex items-center" style={{ height: 18, color: "var(--text2)", border: EDGE }}
                 title={entry.source.ref}>{COMMIT.test(entry.source.ref) ? entry.source.ref.slice(0, 7) : entry.source.ref}</span>
             )}
           </div>
-          <div className="text-[11.5px] t-dim truncate">by {entry.publisher || owner}</div>
+          <div className="text-[11.5px] t-dim break-words">by {entry.publisher || owner}</div>
         </div>
       </div>
       <p className="m-0 text-[12px] leading-snug" style={{ color: "var(--text2)", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}

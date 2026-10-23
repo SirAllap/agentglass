@@ -290,7 +290,7 @@ export function PluginsPane({ open, focus }: {
           </p>
         )}
         {installing && (
-          <div className="mb-4 rounded-xl overflow-hidden" style={{ background: "var(--surface-card)", border: "1px solid var(--surface-line)" }}>
+          <div className="mb-4 rounded-xl overflow-hidden" style={{ background: "var(--surface-card)", border: LINE }}>
             <AddPluginCard onInstalled={load} open={installing} setOpen={setInstalling} prefill={prefill} />
           </div>
         )}
@@ -414,7 +414,7 @@ function PluginCard({ plugin, masterOn, envAllowsUnboxed, onChanged, onSettings,
         and how it is, what it is, what matters now, what can be done. The
         footer is pinned to the bottom, so cards in a row end on one line. */}
     <article className="flex flex-col min-w-0 rounded-xl overflow-hidden"
-      style={{ background: "var(--surface-card)", border: "1px solid var(--surface-line)", boxShadow: "var(--surface-lift)" }}>
+      style={{ background: "var(--surface-card)", border: LINE, boxShadow: "var(--surface-lift)" }}>
       {band && (
         <Band band={band}>
           {band === "approval" && (<>
@@ -455,11 +455,11 @@ function PluginCard({ plugin, masterOn, envAllowsUnboxed, onChanged, onSettings,
           <PluginMark name={plugin.name} icon={plugin.icon} color={plugin.color} size={44} stamp={plugin.contentHash} />
           <div className="min-w-0 flex-1">
             <div className="flex items-baseline gap-2.5 min-w-0">
-              <span className="text-[14px] font-semibold truncate" style={{ color: "var(--text)" }}>{plugin.name}</span>
+              <span className="text-[14px] font-semibold break-words" style={{ color: "var(--text)" }}>{plugin.name}</span>
               <span className="t-mono text-[10.5px] px-1.5 rounded-md shrink-0 inline-flex items-center" style={{ height: 18, color: "var(--text2)", border: EDGE }}
                 title={plugin.resolvedCommit ?? "no version: this plugin's manifest does not carry one"}>{versionChip(plugin)}</span>
             </div>
-            <div className="text-[11.5px] t-dim truncate" title={`${formatSource(plugin.source)} · installed ${fmtAgo(plugin.installedAt)}`}>
+            <div className="text-[11.5px] t-dim" title={`${formatSource(plugin.source)} · installed ${fmtAgo(plugin.installedAt)}`}>
               by {plugin.publisher} · {SOURCE_WORD[plugin.source.kind]} · installed {fmtAgo(plugin.installedAt)}
             </div>
           </div>
@@ -473,7 +473,7 @@ function PluginCard({ plugin, masterOn, envAllowsUnboxed, onChanged, onSettings,
           </button>
         </div>
 
-        <p className="m-0 text-[12.5px] truncate" style={{ color: "var(--text2)" }} title={plugin.description}>{plugin.description}</p>
+        <p className="m-0 text-[12.5px]" style={{ color: "var(--text2)" }} title={plugin.description}>{plugin.description}</p>
 
         {/* Chips, because a plugin is read by its badges before its prose —
             the scope is the one fact worth knowing before installing anything. */}
@@ -578,7 +578,7 @@ function Band({ band, children }: { band: Exclude<CardBand, null>; children: Rea
   const hue = band === "stopped" ? "var(--error)" : band === "update" ? "var(--warning)" : "var(--primary)";
   return (
     <div className="flex items-start gap-x-3 gap-y-1 flex-wrap px-4 py-2 text-[12px] min-w-0" data-band={band}
-      style={{ background: `color-mix(in srgb, ${hue} 12%, transparent)`, borderBottom: `1px solid color-mix(in srgb, ${hue} 35%, transparent)`, color: "var(--text)" }}>
+      style={{ background: `color-mix(in srgb, ${hue} 12%, transparent)`, borderBottom: LINE, color: "var(--text)" }}>
       {children}
     </div>
   );
