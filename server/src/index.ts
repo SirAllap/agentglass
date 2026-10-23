@@ -524,7 +524,6 @@ import re
 import sys
 
 
-
 def tail(path: str, keep: int = 60) -> str:
     """The END of a path, which is the part that differs between two of them."""
     return path if len(path) <= keep else "…" + path[-(keep - 1):]
