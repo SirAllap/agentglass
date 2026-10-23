@@ -140,6 +140,10 @@ contextBridge.exposeInMainWorld("agentglass", {
   setWindowBackground: (/** @type {string} */ color, /** @type {{ dark?: string, light?: string } | undefined} */ both) =>
     ipcRenderer.send("ag:setWindowBackground", String(color ?? ""),
       both && typeof both === "object" ? { dark: String(both.dark ?? ""), light: String(both.light ?? "") } : null),
+  /** The theme's primary (#rrggbb), for the scrollbars of pages in the
+   *  built-in browser. Fire-and-forget, like the background above. */
+  setGuestScrollbar: (/** @type {string} */ primary) =>
+    ipcRenderer.send("ag:setGuestScrollbar", String(primary ?? "")),
   /** @param {(p: unknown) => void} fn */
   onServerFailed: (fn) => {
     /** @type {IpcListener} */

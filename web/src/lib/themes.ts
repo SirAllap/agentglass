@@ -185,6 +185,11 @@ function rememberPaint(id: string, keys: string[]) {
         .agentglass?.setWindowBackground?.(vars["--bg"], both);
     } catch { /* an older shell without the call: its window keeps the default */ }
   }
+  if (vars["--primary"]) {
+    try {
+      (window as unknown as { agentglass?: { setGuestScrollbar?: (c: string) => void } }).agentglass?.setGuestScrollbar?.(vars["--primary"]);
+    } catch { /* an older shell: its pages keep the stock scrollbar */ }
+  }
 }
 
 /** What applyTheme would set for a listed theme, accent included, without

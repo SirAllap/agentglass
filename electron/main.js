@@ -35,6 +35,7 @@ const { startEgressProxy, literalRefusal, EGRESS_ENV } = require("./egress-guard
 /* S9: the honest "an agent is driving this" header — see identify-header.js
    for the decision and which origins count. */
 const { IDENTIFY_HEADER, shouldIdentify, createOwnerBook } = require("./identify-header.js");
+const { createScrollbarBook } = require("./guest-scrollbar.js");
 
 /**
  * The browser's egress guard, once it is listening — see egress-guard.js for
@@ -3395,6 +3396,8 @@ let browserGuest = null;
 /** Every attached guest. `browserGuest` is whichever of them the renderer says
  *  is on screen; this is what lets a destroyed tab fall back to another. */
 const browserGuests = new Set();
+/** The scrollbar every guest page wears, in the colours the renderer last reported — see guest-scrollbar.js. */
+const guestScrollbar = createScrollbarBook();
 /** Per guest, the favicon URLs Chromium has reported for it. The allowlist
  *  `ag:browserFavicon` checks against; see where it is filled for why. */
 const guestFavicons = new WeakMap();
@@ -3624,6 +3627,7 @@ function guardWebviews(win, opts = {}) {
      * step in history, and nothing more.
      */
     guest.on("dom-ready", () => {
+      guestScrollbar.apply(guest);
       guest.executeJavaScriptInIsolatedWorld(SIDE_BUTTON_WORLD, [{ code: `(() => { if (window.__agxSide) return; window.__agxSide = 1;
         addEventListener("mouseup", (e) => { if (e.button === 3 || e.button === 4) { e.preventDefault(); console.info(${JSON.stringify(SIDE_BUTTON_TOKEN)} + e.button); } }, true); })()` }]).catch(() => {});
     });
@@ -4688,6 +4692,13 @@ app.whenReady().then(async () => {
     if (!win || win.isDestroyed()) return;
     try { win.setBackgroundColor(bg); } catch { /* a window on its way out */ }
     saveWindowState(win);
+  });
+  // The theme's primary, on every paint of a theme: pages in the built-in
+  // browser draw their scrollbars in it. Applied to the open ones now, to the
+  // rest as they load.
+  ipcMain.on("ag:setGuestScrollbar", (e, primary) => {
+    if (isLaneHost(e.sender) || !guestScrollbar.setPrimary(primary)) return;
+    for (const g of browserGuests) guestScrollbar.apply(g);
   });
   // The browser element-picker's copy/screenshot, done on the main-process
   // clipboard so it works while the <webview> guest holds focus — the preload
