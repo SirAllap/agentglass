@@ -42,6 +42,8 @@ export interface BrowseEntry {
    *  a person actually wants there, and the one every file manager shows. */
   bytes: number | null;
   items: number | null;
+  /** A link whose target does not exist. A link that leads somewhere this may not look is not this: it is only not followed. */
+  broken?: true;
   /** Epoch millis. Rendered relative on the client, which is where the clock is. */
   mtime: number;
   /** True when the name starts with a dot. Listed only when the caller asks
@@ -308,7 +310,8 @@ export function entryOf(abs: string, name: string, viaDot: boolean, local: boole
   // A symlink is followed ONLY to decide whether it behaves as a folder,
   // and only when its target is somewhere this may look. Anything else is
   // shown as what it is.
-  const target = link && browseAllows(realish(full), local) ? safeStat(full) : null;
+  const followable = link && browseAllows(realish(full), local);
+  const target = followable ? safeStat(full) : null;
   const dir = st.isDirectory() || (target?.isDirectory() ?? false);
   const locked = (hidden || viaDot) && !browseAllows(full, local);
   return {
@@ -319,6 +322,7 @@ export function entryOf(abs: string, name: string, viaDot: boolean, local: boole
     mtime: st.mtimeMs,
     hidden,
     locked,
+    ...(followable && !target ? { broken: true as const } : null),
     ...(locked && agentglassPrivate(realish(full)) ? { why: KEYS_WHY } : null),
   };
 }

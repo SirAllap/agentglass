@@ -48,7 +48,7 @@ describe("wired where Strata has it", () => {
     expect(on.indexOf('key.toLowerCase() === "k"')).toBeLessThan(on.indexOf("isAppChord(e)"));
     expect(on.indexOf("searchingRef.current")).toBeGreaterThan(-1);
     expect(on.indexOf("searchingRef.current")).toBeLessThan(on.indexOf('key.toLowerCase() === "k"'));
-    expect(t).toContain('aria-label="Search Home"');
+    expect(t).toContain('aria-label="Search"');
   });
   test("Names are asked of the index and Contents of the text search, and nothing polls", async () => {
     const t = await src("components/finder/machine/FinderSearch.tsx");

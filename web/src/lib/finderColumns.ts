@@ -111,29 +111,6 @@ export function previewFits(room: number, view: "columns" | "icons" | "list"): b
   return room - GRIP_W - (view === "columns" ? COLUMN_MIN_W : 240) >= PREVIEW_MIN_W;
 }
 
-/** The column header's actions, in the order they give up their place: the last of these goes into the menu first. */
-export type HeaderAction = "options" | "filter" | "close" | "refresh" | "direction" | "sort";
-export const HEADER_ORDER: readonly HeaderAction[] = ["options", "filter", "close", "refresh", "direction", "sort"];
-
-/**
- * Which header actions stay as buttons in a column `width` px wide. The title
- * keeps 56 px, the count badge 34, and each button takes `hit` plus a 4 px gap;
- * whatever does not fit is reached from the options menu instead, as in
- * Strata, and the header never draws one control over another. The options
- * button itself always stays: it is where the rest went.
- */
-export function headerInline(width: number, hit: number, closable: boolean, hasCount = true): Set<HeaderAction> {
-  const room = width - 20 - 56 - (hasCount ? 38 : 0);
-  let slots = Math.max(1, Math.floor(room / (hit + 4)));
-  const out = new Set<HeaderAction>();
-  for (const a of HEADER_ORDER) {
-    if (a === "close" && !closable) continue;
-    if (slots <= 0) break;
-    out.add(a); slots--;
-  }
-  return out;
-}
-
 /**
  * The strip's layout, as numbers and nothing else: how much room to leave after
  * the last column and where to scroll. It reads the scroll position the browser

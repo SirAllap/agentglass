@@ -244,3 +244,16 @@ describe("the bench never follows a link", () => {
     expect(canEditRow(row("a.zip"))).toBe(false);
   });
 });
+
+describe("sort by type and folders first (Strata's sort menu)", () => {
+  const row = (name: string, kind: "dir" | "file" = "file") => ({ name, kind, bytes: 1, items: kind === "dir" ? 0 : null, mtime: 0, hidden: false });
+  const rows = [row("b.py"), row("a.txt"), row("zdir", "dir"), row("c.md"), row("adir", "dir")];
+  test("type orders by the extension, then the name", () => {
+    expect(sortRows(rows, "type", "asc").map((r) => r.name)).toEqual(["adir", "zdir", "c.md", "b.py", "a.txt"]);
+    expect(sortRows(rows, "type", "desc").filter((r) => r.kind === "file").map((r) => r.name)).toEqual(["a.txt", "b.py", "c.md"]);
+  });
+  test("with folders first off a folder sorts among the files", () => {
+    expect(sortRows(rows, "name", "asc", false).map((r) => r.name)).toEqual(["a.txt", "adir", "b.py", "c.md", "zdir"]);
+    expect(sortRows(rows, "name", "asc").map((r) => r.name)).toEqual(["adir", "zdir", "a.txt", "b.py", "c.md"]);
+  });
+});

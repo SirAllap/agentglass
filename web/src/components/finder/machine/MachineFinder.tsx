@@ -22,19 +22,17 @@ import {
   DEFAULT_PREFS, canEditRow, displayRows, opensOnPick, footerCount, gridStep, indexOfName, isFolder, joinPath, keyStep, nextSidebar, parentOf, readPrefs, rowHeight, sidebarMode, sidebarPrefs, sidebarTip, writePrefs,
   type ColShape, type Display, type Prefs, type Row, type SortKey,
 } from "../../../lib/finderMiller.ts";
-import { CopyIcon, GridIcon, SearchIcon } from "../../../lib/glyphIcons.tsx";
-import { ArrowLeftIcon, ArrowRightIcon, ArrowUpIcon, PanelLeftIcon, SlidersIcon } from "../../../lib/finderIcons.tsx";
-import { HIT, ICON } from "../../../lib/iconSize.ts";
+import { HIT } from "../../../lib/iconSize.ts";
 import { isAppChord } from "../../../lib/keybindings.ts";
 import type { DiskPlace } from "../../../../../shared/types.ts";
-import { EDGE, LINE } from "../../workspace/Chrome.tsx";
+import { LINE } from "../../workspace/Chrome.tsx";
 import { Column, type Mod } from "./Column.tsx";
 import { AppearanceMenu, FinderSettings, HelpSheet } from "./FinderChrome.tsx";
 import { FinderPathBar } from "./FinderPathBar.tsx";
 import { FinderSearch } from "./FinderSearch.tsx";
 import type { HitTarget } from "../../../lib/finderSearch.ts";
 import { IconsView, ListView, tilesPerRow } from "./FolderViews.tsx";
-import { CloseButton } from "../../CloseButton.tsx";
+import { StrataIcon } from "./StrataIcon.tsx";
 import { QuickLook } from "./QuickLook.tsx";
 import { Sidebar, placesFor } from "./Sidebar.tsx";
 import { useBox } from "./useBox.ts";
@@ -194,14 +192,14 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
     const state: FolderState | undefined = store.current?.get(path);
     const needle = filters[path] ?? "";
     const big = !!state && !state.done && state.rows.length > BIG;
-    const sig = `${needle}|${prefs.hidden}|${prefs.group}|${prefs.sortKey}|${prefs.sortDir}|${big}`;
+    const sig = `${needle}|${prefs.hidden}|${prefs.group}|${prefs.sortKey}|${prefs.sortDir}|${prefs.foldersFirst}|${big}`;
     const hit = cache.current.get(path);
     if (state && hit && hit.rows === state.rows && hit.sig === sig) return { path, state, display: hit.display };
-    const display = displayRows(state?.rows ?? [], { needle, hidden: prefs.hidden, group: prefs.group, sortKey: prefs.sortKey, sortDir: prefs.sortDir, unsorted: big });
+    const display = displayRows(state?.rows ?? [], { needle, hidden: prefs.hidden, group: prefs.group, sortKey: prefs.sortKey, sortDir: prefs.sortDir, foldersFirst: prefs.foldersFirst, unsorted: big });
     if (state) cache.current.set(path, { rows: state.rows, sig, display });
     return { path, state, display };
     // `version` is how the store says its rows changed.
-  }), [trail, version, ready, filters, prefs.hidden, prefs.group, prefs.sortKey, prefs.sortDir]);
+  }), [trail, version, ready, filters, prefs.hidden, prefs.group, prefs.sortKey, prefs.sortDir, prefs.foldersFirst]);
 
   /* ---- selection ---- */
   const pick = useCallback((col: number, row: Row) => {
@@ -409,17 +407,18 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
   return (
     <div ref={root} data-machine-finder className="relative flex-1 min-h-0 min-w-0 flex flex-col" style={{ fontSize: prefs.textSize, color: "var(--text)" }}>
       <div className="flex items-center gap-1.5 px-2.5 py-1.5 shrink-0" style={{ borderBottom: LINE }}>
-        <button className={tool} style={{ width: HIT, height: HIT, border: EDGE, color: sideOn ? "var(--text)" : "var(--text3)" }} aria-pressed={sideOn} title={sidebarTip(compact ? (sidePage ? "full" : "hidden") : sideMode, "Ctrl+B")} aria-label="Toggle sidebar (Ctrl+B)"
-          onClick={toggleSide}><PanelLeftIcon size={ICON.sm} /></button>
-        <button className={tool} disabled={!canBack(hist)} style={{ width: HIT, height: HIT, border: EDGE, color: "var(--text2)", opacity: canBack(hist) ? 1 : 0.4 }} title="Back (Alt+Left)" aria-label="Back" onClick={() => goHist(histBack(hist))}><ArrowLeftIcon size={ICON.sm} /></button>
-        <button className={tool} disabled={!canForward(hist)} style={{ width: HIT, height: HIT, border: EDGE, color: "var(--text2)", opacity: canForward(hist) ? 1 : 0.4 }} title="Forward (Alt+Right)" aria-label="Forward" onClick={() => goHist(histForward(hist))}><ArrowRightIcon size={ICON.sm} /></button>
-        <button className={tool} disabled={!parentOf(trail[0]!)} style={{ width: HIT, height: HIT, border: EDGE, color: "var(--text2)", opacity: parentOf(trail[0]!) ? 1 : 0.4 }} title="Parent folder (Alt+Up)" aria-label="Parent folder" onClick={goUp}><ArrowUpIcon size={ICON.sm} /></button>
+        <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", opacity: sideOn ? 1 : 0.7 }} aria-pressed={sideOn} title={sidebarTip(compact ? (sidePage ? "full" : "hidden") : sideMode, "Ctrl+B")} aria-label="Toggle sidebar (Ctrl+B)"
+          onClick={toggleSide}><StrataIcon set="act" name="panel-left-symbolic" size={17} /></button>
+        {prefs.view !== "columns" && <>
+          <button className={tool} disabled={!canBack(hist)} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", opacity: canBack(hist) ? 1 : 0.4 }} title="Back (Alt+Left)" aria-label="Back" onClick={() => goHist(histBack(hist))}><StrataIcon set="act" name="arrow-left" size={17} /></button>
+          <button className={tool} disabled={!canForward(hist)} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", opacity: canForward(hist) ? 1 : 0.4 }} title="Forward (Alt+Right)" aria-label="Forward" onClick={() => goHist(histForward(hist))}><StrataIcon set="act" name="arrow-right" size={17} /></button>
+          <button className={tool} disabled={!parentOf(trail[0]!)} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", opacity: parentOf(trail[0]!) ? 1 : 0.4 }} title="Parent folder (Alt+Up)" aria-label="Parent folder" onClick={goUp}><StrataIcon set="act" name="arrow-up" size={17} /></button>
+        </>}
         <FinderPathBar path={trail[last] ?? trail[0]!} home={home} onGo={go} signalEdit={pathSignal} />
-        <button className={tool} style={{ width: HIT, height: HIT, border: EDGE, color: "var(--text2)" }} title="Search Home (Ctrl+K)" aria-label="Search Home" onClick={() => setSearching(true)}><SearchIcon size={ICON.sm} /></button>
-        <button className={tool} style={{ width: HIT, height: HIT, border: EDGE, color: "var(--text2)" }} title="Copy the selected path (Ctrl+C)" aria-label="Copy path" onClick={copyChosen}><CopyIcon size={ICON.sm} /></button>
-        <button className={tool} style={{ width: HIT, height: HIT, border: EDGE, color: "var(--text2)" }} title="Finder settings" aria-label="Finder settings" aria-haspopup="menu" onClick={(e) => setSettings(e.currentTarget.getBoundingClientRect())}><SlidersIcon size={ICON.sm} /></button>
-        <button className={tool} style={{ width: HIT, height: HIT, border: EDGE, color: "var(--text2)" }} title="Appearance" aria-label="Appearance" aria-haspopup="menu" onClick={(e) => setMenu(e.currentTarget.getBoundingClientRect())}><GridIcon size={ICON.sm} /></button>
-        <CloseButton onClick={onClose} title="Close the finder (esc)" size={ICON.sm} />
+        <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Search (Ctrl+K)" aria-label="Search" onClick={() => setSearching(true)}><StrataIcon set="act" name="search" size={17} /></button>
+        <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Appearance" aria-label="Appearance" aria-haspopup="menu" onClick={(e) => setMenu(e.currentTarget.getBoundingClientRect())}><StrataIcon set="act" name={prefs.view} size={17} /></button>
+        <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Settings" aria-label="Settings" aria-haspopup="menu" onClick={(e) => setSettings(e.currentTarget.getBoundingClientRect())}><StrataIcon set="act" name="settings" size={17} /></button>
+        <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Close (Esc)" aria-label="Close the finder" onClick={onClose}><StrataIcon set="act" name="x" size={17} /></button>
       </div>
 
       <div className="flex-1 min-h-0 flex">
@@ -436,7 +435,7 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
               ) : prefs.view === "columns" ? (
                 <ColumnsRow widths={widths} active={focusCol}>
                   {columns.map((c, i) => (
-                    <Column key={c.path} title={basename(c.path)} closable={i > 0} onClosePane={() => { setTrail((t) => t.slice(0, i)); setSel((x) => x.slice(0, i)); setFocusCol((f) => Math.min(f, i - 1)); }} filterSignal={filterTick.col === i ? filterTick.n : 0} width={widths[i]!} onResize={(w) => setDragged((d) => ({ ...d, [c.path]: w }))} onFit={() => setDragged((d) => ({ ...d, [c.path]: fitWidth(c.state?.rows.map((r) => r.name) ?? [], measure, mainBox.w || undefined) }))} state={c.state} display={c.display} selName={sel[i] ?? null} chosen={liveMulti?.col === i ? liveMulti.choice.names : null} focused={i === focusCol} prefs={prefs} rowH={rowH}
+                    <Column key={c.path} title={basename(c.path)} filterSignal={filterTick.col === i ? filterTick.n : 0} width={widths[i]!} onResize={(w) => setDragged((d) => ({ ...d, [c.path]: w }))} onFit={() => setDragged((d) => ({ ...d, [c.path]: fitWidth(c.state?.rows.map((r) => r.name) ?? [], measure, mainBox.w || undefined) }))} state={c.state} display={c.display} selName={sel[i] ?? null} chosen={liveMulti?.col === i ? liveMulti.choice.names : null} focused={i === focusCol} prefs={prefs} rowH={rowH}
                       filter={filters[c.path] ?? ""} onFilter={(v) => setFilters((f) => ({ ...f, [c.path]: v }))}
                       scrollTop={scrolls.current[c.path]} onScrollTop={(t) => onScrollTop(c.path, t)} onPick={(r, m) => onPickMod(i, r, m)} onOpen={(r) => { if (isFolder(r) && !r.locked) { pick(i, r); enterFolder(i); } else if (canEditRow(r)) onBench(joinPath(c.path, r.name), "edit"); }}
                       onFocusCol={() => setFocusCol(i)} onRefresh={() => refresh(c.path)} onSort={onSort} onPref={setPrefs} />

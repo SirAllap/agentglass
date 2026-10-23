@@ -10,7 +10,7 @@ import { ICON } from "../../../lib/iconSize.ts";
 import { FolderIcon, FileIcon, SearchIcon } from "../../../lib/glyphIcons.tsx";
 import { EDGE, LINE } from "../../workspace/Chrome.tsx";
 import { MenuCap, MenuItem, Popover } from "./Popover.tsx";
-import { SlidersIcon } from "../../../lib/finderIcons.tsx";
+import { StrataIcon } from "./StrataIcon.tsx";
 
 interface Row extends SearchHit { text?: string; line?: number }
 
@@ -59,7 +59,7 @@ export function FinderSearch({ home, onTarget, onClose }: { home: string; onTarg
               else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); onClose(); }
             }} />
           <button type="button" className="agx-btn rounded-md grid place-items-center shrink-0" style={{ width: 26, height: 26, color: contents ? "var(--primary-ink)" : "var(--text3)" }} title="Search settings" aria-label="Search settings" aria-haspopup="menu"
-            onClick={(e) => setMenu(e.currentTarget.getBoundingClientRect())}><SlidersIcon size={ICON.sm} /></button>
+            onClick={(e) => setMenu(e.currentTarget.getBoundingClientRect())}><StrataIcon set="act" name="sliders-horizontal" size={ICON.sm} /></button>
         </div>
         <div ref={list} role="listbox" aria-label="Results" className="agx-scroll flex-1 min-h-0 overflow-y-auto" style={{ minHeight: 200 }}>
           {note ? <div className="h-full grid place-items-center text-[12px] p-6 text-center" style={{ color: "var(--text3)", minHeight: 200 }}>{note}</div> : rows.map((r, i) => (

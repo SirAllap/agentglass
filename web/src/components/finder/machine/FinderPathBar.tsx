@@ -7,8 +7,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../../lib/api.ts";
 import { completePath, crumbs, isFolder } from "../../../lib/finderMiller.ts";
-import { ICON } from "../../../lib/iconSize.ts";
-import { CaretIcon } from "../../../lib/glyphIcons.tsx";
 import { EDGE, INPUT, INPUT_STYLE, LINE } from "../../workspace/Chrome.tsx";
 
 export function FinderPathBar({ path, home, onGo, signalEdit }: { path: string; home: string; onGo: (path: string) => void; signalEdit: number }) {
@@ -76,13 +74,14 @@ export function FinderPathBar({ path, home, onGo, signalEdit }: { path: string; 
     );
   }
   const parts = crumbs(path, home);
+  // Strata draws the path bare: segments separated by a slash, the last one in the accent.
   return (
-    <div className="flex-1 min-w-0 flex items-center gap-0.5 rounded-md px-2 overflow-hidden cursor-text whitespace-nowrap" role="navigation" aria-label="Path"
-      onClick={edit} style={{ minHeight: 30, background: "var(--bg)", border: EDGE }} title="Click to type a path (Ctrl+L)">
+    <div className="flex-1 min-w-0 flex items-center gap-1 px-2 overflow-hidden cursor-text whitespace-nowrap" role="navigation" aria-label="Path"
+      onClick={edit} style={{ minHeight: 30 }} title="Click to type a path (Ctrl+L)">
       {parts.map((c, i) => (
-        <span key={c.path} className="flex items-center gap-0.5 min-w-0">
-          {i > 0 && <span style={{ color: "var(--text4)", transform: "rotate(-90deg)", display: "flex" }}><CaretIcon size={ICON.xs} /></span>}
-          <button className="agx-btn rounded px-1 truncate text-[12px]" style={{ color: i === parts.length - 1 ? "var(--text)" : "var(--text3)", fontWeight: i === parts.length - 1 ? 600 : 400 }}
+        <span key={c.path} className="flex items-center gap-1 min-w-0">
+          {i > 0 && <span aria-hidden style={{ color: "var(--text4)" }}>/</span>}
+          <button className="agx-btn rounded px-1 truncate" style={{ color: i === parts.length - 1 ? "var(--primary-ink)" : "var(--text3)" }}
             onClick={(e) => { e.stopPropagation(); onGo(c.path); }}>{c.label}</button>
         </span>
       ))}

@@ -4,7 +4,7 @@
  * cut while there is room. Drag and double-click change one column's width.
  */
 import { describe, expect, test } from "bun:test";
-import { COL_CHROME, COL_DEFAULT, columnWidth, fitWidth, dragWidth, longestNames, revealScroll, stripPad, previewWidth, stripLayout, headerInline, TIGHT_W } from "../src/lib/finderColumns.ts";
+import { COL_CHROME, COL_DEFAULT, columnWidth, fitWidth, dragWidth, longestNames, revealScroll, stripPad, previewWidth, stripLayout, TIGHT_W } from "../src/lib/finderColumns.ts";
 
 const px = (s: string) => s.length * 7;
 
@@ -148,16 +148,6 @@ describe("the strip layout cannot loop", () => {
     const src = await Bun.file(new URL("../src/components/finder/machine/MachineFinder.tsx", import.meta.url)).text();
     const row = src.slice(src.indexOf("function ColumnsRow("));
     expect(row.slice(0, row.indexOf("\n}\n"))).not.toMatch(/useState|setPad/);
-  });
-  test("a narrow header keeps options and gives the rest up in order, and never needs more room than it has", () => {
-    for (let w = 120; w <= 420; w += 10) {
-      const on = headerInline(w, 26, true);
-      expect(on.has("options")).toBe(true);
-      expect(on.size * 30 + 20 + 56 + 38).toBeLessThanOrEqual(Math.max(w, 20 + 56 + 38 + 30));
-    }
-    expect([...headerInline(120, 26, true)]).toEqual(["options"]);
-    expect(headerInline(420, 26, true).size).toBe(6);
-    expect(headerInline(420, 26, false).has("close")).toBe(false);
   });
   test("the rows of a tight column drop their size and count", async () => {
     expect(TIGHT_W).toBeGreaterThan(120);

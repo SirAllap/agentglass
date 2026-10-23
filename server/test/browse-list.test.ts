@@ -146,6 +146,15 @@ describe("the boundary, judged on every page", () => {
     expect(browseBatch(join(d, "alias"), 0).ok).toBe(true);
   });
 
+  test("a link whose target is gone says so, and a link that leads outside the roots does not", () => {
+    const d = tmp();
+    symlinkSync("missing-target.txt", join(d, "dangling"));
+    symlinkSync("/etc", join(d, "to-etc"));
+    const by = (n: string) => browseBatch(d, 0).entries.find((x) => x.name === n)!;
+    expect(by("dangling").broken).toBe(true);
+    expect(by("to-etc").broken).toBeUndefined();
+  });
+
   test("a file is not a folder", () => {
     const d = tmp();
     writeFileSync(join(d, "a.txt"), "");

@@ -8,7 +8,7 @@ import { api } from "../../../lib/api.ts";
 import { ago } from "../../../lib/fileRecents.ts";
 import { TYPE_GROUPS, canEditRow, formatSize, itemsLabel, isFolder, typeGroup, typeLabel, type Row } from "../../../lib/finderMiller.ts";
 import { CopyIcon, CrossIcon, TerminalIcon } from "../../../lib/glyphIcons.tsx";
-import { ExternalIcon } from "../../../lib/finderIcons.tsx";
+import { StrataIcon } from "./StrataIcon.tsx";
 import { HIT, ICON } from "../../../lib/iconSize.ts";
 import type { FileFacts } from "../../../../../shared/types.ts";
 import { EDGE, LINE } from "../../workspace/Chrome.tsx";
@@ -61,7 +61,7 @@ export function QuickLook({ path, row, rows, onBench, onCopy, onClose }: {
           <h3 className="m-0 flex-1 min-w-0 text-[13px] font-semibold break-all">{row.name}</h3>
           {!row.locked && !folder && (
             <button className="agx-btn rounded-md grid place-items-center shrink-0" style={{ width: HIT - 4, height: HIT - 4, color: "var(--text3)" }} title="Open in the default application" aria-label="Open in the default application"
-              onClick={() => { void api.previewOpen(path); }}><ExternalIcon size={ICON.sm} /></button>
+              onClick={() => { void api.previewOpen(path); }}><StrataIcon set="act" name="external-link" size={ICON.sm} /></button>
           )}
           {onClose && (
             <button className="agx-btn rounded-md grid place-items-center shrink-0" style={{ width: HIT - 4, height: HIT - 4, color: "var(--text3)" }} title="Close the preview (Space)" aria-label="Close the preview" onClick={onClose}><CrossIcon size={ICON.sm} /></button>

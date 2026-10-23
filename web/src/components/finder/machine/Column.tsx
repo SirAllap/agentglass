@@ -6,16 +6,15 @@
 // by NAME, not by index: the rows arrive in pages and are re-sorted, so an index
 // would point at a different file a moment later.
 import { useEffect, useRef, useState } from "react";
-import { CaretIcon, CrossIcon, LinkIcon, LockIcon, MoreIcon, SearchIcon, SwapIcon } from "../../../lib/glyphIcons.tsx";
-import { glyphFor } from "../../../lib/finderGlyphs.ts";
-import { ArrowDownIcon, ArrowUpIcon, GlyphIcon, TONE_INK } from "../../../lib/finderIcons.tsx";
+import { CaretIcon } from "../../../lib/glyphIcons.tsx";
+import { FileTypeIcon, StrataIcon } from "./StrataIcon.tsx";
 import { HIT, ICON } from "../../../lib/iconSize.ts";
 import { formatSize, isFolder, itemsLabel, type Display, type Prefs, type Row, type SortKey } from "../../../lib/finderMiller.ts";
 import type { FolderState } from "../../../lib/finderFolders.ts";
-import { INPUT, INPUT_STYLE, LINE, RefreshButton } from "../../workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, LINE } from "../../workspace/Chrome.tsx";
 import { MenuCap, MenuItem, MenuRule, Popover } from "./Popover.tsx";
 import { VirtualList } from "./VirtualList.tsx";
-import { TIGHT_W, dragWidth, headerInline } from "../../../lib/finderColumns.ts";
+import { TIGHT_W, dragWidth } from "../../../lib/finderColumns.ts";
 
 /** Ctrl and Shift on a click: what makes it a choice of several rows. */
 export interface Mod { ctrl: boolean; shift: boolean }
@@ -23,18 +22,13 @@ export const modOf = (e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean
 /** A Shift-click would also select the text between the two rows. */
 export const noRange = (e: React.MouseEvent) => { if (e.shiftKey || e.ctrlKey || e.metaKey) e.preventDefault(); };
 
+/** Strata's drawing for the row: a folder, a broken link (a cross) or what the name says it is. A folder that cannot be read is still a folder; the row itself says it is disabled. */
 export function RowIcon({ row, size = ICON.sm }: { row: Row; size?: number }) {
-  if (row.locked) return <LockIcon size={size} />;
-  if (row.kind === "link" && !isFolder(row)) return <LinkIcon size={size} />;
-  const g = glyphFor(row.name, isFolder(row));
-  return <span className="flex" style={{ color: TONE_INK[g.tone] }}><GlyphIcon glyph={g.glyph} size={size} /></span>;
+  return <FileTypeIcon name={row.name} isDir={isFolder(row)} broken={row.broken === true} size={size} />;
 }
 
-export function Column({ title, closable, onClosePane, filterSignal, width, onResize, onFit, state, display, selName, chosen, focused, prefs, rowH, filter, onFilter, onPick, onOpen, onFocusCol, onRefresh, onSort, onPref, scrollTop, onScrollTop }: {
+export function Column({ title, filterSignal, width, onResize, onFit, state, display, selName, chosen, focused, prefs, rowH, filter, onFilter, onPick, onOpen, onFocusCol, onRefresh, onSort, onPref, scrollTop, onScrollTop }: {
   title: string;
-  /** Not the first column: it can be closed, which drops it and what is to its right. */
-  closable: boolean;
-  onClosePane: () => void;
   /** Bumped by Ctrl+F when this is the column with the keyboard. */
   filterSignal: number;
   /** Pixels: the longest name, a dragged width, or the free room (see lib/finderColumns). */
@@ -62,7 +56,7 @@ export function Column({ title, closable, onClosePane, filterSignal, width, onRe
   scrollTop?: number;
   onScrollTop?: (top: number) => void;
 }) {
-  const [menu, setMenu] = useState<{ kind: "sort" | "opts"; at: DOMRect } | null>(null);
+  const [menu, setMenu] = useState<DOMRect | null>(null);
   const [finding, setFinding] = useState(filter !== "");
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => { if (filterSignal > 0) { setFinding(true); setTimeout(() => input.current?.focus(), 0); } }, [filterSignal]);
@@ -71,9 +65,8 @@ export function Column({ title, closable, onClosePane, filterSignal, width, onRe
   const btn = "agx-btn rounded-md grid place-items-center shrink-0";
   // Under this a row has no room for a count or a size beside the name, and the name comes first.
   const tight = width < TIGHT_W;
-  const inline = headerInline(width, HIT, closable, !!state);
   const toggleFilter = () => { const on = !finding; setFinding(on); if (!on) onFilter(""); else setTimeout(() => input.current?.focus(), 0); };
-  const open = (kind: "sort" | "opts") => (e: React.MouseEvent<HTMLButtonElement>) => setMenu({ kind, at: e.currentTarget.getBoundingClientRect() });
+  const open = (e: React.MouseEvent<HTMLButtonElement>) => setMenu(e.currentTarget.getBoundingClientRect());
 
   return (
     <section aria-label={`Folder ${title}`} onMouseDown={onFocusCol} className="relative flex flex-col min-h-0 shrink-0"
@@ -98,24 +91,14 @@ export function Column({ title, closable, onClosePane, filterSignal, width, onRe
         }} />
       <header className="flex items-center gap-1 px-2.5 pt-2 pb-1.5 shrink-0" style={{ borderBottom: LINE }}>
         <b className="flex-1 min-w-0 truncate text-[12px]" title={title}>{title}</b>
-        {state && (
-          <span className="shrink-0 tabular-nums text-[10px] px-1.5 rounded-md" aria-live="polite"
-            style={{ background: "color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text3)" }}>
-            {state.total.toLocaleString()}{loading ? "…" : ""}
-          </span>
-        )}
-        {inline.has("refresh") && <RefreshButton onRefresh={onRefresh} title="Reload this folder (F5)" />}
-        {inline.has("direction") && (
-          <button className={btn} style={{ width: HIT, height: HIT, color: "var(--text3)" }} aria-label={prefs.sortDir === "asc" ? "Ascending — click to reverse" : "Descending — click to reverse"}
-            title={prefs.sortDir === "asc" ? "Ascending — click to reverse" : "Descending — click to reverse"} onClick={() => onSort(prefs.sortKey)}>
-            {prefs.sortDir === "asc" ? <ArrowUpIcon size={ICON.sm} /> : <ArrowDownIcon size={ICON.sm} />}
-          </button>
-        )}
-        {inline.has("sort") && <button className={btn} style={{ width: HIT, height: HIT, color: "var(--text3)" }} title="Sort this folder" aria-label="Sort this folder" aria-haspopup="menu" onClick={open("sort")}><SwapIcon size={ICON.sm} /></button>}
-        <button className={btn} style={{ width: HIT, height: HIT, color: "var(--text3)" }} title="Options" aria-label="Options" aria-haspopup="menu" onClick={open("opts")}><MoreIcon size={ICON.sm} /></button>
-        {inline.has("filter") && <button className={btn} aria-pressed={finding} style={{ width: HIT, height: HIT, color: finding ? "var(--primary-ink)" : "var(--text3)" }} title="Filter this pane (Ctrl+F)" aria-label="Filter this pane"
-          onClick={toggleFilter}><SearchIcon size={ICON.sm} /></button>}
-        {closable && inline.has("close") && <button className={btn} style={{ width: HIT, height: HIT, color: "var(--text3)" }} title="Close this pane" aria-label="Close this pane" onClick={onClosePane}><CrossIcon size={ICON.sm} /></button>}
+        <button className={btn} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Refresh (F5)" aria-label="Refresh" onClick={onRefresh}><StrataIcon set="act" name="refresh" size={ICON.md} /></button>
+        <button className={btn} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} aria-label={prefs.sortDir === "asc" ? "Ascending — click to reverse" : "Descending — click to reverse"}
+          title={prefs.sortDir === "asc" ? "Ascending — click to reverse" : "Descending — click to reverse"} onClick={() => onSort(prefs.sortKey)}>
+          <StrataIcon set="act" name={prefs.sortDir === "asc" ? "arrow-up-narrow-wide" : "arrow-down-wide-narrow"} size={ICON.md} />
+        </button>
+        <button className={btn} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Sort options" aria-label="Sort options" aria-haspopup="menu" onClick={open}><StrataIcon set="act" name="sliders-horizontal" size={ICON.md} /></button>
+        <button className={btn} aria-pressed={finding} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", background: finding ? "color-mix(in srgb, var(--primary) 16%, transparent)" : undefined }} title="Filter this pane (Ctrl+F)" aria-label="Filter this pane"
+          onClick={toggleFilter}><StrataIcon set="act" name="funnel" size={ICON.md} /></button>
       </header>
       {finding && (
         <div className="px-2.5 py-1.5 shrink-0" style={{ borderBottom: LINE }}>
@@ -157,38 +140,24 @@ export function Column({ title, closable, onClosePane, filterSignal, width, onRe
                     {r.items !== null && !tight && r.name === selName && <span className="shrink-0 tabular-nums text-[10px] px-1.5 rounded-md" style={{ background: "color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text3)", fontWeight: 400 }}>{itemsLabel(r.items)}</span>}
                     <span className="shrink-0 flex" style={{ color: "var(--text4)", transform: "rotate(-90deg)" }}><CaretIcon size={ICON.xs} /></span>
                   </>
-                ) : prefs.sizes && r.bytes !== null && !tight ? (
-                  <span className="shrink-0 tabular-nums text-[10.5px]" style={{ color: "var(--text4)", fontWeight: 400 }}>{formatSize(r.bytes)}</span>
+                ) : prefs.sizes && r.bytes !== null && !tight && r.name === selName ? (
+                  <span className="shrink-0 tabular-nums text-[10px] px-1.5 rounded-md" style={{ background: "color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text3)", fontWeight: 400 }}>{formatSize(r.bytes)}</span>
                 ) : null}
               </div>
             );
           }} />
       )}
 
-      {menu?.kind === "sort" && (
-        <Popover anchor={menu.at} onClose={() => setMenu(null)} width={200} label="Sort">
+      {menu && (
+        <Popover anchor={menu} onClose={() => setMenu(null)} width={200} label="Sort">
           <MenuCap>Sort by</MenuCap>
-          {(["name", "size", "modified"] as const).map((k) => (
+          {(["name", "size", "modified", "type"] as const).map((k) => (
             <MenuItem key={k} on={prefs.sortKey === k} hint={prefs.sortKey === k ? (prefs.sortDir === "asc" ? "↑" : "↓") : undefined} onClick={() => { onSort(k); setMenu(null); }}>
-              {k === "name" ? "Name" : k === "size" ? "Size" : "Modified"}
+              {k === "name" ? "Name" : k === "size" ? "Size" : k === "modified" ? "Modified" : "Type"}
             </MenuItem>
           ))}
-        </Popover>
-      )}
-      {menu?.kind === "opts" && (
-        <Popover anchor={menu.at} onClose={() => setMenu(null)} width={230} label="Column options">
-          <MenuItem on={prefs.group} onClick={() => onPref({ group: !prefs.group })}>Group by file type</MenuItem>
-          <MenuItem on={prefs.hidden} hint="Ctrl+H" onClick={() => onPref({ hidden: !prefs.hidden })}>Hidden files</MenuItem>
-          <MenuItem on={prefs.sizes} onClick={() => onPref({ sizes: !prefs.sizes })}>Show sizes</MenuItem>
           <MenuRule />
-          <MenuItem onClick={() => { onRefresh(); setMenu(null); }}>Reload this folder</MenuItem>
-          {(!inline.has("filter") || !inline.has("direction") || !inline.has("sort") || (closable && !inline.has("close"))) && <MenuRule />}
-          {!inline.has("filter") && <MenuItem on={finding} onClick={() => { toggleFilter(); setMenu(null); }}>Filter this pane</MenuItem>}
-          {!inline.has("direction") && <MenuItem onClick={() => { onSort(prefs.sortKey); setMenu(null); }}>{prefs.sortDir === "asc" ? "Sort descending" : "Sort ascending"}</MenuItem>}
-          {!inline.has("sort") && (["name", "size", "modified"] as const).map((k) => (
-            <MenuItem key={k} on={prefs.sortKey === k} onClick={() => { onSort(k); setMenu(null); }}>{`Sort by ${k}`}</MenuItem>
-          ))}
-          {closable && !inline.has("close") && <MenuItem onClick={() => { setMenu(null); onClosePane(); }}>Close this pane</MenuItem>}
+          <MenuItem on={prefs.foldersFirst} onClick={() => onPref({ foldersFirst: !prefs.foldersFirst })}>Folders first</MenuItem>
         </Popover>
       )}
     </section>

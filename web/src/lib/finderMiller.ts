@@ -20,6 +20,8 @@ export interface Row {
   hidden: boolean;
   locked?: boolean;
   why?: string;
+  /** A link to nothing: Strata draws it as a cross. */
+  broken?: true;
 }
 
 /** Whether choosing this row opens its column: a folder that may be shown, with "Mirror columns selection" on. */
@@ -30,27 +32,29 @@ export const isFolder = (r: Pick<Row, "kind" | "items">): boolean => r.kind === 
 
 /* ------------------------------------------------------------------- order */
 
-export type SortKey = "name" | "size" | "modified";
+export type SortKey = "name" | "size" | "modified" | "type";
 export type SortDir = "asc" | "desc";
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 const byName = (a: Row, b: Row) => collator.compare(a.name, b.name);
 
 /**
- * Folders first, then files — the order every file manager uses — and the
+ * Folders first (Strata's "Folders first", on by default), then files — the order every file manager uses — and the
  * chosen key inside each. A folder has no size, so under "size" folders keep
  * name order; under "modified" they sort by date like everything else.
  * Returns a new array: the rows are the folder's own cache.
  */
-export function sortRows(rows: readonly Row[], key: SortKey, dir: SortDir): Row[] {
+export function sortRows(rows: readonly Row[], key: SortKey, dir: SortDir, foldersFirst = true): Row[] {
   const sign = dir === "asc" ? 1 : -1;
+  const ext = (r: Row) => (isFolder(r) || r.name.lastIndexOf(".") < 1 ? "" : r.name.slice(r.name.lastIndexOf(".") + 1).toLowerCase());
   const within = (a: Row, b: Row): number => {
+    if (key === "type") return sign * collator.compare(ext(a), ext(b)) || byName(a, b);
     if (key === "size" && !(isFolder(a) === false && isFolder(b) === false)) return byName(a, b);
     if (key === "size") return sign * ((a.bytes ?? 0) - (b.bytes ?? 0)) || byName(a, b);
     if (key === "modified") return sign * (a.mtime - b.mtime) || byName(a, b);
     return sign * byName(a, b);
   };
-  return [...rows].sort((a, b) => (isFolder(a) === isFolder(b) ? within(a, b) : isFolder(a) ? -1 : 1));
+  return [...rows].sort((a, b) => (!foldersFirst || isFolder(a) === isFolder(b) ? within(a, b) : isFolder(a) ? -1 : 1));
 }
 
 /** Hidden rows unless asked for, then the column's own filter (a substring of the name). */
@@ -182,6 +186,8 @@ export interface Prefs {
   rail: boolean;
   sortKey: SortKey;
   sortDir: SortDir;
+  /** Strata's "Folders first" in the sort menu. */
+  foldersFirst: boolean;
   /** Icons view: the side of an image's thumbnail in pixels. */
   thumb: number;
   /** The full sidebar's width in pixels, as dragged. */
@@ -201,7 +207,7 @@ export const TEXT_MAX = 18;
 
 export const DEFAULT_PREFS: Prefs = {
   view: "columns", preview: true, density: "compact", textSize: 13, hidden: false, group: false, sizes: true, sidebar: true, rail: false,
-  sortKey: "name", sortDir: "asc", thumb: THUMB_DEFAULT, sideW: 201, mirror: true, f1: true,
+  sortKey: "name", sortDir: "asc", foldersFirst: true, thumb: THUMB_DEFAULT, sideW: 201, mirror: true, f1: true,
 };
 
 /** Stored preferences, field by field: one that is missing or the wrong type falls back alone. */
@@ -222,8 +228,9 @@ export function readPrefs(raw: string | null): Prefs {
     sizes: flag(o.sizes, d.sizes),
     sidebar: flag(o.sidebar, d.sidebar),
     rail: flag(o.rail, d.rail),
-    sortKey: pick(o.sortKey, ["name", "size", "modified"], d.sortKey),
+    sortKey: pick(o.sortKey, ["name", "size", "modified", "type"], d.sortKey),
     sortDir: pick(o.sortDir, ["asc", "desc"], d.sortDir),
+    foldersFirst: flag(o.foldersFirst, d.foldersFirst),
     thumb: typeof o.thumb === "number" && Number.isFinite(o.thumb) ? Math.min(THUMB_MAX, Math.max(THUMB_MIN, Math.round(o.thumb))) : d.thumb,
     sideW: typeof o.sideW === "number" && Number.isFinite(o.sideW) ? Math.min(360, Math.max(169, Math.round(o.sideW))) : d.sideW,
     mirror: flag(o.mirror, d.mirror),
@@ -245,10 +252,10 @@ export interface Display {
 }
 
 /** Filter, order and (optionally) group a folder's rows for one column. */
-export function displayRows(all: readonly Row[], o: { needle: string; hidden: boolean; group: boolean; sortKey: SortKey; sortDir: SortDir; unsorted?: boolean }): Display {
+export function displayRows(all: readonly Row[], o: { needle: string; hidden: boolean; group: boolean; sortKey: SortKey; sortDir: SortDir; foldersFirst?: boolean; unsorted?: boolean }): Display {
   // `unsorted`: a folder still arriving that is too big to re-sort on every page; it is sorted once, when it is whole.
   const kept = filterRows(all, o.needle, o.hidden);
-  const sorted = o.unsorted ? kept : sortRows(kept, o.sortKey, o.sortDir);
+  const sorted = o.unsorted ? kept : sortRows(kept, o.sortKey, o.sortDir, o.foldersFirst ?? true);
   const items: Grouped[] = o.group ? groupRows(sorted) : sorted.map((row) => ({ row }));
   const rows: Row[] = [];
   const itemOfRow: number[] = [];

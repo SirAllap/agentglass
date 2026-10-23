@@ -25,7 +25,7 @@ describe("no search box on the Machine tab", () => {
   });
   test("close lives on the path-bar row", () => {
     const row = machine.slice(machine.indexOf("<FinderPathBar"));
-    expect(row.slice(0, row.indexOf("</div>"))).toContain("<CloseButton onClick={onClose}");
+    expect(row.slice(0, row.indexOf("</div>"))).toContain("onClick={onClose}");
   });
   test("the panel takes the keys when there is no field to hold them", () => {
     expect(palette).toContain("panelRef.current?.focus()");
