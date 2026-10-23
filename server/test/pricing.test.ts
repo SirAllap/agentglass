@@ -2,7 +2,7 @@
 // Covers wishlist item from #10: model-name substring matching,
 // cache rates, and unknown models falling back without NaN.
 import { describe, expect, test } from "bun:test";
-import { costUsd, modelLabel, priceFor, DEFAULT_PRICE } from "../src/pricing.ts";
+import { costUsd, modelLabel, priceFor, DEFAULT_PRICE, PRICE_TABLE, PricingCatalog } from "../src/pricing.ts";
 
 describe("priceFor", () => {
   test("matches Anthropic family names case-insensitively", () => {
@@ -31,6 +31,27 @@ describe("priceFor", () => {
     expect(priceFor("gemini-2.5-pro")?.label).toBe("Gemini Pro");
     expect(priceFor("gemini-2.0-flash-lite")?.label).toBe("Gemini Flash-Lite");
     expect(priceFor("gemini-2.0-flash")?.label).toBe("Gemini Flash");
+  });
+
+  test("MiniMax Flash rates beat the generic flash fragment without pricing gateway ids as direct", () => {
+    for (const model of ["MiniMax-M3.1-Flash", "minimax-m3.1-flash", "MiniMax-M3.1-Flash[1m]"]) {
+      expect(priceFor(model)).toMatchObject({
+        label: "MiniMax M3.1 Flash", input: 0.15, output: 0.6,
+        cache_write: 0.15, cache_read: 0.015,
+      });
+    }
+    expect(priceFor("minimax/minimax-m3.1-flash:free")).toMatchObject({
+      input: 0, output: 0, cache_write: 0, cache_read: 0,
+    });
+    expect(priceFor("custom/minimax-m3.1-flash")?.label).not.toBe("MiniMax M3.1 Flash");
+    expect(priceFor("gemini-2.5-flash")?.cache_read).toBe(0.0375);
+  });
+
+  test("a saved pricing table still controls MiniMax Flash rates", () => {
+    const saved = [{ match: ["minimax"], label: "Contract", input: 2, output: 4, cache_write: 2, cache_read: 1 }];
+    const catalog = new PricingCatalog(PRICE_TABLE, saved);
+    expect(catalog.priceFor("MiniMax-M3.1-Flash")).toBe(saved[0]);
+    expect(catalog.priceFor("minimax/minimax-m3.1-flash:free")).toBe(saved[0]);
   });
 
   test("Kimi K3 aliases use Moonshot's published API rates", () => {

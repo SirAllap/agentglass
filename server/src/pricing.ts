@@ -104,6 +104,15 @@ export const PRICE_TABLE: ModelPrice[] = [
   { match: ["gpt-4"], label: "GPT-4", input: 30, output: 60, cache_write: 0, cache_read: 0 },
   { match: ["gpt-3.5"], label: "GPT-3.5", input: 0.5, output: 1.5, cache_write: 0, cache_read: 0 },
 
+  // MiniMax Flash must precede the generic "flash" match below. These exact
+  // ids keep the direct API rates separate from a gateway's free route.
+  // https://platform.minimax.io/docs/pricing/overview#models/text
+  // No cache creation rate is published: ordinary input is this catalogue's
+  // fallback estimate (see cacheRate), not a separately verified write price.
+  { match: [], exact: ["minimax-m3.1-flash"], label: "MiniMax M3.1 Flash", input: 0.15, output: 0.6, cache_write: 0.15, cache_read: 0.015 },
+  // https://openrouter.ai/minimax/minimax-m3.1-flash:free
+  { match: [], exact: ["minimax/minimax-m3.1-flash:free"], label: "MiniMax M3.1 Flash (free)", input: 0, output: 0, cache_write: 0, cache_read: 0 },
+
   // --- Google (Gemini) ---
   { match: ["gemini-2.5-pro", "gemini-1.5-pro"], label: "Gemini Pro", input: 1.25, output: 5, cache_write: 0, cache_read: 0.31 },
   { match: ["flash-lite"], label: "Gemini Flash-Lite", input: 0.075, output: 0.3, cache_write: 0, cache_read: 0.01875 },

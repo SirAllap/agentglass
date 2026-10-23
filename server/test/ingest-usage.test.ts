@@ -3,12 +3,29 @@
 // mislabeled the event as cumulative, which then re-summed it from the transcript.
 import { describe, expect, test } from "bun:test";
 import { normalize } from "../src/ingest.ts";
+import { costUsd } from "../src/pricing.ts";
+import { modelLabelOf, providerOf } from "../../shared/models.ts";
 import type { IngestBody } from "../../shared/types.ts";
 
 const body = (over: Partial<IngestBody>): IngestBody =>
   ({ source_app: "app", session_id: "sess", hook_event_type: "PostToolUse", ...over }) as IngestBody;
 
 describe("payload usage detection", () => {
+  test("MiniMax Flash telemetry keeps its model and cached usage through normalization", () => {
+    // A serialized exporter event, with cached tokens included in prompt_tokens.
+    // The generic flash matcher used to assign the wrong provider and cache rate.
+    const ev = normalize(JSON.parse(JSON.stringify(body({
+      model_name: "MiniMax-M3.1-Flash",
+      payload: { usage: { prompt_tokens: 1_200, completion_tokens: 300, prompt_tokens_details: { cached_tokens: 800 } } },
+    }))));
+    expect(ev.model_name).toBe("MiniMax-M3.1-Flash");
+    expect(ev.usage).toEqual({ input_tokens: 400, output_tokens: 300, cache_creation_tokens: 0, cache_read_tokens: 800 });
+    expect(ev.usage_is_cumulative).toBe(false);
+    expect(providerOf(ev.model_name)).toBe("MiniMax");
+    expect(modelLabelOf(ev.model_name)).toBe("MiniMax M3.1 Flash");
+    expect(costUsd(ev.usage, ev.model_name)).toBeCloseTo((400 * 0.15 + 300 * 0.6 + 800 * 0.015) / 1_000_000, 10);
+  });
+
   test("cache-only usage is kept and not marked cumulative", () => {
     const ev = normalize(body({ payload: { usage: { cache_read_tokens: 500, cache_creation_tokens: 20 } } }));
     expect(ev.usage.cache_read_tokens).toBe(500);
