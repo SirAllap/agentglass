@@ -243,6 +243,27 @@ export interface JiraViewRead {
   cached?: boolean;
 }
 
+/** One of a board's own quick filters: a name, and a query only the server holds. */
+export interface JiraQuickFilter { id: string; name: string; description?: string }
+
+/** The sprint a scrum board is in the middle of (a future one is the backlog's, not the header's). Dates are epoch milliseconds, 0 when the site says none. */
+export interface JiraBoardSprint { id: string; name: string; state: "active"; start: number; end: number; goal?: string }
+
+/** An epic of the board, for its colour. `color` is one of Jira's named epic colours. */
+export interface JiraBoardEpic { key: string; name: string; color?: string }
+
+/**
+ * `GET /jira/board-context`: what sits around a board's cards. Three reads the site keeps still for ten minutes,
+ * each empty (never an error) where the board has none of it: a kanban board has no sprint and no epic list.
+ */
+export interface JiraBoardContext {
+  ok: boolean;
+  error?: string;
+  filters: JiraQuickFilter[];
+  sprint?: JiraBoardSprint;
+  epics: JiraBoardEpic[];
+}
+
 /** Something the add-a-view list offers. */
 export interface JiraViewChoice {
   kind: "board" | "filter";
@@ -451,7 +472,9 @@ export interface ProviderTask {
   /** How many subtasks it has, so a card with hidden work says so. */
   subtasks?: number;
   /** The card this one sits under, when it has one (a Jira subtask's parent, a story's epic). Read on a card's own read, not on a board's. */
-  parent?: { key: string; title: string };
+  parent?: { key: string; title: string; /** What the parent is ("Epic"), on a board read. */ type?: string };
+  /** A flag raised on the card (Jira's Impediment): a board row says so. */
+  flagged?: boolean;
   /** The kind of card as the site names it ("Story", "Bug"), on the card's own read and on the rows it carries. */
   issueType?: string;
   /**

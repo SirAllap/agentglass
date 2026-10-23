@@ -112,7 +112,7 @@ naming a level is the answer, not a puzzle. Ask the person.
 A card on a Jira site is not a window, so it is not a door in the list above:
 `agentglass-ui jira ...` (MCP: `ui_jira_card`, `ui_jira_moves`, `ui_jira_links`, `ui_jira_linktypes`, `ui_jira_activity`, `ui_jira_steps`,
 `ui_jira_linktypes`, `ui_jira_step`, `ui_jira_link`, `ui_jira_edit`, `ui_jira_comment`, `ui_jira_comment-edit`, `ui_jira_comment-delete`,
-`ui_jira_move`, `ui_jira_subtask`, `ui_jira_relate`, `ui_jira_unrelate`, `ui_jira_weblink`, `ui_jira_unweblink`, `ui_jira_worklog`, `ui_jira_worklog-edit`, `ui_jira_worklog-delete`, `ui_jira_watch`, `ui_jira_vote`) talks to the same routes the screen uses, under
+`ui_jira_move`, `ui_jira_subtask`, `ui_jira_relate`, `ui_jira_unrelate`, `ui_jira_weblink`, `ui_jira_unweblink`, `ui_jira_worklog`, `ui_jira_worklog-edit`, `ui_jira_worklog-delete`, `ui_jira_watch`, `ui_jira_vote`, `ui_jira_rank`) talks to the same routes the screen uses, under
 the same switch.
 
 ```bash
@@ -141,6 +141,7 @@ agentglass-ui --as my-agent jira worklog-edit ORBIT-1042 --id 60012 --time 2h --
 agentglass-ui --as my-agent jira worklog-delete ORBIT-1042 --id 60012 --confirm --updated <state.updated>   # your own, for good
 agentglass-ui --as my-agent jira watch ORBIT-1042   # watch the card; `--off` stops
 agentglass-ui --as my-agent jira vote ORBIT-1042   # vote for it; `--off` takes the vote back
+agentglass-ui --as my-agent jira rank ORBIT-1043 --before ORBIT-1040                                 # the board's order; --after puts it behind
 agentglass-ui --as my-agent jira move ORBIT-1043 --id 31 --updated <state.updated>                  # a sub-task changes status like any card
 agentglass-ui --as my-agent jira move ORBIT-1042 --id 51 --updated <state.updated> --fields '{"resolution":"10000","comment":"Shipped"}'   # a move whose screen asks for fields
 ```
@@ -165,7 +166,7 @@ agentglass-ui --as my-agent jira move ORBIT-1042 --id 51 --updated <state.update
   or `new`; `worklog-delete` takes all four, `manual` putting `--estimate` back. Both work only on an entry of the
   connected account, checked against the site after you ask, and delete needs `--confirm` because it cannot be
   undone. All three need `--updated` and answer with `remainingBefore` and `remainingAfter` in `state`.
-- `watch` and `vote` are the connected account's own mark on a card, so they take no `--updated` (the card does not
+- `watch`, `vote` and `rank` are the connected account's own mark on a card, so they take no `--updated` (the card does not
   change) and are idempotent; `--off` takes the mark away. `card` says `watching`, `watchers`, `voted` and `votes` in
   `state`; a count the site does not give (a hidden watcher count, voting switched off) is left out. The site refuses
   a vote on your own card and where voting is off, and does not say which.
@@ -178,7 +179,7 @@ agentglass-ui --as my-agent jira move ORBIT-1042 --id 51 --updated <state.update
   key: a choice by its `id`, several as a list of ids, text as text, a comment as Markdown. A required one left
   empty, a choice the site did not offer, or a required field of a kind this cannot fill (a person, say) is
   refused in one sentence with no request sent.
-- **`step`, `link`, `edit`, `comment`, `comment-edit`, `comment-delete`, `move`, `subtask`, `relate`, `unrelate`, `weblink`, `unweblink`, `worklog`, `worklog-edit`, `worklog-delete`, `watch` and `vote` change a shared site, with no click from the person.**
+- **`step`, `link`, `edit`, `comment`, `comment-edit`, `comment-delete`, `move`, `subtask`, `relate`, `unrelate`, `weblink`, `unweblink`, `worklog`, `worklog-edit`, `worklog-delete`, `watch`, `vote` and `rank` change a shared site, with no click from the person.**
   They run only when the owner has done two things: started the server at
   control level 3, and switched Jira writes on. On a server as it starts
   (level 2), at level 1 or read-only, each is refused with a `403` and a

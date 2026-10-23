@@ -30,8 +30,12 @@ import { Optimistic, commentResolvedPatch } from "../lib/taskOptimistic.ts";
 import { FilterBuilder } from "./tasks/FilterBuilder.tsx";
 import { EMPTY, apply as applyFilters, fieldsOf, liveCount as builtCount, type FilterSet } from "./tasks/filters.ts";
 import type { GitRepoRef, IssueDetail, IssuePr, IssueRow, IssueWork, StartMode, LocalTask, TaskCapability, TasksListResponse, SkillInfo } from "../../../shared/types.ts";
-import type { ProviderTask, ProviderTasksResponse, SavedView, SavedFolder, ViewTasksResponse, ListStatus, ListField, ListPlace, ListMember, TaskDetail, CardEvent, CardField as CardFieldValue } from "../../../shared/providers.ts";
+import type { JiraBoardContext, ProviderTask, ProviderTasksResponse, SavedView, SavedFolder, ViewTasksResponse, ListStatus, ListField, ListPlace, ListMember, TaskDetail, CardEvent, CardField as CardFieldValue } from "../../../shared/providers.ts";
 import { compareOrder } from "../../../shared/orderIndex.ts";
+import { ON_CHIP, ON_CHIP_OK } from "./tasks/chipStyle.ts";
+import { JiraGroupBy, JiraQuickChips, JiraSprintHeader, ParentLabel } from "./jira/JiraBoardContext.tsx";
+import { TypeMark } from "./jira/JiraSections.tsx";
+import { groupByParent, groupModeOf, guessOrder, rankOf, rankable, sortedByOrder, type GroupMode } from "../lib/jiraBoardContext.ts";
 import { blockersOf, foldCard, groupByStatus, looksLikeCardId, readyCount, tableColumns } from "../lib/boardGroups.ts";
 import { CardWrites } from "../lib/cardWrites.ts";
 import { activityRows } from "../lib/cardActivity.ts";
@@ -947,6 +951,13 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
   const [showDone, setShowDone] = useState(false);
   const [sel, setSel] = useState<string | null>(null);
   const [statusPick, setStatusPick] = useState<string[]>([]);
+  /* A board's context (quick filters, sprint, epics), the quick filters pressed on each board, and how the cards are grouped.
+     The pressed ones are kept in a ref as well as in state: a read that begins before the next render must send the filters
+     of ITS board, never the last one's (the id of a filter belongs to one board, and the server refuses a stranger). */
+  const [ctx, setCtx] = useState<JiraBoardContext | null>(null);
+  const [quickBy, setQuickBy] = useState<Record<string, string[]>>({});
+  const quickRef = useRef<Record<string, string[]>>({});
+  const [groupSaved, setGroupSaved] = useState<string | null>(() => { try { return localStorage.getItem(source.storageKey("group")); } catch { return null; } });
   /** The built filter — field, is/is not, values — see tasks/filters.ts. */
   const [built, setBuilt] = useState<FilterSet>(EMPTY);
   const [confirmWrite, setConfirmWrite] = useState(false);
@@ -1450,7 +1461,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
       await new Promise((r) => setTimeout(r, 1500));
       if (settling.current !== run) return; // something else was asked for
       try {
-        const r = await source.read(id, false);
+        const r = await source.read(id, false, quickRef.current[id]);
         if (settling.current !== run) return;
         if (r.at > was || !r.revalidating) { setData(r); return; }
       } catch { return; }
@@ -1475,7 +1486,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
     setBusy(true);
     if (asked && id) setWanted(id);
     try {
-      const r = await source.read(id, force);
+      const r = await source.read(id, force, id ? quickRef.current[id] : undefined);
       if (ticket !== asking.current) return; // a later board already won
       setData(r);
       if (r.revalidating && r.view?.id) void settle(r.view.id, r.at);
@@ -2363,13 +2374,88 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
     return groupByStatus(rows, data?.statuses ?? [], byOrder);
   }, [rows, data?.statuses]);
 
+  /*
+   * A Jira board's context and what is done with it (lib/jiraBoardContext.ts, components/jira/JiraBoardContext.tsx).
+   *
+   * The context is asked once per board visit, not per poll: the server keeps it ten minutes and a new read of the cards
+   * does not change it. Grouping by parent replaces the status groups for the board; the rows keep the order the site
+   * ranked them in inside each group. A quick filter is a read of the narrower board, never a filter over the rows here,
+   * so what is drawn is what the site would show with that filter pressed.
+   */
+  const boardViewId = data?.view?.id;
+  useEffect(() => {
+    setCtx(null);
+    if (!source.boardContext || !boardViewId?.startsWith("board:")) return;
+    let live = true;
+    void source.boardContext(boardViewId).then((c) => { if (live) setCtx(c); }).catch(() => {});
+    return () => { live = false; };
+  }, [source, boardViewId]);
+  const quick = (boardViewId && quickBy[boardViewId]) || [];
+  const toggleQuick = (qid: string) => {
+    if (!boardViewId) return;
+    const cur = quickRef.current[boardViewId] ?? [];
+    const next = cur.includes(qid) ? cur.filter((x) => x !== qid) : [...cur, qid];
+    quickRef.current = { ...quickRef.current, [boardViewId]: next };
+    setQuickBy(quickRef.current);
+    void load(boardViewId, false);
+  };
+  const groupMode: GroupMode = groupModeOf(groupSaved, !!source.caps.context);
+  const pickGroup = (m: GroupMode) => {
+    setGroupSaved(m);
+    try { localStorage.setItem(source.storageKey("group"), m); } catch { /* a private window keeps it for this visit only */ }
+  };
+  const byParent = !onLooked && groupMode === "parent";
+  const parentGroups = useMemo(() => (byParent ? groupByParent(sortedByOrder(rows)) : []), [byParent, rows]);
+  const epicColors = useMemo(() => new Map((ctx?.epics ?? []).map((e) => [e.key, e.color])), [ctx]);
+
+  /* Ranking by a drop. Only inside one status group (a rank is a place among its neighbours, and a card dropped into
+     another status would look moved and not be), only when every card of the group has a place (the board is ordered by
+     rank) and only with the write switch on. The row draws the line it will land on; the card sorts there at once (a guessed
+     order, see guessOrder) and goes back to where the board read it if Jira refuses. */
+  const rankPick = useRef<{ key: string; group: string } | null>(null);
+  const [rankMark, setRankMark] = useState<{ id: string; half: "top" | "bottom" } | null>(null);
+  const canRank = !!source.rank && !!boards?.writeEnabled && !!boardViewId?.startsWith("board:") && !byParent && !onLooked;
+  const dragFor = (g: { status: string; rows: ProviderTask[] }, t: ProviderTask) => {
+    if (!canRank || !rankable(g.rows)) return undefined;
+    const keys = g.rows.map((r) => r.customId ?? r.id);
+    const key = t.customId ?? t.id;
+    const halfOf = (e: React.DragEvent<HTMLElement>): "top" | "bottom" => {
+      const box = e.currentTarget.getBoundingClientRect();
+      return e.clientY - box.top < box.height / 2 ? "top" : "bottom";
+    };
+    return {
+      edge: rankMark?.id === t.id ? rankMark.half : null,
+      onStart: () => { rankPick.current = { key, group: g.status }; },
+      onEnd: () => { rankPick.current = null; setRankMark(null); },
+      onOver: (e: React.DragEvent<HTMLElement>) => {
+        const from = rankPick.current;
+        if (!from || from.group !== g.status || from.key === key) return;
+        e.preventDefault();
+        const half = halfOf(e);
+        setRankMark((m) => (m?.id === t.id && m.half === half ? m : { id: t.id, half }));
+      },
+      onDrop: (e: React.DragEvent<HTMLElement>) => {
+        const from = rankPick.current;
+        rankPick.current = null; setRankMark(null);
+        if (!from || from.group !== g.status) return;
+        e.preventDefault();
+        const half = halfOf(e);
+        const r = rankOf(keys, from.key, key, half);
+        const moved = g.rows.find((x) => (x.customId ?? x.id) === from.key);
+        if (!r || !moved) return;
+        const order = guessOrder(t.order, half);
+        apply(moved, "rank", { done: `Ranked ${r.key}`, ...(order ? { optimistic: { order } } : {}), go: () => source.rank!(r.key, r.ask) });
+      },
+    };
+  };
+
   /* The board as one list, in the order the table draws it: status groups in the
      workflow's order, priority first inside each. What the modal's next/previous
      walks — so "next" means the row under the one you opened, and nothing has to
      re-derive that order a second way. */
   const cardOrder = useMemo(
-    () => (onLooked ? lookedGroups : groups).flatMap((g) => g.rows),
-    [onLooked, lookedGroups, groups],
+    () => (onLooked ? lookedGroups : byParent ? parentGroups : groups).flatMap((g) => g.rows),
+    [onLooked, lookedGroups, byParent, parentGroups, groups],
   );
 
   if (!boards) return <div className="p-5"><Spinner label="Reading your boards…" className="" /></div>;
@@ -2820,6 +2906,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
             busy={busy} editing={editing?.listName || editing?.name || null}
             folders={boards?.folders ?? []} onAddFolder={addFolder} onAddList={addList} />)}
 
+      {!onLooked && ctx?.sprint && <JiraSprintHeader sprint={ctx.sprint} now={Date.now()} />}
       <div className="flex items-center gap-1.5 px-4 pb-1.5 flex-wrap shrink-0">
         {/* The box, with `overflow-hidden` so anything attached to its right
             end is clipped to the same corner the field has — see the clear
@@ -2886,7 +2973,11 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
             invented — none of which could be a chip, because which fields
             exist is the board's business and not ours. */}
         <FilterBuilder fields={taskFields} value={built} onChange={setBuilt} />
+        {/* The board's own quick filters, each a read of the narrower board; and, at the right, how to group what comes back.
+            Only where the source has a context to draw (Jira), and the filters only where the board defines some. */}
+        {source.caps.context && ctx && <JiraQuickChips filters={ctx.filters} picked={quick} onToggle={toggleQuick} />}
         <span className="flex-1" />
+        {source.caps.context && <JiraGroupBy mode={groupMode} onMode={pickGroup} />}
         {/* Named by what pressing it DOES, not by what is true.
             "6 done hidden" is a caption, and it was read as one: six statuses
             looked like they had gone missing from the board rather than like
@@ -3249,7 +3340,20 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
             {/* Grouped by status, in the board's own workflow order, each group
                 foldable with its count — the shape ClickUp itself uses, and the
                 one that answers "what is in review" without a filter. */}
-            {!onLooked && groups.map((g, gi) => (
+            {byParent && parentGroups.map((g, gi) => (
+              <div key={g.key || "none"} style={{ marginTop: gi ? 18 : 4 }}>
+                <GroupHead first={!gi} folded={!!folded[`parent:${g.key}`]} count={g.rows.length}
+                  points={g.rows.reduce((n, t) => n + (t.points ?? 0), 0)}
+                  onToggle={() => setFolded((f) => ({ ...f, [`parent:${g.key}`]: !f[`parent:${g.key}`] }))}
+                  label={<ParentLabel g={g} tone={epicColors.get(g.key)} />} />
+                {!folded[`parent:${g.key}`] && g.rows.map((t) => (
+                  <ClickUpRow key={t.id} t={t} today={today} on={t.id === sel} onPick={() => setSel(t.id)} showStatus
+                    grid={grid} showWho={anyWho} showSquad={!!squadLabel} showSprint={anySprint} showEst={anyEst} showPts={anyPts} showCmts={anyCmts} blocked={blockedBy(t)} onHand={handCard}
+                    repos={repos} here={here} source={source} />
+                ))}
+              </div>
+            ))}
+            {!onLooked && !byParent && groups.map((g, gi) => (
               <div key={g.status} style={{ marginTop: gi ? 18 : 4 }}>
                 <GroupHead first={!gi} folded={!!folded[g.status]} count={g.rows.length} points={g.points}
                   onToggle={() => setFolded((f) => ({ ...f, [g.status]: !f[g.status] }))}
@@ -3257,7 +3361,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
                 {!folded[g.status] && g.rows.map((t) => (
                   <ClickUpRow key={t.id} t={t} today={today} on={t.id === sel} onPick={() => setSel(t.id)}
                     grid={grid} showWho={anyWho} showSquad={!!squadLabel} showSprint={anySprint} showEst={anyEst} showPts={anyPts} showCmts={anyCmts} blocked={blockedBy(t)} onHand={handCard}
-                    repos={repos} here={here} source={source} />
+                    repos={repos} here={here} source={source} drag={dragFor(g, t)} />
                 ))}
               </div>
             ))}
@@ -4255,22 +4359,6 @@ const clampCardW = (w: number): number => {
 /** How many looked-up cards to keep. A history you have to scroll is not a
  *  history, and these are all one click from being fetched again. */
 const LOOKED_MAX = 12;
-/*
- * A filter that is ON has to look ON.
- *
- * The old treatment was the accent at 18% behind a normal-weight label, which
- * beside five identical outlined chips reads as "slightly warmer", not as "this
- * one is doing something". Reported as not being able to tell what was picked.
- * Filled, in the accent's own colour, with the panel's background for the text —
- * the same way the app marks a pressed control everywhere else.
- */
-const ON_CHIP = {
-  background: "var(--primary)", border: "1px solid var(--primary)", color: "var(--on-primary)", fontWeight: 600,
-} as const;
-const ON_CHIP_OK = {
-  background: "var(--success)", border: "1px solid var(--success)", color: "var(--bg)", fontWeight: 600,
-} as const;
-
 
 /*
  * The columns, and the ones that come and go.
@@ -4585,7 +4673,7 @@ function PriorityPick({ t, writable, busy, onApply }: {
   );
 }
 
-function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint, showEst, showPts = true, showCmts = true, blocked, onHand, onForget, repos, here, source = CLICKUP_BOARD }: {
+function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint, showEst, showPts = true, showCmts = true, blocked, onHand, onForget, repos, here, source = CLICKUP_BOARD, showStatus = false, drag }: {
   t: ProviderTask; today: string; on: boolean; onPick: () => void;
   grid: string; showWho: boolean; showSquad: boolean; showSprint: boolean; showEst: boolean;
   /** Drawn unless the board has no points to show. */
@@ -4594,6 +4682,15 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
   showCmts?: boolean;
   /** Whose card this is: which tracker answers for its pull requests, and the words in its menu. */
   source?: BoardSource;
+  /** The status as a pill under the title: for a board grouped by something that is not the status. */
+  showStatus?: boolean;
+  /** Dragging this row to rank it. Absent where the row cannot be ranked, and the row is then not draggable at all. */
+  drag?: {
+    /** Which half of this row the pointer is over while a card is dragged across it: the line it would land on. */
+    edge: "top" | "bottom" | null;
+    onStart: () => void; onEnd: () => void;
+    onOver: (e: React.DragEvent<HTMLElement>) => void; onDrop: (e: React.DragEvent<HTMLElement>) => void;
+  };
   /** Unfinished cards this one is waiting on. Empty means it can be started. */
   blocked: ProviderTask[];
   /** Hand this card over without opening it. Absent where there is no checkout
@@ -4649,6 +4746,9 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
 
   return (
     <div role="row" tabIndex={0} aria-current={on ? "true" : undefined} onClick={onPick}
+      draggable={!!drag}
+      onDragStart={drag ? (e) => { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", t.customId ?? t.id); drag.onStart(); } : undefined}
+      onDragEnd={drag?.onEnd} onDragOver={drag?.onOver} onDrop={drag?.onDrop}
       onKeyDown={(e) => { if (e.key === "Enter") onPick(); }}
       onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY }); }}
       className="agx-row w-full text-left pr-4 hover:bg-white/5 cursor-pointer items-center"
@@ -4664,6 +4764,13 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
         background: on ? "color-mix(in srgb, var(--primary) 13%, transparent)" : undefined,
         boxShadow: on ? "inset 2px 0 0 0 var(--primary)" : undefined,
       }}>
+      {/* Where a dragged card would land: a line over the row's own edge, drawn on top of the row and out of its layout, so
+          nothing moves while a card is held over it. Above the sticky first cell (z-index 6, index.css), which an inset shadow
+          would be hidden under. */}
+      {drag?.edge && (
+        <span aria-hidden className="absolute left-0 right-0 pointer-events-none"
+          style={{ [drag.edge === "top" ? "top" : "bottom"]: 0, height: 2, background: "var(--primary)", zIndex: 7 }} />
+      )}
       {/* Held still while the columns to its right scroll under it — see
           `.agx-stick` for why its background has to be opaque. */}
       <div className="min-w-0 agx-stick">
@@ -4691,6 +4798,12 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
               language; drawn on every row it also keeps the titles on one left
               edge instead of ragged. A card with no priority gets the outline
               one, which is what its own picker shows for none. */}
+          {/* The kind of card, where the site has kinds to tell apart. */}
+          {source.caps.context && t.issueType && <span className="shrink-0 flex self-center"><TypeMark type={t.issueType} /></span>}
+          {t.flagged && (
+            <span className={`${ROW_CHIP} tracking-[0.06em] shrink-0 uppercase`} title="Flagged: an impediment is raised on this card"
+              style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 16%, transparent)" }}>Flagged</span>
+          )}
           <span className="shrink-0 flex self-center" title={`Priority: ${prioLook(t.priority).label}`}>
             <Flag c={prioLook(t.priority).c} on={!!t.priority} />
           </span>
@@ -4714,6 +4827,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
           </div>
         )}
         <div className="flex items-center gap-1 mt-1 flex-wrap">
+          {showStatus && <StatusPill status={t.status} color={t.statusColor} dim={done} />}
           {/* The id wears the same shape as the tags rather than floating naked
               beside them — three kinds of small text on one line read as
               leftovers. Its own colour keeps it the id. */}

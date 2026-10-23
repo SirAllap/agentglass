@@ -37,7 +37,7 @@ import type { ComponentType, ReactNode } from "react";
 import { api } from "./api.ts";
 import { __forgetClickupSetup } from "./clickupSetup.ts";
 import type { TrackerId } from "./trackerApi.ts";
-import type { ClickUpBoards, ProviderTask, ViewTasksResponse } from "../../../shared/providers.ts";
+import type { ClickUpBoards, JiraBoardContext, ProviderTask, ViewTasksResponse } from "../../../shared/providers.ts";
 
 /** What the card pane may offer. A source that cannot do a thing says so here
  *  and the control is left out, not disabled. */
@@ -60,6 +60,11 @@ export interface BoardCaps {
   editAddress: boolean;
   /** The built-in "assigned to you" read asks the whole workspace and is slow, with a quirk worth a note. */
   slowAssigned: boolean;
+  /**
+   * A board has context around its cards: quick filters, a sprint header, a parent to group by, and a rank to drag. Absent
+   * means none of it, so a source that has no such thing never grows a control for it.
+   */
+  context?: boolean;
 }
 
 /** The words a board uses for the tracker's own things. */
@@ -114,7 +119,11 @@ export interface BoardSource {
 
   views: () => Read<"clickupViews">;
   /** One board. `force` skips the server's cache. */
-  read: (id?: string, force?: boolean) => Read<"clickupView">;
+  read: (id?: string, force?: boolean, quick?: readonly string[]) => Read<"clickupView">;
+  /** A board's quick filters, sprint and epics. Only a source whose `caps.context` is set has it. */
+  boardContext?: (viewId: string) => Promise<JiraBoardContext>;
+  /** Put a card before or after another on its board (the order the board is read in). Behind the tracker's write switch. */
+  rank?: (key: string, ask: { before?: string; after?: string }) => Promise<{ ok: boolean; error?: string }>;
   /** One list's own statuses and fields, for a card that lives elsewhere. */
   list: (listId: string) => Read<"clickupList">;
   /** A list's own saved views, for the rail. Only asked when `caps.listViews`. */

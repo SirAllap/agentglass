@@ -655,7 +655,7 @@ export interface TaskContext {
   /** The connected account's id, to mark the card as yours. */
   me?: string;
   /** Where a board's fields live on this site; absent for a read that did not ask. */
-  fields?: { sprint?: string; points?: string };
+  fields?: { sprint?: string; points?: string; flag?: string };
 }
 
 /** One issue as the panel's task. Null when it is not an issue at all. */
@@ -818,8 +818,10 @@ export async function searchJql(creds: JiraCreds, jql: string, o: { pages?: numb
     const ids = found.ok && found.data ? found.data : null;
     const sprint = ids?.sprint;
     const points = pointsField(ids, o.board.points);
-    fields = [...CARD_FIELDS, ...(sprint ? [sprint] : []), ...(points ? [points] : []), "issuelinks", "subtasks", ...(searchComments ? ["comment"] : [])];
-    ask = { sprint, points };
+    // The kind, the parent and the flag are three more fields in the one search, never a request each.
+    const flag = ids?.flag;
+    fields = [...CARD_FIELDS, ...(sprint ? [sprint] : []), ...(points ? [points] : []), ...(flag ? [flag] : []), "issuetype", "parent", "issuelinks", "subtasks", ...(searchComments ? ["comment"] : [])];
+    ask = { sprint, points, flag };
   }
   const cx = base.then((c): TaskContext => (ask ? { ...c, fields: ask } : c));
   // The order a rank-ordered search arrives in is the board's order; the card carries it across pages.

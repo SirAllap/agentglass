@@ -30,15 +30,16 @@ import { ACTIVITY_KINDS, activityStored, type ActivityKind } from "./jiraActivit
 import { deleteCommentStored, detailStored, editCommentStored, commentStored } from "./jiraComments.ts";
 import { editStored, type EditAsk } from "./jiraEdit.ts";
 import { addWebLinkStored, createSubtaskStored, linkKindsStored, relateCardsStored, removeWebLinkStored, unrelateCardsStored } from "./jiraRelate.ts";
+import { rankStored } from "./jiraRank.ts";
 import { jiraSteps, runStepBody, STEP_KEYS } from "./jiraSteps.ts";
 import { setVoteStored, setWatchStored } from "./jiraFollow.ts";
 import { deleteWorkStored, editWorkStored, logWorkStored } from "./jiraWorklog.ts";
 import { rememberOwnMove } from "./jirawatch.ts";
 
-export const DOOR_VERBS = ["card", "moves", "links", "linktypes", "activity", "steps", "step", "link", "edit", "comment", "comment-edit", "comment-delete", "move", "subtask", "relate", "unrelate", "weblink", "unweblink", "worklog", "worklog-edit", "worklog-delete", "watch", "vote"] as const;
+export const DOOR_VERBS = ["card", "moves", "links", "linktypes", "activity", "steps", "step", "link", "edit", "comment", "comment-edit", "comment-delete", "move", "subtask", "relate", "unrelate", "weblink", "unweblink", "worklog", "worklog-edit", "worklog-delete", "watch", "vote", "rank"] as const;
 export type DoorVerb = (typeof DOOR_VERBS)[number];
 /** The verbs that change the site. The rest read. */
-export const DOOR_ACTING: readonly DoorVerb[] = ["step", "link", "edit", "comment", "comment-edit", "comment-delete", "move", "subtask", "relate", "unrelate", "weblink", "unweblink", "worklog", "worklog-edit", "worklog-delete", "watch", "vote"];
+export const DOOR_ACTING: readonly DoorVerb[] = ["step", "link", "edit", "comment", "comment-edit", "comment-delete", "move", "subtask", "relate", "unrelate", "weblink", "unweblink", "worklog", "worklog-edit", "worklog-delete", "watch", "vote", "rank"];
 export const isActing = (v: string): boolean => (DOOR_ACTING as readonly string[]).includes(v);
 
 /**
@@ -424,6 +425,9 @@ export async function runDoor(verb: string, b: Record<string, unknown>): Promise
       const r = await (verb === "watch" ? setWatchStored : setVoteStored)(key, on);
       return written(r, r.ok ? { [verb === "watch" ? "watching" : "voted"]: on } : {});
     }
+    case "rank":
+      // `before` or `after`: the card goes next to that one. Nothing is read back; the answer says only that it was sent.
+      return written(await rankStored(key, { before: b.before, after: b.after }), { ranked: true });
     default:
       return refuse(`That is not a card verb: ${DOOR_VERBS.join(", ")}`);
   }

@@ -235,6 +235,11 @@ export interface FakeState {
   nextRemoteLinkId: number;
   /** Projects whose create metadata lists no sub-task type: a site that did not turn them on. */
   noSubtaskIn: string[];
+  /** A board's own quick filters (`jql` is what a toggle ANDs into the read), its sprints and what it answers to a rank write. */
+  quickFilters: Record<number, { id: string; name: string; jql: string; description?: string }[]>;
+  sprints: Record<number, { id: number; name: string; state: string; startDate?: string; endDate?: string; goal?: string }[]>;
+  /** Keys the rank endpoint refuses (a card the caller may not rank). */
+  denyRank: string[];
   /** When true, search answers from the data as it was at the last reset,
    *  the way a real index can trail a write. */
   searchLags: boolean;
@@ -351,6 +356,9 @@ function seedState(flavor: FakeFlavor): FakeState {
     remoteLinks: structuredClone(boardExtras.remoteLinks) as Record<string, FakeRemoteLink[]>,
     nextRemoteLinkId: 20000,
     noSubtaskIn: [],
+    quickFilters: { 3: [{ id: "1", name: "Only bugs", jql: "issuetype = Bug", description: "Bugs and nothing else" }, { id: "2", name: "High priority", jql: "priority = High" }], 2: [] },
+    sprints: { 3: [{ id: 41, name: "Sprint 4", state: "active", startDate: "2026-10-05T09:00:00.000Z", endDate: "2026-10-19T09:00:00.000Z", goal: "Ship the board" }, { id: 42, name: "Sprint 5", state: "future" }], 2: [] },
+    denyRank: [],
     commentCap: null,
   };
 }
@@ -640,6 +648,7 @@ function runJql(jql: string, issues: Record<string, FakeIssue>, dc: boolean): Fa
     }
     else if ((m = /^status\s*(!?=)\s*(.+)$/i.exec(c))) rows = rows.filter((i) => (statusById(i.statusId).name.toLowerCase() === q(m![2]).toLowerCase()) === (m![1] === "="));
     else if ((m = /^issuetype\s*(!?=)\s*(.+)$/i.exec(c))) rows = rows.filter((i) => (i.issueType.toLowerCase() === q(m![2]).toLowerCase()) === (m![1] === "="));
+    else if ((m = /^priority\s*(!?=)\s*(.+)$/i.exec(c))) rows = rows.filter((i) => (priorities.find((p) => p.id === i.priorityId)!.name.toLowerCase() === q(m![2]).toLowerCase()) === (m![1] === "="));
     else if ((m = /^statusCategory\s*(!?=)\s*(.+)$/i.exec(c))) {
       rows = rows.filter((i) => {
         const k = workflow.categories[statusById(i.statusId).category];
@@ -814,6 +823,20 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
       return json(200, ["Task", "Bug"].map((name, i) => ({ id: String(10001 + i), name, subtask: false, self: `${PREFIX}/issuetype/${10001 + i}`, statuses })));
     }
 
+    // Ranking: the dragged card goes before or after a named neighbour. Every card is re-sequenced, which is all a test needs of a lexorank.
+    if (m === "PUT" && path === "/rest/agile/1.0/issue/rank") {
+      const b = (body ?? {}) as { issues?: string[]; rankBeforeIssue?: string; rankAfterIssue?: string };
+      const keys = Array.isArray(b.issues) ? b.issues : [];
+      const target = b.rankBeforeIssue ?? b.rankAfterIssue ?? "";
+      if (keys.length !== 1 || !live.issues[keys[0]!] || !live.issues[target] || keys[0] === target) return json(400, { errorMessages: ["Cannot rank those issues."], errors: {} });
+      if (live.denyRank.includes(keys[0]!)) return json(403, { errorMessages: ["You do not have permission to rank this issue."], errors: {} });
+      const order = Object.values(live.issues).sort((a, b2) => (a.rank < b2.rank ? -1 : a.rank > b2.rank ? 1 : 0)).filter((i) => i.key !== keys[0]);
+      const at = order.findIndex((i) => i.key === target) + (b.rankAfterIssue ? 1 : 0);
+      order.splice(at, 0, live.issues[keys[0]!]!);
+      order.forEach((i, n) => { i.rank = `0|r${String(n).padStart(5, "0")}:`; });
+      return new Response(null, { status: 204 });
+    }
+
     // Jira Software, outside the platform prefix and the same on both flavors.
     if (m === "GET" && path.startsWith("/rest/agile/1.0/")) {
       const boards = live.boards;
@@ -850,6 +873,21 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
             constraintType: "none",
           },
         });
+      }
+      if ((r = /^\/rest\/agile\/1\.0\/board\/(\d+)\/(quickfilter|sprint|epic)$/.exec(path))) {
+        const b = boards.find((x) => x.id === Number(r![1]));
+        if (!b) return json(404, { errorMessages: ["The requested board cannot be viewed because it either does not exist or you do not have permission to view it."], errors: {} });
+        const id = b.id;
+        if (r[2] === "quickfilter") return json(200, { maxResults: 50, startAt: 0, total: (live.quickFilters[id] ?? []).length, isLast: true, values: (live.quickFilters[id] ?? []).map((q) => ({ ...q, boardId: id })) });
+        // A kanban board has no sprints and no epic panel: the site answers 400, and both are a normal "none" to the caller.
+        if (b.type !== "scrum") return json(400, { errorMessages: [`The board does not support ${r[2]}s.`], errors: {} });
+        if (r[2] === "sprint") {
+          const states = String(query.state ?? "").split(",").filter(Boolean);
+          const rows = (live.sprints[id] ?? []).filter((x) => !states.length || states.includes(x.state));
+          return json(200, { maxResults: 50, startAt: 0, isLast: true, values: rows.map((x) => ({ ...x, originBoardId: id })) });
+        }
+        const epics = Object.values(live.issues).filter((i) => i.issueType === "Epic" && i.projectKey === b.projectKey);
+        return json(200, { maxResults: 50, startAt: 0, isLast: true, values: epics.map((e, n) => ({ id: Number(e.id), key: e.key, name: e.summary, done: false, color: { key: ["color_1", "color_4", "color_6"][n % 3] } })) });
       }
       // The deprecated card list is not served: asking for it is a mistake worth seeing.
       return json(404, { errorMessages: [`The fake does not serve ${m} ${path}.`], errors: {} });

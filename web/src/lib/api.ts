@@ -8,7 +8,7 @@ import type { CheckOnBasePlan, CheckOnBaseStatus } from "../../../shared/checkOn
 import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, EnginesReport, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest } from "../../../shared/types.ts";
 import type { JiraUnits } from "../../../shared/jiraStatusUnits.ts";
 import type { WorkSend } from "./jiraWorklog.ts";
-import type { CardEdit, CardFact, ProvidersResponse, JiraBlockOutcome, JiraConnectResult, JiraHandoffRule, JiraMoves, JiraPerson, JiraSettings, JiraStep, JiraStepChoice, JiraStepKey, JiraStepPr, JiraSteps, JiraStepsRead, JiraStatus, JiraViews, JiraViewRead, JiraViewChoice, JiraProjectChoice, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, CardWebLink, CardEvent, TrackerChoice } from "../../../shared/providers.ts";
+import type { CardEdit, CardFact, ProvidersResponse, JiraBlockOutcome, JiraConnectResult, JiraHandoffRule, JiraMoves, JiraPerson, JiraSettings, JiraStep, JiraStepChoice, JiraStepKey, JiraStepPr, JiraSteps, JiraStepsRead, JiraStatus, JiraViews, JiraViewRead, JiraBoardContext, JiraViewChoice, JiraProjectChoice, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, CardWebLink, CardEvent, TrackerChoice } from "../../../shared/providers.ts";
 import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from "../../../shared/notifyPrefs.ts";
 import type { CheckMetric } from "../../../shared/checkBaseline.ts";
 import type { UiReply } from "../../../shared/uiActions.ts";
@@ -1465,8 +1465,12 @@ const realApi = {
   /** The saved Jira views and folders: local, no request to Jira. */
   jiraViews: () => get<JiraViews>("/jira/views"),
   /** One saved view's cards. `cached` answers from disk only; `force` skips the server's held answer. */
-  jiraView: (id: string, o?: { force?: boolean; cached?: boolean }) =>
-    get<JiraViewRead>(`/jira/view?${new URLSearchParams({ id, ...(o?.force ? { force: "1" } : {}), ...(o?.cached ? { cached: "1" } : {}) })}`),
+  jiraView: (id: string, o?: { force?: boolean; cached?: boolean; filters?: readonly string[] }) =>
+    get<JiraViewRead>(`/jira/view?${new URLSearchParams({ id, ...(o?.force ? { force: "1" } : {}), ...(o?.cached ? { cached: "1" } : {}), ...(o?.filters?.length ? { filters: o.filters.join(",") } : {}) })}`),
+  /** The quick filters, the active sprint and the epics around a board's cards (server/src/jiraBoardContext.ts). */
+  jiraBoardContext: (id: string) => get<JiraBoardContext>(`/jira/board-context?id=${encodeURIComponent(id)}`),
+  /** Put a card before or after another on its board; nothing is read back. */
+  jiraRank: (key: string, ask: { before?: string; after?: string }) => post<ClickUpWrite>("/jira/rank", { key, ...ask }),
   /** Boards and favourite filters the add-a-view list offers. */
   jiraViewChoices: (q = "") =>
     get<{ ok: boolean; error?: string; boards: JiraViewChoice[]; filters: JiraViewChoice[]; truncated?: boolean }>(`/jira/view-choices?q=${encodeURIComponent(q)}`),
@@ -2920,7 +2924,9 @@ const demoApi: typeof realApi = {
     connected: true, site: "acme.example", current: "board:1",
     views: [{ id: "board:1", name: "ORBIT board", url: "", addedAt: 0 }], folders: [],
   }),
-  jiraView: (_id: string, _o?: { force?: boolean; cached?: boolean }) => D<JiraViewRead>({
+  jiraBoardContext: (_id: string) => D<JiraBoardContext>({ ok: true, filters: [], epics: [] }),
+  jiraRank: (_k: string, _a: { before?: string; after?: string }) => D({ ok: false, error: "not available in the demo" }),
+  jiraView: (_id: string, _o?: { force?: boolean; cached?: boolean; filters?: readonly string[] }) => D<JiraViewRead>({
     ok: true, at: Date.now(),
     columns: [
       { name: "To Do", statusIds: ["1"] },

@@ -6624,7 +6624,20 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       return json(jiraViews());
     }
     if (req.method === "GET" && pathname === "/jira/view") {
-      return json(await jiraViewRead(url.searchParams.get("id") || undefined, { force: url.searchParams.get("force") === "1", cached: url.searchParams.get("cached") === "1" }));
+      // `filters` is a comma list of the board's own quick-filter ids; the server looks each up, a query never comes from here.
+      const quick = (url.searchParams.get("filters") ?? "").split(",").map((x) => x.trim()).filter(Boolean).slice(0, 9);
+      return json(await jiraViewRead(url.searchParams.get("id") || undefined, { force: url.searchParams.get("force") === "1", cached: url.searchParams.get("cached") === "1", quick }));
+    }
+    /* What sits around a board's cards: quick filters, the active sprint, the epics. Kept ten minutes per board (jiraBoardContext.ts). */
+    if (req.method === "GET" && pathname === "/jira/board-context") {
+      const r = await withJira(async (c) => ({ ok: true, data: await jiraBoardContext(c, url.searchParams.get("id") ?? "") }));
+      return json(r.ok && r.data ? r.data : { ok: false, error: r.error, filters: [], epics: [], ...(r.throttled ? { throttled: true } : null) });
+    }
+    if (pathname === "/jira/rank" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = await jiraRank(String(b.key ?? ""), { before: b.before, after: b.after });
+      return json(r, r.ok ? 200 : 400);
     }
     if (req.method === "GET" && pathname === "/jira/view-choices") {
       const r = await withJira((c) => jiraViewChoices(c, url.searchParams.get("q") ?? ""));
@@ -10649,6 +10662,8 @@ startCardWatch((n) => broadcast({ type: "card", data: n }));
 /* The same bell for a connected Jira: one search every six minutes, nothing
    at all while Jira is not connected. See jirawatch.ts. */
 import { startJiraWatch, rememberOwnMove as jiraRememberOwnMove, rememberOwnAssign as jiraRememberOwnAssign } from "./jirawatch.ts";
+import { boardContext as jiraBoardContext } from "./jiraBoardContext.ts";
+import { rankStored as jiraRank } from "./jiraRank.ts";
 import { linkKindsStored as jiraLinkKinds, createSubtaskStored as jiraSubtask, relateCardsStored as jiraRelate, unrelateCardsStored as jiraUnrelate, addWebLinkStored as jiraWebLink, removeWebLinkStored as jiraWebUnlink } from "./jiraRelate.ts";
 import { detailStored as jiraDetailRead, mentionableStored as jiraMentionable, commentStored as jiraCommentOn, editCommentStored as jiraCommentEdit, deleteCommentStored as jiraCommentDelete } from "./jiraComments.ts";
 import { setVoteStored as jiraVote, setWatchStored as jiraWatch } from "./jiraFollow.ts";

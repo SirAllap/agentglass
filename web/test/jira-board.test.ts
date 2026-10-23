@@ -310,8 +310,8 @@ describe("JIRA_BOARD asks Jira", () => {
 
 describe("a control Jira cannot honour is not drawn", () => {
   test("every capability Jira lacks is off", () => {
-    // The site search is the one thing Jira can do of these; it is answered whole, not streamed.
-    expect(Object.entries(JIRA_BOARD.caps).filter(([, on]) => on)).toEqual([["workspaceSearch", true]]);
+    // The site search (answered whole, not streamed) and the board's context are the things Jira can do of these.
+    expect(Object.entries(JIRA_BOARD.caps).filter(([, on]) => on)).toEqual([["workspaceSearch", true], ["context", true]]);
     expect(Object.values(CLICKUP_BOARD.caps).every(Boolean)).toBe(true);
   });
 

@@ -166,7 +166,9 @@ for (const flavor of ["cloud", "datacenter"] as const) {
         expect(r.tasks.length).toBeGreaterThan(0);
         expect(r.tasks.every((t) => t.sprint === undefined && t.points === undefined)).toBe(true);
         const sent = (searches()[0]!.body as { fields: string[] }).fields;
-        expect(sent.filter((f) => f.startsWith("customfield_"))).toEqual([]);
+        // The flag is the one custom field left, and it is asked for by what it is on this site.
+        const flag = fake.state.fields.find((f) => /^flagged$/i.test(String(f.name)))!.id;
+        expect(sent.filter((f) => f.startsWith("customfield_"))).toEqual([flag]);
       });
 
       test("a field list that cannot be read costs the fields, never the board", async () => {

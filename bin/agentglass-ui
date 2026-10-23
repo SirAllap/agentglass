@@ -466,6 +466,9 @@ JIRA_VERBS = {
     "vote": {"acting": True,
              "surface": "vote for a card as the connected account, or take the vote back with `off`. One request, no stamp. Refused by the site for the account's own cards and where voting is off, below control level 3 and when Jira writes are off",
              "args": {"key": ("a card id such as ORBIT-1042", True), "off": ("true to take the vote back", False)}},
+    "rank": {"acting": True,
+             "surface": "put a card before or after another on its board, which is the order the board is read in; give exactly one of before and after; refused below control level 3 or when Jira writes are off",
+             "args": {"key": ("the card to move, such as ORBIT-1042", True), "before": ("the card it goes in front of", False), "after": ("the card it goes behind", False)}},
 }
 _JIRA_INT = ("updated", "pr_number", "start")
 _JIRA_BOOL = ("stay", "clear", "confirm", "off")
@@ -578,7 +581,7 @@ def main(argv=None):
     pm = p.add_mutually_exclusive_group()
     pm.add_argument("--now", action="store_true", help="open it at once: ONLY when the person just asked you to prepare this")
     pm.add_argument("--quiet", action="store_true", help="wait behind a chip if the person is typing (the default)")
-    p = sub.add_parser("jira", help="a Jira card through the routes the screen uses: card, moves, links, linktypes, activity, steps, step, link, edit, comment, comment-edit, comment-delete, move, subtask, relate, unrelate, weblink, unweblink, worklog, worklog-edit, worklog-delete, watch, vote")
+    p = sub.add_parser("jira", help="a Jira card through the routes the screen uses: card, moves, links, linktypes, activity, steps, step, link, edit, comment, comment-edit, comment-delete, move, subtask, relate, unrelate, weblink, unweblink, worklog, worklog-edit, worklog-delete, watch, vote, rank")
     js = p.add_subparsers(dest="jverb", required=True)
     for verb, spec in JIRA_VERBS.items():
         q = js.add_parser(verb, help=spec["surface"])
