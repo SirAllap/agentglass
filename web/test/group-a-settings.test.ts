@@ -100,8 +100,8 @@ describe("header chips from a page's own facts", () => {
   });
   it("tmux says its version, Tasks its sources, Terminal what is unsaved, Browser what can come in", () => {
     expect(facts.pageChips("tmux", [{ tone: "ok", text: "tmux ready" }], { tmuxVersion: "3.4" })[0]!.text).toBe("tmux 3.4");
-    expect(facts.pageChips("tasks", [], { taskSources: 3 })[0]!.text).toBe("3 sources");
-    expect(facts.pageChips("tasks", [], { taskSources: 1 })[0]!.text).toBe("1 source");
+    expect(facts.pageChips("tasks", [], { taskSources: 3 })[0]!.text).toBe("3 on the board");
+    expect(facts.pageChips("tasks", [], { taskSources: 1 })[0]!.text).toBe("1 on the board");
     expect(facts.pageChips("terminal", [], { unsavedRules: 1 })[0]).toEqual({ tone: "warn", text: "1 unsaved" });
     expect(facts.pageChips("terminal", [], { unsavedRules: 0 })).toEqual([]);
     expect(facts.pageChips("browser", [], { importableSites: 12 })[0]!.text).toBe("12 sites to bring in");

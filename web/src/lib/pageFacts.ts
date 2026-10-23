@@ -45,7 +45,8 @@ export function pageChips(id: string, chips: HeaderChip[], f: PageFacts): Header
       out.unshift({ tone: "ok", text: "No conflicts" });
       break;
     case "tasks":
-      if (f.taskSources !== undefined) out.unshift({ tone: f.taskSources ? "ok" : "off", text: `${f.taskSources} ${f.taskSources === 1 ? "source" : "sources"}` });
+      // "N sources" read as N connected, beside rows that say Not connected: this counts the lanes the Tasks bar shows.
+      if (f.taskSources !== undefined) out.unshift({ tone: f.taskSources ? "ok" : "off", text: `${f.taskSources} on the board` });
       break;
     case "browser":
       if (f.importableSites) out.unshift({ tone: "ok", text: `${f.importableSites} ${f.importableSites === 1 ? "site" : "sites"} to bring in` });
