@@ -38,6 +38,7 @@ import { IconsView, ListView, tilesPerRow } from "./FolderViews.tsx";
 import { StrataIcon } from "./StrataIcon.tsx";
 import { QuickLook } from "./QuickLook.tsx";
 import { Sidebar, placesFor } from "./Sidebar.tsx";
+import { useVolumeFlow } from "./useVolumeFlow.tsx";
 import { PIN_KEY, readPins, togglePin, writePins } from "../../../lib/finderPins.ts";
 import { useBox } from "./useBox.ts";
 
@@ -227,6 +228,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
     onPlace(path);
   }, [onPlace]);
   const go = useMemo(() => guarded("folder", goRaw), [guarded, goRaw]);
+  const devices = useVolumeFlow({ here: trail[0]!, home, go });
 
   /* A search hit: a folder becomes the place; a file selects itself inside its own folder, so its preview shows. */
   const revealRaw = useCallback((t: HitTarget) => {
@@ -529,7 +531,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
           <button className={tool} disabled={!canForward(hist)} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", opacity: canForward(hist) ? 1 : 0.4 }} title="Forward (Alt+Right)" aria-label="Forward" onClick={() => goHist(histForward(hist))}><StrataIcon set="act" name="arrow-right" size={17} /></button>
           <button className={tool} disabled={!parentOf(trail[0]!)} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", opacity: parentOf(trail[0]!) ? 1 : 0.4 }} title="Parent folder (Alt+Up)" aria-label="Parent folder" onClick={goUp}><StrataIcon set="act" name="arrow-up" size={17} /></button>
         </>}
-        <FinderPathBar path={trail[last] ?? trail[0]!} home={home} onGo={go} signalEdit={pathSignal} onEditing={setPathEditing} />
+        <FinderPathBar path={trail[last] ?? trail[0]!} home={home} onGo={go} signalEdit={pathSignal} onEditing={setPathEditing} volumes={devices.volumes} onRemote={devices.openAddress} />
         <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Search (Ctrl+K)" aria-label="Search" onClick={openSearch}><StrataIcon set="act" name="search" size={17} /></button>
         <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Appearance" aria-label="Appearance" aria-haspopup="menu" onClick={(e) => setMenu(e.currentTarget.getBoundingClientRect())}><StrataIcon set="act" name={prefs.view} size={17} /></button>
         <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Settings" aria-label="Settings" aria-haspopup="menu" onClick={(e) => setSettings(e.currentTarget.getBoundingClientRect())}><StrataIcon set="act" name="settings" size={17} /></button>
@@ -537,7 +539,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
       </div>
 
       <div className="flex-1 min-h-0 flex">
-        {sideOn && <Sidebar places={placesFor(home, places)} pins={pins} here={trail[0]!} mode={compact || sideMode === "hidden" ? "full" : pathEditing ? "rail" : sideMode} width={sidebarWidth(compact || sideMode === "hidden" ? "full" : pathEditing || sideMode === "rail" ? "rail" : "full", prefs.sideW, box.w)} onResize={(w) => setPrefs({ sideW: sidebarWidth("full", w, box.w) })} onGo={go} onRecent={onRecent} />}
+        {sideOn && <Sidebar places={placesFor(home, places)} pins={pins} here={trail[0]!} mode={compact || sideMode === "hidden" ? "full" : pathEditing ? "rail" : sideMode} width={sidebarWidth(compact || sideMode === "hidden" ? "full" : pathEditing || sideMode === "rail" ? "rail" : "full", prefs.sideW, box.w)} onResize={(w) => setPrefs({ sideW: sidebarWidth("full", w, box.w) })} onGo={go} onRecent={onRecent} onNetwork={devices.openNetwork} volumes={devices.volumes} busy={devices.busy} onVolume={devices.onVolume} onVolumeAct={devices.onVolumeAct} />}
         {!(compact && sidePage) && (
           <>
             {/* With the preview beside the columns and nothing dragged, the columns take what their names ask for and the preview takes all that is left, as Strata's does; a gap between the two was the free room with nowhere to go. */}
@@ -610,6 +612,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
           </div>
         </div>
       )}
+      {devices.dialogs}
       {ops.nodes}
       {help && <HelpSheet onClose={() => setHelp(false)} />}
       {searching && <FinderSearch home={home} onTarget={reveal} onClose={() => setSearching(false)} />}

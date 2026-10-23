@@ -24,6 +24,7 @@ import { failed } from "./refused.ts";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { diskAllows, diskEnabled, diskRoots } from "./disk.ts";
 import { safeAbs } from "./git.ts";
+import { mountAllows } from "./volumes.ts";
 import { agentglassConfigDirs, agentglassPrivate, inScope, realish, workspaceRoots } from "./config.ts";
 
 /** How many entries one folder hands back. A directory with 40,000 files in it
@@ -224,6 +225,8 @@ export function browseReal(p: unknown, local = false): string | null {
   if (diskAllows(real)) return real;
   // `local` is true only for a caller the server has resolved to loopback.
   if (local && dottedAllows(abs, real)) return real;
+  // A volume the DEVICES list shows as mounted: a disk the person plugged in is theirs to browse.
+  if (local && mountAllows(real)) return real;
   /*
    * The checkout door, and it is CLOSED when there is no checkout.
    *

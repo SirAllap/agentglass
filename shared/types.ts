@@ -1936,6 +1936,8 @@ export type WsFrame =
    *  `/desktop/palette`, as it does at boot, instead of polling it. */
   | { type: "desktop-palette" }
   | { type: "tasks" }
+  /** A volume appeared, went, mounted, unmounted, locked or unlocked. Carries nothing: the finder re-reads `/finder/devices`. */
+  | { type: "devices" }
   /** The list of pending gate holds changed (one arrived, was decided, timed
    *  out, or was answered by a rule). Carries no payload: the client re-reads
    *  `/gate/pending`, which replaces a two second poll of it. */
@@ -4621,6 +4623,26 @@ export interface FindReport {
 /** A folder the machine search may be rooted at — see server/src/disk.ts.
  *  `places` is a menu, `roots` is the boundary; the two are not the same list. */
 export interface DiskPlace { path: string; label: string }
+/** One row of the finder's DEVICES list: a volume udisks knows, as the sidebar draws it. */
+export interface Volume {
+  /** The block device the actions name (`/dev/sdb1`); the server resolves it against its own last listing. */
+  id: string; name: string;
+  encrypted: boolean; locked: boolean; mounted: boolean; mountPoint?: string;
+  /** What the eject button does and says: "eject" for removable media, "unmount" for the rest, none for neither. */
+  release: "eject" | "unmount" | null;
+  size: number;
+  /** Set on a mounted remote (`id` is then its address): which protocol, so the row is drawn and offered Disconnect as Strata's. */
+  remote?: "smb" | "sftp";
+}
+/** One step of connecting to a remote: what gio is waiting for, or how it ended. Everything in `message` is gio's own text and is shown as text, never run. */
+export type RemoteStep =
+  | { state: "password"; session: string; message: string; fields: ("User" | "Domain" | "Password")[]; defaults: { User?: string; Domain?: string } }
+  | { state: "question"; session: string; message: string; choices: string[] }
+  | { state: "done"; mountPoint?: string; uri: string }
+  | { state: "error"; error: string; missing?: boolean };
+/** What the Network row finds: addresses gio can list on `network:///`. */
+export interface NetworkList { ok: boolean; entries: { name: string; uri: string }[]; error?: string }
+export interface VolumeList { ok: boolean; devices: Volume[]; error?: string }
 export interface DiskPlaces { ok: boolean; home: string; roots: string[]; places: DiskPlace[]; error?: string }
 
 /* --- browsing a place, and looking at a file ------------------------------

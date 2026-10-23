@@ -106,7 +106,7 @@ import { singleFlight, inflightCount } from "./singleflight.ts";
 import { openInEditor, editorTarget, editorCapability, HAS_NVIM } from "./editor.ts";
 import { syncTheme, snippetStatus, SNIPPETS, tmuxThemePath, repairTmuxTheme, currentTheme, automatedThemeClient } from "./themesync.ts";
 import { desktopPalette, desktopLogo, watchDesktopPalette } from "./desktopPalette.ts";
-import { existsSync as fsExists, readFileSync as fsRead, writeFileSync as fsWrite, mkdtempSync } from "node:fs";
+import { existsSync as fsExists, readFileSync as fsRead, writeFileSync as fsWrite, mkdtempSync, readdirSync } from "node:fs";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
 import { listPortsAsync, listResources, spaceFor, killPort } from "./machine.ts";
 import { gitLocks, removeStaleLock } from "./gitlocks.ts";
@@ -149,6 +149,9 @@ import { fileText, fileToTemp, fileTree, findFiles, grepFiles, listRefs, filesEx
 import { diskEnabled, diskFind, diskGrep, diskPlaces } from "./disk.ts";
 import { homeIndex } from "./homeindex.ts";
 import { browseBatch } from "./browselist.ts";
+import { actOnDevice, devicePolicy, ensureDeviceWatch, listDevices, type DeviceAct } from "./volumes.ts";
+import { Sessions, discoverNetwork, gvfsDir, remotePolicy, remotesFromMounts } from "./remotes.ts";
+import { runTool } from "./volumes.ts";
 import { fsRun, fsReadOp, fsJobs, fsPathsOf, fsGate, fsWantsJson } from "./fsroute.ts";
 import { browseDir, fileBytes, fileFacts, previewSlice, openInDesktop, pagePolicy, revealInFileManager } from "./browse.ts";
 import { fileGitFacts } from "./fileGit.ts";
@@ -1565,6 +1568,13 @@ const controlWriteLimit = makeWriteLimiter();
  * server with another value (server/test/control-levels.test.ts pins this).
  */
 const CONTROL = controlSwitch();
+/** Connections to remotes in flight: see remotes.ts. After one mounts, its path is read back from what gio says is mounted. */
+const remoteSessions = new Sessions(undefined, async (uri) => {
+  const g = await runTool(["gio", "mount", "-l"]);
+  let entries: string[] = [];
+  try { entries = readdirSync(gvfsDir()); } catch { /* none */ }
+  return remotesFromMounts(g.out, entries, gvfsDir()).find((r) => r.id === uri || r.id.replace(/\/+$/, "") === uri.replace(/\/+$/, ""))?.mountPoint;
+});
 // A variable that was set to something unreadable has already failed closed
 // (control.ts); the owner hears it once, here, with the value and what is held.
 for (const w of CONTROL.warnings) console.warn(`agentglass: ${w}`);
@@ -7424,6 +7434,56 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       catch { return json({ ok: false, text: "", error: "invalid json" }, 400); }
       const r = writeNote(body?.root, body?.text);
       return json(r, r.ok ? 200 : 400);
+    }
+
+    /* The DEVICES list of the finder's sidebar. Reading it is as open as
+       browsing; doing something to one is a write to hardware, so it takes the
+       same page gate every write takes plus the desk key, and anyone else may only read: see devicePolicy. The monitor starts on the first read
+       and a change that alters the list reaches every window as one frame. */
+    if (pathname === "/finder/devices" && req.method === "GET") {
+      if (!FS_BROWSE_ENABLED) return json({ error: "directory browsing is disabled (AGENTGLASS_FS_BROWSE_DISABLED=1)" }, 403);
+      ensureDeviceWatch(() => broadcast({ type: "devices" }));
+      return json(await listDevices());
+    }
+    if (pathname.startsWith("/finder/devices/") && req.method === "POST") {
+      if (!FS_BROWSE_ENABLED) return json({ error: "directory browsing is disabled (AGENTGLASS_FS_BROWSE_DISABLED=1)" }, 403);
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const act = pathname.slice("/finder/devices/".length) as DeviceAct;
+      if (!["mount", "unmount", "eject", "unlock", "lock"].includes(act)) return json({ ok: false, error: "unknown action" }, 404);
+      const no = devicePolicy(act, deskHeld() && deskKeyOk(req));
+      if (no) return json({ ok: false, error: no }, 403);
+      let b: { id?: unknown; passphrase?: unknown } = {};
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const r = await actOnDevice(act, b?.id, b?.passphrase);
+      b = {};
+      if (r.ok) broadcast({ type: "devices" });
+      return json(r, r.ok ? 200 : 400);
+    }
+
+    /* The Network row and connecting to a server (SFTP, SMB through GVfs).
+       Listing the network is a read; every step of a connection is a write that
+       carries a credential or a host-key decision, so each takes the page gate
+       and a caller with no page is refused (remotePolicy). The request body
+       is read into the call and not logged (JS cannot wipe a string, so nothing here promises more). */
+    if (pathname === "/finder/network" && req.method === "GET") {
+      if (!FS_BROWSE_ENABLED) return json({ error: "directory browsing is disabled (AGENTGLASS_FS_BROWSE_DISABLED=1)" }, 403);
+      return json(await discoverNetwork(runTool));
+    }
+    if ((pathname === "/finder/remotes/connect" || pathname === "/finder/remotes/answer" || pathname === "/finder/remotes/cancel") && req.method === "POST") {
+      if (!FS_BROWSE_ENABLED) return json({ error: "directory browsing is disabled (AGENTGLASS_FS_BROWSE_DISABLED=1)" }, 403);
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const no = remotePolicy(deskHeld() && deskKeyOk(req));
+      if (no) return json({ state: "error", error: no }, 403);
+      let b: { uri?: unknown; session?: unknown; answers?: Record<string, unknown>; choice?: unknown } = {};
+      try { b = (await req.json()) as typeof b; } catch { return json({ state: "error", error: "invalid json" }, 400); }
+      ensureDeviceWatch(() => broadcast({ type: "devices" }));
+      let step;
+      if (pathname.endsWith("/connect")) step = await remoteSessions.start(b?.uri);
+      else if (pathname.endsWith("/answer")) step = await remoteSessions.answer(String(b?.session ?? ""), { answers: b?.answers, choice: b?.choice });
+      else { remoteSessions.cancel(String(b?.session ?? "")); step = { state: "error" as const, error: "cancelled" }; }
+      b = {};
+      if (step.state === "done") broadcast({ type: "devices" });
+      return json(step, step.state === "error" ? 400 : 200);
     }
 
     if (pathname.startsWith("/disk/")) {

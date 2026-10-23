@@ -10,6 +10,8 @@ import { completePath, crumbs, isFolder } from "../../../lib/finderMiller.ts";
 import { EDGE, INPUT, INPUT_STYLE, LINE } from "../../workspace/Chrome.tsx";
 import { HIT, ICON } from "../../../lib/iconSize.ts";
 import { StrataIcon } from "./StrataIcon.tsx";
+import type { Volume } from "../../../../../shared/types.ts";
+import { isRemoteAddress, remoteView } from "../../../lib/finderRemote.ts";
 
 /** Strata shows where a completion lives as the tail of its parent, cut from the left: "…a/scratchpad/tree". */
 export function parentHint(dir: string, keep = 20): string {
@@ -17,7 +19,9 @@ export function parentHint(dir: string, keep = 20): string {
   return d.length <= keep ? d : `…${d.slice(d.length - keep)}`;
 }
 
-export function FinderPathBar({ path, home, onGo, signalEdit, onEditing }: { path: string; home: string; onGo: (path: string) => void; signalEdit: number; onEditing?: (on: boolean) => void }) {
+export function FinderPathBar({ path, home, onGo, signalEdit, onEditing, volumes = [], onRemote }: { path: string; home: string; onGo: (path: string) => void; signalEdit: number; onEditing?: (on: boolean) => void; volumes?: readonly Volume[]; onRemote?: (address: string) => void }) {
+  /** A folder of a mounted remote is shown and edited as its address, as Strata does. */
+  const remote = remoteView(path, volumes);
   const [text, setText] = useState<string | null>(null);
   const [picks, setPicks] = useState<string[]>([]);
   const [dir, setDir] = useState<string | null>(null);
@@ -26,12 +30,12 @@ export function FinderPathBar({ path, home, onGo, signalEdit, onEditing }: { pat
   const seen = useRef(signalEdit);
 
   useEffect(() => { onEditing?.(text !== null); }, [text !== null]);
-  const edit = () => { setText(path.endsWith("/") ? path : `${path}/`); setTimeout(() => input.current?.select(), 0); };
+  const edit = () => { const shownPath = remote ? remote.uri : path; setText(shownPath.endsWith("/") ? shownPath : `${shownPath}/`); setTimeout(() => input.current?.select(), 0); };
   // Ctrl+L (the finder's own key) asks for the field from outside.
   useEffect(() => { if (signalEdit !== seen.current) { seen.current = signalEdit; edit(); } }, [signalEdit]);
 
   // Which folder is typed, and what is in it. The bar asks only when the folder part changes, not on every keystroke after it.
-  const asked = text === null ? null : completePath(text, home, []).dir;
+  const asked = text === null || isRemoteAddress(text) ? null : completePath(text, home, []).dir;
   useEffect(() => {
     if (!asked) { setPicks([]); setDir(null); return; }
     const ctl = new AbortController();
@@ -50,6 +54,7 @@ export function FinderPathBar({ path, home, onGo, signalEdit, onEditing }: { pat
     const v = value.trim();
     const full = v === "~" ? home : v.startsWith("~/") ? `${home.replace(/\/+$/, "")}/${v.slice(2)}` : v;
     setText(null);
+    if (isRemoteAddress(v)) { onRemote?.(v); return; }
     if (full.startsWith("/")) onGo(full.length > 1 ? full.replace(/\/+$/, "") : full);
   };
   const fill = (name: string) => { if (text !== null) setText(`${text.slice(0, text.lastIndexOf("/") + 1)}${name}/`); };
@@ -88,7 +93,10 @@ export function FinderPathBar({ path, home, onGo, signalEdit, onEditing }: { pat
       </div>
     );
   }
-  const parts = crumbs(path, home);
+  // Under a remote the first crumb is the address of the mount and the rest are its folders.
+  const parts: { label: string; path: string }[] = remote
+    ? [{ label: remote.root, path: remote.mountPoint }, ...path.slice(remote.mountPoint.length).split("/").filter(Boolean).map((seg, i, all) => ({ label: seg, path: `${remote.mountPoint}/${all.slice(0, i + 1).join("/")}` }))]
+    : crumbs(path, home);
   // Strata draws the path bare: segments separated by a slash, the last one in the accent.
   return (
     <div className="flex-1 min-w-0 flex items-center gap-1 px-2 overflow-hidden cursor-text whitespace-nowrap" role="navigation" aria-label="Path"
