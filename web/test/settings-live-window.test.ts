@@ -48,6 +48,7 @@ describe("the views a live window offers", () => {
 describe("the window follows the controls", () => {
   test("Display size sets how wide the window is laid out: a bigger size fits less", () => {
     const width = (zoomPct: number) => Number(html(h(LiveWindow, { view: "settings", zoomPct, aspect: 1.6 })).match(/width:([\d.]+)px;height/)?.[1]);
+    // Rendered without a layout, the box is 480 px: drawn at half the base width.
     expect(width(100)).toBeCloseTo(LIVE_BASE_W, 0);
     expect(width(125)).toBeCloseTo(LIVE_BASE_W / 1.25, 0);
     expect(width(90)).toBeGreaterThan(width(100));

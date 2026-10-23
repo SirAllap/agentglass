@@ -37,7 +37,7 @@ export function WindowPreview(p: WindowPreviewProps) {
               <span className="flex-1 text-center">agentglass</span>
             </div>
           )}
-          <LiveWindow view={p.view} zoomPct={p.zoomPct} rail={p.rail} aspect={p.fullscreen ? 1.3 : 1.6} />
+          <LiveWindow view={p.view} zoomPct={p.zoomPct} rail={p.rail} aspect={p.fullscreen ? 1.2 : 1.45} />
           {p.launchAnimation && (
             <div data-cover style={{ position: "absolute", right: p.fullscreen ? 12 : 34, bottom: p.fullscreen ? 12 : 40, padding: "6px 12px", borderRadius: 8, background: "var(--bg)", color: "var(--text)", fontSize: 11, boxShadow: "var(--surface-lift)" }}>Launch cover plays first</div>
           )}

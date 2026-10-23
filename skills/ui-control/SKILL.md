@@ -1,6 +1,6 @@
 ---
 name: ui-control
-description: Open a panel in agentglass's own window, read what is open, or read and change one of its settings. Use when the person asks you to "show me" a Settings page, the machine panel, the bench, a Git modal or a file in agentglass; when you need to know what they are looking at, what is in a chat or on the bench, or what a setting is set to; or when they ask you to change an agentglass setting (theme, accent, diff layout, terminal font, rail order). Also a Jira card: read it, list its moves, run a configured step, link a pull request. Not for pages inside the built-in browser (that is browser-use).
+description: Open a panel in agentglass's own window, read what is open, or read and change one of its settings. Use when the person asks you to "show me" a Settings page, the machine panel, the bench, a Git modal or a file in agentglass; when you need to know what they are looking at, what is in a chat or on the bench, or what a setting is set to; or when they ask you to change an agentglass setting (theme, accent, density, interface font size, reduce motion, diff layout, terminal font, rail order). Also a Jira card: read it, list its moves, run a configured step, link a pull request. Not for pages inside the built-in browser (that is browser-use).
 ---
 
 # Driving agentglass's own screen

@@ -351,7 +351,7 @@ function ScaleControl({ scale, onZoom }: { scale: number; onZoom: (dir: 1 | -1 |
   };
   const quick = SCALE_QUICK.includes(scale);
   return (
-    <span className="flex items-center gap-2 flex-wrap justify-end">
+    <span className="flex items-center gap-2 flex-wrap justify-start">
       <SegControl label="Display size" value={quick ? String(scale) : undefined}
         options={SCALE_QUICK.map((v) => ({ v: String(v), label: fmtScale(v) }))}
         onPick={(v) => goTo(Number(v))} />

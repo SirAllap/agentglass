@@ -18,6 +18,8 @@ export type LiveView = (typeof LIVE_VIEWS)[number]["id"];
 
 /** The width, in CSS px, the window is laid out at when Display size is 100 % (the preview is small, so this is narrower than a real window, which keeps its text readable). */
 export const LIVE_BASE_W = 960;
+/** The largest a miniature is drawn, as a share of real size: wider boxes show more of the window, not bigger text. */
+const MINIATURE_MAX = 0.75;
 
 const BORDER = "0.08em solid var(--surface-line)";
 
@@ -44,7 +46,7 @@ function SettingsDemo({ zoomPct }: { zoomPct: number }) {
   return (
     <div data-view-body="settings" className="agx-settings-page" style={{ padding: "0 0 16px" }}>
       <SettingsPageHeader label="Appearance" group={null} icon={ThemeIcon} what="How the window looks." chips={[]} />
-      <div className="agx-settings-col" style={{ padding: "0 24px" }}>
+      <div className="agx-settings-col" data-flow="single" style={{ padding: "0 24px", maxWidth: 620 }}>
         <SettingsCard title="Size and startup" icon={<ThemeIcon size={16} />}>
           <SettingRow agentExempt label="Display size" hint="How big everything inside the window is."
             below={<SegControl label="Display size" value={size} onPick={noop}
@@ -93,9 +95,14 @@ export interface LiveWindowProps {
 export function LiveWindow({ view, zoomPct, rail, aspect, density, fontPx, translucent }: LiveWindowProps) {
   const [ref, box] = useBox();
   const z = zoomScale(zoomPct);
-  const vw = LIVE_BASE_W / z;
-  const k = (box.w || 480) / vw;
-  const vh = (box.h || (box.w || 480) / aspect) / k;
+  // The box is a screen. At 100 % its pixels are drawn at `s0` of their size, never larger than a
+  // miniature should be; Display size multiplies that, so a bigger size makes the app bigger inside
+  // the same window and less of it fits, as on the desktop.
+  const w = box.w || 480;
+  const s0 = Math.min(w / LIVE_BASE_W, MINIATURE_MAX);
+  const k = s0 * z;
+  const vw = w / k;
+  const vh = (box.h || w / aspect) / k;
   const look: CSSProperties = {
     ...(fontPx ? ({ "--agx-fs": fontPx / 13 } as CSSProperties) : null),
   };

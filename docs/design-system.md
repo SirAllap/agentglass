@@ -426,6 +426,16 @@ Every settings page is built from the blocks in
   3px ring on focus. A short exclusive choice in a row (display size, 12h/24h) is
   `SegControl` from `SettingsKit`; a numbered list (what happens at login) sits
   in `.agx-steps`, 22px inset circles and no rule between steps.
+- The look preferences (`lib/lookPrefs.ts`) are four attributes on `<html>` that
+  `index.css` reads and nothing else does: `data-density` scales the 8/10/12px
+  vertical padding steps and the Settings rows, `data-ui-font` scales every
+  `text-[Npx]` class and every size the stylesheet sets (written
+  `calc(Npx * var(--agx-fs, 1))`, so a new bare `font-size: Npx` is refused by
+  `look-prefs.test.ts`), `data-translucent` lets `--surface-nav` through, and
+  `data-reduce-motion` ends every animation. Density and font size are written
+  without `html`, so a preview can wear its own value. The Appearance and
+  Window previews are the app's own screens (a Settings page, the Lantern's
+  cards, a diff) in a window laid out at the Display size, never the Dashboard.
 - The nav group hues are five fixed mid-tones, the same in every theme
   (`--g-general` #6b7bb8, `--g-workspace` #3f9a93, `--g-agents` #d98a6c,
   `--g-library` #c4982f, `--g-connections` #5c8fc4): used only as a 17% tint, a
