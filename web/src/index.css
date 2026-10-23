@@ -3071,7 +3071,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 /* Open beats every size the pill takes on hover or when tucked: a hover rule
    that won here shrank the open overview under the pointer, which then left
    it, which grew it again — a loop (measured on the installed app, tab yours). */
-.agx-isl.is-open { clip-path: inset(0px 0px 0px 0px round 20px) !important; background: transparent !important; top: 12px !important; z-index: 30; transition: none !important; }
+.agx-isl.is-open { clip-path: inset(0px var(--sbr, 0px) var(--sbb, 0px) 0px round 20px) !important; background: transparent !important; top: 12px !important; z-index: 30; transition: none !important; }
 /* the shape that grows: a solid colour with nothing in it, clipped from the pill to the page */
 .agx-isl-morph { position: absolute; inset: 0; background: rgba(22, 19, 31, .84);
   clip-path: inset(0px calc(50% - var(--pw)) calc(100% - var(--ph)) calc(50% - var(--pw)) round var(--pr));
@@ -3088,7 +3088,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 @keyframes agx-morph-seal { from { background: transparent; } to { background: var(--bg); } }
 @keyframes agx-morph-dark { from { background: var(--bg); } to { background: rgb(22, 19, 31); } }
 /* the open overview's glass: the page behind is blurred past reading, the tint is the theme's own */
-.agx-isl-glass { position: absolute; left: 12px; right: 12px; top: 12px; bottom: 12px; z-index: 29; border-radius: 20px; pointer-events: none; opacity: 0;
+.agx-isl-glass { position: absolute; left: 12px; right: calc(12px + var(--sbr, 0px)); top: 12px; bottom: calc(12px + var(--sbb, 0px)); z-index: 29; border-radius: 20px; pointer-events: none; opacity: 0;
   background: color-mix(in srgb, var(--bg) 52%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent), 0 24px 60px -24px rgba(0, 0, 0, .45);
   /* closing: the blur and the layer stay for the 120 ms the morph takes to turn opaque, then go, hidden under it */
@@ -3154,7 +3154,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 /* the overview */
 /* the overview is clipped to the same shape as it grows and shrinks, so the
    shape is never empty: it carries its content in and out */
-.agx-isl-mc { position: absolute; inset: 0; display: flex; flex-direction: column; opacity: 0; transform: scale(.985); transform-origin: 50% 0;
+.agx-isl-mc { position: absolute; inset: 0 var(--sbr, 0px) var(--sbb, 0px) 0; display: flex; flex-direction: column; opacity: 0; transform: scale(.985); transform-origin: 50% 0;
   clip-path: inset(0px calc(50% - var(--pw)) calc(100% - var(--ph)) calc(50% - var(--pw)) round var(--pr));
   transition: opacity 240ms ease-in 120ms, transform 3120ms cubic-bezier(0.32, 0.72, 0, 1) 120ms, clip-path 3120ms cubic-bezier(0.32, 0.72, 0, 1) 120ms; }
 .agx-isl.is-shown .agx-isl-mc { opacity: 1; transform: none; clip-path: inset(0px 0px 0px 0px round 20px);

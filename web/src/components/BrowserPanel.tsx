@@ -632,6 +632,16 @@ export function BrowserView({ active: viewOn, scope }: {
     if (src) shots.current.set(id, src);
     return src;
   }, []);
+  /** The classic scrollbars the guest draws, which a <webview> shows through the overview's 12px margin. */
+  const gutterOf = useCallback(async (id: string) => {
+    const e = els.current.get(id);
+    if (!e) return null;
+    try {
+      const [w, h] = (await e.executeJavaScript("[innerWidth - document.documentElement.clientWidth, innerHeight - document.documentElement.clientHeight]")) as [number, number];
+      const z = 1.2 ** e.getZoomLevel(); // CSS px of a zoomed page back to the panel's
+      return { r: Math.max(0, Math.round(w * z)), b: Math.max(0, Math.round(h * z)) };
+    } catch { return null; }
+  }, []);
   const spaceName = useCallback((id: string) => profileName(profilesRef.current, id), []);
   useEffect(() => {
     if (!activeId || !landings[activeId]) return;
@@ -3154,6 +3164,7 @@ export function BrowserView({ active: viewOn, scope }: {
             onMenu={(r, byKey) => { setMenuAtXY({ top: r.bottom + 6, right: Math.max(6, window.innerWidth - r.right) }); setMenuByKey(byKey); setMenuOpen(true); }} menuOpen={menuOpen}
             onToggle={(id) => { const a = actsRef.current[id]; if (a) dispatchAct({ type: "pause", tab: id, paused: !a.paused }); }}
             picture={snapTab}
+            gutter={gutterOf}
             lastPicture={(id) => shots.current.get(id) ?? null}
             onTucked={setIslandTucked} />
         )}

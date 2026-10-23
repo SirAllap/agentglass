@@ -4,6 +4,18 @@ const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");
 const island = strip(await Bun.file(new URL("../src/components/browser/BrowserIsland.tsx", import.meta.url)).text());
 const presence = strip(await Bun.file(new URL("../src/components/browser/AgentPresence.tsx", import.meta.url)).text());
 
+describe("overview margin beside a guest scrollbar", () => {
+  // A <webview> draws its own scrollbar under the card's 12px margin, so the right
+  // and bottom gaps read wider or narrower than the left and top ones.
+  test("the card, its glass and its content all move in by the scrollbar the page draws", async () => {
+    const css = await Bun.file(new URL("../src/index.css", import.meta.url)).text();
+    expect(css).toMatch(/\.agx-isl-glass \{[^}]*right: calc\(12px \+ var\(--sbr, 0px\)\)[^}]*bottom: calc\(12px \+ var\(--sbb, 0px\)\)/);
+    expect(css).toMatch(/\.agx-isl\.is-open \{ clip-path: inset\(0px var\(--sbr, 0px\) var\(--sbb, 0px\) 0px round 20px\)/);
+    expect(css).toMatch(/\.agx-isl-mc \{ position: absolute; inset: 0 var\(--sbr, 0px\) var\(--sbb, 0px\) 0;/);
+    expect(island).toContain("p.gutter(front)");
+  });
+});
+
 describe("island pill", () => {
   // A tab an agent had touched an hour earlier still showed "agent · working"
   // with no rim, no pointer and no Take over on the page.

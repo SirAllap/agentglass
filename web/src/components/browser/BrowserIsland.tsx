@@ -61,6 +61,8 @@ export interface IslandProps {
   onToggle: (tab: string) => void;
   /** A fresh picture of an awake tab, or null. */
   picture: (id: string) => Promise<string | null>;
+  /** The width and height of the scrollbars the page in front is drawing, in panel pixels, or null. */
+  gutter?: (id: string) => Promise<{ r: number; b: number } | null>;
   /** The last picture seen of a tab, at once, or null. */
   lastPicture: (id: string) => string | null;
   /** Tells the panel when the island has tucked, so the dock goes too. */
@@ -77,6 +79,7 @@ export function BrowserIsland(p: IslandProps) {
   const box = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
   const [tucked, setTucked] = useState(false);
+  const [gut, setGut] = useState({ r: 0, b: 0 });
   const [pics, setPics] = useState<Record<string, string>>({});
   const active = tabs.find((t) => t.id === activeId) ?? null;
   const act = active ? acts[active.id] : undefined;
@@ -148,6 +151,9 @@ export function BrowserIsland(p: IslandProps) {
     if (!open) { setSnap(true); setOpen(true); unsnap(); }
     requestAnimationFrame(() => setShown(true));
     // the page in front is the one worth refreshing; a hidden guest gives no picture
+    // the card keeps its 12px from the page's scrollbar, as it does from the panel's other edges
+    setGut({ r: 0, b: 0 });
+    if (front && p.gutter) void p.gutter(front).then((g) => { if (g) setGut(g); });
     if (front) void p.picture(front).then((src) => { if (src) setPics((m) => ({ ...m, [front]: src })); });
   }, [open, tabs, activeId, p, yours]); // eslint-disable-line react-hooks/exhaustive-deps
   const hide = useCallback((pick?: string) => {
@@ -206,14 +212,15 @@ export function BrowserIsland(p: IslandProps) {
   useEffect(() => { if (!tucked || open) setPeek(false); }, [tucked, open]);
 
   const cls = "agx-isl" + (open ? " is-open" : "") + (shown ? " is-shown" : "") + (snap ? " is-snap" : "") + (tucked ? " is-tucked" : "") + (peek || p.menuOpen ? " is-peek" : "") + (yours ? " is-yours" : "") + (act?.paused ? " is-taken" : "");
+  const sbv = { "--sbr": `${gut.r}px`, "--sbb": `${gut.b}px` } as React.CSSProperties;
   const dot = act?.paused ? "is-taken" : working ? "is-working" : "";
   return (
     <>
       {open && <div className={"agx-isl-scrim" + (shown ? " is-shown" : "")} onClick={() => hide()} />}
-      {open && <div className={"agx-isl-glass" + (shown ? " is-shown" : "")} aria-hidden />}
+      {open && <div className={"agx-isl-glass" + (shown ? " is-shown" : "")} style={sbv} aria-hidden />}
       <div ref={box} className={cls} role={open ? "dialog" : undefined} aria-label={open ? "Every tab" : undefined}
         onPointerEnter={() => { if (tucked && !open) setPeek(true); }}
-        style={{ "--pw": `${morph.w}px`, "--ph": `${morph.h}px`, "--pr": `${morph.r}px` } as React.CSSProperties}>
+        style={{ "--pw": `${morph.w}px`, "--ph": `${morph.h}px`, "--pr": `${morph.r}px`, ...sbv } as React.CSSProperties}>
         {/* under the collapsed content, so the capsule's icons are on top of it as it lands */}
         {open && <div className="agx-isl-morph" aria-hidden
           onTransitionEnd={(e) => { if (!shown && e.target === e.currentTarget && e.propertyName === "clip-path") finish(); }} />}
