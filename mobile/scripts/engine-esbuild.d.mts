@@ -11,3 +11,4 @@ export const ENGINE_ESBUILD: {
   write: false;
   logLevel: "silent";
 };
+export const RECIPE: string;
