@@ -588,7 +588,8 @@ describe("a board is for pointing at, not for pressing", () => {
      * reason, and then an Open button nobody used. The whole card is the
      * button; the lane and its sentence say what wants doing.
      */
-    expect(board).toContain('<div onClick={onOpen} role="button"');
+    // `ref={cardEl}` sits first: the conflict resolver watches the card's visibility.
+    expect(board).toContain('<div ref={cardEl} onClick={onOpen} role="button"');
     expect(board).not.toContain("onAct(p, act)");
     expect(board).not.toContain('onAct(p, "open")');
   });
