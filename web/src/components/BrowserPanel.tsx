@@ -2676,7 +2676,6 @@ export function BrowserView({ active: viewOn, scope }: {
         <SideTool label={active?.loading ? "Stop" : "Reload"}
           onClick={() => (active?.loading ? el()?.stop() : el()?.reload())}>{active?.loading ? <StopIcon /> : <ReloadIcon />}</SideTool>
       </div>
-      {barMenu}
       <div className="px-1.5 pt-1 pb-1.5 shrink-0 flex items-center gap-1">
         <button onClick={() => setOmni("edit")}
           title={active?.url || "Type an address"}
@@ -3427,6 +3426,9 @@ export function BrowserView({ active: viewOn, scope }: {
           )}
         </>
       )}
+      {/* Drawn here, not in the side bar: with the island there is no side
+          bar, and the island's own ⋯ opened a menu nothing rendered. */}
+      {barMenu}
       {/* What the other browser has, before any of it lands here.
           An import that simply happens is one nobody can check — and this one
           adds fourteen folders and seventy-odd pages to something arranged by

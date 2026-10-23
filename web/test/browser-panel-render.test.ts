@@ -333,3 +333,15 @@ describe("dropping the container on screen", () => {
     expect(body).toContain('setProfile("")');
   });
 });
+
+describe("the ⋯ menu", () => {
+  test("is drawn outside the side bar, which the island never mounts", async () => {
+    const src = await Bun.file(new URL("../src/components/BrowserPanel.tsx", import.meta.url)).text();
+    const start = src.indexOf("const sideBody = (");
+    expect(start).toBeGreaterThan(-1);
+    const end = src.indexOf("\n  );\n", start);
+    expect(end).toBeGreaterThan(start);
+    expect(src.slice(start, end)).not.toContain("{barMenu}");
+    expect(src.split("{barMenu}").length).toBe(2);
+  });
+});
