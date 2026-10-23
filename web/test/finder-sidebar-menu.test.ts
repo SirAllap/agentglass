@@ -51,8 +51,10 @@ const sidebar = await Bun.file(new URL("Sidebar.tsx", dir)).text();
 const finder = await Bun.file(new URL("MachineFinder.tsx", dir)).text();
 
 describe("every sidebar row has its menu", () => {
-  test("the place (and pinned folder), remote and device rows all spread the same handlers", () => {
-    expect(sidebar.match(/\{\.\.\.menuOf\(/g)?.length).toBe(3);
+  test("the place (and pinned folder) and device rows spread the same handlers; a pinned remote is inert and has no menu", () => {
+    expect(sidebar.match(/\{\.\.\.menuOf\(/g)?.length).toBe(2);
+    const at = sidebar.indexOf("const remote = (");
+    expect(sidebar.slice(at, sidebar.indexOf("const device = (", at))).toContain("disabled");
   });
   test("the Menu key and Shift+F10 open it at the row", () => {
     const at = sidebar.indexOf("const menuOf = (");

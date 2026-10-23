@@ -95,11 +95,11 @@ export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, o
       </button>
     );
   };
-  /** A pinned remote (sftp, smb): it has no folder here until it is connected, so the row asks the address flow to open it. */
+  /** A pinned remote (sftp, smb) opens nothing from the sidebar: the row is greyed and inert, with no menu either, so it never looks like a button that failed. */
   const remote = (b: PinnedPlace) => (
-    <button key={`pin:${b.uri}`} type="button" data-side-row aria-label={rail ? b.label : undefined} title={b.uri} onClick={(e) => { if (activates(e.button, "click")) onRemote?.(b.uri); }} {...menuOf({ kind: "pin", uri: b.uri })}
-      className={`agx-btn w-full flex items-center ${rail ? "justify-center" : "gap-2 px-2.5"} rounded-md text-left`} style={{ minHeight: rail ? 28 : 26, color: "var(--text2)" }}>
-      <span className="shrink-0 flex" style={{ color: "var(--primary-ink)" }}><StrataIcon set="act" name="folder" size={ICON.md} /></span>
+    <button key={`pin:${b.uri}`} type="button" disabled data-side-row aria-disabled="true" aria-label={rail ? b.label : undefined} title={b.uri} onContextMenu={(e) => e.preventDefault()}
+      className={`w-full flex items-center ${rail ? "justify-center" : "gap-2 px-2.5"} rounded-md text-left`} style={{ minHeight: rail ? 28 : 26, color: "var(--text2)", opacity: 0.4, cursor: "not-allowed" }}>
+      <span className="shrink-0 flex"><StrataIcon set="act" name="folder" size={ICON.md} /></span>
       {!rail && <span className="truncate">{b.label}</span>}
     </button>
   );

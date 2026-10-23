@@ -69,7 +69,7 @@ const handlers = (s: string, re: RegExp) => [...code(s).matchAll(re)].map((m) =>
 describe("every handler that acts asks which button first", () => {
   test("sidebar rows, pins, devices and the device buttons", () => {
     const h = handlers(sidebar!, /onClick=\{\(e\)[^\n]*/g);
-    expect(h.length).toBeGreaterThanOrEqual(4);
+    expect(h.length).toBeGreaterThanOrEqual(3);
     for (const x of h) if (!x.includes("MenuItem")) expect(x).toContain("activates(e.button");
     expect(code(sidebar!)).not.toMatch(/onClick=\{\(\) =>(?![^\n]*MenuItem)[^\n]*(onGo|onRemote|onVolume|onRecent)/);
   });
