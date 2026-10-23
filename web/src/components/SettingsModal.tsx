@@ -21,6 +21,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Portal, PortalFloor } from "./Portal.tsx";
 import { LAYER } from "../lib/layers.ts";
 import { api } from "../lib/api.ts";
+import { savePaneField as paneFieldSave } from "../lib/paneEngineSave.ts";
 import { browserPlaces, CAN_IMPORT_COOKIES, cookieSources, importCookies, forgetCookies, type CookieSource, type CookieImportReply } from "../lib/desktop.ts";
 import { loadProfiles } from "../lib/browserProfiles.ts";
 import { addVisible, allSites, bestSource, dropVisible, lockedWhy, reachable, siteView } from "../lib/cookiePick.ts";
@@ -3196,6 +3197,8 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
   /** The card the last action belongs to, so its answer appears under it and not at the foot of the page. */
   const [noteAt, setNoteAt] = useState<"engine" | "config" | "restore">("engine");
   const [busy, setBusy] = useState(false);
+  /** A failed Restore / Resume save. Not `err`: that one replaces the whole page. */
+  const [saveFail, setSaveFail] = useState<string | null>(null);
 
   const load = () => {
     setBusy(true);
@@ -3219,10 +3222,23 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
 
   const saveSettings = () => {
     setBusy(true); setNote(null); setNoteAt("engine");
-    api.tmuxSettingsSave({ source, path: source === "custom" ? path : undefined, restore, resume })
+    api.tmuxSettingsSave({ source, path: source === "custom" ? path : undefined })
       .then((r) => { setNote(r.ok ? "Saved. The binary choice applies to new panes." : r.error ?? "Could not save."); void load(); })
       .catch(() => setErr("Could not save — server unreachable."))
       .finally(() => setBusy(false));
+  };
+
+  /** Restore and Resume mode save the moment they change: show the new value
+   *  at once, put the old one back and say so if the save fails. */
+  const savePaneField = (field: { restore: boolean } | { resume: "lazy" | "all" }, what: string) => {
+    const prev = { restore, resume };
+    if ("restore" in field) setRestore(field.restore); else setResume(field.resume);
+    setNote(null); setSaveFail(null);
+    void paneFieldSave(api.tmuxSettingsSave, field, what).then((r) => {
+      if (r.ok) { void load(); return; }
+      setRestore(prev.restore); setResume(prev.resume);
+      setSaveFail(r.error);
+    });
   };
 
   const savePrefix = () => {
@@ -3400,19 +3416,22 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
       <SettingRow
         label="Restore the layout"
         role="switch" ariaChecked={restore}
-        onClick={busy ? undefined : () => setRestore(!restore)}
+        onClick={busy ? undefined : () => savePaneField({ restore: !restore }, "Restore")}
         hint="When the host reboots, the engine's tmux dies with it — this photographs the layout (sessions, tabs, splits, each pane's directory and start command; not what scrolled past) and rebuilds it at the next boot. Nothing here touches your own tmux or its resurrect saves."
         control={<Switch on={restore} busy={busy} />}
       />
       <SettingRow
         label="Resume mode"
         hint={<>"Lazy" restores the tree and resumes each agent when you reopen its chat; "All" relaunches every recorded CLI, resuming each conversation.</>}
-        control={<Select value={resume} onChange={setResume} disabled={busy || !restore} align="right" style={SELECT_BOX}
+        control={<Select value={resume} onChange={(v) => savePaneField({ resume: v === "all" ? "all" : "lazy" }, "Resume mode")} disabled={busy || !restore} align="right" style={SELECT_BOX}
           options={[
             { value: "lazy", label: "Lazy resume" },
             { value: "all", label: "Resume all" },
           ]} />}
       />
+      {saveFail && (
+        <SettingRow label={<span style={{ color: "var(--error-ink)" }}>{saveFail}</span>} />
+      )}
       {st?.crashLoop && (
         <SettingRow
           label="Layout left alone"

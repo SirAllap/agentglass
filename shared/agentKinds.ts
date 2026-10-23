@@ -159,6 +159,81 @@ export type LockSpelling =
   | { via: "env"; env: string }
   | { via: "file"; env: string };
 
+/*
+ * What an orchestrator needs to know about an engine before it hands it work.
+ * Four facets, each one a fact read off the CLI itself (research notes, laptop
+ * and desktop, 2026-10-10) and nothing inferred:
+ *
+ *   version   how to ask for it, how to pick it out of the banner, and the
+ *             oldest one agentglass can drive
+ *   account   the CLI's own read-only status command, and what it prints when
+ *             someone is signed in. Names only: agentglass never opens a
+ *             credential file, it asks the CLI
+ *   headless  which argv builder runs one turn without a terminal, and how a
+ *             follow-up turn names its session
+ *   envelope  how a worker's permissions are fixed BEFORE its turn
+ *   screen    what a TUI chair's pane says when it is waiting on a person
+ *
+ * A facet that is absent means nobody has seen that CLI do it. That is the
+ * point of leaving it out rather than filling it from memory: Gemini and
+ * Antigravity are not installed on the machines this was measured on, so they
+ * carry what the repo's own code says and no more, and Qwen carries nothing
+ * beyond its `--version`.
+ */
+
+/** Ask a CLI for its version, and read it out of what it prints. */
+export interface VersionFacet {
+  args: string[];
+  /** A regex source whose FIRST capture group is the dotted version. */
+  pattern: string;
+  /** The oldest version agentglass can drive, and what the newer one has. */
+  min?: string;
+  minWhy?: string;
+}
+
+/** The CLI's read-only "who am I" command. */
+export interface AccountFacet {
+  args: string[];
+  /** A regex source that matches the output when someone is signed in. */
+  signedIn: string;
+  /** The CLI works without an account (a free catalogue), so a miss is not a
+   *  reason to refuse it. */
+  optional?: boolean;
+}
+
+/** Which of the server's argv builders runs one turn of this engine. */
+export interface HeadlessFacet {
+  argv: "claude" | "codex" | "antigravity" | "hermes" | "opencode" | "gemini";
+  /** The words that name an earlier session on a follow-up turn, as they come
+   *  before the id: "--resume" for a flag, "exec resume" for a subcommand. */
+  resume: string;
+  /** The flags that stop a turn by themselves, where the CLI has them. */
+  ceilings?: { turns?: string; seconds?: string; usd?: string };
+}
+
+/** How a worker's permissions are decided before it starts.
+ *
+ *    settings-flag  a settings file passed on the command line (Claude Code)
+ *    config-env     a config in an environment variable or a file one names
+ *                   (OpenCode, Qwen Code)
+ *    sandbox-flags  a sandbox and an approval policy, no per-command list
+ *                   (Codex)
+ *    own-config     the person's own config; agentglass only checks it
+ *                   (Hermes) */
+export interface EnvelopeFacet {
+  via: "settings-flag" | "config-env" | "sandbox-flags" | "own-config";
+  /** For `own-config`: the argv that says whether the deny list holds, and the
+   *  exit code that means it does. */
+  check?: { args: string[]; exit: number };
+}
+
+/** What a TUI's pane says when it is waiting for a person or working. Regex
+ *  sources, matched against the captured screen. */
+export interface ScreenFacet {
+  needsYou: string;
+  running: string;
+}
+
 export interface Provider extends AgentKind {
   /** On the new-tab menu, and accepted wherever a route validates a kind. */
   tab: boolean;
@@ -168,6 +243,11 @@ export interface Provider extends AgentKind {
   probe?: ProbeFacet;
   run?: RunSpelling;
   chat?: ChatFacet;
+  version?: VersionFacet;
+  account?: AccountFacet;
+  headless?: HeadlessFacet;
+  envelope?: EnvelopeFacet;
+  screen?: ScreenFacet;
 }
 
 /**
@@ -206,6 +286,13 @@ export const AGENT_PROVIDERS: Provider[] = [
       connects: "hooks that post each event to this server",
     },
     run: { bypass: "--dangerously-skip-permissions", promptFlag: "" },
+    version: { args: ["--version"], pattern: "^(\\d+\\.\\d+\\.\\d+)" },
+    account: { args: ["auth", "status"], signedIn: '"loggedIn":\\s*true' },
+    headless: { argv: "claude", resume: "--resume", ceilings: { usd: "--max-budget-usd" } },
+    envelope: { via: "settings-flag" },
+    // Keep in step with NEEDS_YOU_RE and RUNNING_RE in server/src/chatpane.ts;
+    // a test holds the two to the same screens.
+    screen: { needsYou: "Esc to cancel|Enter to confirm|to use this session only", running: "esc to interrupt" },
     chat: {
       label: "Claude",
       defaultModel: "claude-opus-5", defaultMode: "default",
@@ -239,6 +326,10 @@ export const AGENT_PROVIDERS: Provider[] = [
     // is deliberately NOT the prompt flag: a run's leg through it would answer
     // once and close the window.
     run: { bypass: "--dangerously-skip-permissions", promptFlag: "" },
+    // Repo facts only (antigravity.ts); the CLI is not installed where this was
+    // measured, so there is no account command and no envelope to state.
+    version: { args: ["--version"], pattern: "(\\d+\\.\\d+\\.\\d+)" },
+    headless: { argv: "antigravity", resume: "--conversation" },
     chat: {
       // Its four modes happen to line up with Claude's, which is a property of
       // the CLI rather than a mapping imposed here. Keep in step with
@@ -267,6 +358,17 @@ export const AGENT_PROVIDERS: Provider[] = [
       install: "https://hermes-agent.nousresearch.com/docs/",
       connects: "the chat panel, which turns its own turns into events",
     },
+    // 0.21.4 is the first with `chat --format stream-json` (docs/CONFIG.md);
+    // 0.21.0 exits on the unknown flag. The deny list is the person's own
+    // `approvals.deny`: `hermes approvals test -- git push` exits 3 when it
+    // holds (measured headless on 0.21.5, where the refusal reaches the model).
+    version: {
+      args: ["--version"], pattern: "Hermes Agent v(\\d+\\.\\d+\\.\\d+)",
+      min: "0.21.4", minWhy: "it is the first with the output format agentglass reads",
+    },
+    account: { args: ["status"], signedIn: "✓ logged in" },
+    headless: { argv: "hermes", resume: "--resume", ceilings: { turns: "--max-turns", seconds: "--run-budget" } },
+    envelope: { via: "own-config", check: { args: ["approvals", "test", "--", "git", "push", "origin", "main"], exit: 3 } },
     chat: {
       label: "Hermes",
       // Fallback when config.yaml is unread; /hermes/enabled prefers the
@@ -300,6 +402,11 @@ export const AGENT_PROVIDERS: Provider[] = [
     // is the streaming form the chat panel drives and would fill a tmux pane
     // with JSON instead of a TUI.
     run: { bypass: "--dangerously-bypass-approvals-and-sandbox", promptFlag: "" },
+    version: { args: ["--version"], pattern: "codex-cli (\\d+\\.\\d+\\.\\d+)" },
+    account: { args: ["login", "status"], signedIn: "^Logged in" },
+    // `-a` is a flag of `codex` itself, before `exec`; `codex exec -a` is refused.
+    headless: { argv: "codex", resume: "exec resume" },
+    envelope: { via: "sandbox-flags" },
     chat: {
       // The mode is its sandbox rather than a permission policy, so the two
       // vocabularies stay apart. Keep in step with DEFAULT_SANDBOX in
@@ -329,6 +436,7 @@ export const AGENT_PROVIDERS: Provider[] = [
     // prompt goes through the flag that keeps the TUI up. Both words are probed
     // before they are used — this is the entry with the least evidence behind
     // it, and the probe is what makes that safe rather than hopeful.
+    version: { args: ["--version"], pattern: "(\\d+\\.\\d+\\.\\d+)" },
     run: { bypass: "--yolo", promptFlag: "-i" },
   },
   {
@@ -339,6 +447,12 @@ export const AGENT_PROVIDERS: Provider[] = [
     mode: "flag",
     tab: true,
     modelFlag: "--model",
+    version: { args: ["--version"], pattern: "^(\\d+\\.\\d+\\.\\d+)" },
+    // Its free catalogue answers with no credential (measured on 1.18.32), so
+    // an empty list of providers is not "signed out".
+    account: { args: ["providers", "list"], signedIn: "[1-9]\\d* credentials?", optional: true },
+    headless: { argv: "opencode", resume: "-s" },
+    envelope: { via: "config-env" },
     lock: { via: "env", env: "OPENCODE_CONFIG_CONTENT" },
   },
   {
@@ -353,6 +467,8 @@ export const AGENT_PROVIDERS: Provider[] = [
     mode: "flag-interactive",
     tab: true,
     modelFlag: "--model",
+    version: { args: ["--version"], pattern: "(\\d+\\.\\d+\\.\\d+)" },
+    envelope: { via: "config-env" },
     lock: { via: "file", env: "QWEN_CODE_SYSTEM_SETTINGS_PATH" },
   },
 ];

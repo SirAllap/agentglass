@@ -34,6 +34,8 @@ import { blockedEntry, type BlockEntry } from "./plugin-blocklist.ts";
 import { type Contributes, type Field, RESERVED_KEYS, redactSecrets, validateContributes } from "../../shared/pluginUi.ts";
 import { type PluginSandbox, validateSandbox } from "../../shared/pluginSandbox.ts";
 import { boxPlan, type BoxPlan } from "../../shared/pluginBoxPlan.ts";
+import { versionAtLeast } from "../../shared/semverLite.ts";
+export { versionAtLeast };
 import {
   hostResolvConfExtraRo, hostSystemPaths, openGrantFds, pluginDataDir, removePluginDataDir, resolveGrants,
   resolvePrograms, sandboxArgv, sandboxProbe, type SandboxProbe,
@@ -96,15 +98,6 @@ export function appVersion(): string {
     } catch { /* the next one, or the floor below */ }
   }
   return "0.0.0";
-}
-
-export function versionAtLeast(have: string, want: string): boolean {
-  const parts = (v: string) => v.trim().split(".").map((n) => Number.parseInt(n, 10) || 0);
-  const [h, w] = [parts(have), parts(want)];
-  for (let i = 0; i < 3; i++) {
-    if ((h[i] ?? 0) !== (w[i] ?? 0)) return (h[i] ?? 0) > (w[i] ?? 0);
-  }
-  return true;
 }
 
 /** One path segment, the same character set `projectadd.ts` holds a cloned
