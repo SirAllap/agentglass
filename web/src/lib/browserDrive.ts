@@ -1028,6 +1028,50 @@ function actionable(timeoutMs = 3000): string {
   })`;
 }
 
+/**
+ * A CLICK IS A PRESS, NOT A LONE `click` EVENT.
+ *
+ * `el.click()` dispatches one `click` and nothing before it. Measured on a
+ * React chat list and on menus that open on mousedown: the verb answered ok,
+ * the page did nothing, because those handlers listen to pointerdown or
+ * mousedown and never saw a press. So this fires what a mouse makes, at the
+ * centre of the element (the point the actionable gate just checked), on
+ * whatever is topmost there: over, enter, move, down, focus, up, click.
+ *
+ * Browser rules kept: a pointerdown that is cancelled suppresses the mouse
+ * down and up (click still comes); a cancelled mousedown means no focus move.
+ * The click then runs its default action (link, submit, checkbox) as a native
+ * one does. Ceiling: enter/leave go to the target only, not up its ancestor
+ * chain, and there is no pointerout for the previous element.
+ * Runs inside a `resolveOne` body, after the gate said ok.
+ */
+const PRESS = `(() => {
+  const r = e.getBoundingClientRect();
+  const x = Math.min(Math.max(r.left + r.width / 2, 0), innerWidth - 1);
+  const y = Math.min(Math.max(r.top + r.height / 2, 0), innerHeight - 1);
+  const t = document.elementFromPoint(x, y) || e;
+  const base = { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, screenX: x, screenY: y, button: 0 };
+  const ptr = (type, buttons, noBubble) => t.dispatchEvent(new PointerEvent(type, {
+    ...base, buttons, bubbles: !noBubble, cancelable: !noBubble, pointerId: 1, pointerType: "mouse", isPrimary: true,
+    width: 1, height: 1, pressure: buttons ? 0.5 : 0,
+  }));
+  const mouse = (type, buttons, noBubble) => t.dispatchEvent(new MouseEvent(type, {
+    ...base, buttons, bubbles: !noBubble, cancelable: !noBubble, detail: /^mouse(over|enter|move)$/.test(type) ? 0 : 1,
+  }));
+  ptr("pointerover", 0); ptr("pointerenter", 0, true); mouse("mouseover", 0); mouse("mouseenter", 0, true);
+  ptr("pointermove", 0); mouse("mousemove", 0);
+  const downOk = ptr("pointerdown", 1);
+  /* pointerdown cancelled: a browser sends no compatibility mouse events. */
+  const mouseOk = downOk ? mouse("mousedown", 1) : false;
+  if (mouseOk) {
+    const f = t.closest ? t.closest("a[href],button,input,select,textarea,summary,[tabindex],[contenteditable]") : null;
+    if (f && f !== document.activeElement && f.focus) f.focus();
+  }
+  ptr("pointerup", 0);
+  if (downOk) mouse("mouseup", 0);
+  mouse("click", 0);
+})()`;
+
 /** The sentence for a `resolveOne` body that returned `{ kind: "blocked" }` —
  *  an element found, but not safe to act on yet. Falls back to
  *  `selectorError` for the other three ways resolution fails. */
@@ -2726,7 +2770,7 @@ async function runVerb(
           `return (${actionable()}).then((r) => {
              if (!r.ok) return { kind: "blocked", reason: r.reason };
              const t0 = ${MUTATIONS_ON};
-             e.click();
+             ${PRESS};
              return { kind: "ok", t0 };
            });`, false, true,
         ), true))).catch((err: unknown) => { watch.dispose(); throw err; }) as { kind: string; reason?: string; t0?: number } | boolean;

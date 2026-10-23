@@ -165,7 +165,7 @@ describe("a click waits for what it caused", () => {
     await click(el);
     const act = el.ran[0]!;
     expect(act.indexOf("new MutationObserver")).toBeGreaterThan(-1);
-    expect(act.indexOf("new MutationObserver")).toBeLessThan(act.indexOf("e.click()"));
+    expect(act.indexOf("new MutationObserver")).toBeLessThan(act.indexOf(String.raw`mouse("click"`));
     // childList and text only: a style attribute animating every frame would never be quiet.
     expect(act).toContain("childList: true, characterData: true }");
     expect(act).not.toContain("attributes: true");

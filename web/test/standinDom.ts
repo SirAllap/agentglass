@@ -191,7 +191,8 @@ export function page(body: N) {
     localStorage: {}, sessionStorage: {}, crypto: globalThis.crypto,
     HTMLInputElement: class {}, HTMLTextAreaElement: class {},
     Event: class { constructor(public type: string) {} },
-    MouseEvent: class { constructor(public type: string) {} },
+    MouseEvent: class { constructor(public type: string, init: object = {}) { Object.assign(this, init); } },
+    PointerEvent: class { constructor(public type: string, init: object = {}) { Object.assign(this, init); } },
     KeyboardEvent: class { constructor(public type: string) {} },
     setTimeout, Date, location: { href: "https://orbit.example/app" },
   };

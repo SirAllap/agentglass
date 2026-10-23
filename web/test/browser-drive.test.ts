@@ -1975,6 +1975,7 @@ describe("stale ids say why, and say to observe again", () => {
   /** A document with one button per label, a window of its own (so `__agxSeq`
    *  lives where a real page keeps it), and the guest that runs scripts
    *  against them. */
+  const EvStub = class { constructor(public type: string, init: object) { Object.assign(this, init); } };
   function fakePage(buttons: string[], href = "https://example.com/a") {
     const clicked: string[] = [];
     const nodes: Node[] = buttons.map((label, i) => ({
@@ -1984,7 +1985,8 @@ describe("stale ids say why, and say to observe again", () => {
       getBoundingClientRect: () => ({ x: 10, y: 10 + 40 * i, width: 80, height: 20, top: 10 + 40 * i, left: 10 }),
       contains: () => false,
       scrollIntoView() {},
-      click() { clicked.push(label); },
+      dispatchEvent(ev: { type: string }) { if (ev.type === "click") clicked.push(label); return true; },
+      closest: () => null,
       querySelectorAll: () => [],
     }));
     /* The form the buttons sit in — what `region` is pointed at. */
@@ -2008,9 +2010,9 @@ describe("stale ids say why, and say to observe again", () => {
       querySelector(sel: string): Node | null { return document.querySelectorAll(sel)[0] ?? null; },
     };
     const run = (code: string) => new Function(
-      "window", "document", "location", "getComputedStyle", "innerWidth", "innerHeight", "localStorage", "sessionStorage",
+      "window", "document", "location", "getComputedStyle", "innerWidth", "innerHeight", "localStorage", "sessionStorage", "PointerEvent", "MouseEvent",
       `return ${code}`,
-    )(win, document, { href }, () => ({ display: "block", visibility: "visible", opacity: "1" }), 1200, 800, {}, {});
+    )(win, document, { href }, () => ({ display: "block", visibility: "visible", opacity: "1" }), 1200, 800, {}, {}, EvStub, EvStub);
     /* The collector patches fetch and friends on a real window; here it has
        nothing to patch and nothing this checks depends on it. */
     const el = fakeGuest((code) => (code.includes("__agxLog = log") ? 1 : run(code)));
