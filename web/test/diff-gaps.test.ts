@@ -5,7 +5,7 @@
 // disagrees with the text beside it is visible in one assertion.
 import { test, expect } from "bun:test";
 import type { DiffHunk } from "../../shared/types.ts";
-import { expandHunks, reveal, splitFileLines, EXPAND_STEP } from "../../shared/diffGaps.ts";
+import { expandHunks, inDiff, reveal, splitFileLines, EXPAND_STEP } from "../../shared/diffGaps.ts";
 import { unifiedRows } from "../src/components/diff/DiffLines.tsx";
 
 const file = (n: number) => Array.from({ length: n }, (_, i) => `line ${i + 1}`);
@@ -121,4 +121,16 @@ test("the step is 20, and clicks add up", () => {
   expect(EXPAND_STEP).toBe(20);
   expect(reveal(reveal({}, 2, "down"), 2, "down")[2]).toEqual({ top: 40, bottom: 0 });
   expect(reveal(reveal({}, 2, "down"), 2, "up")[2]).toEqual({ top: 20, bottom: 20 });
+});
+
+test("only lines the diff sent can take a comment; a revealed line cannot", () => {
+  const a = change(40, 0); // new/old 37..43
+  expect(inDiff([a], 37, "RIGHT")).toBe(true);
+  expect(inDiff([a], 43, "RIGHT")).toBe(true);
+  expect(inDiff([a], 36, "RIGHT")).toBe(false);
+  expect(inDiff([a], 44, "LEFT")).toBe(false);
+  // After a reveal the hunk grows, but the question is asked of the ORIGINAL hunks.
+  const grown = expandHunks([a], file(100), reveal({}, 0, "up")).hunks[0]!;
+  expect(inDiff([grown], 20, "RIGHT")).toBe(true);
+  expect(inDiff([a], 20, "RIGHT")).toBe(false);
 });

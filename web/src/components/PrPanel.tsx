@@ -99,7 +99,7 @@ import { listMembers } from "../lib/listMembers.ts";
 import { orderMembers } from "../lib/peopleOrder.ts";
 import { SCROLLBAR_CSS, LINEBTN_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, LineMenuCtx, type LinePick, type LineSel } from "./diff/DiffLines.tsx";
 import { GapRow } from "./diff/GapRow.tsx";
-import { expandHunks, reveal, type Reveals } from "../../../shared/diffGaps.ts";
+import { expandHunks, inDiff, reveal, type Reveals } from "../../../shared/diffGaps.ts";
 import { Toggle } from "./diff/DiffControls.tsx";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { Select } from "./Select.tsx";
@@ -1243,13 +1243,14 @@ function DiffPane({ file, split, wrap, onPick, sel, expandFrom, rowAfter, permal
     const g = view.open.find((o) => o.at === at);
     return g ? <GapRow gap={g} busy={fetching.busy} error={fetching.err} onExpand={(dir) => void onExpand(g.key, dir)} /> : null;
   } : undefined;
+  const canPick = can ? (line: number, side: "LEFT" | "RIGHT") => inDiff(file.hunks, line, side) : undefined;
   const heavy = file.hunks.reduce((n, h) => n + h.lines.length, 0) > 3000;
   return (
     <HiliteCtx.Provider value={heavy ? { ...hilite, theme: null } : hilite}>
       <LineMenuCtx.Provider value={onPick ? { permalink } : null}>
         {split
-          ? <SplitDiff c={file} hunks={view.hunks} wrap={wrap} onPick={onPick} sel={sel} rowAfter={rowAfter} gapRow={gapRow} />
-          : <UnifiedDiff c={file} hunks={view.hunks} wrap={wrap} onPick={onPick} sel={sel} rowAfter={rowAfter} gapRow={gapRow} />}
+          ? <SplitDiff c={file} hunks={view.hunks} wrap={wrap} onPick={onPick} canPick={canPick} sel={sel} rowAfter={rowAfter} gapRow={gapRow} />
+          : <UnifiedDiff c={file} hunks={view.hunks} wrap={wrap} onPick={onPick} canPick={canPick} sel={sel} rowAfter={rowAfter} gapRow={gapRow} />}
       </LineMenuCtx.Provider>
     </HiliteCtx.Provider>
   );

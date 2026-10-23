@@ -300,8 +300,8 @@ function inSel(sel: LineSel, n: number | null | undefined, side: DiffSide): bool
  * somewhere nobody chose. Shift-click extends from the last pick, which is how
  * GitHub does a multi-line comment.
  */
-function LineBtn({ n, side, onPick }: { n: number | null | undefined; side: DiffSide; onPick?: (p: LinePick) => void }) {
-  if (!onPick || n == null) return null;
+function LineBtn({ n, side, onPick, canPick }: { n: number | null | undefined; side: DiffSide; onPick?: (p: LinePick) => void; canPick?: (line: number, side: DiffSide) => boolean }) {
+  if (!onPick || n == null || canPick?.(n, side) === false) return null;
   return (
     <button
       onClick={(e) => onPick({ line: n, side, shift: e.shiftKey })}
@@ -325,6 +325,9 @@ type DiffProps = {
   wrap: boolean;
   rowAfter?: (newN: number | null | undefined, oldN: number | null | undefined) => ReactNode;
   onPick?: (p: LinePick) => void;
+  /** False for a line that cannot take a review comment (one revealed by an
+   *  expander is outside the diff, and GitHub refuses a comment there). */
+  canPick?: (line: number, side: DiffSide) => boolean;
   sel?: LineSel;
   /** The strip for the lines the diff leaves out, drawn before hunk `at` (and
    *  after the last one when `at` is the hunk count). Null when that gap has
@@ -446,7 +449,7 @@ function HRailRow({ rails, children }: { rails: Rail[]; children: ReactNode }) {
  * caller — the pull request's file column, the Diff view and the preset viewer
  * all scroll vertically themselves, and this pane grows inside them.
  */
-export function UnifiedDiff({ c, hunks, wrap, hunkAction, rowAfter, onPick, sel, gapRow }: DiffProps & { hunkAction?: (hunkIndex: number) => ReactNode }) {
+export function UnifiedDiff({ c, hunks, wrap, hunkAction, rowAfter, onPick, canPick, sel, gapRow }: DiffProps & { hunkAction?: (hunkIndex: number) => ReactNode }) {
   const wrapCls = wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre";
   const source = hunks ?? c?.hunks ?? NO_HUNKS;
   const built = useMemo(() => source.map((h) => ({ h, rows: unifiedRows(h) })), [source]);
@@ -512,7 +515,7 @@ export function UnifiedDiff({ c, hunks, wrap, hunkAction, rowAfter, onPick, sel,
                       style={{ width: gw, background: numBg(r.kind) }}><span className="opacity-40">{r.oldN ?? ""}</span></div>
                     <div className="shrink-0 text-right pr-1.5 tabular-nums select-none sticky z-[2] agx-gutter"
                       style={{ width: gw, left: gw, background: numBg(r.kind), boxShadow: "1px 0 0 0 color-mix(in srgb, var(--border) 22%, transparent)" }}>
-                      <LineBtn n={r.newN ?? r.oldN} side={r.newN != null ? "RIGHT" : "LEFT"} onPick={onPick} />
+                      <LineBtn n={r.newN ?? r.oldN} side={r.newN != null ? "RIGHT" : "LEFT"} onPick={onPick} canPick={canPick} />
                       <span className="opacity-40">{r.newN ?? ""}</span>
                     </div>
                     {/* `data-ln` names the row the way a search result does —
@@ -554,7 +557,7 @@ export function UnifiedDiff({ c, hunks, wrap, hunkAction, rowAfter, onPick, sel,
 /* The scrolling panes below are size containers (`container-type: inline-size`)
    so a card under a line can be as wide as the pane you SEE rather than as wide
    as the code, which is wider whenever one line is long: `100cqw` is the pane. */
-export function SplitDiff({ c, hunks, wrap, rowAfter, onPick, sel, gapRow }: DiffProps) {
+export function SplitDiff({ c, hunks, wrap, rowAfter, onPick, canPick, sel, gapRow }: DiffProps) {
   const source = hunks ?? c?.hunks ?? NO_HUNKS;
   const built = useMemo(() => source.map((h) => ({ h, rows: splitRows(h) })), [source]);
   const gw = useMemo(() => gutterWidth(source.reduce((n, h) => Math.max(n, h.oldStart + h.oldLines, h.newStart + h.newLines), 0)), [source]);
@@ -611,7 +614,7 @@ export function SplitDiff({ c, hunks, wrap, rowAfter, onPick, sel, gapRow }: Dif
               <div data-ln={cell ? `${which === "l" ? "L" : "R"}${cell.num}` : undefined}
                 className="flex" style={{ width: "max-content", minWidth: "100%", background: cell ? cellBg(cell.kind) : HATCH }}>
                 <div data-side={which} className="text-right pr-1.5 tabular-nums select-none shrink-0 sticky left-0 z-[1] agx-gutter" style={{ width: gw, background: numBg(cell?.kind), boxShadow: "1px 0 0 0 color-mix(in srgb, var(--border) 22%, transparent)" }}>
-                  <LineBtn n={cell?.num} side={which === "l" ? "LEFT" : "RIGHT"} onPick={onPick} />
+                  <LineBtn n={cell?.num} side={which === "l" ? "LEFT" : "RIGHT"} onPick={onPick} canPick={canPick} />
                   <span className="opacity-40">{cell?.num ?? ""}</span>
                 </div>
                 <div className={`${wrapCls} px-1.5`} style={{ color: cellFg(cell?.kind), background: inSel(sel ?? null, cell?.num, which === "l" ? "LEFT" : "RIGHT") ? SEL_BG : undefined }}>{cell ? <Code text={cell.text} segs={cell.segs} kind={cell.kind} /> : ""}</div>

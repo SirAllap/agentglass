@@ -145,3 +145,13 @@ export function reveal(rs: Reveals, key: number, dir: "up" | "down" | "all", ste
       : dir === "down" ? { ...r, top: r.top + step } : { ...r, bottom: r.bottom + step },
   };
 }
+
+/** Is this line part of the diff as GitHub sent it? A line an expander revealed
+ *  is not, and a review comment on it is refused. `side` is the gutter: the new
+ *  numbers are the head's, the old ones the base's. */
+export function inDiff(hunks: DiffHunk[], line: number, side: "LEFT" | "RIGHT"): boolean {
+  return hunks.some((h) => {
+    const [s, n] = side === "LEFT" ? [h.oldStart, h.oldLines] : [h.newStart, h.newLines];
+    return line >= first(s, n) && line < first(s, n) + n;
+  });
+}
