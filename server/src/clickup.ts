@@ -593,6 +593,16 @@ export async function fetchTasks(
     page: String(page),
     order_by: "due_date",
     include_closed: "false",
+    /*
+     * Measured against a real workspace, 2026-10-14: ClickUp's own "Assigned
+     * to me" showed 27 cards and this query 26. The missing one was homed in
+     * one list and also placed in a sprint list, and the filtered team
+     * endpoint leaves a card out unless `include_timl` (tasks in multiple
+     * lists) is on; with it, the same query returned all 27 and no duplicate.
+     * It is not tied to any status or list, so it holds for any workspace that
+     * files one card in two places.
+     */
+    include_timl: "true",
   });
   /* Off by default, for the measurement above. On, for a team whose work lives
      in subtasks: ClickUp's filtered task endpoint leaves them out unless asked,
@@ -680,6 +690,9 @@ export async function changedForMe(sinceMs: number): Promise<CallResult<{ tasks:
     date_updated_gt: String(Math.floor(sinceMs)),
     include_closed: "true",
     order_by: "updated",
+    /* Same rule as `fetchTasks`: a card also placed in a second list is
+       otherwise invisible to this question. */
+    include_timl: "true",
   });
   return changedPages(me.workspaceId, token, me.accountId, q, [["assignees[]", me.accountId]]);
 }
@@ -3401,23 +3414,38 @@ export async function cardPullRequests(
   // every card has and which a free workspace has instead of any other.
   const term = cardId || taskId;
   if (!term) return { ok: true, prs: [...out.values()] };
-  // `--search` rather than a filter: the id appears in a branch, a title or a
-  // commit, and which of those is not ours to assume.
-  const r = await gh(
-    ["pr", "list", "--search", term, "--state", "all", "--limit", "20",
-      // `body` and `headRefName` are not decoration: they are what the rows are
-      // CHECKED against below. Without them the search's own idea of a match is
-      // the final answer, and that idea is wrong — see the filter.
-      "--json", "number,title,state,isDraft,url,body,headRefName,author"],
-    root,
-  );
-  if (r.code !== 0) {
-    // A search that failed is not a card with no pull requests. Whatever the
-    // field said still stands, and the caller is told the rest is unknown.
-    return { ok: false, prs: [...out.values()], error: r.stderr.trim().slice(0, 160) || "could not search GitHub" };
+  // Two searches, unioned. GitHub's text search covers a title and a body but
+  // NOT a branch name, so a pull request that carries the card id only in its
+  // branch (a revert whose title is the card's name) is invisible to it:
+  // measured on a card with three pull requests, the text search returned two
+  // and `head:<id>` returned all three. The branch search is only asked for a
+  // custom id (`head:` matches a branch PREFIX and a task's default id sits
+  // after `CU-`); each row is still checked below, so a wider net never links
+  // a pull request that does not name the card.
+  const searches: string[][] = [[term]];
+  if (cardId) searches.push([`head:${cardId}`]);
+  const rows: { number: number; title: string; state: string; isDraft?: boolean; url: string; body?: string; headRefName?: string; author?: { login?: string } }[] = [];
+  let failed = "";
+  for (const q of searches) {
+    const r = await gh(
+      ["pr", "list", "--search", q[0]!, "--state", "all", "--limit", "20",
+        // `body` and `headRefName` are not decoration: they are what the rows are
+        // CHECKED against below. Without them the search's own idea of a match is
+        // the final answer, and that idea is wrong — see the filter.
+        "--json", "number,title,state,isDraft,url,body,headRefName,author"],
+      root,
+    );
+    if (r.code !== 0) { failed ||= r.stderr.trim().slice(0, 160) || "could not search GitHub"; continue; }
+    try {
+      const got = JSON.parse(r.stdout);
+      if (Array.isArray(got)) for (const p of got) if (!rows.some((x) => x.number === p.number)) rows.push(p);
+    } catch { /* a search that answered nothing usable is a search with no rows */ }
   }
-  try {
-    const rows = JSON.parse(r.stdout) as { number: number; title: string; state: string; isDraft?: boolean; url: string; body?: string; headRefName?: string; author?: { login?: string } }[];
+  // Every search failed: that is not a card with no pull requests. Whatever the
+  // field said still stands, and the caller is told the rest is unknown. One
+  // that failed while another answered is a partial answer and is used.
+  if (failed && !rows.length) return { ok: false, prs: [...out.values()], error: failed };
+  {
     const me = await viewerLogin(gh, root);
     for (const p of rows) {
       // Every row is checked. GitHub's search does not answer the question we
@@ -3435,7 +3463,7 @@ export async function cardPullRequests(
         mine: !!me && p.author?.login?.toLowerCase() === me,
       });
     }
-  } catch { /* a search that answered nothing usable is a search with no rows */ }
+  }
 
   return {
     ok: true,

@@ -61,7 +61,7 @@ describe("the unread switch is one state, not two", () => {
        one example among several JSX call shapes, and finding THAT would make
        this test pass whether or not the real mount below it was ever wired. */
     const call = triageBoardCall(code(PANEL));
-    expect(call, "the board must receive the panel's switch").toContain("onlyUnread={unreadOnly}");
-    expect(call, "and a way to flip it").toContain("onOnlyUnread={setUnreadOnly}");
+    expect(call, "the board must receive the panel's switch").toContain("onlyUnread={personLogin ? false : unreadOnly}");
+    expect(call, "and a way to flip it").toContain("onOnlyUnread={personLogin ? () => {} : setUnreadOnly}");
   });
 });

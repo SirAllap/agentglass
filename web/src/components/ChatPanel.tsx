@@ -57,8 +57,8 @@ import { INPUT, INPUT_STYLE, EDGE, LINE, TL_AVATAR, TL_CSS } from "./workspace/C
 // has not passed — Claude Code publishes no list of its own, so a file that can
 // be corrected without a rebuild is the closest thing to asking the CLI.
 //
-// This is only what to draw before that answer arrives, and on a server too old
-// to send one. Deliberately a single certain id rather than a copy of the
+// MODELS_PENDING is a placeholder, not a list: only what to draw before that
+// answer arrives, and on a server too old to send one. Deliberately a single certain id rather than a copy of the
 // catalogue: two lists that drift apart is the problem being solved.
 const MODELS_PENDING = [{ id: "claude-opus-5", label: "Claude Opus 5" }];
 // These run through `claude -p`, which has no terminal to prompt from: a tool

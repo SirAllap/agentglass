@@ -250,6 +250,6 @@ describe("the card door on the pane's block", () => {
   });
 
   it("opens Tasks when the card lives here, and the tracker when it does not", () => {
-    expect(termSrc).toContain('if (go.in === "tasks") openCard(ref.query, ref.label); else openExternal(go.url);');
+    expect(termSrc).toContain('if (go.in === "tasks") openCard(ref.query, ref.label, go.tracker); else openExternal(go.url);');
   });
 });

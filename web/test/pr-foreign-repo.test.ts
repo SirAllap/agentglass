@@ -43,7 +43,6 @@ describe("a checkout-less pull request", () => {
 
   it("draws the Inbox count in the warning ink, not the bare tint on its own wash", () => {
     expect(code).toContain("`var(--${countTint}-ink)`");
-    expect(code).toContain('countTint="warning"');
     expect(code).not.toContain('countTint="var(--warning)"');
   });
 });

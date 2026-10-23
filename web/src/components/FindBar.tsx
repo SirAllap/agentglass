@@ -1,7 +1,7 @@
 /*
  * The find bar: one field, for whatever is on screen.
  *
- * Mounted at the shell, like the file palette and for the same reason — the
+ * Mounted at the shell, like the finder and for the same reason — the
  * chord has to reach it from a board, a pull request or a settings page, and
  * what it searches is decided by the scope stack rather than by where it lives
  * (see findScope.ts).

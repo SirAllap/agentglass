@@ -27,6 +27,11 @@ const TTL = 60_000;
 let held: { at: number; value: TrackerSetup["jira"] | null } | null = null;
 let inflight: Promise<TrackerSetup["jira"] | null> | null = null;
 
+/** The Jira site's host if the answer is already in (null: none connected), undefined when it is not. */
+export function jiraSiteNow(): string | null | undefined {
+  return held && Date.now() - held.at < TTL ? held.value?.site ?? null : undefined;
+}
+
 async function jiraSetup(): Promise<TrackerSetup["jira"] | null> {
   if (held && Date.now() - held.at < TTL) return held.value;
   inflight ??= api.jiraStatus()

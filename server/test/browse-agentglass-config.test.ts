@@ -1,5 +1,5 @@
 /*
- * The agentglass config folder in the file palette.
+ * The agentglass config folder in the finder.
  *
  * It holds the server's API token, credentials, paired devices and plugin
  * secrets, and was shut whole; its owner also keeps theme.json and config.json
@@ -147,7 +147,8 @@ describe("reads are an allowlist, not a mode", () => {
   });
   test("the browse routes ask 'local' the way the tokenless sinks do: another OS user is not local", async () => {
     const src = await Bun.file(new URL("../src/index.ts", import.meta.url)).text();
-    const i = src.indexOf('if (pathname === "/browse" || pathname.startsWith("/preview/")) {');
+    const i = src.indexOf('if (pathname === "/browse" || pathname === "/browse/list" || pathname.startsWith("/preview/") || pathname.startsWith("/fs/")');
+    expect(i).toBeGreaterThan(-1);
     const blk = src.slice(i, src.indexOf("\n    }\n", i));
     expect(blk).toContain('sinkFrom === "loopback"');
     expect(blk).not.toContain("isLoopback(clientIp)))");

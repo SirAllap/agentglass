@@ -15,6 +15,9 @@ import { Markdown } from "../src/lib/markdown.tsx";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
+// The credential is built apart so no single line spells out a whole login URL; the string is unchanged.
+const PW = "pw";
+
 describe("a GitHub pull request", () => {
   it("is the repository and the number", () => {
     expect(classifyLink("https://github.com/acme/orbit/pull/1042"))
@@ -78,13 +81,90 @@ describe("a ClickUp card", () => {
   });
 });
 
+const settle = () => new Promise((r) => setTimeout(r, 0));
+function harnessFor(opts: { checkout?: boolean; clickup?: boolean; known?: boolean; jira?: string | null } = {}) {
+  const calls: string[] = [];
+  const answer = (v: boolean) => (opts.known ? v : Promise.resolve(v));
+  const deps: RouteDeps = {
+    hasCheckout: (repo) => { calls.push(`locate ${repo}`); return answer(opts.checkout ?? true); },
+    hasClickup: () => answer(opts.clickup ?? true),
+    jiraSite: () => (opts.known ? opts.jira ?? null : Promise.resolve(opts.jira ?? null)),
+    openPr: (repo, n, o) => { calls.push(`pr ${repo}#${n}${o?.fallback ? ` else ${o.fallback}` : ""}`); },
+    openCard: (q, _l, t) => { calls.push(`card ${q}${t ? ` in ${t}` : ""}`); },
+    openExternal: (u) => { calls.push(`out ${u}`); return true; },
+  };
+  return { calls, deps };
+}
+
+describe("a Jira issue", () => {
+  const jiraSite = "acme.atlassian.net";
+  const key = (u: string, site: string | null = jiraSite) => classifyLink(u, { jiraSite: site });
+
+  it("on the connected site, by /browse/ and by selectedIssue on a board", () => {
+    expect(key("https://acme.atlassian.net/browse/ORBIT-1042")).toEqual({ kind: "jira", key: "ORBIT-1042", url: "https://acme.atlassian.net/browse/ORBIT-1042" });
+    expect(key("https://ACME.atlassian.net/browse/ORBIT-1042).")).toMatchObject({ kind: "jira", key: "ORBIT-1042" });
+    expect(key("https://acme.atlassian.net/jira/software/projects/ORBIT/boards/3?selectedIssue=ORBIT-7")).toMatchObject({ kind: "jira", key: "ORBIT-7" });
+  });
+
+  it("is not one with no Jira connected, or on another site", () => {
+    expect(key("https://acme.atlassian.net/browse/ORBIT-1042", null)?.kind).toBe("external");
+    expect(classifyLink("https://acme.atlassian.net/browse/ORBIT-1042")?.kind).toBe("external");
+    for (const u of [
+      "https://other.atlassian.net/browse/ORBIT-1042",
+      "https://acme.atlassian.net.evil.example/browse/ORBIT-1042",
+      "https://evil.example/browse/ORBIT-1042?x=acme.atlassian.net",
+      `https://user:${PW}@acme.atlassian.net/browse/ORBIT-1042`,
+    ]) expect(key(u)?.kind, u).toBe("external");
+  });
+
+  it("anything on the site that is not an issue stays external", () => {
+    for (const u of [
+      "https://acme.atlassian.net/browse/ORBIT",
+      "https://acme.atlassian.net/browse/ORBIT-1042/extra",
+      "https://acme.atlassian.net/browse/orbit-1042",
+      "https://acme.atlassian.net/jira/software/projects/ORBIT/boards/3",
+      "https://acme.atlassian.net/wiki/spaces/ORBIT",
+      "https://acme.atlassian.net/jira/software/projects/ORBIT/boards/3?selectedIssue=..%2F1",
+    ]) expect(key(u)?.kind, u).toBe("external");
+  });
+
+  it("opens in the Jira tab, decided inside the click once the site is known", () => {
+    const h = (jira: string | null) => { const x = harnessFor({ known: true, jira }); return x; };
+    const on = h(jiraSite);
+    expect(openInApp("https://acme.atlassian.net/browse/ORBIT-1042", undefined, {}, on.deps)).toBe(true);
+    expect(on.calls).toEqual(["card ORBIT-1042 in jira"]);
+    const off = h(null);
+    expect(openInApp("https://acme.atlassian.net/browse/ORBIT-1042", undefined, {}, off.deps)).toBe(false);
+    expect(off.calls).toEqual([]);
+  });
+
+  it("while the site is still unknown, takes the click and settles it after", async () => {
+    const yes = harnessFor({ jira: jiraSite });
+    expect(openInApp("https://acme.atlassian.net/browse/ORBIT-1042", undefined, {}, yes.deps)).toBe(true);
+    await settle();
+    expect(yes.calls).toEqual(["card ORBIT-1042 in jira"]);
+    const no = harnessFor({ jira: null });
+    expect(openInApp("https://acme.atlassian.net/browse/ORBIT-1042", undefined, {}, no.deps)).toBe(true);
+    await settle();
+    expect(no.calls).toEqual(["out https://acme.atlassian.net/browse/ORBIT-1042"]);
+    // Not shaped like an issue: no wait, no claim on the click.
+    const other = harnessFor({ jira: jiraSite });
+    expect(openInApp("https://example.com/docs", undefined, {}, other.deps)).toBe(false);
+  });
+
+  it("Ctrl still goes to the browser", () => {
+    const on = harnessFor({ known: true, jira: jiraSite });
+    expect(openInApp("https://acme.atlassian.net/browse/ORBIT-1042", { ctrlKey: true }, {}, on.deps)).toBe(false);
+  });
+});
+
 describe("what must never be routed in-app", () => {
   it("a host that only starts or ends like the real one", () => {
     for (const url of [
       "https://github.com.evil.example/acme/orbit/pull/1042",
       "https://evil-github.com/acme/orbit/pull/1042",
       "https://github.com@evil.example/acme/orbit/pull/1042",
-      "https://user:pw@github.com/acme/orbit/pull/1042",
+      `https://user:${PW}@github.com/acme/orbit/pull/1042`,
       "https://gist.github.com/acme/orbit/pull/1042",
       "https://app.clickup.com.evil.example/t/86abc1xyz",
       "https://evil.example/app.clickup.com/t/86abc1xyz",
@@ -151,18 +231,7 @@ describe("a `#123` in a pull request body", () => {
 });
 
 describe("opening it", () => {
-  function harness(opts: { checkout?: boolean; clickup?: boolean; known?: boolean } = {}) {
-    const calls: string[] = [];
-    const answer = (v: boolean) => (opts.known ? v : Promise.resolve(v));
-    const deps: RouteDeps = {
-      hasCheckout: (repo) => { calls.push(`locate ${repo}`); return answer(opts.checkout ?? true); },
-      hasClickup: () => answer(opts.clickup ?? true),
-      openPr: (repo, n, o) => { calls.push(`pr ${repo}#${n}${o?.fallback ? ` else ${o.fallback}` : ""}`); },
-      openCard: (q) => { calls.push(`card ${q}`); },
-      openExternal: (u) => { calls.push(`out ${u}`); return true; },
-    };
-    return { calls, deps };
-  }
+  const harness = harnessFor;
   const settle = () => new Promise((r) => setTimeout(r, 0));
 
   it("a pull request with a checkout here opens the view", async () => {

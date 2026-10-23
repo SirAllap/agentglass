@@ -139,7 +139,7 @@ export default function App() {
   const [selected, setSelected] = useState<WatchEvent | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   /*
-   * The file palette, and the viewer it raises — both owned here rather than by
+   * The finder, and the viewer it raises — both owned here rather than by
    * a view, because the whole point is that neither belongs to one. It opens
    * over a terminal, over a diff, over the dashboard, and the file it opens has
    * to survive the palette closing.
@@ -925,7 +925,7 @@ export default function App() {
       if (e.key === "Escape") {
         if ((e.target as HTMLElement)?.closest?.(".xterm")) return;
         /*
-         * The file palette first, and alone.
+         * The finder first, and alone.
          *
          * It stops Escape itself while its field has focus, so this line is for
          * the case where focus is not in it — a click that landed on the scrim,
@@ -956,7 +956,7 @@ export default function App() {
         setSearchOpen(false);
         setSessionView(null);
         /*
-         * The file palette is NOT closed here, and that is not an omission: it
+         * The finder is NOT closed here, and that is not an omission: it
          * stops Escape itself so one keystroke closes one layer. Reaching this
          * line with a file open means the palette is already gone, so Escape is
          * now asking to put the document away.
@@ -1331,7 +1331,7 @@ export default function App() {
           is chosen. */}
       <WindowSwitcher open={windowsOpen} onClose={() => setWindowsOpen(false)} onGone={() => goView("term")} />
 
-      {/* Find a file from anywhere. Mounted at the shell rather than in a view
+      {/* The finder, from anywhere. Mounted at the shell rather than in a view
           so the chord reaches it from the dashboard, a terminal or a diff — and
           so the document it raises outlives the palette that found it. */}
       <FilePalette

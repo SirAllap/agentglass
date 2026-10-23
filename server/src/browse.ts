@@ -19,11 +19,13 @@
  * rule is loosened here — this is a third door into the same two rooms, not a
  * new room.
  */
-import { readdirSync, statSync, lstatSync, readFileSync } from "node:fs";
+import { opendirSync, readdirSync, statSync, lstatSync, openSync, readSync, closeSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { failed } from "./refused.ts";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { diskAllows, diskEnabled, diskRoots } from "./disk.ts";
 import { safeAbs } from "./git.ts";
+import { mountAllows } from "./volumes.ts";
 import { agentglassConfigDirs, agentglassPrivate, inScope, realish, workspaceRoots } from "./config.ts";
 
 /** How many entries one folder hands back. A directory with 40,000 files in it
@@ -42,6 +44,8 @@ export interface BrowseEntry {
    *  a person actually wants there, and the one every file manager shows. */
   bytes: number | null;
   items: number | null;
+  /** A link whose target does not exist. A link that leads somewhere this may not look is not this: it is only not followed. */
+  broken?: true;
   /** Epoch millis. Rendered relative on the client, which is where the clock is. */
   mtime: number;
   /** True when the name starts with a dot. Listed only when the caller asks
@@ -222,6 +226,8 @@ export function browseReal(p: unknown, local = false): string | null {
   if (diskAllows(real)) return real;
   // `local` is true only for a caller the server has resolved to loopback.
   if (local && dottedAllows(abs, real)) return real;
+  // A volume the DEVICES list shows as mounted: a disk the person plugged in is theirs to browse.
+  if (local && mountAllows(real)) return real;
   /*
    * The checkout door, and it is CLOSED when there is no checkout.
    *
@@ -257,6 +263,7 @@ function parentOf(abs: string, local: boolean): string | null {
  * `.ssh` and `.aws`; it does not let anybody into them or read what they hold.
  */
 export function browseDir(pathIn: unknown, showHidden = false, local = false): BrowseReport {
+  if (pathIn === RECENT_PLACE) return recentReport(showHidden, local);
   showHidden = showHidden && local;
   // Inside a dotted place every row is judged, not only the dotted ones: `gh` under `.config` is a secret store with an ordinary name.
   const viaDot = local && !diskAllows(realish(String(safeAbs(pathIn) ?? "")));
@@ -281,27 +288,8 @@ export function browseDir(pathIn: unknown, showHidden = false, local = false): B
     const hidden = name.startsWith(".");
     if (hidden && !showHidden) { hiddenSkipped++; continue; }
     if (entries.length >= MAX_ENTRIES) { more++; continue; }
-    const full = join(abs, name);
-    try {
-      const st = lstatSync(full);
-      const link = st.isSymbolicLink();
-      // A symlink is followed ONLY to decide whether it behaves as a folder,
-      // and only when its target is somewhere this may look. Anything else is
-      // shown as what it is.
-      const target = link && browseAllows(realish(full), local) ? safeStat(full) : null;
-      const dir = st.isDirectory() || (target?.isDirectory() ?? false);
-      const locked = (hidden || viaDot) && !browseAllows(full, local);
-      entries.push({
-        name,
-        kind: link ? "link" : dir ? "dir" : "file",
-        bytes: dir ? null : (target ?? st).size,
-        items: dir ? countItems(full) : null,
-        mtime: st.mtimeMs,
-        hidden,
-        locked,
-        ...(locked && agentglassPrivate(realish(full)) ? { why: KEYS_WHY } : null),
-      });
-    } catch { /* vanished between readdir and lstat: it is not there, so it is not a row */ }
+    try { entries.push(entryOf(abs, name, viaDot, local)); }
+    catch { /* vanished between readdir and lstat: it is not there, so it is not a row */ }
   }
 
   // Folders first, then files, each alphabetical — the order every file
@@ -313,20 +301,56 @@ export function browseDir(pathIn: unknown, showHidden = false, local = false): B
   return { ok: true, path: abs, parent: parentOf(abs, local), entries, more, hiddenSkipped };
 }
 
+/**
+ * One row of a folder, from `lstat`. Throws when the entry vanished between the
+ * listing and this call, which the caller reads as "not a row". Shared by the
+ * whole-folder listing and the batched one so the two cannot disagree about
+ * what a symlink or a dotted entry is.
+ */
+export function entryOf(abs: string, name: string, viaDot: boolean, local: boolean): BrowseEntry {
+  const hidden = name.startsWith(".");
+  const full = join(abs, name);
+  const st = lstatSync(full);
+  const link = st.isSymbolicLink();
+  // A symlink is followed ONLY to decide whether it behaves as a folder,
+  // and only when its target is somewhere this may look. Anything else is
+  // shown as what it is.
+  const followable = link && browseAllows(realish(full), local);
+  const target = followable ? safeStat(full) : null;
+  const dir = st.isDirectory() || (target?.isDirectory() ?? false);
+  const locked = (hidden || viaDot) && !browseAllows(full, local);
+  return {
+    name,
+    kind: link ? "link" : dir ? "dir" : "file",
+    bytes: dir ? null : (target ?? st).size,
+    items: dir ? countItems(full) : null,
+    mtime: st.mtimeMs,
+    hidden,
+    locked,
+    ...(followable && !target ? { broken: true as const } : null),
+    ...(locked && agentglassPrivate(realish(full)) ? { why: KEYS_WHY } : null),
+  };
+}
+
 const safeStat = (p: string) => { try { return statSync(p); } catch { return null; } };
 
 /** How many things are in a folder, for the row. Bounded: this runs once per
  *  visible row and a home directory full of caches must not make a listing
  *  crawl. */
 function countItems(abs: string): number | null {
+  // Read the entries one at a time and stop at the cap: `readdirSync` would
+  // load every name of a folder with a million of them to count to 9,999.
+  let dir;
   try {
+    dir = opendirSync(abs);
     let n = 0;
-    for (const name of readdirSync(abs)) {
-      if (name.startsWith(".")) continue;
+    for (let e = dir.readSync(); e; e = dir.readSync()) {
+      if (e.name.startsWith(".")) continue;
       if (++n >= 9999) break;
     }
     return n;
   } catch { return null; }
+  finally { try { dir?.closeSync(); } catch { /* already closed */ } }
 }
 
 /* -------------------------------------------------------------------------
@@ -372,6 +396,13 @@ const TEXT_EXT = new Set([
   ".xml", ".svg", ".patch", ".diff", ".gitignore", ".dockerfile", ".makefile", ".mk", ".gradle",
 ]);
 
+/** Audio and video by extension, with the type a player needs: `audio/*` is a
+ *  pattern for an Accept header, not something a response can be. */
+const MEDIA_MIME: Record<string, string> = {
+  ".mp4": "video/mp4", ".m4v": "video/mp4", ".webm": "video/webm", ".mkv": "video/x-matroska", ".mov": "video/quicktime",
+  ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg", ".opus": "audio/ogg", ".flac": "audio/flac", ".m4a": "audio/mp4",
+};
+
 export type PreviewKind = "image" | "image-convert" | "text" | "pdf" | "video" | "audio" | "binary" | "dir";
 
 export interface FileFacts {
@@ -416,8 +447,7 @@ export function kindOf(abs: string, head?: Buffer): { kind: PreviewKind; mime: s
   if (IMAGE_MIME[ext]) return { kind: "image", mime: IMAGE_MIME[ext]! };
   if (IMAGE_CONVERTIBLE.has(ext)) return { kind: "image-convert", mime: "application/octet-stream" };
   if (ext === ".pdf") return { kind: "pdf", mime: "application/pdf" };
-  if ([".mp4", ".webm", ".mkv", ".mov", ".m4v"].includes(ext)) return { kind: "video", mime: ext === ".webm" ? "video/webm" : "video/mp4" };
-  if ([".mp3", ".wav", ".ogg", ".flac", ".m4a", ".opus"].includes(ext)) return { kind: "audio", mime: "audio/*" };
+  if (MEDIA_MIME[ext]) return { kind: MEDIA_MIME[ext]!.startsWith("video/") ? "video" : "audio", mime: MEDIA_MIME[ext]! };
   if (TEXT_EXT.has(ext) || basename(abs).toLowerCase() === "makefile" || basename(abs).toLowerCase() === "dockerfile") {
     return { kind: "text", mime: "text/plain; charset=utf-8" };
   }
@@ -512,8 +542,11 @@ export function fileFacts(pathIn: unknown, local = false): FileFacts {
 
   let head: Buffer | undefined;
   try {
-    const fd = readFileSync(abs, { flag: "r" });
-    head = fd.subarray(0, Math.min(fd.length, 64 * 1024));
+    // Text needs its first TEXT_HEAD bytes; a picture's size lives in its first
+    // few KB or, for a jpeg behind a big EXIF block, within a few hundred. Never
+    // the whole file: that is what made selecting a 50 MB log take a second.
+    const fd = readHead(abs, TEXT_HEAD) ?? Buffer.alloc(0);
+    head = fd.subarray(0, 64 * 1024);
     const { kind, mime } = kindOf(abs, head);
 
     if (kind === "image") {
@@ -525,7 +558,7 @@ export function fileFacts(pathIn: unknown, local = false): FileFacts {
     }
     if (kind === "text") {
       const text = fd.subarray(0, TEXT_HEAD).toString("utf8");
-      return { ...base, kind, mime, text, textTruncated: fd.length > TEXT_HEAD };
+      return { ...base, kind, mime, text, textTruncated: st.size > TEXT_HEAD };
     }
     return { ...base, kind, mime };
   } catch (e) {
@@ -574,8 +607,71 @@ export async function fileBytes(pathIn: unknown, local = false): Promise<{ ok: t
   return { ok: true, body: out, mime: "image/png" };
 }
 
-function readHead(abs: string): Buffer | undefined {
-  try { return readFileSync(abs).subarray(0, 64 * 1024); } catch { return undefined; }
+/** The first 64 KB, read as 64 KB: `readFileSync` of a 50 MB log to look at its
+ *  first bytes was the whole cost of selecting it. */
+function readHead(abs: string, n = 64 * 1024): Buffer | undefined {
+  let fd: number | undefined;
+  try {
+    fd = openSync(abs, "r");
+    const buf = Buffer.alloc(n);
+    return buf.subarray(0, readSync(fd, buf, 0, n, 0));
+  } catch { return undefined; } finally { if (fd !== undefined) try { closeSync(fd); } catch { /* gone */ } }
+}
+
+/** What one response of the file route may carry: a preview is a look, not a download. */
+export const FILE_CAP = 64 * 1024 * 1024;
+
+/** One plain `bytes=a-b`, `a-` or `-n` range against a file of `size` bytes.
+ *  null: not a range worth honouring (serve the whole). A multi-range is one of
+ *  those: no player sends it and a multipart body is a second thing to get wrong. */
+export function parseRange(h: string | null | undefined, size: number): { start: number; end: number } | "unsatisfiable" | null {
+  const m = /^bytes=(\d*)-(\d*)$/.exec((h ?? "").trim());
+  if (!m || (m[1] === "" && m[2] === "")) return null;
+  let start: number, end: number;
+  if (m[1] === "") { const n = Number(m[2]); if (n === 0) return "unsatisfiable"; start = Math.max(0, size - n); end = size - 1; }
+  else { start = Number(m[1]); end = m[2] === "" ? size - 1 : Math.min(Number(m[2]), size - 1); }
+  return start >= size || start > end ? "unsatisfiable" : { start, end };
+}
+
+export type PreviewSlice =
+  | { ok: true; status: 200 | 206; mime: string; size: number; headers: Record<string, string>; body: Blob }
+  | { ok: false; status: number; error: string; headers?: Record<string, string> };
+
+/**
+ * A file, or a slice of it, for the viewers: images, pdf, audio and video
+ * straight into their elements (so Range works), text and json with a byte cap.
+ *
+ * The boundary is `browseReal`'s — the folder list's own — and what is judged is
+ * what is opened. Never the whole file in memory: the body is a lazy slice of
+ * the file on disk, which Bun streams.
+ */
+export async function previewSlice(pathIn: unknown, local: boolean, opts: { range?: string | null; cap?: number }): Promise<PreviewSlice> {
+  const abs = browseReal(pathIn, local);
+  if (!abs) return { ok: false, status: 403, error: refusal(safeAbs(pathIn) ?? "") };
+  let st;
+  try { st = statSync(abs); } catch { return { ok: false, status: 404, error: "no such file" }; }
+  if (st.isDirectory()) return { ok: false, status: 400, error: "that is a folder" };
+  // A fifo or a device never ends; opening one would hang the answer.
+  if (!st.isFile()) return { ok: false, status: 400, error: "not a regular file" };
+
+  const size = st.size;
+  const { mime } = kindOf(abs, readHead(abs));
+  const file = Bun.file(abs);
+  const base = { "accept-ranges": "bytes", "x-agx-size": String(size) };
+  const range = parseRange(opts.range, size);
+  if (range === "unsatisfiable") return { ok: false, status: 416, error: "range not satisfiable", headers: { "content-range": `bytes */${size}` } };
+  if (range) {
+    const end = Math.min(range.end, range.start + FILE_CAP - 1);
+    return { ok: true, status: 206, mime, size, body: file.slice(range.start, end + 1),
+      headers: { ...base, "content-range": `bytes ${range.start}-${end}/${size}`, "content-length": String(end - range.start + 1) } };
+  }
+  const cap = opts.cap !== undefined ? Math.max(0, Math.min(opts.cap, FILE_CAP)) : FILE_CAP;
+  if (opts.cap === undefined && size > FILE_CAP) {
+    return { ok: false, status: 413, error: `this file is ${(size / 1048576).toFixed(0)} MB, more than the 64 MB a preview reads at once` };
+  }
+  const n = Math.min(size, cap);
+  return { ok: true, status: 200, mime, size, body: file.slice(0, n),
+    headers: { ...base, "content-length": String(n), ...(n < size ? { "x-agx-truncated": "1" } : {}) } };
 }
 
 /** The places a browse can start from: the same list the machine search offers,
@@ -627,7 +723,7 @@ export function openInDesktop(pathIn: unknown, local = false): { ok: boolean; wi
  *
  * A folder is shown as itself and a file as the folder that holds it. Both the
  * path asked for and the folder it lands on go through `browseReal`, the gate
- * every read here goes through: a file the palette may read but whose folder it
+ * every read here goes through: a file the finder may read but whose folder it
  * may not would otherwise hand the file manager a listing of siblings the
  * palette itself refuses to show.
  */
@@ -679,4 +775,55 @@ export function pagePolicy(pathIn: string): { mime: string; csp: string } | null
   return /\.html?$/i.test(pathIn)
     ? { mime: "text/html; charset=utf-8", csp: "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:" }
     : null;
+}
+
+/*
+ * Recent, as Strata lists it: the files the desktop's apps have used lately, newest use first, in the
+ * one flat list `recent:///` is. The source is the freedesktop `recently-used.xbel` — the same file a
+ * GTK file chooser fills — so what Strata shows and what this shows are one list.
+ *
+ * Each row's `name` is the file's ABSOLUTE path: rows of one list come from many folders, and every
+ * caller already joins `dir + name` and treats a name that is itself absolute as the whole path.
+ * Judged like any listing: a file the finder may not look at is not a row, a dotted one is a row only
+ * with hidden files on and for a caller on this machine. The order is the list's own and is never
+ * re-sorted (the client lays it out as it comes).
+ */
+export const RECENT_PLACE = "recent:///";
+
+const xmlText = (s: string) => s.replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+
+/** The local files of an xbel document, most recently used first, each once. */
+export function parseRecentXbel(xml: string): string[] {
+  const seen = new Map<string, number>();
+  for (const m of xml.matchAll(/<bookmark\s([^>]*)>/g)) {
+    const attrs = m[1]!;
+    const href = /\bhref="([^"]*)"/.exec(attrs)?.[1];
+    if (!href || !href.startsWith("file://")) continue;
+    let path: string;
+    try { path = decodeURIComponent(xmlText(href).slice("file://".length)); } catch { continue; }
+    if (!path.startsWith("/")) continue;
+    const when = Date.parse(/\bvisited="([^"]*)"/.exec(attrs)?.[1] ?? "") || Date.parse(/\bmodified="([^"]*)"/.exec(attrs)?.[1] ?? "") || 0;
+    seen.set(path, Math.max(seen.get(path) ?? 0, when));
+  }
+  return [...seen.entries()].sort((a, b) => b[1] - a[1]).map(([p]) => p);
+}
+
+const recentFile = (): string => join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "recently-used.xbel");
+
+export function recentReport(showHidden: boolean, local: boolean): BrowseReport {
+  let xml = "";
+  try { xml = readFileSync(recentFile(), "utf8"); } catch { /* nothing used yet: an empty list, not an error */ }
+  const entries: BrowseEntry[] = [];
+  let hiddenSkipped = 0;
+  let more = 0;
+  for (const path of parseRecentXbel(xml)) {
+    const abs = safeAbs(path);
+    if (!abs || !browseAllows(abs, local)) continue;
+    const hidden = basename(abs).startsWith(".");
+    if (hidden && !(showHidden && local)) { hiddenSkipped++; continue; }
+    if (entries.length >= MAX_ENTRIES) { more++; continue; }
+    try { entries.push({ ...entryOf(dirname(abs), basename(abs), false, local), name: abs }); }
+    catch { /* gone since it was used: not a row */ }
+  }
+  return { ok: true, path: RECENT_PLACE, parent: null, entries, more, hiddenSkipped };
 }

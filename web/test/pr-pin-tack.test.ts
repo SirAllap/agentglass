@@ -17,13 +17,14 @@ const code = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").filte
 
 describe("pull request pins use the tack", () => {
   it("neither the board nor the panel draws a star", () => {
-    expect(code(board)).not.toContain("StarIcon");
+    // The one star is "follow this colleague" on the person banner, which pins nothing.
+    const banner = code(board).slice(code(board).indexOf("export function PersonBanner("));
+    expect(code(board).replace(banner, "").replace(/import \{[^}]*\} from "..\/lib\/glyphIcons.tsx";/, "")).not.toContain("StarIcon");
     expect(code(panel)).not.toContain("StarIcon");
   });
 
-  it("the card button, the row button and the panel button draw a tack, filled when pinned", () => {
+  it("the card button and the panel button draw a tack, filled when pinned", () => {
     expect(code(board)).toContain("<PinIcon size={ICON.xs} filled={pinned} />");
-    expect(code(panel)).toContain("<PinIcon size={ICON.sm} filled={pinned} />");
     expect(code(panel)).toContain("<PinIcon size={ICON.xs} filled={currentPinned} />");
   });
 
@@ -49,42 +50,11 @@ describe("the board no longer lists pins", () => {
   });
 });
 
-describe("the pinned bar", () => {
-  /** The capsule's own source, to its closing brace. */
-  const capsule = (() => {
-    const a = panel.indexOf("function PinnedCapsule(");
-    // The capsule and the scroller under it: the chips live in the second.
-    const b = panel.indexOf("\n}\n", panel.indexOf("function PinScroller(", a));
-    expect(a).toBeGreaterThanOrEqual(0);
-    expect(b).toBeGreaterThan(a);
-    return code(panel.slice(a, b));
-  })();
-
-  it("labels the bar with the tack, not the word", () => {
-    expect(capsule).toContain('aria-label="Pinned"');
-    expect(capsule).not.toMatch(/uppercase tracking-wider[^\n]*>\s*Pinned/);
-  });
-
-  it("a chip opens in the app and shows the number, the cut title and the whole title on hover", () => {
-    expect(capsule).toContain("onOpen(p.number)");
-    expect(capsule).toContain("${p.title}`}");
-    expect(capsule).toContain("truncate");
-  });
-
-  it("marks the open chip as current", () => {
-    expect(capsule).toContain('aria-current={open ? "page" : undefined}');
-  });
-
-  it("unpin is its own button in a slot that is always there, revealed by opacity", () => {
-    expect(capsule).toContain("aria-label={`Unpin #${p.number}`}");
-    expect(capsule).toMatch(/opacity-0[^"]*group-hover:opacity-100[^"]*focus:opacity-100/);
-    // Visibility must never be a display toggle: that would shift the chip.
-    expect(capsule).not.toMatch(/hidden group-hover|group-hover:(inline|block|flex)/);
-  });
-
-  it("scrolls sideways under the header instead of wrapping over it", () => {
-    expect(capsule).toContain("overflow-x-auto");
-    expect(capsule).toContain('maxWidth: "40%"');
-    expect(capsule).not.toContain("flex-wrap");
+describe("the pin button", () => {
+  it("is labelled with the tack, not the word, and counts the pins", () => {
+    const a = panel.indexOf("function PinMenu(");
+    const menu = code(panel.slice(a, panel.indexOf("\n}\n", a)));
+    expect(menu).toContain("<PinIcon size={BAR_ICON}");
+    expect(menu).toContain("Pinned pull requests (${pinned.length})");
   });
 });

@@ -11,14 +11,19 @@
  * same way. The bar in the last column is the whole idea in one row — dark up
  * to what the job usually takes, light up to its slowest 1 in 10, and a marker
  * for the newest run coloured by what that run is against the job's own past.
- * The decisions (verdict, chips, sort) live in lib/ciMetrics.ts.
+ * The decisions (verdict, tiles, status, sort) live in lib/ciMetrics.ts.
+ *
+ * Four tiles above the table filter it; the filter text comes from outside
+ * (`filterText`), because the bar at the top of the panel owns the one search
+ * box.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RERUN_DAYS, MIN_SAMPLES, type CheckMetric } from "../../../../shared/checkBaseline.ts";
 import { api } from "../../lib/api.ts";
 import { usePoll } from "../../lib/usePoll.ts";
-import { barScale, barTop, chipCounts, CHIPS, DEFAULT_SORT, rerunWhy, inChip, isSlow, matches, nextSort, sortRows, sparkPaths, span, toRow, verdictWords, type Chip, type Row, type Sort, type SortKey } from "../../lib/ciMetrics.ts";
-import { FilterField, LINE, RefreshButton, Segmented } from "../workspace/Chrome.tsx";
+import { barScale, barTop, chipCounts, DEFAULT_SORT, rerunWhy, inChip, isSlow, matches, nextSort, sortRows, sparkPaths, span, statusChip, tileOf, TILES, toRow, verdictWords, viewOfTile, type Chip, type CiView, type Row, type Sort, type SortKey, type Tile } from "../../lib/ciMetrics.ts";
+import { LINE, RefreshButton } from "../workspace/Chrome.tsx";
+import { Chip as StatusChip } from "../git/ui.tsx";
 import { Spinner } from "../Spinner.tsx";
 import { LENS_REFRESH_CAP } from "../../../../shared/failureVerdict.ts";
 import { FailingTestsLens } from "./FailingTestsLens.tsx";
@@ -32,7 +37,7 @@ const CHIP_TEXT: Record<Chip, { label: string; title: string }> = {
 };
 
 /** One grid for the header and every row, so the columns cannot drift apart. */
-const COLS = "minmax(190px, 1.5fr) 96px 64px 64px 48px minmax(300px, 2fr)";
+const COLS = "minmax(190px, 1fr) 72px 64px 64px 48px minmax(160px, 380px) 112px";
 
 const TINT = {
   "much-slower": { bar: "var(--error)", ink: "var(--error-ink)" },
@@ -53,10 +58,20 @@ const COLUMNS: { key: SortKey | null; label: string; align: "left" | "right"; ti
   { key: "slow", label: "Slow end", align: "right", title: "The slowest 1 in 10 of its successful runs" },
   { key: "fails", label: "Fails", align: "right", title: "Failures over successes plus failures; cancelled runs do not count" },
   { key: "verdict", label: "This run against its own history", align: "left", title: "The newest run of the check, judged against that check's own usual" },
+  { key: null, label: "Status", align: "left", title: "One word for what is notable about the newest run" },
 ];
 
+const TILE_TEXT: Record<Tile, { label: string; title: string }> = {
+  all: { label: "All checks", title: CHIP_TEXT.all.title },
+  slow: { label: "Slow", title: CHIP_TEXT.slow.title },
+  rerun: { label: "Re-run passed", title: CHIP_TEXT.rerun.title },
+  attention: { label: "Drifting · failing tests", title: "Checks creeping up week on week, and every failing test the app has read" },
+};
+
+const TONE = { bad: "bad", warn: "warn", good: "good" } as const;
+
 function Spark({ r }: { r: Row }) {
-  const W = 88, H = 14;
+  const W = 56, H = 14;
   const { lines, last, refY } = useMemo(() => sparkPaths(r.trend, W, H, r.slowEnd), [r.trend, r.slowEnd]);
   const color = isSlow(r) ? "var(--warning-ink)" : "var(--text2)";
   return (
@@ -86,23 +101,13 @@ function Line({ r, top }: { r: Row; top: number }) {
   const t = tintOf(r);
   const words = verdictWords(r);
   const week = r.drift != null ? Math.round(r.drift * 100) : null;
+  const status = statusChip(r);
   return (
-    <div role="row" className="grid items-center gap-x-3 px-3 agx-hover" style={{ gridTemplateColumns: COLS, minHeight: 34, borderTop: LINE }}>
+    <div role="row" className="grid items-center gap-x-3 px-3 agx-hover" style={{ gridTemplateColumns: COLS, minHeight: 32, borderTop: QUIET }}>
       <div role="cell" className="flex items-center gap-2 min-w-0">
         <span className="truncate text-[11px]" style={{ color: "var(--text)" }} title={r.workflow ? `${r.workflow} / ${r.name}` : r.name}>{r.name}</span>
-        {r.workflow && <span className="text-[10px] shrink-0" style={{ color: "var(--text3)" }}>{r.workflow}</span>}
-        {r.rerun && (
-          <span className="text-[10px] px-1.5 rounded shrink-0" title={rerunWhy(r.sameCommit)}
-            style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 16%, transparent)" }}>
-            Re-run passed
-          </span>
-        )}
-        {week != null && (
-          <span className="text-[10px] px-1.5 rounded shrink-0" title="The last 7 days took longer than the 7 before"
-            style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 16%, transparent)" }}>
-            ▲ {week}% this week
-          </span>
-        )}
+        {r.workflow && <span className="text-[10px] truncate" style={{ color: "var(--text3)" }}>{r.workflow}</span>}
+        {week != null && <span className="text-[10px] shrink-0 tabular-nums" style={{ color: "var(--text3)" }} title="The last 7 days took longer than the 7 before">▲ {week}%</span>}
       </div>
       <div role="cell"><Spark r={r} /></div>
       <div role="cell" className="text-right text-[11px] tabular-nums" style={{ color: "var(--text)" }}>{r.usual != null ? span(r.usual) : "—"}</div>
@@ -112,19 +117,30 @@ function Line({ r, top }: { r: Row; top: number }) {
       </div>
       <div role="cell" className="flex items-center gap-3 min-w-0">
         <Bar r={r} top={top} />
-        <span className="text-[11px] tabular-nums shrink-0" style={{ color: t.ink, width: 148 }}>
-          {r.thisRun != null ? span(r.thisRun) : "—"}{words && ` · ${words}`}
+        <span className="text-[11px] tabular-nums shrink-0 w-[52px] text-right" style={{ color: t.ink }}>
+          {r.thisRun != null ? span(r.thisRun) : "—"}
         </span>
+      </div>
+      <div role="cell" className="flex items-center min-w-0">
+        {status && <StatusChip tone={TONE[status.tone]} title={r.rerun ? rerunWhy(r.sameCommit) : words || undefined}>{status.label}</StatusChip>}
       </div>
     </div>
   );
 }
 
-export function CiMetrics({ root, repo, active }: { root: string; repo: string; active: boolean }) {
+/** A hairline quieter than the house LINE: forty rows of full-strength rules read as a grid, not a list. */
+const QUIET = "1px solid color-mix(in srgb, var(--text) 6%, transparent)";
+
+export function CiMetrics({ root, repo, active, filterText, onFilterText }: {
+  root: string; repo: string; active: boolean;
+  /** The text the panel's one search box holds. The bar owns the box, so this view draws none. */
+  filterText: string;
+  onFilterText: (v: string) => void;
+}) {
   const [checks, setChecks] = useState<CheckMetric[] | null>(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
-  const [chip, setChip] = useState<Chip | "tests">("all");
+  const [chip, setChip] = useState<CiView>("all");
   // The failing tests: read from this server's own record with every poll (no GitHub request), refreshed from GitHub only when asked.
   const [tests, setTests] = useState<FailingTests | null>(null);
   const [testsBusy, setTestsBusy] = useState(false);
@@ -132,7 +148,8 @@ export function CiMetrics({ root, repo, active }: { root: string; repo: string; 
   // What the last refresh did stays on the page: the next poll re-reads the table and carries no refresh of its own.
   const [lastRefresh, setLastRefresh] = useState<FailingTests["refresh"]>(undefined);
   const refreshed = useRef(new Set<string>());
-  const [query, setQuery] = useState("");
+  const query = filterText;
+  const setQuery = onFilterText;
   const [sort, setSort] = useState<Sort>(DEFAULT_SORT);
 
   // The newest request wins: an answer for the project the panel has since left must not be drawn under the new one's name.
@@ -189,14 +206,38 @@ export function CiMetrics({ root, repo, active }: { root: string; repo: string; 
         <RefreshButton onRefresh={testChip ? refreshTests : () => { load(); loadTests(); }} busy={testChip ? testsBusy : busy}
           title={testChip ? `Read the failed runs it has not read yet: at most ${LENS_REFRESH_CAP}, newest first, and the cost is stated below` : "Read the recorded runs again"} />
       </div>
-      <div className="flex items-center gap-3">
-        <Segmented<Chip | "tests"> label="Which checks" value={chip} onChange={setChip}
-          options={[
-            ...CHIPS.map((c) => ({ id: c as Chip | "tests", title: CHIP_TEXT[c].title, label: <>{CHIP_TEXT[c].label} <span className="tabular-nums" style={{ opacity: 0.7 }}>{counts[c]}</span></> })),
-            { id: "tests" as const, title: "Every failing test the app has read, counted over runs and pull requests", label: <>Failing tests <span className="tabular-nums" style={{ opacity: 0.7 }}>{tests ? tests.rows.length : "…"}</span></> },
-          ]} />
-        <span className="flex-1" />
-        <FilterField value={query} onChange={setQuery} placeholder={testChip ? "Filter tests…" : "Filter checks…"} label={testChip ? "Filter tests" : "Filter checks"} className="w-[220px]" />
+      <div className="grid gap-2.5" style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }} role="group" aria-label="Which checks">
+        {TILES.map((t) => {
+          const on = tileOf(chip) === t;
+          const n = t === "attention" ? counts.drifting : counts[t];
+          const warm = t === "slow" || t === "rerun" ? "var(--warning-ink)" : "var(--text)";
+          const frame = { background: on ? "color-mix(in srgb, var(--primary) 14%, transparent)" : "var(--surface-card)", border: LINE, boxShadow: on ? "inset 0 0 0 1px color-mix(in srgb, var(--primary) 45%, transparent)" : undefined } as const;
+          return t === "attention" ? (
+            <div key={t} className="rounded-xl px-3 py-2 min-w-0" style={frame} title={TILE_TEXT[t].title}>
+              <div className="text-[10.5px]" style={{ color: "var(--text3)" }}>{TILE_TEXT[t].label}</div>
+              <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                <button type="button" aria-pressed={chip === "drifting"} onClick={() => setChip("drifting")} title={CHIP_TEXT.drifting.title}
+                  className="agx-btn rounded-md px-1.5 py-0.5 text-[11px] tabular-nums flex items-baseline gap-1"
+                  style={{ background: chip === "drifting" ? "color-mix(in srgb, var(--text) 10%, transparent)" : "transparent" }}>
+                  <span className="text-[18px] font-semibold leading-none" style={{ color: counts.drifting ? "var(--warning-ink)" : "var(--text3)" }}>{counts.drifting}</span>
+                  <span style={{ color: "var(--text2)" }}>Drifting</span>
+                </button>
+                <button type="button" aria-pressed={testChip} onClick={() => setChip("tests")} title="Every failing test the app has read, counted over runs and pull requests"
+                  className="agx-btn rounded-md px-1.5 py-0.5 text-[11px] tabular-nums flex items-baseline gap-1"
+                  style={{ background: testChip ? "color-mix(in srgb, var(--text) 10%, transparent)" : "transparent" }}>
+                  <span className="text-[18px] font-semibold leading-none" style={{ color: tests?.rows.length ? "var(--error-ink)" : "var(--text3)" }}>{tests ? tests.rows.length : "…"}</span>
+                  <span style={{ color: "var(--text2)" }}>Failing tests</span>
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button key={t} type="button" aria-pressed={on} onClick={() => setChip(viewOfTile(t))} title={TILE_TEXT[t].title}
+              className="agx-btn rounded-xl px-3 py-2 text-left min-w-0" style={frame}>
+              <div className="text-[10.5px] truncate" style={{ color: "var(--text3)" }}>{TILE_TEXT[t].label}</div>
+              <div className="text-[22px] font-semibold leading-tight tabular-nums mt-0.5" style={{ color: n && t !== "all" ? warm : "var(--text)" }}>{n}</div>
+            </button>
+          );
+        })}
       </div>
       {testChip ? (
         <FailingTestsLens data={tests && { ...tests, refresh: lastRefresh }} query={query} busy={testsBusy} error={testsErr} />
@@ -207,8 +248,9 @@ export function CiMetrics({ root, repo, active }: { root: string; repo: string; 
       ) : !rows.length ? (
         <div className="text-[11px] px-1 py-6" style={{ color: "var(--text3)" }}>No runs recorded yet. They are recorded as each pull request's Checks tab loads.</div>
       ) : (
-        <div role="table" aria-label="Checks" className="rounded-xl overflow-hidden" style={{ background: "var(--surface-card)", border: LINE, boxShadow: "var(--surface-lift)" }}>
-          <div role="row" className="grid items-center gap-x-3 px-3" style={{ gridTemplateColumns: COLS, minHeight: 30, background: "var(--surface-inset)" }}>
+        <div role="table" aria-label="Checks" className="rounded-xl" style={{ background: "var(--surface-card)", border: LINE, boxShadow: "var(--surface-lift)" }}>
+          {/* Sticky in the panel's own scroller, so the columns stay named under a long list. No overflow clip on the table itself: it would make the header stick to the table instead. */}
+          <div role="row" className="grid items-center gap-x-3 px-3 sticky top-0 z-10 rounded-t-xl" style={{ gridTemplateColumns: COLS, minHeight: 30, background: "var(--surface-inset)", borderBottom: LINE }}>
             {COLUMNS.map((c) => c.key ? (
               <button key={c.label} role="columnheader" type="button" title={c.title} onClick={() => setSort(nextSort(sort, c.key!))}
                 aria-sort={sort.key === c.key ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
@@ -222,9 +264,12 @@ export function CiMetrics({ root, repo, active }: { root: string; repo: string; 
             ))}
           </div>
           {shown.length ? shown.map((r) => <Line key={r.key} r={r} top={top} />) : (
-            <div className="text-[11px] px-3 py-6" style={{ color: "var(--text3)", borderTop: LINE }}>No check matches.</div>
+            <div className="text-[11px] px-3 py-6 flex items-center gap-2" style={{ color: "var(--text3)", borderTop: QUIET }}>
+              No check matches{query ? <> “{query}”.</> : "."}
+              {query && <button type="button" className="agx-btn underline underline-offset-2" style={{ color: "var(--text2)" }} onClick={() => setQuery("")}>Clear the filter</button>}
+            </div>
           )}
-          <div className="text-[10px] px-3 py-2 flex flex-wrap gap-x-5 gap-y-1" style={{ color: "var(--text3)", borderTop: LINE }}>
+          <div className="text-[10px] px-3 py-2 flex flex-wrap gap-x-5 gap-y-1" style={{ color: "var(--text3)", borderTop: QUIET }}>
             <span>bar = 0 → usual (solid) → slowest 1 in 10 (faint)</span>
             <span>marker = this run, coloured by its own history</span>
             <span>dashed line = slowest 1 in 10</span>

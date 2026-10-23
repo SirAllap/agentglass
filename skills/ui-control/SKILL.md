@@ -77,8 +77,15 @@ Read the sentence and do what it says; do not retry the same call.
    one through this channel: a level 3 door only **stages**, opening the dialog
    with its fields filled in, and the person's own click is the effect. There is
    no grant that makes it automatic. It is offered only when the owner has allowed level 3. If the task needs one and no door
-   stages it, say so and let the person do it. Five exist, all on a pull request. `pr.unstick` (level 3) opens the Unstick dialog and
+   stages it, say so and let the person do it. Six exist: five on a pull request and one in the Finder. `pr.unstick` (level 3) opens the Unstick dialog and
    nothing else; never offer it on a pull request that is merely slow, the dialog refuses one that is not stuck.
+
+   `finder.op.stage` (op `trash`/`move`/`copy`/`rename`/`new-folder`/`duplicate`, path,
+   plus `dest` for move and copy, `name` for rename and new-folder) opens the Finder
+   on the path with a confirmation naming you and every path; it never offers Open
+   With or the person's own actions, and `delete` and `empty-trash` are refused
+   because they cannot be taken back. Say *I prepared the move; it is yours to
+   press*, never that you moved anything.
 
    The other four are the stage doors: `pr.merge.stage` (repo, number, method, optional subject
    and body), `pr.comment.stage` (repo, number, body), `pr.review.stage` (repo,
@@ -110,17 +117,43 @@ naming a level is the answer, not a puzzle. Ask the person.
 ## A Jira card
 
 A card on a Jira site is not a window, so it is not a door in the list above:
-`agentglass-ui jira ...` (MCP: `ui_jira_card`, `ui_jira_moves`, `ui_jira_steps`,
-`ui_jira_step`, `ui_jira_link`) talks to the same routes the screen uses, under
+`agentglass-ui jira ...` (MCP: `ui_jira_card`, `ui_jira_moves`, `ui_jira_links`, `ui_jira_linktypes`, `ui_jira_activity`, `ui_jira_steps`,
+`ui_jira_linktypes`, `ui_jira_areas`, `ui_jira_step`, `ui_jira_link`, `ui_jira_edit`, `ui_jira_comment`, `ui_jira_comment-edit`, `ui_jira_comment-delete`,
+`ui_jira_move`, `ui_jira_subtask`, `ui_jira_relate`, `ui_jira_unrelate`, `ui_jira_weblink`, `ui_jira_unweblink`, `ui_jira_worklog`, `ui_jira_worklog-edit`, `ui_jira_worklog-delete`, `ui_jira_watch`, `ui_jira_vote`, `ui_jira_rank`, `ui_jira_attach`, `ui_jira_unattach`) talks to the same routes the screen uses, under
 the same switch.
 
 ```bash
-agentglass-ui --as my-agent jira card ORBIT-1042     # facts in state, the words in untrusted
+agentglass-ui --as my-agent jira card ORBIT-1042     # facts in state, the words in untrusted: description, comments, subtasks, linked cards, files by name, Details, and what the site's development tool holds (counts in state.development, rows under untrusted)
+agentglass-ui --as my-agent jira links ORBIT-1042    # every web link on it, pull requests included
+agentglass-ui --as my-agent jira activity ORBIT-1042 --kind history   # what happened on it, 100 at a time (--start <state.next> for the next page)
 agentglass-ui --as my-agent jira moves ORBIT-1042    # where it can go from here
 agentglass-ui --as my-agent jira steps               # handoff, review, merge: which are on
 agentglass-ui --as my-agent jira step ORBIT-1042 handoff --updated <state.updated> \
     --pr-url https://github.com/acme/orbit/pull/318 --pr-title "Retry the export"
 agentglass-ui --as my-agent jira link ORBIT-1042 https://github.com/acme/orbit/pull/318
+agentglass-ui --as my-agent jira edit ORBIT-1042 --field priority --value 2 --updated <state.updated>   # one field of the Details
+agentglass-ui --as my-agent jira edit ORBIT-1042 --field duedate --clear --updated <state.updated>      # take a date off
+agentglass-ui --as my-agent jira comment ORBIT-1042 --text "Fixed in the next build" --reply-to 30004   # a comment; --reply-to threads it (Cloud)
+agentglass-ui --as my-agent jira comment-edit ORBIT-1042 --id 30004 --text "Fixed in 0.24"            # your own comment only
+agentglass-ui --as my-agent jira comment-delete ORBIT-1042 --id 30004 --confirm                        # your own, for good
+agentglass-ui --as my-agent jira linktypes           # the site's link types: ids, and the phrase for each side
+agentglass-ui --as my-agent jira areas --board 3     # the board's areas and how many cards each holds, in the sprint and in all
+agentglass-ui --as my-agent jira subtask ORBIT-1042 --title "Write the draft"                        # a sub-task under it
+agentglass-ui --as my-agent jira relate ORBIT-1042 --other ORBIT-1050 --type 10000 --direction out   # ORBIT-1042 "blocks" ORBIT-1050, once
+agentglass-ui --as my-agent jira unrelate ORBIT-1042 --id 10034 --confirm                            # a linkId from `card`
+agentglass-ui --as my-agent jira weblink ORBIT-1042 https://docs.acme.example/note --title "Design note"
+agentglass-ui --as my-agent jira unweblink ORBIT-1042 --id 10869 --confirm                           # an id from `links`
+agentglass-ui --as my-agent jira worklog ORBIT-1042 --time "1h 30m" --note "Pairing on the export" --updated <state.updated>   # log time; the estimate drops by it
+agentglass-ui --as my-agent jira worklog ORBIT-1042 --time 45m --started 2026-01-30 --adjust new --estimate 3h --updated <state.updated>   # or set the remaining estimate to 3h
+agentglass-ui --as my-agent jira worklog-edit ORBIT-1042 --id 60012 --time 2h --updated <state.updated>   # your own entry; ids are in `activity --kind worklog`
+agentglass-ui --as my-agent jira worklog-delete ORBIT-1042 --id 60012 --confirm --updated <state.updated>   # your own, for good
+agentglass-ui --as my-agent jira watch ORBIT-1042   # watch the card; `--off` stops
+agentglass-ui --as my-agent jira vote ORBIT-1042   # vote for it; `--off` takes the vote back
+agentglass-ui --as my-agent jira rank ORBIT-1043 --before ORBIT-1040                                 # the board's order; --after puts it behind
+agentglass-ui --as my-agent jira attach ORBIT-1042 --name build.log --text "$(tail -50 build.log)"   # a file from words you hold (or --data <base64>), at most 25 MB
+agentglass-ui --as my-agent jira unattach ORBIT-1042 --id 10412 --confirm                           # a fileId from `card`, one you added
+agentglass-ui --as my-agent jira move ORBIT-1043 --id 31 --updated <state.updated>                  # a sub-task changes status like any card
+agentglass-ui --as my-agent jira move ORBIT-1042 --id 51 --updated <state.updated> --fields '{"resolution":"10000","comment":"Shipped"}'   # a move whose screen asks for fields
 ```
 
 - `step` runs what the owner configured (the move, the comment, the link) as one
@@ -128,7 +161,38 @@ agentglass-ui --as my-agent jira link ORBIT-1042 https://github.com/acme/orbit/p
   card first, and if the answer is a `409` conflict the card moved, so read it
   again and decide again rather than retry. `--to`, `--stay`, `--clear`,
   `--assign` and `--comment` answer a block that asks when it runs.
-- **`step` and `link` change a shared site, with no click from the person.**
+- `edit` changes one field per call: `summary`, `description` (`--value` is Markdown, refused with a sentence when the stored one holds a table, panel, image or colour Markdown would lose: send the person to Jira), `priority` (an id), `labels` (`--add` or
+  `--remove` one), `duedate`, `start` (`2026-01-31`), `parent` (a card id), `flag`
+  (`--value true`), `originalEstimate`, `remainingEstimate` (`2h 30m`); `--clear` takes
+  the description, a date, the parent, the flag or an estimate off. A field the card's own edit screen
+  does not offer is refused before it is sent, and a `409` means the card moved since
+  `--updated`: read it again. `comment-edit` and `comment-delete` work only on a
+  comment of the connected account, and delete needs `--confirm` because it cannot be
+  undone (the screen asks first).
+- `worklog` logs time only where the card has time tracking on (`card`'s Details say so; otherwise it is refused in
+  a sentence). `--time` is `1h 30m` (weeks `w`, days `d`, hours `h`, minutes `m`, each once; nothing or zero is
+  refused). `--adjust` says how the remaining estimate follows: `auto` (the default) lowers it by the time, `leave`
+  keeps it, `new` sets it to `--estimate`, `manual` lowers it by `--estimate`. `worklog-edit` takes `auto`, `leave`
+  or `new`; `worklog-delete` takes all four, `manual` putting `--estimate` back. Both work only on an entry of the
+  connected account, checked against the site after you ask, and delete needs `--confirm` because it cannot be
+  undone. All three need `--updated` and answer with `remainingBefore` and `remainingAfter` in `state`.
+- `watch`, `vote` and `rank` are the connected account's own mark on a card, so they take no `--updated` (the card does not
+  change) and are idempotent; `--off` takes the mark away. `card` says `watching`, `watchers`, `voted` and `votes` in
+  `state`; a count the site does not give (a hidden watcher count, voting switched off) is left out. The site refuses
+  a vote on your own card and where voting is off, and does not say which.
+- `attach` sends the words or bytes you give it and reads nothing from a path. `unattach` takes only a `fileId` that
+  `card` lists with `mine` (a file you added); the site's own delete would take anybody's. `card` names a file and
+  sizes it and never carries its bytes.
+- `relate` reads which side the card is on: `--direction out` is the card that holds the phrase
+  `linktypes` calls `out` ("blocks"), `in` the other. A link already there answers `already` and sends
+  nothing. `unrelate` and `unweblink` need `--confirm` and take only an id the card itself holds (`card`
+  lists each linked card's `linkId`, `links` each address's `id`). `weblink` takes `http` and `https`
+  only. `subtask` uses the project's own sub-task type; `move` is the card's move by an id from `moves`. A move whose `moves` entry
+  lists `fields` (under `untrusted`, the site's own words) asks for the required ones in `--fields`, by field
+  key: a choice by its `id`, several as a list of ids, text as text, a comment as Markdown. A required one left
+  empty, a choice the site did not offer, or a required field of a kind this cannot fill (a person, say) is
+  refused in one sentence with no request sent.
+- **`step`, `link`, `edit`, `comment`, `comment-edit`, `comment-delete`, `move`, `subtask`, `relate`, `unrelate`, `weblink`, `unweblink`, `worklog`, `worklog-edit`, `worklog-delete`, `watch`, `vote`, `rank`, `attach` and `unattach` change a shared site, with no click from the person.**
   They run only when the owner has done two things: started the server at
   control level 3, and switched Jira writes on. On a server as it starts
   (level 2), at level 1 or read-only, each is refused with a `403` and a

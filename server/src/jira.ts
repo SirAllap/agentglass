@@ -43,19 +43,24 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { guardedFetch, privateAddress, type GuardedFetchOptions } from "./net.ts";
+import { guardedFetch, privateAddress, siteThenNamedHost, type GuardedFetchOptions } from "./net.ts";
 import { isIP } from "node:net";
 import { forgetCached } from "./jiraviews.ts";
 import { cardExtras } from "./jirafields.ts";
+import { webLinksOf } from "./jiraCardRead.ts";
+import type { CardWebLink } from "../../shared/providers.ts";
 import { clearCredential, redacted, secretFor, setCredential } from "./credentials.ts";
 import type { CallResult, WriteOutcome } from "./trackerTypes.ts";
 import { prAddress } from "../../shared/taskref.ts";
+import { moveBody, screenOf } from "./jiraMoveFields.ts";
 import type {
-  JiraAuth, JiraConnectResult, JiraDeployment, JiraHandoffRule, JiraKind, JiraMove, JiraMoves, JiraPerson, JiraSettings, JiraStatus, ProviderTask,
+  JiraAuth, JiraBlockOutcome, JiraConnectResult, JiraDeployment, JiraHandoffRule, JiraKind, JiraMove, JiraMoves, JiraPerson, JiraSettings, JiraStatus, ProviderTask,
 } from "../../shared/providers.ts";
 import { hasUrlCredentials } from "../../shared/urlCredentials.ts";
 
 const TIMEOUT_MS = 8_000;
+/** The one host a Jira Cloud site redirects a file request to. Nothing else is followed. */
+export const JIRA_MEDIA_HOST = "api.media.atlassian.com";
 const MEMO_TTL_MS = 10 * 60_000;
 /** Held-off time when a 429 carries no `Retry-After`, and the longest we honour. */
 const HOLD_DEFAULT_S = 10;
@@ -236,13 +241,15 @@ function limitSentence(reason: string | null, seconds: number, pathname: string)
 export type JiraResult<T> = CallResult<T> & { status?: number };
 
 export interface CallOpts {
-  method?: "GET" | "POST" | "PUT";
+  method?: "GET" | "POST" | "PUT" | "DELETE";
   body?: unknown;
   timeoutMs?: number;
   /** A read nobody is waiting on: answered `throttled` with no request while a hold is on. */
   optional?: boolean;
   /** Skip the in-flight merge. */
   fresh?: boolean;
+  /** A file to attach, sent as multipart. The anti-forgery header the site asks for rides with it. */
+  form?: FormData;
 }
 
 /**
@@ -285,7 +292,9 @@ async function callOnce<T>(creds: JiraCreds, pathname: string, o: CallOpts): Pro
     Accept: "application/json",
   };
   if (o.body !== undefined) headers["Content-Type"] = "application/json";
-  const body = o.body === undefined ? undefined : JSON.stringify(o.body);
+  // The boundary in a multipart type is the fetch's to write, so no content type here; the site refuses an upload without the header.
+  if (o.form) headers["X-Atlassian-Token"] = "no-check";
+  const body = o.form ?? (o.body === undefined ? undefined : JSON.stringify(o.body));
   const stored = secretFor("jira") === creds.token;
 
   const ctl = new AbortController();
@@ -359,6 +368,57 @@ async function callOnce<T>(creds: JiraCreds, pathname: string, o: CallOpts): Pro
     return { ok: false, error: aborted ? "Jira did not answer in time" : "Could not reach Jira" };
   } finally {
     clearTimeout(kill);
+  }
+}
+
+/**
+ * A request for a file's bytes: the same sign-in, the same site checks and the
+ * same guard as `callOnce`, answered as a Response to stream and not as JSON.
+ *
+ * A file on a Cloud site is a 303 to ONE other host with a token in the address;
+ * Data Center answers from the site. The first hop carries the credential and the
+ * second does not (`siteThenNamedHost`); the address of the second never leaves
+ * this function. Under the test base, a redirect is followed only to the base's
+ * own origin, standing in for that host.
+ */
+export async function jiraFetch(creds: JiraCreds, pathname: string, o: { range?: string | null; timeoutMs: number; signal?: AbortSignal }): Promise<{ res: Response } | { error: string }> {
+  const site = parseSite(creds.site);
+  if (!site.ok) return { error: site.error };
+  const origin = baseOverride ?? `https://${site.site}`;
+  const auth = creds.auth === "bearer"
+    ? `Bearer ${creds.token}`
+    : `Basic ${Buffer.from(`${creds.email ?? ""}:${creds.token}`).toString("base64")}`;
+  const forward: Record<string, string> = o.range ? { Range: o.range } : {};
+  const headers: Record<string, string> = { Authorization: auth, ...forward };
+  // The limit is for the first byte: it is lifted once the headers are in, so a file that takes longer than that to arrive is not cut
+  // mid-stream (`serveFile` holds the stream to an idle limit between chunks instead).
+  const first = new AbortController();
+  const timer = setTimeout(() => first.abort(new DOMException("no first byte", "TimeoutError")), o.timeoutMs);
+  const signal = AbortSignal.any([first.signal, ...(o.signal ? [o.signal] : [])]);
+  const held = "That file is held somewhere this may not fetch from";
+  try {
+    if (baseOverride) {
+      const viaBase = (u: string | URL, h: Record<string, string>) => fetch(u, { headers: h, signal, redirect: "manual" });
+      let res = await viaBase(`${origin}${pathname}`, headers);
+      const to = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
+      if (to) {
+        void res.body?.cancel();
+        const next = new URL(to, origin);
+        if (next.origin !== new URL(origin).origin) return { error: held };
+        res = await viaBase(next, forward);
+      }
+      return { res };
+    }
+    const hostPort = site.site.split("/")[0]!;
+    const hops = siteThenNamedHost(hostPort, JIRA_MEDIA_HOST, headers, forward);
+    const g = await guardedFetch(`${origin}${pathname}`, { signal, headers }, hops.allow, { refuses: refusesAddress, initFor: hops.initFor, ...guardOpts });
+    // The refusal names a host, never the address; it is still turned into our sentence here.
+    return g.res ? { res: g.res } : { error: held };
+  } catch (e) {
+    const name = (e as { name?: string })?.name;
+    return { error: name === "TimeoutError" || name === "AbortError" ? "Jira did not answer in time" : "Could not reach Jira" };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -541,7 +601,11 @@ let searchComments = false;
 export const __setSearchComments = (on: boolean): void => { searchComments = on; };
 
 /** The site's own ids for the fields a board shows, found by what they are, never by what they are called. */
-export interface JiraFieldIds { sprint?: string; points: string[] }
+export interface JiraFieldIds {
+  sprint?: string; points: string[];
+  /** The Details a card read shows when the site has them: start date, the flag and the team. */
+  start?: string; flag?: string; team?: string;
+}
 
 /**
  * Which points field a card's number is read from. A board names the one it counts in; a view that does not takes the
@@ -575,7 +639,15 @@ export function siteFields(creds: JiraCreds): Promise<JiraResult<JiraFieldIds>> 
     const custom = (f: Record<string, unknown>) => (isObj(f.schema) ? str(f.schema.custom) : "");
     const byType = rows.filter((f) => custom(f).endsWith(":jsw-story-points"));
     const points = byType.length ? byType : rows.filter((f) => /^story points?$/i.test(str(f.name)) && isObj(f.schema) && str(f.schema.type) === "number");
-    return { ok: true, data: { sprint: rows.find((f) => custom(f).endsWith(":gh-sprint"))?.id as string | undefined, points: points.map((f) => str(f.id)) } };
+    const named = (re: RegExp, type: string) => rows.find((f) => re.test(str(f.name)) && isObj(f.schema) && str(f.schema.type) === type)?.id as string | undefined;
+    return { ok: true, data: {
+      sprint: rows.find((f) => custom(f).endsWith(":gh-sprint"))?.id as string | undefined,
+      points: points.map((f) => str(f.id)),
+      // Found by what they are where a type says so (the team); the start date and the flag have no type of their own, so by the name Jira gives them.
+      start: named(/^start date$/i, "date"),
+      flag: named(/^flagged$/i, "array"),
+      team: rows.find((f) => custom(f).endsWith(":atlassian-team"))?.id as string | undefined,
+    } };
   }, true);
 }
 
@@ -640,7 +712,7 @@ export interface TaskContext {
   /** The connected account's id, to mark the card as yours. */
   me?: string;
   /** Where a board's fields live on this site; absent for a read that did not ask. */
-  fields?: { sprint?: string; points?: string };
+  fields?: { sprint?: string; points?: string; flag?: string };
 }
 
 /** One issue as the panel's task. Null when it is not an issue at all. */
@@ -684,6 +756,7 @@ export function toTask(issue: unknown, cx: TaskContext, arrival?: number): Provi
     mine: !!(cx.me && whoId && cx.me === whoId),
   };
   if (created) task.created = created;
+  if (isObj(f.issuetype) && str(f.issuetype.name)) task.issueType = str(f.issuetype.name);
   Object.assign(task, cardExtras(f, cx.fields));
   if (arrival !== undefined) task.order = String(arrival).padStart(6, "0");
   return task;
@@ -802,8 +875,10 @@ export async function searchJql(creds: JiraCreds, jql: string, o: { pages?: numb
     const ids = found.ok && found.data ? found.data : null;
     const sprint = ids?.sprint;
     const points = pointsField(ids, o.board.points);
-    fields = [...CARD_FIELDS, ...(sprint ? [sprint] : []), ...(points ? [points] : []), "issuelinks", "subtasks", ...(searchComments ? ["comment"] : [])];
-    ask = { sprint, points };
+    // The kind, the parent and the flag are three more fields in the one search, never a request each.
+    const flag = ids?.flag;
+    fields = [...CARD_FIELDS, ...(sprint ? [sprint] : []), ...(points ? [points] : []), ...(flag ? [flag] : []), "issuetype", "parent", "issuelinks", "subtasks", ...(searchComments ? ["comment"] : [])];
+    ask = { sprint, points, flag };
   }
   const cx = base.then((c): TaskContext => (ask ? { ...c, fields: ask } : c));
   // The order a rank-ordered search arrives in is the board's order; the card carries it across pages.
@@ -1071,8 +1146,10 @@ export function setJiraWrites(on: boolean): void {
  * a word looked for in it.
  *
  * Ceiling: one move per call. Reaching a distant status through several moves
- * is not here, and neither is a form for the fields a screen may ask for: a
- * move that needs one is listed with `needs` and refused when asked for.
+ * is not here. A move whose screen asks for a field is listed with `needs` and
+ * `fields` (jiraMoveFields.ts reads them); it is made with the values the
+ * person typed, and refused with no request when a required one is empty or of
+ * a kind this cannot fill.
  */
 
 export const ISSUE_KEY = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
@@ -1096,6 +1173,8 @@ export function toMoves(raw: unknown): JiraMove[] {
     const needs = isObj(t.fields)
       ? Object.entries(t.fields).filter(([k, v]) => isObj(v) && v.required === true && FIELD_KEY.test(k)).map(([k]) => k)
       : [];
+    // The screen is carried only by a move that has to ask: the rest are made at once, as before.
+    const screen = needs.length ? screenOf(t.fields) : [];
     const color = CATEGORY_COLOR[str(cat.colorName)];
     moves.push({
       id,
@@ -1106,6 +1185,7 @@ export function toMoves(raw: unknown): JiraMove[] {
       toKind: catKey === "done" ? "done" : catKey === "new" || catKey === "indeterminate" ? "open" : "other",
       ...(color ? { color } : null),
       ...(needs.length ? { needs } : null),
+      ...(needs.length && screen.length ? { fields: screen } : null),
     });
   }
   // Two moves into one status (a quick path and a long one) must not read as one.
@@ -1140,15 +1220,15 @@ export const NOT_ACCEPTED = "Jira did not accept that move. The card may have mo
  *
  * In order, and each step may end it: the write switch, the inputs, a read of
  * `updated` (refused as a conflict when it is not the one the person saw), the
- * move's screen (refused with no write when it asks for a field), the POST,
- * and a read of the card. Three requests, plus one when the site's moves for
+ * move's screen (refused with no write when a required field is empty), the
+ * POST with what was typed, and a read of the card. Three requests, plus one when the site's moves for
  * this status are not remembered yet.
  *
  * The reads that bracket the write skip the in-flight merge: a read of this
  * card already in the air from before the write would be handed back as the
  * card "after" it.
  */
-export async function moveIssue(creds: JiraCreds, key: string, transitionId: string, updated: number): Promise<WriteOutcome> {
+export async function moveIssue(creds: JiraCreds, key: string, transitionId: string, updated: number, fields?: unknown): Promise<WriteOutcome> {
   if (!jiraWriteEnabled()) return { ok: false, error: WRITE_OFF };
   if (!ISSUE_KEY.test(key)) return { ok: false, error: "That is not a Jira card id" };
   if (!/^\d{1,10}$/.test(transitionId)) return { ok: false, error: "That is not one of this card's moves" };
@@ -1164,7 +1244,8 @@ export async function moveIssue(creds: JiraCreds, key: string, transitionId: str
   }
   const f = isObj(seen.data) && isObj(seen.data.fields) ? seen.data.fields : {};
   const now = epoch(f.updated);
-  if (now && now !== updated) return { ok: false, conflict: true, error: "Somebody changed this card while you had it open, reloaded" };
+  if (!now) return unreadable();
+  if (now !== updated) return stale();
 
   // Moves differ by project, issue type and status, so that is the memo's key.
   const status = isObj(f.status) ? f.status : {};
@@ -1190,13 +1271,17 @@ export async function moveIssue(creds: JiraCreds, key: string, transitionId: str
     move = moves.data.find((m) => m.id === transitionId);
     if (!move) return { ok: false, error: "That move is not available any more: reload the card" };
   }
-  if (move.needs?.length) {
+  // A required field with nothing in it, or one this cannot fill, ends it here: no write.
+  // A move whose screen could not be read as fields keeps the old refusal.
+  if (move.needs?.length && !move.fields?.length) {
     return { ok: false, error: `That move needs ${move.needs.join(", ")}, which cannot be filled in here yet` };
   }
+  const built = moveBody(transitionId, move.fields, fields, v);
+  if (!built.ok) return { ok: false, error: built.error };
 
   const post = await jiraCall<unknown>(creds, `/rest/api/${v}/issue/${encodeURIComponent(key)}/transitions`, {
     method: "POST",
-    body: { transition: { id: transitionId } },
+    body: built.body,
   });
   if (!post.ok) {
     if (post.status === 409) return { ok: false, conflict: true, error: "Somebody changed this card while you were moving it, reloaded" };
@@ -1233,15 +1318,24 @@ function prLinksIn(raw: unknown): { canon: string; globalId: string; link: JiraP
   return out;
 }
 
-/** The pull requests this card is linked to on the site: one request. A link with no global id counts like any other. */
-export async function remoteLinks(creds: JiraCreds, key: string): Promise<JiraResult<JiraPrLink[]>> {
+/** What the card's remote links hold: the pull requests (as ever) and every link as a row. */
+export interface JiraRemoteLinks { links: JiraPrLink[]; web: CardWebLink[] }
+
+/** The card's remote links: one request, whether the caller wants the pull requests, every address, or both. A link with no global id counts like any other. */
+export async function remoteLinksAll(creds: JiraCreds, key: string): Promise<JiraResult<JiraRemoteLinks>> {
   if (!ISSUE_KEY.test(key)) return { ok: false, error: "That is not a Jira card id" };
   const r = await jiraCall<unknown>(creds, remoteLinksPath(creds, key));
   if (!r.ok) return { ...r, data: undefined };
   const seen = new Set<string>();
-  return { ok: true, data: prLinksIn(r.data).map((x) => x.link).filter((l) => !seen.has(l.url) && !!seen.add(l.url)) };
+  return { ok: true, data: { links: prLinksIn(r.data).map((x) => x.link).filter((l) => !seen.has(l.url) && !!seen.add(l.url)), web: webLinksOf(r.data) } };
+}
+/** The pull requests this card is linked to on the site: one request. */
+export async function remoteLinks(creds: JiraCreds, key: string): Promise<JiraResult<JiraPrLink[]>> {
+  const r = await remoteLinksAll(creds, key);
+  return r.ok && r.data ? { ok: true, data: r.data.links } : { ...r, data: undefined };
 }
 export const remoteLinksStored = (key: string): Promise<JiraResult<JiraPrLink[]>> => withStored((c) => remoteLinks(c, key));
+export const remoteLinksAllStored = (key: string): Promise<JiraResult<JiraRemoteLinks>> => withStored((c) => remoteLinksAll(c, key));
 
 export type LinkOutcome = { ok: true; linked: boolean; url: string } | { ok: false; error: string; unauthorised?: boolean };
 
@@ -1296,9 +1390,9 @@ export async function linkPullRequestStored(key: string, address: string, title 
 /** The stored connection's moves, or the sentence that says there is none. */
 export const movesStored = (key: string): Promise<JiraResult<JiraMoves>> => withStored((c) => movesOf(c, key));
 
-export async function moveStored(key: string, transitionId: string, updated: number): Promise<WriteOutcome> {
+export async function moveStored(key: string, transitionId: string, updated: number, fields?: unknown): Promise<WriteOutcome> {
   const c = storedCreds();
-  return c ? moveIssue(c, key, transitionId, updated) : { ok: false, error: NOT_CONNECTED };
+  return c ? moveIssue(c, key, transitionId, updated, fields) : { ok: false, error: NOT_CONNECTED };
 }
 
 // ---------------------------------------------------------------------------
@@ -1379,6 +1473,8 @@ export async function readBefore(creds: JiraCreds, key: string, fields: string):
   return { f: isObj(seen.data) && isObj(seen.data.fields) ? seen.data.fields : {}, id: isObj(seen.data) ? idText(seen.data.id) : "" };
 }
 
+/** A read whose `updated` cannot be parsed proves nothing about the card: no write goes behind it. */
+export const unreadable = (): WriteOutcome => ({ ok: false, error: "Nothing was changed: could not tell whether the card moved since you opened it. Reload it and try again" });
 export const stale = (): WriteOutcome => ({ ok: false, conflict: true, error: "Somebody changed this card while you had it open, reloaded" });
 
 /** Why Jira refused an assignee write, in our words. */
@@ -1405,7 +1501,8 @@ export async function setAssignee(creds: JiraCreds, key: string, to: string | nu
   const before = await readBefore(creds, key, "updated,status,assignee");
   if ("stop" in before) return before.stop;
   const now = epoch(before.f.updated);
-  if (now && now !== updated) return stale();
+  if (!now) return unreadable();
+  if (now !== updated) return stale();
 
   const put = await jiraCall<unknown>(creds, `/rest/api/${apiOf(creds)}/issue/${encodeURIComponent(key)}/assignee`, {
     method: "PUT",
@@ -1541,7 +1638,7 @@ export interface HandoffChoice {
  * assignee write to close it.
  */
 /** A hand-off's answer. `moved`: the card moved but could not be read back, as much of it as the watch needs. */
-export type HandoffOutcome = WriteOutcome & { moved?: ProviderTask };
+export type HandoffOutcome = WriteOutcome & { moved?: ProviderTask; /** What each block of a step did; a step run says it, the older hand-off does not. */ blocks?: JiraBlockOutcome[] };
 
 export async function handOff(creds: JiraCreds, key: string, updated: number, choice: HandoffChoice = {}): Promise<HandoffOutcome> {
   if (!jiraWriteEnabled()) return { ok: false, error: WRITE_OFF };
@@ -1556,7 +1653,8 @@ export async function handOff(creds: JiraCreds, key: string, updated: number, ch
   if ("stop" in before) return before.stop;
   const f = before.f;
   const now = epoch(f.updated);
-  if (now && now !== updated) return stale();
+  if (!now) return unreadable();
+  if (now !== updated) return stale();
   const status = isObj(f.status) ? f.status : {};
   const statusName = str(status.name);
   const project = isObj(f.project) ? str(f.project.key) : K.slice(0, K.lastIndexOf("-"));

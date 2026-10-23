@@ -50,6 +50,7 @@ export const OFFER_LABELS: Labels = {
   "pr.comment.stage": (a) => `Pull request #${a.number} > Comment`,
   "pr.review.stage": (a) => `Pull request #${a.number} > Review`,
   "card.move.stage": (a) => `Pull request #${a.number} > Move card`,
+  "finder.op.stage": (a) => `the file finder > ${a.op.replace("-", " ")} ${base(a.path)}`,
   "pr.unstick": (a) => `Pull request #${a.number} > Unstick`,
 };
 

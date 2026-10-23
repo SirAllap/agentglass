@@ -155,7 +155,7 @@ describe("the screens, as source", () => {
     expect(s).toContain("<TrackerStatusPick tracker={TRACKERS.jira} task={t} query={query} onSaid={setSaid} onTask={onTask} />");
     expect(s).toContain("<TrackerPeoplePick tracker={TRACKERS.jira}");
     expect(s).toContain("<TrackerHandOffButton tracker={TRACKERS.jira}");
-    expect(s).toContain("<JiraFacts t={t} writable={writable} onTask={onTask} />");
+    expect(s).toContain("<JiraHead t={t} writable={writable} onTask={onTask}");
     // And the board folds the written card over its own row, so the list and the pane are one datum.
     expect(code("components/TasksPanel.tsx")).toContain("onTask={(task) => setOver((m) => ({ ...m, [task.id]: foldCard(byId.get(task.id), task) }))}");
   });

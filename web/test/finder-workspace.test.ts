@@ -46,13 +46,12 @@ describe("opening a file no longer leaves the finder", () => {
 });
 
 describe("a glob is a filter, not a search", () => {
-  test("no server search runs for one, on either tab that has a folder", () => {
+  test("no server search runs for one: the folder is already listed", () => {
     const c = code(palette);
-    expect(c).toContain("q.trim().length > 0 && !globAsked");
-    expect(c).toContain('q.trim().length >= 2 && !globAsked');
+    expect(c).toContain('tab === "machine" && !byText && q.trim().length >= 2 && !globAsked');
   });
   test("a pattern keeps what it matches instead of scoring it as a fuzzy name", () => {
-    expect(code(palette)).toContain("hasGlob(needle) && tab !== \"contents\"");
+    expect(code(palette)).toContain("hasGlob(needle) && !byText");
     expect(code(palette)).toContain("matchGlob(needle, r.rel)");
   });
 });

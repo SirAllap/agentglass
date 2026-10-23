@@ -84,6 +84,14 @@ const lines = (line: number, startLine?: number | null) =>
   startLine && startLine !== line ? `Lines ${startLine}–${line}` : `Line ${line}`;
 
 /** The three verdicts GitHub takes, in the panel's own spelling. */
+/** "2026-10-10 14:32" in the reader's own clock, beside the short age. */
+const stampOf = (iso: string): string => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+
 export type RailVerdict = "approve" | "request_changes" | "comment";
 
 export function FileRail({
@@ -337,7 +345,7 @@ export function FileRail({
                           {m.kind === "review" ? "review" : "comment"}
                           {/* Whether the argument predates the last push is most of
                               what decides if it still applies to the code below. */}
-                          {railAge(m.createdAt) && ` · ${railAge(m.createdAt)}`}
+                          {railAge(m.createdAt) && ` · ${railAge(m.createdAt)} · ${stampOf(m.createdAt)}`}
                         </span>
                         {goTo && (
                           /* Per ENTRY, which is the whole of what was asked:

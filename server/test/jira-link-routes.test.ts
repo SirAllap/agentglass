@@ -88,7 +88,7 @@ const step = story();
 
 describe("the link routes", () => {
   step("not connected is a sentence and nothing is sent", async () => {
-    expect((await call("GET", "/jira/links?key=ORBIT-1042")).body).toEqual({ ok: false, links: [], error: "Jira is not connected" });
+    expect((await call("GET", "/jira/links?key=ORBIT-1042")).body).toEqual({ ok: false, links: [], web: [], error: "Jira is not connected" });
     expect((await call("POST", "/jira/link", { key: "ORBIT-1042", url: PR })).body).toEqual({ ok: false, error: "Jira is not connected" });
     expect(fake.requests.length).toBe(0);
   });
@@ -100,6 +100,8 @@ describe("the link routes", () => {
     const r = await call("GET", "/jira/links?key=ORBIT-1042");
     expect(r.status).toBe(200);
     expect(r.body.links.map((l: { number: number }) => l.number)).toEqual([2100]);
+    // The same one request also names the address that is no pull request.
+    expect(r.body.web.map((w: { host: string; pr?: boolean }) => [w.host, !!w.pr])).toEqual([["github.com", true], ["wiki.acme.example", false]]);
     expect(fake.requests.length).toBe(1);
     expect((await call("GET", "/jira/links?key=nope")).body).toMatchObject({ ok: false, error: "That is not a Jira card id" });
   });

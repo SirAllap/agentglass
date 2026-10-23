@@ -383,6 +383,21 @@ describe("resolvePrograms", () => {
     expect(r.dirs).toEqual([binDir]);
   });
 
+  // A version manager's `latest` is a symlink to the version dir, and PATH
+  // names it. bwrap cannot mount onto a symlink destination ("Can't mount on
+  // symlink destination …", exit 1 in the first milliseconds), so the mount
+  // is the directory the link points at.
+  test("a program reached through a symlinked directory is mounted at the real directory", () => {
+    const home = scratch("agx-sbx-home-");
+    const versions = join(home, ".local", "share", "orbit-mgr", "installs", "orbit-cli");
+    mkdirSync(join(versions, "1.0.0"), { recursive: true });
+    symlinkSync("./1.0.0", join(versions, "latest"));
+    writeFileSync(join(versions, "1.0.0", "orbit-cli"), "#!/bin/sh\necho hi\n");
+    chmodSync(join(versions, "1.0.0", "orbit-cli"), 0o755);
+    const r = resolvePrograms(["orbit-cli"], `${join(versions, "latest")}:${process.env.PATH ?? ""}`, home);
+    expect(r.dirs).toEqual([join(versions, "1.0.0")]);
+  });
+
   test("an unknown command is silently skipped, not refused", () => {
     const home = scratch("agx-sbx-home-");
     const r = resolvePrograms(["not-a-real-command-xyz"], process.env.PATH ?? "", home);

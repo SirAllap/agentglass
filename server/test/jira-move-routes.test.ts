@@ -141,8 +141,26 @@ describe("the move routes", () => {
   step("a move that needs a field is a 400 and the card stays", async () => {
     const r = await call("POST", "/jira/transition", { key: "ORBIT-1044", transitionId: "41", updated: updated("ORBIT-1044") });
     expect(r.status).toBe(400);
-    expect(r.body.error).toContain("needs resolution");
+    expect(r.body.error).toContain("needs Resolution");
     expect(fake.state.issues["ORBIT-1044"]!.statusId).toBe("4");
+  });
+
+  step("a move whose screen asks for a field: the form's values ride in `fields`, and an empty one is a 400 with no write", async () => {
+    fake.state.workflow.transitions["4"]!.push({
+      id: "61", name: "Close", toStatusId: "5", requiredFields: [], acceptsAssignee: false,
+      screen: [{ key: "resolution", name: "Resolution", required: true, schema: { type: "resolution", system: "resolution" }, allowedValues: [{ id: "10000", name: "Done" }] }],
+    });
+    fake.requests.length = 0;
+    const empty = await call("POST", "/jira/transition", { key: "ORBIT-1044", transitionId: "61", updated: updated("ORBIT-1044"), fields: { resolution: "" } });
+    expect(empty.status).toBe(400);
+    expect(empty.body.error).toBe("That move needs Resolution");
+    expect(fake.requests.filter((r) => r.method !== "GET").length).toBe(0);
+    const r = await call("POST", "/jira/transition", { key: "ORBIT-1044", transitionId: "61", updated: updated("ORBIT-1044"), fields: { resolution: "10000" } });
+    expect(r.status).toBe(200);
+    expect(fake.state.issues["ORBIT-1044"]!.resolution).toBe("Done");
+    // The stand-in shares its workflow with other files in this process: what this adds, it takes out.
+    const list = fake.state.workflow.transitions["4"]!;
+    list.splice(list.findIndex((t) => t.id === "61"), 1);
   });
 
   step("the token, in neither form, is in any answer or in the server's output", () => {

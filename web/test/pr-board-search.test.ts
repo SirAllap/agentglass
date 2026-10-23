@@ -19,16 +19,20 @@ import { describe, expect, it } from "bun:test";
 const src = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
 const chrome = await Bun.file(new URL("../src/components/workspace/Chrome.tsx", import.meta.url)).text();
 
-describe("a search falls through to the table", () => {
+describe("a search is a section of the board", () => {
   it("derives what is shown from the query, not only from the stored setting", () => {
     // The inbox is a third surface and wins over both, so it is in the gate
-    // too — but the rule this pins is unchanged: a search is a table.
-    expect(src).toContain("const boardShown = boardOn && !searching && !inboxOn && !metricsOn;");
+    // too. The lanes give way to the result rows, inside the same board.
+    expect(src).toContain("const boardShown = boardOn && !searching && !inboxOn && !metricsOn && !closedOn;");
     expect(src).toContain("const searching = query.trim().length > 0;");
   });
 
   it("gates the board on what is shown", () => {
-    expect(src).toContain("boardShown && repo && !listState.needsAuth ? (");
+    expect(src).toContain("(boardShown || resultsShown || personLogin) && repo && !listState.needsAuth ? (");
+    expect(src).toContain("const resultsShown = !boardShown && !inboxOn && !metricsOn;");
+    // The table is gone: nothing draws a row of its own any more.
+    expect(src).not.toContain("<PrRow");
+    expect(src).not.toContain("<PrTableHead");
     // The old gate is what shipped the bug. If it comes back, so does the bug.
     expect(src).not.toContain("{boardOn && repo && !listState.needsAuth ? (");
   });
@@ -45,29 +49,29 @@ describe("a search falls through to the table", () => {
      * component; pinning the three literal style lines only pinned the old
      * markup.
      */
-    expect(src).toContain("<Pill on={boardShown}");
+    expect(src).toContain("on={!inboxOn && !metricsOn && !closedOn}");
     expect(src).not.toContain("<Pill on={boardOn}");
   });
 
-  it("gives the pill a way back, because clearing the box is the only one", () => {
+  it("gives a view a way back from a search, because the pill clears the box", () => {
     // By shape: the same handler now also has to leave the inbox, and the
     // order it does that in is not what this is about.
     /* Bounded by the NEXT pill, not by the first `/>`: the first one closes the
        icon nested inside this pill, so that slice ended before the handler and
        the assertion below passed over nothing. Third time this exact cut has
        been got wrong in this repository. */
-    const from = src.indexOf("<Pill on={boardShown}");
-    const board = src.slice(from, src.indexOf("<Pill on={inboxOn}", from));
-    expect(board).toContain('if (searching) setQuery("")');
-    expect(board).toContain("setBoard(true)");
+    const from = src.indexOf('label="Open"');
+    const views = src.slice(from, src.indexOf("/>", src.indexOf("onClick", from)));
+    expect(from).toBeGreaterThan(0);
+    expect(views).toContain('setQuery("")');
   });
 
-  it("does not light a scope pill while the board — or the inbox — is showing", () => {
+  it("lights Open only while neither the inbox, CI nor Closed is showing", () => {
     /* The scopes are the table's; with either other surface up none of them is
        active, and with a search up one of them is. `inboxOn` joined this the day
        the inbox stopped being a toggle: it hides the table too, so a scope lit
        under it was the same lie. */
-    expect(src).toContain("const on = !boardShown && !inboxOn && !metricsOn && activeView?.id === v.id;");
+    expect(src).toContain("on={!inboxOn && !metricsOn && !closedOn}");
   });
 });
 
@@ -396,9 +400,6 @@ describe("the strip, at the mockup's wording", () => {
    * gone; what is left to pin here is that the surfaces which DID keep their
    * coloured chips are still untouched.
    */
-  it("still draws labels as coloured chips everywhere that isn't the strip", () => {
-    expect(src).toContain("{shownLabels.map((l) => <Chip key={l.name}");
-  });
 });
 
 describe("a reply looks like a reply", () => {
@@ -456,14 +457,19 @@ describe("the open pull request survives what happens to the list behind it", ()
 
   it("does not change the filter under an open pull request either", () => {
     // Even with the selection surviving, a pane that rearranges itself while
-    // you read is its own bug.
-    expect(src).toContain("&& !fellBack.current && selectedRef.current == null) {");
+    // you read is its own bug. The "nothing waiting on you, show your own"
+    // fallback that could do it is gone: the list is the repository's, and the
+    // views are filters over the board.
+    expect(src).not.toContain("fellBack");
+    expect(src).not.toContain('setFilter("mine")');
   });
 
   it("declares that ref above every callback that reads it", () => {
     // A `const` referenced before its line is a temporal dead zone waiting for
     // the day somebody calls one of those during render.
-    expect(src.indexOf("const selectedRef = useRef")).toBeLessThan(src.indexOf("selectedRef.current == null"));
+    const decl = src.indexOf("const selectedRef = useRef");
+    expect(decl).toBeGreaterThan(0);
+    expect(decl).toBeLessThan(src.indexOf("selectedRef.current !== n"));
   });
 });
 
@@ -501,7 +507,7 @@ describe("waiting for the board", () => {
      */
     expect(src).toContain("const boardWhole = !boardLoading");
     expect(src).toContain("p.checksLoaded === false");
-    expect(src).toContain("settling={boardSettling}");
+    expect(src).toContain("settling={personLogin ? false : boardSettling}");
   });
 
   it("never holds it on a refresh, and never for ever", () => {

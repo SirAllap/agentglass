@@ -12,22 +12,35 @@
  * comments). A comment is one write and the card read back, and that answer
  * replaces the thread, so posting costs no second read here.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../lib/api.ts";
-import { avatarSrc } from "../../lib/avatarSrc.ts";
-import { fmtAgo } from "../../lib/format.ts";
-import { chipInk } from "../../lib/contrast.ts";
-import { Markdown } from "../../lib/markdown.tsx";
 import { putCard } from "../../lib/prCardStore.ts";
 import { TRACKERS } from "../../lib/trackerApi.ts";
 import { OfferedPeople } from "../../lib/trackerComment.ts";
 import type { Mentionable } from "../../lib/mentions.ts";
-import type { ProviderTask, TaskDetail } from "../../../../shared/providers.ts";
-import { openCard } from "../../lib/openCard.ts";
+import type { CardDev, ProviderTask, TaskDetail } from "../../../../shared/providers.ts";
 import { Composer, COMPOSER_MIN } from "../tasks/Composer.tsx";
-import { LINE } from "../workspace/Chrome.tsx";
+import { EDGE, LINE } from "../workspace/Chrome.tsx";
+import { readJiraLinks, setJiraWeb, type JiraLinks } from "../../lib/jiraLinks.ts";
+import { JiraProps } from "./JiraFacts.tsx";
+import { EditNote } from "./EditNote.tsx";
+import { useJiraEdit, type JiraEditUi } from "./useJiraEdit.ts";
+import type { JiraFollowUi } from "./useJiraFollow.ts";
+import { nowOf, stepFor } from "../../lib/jiraEdit.ts";
+import { keepThreads } from "../../lib/jiraThreads.ts";
+import { JiraActivity, type CommentAct } from "./JiraActivity.tsx";
+import { useJiraWork } from "./useJiraWork.ts";
+import { useJiraFollow } from "./useJiraFollow.ts";
+import { JiraDescription } from "./JiraDescription.tsx";
+import { LinkedBlock, SubtasksBlock, WebLinksBlock, type JoinAct } from "./JiraJoins.tsx";
+import { madeLink, webAddress } from "../../lib/jiraJoins.ts";
+import { AttachmentsBlock, type FileAct } from "./JiraFiles.tsx";
+import { LinkedSection, Section, SubtasksSection, WebLinksSection } from "./JiraSections.tsx";
 import { Spinner } from "../Spinner.tsx";
 import { JiraCardPrs } from "./JiraCardPrs.tsx";
+import { JiraDevLists } from "./JiraDev.tsx";
+import { countsLine, readJiraDev } from "../../lib/jiraDev.ts";
+import { mentionsOfCard } from "../../lib/jiraLinks.ts";
 
 /** The box may grow to this share of the pane, then scrolls inside; the ClickUp card's share. */
 const COMPOSER_SHARE = 0.3;
@@ -36,42 +49,10 @@ const PEOPLE_WAIT_MS = 250;
 
 type Row = Mentionable & { initials?: string; avatar?: string };
 
-function Author({ who, initials, avatar }: { who: string; initials?: string; avatar?: string }) {
-  const [broken, setBroken] = useState(false);
-  const size = { width: 18, height: 18, borderRadius: 999 } as const;
-  if (avatar && !broken) {
-    return <img src={avatarSrc(avatar)} alt="" title={who} loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken(true)}
-      className="shrink-0 object-cover" style={size} />;
-  }
-  return <span title={who} className="shrink-0 inline-flex items-center justify-center text-[9px] font-medium"
-    style={{ ...size, background: "var(--bg4)", color: chipInk(null) }}>{initials || "?"}</span>;
-}
-
-type Tab = "card" | "github" | "subtasks";
-
-/** Subtasks as the detail read gave them: the key, the title, the status as the site spells it. A row opens the card in the app. */
-export function SubtaskRows({ rows }: { rows: ProviderTask[] }) {
-  return (
-    <div className="flex flex-col" aria-label="Subtasks">
-      {rows.map((s) => {
-        const k = s.customId ?? s.id;
-        return (
-          <button key={s.id} onClick={() => openCard(k, k, "jira")} title={`Open ${k}`}
-            className="agx-btn flex items-center gap-2 min-w-0 text-left text-[11px] py-1.5" style={{ borderBottom: LINE }}>
-            <span className="tabular-nums shrink-0" style={{ color: "var(--text3)" }}>{k}</span>
-            <span className="flex-1 min-w-0 truncate" style={{ color: s.statusKind === "done" ? "var(--text3)" : "var(--text)" }}>{s.title}</span>
-            <span className="shrink-0 text-[10px]" style={{ color: "var(--text3)" }}>{s.status}</span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 export function JiraCard({ t, header, writes, onTask }: {
   t: ProviderTask;
-  /** The card's facts, drawn above the thread and kept there. */
-  header: React.ReactNode;
+  /** What stays above the tabs, given how to re-read this card. */
+  header: (r: { onRefresh: () => void; refreshing: boolean; ed: JiraEditUi; follow: JiraFollowUi }) => React.ReactNode;
   /** Whether writing to Jira is switched on; off draws a line instead of the box. */
   writes: boolean;
   /** The card as a fresher read or a write left it, for the list beside this. */
@@ -85,6 +66,7 @@ export function JiraCard({ t, header, writes, onTask }: {
   const onTaskRef = useRef(onTask);
   onTaskRef.current = onTask;
 
+  const [refreshing, setRefreshing] = useState(false);
   const read = useCallback(async () => {
     const mine = ++tok.current;
     const r = await api.jiraDetail(key).catch(() => ({ ok: false as const, error: "Could not reach agentglass" } as Awaited<ReturnType<typeof api.jiraDetail>>));
@@ -94,18 +76,50 @@ export function JiraCard({ t, header, writes, onTask }: {
       onTaskRef.current(r.detail.task);
     } else setErr(r.error || `${key} could not be read`);
   }, [key]);
+  /* The card's own refresh: the detail read again, the same one a pick makes, no timer and no second request. */
+  const refresh = useCallback(() => {
+    setRefreshing(true);
+    void read().finally(() => setRefreshing(false));
+  }, [read]);
 
   useEffect(() => { setDetail(null); setMore(0); setErr(""); void read(); }, [read]);
 
-  /* Which half of the card is on screen. GitHub is there for every card (the
-     pull requests are read when it is opened, never before); subtasks only when
-     the card has some. A different card starts on the card itself. */
-  const [tab, setTab] = useState<Tab>("card");
-  useEffect(() => { setTab("card"); }, [key]);
-  const subtasks = detail?.subtasks ?? [];
-  const view: Tab = tab === "subtasks" && !subtasks.length ? "card" : tab;
+  /* A change to the card's Details: one request, whose answer is the card with its Details, so nothing is read again. */
+  const editing = useJiraEdit({
+    cardKey: key, stamp: (detail?.task ?? t).updated ?? 0,
+    onDone: (r) => {
+      setDetail((d) => (d ? { ...d, task: r.task, ...(r.facts ? { facts: r.facts } : {}), ...(r.edit ? { edit: r.edit } : {}), ...(r.description !== undefined ? { description: r.description } : {}) } : d));
+      onTaskRef.current(r.task); putCard(key, r.task);
+    },
+    onStale: refresh,
+  });
+  const ed: JiraEditUi = {
+    edit: writes ? detail?.edit : undefined, busy: editing.busy, run: editing.run,
+    now: nowOf(detail?.task ?? t, detail?.facts, detail?.edit, detail?.description),
+  };
 
-  /* The composer, pinned under the thread. */
+  /* The card's remote links: one request, shared with the Development section (lib/jiraLinks.ts), so opening a card costs two in all. */
+  const [links, setLinks] = useState<JiraLinks | null>(null);
+  useEffect(() => {
+    let on = true;
+    setLinks(null);
+    void readJiraLinks(key).then((r) => { if (on) setLinks(r); });
+    return () => { on = false; };
+  }, [key]);
+  /* What the site's development tool holds, one request when the card has been read (its numeric id is in the read); null is nothing to draw. */
+  const [dev, setDev] = useState<CardDev | null>(null);
+  const issueId = detail?.task.id ?? "";
+  useEffect(() => {
+    let on = true;
+    setDev(null);
+    if (/^\d+$/.test(issueId)) void readJiraDev(issueId).then((d) => { if (on) setDev(d); });
+    return () => { on = false; };
+  }, [issueId]);
+  // The pull requests the card's own words name, from the read already made.
+  const mentions = useMemo(() => (detail ? mentionsOfCard(detail) : []), [detail]);
+
+  /* The composer, pinned under the thread. `replyTo` is the comment its next send answers. */
+  const [replyTo, setReplyTo] = useState<{ id: string; who: string } | null>(null);
   const [say, setSay] = useState("");
   const [saying, setSaying] = useState(false);
   const [sayErr, setSayErr] = useState("");
@@ -117,7 +131,7 @@ export function JiraCard({ t, header, writes, onTask }: {
   const keyRef = useRef(key);
   keyRef.current = key;
   useEffect(() => {
-    setSay(""); setSayErr(""); setSayWarn(""); setPeople(null);
+    setSay(""); setSayErr(""); setSayWarn(""); setPeople(null); setReplyTo(null);
     offered.current = new OfferedPeople();
     return () => { if (asking.current) clearTimeout(asking.current); };
   }, [key]);
@@ -163,15 +177,125 @@ export function JiraCard({ t, header, writes, onTask }: {
     if (list) list.scrollTop = list.scrollHeight;
   }, [count]);
 
+  /* The card's stamp moved with a change to a comment: read it again, and keep the comments already paged in. */
+  const restamp = async () => {
+    const r = await api.jiraDetail(key).catch(() => null);
+    if (r?.ok && r.detail && keyRef.current === key) { setDetail((d) => (d ? { ...d, task: r.detail!.task } : d)); onTaskRef.current(r.detail.task); }
+  };
+  const act: CommentAct | undefined = writes && detail?.edit ? {
+    reply: detail.edit.reply,
+    replyingTo: replyTo?.id ?? null,
+    onReply: (c) => setReplyTo(c ? { id: c.id, who: c.who } : null),
+    edit: async (c, text) => {
+      const r = await api.jiraCommentEdit(key, c.id, text, c.mentions ?? []).catch(() => null);
+      if (!r) return "Could not reach agentglass";
+      if (!r.ok || !r.comment) return r.error || "Jira refused that change";
+      const next = r.comment;
+      setDetail((d) => (d ? { ...d, comments: d.comments.map((x) => (x.id === c.id ? { ...x, ...next } : x)) } : d));
+      void restamp();
+      return r.partial ?? null;
+    },
+    remove: async (c) => {
+      const r = await api.jiraCommentDelete(key, c.id).catch(() => null);
+      if (!r) return "Could not reach agentglass";
+      if (!r.ok) return r.error || "Jira refused the delete";
+      setDetail((d) => (d ? { ...d, comments: d.comments.filter((x) => x.id !== c.id), task: { ...d.task, comments: Math.max(0, (d.task.comments ?? 1) - 1) } } : d));
+      setReplyTo((cur) => (cur?.id === c.id ? null : cur));
+      void restamp();
+      return null;
+    },
+  } : undefined;
+
+  /* What the card is joined to: each change is one write whose answer is the card again (or its list of addresses), so nothing is read twice.
+     The comments stay as they were: a write here did not touch them, and the answer left their threads out. */
+  const take = (sent: TaskDetail) => {
+    setDetail((d) => (d ? { ...sent, comments: d.comments } : sent));
+    onTaskRef.current(sent.task); putCard(key, sent.task);
+  };
+  /* Time logged on the card: each write is one request whose answer is the card again, so nothing is read twice. The comments stay as
+     they were, as for a change to what the card is joined to. Offered only while writing to Jira is on and the site tracks time here. */
+  const work = useJiraWork({
+    cardKey: key, stamp: (detail?.task ?? t).updated ?? 0,
+    onDone: (sent) => take(sent),
+    onStale: refresh,
+  });
+
+  /* Watching and voting: the account's own marks, one request each, with the counts the card was read with moved by the press. */
+  const follow = useJiraFollow({
+    cardKey: key, follow: detail?.follow,
+    onFollow: (f) => setDetail((d) => (d ? { ...d, follow: f } : d)),
+  });
+
+  const joinAct: JoinAct = {
+    subtask: async (title) => {
+      const r = await api.jiraSubtask(key, title).catch(() => null);
+      if (!r) return "Could not reach agentglass";
+      if (!r.ok) return r.error || "Jira refused that sub-task";
+      if (r.detail) take(r.detail); else void read();
+      return null;
+    },
+    relate: async (other, way) => {
+      const r = await api.jiraRelate(key, other, way.typeId, way.outward).catch(() => null);
+      if (!r) return { error: "Could not reach agentglass" };
+      if (!r.ok) return { error: r.error || "Jira refused that link" };
+      if (r.already) return { error: `${key} ${way.phrase} ${other} is already there` };
+      if (!r.detail) { void read(); return {}; }
+      take(r.detail);
+      return { made: madeLink(r.detail.linked, other, way) };
+    },
+    unrelate: async (l) => {
+      const r = await api.jiraUnrelate(key, l.id).catch(() => null);
+      if (!r) return "Could not reach agentglass";
+      if (!r.ok) return r.error || "Jira refused that change";
+      if (r.detail) take(r.detail); else void read();
+      return null;
+    },
+    webAdd: async (url, title) => {
+      const r = await api.jiraWebLink(key, url, title).catch(() => null);
+      if (!r) return { error: "Could not reach agentglass" };
+      if (!r.ok || !r.web) return { error: r.error || "Jira refused that address" };
+      setLinks(setJiraWeb(key, r.web));
+      if (r.already) return { error: "That address is already on the card" };
+      const at = webAddress(url);
+      return { made: r.web.find((w) => w.url === at) };
+    },
+    webRemove: async (w) => {
+      const r = await api.jiraWebUnlink(key, w.id).catch(() => null);
+      if (!r) return "Could not reach agentglass";
+      if (!r.ok || !r.web) return r.error || "Jira refused that change";
+      setLinks(setJiraWeb(key, r.web));
+      return null;
+    },
+    onRowTask: (t) => setDetail((d) => (d ? { ...d, subtasks: d.subtasks.map((x) => (x.id === t.id ? t : x)) } : d)),
+  };
+
+  /* A file is one write whose answer is the card again, so nothing is read twice. */
+  const fileAct: FileAct = {
+    add: async (f) => {
+      const r = await api.jiraAttach(key, f).catch(() => null);
+      if (!r) return "Could not reach agentglass";
+      if (!r.ok) return r.error || "Jira refused that file";
+      if (r.detail) take(r.detail); else void read();
+      return null;
+    },
+    remove: async (a) => {
+      const r = await api.jiraUnattach(key, a.id).catch(() => null);
+      if (!r) return "Could not reach agentglass";
+      if (!r.ok) return r.error || "Jira refused that change";
+      if (r.detail) take(r.detail); else void read();
+      return null;
+    },
+  };
+
   const send = () => {
     if (!say.trim() || saying) return;
     setSaying(true); setSayErr(""); setSayWarn("");
-    void TRACKERS.jira.comment(detail?.task ?? t, say, offered.current.named(say)).then((r) => {
-      if (!r.ok) { setSayErr(r.error || "Jira refused the comment"); return; } // the draft is kept
-      setSay("");
+    void TRACKERS.jira.comment(detail?.task ?? t, say, offered.current.named(say), replyTo?.id).then((r) => {
+      if (!r.ok) { setSayErr(r.error || "Jira refused the comment"); return; } // the draft is kept, and so is whom it answers
+      setSay(""); setReplyTo(null);
       sent.current = true;
       if (r.task) { onTaskRef.current(r.task); putCard(key, r.task); }
-      if (r.detail) { setDetail(r.detail); setMore(r.more ?? 0); }
+      if (r.detail) { const sent = r.detail; setDetail((d) => ({ ...sent, comments: keepThreads(d?.comments ?? [], sent.comments, replyTo?.id) })); setMore(r.more ?? 0); }
       else void read();
       if (r.partial) setSayWarn(r.partial);
     }).finally(() => setSaying(false));
@@ -179,70 +303,44 @@ export function JiraCard({ t, header, writes, onTask }: {
 
   return (
     <div ref={paneRef} className="flex flex-col flex-1 min-w-0 min-h-0">
-      <div className="shrink-0" style={{ borderBottom: LINE }}>{header}</div>
-      <div className="shrink-0">
-        <div className="flex items-center gap-1.5 px-5" style={{ borderBottom: LINE }}>
-          {([
-            ["card", "Card"],
-            ["github", "GitHub"],
-            ...(subtasks.length ? [["subtasks", `Subtasks ${subtasks.length}`] as const] : []),
-          ] as const).map(([id, label]) => (
-            <button key={id} onClick={() => setTab(id)} aria-current={view === id ? "page" : undefined}
-              className="agx-btn text-[10px] uppercase tracking-[0.14em] px-2.5 py-1.5 -mb-px rounded-t-md"
-              style={{
-                color: view === id ? "var(--text)" : "var(--text3)",
-                background: view === id ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent",
-                borderBottom: `2px solid ${view === id ? "var(--primary)" : "transparent"}`,
-              }}>
-              {label}
-            </button>
-          ))}
-        </div>
+      <div className="shrink-0" style={{ background: "var(--bg)" }}>
+        {header({ onRefresh: refresh, refreshing, ed, follow })}
+        {/* No height is held for what a change says: an empty reserve was a 34 px blank band under every title. The note takes its line only while there is one, and the header sits above the scroll, so no control moves. */}
+        <EditNote note={editing.note} busy={!!editing.busy} onUndo={editing.undo} onClose={editing.clear} />
       </div>
-
-      <div ref={listRef} className="agx-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-5 py-3">
-        {view === "github" && <JiraCardPrs query={key} writable={writes} quiet={!writes} />}
-        {view === "subtasks" && <SubtaskRows rows={subtasks} />}
-        {view === "card" && err && <div className="text-[11px] mb-3" role="alert" style={{ color: "var(--error-ink)" }}>{err}</div>}
-        {view === "card" && !detail && !err && <Spinner label="Reading the card…" className="" />}
-        {view === "card" && detail && (
+      <div ref={listRef} className="agx-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 py-3">
+        {err && <div className="text-[11px] mb-3" role="alert" style={{ color: "var(--error-ink)" }}>{err}</div>}
+        {!detail && !err && <Spinner label="Reading the card…" className="" />}
+        <JiraProps t={detail?.task ?? t} writable={writes} onTask={onTask} facts={detail?.facts} ed={ed} />
+        {detail && (
           <>
-            <div className="text-[10px] uppercase tracking-wide mb-1.5" style={{ color: "var(--text3)" }}>Description</div>
-            <div className="agx-cu-body mb-5 min-w-0 break-words">
-              {detail.description.trim()
-                ? <Markdown text={detail.description} />
-                : <span style={{ color: "var(--text4)" }}>No description.</span>}
-            </div>
-            <div className="text-[10px] uppercase tracking-wide mb-2" style={{ color: "var(--text3)" }}>
-              Comments{count ? ` · ${count}` : ""}
-            </div>
-            {more > 0 && (
-              <div className="text-[10.5px] mb-2" style={{ color: "var(--text3)" }}>
-                {more} earlier {more === 1 ? "comment is" : "comments are"} only on Jira.
-              </div>
-            )}
-            {!count && <div className="text-[11px]" style={{ color: "var(--text4)" }}>No comments yet.</div>}
-            {detail.comments.map((c) => (
-              <div key={c.id} className="mb-3.5 flex gap-2.5 min-w-0">
-                <Author who={c.who} initials={c.initials} avatar={c.avatar} />
-                <div className="min-w-0 flex-1">
-                  <div className="text-[10.5px] mb-0.5">
-                    <span className="font-semibold" style={{ color: "var(--text2)" }}>{c.who}</span>
-                    {c.at > 0 && <span style={{ color: "var(--text4)" }}>{" · "}{fmtAgo(c.at)} ago</span>}
-                  </div>
-                  <div className="agx-cu-body agx-cu-note min-w-0 break-words"><Markdown text={c.text} /></div>
-                </div>
-              </div>
-            ))}
+            <JiraDescription text={detail.description} edit={detail.edit} writes={writes} url={t.url} busy={editing.busy === "description"}
+              onSave={(md) => { const step = stepFor("description", { value: md }, ed.now); return step ? editing.run(step) : Promise.resolve(false); }} />
+            <AttachmentsBlock files={detail.attachments ?? []} card={key} writable={writes} act={fileAct} />
+            {writes ? <SubtasksBlock rows={detail.subtasks} parent={detail.task} writable act={joinAct} /> : <SubtasksSection rows={detail.subtasks} />}
+            {writes ? <LinkedBlock linked={detail.linked ?? []} card={key} writable act={joinAct} /> : <LinkedSection linked={detail.linked ?? []} />}
+            {writes ? <WebLinksBlock links={links ? links.web : null} error={links?.error ?? ""} writable card={key} act={joinAct} /> : <WebLinksSection links={links ? links.web : null} error={links?.error ?? ""} />}
+            <Section id="development" title="Development" aside={dev ? <span className="truncate" title="What the development tool connected to this site holds for the card">{countsLine(dev.counts)}</span> : undefined}>
+              <JiraCardPrs query={key} writable={writes} quiet={!writes} mentions={mentions} dev={dev} />
+              <JiraDevLists dev={dev} />
+            </Section>
+            <JiraActivity cardKey={key} act={act} comments={detail.comments} moreComments={more} worklog={detail.events ?? []} worklogMore={detail.worklogMore ?? 0} tracking={detail.tracking} work={writes && detail.tracking ? work : undefined}
+              onMoreComments={(page, left) => { setDetail((d) => (d ? { ...d, comments: [...d.comments, ...page] } : d)); setMore(left); }} />
           </>
         )}
       </div>
 
       {/* With writes off the pane has said so once, above; there is no box and no second sentence here. */}
       {writes && <div className="shrink-0 px-4 pt-2 pb-3" style={{ borderTop: LINE }}>
+        {replyTo && (
+          <div className="flex items-center gap-2 mb-1 text-[10.5px] min-w-0" style={{ color: "var(--text3)" }}>
+            <span className="min-w-0 truncate" title="Your comment goes in their thread">Replying to {replyTo.who}</span>
+            <button className="agx-btn shrink-0 rounded-md px-1.5 py-0.5" onClick={() => setReplyTo(null)} style={{ color: "var(--text2)", border: EDGE }} title="Add it as a comment of its own, not in their thread">Cancel reply</button>
+          </div>
+        )}
         <Composer value={say} growTo={sayCap} onChange={(v) => { setSay(v); setSayErr(""); }} busy={saying}
-          placeholder={`Comment on ${key}. Markdown, and @ to mention somebody.`}
-          sendLabel="Comment"
+          placeholder={replyTo ? `Answer ${replyTo.who}. Markdown, and @ to mention somebody.` : `Comment on ${key}. Markdown, and @ to mention somebody.`}
+          sendLabel={replyTo ? "Reply" : "Comment"}
           people={people}
           onNeedPeople={() => askPeople("")}
           onPeopleQuery={askPeople}

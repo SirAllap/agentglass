@@ -23,8 +23,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import {
-  type Contributes, type Field, type FieldOption, type NoteStatus, type PrNote, type PrRun, type UiAction, type UiNode,
-  NOTE_STATUSES, coerceValue, resolveSettings, validateNote, validateRun, validateTree, validPrRef,
+  type Contributes, type Field, type FieldOption, type NoteReply, type NoteStatus, type PrNote, type PrRun, type UiAction, type UiNode,
+  NOTE_STATUSES, REPLIES_PER_NOTE, coerceValue, validateReplyInput, validReplyBy, resolveSettings, validateNote, validateRun, validateTree, validPrRef,
 } from "../../shared/pluginUi.ts";
 import { pluginsConfigDir } from "./plugins.ts";
 import { forgetAnnotations } from "./inbox-annotations.ts";
@@ -117,7 +117,7 @@ export { resolveSettings };
 export type PluginEvent =
   | { type: "action"; panel?: string; action: UiAction; values?: Record<string, unknown>; at: number }
   | { type: "settings"; settings: Record<string, unknown>; at: number }
-  | { type: "note-status"; repo: string; number: number; id: string; status: NoteStatus; at: number }
+  | { type: "note-status"; repo: string; number: number; id: string; status: NoteStatus; at: number; reply?: NoteReply; replies?: NoteReply[] }
   | { type: "pr-open"; repo: string; number: number; at: number }
   | { type: "pr-action"; id: string; repo: string; number: number; at: number };
 
@@ -238,7 +238,7 @@ const MAX_BYTES_PER_PLUGIN = 40_000_000;
 
 function bytesOf(plugin: string, s: NotesStore): number {
   let n = 0;
-  for (const x of s.notes) if (x.plugin === plugin) n += (x.body?.length ?? 0) + x.title.length + 200;
+  for (const x of s.notes) if (x.plugin === plugin) n += (x.body?.length ?? 0) + x.title.length + 200 + (x.replies?.reduce((m, r) => m + r.text.length + 100, 0) ?? 0);
   for (const x of s.runs) if (x.plugin === plugin) n += (x.summary?.length ?? 0) + x.title.length + 200;
   return n;
 }
@@ -302,6 +302,8 @@ export function upsertNotes(plugin: string, c: Contributes, raw: unknown): { ok:
       plugin,
       status: personSaid ? prev!.status : v.status ?? "open",
       statusBy: personSaid ? "person" : "plugin",
+      // A plugin sending the finding again does not send the answers to it.
+      ...(prev?.replies?.length ? { replies: prev.replies } : {}),
       createdAt: prev?.createdAt ?? now,
       updatedAt: now,
     };
@@ -346,9 +348,118 @@ export function setNoteStatus(plugin: string, id: string, status: unknown): { ok
   n.statusBy = "person";
   n.updatedAt = Date.now();
   save();
-  pushEvent(plugin, { type: "note-status", repo: n.repo, number: n.number, id, status: n.status, at: n.updatedAt });
+  pushEvent(plugin, { type: "note-status", repo: n.repo, number: n.number, id, status: n.status, at: n.updatedAt, ...(n.replies?.length ? { replies: n.replies } : {}) });
   onChange({ kind: "pr", repo: n.repo, number: n.number });
   return { ok: true };
+}
+
+/** What comments on the pull request for a reply. Handed in, so this file
+ *  never reaches GitHub on its own and a test can see whether it was asked to. */
+export type GitHubPoster = (note: PrNote & { plugin: string }, body: string) => Promise<{ ok: boolean; error?: string }>;
+
+export interface NoteAnswer {
+  status?: unknown;
+  reply?: unknown;
+  /** When sent, must be the note's own pull request. */
+  repo?: unknown;
+  number?: unknown;
+  /** `"user"` or `"agent:<name>"`. */
+  by: string;
+  /** Whether this caller may comment on GitHub (full scope). */
+  mayPost: boolean;
+}
+
+export type NoteAnswered =
+  | { ok: true; status: NoteStatus; replies: NoteReply[]; posted: boolean; postError?: string }
+  | { ok: false; error: string };
+
+/** The line a GitHub reader sees first, so a comment that came out of a local
+ *  finding is never taken for the reply of a person to a person. The finding's
+ *  words go in code spans: an `@name` in a title must not notify anybody. */
+export function githubReplyBody(n: PrNote & { plugin: string }, text: string): string {
+  const code = (t: string) => "`" + t.replace(/`/g, "'").replace(/\s+/g, " ").slice(0, 200) + "`";
+  const where = n.path ? ` at ${code(`${n.path}${n.line ? `:${n.line}` : ""}`)}` : "";
+  return `> Reply to an automated finding from ${code(n.plugin)}${where}: ${code(n.title)}\n\n${text}`;
+}
+
+let replySeq = 0;
+function replyId(): string {
+  return `r_${Date.now().toString(36)}${(replySeq++ % 1296).toString(36)}${crypto.randomUUID().slice(0, 4)}`;
+}
+
+/**
+ * The person (or an agent for them) answers a finding: a reply, a status, or
+ * both in one step. Everything is checked before anything is stored or sent.
+ * GitHub is reached only when the request asks for it, the caller may, and
+ * `post` was given; if that comment fails the reply is still kept, and the
+ * answer says so. There is no retry: a second try is a second comment.
+ */
+export async function answerNote(plugin: string, id: string, a: NoteAnswer, post: GitHubPoster | null): Promise<NoteAnswered> {
+  let status: NoteStatus | undefined;
+  if (a.status !== undefined) {
+    if (typeof a.status !== "string" || !(NOTE_STATUSES as readonly string[]).includes(a.status)) {
+      return { ok: false, error: `status must be one of ${NOTE_STATUSES.join(", ")}` };
+    }
+    status = a.status as NoteStatus;
+  }
+  let reply: { text: string; postToGitHub: boolean } | undefined;
+  if (a.reply !== undefined) {
+    const v = validateReplyInput(a.reply);
+    if (!v.ok) return v;
+    reply = v.value;
+  }
+  if (!status && !reply) return { ok: false, error: "send a status, a reply, or both" };
+  if (!validReplyBy(a.by)) return { ok: false, error: "invalid author" };
+  const s = load();
+  const find = () => s.notes.find((x) => x.plugin === plugin && x.id === id);
+  const n = find();
+  if (!n) return { ok: false, error: "no such note" };
+  if (a.repo !== undefined || a.number !== undefined) {
+    const ref = validPrRef(a.repo, a.number);
+    if (!ref) return { ok: false, error: "repo (owner/name) and number must go together" };
+    if (ref.repo !== n.repo || ref.number !== n.number) return { ok: false, error: "that note is on another pull request" };
+  }
+  if (reply && (n.replies?.length ?? 0) >= REPLIES_PER_NOTE) return { ok: false, error: `a finding keeps at most ${REPLIES_PER_NOTE} replies` };
+  if (reply?.postToGitHub) {
+    if (!a.mayPost) return { ok: false, error: "commenting on GitHub needs full scope" };
+    if (!post) return { ok: false, error: "commenting on GitHub is not available here" };
+  }
+
+  let posted = false;
+  let postError: string | undefined;
+  if (reply?.postToGitHub && post) {
+    try {
+      const r = await post(n, githubReplyBody(n, reply.text));
+      posted = r.ok;
+      if (!r.ok) postError = r.error || "GitHub refused the comment";
+    } catch (e) {
+      postError = e instanceof Error ? e.message : "GitHub refused the comment";
+    }
+  }
+
+  // The post above awaited: the note may have been removed meanwhile.
+  const cur = find();
+  if (!cur) return { ok: false, error: "no such note" };
+  const now = Date.now();
+  let added: NoteReply | undefined;
+  if (reply) {
+    added = { id: replyId(), text: reply.text, at: now, by: a.by, postedOnGitHub: posted };
+    if (status === "resolved" || status === "dismissed") added.withStatus = status;
+    cur.replies = [...(cur.replies ?? []), added];
+  }
+  if (status) {
+    cur.status = status;
+    cur.statusBy = "person";
+  }
+  cur.updatedAt = now;
+  save();
+  pushEvent(plugin, {
+    type: "note-status", repo: cur.repo, number: cur.number, id, status: cur.status, at: now,
+    ...(added ? { reply: added } : {}),
+    ...(cur.replies?.length ? { replies: cur.replies } : {}),
+  });
+  onChange({ kind: "pr", repo: cur.repo, number: cur.number });
+  return { ok: true, status: cur.status, replies: cur.replies ?? [], posted, ...(postError ? { postError } : {}) };
 }
 
 /** Removing a plugin removes what it wrote. Disabling one does not: a review

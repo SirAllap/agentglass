@@ -1,20 +1,8 @@
-// The pager belongs to the table. A page index carried over from the table (or
-// left behind by a detail that shrank the list) must not put a "Page 2 of 2"
-// footer under the board, nor leave the table on a page that no longer exists.
+// There is no Previous/Next: the board's pages append through a Load more card.
+// A page stack left over from a wide view must not follow the two queues (Needs
+// my review, Mine), nor leave the list on a page that no longer exists.
 import { test, expect } from "bun:test";
-import { pagerShown, pageRanOut } from "../src/lib/prPager.ts";
-
-test("no pager under the board, on any page", () => {
-  expect(pagerShown({ hasRepo: true, boardShown: true, hasNext: false, pageDepth: 1 })).toBe(false);
-  expect(pagerShown({ hasRepo: true, boardShown: true, hasNext: true, pageDepth: 0 })).toBe(false);
-});
-
-test("the table keeps its pager when it has somewhere to go", () => {
-  expect(pagerShown({ hasRepo: true, boardShown: false, hasNext: true, pageDepth: 0 })).toBe(true);
-  expect(pagerShown({ hasRepo: true, boardShown: false, hasNext: false, pageDepth: 1 })).toBe(true);
-  expect(pagerShown({ hasRepo: true, boardShown: false, hasNext: false, pageDepth: 0 })).toBe(false);
-  expect(pagerShown({ hasRepo: false, boardShown: false, hasNext: true, pageDepth: 0 })).toBe(false);
-});
+import { pageRanOut } from "../src/lib/prPager.ts";
 
 test("a page past the end is taken back, page one never is", () => {
   expect(pageRanOut({ pageDepth: 1, rows: 0, hasNext: false })).toBe(true);
@@ -22,9 +10,11 @@ test("a page past the end is taken back, page one never is", () => {
   expect(pageRanOut({ pageDepth: 0, rows: 0, hasNext: false })).toBe(false);
 });
 
-test("PrPanel routes both decisions through the helpers", async () => {
+test("PrPanel pages by Load more, with no Previous/Next footer", async () => {
   const src = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
-  expect(src).toContain("pagerShown({");
+  expect(src).not.toContain("pagerShown");
+  expect(src).not.toContain("‹ Previous");
+  expect(src).toContain("listState.hasNext && listState.cursor");
   expect(src).toContain("pageRanOut({");
-  expect(src).toMatch(/if \(boardShown\) setPages\(/);
+  expect(src).toMatch(/if \(queuesOnly\) setPages\(/);
 });

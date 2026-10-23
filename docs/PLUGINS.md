@@ -167,6 +167,40 @@ cleared, a running instance is stopped, and the reviewer is asked again. Every
 update re-asks, a typo fix included: a consent prompt that is only *sometimes*
 honest teaches people to click through it faster than one that always is.
 
+**When a plugin dies at once.** A plugin that starts and exits within about ten
+seconds leaves its reason on `GET /plugins`: `lastExit` is `{ code, signal,
+stderrTail, afterMs }`, with the last 2 KB of what it wrote to stderr (paths and
+anything that looks like a secret redacted). The plugin's card in Settings and
+its not-running panel show it under "Why it stopped", next to `lastBoxFailure`
+when the box itself failed to build. It is held in memory, cleared by the next
+start and by remove, and is not a log: stderr only, only for those first
+seconds, only when the process exits inside them. A plugin that ran longer
+keeps nothing, and nothing it writes after that window is stored or streamed.
+
+### Updating
+
+`agentglass-plugin update <name>` (and the Update button) goes back to where the
+install came from:
+
+- **A git install** re-fetches its URL at the ref it recorded.
+- **A market install** re-reads the catalogue named in its source, finds its
+  entry, and installs what the entry lists *now*. It does not re-fetch the
+  commit it was pinned to at install time, which is the same commit again. The
+  new tree is held to the entry's `sha256` exactly like a fresh install; a tree
+  that hashes to something else is refused and the installed copy is left as it
+  was.
+- **A local folder** has no upstream; copy it in again.
+
+The answer says what happened, for example
+`acme-review updated from 1a2b3c4 to 9f8e7d6, sha256 verified; needs approval: yes`.
+An entry that has not moved answers `acme-review is already at the listed version
+(1a2b3c4)` and changes nothing; an entry that was removed from the catalogue
+answers that it is no longer listed. Settings and keys stay. Approval follows the
+rule above: a changed manifest, sandbox or entrypoint asks again, an unchanged
+one does not. The Market tab offers the same update when an installed plugin's
+entry moved to another commit or another hash; it reads the catalogue once when
+the tab opens, and does not poll.
+
 `~/.config/agentglass/plugins.json` records, per plugin, its source (git URL and
 ref, local path, or catalogue plus entry id), the commit it resolved to, the
 content hash, the fingerprint that was approved, whether it is enabled, and when
@@ -280,7 +314,7 @@ plugin cannot draw into another's panel.
 | Route | What it does |
 |---|---|
 | `GET /plugin/self` | Its name, its declared contributions and its settings |
-| `GET /plugin/self/events?wait=25000` | Long poll: clicks, submitted forms, settings changes, a note marked resolved, a pull request opened |
+| `GET /plugin/self/events?wait=25000` | Long poll: clicks, submitted forms, settings changes, a note marked resolved or answered, a pull request opened |
 | `POST /plugin/self/panel` `{id, tree}` | Draw a declared panel |
 | `POST /plugin/self/panel/<id>/ops` `{seq?, ops}` | Change a declared live panel (`canvas: true`) |
 | `POST /plugin/self/options` `{key, options}` | Choices for a `select` it could only find at run time |
@@ -554,13 +588,80 @@ the way back. `focus: "local"` lands on the Local lane. It is the app's
 errand, not a message to the plugin: `action` is still the plugin's, and an
 item may carry both.
 
-**Notes on a pull request** are never sent anywhere. Each one is marked *local*,
-has no Reply, and offers Resolve, Dismiss, Reopen and Copy. The person's choice
+**Notes on a pull request** stay on this machine. Each one is marked *local*
+and offers Reply, Resolve, Dismiss, Reopen and Copy. The person's choice
 outranks the plugin's: a note they resolved stays resolved when the plugin sends
 it again, and the plugin hears the change as an event, so its next pass can take
 it into account. Removing a plugin removes its notes; disabling it keeps them
 readable. Removing it keeps what was chosen on its settings page, so a reinstall
 comes back configured; the remove dialog (or `--drop-settings`) clears them too.
+
+The one way a note's words leave the machine is a **reply** the person sends with
+*Also post on the pull request on GitHub* ticked (off every time, confirmed once
+more before it goes). The app comments as the person, through the same path the
+pull request view uses for comments — never through the plugin's token, which
+the plugin does not have for this — and the comment starts by saying it answers
+an automated finding. A plugin only ever receives the text.
+
+### Replies under a finding
+
+A reply is stored with the note, so removing the plugin removes it, and a plugin
+sending the finding again does not clear it. Up to 4000 characters each and 50
+per finding; tags and control characters are stripped. Each one is
+
+```json
+{ "id": "r_lq3x9k2a1b4c", "text": "Fixed in 3f9a2c1: the guard now runs before the loop.",
+  "at": 1792190000000, "by": "user", "postedOnGitHub": false, "withStatus": "resolved" }
+```
+
+`by` is `"user"`, or `"agent:<name>"` for a reply an agent sent for the person.
+`withStatus` is present when the reply was sent together with Resolve or Dismiss.
+
+The `note-status` event (long poll, see the routes above) gains two fields and
+keeps everything it had, so a plugin that ignores them works as before:
+
+```json
+{
+  "type": "note-status",
+  "repo": "acme/orbit", "number": 1042,
+  "id": "f-df05fe5d61f441",
+  "status": "resolved",
+  "at": 1792190000000,
+  "reply": { "id": "r_lq3x9k2a1b4c", "text": "Fixed in 3f9a2c1: the guard now runs before the loop.",
+             "at": 1792190000000, "by": "user", "postedOnGitHub": false, "withStatus": "resolved" },
+  "replies": [
+    { "id": "r_lq3x8w0z9y8x", "text": "Checking this one.", "at": 1792189400000, "by": "user", "postedOnGitHub": false },
+    { "id": "r_lq3x9k2a1b4c", "text": "Fixed in 3f9a2c1: the guard now runs before the loop.",
+      "at": 1792190000000, "by": "user", "postedOnGitHub": false, "withStatus": "resolved" }
+  ]
+}
+```
+
+`id` is the id the plugin gave the note (for acme-review, its finding id).
+`reply` is the one just added and is absent when the status changed alone;
+`replies` is every reply of the finding, oldest first, so the next pass sees the
+whole why, and is absent while there are none.
+
+Answering from a script or an agent is the same route the window uses, full
+scope:
+
+```
+POST /plugins/pr-notes/status
+{ "plugin": "acme-review", "id": "f-df05fe5d61f441",
+  "repo": "acme/orbit", "number": 1042,          // optional; if sent, must be the note's own pull request
+  "status": "resolved",                          // optional: omit to only reply
+  "reply": { "text": "Fixed in 3f9a2c1.", "postToGitHub": false },
+  "root": "/path/to/a/checkout" }                // only read when postToGitHub is true
+→ { "ok": true, "status": "resolved", "replies": [ … ], "posted": false }
+```
+
+Send `status`, `reply` or both; both is one request. `postToGitHub: true` needs
+full scope and a `root` that is a checkout of the note's repository; without
+both it is refused and nothing is saved. If GitHub refuses the comment, the
+reply is still kept, `posted` is `false` and `postError` says why; nothing
+retries. An agent that sends the `X-Agentglass-Agent` header is recorded as
+`agent:<name>`. `GET /plugins/pr-notes?repo=acme/orbit&number=1042` (read scope)
+returns `replies` inside each note.
 
 A worked plugin that uses all four is
 [local-review](https://github.com/SirAllap/agentglass-local-review): it reviews
@@ -577,6 +678,7 @@ keeps the findings in the pull request view.
     agentglass-plugin list --json
     agentglass-plugin enable <name> --approve
     agentglass-plugin disable | update | remove <name>
+    agentglass-plugin update <name> --full           # with the whole plugin record
     agentglass-plugin remove <name> --drop-settings  # its settings go too
     agentglass-plugin settings <name>               # what it holds
     agentglass-plugin settings <name> style=security

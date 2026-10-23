@@ -107,6 +107,8 @@ export function eventLine(e: CardEvent): string {
      reports no assignment and no follower — the notification does, by name —
      so this is the only place those ever appear, and it says where it came
      from rather than passing itself off as history the API gave us. */
+  // Jira's rows say who did it: the API names the person on every entry of the history and the work log.
+  if (e.kind === "change" || e.kind === "worklog") return `${e.who || "Somebody"} ${(e.text ?? "").trim()}`.trim();
   if (e.kind === "seen") return (e.text ?? "").trim() || "Something happened to this card";
   if (e.kind === "created") {
     const who = e.who || "Somebody";

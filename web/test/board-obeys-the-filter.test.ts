@@ -41,14 +41,16 @@ test("is on a card status keeps exactly those rows", () => {
 test("the board is handed the filtered lists, not the raw fetches", () => {
   const src = readFileSync(new URL("../src/components/PrPanel.tsx", import.meta.url), "utf8");
   /* Enriched with the card the screen is showing, then filtered. */
-  expect(src).toMatch(/const boardMineCards = useMemo\(\s*\(\) => boardMine\.map\(\(p\) => withCard\(p, hasTaskProvider\)\)/);
-  expect(src).toMatch(/const boardReviewCards = useMemo\(\s*\(\) => boardReview\.map\(\(p\) => withCard\(p, hasTaskProvider\)\)/);
+  expect(src).toMatch(/const boardMineCards = useMemo\(\s*\(\) => boardMineFilled\.map\(\(p\) => withConflict\(root, withCard\(p, hasTaskProvider\)\)\)/);
+  expect(src).toMatch(/const boardReviewCards = useMemo\(\s*\(\) => boardReviewFilled\.map\(\(p\) => withConflict\(root, withCard\(p, hasTaskProvider\)\)\)/);
   /* `applyRulesKeepUnread`, not `applyWith` directly: a pull request with
      something unread on it survives a rule that would otherwise drop it — see
      prFilter.test.ts. */
   expect(src).toContain("applyRulesKeepUnread(boardMineCards, rules, readPrField, isRuleExempt)");
   expect(src).toContain("applyRulesKeepUnread(boardReviewCards, rules, readPrField, isRuleExempt)");
-  expect(src).toContain("mine={boardMineShown} review={boardReviewShown}");
+  // Wiring pinned: a person's board has its own lists (not the owner's rules);
+  // the owner's board is handed the filtered pair.
+  expect(src).toContain("mine={personLogin ? personLists.mine : boardMineShown} review={personLogin ? personLists.review : boardReviewShown}");
   /* The raw pair never reaches the component again — the exact shape of the bug. */
   expect(src).not.toContain("mine={boardMine}");
   /* And the builder is offered the fields of the rows on screen, not the

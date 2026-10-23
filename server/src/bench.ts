@@ -189,6 +189,7 @@ export async function benchLive(rootIn: unknown): Promise<BenchLive> {
   }
   const slots: number[] = [];
   for (let n = 1; n <= 99; n++) {
+    if (n === FINDER_EDIT_SLOT) continue; // the Finder's own editor is not a tab of the bench
     const name = benchSessionName(at.root, n);
     if (!names.has(name)) continue;
     if (dead.has(name) && !alive.has(name)) { await tmux(["kill-session", "-t", `=${name}`]); continue; }
@@ -216,6 +217,86 @@ export async function benchLive(rootIn: unknown): Promise<BenchLive> {
  * could not name it — see editorwhere.ts for the same rule at pane scope.
  */
 export const BENCH_READER_SLOT = 90;
+
+/**
+ * The slot of the nvim the Finder's Editing tab shows inside its own preview.
+ *
+ * Not a bench tab: the Finder starts it when Editing is chosen and ends it
+ * (kill-session by this name) when Editing is left, so it is never offered to
+ * the bench window, and `benchLive` leaves it out. Its own socket, because the
+ * reader's is derived from the checkout and two editors cannot listen on one.
+ */
+export const FINDER_EDIT_SLOT = 89;
+
+export function finderEditSocketPath(root: string): string {
+  const hash = createHash("sha1").update(safeAbs(root) ?? root).digest("hex").slice(0, 12);
+  return join(tmpdir(), `agx-finder-edit-${hash}.sock`);
+}
+
+export interface FinderEditState { ok: boolean; live: boolean; modified: boolean; error?: string }
+
+/** The argv that asks the Finder's nvim how many buffers hold unsaved changes. A constant: nothing from the client reaches it. */
+export const finderModifiedArgv = (sock: string): string[] =>
+  ["nvim", "--server", sock, "--remote-expr", "len(filter(getbufinfo(), {_, b -> b.changed}))"];
+
+/** The keys that write every changed buffer: constants, so nothing typed by a client ever becomes a keystroke. */
+export const FINDER_SAVE_KEYS = "<Esc><Cmd>wa<CR>";
+
+/** Write every changed buffer of the Finder's editor, then say whether any is still unsaved. */
+export async function finderEditSave(rootIn: unknown): Promise<FinderEditState> {
+  const at = checkout(rootIn);
+  if ("error" in at) return { ok: false, live: false, modified: false, error: at.error };
+  const sock = finderEditSocketPath(at.root);
+  try {
+    const proc = Bun.spawn(["nvim", "--server", sock, "--remote-send", FINDER_SAVE_KEYS], { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
+    const kill = setTimeout(() => { try { proc.kill(); } catch { /* gone */ } }, 2000);
+    await proc.exited; clearTimeout(kill);
+  } catch { /* the state below says what is left */ }
+  await Bun.sleep(150);
+  return finderEditState(rootIn);
+}
+
+/** The keys that quit nvim without writing: constants. Asked of nvim itself so it removes its own swap file, which a bare kill-session leaves behind (and the next open then warns about). */
+export const FINDER_QUIT_KEYS = "<Esc><Cmd>qa!<CR>";
+
+/**
+ * End the Finder's editor: nvim quits itself, then whatever is left of its tmux
+ * session is killed by name, so nothing outlives the tab. Callers have already
+ * asked about unsaved changes; this one does not.
+ */
+export async function finderEditEnd(rootIn: unknown): Promise<{ ok: boolean; ended?: boolean; error?: string }> {
+  const at = checkout(rootIn);
+  if ("error" in at) return { ok: false, error: at.error };
+  const sock = finderEditSocketPath(at.root);
+  try {
+    statSync(sock);
+    const proc = Bun.spawn(["nvim", "--server", sock, "--remote-send", FINDER_QUIT_KEYS], { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
+    const kill = setTimeout(() => { try { proc.kill(); } catch { /* gone */ } }, 1500);
+    await proc.exited; clearTimeout(kill);
+    await Bun.sleep(150);
+  } catch { /* no socket: no editor to ask */ }
+  return benchEnd(at.root, FINDER_EDIT_SLOT);
+}
+
+/** Is the Finder's editor running, and has it unsaved changes? `live: false` is "no editor", not a failure. */
+export async function finderEditState(rootIn: unknown): Promise<FinderEditState> {
+  const at = checkout(rootIn);
+  if ("error" in at) return { ok: false, live: false, modified: false, error: at.error };
+  const sock = finderEditSocketPath(at.root);
+  try { statSync(sock); } catch { return { ok: true, live: false, modified: false }; }
+  try {
+    const proc = Bun.spawn(finderModifiedArgv(sock), { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
+    const kill = setTimeout(() => { try { proc.kill(); } catch { /* gone */ } }, 2000);
+    const out = (await new Response(proc.stdout).text()).trim();
+    const code = await proc.exited;
+    clearTimeout(kill);
+    // A socket left by an editor that died answers nothing: that is "no editor".
+    if (code !== 0 || !/^\d+$/.test(out)) return { ok: true, live: false, modified: false };
+    return { ok: true, live: true, modified: Number(out) > 0 };
+  } catch {
+    return { ok: true, live: false, modified: false };
+  }
+}
 
 export function readerSocketPath(root: string): string {
   const hash = createHash("sha1").update(safeAbs(root) ?? root).digest("hex").slice(0, 12);

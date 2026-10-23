@@ -30,11 +30,11 @@
  * write takes (Cloud's account id, Data Center's login).
  */
 import { NO_ASSIGN, fillTemplate, planOf, type StepTrigger } from "../../shared/stepBlocks.ts";
-import type { HandoffUnassign, JiraHandoffRule, JiraStep, JiraSteps, StepBlock } from "../../shared/providers.ts";
+import type { HandoffUnassign, JiraBlockOutcome, JiraHandoffRule, JiraStep, JiraSteps, StepBlock } from "../../shared/providers.ts";
 import { prAddress } from "../../shared/taskref.ts";
 import {
   ISSUE_KEY, NOT_ACCEPTED, NOT_CONNECTED, WRITE_OFF, apiOf, assigneeBody, assignRefusal, badPerson, epoch, handoffMoves, handoffRules, isObj, jiraCall,
-  jiraWriteEnabled, linkPullRequest, movesPath, personId, personName, projectKey, readBefore, readIssue, readSettingsFile, stale, storedCreds, str, writeSettingsKey,
+  jiraWriteEnabled, linkPullRequest, movesPath, personId, personName, projectKey, readBefore, readIssue, readSettingsFile, stale, unreadable, storedCreds, str, writeSettingsKey,
   type HandoffMove, type HandoffOutcome, type JiraCreds, type JiraResult,
 } from "./jira.ts";
 import { commentOn } from "./jiraComments.ts";
@@ -246,7 +246,8 @@ async function runStepOnce(creds: JiraCreds, key: string, updated: number, which
   if ("stop" in before) return before.stop;
   const f = before.f;
   const now = epoch(f.updated);
-  if (now && now !== updated) return stale();
+  if (!now) return unreadable();
+  if (now !== updated) return stale();
   const status = isObj(f.status) ? f.status : {};
   const statusName = str(status.name);
   const project = isObj(f.project) ? str(f.project.key) : K.slice(0, K.lastIndexOf("-"));
@@ -277,6 +278,9 @@ async function runStepOnce(creds: JiraCreds, key: string, updated: number, which
     if ("move" in picked) { chosen = picked.move; destName = picked.move.toName || names[0]!; }
     else destName = statusName;
   }
+  // What each block did, in the order it ran. The sentences are ours: nothing the site said goes into one.
+  const blocks: JiraBlockOutcome[] = [];
+  if (move && !chosen) blocks.push({ block: "move", state: "skipped", why: `already in ${destName}` });
 
   // Who ends up on the card: `want` is undefined to leave it, null to take the assignee off.
   const give = rule ? null : plan.askAssign ?? (plan.assign.who !== "none" ? plan.assign : null);
@@ -328,8 +332,13 @@ async function runStepOnce(creds: JiraCreds, key: string, updated: number, which
     });
     if (!post.ok) return failed(post);
     wrote = true; moved = true;
+    blocks.push({ block: "move", state: "done" });
     if (inside) assigneeDone = true;
   }
+  // Does the step have a say in who is on the card at all? Then it reports a row for it, done or not needed.
+  const touchesAssignee = rule ? (rule.clear || rule.askClear) : (give !== null || takeOff !== null || fixedUnassign !== "none" || askClear);
+  if (touchesAssignee && want === undefined) blocks.push({ block: "assignee", state: "skipped", why: "nothing to change on who is on it" });
+  else if (touchesAssignee && assigneeDone) blocks.push({ block: "assignee", state: "done" });
 
   // The assignee, after the move when the screen did not carry it. The stamp is not checked again: the move changed it.
   // The precondition is that the assignee is still who step 1 saw.
@@ -337,30 +346,31 @@ async function runStepOnce(creds: JiraCreds, key: string, updated: number, which
     const label = want === null ? `${wasName} is still assigned` : "the card was not given to the person chosen";
     const after = moved ? await jiraCall<unknown>(creds, `/rest/api/${v}/issue/${encodeURIComponent(key)}?fields=assignee,updated`, { fresh: true }) : null;
     const af = after && after.ok && isObj(after.data) && isObj(after.data.fields) ? after.data.fields : null;
-    if (after && !after.ok) partials.push(`who is on it could not be checked, so ${label}`);
-    else if (af && personId(af.assignee) !== was) partials.push(`${personId(af.assignee) ? `${personName(af.assignee)} was put on it meanwhile, so nobody was changed` : "the assignee changed meanwhile, so nobody was changed"}`);
+    if (after && !after.ok) { partials.push(`who is on it could not be checked, so ${label}`); blocks.push({ block: "assignee", state: "failed", why: "Jira would not say who is on the card, so nobody was changed" }); }
+    else if (af && personId(af.assignee) !== was) { partials.push(`${personId(af.assignee) ? `${personName(af.assignee)} was put on it meanwhile, so nobody was changed` : "the assignee changed meanwhile, so nobody was changed"}`); blocks.push({ block: "assignee", state: "skipped", why: "somebody else was put on the card meanwhile, so nobody was changed" }); }
     else {
       const put = await jiraCall<unknown>(creds, `/rest/api/${v}/issue/${encodeURIComponent(key)}/assignee`, { method: "PUT", body: assigneeBody(creds, want) });
       if (!put.ok) {
         if (!moved) return assignRefusal(put);
         partials.push(`${label}: ${assignRefusal(put).error ?? "Jira refused"}`);
-      } else wrote = true;
+        blocks.push({ block: "assignee", state: "failed", why: "Jira did not accept the change of who is on the card" });
+      } else { wrote = true; blocks.push({ block: "assignee", state: "done" }); }
     }
   }
 
   // 4. The comment, then the link. Neither is retried and neither undoes what landed before it.
   if (comment !== null) {
     const r = await commentOn(creds, key, comment, []);
-    if (r.ok) wrote = true;
+    if (r.ok) { wrote = true; blocks.push({ block: "comment", state: "done" }); }
     else if (!wrote) return { ok: false, unauthorised: r.unauthorised, error: r.error };
-    else partials.push(`the comment was not posted: ${r.error ?? "Jira refused"}`);
+    else { partials.push(`the comment was not posted: ${r.error ?? "Jira refused"}`); blocks.push({ block: "comment", state: "failed", why: "Jira did not accept the comment" }); }
   }
   if (wantsLink && pr) {
     const r = await linkPullRequest(creds, key, pr.url, pr.title ?? "");
     // Already linked is the answer the person wanted, so it is not "nothing to do".
-    if (r.ok) wrote = true;
+    if (r.ok) { wrote = true; blocks.push(r.linked ? { block: "link", state: "done" } : { block: "link", state: "skipped", why: "already on the card" }); }
     else if (!wrote) return { ok: false, unauthorised: r.unauthorised, error: r.error };
-    else partials.push(`the pull request was not linked: ${r.error}`);
+    else { partials.push(`the pull request was not linked: ${r.error}`); blocks.push({ block: "link", state: "failed", why: "Jira did not accept the link" }); }
   }
 
   if (!wrote && !partials.length) {
@@ -379,9 +389,9 @@ async function runStepOnce(creds: JiraCreds, key: string, updated: number, which
   if (!readable) {
     // Enough of the card for the watch to know the move was ours.
     const gone = { id: before.id || K, customId: K, title: "", status: destName } as NonNullable<HandoffOutcome["moved"]>;
-    return { ok: true, ...(moved ? { was: statusName, moved: gone } : null), ...(partial ? { partial } : null) };
+    return { ok: true, ...(moved ? { was: statusName, moved: gone } : null), ...(partial ? { partial } : null), blocks };
   }
-  return { ok: true, task: back.data!, ...(moved ? { was: statusName } : null), ...(partial ? { partial } : null) };
+  return { ok: true, task: back.data!, ...(moved ? { was: statusName } : null), ...(partial ? { partial } : null), blocks };
 }
 
 export async function runStepStored(key: string, updated: number, which: unknown, choice: StepChoice = {}, pr?: StepPr): Promise<HandoffOutcome> {

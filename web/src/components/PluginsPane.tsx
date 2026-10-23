@@ -16,6 +16,7 @@ import { Market } from "./plugins/Market.tsx";
 import { PluginDeclaration } from "./plugins/PluginDeclaration.tsx";
 import { UnboxedConsent } from "./plugins/UnboxedConsent.tsx";
 import { envHatchNotice } from "../lib/pluginBoxState.ts";
+import { PluginWhyStopped } from "./plugins/PluginWhyStopped.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { useCallback, useEffect, useState, useMemo, useSyncExternalStore } from "react";
@@ -301,6 +302,7 @@ function PluginCard({ plugin, masterOn, envAllowsUnboxed, onChanged, onSettings 
   const [busy, setBusy] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
+  const [updateNote, setUpdateNote] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [dropSettings, setDropSettings] = useState(false);
 
@@ -326,12 +328,12 @@ function PluginCard({ plugin, masterOn, envAllowsUnboxed, onChanged, onSettings 
   // exists to catch, so the toggle reflects the PROCESS, not the intent —
   // `enabled` can be true with `running` false for one tick after a crash.
   const running = plugin.running;
-  // Only a git-backed source has an upstream to re-fetch — see
-  // server/src/plugins.ts, updatePlugin. A market install pinned to a commit
-  // has one, and re-fetching it gets the same commit: its update is the
-  // market's, offered there when the listing moves on.
+  // Only a git-backed source has an upstream — see server/src/plugins.ts,
+  // updatePlugin. A market install pinned to a commit asks the catalogue what
+  // it lists now, so Update is honest for it too: it installs the newer entry
+  // or says the listing has not moved.
   const pinned = pinnedByMarket(plugin.source);
-  const updatable = plugin.source.kind !== "local-path" && !pinned;
+  const updatable = plugin.source.kind !== "local-path";
 
   const { ask, dialog } = useDialogs();
   const setEnabled = async (next: boolean) => {
@@ -358,9 +360,10 @@ function PluginCard({ plugin, masterOn, envAllowsUnboxed, onChanged, onSettings 
   const update = async () => {
     setUpdating(true);
     setUpdateError(null);
+    setUpdateNote(null);
     const r = await api.pluginUpdate(plugin.name);
     setUpdating(false);
-    if (r.ok) onChanged();
+    if (r.ok) { setUpdateNote(r.update.message); onChanged(); }
     else setUpdateError(r.error);
   };
 
@@ -429,10 +432,13 @@ function PluginCard({ plugin, masterOn, envAllowsUnboxed, onChanged, onSettings 
         </div>
         {pinned && (
           <div className="text-[11.5px] t-dim">
-            Pinned to <span className="t-mono" title={pinned}>{pinned.slice(0, 7)}</span> by the market. It updates by
-            installing the version the market lists: the plugin shows up there with an Update button when it lists a newer version.
+            Pinned to <span className="t-mono" title={pinned}>{pinned.slice(0, 7)}</span> by the market. Update reads the market
+            again and installs the version it lists now; the market tab offers the same when the listing moves on.
           </div>
         )}
+
+        {/* Switched on, nothing running, and the host kept how it ended. */}
+        {plugin.enabled && !running && <PluginWhyStopped plugin={plugin} />}
 
         {/* The re-consent case, drawn so it cannot be mistaken for an ordinary
             disabled plugin: its own colour and its own sentence, above the
@@ -474,6 +480,7 @@ function PluginCard({ plugin, masterOn, envAllowsUnboxed, onChanged, onSettings 
         <UnboxedConsent plugin={plugin} envAllowsAll={envAllowsUnboxed} onChanged={onChanged} />
 
         {updateError && <Note tone="err">{updateError}</Note>}
+        {updateNote && !updateError && <Note tone="warn">{updateNote}</Note>}
 
         {/* Kept by default: what was typed into the settings page belongs to
             the person, and a reinstall picks it back up. */}

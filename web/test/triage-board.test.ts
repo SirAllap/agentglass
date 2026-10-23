@@ -89,9 +89,9 @@ const drawn = (html: string, lane: string): number => (column(html, lane).match(
 /** The number in the lane's heading. */
 const heading = (html: string, lane: string): string | null =>
   column(html, lane).match(/tabular-nums">([^<]+)</)?.[1] ?? null;
-/** The number in that lane's segment of the summary bar. */
+/** The number on the lane's count button, the one that lights the lane (the chip row it replaced is gone). */
 const segment = (html: string, lane: string): string | null =>
-  html.match(new RegExp(`data-seg="${lane}"[\\s\\S]*?<b[^>]*>([^<]+)</b>`))?.[1] ?? null;
+  html.match(new RegExp(`data-seg="${lane}"[^>]*>\\s*<span[^>]*>([^<]+)</span>`))?.[1] ?? null;
 
 /*
  * One board with a lane of every shape, built through the real classifier
@@ -190,25 +190,25 @@ describe("the scope sentence", () => {
   it("states what is on the board and what is not", () => {
     const html = full();
     expect(html).toContain(`${INVOLVED}</b>`);
-    expect(html).toContain("of 388 open pull requests want something from you");
-    // The subtraction is the promise: the board is not hiding the rest, it is
-    // pointing at them.
-    expect(html).toContain(`the other ${388 - INVOLVED} are a table`);
+    expect(html).toContain("of 388 open · yours and asked of you");
+    // No way to the rest from here: the repository is reached by searching.
+    expect(html).not.toContain("show the other");
+    expect(html).not.toContain("never shows more than that");
   });
 
   it("drops every number built on the total when the total disagrees", () => {
     /*
-     * Clamping is how "the other 0 are a table" got onto a screen with 388 open
+     * Clamping is how "show the other 0" got onto a screen with 388 open
      * pull requests behind it, and "5 of 3 want something from you" is the same
      * bad total two sentences later. The way out stays; the false counts go —
      * and they go together, or the screen contradicts itself.
      */
     const html = render({ total: 1, mine: MINE, review: REVIEW });
-    expect(html).toContain("the rest are a table");
+    expect(html).not.toContain("show every open pull request");
+    expect(html).not.toContain("never shows more than that");
     expect(html).not.toContain("the other 0");
-    expect(html).toContain("open pull requests want something from you");
-    expect(html).not.toContain("of 1 open pull requests");
-    expect(html).toContain(`${INVOLVED} on the board`);
+    expect(html).toContain("open · yours and asked of you");
+    expect(html).not.toContain("of 1 open");
   });
 
   it("shouts about the ones that only need a press", () => {
@@ -232,7 +232,7 @@ describe("waiting is not the same as empty", () => {
     expect(html).toContain("Reading the two lists this board is made of");
     expect(html).not.toContain("Nothing wants anything from you");
     // Not "0 of 388". A count nobody has counted is the whole complaint.
-    expect(html).not.toContain("want something from you");
+    expect(html).not.toContain("yours and asked of you");
     expect(heading(html, "review")).toBe("—");
   });
 
@@ -257,7 +257,7 @@ describe("waiting is not the same as empty", () => {
   });
 
   it("offers the table from the empty state too, since that is the way out", () => {
-    expect(render({ loading: false, total: 388 })).toContain("Show all 388 as a table");
+    expect(render({ loading: false, total: 388 })).toContain("Show all 388");
   });
 });
 
@@ -301,7 +301,7 @@ describe("the footer", () => {
      * dressed up as a number.
      */
     const html = render({ total: 1, mine: MINE, review: REVIEW });
-    expect(html).toContain("not a number this view can trust");
+    expect(html).not.toContain("not a number this view can trust");
     expect(html).not.toContain("want nothing from you right now");
   });
 
@@ -321,9 +321,9 @@ describe("the summary bar", () => {
     expect(segment(html, "blocked")).toBe("1");
     expect(segment(html, "others")).toBe("1");
     expect(segment(html, "flight")).toBe("1");
-    // And the board against the repository, which is the same fraction the
-    // scope sentence states in words.
-    expect(html).toContain(`${INVOLVED} / 388`);
+    // The board against the repository is the one line above the lanes now.
+    expect(html).toContain(`${INVOLVED}</b>`);
+    expect(html).toContain("of 388 open");
   });
 
   it("agrees with the lane headings, because two counts that can drift will", () => {
@@ -354,22 +354,18 @@ describe("the summary bar", () => {
     const before = (html.match(/data-pr="/g) ?? []).length;
     expect(before, "a board with cards to keep").toBeGreaterThan(0);
 
-    /* The chips are buttons now — the empty ones deliberately are not, because
-       lighting a lane with nothing in it leaves a board where every card is
-       quiet and the way out is the chip you just pressed. */
-    const row = html.slice(html.indexOf('data-seg="review"'), html.indexOf('data-lane="review"'));
-    expect(row, "a lane with cards is pressable").toContain("<button");
-    expect(row).toContain('data-seg="land"');
+    /* The lane's count is the button now — an empty lane's deliberately is not,
+       because lighting a lane with nothing in it leaves a board where every
+       card is quiet and the way out is the count you just pressed. */
+    expect(html, "a lane with cards is pressable").toMatch(/<button data-seg="review"/);
+    expect(html).toMatch(/<button data-seg="land"/);
   });
 
   it("and an empty lane is not one of those buttons", () => {
     // `review` is empty in this fixture; `land` is not.
     const html = render({ mine: [pr(1)], review: [], total: 40 });
-    const seg = (id: string) => {
-      const i = html.indexOf(`data-seg="${id}"`);
-      return html.slice(html.lastIndexOf("<", i), i);
-    };
-    expect(seg("review"), "nothing to light").not.toContain("button");
+    expect(html, "nothing to light").not.toContain('data-seg="review"');
+    expect(html, "a lane holding the card is pressable").toContain("data-seg=");
   });
 
   it("is not drawn while the lists are still arriving", () => {
@@ -588,7 +584,8 @@ describe("a board is for pointing at, not for pressing", () => {
      * reason, and then an Open button nobody used. The whole card is the
      * button; the lane and its sentence say what wants doing.
      */
-    expect(board).toContain('<div onClick={onOpen} role="button"');
+    // `ref={cardEl}` sits first: the conflict resolver watches the card's visibility.
+    expect(board).toContain('<div ref={cardEl} onClick={onOpen} role="button"');
     expect(board).not.toContain("onAct(p, act)");
     expect(board).not.toContain('onAct(p, "open")');
   });
@@ -709,7 +706,7 @@ describe("taking a card away with you", () => {
  * renders. What has to hold is the shape — that the focus happens, and that it
  * is guarded — and a server render cannot see either.
  */
-describe("the shortcuts the legend promises", () => {
+describe("what the board still does with the keyboard", () => {
   const SRC = readFileSync(new URL("../src/components/TriageBoard.tsx", import.meta.url), "utf8");
   /** Comments here name the very things these assertions are about. */
   const bare = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
@@ -732,25 +729,19 @@ describe("the shortcuts the legend promises", () => {
     expect(bare).toContain("preventScroll: true");
   });
 
-  it("the board answers no card keys, and prints none", () => {
-    // Ctrl+Alt+A closes and opens the bench; the board's `a` read it as "open
-    // this card" and opened whatever the cursor rested on. The keys went.
-    for (const k of ['"j"', '"k"', '"h"', '"l"', '"p"', '"a"']) {
-      expect(bare, `the board still handles ${k}`).not.toContain(`k === ${k}`);
-    }
-    expect(SRC).not.toContain("</K> pin<");
-    expect(SRC).not.toContain("</K> open it<");
-  });
-
-  it("no card paints a keyboard cursor", () => {
-    // With the keys gone nothing could move it, so one card always wore a blue
-    // border and a left strip that read as a pull request state.
+  it("the board has no keyboard cursor: no j/k, no arrow walk, no painted card", () => {
+    // The board is mouse-driven. Cards are buttons and links; Tab reaches them.
+    expect(bare).not.toMatch(/k === "[jk]"/);
+    expect(bare).not.toContain('"ArrowDown"');
+    expect(bare).not.toContain('"ArrowUp"');
+    expect(bare).not.toContain("data-cursor");
+    expect(bare).not.toContain("const walk");
+    expect(bare).not.toContain("setCur(");
+    // ⌃F, the app's find, is the one key the board still answers.
+    expect(bare).toContain('e.key.toLowerCase() === "f"');
     const html = render({ review: [pr(1), pr(2)], mine: [pr(3)], total: 3 });
     expect(drawn(html, "review")).toBeGreaterThan(0);
-    expect(html).not.toContain("data-cur");
-    expect(html).not.toContain("inset 2px 0 0");
-    expect(SRC).not.toContain("data-cur");
-    expect(SRC).not.toMatch(/\bsetCur\b/);
+    expect(html).not.toContain('data-cursor');
   });
 });
 
@@ -805,5 +796,45 @@ describe("the identity line of a board card", () => {
   it("does not print the author's name: the first face bottom right is the author", () => {
     expect(line).toContain("ago(p.updatedAt)");
     expect(line).not.toContain("{p.author}");
+  });
+});
+
+describe("the repository on the board, and results as cards", () => {
+  const theirs = (n: number, o: Parameters<typeof pr>[1] = {}) => pr(n, { author: "other", ...o });
+
+  it("the two queues ignore the repository's page", () => {
+    const html = render({ mine: [pr(1)], review: [], others: [theirs(10, { fail: 2 })], total: -1 });
+    expect(html).toContain('data-pr="1"');
+    expect(html).not.toContain('data-pr="10"');
+  });
+
+  it("the default view holds only the viewer's stake: no repository page, no lane for others, no pager", () => {
+    const html = render({ mine: [pr(1)], review: [], others: [theirs(10)], total: -1 });
+    expect(html).toContain('data-pr="1"');
+    expect(html).not.toContain('data-pr="10"');
+    expect(html).not.toContain("on this page of the repository");
+    expect(html).not.toContain('data-lane="others"');
+    expect(html).not.toContain("Load more pull requests");
+    expect(html).toContain("open · yours and asked of you");
+  });
+
+  it("results are cards, merged ones included, never rows and never filed under Blocked", () => {
+    const html = render({
+      results: {
+        title: "closed and merged pull requests", loading: false, empty: "none", onBack: () => {},
+        rows: [theirs(20, { state: "MERGED", fail: 1 }), theirs(21, { state: "CLOSED" }), theirs(22)],
+      },
+    });
+    expect(html).toContain('data-results');
+    expect((html.match(/data-pr="/g) ?? []).length).toBe(3);
+    expect(html).toContain('data-finished="merged"');
+    expect(html).toContain('data-finished="closed"');
+    expect(html).not.toContain("data-lane=");
+    expect(html).toContain("Back to the board");
+  });
+
+  it("an empty result says why", () => {
+    const html = render({ results: { title: "x", loading: false, empty: "No pull requests match this search.", onBack: () => {}, rows: [] } });
+    expect(html).toContain("No pull requests match this search.");
   });
 });

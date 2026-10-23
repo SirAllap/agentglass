@@ -1,6 +1,6 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { parseCatalog, isOffered, todayStamp, claudeModels, catalogPaths } from "../src/claudemodels.ts";
 
@@ -134,10 +134,52 @@ describe("the catalogue this repo ships", () => {
     expect(out.map((m) => m.id)).toContain("claude-opus-5");
   });
 
+  test("offers the models Claude Code offers, not one fallback id", () => {
+    delete process.env.AGENTGLASS_CLAUDE_MODELS;
+    const ids = claudeModels().map((m) => m.id);
+    for (const id of ["claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-1", "claude-haiku-5-5", "claude-sonnet-5", "claude-opus-5", "claude-fable-5", "claude-opus-4-8"]) {
+      expect(ids).toContain(id);
+    }
+    // claude-haiku-4-5 is catalogued with a shutdown of 2026-10-15, so it left
+    // the list the next day and a test that names it fails on the calendar, not
+    // on a change. Its retirement is asserted against a fixed day instead.
+    const haiku = JSON.parse(readFileSync(join(import.meta.dir, "../../shared/claude-models.json"), "utf8")).models.find((m: { id: string }) => m.id === "claude-haiku-4-5");
+    expect(isOffered(haiku, "2026-10-15")).toBe(true);
+    expect(isOffered(haiku, "2026-10-16")).toBe(false);
+  });
+
   test("today's stamp is a plain calendar date", () => {
     expect(todayStamp(new Date(2026, 6, 31))).toBe("2026-07-31");
     // Zero-padded, or string comparison against the file's dates is wrong for
     // nine months of the year.
     expect(todayStamp(new Date(2026, 0, 5))).toBe("2026-01-05");
+  });
+});
+
+// The catalogue is read from disk at runtime, so `bun build --compile` does not
+// carry it: a packaged app finds it beside its sidecar or it offers one model.
+// Measured on an installed app: the local build staged no copy, and only CI did.
+describe("the packaged layout carries the catalogue", () => {
+  const ROOT = join(import.meta.dir, "../..");
+  const build = Bun.file(join(ROOT, "electron/build.mjs")).text();
+
+  test("the sidecar looks beside its own binary", () => {
+    expect(catalogPaths()).toContain(join(dirname(process.execPath), "claude-models.json"));
+  });
+
+  test("build.mjs stages it on every path, after the local/CI split", async () => {
+    const src = await build;
+    const copy = src.indexOf('copyFileSync(resolve(REPO, "shared/claude-models.json")');
+    expect(copy).toBeGreaterThan(-1);
+    expect(src.slice(copy, copy + 200)).toContain('staging/claude-models.json');
+    // Top level (column 0), so neither the local branch nor CI's
+    // --provenance-only branch can skip it, and after the wipe of staging.
+    expect(src.lastIndexOf("\n", copy) + 1).toBe(copy);
+    expect(copy).toBeGreaterThan(src.indexOf('"--outfile", resolve(HERE, "staging/agentglass-server")'));
+  });
+
+  test("CI runs build.mjs, so the one copy covers it", async () => {
+    const wf = await Bun.file(join(ROOT, ".github/workflows/desktop-binaries.yml")).text();
+    expect(wf).toContain("node electron/build.mjs --provenance-only");
   });
 });

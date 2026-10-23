@@ -7,7 +7,7 @@
  * ~/Documents, the export somebody dropped in ~/Downloads — none of them live
  * in a git checkout, so none of them were reachable, and reading one meant
  * leaving for a file manager and coming back to find your place again. Which
- * is the exact trip the palette exists to remove.
+ * is the exact trip the finder exists to remove.
  *
  * Everything else under /files/ is bounded by the open project on purpose (see
  * config.ts): a cockpit pointed at one repository must not hand out reads of
@@ -144,7 +144,7 @@ export interface DiskPlaces {
 /** The usual homes for documents. Listed rather than guessed at, and every one
  *  of them is checked against the disk before it is offered — a menu row for a
  *  folder that is not there is a dead end wearing a name. */
-const HOME_FOLDERS = ["Documents", "Desktop", "Downloads", "Projects", "code", "src", "Notes"];
+const HOME_FOLDERS = ["Documents", "Desktop", "Downloads", "Music", "Pictures", "Videos", "Projects", "code", "src", "Notes"];
 
 export function diskPlaces(): DiskPlaces {
   const at = home();

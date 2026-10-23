@@ -11,6 +11,7 @@ import { commentResolvedPatch } from "../src/lib/taskOptimistic.ts";
  * They are rules about source, so they are asserted against source.
  */
 const src = await Bun.file(new URL("../src/components/TasksPanel.tsx", import.meta.url)).text();
+const eventRun = await Bun.file(new URL("../src/components/CardEventRun.tsx", import.meta.url)).text();
 const chrome = await Bun.file(new URL("../src/components/workspace/Chrome.tsx", import.meta.url)).text();
 const pr = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
 
@@ -41,8 +42,10 @@ function fnBody(text: string, sig: string): string {
 }
 
 const card = naked(fnBody(src, "function CardDetail("));
-const events = naked(fnBody(src, "function EventRun("));
-const action = naked(fnBody(src, "function CommentAction("));
+const events = naked(fnBody(eventRun, "function EventRun("));
+// CommentAction moved to tasks/CardEdit.tsx so a second tracker's card can draw it too.
+const cardEdit = await Bun.file(new URL("../src/components/tasks/CardEdit.tsx", import.meta.url)).text();
+const action = naked(fnBody(cardEdit, "function CommentAction("));
 
 describe("a card's activity is the pull request's timeline", () => {
   it("found the pieces it reads", () => {

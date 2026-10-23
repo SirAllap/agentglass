@@ -1,0 +1,71 @@
+// A menu that hangs off a button and is never clipped by the column it came from.
+//
+// The columns scroll sideways and the palette clips its children, so a menu
+// drawn inside either loses an edge. It is a Portal at the menu layer with a
+// backdrop that closes it on any click elsewhere — one element, which a click
+// that stops propagation cannot outrun — and it is clamped to the window so a
+// button near the right edge opens inward instead of off the screen.
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Portal } from "../../Portal.tsx";
+import { ICON } from "../../../lib/iconSize.ts";
+import { LAYER } from "../../../lib/layers.ts";
+import { DoneIcon } from "../../../lib/glyphIcons.tsx";
+import { StrataIcon } from "./StrataIcon.tsx";
+import { EDGE } from "../../workspace/Chrome.tsx";
+import { MENU_ROW, MENU_ROW_H, MENU_ROW_TALL, MENU_RULE } from "../../../lib/finderMenu.ts";
+import { useMenuKeys } from "./useMenuKeys.ts";
+
+export function Popover({ anchor, onClose, width = 220, children, label, column }: { anchor: DOMRect; onClose: () => void; width?: number; children: ReactNode; label: string; /** A column's sort popover: h j k l and Backspace (see useMenuKeys). */ column?: boolean }) {
+  const el = useRef<HTMLDivElement | null>(null);
+  // The Portal mounts its children a frame after this component, so the menu does not exist yet at the first layout: placing it then measured a height of 0 and a menu opened from the footer hung below the window. It is placed again once it is there.
+  const [there, setThere] = useState(false);
+  const own = useCallback((n: HTMLDivElement | null) => { el.current = n; setThere(!!n); }, []);
+  const [at, setAt] = useState<{ left: number; top: number } | null>(null);
+  useLayoutEffect(() => {
+    const h = el.current?.offsetHeight ?? 0;
+    // A button's menu hangs from its right edge; a point (a right-click) opens to the right of the pointer, as Strata's does.
+    const w = Math.min(width, window.innerWidth - 16);
+    const from = anchor.width <= 1 ? anchor.left : anchor.right - w;
+    const left = Math.max(8, Math.min(from, window.innerWidth - w - 8));
+    const below = anchor.bottom + 8;
+    const top = below + h > window.innerHeight - 8 ? Math.max(8, anchor.top - 4 - h) : below;
+    setAt({ left, top });
+  }, [anchor, width, there]);
+  // Focus stays in the palette's search box while a menu is open, so Escape never reaches the menu: it is taken here, or it would close the whole finder.
+  useEffect(() => { el.current?.focus({ preventScroll: true }); }, []);
+  useEffect(() => {
+    const on = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onClose(); } };
+    window.addEventListener("keydown", on, true);
+    return () => window.removeEventListener("keydown", on, true);
+  }, [onClose]);
+  useMenuKeys(el, { first: "ring", column, onBackspace: onClose });
+  return (
+    <Portal z={LAYER.menu}>
+      <div className="fixed inset-0" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
+      <div ref={own} role="menu" data-finder-menu aria-label={label} className="fixed rounded-lg text-[12px] shadow-2xl py-1.5 outline-none"
+        tabIndex={-1} onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } }}
+        style={{ width, maxWidth: "calc(100vw - 16px)", left: at?.left ?? -9999, top: at?.top ?? -9999, background: "var(--surface-card)", border: EDGE, color: "var(--text)", maxHeight: "calc(100vh - 16px)", overflowY: "auto" }}>
+        {children}
+      </div>
+    </Portal>
+  );
+}
+
+export function MenuCap({ children }: { children: ReactNode }) {
+  return <div className="px-4 pt-1.5 pb-0.5 text-[10.5px] uppercase tracking-[0.1em]" style={{ color: "var(--text3)", fontWeight: 600 }}>{children}</div>;
+}
+
+/** `tall`: the roomy row of the column sort menu. `icon`: the name of one of Strata's action icons, drawn in the accent before the label, as Strata's menus do. `danger` paints the row in the error colour. */
+export function MenuItem({ children, onClick, on, hint, disabled, icon, tall, danger }: { children: ReactNode; onClick: () => void; on?: boolean; hint?: string; disabled?: boolean; icon?: string; tall?: boolean; danger?: boolean }) {
+  return (
+    <button role="menuitemcheckbox" aria-checked={on} disabled={disabled} onClick={onClick}
+      className={`${MENU_ROW} flex items-center gap-2 px-3 text-left disabled:opacity-40`} style={{ minHeight: tall ? MENU_ROW_TALL : MENU_ROW_H, color: danger ? "var(--error-ink)" : "var(--text)" }}>
+      {icon && <span style={{ color: danger ? "var(--error-ink)" : "var(--primary-ink)" }}><StrataIcon set="act" name={icon} size={ICON.sm} /></span>}
+      <span className="flex-1 min-w-0 truncate">{children}</span>
+      {hint && <span className="text-[10.5px]" style={{ color: "var(--text4)" }}>{hint}</span>}
+      <span aria-hidden className="w-3 flex justify-center" style={{ color: "var(--primary-ink)" }}>{on ? <DoneIcon size={ICON.xs} /> : null}</span>
+    </button>
+  );
+}
+
+export const MenuRule = () => <div className="my-1" style={{ borderTop: MENU_RULE }} />;

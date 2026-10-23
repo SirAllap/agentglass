@@ -76,7 +76,7 @@ import {
   refs, listSnapshots, createSnapshot, restoreSnapshot, deleteSnapshot,
   applyHunk, logGraph, mergeBranch, rebaseBranch, renameBranch, resetTo,
   worktreesWithState as gitWorktrees, addWorktree, removeWorktree, worktreeLeftovers, rescueLeftovers, fixWorktreeOwnership, startAutoFetch, setAutoFetchAudience, autoFetchWhenSomeoneComes, syncFromBase, setBase, setGitChangeHook, setMergedVerdictHook, setPrBaseHook,
-  conflicts as gitConflicts, resolveWith, conflictBlocks, conflictFile, resolveBlocks, mergeSession, reopenConflict, stoppedRefusal, conflictPreview, mergeAbort, mergeContinue, baseCandidates, undoMerge, mergeInfo,
+  conflicts as gitConflicts, resolveWith, conflictBlocks, conflictFile, resolveBlocks, mergeSession, reopenConflict, stoppedRefusal, conflictPreview, conflictPreviewFile, mergeAbort, mergeContinue, baseCandidates, undoMerge, mergeInfo,
   cherryPick, cherryPickContinue, cherryPickAbort,
   revertCommit, amendCommit, squashCommits,
   rebaseSteps, runRebase, compareRefs,
@@ -106,7 +106,7 @@ import { singleFlight, inflightCount } from "./singleflight.ts";
 import { openInEditor, editorTarget, editorCapability, HAS_NVIM } from "./editor.ts";
 import { syncTheme, snippetStatus, SNIPPETS, tmuxThemePath, repairTmuxTheme, currentTheme, automatedThemeClient } from "./themesync.ts";
 import { desktopPalette, desktopLogo, watchDesktopPalette } from "./desktopPalette.ts";
-import { existsSync as fsExists, readFileSync as fsRead, writeFileSync as fsWrite, mkdtempSync } from "node:fs";
+import { existsSync as fsExists, readFileSync as fsRead, writeFileSync as fsWrite, mkdtempSync, readdirSync } from "node:fs";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
 import { listPortsAsync, listResources, spaceFor, killPort } from "./machine.ts";
 import { gitLocks, removeStaleLock } from "./gitlocks.ts";
@@ -117,8 +117,11 @@ import {
 import { currentRuns, runById, runActivity, startRun, adoptPane, finishRun } from "./runs.ts";
 import { failed } from "./refused.ts";
 import { trackerProjects, setTrackerChoice } from "./trackerProjects.ts";
+import { holdCard as holdJiraCard } from "./jiraprcards.ts";
 import { ISSUE_KEY, connectJira, jiraStatus, setJiraWrites, jiraWriteEnabled, readIssue, findIssue, mine as jiraMine, searchText as jiraSearchText, withStored as withJira } from "./jira.ts";
-import { movesStored as jiraMoves, moveStored as jiraMove, remoteLinksStored as jiraLinks, linkPullRequestStored as jiraLink } from "./jira.ts";
+import { ACTIVITY_KINDS, activityStored as jiraActivity, type ActivityKind } from "./jiraActivity.ts";
+import { devStored as jiraDev } from "./jiraDev.ts";
+import { movesStored as jiraMoves, moveStored as jiraMove, remoteLinksStored as jiraLinks, remoteLinksAllStored as jiraLinksAll, linkPullRequestStored as jiraLink } from "./jira.ts";
 import {
   assignableStored as jiraAssignable, setAssigneeStored as jiraSetAssignee, handOffStored as jiraHandOff,
   jiraSettings, setHandoffRule as jiraSetHandoff, projectStatusesStored as jiraProjectStatuses,
@@ -129,7 +132,7 @@ import { countedProjects, setCountedProjects, statusUnitsStored as jiraStatusUni
 import {
   jiraViews, viewRead as jiraViewRead, viewChoices as jiraViewChoices, projectChoices as jiraProjectChoices,
   addViewByUrl as jiraAddViewByUrl, addViewByChoice as jiraAddViewByChoice, addFolderByKey as jiraAddFolder,
-  removeViewById as jiraRemoveView, removeFolderById as jiraRemoveFolder, refreshJiraFoldersIfStale,
+  removeViewById as jiraRemoveView, removeFolderById as jiraRemoveFolder, refreshJiraFoldersIfStale, readBoardAreas as jiraBoardAreas,
 } from "./jiraboards.ts";
 import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, addClickupFolder, refreshFoldersIfStale, replaceViewUrl, readView } from "./providers.ts";
 import { clickupPrefs, setClickupPrefs, settleFirstRun } from "./clickupPrefs.ts";
@@ -143,10 +146,20 @@ import {
   remindersFor, firedUnacked, setReminderHook, startReminderTick, localZone,
 } from "./reminders.ts";
 import { fileText, fileToTemp, fileTree, findFiles, grepFiles, listRefs, filesExist, heldBackFrom, heldBackTest, HELD_BACK, filesReach, gitReadRefusal, gitReadTest } from "./files.ts";
-import { diskFind, diskGrep, diskPlaces } from "./disk.ts";
-import { browseDir, fileBytes, fileFacts, openInDesktop, pagePolicy, revealInFileManager } from "./browse.ts";
+import { diskEnabled, diskFind, diskGrep, diskPlaces } from "./disk.ts";
+import { homeIndex } from "./homeindex.ts";
+import { browseBatch } from "./browselist.ts";
+import { readBookmarks, removeBookmarkUri, toggleBookmark } from "./bookmarks.ts";
+import { actOnDevice, devicePolicy, ensureDeviceWatch, listDevices, type DeviceAct } from "./volumes.ts";
+import { Sessions, discoverNetwork, gvfsDir, remotePolicy, remotesFromMounts, sameRemote } from "./remotes.ts";
+import { runTool } from "./volumes.ts";
+import { appsForAll, launchApp, mimeOf, setDefaultApp } from "./openwith.ts";
+import { actionsFor, deleteAction, listActions, readAction, runAction, saveAction } from "./finderactions.ts";
+import { fsRun, fsReadOp, fsJobs, fsPathsOf, fsGate, fsWantsJson } from "./fsroute.ts";
+import { mediaFacts, posterFrame } from "./mediafacts.ts";
+import { browseDir, browseReal, fileBytes, fileFacts, previewSlice, openInDesktop, pagePolicy, revealInFileManager } from "./browse.ts";
 import { fileGitFacts } from "./fileGit.ts";
-import { benchEdit, benchEnd, benchLive, readNote, writeNote } from "./bench.ts";
+import { benchEdit, benchEnd, benchLive, finderEditEnd, finderEditSave, finderEditState, readNote, writeNote } from "./bench.ts";
 import {
   overview as dockerOverview, stats as dockerStats, logs as dockerLogs, inspect as dockerInspect, top as dockerTop,
   disk as dockerDisk, volumeDetail as dockerVolumeDetail, volumePeek as dockerVolumePeek, DOCKER_WRITE_ENABLED,
@@ -169,11 +182,12 @@ import {
   listPrs, prDetail, prDiff, prAsset, ghCapability, submitReview, addComment, replyToThread,
   editComment, deleteComment, hideComment, unhideComment, setFileViewed, setAssignees, setMilestone, viewCounts, jobLog, checkJobs, checkFailures, cachedCheckFailures, failingTestsFor, rerunJobs, addLineComment, mentionables, facetOptions, applySuggestion, fileSlice,
   setThreadResolved, react, editPr, setLabels, setReviewers, setDraft, updateBranch,
-  rerunFailedChecks, mergePr, closePr, unstickLook, unstickClose, unstickReopen, filesSince, codeowners, prepareReviewPrompt, pendingReviewFor, branchUrl, subscribeCi, subscribeTalk, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
+  rerunFailedChecks, mergePr, closePr, unstickLook, unstickClose, unstickReopen, filesSince, compareDiff, treeAtTarget, codeowners, prepareReviewPrompt, pendingReviewFor, branchUrl, subscribeCi, subscribeTalk, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
   prBaseOf,
   ghRateLimit,
-  branchBehind, localHead, prRollup, repoIdFor as prRepoIdFor, subscribeTalkSeen,
+  branchBehind, localHead, prRollup, prRowDetails, personBoard, refBranchRows, repoIdFor as prRepoIdFor, subscribeTalkSeen,
   prBranches, githubStatusCached, prsForBranch, prForHead, nodeIdOk, locateRepo, isForeignRoot } from "./prs.ts";
+import { treeAtTar } from "./treeAt.ts";
 import { planCheckOnBase, startCheckOnBase, checkOnBaseStatus, cancelCheckOnBase } from "./checkOnBasePr.ts";
 import { repoSpend } from "./spend.ts";
 import { repoMetrics } from "./checkRuns.ts";
@@ -234,7 +248,7 @@ import {
 import { setPluginSocketHandler, viaPluginSocket } from "./plugin-socket.ts";
 import { CanvasHandle, handleCanvasOps, isCanvasPanel, readBoundedJson, setCanvasResolver } from "./plugin-canvas.ts";
 import {
-  setPluginUiHook, setPanel, panelState, setOptions, pushEvent, takeEvents, upsertRun, upsertNotes, notesFor, setNoteStatus, flushPluginNotes,
+  setPluginUiHook, setPanel, panelState, setOptions, pushEvent, takeEvents, upsertRun, upsertNotes, notesFor, answerNote, type GitHubPoster, flushPluginNotes,
 } from "./plugin-ui.ts";
 import { PANEL_ID_RE, validPrRef } from "../../shared/pluginUi.ts";
 import { readNotifyPrefs, writeNotifyPrefs } from "./notifyPrefs.ts";
@@ -1559,6 +1573,13 @@ const controlWriteLimit = makeWriteLimiter();
  * server with another value (server/test/control-levels.test.ts pins this).
  */
 const CONTROL = controlSwitch();
+/** Connections to remotes in flight: see remotes.ts. After one mounts, its path is read back from what gio says is mounted. */
+const remoteSessions = new Sessions(undefined, async (uri) => {
+  const g = await runTool(["gio", "mount", "-l"]);
+  let entries: string[] = [];
+  try { entries = readdirSync(gvfsDir()); } catch { /* none */ }
+  return remotesFromMounts(g.out, entries, gvfsDir()).find((r) => sameRemote(r.id, uri))?.mountPoint;
+});
 // A variable that was set to something unreadable has already failed closed
 // (control.ts); the owner hears it once, here, with the value and what is held.
 for (const w of CONTROL.warnings) console.warn(`agentglass: ${w}`);
@@ -3004,6 +3025,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (!TERMINAL_ENABLED) return json({ error: "terminal is disabled" }, 403);
       const data: PtyWsData & { ip?: string | null; deviceId?: string | null } = {
         kind: "pty",
+        local: peer.source === "socket" && !!clientIp && isLoopback(clientIp) && sinkFrom === "loopback",
         deviceId: caller?.device?.id ?? null,
         root: url.searchParams.get("root") || "",
         // A path to open, not a command to run. Validated in ptyOpen against
@@ -5637,10 +5659,26 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     }
     if (pathname === "/plugins/pr-notes/status" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
-      let b: { plugin?: unknown; id?: unknown; status?: unknown };
+      let b: { plugin?: unknown; id?: unknown; status?: unknown; reply?: unknown; repo?: unknown; number?: unknown; root?: unknown };
       try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       if (typeof b.plugin !== "string" || typeof b.id !== "string") return json({ ok: false, error: "plugin and id are required" }, 400);
-      const r = setNoteStatus(b.plugin, b.id, b.status);
+      // Who is answering: an agent says so with the header its CLI sends (the
+      // same honesty system as presentedWorker); anything else is the person.
+      const agent = req.headers.get("x-agentglass-agent");
+      const by = agent && /^[A-Za-z0-9_.-]{1,60}$/.test(agent) ? `agent:${agent}` : "user";
+      // The only path from a note to GitHub. It runs when the request asked
+      // for it AND the caller is full scope; `answerNote` enforces both, and
+      // this poster only checks the checkout belongs to the note's repository.
+      const poster: GitHubPoster = async (n, body) => {
+        const id = await prRepoIdFor(b.root);
+        if (!id || id.nameWithOwner.toLowerCase() !== n.repo.toLowerCase()) return { ok: false, error: `that project is not a checkout of ${n.repo}` };
+        const r = await addComment(b.root, n.number, body);
+        return r.ok ? { ok: true } : { ok: false, error: r.error };
+      };
+      const r = await answerNote(b.plugin, b.id, {
+        status: b.status, reply: b.reply, repo: b.repo, number: b.number, by,
+        mayPost: (caller?.scope ?? "full") === "full",
+      }, poster);
       return json(r, r.ok ? 200 : 400);
     }
     if (pathname === "/plugins/pr-action" && req.method === "POST") {
@@ -6428,8 +6466,29 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      * links are read first and an address already there is not posted again.
      */
     if (req.method === "GET" && pathname === "/jira/links") {
-      const r = await jiraLinks((url.searchParams.get("key") ?? "").trim());
-      return json(r.ok ? { ok: true, links: r.data ?? [] } : { ok: false, links: [], error: r.error });
+      const r = await jiraLinksAll((url.searchParams.get("key") ?? "").trim());
+      return json(r.ok && r.data ? { ok: true, links: r.data.links, web: r.data.web } : { ok: false, links: [], web: [], error: r.error });
+    }
+    /*
+     * `GET /jira/dev?id=`: what the site's development tool (GitHub for Jira and the like) knows about a card, by its numeric id,
+     * which the card read already carries. Read once when the card is opened, never polled. `dev` is null whenever there is
+     * nothing to show (no tool connected, a panel that is not there, a shape that changed): that is an answer, not an error.
+     */
+    if (req.method === "GET" && pathname === "/jira/dev") {
+      const r = await jiraDev((url.searchParams.get("id") ?? "").trim());
+      return json({ ok: true, dev: r.ok ? r.data ?? null : null });
+    }
+    /*
+     * `GET /jira/activity?key=&kind=history|worklog|comments&startAt=`: one page of what happened on a card, read when its
+     * tab is opened (history), or when the pane asks for more (the rest of the work log, comments past the card read).
+     * Never part of opening a card. An answer is `{ok, events|comments, total, next?}`; `next` is the `startAt` of the following page.
+     */
+    if (req.method === "GET" && pathname === "/jira/activity") {
+      const kind = url.searchParams.get("kind") ?? "";
+      if (!(ACTIVITY_KINDS as readonly string[]).includes(kind)) return json({ ok: false, error: `kind is one of ${ACTIVITY_KINDS.join(", ")}` }, 400);
+      const at = Number(url.searchParams.get("startAt") ?? 0);
+      const r = await jiraActivity(kind as ActivityKind, (url.searchParams.get("key") ?? "").trim(), Number.isFinite(at) && at >= 0 ? at : 0);
+      return json(r.ok && r.data ? { ok: true, ...r.data } : { ok: false, error: r.error });
     }
     if (pathname === "/jira/link" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
@@ -6454,7 +6513,12 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       return json(r.ok ? { ok: true, task: r.data } : { ok: false, error: r.error });
     }
     if (req.method === "GET" && pathname === "/jira/find") {
-      const r = await withJira((c) => findIssue(c, url.searchParams.get("q") ?? ""));
+      /* One fact, two views: what the panel just read is what the list draws. */
+      const r = await withJira(async (c) => {
+        const found = await findIssue(c, url.searchParams.get("q") ?? "");
+        if (found.ok && found.data) holdJiraCard(c.site, found.data.task);
+        return found;
+      });
       return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error });
     }
     if (req.method === "GET" && (pathname === "/jira/mine" || pathname === "/jira/search")) {
@@ -6486,7 +6550,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname === "/jira/transition" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
-      const r = await jiraMove(String(b.key ?? ""), String(b.transitionId ?? ""), typeof b.updated === "number" ? b.updated : 0);
+      const r = await jiraMove(String(b.key ?? ""), String(b.transitionId ?? ""), typeof b.updated === "number" ? b.updated : 0, b.fields);
       // The watch must not announce the person's own move as news.
       if (r.ok && r.task && r.was) jiraRememberOwnMove({ ...r.task, status: r.was }, r.task.status);
       return json(r, r.ok ? 200 : r.conflict ? 409 : 400);
@@ -6605,7 +6669,25 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       return json(jiraViews());
     }
     if (req.method === "GET" && pathname === "/jira/view") {
-      return json(await jiraViewRead(url.searchParams.get("id") || undefined, { force: url.searchParams.get("force") === "1", cached: url.searchParams.get("cached") === "1" }));
+      // `filters` is a comma list of the board's own quick-filter ids; the server looks each up, a query never comes from here.
+      const quick = (url.searchParams.get("filters") ?? "").split(",").map((x) => x.trim()).filter(Boolean).slice(0, 9);
+      return json(await jiraViewRead(url.searchParams.get("id") || undefined, { force: url.searchParams.get("force") === "1", cached: url.searchParams.get("cached") === "1", quick }));
+    }
+    /* What sits around a board's cards: quick filters, the active sprint, the epics. Kept ten minutes per board (jiraBoardContext.ts). */
+    if (req.method === "GET" && pathname === "/jira/board-context") {
+      const r = await withJira(async (c) => ({ ok: true, data: await jiraBoardContext(c, url.searchParams.get("id") ?? "") }));
+      return json(r.ok && r.data ? r.data : { ok: false, error: r.error, filters: [], epics: [], ...(r.throttled ? { throttled: true } : null) });
+    }
+    /* The cards under the board's epics, one kept read for the Areas tree and an Area's page (jiraboards.ts `readBoardAreas`). */
+    if (req.method === "GET" && pathname === "/jira/board-areas") {
+      const r = await withJira((c) => jiraBoardAreas(c, (url.searchParams.get("id") ?? "").replace(/^board:/, "")));
+      return json(r.ok && r.data ? { ok: true, ...r.data } : { ok: false, error: r.error, tasks: [], ...(r.throttled ? { throttled: true } : null) });
+    }
+    if (pathname === "/jira/rank" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = await jiraRank(String(b.key ?? ""), { before: b.before, after: b.after });
+      return json(r, r.ok ? 200 : 400);
     }
     if (req.method === "GET" && pathname === "/jira/view-choices") {
       const r = await withJira((c) => jiraViewChoices(c, url.searchParams.get("q") ?? ""));
@@ -6660,8 +6742,101 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname === "/jira/comment" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
-      const r = await jiraCommentOn(String(b.key ?? ""), typeof b.text === "string" ? b.text : "", b.mentions);
+      const r = await jiraCommentOn(String(b.key ?? ""), typeof b.text === "string" ? b.text : "", b.mentions, b.replyTo);
       return json(r, r.ok ? 200 : 400);
+    }
+    /* Your own comment, changed or deleted. Both behind the write switch, 400 with a sentence when refused. */
+    if (pathname === "/jira/comment/edit" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = await jiraCommentEdit(String(b.key ?? ""), String(b.id ?? ""), typeof b.text === "string" ? b.text : "", b.mentions);
+      return json(r, r.ok ? 200 : 400);
+    }
+    if (pathname === "/jira/comment/delete" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = await jiraCommentDelete(String(b.key ?? ""), String(b.id ?? ""));
+      return json(r, r.ok ? 200 : 400);
+    }
+    /* Time logged on a card (jiraWorklog.ts): an entry added, and your own entries changed or deleted. Each behind the write switch and
+       the card's stamp: 409 when the card moved since the person saw it, 400 with a sentence when refused. The answer is the card again
+       with the remaining estimate before and after. */
+    if ((pathname === "/jira/worklog" || pathname === "/jira/worklog/edit" || pathname === "/jira/worklog/delete") && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const key = String(b.key ?? "");
+      const stamp = typeof b.updated === "number" ? b.updated : 0;
+      const ask = { time: b.time, started: b.started, note: b.note, adjust: b.adjust };
+      const r = pathname === "/jira/worklog" ? await jiraWorkLog(key, ask, stamp)
+        : pathname === "/jira/worklog/edit" ? await jiraWorkEdit(key, String(b.id ?? ""), ask, stamp)
+        : await jiraWorkDelete(key, String(b.id ?? ""), ask, stamp);
+      return json(r, r.ok ? 200 : r.conflict ? 409 : 400);
+    }
+    /* The connected account's own marks on a card (jiraFollow.ts): watching it and voting for it, each `{ key, on }` and one request. Behind
+       the write switch and, unlike the card's other changes, with no stamp: neither moves the card, and both are idempotent. */
+    if ((pathname === "/jira/watch" || pathname === "/jira/vote") && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = await (pathname === "/jira/watch" ? jiraWatch : jiraVote)(String(b.key ?? ""), b.on);
+      return json(r, r.ok ? 200 : 400);
+    }
+    /* One field of a card's Details changed (jiraEdit.ts). 409 when the card moved since the person saw it. */
+    if (pathname === "/jira/edit" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = await jiraEditCard(String(b.key ?? ""), { field: b.field, value: b.value, add: b.add, remove: b.remove, mentions: b.mentions }, typeof b.updated === "number" ? b.updated : 0);
+      return json(r, r.ok ? 200 : r.conflict ? 409 : 400);
+    }
+    /* What a card is joined to (jiraRelate.ts): a sub-task, a link to another card and a web address, each behind the write switch.
+       The link types are a read. A removal is by an id the card itself holds; the answer is the card again, or the card's addresses. */
+    if (req.method === "GET" && pathname === "/jira/link-types") {
+      const r = await jiraLinkKinds();
+      return json(r.ok ? { ok: true, kinds: r.data ?? [] } : { ok: false, kinds: [], error: r.error, ...(r.throttled ? { throttled: true } : null) });
+    }
+    if (req.method === "POST" && (pathname === "/jira/subtask" || pathname === "/jira/relate" || pathname === "/jira/relate/remove" || pathname === "/jira/weblink" || pathname === "/jira/weblink/remove")) {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const key = String(b.key ?? "").trim();
+      const r = pathname === "/jira/subtask" ? await jiraSubtask(key, b.title)
+        : pathname === "/jira/relate" ? await jiraRelate(key, { other: b.other, typeId: b.typeId, outward: b.outward })
+        : pathname === "/jira/relate/remove" ? await jiraUnrelate(key, b.id)
+        : pathname === "/jira/weblink" ? await jiraWebLink(key, b.url, b.title)
+        : await jiraWebUnlink(key, b.id);
+      return json(r, r.ok ? 200 : 400);
+    }
+    /*
+     * A card's files (jiraFiles.ts). `GET /jira/file` streams one file's bytes, or its small picture with `thumb=1`, through
+     * this server so the credential never leaves it, and only a file the card read listed: a caller names a card and an id,
+     * never an address. What the site redirects to is followed here and is never in an answer. A file that is not a picture
+     * or a video is a download (`download=1` makes any file one). `POST /jira/attach` adds one (multipart: `key`, `file`)
+     * and `POST /jira/attach/remove` takes one of your own off, both behind the write switch.
+     */
+    if (req.method === "GET" && pathname === "/jira/file") {
+      const r = await jiraFileServe({
+        key: url.searchParams.get("key") ?? "", id: url.searchParams.get("id") ?? "", thumb: url.searchParams.get("thumb") === "1",
+        download: url.searchParams.get("download") === "1", range: req.headers.get("range"), signal: req.signal,
+      });
+      return "res" in r ? r.res : json({ ok: false, error: r.error }, r.status);
+    }
+    if (req.method === "POST" && pathname === "/jira/attach") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      // The declared length first: a body this large is refused before any of it is read.
+      if (Number(req.headers.get("content-length")) > JIRA_UPLOAD_MAX + 64 * 1024) return json({ ok: false, error: `A file added here is at most ${JIRA_UPLOAD_MAX / (1024 * 1024)} MB. Add a bigger one in Jira` }, 413);
+      const form = await req.formData().catch(() => null);
+      const file = form?.get("file");
+      if (!form || !(file instanceof File)) return json({ ok: false, error: "Send the file as a form with a `file` part" }, 400);
+      const r = await jiraAttach(String(form.get("key") ?? "").trim(), file.name, new Uint8Array(await file.arrayBuffer()));
+      return json(r, r.ok ? 200 : 400);
+    }
+    if (req.method === "POST" && pathname === "/jira/attach/remove") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = await jiraUnattach(String(b.key ?? "").trim(), b.id);
+      return json(r, r.ok ? 200 : 400);
+    }
+    if (req.method === "GET" && pathname === "/jira/labels") {
+      const r = await jiraLabels(url.searchParams.get("q") ?? "");
+      return json(r.ok ? { ok: true, labels: r.data ?? [] } : { ok: false, error: r.error, ...(r.throttled ? { throttled: true } : null) });
     }
     /* Boards, saved by pasting their address. Reads and one write path, and
        the write path refuses unless AGENTGLASS_CLICKUP_WRITE=1 — see
@@ -7240,6 +7415,20 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       return json(readNote(url.searchParams.get("root") || ""));
     }
     if (pathname === "/bench/live") return json(await benchLive(url.searchParams.get("root") || ""));
+    /* The Finder's own editor (bench slot FINDER_EDIT_SLOT): is it running, has it unsaved buffers, and write them. Constants only reach nvim. */
+    if (pathname === "/bench/finder-edit") return json(await finderEditState(url.searchParams.get("root") || ""));
+    if (pathname === "/bench/finder-edit/end" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { root?: unknown } = {};
+      try { b = (await req.json()) as { root?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      return json(await finderEditEnd(b?.root));
+    }
+    if (pathname === "/bench/finder-edit/save" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { root?: unknown } = {};
+      try { b = (await req.json()) as { root?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      return json(await finderEditSave(b?.root));
+    }
     if (pathname === "/bench/end" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       let b: { root?: unknown; slot?: unknown };
@@ -7269,9 +7458,66 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       return json(r, r.ok ? 200 : 400);
     }
 
+    /* The DEVICES list of the finder's sidebar. Reading it is as open as
+       browsing; doing something to one is a write to hardware, so it takes the
+       same page gate every write takes plus the desk key, and anyone else may only read: see devicePolicy. The monitor starts on the first read
+       and a change that alters the list reaches every window as one frame. */
+    if (pathname === "/finder/devices" && req.method === "GET") {
+      if (!FS_BROWSE_ENABLED) return json({ error: "directory browsing is disabled (AGENTGLASS_FS_BROWSE_DISABLED=1)" }, 403);
+      ensureDeviceWatch(() => broadcast({ type: "devices" }));
+      return json(await listDevices());
+    }
+    if (pathname.startsWith("/finder/devices/") && req.method === "POST") {
+      if (!FS_BROWSE_ENABLED) return json({ error: "directory browsing is disabled (AGENTGLASS_FS_BROWSE_DISABLED=1)" }, 403);
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const act = pathname.slice("/finder/devices/".length) as DeviceAct;
+      if (!["mount", "unmount", "eject", "unlock", "lock"].includes(act)) return json({ ok: false, error: "unknown action" }, 404);
+      const no = devicePolicy(act, deskHeld() && deskKeyOk(req));
+      if (no) return json({ ok: false, error: no }, 403);
+      let b: { id?: unknown; passphrase?: unknown } = {};
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const r = await actOnDevice(act, b?.id, b?.passphrase);
+      b = {};
+      if (r.ok) broadcast({ type: "devices" });
+      return json(r, r.ok ? 200 : 400);
+    }
+
+    /* The Network row and connecting to a server (SFTP, SMB through GVfs).
+       Listing the network is a read; every step of a connection is a write that
+       carries a credential or a host-key decision, so each takes the page gate
+       and a caller with no page is refused (remotePolicy). The request body
+       is read into the call and not logged (JS cannot wipe a string, so nothing here promises more). */
+    if (pathname === "/finder/network" && req.method === "GET") {
+      if (!FS_BROWSE_ENABLED) return json({ error: "directory browsing is disabled (AGENTGLASS_FS_BROWSE_DISABLED=1)" }, 403);
+      return json(await discoverNetwork(runTool));
+    }
+    if ((pathname === "/finder/remotes/connect" || pathname === "/finder/remotes/answer" || pathname === "/finder/remotes/cancel") && req.method === "POST") {
+      if (!FS_BROWSE_ENABLED) return json({ error: "directory browsing is disabled (AGENTGLASS_FS_BROWSE_DISABLED=1)" }, 403);
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const no = remotePolicy(deskHeld() && deskKeyOk(req));
+      if (no) return json({ state: "error", error: no }, 403);
+      let b: { uri?: unknown; session?: unknown; answers?: Record<string, unknown>; choice?: unknown } = {};
+      try { b = (await req.json()) as typeof b; } catch { return json({ state: "error", error: "invalid json" }, 400); }
+      ensureDeviceWatch(() => broadcast({ type: "devices" }));
+      let step;
+      if (pathname.endsWith("/connect")) step = await remoteSessions.start(b?.uri);
+      else if (pathname.endsWith("/answer")) step = await remoteSessions.answer(String(b?.session ?? ""), { answers: b?.answers, choice: b?.choice });
+      else { remoteSessions.cancel(String(b?.session ?? "")); step = { state: "error" as const, error: "cancelled" }; }
+      b = {};
+      if (step.state === "done") broadcast({ type: "devices" });
+      return json(step, step.state === "error" ? 400 : 200);
+    }
+
     if (pathname.startsWith("/disk/")) {
       if (!FS_BROWSE_ENABLED) return json({ error: "directory browsing is disabled (AGENTGLASS_FS_BROWSE_DISABLED=1)" }, 403);
       if (pathname === "/disk/places") return json(diskPlaces());
+      /* The home index: fuzzy names across the roots, kept by filesystem events. Built on the first question. */
+      if (pathname === "/disk/index/search") {
+        if (!diskEnabled()) return json({ ok: false, hits: [], error: "searching the machine is disabled (AGENTGLASS_DISK_DISABLED=1)" }, 403);
+        const lim = Math.min(200, Math.max(1, Number(url.searchParams.get("limit")) || 60));
+        return json(await homeIndex().search(url.searchParams.get("q") || "", lim, req.signal));
+      }
+      if (pathname === "/disk/index/status") { void homeIndex().ensure(); return json(homeIndex().status()); }
       if (pathname === "/disk/find") return json(diskFind(url.searchParams.get("root") || "", url.searchParams.get("q") || ""));
       // What documents SAY, not just what they are called — the question the
       // Contents tab could only ask inside the open checkout.
@@ -7288,7 +7534,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      *
      * Behind the same switch as directory browsing: turning that off must not
      * leave a second door standing. */
-    if (pathname === "/browse" || pathname.startsWith("/preview/")) {
+    if (pathname === "/browse" || pathname === "/browse/list" || pathname.startsWith("/preview/") || pathname.startsWith("/fs/") || pathname.startsWith("/finder/openwith") || pathname.startsWith("/finder/actions") || pathname === "/finder/bookmarks") {
       /* "local" opens dotted folders and the agentglass config folder, so it is judged
          like the tokenless sinks: a direct loopback socket AND not another OS
          user on this box (sinkFrom). With a token every route here needs it, but
@@ -7306,6 +7552,79 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         const r = openInDesktop(b?.path, localBrowse);
         return json(r, r.ok ? 200 : 400);
       }
+      /* Open With: the applications a file type has (a read), and starting one. Starting
+         an application on a person's files, and changing which one is their default,
+         are for the person: the desk key, not the machine token every agent shell holds. */
+      if (pathname === "/finder/openwith" && req.method === "GET") {
+        const ps = url.searchParams.getAll("path").slice(0, 500);
+        if (!ps.length) return json({ ok: false, error: "nothing selected" }, 400);
+        if (heldBackFrom(caller, ps)) return json(HELD_BACK, 403);
+        const mimes: string[] = [];
+        for (const p of ps) {
+          const real = browseReal(p, localBrowse);
+          if (!real) return json({ ok: false, error: "outside what this may open" }, 403);
+          const m = await mimeOf(real);
+          if (!m) return json({ ok: false, error: "the type of that file could not be found" }, 400);
+          mimes.push(m);
+        }
+        return json({ ok: true, ...appsForAll(mimes) });
+      }
+      if (pathname === "/finder/openwith/launch" && req.method === "POST") {
+        if (!trustedCaller(req, from)) return csrfBlocked();
+        if (!(deskHeld() && deskKeyOk(req))) return json({ ok: false, error: "only the desktop app starts an application for a person" }, 403);
+        let b: { id?: unknown; paths?: unknown; always?: unknown; mime?: unknown } = {};
+        try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+        if (Array.isArray(b?.paths) && heldBackFrom(caller, b.paths.filter((x): x is string => typeof x === "string"))) return json(HELD_BACK, 403);
+        const r = await launchApp(b?.id, b?.paths, { local: localBrowse });
+        if (r.ok && b.always === true) {
+          const d = await setDefaultApp(b.id, b.mime);
+          if (!d.ok) return json({ ok: true, note: d.error });
+        }
+        return json(r, r.ok ? 200 : 400);
+      }
+      /* The person's own actions: programs they wrote, run on a selection. Listing and
+         matching are reads. Defining, changing, deleting and running one are the
+         person's alone: the desk key, never the machine token an agent shell holds. */
+      if (pathname.startsWith("/finder/actions")) {
+        if (req.method === "GET") {
+          if (pathname === "/finder/actions") return json({ ok: true, ...listActions() });
+          if (pathname === "/finder/actions/read") { const r = readAction(url.searchParams.get("id") || ""); return json(r, r.ok ? 200 : 404); }
+          if (pathname === "/finder/actions/match") {
+            const ps = url.searchParams.getAll("path").slice(0, 1000);
+            if (heldBackFrom(caller, ps)) return json(HELD_BACK, 403);
+            return json({ ok: true, actions: (await actionsFor(ps, url.searchParams.get("source"), localBrowse)).map(({ script: _s, ...a }) => a) });
+          }
+          return json({ ok: false, error: "no such route" }, 404);
+        }
+        if (req.method !== "POST") return json({ ok: false, error: "method not allowed" }, 405);
+        if (!trustedCaller(req, from)) return csrfBlocked();
+        if (!fsWantsJson(req.headers.get("content-type"))) return json({ ok: false, error: "send application/json" }, 415);
+        if (!(deskHeld() && deskKeyOk(req))) return json({ ok: false, error: "only the desktop app changes or runs an action for a person" }, 403);
+        let b: Record<string, unknown> = {};
+        try { b = (await req.json()) as Record<string, unknown>; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+        if (!b || typeof b !== "object") return json({ ok: false, error: "invalid json" }, 400);
+        let r: { ok: boolean; error?: string };
+        if (pathname === "/finder/actions/run") {
+          if (Array.isArray(b.paths) && heldBackFrom(caller, b.paths.filter((x): x is string => typeof x === "string"))) return json(HELD_BACK, 403);
+          r = await runAction(b.id, b.paths, b.source, { local: localBrowse, deskProven: true, confirmed: b.confirmed === true });
+        } else if (pathname === "/finder/actions/save") r = saveAction({ manifest: b.manifest as string | Record<string, unknown>, script: typeof b.script === "string" ? b.script : undefined }, { create: b.create === true });
+        else if (pathname === "/finder/actions/delete") r = deleteAction(b.id);
+        else return json({ ok: false, error: "no such route" }, 404);
+        return json(r, r.ok ? 200 : 400);
+      }
+      /* The pinned places are GTK's bookmarks file. Reading is a read; pinning writes a file
+         in the person's config, so it takes the desk key like the actions above. */
+      if (pathname === "/finder/bookmarks") {
+        if (req.method === "GET") return json({ ok: true, bookmarks: readBookmarks() });
+        if (req.method !== "POST") return json({ ok: false, error: "method not allowed" }, 405);
+        if (!trustedCaller(req, from)) return csrfBlocked();
+        if (!fsWantsJson(req.headers.get("content-type"))) return json({ ok: false, error: "send application/json" }, 415);
+        if (!(deskHeld() && deskKeyOk(req))) return json({ ok: false, error: "only the desktop app pins a place for a person" }, 403);
+        let b: { path?: unknown; uri?: unknown } = {};
+        try { b = (await req.json()) as { path?: unknown; uri?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+        const r = b?.uri !== undefined ? removeBookmarkUri(b.uri) : toggleBookmark(b?.path);
+        return json(r, r.ok ? 200 : 400);
+      }
       if (pathname === "/preview/reveal" && req.method === "POST") {
         if (!trustedCaller(req, from)) return csrfBlocked();
         let b: { path?: unknown } = {};
@@ -7313,9 +7632,66 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         const r = revealInFileManager(b?.path, localBrowse);
         return json(r, r.ok ? 200 : 400);
       }
+      /* Changing a place. Every write is a POST with the same gate as handing a file
+         to the desktop (trusted caller) and only for a caller on this machine; the
+         operation itself judges where (fsops.ts). */
+      if (pathname.startsWith("/fs/")) {
+        const send = (r: { status: number; body: unknown }) => json(r.body, r.status);
+        if (req.method === "GET") return send(fsReadOp(pathname.slice(4), url.searchParams, localBrowse));
+        if (req.method !== "POST") return json({ ok: false, error: "method not allowed" }, 405);
+        if (!trustedCaller(req, from)) return csrfBlocked();
+        if (!fsWantsJson(req.headers.get("content-type"))) return json({ ok: false, error: "send application/json" }, 415);
+        let b: Record<string, unknown> = {};
+        try { b = (await req.json()) as Record<string, unknown>; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+        if (!b || typeof b !== "object") return json({ ok: false, error: "invalid json" }, 400);
+        if (pathname === "/fs/jobs/cancel") return send(fsJobs("cancel", b.id));
+        if (pathname === "/fs/jobs/clear") return send(fsJobs("clear", null));
+        if (pathname !== "/fs/op") return json({ ok: false, error: "no such route" }, 404);
+        if (heldBackFrom(caller, fsPathsOf(b))) return json(HELD_BACK, 403);
+        const gated = fsGate(String(b.op), deskHeld() && deskKeyOk(req));
+        if (gated) return send(gated);
+        return send(await fsRun(b, localBrowse));
+      }
+      // A folder a page at a time, for the Machine tab's columns: see browselist.ts.
+      if (pathname === "/browse/list") {
+        const c = Number(url.searchParams.get("cursor"));
+        const n = Number(url.searchParams.get("limit"));
+        return json(browseBatch(url.searchParams.get("path") || "", Number.isFinite(c) ? c : 0,
+          { limit: Number.isFinite(n) && n > 0 ? n : undefined, showHidden: url.searchParams.get("hidden") === "1", local: localBrowse }));
+      }
       if (pathname === "/browse") return json(browseDir(url.searchParams.get("path") || "", url.searchParams.get("hidden") === "1", localBrowse));
       if (pathname === "/preview/facts") return json(fileFacts(url.searchParams.get("path") || "", localBrowse));
+      if (pathname === "/preview/media") return json(await mediaFacts(url.searchParams.get("path") || "", localBrowse));
+      if (pathname === "/preview/poster") {
+        const r = await posterFrame(url.searchParams.get("path") || "", localBrowse);
+        if (!r.ok) return json({ error: r.error }, 404);
+        return new Response(r.body, { headers: { ...cors, "content-type": "image/jpeg", "cache-control": "no-store", "x-content-type-options": "nosniff" } });
+      }
       if (pathname === "/preview/git") return json(await fileGitFacts(url.searchParams.get("path") || "", localBrowse));
+      /* The Machine tab's viewers: a slice of the file, never the whole of it in
+         memory. `cap` serves the head of a big text file; `Range` is what lets an
+         <audio> or <video> seek. Same boundary as the folder list (previewSlice). */
+      if (pathname === "/preview/file") {
+        const capQ = url.searchParams.get("cap");
+        const cap = capQ !== null && Number.isFinite(Number(capQ)) ? Number(capQ) : undefined;
+        const r = await previewSlice(url.searchParams.get("path") || "", localBrowse, { range: req.headers.get("range"), cap });
+        if (!r.ok) return json({ error: r.error }, r.status);
+        return new Response(r.body, {
+          status: r.status,
+          headers: {
+            ...cors,
+            ...r.headers,
+            "access-control-expose-headers": "x-agx-size, x-agx-truncated, content-range",
+            "content-type": r.mime,
+            "cache-control": "no-store",
+            // Bytes to be drawn, never a document with a script in it: an svg or
+            // an html file opened directly here gets no scripts, no network, and
+            // an opaque origin.
+            "content-security-policy": "sandbox; default-src 'none'; img-src 'self' data: blob:; media-src 'self'; style-src 'unsafe-inline'",
+            "x-content-type-options": "nosniff",
+          },
+        });
+      }
       if (pathname === "/preview/raw" || pathname === "/preview/page") {
         const r = await fileBytes(url.searchParams.get("path") || "", localBrowse);
         if (!r.ok) return json({ error: r.error }, 404);
@@ -7699,6 +8075,15 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // origin, and refs/pull/<n>/head is the only ref that always exists.
       return json(await conflictPreview(root, pr.base, pr.head, number));
     }
+    /* One file of that preview, markers and all, read out of the tree the
+       preview merge wrote. Read-only; the path must be one the preview named. */
+    if (pathname === "/prs/conflict-file") {
+      const root = prRouteRoot(url.searchParams.get("root") ?? "");
+      const number = Number(url.searchParams.get("number") ?? 0);
+      const pr = await prBranches(root, number);
+      if (!pr) return json({ ok: false, segments: [], blocks: [], lines: 0, stamp: "", error: "could not read that pull request's branches" });
+      return json(await conflictPreviewFile(root, pr.base, pr.head, number, url.searchParams.get("path")));
+    }
     /* The pull requests on a branch — one out of it, any number into it. Asked
        of GitHub by name rather than filtered out of a scope, because a scope is
        about an AUTHOR and this question is about a branch. */
@@ -7771,6 +8156,15 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname === "/prs/rollup") {
       return json(await prRollup(url.searchParams.get("root") || "", url.searchParams.get("number") || 0, url.searchParams.get("force") === "1"));
     }
+    if (pathname === "/prs/ref-branches") {
+      return json(await refBranchRows(url.searchParams.get("root") || "", url.searchParams.get("key") || ""));
+    }
+    if (pathname === "/prs/person") {
+      return json(await personBoard(url.searchParams.get("root") || "", url.searchParams.get("login") || "", url.searchParams.get("force") === "1"));
+    }
+    if (pathname === "/prs/row-details") {
+      return json(await prRowDetails(url.searchParams.get("root") || "", url.searchParams.get("numbers") || "", url.searchParams.get("finished") || ""));
+    }
     if (pathname === "/prs/local-head") {
       return json({ ok: true, local: await localHead(
         url.searchParams.get("root") || "",
@@ -7832,9 +8226,10 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         url.searchParams.get("force") === "1",
         url.searchParams.get("after") || undefined,
         url.searchParams.get("q") || undefined,
+        url.searchParams.getAll("label"),
       );
       // Only an unpaged, unfiltered read is the whole list: a later page's PRs are old, not new.
-      if (!url.searchParams.get("after") && !url.searchParams.get("q")) noteMine(root, filter, state, listed);
+      if (!url.searchParams.get("after") && !url.searchParams.get("q") && !url.searchParams.getAll("label").length) noteMine(root, filter, state, listed);
       return json(listed);
     }
     /* Which files moved between two commits of this pull request — see filesSince.
@@ -7994,6 +8389,23 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     // Images in a PR body. Not JSON — it streams the bytes back, because
     // GitHub's own attachment URLs 404 without the token this attaches.
     if (pathname === "/prs/asset") return prAsset(url.searchParams.get("url") || "", !!caller && caller.scope !== "full");
+    /* The diff between two commits of this pull request, from the local clone — see compareDiff. */
+    if (pathname === "/prs/compare-diff") {
+      return json(await compareDiff(
+        url.searchParams.get("root") || "",
+        url.searchParams.get("number") || "",
+        url.searchParams.get("from") || "",
+        url.searchParams.get("to") || "",
+      ));
+    }
+    /* A commit's files as a tar, from the local checkout — see treeAt.ts. Read-only, no GitHub request. */
+    if (pathname === "/prs/tree-at") {
+      const t = await treeAtTarget(url.searchParams.get("root") || "", url.searchParams.get("sha") || "", url.searchParams.get("number"));
+      if (!t.ok) return json(t.missing ? { ok: true, missing: t.missing, error: t.error } : t, t.missing ? 200 : 400);
+      const tar = await treeAtTar(t.root, t.sha);
+      if (!tar.ok) return json(tar, 400);
+      return new Response(tar.body, { headers: { "content-type": "application/x-tar", "x-tree-sha": t.sha, "x-tree-files": String(tar.files), "cache-control": "no-store", ...cors } });
+    }
     if (pathname === "/prs/commit-diff") {
       return json(await prCommitDiff(url.searchParams.get("root") || "", url.searchParams.get("sha") || ""));
     }
@@ -10567,7 +10979,14 @@ startCardWatch((n) => broadcast({ type: "card", data: n }));
 /* The same bell for a connected Jira: one search every six minutes, nothing
    at all while Jira is not connected. See jirawatch.ts. */
 import { startJiraWatch, rememberOwnMove as jiraRememberOwnMove, rememberOwnAssign as jiraRememberOwnAssign } from "./jirawatch.ts";
-import { detailStored as jiraDetailRead, mentionableStored as jiraMentionable, commentStored as jiraCommentOn } from "./jiraComments.ts";
+import { boardContext as jiraBoardContext } from "./jiraBoardContext.ts";
+import { rankStored as jiraRank } from "./jiraRank.ts";
+import { serveFileStored as jiraFileServe, attachFileStored as jiraAttach, removeFileStored as jiraUnattach, UPLOAD_MAX as JIRA_UPLOAD_MAX } from "./jiraFiles.ts";
+import { linkKindsStored as jiraLinkKinds, createSubtaskStored as jiraSubtask, relateCardsStored as jiraRelate, unrelateCardsStored as jiraUnrelate, addWebLinkStored as jiraWebLink, removeWebLinkStored as jiraWebUnlink } from "./jiraRelate.ts";
+import { detailStored as jiraDetailRead, mentionableStored as jiraMentionable, commentStored as jiraCommentOn, editCommentStored as jiraCommentEdit, deleteCommentStored as jiraCommentDelete } from "./jiraComments.ts";
+import { setVoteStored as jiraVote, setWatchStored as jiraWatch } from "./jiraFollow.ts";
+import { logWorkStored as jiraWorkLog, editWorkStored as jiraWorkEdit, deleteWorkStored as jiraWorkDelete } from "./jiraWorklog.ts";
+import { editStored as jiraEditCard, labelSuggestionsStored as jiraLabels } from "./jiraEdit.ts";
 startJiraWatch((n) => broadcast({ type: "card", data: n }));
 /* Re-asks the open pull request lists a real client has looked at, on a timer,
    so a comment posted while nobody is on the PRs tab still reaches `noteTalk`

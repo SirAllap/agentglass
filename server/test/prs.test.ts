@@ -306,6 +306,9 @@ describe("asset proxy: Jira avatar hosts", () => {
   test("admits exactly the two hosts a Jira Cloud picture is served from", () => {
     expect(prs.assetAllowed(GRAVATAR)).not.toBeNull();
     expect(prs.assetAllowed(ATL)).not.toBeNull();
+    // The review bot's celebratory gif lives in one folder of its site; nothing else there is fetched.
+    expect(prs.assetAllowed("https://reviewsaur.com/dino-gifs/dino-05.gif")).not.toBeNull();
+    for (const bad of ["https://reviewsaur.com/quiz/abc", "http://reviewsaur.com/dino-gifs/a.gif", "https://reviewsaur.com:8443/dino-gifs/a.gif", "https://u@reviewsaur.com/dino-gifs/a.gif", "https://evil.reviewsaur.com/dino-gifs/a.gif"]) expect(prs.assetAllowed(bad), bad).toBeNull();
   });
 
   test("refuses lookalikes, userinfo, http and sibling hosts", () => {

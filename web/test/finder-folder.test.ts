@@ -75,6 +75,18 @@ describe("the action behind Enter, by kind", () => {
     expect(primaryAction("dir", true)).toMatchObject({ id: "terminal" });
   });
 
+  test("the folder hover card carries the same Terminal here button as the preview, wired through the hook", () => {
+    const strip = (t: string) => t.split("\n").filter((l) => !/^\s*(\/\*|\*|\/\/)/.test(l)).join("\n");
+    const peek = strip(readFileSync(new URL("../src/components/finder/machine/FolderPeek.tsx", import.meta.url), "utf8"));
+    const quick = strip(readFileSync(new URL("../src/components/finder/machine/QuickLook.tsx", import.meta.url), "utf8"));
+    const label = primaryAction("dir")!.label;
+    expect(quick).toContain(`<BarButton icon="terminal" label="${label}"`);
+    expect(peek).toContain(`<BarButton icon="terminal" label="${label}"`);
+    expect(peek).toContain('onBench(path, "terminal")');
+    const finder = strip(readFileSync(new URL("../src/components/finder/machine/MachineFinder.tsx", import.meta.url), "utf8"));
+    expect(finder).toMatch(/useFolderPeek\([^\n]*, onBench\)/);
+  });
+
   test("nobody says 'To the bench' any more", () => {
     for (const f of ["../src/components/finder/InfoRail.tsx", "../src/components/finder/FileView.tsx", "../src/lib/finderFolder.ts"]) {
       const src = readFileSync(new URL(f, import.meta.url), "utf8").split("\n").filter((l) => !/^\s*(\/\*|\*|\/\/)/.test(l)).join("\n");

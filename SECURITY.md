@@ -678,7 +678,7 @@ The agent door (`agentglass-ui jira`, `ui_jira_*`, `POST /jira/door/<verb>`)
 calls what the routes call, so the Jira switch is the screen's switch and its
 refusal is the screen's sentence. It adds:
 
-- **A second switch, and the default is off.** `step` and `link` change a
+- **A second switch, and the default is off.** `step`, `link`, `edit`, `comment`, `comment-edit`, `comment-delete`, `move`, `subtask`, `relate`, `unrelate`, `weblink`, `unweblink`, `worklog`, `worklog-edit`, `worklog-delete`, `watch`, `vote`, `rank`, `attach` and `unattach` change a
   shared site with no click of yours, so they need `AGENTGLASS_CONTROL_LEVEL=3`
   **and** the Jira write switch. The Jira switch alone is not enough: you turn
   it on to use the Jira screen yourself, and that must not hand your cards to
@@ -688,6 +688,22 @@ refusal is the screen's sentence. It adds:
   the refusal is a line in the action log. At level 3 with the Jira switch off
   they answer `Writing to Jira is switched off`. `card`, `moves` and `steps`
   read at every level.
+- **A card's files cross the server, one named host and nothing else.** `GET /jira/file`
+  streams a file's bytes or its small picture so the Jira credential never reaches the
+  page. A Cloud site answers a file request with a redirect to its media host
+  (`api.media.atlassian.com`) and a token in the address: the server follows that one
+  host over https on port 443, sends the credential to the site only, and never returns
+  the address, a header from it or the host's name to the page. Every other host, a
+  plain-http hop, a private or link-local address and more than five hops are refused
+  by the same egress guard as every other outbound call. A caller names a card and a
+  file id, never an address, and only files the card read listed are served. A picture
+  or a video is shown in place only when the site's type and the bytes' type are the
+  same entry of one short list; an HTML page, an SVG, a PDF or anything else is sent as
+  a download of `application/octet-stream` with `nosniff` and a CSP that allows
+  nothing. Limits: 25 MB to show in place, 100 MB to download, 1 MB for a thumbnail,
+  25 MB to add; a stream with no length is counted and cut. `attach` and `unattach`
+  read nothing from a path, and a file is taken off only when the card's own read
+  lists it as one you added.
 - **No verb for the switch itself, the connection or a credential.** An agent
   cannot turn Jira writes on, connect a site or read a token; those are yours.
   The token never appears in an answer.
@@ -699,7 +715,7 @@ refusal is the screen's sentence. It adds:
   stamp. A refusal is a sentence of ours, and it can name a status or a field
   the site holds: it says what happened and is not something to do.
 - **A name and a limit.** Each call carries `--as`, the action log shows
-  `as NAME` and, for `step` and `link`, which card; changes are limited to 30 a
+  `as NAME` and, for the verbs that change a card, which card; changes are limited to 30 a
   minute per caller.
 
 This door **performs**, where the level 3 doors of `/control` only stage a
@@ -1219,7 +1235,7 @@ the full list and defaults:
 | `AGENTGLASS_UNDERSTUDY=0` | the Clone, whatever its settings file says — the variable can force it off, never on |
 | `AGENTGLASS_TMUX_OBSERVE_ONLY` | every tmux command that writes to a session — see [docs/BLAST-RADIUS.md](docs/BLAST-RADIUS.md) |
 | `AGENTGLASS_CLICKUP_WRITE=1` | *(opposite sense)* turns **on** writes to a ClickUp board, which are off by default |
-| `AGENTGLASS_JIRA_WRITE=1` | *(opposite sense)* turns **on** writes to a Jira site, which are off by default; the agent door's `step` and `link` need `AGENTGLASS_CONTROL_LEVEL=3` as well |
+| `AGENTGLASS_JIRA_WRITE=1` | *(opposite sense)* turns **on** writes to a Jira site, which are off by default; the agent door's `step`, `link`, `edit`, `comment`, `comment-edit`, `comment-delete`, `move`, `subtask`, `relate`, `unrelate`, `weblink`, `unweblink`, `worklog`, `worklog-edit`, `worklog-delete`, `watch`, `vote`, `rank`, `attach` and `unattach` need `AGENTGLASS_CONTROL_LEVEL=3` as well |
 | `AGENTGLASS_GATE_FAILCLOSED=1` | *(opposite sense)* makes the gate deny on timeout instead of allowing |
 
 The `/control` channel, which drives the app's own window, has a level switch
@@ -1253,13 +1269,19 @@ value; only an unset variable is the default. What each level means:
   filled in; it may not call a route that writes. The person's click is the
   effect. There are no automatic grants, so `AGENTGLASS_CONTROL_LEVEL=3` lets an
   agent prepare something and never perform it, with one exception outside
-  `/control`: the Jira card door's `step` and `link`, which perform at level 3
+  `/control`: the Jira card door's `step`, `link`, `edit`, `comment`, `comment-edit`, `comment-delete`, `move`, `subtask`, `relate`, `unrelate`, `weblink`, `unweblink`, `worklog`, `worklog-edit`, `worklog-delete`, `watch`, `vote`, `rank`, `attach` and `unattach`, which perform at level 3
   when the Jira write switch is also on (see "Jira, and the agent door to a
-  card"). Five doors ship, all on one pull
-  request: `pr.merge.stage` (method, commit subject and body), `pr.comment.stage`
+  card"). Six doors ship, five on one pull
+  request and one in the Finder: `pr.merge.stage` (method, commit subject and body), `pr.comment.stage`
   (the text), `pr.review.stage` (verdict and text), `card.move.stage` (the new
   status of the card the pull request carries) and `pr.unstick` (opens the Unstick
-  dialog and does not run it). Each opens the dialog the screen already has,
+  dialog and does not run it) and `finder.op.stage` (one reversible file operation
+  on one path: trash, move, copy, rename, new folder or duplicate, with the
+  destination or name it needs; `delete` and `empty-trash` cannot be spelled, so
+  they are refused, and a name with a `/` is refused too). The Finder opens on the
+  folder with the path chosen and draws a confirmation that names the caller and
+  every path, with nothing to edit; the person's press runs it through the same
+  call as the context menu. Each opens the dialog the screen already has,
   filled in, and nothing more: the merge, the comment, the review, the move and
   the unstick happen when the person presses that dialog's own button. What arrived
   is shown as written by the caller (`as` is a label the caller picks, so it is

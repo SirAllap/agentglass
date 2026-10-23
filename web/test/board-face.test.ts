@@ -135,7 +135,6 @@ describe("the table's list fetch", () => {
     expect(load).toContain('const reading = listOutcome(r) === "reading";');
     expect(load).toContain("if (!reading) setPrs(");
     expect(load).toContain("if (!reading && pageRanOut(");
-    expect(load).toContain("if (!reading) setRowCursor(");
   });
   it("still records the loading state, so the settle timer asks again", () => {
     expect(load).toContain("fetchedAt: reading ? st.fetchedAt : r.fetchedAt, loading: r.loading");

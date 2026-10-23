@@ -142,6 +142,14 @@ export const FACETS: InboxFacet[] = [
   { id: "review", label: "Review requested", reasons: ["review_requested"], hint: "Somebody asked you to look" },
 ];
 
+/** "All reasons" and the five named filters as chips, each with the number of rows it would leave. */
+export function reasonChips(items: InboxItem[]): { id: string; label: string; hint: string; n: number }[] {
+  return [
+    { id: "", label: "All reasons", hint: "Every reason", n: items.length },
+    ...FACETS.map((f) => ({ id: f.id, label: f.label, hint: f.hint, n: items.filter((n) => inFacet(n, f.id)).length })),
+  ];
+}
+
 export const facetById = (id: string): InboxFacet | undefined => FACETS.find((f) => f.id === id);
 
 /** Does this row belong to that named filter? An unknown id filters nothing,

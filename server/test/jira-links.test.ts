@@ -81,6 +81,26 @@ function suite(flavor: FakeFlavor) {
       expect(fake.requests.length).toBe(1);
     });
 
+    test("an address only in a comment costs no request: the detail read carries it, the links read stays one", async () => {
+      const D = await import("../src/jiraComments.ts");
+      const issue = fake.state.issues[KEY]!;
+      const text = (d: { description: string; comments: { text: string }[] }) => [d.description, ...d.comments.map((c) => c.text)].join("\n");
+      // The same card read twice: once as it is, once with a comment that names a pull request. Same requests.
+      await J.withStored((c) => D.readDetail(c, KEY, { fresh: true })); // warms the site's remembered field lists
+      fake.requests.length = 0;
+      const plain = await J.withStored((c) => D.readDetail(c, KEY, { fresh: true }));
+      const before = fake.requests.length;
+      issue.comments.push({ id: "9001", author: issue.reporter, created: "2026-10-01T10:00:00.000+0000", updated: "2026-10-01T10:00:00.000+0000", body: dc ? `Pull request: ${PR}` : { type: "doc", version: 1, content: [{ type: "paragraph", content: [{ type: "text", text: `Pull request: ${PR}` }] }] } });
+      fake.requests.length = 0;
+      const withMention = await J.withStored((c) => D.readDetail(c, KEY, { fresh: true }));
+      expect(fake.requests.length).toBe(before);
+      expect(plain.ok && text(plain.data!.detail)).not.toContain(PR);
+      expect(withMention.ok && text(withMention.data!.detail)).toContain(PR);
+      fake.requests.length = 0;
+      expect(await J.remoteLinksStored(KEY)).toEqual({ ok: true, data: [] });
+      expect(fake.requests.length).toBe(1);
+    });
+
     test("linking twice costs one write", async () => {
       expect(await J.linkPullRequestStored(KEY, PR, "Retry the export")).toEqual({ ok: true, linked: true, url: PR });
       expect(await J.linkPullRequestStored(KEY, PR, "Retry the export")).toEqual({ ok: true, linked: false, url: PR });

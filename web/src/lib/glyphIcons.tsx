@@ -259,6 +259,11 @@ export function EyeOffIcon({ size = ICON.sm, className }: P) {
   return <svg {...svg(size, className)}><path d="M1.4 7S3.6 3 7 3s5.6 4 5.6 4-2.2 4-5.6 4S1.4 7 1.4 7z" /><circle cx="7" cy="7" r="1.8" /><path d="M2.4 12L11.6 2" /></svg>;
 }
 
+/** 👍 */
+export function ThumbUpIcon({ size = ICON.sm, className }: P) {
+  return <svg {...svg(size, className)}><path d="M1.8 6.2h2.4v5.6H1.8z" /><path d="M4.2 6.4 6.3 2.3a1.2 1.2 0 0 1 1.7 1.3L7.6 5.6h3.2a1 1 0 0 1 1 1.2l-.8 4a1 1 0 0 1-1 .8H4.2" /></svg>;
+}
+
 /** 🏷 */
 export function TagIcon({ size = ICON.sm, className }: P) {
   return <svg {...svg(size, className)}><path d="M1.9 2.9v3.5l5.6 5.6 4.4-4.4-5.6-5.6H2.9a1 1 0 0 0-1 .9z" /><circle cx="4.6" cy="4.6" r=".8" /></svg>;

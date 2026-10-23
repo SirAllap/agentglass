@@ -987,10 +987,14 @@ const CSP = [
      what "add to home screen" is made of on the HTTP twin of this policy. */
   "manifest-src 'self'",
   "font-src 'self' data:",
-  "media-src 'self' data: blob:",
+  /* Audio and video the finder plays come from the sidecar, which is a different
+     origin from the desktop page: `'self'` alone would refuse them. */
+  "media-src 'self' data: blob: http://127.0.0.1:* http://localhost:*",
   "connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*",
   "worker-src 'self' blob:",
-  "frame-src 'self'",
+  /* The finder's PDF viewer frames a file the sidecar serves; Rendered HTML is
+     a srcdoc, which no frame-src judges. */
+  "frame-src 'self' http://127.0.0.1:* http://localhost:*",
   "child-src 'self'",
   "object-src 'none'",
   "base-uri 'none'",

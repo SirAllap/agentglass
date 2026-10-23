@@ -1936,6 +1936,8 @@ export type WsFrame =
    *  `/desktop/palette`, as it does at boot, instead of polling it. */
   | { type: "desktop-palette" }
   | { type: "tasks" }
+  /** A volume appeared, went, mounted, unmounted, locked or unlocked. Carries nothing: the finder re-reads `/finder/devices`. */
+  | { type: "devices" }
   /** The list of pending gate holds changed (one arrived, was decided, timed
    *  out, or was answered by a rule). Carries no payload: the client re-reads
    *  `/gate/pending`, which replaces a two second poll of it. */
@@ -3507,6 +3509,13 @@ export interface PrSummary {
    */
   mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
   /**
+   * A required check that never reported and is not running, as the detail's
+   * merge box read it. Not on any list payload (the list does not know which
+   * checks the base requires), so the board overlays it from what the detail
+   * learned: see `web/src/lib/prKnownBlock.ts`.
+   */
+  requiredMissing?: boolean;
+  /**
    * The commit `checks` describes — and therefore the only commit a merge
    * started from this row is allowed to land.
    *
@@ -3533,6 +3542,32 @@ export interface PrSummary {
    * is on screen.
    */
   talk?: PrTalk[];
+  /**
+   * What a finished pull request ended as. Only on a merged or closed row, and
+   * only once the details have been read: a finished pull request never changes,
+   * so the server keeps this for good (see prClosedStore.ts) and the card draws
+   * it without a loading state.
+   */
+  closed?: PrClosedFacts;
+}
+
+/** The final facts of a merged or closed pull request. See `closed` on PrSummary. */
+export interface PrClosedFacts {
+  /** When it was merged or closed, ISO. */
+  at: string;
+  /** When it was opened, ISO: the card says how long it stayed open. */
+  openedAt: string;
+  /** Who merged it, or who closed it. Null when GitHub does not say. */
+  by: string | null;
+  /** How it landed. Null when it was not merged or the commit is gone. */
+  method: "squash" | "merge" | "rebase" | null;
+  /** Final check counts at the head commit, and up to two red names. */
+  checks: { total: number; success: number; failure: number; skipped: number; failing: string[] };
+  commits: number;
+  /** Everyone's last verdict, the number of review rounds and of comments. */
+  reviews: { approved: string[]; changes: string[]; rounds: number; comments: number };
+  /** The last human comment, one line, for a pull request closed without merging. */
+  why: string | null;
 }
 
 /** Why the merge button is grey. A disabled control that can't say why is the
@@ -3908,6 +3943,9 @@ export interface PrMergeGate {
 }
 
 export interface PrDetail extends PrSummary {
+  /** The base branch's tip the pull request was last compared against (40 hex).
+   *  `headSha` is inherited from the row and is the head's. */
+  baseSha?: string;
   /** The author's profile name and public email, when GitHub has them: what a
    *  tracker member is matched against. Absent for a bot or a private profile. */
   authorName?: string;
@@ -3974,6 +4012,17 @@ export interface PrDetail extends PrSummary {
   truncated?: { files?: number; commits?: number; comments?: number; threads?: number; checks?: number };
 }
 
+/** What the last GitHub answer said about the hourly budget. */
+export interface PrRate {
+  limit: number;
+  remaining: number;
+  /** Epoch ms when it refills; 0 when never said. */
+  resetAt: number;
+  /** A limit answer is in force: nothing is asked until `resetAt`. */
+  limited: boolean;
+  seenAt: number;
+}
+
 export interface PrListResponse {
   ok: boolean;
   /** Null when this directory has no forge remote we understand. */
@@ -3982,6 +4031,12 @@ export interface PrListResponse {
   /** When the cached copy was taken. The UI shows this rather than pretending
    *  to be live — every number here costs a subprocess. */
   fetchedAt: number;
+  /** When the rows were last really read from GitHub. `fetchedAt` also moves on
+   *  a read that failed (so the poll does not re-ask every beat); this does not,
+   *  so it is the age of what is on screen. */
+  dataAt?: number;
+  /** GitHub's GraphQL budget as the last answer left it; absent before any. */
+  rate?: PrRate;
   /** When the read behind these rows was SENT, on the server's clock (0 when
    *  unknown). A write's `at` is on the same clock: the only pair a client may
    *  compare to know whether a read saw the write. */
@@ -4614,6 +4669,29 @@ export interface FindReport {
 /** A folder the machine search may be rooted at — see server/src/disk.ts.
  *  `places` is a menu, `roots` is the boundary; the two are not the same list. */
 export interface DiskPlace { path: string; label: string }
+/** One row of the finder's DEVICES list: a volume udisks knows, as the sidebar draws it. */
+/** One line of GTK's bookmarks file: a pinned place. `path` is set for a folder of this machine; a remote (sftp, smb) has only its `uri`. */
+export interface PinnedPlace { uri: string; label: string; path?: string }
+
+export interface Volume {
+  /** The block device the actions name (`/dev/sdb1`); the server resolves it against its own last listing. */
+  id: string; name: string;
+  encrypted: boolean; locked: boolean; mounted: boolean; mountPoint?: string;
+  /** What the eject button does and says: "eject" for removable media, "unmount" for the rest, none for neither. */
+  release: "eject" | "unmount" | null;
+  size: number;
+  /** Set on a mounted remote (`id` is then its address): which protocol, so the row is drawn and offered Disconnect as Strata's. */
+  remote?: "smb" | "sftp";
+}
+/** One step of connecting to a remote: what gio is waiting for, or how it ended. Everything in `message` is gio's own text and is shown as text, never run. */
+export type RemoteStep =
+  | { state: "password"; session: string; message: string; fields: ("User" | "Domain" | "Password")[]; defaults: { User?: string; Domain?: string } }
+  | { state: "question"; session: string; message: string; choices: string[] }
+  | { state: "done"; mountPoint?: string; uri: string }
+  | { state: "error"; error: string; missing?: boolean };
+/** What the Network row finds: addresses gio can list on `network:///`. */
+export interface NetworkList { ok: boolean; entries: { name: string; uri: string }[]; error?: string }
+export interface VolumeList { ok: boolean; devices: Volume[]; error?: string }
 export interface DiskPlaces { ok: boolean; home: string; roots: string[]; places: DiskPlace[]; error?: string }
 
 /* --- browsing a place, and looking at a file ------------------------------
@@ -4650,6 +4728,19 @@ export interface BrowseReport {
   error?: string;
 }
 
+/** One page of a folder, `/browse/list`: the disk's order, 128 at a time. Mirrors server/src/browselist.ts. */
+export interface BrowsePage {
+  ok: boolean;
+  path: string;
+  /** Entries in the folder after the hidden rule, known from the first page. */
+  total: number;
+  entries: BrowseEntry[];
+  /** Where the next page starts; null on the last. */
+  next: number | null;
+  hiddenSkipped: number;
+  error?: string;
+}
+
 export type PreviewKind = "image" | "image-convert" | "text" | "pdf" | "video" | "audio" | "binary" | "dir";
 
 export interface FileFacts {
@@ -4669,6 +4760,19 @@ export interface FileFacts {
   /** For an image the browser cannot draw: the tool on this machine that
    *  could convert it, or null when there is none. */
   converter?: string | null;
+  error?: string;
+}
+/** What ffprobe says about an audio or video file. Mirrors server/src/mediafacts.ts. */
+export interface MediaFacts {
+  ok: boolean;
+  duration?: number;
+  video?: { codec: string; width: number; height: number; fps?: number };
+  audio?: { codec: string; channels?: number; sampleRate?: number };
+  bitRate?: number;
+  title?: string;
+  artist?: string;
+  album?: string;
+  track?: string;
   error?: string;
 }
 /** What git knows about one file the finder has selected. Mirrors server/src/fileGit.ts. */
@@ -5209,6 +5313,20 @@ export type InstallSource =
       plugin: { url: string; ref: string | null; sha256?: string };
     };
 
+/** What an update did, in the words the window and the terminal both print. */
+export interface PluginUpdateReport {
+  /** False when there was nothing newer to install; the plugin is untouched. */
+  changed: boolean;
+  /** The ref installed before and the one installed now (or still), null for a default branch. */
+  from: string | null;
+  to: string | null;
+  /** The tree was held to a content hash the source named. */
+  sha256Verified: boolean;
+  /** The plugin cannot run until somebody approves what it now declares. */
+  needsApproval: boolean;
+  message: string;
+}
+
 export interface PublicPlugin {
   name: string;
   publisher: string;
@@ -5274,6 +5392,11 @@ export interface PublicPlugin {
   /** The first line bwrap wrote to stderr the last time this plugin's box
    *  died in its opening instant. Set only while nothing is running. */
   lastBoxFailure?: string;
+  /** How the last run ended when it ended within ~10 s of starting: exit code
+   *  or signal, the last lines it wrote to stderr (redacted, at most 2 KB) and
+   *  how long it lived. Kept in memory until the next start; a plugin that ran
+   *  longer has none. Set only while nothing is running. */
+  lastExit?: { code: number | null; signal: string | null; stderrTail: string; afterMs: number };
   /** The other plugins whose key this one can read — see `PublicPlugin` in
    *  server/src/plugins.ts. Present only while it runs outside its box. */
   canReadKeysOf?: string[];
@@ -5326,3 +5449,30 @@ export interface LogDigest {
   /** Nothing worth a look; the badge is drawn only when this is false. */
   quiet: boolean;
 }
+
+/** One file operation, as POST /fs/op takes it (server/src/fsroute.ts). */
+export interface FsBody {
+  op: "mkdir" | "newfile" | "folder-with" | "rename" | "trash" | "restore" | "empty-trash" | "delete" | "copy" | "move" | "duplicate" | "compress" | "chmod" | "undo" | "redo";
+  path?: string; paths?: string[]; parent?: string; dest?: string; name?: string; ids?: string[];
+  confirm?: number; conflict?: "fail" | "keep-both"; format?: "zip" | "7z" | "tar.gz" | "tar"; password?: string; mode?: number;
+}
+export interface FsJob { id: string; kind: string; label: string; state: "running" | "done" | "error" | "cancelled"; total: number | null; done: number; items: number; error?: string; output?: string; started: number; ended?: number }
+/** What every operation answers: ok, or the sentence that says why not, plus what Ctrl+Z would undo now. */
+export interface FsAnswer {
+  ok: boolean; error?: string; path?: string; created?: string[]; job?: FsJob;
+  undo?: { available: boolean; label: string | null };
+  redo?: { available: boolean; label: string | null };
+}
+/** One application Open With offers: the id is all the server takes back. */
+export interface OpenWithApp { id: string; name: string; comment: string; icon: string }
+export interface OpenWithList { ok: boolean; error?: string; mimes?: string[]; defaultId?: string | null; recommended?: OpenWithApp[]; other?: OpenWithApp[]; empty?: string }
+/** One of the person's own finder actions, as the server lists it (server/src/finderactions.ts holds the rules). */
+export interface FinderAction {
+  schema_version: 1; id: string; name: string; description: string; icon: string; enabled: boolean; menu: "submenu" | "top";
+  when: { kinds: ("file" | "folder")[]; extensions: string[]; mime_types: string[]; min_items: number; max_items: number | null };
+  run: { runtime: "python" | "bash" | "command"; entrypoint: string; program: string; args: string[]; mode: "whole-selection" | "per-item"; on_error: "continue" | "stop"; working_directory: "parent" | "home" | "action"; confirm: boolean };
+  unavailable?: string; script?: string;
+}
+export interface FinderActionList { ok: boolean; error?: string; actions: FinderAction[]; problems: { id: string; error: string }[] }
+export interface FsTrashRow { id: string; name: string; from: string; deleted: string; kind: "dir" | "file" | "link"; bytes: number | null }
+export interface FsProps { path: string; name: string; kind: "dir" | "file" | "link"; bytes: number | null; mtime: number; mode: number; owner: string; group: string; link: string | null; hidden: boolean; mine: boolean }

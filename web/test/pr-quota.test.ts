@@ -60,6 +60,7 @@ describe("pull-request panel GitHub budget", () => {
     const press = CODE.slice(at, CODE.indexOf("}} disabled={busy} small", at));
     expect(press).not.toContain("forgetRollups(");
     expect(press).toMatch(/if \(boardShown\) \{\s*boardForce\.current = true;/);
-    expect(press).toContain("loadList(!boardShown || tableIsQueue)");
+    expect(press).toContain("const listOnScreen = !boardShown || BOARD_IS_WIDE;");
+    expect(press).toContain("loadList(listOnScreen)");
   });
 });

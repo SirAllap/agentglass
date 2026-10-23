@@ -193,6 +193,33 @@ describe("planWorker: every refusal is a sentence that names the thing refused",
     expect(r.ok && r.startedBy.rule).toBe("Plan nearly used");
   });
 
+  test("an OpenCode entry with no model runs the engine's own default, and the stamp says so", () => {
+    const q = withRule(p, { workers: { builder: [{ engine: "opencode", model: "" }] } });
+    const r = planWorker({ role: "builder" }, view(q), on, FLEET, null);
+    expect(r.ok && r.choice).toEqual({ engine: "opencode", model: agentProvider("opencode")!.seatModel! });
+    expect(r.ok && r.startedBy.model).toBe("opencode/big-pickle");
+    expect(r.ok && r.startedBy.because.join(" ")).toContain("so it ran its default, opencode/big-pickle");
+    // A picked engine takes the same road.
+    const asked = planWorker({ role: "builder", engine: "opencode" }, view(q), on, FLEET, null);
+    expect(asked.ok && asked.choice.model).toBe("opencode/big-pickle");
+  });
+
+  test("an explicit model is kept, and an engine that picks its own is untouched", () => {
+    const named = planWorker({ role: "builder" }, view(withRule(p, { workers: { builder: [{ engine: "opencode", model: "acme/orbit-1" }] } })), on, FLEET, null);
+    expect(named.ok && named.choice.model).toBe("acme/orbit-1");
+    expect(named.ok && named.startedBy.because.join(" ")).not.toContain("default");
+    const claude = planWorker({ role: "builder" }, view(base({ engine: "claude", model: "" })), none, FLEET, null);
+    expect(claude.ok && claude.choice.model).toBe("");
+  });
+
+  test("a bad explicit value is still refused by the turn, naming the value", () => {
+    const q = withRule(p, { workers: { builder: [{ engine: "opencode", model: "orbit-1" }] } });
+    const r = planWorker({ role: "builder" }, view(q), on, FLEET, null);
+    expect(r.ok && r.choice.model).toBe("orbit-1");
+    const t = headlessTurn({ engine: "opencode", bin: "/bin/true", model: "orbit-1", role: builder, envelope: NARROW, limits: { turnMinutes: 5 } as never, prompt: "x" });
+    expect(!t.ok && t.error).toContain(`"orbit-1" is not one`);
+  });
+
   test("no such role", () => {
     const r = planWorker({ role: "janitor" }, view(p), none, FLEET, null);
     expect(!r.ok && r.error).toBe("no such role");

@@ -128,10 +128,12 @@ describe("a pinned install says how it updates", () => {
     expect(pinnedByMarket({ kind: "local-path", path: "/x" })).toBeNull();
   });
 
-  test("its card offers no Update that would fetch the same commit, and says where the update is", () => {
-    expect(code).toContain('const updatable = plugin.source.kind !== "local-path" && !pinned;');
+  test("its card keeps Update, which reads the market again, and says so", () => {
+    // The server re-reads the catalogue for a market install, so Update is no
+    // longer a re-fetch of the same commit and the card no longer hides it.
+    expect(code).toContain('const updatable = plugin.source.kind !== "local-path";');
     expect(pane).toMatch(/Pinned to .* by the market/);
-    expect(pane).toContain("with an Update button when it lists a newer version");
+    expect(pane).toContain("Update reads the market");
   });
 });
 

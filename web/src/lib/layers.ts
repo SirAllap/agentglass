@@ -47,7 +47,7 @@ export const LAYER = {
   benchOverlay: 10035,
 
   /**
-   * The file palette.
+   * The finder.
    *
    * Above the viewer, and that is the whole design rather than a detail: the
    * palette stays open when it opens a document so the next result is a

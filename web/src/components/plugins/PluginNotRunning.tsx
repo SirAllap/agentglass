@@ -1,4 +1,8 @@
+import { useEffect, useState } from "react";
+import { api } from "../../lib/api.ts";
 import { openSettings } from "../../lib/openSettings.ts";
+import type { PublicPlugin } from "../../../../shared/types.ts";
+import { PluginWhyStopped } from "./PluginWhyStopped.tsx";
 import { Button, LINE } from "../workspace/Chrome.tsx";
 
 /**
@@ -7,6 +11,13 @@ import { Button, LINE } from "../workspace/Chrome.tsx";
  * live canvas shows it as a bar over the scene it last had.
  */
 export function PluginNotRunning({ plugin, bar }: { plugin: string; bar?: boolean }) {
+  // One read when the panel turns up: the reason is a few lines, not a feed.
+  const [why, setWhy] = useState<Pick<PublicPlugin, "lastExit" | "lastBoxFailure"> | null>(null);
+  useEffect(() => {
+    let live = true;
+    api.plugins().then((r) => { const p = r.plugins.find((x) => x.name === plugin); if (live && p) setWhy(p); }).catch(() => { /* no reason shown */ });
+    return () => { live = false; };
+  }, [plugin]);
   if (bar) {
     return (
       <div role="status" className="flex items-center gap-3 px-3 py-2 rounded-xl" style={{ background: "var(--surface-card)", border: LINE }}>
@@ -24,6 +35,7 @@ export function PluginNotRunning({ plugin, bar }: { plugin: string; bar?: boolea
           keeps stopping, the plugin exited on its own.
         </div>
         <Button onClick={() => openSettings("plugins")} className="mt-1">Open plugin settings</Button>
+        {why && <div className="mt-2 w-full text-left"><PluginWhyStopped plugin={why} /></div>}
       </div>
     </div>
   );

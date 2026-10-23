@@ -17,7 +17,7 @@
 // guard is applied at the upgrade route.
 import { readFileSync, existsSync, statSync, mkdtempSync, writeFileSync, renameSync, rmSync, readdirSync } from "node:fs";
 import { readdir } from "node:fs/promises";
-import { join, basename } from "node:path";
+import { join, basename, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import type { ServerWebSocket } from "bun";
 import { isViewTemp, viewTempDirOf } from "./viewtemp.ts";
@@ -30,7 +30,7 @@ import { inScope, workspaceRoot, terminalDisabledSource, tmuxTerminal, tmuxPrefi
 import { noteNvimArgv } from "./bench.ts";
 import { engineAttachArgv, engineBenchArgv, engineConsoleArgv, engineWindowRunning, engineSplitRunning, engineSessionName } from "./tmuxpane.ts";
 import { confHealth, ensureConf } from "./tmuxconf.ts";
-import { readerSocketPath, readerSessionState, endReaderSession, BENCH_READER_SLOT } from "./bench.ts";
+import { readerSocketPath, readerSessionState, endReaderSession, finderEditSocketPath, BENCH_READER_SLOT, FINDER_EDIT_SLOT } from "./bench.ts";
 import { browseReal } from "./browse.ts";
 import { SKIP_DIRS } from "./gitwork.ts";
 
@@ -133,6 +133,8 @@ const TMUX_BAR_HEAL_BUDGET = 3;
 const REMOUNT_FAILS_BEFORE_QUIET = 3;
 const REMOUNT_QUIET_MS = 60_000;
 export type PtyWsData = { kind: "pty"; root: string; cols: number; rows: number;
+  /** The caller is this machine's own loopback: a dotted file under home is then a file it may edit, as it may read it in the Finder. */
+  local?: boolean;
   /** A file to open in an editor instead of dropping to a shell. A PATH, never
    *  a command: this socket is reachable from the UI, and "run this string"
    *  would turn a terminal into arbitrary execution. The server picks what
@@ -702,13 +704,29 @@ export function chooseRun(o: {
  * May the bench open this file in an editor?
  *
  * The workspace, a copy this server wrote, or anything the finder is allowed
- * to read. The last one is the regression: the palette's Machine tab lists
+ * to read. The last one is the regression: the finder lists
  * ~/Documents and offers the file, but this door only knew the workspace, so
  * the bench tab opened on a plain shell prompt and nvim never started. One
- * door per question: if the palette may read it, the editor may show it.
+ * door per question: if the finder may read it, the editor may show it.
  */
-export function viewableFile(wanted: string | null, tempCopy: boolean): boolean {
-  return !!wanted && (inScopeReal(wanted) || tempCopy || browseReal(wanted) !== null);
+export function viewableFile(wanted: string | null, tempCopy: boolean, local = false): boolean {
+  return !!wanted && (inScopeReal(wanted) || tempCopy || browseReal(wanted, local) !== null);
+}
+
+/**
+ * The editor the Finder's Editing tab runs, as the pane's own command: in the
+ * folder of the file rather than in whichever checkout the bench key names
+ * (that is where a shell would have been, and a person editing a dotfile in
+ * `~` read a prompt in some other project's tree). `env -C` takes the folder
+ * as one argv element, so a name with spaces or quotes needs no escaping, and
+ * the path never reaches a shell.
+ */
+export function finderEditRun(editorArgv: string[], file: string): string[] {
+  // The wrapper makes the pane end cleanly: the engine keeps a pane whose command failed ("Pane is dead"), and the next Editing session would re-attach to it.
+  // No swap file: this editor lives in a pane that dies with the tab (a killed session, a crash, a closed pane), and a swap left behind is the "E325: swap file exists" prompt on the next Editing, in a directory nobody here owns. What it gives up is crash recovery of unsaved text; "Unsaved changes" already asks before the tab is left.
+  const bin = (editorArgv[0] ?? "").split("/").pop() ?? "";
+  const quiet = /^n?vim$/.test(bin) ? [editorArgv[0]!, "--cmd", "set noswapfile", ...editorArgv.slice(1)] : editorArgv;
+  return ["env", "-C", dirname(file), "sh", "-c", '"$@"; exit 0', "sh", ...quiet];
 }
 
 /**
@@ -793,7 +811,7 @@ export function ptyOpen(ws: PtyWs) {
   // In scope, or a copy this server itself wrote: a pull request's file is
   // fetched to a temp path precisely because it is not in the workspace, and
   // the check has to admit that without admitting /tmp in general.
-  const viewable = viewableFile(wanted, tempCopy);
+  const viewable = viewableFile(wanted, tempCopy, d.local === true);
   const editor = viewable && existsSync(wanted!) ? editorFor() : null;
   /*
    * Read-only unless the caller asked for an editor, and never for a copy.
@@ -828,7 +846,7 @@ export function ptyOpen(ws: PtyWs) {
   const editorSock = editor && /\bnvim$/.test(bin)
     /* `cwd`, not `startIn`: the checkout the client named and this server
        validated, which is the same key /bench/edit derives the path from. */
-    ? (d.bench ? { id: null as string | null, path: readerSocketPath(cwd) } : newEditorSocket())
+    ? (d.bench === FINDER_EDIT_SLOT ? { id: null as string | null, path: finderEditSocketPath(cwd) } : d.bench ? { id: null as string | null, path: readerSocketPath(cwd) } : newEditorSocket())
     : null;
   const readOnly = !d.edit || tempCopy;
   const readonlyFlags = readOnly && /\b(nvim|vim|view)$/.test(bin) ? ["-R", "-M"] : [];
@@ -948,7 +966,15 @@ export function ptyOpen(ws: PtyWs) {
      a plain shell: the client asked /bench/note first and only sends this when
      it said yes. */
   const noteRun = d.bench && d.note ? noteNvimArgv(cwd) : null;
-  const benchRuns = d.bench ? (agentRun.length ? agentRun : noteRun ?? editorArgv) : null;
+  const benchRuns = d.bench ? (agentRun.length ? agentRun : noteRun ?? (editorArgv && d.bench === FINDER_EDIT_SLOT ? finderEditRun(editorArgv, wanted!) : editorArgv)) : null;
+  /* The Editing tab is an editor or it says why: a prompt under a tab that was asked for nvim reads as "nvim did not start". */
+  if (d.bench === FINDER_EDIT_SLOT && d.view && !agentRun.length && !noteRun && !editorArgv) {
+    if (wired) wired.dispose();
+    const why = !viewable ? "is not a file the Finder may open here" : !existsSync(wanted!) ? "is not there any more" : "has no editor to open it (set $EDITOR or install nvim)";
+    ctl(ws, { t: "fatal", error: `${basename(wanted ?? String(d.view))} ${why}` });
+    ws.close(1008, "nothing to edit");
+    return;
+  }
   /*
    * The reader is an editor or it is nothing.
    *

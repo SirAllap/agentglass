@@ -158,6 +158,10 @@ def jira_tools(level=3):
                 props[k] = {"type": "integer", "minimum": 0, "description": why}
             elif k in UI._JIRA_BOOL:
                 props[k] = {"type": "boolean", "description": why}
+            elif k == "fields":
+                props[k] = {"type": "object", "additionalProperties": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]}, "description": why}
+            elif k == "kind":
+                props[k] = {"type": "string", "enum": ["history", "worklog", "comments"], "description": why}
             elif k == "trigger":
                 props[k] = {"type": "string", "enum": ["handoff", "review", "merge"], "description": why}
             else:
@@ -170,8 +174,8 @@ def jira_tools(level=3):
             "name": "ui_jira_" + verb, "description": desc,
             "inputSchema": {"type": "object", "properties": props, "required": required, "additionalProperties": False},
             # A step can take the assignee off and move the card; a link only adds one.
-            "annotations": {"readOnlyHint": not spec["acting"], "destructiveHint": verb == "step",
-                            "idempotentHint": verb != "step", "openWorldHint": spec["acting"]},
+            "annotations": {"readOnlyHint": not spec["acting"], "destructiveHint": verb in ("step", "comment-delete", "unrelate", "unweblink", "worklog-delete", "unattach"),
+                            "idempotentHint": verb not in ("step", "comment", "comment-delete", "subtask", "move"), "openWorldHint": spec["acting"]},
         })
     return tools
 
@@ -237,7 +241,7 @@ def handle_message(msg):
                 "app exposes. Reads (ui_state, ui_read, ui_settings_get, ui_settings_list) show nothing; opens are quiet "
                 "and wait behind a chip while the person types (now=true only when they just asked to be shown). "
                 "A stage tool (level 3, when the owner allows it) only prepares a dialog filled in with what you wrote, for the person to read, edit and press themselves: nothing is merged, posted, submitted or moved by you. "
-                + "ui_jira_card, ui_jira_moves and ui_jira_steps read a Jira card; ui_jira_step and ui_jira_link change it, only on a server at control level 3 where the owner has also switched Jira writes on; below that level they are not listed, and with the switch off they answer with the screen's own sentence. "
+                + "ui_jira_card, ui_jira_moves, ui_jira_links, ui_jira_linktypes, ui_jira_activity and ui_jira_steps read a Jira card; ui_jira_step, ui_jira_link, ui_jira_edit, ui_jira_comment, ui_jira_comment-edit, ui_jira_comment-delete, ui_jira_move, ui_jira_subtask, ui_jira_relate, ui_jira_unrelate, ui_jira_weblink, ui_jira_unweblink, ui_jira_worklog, ui_jira_worklog-edit, ui_jira_worklog-delete, ui_jira_watch, ui_jira_vote, ui_jira_rank, ui_jira_attach and ui_jira_unattach change it, only on a server at control level 3 where the owner has also switched Jira writes on; below that level they are not listed, and with the switch off they answer with the screen's own sentence. "
                 + UNTRUSTED + " Never set a secret. To undo a change, set the setting back to `prev`."),
         })
     if method == "tools/list":

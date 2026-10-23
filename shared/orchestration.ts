@@ -345,7 +345,7 @@ function validParts(o: Record<string, unknown>, at: string): Validated<Parts> {
   const workerDefault = validEnvelope(o.workerDefault, `${at}.workerDefault`);
   if (!workerDefault.ok) return workerDefault;
   if (!envelopeWithin(workerDefault.value, ceiling.value)) {
-    return bad(`${at}.workerDefault`, "is wider than the ceiling; lower the default or raise the ceiling on purpose");
+    return bad(`${at}.workerDefault`, "is wider than the most the main agent may allow; lower the default or raise that limit on purpose");
   }
 
   const l = closed(o.limits, `${at}.limits`, ["maxWorkers", "turnMinutes", "maxRetries"]);

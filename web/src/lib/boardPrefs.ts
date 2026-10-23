@@ -103,3 +103,57 @@ export function walkable<T>(
   if (o.folded) return [];
   return o.opened ? all : all.slice(0, o.cap);
 }
+
+/*
+ * Sort order per lane, and where the board was left.
+ *
+ * Same namespace and same rule as the folds above: a lane with no entry is the
+ * default, and the default is never written down, so changing it later cannot
+ * disagree with what is stored. Scroll is per repository (the key carries it)
+ * because two boards of different shapes would otherwise restore each other's
+ * offsets.
+ */
+import { SORT_KEYS, type SortKey } from "./prSort.ts";
+
+const SORT_KEY = "agentglass.pr.laneSort";
+
+export function laneSorts(known: readonly string[]): Record<string, SortKey> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SORT_KEY) ?? "null") as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out: Record<string, SortKey> = {};
+    for (const [id, v] of Object.entries(parsed)) {
+      if (known.includes(id) && (SORT_KEYS as readonly unknown[]).includes(v) && v !== "default") out[id] = v as SortKey;
+    }
+    return out;
+  } catch { return {}; }
+}
+
+export function setLaneSorts(sorts: Record<string, SortKey>): void {
+  try {
+    const kept = Object.fromEntries(Object.entries(sorts).filter(([, v]) => v !== "default"));
+    if (!Object.keys(kept).length) localStorage.removeItem(SORT_KEY);
+    else localStorage.setItem(SORT_KEY, JSON.stringify(kept));
+  } catch { /* private mode */ }
+}
+
+export interface BoardScroll { x: number; lanes: Record<string, number> }
+
+const scrollKey = (repo: string) => `agentglass.pr.scroll.${repo}`;
+
+export function boardScroll(repo: string): BoardScroll {
+  try {
+    const p = JSON.parse(localStorage.getItem(scrollKey(repo)) ?? "null") as Partial<BoardScroll> | null;
+    const num = (n: unknown) => (typeof n === "number" && Number.isFinite(n) && n > 0 ? n : 0);
+    const lanes: Record<string, number> = {};
+    if (p && typeof p.lanes === "object" && p.lanes) for (const [id, y] of Object.entries(p.lanes)) if (num(y)) lanes[id] = num(y);
+    return { x: num(p?.x), lanes };
+  } catch { return { x: 0, lanes: {} }; }
+}
+
+export function setBoardScroll(repo: string, s: BoardScroll): void {
+  try {
+    if (!s.x && !Object.keys(s.lanes).length) localStorage.removeItem(scrollKey(repo));
+    else localStorage.setItem(scrollKey(repo), JSON.stringify(s));
+  } catch { /* private mode */ }
+}

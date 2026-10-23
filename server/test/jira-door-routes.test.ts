@@ -118,6 +118,55 @@ describe("the card door", () => {
     expect((r.body.untrusted.moves as { toStatus: string }[]).map((m) => m.toStatus)).toContain("In Review");
   });
 
+  step("card: what the site's development tool holds is on the door, counts in state and its words under untrusted; a card with none carries no key", async () => {
+    const none = await door(b, "card", { key: "ORBIT-1042" });
+    expect(none.body.state.development).toBeUndefined();
+    expect(none.body.untrusted.development).toBeUndefined();
+    b.fake.state.dev[b.fake.state.issues["ORBIT-1042"]!.id] = { tool: "GitHub", pullRequests: [{ name: "Retry the export", url: "https://github.com/acme/orbit/pull/2196", status: "MERGED", reviewers: [{ name: "Bo Sample", approved: true }] }] };
+    const r = await door(b, "card", { key: "ORBIT-1042" });
+    expect(r.body.state.development).toMatchObject({ pullRequests: 1, branches: 0, commits: 0, builds: 0 });
+    expect(JSON.stringify(r.body.state)).not.toContain("Retry the export");
+    expect(r.body.untrusted.development.pullRequests).toMatchObject([{ title: "Retry the export", state: "MERGED", approvedBy: ["Bo Sample"] }]);
+    b.fake.state.dev = {};
+  });
+
+  step("card: what the pane draws beside the words is on the door too, ids in state and every typed string under untrusted", async () => {
+    const r = await door(b, "card", { key: "ORBIT-1050" });
+    expect(r.body.state).toMatchObject({ linkedCount: 5, subtasksDone: 0, subtasksTotal: 0, attachmentCount: 0 });
+    expect(r.body.untrusted.linked.map((l: { phrase: string; key: string }) => [l.phrase, l.key])).toEqual([
+      ["blocks", "ACME-8"], ["is blocked by", "ACME-7"], ["duplicates", "ACME-8"], ["is cloned by", "ACME-7"], ["relates to", "ORBIT-1001"],
+    ]);
+    const files = await door(b, "card", { key: "ORBIT-1042" });
+    expect(files.body.state).toMatchObject({ attachmentCount: 2, flagged: true });
+    expect(files.body.untrusted.attachments.map((a: { name: string }) => a.name)).toEqual(["timeout-trace.png", "sync-log.txt"]);
+    expect(files.body.untrusted.details.map((d: { label: string }) => d.label)).toContain("Reporter");
+    expect(JSON.stringify(files.body.state)).not.toContain("timeout-trace");
+    expect(JSON.stringify(files.body.state)).not.toContain("Impediment");
+  });
+
+  step("links: every web link of the card, one request, the pull requests counted in state and the titles under untrusted", async () => {
+    b.fake.requests.length = 0;
+    const r = await door(b, "links", { key: "ORBIT-1042" });
+    expect(r.body.ok).toBe(true);
+    expect(r.body.state).toEqual({ linkCount: 1, pullRequests: 1 });
+    expect(r.body.untrusted.links).toEqual([{ id: "10200", title: "#2196 Fix the timeout", url: "https://github.com/acme/orbit/pull/2196", pullRequest: true }]);
+    expect(b.fake.requests.map((q) => `${q.method} ${q.path}`)).toEqual(["GET /issue/ORBIT-1042/remotelink"]);
+    expect((await door(b, "links", { key: "nope" })).body).toEqual({ ok: false, error: "That is not a Jira card id" });
+  });
+
+  step("activity: a page of the history, one request, its sentences under untrusted and where the next page starts in state", async () => {
+    b.fake.requests.length = 0;
+    const r = await door(b, "activity", { key: "ORBIT-1050" });
+    expect(r.body.state).toEqual({ kind: "history", total: 230, shown: 100, next: 100 });
+    expect(r.body.untrusted.events[0]).toMatchObject({ who: "Grace Sample", text: 'changed the Status from "To Do" to "In Progress"' });
+    expect(JSON.stringify(r.body.state)).not.toContain("Status");
+    expect(b.fake.requests.map((q) => `${q.method} ${q.path}`)).toEqual(["GET /issue/ORBIT-1050/changelog"]);
+    const next = await door(b, "activity", { key: "ORBIT-1050", start: 200 });
+    expect(next.body.state).toEqual({ kind: "history", total: 230, shown: 30 });
+    expect((await door(b, "activity", { key: "ORBIT-1050", kind: "worklog" })).body.state).toMatchObject({ kind: "worklog", total: 25, shown: 25 });
+    expect((await door(b, "activity", { key: "ORBIT-1050", kind: "everything" })).body).toEqual({ ok: false, error: "kind is one of history, worklog, comments" });
+  });
+
   step("steps: which are on is state, what they write is untrusted", async () => {
     const r = await door(b, "steps");
     expect(r.body.state.steps).toEqual({ handoff: { enabled: true }, review: { enabled: false }, merge: { enabled: false } });
@@ -146,7 +195,7 @@ describe("the card door", () => {
     expect((await b.call("POST", "/jira/writes", { on: true })).status).toBe(200);
     b.fake.requests.length = 0;
     const evil = { origin: "https://evil.example" };
-    for (const verb of ["card", "moves", "steps", "step", "link"]) expect((await door(b, verb, { key: "ORBIT-1042" }, evil)).status).toBe(403);
+    for (const verb of ["card", "moves", "links", "activity", "steps", "step", "link"]) expect((await door(b, verb, { key: "ORBIT-1042" }, evil)).status).toBe(403);
     expect(b.fake.requests.length).toBe(0);
   });
 
@@ -208,7 +257,7 @@ describe("the card door", () => {
   step("an unknown verb is a 404 and names the verbs", async () => {
     const r = await door(b, "delete", { key: "ORBIT-1042" });
     expect(r.status).toBe(404);
-    expect(r.body.error).toContain("card, moves, steps, step, link");
+    expect(r.body.error).toContain("card, moves, links, linktypes, areas, activity, steps, step, link");
   });
 
   step("the action log names who asked, and the acting verb names the card", async () => {
@@ -222,6 +271,57 @@ describe("the card door", () => {
   step("no answer carries the token", async () => {
     expect(b.seen()).not.toContain(FAKE_TOKEN);
     expect(b.seen()).not.toContain(BASE64);
+  });
+});
+
+describe("the card door moves a card whose screen asks for fields", () => {
+  const step = story();
+  let b!: Booted;
+
+  step("boot with writes on, and a move to Done that asks for a resolution and may take a comment", async () => {
+    b = await boot({ ...ACTING, AGENTGLASS_JIRA_WRITE: "1" });
+    expect((await b.call("POST", "/jira/connect", { email: FAKE_EMAIL, site: "acme.atlassian.net", token: FAKE_TOKEN })).status).toBe(200);
+    b.fake.state.workflow.transitions["2"]!.push({
+      id: "51", name: "Finish", toStatusId: "5", requiredFields: [], acceptsAssignee: false,
+      screen: [
+        { key: "resolution", name: "Resolution", required: true, schema: { type: "resolution", system: "resolution" }, allowedValues: [{ id: "10000", name: "Done" }, { id: "10001", name: "Won't Do" }] },
+        { key: "comment", name: "Comment", required: false, schema: { type: "comment", system: "comment" } },
+      ],
+    });
+  });
+
+  step("moves lists the screen under untrusted: the site's own words are data", async () => {
+    const r = await door(b, "moves", { key: "ORBIT-1042" });
+    const mv = (r.body.untrusted.moves as { id: string; fields?: { key: string; kind: string; required: boolean; choices?: { id: string }[] }[] }[]).find((m) => m.id === "51")!;
+    expect(mv.fields!.map((f) => [f.key, f.kind, f.required])).toEqual([["resolution", "option", true], ["comment", "comment", false]]);
+    expect(mv.fields![0]!.choices!.map((c) => c.id)).toEqual(["10000", "10001"]);
+    expect(JSON.stringify(r.body.state)).not.toContain("Resolution");
+  });
+
+  step("move without the required field: a 400 with the sentence, and nothing is sent", async () => {
+    b.fake.requests.length = 0;
+    const r = await door(b, "move", { key: "ORBIT-1042", id: "51", updated: stamp(b, "ORBIT-1042") });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toBe("That move needs Resolution");
+    expect(writes(b).length).toBe(0);
+  });
+
+  step("a choice the site did not offer, and fields that are not a table: refused, nothing is sent", async () => {
+    expect((await door(b, "move", { key: "ORBIT-1042", id: "51", updated: stamp(b, "ORBIT-1042"), fields: { resolution: "42" } })).body.error).toBe("Resolution is not one of the choices");
+    expect((await door(b, "move", { key: "ORBIT-1042", id: "51", updated: stamp(b, "ORBIT-1042"), fields: "10000" })).body.error).toBe("fields must be an object of values by field key");
+    expect(writes(b).length).toBe(0);
+  });
+
+  step("with the field and a comment: the card moves through the same route the form uses", async () => {
+    const r = await door(b, "move", { key: "ORBIT-1042", id: "51", updated: stamp(b, "ORBIT-1042"), fields: { resolution: "10000", comment: "Shipped" } });
+    expect(r.status).toBe(200);
+    expect(r.body.ok).toBe(true);
+    expect(r.body.state.moved).toBe(true);
+    expect(b.fake.state.issues["ORBIT-1042"]!.statusId).toBe("5");
+    expect(b.fake.state.issues["ORBIT-1042"]!.resolution).toBe("Done");
+    // The stand-in shares its workflow with other files in this process: what this adds, it takes out.
+    const list = b.fake.state.workflow.transitions["2"]!;
+    list.splice(list.findIndex((t) => t.id === "51"), 1);
   });
 });
 
@@ -358,7 +458,7 @@ describe.skipIf(!HAVE_PY)("the card verbs, as pure functions", () => {
   test("the CLI's verbs are the server's, no more and no fewer", () => {
     expect(py(CLI, "print(json.dumps(list(g['JIRA_VERBS'])))")).toEqual([...DOOR_VERBS]);
     const acting = py(CLI, "print(json.dumps([k for k, v in g['JIRA_VERBS'].items() if v['acting']]))");
-    expect(acting).toEqual(["step", "link"]);
+    expect(acting).toEqual(["step", "link", "edit", "comment", "comment-edit", "comment-delete", "move", "subtask", "relate", "unrelate", "weblink", "unweblink", "worklog", "worklog-edit", "worklog-delete", "watch", "vote", "rank", "attach", "unattach"]);
   });
 
   test("a step's choice and pull request travel nested, as the route reads them, and the name is stamped", () => {
@@ -368,6 +468,15 @@ describe.skipIf(!HAVE_PY)("the card verbs, as pure functions", () => {
       key: "ORBIT-1042", trigger: "handoff", updated: 1768294800000, as: "orchestrator",
       choice: { to: "In Review", stay: true }, pr: { url: "https://github.com/acme/orbit/pull/318", number: 318 },
     });
+  });
+
+  test("a move's fields travel as one object, from JSON text or an object, and anything else is a sentence", () => {
+    const want = { key: "ORBIT-1042", id: "51", updated: 5, fields: { resolution: "10000", comment: "Shipped" } };
+    expect(body("move", { key: "ORBIT-1042", id: "51", updated: "5", fields: '{"resolution":"10000","comment":"Shipped"}' })[0]).toEqual(want);
+    expect(body("move", { key: "ORBIT-1042", id: "51", updated: 5, fields: { resolution: "10000", comment: "Shipped" } })[0]).toEqual(want);
+    expect(body("move", { key: "ORBIT-1042", id: "51", updated: 5, fields: "not json" })[1]).toBe("fields must be a JSON object by field key");
+    expect(body("move", { key: "ORBIT-1042", id: "51", updated: 5, fields: "[1]" })[1]).toBe("fields must be a JSON object by field key");
+    expect(body("card", { key: "ORBIT-1042", fields: {} })[1]).toBe("card takes key, not fields");
   });
 
   test("a missing, unknown or mistyped argument is one sentence and no request", () => {
@@ -381,14 +490,14 @@ describe.skipIf(!HAVE_PY)("the card verbs, as pure functions", () => {
   test("the MCP twin lists one tool per verb, reads marked read-only, acting ones not", () => {
     const tools = py(MCP, "print(json.dumps(g['jira_tools']()))") as { name: string; annotations: { readOnlyHint: boolean }; inputSchema: { required: string[] } }[];
     expect(tools.map((t) => t.name)).toEqual(DOOR_VERBS.map((v) => `ui_jira_${v}`));
-    expect(Object.fromEntries(tools.map((t) => [t.name, t.annotations.readOnlyHint]))).toEqual({ ui_jira_card: true, ui_jira_moves: true, ui_jira_steps: true, ui_jira_step: false, ui_jira_link: false });
+    expect(Object.fromEntries(tools.map((t) => [t.name, t.annotations.readOnlyHint]))).toEqual({ ui_jira_card: true, ui_jira_moves: true, ui_jira_links: true, ui_jira_linktypes: true, ui_jira_areas: true, ui_jira_activity: true, ui_jira_steps: true, ui_jira_step: false, ui_jira_link: false, ui_jira_edit: false, ui_jira_comment: false, "ui_jira_comment-edit": false, "ui_jira_comment-delete": false, ui_jira_move: false, ui_jira_subtask: false, ui_jira_relate: false, ui_jira_unrelate: false, ui_jira_weblink: false, ui_jira_unweblink: false, ui_jira_worklog: false, "ui_jira_worklog-edit": false, "ui_jira_worklog-delete": false, ui_jira_watch: false, ui_jira_vote: false, ui_jira_rank: false, ui_jira_attach: false, ui_jira_unattach: false });
     expect(tools.find((t) => t.name === "ui_jira_step")!.inputSchema.required).toEqual(["key", "trigger", "updated"]);
   });
 
   test("below level 3 the MCP twin lists the reads only, and a step is marked as able to take something away", () => {
-    for (const level of [1, 2]) expect((py(MCP, "print(json.dumps(g['jira_tools'](D)))", level) as { name: string }[]).map((t) => t.name)).toEqual(["ui_jira_card", "ui_jira_moves", "ui_jira_steps"]);
+    for (const level of [1, 2]) expect((py(MCP, "print(json.dumps(g['jira_tools'](D)))", level) as { name: string }[]).map((t) => t.name)).toEqual(["ui_jira_card", "ui_jira_moves", "ui_jira_links", "ui_jira_linktypes", "ui_jira_areas", "ui_jira_activity", "ui_jira_steps"]);
     const at3 = py(MCP, "print(json.dumps(g['jira_tools'](3)))") as { name: string; annotations: { destructiveHint: boolean } }[];
-    expect(Object.fromEntries(at3.map((t) => [t.name, t.annotations.destructiveHint]))).toEqual({ ui_jira_card: false, ui_jira_moves: false, ui_jira_steps: false, ui_jira_step: true, ui_jira_link: false });
+    expect(Object.fromEntries(at3.map((t) => [t.name, t.annotations.destructiveHint]))).toEqual({ ui_jira_card: false, ui_jira_moves: false, ui_jira_links: false, ui_jira_linktypes: false, ui_jira_areas: false, ui_jira_activity: false, ui_jira_steps: false, ui_jira_step: true, ui_jira_link: false, ui_jira_edit: false, ui_jira_comment: false, "ui_jira_comment-edit": false, "ui_jira_comment-delete": true, ui_jira_move: false, ui_jira_subtask: false, ui_jira_relate: false, ui_jira_unrelate: true, ui_jira_weblink: false, ui_jira_unweblink: true, ui_jira_worklog: false, "ui_jira_worklog-edit": false, "ui_jira_worklog-delete": true, ui_jira_watch: false, ui_jira_vote: false, ui_jira_rank: false, ui_jira_attach: false, ui_jira_unattach: true });
   });
 });
 

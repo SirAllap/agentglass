@@ -315,7 +315,68 @@ function suite(flavor: FakeFlavor) {
       });
     });
 
+    /*
+     * The dialog draws one row per block and settles each from this list, so the
+     * answer says what every block did in run order, in a sentence that carries
+     * no text the site sent back.
+     */
+    describe("what each block did", () => {
+      test("every block that landed is done, in run order, assignee included", async () => {
+        setup("handoff", [{ type: "link" }, { type: "comment", text: "Opened {pr}" }, { type: "assign", who: "me" }, { type: "move", statusNames: ["In Review"] }]);
+        const r = await run("ACME-7", "handoff", {}, PR);
+        expect(r.blocks).toEqual([
+          { block: "move", state: "done" }, { block: "assignee", state: "done" },
+          { block: "comment", state: "done" }, { block: "link", state: "done" },
+        ]);
+      });
+
+      test("a comment the site refused is failed with a plain sentence, the move stays done", async () => {
+        setup("handoff", [{ type: "move", statusNames: ["In Review"] }, { type: "comment", text: "Opened {pr}" }]);
+        fake.fail({ path: "/issue/ORBIT-1042/comment", method: "POST", status: 400 });
+        const r = await run("ORBIT-1042");
+        expect(r.blocks).toEqual([{ block: "move", state: "done" }, { block: "comment", state: "failed", why: "Jira did not accept the comment" }]);
+        expect(JSON.stringify(r.blocks)).not.toContain("Jira did not accept that comment");
+      });
+
+      test("a link that was already on the card is skipped, not done", async () => {
+        setup("handoff", [{ type: "link" }]);
+        await run("ORBIT-1042");
+        const r = await run("ORBIT-1042");
+        expect(r.blocks).toEqual([{ block: "link", state: "skipped", why: "already on the card" }]);
+      });
+
+      test("a link the site refused is failed", async () => {
+        setup("handoff", [{ type: "move", statusNames: ["In Review"] }, { type: "link" }]);
+        fake.fail({ path: "/issue/ORBIT-1042/remotelink", method: "POST", status: 400 });
+        const r = await run("ORBIT-1042");
+        expect(r.blocks).toEqual([{ block: "move", state: "done" }, { block: "link", state: "failed", why: "Jira did not accept the link" }]);
+      });
+
+      test("a move that is not needed is skipped while the rest runs", async () => {
+        setup("handoff", [{ type: "move", statusNames: ["In Progress"] }, { type: "comment", text: "Opened {pr}" }]);
+        const r = await run("ORBIT-1042");
+        expect(r.blocks).toEqual([{ block: "move", state: "skipped", why: "already in In Progress" }, { block: "comment", state: "done" }]);
+      });
+
+      test("a person who is already where the step puts them is skipped", async () => {
+        setup("handoff", [{ type: "assign", who: "person", person: { id: me, name: "Ada Tester" } }, { type: "comment", text: "Opened {pr}" }]);
+        const r = await run("ORBIT-1042");
+        expect(r.blocks).toEqual([{ block: "assignee", state: "skipped", why: "nothing to change on who is on it" }, { block: "comment", state: "done" }]);
+      });
+    });
+
     describe("what is refused before a write", () => {
+      test("a card whose updated cannot be read is refused: no step, no write", async () => {
+        setup("handoff", [{ type: "move", statusNames: ["In Review"] }, { type: "comment", text: "Opened {pr}" }]);
+        const at = upd("ORBIT-1042");
+        fake.state.issues["ORBIT-1042"]!.updated = "not a date";
+        const r = await run("ORBIT-1042", "handoff", {}, PR, at);
+        expect(r.ok).toBe(false);
+        expect(r.conflict).toBeUndefined();
+        expect(writes().length).toBe(0);
+        expect(status("ORBIT-1042")).toBe("In Progress");
+      });
+
       test("a stamp that is not the one the person saw: 409, and no write", async () => {
         setup("handoff", [{ type: "move", statusNames: ["In Review"] }, { type: "unassign", who: "all" }, { type: "comment", text: "Opened {pr}" }]);
         const r = await run("ORBIT-1042", "handoff", {}, PR, upd("ORBIT-1042") - 1000);

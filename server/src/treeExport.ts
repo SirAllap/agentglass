@@ -154,7 +154,17 @@ async function listTree(gitRoot: string, sha: string): Promise<string | { error:
   return Buffer.concat(parts).toString("utf8");
 }
 
-export async function exportTree(gitRoot: string, sha: string, dir: string): Promise<string | null> {
+export interface ExportCaps { total: number; blob: number; entries: number }
+
+const mb = (n: number) => `${Math.round(n / 1024 / 1024)} MB`;
+
+/**
+ * `caps` lowers the ceilings for a caller that sends the tree somewhere (the
+ * defaults are sized for a box on this machine); `stats.files` reports how many
+ * regular files and symlinks were read.
+ */
+export async function exportTree(gitRoot: string, sha: string, dir: string, opts: { caps?: ExportCaps; stats?: { files: number } } = {}): Promise<string | null> {
+  const caps = opts.caps ?? { total: EXPORT_CAP, blob: BLOB_CAP, entries: MAX_ENTRIES };
   const listing = await listTree(gitRoot, sha);
   if (typeof listing !== "string") return listing.error;
   const entries: Entry[] = [];
@@ -162,10 +172,11 @@ export async function exportTree(gitRoot: string, sha: string, dir: string): Pro
     const m = /^(\d{6}) (\w+) ([0-9a-f]{40})\t([\s\S]+)$/.exec(rec);
     if (m && !unsafePath(m[4]!)) entries.push({ mode: m[1]!, oid: m[3]!, path: m[4]! });
   }
-  if (entries.length > MAX_ENTRIES) return `the commit has more than ${MAX_ENTRIES} files`;
+  if (entries.length > caps.entries) return `the commit has more than ${caps.entries} files`;
   const conflict = conflictIn(entries);
   if (conflict) return conflict;
   mkdirSync(dir, { recursive: true });
+  if (opts.stats) opts.stats.files = entries.filter((e) => e.mode !== "160000").length;
   const blobs = entries.filter((e) => e.mode === "100644" || e.mode === "100755" || e.mode === "120000");
   try {
     for (const e of entries) if (e.mode === "160000") { ensureParent(dir, e.path); mkdirSync(join(dir, e.path), { recursive: false }); }
@@ -185,8 +196,8 @@ export async function exportTree(gitRoot: string, sha: string, dir: string): Pro
       if (head[1] !== "blob") return `an object of the commit is missing (${(head[0] ?? "").slice(0, 7)})`;
       const size = Number(head[2]);
       total += size;
-      if (!Number.isInteger(size) || size > BLOB_CAP) return `a file in the commit is over ${BLOB_CAP / 1024 / 1024} MB`;
-      if (total > EXPORT_CAP) return "the commit is too large to export";
+      if (!Number.isInteger(size) || size > caps.blob) return `a file in the commit is over ${mb(caps.blob)}`;
+      if (total > caps.total) return `the commit is over ${mb(caps.total)} in all`;
       if (b.mode === "120000") {
         const t: Uint8Array[] = [];
         if (size > 4096 || !(await pipe.take(size, (x) => t.push(Buffer.from(x))))) return "a symlink of the commit is unreadable";

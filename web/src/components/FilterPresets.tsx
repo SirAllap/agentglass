@@ -23,7 +23,8 @@ import { memo, useEffect, useMemo, useRef, useState, type KeyboardEvent as React
 import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { Portal } from "./Portal.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { EDGE, INPUT, INPUT_STYLE, chipTone } from "./workspace/Chrome.tsx";
+import { CloseIcon } from "./CloseButton.tsx";
+import { BAR_CTRL, BAR_ICON, EDGE, INPUT, INPUT_STYLE, chipTone } from "./workspace/Chrome.tsx";
 import { menuUnder } from "../lib/menuPos.ts";
 import { MAX_NAME, MAX_PRESETS, canAdd, cleanName, dropGone, freeName, nthPreset, rulesToPreset, summarizeRules, type Gone, type Preset } from "../lib/filterPresets.ts";
 import { liveCount, type FieldSpec, type FilterSet } from "./tasks/filters.ts";
@@ -365,7 +366,7 @@ function UndoToast({ name, anchor, onUndo }: { name: string; anchor: HTMLElement
 
 /* ------------------------------------------------------------- the row */
 
-export const FilterPresets = memo(function FilterPresets({ api, counts, rules, fields, hotkeys, onEditRule }: {
+export const FilterPresets = memo(function FilterPresets({ api, counts, rules, fields, hotkeys, onEditRule, onOpenFilters, sort }: {
   api: PresetsApi;
   /** Cards each preset would show, from the board's own filter. */
   counts: Record<string, number>;
@@ -375,6 +376,10 @@ export const FilterPresets = memo(function FilterPresets({ api, counts, rules, f
   hotkeys: boolean;
   /** Open the rule builder on this preset's rules (it has been applied first). */
   onEditRule: (id: string) => void;
+  /** The "⋯" menu opens the rule builder. The builder is the host's; the button that used to open it is gone. */
+  onOpenFilters: () => void;
+  /** Lane order, edited from the same menu. `lit` is a non-default order. */
+  sort: { options: { value: string; label: string }[]; value: string; lit: boolean; onPick: (v: string) => void };
 }) {
   const { presets, activeId, active, modified, gone } = api;
   const root = useRef<HTMLDivElement>(null);
@@ -384,7 +389,7 @@ export const FilterPresets = memo(function FilterPresets({ api, counts, rules, f
   const [renaming, setRenaming] = useState<string | null>(null);
   const [more, setMore] = useState<{ anchor: DOMRect } | null>(null);
   const [ctx, setCtx] = useState<{ id: string; anchor: DOMRect; restoreTo: HTMLElement | null } | null>(null);
-  const [saveMenu, setSaveMenu] = useState<{ anchor: DOMRect } | null>(null);
+  const [overflow, setOverflow] = useState<{ anchor: DOMRect } | null>(null);
   const [naming, setNaming] = useState<{ anchor: DOMRect; initial: string } | null>(null);
   // After a move, a rename or a delete the element that had focus may be gone
   // or in a different list; this says where focus goes once the new row has
@@ -470,6 +475,7 @@ export const FilterPresets = memo(function FilterPresets({ api, counts, rules, f
     else if (e.key === "ArrowRight" && !e.altKey) step(at + 1);
     else if (e.key === "Home") step(0);
     else if (e.key === "End") step(order.length - 1);
+    else if (e.key === "Escape" && live > 0) { e.preventDefault(); e.stopPropagation(); api.clear(); }
     else if (e.key === "F2" && isPreset) { e.preventDefault(); startRename(id); }
     else if (e.key === "Delete" && isPreset) { e.preventDefault(); doDelete(id); }
     else if (isMenuKey(e) && isPreset) { e.preventDefault(); openCtx(id, el); }
@@ -503,18 +509,18 @@ export const FilterPresets = memo(function FilterPresets({ api, counts, rules, f
         <button ref={(el) => { chipEls.current[p.id] = el; }} data-chip={p.id}
           tabIndex={tabStop === p.id ? 0 : -1} aria-pressed={on}
           onFocus={() => setFocusId(p.id)}
-          onClick={() => api.apply(p.id)}
+          onClick={() => (on ? api.clear() : api.apply(p.id))}
           onContextMenu={(e) => { e.preventDefault(); openCtx(p.id, e.currentTarget); }}
           title={`${p.name}: ${summaries.get(p.id)}`}
           aria-label={`${p.name}, ${n} ${n === 1 ? "card" : "cards"}${dirty ? ", changed since saved" : ""}${g ? ", a value is missing" : ""}`}
-          className="text-[11.5px] pl-2 pr-2 py-1 rounded-lg flex items-center gap-1.5 whitespace-nowrap agx-btn"
+          className={`agx-btn ${BAR_CTRL}`}
           style={{ border: EDGE, ...chipTone(on), color: on ? "var(--text)" : "var(--text2)" }}>
           <span className="truncate" style={{ maxWidth: 140 }}>{p.name}</span>
           {dirty && <Dirty />}
           {g && <Bang />}
           {/* The number, and the dots that take its place under the pointer: one
               slot, so the chip is the same width hovered or not. */}
-          <span aria-hidden className="tabular-nums text-[10px] text-right shrink-0 group-hover:opacity-0"
+          <span aria-hidden className="tabular-nums text-[11px] text-right shrink-0 group-hover:opacity-0"
             style={{ minWidth: ICON.xs, color: on ? "var(--primary-ink)" : "var(--text4)" }}>{n}</span>
         </button>
         <button tabIndex={-1} aria-label={`Menu for ${p.name}`} title="Rename, move, delete" {...{ [MENU_ATTR]: "" }}
@@ -590,53 +596,81 @@ export const FilterPresets = memo(function FilterPresets({ api, counts, rules, f
     : !active && full ? `${MAX_PRESETS} presets is the limit. Delete one to save another`
     : null;
 
-  const clickSave = () => {
+  // The "⋯" menu is the one control; its rows are what Save and Filters and Sort used to be.
+  const clickMore = () => {
     const r = saveBtn.current?.getBoundingClientRect();
     if (!r) return;
-    if (saveMenu || naming) { setSaveMenu(null); setNaming(null); return; }
-    if (modified) setSaveMenu({ anchor: r });
-    else setNaming({ anchor: r, initial: "" });
+    if (naming || overflow) { setNaming(null); setOverflow(null); return; }
+    setOverflow({ anchor: r });
   };
+  const overflowItems = (anchor: DOMRect): Item[] => [
+    { kind: "item", key: "filters", label: "Filters…", end: live > 0 ? live : undefined, onSelect: onOpenFilters },
+    { kind: "sep" },
+    ...(modified && active
+      ? [
+        { kind: "item", key: "update", label: `Update “${active.name}”`, icon: <Glyph name="revert" />, kbd: "⌘S", onSelect: () => api.update() } as Item,
+        { kind: "item", key: "new", label: "Save as new…", icon: <Glyph name="plus" />, disabled: full, end: full ? "limit" : undefined,
+          onSelect: () => setNaming({ anchor, initial: freeName(active.name, presets) }) } as Item,
+        { kind: "item", key: "revert", label: "Revert to saved", icon: <Glyph name="undo" />, onSelect: () => api.revert() } as Item,
+      ]
+      : [{ kind: "item", key: "save", label: "Save filter set…", icon: <Glyph name="plus" />, disabled: !!saveBlockedBy, end: saveBlockedBy ? "—" : undefined,
+        onSelect: () => setNaming({ anchor, initial: "" }) } as Item]),
+    ...(saveBlockedBy ? [{ kind: "note", key: "why", node: saveBlockedBy } as Item] : []),
+    { kind: "sep" },
+    { kind: "note", key: "sort", node: "Sort lanes" },
+    ...sort.options.map((o): Item => ({
+      kind: "item", key: `sort:${o.value}`, label: o.label, on: o.value === sort.value,
+      icon: o.value === sort.value ? <Glyph name="check" /> : null, onSelect: () => sort.onPick(o.value),
+    })),
+  ];
 
   return (
     <div ref={root} onKeyDown={onRootKey} role="toolbar" aria-label="Filter presets"
       className="flex items-start gap-1 min-w-0" style={{ flex: "1 1 auto" }}>
       {/* The chips, or one line that says what they will be. */}
       <div role="group" aria-label="Saved filter sets" onKeyDown={onRowKey} className="flex flex-wrap items-center gap-1 min-w-0">
-        {presets.length === 0 ? (
-          <span className="text-[10.5px] ml-1.5 py-1.5" style={{ color: "var(--text3)" }}>
-            Build a filter, then <b style={{ color: "var(--text2)", fontWeight: 600 }}>Save</b>: it becomes a one-click chip here.
-          </span>
-        ) : visible.map(chip)}
+        {visible.map(chip)}
         {hidden.length > 0 && (
           <button ref={(el) => { chipEls.current[MORE] = el; }} data-chip={MORE} {...{ [MENU_ATTR]: "" }}
             tabIndex={tabStop === MORE ? 0 : -1} aria-haspopup="menu" aria-expanded={!!more} aria-pressed={!!activeHidden}
             onFocus={() => setFocusId(MORE)}
             onClick={(e) => setMore(more ? null : { anchor: e.currentTarget.getBoundingClientRect() })}
             title={activeHidden ? `${activeHidden.name} is on` : `${hidden.length} more saved filter sets`}
-            className="text-[11.5px] px-2 py-1 rounded-lg flex items-center gap-1.5 whitespace-nowrap shrink-0 agx-btn"
+            className={`agx-btn ${BAR_CTRL}`}
             style={{ border: EDGE, ...chipTone(!!activeHidden), color: activeHidden ? "var(--text)" : "var(--text2)" }}>
             <span className="truncate" style={{ maxWidth: 140 }}>{activeHidden ? activeHidden.name : "More"}</span>
             {activeHidden && modified && <Dirty />}
             {!activeHidden && <span aria-hidden className="tabular-nums text-[10px]" style={{ color: "var(--text4)" }}>{hidden.length}</span>}
-            <Glyph name="chev" />
+            <Glyph name="chev" size={BAR_ICON} />
           </button>
         )}
       </div>
 
       <span className="flex-1" />
 
-      {/* Fixed at the right end: the same place whatever else changes. */}
-      <button ref={saveBtn} onClick={clickSave} disabled={!!saveBlockedBy} {...{ [MENU_ATTR]: "" }}
-        aria-haspopup={modified ? "menu" : "dialog"}
-        title={saveBlockedBy ?? (modified ? `Update “${active?.name}”, or save as a new one` : "Save these filters as a one-click chip")}
-        className="text-[11.5px] px-2 py-1 rounded-lg flex items-center gap-1.5 whitespace-nowrap shrink-0 agx-btn"
+      {/* Always in the row, so the row never moves: with nothing to clear it
+          is only invisible and out of the tab order. Clears the live rules, the
+          preset that is on and anything built by hand; no saved set is deleted. */}
+      <button onClick={api.clear} disabled={live === 0} tabIndex={live === 0 ? -1 : 0} aria-hidden={live === 0}
+        title="Remove every filter. Your saved sets stay in the menu"
+        className={`agx-btn ${BAR_CTRL}`}
+        style={{ border: EDGE, color: "var(--text2)", visibility: live === 0 ? "hidden" : "visible" }}>
+        <CloseIcon size={BAR_ICON} />Clear filters
+      </button>
+
+      {/* Fixed at the right end: the same place whatever else changes. Lit when
+          a rule, a modified set or a non-default order is in force, so the
+          state is visible with the menu shut. */}
+      <button ref={saveBtn} onClick={clickMore} {...{ [MENU_ATTR]: "" }}
+        aria-haspopup="menu" aria-expanded={!!overflow} aria-label="Filters, save and sort"
+        title={modified ? `Filters, save and sort — “${active?.name}” has changed` : "Filters, save a filter set, sort lanes"}
+        className={`agx-btn ${BAR_CTRL}`}
         style={{
-          border: EDGE, ...chipTone(!!modified),
-          color: modified ? "var(--text)" : "var(--text2)",
-          opacity: saveBlockedBy ? 0.45 : 1,
+          border: EDGE, ...chipTone(!!modified || live > 0 || sort.lit),
+          color: modified || live > 0 || sort.lit ? "var(--text)" : "var(--text2)",
         }}>
-        <span>Save</span><Glyph name="chev" />
+        <Glyph name="dots" size={BAR_ICON} />
+        {live > 0 && <span className="tabular-nums text-[10px]" style={{ color: "var(--primary-ink)" }}>{live}</span>}
       </button>
 
       {/* Only while it has something to list: the last hidden preset going (deleted,
@@ -651,16 +685,9 @@ export const FilterPresets = memo(function FilterPresets({ api, counts, rules, f
         <PopMenu label={`${nameOf(ctx.id)} menu`} anchor={ctx.anchor} items={chipMenuItems(ctx.id)} minWidth={ctx.anchor.width > 200 ? ctx.anchor.width : 220}
           restoreTo={ctx.restoreTo} onClose={() => setCtx(null)} />
       )}
-      {saveMenu && active && (
-        <PopMenu label="Save" anchor={saveMenu.anchor} align="right" minWidth={240} restoreTo={saveBtn.current}
-          onClose={() => setSaveMenu(null)}
-          items={[
-            { kind: "item", key: "update", label: `Update “${active.name}”`, icon: <Glyph name="revert" />, kbd: "⌘S", onSelect: () => api.update() },
-            { kind: "item", key: "new", label: "Save as new…", icon: <Glyph name="plus" />, disabled: full,
-              end: full ? "limit" : undefined,
-              onSelect: () => setNaming({ anchor: saveMenu.anchor, initial: freeName(active.name, presets) }) },
-            { kind: "item", key: "revert", label: "Revert to saved", icon: <Glyph name="undo" />, onSelect: () => api.revert() },
-          ]} />
+      {overflow && (
+        <PopMenu label="Filters, save and sort" anchor={overflow.anchor} align="right" minWidth={230} restoreTo={saveBtn.current}
+          onClose={() => setOverflow(null)} items={overflowItems(overflow.anchor)} />
       )}
       {naming && (
         <SavePopover anchor={naming.anchor} initial={naming.initial} keeps={summarizeRules(rules.join, rulesToPreset(rules), fields)}

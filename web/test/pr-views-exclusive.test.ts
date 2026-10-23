@@ -57,7 +57,7 @@ describe("the view row", () => {
     // assertion below green over an empty list.
     expect(viewPickers.length, "handlers that pick a surface").toBeGreaterThanOrEqual(3);
     // And the board's own "show me the table instead", which is not an onClick.
-    expect(src).toContain("onShowTable={() => { setInboxOn(false)");
+    expect(src).toContain("onShowTable={() => { setPersonLogin(null); setInboxOn(false)");
   });
 
   test("every control that picks a view says what happens to the inbox", () => {

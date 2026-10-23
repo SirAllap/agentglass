@@ -228,10 +228,12 @@ describe("the source says the same", () => {
   // Code only: a comment may say "fetch(" while explaining why there is one.
   const code = src.split("\n").filter((l) => !/^\s*(\/\/|\/?\*)/.test(l)).join("\n");
 
-  test("the only plain fetch is the one behind the operator's base address", () => {
-    const plain = code.split("\n").filter((l) => /(^|[^A-Za-z_.])fetch\(/.test(l));
-    expect(plain.length).toBe(1);
-    expect(plain[0]).toContain("baseOverride");
+  test("the only plain fetches are the two behind the operator's base address: a call's, and a file's", () => {
+    const lines = code.split("\n");
+    const at = lines.flatMap((l, i) => (/(^|[^A-Za-z_.])fetch\(/.test(l) ? [i] : []));
+    expect(at.length).toBe(2);
+    // Each sits on a line that names the override or directly under the `if` that does.
+    for (const i of at) expect(lines.slice(Math.max(0, i - 1), i + 1).join("\n"), lines[i]).toContain("baseOverride");
   });
 
   test("the connection is always made under the loopback and link-local refusal", () => {

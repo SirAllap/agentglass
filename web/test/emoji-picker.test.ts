@@ -149,6 +149,12 @@ describe("where the popover goes", () => {
     expect(p.up).toBe(true);
     expect(p.top + p.height).toBeLessThanOrEqual(500);
   });
+  it("opens under the button when asked and there is room there, even if above has more", () => {
+    const p = popoverPlace(box(300, 500), size, view, 6, 8, true);
+    expect(p.up).toBe(false);
+    expect(p.top).toBeGreaterThanOrEqual(524);
+    expect(popoverPlace(box(300, 700), size, view, 6, 8, true).up).toBe(true);
+  });
   it("goes below when above has no room and below has more", () => {
     const p = popoverPlace(box(300, 80), size, view);
     expect(p.up).toBe(false);

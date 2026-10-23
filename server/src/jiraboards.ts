@@ -30,13 +30,15 @@
  */
 import { ASSIGNED_VIEW_ID } from "../../shared/providers.ts";
 import type {
-  JiraColumn, JiraProjectChoice, JiraViewChoice, JiraViewRead, JiraViews, ListStatus, SavedFolder, SavedView,
+  JiraColumn, JiraProjectChoice, ProviderTask, JiraViewChoice, JiraViewRead, JiraViews, ListStatus, SavedFolder, SavedView,
 } from "../../shared/providers.ts";
 import { redacted } from "./credentials.ts";
 import {
   CATEGORY_COLOR, apiOf, jiraCall, jiraGeneration, orderByAt, memoOk, memoHas, mine, projects, searchJql, withStored,
   type JiraCreds, type JiraResult, type JiraTasks, type SeenStatus,
 } from "./jira.ts";
+import { activeSprint, boardEpics, quickFilterRows } from "./jiraBoardContext.ts";
+import { underClause } from "../../shared/jiraAreas.ts";
 import {
   addFolder, addView, cachedFor, currentView, isFolderBoard, putCache, removeFolder, removeView, replaceFolder, savedFolders, savedViews, setCurrent,
 } from "./jiraviews.ts";
@@ -283,25 +285,127 @@ async function viewStatuses(creds: JiraCreds, rows: JiraTasks): Promise<ListStat
     .map((x, i) => asListStatus(x.s, i));
 }
 
-export async function readBoard(creds: JiraCreds, id: string): Promise<JiraResult<ViewRows>> {
+/** Most quick filters one read may AND in: a board does not define anywhere near this many, and each is a clause of the query. */
+const MAX_QUICK = 8;
+
+/**
+ * The clauses of the quick filters asked for, from the board's OWN list. An id the board no longer has is refused with
+ * a sentence rather than dropped: a read that quietly ignored it would show more cards than the person asked for.
+ */
+async function quickClauses(creds: JiraCreds, board: string, ids: readonly string[]): Promise<JiraResult<string[]>> {
+  if (!ids.length) return { ok: true, data: [] };
+  if (ids.length > MAX_QUICK) return { ok: false, error: "Too many quick filters at once" };
+  const all = await quickFilterRows(creds, board);
+  if (!all.ok || !all.data) return { ...all, data: undefined };
+  const out: string[] = [];
+  for (const id of ids) {
+    const q = all.data.find((x) => x.id === id);
+    // Only the restriction: an order inside a quick filter is not ours to apply.
+    const jql = q ? splitOrder(q.jql).restriction : "";
+    if (!jql) return { ok: false, error: "That quick filter is gone from the board: reload it" };
+    out.push(`(${jql})`);
+  }
+  return { ok: true, data: out };
+}
+
+/**
+ * A board with an active sprint is read as two searches, not one. The board's own query is the whole project ranked, and
+ * a project with a long history ranks its done cards ahead of the sprint: measured on a project of 1120 cards where the
+ * sprint held 98, the first 150 ranked cards were all done and not one of them was in the sprint. So the sprint is asked
+ * for by its id first (its cards, done and open), and what comes after it is the open cards that are not in it, which is
+ * the backlog a person opens a board to see.
+ *
+ * `sprint is EMPTY OR sprint != id` and not `NOT sprint = id`: on the site measured the second leaves out every card
+ * that has no sprint, which is the backlog. Ceiling: the backlog is one page of the open cards not in the sprint, and a
+ * board with more says so through `truncated`; its done history is not read here.
+ */
+export function sprintQueries(where: readonly string[], order: string, sprintId: string): { sprint: string; rest: string } {
+  const tail = order ? ` ${order}` : "";
+  return {
+    sprint: [...where, `sprint = ${sprintId}`].join(" AND ") + tail,
+    rest: [...where, `(sprint is EMPTY OR sprint != ${sprintId})`, "statusCategory != Done"].join(" AND ") + tail,
+  };
+}
+
+const BACKLOG_PAGES = 1;
+
+async function searchSprintAndRest(creds: JiraCreds, q: { sprint: string; rest: string }, ask: { board: { points?: string } }): Promise<JiraResult<JiraTasks>> {
+  const inSprint = await searchJql(creds, q.sprint, ask);
+  if (!inSprint.ok || !inSprint.data) return inSprint;
+  const rest = await searchJql(creds, q.rest, { ...ask, pages: BACKLOG_PAGES });
+  if (!rest.ok || !rest.data) return rest;
+  const seen = new Map((inSprint.data.seen ?? []).map((x) => [x.id, x]));
+  for (const x of rest.data.seen ?? []) if (!seen.has(x.id)) seen.set(x.id, x);
+  const ids = new Set(inSprint.data.tasks.map((t) => t.id));
+  return {
+    ok: true,
+    data: {
+      tasks: [...inSprint.data.tasks, ...rest.data.tasks.filter((t) => !ids.has(t.id))],
+      truncated: inSprint.data.truncated || rest.data.truncated,
+      seen: [...seen.values()],
+    },
+  };
+}
+
+/** The board's own restriction, as clauses a search can AND together, and the order its filter asks for. */
+async function boardWhere(creds: JiraCreds, id: string, quick: readonly string[]): Promise<JiraResult<{ where: string[]; order: string; cfg: BoardConfig; empty: boolean; columns: JiraColumn[] }>> {
   const cfg = await boardConfig(creds, id);
   if (!cfg.ok || !cfg.data) return { ...cfg, data: undefined };
   const f = await filterJql(creds, cfg.data.filterId);
   if (!f.ok || !f.data) return { ...f, data: undefined };
   const columns = cfg.data.columns;
   const ids = [...new Set(columns.flatMap((c) => c.statusIds))];
-  // A board whose columns map no status shows its columns and no cards.
-  if (!ids.length) return { ok: true, data: { tasks: [], truncated: false, columns, statuses: [] } };
   const { restriction, order } = splitOrder(f.data.jql);
-  const jql = [
+  const clauses = await quickClauses(creds, id, quick);
+  if (!clauses.ok || !clauses.data) return { ...clauses, data: undefined };
+  const where = [
     ...(restriction ? [`(${restriction})`] : []),
-    `status in (${ids.join(", ")})`,
+    ...(ids.length ? [`status in (${ids.join(", ")})`] : []),
     ...(cfg.data.subQuery ? [`(${cfg.data.subQuery})`] : []),
-  ].join(" AND ") + (order ? ` ${order}` : "");
-  const r = await searchJql(creds, jql, { board: { points: cfg.data.estimationField } });
+    ...clauses.data,
+  ];
+  // A board whose columns map no status shows its columns and no cards.
+  return { ok: true, data: { where, order, cfg: cfg.data, empty: !ids.length, columns } };
+}
+
+export async function readBoard(creds: JiraCreds, id: string, quick: readonly string[] = []): Promise<JiraResult<ViewRows>> {
+  const w = await boardWhere(creds, id, quick);
+  if (!w.ok || !w.data) return { ...w, data: undefined };
+  const { where, order, cfg, columns } = w.data;
+  if (w.data.empty) return { ok: true, data: { tasks: [], truncated: false, columns, statuses: [] } };
+  // Free where the board's header already asked: the sprint is remembered under the same key as its context.
+  const sprint = await activeSprint(creds, id);
+  const ask = { board: { points: cfg.estimationField } };
+  const plan = sprint.ok && sprint.data ? sprintQueries(where, order, sprint.data.id) : null;
+  const r = plan ? await searchSprintAndRest(creds, plan, ask) : await searchJql(creds, where.join(" AND ") + (order ? ` ${order}` : ""), ask);
   if (!r.ok || !r.data) return { ...r, data: undefined };
   const { seen: _seen, ...rows } = r.data;
-  return { ok: true, data: { ...rows, columns, statuses: await boardStatuses(creds, cfg.data, r.data) } };
+  return { ok: true, data: { ...rows, columns, statuses: await boardStatuses(creds, cfg, r.data) } };
+}
+
+/**
+ * The cards that sit under an epic on a board, done and open, in ONE kept read. The Areas tree draws its counts from it
+ * and an Area's page is filtered from it, so opening a board costs this one search (a few pages) per ten minutes and
+ * nothing per area. The epics read are the areas plus at most OPEN_EPICS_MAX open ones beside them; an open epic past
+ * that is not on the rail. Sub-tasks are left out (their parent is a story, not an area). Ceiling: AREA_PAGES pages of 50
+ * cards, newest first; a project with more says so through `truncated` and the counts are then "at least".
+ */
+const AREA_PAGES = 6;
+export function readBoardAreas(creds: JiraCreds, id: string): Promise<JiraResult<{ tasks: ProviderTask[]; truncated: boolean }>> {
+  if (!NUM.test(id)) return Promise.resolve({ ok: false, error: BOARD_GONE });
+  return memoOk<{ tasks: ProviderTask[]; truncated: boolean }>(creds, `areas:${id}`, async () => {
+    const w = await boardWhere(creds, id, []);
+    if (!w.ok || !w.data) return { ...w, data: undefined };
+    if (w.data.empty) return { ok: true, data: { tasks: [], truncated: false } };
+    // The epics named "Area: …" and the open ones beside them (see underClause): ask for their cards only, so a QA epic
+    // holding a hundred runs does not use up the pages.
+    const epics = await boardEpics(creds, id);
+    const under = underClause(epics.data ?? []);
+    const jql = [...w.data.where, under, "issuetype not in subTaskIssueTypes()"].join(" AND ") + " ORDER BY updated DESC";
+    const r = await searchJql(creds, jql, { board: { points: w.data.cfg.estimationField }, pages: AREA_PAGES });
+    if (!r.ok || !r.data) return { ...r, data: undefined };
+    return { ok: true, data: { tasks: r.data.tasks, truncated: r.data.truncated } };
+  });
 }
 
 async function plainView(creds: JiraCreds, jql: string): Promise<JiraResult<ViewRows>> {
@@ -335,9 +439,19 @@ export const readJql = (creds: JiraCreds, jql: string): Promise<JiraResult<ViewR
  */
 const held = new Map<string, { gen: number; at: number; r?: JiraViewRead; run?: Promise<JiraViewRead> }>();
 
+/** A narrowed read is its own entry; the oldest of them go first so a person trying every combination cannot fill memory. */
+const MAX_NARROWED = 12;
+function trimNarrowed(): void {
+  const keys = [...held.keys()].filter((k) => k.includes("|q:"));
+  for (const k of keys.slice(0, Math.max(0, keys.length - MAX_NARROWED))) held.delete(k);
+}
+
+/** A write that changes what a read would say (a rank) drops the minute every board read is held for. */
+export const forgetViewReads = (): void => { held.clear(); };
+
 const emptyRead = (error: string, view?: SavedView): JiraViewRead => ({ ok: false, error, ...(view ? { view } : null), tasks: [], columns: [], at: 0 });
 
-async function readView(creds: JiraCreds, view: SavedView, force: boolean): Promise<JiraResult<ViewRows>> {
+async function readView(creds: JiraCreds, view: SavedView, force: boolean, quick: readonly string[] = []): Promise<JiraResult<ViewRows>> {
   if (view.id === ASSIGNED_VIEW_ID) {
     const r = await mine(creds, { fresh: force, board: true });
     if (!r.ok || !r.data) return { ...r, data: undefined };
@@ -345,7 +459,7 @@ async function readView(creds: JiraCreds, view: SavedView, force: boolean): Prom
     return { ok: true, data: { ...rows, columns: [], statuses: await viewStatuses(creds, r.data) } };
   }
   const [kind, num] = view.id.split(":");
-  if (kind === "board") return readBoard(creds, num);
+  if (kind === "board") return readBoard(creds, num, quick);
   if (kind === "filter") return readFilter(creds, num);
   const jql = kind === "jql" ? jqlOfView(view) : null;
   return jql ? readJql(creds, jql) : { ok: false, error: "That view has no search to run" };
@@ -355,18 +469,20 @@ let readFault: (() => void) | null = null;
 /** Test seam: something that throws where a read begins, which no stand-in request can do. */
 export const __setReadFault = (f: (() => void) | null): void => { readFault = f; };
 
-function startRead(creds: JiraCreds, site: string, view: SavedView, force: boolean): Promise<JiraViewRead> {
+function startRead(creds: JiraCreds, site: string, view: SavedView, force: boolean, quick: readonly string[] = []): Promise<JiraViewRead> {
   const gen = jiraGeneration();
-  return Promise.resolve().then(() => { readFault?.(); return readView(creds, view, force); }).then((r): JiraViewRead => {
+  return Promise.resolve().then(() => { readFault?.(); return readView(creds, view, force, quick); }).then((r): JiraViewRead => {
     if (r.ok && r.data) {
       const at = Date.now();
       const out: JiraViewRead = { ok: true, view, tasks: r.data.tasks, columns: r.data.columns, ...(r.data.statuses ? { statuses: r.data.statuses } : null), at, ...(r.data.truncated ? { truncated: true } : null) };
       // A disconnect while this was in the air: the rows are not written back.
-      if (gen === jiraGeneration()) putCache(site, view.id, { view, tasks: out.tasks, columns: out.columns, ...(out.statuses ? { statuses: out.statuses } : null), at, ...(out.truncated ? { truncated: true } : null) });
+      // A narrowed read is a question of the moment: kept on disk it would be the board the next time it opens.
+      if (gen === jiraGeneration() && !quick.length) putCache(site, view.id, { view, tasks: out.tasks, columns: out.columns, ...(out.statuses ? { statuses: out.statuses } : null), at, ...(out.truncated ? { truncated: true } : null) });
       return out;
     }
     // A failed read is never an empty board: the last good rows come back, said to be old.
-    const last = cachedFor(site, view.id);
+    // Not for a narrowed one: the last rows kept are the whole board, and shown under a filter they would be wrong.
+    const last = quick.length ? undefined : cachedFor(site, view.id);
     const error = r.error ?? "Could not read that view";
     return {
       ok: false, error, view, ...(r.throttled ? { throttled: true } : null),
@@ -380,7 +496,7 @@ function startRead(creds: JiraCreds, site: string, view: SavedView, force: boole
  * One saved view: the current one when no id is given, else the built-in one.
  * `cached` answers from disk and asks nobody.
  */
-export async function viewRead(id?: string, o: { force?: boolean; cached?: boolean } = {}): Promise<JiraViewRead> {
+export async function viewRead(id?: string, o: { force?: boolean; cached?: boolean; quick?: readonly string[] } = {}): Promise<JiraViewRead> {
   const site = connectedSite();
   if (!site) return emptyRead(NOT_CONNECTED);
   const views = savedViews(site);
@@ -389,14 +505,16 @@ export async function viewRead(id?: string, o: { force?: boolean; cached?: boole
   if (!view) return emptyRead("That view is not saved any more");
   if (want !== currentView(site)) setCurrent(site, want);
 
-  if (o.cached) {
+  // Quick filters narrow a board and nothing else; each distinct set is its own minute.
+  const quick = want.startsWith("board:") ? [...new Set(o.quick ?? [])].sort() : [];
+  if (o.cached && !quick.length) {
     const last = cachedFor(site, want);
     return last
       ? { ok: true, view, tasks: last.tasks, columns: last.columns, ...(last.statuses ? { statuses: last.statuses } : null), at: last.at, ...(last.truncated ? { truncated: true } : null), cached: true }
       : { ok: true, view, tasks: [], columns: [], at: 0, cached: true };
   }
 
-  const k = `${site}|${want}`;
+  const k = `${site}|${want}${quick.length ? `|q:${quick.join(",")}` : ""}`;
   const hit = held.get(k);
   const gen = jiraGeneration();
   if (!o.force && hit && hit.gen === gen) {
@@ -404,7 +522,7 @@ export async function viewRead(id?: string, o: { force?: boolean; cached?: boole
     if (hit.r && Date.now() - hit.at < VIEW_TTL_MS) return hit.r;
   }
   const settled = await withStored(async (creds): Promise<JiraResult<JiraViewRead>> => {
-    const run: Promise<JiraViewRead> = startRead(creds, site, view, !!o.force).catch((): JiraViewRead => emptyRead("Could not read that view", view)).then((r) => {
+    const run: Promise<JiraViewRead> = startRead(creds, site, view, !!o.force, quick).catch((): JiraViewRead => emptyRead("Could not read that view", view)).then((r) => {
       const now = held.get(k);
       // A newer ask took the slot while this was in the air: leave it its own.
       if (now && now.run !== run) return r;
@@ -412,6 +530,7 @@ export async function viewRead(id?: string, o: { force?: boolean; cached?: boole
       return r;
     });
     held.set(k, { gen, at: hit?.gen === gen ? hit.at : 0, r: hit?.gen === gen ? hit.r : undefined, run });
+    if (quick.length) trimNarrowed();
     return { ok: true, data: await run };
   });
   return settled.ok && settled.data ? settled.data : emptyRead(settled.error ?? NOT_CONNECTED, view);

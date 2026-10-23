@@ -242,17 +242,20 @@ export function moveInGrid(rows: number[], at: { r: number; c: number }, key: st
   return at;
 }
 
+/** `below` asks for under the button whenever it fits there, as Strata's emoji box sits. */
+const prefBelow = (asked: boolean, room: number, want: number): boolean => asked && room >= Math.min(want, 200);
+
 export interface Anchor { left: number; top: number; bottom: number; right: number }
 
 /** Where the popover goes: above the button unless it does not fit and below
  *  has more room, and never off either side of the window. `height` is the
  *  most it wants; the result may be less, to fit the room there is. */
-export function popoverPlace(a: Anchor, size: { width: number; height: number }, view: { width: number; height: number }, gap = 6, edge = 8):
+export function popoverPlace(a: Anchor, size: { width: number; height: number }, view: { width: number; height: number }, gap = 6, edge = 8, below = false):
   { left: number; top: number; height: number; up: boolean } {
   const above = a.top - gap - edge;
-  const below = view.height - a.bottom - gap - edge;
-  const up = above >= size.height || above >= below;
-  const height = Math.max(160, Math.min(size.height, up ? above : below));
+  const room = view.height - a.bottom - gap - edge;
+  const up = !prefBelow(below, room, size.height) && (above >= size.height || above >= room);
+  const height = Math.max(160, Math.min(size.height, up ? above : room));
   const left = Math.max(edge, Math.min(a.left, view.width - size.width - edge));
   return { left, top: up ? a.top - gap - height : a.bottom + gap, height, up };
 }

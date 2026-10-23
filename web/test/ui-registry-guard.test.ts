@@ -76,6 +76,9 @@ const NOT_AGENT_DOOR: {
     "workspace/Workspace.tsx": POPOVER,
     "PeoplePick.tsx": "choosing a person writes an assignment or a reviewer request, and it opens only from a card or a pull request it is about: there is no state of its own to show",
     "RescueModal.tsx": "the end of the worktree-removal flow, a promise that flow settles: opened alone it has nothing to settle, and opening it means starting the removal",
+    "jira/JiraMoveForm.tsx": "the form a Jira move opens when its screen asks for fields, opened by picking that move in the status list: the agent's door is `agentglass-ui jira move --fields` (POST /jira/door/move, the same check, route and write gate as the form), and `jira moves` lists each screen",
+    "jira/JiraStepDialog.tsx": "the confirmation a Jira step asks before it writes, opened from the step button on one card: the agent's door is `agentglass-ui jira step` (POST /jira/step, same route and same write gate as the press), and opening the dialog alone would only show a plan the agent already reads from GET /jira/steps",
+    "orchestration/RuleForm.tsx": "the editor of one condition, opened by Edit or Add on the Orchestration page, which an agent opens and reads: what it writes is the policy, and only a person may write that (the route refuses an agent), so the editor has no door of its own",
     "CommitModal.tsx": "no mount site outside itself (measured): dead code, not a surface",
   },
 };

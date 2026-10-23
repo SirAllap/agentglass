@@ -23,7 +23,7 @@ import { renderToStaticMarkup } from "react-dom/server";
    `document` whose `body` is not an element makes the next suite that renders a
    Portal throw "Target container is not a DOM element" — measured on a btrfs
    checkout, where directories list in a different order than on ext4 and this
-   file ran before the file palette and the Docker panel suites. */
+   file ran before the finder and the Docker panel suites. */
 const G = globalThis as unknown as Record<string, unknown>;
 const prior = { window: G.window, document: G.document, location: G.location, localStorage: G.localStorage };
 afterAll(() => { for (const [k, v] of Object.entries(prior)) { if (v === undefined) delete G[k]; else G[k] = v; } });

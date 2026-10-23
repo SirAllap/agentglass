@@ -7,12 +7,13 @@
  * to read `~/.ssh/id_rsa` from a browser tab.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pagePolicy } from "../src/browse.ts";
-import { editorRunArgv, viewableFile } from "../src/terminal.ts";
-import { browseDir, browseReal, fileBytes, fileFacts, imageSize, kindOf, openInDesktop, revealArgv, revealTarget } from "../src/browse.ts";
+import { editorRunArgv, finderEditRun, viewableFile } from "../src/terminal.ts";
+import { browseDir, parseRecentXbel, browseReal, fileBytes, fileFacts, imageSize, kindOf, openInDesktop, revealArgv, revealTarget } from "../src/browse.ts";
+import { browseBatch } from "../src/browselist.ts";
 
 const made: string[] = [];
 const wasRoots = process.env.AGENTGLASS_DISK_ROOTS;
@@ -424,6 +425,52 @@ describe("the bench editor door follows the finder's", () => {
   });
 });
 
+describe("a dotfile in home opens in the Finder's Editing tab", () => {
+  const wasRoots = process.env.AGENTGLASS_DISK_ROOTS;
+  const wasRoot = process.env.AGENTGLASS_ROOT;
+  afterEach(() => {
+    if (wasRoots === undefined) delete process.env.AGENTGLASS_DISK_ROOTS; else process.env.AGENTGLASS_DISK_ROOTS = wasRoots;
+    if (wasRoot === undefined) delete process.env.AGENTGLASS_ROOT; else process.env.AGENTGLASS_ROOT = wasRoot;
+  });
+  test("only a caller on this machine may edit .bashrc: a remote one is refused, as it is for reading", () => {
+    const home = tmp();
+    const project = tmp();
+    process.env.AGENTGLASS_ROOT = project;
+    process.env.AGENTGLASS_DISK_ROOTS = home;
+    writeFileSync(join(home, ".bashrc"), "export A=1\n");
+    expect(viewableFile(join(home, ".bashrc"), false, true)).toBe(true);
+    expect(viewableFile(join(home, ".bashrc"), false, false)).toBe(false);
+  });
+  test("the editor starts in the file's folder, with the file as one argv element (a name with spaces needs no escaping)", () => {
+    const run = finderEditRun(["nvim", "--listen", "/run/x.sock", "/home/u/my notes/.bashrc"], "/home/u/my notes/.bashrc");
+    expect(run).toEqual(["env", "-C", "/home/u/my notes", "sh", "-c", '"$@"; exit 0', "sh", "nvim", "--cmd", "set noswapfile", "--listen", "/run/x.sock", "/home/u/my notes/.bashrc"]);
+  });
+  test("neovim and vim run without a swap file, any other editor is left as configured", () => {
+    expect(finderEditRun(["/usr/bin/nvim", "x"], "/a/b").slice(7)).toEqual(["/usr/bin/nvim", "--cmd", "set noswapfile", "x"]);
+    expect(finderEditRun(["vim", "x"], "/a/b").slice(7)).toEqual(["vim", "--cmd", "set noswapfile", "x"]);
+    expect(finderEditRun(["nano", "x"], "/a/b").slice(7)).toEqual(["nano", "x"]);
+  });
+  test("a real nvim with it leaves no swap file behind when it is killed", async () => {
+    const nvim = Bun.which("nvim");
+    if (!nvim) return;
+    const dir = mkdtempSync(join(tmpdir(), "agx-noswap-"));
+    const state = join(dir, "state");
+    const file = join(dir, "notes.txt");
+    writeFileSync(file, "hello\n");
+    const run = finderEditRun([nvim, "--headless", "-c", "call system('kill -9 ' . getpid())", file], file);
+    const proc = Bun.spawn(run, { env: { PATH: process.env.PATH ?? "", HOME: dir, XDG_STATE_HOME: state, XDG_CONFIG_HOME: join(dir, "c"), XDG_DATA_HOME: join(dir, "d") }, stdout: "ignore", stderr: "ignore", stdin: "pipe" });
+    await proc.exited;
+    const swaps = existsSync(join(state, "nvim", "swap")) ? readdirSync(join(state, "nvim", "swap")) : [];
+    const stray = readdirSync(dir).filter((f) => f.endsWith(".swp"));
+    rmSync(dir, { recursive: true, force: true });
+    expect([...swaps, ...stray]).toEqual([]);
+  });
+  test("a failing editor still ends the pane cleanly, so no dead pane is left to re-attach", () => {
+    const [, , , , , script] = finderEditRun(["nvim", "x"], "/a/b");
+    expect(script).toBe('"$@"; exit 0');
+  });
+});
+
 describe("the bench editor command carries the file", () => {
   test("nvim, its socket, the line and the exact path as one element", () => {
     const argv = editorRunArgv({ editor: "nvim", listen: "/run/x.sock", readonlyFlags: [], line: 12.9, file: "/home/u/Documents/my notes.md" });
@@ -494,3 +541,45 @@ describe("showing a place in the file manager", () => {
 });
 
 function noRootsForOpen() { delete process.env.AGENTGLASS_DISK_ROOTS; }
+
+describe("Recent, as Strata lists it", () => {
+  const xbel = (items: { href: string; visited: string }[]) => `<?xml version="1.0"?>\n<xbel version="1.0">\n${items.map((i) => `  <bookmark href="${i.href}" added="2026-01-01T00:00:00Z" modified="2026-01-01T00:00:00Z" visited="${i.visited}"><info/></bookmark>`).join("\n")}\n</xbel>`;
+  test("newest use first, each file once, local files only, names decoded", () => {
+    const list = parseRecentXbel(xbel([
+      { href: "file:///home/ann/old.md", visited: "2026-01-01T00:00:00Z" },
+      { href: "file:///home/ann/My%20Notes/a%26b.txt", visited: "2026-03-01T00:00:00Z" },
+      { href: "sftp://host/home/ann/x.txt", visited: "2026-05-01T00:00:00Z" },
+      { href: "file:///home/ann/old.md", visited: "2026-02-01T00:00:00Z" },
+    ]));
+    expect(list).toEqual(["/home/ann/My Notes/a&b.txt", "/home/ann/old.md"]);
+  });
+  test("a listing names each row by its absolute path, in the file's order, and drops what is gone or refused", () => {
+    const d = tmp();
+    const data = tmp();
+    writeFileSync(join(d, "one.txt"), "1"); writeFileSync(join(d, "two.txt"), "22"); writeFileSync(join(d, ".dot"), "x");
+    writeFileSync(join(data, "recently-used.xbel"), xbel([
+      { href: `file://${join(d, "one.txt")}`, visited: "2026-01-01T00:00:00Z" },
+      { href: `file://${join(d, "two.txt")}`, visited: "2026-02-01T00:00:00Z" },
+      { href: `file://${join(d, "gone.txt")}`, visited: "2026-03-01T00:00:00Z" },
+      { href: "file:///etc/passwd", visited: "2026-04-01T00:00:00Z" },
+      { href: `file://${join(d, ".dot")}`, visited: "2026-05-01T00:00:00Z" },
+    ]));
+    const was = process.env.XDG_DATA_HOME, wasRoots = process.env.AGENTGLASS_DISK_ROOTS;
+    process.env.XDG_DATA_HOME = data; process.env.AGENTGLASS_DISK_ROOTS = d;
+    try {
+      const r = browseDir("recent:///", false, true);
+      expect(r.ok).toBe(true);
+      expect(r.entries.map((e) => e.name)).toEqual([join(d, "two.txt"), join(d, "one.txt")]);
+      expect(r.hiddenSkipped).toBe(1);
+      expect(browseDir("recent:///", true, true).entries.map((e) => e.name)[0]).toBe(join(d, ".dot"));
+      // the paged door the finder's columns use answers the same list, not "invalid path"
+      const page = browseBatch("recent:///", 0, { local: true });
+      expect(page.ok).toBe(true);
+      expect(page.entries.map((e) => e.name)).toEqual([join(d, "two.txt"), join(d, "one.txt")]);
+      expect(page.next).toBeNull();
+    } finally {
+      if (was === undefined) delete process.env.XDG_DATA_HOME; else process.env.XDG_DATA_HOME = was;
+      if (wasRoots === undefined) delete process.env.AGENTGLASS_DISK_ROOTS; else process.env.AGENTGLASS_DISK_ROOTS = wasRoots;
+    }
+  });
+});

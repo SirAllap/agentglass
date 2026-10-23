@@ -1,6 +1,6 @@
-import type { Contributes, Field, NoteStatus, PanelContribution, PrNote, PrRun, UiAction, UiNode, UiOpenPr } from "../../../shared/pluginUi.ts";
+import type { Contributes, Field, NoteReply, NoteStatus, PanelContribution, PrNote, PrRun, UiAction, UiNode, UiOpenPr } from "../../../shared/pluginUi.ts";
 
-export type { Contributes, Field, NoteStatus, PrNote, PrRun, UiAction, UiNode, UiOpenPr };
+export type { Contributes, Field, NoteReply, NoteStatus, PrNote, PrRun, UiAction, UiNode, UiOpenPr };
 
 /** A panel as the window gets it: what was declared, who declared it, and
  *  what the plugin last drew there (null until it draws, or once it stops). */

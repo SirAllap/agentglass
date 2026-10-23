@@ -258,8 +258,11 @@ function RuleRow({ fields, rule, onChange, onDrop }: {
  * and the honest way to give it one is to hand it the fields rather than to
  * write a second one that drifts from this by a pixel a month.
  */
-export function FilterBuilder({ fields, value, onChange, openSignal }: {
+export function FilterBuilder({ fields, value, onChange, openSignal, bare }: {
   fields: FieldSpec[]; value: FilterSet; onChange: (f: FilterSet) => void;
+  /** No button: a host that opens the panel from a menu of its own (`openSignal`)
+   *  has no use for a second trigger. The panel hangs off an empty anchor in its place. */
+  bare?: boolean;
   /** Opens the panel each time it changes to a new number above zero — how a
    *  saved filter set's "Edit rule" lands the person in the rows. */
   openSignal?: number;
@@ -285,9 +288,10 @@ export function FilterBuilder({ fields, value, onChange, openSignal }: {
    * entirely off screen.
    */
   const btn = useRef<HTMLButtonElement | null>(null);
+  const anchor = useRef<HTMLSpanElement | null>(null);
   const [at, setAt] = useState<{ top: number; left: number } | null>(null);
   const openPanel = () => {
-    const r = btn.current?.getBoundingClientRect();
+    const r = (bare ? anchor.current : btn.current)?.getBoundingClientRect();
     if (r) setAt(panelAt(r, window.innerWidth));
     setOpen(true);
   };
@@ -303,7 +307,7 @@ export function FilterBuilder({ fields, value, onChange, openSignal }: {
 
   return (
     <span ref={ref} className="relative inline-flex shrink-0">
-      <button ref={btn} onClick={toggle}
+      {bare ? <span ref={anchor} aria-hidden /> : <button ref={btn} onClick={toggle}
         title="Build a filter — field, is or is not, values"
         className="text-[11.5px] px-2 py-1 rounded-lg flex items-center gap-1.5 whitespace-nowrap"
         style={{
@@ -313,7 +317,7 @@ export function FilterBuilder({ fields, value, onChange, openSignal }: {
         }}>
         <span>Filters</span>
         {n > 0 && <span className="tabular-nums text-[10px]" style={{ color: "var(--primary-ink)" }}>{n}</span>}
-      </button>
+      </button>}
 
       {open && at && (
         <Portal z={10040}>

@@ -38,6 +38,7 @@ stubGlobal("localStorage", {
 });
 
 const { TriageBoard } = await import("../src/components/TriageBoard.tsx");
+const { LANE_WIDTH_PX } = await import("../src/lib/prSearch.ts");
 const { ALWAYS_OPEN, foldedLanes, setFoldedLanes, walkable } = await import("../src/lib/boardPrefs.ts");
 
 /** The board's own fixture, copied from triage-board.test.ts rather than
@@ -136,12 +137,22 @@ describe("a folded lane", () => {
     expect(column(render(withCards), "flight").toLowerCase()).toContain("in flight");
   });
 
-  test("takes 44px instead of 268", () => {
+  test("takes 44px instead of the lane width", () => {
     cell.set("agentglass.pr.lanes", JSON.stringify(["flight"]));
     const html = render(withCards);
     expect(html).toContain("44px");
-    // And the open ones keep their floor: 268 is where a title stops wrapping.
-    expect(html).toContain("minmax(268px, 1fr)");
+    // And the open ones are a fixed width, not a share of the window: the old
+    // `minmax(268px, 1fr)` squeezed them when the window narrowed.
+    expect(html).toContain(`${LANE_WIDTH_PX}px`);
+    expect(html).not.toContain("minmax(268px, 1fr)");
+  });
+
+  test("the lane strip is as wide as its lanes and the scroller around it goes sideways", () => {
+    const html = render(withCards);
+    expect(html).toContain("overflow-x-auto");
+    expect(html).toContain("grid gap-2.5 h-full w-max");
+    // 1fr tracks would hand every lane a share of the window and nothing would scroll.
+    expect(html).not.toMatch(/grid-template-columns:[^"]*1fr/);
   });
 });
 
@@ -187,7 +198,7 @@ describe("the lane that cannot be folded", () => {
   });
 });
 
-describe("what the keyboard walks", () => {
+describe("what the find walks", () => {
   /*
    * The half a render cannot show, and the half that had no test at all: a
    * cursor on a card behind a 44px strip looks exactly like a cursor on a

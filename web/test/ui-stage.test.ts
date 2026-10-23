@@ -79,6 +79,31 @@ describe("a stage handler", () => {
   });
 });
 
+describe("finder.op.stage", () => {
+  const A = { op: "move", path: "/home/acme/notes.txt", dest: "/home/acme/docs" } as const;
+  it("latches the draft, opens the Finder on the path, switches no view and touches no network", async () => {
+    const { onFinderAt } = await import("../src/lib/finderTarget.ts");
+    const seen: unknown[] = [];
+    const off = onFinderAt((t) => seen.push([t.path, t.kind]));
+    const k = ctx("tidy-bot");
+    expect(runControl(ui("finder.op.stage", A), k.c)).toBe("finder.op.stage");
+    expect(peekStage()).toMatchObject({ id: "finder.op.stage", by: "tidy-bot", a: A });
+    expect(seen).toEqual([["/home/acme/notes.txt", "file"]]);
+    expect(k.calls).toEqual([]);
+    expect(prJump()).toBeNull();
+    expect(fetched).toEqual([]);
+    runControl(ui("finder.op.stage", { op: "new-folder", path: "/home/acme/docs", name: "archive" }), k.c);
+    expect(seen[1]).toEqual(["/home/acme/docs", "dir"]);
+    off();
+  });
+  it("an irreversible operation is no command: nothing latches", () => {
+    const k = ctx("x");
+    expect(runControl(ui("finder.op.stage", { op: "delete", path: "/home/acme/notes.txt" }), k.c)).toBeNull();
+    expect(runControl(ui("finder.op.stage", { op: "empty-trash", path: "/home/acme/notes.txt" }), k.c)).toBeNull();
+    expect(peekStage()).toBeNull();
+  });
+});
+
 describe("the mailbox", () => {
   it("expires: a request nobody was there for does not open at the next visit", () => {
     latchStage({ id: "pr.comment.stage", a: ARGS["pr.comment.stage"] }, "x");

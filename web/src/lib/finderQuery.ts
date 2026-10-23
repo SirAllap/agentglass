@@ -233,7 +233,7 @@ export function scoreMatch(path: string, text: string, exact: boolean): number {
 /* -------------------------------------------------------------------------
  * Typing a path, the way a shell takes one.
  *
- * `~/Downloads` in a search box means "go there", not "find a file called
+ * `~/Downloads` in a search box means "go there", not "search for a file called
  * ~/Downloads" — which is what it used to answer, and it is the difference
  * between a search box and a file browser. Anything that starts like a path is
  * read as a destination: the folder part says where to look, the rest filters
@@ -286,6 +286,13 @@ export function readPath(raw: string, home: string, here: string): PathIntent | 
   if (q.endsWith("/") || q === "~") return { dir: full.replace(/\/$/, "") || "/", tail: "", atFolder: true };
   const cut = full.lastIndexOf("/");
   return { dir: cut <= 0 ? "/" : full.slice(0, cut), tail: full.slice(cut + 1), atFolder: false };
+}
+
+/** The one place a typed path points at, folder or file, or null for words. */
+export function finderTarget(raw: string, home: string, here: string): string | null {
+  const p = readPath(raw, home, here);
+  if (!p) return null;
+  return p.atFolder || !p.tail ? p.dir : `${p.dir === "/" ? "" : p.dir}/${p.tail}`;
 }
 
 /**

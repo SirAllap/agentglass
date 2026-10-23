@@ -20,6 +20,8 @@ registry of doors a Stream Deck button does (POST /control).
     agentglass-ui jira steps                    # the configured steps (handoff, review, merge) and whether each is on
     agentglass-ui jira step ORBIT-1042 handoff --updated 1768294800000 --pr-url https://github.com/acme/orbit/pull/318
     agentglass-ui jira link ORBIT-1042 https://github.com/acme/orbit/pull/318
+    agentglass-ui jira edit ORBIT-1042 --field priority --value 2 --updated 1768294800000   # one field of the Details
+    agentglass-ui jira comment ORBIT-1042 --text "Fixed in the next build" --reply-to 30004   # a comment, or a thread reply
 
 Every answer is one JSON object on stdout, {"ok": true, ...} or
 {"ok": false, "error": "one sentence"}; the exit code is 0 when ok and 1
@@ -377,6 +379,15 @@ JIRA_VERBS = {
              "args": {"key": ("a card id such as ORBIT-1042", True)}},
     "moves": {"acting": False, "surface": "the moves a Jira card can make from where it is: ids in `state`, the team's names in `untrusted`",
               "args": {"key": ("a card id such as ORBIT-1042", True)}},
+    "links": {"acting": False, "surface": "every web link on a Jira card, pull requests included: how many in `state`, the titles and addresses in `untrusted`",
+              "args": {"key": ("a card id such as ORBIT-1042", True)}},
+    "linktypes": {"acting": False, "surface": "the link types the site has: each one's id, its name, and the phrase for each side (`out` is what the card that holds it says, `in` what the other says); what `relate` takes as `type`",
+                  "args": {}},
+    "areas": {"acting": False, "surface": "a board's areas (its epics named `Area: ...`): how many cards each holds in the sprint, done, and in all; the names are the team's, so they are in `untrusted`",
+              "args": {"board": ("a board id such as 3 or board:3", True)}},
+    "activity": {"acting": False, "surface": "one page of what happened on a Jira card: its history (the default), its work log, or its comments past the card read; `state.next` is where the next page starts",
+                 "args": {"key": ("a card id such as ORBIT-1042", True), "kind": ("history, worklog or comments (history by default)", False),
+                          "start": ("where the page starts, from `state.next` of the last answer", False)}},
     "steps": {"acting": False, "surface": "the configured steps (handoff, review, merge) and whether each is on", "args": {}},
     "step": {"acting": True,
              "surface": "run one configured step on a card, as one request (the move, the comment and the link it is set to do); refused below control level 3, when Jira writes are off, or when the card changed since `updated`",
@@ -394,9 +405,82 @@ JIRA_VERBS = {
              }},
     "link": {"acting": True, "surface": "link a pull request to a card, once (refused below control level 3, when Jira writes are off, or when the address is not a pull request on a known host)",
              "args": {"key": ("a card id such as ORBIT-1042", True), "url": ("the pull request's address", True), "title": ("its title", False)}},
+    "edit": {"acting": True,
+             "surface": "change one field of a card's Details: title (summary), description (Markdown; refused when the stored one holds a table, panel or image Markdown would lose), priority (a priority id), labels (add or remove one), duedate or start (2026-01-31), parent (a card id), flag (true or false), originalEstimate or remainingEstimate (2h 30m); `clear` takes the description, a date, the parent, the flag or an estimate off. Refused below control level 3, when Jira writes are off, for a field the card's edit screen does not offer, or when the card changed since `updated`; the answer is the card as it now stands",
+             "args": {
+                 "key": ("a card id such as ORBIT-1042", True),
+                 "field": ("summary, description, priority, labels, duedate, start, parent, flag, originalEstimate or remainingEstimate", True),
+                 "updated": ("the stamp from `card` (state.updated)", True),
+                 "value": ("the new value, as text", False),
+                 "add": ("labels only: the label to add", False),
+                 "remove": ("labels only: the label to take off", False),
+                 "clear": ("true to take the value off", False),
+             }},
+    "comment": {"acting": True,
+                "surface": "add a comment to a card, or answer one in its thread with reply_to (Cloud only); refused below control level 3 or when Jira writes are off",
+                "args": {"key": ("a card id such as ORBIT-1042", True), "text": ("the comment, as Markdown", True),
+                         "reply_to": ("the id of the comment this answers", False)}},
+    "comment-edit": {"acting": True,
+                     "surface": "change one of the connected account's own comments; refused for anybody else's, below control level 3 or when Jira writes are off",
+                     "args": {"key": ("a card id such as ORBIT-1042", True), "id": ("the comment's id", True), "text": ("the new text, as Markdown", True)}},
+    "comment-delete": {"acting": True,
+                       "surface": "delete one of the connected account's own comments, for good; refused for anybody else's, below control level 3 or when Jira writes are off, and unless confirm is true",
+                       "args": {"key": ("a card id such as ORBIT-1042", True), "id": ("the comment's id", True),
+                                "confirm": ("true to say you mean it: it cannot be undone", True)}},
+    "move": {"acting": True,
+             "surface": "move a card, or a sub-task, to another status by one of the move ids `moves` listed; a move whose `moves` entry lists `fields` needs the required ones in `fields`, by field key (a choice by its id, several as a list, a comment as Markdown), and is refused with no request while one is empty. Refused when the card changed since `updated`, below control level 3 or when Jira writes are off",
+             "args": {"key": ("a card id such as ORBIT-1042", True), "id": ("the move's id, from `moves`", True), "updated": ("the stamp from `card` (state.updated)", True),
+                      "fields": ("what the move's screen asks for, as a JSON object by field key: {\"resolution\": \"10000\", \"comment\": \"Shipped\"}", False)}},
+    "subtask": {"acting": True,
+                "surface": "make a sub-task under a card, with the project's own sub-task type; refused below control level 3 or when Jira writes are off",
+                "args": {"key": ("the parent's card id such as ORBIT-1042", True), "title": ("the sub-task's title, one line", True)}},
+    "relate": {"acting": True,
+               "surface": "link a card to another, once: a link already there is left alone and answered `already`; refused below control level 3 or when Jira writes are off",
+               "args": {"key": ("a card id such as ORBIT-1042", True), "other": ("the other card's id", True), "type": ("the link type's id, from `linktypes`", True),
+                        "direction": ("out when this card holds the phrase `linktypes` calls out (it blocks the other), in when the other card does", True)}},
+    "unrelate": {"acting": True,
+                 "surface": "take one link off a card, by the `linkId` `card` listed for it; refused for an id the card does not hold, below control level 3, when Jira writes are off, and unless confirm is true",
+                 "args": {"key": ("a card id such as ORBIT-1042", True), "id": ("the link's id, from `card`", True), "confirm": ("true to say you mean it", True)}},
+    "weblink": {"acting": True,
+                "surface": "put a web address on a card, once (http or https only); refused below control level 3 or when Jira writes are off",
+                "args": {"key": ("a card id such as ORBIT-1042", True), "url": ("the address", True), "title": ("what to call it (the host by default)", False)}},
+    "unweblink": {"acting": True,
+                  "surface": "take one web address off a card, by the id `links` listed for it; refused for an id the card does not hold, below control level 3, when Jira writes are off, and unless confirm is true",
+                  "args": {"key": ("a card id such as ORBIT-1042", True), "id": ("the address's id, from `links`", True), "confirm": ("true to say you mean it", True)}},
+    "worklog": {"acting": True,
+                "surface": "log time on a card (only where the site has time tracking on for it): `time` like 1h 30m, an optional `started` day, an optional `note`, and how the remaining estimate follows by `adjust`: auto (lowers it by the time, the default), leave, new (sets it to `estimate`) or manual (lowers it by `estimate`). Refused below control level 3, when Jira writes are off, with no time or a time of nothing, or when the card changed since `updated`; the answer says the remaining estimate before and after",
+                "args": {"key": ("a card id such as ORBIT-1042", True), "time": ("the time spent, like 1h 30m", True), "updated": ("the stamp from `card` (state.updated)", True),
+                         "started": ("the day the work was done, 2026-01-31 (today by default)", False), "note": ("what was done, as Markdown", False),
+                         "adjust": ("auto, leave, new or manual", False), "estimate": ("the time `new` sets the remaining estimate to, or `manual` takes off it", False)}},
+    "worklog-edit": {"acting": True,
+                     "surface": "change one of the connected account's own work-log entries (its time, day or note), by an id from `activity --kind worklog`; `adjust` is auto, leave or new (there is no manual here). Refused for anybody else's entry, below control level 3, when Jira writes are off, or when the card changed since `updated`",
+                     "args": {"key": ("a card id such as ORBIT-1042", True), "id": ("the entry's id, from `activity --kind worklog`", True), "updated": ("the stamp from `card` (state.updated)", True),
+                              "time": ("the new time, like 1h 30m", False), "started": ("the day the work was done, 2026-01-31", False), "note": ("a new note, as Markdown (a note cannot be taken off)", False),
+                              "adjust": ("auto, leave or new", False), "estimate": ("the time `new` sets the remaining estimate to", False)}},
+    "worklog-delete": {"acting": True,
+                       "surface": "delete one of the connected account's own work-log entries, for good; `adjust` is auto (puts the time back on the estimate, the default), leave, new or manual (puts `estimate` back). Refused for anybody else's, below control level 3, when Jira writes are off, when the card changed since `updated`, and unless confirm is true",
+                       "args": {"key": ("a card id such as ORBIT-1042", True), "id": ("the entry's id, from `activity --kind worklog`", True), "updated": ("the stamp from `card` (state.updated)", True),
+                                "adjust": ("auto, leave, new or manual", False), "estimate": ("the time `new` sets the remaining estimate to, or `manual` adds back", False),
+                                "confirm": ("true to say you mean it: it cannot be undone", True)}},
+    "watch": {"acting": True,
+              "surface": "watch a card as the connected account, or stop with `off`; watching twice is watching. One request, no stamp (it does not change the card). Refused below control level 3 or when Jira writes are off",
+              "args": {"key": ("a card id such as ORBIT-1042", True), "off": ("true to stop watching", False)}},
+    "vote": {"acting": True,
+             "surface": "vote for a card as the connected account, or take the vote back with `off`. One request, no stamp. Refused by the site for the account's own cards and where voting is off, below control level 3 and when Jira writes are off",
+             "args": {"key": ("a card id such as ORBIT-1042", True), "off": ("true to take the vote back", False)}},
+    "rank": {"acting": True,
+             "surface": "put a card before or after another on its board, which is the order the board is read in; give exactly one of before and after; refused below control level 3 or when Jira writes are off",
+             "args": {"key": ("the card to move, such as ORBIT-1042", True), "before": ("the card it goes in front of", False), "after": ("the card it goes behind", False)}},
+    "attach": {"acting": True,
+               "surface": "add a file to a card from words (text) or bytes (data, base64) the caller holds, at most 25 MB; nothing is read from a path; refused below control level 3 or when Jira writes are off",
+               "args": {"key": ("a card id such as ORBIT-1042", True), "name": ("the file's name, as it should show", True),
+                        "text": ("the file's words (or give data)", False), "data": ("the file's bytes as base64 (or give text)", False)}},
+    "unattach": {"acting": True,
+                 "surface": "take one of your own files off a card, by the `fileId` `card` listed for it; refused for a file the card does not hold or one somebody else added, below control level 3, when Jira writes are off, and unless confirm is true",
+                 "args": {"key": ("a card id such as ORBIT-1042", True), "id": ("the file's id, from `card`", True), "confirm": ("true to say you mean it", True)}},
 }
-_JIRA_INT = ("updated", "pr_number")
-_JIRA_BOOL = ("stay", "clear")
+_JIRA_INT = ("updated", "pr_number", "start")
+_JIRA_BOOL = ("stay", "clear", "confirm", "off")
 
 
 def jira_body(verb, given, as_name=None):
@@ -425,11 +509,22 @@ def jira_body(verb, given, as_name=None):
                 v = low == "true"
             elif not isinstance(v, bool):
                 return None, f"{k} must be true or false"
+        elif k == "fields":
+            if isinstance(v, str):
+                try:
+                    v = json.loads(v)
+                except ValueError:
+                    return None, "fields must be a JSON object by field key"
+            if not isinstance(v, dict):
+                return None, "fields must be a JSON object by field key"
         elif not isinstance(v, str):
             return None, f"{k} must be text"
         flat[k] = v
-    body = {k: flat[k] for k in ("key", "trigger", "updated", "url", "title") if k in flat}
-    choice = {k: flat[k] for k in ("to", "stay", "clear", "assign", "comment") if k in flat}
+    body = {k: flat[k] for k in ("key", "trigger", "updated", "url", "title", "field", "value", "add", "remove", "id", "text", "reply_to", "confirm", "off", "other", "type", "direction", "fields") if k in flat}
+    # `clear` is a step's choice on a step and a top-level word on an edit.
+    if verb == "edit" and "clear" in flat:
+        body["clear"] = flat["clear"]
+    choice = {k: flat[k] for k in ("to", "stay", "clear", "assign", "comment") if k in flat and verb == "step"}
     pr = {k[3:]: flat[k] for k in ("pr_url", "pr_title", "pr_number", "pr_author") if k in flat}
     if choice:
         body["choice"] = choice
@@ -495,7 +590,7 @@ def main(argv=None):
     pm = p.add_mutually_exclusive_group()
     pm.add_argument("--now", action="store_true", help="open it at once: ONLY when the person just asked you to prepare this")
     pm.add_argument("--quiet", action="store_true", help="wait behind a chip if the person is typing (the default)")
-    p = sub.add_parser("jira", help="a Jira card through the routes the screen uses: card, moves, steps, step, link")
+    p = sub.add_parser("jira", help="a Jira card through the routes the screen uses: card, moves, links, linktypes, activity, steps, step, link, edit, comment, comment-edit, comment-delete, move, subtask, relate, unrelate, weblink, unweblink, worklog, worklog-edit, worklog-delete, watch, vote, rank, attach, unattach")
     js = p.add_subparsers(dest="jverb", required=True)
     for verb, spec in JIRA_VERBS.items():
         q = js.add_parser(verb, help=spec["surface"])

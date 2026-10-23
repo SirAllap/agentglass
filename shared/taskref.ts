@@ -349,6 +349,22 @@ export function prAddress(url: string | null | undefined): { url: string; number
   return { url: `https://${host}/${slug}/-/merge_requests/${number}`, number, slug };
 }
 
+/**
+ * Every pull request address written in a piece of text, canonical and in
+ * order, each once. A candidate is cut out at whitespace and brackets, loses
+ * the sentence punctuation that trails it, and then goes through `prAddress`
+ * like any address from outside: no host rule lives here.
+ */
+export function prMentions(text: string | null | undefined): { url: string; number: number; slug: string }[] {
+  const out: { url: string; number: number; slug: string }[] = [];
+  const seen = new Set<string>();
+  for (const m of (text ?? "").matchAll(/https:\/\/[^\s<>()[\]"'`|]+/gi)) {
+    const a = prAddress(m[0].replace(/[.,;:!?*_]+$/, ""));
+    if (a && !seen.has(a.url)) { seen.add(a.url); out.push(a); }
+  }
+  return out;
+}
+
 /** The tracker item an address names, when the WHOLE string is that address
  *  (a query or fragment after it is fine). `ADDRESSES` is shaped to find links
  *  inside prose, so an address buried in the middle of something else — a

@@ -565,7 +565,8 @@ export function validateTree(raw: unknown): Ok<UiNode> | Err {
 // the app already shows. A reviewer, a linter or a CI watcher all say the
 // same kind of thing — "at this line of this commit, this" — so that is the
 // shape, and PrPanel draws it beside GitHub's own threads, marked as local.
-// Nothing here is ever sent to GitHub; the app has no path that would.
+// Notes never go to GitHub by themselves. The one path is a person's reply
+// with its GitHub box ticked (answerNote in server/src/plugin-ui.ts).
 
 export type NoteSeverity = "critical" | "high" | "medium" | "low" | "idea" | "info";
 export const NOTE_SEVERITIES: readonly NoteSeverity[] = ["critical", "high", "medium", "low", "idea", "info"];
@@ -605,8 +606,59 @@ export interface PrNote {
    *  the plugin's: a finding the reviewer itself marked resolved can be
    *  reopened by it when the bug comes back. */
   statusBy?: "person" | "plugin";
+  /** What was answered to this finding, oldest first. Written by the person
+   *  (or an agent acting for them), never by the plugin's own upserts, and
+   *  kept across them. Stored with the note, so removing the plugin removes it. */
+  replies?: NoteReply[];
   createdAt: number;
   updatedAt: number;
+}
+
+/** One answer under a finding. */
+export interface NoteReply {
+  id: string;
+  text: string;
+  at: number;
+  /** `"user"`, or `"agent:<name>"` for a reply an agent sent for the person. */
+  by: string;
+  /** Whether this text was also commented on the pull request on GitHub. */
+  postedOnGitHub: boolean;
+  /** The status this reply was sent together with, when it changed it. */
+  withStatus?: "resolved" | "dismissed";
+}
+
+export const REPLY_MAX_CHARS = 4000;
+export const REPLIES_PER_NOTE = 50;
+const REPLY_BY_RE = /^agent:[A-Za-z0-9_.-]{1,60}$/;
+
+/** Reply text as it is stored: control characters gone (a tab and a newline
+ *  stay), tags gone — a reply is shown as plain text, so markup in it is
+ *  noise at best — and trimmed. */
+export function cleanReplyText(raw: string): string {
+  let s = raw
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
+    .replace(/\r\n?/g, "\n");
+  // Until nothing changes: removing `<b>` from `<<b>script>` leaves a tag behind.
+  for (let prev = ""; prev !== s;) { prev = s; s = s.replace(/<\/?[A-Za-z!][^>]*>/g, ""); }
+  return s.trim();
+}
+
+export function validReplyBy(v: unknown): v is string {
+  return v === "user" || (typeof v === "string" && REPLY_BY_RE.test(v));
+}
+
+/** The `reply` of a status request: `{ text, postToGitHub? }`. */
+export function validateReplyInput(raw: unknown): Ok<{ text: string; postToGitHub: boolean }> | Err {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, error: "reply must be an object with a text" };
+  const r = raw as Record<string, unknown>;
+  if (typeof r.text !== "string") return { ok: false, error: "reply.text must be a string" };
+  if (r.text.length > REPLY_MAX_CHARS * 2) return { ok: false, error: `reply.text is over ${REPLY_MAX_CHARS} characters` };
+  const text = cleanReplyText(r.text);
+  if (!text) return { ok: false, error: "reply.text is empty" };
+  if (text.length > REPLY_MAX_CHARS) return { ok: false, error: `reply.text is over ${REPLY_MAX_CHARS} characters` };
+  if (r.postToGitHub !== undefined && typeof r.postToGitHub !== "boolean") return { ok: false, error: "reply.postToGitHub must be true or false" };
+  return { ok: true, value: { text, postToGitHub: r.postToGitHub === true } };
 }
 
 const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;

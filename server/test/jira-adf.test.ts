@@ -8,7 +8,7 @@
  * sends that this does not know is read as its words and never throws.
  */
 import { describe, expect, test } from "bun:test";
-import { adfToMarkdown, adfToWiki, markdownToAdf, markdownToWiki, wikiToMarkdown, type AdfNode } from "../src/jiraAdf.ts";
+import { adfToMarkdown, adfToWiki, editableBody, markdownToAdf, markdownToWiki, wikiToMarkdown, type AdfNode } from "../src/jiraAdf.ts";
 import richDescription from "./fixtures/jira/description-rich.json";
 import wiki from "./fixtures/jira/wiki.json";
 import issues from "./fixtures/jira/issues.json";
@@ -273,5 +273,51 @@ describe("wiki markup, for Data Center", () => {
 
   test("ADF a site wrote can be put in wiki form without throwing", () => {
     expect(() => adfToWiki(markdownToAdf(RICH_MD, [{ id: "grace", name: "Grace Sample" }]))).not.toThrow();
+  });
+});
+
+describe("whether a stored description can be edited as Markdown", () => {
+  const doc = (...content: unknown[]) => ({ type: "doc", version: 1, content });
+  const p = (...inline: unknown[]) => ({ type: "paragraph", content: inline });
+  const t = (text: string, ...marks: string[]) => ({ type: "text", text, ...(marks.length ? { marks: marks.map((type) => ({ type })) } : {}) });
+
+  test("everything Markdown writes comes back as the same document", () => {
+    const md = "## Plan\n\nSome **bold**, *it*, `code`, ~~gone~~ and a [link](https://a.example/x) with @Grace Sample.\n\n1. one\n2. two\n   - nested\n\n> quote\n\n---\n\n```ts\nx\n```\n\nline  \nbreak";
+    expect(editableBody(markdownToAdf(md, [{ id: "acc-0002", name: "Grace Sample" }]), 3)).toBe(true);
+    expect(editableBody(markdownToWiki(md, [{ id: "grace", name: "Grace Sample" }]), 2)).toBe(true);
+  });
+
+  test("nothing at all can be written over", () => {
+    for (const empty of [null, undefined, "", doc()]) expect(editableBody(empty, 3)).toBe(true);
+    expect(editableBody(null, 2)).toBe(true);
+  });
+
+  test("a panel, a table, media, an expand, a task list, an emoji, a smart link, a colour and an underline are not Markdown's", () => {
+    const refused: unknown[] = [
+      doc({ type: "panel", attrs: { panelType: "info" }, content: [p(t("x"))] }),
+      richDescription,
+      doc({ type: "mediaSingle", content: [{ type: "media", attrs: { id: "m1", type: "file", collection: "" } }] }),
+      doc({ type: "expand", attrs: { title: "More" }, content: [p(t("x"))] }),
+      doc({ type: "taskList", attrs: { localId: "1" }, content: [{ type: "taskItem", attrs: { localId: "2", state: "TODO" }, content: [t("x")] }] }),
+      doc(p(t("x"), { type: "emoji", attrs: { shortName: ":smile:" } })),
+      doc(p({ type: "inlineCard", attrs: { url: "https://a.example/x" } })),
+      doc(p({ type: "text", text: "x", marks: [{ type: "textColor", attrs: { color: "#ff0000" } }] })),
+      doc(p(t("x", "underline"))),
+    ];
+    for (const body of refused) expect(editableBody(body, 3)).toBe(false);
+  });
+
+  test("a body that is not a document, or is deeper than any reader goes, is refused", () => {
+    expect(editableBody("plain", 3)).toBe(false);
+    expect(editableBody({ type: "doc", content: "x" }, 3)).toBe(false);
+    let deep: unknown = p(t("x"));
+    for (let i = 0; i < 20; i++) deep = { type: "blockquote", content: [deep] };
+    expect(editableBody(doc(deep), 3)).toBe(false);
+  });
+
+  test("on Data Center a table, a panel macro and a non-text body are refused", () => {
+    expect(editableBody(wiki.description, 2)).toBe(false);
+    expect(editableBody("{panel:title=T}\nbody\n{panel}", 2)).toBe(false);
+    expect(editableBody({ type: "doc" }, 2)).toBe(false);
   });
 });

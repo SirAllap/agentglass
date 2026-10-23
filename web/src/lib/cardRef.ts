@@ -129,14 +129,14 @@ export interface RefSetup {
  * WHERE this goes cannot be half-applied.
  *
  *   null            say nothing — an id from a tracker we cannot resolve
- *   { in: "tasks" } open it here, in the board
+ *   { in: "tasks" } open it here, in the board (`tracker: "jira"`: the Jira tab)
  *   { in: "away" }  not this board's item, or no board here, and the body gave
  *                   an address — which opens without anybody's credentials
  */
 export function chipAction(
   ref: CardRef | null,
   setup: RefSetup | null,
-): { in: "tasks" } | { in: "away"; url: string } | null {
+): { in: "tasks"; tracker?: "jira" } | { in: "away"; url: string } | null {
   // Null setup is "the answer has not arrived", not "no". Saying nothing until
   // it has is what stops the chip appearing and then vanishing.
   if (!ref || !setup) return null;
@@ -144,7 +144,10 @@ export function chipAction(
     // Jira is connected too and `trackerFor` is the one that says whose it is.
     const o = setup.ownerOf(ref, true);
     if (o.owner === "clickup" && setup.connected) return { in: "tasks" };
-    // Jira cards have no view in the board yet, so the chip opens the card on its site.
+    /* A Jira card opens in the Jira tab when a Jira site is connected, the same
+       as a ClickUp card does in its own; without one there is no board to
+       look it up in, and the chip opens the card on its site. */
+    if (o.owner === "jira" && setup.jira) return { in: "tasks", tracker: "jira" };
     if (o.owner === "jira") {
       const url = ref.url ?? (o.jiraSite ? `https://${o.jiraSite}/browse/${ref.label}` : undefined);
       return url ? { in: "away", url } : null;

@@ -42,7 +42,8 @@ describe("the group heading is one component", () => {
 
   test("the tab mounts the board's body, and what it draws for a card is Jira's own pane", () => {
     const j = strip(jira);
-    expect(strip(facts).match(/function JiraFacts\(/g)).toHaveLength(1);
+    // The card's facts are drawn once: the head over the tabs, the properties inside the pane.
+    for (const name of ["JiraHead", "JiraProps"]) expect(strip(facts).match(new RegExp(`function ${name}\\(`, "g")), name).toHaveLength(1);
     expect(j).not.toContain("function Facts(");
     expect(j).toContain("<JiraCard ");
     expect(strip(panel)).toContain("source={JIRA_BOARD} />");

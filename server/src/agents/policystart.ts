@@ -24,7 +24,7 @@ import { addNeed } from "../seatneed.ts";
 import { addReport } from "../seatreport.ts";
 import { wakeForReport } from "../seatwake.ts";
 import { hermesResumeRefusal } from "../hermes.ts";
-import { agentProvider } from "../../../shared/agentKinds.ts";
+import { agentProvider, workerModelFor } from "../../../shared/agentKinds.ts";
 import { workerRole, type RoleId } from "../../../shared/workerRoles.ts";
 import { chainFor, envelopeWithin, resolve, type RuleFacts } from "../../../shared/orchestration.ts";
 import type { EngineReadiness } from "../../../shared/types.ts";
@@ -396,12 +396,13 @@ async function switchEngine(a: AgentOps.NamedAgent, by: StartedBy, why: FirstTur
   });
   if (!next.ok) return next.why;
   const bin = pathOf(next.choice.engine)!;
-  const turn = headlessTurn({ engine: next.choice.engine, bin, model: next.choice.model, role, envelope: by.envelope, limits: view.policy.limits, prompt });
+  const model = workerModelFor(next.choice.engine, next.choice.model);
+  const turn = headlessTurn({ engine: next.choice.engine, bin, model, role, envelope: by.envelope, limits: view.policy.limits, prompt });
   if (!turn.ok) return turn.error;
   // The failed turn's tab is still open under this name; it goes before the next opens.
   if (await AgentOps.keptTabOf(a)) await AgentOps.stopAgent(a, Date.now(), true);
   const stamp: StartedBy = {
-    ...by, engine: next.choice.engine, model: next.choice.model, position: next.position,
+    ...by, engine: next.choice.engine, model, position: next.position,
     retries: (by.retries ?? 0) + 1, from: by.engine, turnMinutes: view.policy.limits.turnMinutes,
     because: [...by.because, `${engineTitle(by.engine)} ${WHY[why]}, so the next engine in the chain took over`],
   };
@@ -409,7 +410,7 @@ async function switchEngine(a: AgentOps.NamedAgent, by: StartedBy, why: FirstTur
   const r = await AgentOps.startAgent({
     root: a.seatRoot ?? cwd, name: a.name, cwd, kind: next.choice.engine, exactArgv: wrapped(files, turn.argv),
     env: turn.env, keep: true, lockedRole: true, yoloAllowed: false,
-    owner: { seatRoot: a.seatRoot ?? null, model: next.choice.model, startedBy: stamp, resumeId: turn.sessionId ?? null },
+    owner: { seatRoot: a.seatRoot ?? null, model, startedBy: stamp, resumeId: turn.sessionId ?? null },
   });
   /* An engine that fails at launch is `died` here: its row is written and
      ended all the same, and its wrapper has left the status, so it is armed

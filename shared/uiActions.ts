@@ -62,6 +62,19 @@ export const STAGE_REVIEW_VERDICTS = ["approve", "request_changes", "comment"] a
 export const STAGE_BODY_MAX = 8000;
 export const STAGE_SUBJECT_MAX = 256;
 /**
+ * The Finder operations a door may stage: the ones Ctrl+Z takes back. The two
+ * that cannot be taken back (delete, empty-trash) are not here on purpose, so
+ * validation refuses them; they stay with the person's own hands.
+ */
+export const FINDER_STAGE_OPS = ["trash", "move", "copy", "rename", "new-folder", "duplicate"] as const;
+export type FinderStageOp = (typeof FINDER_STAGE_OPS)[number];
+/** The longest name a file system takes. */
+export const FINDER_NAME_MAX = 255;
+/** Which optional argument each staged operation cannot do without. */
+export const FINDER_STAGE_NEEDS: Readonly<Record<FinderStageOp, "dest" | "name" | null>> = {
+  trash: null, duplicate: null, move: "dest", copy: "dest", rename: "name", "new-folder": "name",
+};
+/**
  * What `ui.read` can be asked about. Each one has exactly one provider in
  * web/src/lib/uiSnapshots.ts, keyed by these ids, so a panel named here with no
  * provider is a compile error and web/test/ui-read-guard.test.ts pins the rest.
@@ -172,6 +185,14 @@ const def = <const D extends UiActionDef>(d: D): D => d;
 // A pull request's number: a whole number from 1. `int` starts at 0, so the
 // entries that take one refuse 0 in `refine`.
 const PR_NUMBER = { t: "int", max: 999_999_999 } as const;
+// Only what the operation uses is kept, so a stray `dest` on a rename is not
+// carried into a dialog that never shows it. A name is one path component.
+const finderStageOk = (a: Record<string, unknown>): Record<string, unknown> | null => {
+  const need = FINDER_STAGE_NEEDS[a.op as FinderStageOp];
+  if (need === undefined || (need !== null && a[need] === undefined)) return null;
+  if (typeof a.name === "string" && a.name.includes("/")) return null;
+  return { op: a.op, path: a.path, ...(need ? { [need]: a[need] } : {}) };
+};
 const prNumberOk = (a: Record<string, unknown>): Record<string, unknown> | null => ((a.number as number) >= 1 ? a : null);
 
 export const UI_ACTIONS = {
@@ -182,7 +203,7 @@ export const UI_ACTIONS = {
   }),
   "esc.peel": def({ inPlace: true, level: 1, kind: "open", surface: "peels the top overlay, as Escape does", legacy: { cmd: "esc" }, args: {} }),
   "panel.open": def({ modals: ["CommandPalette.tsx", "HelpLegend.tsx", "SearchModal.tsx", "SkillsModal.tsx", "StatsModal.tsx"], level: 1, kind: "open", surface: "stats, skills, search, help or the command palette", legacy: { cmd: "open" }, args: { what: { t: "enum", values: PANEL_IDS } } }),
-  "finder.open": def({ modals: ["FilePalette.tsx"],
+  "finder.open": def({ modals: ["FilePalette.tsx", "finder/machine/FinderActions.tsx", "finder/machine/FinderChrome.tsx", "finder/machine/FinderSearch.tsx", "finder/machine/FolderPeek.tsx", "finder/machine/FolderViews.tsx", "finder/machine/MachineFinder.tsx", "finder/machine/Popover.tsx", "finder/machine/VolumeDialogs.tsx"],
     level: 1, kind: "open", surface: "the file finder on one absolute path", legacy: { cmd: "open", pin: { what: "finder" } }, chords: ["files.palette"],
     args: { path: { t: "abspath" }, kind: { t: "pathKind", of: "path" } },
   }),
@@ -292,6 +313,15 @@ export const UI_ACTIONS = {
     surface: "the move dialog for the card of one pull request, with the new status filled in (nothing moves until the person presses Move)",
     args: { repo: { t: "repo" }, number: PR_NUMBER, status: { t: "text", max: 80, line: true } },
     refine: prNumberOk,
+  }),
+  "finder.op.stage": def({
+    modals: ["finder/machine/FinderOpsUI.tsx"], level: 3, kind: "stage",
+    surface: "the Finder's confirmation for one reversible file operation (trash, move, copy, rename, new folder, duplicate) on one path, with the paths named (nothing runs until the person presses the button)",
+    args: {
+      op: { t: "enum", values: FINDER_STAGE_OPS }, path: { t: "abspath" },
+      dest: { t: "abspath", optional: true }, name: { t: "text", max: FINDER_NAME_MAX, line: true, optional: true },
+    },
+    refine: finderStageOk,
   }),
 } as const satisfies Record<string, UiActionDef>;
 

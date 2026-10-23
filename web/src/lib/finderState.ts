@@ -77,11 +77,12 @@ export function restore(raw: unknown): FinderSnapshot {
   if (r.v !== 1) return base;
   const tabs: Partial<Record<FinderTab, TabView>> = {};
   const rt = (r.tabs && typeof r.tabs === "object" ? r.tabs : {}) as Record<string, unknown>;
-  for (const t of FINDER_TABS) { const v = tabView(rt[t]); if (v) tabs[t] = v; }
+  for (const t of FINDER_TABS) { if (t === "recent") continue; const v = tabView(rt[t]); if (v) tabs[t] = v; }
   const sc = r.scroll as Record<string, unknown> | null | undefined;
   return {
     v: 1,
-    tab: FINDER_TABS.includes(r.tab as FinderTab) ? (r.tab as FinderTab) : base.tab,
+    // The Recent list is the sidebar's Recent folder now; a store that still says "recent" opens the finder on its own tab.
+    tab: r.tab === "recent" ? "machine" : FINDER_TABS.includes(r.tab as FinderTab) ? (r.tab as FinderTab) : base.tab,
     tabs,
     drawerW: typeof r.drawerW === "number" ? clampDrawer(r.drawerW) : base.drawerW,
     collapsed: r.collapsed === true,

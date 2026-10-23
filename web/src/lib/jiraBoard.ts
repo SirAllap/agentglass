@@ -15,6 +15,10 @@
  *              groups.
  *   write gate the one switch for writing to Jira, a local read.
  *
+ * A board also has its context (quick filters, sprint, epics) and can be ranked by
+ * a drop; both are optional parts of the source (`boardContext`, `rank`) that the
+ * body draws only when they are there.
+ *
  * What Jira does not have yet is stated in `caps`, and a control it cannot
  * honour is left out of the screen: no sprint or field editing, no workspace
  * search, no list of a list's own views, no new address for a saved board.
@@ -79,8 +83,10 @@ async function views(): Promise<BoardViews> {
 const live = new Set<string>();
 const behind = new Map<string, Promise<ViewTasksResponse>>();
 
-async function read(id?: string, force?: boolean): Promise<ViewTasksResponse> {
+async function read(id?: string, force?: boolean, quick?: readonly string[]): Promise<ViewTasksResponse> {
   const key = id ?? "";
+  // A narrowed board is a question of the moment: it neither paints from, nor waits behind, the whole board's kept copy.
+  if (quick?.length) return api.jiraView(key, { ...(force ? { force: true } : {}), filters: quick }).then(boardOf);
   const asked = behind.get(key);
   if (asked && !force) return asked;
   const fresh = () => api.jiraView(key, force ? { force: true } : undefined).then(boardOf);
@@ -112,13 +118,16 @@ export const JIRA_BOARD: BoardSource = {
   },
   caps: {
     sprintEdit: false, multiAssignee: false, fieldEdits: false, listViews: false, workspaceSearch: true, stream: false,
-    listMeta: false, editAddress: false, slowAssigned: false,
+    listMeta: false, editAddress: false, slowAssigned: false, context: true,
   },
   shortKeys: true,
   storageKey: (name) => boardStorageKey("jira", name),
 
   views,
   read,
+  boardContext: (viewId) => api.jiraBoardContext(viewId),
+  boardAreas: (viewId) => api.jiraBoardAreas(viewId),
+  rank: (key, ask) => api.jiraRank(key, ask),
   list: async () => NOT_HERE,
   listViews: async () => ({ ok: true, views: [], links: [] }),
   setWrites: (on) => api.jiraWrites(on),

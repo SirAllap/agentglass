@@ -20,19 +20,27 @@ const alerts = await Bun.file(new URL("../src/components/Alerts.tsx", import.met
 
 const code = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
 
-describe("PR board state axis", () => {
-  it("is the house Segmented", () => {
-    expect(code(pr)).toMatch(/<Segmented value=\{stateSel\}/);
+describe("PR board has no state axis", () => {
+  it("has no Open / Closed / All switch and no All pill", () => {
+    expect(code(pr)).not.toMatch(/<Segmented value=\{stateSel\}/);
+    expect(code(pr)).not.toContain("setStateSel");
+    expect(code(pr)).not.toContain("VIEWS.filter");
   });
 
-  it("leaves the board for the table on Closed or All", () => {
-    const at = pr.indexOf("<Segmented value={stateSel}");
-    const call = pr.slice(at, pr.indexOf("/>", at));
-    expect(call).toContain('if (s !== "open") setBoard(false)');
+  it("asks GitHub for every state only once Enter was pressed", () => {
+    expect(code(pr)).toContain('const stateSel: StateSel = serverQuery.trim() ? "all" : "open";');
   });
 
-  it("puts the board back on Open when Board is picked", () => {
-    expect(pr).toContain('setInboxOn(false); setMetricsOn(false); setStateSel("open"); setBoard(true);');
+  it("shows search results as cards of the board, and has no switch of its own", () => {
+    /* The board is whatever Open shows; there is no stored preference to fall
+       out of step with the state axis. */
+    expect(code(pr)).toContain("const boardOn = stateSel === \"open\";");
+    expect(code(pr)).not.toContain("setBoard(");
+    expect(pr).not.toContain("agentglass.pr.board");
+  });
+
+  it("the Open pill leaves the other views and clears a search only when already on the board", () => {
+    expect(pr).toContain('if (!inboxOn && !metricsOn && !closedOn) { setFilter("all"); setQuery(""); }');
   });
 });
 

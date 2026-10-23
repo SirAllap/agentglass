@@ -11,12 +11,14 @@
  * ClickUp's write is the call the status picker has always made, with the same
  * body: `api.clickupCard(id, { status }, updated)`.
  *
- * Ceiling: one move per click. Jira's moves that ask for a field are listed
- * with `needs` and cannot be made from here; there is no form for them, and no
- * path through several moves to a distant status.
+ * Ceiling: one move per click, and no path through several moves to a distant
+ * status. A Jira move that asks for a field carries `needs` and `fields`: the
+ * picker opens a form for them and the write is refused, with nothing sent,
+ * until they are given.
  */
 import { api } from "./api.ts";
 import type { ProviderTask } from "../../../shared/providers.ts";
+import type { JiraMoveField } from "../../../shared/jiraMoveFields.ts";
 
 export interface StatusOption {
   /** ClickUp: the status name. Jira: the move's id. */
@@ -28,8 +30,10 @@ export interface StatusOption {
   toId?: string;
   toKind: "open" | "done" | "other";
   color?: string;
-  /** Screen fields the move cannot be made without; set means shown, not offered. */
+  /** Screen fields the move cannot be made without: set means the move asks first. */
   needs?: string[];
+  /** The move's screen, as a form draws it. */
+  fields?: JiraMoveField[];
 }
 
 export interface StatusOptionsResult { ok: boolean; data?: StatusOption[]; error?: string; throttled?: boolean }
@@ -80,12 +84,14 @@ export async function jiraStatusOptions(task: ProviderTask): Promise<StatusOptio
       toKind: m.toKind,
       ...(m.color ? { color: m.color } : null),
       ...(m.needs?.length ? { needs: m.needs } : null),
+      ...(m.fields?.length ? { fields: m.fields } : null),
     })),
   };
 }
 
-export async function jiraSetStatus(task: ProviderTask, opt: StatusOption): Promise<StatusWriteResult> {
-  if (opt.needs?.length) return { ok: false, error: `That move needs ${opt.needs.join(", ")}, which cannot be filled in here yet` };
-  return api.jiraTransition(task.customId || task.id, opt.key, task.updated)
+export async function jiraSetStatus(task: ProviderTask, opt: StatusOption, fields?: Record<string, string | string[]>): Promise<StatusWriteResult> {
+  // A move that asks, asked with nothing: said here and not sent (the form is how it is given).
+  if (opt.needs?.length && !fields) return { ok: false, error: `That move needs ${opt.needs.join(", ")}` };
+  return api.jiraTransition(task.customId || task.id, opt.key, task.updated, fields)
     .catch(() => ({ ok: false, error: UNREACHABLE, task: undefined } as StatusWriteResult));
 }

@@ -1,26 +1,45 @@
-import { FacetMenu } from "./FacetMenu.tsx";
+import { useState } from "react";
+import { Avatar } from "./Avatar.tsx";
+import { LAYER } from "../lib/layers.ts";
+import { applyPick, atToken, loadUse, recordPicks, suggestPeople } from "../lib/personUsage.ts";
+import { SEARCH_HINT, SEARCH_PLACEHOLDER } from "../lib/prSearch.ts";
+import { barControls, type BarView } from "../lib/prBarView.ts";
 import { ICON } from "../lib/iconSize.ts";
-import {
-  serializeQuery, toggleFacet, setSort, DEFAULT_SORT, SORT_OPTIONS,
-  type FilterState, type FacetView, type SortTok,
-} from "../lib/prFilter.ts";
-import { SearchIcon } from "../lib/glyphIcons.tsx";
+import { serializeQuery, toggleFacet, type FilterState, type FacetView } from "../lib/prFilter.ts";
+import { PinIcon, SearchIcon, StarIcon } from "../lib/glyphIcons.tsx";
+import { focusItems, type SearchFocus } from "../lib/useSearchFocus.ts";
+import { SearchFocusPanel } from "./prs/SearchFocusPanel.tsx";
 import { CloseIcon } from "./CloseButton.tsx";
-import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { BAR_CTRL, BAR_ICON, BAR_INPUT, BAR_SQUARE, CHIP_SURFACE, EDGE, INPUT_STYLE, chipTone } from "./workspace/Chrome.tsx";
 
 /**
- * The PR list's filter bar (#pulldash-style): a query input, a wrapping row of
- * GitHub-style facet pills, a Sort pill, and a row of removable chips for what
- * is active.
+ * The PR list's filter controls: a query input, the unread chip, the rule
+ * builder and saved sets (passed in as `builder`), and a row of removable chips
+ * for what is active.
+ *
+ * It draws a FRAGMENT, not a bar of its own: the panel's header is the one bar,
+ * and these are the parts of it that belong to the filter. The chips row takes a
+ * line of its own (`basis-full`) and exists only while something is narrowing.
  *
  * Every control edits ONE thing — the query string — through parse/serialize, so
  * the bar and the dropdowns are always the same filter. This component holds no
  * state; it turns clicks into new query strings and hands them up via `onQuery`.
  */
 export function PrFilterBar({
-  query, filters, facets, onQuery, onSearch, pending, searching, shown, total, swept, unread, builder,
+  query, filters, facets, onQuery, onSearch, onPickPerson, pending, searching, shown, total, swept, builder, people, view = "board", scoped, inbox, focus,
 }: {
+  /** Which view the box points at. Everything below the box is the board's and is drawn only there. */
+  view?: BarView;
+  /** The box for a view that is not the board: its own text, its own hint. It asks nobody on a keystroke. */
+  scoped?: { value: string; onChange: (v: string) => void; placeholder: string };
+  /** The inbox's two controls: which list is showing and how many are unread. */
+  inbox?: { unreadOnly: boolean; onUnreadOnly: (v: boolean) => void; unread: number };
+  /** Recent and saved searches and the people followed, offered while the box has focus and is empty. */
+  focus?: SearchFocus;
   query: string;
+  /** The repository's people, already loaded by the panel. Null while they are
+   *  not: typing "@" then says so instead of asking for them. */
+  people?: string[] | null;
   filters: FilterState;
   facets: FacetView[];
   /** The rule builder, drawn after the pills. Passed in rather than built here
@@ -30,6 +49,8 @@ export function PrFilterBar({
   onQuery: (q: string) => void;
   /** Ask GitHub. Never called on a keystroke — see PrPanel's serverQuery. */
   onSearch: () => void;
+  /** Called when the `@` menu picked somebody into an otherwise empty box: that is a request for their board, not a search. */
+  onPickPerson?: (login: string) => void;
   /** The box says something the last search did not ask for. */
   pending: boolean;
   searching?: boolean;
@@ -38,17 +59,25 @@ export function PrFilterBar({
   /** How far the background sweep has read, while free text is filtering. A
    *  count over a partial pool has to say so. */
   swept?: { rows: number; done: boolean };
-  /**
-   * Rows with something said on them since you last looked.
-   *
-   * Not a facet: every other pill here is a GitHub search qualifier, and "since I last
-   * looked" is a timestamp in this browser that GitHub has never heard of. It sits
-   * with them because that is where somebody looks for it, and its tooltip says out
-   * loud that it counts only the rows this table has loaded.
-   */
-  unread?: { count: number; on: boolean; onToggle: () => void; onMarkAllRead: () => void };
 }) {
+  const controls = barControls(view);
   const emit = (next: FilterState) => onQuery(serializeQuery(next));
+
+  /* "@" in the box: the repository's people, from the list the panel already
+     holds. Nothing is requested here, on a keystroke or otherwise. */
+  const [dismissed, setDismissed] = useState("");
+  const [cursor, setCursor] = useState(0);
+  const at = atToken(query);
+  const suggest = at && people ? suggestPeople(people, loadUse(), at.token) : null;
+  const flat = suggest ? [...suggest.frequent, ...suggest.rest] : [];
+  const menuOpen = !scoped && !!at && dismissed !== query;
+  const pick = (login: string) => {
+    recordPicks([login]);
+    const next = applyPick(query, login);
+    onQuery(next);
+    if (next.trim().split(/\s+/).length === 1) onPickPerson?.(login);
+    setCursor(0);
+  };
 
   // Chips mirror every active token, each with its own removal. Free text is one
   // chip (removing it strips only the words, keeping the facets).
@@ -66,12 +95,46 @@ export function PrFilterBar({
   if (filters.text.trim()) {
     chips.push({ key: "text", label: `"${filters.text.trim()}"`, onRemove: () => emit({ ...filters, text: "" }) });
   }
-  const border = "1px solid color-mix(in srgb, var(--border) 45%, transparent)";
+  /* The full syntax is a popover under the box while it has focus; the box
+     itself says only what Enter does, so it fits the one bar. */
+  const [focused, setFocused] = useState(false);
+  /* The focus panel: open while the box has focus and nothing is typed. Escape
+     closes it until the box is focused again or typed in; Up and Down walk it
+     (it is a menu), and nothing outside it. */
+  const [panelShut, setPanelShut] = useState(false);
+  const [row, setRow] = useState(-1);
+  const items = focus ? focusItems(focus) : [];
+  const panelOpen = focused && !scoped && !!focus && !menuOpen && !query.trim() && !panelShut && items.length > 0;
+  const activate = (i: number) => {
+    const it = items[i];
+    if (!it || !focus) return;
+    setRow(-1);
+    if (it.kind === "person") focus.openPerson(it.value); else focus.run(it.value);
+  };
+
+  const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (scoped) return;
+    if (panelOpen) {
+      if (e.key === "ArrowDown") { e.preventDefault(); setRow((r) => (r + 1) % items.length); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); setRow((r) => (r <= 0 ? items.length - 1 : r - 1)); return; }
+      if (e.key === "Enter" && row >= 0) { e.preventDefault(); e.stopPropagation(); activate(row); return; }
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setPanelShut(true); setRow(-1); return; }
+    }
+    if (menuOpen && flat.length) {
+      if (e.key === "ArrowDown") { e.preventDefault(); setCursor((c) => (c + 1) % flat.length); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); setCursor((c) => (c - 1 + flat.length) % flat.length); return; }
+      if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); e.stopPropagation(); pick(flat[Math.min(cursor, flat.length - 1)]!); return; }
+    }
+    if (menuOpen && e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setDismissed(query); return; }
+    if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); onSearch(); }
+  };
 
   return (
-    <div className="px-2 py-1.5 border-b shrink-0 flex flex-col gap-1.5" style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)" }}>
-      {/* Query input — the source of truth every pill also writes to. */}
-      <div className="flex items-center gap-1.5">
+    <>
+      {/* Query input — the source of truth every pill also writes to. Grows to
+          fill the line and wraps to a line of its own when the others leave it
+          under 16rem, so it is never cut and nothing sits over it. */}
+      <div className="agx-prbar-search flex items-center gap-1.5 min-w-0" style={{ flex: "1 1 20rem", minWidth: "16rem", maxWidth: "36rem" }}>
         {/* Said next to the box doing the filtering, because it is a caveat on
             the number of rows below it: "3 of 25 read" and "3 of 93 read" are
             different answers to the same search, and only one of them means
@@ -85,15 +148,64 @@ export function PrFilterBar({
             {swept.done ? `${shown} of ${swept.rows}` : `${shown} of ${swept.rows}…`}
           </span>
         )}
+        <div className="relative flex-1 min-w-0">
         <input
           data-pr-filter-input
-          value={query}
-          onChange={(e) => onQuery(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); onSearch(); } }}
-          placeholder="Filter these, or press ⏎ to search them all"
+          value={scoped ? scoped.value : query}
+          onChange={(e) => { setCursor(0); setRow(-1); setPanelShut(false); (scoped ? scoped.onChange : onQuery)(e.target.value); }}
+          onKeyDown={onKey}
+          role="combobox" aria-expanded={menuOpen || panelOpen} aria-autocomplete="list" aria-controls={panelOpen ? "pr-search-focus" : "pr-at-people"}
+          onFocus={() => { setFocused(true); setPanelShut(false); setRow(-1); }} onBlur={() => setFocused(false)}
+          placeholder={scoped ? scoped.placeholder : SEARCH_PLACEHOLDER}
+          aria-label={scoped ? scoped.placeholder : SEARCH_HINT}
           spellCheck={false}
-          className={`flex-1 min-w-0 ${INPUT}`}
+          className={`w-full ${BAR_INPUT}`}
           style={INPUT_STYLE} />
+        {panelOpen && focus && <SearchFocusPanel focus={focus} cursor={row} />}
+        {focused && !menuOpen && !scoped && !panelOpen && !panelShut && (
+          <div role="note" className="absolute left-0 right-0 top-full mt-1 rounded-lg px-3 py-2 text-[11px] pointer-events-none"
+            style={{ zIndex: LAYER.menu, border: EDGE, color: "var(--text2)", background: "color-mix(in srgb, var(--bg2) 98%, black)", boxShadow: "0 18px 44px -18px rgba(0,0,0,.8)" }}>
+            {SEARCH_HINT}
+          </div>
+        )}
+        {menuOpen && (
+          <div id="pr-at-people" role="listbox" className="absolute left-0 right-0 top-full mt-1 rounded-lg overflow-y-auto agx-scroll"
+            style={{ zIndex: LAYER.menu, maxHeight: 260, border: EDGE, background: "color-mix(in srgb, var(--bg2) 98%, black)", boxShadow: "0 18px 44px -18px rgba(0,0,0,.8)" }}>
+            {!people ? (
+              <div className="px-3 py-2 text-[11px]" style={{ color: "var(--text3)" }}>People are still loading…</div>
+            ) : flat.length === 0 ? (
+              <div className="px-3 py-2 text-[11px]" style={{ color: "var(--text3)" }}>Nobody matches @{at!.token}.</div>
+            ) : (
+              <>
+                {suggest!.frequent.length > 0 && <div className="px-2.5 pt-1.5 pb-0.5 text-[10px] uppercase tracking-wide" style={{ color: "var(--text4)" }}>Frequent</div>}
+                {flat.map((login, i) => (
+                  <div key={login}>
+                    {i === suggest!.frequent.length && suggest!.frequent.length > 0 && <div className="px-2.5 pt-1.5 pb-0.5 text-[10px] uppercase tracking-wide" style={{ color: "var(--text4)" }}>Everyone</div>}
+                    <button role="option" aria-selected={i === cursor}
+                      onMouseDown={(e) => { e.preventDefault(); pick(login); }}
+                      onMouseEnter={() => setCursor(i)}
+                      className="agx-mi w-full text-left flex items-center gap-2 px-2.5 py-1.5 text-[11px]"
+                      style={{ color: "var(--text2)", background: i === cursor ? "color-mix(in srgb, var(--primary) 14%, transparent)" : undefined }}>
+                      <Avatar login={login} size={ICON.md} />
+                      <span className="truncate">{login}</span>
+                      {focus && (
+                        <span role="button" tabIndex={-1} aria-pressed={focus.isFollowed(login)}
+                          aria-label={focus.isFollowed(login) ? `Unfollow ${login}` : `Follow ${login}`}
+                          title={focus.isFollowed(login) ? "Unfollow" : "Follow: one click to their board"}
+                          onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); focus.toggleFollow(login); }}
+                          className="agx-btn ml-auto grid place-items-center rounded-md shrink-0"
+                          style={{ width: ICON.md + 8, height: ICON.md + 8, color: focus.isFollowed(login) ? "var(--warning)" : "var(--text4)" }}>
+                          <StarIcon size={BAR_ICON} filled={focus.isFollowed(login)} />
+                        </span>
+                      )}
+                    </button>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        )}
+        </div>
         {/*
           * Appears only when there is something to ask for.
           *
@@ -103,99 +215,81 @@ export function PrFilterBar({
           * goes away again once it has — so its presence IS the message: there
           * is more behind this than the rows you can see.
           */}
-        {(pending || searching) && (
+        {!scoped && (pending || searching) && (
           <button
             onClick={onSearch}
             disabled={searching}
             title={searching ? "Asking GitHub…" : "Search every pull request, not just the ones loaded (⏎)"}
-            className="shrink-0 text-[10px] px-2 py-1 rounded flex items-center gap-1 whitespace-nowrap"
+            className={`agx-btn ${BAR_CTRL}`}
             style={{
               color: searching ? "var(--text3)" : "var(--text)",
               background: "color-mix(in srgb, var(--primary) 18%, transparent)",
               border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)",
             }}>
-            {searching ? <span className="agx-spin" aria-hidden style={{ width: 8, height: 8, borderWidth: 1.5 }} /> : <span aria-hidden className="flex"><SearchIcon size={ICON.xs} /></span>}
+            {searching ? <span className="agx-spin" aria-hidden style={{ width: BAR_ICON - 4, height: BAR_ICON - 4, borderWidth: 1.5 }} /> : <span aria-hidden className="flex"><SearchIcon size={BAR_ICON} /></span>}
             <span>{searching ? "Searching" : "Search all"}</span>
           </button>
         )}
-        {query.trim() && (
-          <button onClick={() => onQuery("")} title="Clear all filters" aria-label="Clear all filters"
-            className="grid place-items-center w-[22px] h-[22px] rounded shrink-0 hover:bg-white/5" style={{ color: "var(--text3)", border }}>
-            <CloseIcon size={ICON.xs} />
+        {!scoped && focus && focus.isRemembered(query) && (
+          <button onClick={() => focus.pin(query)} aria-pressed={focus.isPinned(query)}
+            title={focus.isPinned(query) ? "Unpin this search" : "Pin this search: it stays under Saved"}
+            aria-label={focus.isPinned(query) ? "Unpin this search" : "Pin this search"}
+            className={`agx-btn ${BAR_SQUARE}`}
+            style={{ ...CHIP_SURFACE, color: focus.isPinned(query) ? "var(--primary-ink)" : "var(--text3)" }}>
+            <PinIcon size={BAR_ICON} filled={focus.isPinned(query)} />
+          </button>
+        )}
+        {(scoped ? scoped.value : query).trim() && (
+          <button onClick={() => (scoped ? scoped.onChange("") : onQuery(""))} title={scoped ? "Clear the filter" : "Clear all filters"} aria-label={scoped ? "Clear the filter" : "Clear all filters"}
+            className={`agx-btn ${BAR_SQUARE}`} style={{ ...CHIP_SURFACE, color: "var(--text3)" }}>
+            <CloseIcon size={BAR_ICON} />
           </button>
         )}
       </div>
 
-      {/* Facet pills — wrap in the narrow sidebar; each menu floats via a Portal. */}
-      <div className="flex flex-wrap items-center gap-1">
-        {!!unread?.count && (
-          <button onClick={unread.onToggle} aria-pressed={unread.on}
-            title={unread.on
-              ? "Showing only the pull requests somebody has spoken on since you last looked. Press again for all of them."
-              : `${unread.count} of the loaded pull requests have something said on them since you last looked. Counted here rather than on GitHub — the mark is this browser\u2019s.`}
-            className="agx-btn inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded tabular-nums"
-            style={{
-              color: "var(--warning-ink)",
-              border: `1px solid color-mix(in srgb, var(--warning) ${unread.on ? 70 : 40}%, transparent)`,
-              background: unread.on ? "color-mix(in srgb, var(--warning) 16%, transparent)" : "transparent",
-            }}>
-            <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 24 24" fill="none" aria-hidden
-              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
-            </svg>
-            {unread.count} unread
-          </button>
-        )}
-        {/* Beside the chip it clears, not inside it: pressing this is a
-            different act from pressing the chip (one filters, one writes),
-            and a single control that did both would need a second click to
-            find out which. Only offered while there is something to mark —
-            once the count reaches zero the button would have nothing to do. */}
-        {!!unread?.count && (
-          <button onClick={unread.onMarkAllRead}
-            title={`Mark all ${unread.count} as read`}
-            className="agx-btn text-[10px] px-2 py-1 rounded"
-            style={{ color: "var(--text3)", border }}>
-            Mark all read
-          </button>
-        )}
+      {controls.inboxControls && inbox && (
+        <>
+          <span className="inline-flex shrink-0 rounded-lg overflow-hidden" role="group" aria-label="Show" style={{ border: EDGE }}>
+            {([["all", "All"], ["unread", "Unread"]] as const).map(([id, label]) => {
+              const on = (id === "unread") === inbox.unreadOnly;
+              return (
+                <button key={id} onClick={() => inbox.onUnreadOnly(id === "unread")} aria-pressed={on}
+                  className={`agx-btn ${BAR_CTRL} rounded-none`}
+                  style={{ color: on ? "var(--text)" : "var(--text3)", fontWeight: on ? 600 : 400, border: 0,
+                    background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent" }}>
+                  {label}
+                </button>
+              );
+            })}
+          </span>
+          {inbox.unread > 0 && (
+            <span className="text-[11px] tabular-nums shrink-0" style={{ color: "var(--warning-ink)" }}>{inbox.unread} unread</span>
+          )}
+        </>
+      )}
         {/* No row of pills: the builder is the filter, and it says everything
             they said plus `is not`, `is set`, `is not set`, and several joined.
             It reads the same field table (`builderFields` reads `buildFacets`),
             so every menu they had is a field in it, and a query string still
             fills it through `queryToRules`. */}
-        {builder}
-        <div className="ml-auto">
-          <FacetMenu
-            label="Sort"
-            mode="radio"
-            align="right"
-            pillActive={filters.sort !== DEFAULT_SORT}
-            options={SORT_OPTIONS.map((o) => ({ value: o.value, label: o.label, count: 0 }))}
-            selected={[filters.sort]}
-            onToggle={(v) => emit(setSort(filters, v as SortTok))}
-            onClear={() => emit(setSort(filters, DEFAULT_SORT))}
-          />
-        </div>
-      </div>
+        {controls.boardControls && builder}
 
       {/* Active-filter chips + count. Only when something is narrowing the list. */}
-      {chips.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1">
+      {controls.boardControls && chips.length > 0 && (
+        <div className="agx-prbar-chips flex flex-wrap items-center gap-1 basis-full">
           {chips.map((c) => (
-            <button key={c.key} onClick={c.onRemove}
-              className="text-[9.5px] pl-2 pr-1 py-0.5 rounded-full flex items-center gap-1 hover:opacity-80"
-              style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--primary) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 28%, transparent)" }}>
+            <button key={c.key} onClick={c.onRemove} className={`agx-btn ${BAR_CTRL}`}
+              style={{ ...chipTone(true), color: "var(--text2)" }}>
               <span className="truncate max-w-[140px]">{c.label}</span>
-              <span aria-hidden className="flex" style={{ color: "var(--text3)" }}><CloseIcon size={ICON.xs} /></span>
+              <span aria-hidden className="flex" style={{ color: "var(--text3)" }}><CloseIcon size={BAR_ICON} /></span>
             </button>
           ))}
-          <button onClick={() => onQuery("")} className="text-[9.5px] px-1.5 py-0.5 rounded-full hover:bg-white/5" style={{ color: "var(--text3)" }}>
+          <button onClick={() => onQuery("")} className={`agx-btn ${BAR_CTRL}`} style={{ ...CHIP_SURFACE, color: "var(--text3)" }}>
             Clear all
           </button>
-          <span className="ml-auto text-[10px] tabular-nums shrink-0" style={{ color: "var(--text3)" }}>{total} match{total === 1 ? "" : "es"}</span>
+          <span className="ml-auto text-[11px] tabular-nums shrink-0" style={{ color: "var(--text3)" }}>{total} match{total === 1 ? "" : "es"}</span>
         </div>
       )}
-    </div>
+    </>
   );
 }

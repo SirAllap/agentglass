@@ -446,7 +446,7 @@ describe("a desk is its pipe and its parent, not a variable", () => {
   });
 });
 
-describe("the desktop app hands its key to the two ends that use it, and nowhere else", () => {
+describe("the desktop app hands its key to the ends that use it, and nowhere else", () => {
   // No renderer runs here, so where the key travels is asserted on the source.
   const MAIN = readFileSync(new URL("../../electron/main.js", import.meta.url), "utf8");
   const PRELOAD = readFileSync(new URL("../../electron/preload.js", import.meta.url), "utf8");
@@ -505,10 +505,19 @@ describe("the desktop app hands its key to the two ends that use it, and nowhere
     expect(sent).toContain('"/pair/accept", { ticket, scope }, deskHeader())');
     /* And the two registrations a browser window makes (who receives an agent's
        asks is as much the app's to say as who releases its gate). The count is
-       the point: a fifth use is a change somebody has to look at. */
+       the point: another use is a change somebody has to look at. */
     expect(sent).toContain('"/browser/ready", { client, on, manager: true }, deskHeader())');
     expect(sent).toContain('"/browser/ready", { client, on, lanes }, deskHeader())');
-    expect([...sent.matchAll(/deskHeader\(\)/g)]).toHaveLength(4);
+    /* The fifth is the orchestration policy: which engine runs and what a worker
+       may do is the person's to change, so the window proves it with the desk
+       key and an agent's machine token cannot (mayChangePolicy on the server). */
+    expect(sent).toContain('"/orchestration", { root, policy }, deskHeader())');
+    /* The sixth is the finder's own routes (bookmarks, remotes, devices, actions,
+       the file operations): the shared `post` adds the key only where
+       `deskGated(path)` says so (web/src/lib/deskGate.ts, tested in
+       web/test/finder-desk-key.test.ts), never on every call. */
+    expect(sent).toContain("...(deskGated(path) ? deskHeader() : {})");
+    expect([...sent.matchAll(/deskHeader\(\)/g)]).toHaveLength(6);
   });
 });
 

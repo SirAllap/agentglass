@@ -8,7 +8,9 @@
  * picked, by the id the search gave, and the server turns `@Name` into a real
  * mention only for them.
  *
- * Ceiling: no edit, delete, reply or resolve. Those stay ClickUp's.
+ * A Jira comment can also answer another (`replyTo`, Cloud's thread); editing and
+ * deleting your own is in the Jira card (components/jira/JiraActivity.tsx).
+ * Ceiling: no resolve; that stays ClickUp's.
  */
 import { api } from "./api.ts";
 import { mentioned } from "./mentions.ts";
@@ -33,9 +35,9 @@ export async function clickupComment(task: ProviderTask, markdown: string): Prom
   } catch { return { ok: false, error: UNREACHABLE }; }
 }
 
-export async function jiraComment(task: ProviderTask, markdown: string, mentions: CommentMention[] = []): Promise<CommentResult> {
+export async function jiraComment(task: ProviderTask, markdown: string, mentions: CommentMention[] = [], replyTo?: string): Promise<CommentResult> {
   try {
-    const r = await api.jiraComment(task.customId ?? task.id, markdown, mentions);
+    const r = await api.jiraComment(task.customId ?? task.id, markdown, mentions, replyTo);
     return { ok: r.ok, error: r.error, unauthorised: r.unauthorised, task: r.task, detail: r.detail, more: r.more, partial: r.partial };
   } catch { return { ok: false, error: UNREACHABLE }; }
 }

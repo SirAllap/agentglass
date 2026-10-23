@@ -172,10 +172,9 @@ describe("drawing", () => {
 const panel = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
 describe("the CI pill in the panel's exclusive row", () => {
   it("clears the inbox, and the inbox, the board and every scope clear it", () => {
-    expect(panel).toContain("onClick={() => { setInboxOn(false); setMetricsOn(true); }}");
-    expect(panel).toContain("onClick={() => { setMetricsOn(false); setInboxOn(true); }}");
-    expect(panel).toContain("setInboxOn(false); setMetricsOn(false); setBoard(false); setFilter(v.scope)");
-    expect(panel).toContain("setInboxOn(false); setMetricsOn(false); setStateSel(\"open\"); setBoard(true);");
+    expect(panel).toContain("onClick={() => { setInboxOn(false); setClosedOn(false); setMetricsOn(true); }}");
+    expect(panel).toContain("onClick={() => { setMetricsOn(false); setClosedOn(false); setInboxOn(true); }}");
+    expect(panel).toContain("setInboxOn(false); setMetricsOn(false); setClosedOn(false);\n            }} />");
   });
   it("is drawn before the inbox, which the switch would otherwise never reach", () => {
     expect(panel.indexOf("{metricsOn ? (")).toBeGreaterThan(0);

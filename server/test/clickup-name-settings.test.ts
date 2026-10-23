@@ -48,15 +48,15 @@ afterAll(() => {
 });
 
 describe("assigned to me and subtasks", () => {
-  test("default: the query string is exactly the one that shipped, with no subtasks", async () => {
+  test("default: the query string is exactly the one that shipped, with no subtasks (include_timl stays: a card filed in two lists)", async () => {
     await CU.fetchTasks("pk_1_X", "9001", "7");
-    expect(paths).toEqual(["/team/9001/task?page=0&order_by=due_date&include_closed=false&assignees%5B%5D=7"]);
+    expect(paths).toEqual(["/team/9001/task?page=0&order_by=due_date&include_closed=false&include_timl=true&assignees%5B%5D=7"]);
   });
 
   test("on: subtasks=true is added and nothing else changes", async () => {
     expect(P.setClickupPrefs({ assigned: { includeSubtasks: true } }).ok).toBe(true);
     await CU.fetchTasks("pk_1_X", "9001", "7");
-    expect(paths).toEqual(["/team/9001/task?page=0&order_by=due_date&include_closed=false&subtasks=true&assignees%5B%5D=7"]);
+    expect(paths).toEqual(["/team/9001/task?page=0&order_by=due_date&include_closed=false&include_timl=true&subtasks=true&assignees%5B%5D=7"]);
   });
 
   test("switching it back off removes it again", async () => {

@@ -58,7 +58,7 @@ function openingTag(src: string, tag: string, marker: string): string {
 describe("body-swapping strips are tab lists", () => {
   test("the pull request's section strip is the shared Tabs, over a tabpanel", () => {
     expect(pr).toMatch(/<Tabs value=\{tab\}[^>]*panelId="pr-tab-body"/);
-    expect(pr).toMatch(/ref=\{tabBodyRef\} id="pr-tab-body" role="tabpanel"/);
+    expect(pr).toMatch(/ref=\{setBodyEl\} id="pr-tab-body" role="tabpanel"/);
     // And the hand-rolled strip is gone rather than kept beside it.
     expect(pr).not.toMatch(/TABS\.map\(\(t\) => \(\s*<button/);
   });

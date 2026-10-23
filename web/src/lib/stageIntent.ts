@@ -12,16 +12,21 @@
  */
 import type { UiArgs } from "../../../shared/uiActions.ts";
 
-export type Staged =
+export type PrStaged =
   | { id: "pr.merge.stage"; a: UiArgs<"pr.merge.stage"> }
   | { id: "pr.comment.stage"; a: UiArgs<"pr.comment.stage"> }
   | { id: "pr.review.stage"; a: UiArgs<"pr.review.stage"> }
   | { id: "card.move.stage"; a: UiArgs<"card.move.stage"> };
+/** The one the Finder takes, not the pull request panel: a file operation to confirm. */
+export type FinderStaged = { id: "finder.op.stage"; a: UiArgs<"finder.op.stage"> };
+export type Staged = PrStaged | FinderStaged;
 
 /** What the panel receives: the draft, the name the caller stamped on it (an
  *  untrusted label: any caller picks its own), and a rising number so asking
  *  for the same dialog twice is two requests. */
 export type StageRequest = Staged & { by: string; n: number; at: number };
+
+export type PrStageRequest = PrStaged & { by: string; n: number; at: number };
 
 /** Long enough for a pull request to be located and read; short enough that a
  *  request nobody was there for does not open at the next unrelated visit. */

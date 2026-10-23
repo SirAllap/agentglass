@@ -611,6 +611,15 @@ def cmd_simple(path, args):
     return emit(call(path, {"name": args.name}))
 
 
+def cmd_update(args):
+    """The answer says what happened (from, to, hash checked, needs approval)
+    without the whole plugin record, which `--full` brings back."""
+    res = call("/plugins/update", {"name": args.name})
+    if isinstance(res, dict) and res.get("ok") and not args.full:
+        res = {"ok": True, "update": res.get("update")}
+    return emit(res)
+
+
 def cmd_settings(args):
     if not args.set:
         return emit(call(f"/plugins/settings?name={urllib.parse.quote(args.name)}", method="GET"))
@@ -666,13 +675,14 @@ def main():
     rm.add_argument("--drop-settings", action="store_true", help="also remove what was chosen on its settings page")
     rm.set_defaults(fn=lambda args: emit(call("/plugins/remove", {"name": args.name, "dropSettings": args.drop_settings})))
 
-    for name, path, help_text in (
-        ("disable", "/plugins/disable", "switch one off; its notes stay readable"),
-        ("update", "/plugins/update", "re-clone a git-backed install at its recorded ref"),
-    ):
-        s = sub.add_parser(name, help=help_text)
-        s.add_argument("name")
-        s.set_defaults(fn=lambda args, path=path: cmd_simple(path, args))
+    d = sub.add_parser("disable", help="switch one off; its notes stay readable")
+    d.add_argument("name")
+    d.set_defaults(fn=lambda args: cmd_simple("/plugins/disable", args))
+
+    up = sub.add_parser("update", help="update from where it came from: a market install re-reads the catalogue and installs what it lists now")
+    up.add_argument("name")
+    up.add_argument("--full", action="store_true", help="include the whole plugin record in the answer")
+    up.set_defaults(fn=cmd_update)
 
     st = sub.add_parser("settings", help="read or write a plugin's settings")
     st.add_argument("name")

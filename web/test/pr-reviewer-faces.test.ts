@@ -15,7 +15,6 @@ const panel = read("src/components/PrPanel.tsx");
 
 describe("a team is not drawn as a face", () => {
   test("the reviewer surfaces go through the one component", () => {
-    expect(panel).toContain("<ReviewerFace r={r} size={18} />"); // the list's stack
     expect(panel).toContain("<ReviewerFace r={p} size={16} />"); // assignees, in the sidebar
     // The sidebar's reviewer list, which carries a verdict per person and
     // therefore builds its own row — see lib/prReviewers.
@@ -61,8 +60,8 @@ describe("a team is not drawn as a face", () => {
        this panel goes through `ReviewerFace`, because that is the one place
        that knows a team is initials rather than a photograph. */
     const faces = (panel.match(/<ReviewerFace /g) ?? []).length;
-    expect(faces, "the three pinned above, and any new one must be one of these")
-      .toBeGreaterThanOrEqual(3);
+    expect(faces, "the two pinned above, and any new one must be one of these")
+      .toBeGreaterThanOrEqual(2);
   });
 
   test("the sidebar no longer hands a bare login to the avatar", () => {

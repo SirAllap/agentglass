@@ -30,8 +30,10 @@ import {
 import { pluginGitEnv, PLUGIN_GIT_CONFIG } from "./plugin-env.ts";
 import { fetchCatalogue } from "./plugin-catalogue.ts";
 import type { GuardedFetchOptions } from "./net.ts";
+import type { PluginUpdateReport } from "../../shared/types.ts";
 import { blockedEntry, type BlockEntry } from "./plugin-blocklist.ts";
 import { type Contributes, type Field, RESERVED_KEYS, redactSecrets, validateContributes } from "../../shared/pluginUi.ts";
+import { redactText } from "../../shared/scrub.ts";
 import { type PluginSandbox, validateSandbox } from "../../shared/pluginSandbox.ts";
 import { boxPlan, type BoxPlan } from "../../shared/pluginBoxPlan.ts";
 import { versionAtLeast } from "../../shared/semverLite.ts";
@@ -682,28 +684,74 @@ const lastBoxFailure = new Map<string, string>();
 const BOX_GRACE_MS = 2000;
 const STDERR_CAP = 2048;
 
-/** Reads `stderr` up to `STDERR_CAP` bytes and cancels the stream once
- *  either that cap or the process's own exit is reached — this is not log
- *  capture, only enough to explain a bwrap mount failure that happens in
- *  the first instant of a boxed start. */
-async function captureFirstStderrLine(stream: ReadableStream<Uint8Array>): Promise<string> {
+/**
+ * Why a plugin that started and died within seconds stopped: its exit code or
+ * signal and the last lines it wrote to stderr. In memory only, keyed by name,
+ * cleared at the start of the next attempt and on remove.
+ *
+ * The ceiling, on purpose: this is NOT log capture. Only stderr, only the last
+ * `STDERR_CAP` bytes, only for the first `EARLY_EXIT_MS` of the process's life,
+ * and only kept if the process exited inside that window. A plugin that is
+ * still running when the window closes has its buffer thrown away; nothing is
+ * written to disk and nothing is streamed afterwards.
+ */
+export type PluginLastExit = { code: number | null; signal: string | null; stderrTail: string; afterMs: number };
+const lastExit = new Map<string, PluginLastExit>();
+let EARLY_EXIT_MS = 10_000;
+/** A test cannot wait ten seconds to see the window close. */
+export function __setEarlyExitMs(ms: number): void { EARLY_EXIT_MS = ms; }
+
+/** What `startProcess` learns about a child's stderr in its opening window. */
+type StderrWindow = {
+  /** Resolves once the stream has ended or the window has closed. */
+  settled: Promise<void>;
+  /** The first line written, for bwrap's own mount failures. */
+  head: () => string;
+  /** The last `STDERR_CAP` bytes, whole lines only when it had to cut. */
+  tail: () => string;
+};
+
+/** Reads `stderr` for `EARLY_EXIT_MS`, then drops what it kept and goes on
+ *  reading into the void. Draining rather than cancelling matters: a closed
+ *  read end makes the plugin's next write to stderr fail (EPIPE/SIGPIPE), and
+ *  a plugin must not die for having something to say after the window. */
+function watchStderr(stream: ReadableStream<Uint8Array>): StderrWindow {
   const reader = stream.getReader();
-  let bytes = 0;
-  const chunks: Uint8Array[] = [];
-  try {
-    while (bytes < STDERR_CAP) {
-      const { done, value } = await reader.read();
-      if (done || !value) break;
-      chunks.push(value);
-      bytes += value.length;
+  let headBuf = Buffer.alloc(0);
+  let tailBuf = Buffer.alloc(0);
+  let truncated = false;
+  let open = true;
+  let release: () => void = () => {};
+  const settled = new Promise<void>((r) => { release = r; });
+  const timer = setTimeout(() => { open = false; headBuf = Buffer.alloc(0); tailBuf = Buffer.alloc(0); release(); }, EARLY_EXIT_MS);
+  (async () => {
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!open || !value) continue;
+        const chunk = Buffer.from(value);
+        if (headBuf.length < STDERR_CAP) headBuf = Buffer.concat([headBuf, chunk]).subarray(0, STDERR_CAP);
+        tailBuf = Buffer.concat([tailBuf, chunk]);
+        if (tailBuf.length > STDERR_CAP) { tailBuf = tailBuf.subarray(tailBuf.length - STDERR_CAP); truncated = true; }
+      }
+    } catch {
+      /* stream errored (process reaped, pipe closed): use whatever arrived */
+    } finally {
+      clearTimeout(timer);
+      release();
     }
-  } catch {
-    /* stream errored (process reaped, pipe closed): use whatever arrived */
-  } finally {
-    try { await reader.cancel(); } catch { /* already done */ }
-  }
-  const text = Buffer.concat(chunks.map((c) => Buffer.from(c))).toString("utf8", 0, STDERR_CAP);
-  return text.split("\n").find((l) => l.trim().length > 0)?.trim() ?? "";
+  })();
+  return {
+    settled,
+    head: () => headBuf.toString("utf8").split("\n").find((l) => l.trim().length > 0)?.trim() ?? "",
+    tail: () => {
+      let text = tailBuf.toString("utf8");
+      // A cut lands mid-line (and maybe mid-character): start at the next line.
+      if (truncated) { const nl = text.indexOf("\n"); text = nl === -1 ? text : text.slice(nl + 1); }
+      return text.trim();
+    },
+  };
 }
 
 /** The whole group: the entrypoint runs as `bash -c`, and what it started
@@ -872,6 +920,7 @@ async function startProcess(rec: PluginRecord): Promise<void> {
   // block can never be bypassed by a path that forgets to check first.
   if (blockedEntry(rec.name)) return;
   lastBoxFailure.delete(rec.name);
+  lastExit.delete(rec.name);
   // A run starts on an empty board, whatever the last one left.
   dropCanvases(rec.name);
   const token = mintPluginToken(rec.scope, rec.name);
@@ -955,27 +1004,32 @@ async function startProcess(rec: PluginRecord): Promise<void> {
         AGENTGLASS_PLUGIN_DATA: dataDir,
       },
       // Extra fds for the box's `--ro-bind-fd`/`--bind-fd` grants — index 3
-      // onward, matching the child fd numbers `sandboxArgv` was given. A
-      // boxed start also pipes stderr, but ONLY long enough to catch bwrap
-      // itself failing to mount something in the first instant; see
-      // `captureFirstStderrLine`, which cancels the stream well short of
-      // becoming a general log capture this app has never done.
-      stdio: ["ignore", "ignore", boxed ? "pipe" : "ignore", ...parentFds],
+      // onward, matching the child fd numbers `sandboxArgv` was given. Stderr
+      // is piped for every plugin, but `watchStderr` keeps it only for the
+      // first moments of life, to say why a plugin that dies at once died.
+      stdio: ["ignore", "ignore", "pipe", ...parentFds],
     });
     for (const fd of parentFds) { try { closeSync(fd); } catch { /* already closed by the dup */ } }
     const startedAt = Date.now();
-    if (boxed && proc.stderr instanceof ReadableStream) {
-      captureFirstStderrLine(proc.stderr).then((line) => {
-        if (line && Date.now() - startedAt < BOX_GRACE_MS) lastBoxFailure.set(rec.name, line);
-      });
-    }
+    const window = proc.stderr instanceof ReadableStream ? watchStderr(proc.stderr) : null;
     const entry: Running = { proc, token, pid: proc.pid, boxState };
     running.set(rec.name, entry);
     // A plugin that crashes or exits on its own must not leave a live token
     // behind — the same "revoked when the run ends" rule `mintUnderstudyToken`
     // already lives by, generalized from "the run ends" to "the process ends".
-    proc.exited.then(() => {
+    proc.exited.then(async (code) => {
+      const afterMs = Date.now() - startedAt;
+      // The pipe closes with the process, but a grandchild holding it open
+      // must not hold this up: a moment for the last bytes, then what we have.
+      if (window && afterMs < EARLY_EXIT_MS) await Promise.race([window.settled, new Promise((r) => setTimeout(r, 250))]);
       const cur = running.get(rec.name);
+      if (window && afterMs < BOX_GRACE_MS && boxed) {
+        const line = window.head();
+        if (line) lastBoxFailure.set(rec.name, line);
+      }
+      if (window && cur === entry && afterMs < EARLY_EXIT_MS) {
+        lastExit.set(rec.name, { code: proc.signalCode ? null : code, signal: proc.signalCode ?? null, stderrTail: redactText(window.tail()), afterMs });
+      }
       if (cur === entry) { revokePluginToken(entry.token); running.delete(rec.name); forgetPlugin(rec.name); }
     });
   } catch (e) {
@@ -1029,6 +1083,10 @@ export type PublicPlugin = PluginRecord & {
    *  Set only while nothing is running: a plugin currently up has nothing
    *  to explain. */
   lastBoxFailure?: string;
+  /** How the last run ended when it ended within seconds of starting: exit
+   *  code or signal, the tail of stderr (redacted) and how long it lived.
+   *  Only early exits are kept, in memory, until the next start. */
+  lastExit?: PluginLastExit;
   /** The other plugins whose key THIS one can read: set only while it runs
    *  outside its box (a same-user process reads `secrets.json`) and another
    *  plugin holds a key. Static, a line on the plugin and in `plugins list`,
@@ -1079,9 +1137,9 @@ function runsUnboxed(p: PluginRecord, boxState: BoxState | undefined): boolean {
  *  raced a stop or a restart in between. Adds the host-level probe and any
  *  leftover crash detail, both keyed off the RECORD rather than the live
  *  entry, since they matter most while nothing is running. */
-function liveState(p: PluginRecord): Pick<PublicPlugin, "running" | "pid" | "boxState" | "sandboxProbe" | "boxPlan" | "lastBoxFailure"> {
+function liveState(p: PluginRecord): Pick<PublicPlugin, "running" | "pid" | "boxState" | "sandboxProbe" | "boxPlan" | "lastBoxFailure" | "lastExit"> {
   const r = running.get(p.name);
-  const out: Pick<PublicPlugin, "running" | "pid" | "boxState" | "sandboxProbe" | "boxPlan" | "lastBoxFailure"> = {
+  const out: Pick<PublicPlugin, "running" | "pid" | "boxState" | "sandboxProbe" | "boxPlan" | "lastBoxFailure" | "lastExit"> = {
     running: r !== undefined,
     pid: r?.pid ?? null,
   };
@@ -1093,6 +1151,8 @@ function liveState(p: PluginRecord): Pick<PublicPlugin, "running" | "pid" | "box
   if (!r) {
     const fail = lastBoxFailure.get(p.name);
     if (fail) out.lastBoxFailure = fail;
+    const exit = lastExit.get(p.name);
+    if (exit) out.lastExit = exit;
   }
   return out;
 }
@@ -1531,31 +1591,82 @@ export async function installFromCatalogue(
   }
 }
 
+export type PluginUpdateResult = { ok: true; plugin: PublicPlugin; update: PluginUpdateReport } | { ok: false; error: string };
+
+const shortRef = (ref: string | null): string => (ref === null ? "the default branch" : FULL_COMMIT.test(ref) ? ref.slice(0, 7) : ref);
+
 /**
- * Re-fetch a git-backed install at its recorded URL and ref — the update
- * this page otherwise has no way to trigger. Same path as a first install:
- * `finishInstall` re-derives the fingerprint from what actually came back,
- * so an update that changed the manifest or the entrypoint's code loses its
- * approval exactly like an install typed in fresh would, and never
- * re-enables itself. A local-path install has no upstream to re-fetch —
- * that source is copied in again by hand, not updated.
+ * Update an install from where it came from.
+ *
+ * A git install re-fetches its own URL and ref. A marketplace install does NOT
+ * re-fetch the ref it was pinned to at install time, which is the same commit
+ * again: it re-reads the catalogue it came from and installs what that lists
+ * now, held to the listed content hash like a fresh install. An entry that
+ * moved on is installed; one that did not, or is gone, is said so and nothing
+ * is touched. Either way `finishInstall` re-derives the fingerprint from what
+ * arrived, so a changed declaration loses its approval exactly like an install
+ * typed in fresh, and an unchanged one keeps it. A local-path install has no
+ * upstream — that source is copied in again by hand.
  */
-export async function updatePlugin(name: string): Promise<{ ok: true; plugin: PublicPlugin } | { ok: false; error: string }> {
+export async function updatePlugin(
+  name: string,
+  /** For the test, which serves the catalogue itself — see fetchCatalogue. */
+  guard: GuardedFetchOptions = {},
+): Promise<PluginUpdateResult> {
   const store = read();
   const existing = store.plugins.find((p) => p.name === name);
   if (!existing) return { ok: false, error: "no such plugin" };
-  if (existing.source.kind === "local-path") return { ok: false, error: "A local install has no upstream to re-fetch" };
-  const { url, ref, sha256 } = existing.source.kind === "git"
-    ? { url: existing.source.url, ref: existing.source.ref, sha256: undefined }
-    : { url: existing.source.plugin.url, ref: existing.source.plugin.ref, sha256: existing.source.plugin.sha256 };
+  const src = existing.source;
+  if (src.kind === "local-path") return { ok: false, error: "A local install has no upstream to re-fetch" };
+
+  let source: InstallSource = src;
+  let target: { url: string; ref: string | null; sha256?: string } = src.kind === "git"
+    ? { url: src.url, ref: src.ref }
+    : { url: src.plugin.url, ref: src.plugin.ref, sha256: src.plugin.sha256 };
+  const from = src.kind === "git" ? src.ref : src.plugin.ref;
+
+  if (src.kind === "marketplace") {
+    const fetched = await fetchCatalogue(src.marketplace.url, guard);
+    if (!fetched.ok) return { ok: false, error: fetched.error };
+    // The folder is named by the entry id (see finishInstall's expectName), so
+    // the id is the name this install was made under.
+    const entry = fetched.catalogue.plugins.find((p) => p.id === existing.name);
+    if (!entry) return { ok: false, error: `${name} is no longer listed in the catalogue it was installed from; nothing was changed` };
+    if (entry.source.url === src.plugin.url && entry.source.ref === src.plugin.ref && entry.sha256 === src.plugin.sha256) {
+      return {
+        ok: true, plugin: { ...existing, ...liveState(existing) },
+        update: {
+          changed: false, from, to: from, sha256Verified: false,
+          needsApproval: existing.approvedFingerprint !== existing.fingerprint,
+          message: `${name} is already at the listed version (${shortRef(from)})`,
+        },
+      };
+    }
+    target = { url: entry.source.url, ref: entry.source.ref, sha256: entry.sha256 };
+    source = {
+      kind: "marketplace",
+      marketplace: { ...src.marketplace },
+      plugin: { url: entry.source.url, ref: entry.source.ref, ...(entry.sha256 ? { sha256: entry.sha256 } : {}) },
+    };
+  }
 
   const staging = mkdtempSync(join(tmpdir(), "agx-plugin-"));
   try {
-    const r = await fetchInto(staging, url, ref, sha256);
+    const r = await fetchInto(staging, target.url, target.ref, target.sha256);
     if (!r.ok) return r;
+    if (source.kind === "marketplace") source.marketplace.resolvedCommit = await resolveHead(staging);
     // Updated in place: whatever arrives must still be the plugin that is
     // installed here, or it would land in another plugin's folder.
-    return await finishInstall(staging, existing.source, existing.name);
+    const done = await finishInstall(staging, source, existing.name);
+    if (!done.ok) return done;
+    const needsApproval = done.plugin.approvedFingerprint !== done.plugin.fingerprint;
+    return {
+      ok: true, plugin: done.plugin,
+      update: {
+        changed: true, from, to: target.ref, sha256Verified: Boolean(target.sha256), needsApproval,
+        message: `${name} updated from ${shortRef(from)} to ${shortRef(target.ref)}${target.sha256 ? ", sha256 verified" : ""}; needs approval: ${needsApproval ? "yes" : "no"}`,
+      },
+    };
   } finally {
     rmSync(staging, { recursive: true, force: true });
   }
@@ -1691,6 +1802,7 @@ export async function removePlugin(name: string, opts: { dropSettings?: boolean 
   dropKeyOrThrow(store, name);
   await stopRunning(name);
   lastBoxFailure.delete(name);
+  lastExit.delete(name);
   const keepable = withoutSecrets(rec.contributes?.settings, rec.settings);
   const keep = !opts.dropSettings && keepable && Object.keys(keepable).length > 0;
   const from = sourceKey(rec.source);

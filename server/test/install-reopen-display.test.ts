@@ -120,6 +120,46 @@ describe("reopening from a shell with no display", () => {
   });
 });
 
+/** A `hyprctl` first on PATH that logs its arguments and says `ok`, or fails. */
+function fakeHyprctl(log: string, ok: boolean): string {
+  const dir = join(fakeInstall("agx-hyprctl-"), "bin");
+  mkdirSync(dir);
+  dirs.push(dir);
+  writeFileSync(join(dir, "hyprctl"),
+    `#!/bin/sh\necho "sig=$HYPRLAND_INSTANCE_SIGNATURE $*" >> "${log}"\n${ok ? "echo ok" : "echo error >&2; exit 1"}\n`);
+  chmodSync(join(dir, "hyprctl"), 0o755);
+  return dir;
+}
+
+describe("reopening from a shell with no display, with a compositor to ask", () => {
+  // An ssh reopen that started the binary itself got a full-size window that
+  // painted nothing; the same binary spawned by hyprctl painted. So the
+  // compositor spawns it, and the scoping rides in the command.
+  test("the compositor is asked to spawn it, scoped, and the shell does not", async () => {
+    const app = fakeInstall();
+    running(app);
+    const log = join(fakeInstall("agx-hlog-"), "log");
+    const bin = `${fakeHyprctl(log, true)}:${fakeSystemctl(SESSION)}`;
+    const out = await reopen(app, {}, bin, false);
+    const logged = await Bun.file(log).text();
+    expect(logged).toContain("sig=abc123 eval hl.exec_cmd(");
+    expect(logged).toContain(`${app}/agentglass`);
+    expect(out).not.toContain("WAYLAND_DISPLAY=");  // no main of ours was started here
+    cleanup(app);
+  });
+
+  test("a compositor that refuses falls back to the direct launch", async () => {
+    const app = fakeInstall();
+    running(app);
+    const log = join(fakeInstall("agx-hlog-"), "log");
+    const bin = `${fakeHyprctl(log, false)}:${fakeSystemctl(SESSION)}`;
+    const out = await reopen(app, {}, bin);
+    expect(out).toContain("WAYLAND_DISPLAY=wayland-1");
+    expect(await Bun.file(log).text()).toContain("dispatch exec");
+    cleanup(app);
+  });
+});
+
 describe("reopening from a shell that has a display", () => {
   test("a display already set is never overwritten", async () => {
     const app = fakeInstall();

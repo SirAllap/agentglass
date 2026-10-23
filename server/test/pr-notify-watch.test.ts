@@ -480,7 +480,7 @@ describe("wiring in the server", () => {
     expect(ix).toContain('"/prs/notify-watch/pending"');
     // past 100 contexts `all` is one page: the reader must not conclude "all done" from it
     expect(ix).toContain("allDone: r.checks.allDone && complete");
-    expect(ix).toMatch(/searchParams\.get\("after"\) && !url\.searchParams\.get\("q"\)\) noteMine\(root, filter, state, listed\)/);
+    expect(ix).toMatch(/searchParams\.get\("after"\) && !url\.searchParams\.get\("q"\) && !url\.searchParams\.getAll\("label"\)\.length\) noteMine\(root, filter, state, listed\)/);
     const prs = strip(await Bun.file(join(import.meta.dir, "../src/prs.ts")).text());
     expect(prs).toContain("contexts(first:100){totalCount");
     expect(prs).toContain("truncated: Number(ctxs?.totalCount ?? 0) > raw.length");

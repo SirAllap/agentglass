@@ -20,12 +20,12 @@ const KEY = "agentglass.pr.pins";
 /**
  * How many.
  *
- * They live in a single row beside the way back, so the ceiling is the width
- * that row can hold before it starts to wrap and push the panel around. Six
- * chips of `#12345` fit; past that this stops being a bar you read at a glance
- * and becomes a second list, which is the thing it exists to save you from.
+ * They live in a menu behind one button, so the ceiling is no longer a row's
+ * width: it is how long a list stays something you pick from rather than
+ * search. Thirty is past where the menu's filter box is the way in, and a
+ * pin kept past it is one nobody comes back to.
  */
-export const PIN_MAX = 6;
+export const PIN_MAX = 30;
 
 export type Pin = {
   /** `owner/name`, so the same number in two repositories cannot collide. */
@@ -84,6 +84,13 @@ export function togglePin(repo: string, number: number, title: string, at = Date
   }
   persist();
   return !has;
+}
+
+/** The pins whose number or title contain what was typed; a leading "#" is ignored, case is too. */
+export function filterPins(list: readonly Pin[], typed: string): Pin[] {
+  const needle = typed.trim().toLowerCase().replace(/^#/, "");
+  if (!needle) return [...list];
+  return list.filter((p) => String(p.number).includes(needle) || p.title.toLowerCase().includes(needle));
 }
 
 export function unpinAll(): void {

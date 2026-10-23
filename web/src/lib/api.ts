@@ -1,13 +1,15 @@
+import { deskGated } from "./deskGate.ts";
 import { forgetShared, sharedRead } from "./sharedRead.ts";
-import type { UiAction, Field, NoteStatus, PluginPanel, PluginPrNotes } from "./pluginTypes.ts";
+import type { UiAction, Field, NoteReply, NoteStatus, PluginPanel, PluginPrNotes } from "./pluginTypes.ts";
 import type { ImportedPlace } from "./desktop.ts";
 import type { Policy } from "../../../shared/orchestration.ts";
-import type { PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/types.ts";
+import type { PinnedPlace, PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/types.ts";
 import type { AskedAlert } from "../../../shared/notifyPayload.ts";
 import type { CheckOnBasePlan, CheckOnBaseStatus } from "../../../shared/checkOnBase.ts";
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, EnginesReport, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, BrowsePage, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, EnginesReport, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, VolumeList, NetworkList, RemoteStep, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, PluginUpdateReport, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest, FsBody, FsAnswer, FsJob, FsTrashRow, FsProps, OpenWithList, FinderAction, FinderActionList, MediaFacts } from "../../../shared/types.ts";
 import type { JiraUnits } from "../../../shared/jiraStatusUnits.ts";
-import type { ProvidersResponse, JiraConnectResult, JiraHandoffRule, JiraMoves, JiraPerson, JiraSettings, JiraStep, JiraStepChoice, JiraStepKey, JiraStepPr, JiraSteps, JiraStepsRead, JiraStatus, JiraViews, JiraViewRead, JiraViewChoice, JiraProjectChoice, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, TrackerChoice } from "../../../shared/providers.ts";
+import type { WorkSend } from "./jiraWorklog.ts";
+import type { CardEdit, CardFact, ProvidersResponse, JiraBlockOutcome, JiraConnectResult, JiraHandoffRule, JiraMoves, JiraPerson, JiraSettings, JiraStep, JiraStepChoice, JiraStepKey, JiraStepPr, JiraSteps, JiraStepsRead, JiraStatus, JiraViews, JiraViewRead, JiraBoardAreas, JiraBoardContext, JiraViewChoice, JiraProjectChoice, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, CardDev, CardWebLink, CardEvent, TrackerChoice } from "../../../shared/providers.ts";
 import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from "../../../shared/notifyPrefs.ts";
 import type { CheckMetric } from "../../../shared/checkBaseline.ts";
 import type { UiReply } from "../../../shared/uiActions.ts";
@@ -23,8 +25,16 @@ type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? Partial<T[K]> : T
    because this provider answers 401 for a card that does not exist and a code
    pretending to know which it was would be wrong on the common case. */
 type ClickUpWrite = { ok: boolean; error?: string; conflict?: boolean; unauthorised?: boolean; task?: ProviderTask };
+/** One link type a Jira site has: the phrase for each side ("blocks" / "is blocked by"). */
+export type JiraLinkKind = { id: string; name: string; inward: string; outward: string };
+/** One field of a Jira card's Details, as `/jira/edit` takes it (see server/src/jiraEdit.ts). */
+export type JiraEditAsk = { field: string; value?: string | boolean | null; add?: string; remove?: string };
+/** What a work-log write answers: the card again, and the remaining estimate either side of it. */
+export type JiraWorkWrite = ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string; entry?: string; before?: string; after?: string; removed?: boolean };
+/** The answer of a watch or a vote: the mark as it now is, and `denied` when the site refused this account itself. */
+export type JiraFollowWrite = ClickUpWrite & { on?: boolean; denied?: boolean };
 /** A Jira write's answer: ClickUp's shape, plus `partial` when only some of it landed (a warning, never plain success). */
-type JiraWrite = ClickUpWrite & { partial?: string };
+type JiraWrite = ClickUpWrite & { partial?: string; /** What each block of a step did, in run order. */ blocks?: JiraBlockOutcome[] };
 
 /** Local agent spend, attributed to the work objects it happened in — see
  *  server/src/spend.ts, which is where the rule and its limits are written.
@@ -355,9 +365,9 @@ let TOKEN: string = (() => {
   }
 })();
 
-/** The desktop app's own key, carried on the two requests only a person may
- *  make — letting a held call go, and accepting a device — where the app started
- *  the server. Empty anywhere but the desktop app. See server/src/desk.ts. */
+/** The desktop app's own key, carried on the requests only a person may
+ *  make — letting a held call go, accepting a device, registering the browser
+ *  window, changing the orchestration policy — where the app started the server. Empty anywhere but the desktop app. See server/src/desk.ts. */
 let DESK_KEY: string = (() => {
   try {
     return (window as unknown as { agentglass?: { deskKey?: string | null } }).agentglass?.deskKey || "";
@@ -762,7 +772,7 @@ async function post<T>(path: string, body: unknown, headers: Record<string, stri
   const git = path.startsWith("/git/");
   if (git) forgetShared();
   try {
-    const r = await fetch(SERVER + path, { method: "POST", headers: authHeaders({ "content-type": "application/json", ...headers }), body: JSON.stringify(body) });
+    const r = await fetch(SERVER + path, { method: "POST", headers: authHeaders({ "content-type": "application/json", ...(deskGated(path) ? deskHeader() : {}), ...headers }), body: JSON.stringify(body) });
     return await (r.json() as Promise<T>);
   } finally {
     if (git) forgetShared();
@@ -1292,6 +1302,30 @@ const realApi = {
      One pair for both worlds, because the finder's tabs should not behave
      differently depending on which backend answers them. */
   browse: (path: string, hidden = false) => get<BrowseReport>(`/browse?path=${encodeURIComponent(path)}${hidden ? "&hidden=1" : ""}`),
+  browseList: (path: string, cursor = 0, hidden = false, signal?: AbortSignal, limit?: number) =>
+    get<BrowsePage>(`/browse/list?path=${encodeURIComponent(path)}&cursor=${cursor}${limit ? `&limit=${limit}` : ""}${hidden ? "&hidden=1" : ""}`, signal),
+  /** One file operation (server/src/fsroute.ts); a refusal comes back as ok:false with the sentence. */
+  fsOp: (body: FsBody) => post<FsAnswer>("/fs/op", body).catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) } as FsAnswer)),
+  fsJobs: () => get<{ jobs: FsJob[] }>("/fs/jobs"),
+  /** The applications that can open these files, and starting one (the desk key's job, see server/src/openwith.ts). */
+  openWithList: (paths: string[]) => get<OpenWithList>(`/finder/openwith?${paths.map((p) => `path=${encodeURIComponent(p)}`).join("&")}`).catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) } as OpenWithList)),
+  openWithLaunch: (id: string, paths: string[], always?: { mime: string }) =>
+    post<{ ok: boolean; error?: string; note?: string }>("/finder/openwith/launch", { id, paths, ...(always ? { always: true, mime: always.mime } : {}) }).catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) } as { ok: boolean; error?: string; note?: string })),
+  fsJobCancel: (id: string) => post<{ ok: boolean }>("/fs/jobs/cancel", { id }),
+  fsJobsClear: () => post<{ ok: boolean }>("/fs/jobs/clear", {}),
+  /** The sidebar's pinned places: GTK's bookmarks file, read freely, changed with the desk key (server/src/bookmarks.ts). */
+  bookmarks: () => get<{ ok: boolean; bookmarks: PinnedPlace[] }>("/finder/bookmarks").catch(() => ({ ok: false, bookmarks: [] as PinnedPlace[] })),
+  bookmarkToggle: (path: string) => post<{ ok: boolean; error?: string; bookmarks?: PinnedPlace[] }>("/finder/bookmarks", { path }).catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) } as { ok: boolean; error?: string; bookmarks?: PinnedPlace[] })),
+  bookmarkRemove: (uri: string) => post<{ ok: boolean; error?: string; bookmarks?: PinnedPlace[] }>("/finder/bookmarks", { uri }).catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) } as { ok: boolean; error?: string; bookmarks?: PinnedPlace[] })),
+  /** The person's own finder actions: matching and listing are reads; saving, deleting and running are the desk key's (server/src/finderactions.ts). */
+  actionsMatch: (paths: string[], source: "selection" | "background") => get<{ ok: boolean; actions: FinderAction[] }>(`/finder/actions/match?source=${source}&${paths.map((p) => `path=${encodeURIComponent(p)}`).join("&")}`).catch(() => ({ ok: false, actions: [] as FinderAction[] })),
+  actionsList: () => get<FinderActionList>("/finder/actions").catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e), actions: [], problems: [] } as FinderActionList)),
+  actionRead: (id: string) => get<{ ok: boolean; error?: string; action?: FinderAction }>(`/finder/actions/read?id=${encodeURIComponent(id)}`).catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) } as { ok: boolean; error?: string; action?: FinderAction })),
+  actionSave: (manifest: FinderAction, script: string | undefined, create: boolean) => post<{ ok: boolean; error?: string; id?: string }>("/finder/actions/save", { manifest, ...(script !== undefined ? { script } : {}), create }).catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) } as { ok: boolean; error?: string; id?: string })),
+  actionDelete: (id: string) => post<{ ok: boolean; error?: string }>("/finder/actions/delete", { id }).catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) } as { ok: boolean; error?: string })),
+  actionRun: (id: string, paths: string[], source: "selection" | "background", confirmed?: boolean) => post<{ ok: boolean; error?: string; confirm?: boolean; job?: FsJob }>("/finder/actions/run", { id, paths, source, ...(confirmed ? { confirmed: true } : {}) }).catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) } as { ok: boolean; error?: string; confirm?: boolean; job?: FsJob })),
+  fsTrash: () => get<{ ok: boolean; entries: FsTrashRow[] }>("/fs/trash"),
+  fsProps: (path: string) => get<{ ok: boolean; error?: string; props?: FsProps }>(`/fs/props?path=${encodeURIComponent(path)}`),
   previewFacts: (path: string) => get<FileFacts>(`/preview/facts?path=${encodeURIComponent(path)}`),
   /** Status, +/-, branch and last commit of one file, for the info rail. */
   previewGit: (path: string) => get<FileGitFacts>(`/preview/git?path=${encodeURIComponent(path)}`),
@@ -1302,6 +1336,25 @@ const realApi = {
    * app's token on every request and an `<img>` cannot carry a header. The
    * caller owns the URL and must revoke it — see Preview.tsx, which does.
    */
+  /** The text of a file up to `cap` bytes, from the slice route: `size` is the
+   *  whole file and `truncated` says whether the cap cut it. */
+  previewText: async (path: string, cap: number): Promise<{ ok: true; text: string; size: number; truncated: boolean } | { ok: false; error: string }> => {
+    try {
+      const r = await fetch(`${SERVER}/preview/file?path=${encodeURIComponent(path)}&cap=${cap}`, { headers: authHeaders() });
+      if (!r.ok) {
+        const why = await r.json().catch(() => null) as { error?: string } | null;
+        return { ok: false, error: why?.error ?? `the engine refused it (${r.status})` };
+      }
+      return { ok: true, text: await r.text(), size: Number(r.headers.get("x-agx-size") ?? 0), truncated: r.headers.get("x-agx-truncated") === "1" };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  },
+  /** A file's own URL for an element that can carry no header — <img>, <audio>,
+   *  <video>, a frame — so the browser can ask for ranges itself. */
+  previewUrl: (path: string): string => withToken(`${SERVER}/preview/file?path=${encodeURIComponent(path)}`),
+  previewMedia: (path: string) => get<MediaFacts>(`/preview/media?path=${encodeURIComponent(path)}`),
+  frameUrl: (path: string): string => withToken(`${SERVER}/preview/poster?path=${encodeURIComponent(path)}`),
   previewBlob: async (path: string): Promise<{ ok: true; url: string; mime: string } | { ok: false; error: string }> => {
     try {
       const r = await fetch(`${SERVER}/preview/raw?path=${encodeURIComponent(path)}`, { headers: authHeaders() });
@@ -1319,7 +1372,13 @@ const realApi = {
   /** Hand a file to the desktop's own viewer — a picture belongs to the picture
    *  viewer, not to the editor the text files open in. */
   previewOpen: (path: string) => post<{ ok: boolean; with?: string; error?: string }>("/preview/open", { path }),
+  finderEditState: (root: string) => get<{ ok: boolean; live: boolean; modified: boolean; error?: string }>(`/bench/finder-edit?root=${encodeURIComponent(root)}`),
+  finderEditEnd: (root: string) => post<{ ok: boolean; ended?: boolean; error?: string }>("/bench/finder-edit/end", { root }),
+  finderEditSave: (root: string) => post<{ ok: boolean; live: boolean; modified: boolean; error?: string }>("/bench/finder-edit/save", { root }),
   previewReveal: (path: string) => post<{ ok: boolean; with?: string; error?: string }>("/preview/reveal", { path }),
+  /** Fuzzy names across Home from the server's incremental index. */
+  diskIndexSearch: (q: string, signal?: AbortSignal) =>
+    get<{ ok: boolean; hits: { path: string; dir: boolean; score: number }[]; building: boolean; ms: number; error?: string }>(`/disk/index/search?q=${encodeURIComponent(q)}`, signal),
   diskGrep: (root: string, q: string) => get<GrepReport>(`/disk/grep?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}`),
 
   dockerLogs: (id: string, tail = 400) => get<{ ok: boolean; text: string; error?: string }>(`/docker/logs?id=${encodeURIComponent(id)}&tail=${tail}`),
@@ -1404,7 +1463,9 @@ const realApi = {
     get<{ ok: boolean; prs: CardPr[]; error?: string }>(`/jira/prs?${new URLSearchParams({ key, root })}`),
   /** The pull requests a card is linked to on the Jira site: one request, read when the card is opened. */
   jiraLinks: (key: string) =>
-    get<{ ok: boolean; links: { url: string; number: number; title: string; resolved: boolean }[]; error?: string }>(`/jira/links?${new URLSearchParams({ key })}`),
+    get<{ ok: boolean; links: { url: string; number: number; title: string; resolved: boolean }[]; web?: CardWebLink[]; error?: string }>(`/jira/links?${new URLSearchParams({ key })}`),
+  /** What the site's development tool holds for a card, by its numeric id: `dev` is null when there is nothing to show. */
+  jiraDev: (id: string) => get<{ ok: boolean; dev: CardDev | null }>(`/jira/dev?${new URLSearchParams({ id })}`),
   /** Put a pull request on a card as a remote link. Refused by the server unless Jira writes are switched on. */
   jiraLink: (key: string, url: string, title = "") =>
     post<{ ok: boolean; linked?: boolean; url?: string; error?: string }>("/jira/link", { key, url, title }),
@@ -1426,8 +1487,8 @@ const realApi = {
   jiraTransitions: (key: string) =>
     get<{ ok: boolean; error?: string; throttled?: boolean } & Partial<JiraMoves>>(`/jira/transitions?key=${encodeURIComponent(key)}`),
   /** One move, with the `updated` the person saw; the server refuses it as a conflict if the card has moved since. */
-  jiraTransition: (key: string, transitionId: string, updated: number) =>
-    post<ClickUpWrite>("/jira/transition", { key, transitionId, updated }),
+  jiraTransition: (key: string, transitionId: string, updated: number, fields?: Record<string, string | string[]>) =>
+    post<ClickUpWrite>("/jira/transition", { key, transitionId, updated, ...(fields ? { fields } : null) }),
   /** Who the card can be given to, by what was typed. A short answer is not "that is everybody": Jira scans part of its directory. */
   jiraAssignable: (key: string, q: string, transition = "") =>
     get<{ ok: boolean; error?: string; throttled?: boolean; people?: JiraPerson[] }>(`/jira/assignable?${new URLSearchParams({ key, q, ...(transition ? { transition } : {}) })}`),
@@ -1456,8 +1517,14 @@ const realApi = {
   /** The saved Jira views and folders: local, no request to Jira. */
   jiraViews: () => get<JiraViews>("/jira/views"),
   /** One saved view's cards. `cached` answers from disk only; `force` skips the server's held answer. */
-  jiraView: (id: string, o?: { force?: boolean; cached?: boolean }) =>
-    get<JiraViewRead>(`/jira/view?${new URLSearchParams({ id, ...(o?.force ? { force: "1" } : {}), ...(o?.cached ? { cached: "1" } : {}) })}`),
+  jiraView: (id: string, o?: { force?: boolean; cached?: boolean; filters?: readonly string[] }) =>
+    get<JiraViewRead>(`/jira/view?${new URLSearchParams({ id, ...(o?.force ? { force: "1" } : {}), ...(o?.cached ? { cached: "1" } : {}), ...(o?.filters?.length ? { filters: o.filters.join(",") } : {}) })}`),
+  /** The quick filters, the active sprint and the epics around a board's cards (server/src/jiraBoardContext.ts). */
+  jiraBoardContext: (id: string) => get<JiraBoardContext>(`/jira/board-context?id=${encodeURIComponent(id)}`),
+  /** Put a card before or after another on its board; nothing is read back. */
+  /** The cards under the board's epics, one read kept ten minutes (server/src/jiraboards.ts `readBoardAreas`). */
+  jiraBoardAreas: (id: string) => get<JiraBoardAreas>(`/jira/board-areas?id=${encodeURIComponent(id)}`),
+  jiraRank: (key: string, ask: { before?: string; after?: string }) => post<ClickUpWrite>("/jira/rank", { key, ...ask }),
   /** Boards and favourite filters the add-a-view list offers. */
   jiraViewChoices: (q = "") =>
     get<{ ok: boolean; error?: string; boards: JiraViewChoice[]; filters: JiraViewChoice[]; truncated?: boolean }>(`/jira/view-choices?q=${encodeURIComponent(q)}`),
@@ -1470,12 +1537,62 @@ const realApi = {
   /** A Jira card with its description and comments as Markdown; `more` is how many comments the read left out. */
   jiraDetail: (key: string) =>
     get<{ ok: boolean; error?: string; throttled?: boolean; detail?: TaskDetail; more?: number }>(`/jira/detail?key=${encodeURIComponent(key)}`),
+  /** One page of what happened on a card: its history, the rest of its work log, or the comments the card read left out. `next` is where the following page starts. */
+  jiraActivity: (key: string, kind: "history" | "worklog" | "comments", startAt = 0) =>
+    get<{ ok: boolean; error?: string; throttled?: boolean; events?: CardEvent[]; comments?: TaskDetail["comments"]; total?: number; next?: number }>(`/jira/activity?${new URLSearchParams({ key, kind, startAt: String(startAt) })}`),
   /** Who a comment on this card may mention, for what was typed after `@`. `key` is the id a mention carries. */
   jiraPeople: (key: string, q: string) =>
     get<{ ok: boolean; error?: string; throttled?: boolean; people?: { key: string; name: string; initials: string; avatar?: string }[] }>(`/jira/people?${new URLSearchParams({ key, q })}`),
   /** One comment, Markdown; `mentions` are the people named in it, by the id `jiraPeople` gave. */
-  jiraComment: (key: string, text: string, mentions: { id: string; name: string }[] = []) =>
-    post<ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string }>("/jira/comment", { key, text, mentions }),
+  jiraComment: (key: string, text: string, mentions: { id: string; name: string }[] = [], replyTo?: string) =>
+    post<ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string }>("/jira/comment", { key, text, mentions, ...(replyTo ? { replyTo } : {}) }),
+  /** Your own comment, changed (the answer is the comment as it now stands) or deleted. The card's stamp moved with either: read the card again. */
+  jiraCommentEdit: (key: string, id: string, text: string, mentions: { id: string; name: string }[] = []) =>
+    post<ClickUpWrite & { comment?: TaskDetail["comments"][number]; partial?: string }>("/jira/comment/edit", { key, id, text, mentions }),
+  jiraCommentDelete: (key: string, id: string) =>
+    post<ClickUpWrite & { removed?: boolean }>("/jira/comment/delete", { key, id }),
+  /** One field of a card's Details. `updated` is the stamp the person saw; the answer is the card, its Details and what it still lets them change. */
+  jiraEdit: (key: string, ask: JiraEditAsk, updated: number) =>
+    post<ClickUpWrite & { facts?: CardFact[]; edit?: CardEdit; /** Set when the description was the field: it as it now stands, in Markdown. */ description?: string }>("/jira/edit", { key, ...ask, updated }),
+  /** What a card is joined to (server/src/jiraRelate.ts). The answer of a sub-task or a link is the card again; of an address, the card's whole list of them. */
+  jiraLinkTypes: () => get<{ ok: boolean; error?: string; throttled?: boolean; kinds?: JiraLinkKind[] }>("/jira/link-types"),
+  jiraSubtask: (key: string, title: string) =>
+    post<ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string; created?: string }>("/jira/subtask", { key, title }),
+  jiraRelate: (key: string, other: string, typeId: string, outward: boolean) =>
+    post<ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string; already?: boolean }>("/jira/relate", { key, other, typeId, outward }),
+  jiraUnrelate: (key: string, id: string) =>
+    post<ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string }>("/jira/relate/remove", { key, id }),
+  jiraWebLink: (key: string, url: string, title: string) =>
+    post<ClickUpWrite & { web?: CardWebLink[]; already?: boolean }>("/jira/weblink", { key, url, title }),
+  jiraWebUnlink: (key: string, id: string) =>
+    post<ClickUpWrite & { web?: CardWebLink[] }>("/jira/weblink/remove", { key, id }),
+  /**
+   * Time logged on a card (server/src/jiraWorklog.ts). `updated` is the stamp the person saw; the answer is the card again, with the
+   * remaining estimate before and after the write and, for an add, the id of the entry made.
+   */
+  jiraWorklog: (key: string, send: WorkSend, updated: number) =>
+    post<JiraWorkWrite>("/jira/worklog", { key, ...send, updated }),
+  jiraWorklogEdit: (key: string, id: string, send: WorkSend, updated: number) =>
+    post<JiraWorkWrite>("/jira/worklog/edit", { key, id, ...send, updated }),
+  jiraWorklogDelete: (key: string, id: string, send: Pick<WorkSend, "adjust">, updated: number) =>
+    post<JiraWorkWrite>("/jira/worklog/delete", { key, id, ...send, updated }),
+  /** The connected account's own mark on a card: `on` puts it on or takes it off, one request and no stamp (server/src/jiraFollow.ts). */
+  jiraWatch: (key: string, on: boolean) => post<JiraFollowWrite>("/jira/watch", { key, on }),
+  jiraVote: (key: string, on: boolean) => post<JiraFollowWrite>("/jira/vote", { key, on }),
+  /** One file onto a card: a multipart form, the file under `file`. The answer is the card again. */
+  jiraAttach: async (key: string, file: File) => {
+    await whenServerUp();
+    const form = new FormData();
+    form.append("key", key);
+    form.append("file", file, file.name);
+    // No content type: the boundary in it is the browser's to write.
+    const r = await fetch(SERVER + "/jira/attach", { method: "POST", headers: authHeaders(), body: form });
+    return (await r.json()) as ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string; added?: string };
+  },
+  jiraUnattach: (key: string, id: string) =>
+    post<ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string }>("/jira/attach/remove", { key, id }),
+  /** Labels the site knows that start with what was typed. */
+  jiraLabels: (q: string) => get<{ ok: boolean; error?: string; throttled?: boolean; labels?: string[] }>(`/jira/labels?q=${encodeURIComponent(q)}`),
   providerTasks: (force = false) =>
     get<ProviderTasksResponse>(`/tasks/provider${force ? "?force=1" : ""}`),
 
@@ -1537,10 +1654,12 @@ const realApi = {
     get<{ ok: boolean; error?: string; scope: "project" | "global"; root?: string; overrides: string[]; policy: Policy }>(
       `/orchestration${root ? `?root=${encodeURIComponent(root)}` : ""}`),
   /** Store a whole policy (null removes a project's own). Refused for anything
-   *  but the person's own window or a paired device. */
+   *  but the person's own window or a paired device; where the app started the
+   *  server, the window proves it with the desk key, which the machine token
+   *  every agent holds does not replace. */
   orchestrationSave: (policy: Policy | null, root?: string) =>
     post<{ ok: boolean; error?: string; scope?: "project" | "global"; root?: string; overrides?: string[]; policy?: Policy }>(
-      "/orchestration", { root, policy }),
+      "/orchestration", { root, policy }, deskHeader()),
   /** Which rules are on and why a reading did not change one. Read when the
    *  page opens and after a save: the server settles it on events, not on a clock. */
   orchestrationState: () => get<{ ok: boolean; rules: PolicyRuleState[] }>("/orchestration/state"),
@@ -1633,6 +1752,11 @@ const realApi = {
       resolvedLocally?: { branch: string; ahead: number };
       error?: string }>(
       `/prs/conflict-files?root=${encodeURIComponent(root)}&number=${number}`),
+  /** One conflicted file of that preview with its markers, read from git's
+   *  object database. `noMarkers`: a modify/delete conflict has none. */
+  prConflictFile: (root: string, number: number, path: string) =>
+    get<ConflictFile & { noMarkers?: boolean }>(
+      `/prs/conflict-file?root=${encodeURIComponent(root)}&number=${number}&path=${encodeURIComponent(path)}`),
   /** How far behind its base a pull request's branch is. Its own call: it costs
    *  about 600ms, and the detail should not wait on an offer. */
   /** The pull requests on a branch: one out of it, any number into it. By
@@ -1657,6 +1781,18 @@ const realApi = {
   prRollup: (root: string, number: number, force = false) =>
     get<{ ok: boolean; checks?: PrCheckRollup; error?: string }>(
       `/prs/rollup?${new URLSearchParams({ root, number: String(number), ...(force ? { force: "1" } : {}) })}`),
+  /** One person's open pull requests: what they opened and what they were asked to review. */
+  prPerson: (root: string, login: string, force = false) =>
+    get<{ ok: boolean; login?: string; authored?: PrSummary[]; asked?: PrSummary[]; more?: boolean; error?: string }>(
+      `/prs/person?${new URLSearchParams({ root, login, ...(force ? { force: "1" } : {}) })}`),
+  /** The pull requests whose branch name carries a card key: git ls-remote on the server, one batched read. */
+  prRefBranches: (root: string, key: string) =>
+    get<{ ok: boolean; key?: string; branches?: string[]; rows?: PrSummary[]; error?: string }>(
+      `/prs/ref-branches?${new URLSearchParams({ root, key })}`),
+  /** The second pass (checks, size, review) for up to 24 pull requests in one request. */
+  prRowDetails: (root: string, numbers: number[], finished: number[] = []) =>
+    get<{ ok: boolean; rows: Record<number, Partial<PrSummary>>; error?: string }>(
+      `/prs/row-details?${new URLSearchParams({ root, numbers: numbers.join(","), ...(finished.length ? { finished: finished.join(",") } : null) })}`),
   /** `force` skips the server's 60 s copy: after "Update branch", or when the
    *  person pressed Refresh. The panel's own 30 s tick does not need it. */
   /** GitHub's own status, only worth asking once a pull request has been stuck
@@ -1947,6 +2083,14 @@ const realApi = {
   // --- and searching the machine, which is not a checkout ---
   /** Where a machine search may be rooted, and a menu of places to start. */
   diskPlaces: () => get<DiskPlaces>("/disk/places"),
+  /** The finder's DEVICES list, and one thing done to one of its volumes. The passphrase of an unlock is the one secret: it travels in this body and is kept nowhere. */
+  volumes: () => get<VolumeList>("/finder/devices"),
+  /** The Network row, and one step of connecting to a server. Credentials travel in these bodies and are kept nowhere. */
+  network: () => get<NetworkList>("/finder/network"),
+  remoteConnect: (uri: string) => post<RemoteStep>("/finder/remotes/connect", { uri }),
+  remoteAnswer: (session: string, answer: { answers?: Record<string, string>; choice?: number }) => post<RemoteStep>("/finder/remotes/answer", { session, ...answer }),
+  remoteCancel: (session: string) => post<RemoteStep>("/finder/remotes/cancel", { session }),
+  volumeAct: (act: "mount" | "unmount" | "eject" | "unlock" | "lock", id: string, passphrase?: string) => post<{ ok: boolean; error?: string; mountPoint?: string }>(`/finder/devices/${act}`, passphrase === undefined ? { id } : { id, passphrase }),
   /** Files and folders under `root` whose path contains `q`. Bounded by
    *  disk.ts, not by the open project — that is the whole point of it. */
   diskFind: (root: string, q: string) =>
@@ -2024,15 +2168,21 @@ const realApi = {
     get<PluginPrNotes>(`/plugins/pr-notes?repo=${encodeURIComponent(repo)}&number=${number}`),
   pluginNoteStatus: (plugin: string, id: string, status: NoteStatus) =>
     post<{ ok: boolean; error?: string }>("/plugins/pr-notes/status", { plugin, id, status }),
+  /** Answer a finding: a reply, a status, or both in one request. `root` is
+   *  the checkout, needed only when the reply is also posted on GitHub. */
+  pluginNoteReply: (plugin: string, id: string, body: { status?: NoteStatus; reply: { text: string; postToGitHub: boolean }; root?: string }) =>
+    post<{ ok: boolean; error?: string; status?: NoteStatus; replies?: NoteReply[]; posted?: boolean; postError?: string }>("/plugins/pr-notes/status", { plugin, id, ...body }),
   pluginPrOpen: (repo: string, number: number) =>
     post<{ ok: boolean }>("/plugins/pr-open", { repo, number }),
   pluginPrAction: (plugin: string, id: string, repo: string, number: number) =>
     post<{ ok: boolean; error?: string }>("/plugins/pr-action", { plugin, id, repo, number }),
-  /** Re-clones a git-backed install at its recorded URL/ref. Same review
-   *  gate as a fresh install: an update that changes the declaration loses
-   *  its approval rather than re-enabling itself. */
+  /** Updates an install from where it came from: a git install re-clones its
+   *  ref, a market install re-reads the catalogue and installs what it lists
+   *  now. Same review gate as a fresh install: an update that changes the
+   *  declaration loses its approval rather than re-enabling itself. `update`
+   *  says what happened, including "already at the listed version". */
   pluginUpdate: (name: string) =>
-    post<{ ok: true; plugin: PublicPlugin } | { ok: false; error: string }>("/plugins/update", { name }),
+    post<{ ok: true; plugin: PublicPlugin; update: PluginUpdateReport } | { ok: false; error: string }>("/plugins/update", { name }),
   /** Fetched fresh, never cached — a stale list read as live is the one
    *  thing this must not do. `ok: false` covers an unreachable or malformed
    *  catalogue equally; the caller shows the error either way. */
@@ -2622,10 +2772,35 @@ const demoApi: typeof realApi = {
   dockerOverview: () => D(demo.dockerOverview()),
   dockerStats: () => D(demo.dockerStats()),
   browse: (path: string) => D({ ok: false, path, parent: null, entries: [], more: 0, hiddenSkipped: 0, error: "the demo has no filesystem" } as BrowseReport),
+  browseList: (path: string) => D({ ok: false, path, total: 0, entries: [], next: null, hiddenSkipped: 0, error: "the demo has no filesystem" } as BrowsePage),
+  fsOp: () => D({ ok: false, error: "the demo has no filesystem" } as FsAnswer),
+  fsJobs: () => D({ jobs: [] }),
+  openWithList: () => D({ ok: false, error: "the demo has no filesystem" }),
+  openWithLaunch: () => D({ ok: false, error: "the demo has no filesystem" }),
+  fsJobCancel: () => D({ ok: false }),
+  fsJobsClear: () => D({ ok: false }),
+  actionsMatch: () => D({ ok: true, actions: [] }),
+  actionsList: () => D({ ok: true, actions: [], problems: [] }),
+  actionRead: () => D({ ok: false, error: "the demo has no filesystem" }),
+  actionSave: () => D({ ok: false, error: "the demo has no filesystem" }),
+  bookmarks: () => D({ ok: true, bookmarks: [] as PinnedPlace[] }),
+  bookmarkToggle: () => D({ ok: false, error: "the demo has no filesystem" }),
+  bookmarkRemove: () => D({ ok: false, error: "the demo has no filesystem" }),
+  actionDelete: () => D({ ok: false, error: "the demo has no filesystem" }),
+  actionRun: () => D({ ok: false, error: "the demo has no filesystem" }),
+  fsTrash: () => D({ ok: true, entries: [] }),
+  fsProps: () => D({ ok: false, error: "the demo has no filesystem" }),
   previewFacts: (path: string) => D({ ok: false, path, name: "", kind: "binary", mime: "", bytes: 0, mtime: 0, error: "the demo has no filesystem" } as FileFacts),
   previewGit: () => D({ ok: true, repo: false } as FileGitFacts),
   previewBlob: async () => ({ ok: false as const, error: "the demo has no filesystem" }),
+  previewText: async () => ({ ok: false as const, error: "the demo has no filesystem" }),
+  previewUrl: () => "",
+  previewMedia: () => D({ ok: false, error: "the demo has no filesystem" } as MediaFacts),
+  frameUrl: () => "",
   previewOpen: () => D({ ok: false, error: "the demo has no filesystem" }),
+  finderEditState: () => D({ ok: true, live: false, modified: false }),
+  finderEditEnd: () => D({ ok: true, ended: false }),
+  finderEditSave: () => D({ ok: false, live: false, modified: false, error: "not available in the demo" }),
   previewReveal: () => D({ ok: false, error: "the demo has no filesystem" }),
   diskGrep: () => D({ ok: false, hits: [], files: 0, truncated: false, via: "", error: "the demo has no filesystem" } as GrepReport),
   dockerLogs: (id: string, _tail?: number) => D(demo.dockerLogs(id)),
@@ -2659,9 +2834,10 @@ const demoApi: typeof realApi = {
   pluginSettingsSave: (_name: string, _v: Record<string, unknown>) => D({ ok: false, error: "not available in the demo" }),
   pluginPrNotes: (_repo: string, _n: number) => D({ ok: true, runs: [], notes: [], publishers: {} } as PluginPrNotes),
   pluginNoteStatus: (_p: string, _id: string, _s: NoteStatus) => D({ ok: false, error: "not available in the demo" }),
+  pluginNoteReply: (_p: string, _id: string, _b: { status?: NoteStatus; reply: { text: string; postToGitHub: boolean }; root?: string }) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string; status?: NoteStatus; replies?: NoteReply[]; posted?: boolean; postError?: string }),
   pluginPrOpen: (_repo: string, _n: number) => D({ ok: true }),
   pluginPrAction: (_p: string, _id: string, _repo: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
-  pluginUpdate: (_name: string) => D({ ok: false, error: "not available in the demo" } as { ok: false; error: string }),
+  pluginUpdate: (_name: string) => D({ ok: false, error: "not available in the demo" } as { ok: false; error: string } | { ok: true; plugin: PublicPlugin; update: PluginUpdateReport }),
   pluginCatalogueFetch: (_url: string) => D({ ok: false, error: "not available in the demo" } as { ok: false; error: string }),
   pluginInstallFromCatalogue: (_catalogueUrl: string, _pluginId: string) =>
     D({ ok: false, error: "not available in the demo" } as { ok: false; error: string }),
@@ -2847,6 +3023,7 @@ const demoApi: typeof realApi = {
   jiraWrites: (_o: boolean) => D({ ok: false, error: "not available in the demo" }),
   jiraPrs: (_k: string, _r?: string) => D({ ok: true, prs: [] }),
   jiraLinks: (_k: string) => D({ ok: true, links: [] as { url: string; number: number; title: string; resolved: boolean }[] }),
+  jiraDev: (_i: string) => D({ ok: true, dev: null as CardDev | null }),
   jiraLink: (_k: string, _u: string, _t?: string) => D({ ok: false, error: "not available in the demo" }),
   jiraProjectPrs: (_p: string, _r?: string) => D({ ok: true, byCard: {} as Record<string, CardPr[]> }),
   trackerProjects: (_r?: boolean) => D({ ok: true, projects: {}, repos: [] }),
@@ -2871,7 +3048,10 @@ const demoApi: typeof realApi = {
     connected: true, site: "acme.example", current: "board:1",
     views: [{ id: "board:1", name: "ORBIT board", url: "", addedAt: 0 }], folders: [],
   }),
-  jiraView: (_id: string, _o?: { force?: boolean; cached?: boolean }) => D<JiraViewRead>({
+  jiraBoardContext: (_id: string) => D<JiraBoardContext>({ ok: true, filters: [], epics: [] }),
+  jiraBoardAreas: (_id: string) => D<JiraBoardAreas>({ ok: true, tasks: [] }),
+  jiraRank: (_k: string, _a: { before?: string; after?: string }) => D({ ok: false, error: "not available in the demo" }),
+  jiraView: (_id: string, _o?: { force?: boolean; cached?: boolean; filters?: readonly string[] }) => D<JiraViewRead>({
     ok: true, at: Date.now(),
     columns: [
       { name: "To Do", statusIds: ["1"] },
@@ -2891,8 +3071,26 @@ const demoApi: typeof realApi = {
   jiraAddFolder: (_k: string) => D({ ok: false, error: "not available in the demo" }),
   jiraRemoveFolder: (_i: string) => D({ ok: false }),
   jiraDetail: (_k: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraActivity: (_k: string, _kind: "history" | "worklog" | "comments", _at = 0) => D({ ok: false, error: "not available in the demo" }),
   jiraPeople: (_k: string, _q: string) => D({ ok: true, people: [] as { key: string; name: string; initials: string; avatar?: string }[] }),
-  jiraComment: (_k: string, _t: string, _m?: { id: string; name: string }[]) => D({ ok: false, error: "not available in the demo" }),
+  jiraComment: (_k: string, _t: string, _m?: { id: string; name: string }[], _r?: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraCommentEdit: (_k: string, _i: string, _t: string, _m?: { id: string; name: string }[]) => D({ ok: false, error: "not available in the demo" }),
+  jiraCommentDelete: (_k: string, _i: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraEdit: (_k: string, _a: JiraEditAsk, _u: number) => D({ ok: false, error: "not available in the demo" }),
+  jiraLinkTypes: () => D({ ok: false, kinds: [] as JiraLinkKind[], error: "not available in the demo" }),
+  jiraSubtask: (_k: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraRelate: (_k: string, _o: string, _t: string, _w: boolean) => D({ ok: false, error: "not available in the demo" }),
+  jiraUnrelate: (_k: string, _i: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraWebLink: (_k: string, _u: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraWebUnlink: (_k: string, _i: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraWorklog: (_k: string, _s: WorkSend, _u: number) => D<JiraWorkWrite>({ ok: false, error: "not available in the demo" }),
+  jiraWorklogEdit: (_k: string, _i: string, _s: WorkSend, _u: number) => D<JiraWorkWrite>({ ok: false, error: "not available in the demo" }),
+  jiraWorklogDelete: (_k: string, _i: string, _s: Pick<WorkSend, "adjust">, _u: number) => D<JiraWorkWrite>({ ok: false, error: "not available in the demo" }),
+  jiraWatch: (_k: string, _o: boolean) => D<JiraFollowWrite>({ ok: false, error: "not available in the demo" }),
+  jiraVote: (_k: string, _o: boolean) => D<JiraFollowWrite>({ ok: false, error: "not available in the demo" }),
+  jiraAttach: (_k: string, _f: File) => D({ ok: false, error: "not available in the demo" }),
+  jiraUnattach: (_k: string, _i: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraLabels: (_q: string) => D({ ok: true, labels: [] as string[] }),
   providerTasks: (_f?: boolean) => D({ tasks: [], more: false, at: 0 }),
   recipes: (_r?: string) => D({ recipes: [] }),
   recipeSave: (_r: Recipe) => D({ ok: false, error: "not available in the demo" }),
@@ -2976,6 +3174,9 @@ const demoApi: typeof realApi = {
     local: { branch, exists: false, ahead: 0, behind: 0, dirty: false, sync: "absent" as const },
   }),
   prRollup: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
+  prRowDetails: (_r: string, _n: number[], _f?: number[]) => D({ ok: true, rows: {} }),
+  prRefBranches: (_r: string, _k: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; key?: string; branches?: string[]; rows?: PrSummary[]; error?: string }),
+  prPerson: (_r: string, _l: string, _f?: boolean) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; login?: string; authored?: PrSummary[]; asked?: PrSummary[]; more?: boolean; error?: string }),
   prGithubStatus: () => D({ ok: true, problem: null as GithubProblem | null }),
   prUnstickLook: (_r: string, _n: number, _f?: boolean) => D<Look>({ ok: false, error: "not available in the demo" }),
   prBehind: (_r: string, n: number) => D(n === 461
@@ -2988,6 +3189,7 @@ const demoApi: typeof realApi = {
     }
     : { ok: false }),
   prConflict: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
+  prConflictFile: (_r: string, _n: number, _p: string) => D({ ok: false, segments: [], blocks: [], lines: 0, stamp: "", error: "not available in the demo" } as ConflictFile),
   prConflictFiles: (_r: string, _n: number) => D({ ok: false, conflicts: [] as string[], clean: false, error: "not available in the demo" }),
   clickupWhere: (_i: string) => D({ ok: false }),
   clickupSearchStream: async (_q: string, _f: boolean, _o: (t: ProviderTask[]) => void, _s?: AbortSignal) =>
@@ -3077,6 +3279,13 @@ const demoApi: typeof realApi = {
   /* The demo has no machine to search — and saying so is the point: an empty
      result list would read as "your home directory is empty". */
   diskPlaces: () => D({ ok: false, home: "", roots: [], places: [], error: "the demo has no machine to search" }),
+  volumes: () => D({ ok: false, devices: [], error: "the demo has no machine" }),
+  network: () => D({ ok: false, entries: [], error: "the demo has no machine" }),
+  remoteConnect: (_u: string) => D({ state: "error", error: "the demo has no machine" } as RemoteStep),
+  remoteAnswer: (_s: string, _a: object) => D({ state: "error", error: "the demo has no machine" } as RemoteStep),
+  remoteCancel: (_s: string) => D({ state: "error", error: "cancelled" } as RemoteStep),
+  volumeAct: (_a: string, _i: string, _p?: string) => D({ ok: false, error: "the demo has no machine" }),
+  diskIndexSearch: (_q: string) => D({ ok: false, hits: [], building: false, ms: 0, error: "the demo has no machine to search" }),
   diskFind: (_r: string, _q: string) => D({ ok: false, files: [], dirs: [], truncated: false, via: "", error: "the demo has no machine to search" }),
   /* The demo has no disk to keep a note on and no tmux to run a tab in. Said,
      rather than answered with an empty note that would swallow what was typed. */

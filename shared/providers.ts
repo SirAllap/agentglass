@@ -16,6 +16,9 @@
  * there.
  */
 
+import type { CardFollow } from "./jiraFollow.ts";
+import type { JiraMoveField } from "./jiraMoveFields.ts";
+
 /** Which half of the app a provider feeds. The two are genuinely different
  *  jobs, and Orca's split is the right one: code you review, and work you owe. */
 export type ProviderKind = "review" | "task";
@@ -129,8 +132,9 @@ export interface JiraStatus {
 /**
  * One move a Jira workflow offers a card from where it stands now. `id` is the
  * transition's, `label` the status it leads to (the site's own words, never
- * ours). `needs` names the screen fields the move cannot be made without: a
- * move with `needs` is shown and not offered, because there is no form for them.
+ * ours). `needs` names the screen fields the move cannot be made without, and
+ * `fields` is the move's screen as a form can draw it: a move with `needs` asks
+ * for them first instead of being made at once.
  */
 export interface JiraMove {
   id: string;
@@ -143,6 +147,7 @@ export interface JiraMove {
   toKind: "open" | "done" | "other";
   color?: string;
   needs?: string[];
+  fields?: JiraMoveField[];
 }
 
 /** The answer to `GET /jira/transitions`. An empty list always carries `cannot`. */
@@ -178,6 +183,11 @@ export interface JiraSteps { handoff: JiraStep; review: JiraStep; merge: JiraSte
 export type JiraStepKey = keyof JiraSteps;
 /** What a person chose when a step asked (all optional): the status by name, the assignee, the comment as edited. */
 export interface JiraStepChoice { to?: string; clear?: boolean; assign?: string | null; comment?: string; /** Skip the step's move; the rest of it still runs. */ stay?: boolean }
+/**
+ * What one block of a step did, in the order the server ran them. `assignee` stands for the take-off and the
+ * assign together: the server writes who is on the card once. `why` is a sentence of ours, never the site's words.
+ */
+export interface JiraBlockOutcome { block: "move" | "assignee" | "comment" | "link"; state: "done" | "skipped" | "failed"; why?: string }
 /** The pull request a step links on the card. */
 export interface JiraStepPr { url: string; title?: string; number?: number; author?: string }
 
@@ -232,6 +242,34 @@ export interface JiraViewRead {
   /** These rows are the last read kept on disk, not a new one. */
   cached?: boolean;
 }
+
+/** One of a board's own quick filters: a name, and a query only the server holds. */
+export interface JiraQuickFilter { id: string; name: string; description?: string }
+
+/** The sprint a scrum board is in the middle of (a future one is the backlog's, not the header's). Dates are epoch milliseconds, 0 when the site says none. */
+export interface JiraBoardSprint { id: string; name: string; state: "active"; start: number; end: number; goal?: string }
+
+/** An epic of the board, for its colour. `color` is one of Jira's named epic colours. */
+export interface JiraBoardEpic { key: string; name: string; color?: string; done?: boolean }
+
+/**
+ * `GET /jira/board-context`: what sits around a board's cards. Three reads the site keeps still for ten minutes,
+ * each empty (never an error) where the board has none of it: a kanban board has no sprint and no epic list.
+ */
+export interface JiraBoardContext {
+  ok: boolean;
+  error?: string;
+  filters: JiraQuickFilter[];
+  sprint?: JiraBoardSprint;
+  epics: JiraBoardEpic[];
+}
+
+/**
+ * `GET /jira/board-areas`: the cards that sit under an epic on a board (done and open), in one read the server keeps
+ * ten minutes. The Areas tree counts from it and an Area's page is filtered from it. `truncated`: more than the read
+ * holds, so the counts are "at least".
+ */
+export interface JiraBoardAreas { ok: boolean; error?: string; tasks: ProviderTask[]; truncated?: boolean; throttled?: boolean }
 
 /** Something the add-a-view list offers. */
 export interface JiraViewChoice {
@@ -441,7 +479,11 @@ export interface ProviderTask {
   /** How many subtasks it has, so a card with hidden work says so. */
   subtasks?: number;
   /** The card this one sits under, when it has one (a Jira subtask's parent, a story's epic). Read on a card's own read, not on a board's. */
-  parent?: { key: string; title: string };
+  parent?: { key: string; title: string; /** What the parent is ("Epic"), on a board read. */ type?: string };
+  /** A flag raised on the card (Jira's Impediment): a board row says so. */
+  flagged?: boolean;
+  /** The kind of card as the site names it ("Story", "Bug"), on the card's own read and on the rows it carries. */
+  issueType?: string;
   /**
    * Custom field values worth showing, already resolved from ids to names.
    *
@@ -972,7 +1014,10 @@ export interface ViewTasksResponse {
  */
 export interface CardEvent {
   at: number;
-  kind: "created" | "status" | "seen";
+  /** `change` and `worklog` are Jira's: one edit of one field by a named person, and one entry of time logged; both carry `who` and their sentence in `text`. */
+  kind: "created" | "status" | "seen" | "change" | "worklog";
+  /** Jira's work-log entry behind a `worklog` event: what is needed to change or delete it, and whether it is the connected account's own. */
+  entry?: { id: string; /** The time as Jira wrote it, "1h 30m". */ time: string; /** When the work was done, as Jira wrote it. */ started: string; note: string; mine: boolean };
   /** The status this event put the card in. */
   status?: string;
   /** ClickUp's colour for it, so the row reads like the pill everywhere else. */
@@ -1041,10 +1086,115 @@ export interface CardAttachment {
   at?: number;
   /** Who attached it. */
   who?: string;
+  /** Attached by the connected account: the only files the app offers to take off. */
+  mine?: boolean;
+}
+
+/** One card linked to another, in the words the link type uses for the side this card is on ("blocks", "is blocked by"). */
+export interface CardLinked {
+  id: string;
+  /** The phrase for this card's side of the link; links of one phrase are drawn together. */
+  phrase: string;
+  /** The link type's own name ("Blocks"), for a row's tooltip. */
+  type: string;
+  /** `out` when this card is the subject of the phrase. */
+  direction: "in" | "out";
+  task: ProviderTask;
+}
+
+/** One line of a card's Details: a label and a value as text. An empty value is a field the site offers on this card and nobody filled. */
+export interface CardFact {
+  id: string;
+  label: string;
+  value: string;
+  /** A person's face, for the rows that name one (the reporter). */
+  avatar?: string;
+  initials?: string;
+  /** A state worth a colour, not a value to read: the card is flagged. */
+  tone?: "flag";
+  /** The edit this row takes (see `CardEdit`), and the value as the site would be sent it back (an estimate as "2h 30m", a date as 2026-01-31). */
+  field?: string;
+  raw?: string;
+}
+
+/**
+ * What this card's edit screen lets the app change, read off the site's own `editmeta`. Absent when writing to Jira is
+ * switched off or the site named no fields: a control is drawn only for what is listed here.
+ */
+export interface CardEdit {
+  /** Edit keys the site offers on this card: summary, description, priority, labels, duedate, start, parent, flag, originalEstimate, remainingEstimate. */
+  fields: string[];
+  /** The priorities this card may take, most urgent first. */
+  priorities: { id: string; name: string }[];
+  /** The one it has now, by the site's id (the card's own `priority` is a rank, which says nothing of which of two High-ish names it is). */
+  priority?: { id: string; name: string };
+  /** Whether a comment can be answered in a thread (Cloud) or only added (Data Center). */
+  reply: boolean;
+  /** The site lets the description be changed, but it holds parts Markdown would lose (a table, a panel, an image): the pane says so and points at Jira. */
+  descriptionLocked?: boolean;
+}
+
+/**
+ * What a Jira site knows about a card from the development tool connected to it (GitHub for Jira and the like):
+ * the pull requests, branches, commits and builds it has seen name the card. Every string is somebody's words.
+ * `state` is the vocabulary the pull request chip already uses (OPEN, MERGED, CLOSED); a site's "declined" is CLOSED.
+ */
+export interface CardDevPr {
+  url: string;
+  title: string;
+  state: "OPEN" | "MERGED" | "CLOSED" | "";
+  author?: string;
+  /** Who was asked, and whether they approved. */
+  reviewers: { name: string; approved: boolean }[];
+  from?: string;
+  into?: string;
+  repo?: string;
+  comments: number;
+  updated: number;
+}
+export interface CardDevBranch { name: string; url: string; repo: string }
+export interface CardDevCommit { id: string; message: string; url: string; author?: string; at: number }
+export interface CardDevBuild { name: string; url: string; state: "passed" | "failed" | "running" | ""; at: number }
+export interface CardDev {
+  /** What the site counted, which can be more than the rows it was asked for (rows are cut at ROWS). */
+  counts: { pullRequests: number; branches: number; commits: number; builds: number };
+  /** Builds that passed / failed among those counted; the summary carries these without a detail read. */
+  buildsPassed: number;
+  buildsFailed: number;
+  prs: CardDevPr[];
+  branches: CardDevBranch[];
+  commits: CardDevCommit[];
+  builds: CardDevBuild[];
+}
+
+/** A link from the card to a page: any address, not only a pull request. */
+export interface CardWebLink {
+  id: string;
+  url: string;
+  title: string;
+  /** The address's host, so a row says where it goes without the whole address. */
+  host: string;
+  /** The same address is a pull request, which the card also shows as one. */
+  pr?: boolean;
 }
 
 export interface TaskDetail {
   task: ProviderTask;
+  /** Work-log entries the card has beyond the ones in `events` (the read carries the first 20). */
+  worklogMore?: number;
+  /**
+   * Jira: the card's time tracking, said only while the site has it on for this card; absent, there is nothing to log
+   * time against and the pane draws no control. Each is the site's own text ("5h", "1w 2d"), empty when not set.
+   */
+  tracking?: { remaining: string; original: string; spent: string };
+  /** Jira: whether the connected account watches the card and has voted for it, and the counts, from the card's own read. */
+  follow?: CardFollow;
+  /** The card's links to other cards, of every type and both directions. Absent when the card was read without them. */
+  linked?: CardLinked[];
+  /** The card's Details under the properties; a field the site does not offer here and the card does not have is not in it. */
+  facts?: CardFact[];
+  /** What may be changed from here; see `CardEdit`. */
+  edit?: CardEdit;
   /** The files on the card. Metadata only — see CardAttachment. */
   attachments?: CardAttachment[];
   /**
@@ -1063,6 +1213,14 @@ export interface TaskDetail {
     mine?: boolean;
     /** Ticked off in ClickUp. */
     resolved?: boolean;
+    /** Jira: the comment was changed after it was written. */
+    edited?: boolean;
+    /** Jira: who can see it, when it is not everybody (a role or group the site named). */
+    restricted?: string;
+    /** Jira: the people the comment names, as a write takes them back, so a changed comment keeps its mentions. */
+    mentions?: { id: string; name: string }[];
+    /** Jira (Cloud): the comment this one answers; absent on a comment that starts a thread. */
+    parentId?: string;
     /** How many replies the thread has, from the workspace's own count. */
     replies?: number;
     /** The author's face, the way a reply already carries one. ClickUp draws it

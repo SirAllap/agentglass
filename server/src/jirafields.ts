@@ -30,7 +30,7 @@ const linkedOpen = (c: unknown): boolean => {
   return !(status && isObj(status.statusCategory) && str(status.statusCategory.key) === "done");
 };
 
-export function cardExtras(f: Record<string, unknown>, ids?: { sprint?: string; points?: string }): Partial<ProviderTask> {
+export function cardExtras(f: Record<string, unknown>, ids?: { sprint?: string; points?: string; flag?: string }): Partial<ProviderTask> {
   const out: Partial<ProviderTask> = {};
   const sprint = ids?.sprint ? sprintOf(f[ids.sprint]) : undefined;
   if (sprint) out.sprint = sprint;
@@ -39,7 +39,13 @@ export function cardExtras(f: Record<string, unknown>, ids?: { sprint?: string; 
   // Zero is an answer ("no comments"); a block that was not asked for is not.
   if (isObj(f.comment) && typeof f.comment.total === "number") out.comments = f.comment.total;
   if (Array.isArray(f.subtasks) && f.subtasks.length) out.subtasks = f.subtasks.length;
-  if (isObj(f.parent) && str(f.parent.key)) out.parent = { key: str(f.parent.key), title: isObj(f.parent.fields) ? str(f.parent.fields.summary) : "" };
+  if (isObj(f.parent) && str(f.parent.key)) {
+    const pf = isObj(f.parent.fields) ? f.parent.fields : {};
+    const type = isObj(pf.issuetype) ? str(pf.issuetype.name) : "";
+    out.parent = { key: str(f.parent.key), title: str(pf.summary), ...(type ? { type } : {}) };
+  }
+  // The Flagged field is a list of options: raised when it holds one, absent (not false) when it does not.
+  if (ids?.flag && Array.isArray(f[ids.flag]) && (f[ids.flag] as unknown[]).length) out.flagged = true;
   const waitsOn: string[] = [];
   const blocks: string[] = [];
   for (const l of Array.isArray(f.issuelinks) ? f.issuelinks : []) {

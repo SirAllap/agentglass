@@ -30,13 +30,20 @@ import { Optimistic, commentResolvedPatch } from "../lib/taskOptimistic.ts";
 import { FilterBuilder } from "./tasks/FilterBuilder.tsx";
 import { EMPTY, apply as applyFilters, fieldsOf, liveCount as builtCount, type FilterSet } from "./tasks/filters.ts";
 import type { GitRepoRef, IssueDetail, IssuePr, IssueRow, IssueWork, StartMode, LocalTask, TaskCapability, TasksListResponse, SkillInfo } from "../../../shared/types.ts";
-import type { ProviderTask, ProviderTasksResponse, SavedView, SavedFolder, ViewTasksResponse, ListStatus, ListField, ListPlace, ListMember, TaskDetail, CardEvent, CardField as CardFieldValue } from "../../../shared/providers.ts";
+import type { JiraBoardAreas, JiraBoardContext, ProviderTask, ProviderTasksResponse, SavedView, SavedFolder, ViewTasksResponse, ListStatus, ListField, ListPlace, ListMember, TaskDetail, CardEvent, CardField as CardFieldValue } from "../../../shared/providers.ts";
 import { compareOrder } from "../../../shared/orderIndex.ts";
+import { ON_CHIP, ON_CHIP_OK } from "./tasks/chipStyle.ts";
+import { JiraQuickChips, JiraSprintHeader, ParentLabel } from "./jira/JiraBoardContext.tsx";
+import { JiraAreaHead, JiraAreaRail, JiraGroupControl, JiraScope, SPRINTS } from "./jira/JiraAreas.tsx";
+import { areaCards, areaRows, headChips, defaultPref, emptyBodyText, railTitle, groupAreas, groupKeyed, parsePref, prefText, type GroupPref, type KeyGroup } from "../lib/jiraAreas.ts";
+import { TypeMark } from "./jira/JiraSections.tsx";
+import { guessOrder, rankOf, rankable, sortedByOrder, splitSprint, sprintTotals, type ParentGroup } from "../lib/jiraBoardContext.ts";
 import { blockersOf, foldCard, groupByStatus, looksLikeCardId, readyCount, tableColumns } from "../lib/boardGroups.ts";
 import { CardWrites } from "../lib/cardWrites.ts";
-import { activityRows, eventLine, foldLabel, folds, spanLabel, seenActor, NO_AUTHOR_NOTE } from "../lib/cardActivity.ts";
+import { activityRows } from "../lib/cardActivity.ts";
+import { EventRun } from "./CardEventRun.tsx";
 import { layoutCard } from "../lib/cardLayout.ts";
-import { dayToMs, describeWithComment, estimateText, msToDay, parseEstimate, parsePoints, sortSprints, sprintShort, tagChoices, tagSources } from "../lib/cardEdits.ts";
+import { dayToMs, describeWithComment, estimateText, msToDay, parseEstimate, parsePoints, sortSprints, sprintShort, tagSources } from "../lib/cardEdits.ts";
 
 import { branchName, checkoutCommand, commitCommand, worktreeCommand } from "../lib/cardBranch.ts";
 import { neighbours, shortTitle, hopMatches } from "../lib/cardHop.ts";
@@ -66,6 +73,7 @@ import { HAS_BROWSER } from "../lib/desktop.ts";
 import { matchesQuery } from "../lib/boardSearch.ts";
 import { openCard, type CardJump } from "../lib/openCard.ts";
 import type { IssueJump } from "../lib/openIssue.ts";
+import { boardView } from "../lib/boardView.ts";
 import { TASK_SOURCES, shownTaskSources, subscribeTaskSources, type TaskSourceId } from "../lib/taskSources.ts";
 import { CHIP, CTRL_H, EDGE, IconChip, INPUT, INPUT_STYLE, RefreshButton, LINE, TL_AVATAR, TL_CSS } from "./workspace/Chrome.tsx";
 import { SCROLLBAR_CSS } from "./diff/DiffLines.tsx";
@@ -81,6 +89,7 @@ import { useSyncExternalStore } from "react";
 import { CloseButton, CloseIcon } from "./CloseButton.tsx";
 import { HIT, ICON, MIN_BOX } from "../lib/iconSize.ts";
 import { GroupHead } from "./tasks/GroupHead.tsx";
+import { CommentAction, EditDay, EditText, PriorityMenu, TagEditor } from "./tasks/CardEdit.tsx";
 import { RAIL_W_DEFAULT, RAIL_W_MAX, RAIL_W_MIN, clampRailW, railKey, railSplit } from "../lib/railTree.ts";
 import { boardDue, BOARD_POLL_MS, BOARD_TICK_MS } from "../lib/boardPoll.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
@@ -945,6 +954,18 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
   const [showDone, setShowDone] = useState(false);
   const [sel, setSel] = useState<string | null>(null);
   const [statusPick, setStatusPick] = useState<string[]>([]);
+  /* A board's context (quick filters, sprint, epics), the quick filters pressed on each board, and how the cards are grouped.
+     The pressed ones are kept in a ref as well as in state: a read that begins before the next render must send the filters
+     of ITS board, never the last one's (the id of a filter belongs to one board, and the server refuses a stranger). */
+  const [ctx, setCtx] = useState<JiraBoardContext | null>(null);
+  const [quickBy, setQuickBy] = useState<Record<string, string[]>>({});
+  const quickRef = useRef<Record<string, string[]>>({});
+  /* The Areas tree's one read of the cards under the board's epics, which area or the sprint is open (an epic's key, or SPRINTS),
+     whether an Area shows only the sprint's cards, and the grouping the person last chose for THIS board (kept as text, read by `parsePref`). */
+  const [areas, setAreas] = useState<{ state: "loading" | "ready" | "error"; read: JiraBoardAreas | null }>({ state: "loading", read: null });
+  const [areaSel, setAreaSel] = useState<string | null>(null);
+  const [scopeOnly, setScopeOnly] = useState(false);
+  const [prefRaw, setPrefRaw] = useState<string | null>(null);
   /** The built filter — field, is/is not, values — see tasks/filters.ts. */
   const [built, setBuilt] = useState<FilterSet>(EMPTY);
   const [confirmWrite, setConfirmWrite] = useState(false);
@@ -1448,7 +1469,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
       await new Promise((r) => setTimeout(r, 1500));
       if (settling.current !== run) return; // something else was asked for
       try {
-        const r = await source.read(id, false);
+        const r = await source.read(id, false, quickRef.current[id]);
         if (settling.current !== run) return;
         if (r.at > was || !r.revalidating) { setData(r); return; }
       } catch { return; }
@@ -1473,7 +1494,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
     setBusy(true);
     if (asked && id) setWanted(id);
     try {
-      const r = await source.read(id, force);
+      const r = await source.read(id, force, id ? quickRef.current[id] : undefined);
       if (ticket !== asking.current) return; // a later board already won
       setData(r);
       if (r.revalidating && r.view?.id) void settle(r.view.id, r.at);
@@ -1772,9 +1793,15 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
    * a status applied on the press has to move the row, the group heading and the
    * pill in the card at the same moment, or the panel looks like it half-worked.
    */
+  const inAreaPage = !!areaSel && areaSel !== SPRINTS;
+  const areaHeld = useMemo(() => (inAreaPage && areas.read?.ok ? areaCards(areas.read.tasks, areaSel!) : []), [inAreaPage, areaSel, areas.read]);
+  const areaSprint = ctx?.sprint?.name;
   const tasks = useMemo(
-    () => (data?.tasks ?? []).map((t) => over[t.id] ?? t),
-    [data, over],
+    () => (inAreaPage
+      // An Area's page: its cards in any sprint, or only the sprint's when the switch says so.
+      ? (scopeOnly && areaSprint ? areaHeld.filter((t) => t.sprint === areaSprint) : areaHeld)
+      : (data?.tasks ?? [])).map((t) => over[t.id] ?? t),
+    [data, over, inAreaPage, areaHeld, scopeOnly, areaSprint],
   );
 
   /* Worked out here rather than inside the builder, so the same builder can
@@ -2337,6 +2364,14 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
     return [...by.entries()].map(([place, rows]) => ({ place, rows }));
   }, [looked, q]);
 
+  /* A board in a sprint: the sprint's cards in their status groups, and the rest below as one folded Backlog. */
+  const sprintName = !onLooked && !inAreaPage ? ctx?.sprint?.name : undefined;
+  const sprintSplit = useMemo(() => (sprintName ? splitSprint(rows, sprintName) : null), [rows, sprintName]);
+  const sprintPoints = useMemo(() => (ctx?.sprint?.name ? sprintTotals(splitSprint((data?.tasks ?? []).map((t) => over[t.id] ?? t), ctx.sprint.name).inSprint, data?.statuses ?? []) : undefined), [data, over, ctx?.sprint?.name]);
+  // The person opens a sprint to see all of it, like Jira's own backlog view: done cards included, one press to hide them.
+  const sprintId = ctx?.sprint?.id;
+  useEffect(() => { if (sprintId) setShowDone(true); }, [sprintId]);
+
   /* One group per status that HAS something, ordered by the board's own
      workflow rather than alphabetically or by count — a board is read in the
      order work moves through it. */
@@ -2358,16 +2393,143 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
       .map((t, i) => ({ t, i }))
       .sort((a, b) => compareOrder(a.t.order, b.t.order) || a.i - b.i)
       .map((x) => x.t);
-    return groupByStatus(rows, data?.statuses ?? [], byOrder);
-  }, [rows, data?.statuses]);
+    return groupByStatus(sprintSplit ? sprintSplit.inSprint : rows, data?.statuses ?? [], byOrder);
+  }, [rows, sprintSplit, data?.statuses]);
+
+  /*
+   * A Jira board's context and what is done with it (lib/jiraBoardContext.ts, components/jira/JiraBoardContext.tsx).
+   *
+   * The context is asked once per board visit, not per poll: the server keeps it ten minutes and a new read of the cards
+   * does not change it. Grouping by parent replaces the status groups for the board; the rows keep the order the site
+   * ranked them in inside each group. A quick filter is a read of the narrower board, never a filter over the rows here,
+   * so what is drawn is what the site would show with that filter pressed.
+   */
+  const boardViewId = data?.view?.id;
+  useEffect(() => {
+    setCtx(null);
+    if (!source.boardContext || !boardViewId?.startsWith("board:")) return;
+    let live = true;
+    void source.boardContext(boardViewId).then((c) => { if (live) setCtx(c); }).catch(() => {});
+    return () => { live = false; };
+  }, [source, boardViewId]);
+  /* The Areas tree's read: once per board visit (the server keeps it ten minutes, so a revisit is free), and the last
+     grouping this board was left in. An open Area belongs to its board, so it is closed with it. */
+  useEffect(() => {
+    setAreaSel(null); setScopeOnly(false);
+    try { setPrefRaw(boardViewId ? (localStorage.getItem(source.storageKey(`group:${boardViewId}`)) ?? localStorage.getItem(source.storageKey("group"))) : null); } catch { setPrefRaw(null); }
+    setAreas({ state: "loading", read: null });
+    if (!source.boardAreas || !boardViewId?.startsWith("board:")) return;
+    let live = true;
+    void source.boardAreas(boardViewId)
+      .then((r) => { if (live) setAreas({ state: r.ok ? "ready" : "error", read: r }); })
+      .catch(() => { if (live) setAreas({ state: "error", read: null }); });
+    return () => { live = false; };
+  }, [source, boardViewId]);
+  // Opening an Area or the sprint shows all of it, done cards included, as the sprint's own page does.
+  useEffect(() => { if (areaSel) setShowDone(true); }, [areaSel]);
+  const quick = (boardViewId && quickBy[boardViewId]) || [];
+  const toggleQuick = (qid: string) => {
+    if (!boardViewId) return;
+    const cur = quickRef.current[boardViewId] ?? [];
+    const next = cur.includes(qid) ? cur.filter((x) => x !== qid) : [...cur, qid];
+    quickRef.current = { ...quickRef.current, [boardViewId]: next };
+    setQuickBy(quickRef.current);
+    void load(boardViewId, false);
+  };
+  /* The Areas tree: the board's epics counted over the one read the server keeps. An Area is open when its key is in `areaSel`. */
+  const areaList = useMemo(() => areaRows(ctx?.epics ?? [], areas.read?.tasks ?? [], ctx?.sprint?.name, data?.tasks), [ctx, areas.read, data]);
+  const hasAreas = !!source.caps.context && areaList.length > 0;
+  const sprintView = areaSel === SPRINTS;
+  const pref: GroupPref = parsePref(prefRaw, hasAreas, defaultPref(sprintView));
+  const pickGroup = (p: GroupPref) => {
+    setPrefRaw(prefText(p));
+    try { localStorage.setItem(source.storageKey(`group:${boardViewId ?? ""}`), prefText(p)); } catch { /* a private window keeps it for this visit only */ }
+  };
+  const keyed = !onLooked && pref.by !== "status";
+  /* The cards the groups are made of: the sprint's alone in the sprint view, whatever the board holds otherwise. */
+  const groupRows = sprintView && sprintSplit ? sprintSplit.inSprint : rows;
+  const keyedGroups = useMemo<(ParentGroup | KeyGroup)[]>(() => {
+    if (!keyed) return [];
+    const ordered = sortedByOrder(groupRows);
+    return pref.by === "area" ? groupAreas(ordered, ctx?.epics ?? []) : groupKeyed(ordered, pref.by as "sprint" | "priority" | "person");
+  }, [keyed, groupRows, pref.by, ctx?.epics]);
+  const epicColors = useMemo(() => new Map((ctx?.epics ?? []).map((e) => [e.key, e.color])), [ctx]);
+
+  /* Ranking by a drop. Only inside one status group (a rank is a place among its neighbours, and a card dropped into
+     another status would look moved and not be), only when every card of the group has a place (the board is ordered by
+     rank) and only with the write switch on. The row draws the line it will land on; the card sorts there at once (a guessed
+     order, see guessOrder) and goes back to where the board read it if Jira refuses. */
+  const rankPick = useRef<{ key: string; group: string } | null>(null);
+  const [rankMark, setRankMark] = useState<{ id: string; half: "top" | "bottom" } | null>(null);
+  /* One card's row. `showStatus` where the group is not a status. */
+  const cardRow = (t: ProviderTask, showStatus: boolean, drag?: ReturnType<typeof dragFor>) => (
+    <ClickUpRow key={t.id} t={t} today={today} on={t.id === sel} onPick={() => setSel(t.id)} {...(showStatus ? { showStatus: true } : null)}
+      grid={grid} showWho={anyWho} showSquad={!!squadLabel} showSprint={anySprint} showEst={anyEst} showPts={anyPts} showCmts={anyCmts} blocked={blockedBy(t)} onHand={handCard}
+      repos={repos} here={here} source={source} {...(drag ? { drag } : null)} />
+  );
+  /* The second level of the outline, one step in under its group: status under any grouping, area under status. */
+  const renderSub = (parent: string, list: ProviderTask[]) => {
+    const byArea = pref.by === "status";
+    const subs: { key: string; label: React.ReactNode; rows: ProviderTask[] }[] = byArea
+      ? groupAreas(list, ctx?.epics ?? []).map((g) => ({ key: g.key || "none", label: <ParentLabel g={g} tone={epicColors.get(g.key)} />, rows: g.rows }))
+      : groupByStatus(list, data?.statuses ?? []).map((g) => ({ key: g.status, label: <StatusPill status={g.status} color={g.color} dim={g.done} />, rows: g.rows }));
+    return (
+      <div style={{ marginLeft: 18, borderLeft: LINE }} data-testid="jira-subgroups">
+        {subs.map((g, gi) => {
+          const k = `${parent}/${g.key}`;
+          return (
+            <div key={g.key} style={{ marginTop: gi ? 8 : 0 }}>
+              <GroupHead first={!gi} folded={!!folded[k]} count={g.rows.length} points={g.rows.reduce((n, t) => n + (t.points ?? 0), 0)}
+                onToggle={() => setFolded((f) => ({ ...f, [k]: !f[k] }))} label={g.label} />
+              {!folded[k] && g.rows.map((t) => cardRow(t, false))}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+  const canRank = !!source.rank && !!boards?.writeEnabled && !!boardViewId?.startsWith("board:") && !keyed && !onLooked;
+  const dragFor = (g: { status: string; rows: ProviderTask[] }, t: ProviderTask) => {
+    if (!canRank || !rankable(g.rows)) return undefined;
+    const keys = g.rows.map((r) => r.customId ?? r.id);
+    const key = t.customId ?? t.id;
+    const halfOf = (e: React.DragEvent<HTMLElement>): "top" | "bottom" => {
+      const box = e.currentTarget.getBoundingClientRect();
+      return e.clientY - box.top < box.height / 2 ? "top" : "bottom";
+    };
+    return {
+      edge: rankMark?.id === t.id ? rankMark.half : null,
+      onStart: () => { rankPick.current = { key, group: g.status }; },
+      onEnd: () => { rankPick.current = null; setRankMark(null); },
+      onOver: (e: React.DragEvent<HTMLElement>) => {
+        const from = rankPick.current;
+        if (!from || from.group !== g.status || from.key === key) return;
+        e.preventDefault();
+        const half = halfOf(e);
+        setRankMark((m) => (m?.id === t.id && m.half === half ? m : { id: t.id, half }));
+      },
+      onDrop: (e: React.DragEvent<HTMLElement>) => {
+        const from = rankPick.current;
+        rankPick.current = null; setRankMark(null);
+        if (!from || from.group !== g.status) return;
+        e.preventDefault();
+        const half = halfOf(e);
+        const r = rankOf(keys, from.key, key, half);
+        const moved = g.rows.find((x) => (x.customId ?? x.id) === from.key);
+        if (!r || !moved) return;
+        const order = guessOrder(t.order, half);
+        apply(moved, "rank", { done: `Ranked ${r.key}`, ...(order ? { optimistic: { order } } : {}), go: () => source.rank!(r.key, r.ask) });
+      },
+    };
+  };
 
   /* The board as one list, in the order the table draws it: status groups in the
      workflow's order, priority first inside each. What the modal's next/previous
      walks — so "next" means the row under the one you opened, and nothing has to
      re-derive that order a second way. */
   const cardOrder = useMemo(
-    () => (onLooked ? lookedGroups : groups).flatMap((g) => g.rows),
-    [onLooked, lookedGroups, groups],
+    () => (onLooked ? lookedGroups : keyed ? keyedGroups : groups).flatMap((g) => g.rows),
+    [onLooked, lookedGroups, keyed, keyedGroups, groups],
   );
 
   if (!boards) return <div className="p-5"><Spinner label="Reading your boards…" className="" /></div>;
@@ -2435,6 +2597,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
     : <div className="text-center p-5" style={{ color: "var(--text3)" }}>Pick a card.</div>
   );
 
+  const view = boardView({ data });
   const veiled = !!wanted && (stale || !data?.tasks.length);
 
   return (
@@ -2818,6 +2981,14 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
             busy={busy} editing={editing?.listName || editing?.name || null}
             folders={boards?.folders ?? []} onAddFolder={addFolder} onAddList={addList} />)}
 
+      {!onLooked && ctx?.sprint && !inAreaPage && <JiraSprintHeader sprint={ctx.sprint} now={Date.now()} totals={sprintPoints} />}
+      {!onLooked && inAreaPage && (() => {
+        const a = areaList.find((x) => x.key === areaSel);
+        return a ? (
+          <JiraAreaHead title={railTitle(a.name)} fullTitle={a.name} hint={ctx?.sprint ? "Epics are not shown on the sprint board; their cards are." : undefined} sub={`${a.key} · ${areas.read?.truncated ? "at least " : ""}${a.total} cards`} done={a.done} total={a.total}
+            chips={headChips(a, ctx?.sprint?.name, !!areas.read?.truncated)} />
+        ) : null;
+      })()}
       <div className="flex items-center gap-1.5 px-4 pb-1.5 flex-wrap shrink-0">
         {/* The box, with `overflow-hidden` so anything attached to its right
             end is clipped to the same corner the field has — see the clear
@@ -2850,7 +3021,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
             : { border: EDGE, color: "var(--text2)" }}>
           {/* The count has to survive the fill: --text3 on the accent is a
               number you cannot read. */}
-          ready <span style={{ color: readyOnly ? "var(--bg)" : "var(--text3)", opacity: readyOnly ? 0.75 : 1 }}>{counts.ready}</span>
+          ready <span style={{ color: readyOnly ? "var(--bg)" : "var(--text3)", opacity: readyOnly ? 0.75 : 1 }}>{view === "loading" ? "–" : counts.ready}</span>
         </button>
         {/* YOUR FACE ON IT. The board already draws everybody's avatar in the
             WHO column, so the one chip that means "you" was the only place a
@@ -2868,7 +3039,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
               className="rounded-full shrink-0"
               style={{ width: 15, height: 15, objectFit: "cover" }} />
           )}
-          mine <span style={{ color: mineOnly ? "var(--bg)" : "var(--text3)", opacity: mineOnly ? 0.75 : 1 }}>{counts.mine}</span>
+          mine <span style={{ color: mineOnly ? "var(--bg)" : "var(--text3)", opacity: mineOnly ? 0.75 : 1 }}>{view === "loading" ? "–" : counts.mine}</span>
         </button>
         {tags.slice(0, 6).map((t) => (
           <button key={t} onClick={() => setTag((cur) => (cur === t ? null : t))} aria-pressed={tag === t}
@@ -2884,7 +3055,12 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
             invented — none of which could be a chip, because which fields
             exist is the board's business and not ours. */}
         <FilterBuilder fields={taskFields} value={built} onChange={setBuilt} />
+        {/* The board's own quick filters, each a read of the narrower board; and, at the right, how to group what comes back.
+            Only where the source has a context to draw (Jira), and the filters only where the board defines some. */}
+        {source.caps.context && ctx && <JiraQuickChips filters={ctx.filters} picked={quick} onToggle={toggleQuick} />}
         <span className="flex-1" />
+        {source.caps.context && <JiraGroupControl pref={pref} onPref={pickGroup} hasAreas={hasAreas} />}
+        {inAreaPage && ctx?.sprint && <JiraScope only={scopeOnly} onOnly={setScopeOnly} sprintName={ctx.sprint.name} total={areaList.find((x) => x.key === areaSel)?.total ?? 0} />}
         {/* Named by what pressing it DOES, not by what is true.
             "6 done hidden" is a caption, and it was read as one: six statuses
             looked like they had gone missing from the board rather than like
@@ -2899,7 +3075,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
           style={showDone
             ? { border: EDGE, color: "var(--text3)" }
             : { border: EDGE, color: "var(--text2)" }}>
-          {showDone ? "showing everything" : `show ${counts.done} done`}
+          {showDone ? "showing everything" : view === "loading" ? "show – done" : `show ${counts.done} done`}
         </button>
         </>}
         {onLooked && (
@@ -3095,6 +3271,10 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
                 {...(source.id === "clickup" ? null : { "aria-label": `${source.nouns.tracker} ${source.nouns.list}s` })}>
                 {railRows.map(railItem)}
               </div>
+              {source.caps.context && !railFiltering && (areas.state !== "ready" || areaList.length > 0 || ctx?.sprint) && (
+                <JiraAreaRail project={data?.view?.folderName || "Project"} areas={areaList} sprint={ctx?.sprint} now={Date.now()} points={sprintPoints}
+                  sel={areaSel} onPick={setAreaSel} state={areas.state} truncated={!!areas.read?.truncated} />
+              )}
             </div>
           )}
           {railOpen && (
@@ -3217,7 +3397,12 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
             {onLooked && !lookedGroups.length && (
               <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>Nothing matches that.</div>
             )}
-            {!onLooked && !rows.length && !looksLikeId && (
+            {!onLooked && view === "loading" && !looksLikeId && (
+              <div className="p-5 text-[11.5px] flex items-center gap-2" role="status" style={{ color: "var(--text3)" }}>
+                <span className="agx-spin" aria-hidden style={{ width: 12, height: 12, borderWidth: 1.5 }} />Loading the board…
+              </div>
+            )}
+            {!onLooked && view !== "loading" && !rows.length && !looksLikeId && (
               <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>
                 {data?.error ? "Nothing to show — the last read did not get through."
                   : q || tag || mineOnly || statusPick.length ? "Nothing matches that."
@@ -3235,7 +3420,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
                       <button onClick={() => setShowDone(true)} style={{ color: "var(--primary-ink)" }}>Show them</button>
                     </>
                   )
-                  : "This board has nothing open."}
+                  : emptyBodyText(inAreaPage)}
                 {/* Only on the built-in board, and only while it is true. ClickUp's
                     assignee filter leaves subtasks out, so for a team that works in
                     them this empty board is the setting, not the work. */}
@@ -3247,18 +3432,38 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
             {/* Grouped by status, in the board's own workflow order, each group
                 foldable with its count — the shape ClickUp itself uses, and the
                 one that answers "what is in review" without a filter. */}
-            {!onLooked && groups.map((g, gi) => (
+            {keyed && keyedGroups.map((g, gi) => (
+              <div key={g.key || "none"} style={{ marginTop: gi ? 18 : 4 }}>
+                <GroupHead first={!gi} folded={!!folded[`parent:${g.key}`]} count={g.rows.length}
+                  points={g.rows.reduce((n, t) => n + (t.points ?? 0), 0)}
+                  onToggle={() => setFolded((f) => ({ ...f, [`parent:${g.key}`]: !f[`parent:${g.key}`] }))}
+                  label={pref.by === "area"
+                    ? <ParentLabel g={g as ParentGroup} tone={epicColors.get(g.key)} />
+                    : <span className="text-[11.5px]" style={{ color: "var(--text)" }}>{g.title}</span>} />
+                {!folded[`parent:${g.key}`] && (pref.split === "status" ? renderSub(`parent:${g.key}`, g.rows) : g.rows.map((t) => cardRow(t, true)))}
+              </div>
+            ))}
+            {!onLooked && !keyed && groups.map((g, gi) => (
               <div key={g.status} style={{ marginTop: gi ? 18 : 4 }}>
                 <GroupHead first={!gi} folded={!!folded[g.status]} count={g.rows.length} points={g.points}
                   onToggle={() => setFolded((f) => ({ ...f, [g.status]: !f[g.status] }))}
                   label={<StatusPill status={g.status} color={g.color} dim={g.done} />} />
-                {!folded[g.status] && g.rows.map((t) => (
-                  <ClickUpRow key={t.id} t={t} today={today} on={t.id === sel} onPick={() => setSel(t.id)}
+                {!folded[g.status] && (pref.split === "area" ? renderSub(g.status, g.rows) : g.rows.map((t) => cardRow(t, false, dragFor(g, t))))}
+              </div>
+            ))}
+            {!onLooked && !keyed && !sprintView && !!sprintSplit?.backlog.length && (
+              <div style={{ marginTop: 18 }}>
+                <GroupHead first={false} folded={folded.backlog !== false} count={sprintSplit.backlog.length}
+                  points={sprintSplit.backlog.reduce((n, t) => n + (t.points ?? 0), 0)}
+                  onToggle={() => setFolded((f) => ({ ...f, backlog: f.backlog === false }))}
+                  label={<span className={EYEBROW} style={{ color: "var(--text3)" }}>Backlog</span>} />
+                {folded.backlog === false && sprintSplit.backlog.map((t) => (
+                  <ClickUpRow key={t.id} t={t} today={today} on={t.id === sel} onPick={() => setSel(t.id)} showStatus
                     grid={grid} showWho={anyWho} showSquad={!!squadLabel} showSprint={anySprint} showEst={anyEst} showPts={anyPts} showCmts={anyCmts} blocked={blockedBy(t)} onHand={handCard}
                     repos={repos} here={here} source={source} />
                 ))}
               </div>
-            ))}
+            )}
           </div>
           {veiled && (
             <div className="agx-veil absolute inset-0 flex items-center justify-center px-8"
@@ -3292,7 +3497,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
                 at. */}
             {onLooked
               ? <span>{lookedGroups.reduce((n, g) => n + g.rows.length, 0)} looked up · not on your boards</span>
-              : <span>{rows.length} of {data?.tasks.length ?? 0}</span>}
+              : <span>{view === "loading" ? "Loading…" : `${rows.length} of ${data?.tasks.length ?? 0}`}</span>}
             {/* Said, rather than left as a list that stops. */}
             {data?.truncated && (
               <span style={{ color: "var(--warning-ink)" }}
@@ -3447,116 +3652,6 @@ interface Pending {
    * writes that go through the confirmation strip have only ever had the second.
    */
   go: (stamp?: number) => Promise<{ ok: boolean; error?: string; conflict?: boolean; task?: ProviderTask }>;
-}
-
-/**
- * A run of things that happened to the card, with nothing said in between.
- *
- * Folded past three, which is ClickUp's own behaviour and not decoration: a bug
- * card opens with a dozen automation rows in front of the first sentence a person
- * wrote, and unfolded they push the conversation off the screen — "that way the
- * scroll doesn't get huge and you go to what matters, which is the comments". Under
- * three there is nothing to hide and a press to read one line is a press wasted.
- *
- * Dim, small, and not in a card of its own: these are the margin of the
- * conversation. A status change drawn with the weight of a comment is a timeline
- * where you cannot find what somebody said. Each line is an `agx-tiny` sitting
- * on the timeline's rail, its face or bullet in the rail's node — see TL_CSS.
- */
-function EventRun({ events, open, onToggle, faceFor }: {
-  events: CardEvent[]; open: boolean; onToggle: () => void;
-  /** A face for the person a line names, when the board knows one. The API
-   *  never says who did anything; these sentences do, and a name deserves the
-   *  same face the creation row gets. */
-  faceFor?: (name: string) => NonNullable<ProviderTask["people"]>[number] | null;
-}) {
-  const foldable = folds({ kind: "events", at: events[0]?.at ?? 0, events, id: "" });
-  const rows = foldable && !open ? [] : events;
-  return (
-    <div className="agx-ev">
-      {rows.map((e, i) => (
-        <div key={`${e.at}-${i}`} className="agx-tiny"
-          /* Why the moves have no name on them, on the row itself rather than
-             in a footnote nobody reads. */
-          title={e.kind === "status" ? NO_AUTHOR_NOTE : undefined}>
-          {/* The face, where ClickUp gives one — the creation does, a move does
-              not. Same round 14px as everywhere else, and the bullet keeps the
-              rows that have no face aligned with the ones that do. */}
-          <span className="agx-node">{(() => {
-            const seenWho = e.kind === "seen" ? seenActor(e.text ?? "").who : "";
-            const person = seenWho ? faceFor?.(seenWho) : null;
-            if (e.avatar) {
-              return (
-                <img src={avatarSrc(e.avatar)} alt="" loading="lazy" referrerPolicy="no-referrer" title={e.who}
-                  onError={(ev) => { ev.currentTarget.style.display = "none"; }}
-                  className="shrink-0 self-center rounded-full"
-                  style={{ width: 14, height: 14, objectFit: "cover" }} />
-              );
-            }
-            /* The face for a name the sentence carries. Initials in the
-               workspace's own colour when there is no picture — the same
-               fallback every other face in this panel uses. */
-            if (person) {
-              return person.avatar
-                ? <img src={avatarSrc(person.avatar)} alt="" loading="lazy" referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.display = "none"; }} title={person.name}
-                    className="shrink-0 self-center rounded-full"
-                    style={{ width: 14, height: 14, objectFit: "cover" }} />
-                : <span className="shrink-0 self-center rounded-full inline-flex items-center justify-center"
-                    title={person.name}
-                    style={{ width: 14, height: 14, fontSize: 8, background: person.color || "var(--bg4)", color: chipInk(person.color) }}>
-                    {person.initials}
-                  </span>;
-            }
-            return <span aria-hidden className="shrink-0 text-center" style={{ width: 14, color: "var(--text4)" }}>·</span>;
-          })()}</span>
-          <span className="min-w-0 flex-1">
-            {e.kind === "seen" && seenActor(e.text ?? "").who
-              ? (() => {
-                  const { who, rest } = seenActor(e.text ?? "");
-                  return (<><span style={{ color: "var(--text2)", fontWeight: 600 }}>{who}</span> {rest}</>);
-                })()
-              : eventLine(e)}
-            {/* The status in its own colour, the way every other pill in this app
-                shows one — the words alone made a move to "Ready for QA" and a move
-                to "Won't fix" read the same. */}
-            {e.status && (
-              <span className="ml-1.5 px-1 rounded"
-                style={{ color: e.color || "var(--text2)", border: `1px solid color-mix(in srgb, ${e.color || "var(--text)"} 40%, transparent)` }}>
-                {e.status}
-              </span>
-            )}
-            {/* How long it sat where it was. The public API's one addition over
-                the payload, and it is what makes a move readable: "moved to qa
-                complete" after two hours is a different story from the same
-                move after four days. */}
-            {/* Where it came from, said once and quietly: this line was read
-                off a notification on this machine, not from the API. */}
-            {e.kind === "seen" && (
-              <span className="ml-1.5 px-1 rounded text-[9.5px]"
-                style={{ color: "var(--text4)", border: EDGE }}>seen here</span>
-            )}
-            {e.kind === "status" && e.from && e.mins ? (
-              <span className="ml-1.5" style={{ color: "var(--text4)" }}>
-                after {spanLabel(e.mins)}
-              </span>
-            ) : null}
-          </span>
-          <span className="shrink-0 tabular-nums" style={{ color: "var(--text4)" }}
-            title={new Date(e.at).toLocaleString()}>
-            {new Date(e.at).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
-          </span>
-        </div>
-      ))}
-      {foldable && (
-        <button onClick={onToggle}
-          className="agx-btn agx-tiny w-full text-left"
-          style={{ color: "var(--text4)" }}>
-          <span aria-hidden className="agx-node"><span style={{ display: "inline-block", transform: open ? "none" : "rotate(-90deg)" }}>▾</span></span>
-          {open ? "Hide" : `Show ${foldLabel(events.length)}`}
-        </button>
-      )}
-    </div>
-  );
 }
 
 /**
@@ -4363,22 +4458,6 @@ const clampCardW = (w: number): number => {
 /** How many looked-up cards to keep. A history you have to scroll is not a
  *  history, and these are all one click from being fetched again. */
 const LOOKED_MAX = 12;
-/*
- * A filter that is ON has to look ON.
- *
- * The old treatment was the accent at 18% behind a normal-weight label, which
- * beside five identical outlined chips reads as "slightly warmer", not as "this
- * one is doing something". Reported as not being able to tell what was picked.
- * Filled, in the accent's own colour, with the panel's background for the text —
- * the same way the app marks a pressed control everywhere else.
- */
-const ON_CHIP = {
-  background: "var(--primary)", border: "1px solid var(--primary)", color: "var(--on-primary)", fontWeight: 600,
-} as const;
-const ON_CHIP_OK = {
-  background: "var(--success)", border: "1px solid var(--success)", color: "var(--bg)", fontWeight: 600,
-} as const;
-
 
 /*
  * The columns, and the ones that come and go.
@@ -4678,45 +4757,22 @@ function PriorityChip({ p }: { p: NonNullable<ProviderTask["priority"]> }) {
   );
 }
 
-/**
- * The flag, as a control — ClickUp's own field, first class on the card.
- *
- * It was on the row and in the header and could not be changed from here, which
- * made the one field a ClickUp board is ordered by the one field this app could
- * only read. And a card whose list has no "Urgency" drop-down showed no
- * priority ANYWHERE on the card body: the header chip was the whole of it.
- *
- * "None" is offered like any other value. Most cards have no priority, and a
- * picker that can only raise the flag cannot put it back down.
- */
+/** ClickUp's priority field: the shared menu, with ClickUp's write behind a choice. */
 function PriorityPick({ t, writable, busy, onApply }: {
   t: ProviderTask; writable: boolean; busy: boolean;
   onApply: (key: string, p: Pending) => void;
 }) {
-  const look = prioLook(t.priority);
-  const choose = (id: string, label: string) => {
-    onApply("priority", {
-      done: id ? `Priority set to ${label}` : "Priority cleared",
-      optimistic: { priority: (id || null) as ProviderTask["priority"] },
-      go: (stamp) => api.clickupPriority(t.id, id || null, stamp),
-    });
-  };
-  /* The app's one dropdown, with the flag as the option's mark. Only the control changed; the write is the one it always was. */
-  const all = [...PRIOS, { id: "", label: "Clear", c: "var(--text4)" } as const];
-  const now = t.priority ?? "";
   return (
-    <Select value={now} busy={busy} disabled={!writable} title={busy ? "Moving the flag…" : writable ? "Set this card's priority" : "Priority"}
-      className="text-left rounded flex items-center gap-1.5 px-1.5 py-0.5 -mx-1.5 hover:bg-white/5 disabled:cursor-default text-[11px]"
-      style={{ color: look.c }}
-      onChange={(id) => { if (id === now) return; const o = all.find((x) => x.id === id); if (o) choose(o.id, o.label); }}
-      options={[
-        ...(now ? [] : [{ value: "", label: look.label, icon: <Flag c={look.c} on={false} />, tint: "var(--text4)" }]),
-        ...all.filter((o) => (o.id !== "" || !!now)).map((o) => ({ value: o.id, label: o.label, icon: <Flag c={o.c} on={!!o.id} />, tint: o.id ? o.c : "var(--text3)" })),
-      ]} />
+    <PriorityMenu value={t.priority} options={PRIOS} writable={writable} busy={busy}
+      onChoose={(id, label) => onApply("priority", {
+        done: id ? `Priority set to ${label}` : "Priority cleared",
+        optimistic: { priority: (id || null) as ProviderTask["priority"] },
+        go: (stamp) => api.clickupPriority(t.id, id || null, stamp),
+      })} />
   );
 }
 
-function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint, showEst, showPts = true, showCmts = true, blocked, onHand, onForget, repos, here, source = CLICKUP_BOARD }: {
+function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint, showEst, showPts = true, showCmts = true, blocked, onHand, onForget, repos, here, source = CLICKUP_BOARD, showStatus = false, drag }: {
   t: ProviderTask; today: string; on: boolean; onPick: () => void;
   grid: string; showWho: boolean; showSquad: boolean; showSprint: boolean; showEst: boolean;
   /** Drawn unless the board has no points to show. */
@@ -4725,6 +4781,15 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
   showCmts?: boolean;
   /** Whose card this is: which tracker answers for its pull requests, and the words in its menu. */
   source?: BoardSource;
+  /** The status as a pill under the title: for a board grouped by something that is not the status. */
+  showStatus?: boolean;
+  /** Dragging this row to rank it. Absent where the row cannot be ranked, and the row is then not draggable at all. */
+  drag?: {
+    /** Which half of this row the pointer is over while a card is dragged across it: the line it would land on. */
+    edge: "top" | "bottom" | null;
+    onStart: () => void; onEnd: () => void;
+    onOver: (e: React.DragEvent<HTMLElement>) => void; onDrop: (e: React.DragEvent<HTMLElement>) => void;
+  };
   /** Unfinished cards this one is waiting on. Empty means it can be started. */
   blocked: ProviderTask[];
   /** Hand this card over without opening it. Absent where there is no checkout
@@ -4780,6 +4845,9 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
 
   return (
     <div role="row" tabIndex={0} aria-current={on ? "true" : undefined} onClick={onPick}
+      draggable={!!drag}
+      onDragStart={drag ? (e) => { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", t.customId ?? t.id); drag.onStart(); } : undefined}
+      onDragEnd={drag?.onEnd} onDragOver={drag?.onOver} onDrop={drag?.onDrop}
       onKeyDown={(e) => { if (e.key === "Enter") onPick(); }}
       onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY }); }}
       className="agx-row w-full text-left pr-4 hover:bg-white/5 cursor-pointer items-center"
@@ -4795,6 +4863,13 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
         background: on ? "color-mix(in srgb, var(--primary) 13%, transparent)" : undefined,
         boxShadow: on ? "inset 2px 0 0 0 var(--primary)" : undefined,
       }}>
+      {/* Where a dragged card would land: a line over the row's own edge, drawn on top of the row and out of its layout, so
+          nothing moves while a card is held over it. Above the sticky first cell (z-index 6, index.css), which an inset shadow
+          would be hidden under. */}
+      {drag?.edge && (
+        <span aria-hidden className="absolute left-0 right-0 pointer-events-none"
+          style={{ [drag.edge === "top" ? "top" : "bottom"]: 0, height: 2, background: "var(--primary)", zIndex: 7 }} />
+      )}
       {/* Held still while the columns to its right scroll under it — see
           `.agx-stick` for why its background has to be opaque. */}
       <div className="min-w-0 agx-stick">
@@ -4822,6 +4897,12 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
               language; drawn on every row it also keeps the titles on one left
               edge instead of ragged. A card with no priority gets the outline
               one, which is what its own picker shows for none. */}
+          {/* The kind of card, where the site has kinds to tell apart. */}
+          {source.caps.context && t.issueType && <span className="shrink-0 flex self-center"><TypeMark type={t.issueType} /></span>}
+          {t.flagged && (
+            <span className={`${ROW_CHIP} tracking-[0.06em] shrink-0 uppercase`} title="Flagged: an impediment is raised on this card"
+              style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 16%, transparent)" }}>Flagged</span>
+          )}
           <span className="shrink-0 flex self-center" title={`Priority: ${prioLook(t.priority).label}`}>
             <Flag c={prioLook(t.priority).c} on={!!t.priority} />
           </span>
@@ -4845,6 +4926,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
           </div>
         )}
         <div className="flex items-center gap-1 mt-1 flex-wrap">
+          {showStatus && <StatusPill status={t.status} color={t.statusColor} dim={done} />}
           {/* The id wears the same shape as the tags rather than floating naked
               beside them — three kinds of small text on one line read as
               leftovers. Its own colour keeps it the id. */}
@@ -5070,45 +5152,6 @@ function DepRow({ d, onGo }: { d: ProviderTask; onGo: (id: string) => void }) {
 /** One metadatum: a quiet label with its value beneath. Named apart from the
  *  issues panel's own `Field`, which takes a different prop — two components
  *  with one name is how a rename breaks a panel three hundred lines away. */
-/**
- * One thing you can do to a comment.
- *
- * They were four bare words in a row — Reply Edit Resolve Delete — under the
- * paragraph, which reads as a line of text somebody forgot to delete rather
- * than as controls. An icon, a label, a border and the compact control height
- * each (`CTRL_H.compact`, a control inside a card); the destructive one keeps
- * its own colour and is held apart from the other three by a rule.
- */
-function CommentAction({ label, title, d, onClick, busy, on, tone, iconOnly }: {
-  label: string; title: string; d: string;
-  /** The label stays as the tooltip and aria-label; only the glyph is drawn. */
-  iconOnly?: boolean;
-  onClick: () => void;
-  busy?: boolean;
-  /** Already in that state — Resolve on a resolved comment. */
-  on?: boolean;
-  tone?: string;
-}) {
-  const colour = on ? (tone ?? "var(--success, #98c379)") : tone && label === "Delete" ? tone : "var(--text3)";
-  return (
-    <button onClick={onClick} disabled={busy} title={title} aria-label={title} aria-pressed={on || undefined}
-      className={`agx-btn inline-flex items-center justify-center gap-1 rounded-md text-[10.5px] ${iconOnly ? "" : "px-1.5"}`}
-      style={{
-        height: CTRL_H.compact,
-        ...(iconOnly ? { width: CTRL_H.compact } : null),
-        color: colour,
-        border: `1px solid color-mix(in srgb, ${on ? (tone ?? "var(--success, #98c379)") : "var(--text)"} ${on ? 40 : 14}%, transparent)`,
-        background: on ? `color-mix(in srgb, ${tone ?? "var(--success, #98c379)"} 12%, transparent)` : "transparent",
-      }}>
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-        strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-        <path d={d} />
-      </svg>
-      {!iconOnly && label}
-    </button>
-  );
-}
-
 /** The thin bar of SCROLLBAR_CSS, without its arrow buttons. `scrollbar-width`
  *  makes Chrome ignore the ::-webkit- rules, and its own thin bar still draws a
  *  ▲ at the top and a ▼ at the bottom (measured in the running app), so this
@@ -5201,92 +5244,6 @@ function CardField({ label, children }: { label: string; children: React.ReactNo
 }
 
 /**
- * A value on the card that can be typed over.
- *
- * Reads as text until it is clicked, which is the point: the card is READ far
- * more often than it is edited, and a column of input boxes turns a card into a
- * form. Enter saves, Escape puts it back, and leaving the box saves too —
- * because a value typed and then clicked away from is a value somebody meant.
- *
- * An empty box is a CLEAR, not a cancel. See cardEdits.ts: taking a due date
- * off is an edit people need, and a control that can only ever set one cannot.
- */
-function EditText({ value, empty, title, width, busy, parse, onSave }: {
-  value: string;
-  /** What to draw when there is nothing — the invitation, not a dash. */
-  empty: string;
-  title: string;
-  width?: number;
-  busy: boolean;
-  /** Refuse a value here rather than sending it and reporting ClickUp's 400. */
-  parse: (raw: string) => { ok: boolean; error?: string };
-  onSave: (raw: string) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value);
-  const [why, setWhy] = useState("");
-  const box = useRef<HTMLInputElement>(null);
-  useEffect(() => { if (!editing) setDraft(value); }, [value, editing]);
-  useEffect(() => { if (editing) box.current?.select(); }, [editing]);
-
-  const save = () => {
-    const check = parse(draft);
-    if (!check.ok) { setWhy(check.error ?? "that is not a value"); return; }
-    setWhy("");
-    setEditing(false);
-    if (draft.trim() !== value.trim()) onSave(draft);
-  };
-
-  if (!editing) {
-    return (
-      <button className="agx-btn rounded text-left max-w-full truncate" title={busy ? "Saving…" : title}
-        disabled={busy} onClick={() => setEditing(true)}
-        style={{ color: value ? "var(--text2)" : "var(--text4)" }}>
-        {busy
-          ? <span className="agx-spin inline-block align-middle" aria-label="Saving" style={{ width: 10, height: 10, borderWidth: 1.5, borderColor: "var(--text3)", borderTopColor: "transparent" }} />
-          : (value || empty)}
-      </button>
-    );
-  }
-  return (
-    <span className="inline-flex flex-col gap-0.5">
-      <input ref={box} value={draft} autoFocus
-        onChange={(e) => { setDraft(e.target.value); setWhy(""); }}
-        onBlur={save}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") { e.preventDefault(); save(); }
-          // Escape closes the box and nothing else: it must not reach the modal
-          // behind it, which would close the whole card mid-edit.
-          if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setDraft(value); setWhy(""); setEditing(false); }
-        }}
-        className="text-[11.5px] px-1.5 py-0.5 rounded outline-none"
-        style={{ background: "var(--bg)", color: "var(--text)", border: EDGE, width: width ?? 90 }} />
-      {why && <span className="text-[10px]" style={{ color: "var(--error-ink)" }}>{why}</span>}
-    </span>
-  );
-}
-
-/** A date on the card, in the reader's own day. The button beside it is how a
- *  date comes OFF, which the picker itself has no way to say. */
-function EditDay({ value, busy, title, onSave }: {
-  value: number | null; busy: boolean; title: string; onSave: (ms: number | null) => void;
-}) {
-  return (
-    <span className="inline-flex items-center gap-1">
-      <input type="date" value={msToDay(value)} disabled={busy} title={title}
-        onChange={(e) => onSave(dayToMs(e.target.value))}
-        className="text-[11px] px-1.5 py-0.5 rounded outline-none"
-        style={{ background: "transparent", color: "var(--text2)", border: EDGE, colorScheme: "dark" }} />
-      {value != null && !busy && (
-        <button className="agx-btn rounded text-[10px]" style={{ color: "var(--text4)" }}
-          title="Clear this date" onClick={() => onSave(null)}>Clear</button>
-      )}
-      {busy && <span className="agx-spin" aria-label="Saving" style={{ width: 10, height: 10, borderWidth: 1.5, borderColor: "var(--text3)", borderTopColor: "transparent" }} />}
-    </span>
-  );
-}
-
-/**
  * The sprint, as a picker.
  *
  * A sprint is a LIST, so choosing one is a move — the card joins the new list
@@ -5340,25 +5297,19 @@ function SprintPick({ t, busy, onApply }: {
   );
 }
 
-/** The card's tags, with the two things a tag needs: taking one off, and adding
- *  one. Both by NAME — ClickUp has no id for a tag. */
 /*
- * ADDING ONE USED TO BE TYPING IT BLIND.
+ * EVERY TAG THE SPACE HAS, with the ones this board actually uses on top.
  *
- * "the ones already created don't show up for me to pick from properly… it just
- * opens an input". It did: an empty box, and whatever you typed became a tag. Two
- * things go wrong with that on a board somebody else set up — you cannot
- * remember the names, and a near miss (`bug intake` for `bug-intake`) makes a
- * second tag that looks like the first and filters like neither.
+ * It was the board's tags alone, which is what the loaded cards happened to
+ * carry: seven on the board this was reported from, against 571 that exist in
+ * that space. So anything the board had not used yet had to be typed from
+ * memory, exactly right — and a near miss does not fail, it quietly makes a
+ * SECOND tag with almost the same name.
  *
- * So it offers what the board already uses and keeps the typing for the case
- * that has no answer yet: a name nobody has used, which is still one keystroke
- * away because ClickUp creates a tag by being told to put it on a card.
- *
- * The names come from the cards already loaded rather than from a call: the
- * board in front of you is exactly the set you are about to pick from, and it
- * is already in memory. A tag that exists in the space and is on no card is
- * the one case this does not offer — and typing it still works.
+ * Order matters more than completeness here. The board's own tags are the
+ * ones a person reaches for, so they stay where they were, at the top, in the
+ * order they were; the rest of the space follows alphabetically. Typing
+ * filters across both.
  */
 function TagEdit({ t, busy, onApply, board }: {
   t: ProviderTask; busy: boolean;
@@ -5366,43 +5317,11 @@ function TagEdit({ t, busy, onApply, board }: {
   /** The board's cards, for the names it already uses. */
   board?: Map<string, ProviderTask>;
 }) {
-  const [adding, setAdding] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [hot, setHot] = useState(0);
-  const box = useRef<HTMLDivElement>(null);
-  useCloseWithOwner(() => { setAdding(false); setDraft(""); }, { open: adding, from: box });
-
-  useEffect(() => {
-    if (!adding) return;
-    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) { setAdding(false); setDraft(""); } };
-    document.addEventListener("mousedown", away);
-    return () => document.removeEventListener("mousedown", away);
-  }, [adding]);
-
-  /*
-   * EVERY TAG THE SPACE HAS, with the ones this board actually uses on top.
-   *
-   * It was the board's tags alone, which is what the loaded cards happened to
-   * carry: seven on the board this was reported from, against 571 that exist in
-   * that space. So anything the board had not used yet had to be typed from
-   * memory, exactly right — and a near miss does not fail, it quietly makes a
-   * SECOND tag with almost the same name.
-   *
-   * Order matters more than completeness here. The board's own tags are the
-   * ones a person reaches for, so they stay where they were, at the top, in the
-   * order they were; the rest of the space follows alphabetically. Typing
-   * filters across both.
-   */
   const [spaceTags, setSpaceTags] = useState<string[]>([]);
-  useEffect(() => {
-    if (!adding) return;
-    let alive = true;
-    /* On opening rather than on mount: a board is drawn far more often than a
-       tag is added, and the server answers this from a per-space cache, so the
-       wait is paid once for every card under the same space. */
-    void api.clickupTags(t.id).then((r) => { if (alive && r.ok && r.tags) setSpaceTags(r.tags); });
-    return () => { alive = false; };
-  }, [adding, t.id]);
+  /* Read when the add box opens rather than on mount: a board is drawn far more
+     often than a tag is added, and the server answers this from a per-space
+     cache, so the wait is paid once for every card under the same space. */
+  const load = () => { void api.clickupTags(t.id).then((r) => { if (r.ok && r.tags) setSpaceTags(r.tags); }); };
 
   const known = useMemo(() => {
     const boardTags = new Set<string>();
@@ -5410,90 +5329,18 @@ function TagEdit({ t, busy, onApply, board }: {
     return tagSources([...boardTags].sort((a, b) => a.localeCompare(b)), spaceTags, t.tags);
   }, [board, t.tags, spaceTags]);
 
-  const typed = draft.trim();
-  const { rows, newAt, creating: canCreate } = useMemo(() => tagChoices(known, t.tags, typed), [known, t.tags, typed]);
-
-  const add = (name: string) => {
-    setDraft("");
-    setHot(0);
-    setAdding(false);
-    const tag = name.trim();
-    if (!tag || t.tags.includes(tag)) return;
-    onApply(`tag:${tag}`, {
-      done: `Tagged ${tag}`,
-      optimistic: { tags: [...t.tags, tag] },
-      go: () => api.clickupTag(t.id, tag, true),
-    });
-  };
-
   return (
-    <span className="flex flex-wrap items-center gap-1">
-      {t.tags.map((tag) => (
-        <span key={tag} className="inline-flex items-center gap-1 text-[10.5px] px-1.5 py-0.5 rounded-md"
-          style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--text) 7%, transparent)", border: EDGE }}>
-          {tag}
-          <button className="agx-btn rounded flex" title={`Remove ${tag}`} disabled={busy}
-            style={{ color: "var(--text4)" }}
-            onClick={() => onApply(`tag:${tag}`, {
-              done: `Removed ${tag}`,
-              optimistic: { tags: t.tags.filter((x) => x !== tag) },
-              go: () => api.clickupTag(t.id, tag, false),
-            })}><CloseIcon size={ICON.xs} /></button>
-        </span>
-      ))}
-      <span className="relative inline-block" ref={box}>
-        {adding
-          ? <input value={draft} autoFocus placeholder={known.length ? "Filter or type a new one" : "tag"}
-              onChange={(e) => { setDraft(e.target.value); setHot(0); }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  /* What is highlighted, and the typed name when the list is
-                     empty — Enter on a name nobody uses is the whole point. */
-                  const pick = rows[hot] ?? (canCreate ? typed : "");
-                  if (pick) add(pick);
-                  return;
-                }
-                if (e.key === "ArrowDown") { e.preventDefault(); setHot((h) => Math.min(h + 1, Math.max(rows.length - 1, 0))); return; }
-                if (e.key === "ArrowUp") { e.preventDefault(); setHot((h) => Math.max(h - 1, 0)); return; }
-                /* Stopped, or Escape closes the card behind this list. */
-                if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setDraft(""); setAdding(false); }
-              }}
-              className="text-[11px] px-1.5 py-0.5 rounded outline-none"
-              style={{ background: "var(--bg)", color: "var(--text)", border: EDGE, width: 170 }} />
-          : <button className="agx-btn rounded text-[10.5px]" style={{ color: "var(--text4)" }}
-              title="Add a tag" disabled={busy} onClick={() => { setAdding(true); setHot(0); }}>+ tag</button>}
-        {adding && (
-          <div className="agx-scroll absolute left-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-y-auto py-1"
-            style={{ zIndex: 30, background: "var(--surface-card)", border: edge(28), minWidth: 190, maxHeight: 260 }}>
-            {!rows.length && (
-              <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>
-                {/* "in this space", not "on this board": the list is the whole
-                    space's now, so naming the board would send somebody looking
-                    for a tag that the message has already ruled out. */}
-                {known.length ? "Nothing in this space is called that." : "No tags here yet — type one."}
-              </div>
-            )}
-            {rows.map((name, i) => {
-              const isNew = i === newAt;
-              return (
-                <button key={`${isNew ? "new:" : ""}${name}`} type="button"
-                  onMouseEnter={() => setHot(i)}
-                  /* mousedown, not click: the input's blur would close this
-                     list before a click landed on it. */
-                  onMouseDown={(e) => { e.preventDefault(); add(name); }}
-                  className="text-left px-2.5 py-1.5 text-[11px] truncate flex items-center gap-1.5"
-                  style={{ background: i === hot ? "color-mix(in srgb, var(--text) 8%, transparent)" : "transparent" }}>
-                  {isNew && <span className="shrink-0 text-[10px]" style={{ color: "var(--info-ink)" }}>+</span>}
-                  <span className="truncate" style={{ color: isNew ? "var(--info)" : "var(--text2)" }}>{name}</span>
-                  {isNew && <span className="shrink-0 text-[9.5px]" style={{ color: "var(--text4)" }}>new tag</span>}
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </span>
-    </span>
+    <TagEditor tags={t.tags} suggestions={known} busy={busy} onOpen={load}
+      onAdd={(tag) => onApply(`tag:${tag}`, {
+        done: `Tagged ${tag}`,
+        optimistic: { tags: [...t.tags, tag] },
+        go: () => api.clickupTag(t.id, tag, true),
+      })}
+      onRemove={(tag) => onApply(`tag:${tag}`, {
+        done: `Removed ${tag}`,
+        optimistic: { tags: t.tags.filter((x) => x !== tag) },
+        go: () => api.clickupTag(t.id, tag, false),
+      })} />
   );
 }
 
@@ -6267,7 +6114,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
             </button>
           )}
         </div>
-        <h2 className="text-[13px] font-semibold leading-snug mt-1.5" style={{ color: "var(--text)", textWrap: "balance" }}>
+        <h2 className="text-[13px] font-semibold leading-snug mt-1.5" style={{ color: "var(--text)", textWrap: "pretty" }}>
           {t.title}
           {/* The title is the other half of what you paste beside the id — a
               branch name, a commit subject, the line you send a colleague. The
@@ -8387,7 +8234,7 @@ function TaskDetail({ t, today, reminder, onCancel, writable, onToggleNote, onSh
   const progress = checkProgress(t.notes);
   return (
     <div>
-      <h2 className="text-[16px] font-semibold leading-snug mb-2.5" style={{ color: "var(--text)", textWrap: "balance" }}>
+      <h2 className="text-[16px] font-semibold leading-snug mb-2.5" style={{ color: "var(--text)", textWrap: "pretty" }}>
         {t.description}
       </h2>
       {onEdit && writable

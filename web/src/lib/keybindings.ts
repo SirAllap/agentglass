@@ -269,7 +269,7 @@ export function rebindChord(id: ViewId, chord: string): RebindResult {
   const taken = VIEWS.find((v) => v.id !== id && chordFor(v.id) === chord);
   if (taken) return { ok: false, error: `already opens ${taken.label}` };
   // App actions are checked here too, even though App resolves views first: a
-  // view that shadowed the file palette would leave that key looking broken
+  // view that shadowed the finder would leave that key looking broken
   // from the other setting's point of view. Refuse rather than steal — the same
   // rule the single-letter bindings follow.
   const app = appActionForChord(chord);
@@ -304,7 +304,7 @@ function persistChords() {
  * Chords that open something which is not a view.
  *
  * A third mechanism, and it earns its keep: the two above answer "which of the
- * rail's tabs" and "which single letter on the dashboard". The file palette is
+ * rail's tabs" and "which single letter on the dashboard". The finder is
  * neither — it has no tab, it must work while a shell has focus, and it must
  * work from every view including the ones that are not the workspace at all.
  *
@@ -382,8 +382,8 @@ export const APP_CHORD_DEFAULTS: Record<AppChordId, string> = {
 
 export const APP_CHORD_LABELS: Record<AppChordId, { label: string; hint: string }> = {
   "files.palette": {
-    label: "Find a file",
-    hint: "search any checkout from anywhere — names, contents, or what you opened recently",
+    label: "Finder",
+    hint: "browse any folder on this machine, search it by name or contents, and read any file in it",
   },
   "bench.toggle": {
     label: "The bench",

@@ -47,6 +47,9 @@
   --prio-high-ink: color-mix(in srgb, var(--prio-high) 50%, var(--text));
   --prio-normal-ink: color-mix(in srgb, var(--prio-normal) 62%, var(--text));
   --prio-low-ink: color-mix(in srgb, var(--prio-low) 62%, var(--text));
+  /* A merged pull request: indigo, apart from the blue the app uses for actions. The ink is the form text uses, pulled toward the theme's own text colour like the others. */
+  --merged: #8b8fe8;
+  --merged-ink: color-mix(in srgb, var(--merged) 70%, var(--text));
   /* Somebody is looking at this from their phone.
      Its own colour on purpose, and not one of the four above: those are states
      of the work — good, careful, broken, worth reading — and a second person
@@ -507,7 +510,7 @@
 }
 .agx-market-row { transition: background-color 120ms ease; }
 .agx-market-row:hover { background: color-mix(in srgb, var(--text) 3.5%, transparent); }
-/* A row or segment in the file palette that is a button: the same 6% text tint
+/* A row or segment in the finder that is a button: the same 6% text tint
    the app's other hovers use, and nothing else moves. */
 .agx-pal-hit { transition: background-color 120ms ease; }
 .agx-pal-hit:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
@@ -680,6 +683,9 @@
   display: none;
 }
 .agx-hover:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
+/* A lane's whole title bar folds it: a soft wash of the lane's own colour. */
+.agx-lane-bar { cursor: pointer; transition: background-color 120ms; }
+.agx-lane-bar:hover { background: color-mix(in srgb, var(--lane) 12%, transparent); }
 /* The keyboard's cursor over a search result — the same tint `.agx-hover`
    already uses for a mouse over one, so a row highlighted by ↑/↓ reads as
    the thing a click would land on, not a new kind of mark nobody has seen
@@ -712,6 +718,13 @@
 /* Pressed, for every Button: hover already darkens through `hover:brightness-125`,
    and a control with no pressed answer reads as one that did not hear the click. */
 .agx-btn:active:not(:disabled) { filter: brightness(0.86); }
+/* A row of a finder menu, as Strata's popovers draw it: inset, rounded, and one quiet fill for the row under the pointer and the row the keys are on. */
+.agx-menu-row { display: flex; width: calc(100% - 12px); margin: 1px 6px; border-radius: 6px; background: transparent; cursor: pointer; transition: background-color 90ms; }
+.agx-menu-row:hover:not(:disabled), .agx-menu-row[data-active]:not(:disabled) { background: color-mix(in srgb, var(--text) 10%, transparent); }
+/* The keyboard's row wears Strata's focus ring as well; a row lit with "fill" has the fill alone. */
+.agx-menu-row[data-active="ring"]:not(:disabled) { box-shadow: inset 0 0 0 2px var(--text); }
+.agx-menu-row:active:not(:disabled) { background: color-mix(in srgb, var(--text) 16%, transparent); }
+.agx-menu-row:disabled { cursor: default; }
 /* A folding section's header (the ClickUp page's cards): the whole bar is the target. */
 .agx-fold { cursor: pointer; transition: background-color 120ms; }
 .agx-fold:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
@@ -1840,6 +1853,8 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
   margin-bottom: 24px;
 }
 .agx-scard:has(> .agx-scard-body:empty) { display: none; }
+/* The Orchestration page keeps its project bar stuck to the top (ScopeBar writes its height here); a card or row scrolled to stops under it. */
+.agx-orch .agx-scard, .agx-orch [data-row] { scroll-margin-top: calc(var(--orch-stick, 0px) + 8px); }
 .agx-scard-head {
   display: flex;
   flex-wrap: wrap;
@@ -2302,6 +2317,9 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
 *:hover > .agx-hover-show,
 .agx-hover-show:focus-within { opacity: 1; }
 @media (hover: none) { .agx-hover-show { opacity: 1; } }
+/* A card whose verbs show when the CARD is pointed at, not only the verbs' own box. */
+.agx-row:hover .agx-hover-show,
+.agx-row:focus-within .agx-hover-show { opacity: 1; }
 
 /* "It is this one" — see lib/flash.ts.
    A pulse rather than a static highlight: the point is to catch the eye at the
@@ -2737,7 +2755,9 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-stk[data-warn] .agx-stk-b[data-k="off"] { outline-color: var(--warning); color: var(--warning-ink); }
 .agx-stk-gap { flex: none; height: 16px; display: grid; place-items: center; font-size: 9px; font-weight: 700; line-height: 1; color: var(--text2); }
 /* Pointer-over a token outlines the base card it names: an outline, so nothing moves. */
-.agx-stk-card[data-lit] { outline: 2px solid var(--primary); outline-offset: 1px; }
+.agx-stk-card[data-lit] { position: relative; }
+/* An outline sits outside the card and the lane's scroll box cut it off; a ring drawn inside, over the rows, cannot be clipped and hides nothing of the content. */
+.agx-stk-card[data-lit]::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 5; box-shadow: inset 0 0 0 2px var(--primary); }
 
 .agx-stk-t {
   all: unset; box-sizing: border-box; cursor: pointer;
@@ -2789,3 +2809,88 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-stk-row:not(:last-child) .agx-stk-rail::after { content: ""; position: absolute; left: 50%; top: 22px; bottom: -12px; width: 2px; margin-left: -1px; background: color-mix(in srgb, var(--text) 22%, transparent); }
 .agx-stk-rail .agx-stk-b { width: 20px; flex: none; position: relative; z-index: 1; }
 .agx-stk-trunk { position: relative; z-index: 1; height: 16px; max-width: 44px; padding: 0 2px; display: grid; place-items: center; border-radius: 3px; font-size: 8px; text-transform: uppercase; line-height: 1; color: var(--text3); background: var(--surface-card); box-shadow: inset 0 0 0 1px var(--surface-line); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The glyph on a step row that is waiting on Jira: still when motion is reduced, the row's word says it. */
+@keyframes agx-step-turn { to { transform: rotate(360deg); } }
+.agx-step-spin { animation: agx-step-turn 1s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .agx-step-spin { animation: none; } }
+/* The Orchestration page's "Right now" picture: the main agent, a wire to each job. */
+.agx-flow { display: grid; grid-template-columns: minmax(200px, 220px) minmax(0, 1fr); gap: 40px; align-items: stretch; }
+.agx-flow-roles { display: grid; gap: 12px; }
+/* The page reads as prose with the machine's words in mono, as the approved mock does; the body's mono stays everywhere else. */
+.agx-orch { font-family: var(--font-prose); }
+.agx-orch .t-mono { font-family: var(--font-mono, ui-monospace, monospace); }
+.agx-flow-main, .agx-flow-job { position: relative; }
+.agx-flow-main::after { content: ""; position: absolute; top: 50%; right: -20px; width: 20px; height: 2px; background: var(--border2); }
+.agx-flow-job::after { content: ""; position: absolute; top: 50%; left: -20px; width: 20px; height: 2px; background: var(--border2); }
+.agx-flow-job::before { content: ""; position: absolute; left: -20px; top: -12px; bottom: -12px; width: 2px; background: var(--border2); }
+.agx-flow-job:first-child::before { top: 50%; }
+.agx-flow-job:last-child::before { bottom: 50%; }
+@media (max-width: 720px) {
+  .agx-flow { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .agx-flow-main::after, .agx-flow-job::after, .agx-flow-job::before { display: none; }
+}
+/* The ready-made setups: three cards that share the row, and stack when it is narrow. */
+.agx-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.agx-presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: start; }
+@media (max-width: 1100px) { .agx-presets { grid-template-columns: minmax(0, 1fr); } }
+/* Orchestration's wait: the grey shimmer the mock shows while the setting loads. */
+.agx-skel { background: linear-gradient(90deg, var(--bg3), var(--bg2), var(--bg3)); background-size: 200% 100%; animation: agx-skel-sh 1.4s linear infinite; }
+@keyframes agx-skel-sh { to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .agx-skel { animation: none; } }
+
+/* The Machine preview's markdown: nothing in it may be wider than the pane. */
+.agx-prose-pane pre,
+.agx-prose-pane .agx-scroll,
+.agx-prose-pane .agx-scroll * { white-space: pre-wrap; overflow-wrap: anywhere; }
+.agx-prose-pane .agx-scroll { overflow-x: hidden; }
+.agx-prose-pane img { max-width: 100%; height: auto; }
+.agx-prose-pane table { display: block; max-width: 100%; overflow-x: auto; }
+
+/* A row of the finder's columns answers the pointer before it is clicked, as Strata's do. */
+/* What a drag would drop on: a folder row, a column, a place in the sidebar, the Trash. */
+[data-drop-on] { outline: 2px solid var(--primary); outline-offset: -2px; background: color-mix(in srgb, var(--primary) 14%, transparent); border-radius: 6px; }
+.agx-col-enter { animation: agx-col-enter 220ms cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes agx-col-enter { from { transform: translate(-24px, 0); opacity: 0; } to { transform: translate(0, 0); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .agx-col-enter { animation: none; } }
+.agx-list-heading { background: transparent; border-radius: 0; transition: background 160ms ease-out, color 160ms ease-out; }
+.agx-list-heading:hover { background: color-mix(in srgb, var(--primary) 15%, transparent); color: var(--text); }
+.agx-list-heading:active { background: color-mix(in srgb, var(--primary) 22%, transparent); color: var(--primary-ink); transform: scale(0.97); }
+.agx-list-heading:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.agx-fm-row:hover { background: color-mix(in srgb, var(--primary) 8%, transparent); }
+/* A row's size or count badge is drawn at rest only on the chosen row; the pointer on any row brings its own. */
+.agx-fm-badge { opacity: 0; }
+.agx-fm-badge[data-badge-on], .agx-fm-row:hover .agx-fm-badge { opacity: 1; }
+
+/* Markdown in the Finder preview, as Strata draws it: one monospace face, the
+   title in the accent, tables as plain grids with a header that sorts. */
+.agx-strata-md { line-height: 1.6; }
+.agx-strata-md h1, .agx-strata-md h2, .agx-strata-md h3, .agx-strata-md h4 {
+  font-family: inherit; color: var(--primary-ink); font-weight: 700; letter-spacing: 0;
+}
+.agx-prose.agx-strata-md h1 { font-size: 1.35em; border-bottom: 0; padding-bottom: 0; margin: 0 0 0.8em; }
+.agx-strata-md h2 { font-size: 1.15em; margin: 1.4em 0 0.5em; }
+.agx-strata-md h3, .agx-strata-md h4 { font-size: 1em; margin: 1.2em 0 0.4em; }
+.agx-strata-md p { margin: 0.6em 0; }
+.agx-strata-md table { font-family: inherit; }
+.agx-strata-md th { user-select: none; }
+/* A table never breaks a word to fit: it keeps its words whole and scrolls inside its own box. */
+.agx-strata-md td, .agx-strata-md th { overflow-wrap: normal; word-break: normal; }
+
+/* Strata's chrome is never selectable text: a click on a Devices row painted its label blue. One rule
+   for the finder and the menus it portals out of it; a file's text, inputs and the editor opt back in. */
+[data-machine-finder], [data-finder-menu] { user-select: none; -webkit-user-select: none; }
+[data-machine-finder] :is(input, textarea, [contenteditable], [data-selectable], [data-selectable] *, .xterm, .xterm *) { user-select: text; -webkit-user-select: text; }
+[data-machine-finder] .agx-strata-md th { user-select: none; -webkit-user-select: none; }
+/* An Icons tile answers the pointer only over its picture and its name, as Strata's does; the blank of the card does not light up. */
+.agx-tile-part:hover { background: color-mix(in srgb, var(--primary) 8%, transparent); }
+
+/* The pull-request list header is ONE bar. On a panel narrower than 1500px the
+   search leaves it for a line of its own below, and the rest stays put: the
+   views, the saved sets, the "⋯" menu and the refresh keep their places. The
+   active-filter chips follow the search, whichever line it is on. */
+.agx-prbar { container: agx-prbar / inline-size; }
+.agx-prbar-chips { order: 11; }
+@container agx-prbar (max-width: 1499px) {
+  .agx-prbar-search { order: 10; flex: 1 1 100% !important; max-width: none !important; }
+}

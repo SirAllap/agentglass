@@ -93,15 +93,6 @@ describe("feedback and the file manager", () => {
   });
 });
 
-describe("the where menu", () => {
-  test("has a Places and a Recent section and one cursor over both", () => {
-    expect(palette).toContain('heading("Places")');
-    expect(palette).toContain('heading("Recent")');
-    expect(palette).toContain("placeSections(");
-    expect(palette).toContain('role="listbox"');
-  });
-});
-
 describe("open in browser", () => {
   test("the pane offers it, the palette falls back to the system opener, and Enter is untouched", () => {
     expect(code(preview)).toContain("viewerActions(");

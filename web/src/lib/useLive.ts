@@ -3,6 +3,7 @@ import type { WatchEvent, WsFrame, WsClientHello, OpenToolCall } from "../../../
 import { WS_URL, IS_DEMO, hasToken, probeAuth, whenServerUp } from "./api.ts";
 import * as demo from "./demo.ts";
 import { gitChanged } from "./gitBus.ts";
+import { volumesChanged } from "./finderVolumes.ts";
 import { desktopPaletteMoved } from "./themes.ts";
 import { emitControl } from "./controlBus.ts";
 import { clientId, emitBrowserAsk } from "./browserBus.ts";
@@ -208,6 +209,11 @@ export function useLive(paused = false): LiveData {
       }
       if (frame.type === "desktop-palette") {
         desktopPaletteMoved();
+        return;
+      }
+      if (frame.type === "devices") {
+        // A volume came, went, mounted or locked: the finder re-reads its DEVICES list.
+        volumesChanged();
         return;
       }
       if (frame.type === "git") {
