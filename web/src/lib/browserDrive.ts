@@ -2160,35 +2160,35 @@ function flashWhereActed(el: DrivableWebview, ask: BrowserAskFrame): void {
  * navigation does — then changes its address and never its page, and every
  * act after that finds nothing (6 s and a refusal per click, a whole walk lost).
  *
- * So before each ask the guest checks whether a frame arrives within 150 ms;
- * only when none does, requestAnimationFrame also answers from a 16 ms timer,
- * whichever comes first. On screen the check costs one frame and one timer
- * and changes nothing. Measured with frames withheld: GitHub's Issues click
- * rendered in 1.3 s with it, never without.
+ * So before each ask the guest wraps requestAnimationFrame once: every frame
+ * asked for is also armed on a timer, 150 ms while frames have been coming
+ * (on screen the real frame wins and the timer is cleared, so nothing
+ * changes) and 16 ms once one went unanswered, until a real frame comes back.
+ * Measured with frames withheld: GitHub's Issues click rendered in 1.3 s with
+ * it, never without.
  * Ceiling: a page that kept its own reference to requestAnimationFrame from
- * before the check is not reached, and the fallback stays for the life of
- * the document once it went in.
+ * before its first ask is not reached.
  */
 export const FRAME_GUARD = `(() => {
   if (window.__agxFrames) return;
-  window.__agxFrames = "watching";
-  let fired = false;
-  requestAnimationFrame(() => { fired = true; });
-  setTimeout(() => {
-    if (fired) { window.__agxFrames = ""; return; }
-    const real = window.requestAnimationFrame.bind(window), cancelReal = window.cancelAnimationFrame.bind(window);
-    const jobs = new Map(); let next = 1;
-    const raf = function requestAnimationFrame(cb) {
-      const id = next++;
-      const run = (ts) => { const j = jobs.get(id); if (!j) return; jobs.delete(id); cancelReal(j.r); clearTimeout(j.t); cb(ts); };
-      jobs.set(id, { r: real(run), t: setTimeout(() => run(performance.now()), 16) });
-      return id;
-    };
-    const caf = function cancelAnimationFrame(id) { const j = jobs.get(id); if (!j) return; jobs.delete(id); cancelReal(j.r); clearTimeout(j.t); };
-    for (const [f, n] of [[raf, "requestAnimationFrame"], [caf, "cancelAnimationFrame"]]) f.toString = () => "function " + n + "() { [native code] }";
-    window.requestAnimationFrame = raf; window.cancelAnimationFrame = caf;
-    window.__agxFrames = "fallback";
-  }, 150);
+  const real = window.requestAnimationFrame.bind(window), cancelReal = window.cancelAnimationFrame.bind(window);
+  const jobs = new Map(); let next = 1, starved = false;
+  const fire = (id, ts, byFrame) => {
+    const j = jobs.get(id); if (!j) return; jobs.delete(id);
+    if (byFrame) starved = false; else { starved = true; cancelReal(j.r); }
+    clearTimeout(j.t); j.cb(ts);
+  };
+  const raf = function requestAnimationFrame(cb) {
+    const id = next++;
+    const j = { cb, r: 0, t: 0 }; jobs.set(id, j);
+    j.r = real((ts) => fire(id, ts, true));
+    j.t = setTimeout(() => fire(id, performance.now(), false), starved ? 16 : 150);
+    return id;
+  };
+  const caf = function cancelAnimationFrame(id) { const j = jobs.get(id); if (!j) return; jobs.delete(id); cancelReal(j.r); clearTimeout(j.t); };
+  for (const [f, n] of [[raf, "requestAnimationFrame"], [caf, "cancelAnimationFrame"]]) f.toString = () => "function " + n + "() { [native code] }";
+  window.requestAnimationFrame = raf; window.cancelAnimationFrame = caf;
+  Object.defineProperty(window, "__agxFrames", { value: () => starved });
 })()`;
 
 /* Only with a panel drawing this guest (the same signal the pointer uses):
