@@ -40,12 +40,12 @@ import type { Catalogue, InstallSource } from "../../../../shared/types.ts";
 
 /** The list this project publishes, on its own site, and the same document
  *  its plugins page is drawn from. */
-export const MARKET_URL = "https://sirallap.github.io/agentglass/plugins.json";
+export const MARKET_URL = "https://sirallap.github.io/agentglass-plugins/plugins.json";
 const MARKET_HOST = new URL(MARKET_URL).host;
 /** The same list as a page a person can read, with the prose the JSON has no
  *  room for. There is no per-plugin page on it yet, so a row's own link goes
  *  to the repository instead — see `Offer`. */
-const MARKET_PAGE = "https://sirallap.github.io/agentglass/#/plugins";
+const MARKET_PAGE = "https://sirallap.github.io/agentglass-plugins/#/plugins";
 
 /** The manifest's own words for where a plugin draws. A card says what
  *  installing gets you before it is installed. */

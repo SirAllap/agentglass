@@ -178,7 +178,7 @@ describe("the list is the project's, and only the project's", () => {
 
   test("read fresh, and said so", () => {
     expect(code(market)).toContain("api.pluginCatalogueFetch(MARKET_URL)");
-    expect(code(market)).toContain("https://sirallap.github.io/agentglass/plugins.json");
+    expect(code(market)).toContain("https://sirallap.github.io/agentglass-plugins/plugins.json");
   });
 });
 
