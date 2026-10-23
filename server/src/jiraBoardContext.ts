@@ -60,6 +60,13 @@ export function activeSprint(creds: JiraCreds, board: string): Promise<JiraResul
   }, true);
 }
 
+/**
+ * What an epic is called. The agile read gives `name` (the "Epic Name" field, which a project may leave empty)
+ * and `summary` (the issue title, always there): measured on a site whose epics had no Epic Name, every row of the
+ * Areas rail read as its key. The title is the name then; the key only when neither exists.
+ */
+export const epicName = (e: { name?: unknown; summary?: unknown }, key: string): string => str(e.name) || str(e.summary) || key;
+
 /** The board's epics. A board with no epic panel is an empty list. */
 export function boardEpics(creds: JiraCreds, board: string): Promise<JiraResult<JiraBoardEpic[]>> {
   if (!NUM.test(board)) return Promise.resolve({ ok: true, data: [] });
@@ -69,7 +76,7 @@ export function boardEpics(creds: JiraCreds, board: string): Promise<JiraResult<
     return { ok: true, data: rowsOf(r.data).flatMap((e) => {
       const key = str(e.key);
       const color = isObj(e.color) ? str(e.color.key) : "";
-      return key ? [{ key, name: str(e.name) || key, ...(color ? { color } : {}) }] : [];
+      return key ? [{ key, name: epicName(e, key), ...(color ? { color } : {}) }] : [];
     }) };
   }, true);
 }
