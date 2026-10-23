@@ -23,7 +23,7 @@ import { EDGE, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
  * state; it turns clicks into new query strings and hands them up via `onQuery`.
  */
 export function PrFilterBar({
-  query, filters, facets, onQuery, onSearch, pending, searching, shown, total, swept, unread, builder, people,
+  query, filters, facets, onQuery, onSearch, onPickPerson, pending, searching, shown, total, swept, unread, builder, people,
 }: {
   query: string;
   /** The repository's people, already loaded by the panel. Null while they are
@@ -38,6 +38,8 @@ export function PrFilterBar({
   onQuery: (q: string) => void;
   /** Ask GitHub. Never called on a keystroke — see PrPanel's serverQuery. */
   onSearch: () => void;
+  /** Called when the `@` menu picked somebody into an otherwise empty box: that is a request for their board, not a search. */
+  onPickPerson?: (login: string) => void;
   /** The box says something the last search did not ask for. */
   pending: boolean;
   searching?: boolean;
@@ -68,7 +70,9 @@ export function PrFilterBar({
   const menuOpen = !!at && dismissed !== query;
   const pick = (login: string) => {
     recordPicks([login]);
-    onQuery(applyPick(query, login));
+    const next = applyPick(query, login);
+    onQuery(next);
+    if (next.trim().split(/\s+/).length === 1) onPickPerson?.(login);
     setCursor(0);
   };
 

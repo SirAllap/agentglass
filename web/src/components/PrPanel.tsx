@@ -101,6 +101,8 @@ import { afterViewed, fileAtFloor, stepFileIndex, verticalScrollerOf } from "../
 import { buildFileTree, treeOrder, type TreeNode } from "../lib/prFileTree.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
 import { knownLogins, matchedAs, normalizeFree, personIn, searchPool, singleLogin, toServerQuery } from "../lib/prSearch.ts";
+import { refsIn, refWhy, withBranchHits } from "../lib/prRefs.ts";
+import { useRefBranches } from "../lib/refBranches.ts";
 import { usePersonBoard } from "../lib/personBoard.ts";
 import { useRowDetails } from "../lib/useRowDetails.ts";
 import { BOARD_ASK_MS, listOutcome, type ListOutcome } from "../lib/boardFace.ts";
@@ -211,7 +213,6 @@ type StateSel = "open" | "closed" | "all";
  */
 const VIEWS: { id: string; label: string; scope: Filter; query: string; tint?: string; hint: string }[] = [
   { id: "review", label: "Needs my review", scope: "review", query: "", tint: "var(--warning)", hint: "Somebody asked you to look" },
-  { id: "mine", label: "Mine", scope: "mine", query: "", tint: "var(--primary)", hint: "Pull requests you opened" },
   { id: "failing", label: "Failing", scope: "all", query: "checks:red", tint: "var(--error)", hint: "Blocked: a red check or a conflict" },
   { id: "ready", label: "Ready", scope: "all", query: "review:approved checks:green", tint: "var(--success)", hint: "Approved and green — these can land" },
   { id: "all", label: "All", scope: "all", query: "", hint: "Everything on the board" },
@@ -1816,7 +1817,14 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   /* The box as GitHub is asked it: numbers normalised, a known login made a person search. */
   const logins = useMemo(() => knownLogins(prs), [prs]);
   const wanted = useMemo(() => toServerQuery(query, logins), [query, logins]);
-  const runSearch = useCallback(() => setServerQuery(wanted), [wanted]);
+  /* A box that is one login is that person's board, opened by Enter itself —
+     the board needs no search of the whole repository, so none is sent. */
+  const [personLogin, setPersonLogin] = useState<string | null>(null);
+  const runSearch = useCallback(() => {
+    const who = singleLogin(query, logins);
+    if (who) { setPersonLogin(who); return; }
+    setServerQuery(wanted);
+  }, [wanted, query, logins]);
   /*
    * The pages walked so far, kept together.
    *
@@ -2850,13 +2858,35 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const [answeredQuery, setAnsweredQuery] = useState("");
   const answered = serverQuery.trim() !== "" && answeredQuery === serverQuery;
   useEffect(() => { if (!serverQuery) setAnsweredQuery(""); }, [serverQuery]);
+  /* The board's two lists, held here so a reference search can look in them. */
+  const [boardMine, setBoardMine] = useState<PrSummary[]>([]);
+  const [boardReview, setBoardReview] = useState<PrSummary[]>([]);
+  /* The board's own settle window has run out (see `boardSettling`). */
+  const [boardWaited, setBoardWaited] = useState(false);
+  /* Cards the board's two reads never completed — the poll gives up after a few
+     tries — would keep a grey "reading the size" bar for good. Past the settle
+     window they ask for exactly themselves, once each, in one batched request
+     (lib/useRowDetails.ts): the bar fills, or the card says what it knows. A
+     board that completed on its own sends nothing. */
+  const boardAll = useMemo(() => [...boardMine, ...boardReview], [boardMine, boardReview]);
+  const boardAllFilled = useRowDetails(root, boardAll, boardWaited);
+  const boardMineFilled = useMemo(() => boardAllFilled.slice(0, boardMine.length), [boardAllFilled, boardMine.length]);
+  const boardReviewFilled = useMemo(() => boardAllFilled.slice(boardMine.length), [boardAllFilled, boardMine.length]);
+  /* A card key in the box (`ORBIT-1042`): GitHub finds it in the title and the
+     description; the branch name, which GitHub cannot search by part, is read
+     off the cards already in hand (lib/prRefs.ts). No request of its own. */
+  const refKeys = useMemo(() => refsIn(query), [query]);
+  /* Branch names of the whole repository, from git itself, once Enter has been
+     pressed for this box (`serverQuery` is what Enter sent; typing never sets it). */
+  const sentRefs = useMemo(() => refsIn(serverQuery), [serverQuery]);
+  const refBranches = useRefBranches(root, sentRefs, sentRefs.length > 0);
   const pool = useMemo(
     () => searchPool({
       answered,
-      answer: listRows,
+      answer: answered ? withBranchHits(listRows, [...refBranches.rows, ...boardMine, ...boardReview], sentRefs) : listRows,
       inHand: listRows,
     }),
-    [answered, listRows],
+    [answered, listRows, boardMine, boardReview, sentRefs, refBranches.rows],
   );
   /*
    * Filtered HERE, not only on the server.
@@ -3045,8 +3075,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const taskSetup = useClickupSetup();
   const hasTaskProvider = taskSetup?.connected === true;
 
-  const [boardMine, setBoardMine] = useState<PrSummary[]>([]);
-  const [boardReview, setBoardReview] = useState<PrSummary[]>([]);
   /* The board draws these two fetches of its own and never looks at `prs`, so
      the rule builder narrowed the table behind it and left every lane as it
      was. The raw arrays stay for the loading and settling checks, which ask
@@ -3069,8 +3097,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * applied to them, and the search box is left exactly as it was so "Back to
    * my board" returns to it. Editing the box into anything else leaves the view.
    */
-  const [personLogin, setPersonLogin] = useState<string | null>(null);
   const person = usePersonBoard(root, personLogin);
+  /* Back from somebody else's board is the owner's: the box is emptied and the
+     Main/QA/Filters rules, which were never touched, are simply in force again. */
+  const backToMine = useCallback(() => { setPersonLogin(null); setQuery(""); }, []);
   useEffect(() => {
     if (!personLogin) return;
     const now = singleLogin(query, new Set([...logins, personLogin.toLowerCase()]));
@@ -3093,14 +3123,14 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   }, [person.state, personFilled, hasTaskProvider, root, cardTick, conflictTick]);
 
   const boardMineCards = useMemo(
-    () => boardMine.map((p) => withConflict(root, withCard(p, hasTaskProvider))),
+    () => boardMineFilled.map((p) => withConflict(root, withCard(p, hasTaskProvider))),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [boardMine, hasTaskProvider, cardTick, conflictTick, root],
+    [boardMineFilled, hasTaskProvider, cardTick, conflictTick, root],
   );
   const boardReviewCards = useMemo(
-    () => boardReview.map((p) => withConflict(root, withCard(p, hasTaskProvider))),
+    () => boardReviewFilled.map((p) => withConflict(root, withCard(p, hasTaskProvider))),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [boardReview, hasTaskProvider, cardTick, conflictTick, root],
+    [boardReviewFilled, hasTaskProvider, cardTick, conflictTick, root],
   );
   const boardMineShown = useMemo(
     () => applyRulesKeepUnread(boardMineCards, rules, readPrField, isRuleExempt),
@@ -3148,7 +3178,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     const open = (rows: PrSummary[]) => rows.filter((p) => p.state === "OPEN");
     const mine = open(boardMineShown);
     const review = open(boardReviewShown);
-    const wideRows = open(listRows.map((p) => withCard(p, hasTaskProvider)));
     const stakeOf = stakeFrom(mine, review);
     const byNumber = (rows: PrSummary[]) => [...new Map(rows.map((p) => [p.number, p])).values()];
     const count = (view: BoardView, rows: PrSummary[]) => {
@@ -3157,15 +3186,14 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       for (const [lane, list] of filed) for (const p of list) if (viewKeeps(view, lane, stakeOf(p), p)) n++;
       return n;
     };
-    const wideKnown = !listState.hasNext && stateSel === "open" && !searching && filter === "all";
-    const all = [...mine, ...review, ...wideRows];
-    const out: Partial<Record<BoardView, number>> = {
-      review: new Set(review.map((p) => p.number)).size,
-      mine: new Set(mine.map((p) => p.number)).size,
-    };
-    if (wideKnown) for (const v of ["failing", "ready", "all"] as BoardView[]) out[v] = count(v, all);
+    /* The board is the viewer's two queues and nothing else (`viewIsWide` is
+       always false), so every pill counts exactly those: the number on a pill
+       is the number of cards the board then draws. */
+    const all = [...mine, ...review];
+    const out: Partial<Record<BoardView, number>> = {};
+    for (const v of ["review", "failing", "ready", "all"] as BoardView[]) out[v] = count(v, all);
     return out;
-  }, [boardMineShown, boardReviewShown, listRows, hasTaskProvider, listState.hasNext, stateSel, searching, filter]);
+  }, [boardMineShown, boardReviewShown]);
 
   /*
    * The fields the builder offers, taken from the rows the surface is drawing.
@@ -3252,7 +3280,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    */
   const boardWhole = !boardLoading
     && ![...boardMine, ...boardReview].some((p) => p.checksLoaded === false);
-  const [boardWaited, setBoardWaited] = useState(false);
   const boardDrawn = useRef(false);
   useEffect(() => { if (boardWhole) boardDrawn.current = true; }, [boardWhole]);
   useEffect(() => {
@@ -4943,6 +4970,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               facets={facets}
               onQuery={setQuery}
               onSearch={runSearch}
+              onPickPerson={setPersonLogin}
               people={mentions?.users ?? null}
               pending={wanted.trim() !== serverQuery.trim()}
               searching={listState.loading}
@@ -4991,17 +5019,16 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 mine={personLogin ? personLists.mine : boardMineShown} review={personLogin ? personLists.review : boardReviewShown}
                 unfiltered={personLogin ? undefined : boardUnfiltered} view={personLogin ? "all" : boardView}
                 viewer={personLogin ?? undefined}
-                person={personLogin ? { onBack: () => setPersonLogin(null), more: person.state.kind === "ready" && person.state.more } : undefined}
+                person={personLogin ? { onBack: backToMine, more: person.state.kind === "ready" && person.state.more } : undefined}
                 others={boardWide && !personLogin ? boardOthersShown : undefined}
                 more={!personLogin && resultsShown && listState.hasNext && listState.cursor 
                   ? { loading: listState.loading, onMore: () => { if (listState.cursor) setPages((p) => [...p, listState.cursor!]); } }
                   : undefined}
                 results={resultsShown && !personLogin ? {
-                  person: answered && singleLogin(query, logins) ? { login: singleLogin(query, logins)!, onView: () => setPersonLogin(singleLogin(query, logins)) } : undefined,
                   title: answered ? `for “${query.trim()}”, every state` : `in the loaded pull requests — press ⏎ to search them all`,
-                  why: (p) => matchedAs(p, personIn(query, logins)),
+                  why: (p) => refWhy(p, refKeys) ?? matchedAs(p, personIn(query, logins)),
                   rows: visiblePrs,
-                  loading: (listState.loading && pages.length === 0) || (serverQuery.trim() !== "" && !answered),
+                  loading: (listState.loading && pages.length === 0) || (serverQuery.trim() !== "" && !answered) || refBranches.pending,
                   empty: answered ? "No pull request of this repository matches." : "No loaded pull request matches — press ⏎ to search every state.",
                   onBack: () => { setQuery(""); },
                 } : undefined}

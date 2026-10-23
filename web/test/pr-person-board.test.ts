@@ -66,7 +66,7 @@ describe("lane assignment from another viewer", () => {
   it("words the lanes about the person", () => {
     const l = lanesFor("ana-dev");
     expect(l.find((x) => x.id === "review")!.label).toBe("Needs ana-dev's review");
-    expect(l.map((x) => x.id)).toEqual(LANES.map((x) => x.id));
+    expect(l.map((x) => x.id)).toEqual(["review", "land", "blocked", "flight"]);
     expect(JSON.stringify(l)).not.toMatch(/\byour?s?\b/i);
   });
 });
@@ -110,11 +110,13 @@ describe("no request unless Enter opens the board", () => {
     expect(calls).toBe(2);
   });
 
-  it("typing only reads: the one place a person is opened is the button", async () => {
+  it("typing only reads: a person is opened by Enter or by the @ pick, never by a keystroke", async () => {
     const src = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
     const opens = [...src.matchAll(/setPersonLogin\(([^)]*\)?)\)/g)].map((m) => m[1]).filter((a) => !a.startsWith("null"));
-    expect(opens.length).toBe(1);
-    expect(src).toContain("onView: () => setPersonLogin(");
+    expect(opens).toEqual(["who"]);
+    const run = src.slice(src.indexOf("const runSearch = useCallback("));
+    expect(run.slice(0, run.indexOf("}, [wanted"))).toContain("setPersonLogin(who)");
+    expect(src).toContain("onPickPerson={setPersonLogin}");
     expect((await Bun.file(new URL("../src/lib/personBoard.ts", import.meta.url)).text()).match(/api\.prPerson\(/g)?.length).toBe(1);
   });
 });

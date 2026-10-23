@@ -213,8 +213,6 @@ export function TriageBoard({
    *  person has more than the first page of either list. */
   person?: { onBack: () => void; more: boolean };
   results?: {
-    /** Present when the box is about exactly one login: the button that opens that person's board. */
-    person?: { login: string; onView: () => void };
     /** Why a card is in this search, when the box is about a person: "name: author, reviewer". */
     why?: (p: PrSummary) => string | null;
     title: string;
@@ -345,7 +343,7 @@ export function TriageBoard({
    * built on it drops its number instead of repeating it. Clamping is how a
    * wrong number gets to sound like a right one.
    */
-  const totalKnown = rest >= 0;
+  const totalKnown = !viewer && rest >= 0;
   const tableLabel = rest > 0 ? `Show all ${total}` : "Show every open pull request";
 
   /*
@@ -652,13 +650,7 @@ export function TriageBoard({
         <div className="shrink-0 px-4 pt-2 pb-1.5 flex items-center gap-2 text-[12.5px]">
           <b className="text-[15px] font-semibold tabular-nums">{resultsHeading(results.rows.length)}</b>
           <span className="min-w-0 truncate" style={{ color: "var(--text3)" }} title={results.title}>{results.title}</span>
-          {results.person && (
-            <button onClick={results.person.onView} className="agx-btn ml-auto shrink-0 rounded px-2 py-1 text-[10.5px]"
-              style={{ color: "var(--primary-ink)", border: EDGE }}>
-              View {results.person.login}'s board
-            </button>
-          )}
-          <button onClick={results.onBack} className={`agx-btn ${results.person ? "" : "ml-auto "}shrink-0 rounded px-2 py-1 text-[10.5px]`}
+          <button onClick={results.onBack} className="agx-btn ml-auto shrink-0 rounded px-2 py-1 text-[10.5px]"
             style={{ color: "var(--text2)", border: EDGE }}>
             Back to the board
           </button>
@@ -725,6 +717,7 @@ export function TriageBoard({
      * scrolling belongs to each column, one per lane, below.
      */
     <div ref={frame} data-board tabIndex={0} onKeyDown={onKey} className="flex flex-col h-full min-h-0 outline-none">
+      {person && viewer && <PersonBanner login={viewer} onBack={person.onBack} />}
       {/* The scope, said out loud. A board whose reach nobody states is a board
           nobody trusts — and the first question anybody asks it is "where are
           the other three hundred". */}
@@ -754,22 +747,12 @@ export function TriageBoard({
               {wide
                 ? "Yours, the ones you were asked to look at, and the repository's, a page at a time."
                 : viewer ? <>{viewer}'s, and the ones {viewer} was asked to look at{person?.more ? " — the first page of each list" : ""}.</>
-                : <>Yours, and the ones you were asked to look at. The board never shows more than that
-              {" — "}
-              <button onClick={onShowTable} style={{ color: "var(--primary-ink)" }}>
-                {rest > 0 ? `show the other ${rest}` : "show every open pull request"}
-              </button>.</>}
+                : <>Yours, and the ones you were asked to look at.</>}
               {canLand > 0 && <> <span style={{ color: "var(--success-ink)" }}>{canLand}</span> can land right now.</>}
             </span>
           </>
         )}
         </div>
-        {person && (
-          <button onClick={person.onBack} className="agx-btn shrink-0 rounded px-2 py-1 text-[10.5px]"
-            style={{ color: "var(--text2)", border: EDGE }}>
-            Back to my board
-          </button>
-        )}
         {/*
           * Find, in the board, in the space the summary leaves.
           *
@@ -1156,25 +1139,17 @@ export function TriageBoard({
                 {more.loading ? "Loading more…" : "Load more pull requests"}
               </button>
             ) : <span>That is every pull request in this list.</span>
-          ) : !totalKnown ? (
-            <span>How many others are open is not a number this view can trust.</span>
-          ) : rest > 0 ? (
+          ) : viewer ? (
+            <span>Only {viewer}'s two lists are on this board: the open ones {viewer} opened and was asked to review.</span>
+          ) : totalKnown && rest > 0 ? (
             <span>The other <b style={{ color: "var(--text2)" }}>{rest}</b> open pull requests want nothing from you right now.</span>
-          ) : (
-            <span>That is every open pull request — there is nothing else.</span>
-          )}
-          <span style={{ color: "var(--text4)" }}>·</span>
+          ) : null}
+          {(wide || viewer || (totalKnown && rest > 0)) && <span style={{ color: "var(--text4)" }}>·</span>}
           <span title="Measured from each pull request's last update, which GitHub moves for a push, a comment or a label. Counted only over the ones on this board.">
             {quiet > 0
               ? <>{quiet} of these {quiet === 1 ? "has" : "have"} gone {QUIET_DAYS} days without a push or a comment</>
               : <>everything here moved in the last {QUIET_DAYS} days</>}
           </span>
-          {!wide && (
-            <button onClick={onShowTable} className="agx-btn ml-auto rounded px-2 py-0.5"
-              style={{ color: "var(--text2)", border: EDGE }}>
-              {tableLabel}
-            </button>
-          )}
         </div>
       )}
     </div>
@@ -1836,3 +1811,33 @@ function ago(iso: string): string {
 const K = ({ children }: { children: React.ReactNode }) => (
   <span className="rounded px-1 mx-px" style={{ border: `1px solid color-mix(in srgb, var(--text) 16%, transparent)` }}>{children}</span>
 );
+
+
+/**
+ * The yellow bar over somebody else's board.
+ *
+ * Their lanes use the same colours and the same cards as yours, so nothing else
+ * on screen says whose they are, and acting on a card as if it were your own
+ * queue is the mistake this prevents. Warning colour tokens, the house icon and
+ * hit sizes, and its own row: nothing is drawn over it or under it.
+ */
+export function PersonBanner({ login, onBack }: { login: string; onBack: () => void }) {
+  return (
+    <div role="status" data-person-banner className="shrink-0 flex items-center gap-3 mx-4 mt-3 mb-1 rounded-lg pl-3 pr-1.5 py-1.5"
+      style={{
+        minHeight: HIT + 8,
+        color: "var(--warning-ink)",
+        background: "color-mix(in srgb, var(--warning) 34%, var(--bg))",
+        border: EDGE, borderColor: "var(--warning)",
+      }}>
+      <WarningIcon size={ICON.lg} />
+      <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">
+        You are viewing <b className="font-bold">{login}</b>'s board, not yours
+      </span>
+      <button onClick={onBack} className="agx-btn shrink-0 rounded px-3 text-[11.5px] font-semibold"
+        style={{ minHeight: HIT, color: "var(--warning-ink)", border: EDGE, borderColor: "var(--warning)" }}>
+        Back to my board
+      </button>
+    </div>
+  );
+}

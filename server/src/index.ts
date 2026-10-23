@@ -184,7 +184,7 @@ import {
   rerunFailedChecks, mergePr, closePr, unstickLook, unstickClose, unstickReopen, filesSince, codeowners, prepareReviewPrompt, pendingReviewFor, branchUrl, subscribeCi, subscribeTalk, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
   prBaseOf,
   ghRateLimit,
-  branchBehind, localHead, prRollup, prRowDetails, personBoard, repoIdFor as prRepoIdFor, subscribeTalkSeen,
+  branchBehind, localHead, prRollup, prRowDetails, personBoard, refBranchRows, repoIdFor as prRepoIdFor, subscribeTalkSeen,
   prBranches, githubStatusCached, prsForBranch, prForHead, nodeIdOk, locateRepo, isForeignRoot } from "./prs.ts";
 import { planCheckOnBase, startCheckOnBase, checkOnBaseStatus, cancelCheckOnBase } from "./checkOnBasePr.ts";
 import { repoSpend } from "./spend.ts";
@@ -8131,6 +8131,9 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     }
     if (pathname === "/prs/rollup") {
       return json(await prRollup(url.searchParams.get("root") || "", url.searchParams.get("number") || 0, url.searchParams.get("force") === "1"));
+    }
+    if (pathname === "/prs/ref-branches") {
+      return json(await refBranchRows(url.searchParams.get("root") || "", url.searchParams.get("key") || ""));
     }
     if (pathname === "/prs/person") {
       return json(await personBoard(url.searchParams.get("root") || "", url.searchParams.get("login") || "", url.searchParams.get("force") === "1"));

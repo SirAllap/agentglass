@@ -1,4 +1,5 @@
 import type { PrSummary } from "../../../shared/types.ts";
+import { refKey, refToken } from "./prRefs.ts";
 
 /**
  * The one heading over a search: how many cards are on screen, in the words a
@@ -37,12 +38,13 @@ export const stillReading = (p: Pick<PrSummary, "checksLoaded">): boolean => p.c
  *   #19811 · 19811 · PR 19811 · pr#19811   one pull request, by number
  *   a GitHub login that appears on a loaded card   everything that person is involved in
  *   author:name · assignee:name · reviewer:name    exactly that role
+ *   ORBIT-1042 (any case)                            the title, the description and the branch
  *   any other words                                  the title and the description
  *
  * Ceiling: a bare login is recognised only when a card in hand carries it, so a
  * colleague nobody has loaded yet needs `author:name` once.
  */
-export const SEARCH_HINT = "Filter these, or press ⏎ to search every pull request: a number (#123), author:name, assignee:name, reviewer:name, or words from the title";
+export const SEARCH_HINT = "Filter these, or press ⏎ to search every pull request: a number (#123), a card key (ORBIT-1042), author:name, assignee:name, reviewer:name, or words from the title";
 
 const NUMBER = /^#?(\d+)$/;
 const PR_NUMBER = /^(?:pr|pull)#?(\d+)$/i;
@@ -90,7 +92,12 @@ export function toServerQuery(query: string, logins: ReadonlySet<string> = new S
   const toks = query.trim().split(/\s+/).filter(Boolean);
   const free = toks.filter((t) => !isQualifier(t));
   const words = normalizeFree(free.join(" ")).split(/\s+/).filter(Boolean)
-    .map((w) => (logins.has(w.replace(/^@/, "").toLowerCase()) ? `involves:${w.replace(/^@/, "")}` : w));
+    .map((w) => {
+      const bare = w.replace(/^@/, "");
+      if (logins.has(bare.toLowerCase())) return `involves:${bare}`;
+      const key = refKey(w);
+      return key ? refToken(key) : w;
+    });
   return [...toks.filter(isQualifier), ...words].join(" ");
 }
 

@@ -17,13 +17,11 @@ describe("viewKeeps", () => {
     expect(viewKeeps("all", "flight", yours)).toBe(true);
     expect(viewKeeps("all", "others", asked)).toBe(true);
   });
-  it("review and mine read the stake, so a card that is both shows in both", () => {
+  it("review reads the stake; there is no \"mine\" view, the board is already only theirs", () => {
     expect(viewKeeps("review", "land", asked)).toBe(true);
     expect(viewKeeps("review", "land", yours)).toBe(false);
-    expect(viewKeeps("mine", "flight", yours)).toBe(true);
-    expect(viewKeeps("mine", "flight", asked)).toBe(false);
     expect(viewKeeps("review", "blocked", both)).toBe(true);
-    expect(viewKeeps("mine", "blocked", both)).toBe(true);
+    expect(viewKeeps("all", "flight", yours)).toBe(true);
   });
   it("failing is the blocked lane and ready is the land lane, whoever owns the card", () => {
     expect(viewKeeps("failing", "blocked", asked)).toBe(true);
@@ -44,7 +42,7 @@ describe("viewKeeps", () => {
 describe("the wide views", () => {
   it("no view reaches past the viewer's two queues, so the default board holds only their stake", async () => {
     const { viewIsWide } = await import("../src/lib/prLanes.ts");
-    expect(["all", "review", "mine", "failing", "ready"].some((v) => viewIsWide(v as never))).toBe(false);
+    expect(["all", "review", "failing", "ready"].some((v) => viewIsWide(v as never))).toBe(false);
   });
   it("opening the board asks the list for the queue scope, never the repository's", async () => {
     const panel = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();

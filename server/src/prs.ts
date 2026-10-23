@@ -1694,6 +1694,10 @@ function searchExpr(repo: PrRepoId, filter: PrFilter, state: PrState, query?: st
   else if (filter === "review") parts.push("review-requested:@me");
 
   const free: string[] = [];
+  /* A tracker reference (`ref:ORBIT-1042`, made by the panel from a bare key)
+     is searched where teams write it: the title and the description. `in:`
+     scopes the WHOLE query, so it is added once, and only when there is one. */
+  let inTitleBody = false;
   for (const tok of tokenize(query ?? "")) {
     const ci = tok.indexOf(":");
     const key = ci > 0 ? tok.slice(0, ci).toLowerCase() : "";
@@ -1704,6 +1708,10 @@ function searchExpr(repo: PrRepoId, filter: PrFilter, state: PrState, query?: st
     // query outright.
     if (key && !value) continue;
     if (!key) { if (tok.trim()) free.push(tok); continue; }
+    if (key === "ref") {
+      if (/^[A-Za-z][A-Za-z0-9]{1,9}-\d{1,9}$/.test(value)) { parts.push(`"${value.toUpperCase()}"`); inTitleBody = true; }
+      continue;
+    }
     const q = QUALIFIER[key];
     if (q) { parts.push(`${q}:${quoteQ(value)}`); continue; }
     if (key === "checks") {
@@ -1723,6 +1731,7 @@ function searchExpr(repo: PrRepoId, filter: PrFilter, state: PrState, query?: st
   // means. ALWAYS quoted: `foo:bar` is not a qualifier we know, and sent bare it
   // would either be read as one or make GitHub reject the whole search.
   for (const w of free) parts.push(`"${w.replace(/"/g, "")}"`);
+  if (inTitleBody) parts.push("in:title,body");
 
   parts.push("sort:updated-desc");
   return parts.join(" ");
@@ -2988,8 +2997,9 @@ export async function listPrs(rootIn: unknown, filterIn: unknown, stateIn: unkno
  * GitHub search cannot OR across qualifiers (`author:x OR review-requested:x`
  * answers zero, measured), so this is two searches, run side by side and
  * merged by number. Cold that is four GraphQL requests (rows + checks for each
- * search); warm it is none, because the answer is remembered per repository and
- * login. Nothing polls it: the panel asks once per Enter.
+ * search); warm it is none, because the answer is remembered per repository
+ * and login. Nothing polls it: the panel asks once per Enter. Only what is open
+ * NOW: a person's merged and closed pull requests are reached by a plain search.
  *
  * The ceiling: one page (LIST_PAGE) of each search. `more` says a person has
  * further pull requests than the board holds.
@@ -3010,6 +3020,85 @@ export async function personBoard(rootIn: unknown, loginIn: unknown, fresh = fal
     if (!a || !r) return { ok: false, error: "GitHub did not answer" };
     return { ok: true, login, authored: a.rows, asked: r.rows, more: a.hasNext || r.hasNext };
   }, { fresh, keep: (v) => v.ok });
+}
+
+/**
+ * The pull requests whose BRANCH carries a card key.
+ *
+ * GitHub's search cannot match part of a branch name, and teams start their
+ * branches with the card key, which makes the branch the most reliable place
+ * for it. So the branch names come from git itself: one `git ls-remote --heads`
+ * in the local clone (the git protocol, not the GitHub API), filtered here
+ * without regard to case, and the pull requests of the matching branches are
+ * read in ONE batched GraphQL request. Cold that is one ls-remote and at most
+ * one GraphQL; warm it is nothing, for five minutes. The panel asks on Enter
+ * only. The list of heads is kept per clone, so a second key costs no ls-remote.
+ *
+ * Ceiling: 20 branches per key; rows come back without their checks (the panel
+ * fills the ones on screen); a clone with no `origin` finds nothing here and
+ * the title/description search still answers.
+ */
+const REF_RE = /^[A-Za-z][A-Za-z0-9]{1,9}-\d{1,9}$/;
+const REF_TTL_MS = 5 * 60_000;
+const REF_BRANCH_CAP = 20;
+const SAFE_BRANCH = /^[A-Za-z0-9._\/-]{1,200}$/;
+
+/** Branch names in `git ls-remote --heads` output that contain `key`, any case; pure. */
+export function branchesCarrying(lsRemoteOut: string, key: string, cap = REF_BRANCH_CAP): string[] {
+  const k = key.toUpperCase();
+  const out: string[] = [];
+  for (const line of lsRemoteOut.split("\n")) {
+    const ref = line.split("\t")[1]?.trim();
+    if (!ref?.startsWith("refs/heads/")) continue;
+    const name = ref.slice("refs/heads/".length);
+    if (name.toUpperCase().includes(k) && SAFE_BRANCH.test(name)) out.push(name);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
+export type RefBranchDeps = {
+  lsRemote?: (cwd: string) => Promise<string | null>;
+  graphql?: (query: string) => Promise<any>;
+};
+export type RefBranchRows = { ok: boolean; key?: string; branches?: string[]; rows?: PrSummary[]; error?: string };
+
+export async function refBranchRows(rootIn: unknown, keyIn: unknown, deps: RefBranchDeps = {}): Promise<RefBranchRows> {
+  const key = typeof keyIn === "string" ? keyIn.toUpperCase() : "";
+  if (!REF_RE.test(key)) return { ok: false, error: "not a card key" };
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
+  const abs = safeAbs(rootIn);
+  const cwd = abs ? repoRootOf(abs) : null;
+  if (!cwd) return { ok: false, error: "not a git checkout" };
+  const lsRemote = deps.lsRemote ?? (async (dir: string) => {
+    const r = await gitAsync(dir, ["ls-remote", "--heads", "origin"]);
+    return r.code === 0 ? r.stdout : null;
+  });
+  return ttlRead<RefBranchRows>(`refbranch|${repo.key}|${key}`, REF_TTL_MS, async () => {
+    const heads = await ttlRead<string | null>(`lsremote|${cwd}`, REF_TTL_MS, () => lsRemote(cwd), { keep: (v) => v != null });
+    if (heads == null) return { ok: false, error: "git ls-remote did not answer" };
+    const branches = branchesCarrying(heads, key);
+    if (!branches.length) return { ok: true, key, branches, rows: [] };
+    const [owner, name] = repo.nameWithOwner.split("/");
+    // Branch names pass SAFE_BRANCH, so quoting them is all the escaping GraphQL needs.
+    const body = branches.map((b, i) =>
+      `b${i}: pullRequests(headRefName: "${b}", first: 3, orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { ${SEL_ROW} } }`).join("\n");
+    const q = `query { repository(owner: "${owner}", name: "${name}") { ${body} } }`;
+    const res = await (deps.graphql ? deps.graphql(q) : ghGraphql<any>(q, {}));
+    const data = res?.data?.repository;
+    if (!data) return { ok: false, error: "GitHub did not answer" };
+    const rows: PrSummary[] = [];
+    const seen = new Set<number>();
+    for (let i = 0; i < branches.length; i++) {
+      for (const n of data[`b${i}`]?.nodes ?? []) {
+        if (!n || typeof n.number !== "number" || seen.has(n.number)) continue;
+        seen.add(n.number);
+        rows.push(mapSummary({ ...n, labels: n.labels?.nodes ?? [], assignees: n.assignees?.nodes ?? [] }, false));
+      }
+    }
+    return { ok: true, key, branches, rows };
+  }, { keep: (v) => v.ok });
 }
 
 // ---------------------------------------------------------------------------

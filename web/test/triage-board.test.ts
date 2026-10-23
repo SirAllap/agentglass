@@ -191,9 +191,9 @@ describe("the scope sentence", () => {
     const html = full();
     expect(html).toContain(`${INVOLVED}</b>`);
     expect(html).toContain("of 388 open pull requests want something from you");
-    // The subtraction is the promise: the board is not hiding the rest, it is
-    // pointing at them.
-    expect(html).toContain(`show the other ${388 - INVOLVED}`);
+    // No way to the rest from here: the repository is reached by searching.
+    expect(html).not.toContain("show the other");
+    expect(html).not.toContain("never shows more than that");
   });
 
   it("drops every number built on the total when the total disagrees", () => {
@@ -204,7 +204,8 @@ describe("the scope sentence", () => {
      * and they go together, or the screen contradicts itself.
      */
     const html = render({ total: 1, mine: MINE, review: REVIEW });
-    expect(html).toContain("show every open pull request");
+    expect(html).not.toContain("show every open pull request");
+    expect(html).not.toContain("never shows more than that");
     expect(html).not.toContain("the other 0");
     expect(html).toContain("open pull requests want something from you");
     expect(html).not.toContain("of 1 open pull requests");
@@ -301,7 +302,7 @@ describe("the footer", () => {
      * dressed up as a number.
      */
     const html = render({ total: 1, mine: MINE, review: REVIEW });
-    expect(html).toContain("not a number this view can trust");
+    expect(html).not.toContain("not a number this view can trust");
     expect(html).not.toContain("want nothing from you right now");
   });
 

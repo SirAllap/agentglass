@@ -362,10 +362,18 @@ export function voice(text: string, viewer?: string): string {
     .replace(/\b(Asked of|including|not|ball is with|for) you\b/g, `$1 ${v}`);
 }
 
-/** The lanes as a person's board words them; the owner's are `LANES` itself. */
+/**
+ * The lanes as a person's board words them; the owner's are `LANES` itself.
+ *
+ * A person's board has the four the owner's has, never "Waiting on someone
+ * else": that lane is the owner's own "not yours to move", and on somebody
+ * else's board it would be a fifth kind of thing to read. The only cards that
+ * ever reach it are drafts the person was asked to review, and `board` files
+ * those under the review lane, draft sentence intact.
+ */
 export function lanesFor(viewer?: string): Lane[] {
   if (!viewer) return LANES;
-  return LANES.map((l) => ({
+  return LANES.filter((l) => l.id !== "others").map((l) => ({
     ...l,
     label: l.id === "review" ? `Needs ${viewer}'s review` : l.label === "Yours, in flight" ? `${viewer}'s, in flight` : l.label,
     why: l.id === "review" ? `Somebody asked ${viewer} by name, and nobody else can unblock it.`
@@ -381,7 +389,7 @@ export function board(prs: PrSummary[], stakeOf: (p: PrSummary) => Stake, hintOf
   for (const l of LANES) out.set(l.id, []);
   for (const p of prs) {
     const f = fileInLane(p, stakeOf(p), hintOf?.(p));
-    const filed = viewer ? { ...f, reason: voice(f.reason, viewer) } : f;
+    const filed = viewer ? { ...f, reason: voice(f.reason, viewer), lane: f.lane === "others" ? "review" as const : f.lane } : f;
     out.get(filed.lane)!.push({ ...p, filed });
   }
   return out;
@@ -459,8 +467,9 @@ export const ACTION_LABEL: Record<Suggested, string> = {
  * The views on the panel's pill row, as filters over the board.
  *
  * Each one is a question about the cards already in hand, so none of them
- * costs a request. `review` and `mine` are the viewer's stake, read the same
- * way the lanes read it; `failing` and `ready` are the two lanes named for
+ * costs a request. `review` is the viewer's stake, read the same
+ * way the lanes read it (there is no "mine" pill: the board is already only
+ * what they opened and what they were asked for); `failing` and `ready` are the two lanes named for
  * what is wrong and what can land. The stake is judged AFTER filing, which is
  * the point: a pull request that is yours and asked of you keeps the lane it
  * would have everywhere else instead of moving when a pill is pressed.
@@ -468,7 +477,7 @@ export const ACTION_LABEL: Record<Suggested, string> = {
  * (no pill) is those queues whole: what wants something from them. Somebody
  * else's pull request reaches the board only through a search.
  */
-export type BoardView = "all" | "review" | "mine" | "failing" | "ready";
+export type BoardView = "all" | "review" | "failing" | "ready";
 
 /**
  * Whether a view reaches past the viewer's own two queues, to the repository.
@@ -492,7 +501,6 @@ export function viewIsWide(_view: BoardView): boolean {
 export function viewKeeps(view: BoardView, lane: LaneId, stake: Stake, p?: { checks?: { failure?: number }; mergeable?: string }): boolean {
   switch (view) {
     case "review": return stake.asked;
-    case "mine": return stake.mine;
     case "failing": return lane === "blocked" || (p?.checks?.failure ?? 0) > 0 || p?.mergeable === "CONFLICTING";
     case "ready": return lane === "land";
     default: return true;
