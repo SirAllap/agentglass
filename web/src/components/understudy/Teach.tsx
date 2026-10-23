@@ -26,6 +26,7 @@ import { SERVER, authHeaders } from "../../lib/api.ts";
 import { Button } from "../workspace/Chrome.tsx";
 import { Empty } from "../git/ui.tsx";
 import { SettingRow } from "../SettingRow.tsx";
+import { useReportNeeds } from "../SettingsPageState.tsx";
 import { Field, SettingsCard, SettingsForm, StatusBadge } from "../SettingsKit.tsx";
 import { fmtBytes } from "../../lib/goneCleanup.ts";
 import { HIT, ICON } from "../../lib/iconSize.ts";
@@ -142,6 +143,8 @@ export function Teach({ active }: { active: boolean }) {
   }, []);
 
   useEffect(() => { if (active) void load(); }, [active, load]);
+  /* The one red thing on this page is the nav mark too; a wizard step that is "your turn" is a next step, not a problem. */
+  useReportNeeds("understudy", data && !data.terms.ok ? { count: 1, title: "The private-terms list is missing, so nothing is read yet" } : null);
 
   if (!active) return null;
   if (!data) return <Empty what="what is on this machine" busy />;
@@ -280,7 +283,7 @@ export function Teach({ active }: { active: boolean }) {
     );
   };
 
-  const stepTone = (done: boolean, active: boolean) => done ? "ok" as const : active ? "warn" as const : "off" as const;
+  const stepTone = (done: boolean, active: boolean) => done ? "ok" as const : active ? "info" as const : "off" as const;
   const stepWord = (done: boolean, active: boolean, doneText: string) => done ? doneText : active ? "Your turn" : "Later";
   const step1Active = data.never.length === 0;
   const step2Active = data.never.length > 0 && allowedCount === 0;

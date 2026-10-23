@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SettingRow } from "../SettingRow.tsx";
 import { CommandLine, ProblemNote, SettingsCard, StatusBadge } from "../SettingsKit.tsx";
-import { useReportProblem } from "../SettingsPageState.tsx";
+import { useReportNeeds, useReportProblem } from "../SettingsPageState.tsx";
 import { Button, Segmented } from "../workspace/Chrome.tsx";
 import { api } from "../../lib/api.ts";
 import { engineProviders, type Provider } from "../../../../shared/agentKinds.ts";
@@ -165,6 +165,8 @@ export function EnginesPane() {
   const ready = present.filter((r) => engineState(r.e) === "ready");
   const needs = present.filter((r) => !["ready", "checking"].includes(engineState(r.e)));
   const [view, setView] = useState<"all" | "ready" | "needs" | "absent">("all");
+  /* The "Needs you" filter, the cards' badges and the nav mark are the same count. */
+  useReportNeeds("engines", report && needs.length ? { count: needs.length, title: `${needs.length === 1 ? needs[0]!.p.title : `${needs.length} engines`} ${needs.length === 1 ? "needs" : "need"} sign-in or setup` } : null);
   const shown = view === "ready" ? ready : view === "needs" ? needs : view === "absent" ? [] : present;
   const showAbsent = view === "all" || view === "absent";
 

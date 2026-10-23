@@ -7,7 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
-  DEFAULT_SHUT, NAV_GROUPS, NO_FACTS, buildNav, currentToc, groupSearch, headerChips, highlightParts, jumpTarget,
+  DEFAULT_SHUT, NAV_GROUPS, NO_FACTS, buildNav, connectionsNeeding, withNeeds, withProblems, currentToc, groupSearch, headerChips, highlightParts, jumpTarget,
   moveSelection, navMarks, openGroupOf, parseShut, rollup, searchSummary, serializeShut, synonymsUsed, tocItems,
   type NavFacts, type NavGroupId,
 } from "../src/lib/settingsNav.ts";
@@ -301,5 +301,22 @@ describe("the Plugins page's mark", () => {
   test("the header says how many run", () => {
     expect(headerChips("plugins", { state: "on", count: 2 })).toEqual([{ tone: "ok", text: "2 running" }]);
     expect(headerChips("plugins", { state: "needs", count: 1, title: "1 plugin waits for your approval" })).toEqual([{ tone: "warn", text: "1 plugin waits for your approval" }]);
+  });
+});
+
+describe("needs-you is what the person must do (fix 2)", () => {
+  test("connections counts needed tools and errored services, never optional uninstalled CLIs or unconnected services", () => {
+    const deps = [
+      { status: "missing", required: false }, { status: "missing", required: false },
+      { status: "missing", required: true }, { status: "attention", required: false }, { status: "ok", required: true },
+    ];
+    expect(connectionsNeeding(deps, [{ state: "needs-auth" }, { state: "missing-tool" }, { state: "error" }, { state: "connected" }])).toBe(3);
+    expect(connectionsNeeding([{ status: "missing", required: false }], [{ state: "needs-auth" }])).toBe(0);
+  });
+  test("a page's own report becomes an amber mark that says what; a red problem still wins", () => {
+    const m = withNeeds({}, { engines: { count: 2, title: "2 engines need sign-in or setup" }, understudy: { count: 0, title: "x" } });
+    expect(m.engines).toEqual({ state: "needs", count: 2, title: "2 engines need sign-in or setup" });
+    expect(m.understudy).toBeUndefined();
+    expect(withProblems(m, { engines: { chip: "Not scanned", title: "t" } }).engines!.state).toBe("err");
   });
 });

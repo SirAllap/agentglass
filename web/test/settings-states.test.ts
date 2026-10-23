@@ -108,7 +108,7 @@ describe("a page that could not read what it shows", () => {
     expect(applyProblem(one, "jira", { chip: "Not reachable", title: "x" }).jira?.chip).toBe("Not reachable");
   });
   test("the shell draws it: nav mark, header chip and a Try again that runs the page's own retry", () => {
-    expect(modal).toContain("const marks = useMemo(() => withProblems(navMarks({");
+    expect(modal).toContain("const marks = useMemo(() => withProblems(withNeeds(navMarks({");
     expect(modal).toContain("<PageState.Provider value={pageState}>");
     expect(modal).toMatch(/problems\[navTab\.id\] \? <Button tone="primary" onClick=\{\(\) => retries\.current\[navTab\.id\]\?\.\(\)\}>Try again<\/Button>/);
     const nav = read("components/SettingsNav.tsx");

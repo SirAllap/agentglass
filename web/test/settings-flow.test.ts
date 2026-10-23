@@ -41,6 +41,22 @@ describe("placeFlow: balanced, then stable columns", () => {
     expect(s[2]).toEqual({ col: "all", row: 301, span: 50 });
     expect(s[3]).toMatchObject({ col: 1, row: 351 });
   });
+  test("a dominating card gets its own column wherever it sits in the page order", () => {
+    // Page order A, B, C with C the 1373px one: greedy-in-order stacked B and C (1962 against 773).
+    const s = settle([773, 389, 1373], 2);
+    expect(s.map((x) => x.col)).toEqual([2, 2, 1]);
+    const bottom = (c: number) => Math.max(...s.filter((x) => x.col === c).map((x) => x.row - 1 + x.span));
+    expect(Math.abs(bottom(1) - bottom(2))).toBeLessThan(300);
+  });
+  test("opening a card above a wide one moves only the wide card and what is under it, never the other column's cards above it", () => {
+    const memo: (number | undefined)[] = [];
+    const items = (h0: number) => [h0, 300, 200, 250].map((h, i) => ({ h, wide: i === 2, col: memo[i] }));
+    const a = placeFlow(items(100), 2); a.forEach((x, i) => { memo[i] = x.col as number; });
+    const b = placeFlow(items(500), 2);
+    expect(b[1]).toEqual(a[1]);
+    expect(b[2]!.row).toBeGreaterThan(a[2]!.row - 1);
+    expect(b[3]!.row - a[3]!.row).toBe(b[2]!.row - a[2]!.row);
+  });
   test("one column is a plain stack", () => {
     const s = placeFlow([card(10), card(20)], 1);
     expect(s.map((x) => x.row)).toEqual([1, 11]);

@@ -85,7 +85,7 @@ describe("escape asks before it leaves", () => {
     const from = code.indexOf('if (e.key !== "Escape") return;');
     expect(from).toBeGreaterThan(-1);
     const handler = code.slice(from, code.indexOf("};", from));
-    expect(handler).toContain("if (escArmed) { setEscArmed(false); onClose(); return; }");
+    expect(handler).toContain("if (escRef.current) { escRef.current = false; setEscArmed(false); onClose(); return; }");
     expect(handler).toContain("setEscArmed(true)");
   });
 

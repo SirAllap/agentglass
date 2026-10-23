@@ -8,6 +8,7 @@
 //
 // Here each kind gets its own section, toggles look like toggles and say what
 // they control, and downloads say what you actually get.
+import { useModalDialog } from "../lib/focusTrap.ts";
 import { PluginSettingsPane } from "./plugins/PluginSettingsPane.tsx";
 import { Fragment, createContext, isValidElement, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { RecipesPane } from "./RecipesPane.tsx";
@@ -64,7 +65,7 @@ import { SettingsNav } from "./SettingsNav.tsx";
 import { SettingsSearchPanel } from "./SettingsSearchPanel.tsx";
 import { SettingsPageHeader } from "./SettingsPageHeader.tsx";
 import { SettingsToc } from "./SettingsToc.tsx";
-import { NO_FACTS, NO_MARK, groupByName, groupSearch, headerChips, hueVar, navMarks, withProblems, type MatchIn, type NavFacts, type PageProblem } from "../lib/settingsNav.ts";
+import { NO_FACTS, NO_MARK, groupByName, groupSearch, headerChips, hueVar, connectionsNeeding, navMarks, withNeeds, withProblems, type MatchIn, type NavFacts, type PageNeed, type PageProblem } from "../lib/settingsNav.ts";
 import { applyProblem } from "../lib/settingsStates.ts";
 import { PageState, useReportProblem, useReportSaving, useSavePhase, type PageStateSink } from "./SettingsPageState.tsx";
 import { RunningPanes } from "./RunningPanes.tsx";
@@ -3199,7 +3200,7 @@ function RequirementsPane({ open }: { open: boolean }) {
         {broken
           ? <StatusBadge tone="err">{broken} needed {broken === 1 ? "tool" : "tools"} missing</StatusBadge>
           : wanting
-            ? <StatusBadge tone="warn">{wanting} optional {wanting === 1 ? "feature" : "features"} off</StatusBadge>
+            ? <StatusBadge tone={live.some((d) => d.status === "attention") ? "warn" : "off"}>{wanting} optional {wanting === 1 ? "feature" : "features"} off</StatusBadge>
             : <StatusBadge tone="ok">Everything is here</StatusBadge>}
         <span className="text-[12px] flex-1 min-w-0" style={{ color: "var(--text3)" }}>{desc}</span>
         {recheck}
@@ -3838,8 +3839,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
     ]).then(([deps, provs, remote, hookInstalled, digest, jira, lanternWatching, updateAvailable, notificationsOn, plugs]) => {
       if (!live) return;
       setBadges({
-        connections: (deps ?? []).filter((d) => d.status !== "ok" && d.status !== "unsupported").length
-          + (provs ?? []).filter((p) => p.state === "error" || p.state === "needs-auth").length,
+        connections: connectionsNeeding(deps ?? [], provs ?? []),
         remote,
       });
       setLogDigest(digest);
@@ -4218,6 +4218,11 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
    * loaded trigger behind for a keystroke a minute later.
    */
   const [escArmed, setEscArmed] = useState(false);
+  /* The handler reads the armed state from a ref: two presses closer than a render reached it with the
+     first press's closure and re-armed instead of leaving (measured from the empty search box). */
+  const escRef = useRef(false);
+  escRef.current = escArmed;
+  const dialog = useModalDialog(open, "Settings");
   useEffect(() => { if (!open) setEscArmed(false); }, [open]);
 
   /*
@@ -4272,12 +4277,13 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      if (escArmed) { setEscArmed(false); onClose(); return; }
+      if (escRef.current) { escRef.current = false; setEscArmed(false); onClose(); return; }
+      escRef.current = true;
       setEscArmed(true);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose, escArmed]);
+  }, [open, onClose]);
 
   /** The page on screen as the nav knows it: a plugin's own page is the Plugins page. */
   const navPane = pane.startsWith("plugin:") ? "plugins" : pane;
@@ -4289,6 +4295,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
      The facts above are one read per open; these are the pages' own, so they turn the nav dot and the
      header chip without the shell knowing a thing about Jira or an engine scan. */
   const [problems, setProblems] = useState<Record<string, PageProblem>>({});
+  const [needsBy, setNeedsBy] = useState<Record<string, PageNeed>>({});
   const [saving, setSaving] = useState<ReadonlySet<string>>(() => new Set());
   const retries = useRef<Record<string, () => void>>({});
   const pageState = useMemo<PageStateSink>(() => ({
@@ -4296,6 +4303,12 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
       if (p && retry) retries.current[page] = retry;
       setProblems((cur) => applyProblem(cur, page, p));
     },
+    needs: (page, n) => setNeedsBy((cur) => {
+      if (n ? cur[page]?.count === n.count && cur[page]?.title === n.title : !(page in cur)) return cur;
+      const next = { ...cur };
+      if (n) next[page] = n; else delete next[page];
+      return next;
+    }),
     saving: (page, on) => setSaving((cur) => {
       if (cur.has(page) === on) return cur;
       const next = new Set(cur);
@@ -4303,12 +4316,12 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
       return next;
     }),
   }), []);
-  const marks = useMemo(() => withProblems(navMarks({
+  const marks = useMemo(() => withProblems(withNeeds(navMarks({
     ...NO_FACTS, ...facts,
     connectionsNeed: badges.connections ?? null,
     remoteLive: badges.remote ? badges.remote === "live" : null,
     clickupConnected: cuConnected,
-  }), problems), [facts, badges, logDigest, cuConnected, problems]);
+  }), needsBy), problems), [facts, badges, logDigest, cuConnected, problems, needsBy]);
 
   return (
     /* Everything this dialog opens — a confirm, a menu, a picker — is a portal
@@ -4335,6 +4348,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
            * it.
            */
           <motion.div
+            {...dialog}
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             transition={{ duration: 0.14 }}
             className="agx-settings-shell fixed inset-0 flex pointer-events-auto"

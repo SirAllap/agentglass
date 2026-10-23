@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
-import type { PageProblem } from "../lib/settingsNav.ts";
+import type { PageNeed, PageProblem } from "../lib/settingsNav.ts";
 import { SAVED_MS, nextSavePhase, type SavePhase } from "../lib/settingsStates.ts";
 
 /**
@@ -15,6 +15,8 @@ import { SAVED_MS, nextSavePhase, type SavePhase } from "../lib/settingsStates.t
 export interface PageStateSink {
   problem: (page: string, p: PageProblem | null, retry?: () => void) => void;
   saving: (page: string, on: boolean) => void;
+  /** The page found something only the person can do; `null` clears it. */
+  needs: (page: string, n: PageNeed | null) => void;
 }
 export const PageState = createContext<PageStateSink | null>(null);
 
@@ -29,6 +31,17 @@ export function useReportProblem(page: string, p: PageProblem | null, retry?: ()
     sink.problem(page, { chip, title }, () => retryRef.current?.());
     return () => sink.problem(page, null);
   }, [sink, page, chip, title]);
+}
+
+/** Report what the person must do on `page` (count and one sentence saying what); the nav mark and header chip read it. */
+export function useReportNeeds(page: string, n: PageNeed | null) {
+  const sink = useContext(PageState);
+  const count = n?.count, title = n?.title;
+  useEffect(() => {
+    if (!sink || count === undefined || title === undefined) return;
+    sink.needs(page, { count, title });
+    return () => sink.needs(page, null);
+  }, [sink, page, count, title]);
 }
 
 /** Report that a write of `page` is out, for the header chip. */

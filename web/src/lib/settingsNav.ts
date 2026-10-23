@@ -143,6 +143,24 @@ export const rollup = (marks: readonly PageMark[]): number => marks.filter((m) =
  */
 export interface PageProblem { chip: string; title: string }
 
+/** What a page says only the person can do: the amber count on the nav and the sentence under it. */
+export interface PageNeed { count: number; title: string }
+
+/** Pages' own "needs you" reports as nav marks. Amber is for what a person must do and the title says what;
+ *  a problem (red) from the same page still wins in `withProblems`, which runs after this. */
+export function withNeeds(marks: Readonly<Record<string, PageMark>>, needs: Readonly<Record<string, PageNeed>>): Record<string, PageMark> {
+  const out: Record<string, PageMark> = { ...marks };
+  for (const [id, n] of Object.entries(needs)) if (n.count > 0) out[id] = { state: "needs", count: n.count, title: n.title };
+  return out;
+}
+
+/** Tools & services that want the person: a required tool missing or a tool that needs attention, and a service that
+ *  errored. An optional CLI that is not installed and a service nobody connected are neutral on the page, so here too. */
+export function connectionsNeeding(deps: readonly { status: string; required?: boolean }[], provs: readonly { state: string }[]): number {
+  return deps.filter((d) => d.status === "attention" || (d.status === "missing" && !!d.required)).length
+    + provs.filter((p) => p.state === "error").length;
+}
+
 /** A page that reported a problem turns its nav mark red, over whatever the open-time facts said:
  *  the fact is a guess from one read, the report is what the page itself just failed at. */
 export function withProblems(marks: Readonly<Record<string, PageMark>>, problems: Readonly<Record<string, PageProblem>>): Record<string, PageMark> {

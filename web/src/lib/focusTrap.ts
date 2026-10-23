@@ -12,6 +12,8 @@ export function useFocusTrap(on: boolean, root: RefObject<HTMLElement | null>, r
       if (!f.length) return;
       const first = f[0]!, last = f[f.length - 1]!;
       const at = document.activeElement;
+      /* A confirm or menu a row opened is a portal outside the root and has its own Tab handling. */
+      if (at && !root.current.contains(at) && at.closest("[role='dialog'],[role='menu'],[role='listbox']")) return;
       if (e.shiftKey && (at === first || !root.current.contains(at))) { e.preventDefault(); last.focus(); }
       else if (!e.shiftKey && (at === last || !root.current.contains(at))) { e.preventDefault(); first.focus(); }
     };

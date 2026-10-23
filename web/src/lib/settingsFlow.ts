@@ -26,16 +26,36 @@ export interface FlowSlot { col: number | "all"; row: number; span: number }
 export function placeFlow(items: readonly FlowItem[], cols: number): FlowSlot[] {
   const n = Math.max(1, Math.floor(cols));
   const y = new Array<number>(n).fill(0);
-  return items.map((it) => {
-    const span = Math.max(1, Math.ceil(it.h));
-    if (it.wide || n === 1) {
-      const row = Math.max(...y);
-      y.fill(row + span);
-      return { col: "all" as const, row: row + 1, span };
+  const out: FlowSlot[] = [];
+  const fixed = (it: FlowItem) => it.col !== undefined && it.col >= 1 && it.col <= n ? it.col - 1 : -1;
+  const span = (it: FlowItem) => Math.max(1, Math.ceil(it.h));
+  /* A run of cards between two wide ones. Cards with no column yet are dealt tallest first onto the shortest
+     column (the remembered ones count where they sit), so a 1400px card gets a column to itself instead of
+     landing under whichever neighbour happened to come before it; the rows then follow the page order. */
+  let run: number[] = [];
+  const flush = () => {
+    const at = new Map<number, number>();
+    const h = [...y];
+    for (const i of run) { const c = fixed(items[i]!); if (c >= 0) { at.set(i, c); h[c]! += span(items[i]!); } }
+    for (const i of run.filter((j) => !at.has(j)).sort((a, b) => span(items[b]!) - span(items[a]!) || a - b)) {
+      const c = h.indexOf(Math.min(...h));
+      at.set(i, c); h[c]! += span(items[i]!);
     }
-    const c = it.col !== undefined && it.col >= 1 && it.col <= n ? it.col - 1 : y.indexOf(Math.min(...y));
-    const row = y[c]!;
-    y[c] = row + span;
-    return { col: c + 1, row: row + 1, span };
+    for (const i of run) {
+      const c = at.get(i)!, sp = span(items[i]!), row = y[c]!;
+      y[c] = row + sp;
+      out[i] = { col: c + 1, row: row + 1, span: sp };
+    }
+    run = [];
+  };
+  items.forEach((it, i) => {
+    if (it.wide || n === 1) {
+      flush();
+      const row = Math.max(...y), sp = span(it);
+      y.fill(row + sp);
+      out[i] = { col: "all", row: row + 1, span: sp };
+    } else run.push(i);
   });
+  flush();
+  return out;
 }

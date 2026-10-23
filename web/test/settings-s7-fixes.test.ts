@@ -36,3 +36,28 @@ describe("settings s7 fixes", () => {
     expect(diffPreview).not.toContain('rounded-lg overflow-hidden min-w-0');
   });
 });
+
+describe("settings keyboard (fix 1)", () => {
+  test("Settings is a focus-trapped dialog, spread on its shell", () => {
+    expect(modal).toContain('useModalDialog(open, "Settings")');
+    expect(modal).toMatch(/<motion\.div\s+\{\.\.\.dialog\}/);
+  });
+  test("the second Escape reads the armed state from a ref, not a stale closure", () => {
+    expect(modal).toContain("if (escRef.current) { escRef.current = false;");
+    expect(modal).not.toMatch(/\}, \[open, onClose, escArmed\]\);/);
+  });
+});
+
+describe("marks agree with their pages (fix 2)", () => {
+  const engines = strip(at("../src/components/engines/EnginesPane.tsx"));
+  test("Agent engines and Knowledge report the same fact their cards show", () => {
+    expect(engines).toContain('useReportNeeds("engines"');
+    expect(teach).toContain('useReportNeeds("understudy"');
+  });
+  test("a wizard's next step is info, not the amber of needs-you", () => {
+    expect(teach).toContain('active ? "info" as const');
+  });
+  test("the nav count comes from the Tools page's own rule", () => {
+    expect(modal).toContain("connections: connectionsNeeding(deps ?? [], provs ?? [])");
+  });
+});
