@@ -1692,7 +1692,10 @@ export async function handOff(creds: JiraCreds, key: string, updated: number, ch
   const project = isObj(f.project) ? str(f.project.key) : K.slice(0, K.lastIndexOf("-"));
   const rule = handoffRules()[project];
   const toId = choice.to ?? rule?.to?.id;
-  const clear = choice.clear ?? rule?.clear ?? false;
+  const wantClear = choice.clear ?? rule?.clear ?? false;
+  // "Assign a person" off: the card is moved and the assignee is left on it, as jiraSteps.ts refuses the unassign kind.
+  const clearOff = wantClear ? writeRefusal("assign") : null;
+  const clear = wantClear && !clearOff;
   if (!toId) return { ok: false, error: `No hand-off is set for ${project}: choose where it goes in Settings` };
   const was = personId(f.assignee);
   const wasName = personName(f.assignee);
@@ -1715,7 +1718,8 @@ export async function handOff(creds: JiraCreds, key: string, updated: number, ch
     r.status === 409 ? { ok: false, conflict: true, error: "Somebody changed this card while you were moving it, reloaded" }
       : r.status === 400 ? { ok: false, error: NOT_ACCEPTED }
         : { ok: false, unauthorised: r.unauthorised, error: r.error };
-  const readBack = async (partial?: string): Promise<HandoffOutcome> => {
+  const readBack = async (said?: string): Promise<HandoffOutcome> => {
+    const partial = [said, clearOff && was ? `${wasName} was left on it: ${clearOff}` : ""].filter(Boolean).join(". ") || undefined;
     const back = await readIssue(creds, key, { fresh: true });
     if (!back.ok || !back.data) {
       // Enough of the card for the watch to know the move was ours.

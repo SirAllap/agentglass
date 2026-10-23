@@ -220,6 +220,21 @@ function suite(flavor: FakeFlavor) {
         expect(fake.requests.length).toBeLessThanOrEqual(6);
       });
 
+      test("\"Assign a person\" off: the card moves and the assignee stays, whichever way the move would have cleared it", async () => {
+        J.setJiraWriteKind("assign", false);
+        for (const to of ["3", "1"]) {
+          fake.reset();
+          fake.requests.length = 0;
+          const r = await handOff("ORBIT-1042", { to, clear: true });
+          expect(r.ok).toBe(true);
+          expect(r.partial).toBe("Ada Example was left on it: Assigning a person is switched off in Settings");
+          // Neither the atomic `assignee: null` nor the PUT of nobody went out.
+          expect(JSON.stringify(writes().map((w) => w.body))).not.toContain("null");
+          expect(writes().filter((w) => w.method === "PUT")).toEqual([]);
+          expect(fake.state.issues["ORBIT-1042"]!.assignee).toBe("acc-0001");
+        }
+      });
+
       test("THE TRAP: a second write guarded by the stamp the person saw is refused after the move", async () => {
         // What a client that sequenced the two writes itself would do, with one stamp.
         const seen = upd("ORBIT-1042");
