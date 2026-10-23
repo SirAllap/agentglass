@@ -45,6 +45,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { guardedFetch, privateAddress, type GuardedFetchOptions } from "./net.ts";
 import { isIP } from "node:net";
+import { forgetCached } from "./jiraviews.ts";
 import { clearCredential, redacted, secretFor, setCredential } from "./credentials.ts";
 import type { CallResult, WriteOutcome } from "./trackerTypes.ts";
 import type { JiraAuth, JiraConnectResult, JiraDeployment, JiraKind, JiraMove, JiraMoves, JiraStatus, ProviderTask } from "../../shared/providers.ts";
@@ -194,6 +195,8 @@ let refused = false;
 export const jiraRefused = (): boolean => refused;
 
 let generation = 0;
+/** Bumps whenever everything remembered is forgotten; a held answer from before it is stale. */
+export const jiraGeneration = (): number => generation;
 const flying = new Map<string, Promise<JiraResult<unknown>>>();
 const memo = new Map<string, { at: number; r: CallResult<any> }>();
 
@@ -354,7 +357,7 @@ async function callOnce<T>(creds: JiraCreds, pathname: string, o: CallOpts): Pro
 }
 
 /** Answers that hold still, asked once per ten minutes. Only a success is kept. */
-async function memoOk<T>(
+export async function memoOk<T>(
   creds: JiraCreds,
   key: string,
   run: () => Promise<CallResult<T>>,
@@ -420,7 +423,12 @@ const PROJECT_PAGES = 10;
 /** Data Center lists projects in one unpaged array; this is the most that is read. */
 const PROJECTS_UNPAGED = 5000;
 
-export interface JiraProjects { keys: string[]; truncated: boolean }
+export interface JiraProjects {
+  keys: string[];
+  truncated: boolean;
+  /** Key to name, from the same responses. Optional so a caller that never needs a name is unchanged. */
+  names?: Record<string, string>;
+}
 
 const projectKey = (v: unknown): v is string => typeof v === "string" && /^[A-Z][A-Z0-9_]*$/.test(v);
 
@@ -428,23 +436,26 @@ const projectKey = (v: unknown): v is string => typeof v === "string" && /^[A-Z]
 export function projects(creds: JiraCreds, o: { optional?: boolean } = {}): Promise<JiraResult<JiraProjects>> {
   return memoOk<JiraProjects>(creds, "projects", async () => {
     if (creds.api === 2) {
-      const r = await jiraCall<{ key?: unknown }[]>(creds, "/rest/api/2/project", { optional: o.optional });
+      const r = await jiraCall<{ key?: unknown; name?: unknown }[]>(creds, "/rest/api/2/project", { optional: o.optional });
       if (!r.ok) return { ...r, data: undefined };
-      const all = Array.isArray(r.data) ? r.data : [];
-      return { ok: true, data: { keys: all.slice(0, PROJECTS_UNPAGED).map((v) => v?.key).filter(projectKey), truncated: all.length > PROJECTS_UNPAGED } };
+      const all = (Array.isArray(r.data) ? r.data : []).slice(0, PROJECTS_UNPAGED);
+      const names: Record<string, string> = {};
+      for (const v of all) if (projectKey(v?.key)) names[v.key] = str(v.name) || v.key;
+      return { ok: true, data: { keys: all.map((v) => v?.key).filter(projectKey), truncated: (Array.isArray(r.data) ? r.data.length : 0) > PROJECTS_UNPAGED, names } };
     }
     const keys: string[] = [];
+    const names: Record<string, string> = {};
     let start = 0;
     for (let page = 0; page < PROJECT_PAGES; page++) {
-      const r = await jiraCall<{ values?: { key?: unknown }[]; isLast?: boolean }>(
+      const r = await jiraCall<{ values?: { key?: unknown; name?: unknown }[]; isLast?: boolean }>(
         creds, `/rest/api/3/project/search?startAt=${start}&maxResults=${PROJECT_PAGE}`, { optional: o.optional });
       if (!r.ok) return { ...r, data: undefined };
       const values = r.data?.values ?? [];
-      for (const v of values) if (projectKey(v.key)) keys.push(v.key);
+      for (const v of values) if (projectKey(v.key)) { keys.push(v.key); names[v.key] = str(v.name) || v.key; }
       start += values.length;
-      if (r.data?.isLast !== false || !values.length) return { ok: true, data: { keys, truncated: false } };
+      if (r.data?.isLast !== false || !values.length) return { ok: true, data: { keys, truncated: false, names } };
     }
-    return { ok: true, data: { keys, truncated: true } };
+    return { ok: true, data: { keys, truncated: true, names } };
   });
 }
 
@@ -468,7 +479,7 @@ export function projects(creds: JiraCreds, o: { optional?: boolean } = {}): Prom
  * a field one generation has and the other lacks is how the two drift apart.
  */
 
-const apiOf = (c: JiraCreds): 2 | 3 => (c.api === 2 ? 2 : 3);
+export const apiOf = (c: JiraCreds): 2 | 3 => (c.api === 2 ? 2 : 3);
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 const idText = (v: unknown): string => (typeof v === "string" ? v : typeof v === "number" ? String(v) : "");
@@ -576,6 +587,8 @@ export function toTask(issue: unknown, cx: TaskContext): ProviderTask | null {
     status: str(status.name),
     statusKind: catKey === "done" ? "done" : catKey === "new" || catKey === "indeterminate" ? "open" : "other",
     statusColor: CATEGORY_COLOR[str(cat.colorName)],
+    // A board column holds status ids; two statuses may share a name.
+    ...(idText(status.id) ? { statusId: idText(status.id) } : {}),
     priority: priorityRank(f.priority, cx.priorities),
     due,
     updated: epoch(f.updated),
@@ -644,10 +657,33 @@ export async function findIssue(creds: JiraCreds, q: string): Promise<JiraResult
   return { ok: false, error: `No card ${t} in ${keys.join(", ")}` };
 }
 
+/**
+ * Where the `order by` clause starts, or -1. Text inside "..." and '...' (with
+ * backslash escapes) is skipped: a filter `summary ~ "sort order by date"` has
+ * no order clause, and cutting it there sent Jira half a quoted string.
+ */
+export function orderByAt(jql: string): number {
+  let masked = "";
+  let q = "";
+  for (let i = 0; i < jql.length; i++) {
+    const c = jql[i];
+    if (q) {
+      if (c === "\\") { masked += "xx"; i++; continue; }
+      if (c === q) q = "";
+      masked += "x";
+    } else {
+      if (c === '"' || c === "'") q = c;
+      masked += c;
+    }
+  }
+  // An escape at the very end adds one char past the input; the index is still before it.
+  return /(^|\s)order\s+by\s/i.exec(masked)?.index ?? -1;
+}
+
 /** True when the query says something before any `order by`. Jira rejects the rest, and so do we. */
 export function boundedJql(jql: string): boolean {
-  const order = /(^|\s)order\s+by\s/i.exec(jql);
-  return (order ? jql.slice(0, order.index) : jql).trim().length > 0;
+  const at = orderByAt(jql);
+  return (at >= 0 ? jql.slice(0, at) : jql).trim().length > 0;
 }
 
 export interface JiraTasks { tasks: ProviderTask[]; truncated: boolean }
@@ -814,6 +850,8 @@ export async function connectJira(input: JiraConnectInput): Promise<JiraConnectR
   });
   // A hold or a memo from the previous credential says nothing about this one.
   forgetJira();
+  // The rows cached by the previous account were read as that account.
+  forgetCached();
   return { ok: true, account: me.data.name };
 }
 
@@ -842,6 +880,8 @@ export async function jiraStatus(): Promise<JiraStatus> {
 export function disconnectJira(): void {
   clearCredential("jira");
   forgetJira();
+  // The last read of each view is the other person's data once the token is gone; the addresses are not.
+  forgetCached();
 }
 
 // ---------------------------------------------------------------------------

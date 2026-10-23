@@ -89,6 +89,11 @@ const MUTATING = [
   `pathname === "/jira/writes"`,
   `pathname === "/tracker/projects" && req.method === "POST"`,
   `pathname === "/jira/transition"`,
+  // Saved Jira views change the local address book only.
+  `pathname === "/jira/views/add"`,
+  `pathname === "/jira/views/remove"`,
+  `pathname === "/jira/folders/add"`,
+  `pathname === "/jira/folders/remove"`,
   `pathname.startsWith("/tasks/write/")`,
   `pathname.startsWith("/tasks/remind")`,
   // The read marks every device syncs through. Not dangerous, but durable and

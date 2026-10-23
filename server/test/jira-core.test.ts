@@ -472,7 +472,7 @@ describe("requests", () => {
     fake.fail({ path: "/project/search", status: 500, times: 1 });
     expect((await J.projects(stored())).ok).toBe(false);
     const ok = await J.projects(stored());
-    expect(ok.data).toEqual({ keys: ["ORBIT", "ACME"], truncated: false });
+    expect(ok.data).toEqual({ keys: ["ORBIT", "ACME"], truncated: false, names: { ORBIT: "Orbit", ACME: "Acme Platform" } });
     await J.projects(stored());
     expect(fake.requests.filter((q) => q.path === "/project/search").length).toBe(2);
   });

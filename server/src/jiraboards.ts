@@ -1,0 +1,493 @@
+/*
+ * Boards, saved filters and searches, read as views.
+ *
+ * A Jira "view" is a board, a saved filter or a raw search. All three are read
+ * through `searchJql`, the one search path, so the guards on it (a query with no
+ * restriction is refused, pages are capped, a failed page is the answer) hold
+ * here without being repeated.
+ *
+ * A board is NOT read through its card list. `GET /rest/agile/1.0/board/{id}/issue`
+ * is marked deprecated in the Cloud API and answers with the board's own
+ * membership rules applied by the server, which is exactly what we would have
+ * to trust blindly. A board is its filter, narrowed by its sub-query, and an
+ * issue is on it when its status is mapped to a column. That is written down
+ * as one query:
+ *
+ *     (<filter restriction>) AND status in (<every mapped status id>)
+ *       [AND (<sub-query>)] [ORDER BY <the filter's order>]
+ *
+ * Built from the board's configuration and its filter, both remembered ten
+ * minutes: they change when a person edits the board, not by the minute. The
+ * `status in` clause also keeps every board query bounded, so a board whose
+ * filter is only an ordering still reads.
+ *
+ * A card is put in the column that holds its status ID, never its status name:
+ * two statuses may share a name, and a column may hold several.
+ *
+ * Request cost, counted by tests against the stand-in: a board read cold is the
+ * configuration, the filter and the search pages (plus the priority list once);
+ * read again inside a minute it is nothing; forced, only the search pages.
+ */
+import { ASSIGNED_VIEW_ID } from "../../shared/providers.ts";
+import type {
+  JiraColumn, JiraProjectChoice, JiraViewChoice, JiraViewRead, JiraViews, SavedFolder, SavedView,
+} from "../../shared/providers.ts";
+import { redacted } from "./credentials.ts";
+import {
+  apiOf, jiraCall, jiraGeneration, orderByAt, memoOk, mine, projects, searchJql, withStored,
+  type JiraCreds, type JiraResult, type JiraTasks,
+} from "./jira.ts";
+import {
+  addFolder, addView, cachedFor, currentView, isFolderBoard, putCache, removeFolder, removeView, replaceFolder, savedFolders, savedViews, setCurrent,
+} from "./jiraviews.ts";
+
+const AGILE = "/rest/agile/1.0";
+const BOARD_PAGE = 50;
+const FOLDER_PAGES = 2;
+const FOLDER_TTL_MS = 10 * 60_000;
+const VIEW_TTL_MS = 60_000;
+const MAX_URL = 2000;
+const MAX_JQL = 2000;
+const NOT_CONNECTED = "Jira is not connected";
+
+/** Ids that go into a query or a path are digits and nothing else. */
+const NUM = /^\d{1,12}$/;
+const KEY = /^[A-Z][A-Z0-9_]*$/;
+const str = (v: unknown): string => (typeof v === "string" ? v : "");
+const idText = (v: unknown): string => (typeof v === "string" ? v : typeof v === "number" ? String(v) : "");
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+const connectedSite = (): string | null => redacted("jira")?.site || null;
+
+// ---------------------------------------------------------------------------
+// pasted addresses
+// ---------------------------------------------------------------------------
+
+export type ParsedView =
+  | { ok: true; kind: "board" | "filter" | "jql"; id: string; url: string; jql?: string }
+  | { ok: false; error: string };
+
+const NOT_A_VIEW = "That address is not a Jira board, a saved filter or a search. Paste a board's address, or one that ends in ?filter=10000";
+
+/** The order clause is split off with the same rule `boundedJql` judges a query by. */
+export function splitOrder(jql: string): { restriction: string; order: string } {
+  const at = orderByAt(jql);
+  return at >= 0 ? { restriction: jql.slice(0, at).trim(), order: jql.slice(at).trim() } : { restriction: jql.trim(), order: "" };
+}
+
+/**
+ * An address pasted from the browser, judged against the connected site before
+ * anything is sent: the same host and the same context path (a site may live
+ * at `jira.acme.example/jira`), https only. Another host is not Jira's to
+ * answer for, and a request for it would carry the credential there.
+ */
+export function parseViewUrl(text: string, site: string): ParsedView {
+  const raw = text.trim();
+  if (!raw || raw.length > MAX_URL) return { ok: false, error: NOT_A_VIEW };
+  let u: URL;
+  try { u = new URL(raw); } catch { return { ok: false, error: NOT_A_VIEW }; }
+  if (u.protocol !== "https:") return { ok: false, error: "Paste the https address from your Jira site" };
+  const slash = site.indexOf("/");
+  const host = (slash < 0 ? site : site.slice(0, slash)).toLowerCase();
+  const ctx = slash < 0 ? "" : site.slice(slash).replace(/\/+$/, "");
+  if (u.host.toLowerCase() !== host) return { ok: false, error: `That address is not on your Jira site (${site})` };
+  const p = u.pathname;
+  if (ctx && p.toLowerCase() !== ctx.toLowerCase() && !p.toLowerCase().startsWith(ctx.toLowerCase() + "/")) {
+    return { ok: false, error: `That address is not on your Jira site (${site})` };
+  }
+  const rest = p.slice(ctx.length) || "/";
+  const q = u.searchParams;
+  // What is kept is the address without a name and password, a fragment or a port nobody typed.
+  const kept = `${u.origin}${u.pathname}${u.search}`;
+
+  let m = /^\/jira\/software\/(?:c\/)?projects\/[A-Za-z][A-Za-z0-9_]*\/boards\/(\d{1,12})(?:\/|$)/.exec(rest);
+  if (m) return { ok: true, kind: "board", id: m[1], url: kept };
+  if (/^\/secure\/RapidBoard\.jspa$/i.test(rest) && NUM.test(q.get("rapidView") ?? "")) return { ok: true, kind: "board", id: q.get("rapidView")!, url: kept };
+  if (NUM.test(q.get("filter") ?? "")) return { ok: true, kind: "filter", id: q.get("filter")!, url: kept };
+  if (/^\/secure\/IssueNavigator\.jspa$/i.test(rest) && NUM.test(q.get("requestId") ?? "")) return { ok: true, kind: "filter", id: q.get("requestId")!, url: kept };
+
+  m = /^\/issues\/?$/.exec(rest);
+  const jql = q.get("jql")?.trim();
+  if (m && jql) {
+    if (jql.length > MAX_JQL) return { ok: false, error: "That search is too long to keep" };
+    if (!splitOrder(jql).restriction) return { ok: false, error: "That search has no restriction, so it would read every card. Add a project or an assignee to it" };
+    const canonical = `https://${site}/issues/?jql=${encodeURIComponent(jql)}`;
+    return { ok: true, kind: "jql", id: `jql:${Bun.hash(jql).toString(36)}`, url: canonical, jql };
+  }
+  return { ok: false, error: NOT_A_VIEW };
+}
+
+/** The search kept in a `jql:` view's address. */
+function jqlOfView(v: SavedView): string | null {
+  try { return new URL(v.url).searchParams.get("jql")?.trim() || null; } catch { return null; }
+}
+
+// ---------------------------------------------------------------------------
+// boards and filters
+// ---------------------------------------------------------------------------
+
+export interface BoardConfig {
+  name: string;
+  type: string;
+  filterId: string;
+  subQuery?: string;
+  projectKey?: string;
+  columns: JiraColumn[];
+}
+
+const BOARD_GONE = "That board is gone, or it is not shared with you";
+const FILTER_GONE = "That saved filter is not shared with you, or it is gone";
+
+/** What a board is made of. The path is the same on Cloud and Data Center. */
+export function boardConfig(creds: JiraCreds, id: string): Promise<JiraResult<BoardConfig>> {
+  if (!NUM.test(id)) return Promise.resolve({ ok: false, error: BOARD_GONE });
+  return memoOk<BoardConfig>(creds, `board:${id}`, async () => {
+    const r = await jiraCall<unknown>(creds, `${AGILE}/board/${id}/configuration`);
+    if (!r.ok) return { ...r, data: undefined, ...(r.status === 404 || r.status === 403 ? { error: BOARD_GONE } : null) };
+    const d = isObj(r.data) ? r.data : {};
+    const filterId = idText(isObj(d.filter) ? d.filter.id : "");
+    if (!NUM.test(filterId)) return { ok: false, error: "Jira did not say which filter that board reads" };
+    const cols = isObj(d.columnConfig) && Array.isArray(d.columnConfig.columns) ? d.columnConfig.columns : [];
+    const columns: JiraColumn[] = cols.filter(isObj).map((c) => ({
+      name: str(c.name),
+      statusIds: (Array.isArray(c.statuses) ? c.statuses : []).map((s) => idText(isObj(s) ? s.id : "")).filter((s) => NUM.test(s)),
+    }));
+    const sub = isObj(d.subQuery) ? str(d.subQuery.query).trim() : "";
+    const loc = isObj(d.location) ? d.location : {};
+    return {
+      ok: true,
+      data: {
+        name: str(d.name) || `Board ${id}`,
+        type: str(d.type),
+        filterId,
+        // A sub-query is a restriction; an order in it is not ours to apply.
+        ...(splitOrder(sub).restriction ? { subQuery: splitOrder(sub).restriction } : {}),
+        ...(str(loc.key) || str(loc.projectKey) ? { projectKey: str(loc.key) || str(loc.projectKey) } : {}),
+        columns,
+      },
+    };
+  });
+}
+
+/** A saved filter's name and query. Both generations serve it under their own prefix. */
+export function filterJql(creds: JiraCreds, id: string): Promise<JiraResult<{ name: string; jql: string }>> {
+  if (!NUM.test(id)) return Promise.resolve({ ok: false, error: FILTER_GONE });
+  return memoOk<{ name: string; jql: string }>(creds, `filter:${id}`, async () => {
+    const r = await jiraCall<unknown>(creds, `/rest/api/${apiOf(creds)}/filter/${id}`);
+    if (!r.ok) return { ...r, data: undefined, ...(r.status === 404 || r.status === 403 ? { error: FILTER_GONE } : null) };
+    const d = isObj(r.data) ? r.data : {};
+    return { ok: true, data: { name: str(d.name) || `Filter ${id}`, jql: str(d.jql) } };
+  });
+}
+
+interface ViewRows extends JiraTasks { columns: JiraColumn[] }
+
+export async function readBoard(creds: JiraCreds, id: string): Promise<JiraResult<ViewRows>> {
+  const cfg = await boardConfig(creds, id);
+  if (!cfg.ok || !cfg.data) return { ...cfg, data: undefined };
+  const f = await filterJql(creds, cfg.data.filterId);
+  if (!f.ok || !f.data) return { ...f, data: undefined };
+  const columns = cfg.data.columns;
+  const ids = [...new Set(columns.flatMap((c) => c.statusIds))];
+  // A board whose columns map no status shows its columns and no cards.
+  if (!ids.length) return { ok: true, data: { tasks: [], truncated: false, columns } };
+  const { restriction, order } = splitOrder(f.data.jql);
+  const jql = [
+    ...(restriction ? [`(${restriction})`] : []),
+    `status in (${ids.join(", ")})`,
+    ...(cfg.data.subQuery ? [`(${cfg.data.subQuery})`] : []),
+  ].join(" AND ") + (order ? ` ${order}` : "");
+  const r = await searchJql(creds, jql);
+  return r.ok && r.data ? { ok: true, data: { ...r.data, columns } } : { ...r, data: undefined };
+}
+
+export async function readFilter(creds: JiraCreds, id: string): Promise<JiraResult<ViewRows>> {
+  const f = await filterJql(creds, id);
+  if (!f.ok || !f.data) return { ...f, data: undefined };
+  if (!splitOrder(f.data.jql).restriction) {
+    return { ok: false, error: "That filter has no restriction, so it would read every card. Add a project or an assignee to it in Jira" };
+  }
+  const r = await searchJql(creds, f.data.jql);
+  return r.ok && r.data ? { ok: true, data: { ...r.data, columns: [] } } : { ...r, data: undefined };
+}
+
+export async function readJql(creds: JiraCreds, jql: string): Promise<JiraResult<ViewRows>> {
+  const r = await searchJql(creds, jql);
+  return r.ok && r.data ? { ok: true, data: { ...r.data, columns: [] } } : { ...r, data: undefined };
+}
+
+// ---------------------------------------------------------------------------
+// reading a saved view
+// ---------------------------------------------------------------------------
+
+/**
+ * The panel asks on every visit and every return to the window, so an answer
+ * stands for a minute and a second ask while one is in the air joins it: at
+ * most one read per view per minute however many windows look. `force` (the
+ * Refresh button) skips both. Only a success is kept. An entry from before a
+ * disconnect or a new connection (a different `gen`) is not an answer.
+ */
+const held = new Map<string, { gen: number; at: number; r?: JiraViewRead; run?: Promise<JiraViewRead> }>();
+
+const emptyRead = (error: string, view?: SavedView): JiraViewRead => ({ ok: false, error, ...(view ? { view } : null), tasks: [], columns: [], at: 0 });
+
+async function readView(creds: JiraCreds, view: SavedView, force: boolean): Promise<JiraResult<ViewRows>> {
+  if (view.id === ASSIGNED_VIEW_ID) {
+    const r = await mine(creds, { fresh: force });
+    return r.ok && r.data ? { ok: true, data: { ...r.data, columns: [] } } : { ...r, data: undefined };
+  }
+  const [kind, num] = view.id.split(":");
+  if (kind === "board") return readBoard(creds, num);
+  if (kind === "filter") return readFilter(creds, num);
+  const jql = kind === "jql" ? jqlOfView(view) : null;
+  return jql ? readJql(creds, jql) : { ok: false, error: "That view has no search to run" };
+}
+
+let readFault: (() => void) | null = null;
+/** Test seam: something that throws where a read begins, which no stand-in request can do. */
+export const __setReadFault = (f: (() => void) | null): void => { readFault = f; };
+
+function startRead(creds: JiraCreds, site: string, view: SavedView, force: boolean): Promise<JiraViewRead> {
+  const gen = jiraGeneration();
+  return Promise.resolve().then(() => { readFault?.(); return readView(creds, view, force); }).then((r): JiraViewRead => {
+    if (r.ok && r.data) {
+      const at = Date.now();
+      const out: JiraViewRead = { ok: true, view, tasks: r.data.tasks, columns: r.data.columns, at, ...(r.data.truncated ? { truncated: true } : null) };
+      // A disconnect while this was in the air: the rows are not written back.
+      if (gen === jiraGeneration()) putCache(site, view.id, { view, tasks: out.tasks, columns: out.columns, at, ...(out.truncated ? { truncated: true } : null) });
+      return out;
+    }
+    // A failed read is never an empty board: the last good rows come back, said to be old.
+    const last = cachedFor(site, view.id);
+    const error = r.error ?? "Could not read that view";
+    return {
+      ok: false, error, view, ...(r.throttled ? { throttled: true } : null),
+      tasks: last?.tasks ?? [], columns: last?.columns ?? [], at: last?.at ?? 0,
+      ...(last?.truncated ? { truncated: true } : null), ...(last ? { cached: true } : null),
+    };
+  });
+}
+
+/**
+ * One saved view: the current one when no id is given, else the built-in one.
+ * `cached` answers from disk and asks nobody.
+ */
+export async function viewRead(id?: string, o: { force?: boolean; cached?: boolean } = {}): Promise<JiraViewRead> {
+  const site = connectedSite();
+  if (!site) return emptyRead(NOT_CONNECTED);
+  const views = savedViews(site);
+  const want = id || currentView(site) || ASSIGNED_VIEW_ID;
+  const view = views.find((v) => v.id === want);
+  if (!view) return emptyRead("That view is not saved any more");
+  if (want !== currentView(site)) setCurrent(site, want);
+
+  if (o.cached) {
+    const last = cachedFor(site, want);
+    return last
+      ? { ok: true, view, tasks: last.tasks, columns: last.columns, at: last.at, ...(last.truncated ? { truncated: true } : null), cached: true }
+      : { ok: true, view, tasks: [], columns: [], at: 0, cached: true };
+  }
+
+  const k = `${site}|${want}`;
+  const hit = held.get(k);
+  const gen = jiraGeneration();
+  if (!o.force && hit && hit.gen === gen) {
+    if (hit.run) return hit.run;
+    if (hit.r && Date.now() - hit.at < VIEW_TTL_MS) return hit.r;
+  }
+  const settled = await withStored(async (creds): Promise<JiraResult<JiraViewRead>> => {
+    const run: Promise<JiraViewRead> = startRead(creds, site, view, !!o.force).catch((): JiraViewRead => emptyRead("Could not read that view", view)).then((r) => {
+      const now = held.get(k);
+      // A newer ask took the slot while this was in the air: leave it its own.
+      if (now && now.run !== run) return r;
+      if (r.ok && gen === jiraGeneration()) held.set(k, { gen, at: Date.now(), r }); else if (now?.run === run) held.delete(k);
+      return r;
+    });
+    held.set(k, { gen, at: hit?.gen === gen ? hit.at : 0, r: hit?.gen === gen ? hit.r : undefined, run });
+    return { ok: true, data: await run };
+  });
+  return settled.ok && settled.data ? settled.data : emptyRead(settled.error ?? NOT_CONNECTED, view);
+}
+
+// ---------------------------------------------------------------------------
+// the add-a-view list
+// ---------------------------------------------------------------------------
+
+export interface ViewChoices { boards: JiraViewChoice[]; filters: JiraViewChoice[]; truncated: boolean; error?: string }
+
+const boardsPage = (creds: JiraCreds, q: string) => memoOk<{ boards: JiraViewChoice[]; truncated: boolean }>(creds, `boards:${q}`, async () => {
+  const r = await jiraCall<unknown>(creds, `${AGILE}/board?startAt=0&maxResults=${BOARD_PAGE}${q ? `&name=${encodeURIComponent(q)}` : ""}`);
+  if (!r.ok) return { ...r, data: undefined };
+  const d = isObj(r.data) ? r.data : {};
+  const boards: JiraViewChoice[] = (Array.isArray(d.values) ? d.values : []).filter(isObj).flatMap((b) => {
+    const id = idText(b.id);
+    if (!NUM.test(id)) return [];
+    const loc = isObj(b.location) ? b.location : {};
+    return [{ kind: "board" as const, id, name: str(b.name) || `Board ${id}`, ...(str(b.type) ? { type: str(b.type) } : null), ...(str(loc.projectKey) ? { projectKey: str(loc.projectKey) } : null) }];
+  });
+  return { ok: true, data: { boards, truncated: d.isLast === false } };
+});
+
+const favouriteFilters = (creds: JiraCreds) => memoOk<JiraViewChoice[]>(creds, "filters:favourite", async () => {
+  const r = await jiraCall<unknown>(creds, `/rest/api/${apiOf(creds)}/filter/favourite`);
+  if (!r.ok) return { ...r, data: undefined };
+  const list = (Array.isArray(r.data) ? r.data : []).filter(isObj).flatMap((f) => {
+    const id = idText(f.id);
+    return NUM.test(id) ? [{ kind: "filter" as const, id, name: str(f.name) || `Filter ${id}` }] : [];
+  });
+  return { ok: true, data: list };
+});
+
+/** Boards (first page, by name) and favourite filters, each remembered ten minutes on its own, so one failing is not remembered. */
+export async function viewChoices(creds: JiraCreds, query: string): Promise<JiraResult<ViewChoices>> {
+  const q = query.trim().slice(0, 80);
+  const [b, f] = await Promise.all([boardsPage(creds, q), favouriteFilters(creds)]);
+  if (!b.ok && !f.ok) return { ...b, data: undefined };
+  const needle = q.toLowerCase();
+  const filters = f.ok && f.data ? f.data.filter((x) => !needle || x.name.toLowerCase().includes(needle)) : [];
+  const error = !b.ok ? `Boards could not be listed: ${b.error}` : !f.ok ? `Saved filters could not be listed: ${f.error}` : undefined;
+  return { ok: true, data: { boards: b.ok && b.data ? b.data.boards : [], filters, truncated: !!(b.ok && b.data?.truncated), ...(error ? { error } : null) } };
+}
+
+export async function projectChoices(creds: JiraCreds): Promise<JiraResult<{ projects: JiraProjectChoice[]; truncated: boolean }>> {
+  const p = await projects(creds);
+  if (!p.ok || !p.data) return { ...p, data: undefined };
+  return { ok: true, data: { projects: p.data.keys.map((key) => ({ key, name: p.data!.names?.[key] ?? key })), truncated: p.data.truncated } };
+}
+
+// ---------------------------------------------------------------------------
+// adding and removing
+// ---------------------------------------------------------------------------
+
+export type AddResult = { ok: true; view: SavedView } | { ok: false; error: string };
+
+/** Names the view with one request, then keeps it. Nothing is kept when Jira will not name it. */
+async function addResolved(creds: JiraCreds, kind: "board" | "filter" | "jql", id: string, url: string, jql?: string): Promise<AddResult> {
+  let name: string;
+  let viewId: string;
+  if (kind === "board") {
+    const c = await boardConfig(creds, id);
+    if (!c.ok || !c.data) return { ok: false, error: c.error ?? BOARD_GONE };
+    name = c.data.name; viewId = `board:${id}`;
+  } else if (kind === "filter") {
+    const f = await filterJql(creds, id);
+    if (!f.ok || !f.data) return { ok: false, error: f.error ?? FILTER_GONE };
+    name = f.data.name; viewId = `filter:${id}`;
+  } else {
+    name = `Search: ${(jql ?? "").slice(0, 40)}`; viewId = id;
+  }
+  const view: SavedView = { id: viewId, name, url, addedAt: Date.now() };
+  addView(creds.site, view);
+  return { ok: true, view };
+}
+
+export function addViewByUrl(text: string): Promise<JiraResult<AddResult>> {
+  return withStored(async (creds) => {
+    const p = parseViewUrl(text, creds.site);
+    if (!p.ok) return { ok: true, data: p };
+    return { ok: true, data: await addResolved(creds, p.kind, p.id, p.url, p.jql) };
+  });
+}
+
+export function addViewByChoice(kind: unknown, id: unknown): Promise<JiraResult<AddResult>> {
+  return withStored(async (creds) => {
+    if ((kind !== "board" && kind !== "filter") || typeof id !== "string" || !NUM.test(id)) {
+      return { ok: true, data: { ok: false, error: "Pick a board or a saved filter from the list" } };
+    }
+    const url = kind === "board" ? `https://${creds.site}/secure/RapidBoard.jspa?rapidView=${id}` : `https://${creds.site}/issues/?filter=${id}`;
+    return { ok: true, data: await addResolved(creds, kind, id, url) };
+  });
+}
+
+/** A project's boards, as many pages as the cap allows. */
+async function boardsOfProject(creds: JiraCreds, key: string): Promise<JiraResult<{ lists: { id: string; name: string }[]; projectName?: string }>> {
+  const lists: { id: string; name: string }[] = [];
+  let projectName: string | undefined;
+  let start = 0;
+  for (let page = 0; page < FOLDER_PAGES; page++) {
+    const r = await jiraCall<unknown>(creds, `${AGILE}/board?projectKeyOrId=${encodeURIComponent(key)}&startAt=${start}&maxResults=${BOARD_PAGE}`);
+    if (!r.ok) return { ...r, data: undefined, ...(r.status === 404 ? { error: "No such project, or you cannot see it" } : null) };
+    const d = isObj(r.data) ? r.data : {};
+    const values = (Array.isArray(d.values) ? d.values : []).filter(isObj);
+    for (const b of values) {
+      const id = idText(b.id);
+      if (NUM.test(id)) lists.push({ id, name: str(b.name) || `Board ${id}` });
+      if (!projectName && isObj(b.location)) projectName = str(b.location.projectName) || undefined;
+    }
+    start += values.length;
+    if (d.isLast !== false || !values.length) break;
+  }
+  return { ok: true, data: { lists, projectName } };
+}
+
+async function folderFor(creds: JiraCreds, key: string, addedAt: number): Promise<JiraResult<SavedFolder>> {
+  const [b, p] = await Promise.all([boardsOfProject(creds, key), projects(creds)]);
+  if (!b.ok || !b.data) return { ...b, data: undefined };
+  const name = (p.ok ? p.data?.names?.[key] : undefined) || b.data.projectName || key;
+  return { ok: true, data: { id: key, name, spaceId: key, spaceName: name, addedAt, lists: b.data.lists, listsAt: Date.now() } };
+}
+
+export function addFolderByKey(raw: unknown): Promise<JiraResult<{ folder: SavedFolder }>> {
+  return withStored(async (creds) => {
+    const key = typeof raw === "string" ? raw.trim().toUpperCase() : "";
+    if (!KEY.test(key) || key.length > 64) return { ok: false, error: "Pick a project from the list" };
+    const f = await folderFor(creds, key, Date.now());
+    if (!f.ok || !f.data) return { ...f, data: undefined };
+    addFolder(creds.site, f.data);
+    return { ok: true, data: { folder: f.data } };
+  });
+}
+
+export function removeViewById(id: string): { ok: boolean; error?: string } {
+  const site = connectedSite();
+  if (!site) return { ok: true };
+  // A project's board is not a stored view: filtering the store would say yes and drop its rows for nothing.
+  if (isFolderBoard(site, id)) return { ok: false, error: "That board comes with its project; remove the project instead" };
+  removeView(site, id);
+  return { ok: true };
+}
+
+export function removeFolderById(id: string): void {
+  const site = connectedSite();
+  if (site) removeFolder(site, id);
+}
+
+let foldersRunning = false;
+/** Failed refreshes wait out the same ten minutes, so a project that errors is not asked on every look at the rail. */
+const folderTried = new Map<string, number>();
+/** Test seam: forget which folders were tried. */
+export const __resetFolderTried = (): void => { folderTried.clear(); };
+
+/** Re-read the boards of folders older than ten minutes. Called in the background when the rail is asked for; never throws. */
+export async function refreshJiraFoldersIfStale(): Promise<void> {
+  const site = connectedSite();
+  if (!site || foldersRunning) return;
+  const now = Date.now();
+  const stale = savedFolders(site).filter((f) => (!f.listsAt || now - f.listsAt > FOLDER_TTL_MS) && now - (folderTried.get(`${site}|${f.id}`) ?? 0) > FOLDER_TTL_MS);
+  if (!stale.length) return;
+  foldersRunning = true;
+  const gen = jiraGeneration();
+  try {
+    await withStored(async (creds) => {
+      for (const f of stale) {
+        folderTried.set(`${site}|${f.id}`, Date.now());
+        // A disconnect (or another account) while the loop runs ends it.
+        if (gen !== jiraGeneration()) break;
+        const r = await folderFor(creds, f.id, f.addedAt);
+        if (gen !== jiraGeneration()) break;
+        // In place, so the rail does not reorder; a folder removed while this was in the air stays removed.
+        if (r.ok && r.data) replaceFolder(site, r.data);
+      }
+      return { ok: true, data: null };
+    });
+  } catch { /* the rail keeps what it had */ } finally { foldersRunning = false; }
+}
+
+/** `GET /jira/views`: the local store only. */
+export function jiraViews(): JiraViews {
+  const site = connectedSite();
+  if (!site) return { connected: false, site: null, views: [], folders: [] };
+  const views = savedViews(site);
+  const cur = currentView(site);
+  return { connected: true, site, views, folders: savedFolders(site), ...(cur && views.some((v) => v.id === cur) ? { current: cur } : null) };
+}

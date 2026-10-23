@@ -119,6 +119,11 @@ import { failed } from "./refused.ts";
 import { trackerProjects, setTrackerChoice } from "./trackerProjects.ts";
 import { connectJira, jiraStatus, setJiraWrites, jiraWriteEnabled, readIssue, findIssue, mine as jiraMine, searchText as jiraSearchText, withStored as withJira } from "./jira.ts";
 import { movesStored as jiraMoves, moveStored as jiraMove } from "./jira.ts";
+import {
+  jiraViews, viewRead as jiraViewRead, viewChoices as jiraViewChoices, projectChoices as jiraProjectChoices,
+  addViewByUrl as jiraAddViewByUrl, addViewByChoice as jiraAddViewByChoice, addFolderByKey as jiraAddFolder,
+  removeViewById as jiraRemoveView, removeFolderById as jiraRemoveFolder, refreshJiraFoldersIfStale,
+} from "./jiraboards.ts";
 import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, addClickupFolder, refreshFoldersIfStale, replaceViewUrl, readView } from "./providers.ts";
 import { clickupPrefs, setClickupPrefs, settleFirstRun } from "./clickupPrefs.ts";
 import { savedViews, savedFolders, currentView, setCurrent, removeView, removeFolder, knownCardPrefix, knownNoCustomIds, boardHolding, setWritesAllowed, patchCachedTask } from "./clickupviews.ts";
@@ -6365,6 +6370,54 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // The watch must not announce the person's own move as news.
       if (r.ok && r.task && r.was) jiraRememberOwnMove({ ...r.task, status: r.was }, r.task.status);
       return json(r, r.ok ? 200 : r.conflict ? 409 : 400);
+    }
+    /*
+     * Saved Jira views: boards, saved filters and searches, and projects as
+     * folders. Nothing here writes to Jira (so no write gate); the POSTs change
+     * only the local address book, behind the same CSRF check as the other
+     * local writes. Reads answer 200 with `ok: false` and a sentence.
+     * `/jira/views` is the local store alone: its only request, made in the
+     * background, is the stale-folder refresh.
+     */
+    if (req.method === "GET" && pathname === "/jira/views") {
+      void refreshJiraFoldersIfStale();
+      return json(jiraViews());
+    }
+    if (req.method === "GET" && pathname === "/jira/view") {
+      return json(await jiraViewRead(url.searchParams.get("id") || undefined, { force: url.searchParams.get("force") === "1", cached: url.searchParams.get("cached") === "1" }));
+    }
+    if (req.method === "GET" && pathname === "/jira/view-choices") {
+      const r = await withJira((c) => jiraViewChoices(c, url.searchParams.get("q") ?? ""));
+      return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error, ...(r.throttled ? { throttled: true } : null) });
+    }
+    if (req.method === "GET" && pathname === "/jira/project-choices") {
+      const r = await withJira((c) => jiraProjectChoices(c));
+      return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error, ...(r.throttled ? { throttled: true } : null) });
+    }
+    if (pathname === "/jira/views/add" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = typeof b.url === "string" ? await jiraAddViewByUrl(b.url) : await jiraAddViewByChoice(b.kind, b.id);
+      const out = r.ok && r.data ? r.data : { ok: false, error: r.error };
+      return json(out, out.ok ? 200 : 400);
+    }
+    if (pathname === "/jira/views/remove" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = jiraRemoveView(String(b.id ?? ""));
+      return json(r, r.ok ? 200 : 400);
+    }
+    if (pathname === "/jira/folders/add" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = await jiraAddFolder(b.key);
+      return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error }, r.ok ? 200 : 400);
+    }
+    if (pathname === "/jira/folders/remove" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      jiraRemoveFolder(String(b.id ?? ""));
+      return json({ ok: true });
     }
     /* Boards, saved by pasting their address. Reads and one write path, and
        the write path refuses unless AGENTGLASS_CLICKUP_WRITE=1 — see

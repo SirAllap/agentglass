@@ -1,3 +1,4 @@
+import boardFixture from "./jira/boards.json";
 import errors from "./jira/errors.json";
 import issueSeeds from "./jira/issues.json";
 import myselfFixture from "./jira/myself.json";
@@ -24,6 +25,13 @@ import workflowFixture from "./jira/workflow.json";
  * JQL allowed, `GET /project` as one unpaged array, `GET /priority` as the
  * current endpoint, and no rate-limit headers. Both answer `GET
  * /rest/api/2/serverInfo` without credentials, as the real ones do.
+ *
+ * Boards and saved filters (boards.json) are served as Jira Software does: the
+ * agile endpoints live at `/rest/agile/1.0` on BOTH flavors, outside the
+ * `/rest/api/N` prefix, so they are logged whole; `GET /filter/{id}` and
+ * `/filter/favourite` are platform endpoints under the prefix. The deprecated
+ * `/board/{id}/issue` is deliberately not served: a client that calls it gets
+ * the 404 below, and a test can see it.
  *
  * Why stateful: the risky moves are state moves. A transition changes the
  * status and may run a post-function that assigns somebody; an assignee write
@@ -164,6 +172,8 @@ export interface FakeJiraOptions {
   /** How many directory users the assignable search scans before it filters
    *  (the real one scans 1000 and so returns fewer than asked). Default 3. */
   assignableScanCap?: number;
+  /** Boards per page of `GET /board`, capped at 50. Default 50. */
+  boardPageSize?: number;
 }
 
 export interface FakeJira {
@@ -298,6 +308,44 @@ function transitionObject(t: FakeTransition, withFields: boolean, dc: boolean) {
   return { ...base, fields };
 }
 
+function filterObject(f: (typeof boardFixture.filters)[number]) {
+  return { id: f.id, name: f.name, jql: f.jql, favourite: f.favourite, owner: { displayName: userById(f.owner)?.displayName ?? "" }, self: `${prefixOf("cloud")}/filter/${f.id}`, viewUrl: "", searchUrl: "" };
+}
+
+/** Splits on `AND` at the top level only, so `status in (1, 2)` and a
+ *  parenthesised group stay whole. A clause wrapped in one pair of brackets is
+ *  opened and split again. */
+function splitAnd(text: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let from = 0;
+  let quote = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"') quote = !quote;
+    else if (quote) continue;
+    else if (ch === "(") depth++;
+    else if (ch === ")") depth--;
+    else if (depth === 0 && /^\sand\s/i.test(text.slice(i, i + 5))) {
+      out.push(text.slice(from, i).trim());
+      from = i + 5;
+      i += 4;
+    }
+  }
+  out.push(text.slice(from).trim());
+  return out.flatMap((c) => {
+    const open = /^\(([\s\S]*)\)$/.exec(c);
+    // Only a pair that encloses the whole clause: `(a) AND (b)` was split already.
+    return open && balanced(open[1]) ? splitAnd(open[1]) : [c];
+  });
+}
+
+const balanced = (t: string): boolean => {
+  let d = 0;
+  for (const ch of t) { d += ch === "(" ? 1 : ch === ")" ? -1 : 0; if (d < 0) return false; }
+  return d === 0;
+};
+
 /** Cloud wants a bounded query: at least one clause before any `order by`.
  *  Data Center accepts an empty restriction and names people by login or key. */
 function runJql(jql: string, issues: Record<string, FakeIssue>, dc: boolean): FakeIssue[] | { error: string } {
@@ -307,7 +355,7 @@ function runJql(jql: string, issues: Record<string, FakeIssue>, dc: boolean): Fa
   let rows = Object.values(issues);
   // An assignee as the flavor spells it: an account id, or a login name or key.
   const person = (s: string) => (dc ? userDirectory.find((u) => u.name === s || u.key === s)?.accountId : userById(s)?.accountId);
-  for (const clause of restriction ? restriction.split(/\s+and\s+/i) : []) {
+  for (const clause of restriction ? splitAnd(restriction) : []) {
     const c = clause.trim();
     let m: RegExpExecArray | null;
     const q = (s: string) => s.replace(/^"|"$/g, "");
@@ -319,7 +367,13 @@ function runJql(jql: string, issues: Record<string, FakeIssue>, dc: boolean): Fa
       if (!who) return { error: `The value '${q(m[1])}' does not exist for the field 'assignee'.` };
       rows = rows.filter((i) => i.assignee === who);
     }
+    else if ((m = /^status\s+in\s*\(([^)]*)\)$/i.exec(c))) {
+      // By id or by name, the way Jira takes either.
+      const want = m[1].split(",").map((v) => q(v.trim()).toLowerCase()).filter(Boolean);
+      rows = rows.filter((i) => { const s = statusById(i.statusId); return want.includes(s.id) || want.includes(s.name.toLowerCase()); });
+    }
     else if ((m = /^status\s*(!?=)\s*(.+)$/i.exec(c))) rows = rows.filter((i) => (statusById(i.statusId).name.toLowerCase() === q(m![2]).toLowerCase()) === (m![1] === "="));
+    else if ((m = /^issuetype\s*(!?=)\s*(.+)$/i.exec(c))) rows = rows.filter((i) => (i.issueType.toLowerCase() === q(m![2]).toLowerCase()) === (m![1] === "="));
     else if ((m = /^statusCategory\s*(!?=)\s*(.+)$/i.exec(c))) {
       rows = rows.filter((i) => {
         const k = workflow.categories[statusById(i.statusId).category];
@@ -329,8 +383,9 @@ function runJql(jql: string, issues: Record<string, FakeIssue>, dc: boolean): Fa
     } else if ((m = /^key\s*=\s*(.+)$/i.exec(c))) rows = rows.filter((i) => i.key === q(m![1]).toUpperCase());
     else return { error: `Error in the JQL Query: the fake does not understand "${c}".` };
   }
-  const by = order ? /^(key|updated)\s*(asc|desc)?/i.exec(jql.slice(order.index + order[0].length).trim()) : null;
-  const field = by?.[1].toLowerCase() ?? "key";
+  // `Rank` is the board order; the fake has no rank field, so it reads as the key.
+  const by = order ? /^(key|updated|rank)\s*(asc|desc)?/i.exec(jql.slice(order.index + order[0].length).trim()) : null;
+  const field = by?.[1].toLowerCase() === "rank" ? "key" : by?.[1].toLowerCase() ?? "key";
   const dir = (by?.[2] ?? (field === "updated" ? "desc" : "asc")).toLowerCase() === "desc" ? -1 : 1;
   const num = (k: string) => Number(k.split("-")[1]);
   rows.sort((a, b) => dir * (field === "updated" ? a.updated.localeCompare(b.updated) : a.projectKey.localeCompare(b.projectKey) || num(a.key) - num(b.key)));
@@ -347,6 +402,7 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
   const dc = flavor === "datacenter";
   const PREFIX = prefixOf(flavor);
   const pageSize = opts.pageSize ?? 4;
+  const boardPageSize = opts.boardPageSize ?? 50;
   const scanCap = opts.assignableScanCap ?? 3;
   const requests: LoggedRequest[] = [];
   let rules: (FailRule & { left: number })[] = [];
@@ -478,6 +534,52 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
       const all = projects.filter((p) => !q || p.key.toLowerCase().includes(q) || p.name.toLowerCase().includes(q));
       const values = all.slice(start, start + max).map(({ defaultAssignee: _d, ...p }) => p);
       return json(200, { startAt: start, maxResults: max, total: all.length, isLast: start + max >= all.length, values });
+    }
+
+    // Jira Software, outside the platform prefix and the same on both flavors.
+    if (m === "GET" && path.startsWith("/rest/agile/1.0/")) {
+      const boards = boardFixture.boards;
+      const projectOf = (key: string) => projects.find((p) => p.key === key)!;
+      const asBoard = (b: (typeof boards)[number]) => ({
+        id: b.id, self: `${base}/rest/agile/1.0/board/${b.id}`, name: b.name, type: b.type,
+        location: { projectId: Number(projectOf(b.projectKey).id), projectKey: b.projectKey, projectName: projectOf(b.projectKey).name, displayName: `${projectOf(b.projectKey).name} (${b.projectKey})`, projectTypeKey: "software" },
+      });
+      if (path === "/rest/agile/1.0/board") {
+        const start = Math.max(0, Number(query.startAt ?? 0) || 0);
+        const max = Math.min(Number(query.maxResults ?? 50) || 50, 50, boardPageSize);
+        const name = (query.name ?? "").toLowerCase();
+        const project = query.projectKeyOrId;
+        const all = boards.filter((b) => (!name || b.name.toLowerCase().includes(name)) && (!project || b.projectKey === project || projectOf(b.projectKey).id === project));
+        if (project && !projects.some((p) => p.key === project || p.id === project)) return json(404, { errorMessages: [`No project could be found with key '${project}'.`], errors: {} });
+        return json(200, { maxResults: max, startAt: start, total: all.length, isLast: start + max >= all.length, values: all.slice(start, start + max).map(asBoard) });
+      }
+      if ((r = /^\/rest\/agile\/1\.0\/board\/(\d+)(\/configuration)?$/.exec(path))) {
+        const b = boards.find((x) => x.id === Number(r![1]));
+        if (!b) return json(404, { errorMessages: [`The requested board cannot be viewed because it either does not exist or you do not have permission to view it.`], errors: {} });
+        if (!r[2]) return json(200, asBoard(b));
+        const p = projectOf(b.projectKey);
+        return json(200, {
+          id: b.id, name: b.name, type: b.type, self: `${base}/rest/agile/1.0/board/${b.id}/configuration`,
+          location: { type: "project", key: b.projectKey, id: p.id, self: `${PREFIX}/project/${p.id}`, name: p.name },
+          filter: { id: b.filterId, self: `${PREFIX}/filter/${b.filterId}` },
+          ...("subQuery" in b && b.subQuery ? { subQuery: { query: b.subQuery } } : {}),
+          columnConfig: {
+            columns: b.columns.map((c) => ({ name: c.name, statuses: c.statusIds.map((id) => ({ id, self: `${PREFIX}/status/${id}` })) })),
+            constraintType: "none",
+          },
+        });
+      }
+      // The deprecated card list is not served: asking for it is a mistake worth seeing.
+      return json(404, { errorMessages: [`The fake does not serve ${m} ${path}.`], errors: {} });
+    }
+
+    if (m === "GET" && path === "/filter/favourite") {
+      return json(200, boardFixture.filters.filter((f) => f.favourite && f.visible !== false).map(filterObject));
+    }
+    if ((r = /^\/filter\/(\d+)$/.exec(path)) && m === "GET") {
+      const f = boardFixture.filters.find((x) => x.id === r![1]);
+      if (!f || f.visible === false) return json(404, { errorMessages: ["The filter does not exist or you do not have permission to view it."], errors: {} });
+      return json(200, filterObject(f));
     }
 
     if (m === "GET" && path === "/priority") return json(200, priorities);

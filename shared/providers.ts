@@ -139,6 +139,52 @@ export interface JiraMove {
 /** The answer to `GET /jira/transitions`. An empty list always carries `cannot`. */
 export interface JiraMoves { options: JiraMove[]; cannot?: string }
 
+/*
+ * Saved Jira views. They reuse `SavedView` and `SavedFolder`: a view's id says
+ * what it is (`board:12`, `filter:10000`, `jql:<hash>`, or the built-in
+ * `ASSIGNED_VIEW_ID`), and a folder is a project whose `lists` are its boards.
+ */
+export type JiraViewKind = "board" | "filter" | "jql";
+
+/** One board column, in the board's own order and words, by the status ids it holds. */
+export interface JiraColumn { name: string; statusIds: string[] }
+
+/** `GET /jira/views`: read from the local store, no request to Jira. */
+export interface JiraViews {
+  connected: boolean;
+  site: string | null;
+  views: SavedView[];
+  folders: SavedFolder[];
+  current?: string;
+}
+
+/** `GET /jira/view`. `columns` is set for a board; empty means group by status. */
+export interface JiraViewRead {
+  ok: boolean;
+  error?: string;
+  throttled?: boolean;
+  view?: SavedView;
+  tasks: ProviderTask[];
+  columns: JiraColumn[];
+  /** When the rows were read; 0 when there is nothing yet. */
+  at: number;
+  truncated?: boolean;
+  /** These rows are the last read kept on disk, not a new one. */
+  cached?: boolean;
+}
+
+/** Something the add-a-view list offers. */
+export interface JiraViewChoice {
+  kind: "board" | "filter";
+  id: string;
+  name: string;
+  /** Board only: `scrum` | `kanban` | `simple`, as the site says. */
+  type?: string;
+  projectKey?: string;
+}
+
+export interface JiraProjectChoice { key: string; name: string }
+
 /** What a provider is doing right now, as one of four answers a person can act
  *  on. Deliberately not a boolean: "installed but not logged in" and "not
  *  installed" need different sentences and different buttons. */
@@ -238,6 +284,9 @@ export interface ProviderTask {
    *  glance, and inventing our own would make agentglass disagree with the tool
    *  it is showing. */
   statusColor?: string;
+  /** The tracker's own id for the status, where it has one (Jira). A board
+   *  column holds status ids, and two statuses may share a name. */
+  statusId?: string;
   priority: "urgent" | "high" | "normal" | "low" | null;
   /** Local calendar date, `YYYY-MM-DD`, converted from the provider's epoch. */
   due: string | null;

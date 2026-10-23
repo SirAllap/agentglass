@@ -69,6 +69,7 @@ describe("one card", () => {
       status: "In Progress",
       statusKind: "open",
       statusColor: "#ffab00",
+      statusId: "2",
       priority: "high",
       due: null,
       updated: Date.parse("2026-01-13T09:00:00.000Z"),
@@ -80,6 +81,12 @@ describe("one card", () => {
       mine: true,
       created: Date.parse("2026-01-07T09:00:00.000Z"),
     });
+  });
+
+  test("the card carries the status id, which a board column is made of", async () => {
+    expect((await read("ORBIT-1042")).data?.statusId).toBe("2");
+    expect((await read("ORBIT-1045")).data?.statusId).toBe("5");
+    expect(J.toTask({ key: "ORBIT-1", fields: { status: { name: "No id" } } }, { site: "acme.atlassian.net", priorities: null })).not.toHaveProperty("statusId");
   });
 
   test("each status category maps: new and indeterminate are open, done is done", async () => {
@@ -342,6 +349,12 @@ describe("a person's list", () => {
     expect(fake.requests.length).toBe(0);
     expect(J.boundedJql("assignee = currentUser() order by key")).toBe(true);
     expect(J.boundedJql("key = ORBIT-1")).toBe(true);
+    // `order by` inside quoted text is text, not a clause.
+    expect(J.boundedJql('summary ~ "sort order by date"')).toBe(true);
+    expect(J.boundedJql("summary ~ 'x \\' order by y' ORDER BY key")).toBe(true);
+    expect(J.boundedJql('"order by x" order by key')).toBe(true);
+    expect(J.boundedJql("order by key")).toBe(false);
+    expect(J.orderByAt('summary ~ "a order by b" ORDER BY key')).toBe('summary ~ "a order by b"'.length);
   });
 
   test("the cloud site stops being asked at isLast, and no answer's total is read", async () => {

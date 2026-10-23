@@ -78,6 +78,7 @@ import { parseLocal, toLine, sortTasks, step, checkbox, toggleCheckbox, checkPro
 import { useSyncExternalStore } from "react";
 import { CloseButton, CloseIcon } from "./CloseButton.tsx";
 import { HIT, ICON, MIN_BOX } from "../lib/iconSize.ts";
+import { GroupHead } from "./tasks/GroupHead.tsx";
 import { RAIL_W_DEFAULT, RAIL_W_MAX, RAIL_W_MIN, clampRailW, railKey, railSplit } from "../lib/railTree.ts";
 import { boardDue, BOARD_POLL_MS, BOARD_TICK_MS } from "../lib/boardPoll.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
@@ -3236,38 +3237,9 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
                 one that answers "what is in review" without a filter. */}
             {!onLooked && groups.map((g, gi) => (
               <div key={g.status} style={{ marginTop: gi ? 18 : 4 }}>
-                {/* The whole heading is the control, not a glyph beside it. A
-                    nine-pixel triangle is a target you aim at; a row you can hit
-                    anywhere is one you use. */}
-                <button onClick={() => setFolded((f) => ({ ...f, [g.status]: !f[g.status] }))}
-                  aria-expanded={!folded[g.status]}
-                  title={folded[g.status] ? "Show these" : "Hide these"}
-                  className="agx-group-head w-full flex items-center py-2 text-left hover:bg-white/5"
-                  style={{ borderTop: gi ? LINE : undefined }}>
-                  <span className="agx-stick-group flex items-center gap-2">
-                  {/* A drawn chevron, not a text glyph. `▸` at a readable size
-                      renders as a speck in this font — it was still a speck
-                      after being told to be eleven pixels — and the thing it
-                      controls is a section of the board. This is a real 20px
-                      target with a stroke somebody can see. */}
-                  <span aria-hidden className="inline-flex items-center justify-center shrink-0"
-                    style={{ width: 20, height: 20, borderRadius: 6, background: "color-mix(in srgb, var(--text) 6%, transparent)" }}>
-                    <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none"
-                      style={{ transform: folded[g.status] ? "none" : "rotate(90deg)", transition: "transform 120ms ease" }}>
-                      <path d="M4 2.5 L8.5 6 L4 9.5" stroke="var(--text2)" strokeWidth="1.8"
-                        strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </span>
-                  <StatusPill status={g.status} color={g.color} dim={g.done} />
-                  <span className="text-[10.5px] tabular-nums" style={{ color: "var(--text3)" }}>{g.rows.length}</span>
-                  {g.points > 0 && (
-                    <span className="text-[10.5px] tabular-nums" style={{ color: "var(--text4)" }}>· {g.points} pts</span>
-                  )}
-                  {folded[g.status] && (
-                    <span className="text-[10px]" style={{ color: "var(--text4)" }}>· hidden</span>
-                  )}
-                  </span>
-                </button>
+                <GroupHead first={!gi} folded={!!folded[g.status]} count={g.rows.length} points={g.points}
+                  onToggle={() => setFolded((f) => ({ ...f, [g.status]: !f[g.status] }))}
+                  label={<StatusPill status={g.status} color={g.color} dim={g.done} />} />
                 {!folded[g.status] && g.rows.map((t) => (
                   <ClickUpRow key={t.id} t={t} today={today} on={t.id === sel} onPick={() => setSel(t.id)}
                     grid={grid} showWho={anyWho} showSquad={!!squadLabel} showSprint={anySprint} showEst={anyEst} blocked={blockedBy(t)} onHand={handCard}

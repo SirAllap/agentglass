@@ -813,3 +813,76 @@ describe("the Data Center personality", () => {
     expect(dc.state.issues["ORBIT-1042"].comments[0].body).toBe("[~ada] can you take a look at the retry loop?");
   });
 });
+
+describe("boards and saved filters", () => {
+  for (const flavor of ["cloud", "datacenter"] as const) {
+    const f = flavor === "cloud" ? fake : dc;
+    const at = (method: string, path: string) => call(method, path, { on: f });
+    const keys = async (jql: string) => {
+      const r = flavor === "cloud"
+        ? await call("POST", "/search/jql", { on: f, body: { jql, maxResults: 50, fields: ["summary"] } })
+        : await call("POST", "/search", { on: f, body: { jql, maxResults: 50, fields: ["summary"] } });
+      return r.status === 200 ? (r.json.issues as { key: string }[]).map((i) => i.key) : r.json;
+    };
+
+    it(`${flavor}: lists boards under /rest/agile/1.0, logged whole, and filters them by name and project`, async () => {
+      const all = await at("GET", "/rest/agile/1.0/board");
+      expect(all.json).toMatchObject({ startAt: 0, total: 4, isLast: true });
+      expect(all.json.values.map((b: any) => b.id)).toEqual([1, 2, 3, 4]);
+      expect(all.json.values[0]).toMatchObject({ name: "ORBIT board", type: "kanban", location: { projectKey: "ORBIT" } });
+      expect(f.requests.at(-1)?.path).toBe("/rest/agile/1.0/board");
+      expect((await at("GET", "/rest/agile/1.0/board?name=sprint")).json.values.map((b: any) => b.id)).toEqual([2, 3]);
+      expect((await at("GET", "/rest/agile/1.0/board?projectKeyOrId=ORBIT")).json.values.map((b: any) => b.id)).toEqual([1, 3]);
+      expect((await at("GET", "/rest/agile/1.0/board?projectKeyOrId=NOPE")).status).toBe(404);
+    });
+
+    it(`${flavor}: pages boards by startAt and caps a page at 50`, async () => {
+      const small = startFakeJira({ flavor, boardPageSize: 2 });
+      try {
+        const one = await call("GET", "/rest/agile/1.0/board?maxResults=500", { on: small });
+        expect(one.json).toMatchObject({ maxResults: 2, total: 4, isLast: false });
+        const two = await call("GET", "/rest/agile/1.0/board?startAt=2", { on: small });
+        expect(two.json.values.map((b: any) => b.id)).toEqual([3, 4]);
+        expect(two.json.isLast).toBe(true);
+      } finally { await small.stop(); }
+    });
+
+    it(`${flavor}: a board's configuration gives its columns in order, empty ones kept, and its filter and sub-query`, async () => {
+      const r = await at("GET", "/rest/agile/1.0/board/1/configuration");
+      expect(r.status).toBe(200);
+      expect(r.json.filter.id).toBe("10010");
+      expect(r.json.subQuery).toEqual({ query: "issuetype != Epic" });
+      expect(r.json.columnConfig.columns.map((c: any) => [c.name, c.statuses.map((s: any) => s.id)])).toEqual([
+        ["Backlog", []], ["To Do", ["1"]], ["Doing", ["2", "3"]], ["QA", ["4"]], ["Done", ["5"]],
+      ]);
+      expect(r.json.location).toMatchObject({ type: "project", key: "ORBIT" });
+      expect((await at("GET", "/rest/agile/1.0/board/2/configuration")).json.subQuery).toBeUndefined();
+      expect((await at("GET", "/rest/agile/1.0/board/99/configuration")).status).toBe(404);
+      expect((await at("GET", "/rest/agile/1.0/board/99")).status).toBe(404);
+    });
+
+    it(`${flavor}: the deprecated board card list is not served`, async () => {
+      expect((await at("GET", "/rest/agile/1.0/board/1/issue")).status).toBe(404);
+    });
+
+    it(`${flavor}: a filter by id, the favourites, and one that is not visible`, async () => {
+      expect((await at("GET", "/filter/10010")).json).toMatchObject({ id: "10010", name: "ORBIT board filter", jql: "project = ORBIT ORDER BY Rank ASC" });
+      expect((await at("GET", "/filter/favourite")).json.map((x: any) => x.id)).toEqual(["10020", "10030"]);
+      expect((await at("GET", "/filter/10040")).status).toBe(404);
+      expect((await at("GET", "/filter/55555")).status).toBe(404);
+    });
+
+    it(`${flavor}: the JQL reader takes status in (ids or names), a bracketed group, Rank order and issuetype`, async () => {
+      expect(await keys("(project = ORBIT) AND status in (4, 5) ORDER BY Rank ASC")).toEqual(["ORBIT-1044", "ORBIT-1045"]);
+      expect(await keys('project = ORBIT AND status in ("QA", "done")')).toEqual(["ORBIT-1044", "ORBIT-1045"]);
+      expect(await keys("(project = ORBIT AND status in (1, 2)) AND (issuetype != Epic) ORDER BY Rank ASC"))
+        .toEqual(["ORBIT-1001", "ORBIT-1042", "ORBIT-1046", "ORBIT-1050"]);
+      expect(await keys("project = ORBIT AND status in (2) ORDER BY Rank ASC")).toEqual(["ORBIT-1000", "ORBIT-1042"]);
+    });
+
+    it(`${flavor}: a clause it cannot read is an error, never an empty answer`, async () => {
+      const r = await keys("project = ORBIT AND (sprint in openSprints())");
+      expect(JSON.stringify(r)).toContain("does not understand");
+    });
+  }
+});

@@ -5,7 +5,7 @@ import type { PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/typ
 import type { AskedAlert } from "../../../shared/notifyPayload.ts";
 import type { CheckOnBasePlan, CheckOnBaseStatus } from "../../../shared/checkOnBase.ts";
 import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest } from "../../../shared/types.ts";
-import type { ProvidersResponse, JiraConnectResult, JiraMoves, JiraStatus, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, TrackerChoice } from "../../../shared/providers.ts";
+import type { ProvidersResponse, JiraConnectResult, JiraMoves, JiraStatus, JiraViews, JiraViewRead, JiraViewChoice, JiraProjectChoice, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, TrackerChoice } from "../../../shared/providers.ts";
 import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from "../../../shared/notifyPrefs.ts";
 import type { CheckMetric } from "../../../shared/checkBaseline.ts";
 import type { UiReply } from "../../../shared/uiActions.ts";
@@ -1408,6 +1408,20 @@ const realApi = {
   /** One move, with the `updated` the person saw; the server refuses it as a conflict if the card has moved since. */
   jiraTransition: (key: string, transitionId: string, updated: number) =>
     post<ClickUpWrite>("/jira/transition", { key, transitionId, updated }),
+  /** The saved Jira views and folders: local, no request to Jira. */
+  jiraViews: () => get<JiraViews>("/jira/views"),
+  /** One saved view's cards. `cached` answers from disk only; `force` skips the server's held answer. */
+  jiraView: (id: string, o?: { force?: boolean; cached?: boolean }) =>
+    get<JiraViewRead>(`/jira/view?${new URLSearchParams({ id, ...(o?.force ? { force: "1" } : {}), ...(o?.cached ? { cached: "1" } : {}) })}`),
+  /** Boards and favourite filters the add-a-view list offers. */
+  jiraViewChoices: (q = "") =>
+    get<{ ok: boolean; error?: string; boards: JiraViewChoice[]; filters: JiraViewChoice[]; truncated?: boolean }>(`/jira/view-choices?q=${encodeURIComponent(q)}`),
+  jiraProjectChoices: () => get<{ ok: boolean; error?: string; projects: JiraProjectChoice[] }>("/jira/project-choices"),
+  jiraAddView: (input: { url: string } | { kind: "board" | "filter"; id: string }) =>
+    post<{ ok: boolean; error?: string; view?: SavedView }>("/jira/views/add", input),
+  jiraRemoveView: (id: string) => post<{ ok: boolean }>("/jira/views/remove", { id }),
+  jiraAddFolder: (key: string) => post<{ ok: boolean; error?: string; folder?: SavedFolder }>("/jira/folders/add", { key }),
+  jiraRemoveFolder: (id: string) => post<{ ok: boolean }>("/jira/folders/remove", { id }),
   providerTasks: (force = false) =>
     get<ProviderTasksResponse>(`/tasks/provider${force ? "?force=1" : ""}`),
 
@@ -2750,6 +2764,29 @@ const demoApi: typeof realApi = {
   jiraSearch: (_q: string) => D({ ok: false, error: "not available in the demo" }),
   jiraTransitions: (_k: string) => D({ ok: false, error: "not available in the demo" }),
   jiraTransition: (_k: string, _t: string, _u: number) => D({ ok: false, error: "not available in the demo" }),
+  jiraViews: () => D<JiraViews>({
+    connected: true, site: "acme.example", current: "board:1",
+    views: [{ id: "board:1", name: "ORBIT board", url: "", addedAt: 0 }], folders: [],
+  }),
+  jiraView: (_id: string, _o?: { force?: boolean; cached?: boolean }) => D<JiraViewRead>({
+    ok: true, at: Date.now(),
+    columns: [
+      { name: "To Do", statusIds: ["1"] },
+      { name: "Doing", statusIds: ["2"] },
+      { name: "Done", statusIds: ["3"] },
+    ],
+    tasks: [
+      { id: "10001", customId: "ORBIT-1042", title: "Draft the launch checklist", status: "To Do", statusId: "1", statusKind: "open", assignees: [], tags: [], priority: null, due: null, list: "ORBIT" },
+      { id: "10002", customId: "ORBIT-1043", title: "Wire the status page", status: "In Progress", statusId: "2", statusKind: "open", assignees: [], tags: [], priority: null, due: null, list: "ORBIT" },
+      { id: "10003", customId: "ORBIT-1044", title: "Retire the old banner", status: "Done", statusId: "3", statusKind: "done", assignees: [], tags: [], priority: null, due: null, list: "ORBIT" },
+    ] as unknown as ProviderTask[],
+  }),
+  jiraViewChoices: (_q?: string) => D({ ok: true, boards: [{ kind: "board" as const, id: "1", name: "ORBIT board", type: "kanban", projectKey: "ORBIT" }], filters: [] as JiraViewChoice[] }),
+  jiraProjectChoices: () => D({ ok: true, projects: [{ key: "ORBIT", name: "Orbit" }] }),
+  jiraAddView: (_i: { url: string } | { kind: "board" | "filter"; id: string }) => D({ ok: false, error: "not available in the demo" }),
+  jiraRemoveView: (_i: string) => D({ ok: false }),
+  jiraAddFolder: (_k: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraRemoveFolder: (_i: string) => D({ ok: false }),
   providerTasks: (_f?: boolean) => D({ tasks: [], more: false, at: 0 }),
   recipes: (_r?: string) => D({ recipes: [] }),
   recipeSave: (_r: Recipe) => D({ ok: false, error: "not available in the demo" }),
