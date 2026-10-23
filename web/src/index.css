@@ -2314,6 +2314,9 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
 *:hover > .agx-hover-show,
 .agx-hover-show:focus-within { opacity: 1; }
 @media (hover: none) { .agx-hover-show { opacity: 1; } }
+/* A card whose verbs show when the CARD is pointed at, not only the verbs' own box. */
+.agx-row:hover .agx-hover-show,
+.agx-row:focus-within .agx-hover-show { opacity: 1; }
 
 /* "It is this one" — see lib/flash.ts.
    A pulse rather than a static highlight: the point is to catch the eye at the

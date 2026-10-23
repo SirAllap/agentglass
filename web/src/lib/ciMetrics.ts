@@ -114,6 +114,34 @@ export function chipCounts(rows: Row[]): Record<Chip, number> {
   return Object.fromEntries(CHIPS.map((c) => [c, rows.filter((r) => IN[c](r)).length])) as Record<Chip, number>;
 }
 
+/**
+ * The four tiles above the table. Each one filters it; the fifth and sixth of
+ * the old row of buttons (Drifting, Failing tests) are two chips inside the
+ * fourth tile, so every one of the five filters stays one press away.
+ */
+export type Tile = "all" | "slow" | "rerun" | "attention";
+export const TILES: readonly Tile[] = ["all", "slow", "rerun", "attention"];
+
+/** What the view shows: a table chip, or the failing-tests lens. */
+export type CiView = Chip | "tests";
+
+/** The tile a view belongs to. */
+export const tileOf = (v: CiView): Tile => (v === "drifting" || v === "tests" ? "attention" : v);
+
+/** The view a press on a tile opens. The fourth opens on Drifting, the one with a table; Failing tests is the chip beside it. */
+export const viewOfTile = (t: Tile): Chip => (t === "attention" ? "drifting" : t);
+
+/** The one status chip of a row, or null when the run is simply usual. A failed run outranks everything, then a re-run that passed, then the verdict, then a week that drifted. */
+export function statusChip(r: Row): { label: string; tone: "bad" | "warn" | "good" } | null {
+  if (r.failed) return { label: "Failed", tone: "bad" };
+  if (r.rerun) return { label: "Re-run passed", tone: "warn" };
+  if (r.verdict === "much-slower") return { label: "much slower", tone: "bad" };
+  if (r.verdict === "slower") return { label: "slower", tone: "warn" };
+  if (r.drift != null) return { label: "drifting", tone: "warn" };
+  if (r.verdict === "faster") return { label: "faster", tone: "good" };
+  return null;
+}
+
 /** Every word of the query is somewhere in "workflow name", any case. */
 export function matches(r: Row, query: string): boolean {
   const hay = `${r.workflow} ${r.name}`.toLowerCase();
