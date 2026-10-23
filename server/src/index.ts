@@ -175,7 +175,7 @@ import { noteAsk as noteWatchAsk, startPrWatch } from "./prWatch.ts";
 import { onPrChanged, deliverPrChanged } from "./prChanged.ts";
 import {
   listWatches, addWatch, removeWatch, setPreset, applyPreset, sawMine, onTalkSeen as watchOnTalkSeen, pendingFires, ackFire,
-  subscribeWatchChange, subscribeWatchFire, subscribeWatchChecks, startPrNotifyWatch, noteSync,
+  subscribeWatchChange, subscribeWatchFire, subscribeWatchChecks, startPrNotifyWatch, noteSync, dropSync,
 } from "./prNotifyWatch.ts";
 import { subscribeAskedAlerts, handleAskedAlertRoute } from "./askedAlerts.ts";
 import { measureFile } from "./filemeasure.ts";
@@ -8676,7 +8676,11 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         case "/prs/labels": res = await setLabels(root, n, b.add, b.remove); break;
         case "/prs/reviewers": res = await setReviewers(root, n, b.add, b.remove); break;
         case "/prs/draft": res = await setDraft(root, n, b.draft); break;
-        case "/prs/update-branch": res = await updateBranch(root, n, b.syncLocal); if (res.ok) await noteSyncFor(root, n, res.headBefore); break;
+        case "/prs/update-branch": {
+          res = await updateBranch(root, n, b.syncLocal, (before) => noteSyncFor(root, n, before));
+          if (!res.ok && !res.prLagging) await dropSyncFor(root, n);
+          break;
+        }
         case "/prs/rerun": res = await rerunFailedChecks(root, n); break;
         case "/prs/rerun-jobs": res = await rerunJobs(root, b.what, b.id); break;
         case "/prs/line-comment": res = await addLineComment(root, n, b); break;
@@ -11151,7 +11155,11 @@ const prNotifyKick = process.env.NODE_ENV === "test" ? () => {} : startPrNotifyW
   const complete = !r.truncated;
   return { checks: complete ? r.checks : undefined, allDone: r.checks.allDone && complete, verdict: complete ? r.checks.verdict : null, all: r.all, state: r.state, sha: r.sha };
 }).kick;
-/** GitHub accepted an Update branch: a watch on this PR must not take the old head's green for the new run's. One read now, then the watch's own cadence. */
+async function dropSyncFor(root: string, n: unknown): Promise<void> {
+  const id = await prRepoIdFor(root).catch(() => null);
+  if (id) dropSync(id.nameWithOwner, Number(n));
+}
+/** An Update branch has begun (GitHub has not answered yet): a watch on this PR must not take the old head's green for the new run's. One read now, then the watch's own cadence. */
 async function noteSyncFor(root: string, n: unknown, before?: string): Promise<void> {
   const id = await prRepoIdFor(root).catch(() => null);
   if (!id) return;

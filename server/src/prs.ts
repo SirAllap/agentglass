@@ -5327,7 +5327,7 @@ export function updateBranchRefusal(raw: string): PrActionResult | null {
 
 /** Merge the base into the PR branch — the button whose absence is why half a
  *  branch list carries hand-made "Merge origin/master into …" commits. */
-export async function updateBranch(rootIn: unknown, number: unknown, syncLocal?: unknown): Promise<PrActionResult> {
+export async function updateBranch(rootIn: unknown, number: unknown, syncLocal?: unknown, began?: (before: string | undefined) => Promise<void>): Promise<PrActionResult> {
   const abs = safeAbs(rootIn);
   const root = abs ? repoRootOf(abs) : null;
   const wantLocal = syncLocal === true || syncLocal === "true";
@@ -5336,6 +5336,8 @@ export async function updateBranch(rootIn: unknown, number: unknown, syncLocal?:
      not happen at all, so "ok" says nothing about the branch having moved. */
   const pr = root ? await prBranches(root, Number(number)) : null;
   const before = root && pr ? await remoteHeadOf(root, pr.head) : null;
+  // Said before GitHub is asked: the answer takes seconds, and a notify armed inside them must already know.
+  try { await began?.(before ?? undefined); } catch { /* the note is a courtesy to the watch: the press goes on */ }
   const r = await runPr(rootIn, Number(number), ["pr", "update-branch", String(Number(number))]);
   if (!r.ok) return updateBranchRefusal(r.error || "") ?? r;
   const out = (x: PrActionResult): PrActionResult => before ? { ...x, headBefore: before } : x;

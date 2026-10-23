@@ -123,7 +123,7 @@ export function watchPayload(
 ): NotifyPayload {
   const target: NotifyTarget = { kind: "pr", repo: f.repo, number: f.number, ...(read.root ? { root: read.root } : {}) };
   const detail = oneLine(f.detail, LINE_MAX);
-  const counted = f.summary === "CI failed" && read.checks && read.checks.failure > 0 && detail;
+  const counted = f.summary.startsWith("CI failed") && read.checks && read.checks.failure > 0 && detail;
   const line = counted ? `${read.checks!.failure} failed: ${detail}` : detail || oneLine(f.title, LINE_MAX);
   const facts = checkFacts(read.checks, read.all);
   const failed = f.ok === false;
