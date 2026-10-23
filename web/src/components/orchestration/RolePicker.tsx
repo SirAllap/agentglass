@@ -26,14 +26,14 @@ export function RolePicker({ id, role, word, current, readiness, lock, models, m
   onPick: (c: EngineChoice) => void;
 }) {
   return (
-    <div className="grid gap-3 rounded-lg p-3" style={{ background: "var(--surface-inset)" }} data-picker={id}>
+    <div className="grid gap-3" data-picker={id}>
       <div className="grid gap-2">
-        <div className="text-[12px] font-medium" style={{ color: "var(--text)" }}>1. Which engine runs the {word}</div>
+        <div className="text-[11px]" style={{ color: "var(--text3)" }}>Which engine runs the {word}</div>
         <EngineTiles role={role} readiness={readiness} lock={lock} selected={current.engine} label={`Engine for the ${word}`}
           onPick={(engine, options) => { if (disabled) return; const c = pickEngine(options, current, engine); if (c) onPick(c); }} />
       </div>
       <div className="grid gap-2">
-        <div className="text-[12px] font-medium" style={{ color: "var(--text)" }}>2. Which model</div>
+        <div className="text-[11px]" style={{ color: "var(--text3)" }}>Which model</div>
         {models ? (
           <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={`Model for the ${word}`}>
             {[{ id: "", label: DEFAULT_MODEL }, ...models].map((m) => (

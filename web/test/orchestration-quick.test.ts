@@ -17,7 +17,7 @@ import type { OrchestrationViewProps } from "../src/components/orchestration/Orc
 import { agentProvider } from "../../shared/agentKinds.ts";
 import { composePolicy, defaultStored, type Policy } from "../../shared/orchestration.ts";
 import type { EngineReadiness } from "../../shared/types.ts";
-import { OWN_SETTING, SCOPE_KEY, recallScope, rememberScope, scopeLine, openingScope, appliedLine, cardUndo, presetDiagram, undoPolicy, applyPreset, backAvailable, backOf, presetInForce, presetOffers, scopeWords } from "../src/components/orchestration/orchestrationCopy.ts";
+import { OWN_SETTING, SCOPE_KEY, recallScope, rememberScope, scopeSentence, openingScope, appliedLine, cardUndo, presetDiagram, undoPolicy, applyPreset, backAvailable, backOf, presetInForce, presetOffers, scopeWords } from "../src/components/orchestration/orchestrationCopy.ts";
 
 const DIR = join(import.meta.dir, "..", "src", "components", "orchestration");
 const strip = (s: string) => s.replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
@@ -57,8 +57,8 @@ const rowOf = (html: string, label: string): string => {
 describe("the card on the page", () => {
   test("it is the first card, and every preset says what it sets", () => {
     const html = view();
-    expect(html.indexOf("Quick setup")).toBeGreaterThan(-1);
-    expect(html.indexOf("Quick setup")).toBeLessThan(html.indexOf("What a new main agent opens with"));
+    expect(html.indexOf("Start from a ready-made setup")).toBeGreaterThan(-1);
+    expect(html.indexOf("Start from a ready-made setup")).toBeLessThan(html.indexOf("Fine-tune who does what"));
     for (const o of presetOffers([engine("claude"), engine("opencode")])) {
       const row = rowOf(html, o.title);
       for (const line of o.says) expect(row).toContain(line.replace(/'/g, "&#x27;"));
@@ -86,8 +86,8 @@ describe("the card on the page", () => {
   });
   test("the server's sentence for a refusal sits in the card", () => {
     const html = view({ notes: { quick: "policy.workerDefault: is wider than the most the main agent may allow; lower the default or raise that limit on purpose" } });
-    expect(html.indexOf("is wider than the most")).toBeGreaterThan(html.indexOf("Quick setup"));
-    expect(html.indexOf("is wider than the most")).toBeLessThan(html.indexOf("What a new main agent opens with"));
+    expect(html.indexOf("is wider than the most")).toBeGreaterThan(html.indexOf("Start from a ready-made setup"));
+    expect(html.indexOf("is wider than the most")).toBeLessThan(html.indexOf("Fine-tune who does what"));
   });
 });
 
@@ -228,7 +228,7 @@ describe("the side sheet opens where the person is looking", () => {
     expect(body).toContain("nameRef.current?.focus({ preventScroll: true })");
   });
   test("every button that opens it records itself, and closing returns the focus to it", () => {
-    for (const label of ["Add a fallback rule", ">Edit<", ">Add a condition<"]) expect(PANE, label).toContain(label);
+    for (const label of ["Add a fallback rule", ">Edit<", "Add a condition<"]) expect(PANE, label).toContain(label);
     expect((PANE.match(/openSheet\(/g) ?? []).length).toBeGreaterThanOrEqual(3);
     const at = PANE.indexOf("const openSheet =");
     expect(PANE.slice(at, at + 260)).toContain("opener.current = from");
@@ -263,7 +263,7 @@ describe("a preset card shows what changes", () => {
   test("the applied card has the green edge and the Applied word; the others do not", () => {
     const applied = applyPreset(base(), "claude-orchestrates", ready)!;
     const html = view({ policy: applied, readiness: ready });
-    expect(rowOf(html, `${title("claude")} orchestrates, others work`)).toContain("border:1px solid color-mix(in srgb, var(--success) 60%");
+    expect(rowOf(html, `${title("claude")} orchestrates, others work`)).toContain("border:1px solid var(--success)");
     expect(rowOf(html, `All workers on ${title("claude")}`)).not.toContain("border:1px solid color-mix(in srgb, var(--success)");
   });
 });
@@ -333,13 +333,13 @@ describe("the project bar", () => {
     const inherited = view({ projects: ["/w/orbit"], root: "/w/orbit", scope: "global" });
     expect(inherited).toContain("Set for this project");
     expect(inherited).not.toContain("Use the general setting");
-    expect(inherited).toContain(scopeLine("/w/orbit", true, "orbit"));
+    expect(inherited).toContain(scopeSentence("/w/orbit", true, "orbit").tail);
     const own = view({ projects: ["/w/orbit"], root: "/w/orbit", scope: "project", overrides: ["/w/orbit"] });
     expect(own).toContain("Use the general setting");
-    expect(own).toContain("orbit has its own setting.");
+    expect(own).toContain("its own setting. Changes are saved for it only.");
     const all = view();
     expect(all).not.toContain("Set for this project");
-    expect(all).toContain("The setting every project without its own uses.");
+    expect(all).toContain("changes here apply to every project without its own.");
   });
   test("a settings search that is listing rows leaves the bar out, and one that is not leaves it in", () => {
     const el = React.createElement(OrchestrationView, {

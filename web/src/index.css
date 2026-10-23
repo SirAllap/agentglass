@@ -2797,12 +2797,15 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-step-spin { animation: agx-step-turn 1s linear infinite; }
 @media (prefers-reduced-motion: reduce) { .agx-step-spin { animation: none; } }
 /* The Orchestration page's "Right now" picture: the main agent, a wire to each job. */
-.agx-flow { display: grid; grid-template-columns: minmax(200px, 240px) minmax(0, 1fr); gap: 24px; align-items: stretch; }
-.agx-flow-roles { display: grid; gap: 8px; }
+.agx-flow { display: grid; grid-template-columns: minmax(200px, 220px) minmax(0, 1fr); gap: 40px; align-items: stretch; }
+.agx-flow-roles { display: grid; gap: 12px; }
+/* The page reads as prose with the machine's words in mono, as the approved mock does; the body's mono stays everywhere else. */
+.agx-orch { font-family: var(--font-prose); }
+.agx-orch .t-mono { font-family: var(--font-mono, ui-monospace, monospace); }
 .agx-flow-main, .agx-flow-job { position: relative; }
-.agx-flow-main::after { content: ""; position: absolute; top: 50%; right: -12px; width: 12px; height: 1px; background: var(--surface-line); }
-.agx-flow-job::after { content: ""; position: absolute; top: 50%; left: -12px; width: 12px; height: 1px; background: var(--surface-line); }
-.agx-flow-job::before { content: ""; position: absolute; left: -12px; top: -8px; bottom: -8px; width: 1px; background: var(--surface-line); }
+.agx-flow-main::after { content: ""; position: absolute; top: 50%; right: -20px; width: 20px; height: 2px; background: var(--border2); }
+.agx-flow-job::after { content: ""; position: absolute; top: 50%; left: -20px; width: 20px; height: 2px; background: var(--border2); }
+.agx-flow-job::before { content: ""; position: absolute; left: -20px; top: -12px; bottom: -12px; width: 2px; background: var(--border2); }
 .agx-flow-job:first-child::before { top: 50%; }
 .agx-flow-job:last-child::before { bottom: 50%; }
 @media (max-width: 720px) {
@@ -2813,3 +2816,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
 .agx-presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: start; }
 @media (max-width: 1100px) { .agx-presets { grid-template-columns: minmax(0, 1fr); } }
+/* Orchestration's wait: the grey shimmer the mock shows while the setting loads. */
+.agx-skel { background: linear-gradient(90deg, var(--bg3), var(--bg2), var(--bg3)); background-size: 200% 100%; animation: agx-skel-sh 1.4s linear infinite; }
+@keyframes agx-skel-sh { to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .agx-skel { animation: none; } }

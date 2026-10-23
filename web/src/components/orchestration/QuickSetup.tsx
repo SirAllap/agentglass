@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { SettingRow } from "../SettingRow.tsx";
-import { SettingsCard, StatusBadge } from "../SettingsKit.tsx";
-import { Button, EDGE, tintEdge } from "../workspace/Chrome.tsx";
+import { StatusBadge } from "../SettingsKit.tsx";
+import { Button } from "../workspace/Chrome.tsx";
+import { Card, Sec } from "./OrchKit.tsx";
 import { CloseIcon } from "../CloseButton.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { PresetDiagram } from "./PresetDiagram.tsx";
@@ -119,28 +119,28 @@ export function QuickSetup(p: QuickSetupProps) {
 
   const undoOnCard = offers.some((o) => cardUndo(back, p.policy, o.title));
   return (
-    <SettingsCard title="Quick setup"
-      desc="Start from a ready-made setup. Each card shows before and after; nothing running is moved, and you can undo it."
-      actions={
-        <>
-          {canGoBack && !undoOnCard && <Button disabled={locked} title={`Undo "${back?.title}"`} onClick={() => void undo()}>{BACK_LABEL}</Button>}
-          <Button disabled={!p.readiness} onClick={() => setCheck(checkSetup(p.policy, p.states, p.readiness, p.inherited || p.root === "" ? "global" : p.root))}>Check my setup</Button>
-        </>}>
-      <div className="agx-settings-x agx-presets pt-2 pb-4">
+    <div data-orch-presets>
+      <Sec n={1} title="Start from a ready-made setup" sub="Each card shows before and after. Nothing running is moved, and you can undo it."
+        right={
+          <>
+            {canGoBack && !undoOnCard && <Button disabled={locked} title={`Undo "${back?.title}"`} onClick={() => void undo()}>{BACK_LABEL}</Button>}
+            <Button disabled={!p.readiness} onClick={() => setCheck(checkSetup(p.policy, p.states, p.readiness, p.inherited || p.root === "" ? "global" : p.root))}>Check my setup</Button>
+          </>} />
+      <div className="agx-presets">
         {offers.map((o) => (
-          <div key={o.id} data-row={rowId(o.title)} className="rounded-lg p-3 grid content-start gap-3 min-w-0"
-            style={{ border: o.active ? tintEdge("var(--success)", 60) : EDGE, opacity: p.inherited ? 0.6 : 1 }}>
+          <article key={o.id} data-row={rowId(o.title)} className="rounded-xl p-4 grid content-start gap-3 min-w-0"
+            style={{ background: "var(--bg)", border: o.active ? "1px solid var(--success)" : "1px solid var(--border)", boxShadow: o.active ? "0 0 0 1px var(--success)" : undefined, opacity: p.inherited ? 0.6 : 1 }}>
             <div className="grid gap-1">
-              <h4 className="m-0 text-[13px] font-medium" style={{ color: "var(--text)" }}>{o.title}</h4>
-              <div className="text-[12px]" style={{ color: "var(--text3)" }}>
+              <h3 className="m-0 text-[13px] font-semibold leading-snug" style={{ color: "var(--text)" }}>{o.title}</h3>
+              <div className="text-[11px]" style={{ color: "var(--text3)" }}>
                 {o.blocked ? o.blocked : o.says.map((line) => <span key={line} className="block">{line}</span>)}
               </div>
             </div>
             <PresetDiagram rows={presetDiagram(p.policy, o.workers)} />
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 mt-auto">
               {o.active ? (
                 <>
-                  <StatusBadge tone="ok">{`Applied for ${scopeWords(p.root)}`}</StatusBadge>
+                  <StatusBadge tone="ok">{`\u2713 Applied for ${scopeWords(p.root)}`}</StatusBadge>
                   {cardUndo(back, p.policy, o.title) && <Button disabled={locked} title={`Undo "${back?.title}"`} onClick={() => void undo()}>{BACK_LABEL}</Button>}
                 </>
               ) : (
@@ -149,34 +149,38 @@ export function QuickSetup(p: QuickSetupProps) {
                   {o.blocked && p.readiness && <button type="button" className="agx-field-link" onClick={p.onOpenEngines}>See Agent engines</button>}
                 </>
               )}
+              <span className="text-[11px]" style={{ color: "var(--text3)" }}>{o.confirm}</span>
             </div>
-            <p className="m-0 text-[11px]" style={{ color: "var(--text3)" }}>{o.confirm}</p>
-          </div>
+          </article>
         ))}
       </div>
       {result && (
-        <p role="status" className="agx-settings-x m-0 pb-3 text-[12px] flex flex-wrap items-center gap-x-3 gap-y-1" style={{ color: "var(--text)" }}>
+        <p role="status" className="m-0 mt-3 text-[12px] flex flex-wrap items-center gap-x-3 gap-y-1" style={{ color: "var(--text)" }}>
           <span>{appliedLine(result.ruleName, result.changed, p.root)}</span>
           {result.changed && canGoBack && <button type="button" className="agx-field-link" disabled={locked} onClick={() => void undo()}>{BACK_LABEL}</button>}
           <button type="button" className="agx-field-link" onClick={() => showRule(result.ruleName)}>See it in Conditions below</button>
           <Button label="Dismiss" square size="compact" onClick={() => setResult(null)}><CloseIcon size={ICON.sm} /></Button>
         </p>)}
-      {gone && !canGoBack && <p className="agx-settings-x m-0 pb-3 text-[12px]" style={{ color: "var(--text3)" }}>{BACK_GONE}</p>}
-      {p.inherited && <p className="agx-settings-x m-0 pb-3 text-[12px]" style={{ color: "var(--text3)" }}>This project uses the general setting. Set it for this project first, or pick All projects.</p>}
+      {gone && !canGoBack && <p className="m-0 mt-3 text-[12px]" style={{ color: "var(--text3)" }}>{BACK_GONE}</p>}
+      {p.inherited && <p className="m-0 mt-3 text-[12px]" style={{ color: "var(--text3)" }}>This project uses the general setting. Set it for this project first, or pick All projects.</p>}
       {check && (
-        <SettingRow label="Your setup right now" hint="Nothing was started or changed. This is what the policy says when it is read against this machine now."
-          below={
-            <div className="grid gap-2 text-[12px]" style={{ color: "var(--text)" }}>
+        <Card style={{ marginTop: 12 }}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="grid gap-2 text-[12px] min-w-0" style={{ color: "var(--text)" }}>
+              <b className="text-[13px]">Your setup right now</b>
+              <span style={{ color: "var(--text3)" }}>Nothing was started or changed. This is what the policy says when it is read against this machine now.</span>
               <p className="m-0">{check.chair}</p>
               <ul className="m-0 pl-4 grid gap-1">{check.roles.map((r) => <li key={r.id}>{r.line}</li>)}</ul>
               {check.rules.length > 0 && (
                 <ul className="m-0 pl-4 grid gap-1" aria-label="What each rule would change">
                   {check.rules.map((r) => <li key={r.id}><b>{r.name}.</b> {r.line}</li>)}
                 </ul>)}
-            </div>}
-          actions={<Button onClick={() => setCheck(null)}>Hide</Button>} />
+            </div>
+            <Button onClick={() => setCheck(null)}>Hide</Button>
+          </div>
+        </Card>
       )}
-      {p.note && <div role="alert" className="agx-settings-x pt-2 pb-3 text-[12px]" style={{ color: "var(--error-ink)" }}>{p.note}</div>}
-    </SettingsCard>
+      {p.note && <div role="alert" className="pt-2 pb-3 text-[12px]" style={{ color: "var(--error-ink)" }}>{p.note}</div>}
+    </div>
   );
 }

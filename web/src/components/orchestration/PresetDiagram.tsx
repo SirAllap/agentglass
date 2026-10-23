@@ -1,5 +1,5 @@
 import { agentProvider } from "../../../../shared/agentKinds.ts";
-import { CTRL_H, EDGE } from "../workspace/Chrome.tsx";
+import { CTRL_H } from "../workspace/Chrome.tsx";
 import { engineLetter, type DiagramRow } from "./orchestrationCopy.ts";
 
 /**
@@ -13,7 +13,7 @@ function Letters({ ids }: { ids: string[] }) {
       {ids.map((id, i) => (
         <span key={`${i}-${id}`} title={agentProvider(id)?.title ?? id}
           className="inline-flex items-center justify-center rounded-md text-[10px] font-semibold"
-          style={{ width: CTRL_H.compact, height: CTRL_H.compact, background: "var(--surface-card)", border: EDGE, color: "var(--text2)" }}>
+          style={{ width: CTRL_H.compact, height: CTRL_H.compact, background: "var(--bg3)", border: "1px solid var(--border2)", color: "var(--text2)" }}>
           {engineLetter(id)}
         </span>
       ))}
@@ -23,22 +23,23 @@ function Letters({ ids }: { ids: string[] }) {
 
 export function PresetDiagram({ rows }: { rows: DiagramRow[] }) {
   if (!rows.length) return null;
-  const head = "text-[10px] uppercase tracking-wider";
-  return (
-    <div className="rounded-lg p-2 grid items-center gap-x-2 gap-y-1.5 text-[11px]" role="group" aria-label="Before and after"
-      style={{ background: "var(--surface-inset)", border: EDGE, gridTemplateColumns: "auto minmax(0, 1fr) auto minmax(0, 1fr)", color: "var(--text2)" }}>
-      <span />
-      <span className={head} style={{ color: "var(--text3)" }}>Before</span>
-      <span />
-      <span className={head} style={{ color: "var(--text3)" }}>After</span>
+  const col = (side: "before" | "after") => (
+    <div data-col={side} className="rounded-lg p-2 grid content-start gap-1 min-w-0"
+      style={{ background: side === "after" ? "color-mix(in srgb, var(--success) 9%, var(--bg2))" : "var(--bg2)" }}>
+      <span className="t-mono text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--text3)" }}>{side === "after" ? "After" : "Before"}</span>
       {rows.map((r) => (
-        <div key={r.role} className="contents">
-          <span>{r.word}</span>
-          <Letters ids={r.before} />
-          <span aria-hidden style={{ color: "var(--text3)" }}>to</span>
-          <Letters ids={r.after} />
+        <div key={r.role} className="flex flex-wrap items-center gap-x-1 gap-y-0.5 text-[10px]" style={{ color: "var(--text2)", minHeight: 22 }}>
+          <i className="not-italic shrink-0" style={{ minWidth: 48, color: "var(--text3)" }}>{r.word}</i>
+          <Letters ids={r[side]} />
         </div>
       ))}
+    </div>
+  );
+  return (
+    <div className="grid items-center gap-2 agx-preset-mini" role="group" aria-label="Before and after" style={{ gridTemplateColumns: "minmax(0, 1fr) 18px minmax(0, 1fr)" }}>
+      {col("before")}
+      <span aria-hidden className="text-center text-[16px]" style={{ color: "var(--text3)" }}>→</span>
+      {col("after")}
     </div>
   );
 }

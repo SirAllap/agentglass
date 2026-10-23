@@ -240,6 +240,8 @@ export const pickUndoable = (p: Policy, u: Picked): boolean => {
   const now = baseChoice(p, u.field);
   return now.engine === u.to.engine && now.model === u.to.model;
 };
+export const pickedHint = (root: string): string => `Saved the moment you pick: \u201c${pickedLine(root)}\u201d`;
+export const OLD_WORDS = "Older notes say \u201cchair\u201d, \u201cseat\u201d or \u201cceiling\u201d: they mean the main agent and the limit above.";
 export const pickedLine = (root: string): string => `Saved for ${scopeWords(root)}. Nothing running was moved.`;
 
 /** A step added from a tile: the chain with that engine last, or null when the tile is disabled, unknown or the chain is full. */
@@ -608,6 +610,17 @@ export const scopeLine = (root: string, inherited: boolean, name: string): strin
     : inherited ? `${name} has no setting of its own, so it uses the general one, shown here as it is.`
       : `${name} has its own setting.`;
 
+/**
+ * The line under the chips, as the mock words it: what the dot means, then which
+ * project is on screen and whether the changes made here are for it alone.
+ */
+export const OWN_LEGEND = "has its own setting \u00b7 the others follow \u201cAll projects\u201d.";
+export function scopeSentence(root: string, inherited: boolean, name: string): { showing: string; tail: string } {
+  if (root === "") return { showing: "all projects", tail: ": changes here apply to every project without its own." };
+  return inherited ? { showing: name, tail: ": follows All projects until you change something here." }
+    : { showing: name, tail: ": its own setting. Changes are saved for it only." };
+}
+
 // ── the flow picture ("Right now") ───────────────────────────────────────
 
 /*
@@ -758,6 +771,10 @@ export const leftFromReading = (reading: string): number | null => {
   return m ? Number(m[1]) : null;
 };
 /** The newest percent left the rules' readings carry for a plan, in one scope. */
+/** The engines whose plan reads nothing left: the tile says "Limit hit" for them, from the reading the page already holds. */
+export function limitedEngines(states: readonly PolicyRuleState[], scope: string): Set<string> {
+  return new Set(Object.entries(usageLeft(states, scope)).filter(([, left]) => left <= 0).map(([p]) => usageEngine(p as UsageProviderId)));
+}
 export function usageLeft(states: readonly PolicyRuleState[], scope: string): Partial<Record<UsageProviderId, number>> {
   const out: Partial<Record<UsageProviderId, number>> = {};
   for (const s of [...states].filter((x) => x.scope === scope).sort((a, b) => a.readingAt - b.readingAt)) {

@@ -1,7 +1,7 @@
 import { useContext, useEffect, useRef } from "react";
 import { Filter } from "../SettingRow.tsx";
 import { Button, Chip, LINE } from "../workspace/Chrome.tsx";
-import { OWN_SETTING, scopeLine } from "./orchestrationCopy.ts";
+import { OWN_LEGEND, OWN_SETTING, scopeSentence } from "./orchestrationCopy.ts";
 
 const baseName = (root: string) => root.split("/").filter(Boolean).pop() ?? root;
 
@@ -47,19 +47,25 @@ export function ScopeBar({ root, projects, overrides, inherited, busy, note, onR
   const options = [
     { id: "", label: "All projects", title: "The setting every project without its own uses" },
     ...projects.map((r) => (overrides.includes(r)
-      ? { id: r, label: <>{baseName(r)}<span aria-hidden className="inline-block rounded-full ml-1.5 align-middle" style={{ width: 6, height: 6, background: "var(--primary)" }} /></>, title: `${r} — ${OWN_SETTING}` }
+      ? { id: r, label: <><span aria-hidden className="inline-block rounded-full mr-1.5 align-middle" style={{ width: 8, height: 8, background: "currentColor", opacity: root === r ? 1 : 0.9, boxShadow: "none" }} data-own-dot />{baseName(r)}</>, title: `${r} — ${OWN_SETTING}` }
       : { id: r, label: baseName(r), title: r })),
   ];
+  const sentence = scopeSentence(root, inherited, baseName(root));
   if (searching) return null;
   return (
     <div ref={bar} data-scope-bar className="sticky -top-8 z-10 grid gap-1.5 pt-2 pb-2.5 mb-4 agx-settings-x"
       style={{ background: "var(--bg)", borderBottom: LINE }}>
       {/* Segmented's chips, but allowed to run onto a second line: the list grows with the person's projects. */}
       <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Settings for">
-        {options.map((o) => <Chip key={o.id} on={root === o.id} resting onClick={() => onRoot(o.id)} title={o.title}>{o.label}</Chip>)}
+        <span className="text-[10px]" style={{ color: "var(--text3)" }}>Settings for</span>
+        {options.map((o) => <Chip key={o.id} on={root === o.id} resting onClick={() => onRoot(o.id)} title={o.title} className="t-mono"
+          style={root === o.id ? { background: "var(--primary)", color: "var(--bg)", border: "1px solid var(--primary)" } : undefined}>{o.label}</Chip>)}
       </div>
       <div className="flex items-center justify-between gap-3">
-        <p className="m-0 min-w-0 text-[12px]" style={{ color: "var(--text3)" }} aria-live="polite">{scopeLine(root, inherited, baseName(root))}</p>
+        <p className="m-0 min-w-0 text-[12px]" style={{ color: "var(--text3)" }} aria-live="polite">
+          <span aria-hidden className="inline-block rounded-full mr-1 align-middle" style={{ width: 8, height: 8, background: "var(--info)" }} />
+          {OWN_LEGEND} Showing <b style={{ color: "var(--text)" }}>{sentence.showing}</b>{sentence.tail}
+        </p>
         {root !== "" && (
           <Button disabled={busy} className="shrink-0" onClick={() => onScope(inherited)}>{inherited ? "Set for this project" : "Use the general setting"}</Button>)}
       </div>

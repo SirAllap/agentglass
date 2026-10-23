@@ -18,7 +18,7 @@ import { agentProvider } from "../../shared/agentKinds.ts";
 import { composePolicy, defaultStored, validatePolicy, type Policy, type PolicyRule } from "../../shared/orchestration.ts";
 import type { EngineReadiness } from "../../shared/types.ts";
 import type { PolicyRuleState } from "../src/lib/api.ts";
-import { GAUGE_HELP, LIMIT_RANGE, NO_WORKER_ENGINE, SAFETY, safetyIsDefault } from "../src/components/orchestration/orchestrationCopy.ts";
+import { OLD_WORDS, GAUGE_HELP, LIMIT_RANGE, NO_WORKER_ENGINE, SAFETY, safetyIsDefault } from "../src/components/orchestration/orchestrationCopy.ts";
 
 const DIR = join(import.meta.dir, "..", "src", "components", "orchestration");
 const strip = (s: string) => s.replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
@@ -103,12 +103,14 @@ describe("a rule's row, in each state", () => {
     ["d", "Cannot apply", `Cannot apply · ${title("hermes")} needs an update`],
     ["e", "Off", "Off"],
   ];
-  test.each(CASES)("%s: %s keeps the switch and Edit in the row, after its badge", (id, _n, badge) => {
+  // The mock puts the switch first and Edit last, with the name and its badge between: a state changes the badge's words and nothing about where the controls are.
+  test.each(CASES)("%s: %s keeps the switch first and Edit last, around the badge", (id, _n, badge) => {
     const row = rowOf(html, `Rule ${id}`);
     expect(row).toContain(badge);
     const at = { badge: row.indexOf(badge), sw: row.indexOf('role="switch"'), edit: row.indexOf(">Edit<") };
-    expect(at.sw).toBeGreaterThan(at.badge);
-    expect(at.edit).toBeGreaterThan(at.sw);
+    expect(at.sw).toBeGreaterThan(-1);
+    expect(at.badge).toBeGreaterThan(at.sw);
+    expect(at.edit).toBeGreaterThan(at.badge);
   });
   test("a rule's sentence is its hint", () => {
     expect(rowOf(html, "Rule a")).toContain(`10% or less of the ${title("claude")} weekly plan is left: builders use ${title("opencode")} big-pickle.`);
@@ -117,7 +119,8 @@ describe("a rule's row, in each state", () => {
 
 describe("a worker row while a rule holds it", () => {
   const r = rule("a", { workers: { builder: [{ engine: "opencode", model: "" }] } });
-  const html = view({ policy: { ...base(), rules: [r] }, states: [st("a", { active: true })] });
+  // The worker's card is the one Change opens, so the tests open it.
+  const html = view({ policy: { ...base(), rules: [r] }, states: [st("a", { active: true })], openPicker: "builder" });
   test("shows the rule's choice with the base as a second line, and a way to edit the rule", () => {
     const row = rowOf(html, "Builder");
     expect(row).toContain("opencode/big-pickle");
@@ -126,7 +129,7 @@ describe("a worker row while a rule holds it", () => {
     expect(row).toContain(">Edit the rule<");
   });
   test("a project on the general setting cannot edit it from there", () => {
-    expect(rowOf(view({ policy: { ...base(), rules: [r] }, states: [st("a", { active: true })], root: "/work/orbit", scope: "global" }), "Builder")).not.toContain("Edit the rule");
+    expect(rowOf(view({ policy: { ...base(), rules: [r] }, states: [st("a", { active: true })], root: "/work/orbit", scope: "global", openPicker: "builder" }), "Builder")).not.toContain("Edit the rule");
   });
 });
 
@@ -143,14 +146,13 @@ describe("the page, in its other states", () => {
   test("the chosen engine is not ready: the row says why and what runs instead", () => {
     const p = base();
     p.base.workers.builder.value = [{ engine: "hermes", model: "" }];
-    const html = view({ policy: p });
-    expect(html).toContain("Not ready");
+    const html = view({ policy: p, openPicker: "builder" });
     expect(html).toContain("0.21.0 is older than 0.21.4.");
   });
   test("the chain ran out: the card says so, with the sentence the seat got", () => {
     const p = base();
     p.base.workers.builder.value = [{ engine: "hermes", model: "" }];
-    const html = view({ policy: p });
+    const html = view({ policy: p, openPicker: "builder" });
     expect(html).toContain("Nothing in this list is ready");
     expect(html).toContain("no engine in the chain is ready");
   });
@@ -161,10 +163,10 @@ describe("the page, in its other states", () => {
     const html = view({ root: "/work/orbit", scope: "global" });
     expect(html).toContain("Set for this project");
     expect(html).not.toContain("Use the general setting");
-    expect(html).toContain("orbit has no setting of its own");
+    expect(html).toContain("follows All projects until you change something here.");
   });
   test("a project with its own setting can go back to the general one, and worker roles stay global", () => {
-    const html = view({ root: "/work/orbit", scope: "project" });
+    const html = view({ root: "/work/orbit", scope: "project", openPicker: "builder" });
     expect(html).toContain("Use the general setting");
     expect(html).not.toContain("Set for this project");
     expect(html).toContain("Worker roles are the same for every project.");
@@ -310,10 +312,11 @@ describe("Safety and limits", () => {
   });
   test("a search result that lands on a row inside the shut card opens it", () => {
     expect(PANE).toContain("useContext(Filter).flash");
-    expect(PANE).toMatch(/textContent === SAFETY\.title\) setSafetyOpen\(true\)/);
+    expect(PANE).toMatch(/closest\("\[data-safety\]"\)\) setSafetyOpen\(true\)/);
   });
   test("nothing the person reads says chair, seat, envelope or ceiling", () => {
-    const html = view({ notes: {} }).replace(/<[^>]+>/g, " ");
+    // The mock keeps one line that names the old words so an old note still reads; that line is the one exception.
+    const html = view({ notes: {} }).replace(/<[^>]+>/g, " ").replace(OLD_WORDS, "");
     expect(/\b(chair|seat|envelope|ceiling)\b/i.test(html)).toBe(false);
   });
 });

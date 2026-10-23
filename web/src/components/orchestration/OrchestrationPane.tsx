@@ -1,25 +1,24 @@
-import { Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Filter, SettingRow, Switch, Toggle } from "../SettingRow.tsx";
-import { EmptyState, SettingsCard, StatusBadge } from "../SettingsKit.tsx";
+import { StatusBadge } from "../SettingsKit.tsx";
+import { CARD, Card, Sec } from "./OrchKit.tsx";
 import { CloseIcon } from "../CloseButton.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { Button, Chip, INPUT, INPUT_STYLE, Segmented } from "../workspace/Chrome.tsx";
 import { api, type PolicyRuleState, type SeatAnswer } from "../../lib/api.ts";
 import { openSettings } from "../../lib/openSettings.ts";
 import { agentProvider } from "../../../../shared/agentKinds.ts";
-import { ROLE_IDS, resolve, type EngineChoice, type Envelope, type Policy, type PolicyRule, type Resolved } from "../../../../shared/orchestration.ts";
-import { WORKER_ROLES, type RoleId } from "../../../../shared/workerRoles.ts";
+import { resolve, type EngineChoice, type Envelope, type Policy, type PolicyRule } from "../../../../shared/orchestration.ts";
 import type { EngineReadiness, EnginesReport } from "../../../../shared/types.ts";
 import { RuleSheet } from "./RuleForm.tsx";
 import { RuleStrip } from "./RuleStrips.tsx";
 import { QuickSetup } from "./QuickSetup.tsx";
 import { ScopeBar } from "./ScopeBar.tsx";
 import { FlowView } from "./FlowView.tsx";
-import { EngineTile } from "./EngineTile.tsx";
 import { RolePicker } from "./RolePicker.tsx";
 import { rowId } from "../../lib/settingsIndex.ts";
 import {
-  ASK_HINT, BACK_LABEL, CHAIN_TAIL, choiceWords, baseChoice, fineTuneRow, pickedLine, pickUndoable, roleWord, scopeWords, usageLeft, type Picked, LIMIT_RANGE, NO_WORKER_ENGINE, openingScope, recallScope, SAFETY, safetyIsDefault, rememberScope, chainWords, exhausted, notReady, readyFor, ruleBadge, ruleHolds, ruleLine,
+  ASK_HINT, BACK_LABEL, CHAIN_TAIL, choiceWords, baseChoice, fineTuneRow, pickedLine, pickUndoable, roleWord, scopeWords, usageLeft, type Picked, LIMIT_RANGE, NO_WORKER_ENGINE, openingScope, recallScope, SAFETY, safetyIsDefault, rememberScope, chainWords, notReady, exhausted, limitedEngines, OLD_WORDS, pickedHint, readyFor, ruleBadge, ruleHolds, ruleLine,
   stepLimit, withAsk, withBaseChoice, withEnvelopes, withLimits, withRule, withRuleEnabled, withoutRule, type Field,
 } from "./orchestrationCopy.ts";
 
@@ -124,12 +123,6 @@ function SafetyHead({ title, note }: { title: string; note: string }) {
   );
 }
 
-/** What a choice row says about its engine: ready, or why not and what runs instead. */
-function ChoiceStatus({ bad, checking }: { bad: ReturnType<typeof notReady>; checking: boolean }) {
-  if (checking) return <StatusBadge tone="checking">Checking</StatusBadge>;
-  return bad ? <StatusBadge tone="err">{bad.text}</StatusBadge> : <StatusBadge tone="ok">Ready</StatusBadge>;
-}
-
 /** What the view needs of the chair for the project it is showing. */
 export interface SeatFacts { live: boolean; model: string; models: { id: string; label: string }[] }
 
@@ -193,8 +186,7 @@ export function OrchestrationView(p: OrchestrationViewProps) {
   const flash = useContext(Filter).flash;
   useEffect(() => {
     if (!flash) return;
-    const card = document.querySelector(`[data-row="${flash}"]`)?.closest("section");
-    if (card?.querySelector("h3")?.textContent === SAFETY.title) setSafetyOpen(true);
+    if (document.querySelector(`[data-row="${flash}"]`)?.closest("[data-safety]")) setSafetyOpen(true);
   }, [flash]);
   const [env, setEnv] = useState({ ceiling: policy.ceiling, workerDefault: policy.workerDefault });
   // A save, or a project switch, brings a policy the draft did not make.
@@ -225,83 +217,85 @@ export function OrchestrationView(p: OrchestrationViewProps) {
   const chairNow = root === "" || !p.seat?.live ? null
     : `${agentProvider(policy.base.orchestrator.value[0]?.engine ?? "")?.title ?? ""} · ${p.seat.model}`;
 
-  const choiceRow = (field: Field, label: string, hint: string, resolved: Resolved | undefined) => {
+  /**
+   * Fine-tune: one card for the job whose Change was pressed. Everything the old
+   * rows held for that job lives here, in the order a person reads it: the
+   * engine tiles and the model, what is running now and why, the "ask when it
+   * runs" switch, the fallback rule, and the undo of the last press.
+   */
+  const fineTune = (field: Field) => {
     const role = field === "orchestrator" ? "orchestrator" as const : "worker" as const;
+    const resolved = field === "orchestrator" ? resolution?.orchestrator : resolution?.workers[field];
     const ask = field === "orchestrator" ? policy.base.orchestrator : policy.base.workers[field];
     const baseC = ask.value[0]!;
-    // One story per row: while a rule holds this field, its choice is what runs, so it is what the row shows.
+    // One story: while a rule holds this field, its choice is what runs, so it is what the card shows.
     const byRule = resolved?.ok && resolved.from === "rule" ? resolved : null;
     const c = byRule ? byRule.choice : baseC;
     const bad = notReady(c, role, resolved, readiness);
+    const out = exhausted(resolved);
     const chairLock = field === "orchestrator" ? { engine: c.engine, why: "The main agent's engine is set when it opens; another engine comes later." } : undefined;
     const workerGlobal = field !== "orchestrator" && root !== "";
-    const open = picking === field && !inherited && !workerGlobal;
     const orchModels = field === "orchestrator" ? (root === "" ? [] : p.seat?.models ?? []) : null;
     const undoable = picked?.field === field && pickUndoable(policy, picked);
-    return (
-      <SettingRow key={field} label={label} hint={hint} disabled={inherited}
-        status={<>
-          {byRule && <StatusBadge tone="off">From a rule</StatusBadge>}
-          <ChoiceStatus bad={bad} checking={!readiness} />
-        </>}
-        control={<EngineTile engine={c.engine} model={c.model} role={role} readiness={readiness} />}
-        actions={
-          <>
-            <AskChip on={ask.ask} disabled={locked}
-              hint={field === "orchestrator" ? "The dialog that opens the main agent offers this one first, and you pick." : ASK_HINT}
-              onToggle={() => void save(withAsk(policy, field, !ask.ask), field)} />
-            <Button disabled={locked || workerGlobal} label={`Change the ${roleWord(field)}`} onClick={() => setPicking(open ? null : field)}>{open ? "Done" : "Change"}</Button>
-          </>}
-        below={
-          <div className="grid gap-2">
-            {open && (
-              <RolePicker id={rowId(fineTuneRow(field))} role={role} word={roleWord(field)} current={c} readiness={readiness} lock={chairLock}
-                models={orchModels} disabled={locked}
-                modelNote={field === "orchestrator" && root === "" ? "The main agent's model is a project's choice: pick a project above." : ""}
-                onPick={(choice) => commit(field, choice)} />
-            )}
-            {undoable && (
-              <p role="status" data-toast="picked" className="m-0 text-[12px] flex flex-wrap items-center gap-x-3 gap-y-1" style={{ color: "var(--text)" }}>
-                <span>{pickedLine(root)}</span>
-                <button type="button" className="agx-field-link" disabled={locked} onClick={undoPick}>{BACK_LABEL}</button>
-              </p>
-            )}
-            {bad && (
-              <p className="m-0 text-[12px]" style={{ color: "var(--error-ink)" }}>
-                {bad.why}{bad.using ? ` ${bad.using}` : ""}{" "}
-                <button type="button" className="agx-field-link" onClick={p.onOpenEngines}>See Agent engines</button>
-              </p>
-            )}
-            {byRule && (
-              <p className="m-0 text-[12px]" style={{ color: "var(--text3)" }}>From the rule “{byRule.ruleName ?? byRule.ruleId}”. Without it: {choiceWords(baseC)}.{" "}
-                {!inherited && byRule.ruleId && <button type="button" className="agx-field-link" disabled={locked} onClick={(e) => openSheet(byRule.ruleId!, e.currentTarget)}>Edit the rule</button>}
-              </p>
-            )}
-            {workerGlobal && (
-              <p className="m-0 text-[12px]" style={{ color: "var(--text3)" }}>
-                Worker roles are the same for every project.{" "}
-                <button type="button" className="agx-field-link" onClick={() => p.onRoot("")}>Switch to All projects</button> to change them.
-              </p>
-            )}
-          </div>} />
-    );
-  };
-
-  /** A fallback is a rule that always holds: the base is one choice, a chain lives in a rule. */
-  const fallbackRow = (field: Field, label: string) => {
-    const ask = field === "orchestrator" ? policy.base.orchestrator : policy.base.workers[field];
-    const rule: PolicyRule = {
+    const label = fineTuneRow(field);
+    const fb: PolicyRule = {
       id: "", name: `${label} fallback`, enabled: true, when: [{ kind: "always" }],
       ...(field === "orchestrator" ? { orchestrator: ask.value } : { workers: { [field]: ask.value } }),
     };
+    const say = "m-0 text-[11px]";
     return (
-      <SettingRow key={`${field}-fb`} label={`If ${label.toLowerCase()} is not available`} disabled={inherited}
-        hint={<>{chainWords(ask.value)}. {CHAIN_TAIL}</>}
-        actions={<Button disabled={locked} onClick={(e) => openSheet("new", e.currentTarget, rule)}>Add a fallback rule</Button>} />
+      <div className="grid gap-3" data-fine={field}>
+        <div className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>Choosing for {roleWord(field)} {"\u00b7"} step 1</div>
+        <RolePicker id={rowId(fineTuneRow(field))} role={role} word={roleWord(field)} current={c} readiness={readiness} lock={chairLock}
+          models={orchModels} disabled={locked || workerGlobal}
+          modelNote={field === "orchestrator" && root === "" ? "The main agent's model is a project's choice: pick a project above." : ""}
+          onPick={(choice) => commit(field, choice)} />
+        <div className="flex flex-wrap items-center gap-2">
+          <AskChip on={ask.ask} disabled={locked || workerGlobal}
+            hint={field === "orchestrator" ? "The dialog that opens the main agent offers this one first, and you pick." : ASK_HINT}
+            onToggle={() => void save(withAsk(policy, field, !ask.ask), field)} />
+          <span className={say} style={{ color: "var(--text3)" }}>If {roleWord(field)} {field === "orchestrator" ? "is" : "are"} not available: {chainWords(ask.value)}. {CHAIN_TAIL}</span>
+          <Button disabled={locked || workerGlobal} onClick={(e) => openSheet("new", e.currentTarget, fb)}>Add a fallback rule</Button>
+        </div>
+        {(byRule || out) && (
+          <div className="flex flex-wrap items-center gap-2">
+            {byRule && <StatusBadge tone="off">From a rule</StatusBadge>}
+            {out && <StatusBadge tone="err">{out.text}</StatusBadge>}
+          </div>
+        )}
+        {out && <p role="alert" className={say} style={{ color: "var(--error-ink)" }}>{out.sentence}</p>}
+        {undoable && (
+          <p role="status" data-toast="picked" className={`${say} flex flex-wrap items-center gap-x-3 gap-y-1`} style={{ color: "var(--text)" }}>
+            <span>{pickedLine(root)}</span>
+            <button type="button" className="agx-field-link" disabled={locked} onClick={undoPick}>{BACK_LABEL}</button>
+          </p>
+        )}
+        {bad && (
+          <p className={say} style={{ color: "var(--error-ink)" }}>
+            {bad.why}{bad.using ? ` ${bad.using}` : ""}{" "}
+            <button type="button" className="agx-field-link" onClick={p.onOpenEngines}>See Agent engines</button>
+          </p>
+        )}
+        {byRule && (
+          <p className={say} style={{ color: "var(--text3)" }}>From the rule “{byRule.ruleName ?? byRule.ruleId}”. Without it: {choiceWords(baseC)}.{" "}
+            {!inherited && byRule.ruleId && <button type="button" className="agx-field-link" disabled={locked} onClick={(e) => openSheet(byRule.ruleId!, e.currentTarget)}>Edit the rule</button>}
+          </p>
+        )}
+        {workerGlobal && (
+          <p className={say} style={{ color: "var(--text3)" }}>
+            Worker roles are the same for every project.{" "}
+            <button type="button" className="agx-field-link" onClick={() => p.onRoot("")}>Switch to All projects</button> to change them.
+          </p>
+        )}
+        <div className="flex items-center gap-3">
+          <span className={say} style={{ color: "var(--text3)" }}>{pickedHint(root)}</span>
+          <span className="flex-1" />
+          <Button onClick={() => { setPicking(null); setPicked(null); }}>Done</Button>
+        </div>
+      </div>
     );
   };
 
-  const workersExhausted = resolution ? ROLE_IDS.map((r) => exhausted(resolution.workers[r])).find(Boolean) ?? null : null;
   const noWorker = !!readiness && readyFor("worker", readiness).length === 0;
   const dirty = JSON.stringify(env) !== JSON.stringify({ ceiling: policy.ceiling, workerDefault: policy.workerDefault });
 
@@ -313,15 +307,24 @@ export function OrchestrationView(p: OrchestrationViewProps) {
     const badge = ruleBadge(rule, ruleState(rule), readiness);
     const pictured = rule.when.some((t) => t.kind === "hours" || t.kind === "usage");
     return (
-      <SettingRow key={rule.id} label={rule.name} hint={ruleLine(rule)} disabled={inherited}
-        status={<StatusBadge tone={badge.tone}>{badge.text}</StatusBadge>}
-        control={
-          <button type="button" role="switch" aria-checked={rule.enabled} aria-label={`${rule.name}: on or off`} disabled={locked}
-            onClick={() => void save(withRuleEnabled(policy, rule.id, !rule.enabled), "rules")} className="flex">
-            <Switch on={rule.enabled} />
-          </button>}
-        actions={<Button disabled={locked} onClick={(e) => openSheet(rule.id, e.currentTarget)}>Edit</Button>}
-        below={pictured ? <div className="grid gap-2"><RuleStrip when={rule.when} now={now} left={left} /></div> : undefined} />
+      <div key={rule.id} data-row={rowId(rule.name)} data-rule={rule.id} className="grid items-center gap-4 p-4"
+        style={{ gridTemplateColumns: "auto minmax(0, 1fr) auto", borderBottom: "1px solid var(--surface-line)", opacity: inherited ? 0.6 : 1 }}>
+        <button type="button" role="switch" aria-checked={rule.enabled} aria-label={`${rule.name}: on or off`} disabled={locked}
+          onClick={() => void save(withRuleEnabled(policy, rule.id, !rule.enabled), "rules")} className="flex">
+          <Switch on={rule.enabled} />
+        </button>
+        <div className="min-w-0 grid gap-2" style={{ opacity: rule.enabled ? 1 : 0.8 }}>
+          <div className="flex flex-wrap items-center gap-2 text-[13px] font-semibold" style={{ color: "var(--text)" }}>
+            {rule.name}<StatusBadge tone={badge.tone}>{badge.text}</StatusBadge>
+          </div>
+          <div className="text-[12px]" style={{ color: "var(--text2)" }}>{ruleLine(rule)}</div>
+          {pictured && <RuleStrip when={rule.when} now={now} left={left} />}
+          <div className="text-[11px]" style={{ color: "var(--text3)" }}>
+            {rule.enabled ? "On: it applies to agents started from now on. The switch turns it off." : "Off: it does nothing. The switch turns it on for agents started afterwards."}
+          </div>
+        </div>
+        <Button disabled={locked} onClick={(e) => openSheet(rule.id, e.currentTarget)}>Edit</Button>
+      </div>
     );
   });
 
@@ -331,66 +334,67 @@ export function OrchestrationView(p: OrchestrationViewProps) {
         note={notes.scope} onRoot={p.onRoot} onScope={p.onScope} />
 
       <FlowView policy={policy} facts={{ on: ruleHolds(states, scopeKey) }} readiness={readiness} root={root} disabled={false}
-        liveModel={root !== "" && p.seat?.live ? p.seat.model : null}
+        liveModel={root !== "" && p.seat?.live ? p.seat.model : null} limited={limitedEngines(states, scopeKey)}
+        onPickSetup={() => document.querySelector("[data-orch-presets]")?.scrollIntoView({ block: "start", behavior: "smooth" })}
         onChange={(field) => { setPicking(field); setPickTick((n) => n + 1); }} />
 
       <QuickSetup policy={policy} root={root} readiness={readiness} states={states} inherited={inherited} busy={busy}
         note={notes.quick} onSave={save} onOpenEngines={p.onOpenEngines} />
 
-      <SettingsCard title="Main agent" desc={root !== "" && !chairNow ? "Decides the plan and hands the work out. No main agent is running now; this is what the next one will use." : "Decides the plan and hands the work out."}
-        status={root === "" ? <StatusBadge tone="off">All projects</StatusBadge>
-          : chairNow ? <StatusBadge tone="ok">{chairNow}</StatusBadge> : <StatusBadge tone="off">Not open</StatusBadge>}>
-        {choiceRow("orchestrator", "Engine and model", "What a new main agent opens with. Running sessions are never moved.", resolution?.orchestrator)}
-        {fallbackRow("orchestrator", "The main agent")}
-        <Note text={notes.orchestrator} />
-      </SettingsCard>
-
-      <SettingsCard title="Workers" desc="Which engine and model each role runs on when the orchestrator starts one."
-        status={workersExhausted ? <StatusBadge tone="err">{workersExhausted.text}</StatusBadge> : undefined}>
+      <Sec n={2} id="orch-fine-tune" title="Fine-tune who does what"
+        sub={chairNow ? `Press \u201cChange\u201d on the picture above. The main agent now open runs ${chairNow}.` : "Press \u201cChange\u201d on the picture above, then pick an engine from the tiles and a model."} />
+      <Card data-row={picking ? rowId(fineTuneRow(picking)) : undefined}>
         {noWorker ? (
-          <EmptyState>
+          <div className="flex flex-wrap items-center gap-3 text-[12px]" style={{ color: "var(--text2)" }}>
             <span>{NO_WORKER_ENGINE}</span>
             <Button onClick={p.onOpenEngines}>See Agent engines</Button>
-          </EmptyState>
-        ) : (
-          WORKER_ROLES.map((r) => {
-            const out = exhausted(resolution?.workers[r.id as RoleId]);
-            return (
-              <Fragment key={r.id}>
-                {choiceRow(r.id as RoleId, r.title, r.what, resolution?.workers[r.id as RoleId])}
-                {fallbackRow(r.id as RoleId, r.title)}
-                {out && <p className="agx-settings-x m-0 pb-3 text-[12px]" style={{ color: "var(--error-ink)" }}>{out.sentence}</p>}
-              </Fragment>
-            );
-          })
+          </div>
+        ) : picking ? fineTune(picking) : (
+          <div className="text-[12px]" style={{ color: "var(--text3)" }}>Press “Change” on a role in the picture above. The tiles open right here.</div>
         )}
-        <Note text={notes.scout || notes.builder || notes.verifier} />
-      </SettingsCard>
+        <Note text={notes.orchestrator || notes.scout || notes.builder || notes.verifier} />
+      </Card>
 
-      <SettingsCard title="Conditions" desc="A condition replaces the choices above while it holds. The first one that holds wins. Running sessions are never moved: a condition applies to sessions started after it turns on."
-        actions={<Button disabled={locked} onClick={(e) => openSheet("new", e.currentTarget)}>Add a condition</Button>}>
-        {policy.rules.length === 0 ? <EmptyState>No conditions. The choices above always apply.</EmptyState> : ruleRows}
-        <Note text={notes.rules} />
-      </SettingsCard>
+      <Sec n={3} title="Switch things automatically"
+        sub="Conditions override the picture while they hold. The first one that holds wins. They only affect agents started afterwards."
+        right={<>
+          <span className="text-[11px]" style={{ color: "var(--text3)" }}>Opens the editor. Nothing is saved until you press Save.</span>
+          <Button tone="primary" disabled={locked} onClick={(e) => openSheet("new", e.currentTarget)}>+ Add a condition</Button>
+        </>} />
+      <div className="rounded-xl overflow-hidden" style={{ background: "var(--bg)", border: "1px solid var(--border)" }} data-rules>
+        {policy.rules.length === 0
+          ? <div className="p-4 text-[12px]" style={{ color: "var(--text3)" }}>No conditions. The choices above always apply.</div> : ruleRows}
+      </div>
+      <Note text={notes.rules} />
 
-      <SettingsCard title={SAFETY.title} desc={SAFETY.summary}
-        status={safetyIsDefault(policy) ? <StatusBadge tone="off">defaults</StatusBadge> : <StatusBadge tone="ok">changed</StatusBadge>}
-        fold={{ open: safetyOpen, onToggle: setSafetyOpen }}>
-        <SafetyHead {...SAFETY.workers} />
-        <EnvelopeRows prefix="" env={env.workerDefault} locked={locked} onChange={(workerDefault) => setEnv({ ...env, workerDefault })} />
-        <SettingRow label="Always refused" hint={SAFETY.always.hint} detail={{ summary: SAFETY.always.more, body: SAFETY.always.body }} />
-        <SafetyHead {...SAFETY.most} />
-        <EnvelopeRows prefix="At most: " env={env.ceiling} locked={locked} onChange={(ceiling) => setEnv({ ...env, ceiling })} />
-        <SettingRow label="Save these permissions" hint="Both groups save together; the server checks that the default is inside the most allowed."
-          control={<Button tone="primary" pending={busy} disabled={locked || !dirty} onClick={() => void save(withEnvelopes(policy, env), "envelope")}>Save</Button>} />
-        <Note text={notes.envelope} />
-        <SafetyHead {...SAFETY.limits} />
-        {(Object.keys(LIMIT_RANGE) as (keyof Policy["limits"])[]).map((k) => (
-          <StepRow key={k} k={k} value={policy.limits[k]} locked={locked}
-            onStep={(by) => void save(withLimits(policy, { [k]: stepLimit(k, policy.limits[k], by) }), "limits")} />
-        ))}
-        <Note text={notes.limits} />
-      </SettingsCard>
+      <Sec n={4} title={SAFETY.title} sub={`${SAFETY.summary} Every change here saves as you make it.`} />
+      <section data-safety className="rounded-xl p-4" style={{ background: "var(--surface-card)", border: "1px solid var(--surface-line)", boxShadow: "var(--surface-lift)" }}>
+        <button type="button" aria-expanded={safetyOpen} onClick={() => setSafetyOpen(!safetyOpen)}
+          className="flex items-center gap-2 text-[13px] font-semibold bg-transparent border-0 p-0 cursor-pointer" style={{ color: "var(--text)", minHeight: 26 }}>
+          <span aria-hidden className="text-[10px]" style={{ color: "var(--text3)" }}>{safetyOpen ? "\u25be" : "\u25b8"}</span>
+          Show safety and limits
+          {safetyIsDefault(policy) ? <StatusBadge tone="off">defaults</StatusBadge> : <StatusBadge tone="ok">changed</StatusBadge>}
+        </button>
+        {(
+          <div className="mt-3" hidden={!safetyOpen}>
+            <SafetyHead {...SAFETY.workers} />
+            <EnvelopeRows prefix="" env={env.workerDefault} locked={locked} onChange={(workerDefault) => setEnv({ ...env, workerDefault })} />
+            <SettingRow label="Always refused" hint={SAFETY.always.hint} detail={{ summary: SAFETY.always.more, body: SAFETY.always.body }} />
+            <SafetyHead {...SAFETY.most} />
+            <EnvelopeRows prefix="At most: " env={env.ceiling} locked={locked} onChange={(ceiling) => setEnv({ ...env, ceiling })} />
+            <SettingRow label="Save these permissions" hint="Both groups save together; the server checks that the default is inside the most allowed."
+              control={<Button tone="primary" pending={busy} disabled={locked || !dirty} onClick={() => void save(withEnvelopes(policy, env), "envelope")}>Save</Button>} />
+            <Note text={notes.envelope} />
+            <SafetyHead {...SAFETY.limits} />
+            {(Object.keys(LIMIT_RANGE) as (keyof Policy["limits"])[]).map((k) => (
+              <StepRow key={k} k={k} value={policy.limits[k]} locked={locked}
+                onStep={(by) => void save(withLimits(policy, { [k]: stepLimit(k, policy.limits[k], by) }), "limits")} />
+            ))}
+            <Note text={notes.limits} />
+            <p className="m-0 mt-3 text-[11px]" style={{ color: "var(--text3)" }}>{OLD_WORDS}</p>
+          </div>
+        )}
+      </section>
 
       {editing && !inherited && (editing === "new" || sheetRule) && (
         <RuleSheet key={editing} initial={sheetRule} policy={policy} readiness={readiness} scope={scopeWords(root)}
@@ -430,16 +434,22 @@ export function OrchestrationPane() {
   const [seat, setSeat] = useState<SeatAnswer | null>(null);
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  const [workspacesKnown, setWorkspacesKnown] = useState(false);
+  const [startedGlobal, setStartedGlobal] = useState(false);
   const alive = useRef(true);
   useEffect(() => () => { alive.current = false; }, []);
 
   const loadStates = useCallback(() => {
     void api.orchestrationState().then((r) => { if (alive.current && r.ok) setStates(r.rules); }).catch(() => { /* a failed read keeps what is on screen */ });
   }, []);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
   const loadPolicy = useCallback((forRoot: string) => {
     void api.orchestration(forRoot || undefined).then((r) => {
-      if (alive.current && r.ok) setLoaded({ policy: r.policy, scope: r.scope, overrides: r.overrides });
-    }).catch(() => { /* a failed read keeps what is on screen */ });
+      if (!alive.current) return;
+      if (r.ok) { setLoaded({ policy: r.policy, scope: r.scope, overrides: r.overrides }); setLoadError(null); }
+      else setLoadError((r as { error?: string }).error ?? "The server did not answer.");
+    }).catch(() => { if (alive.current) setLoadError("Could not reach the server."); }).finally(() => { if (alive.current) setRetrying(false); });
     loadStates();
     if (forRoot) void api.seat(forRoot).then((r) => { if (alive.current) setSeat(r); }).catch(() => { if (alive.current) setSeat(null); });
     else setSeat(null);
@@ -451,6 +461,7 @@ export function OrchestrationPane() {
       if (!alive.current) return;
       const ws = r.workspaces ?? (r.workspace ? [r.workspace] : []);
       setWorkspaces(ws);
+      setWorkspacesKnown(true);
       if (!chosen.current) setRoot(openingScope(null, ws, ws[0] ?? null));
     }).catch(() => { /* no project switch without a list */ });
   }, []);
@@ -482,11 +493,47 @@ export function OrchestrationPane() {
     loadPolicy(root);
   };
 
-  if (!loaded) {
+  // Nothing open and nothing chosen: say so, and offer the one thing that works without a project.
+  if (workspacesKnown && workspaces.length === 0 && !chosen.current && root === "" && !startedGlobal) {
     return (
-      <SettingsCard title="Orchestration" status={<StatusBadge tone="checking">Checking</StatusBadge>}>
-        <SettingRow label="The policy" minHeight={56} hint="Reading what is set on this computer." />
-      </SettingsCard>
+      <div className="agx-orch">
+        <div className="grid gap-3 justify-items-start rounded-xl p-6" style={{ ...CARD, maxWidth: 620 }}>
+          <h2 className="m-0 text-[15px] font-semibold" style={{ color: "var(--text)" }}>Nothing is set up yet</h2>
+          <p className="m-0 text-[13px]" style={{ color: "var(--text2)" }}>No project is open, so there is nothing to show for one. You can set who does what for all projects now, and each project follows it until you change that project.</p>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button tone="primary" onClick={() => setStartedGlobal(true)}>Set up for all projects</Button>
+            <span className="text-[11px]" style={{ color: "var(--text3)" }}>Opens the setup for all projects. Nothing is saved until you pick.</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Before there is a policy to draw: a failed read says what the server answered, and the wait is a skeleton.
+  if (!loaded) {
+    if (loadError) {
+      return (
+        <div className="agx-orch">
+          <div role="alert" className="grid gap-3 justify-items-start rounded-xl p-6" style={{ ...CARD, borderColor: "color-mix(in srgb, var(--error) 50%, var(--border))", maxWidth: 620 }}>
+            <h2 className="m-0 text-[15px] font-semibold" style={{ color: "var(--text)" }}>Could not load the setting for {root ? root.split("/").filter(Boolean).pop() : "all projects"}</h2>
+            <p className="m-0 text-[13px]" style={{ color: "var(--text2)" }}>The server answered:</p>
+            <div className="t-mono text-[11px] rounded-md px-3 py-2" style={{ background: "var(--bg3)", color: "var(--text2)", overflowWrap: "anywhere" }}>{loadError}</div>
+            <p className="m-0 text-[13px]" style={{ color: "var(--text2)" }}>Nothing was changed. Your last saved setting is still in force.</p>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button tone="primary" pending={retrying} disabled={retrying} onClick={() => { setRetrying(true); loadPolicy(root); }}>{retrying ? "Trying again\u2026" : "Retry"}</Button>
+              <span className="text-[11px]" style={{ color: "var(--text3)" }} aria-live="polite">{retrying ? "Asking the server. Nothing is changed." : "Asks the server again. Nothing is changed."}</span>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="agx-orch grid gap-3" aria-busy="true" aria-label="Loading">
+        <div className="agx-skel rounded-lg" style={{ height: 12, width: 140 }} />
+        <div className="agx-skel rounded-lg" style={{ height: 200 }} />
+        <div className="agx-skel rounded-lg" style={{ height: 32, width: "60%" }} />
+        <div className="agx-presets">{[0, 1, 2].map((i) => <div key={i} className="agx-skel rounded-lg" style={{ height: 200 }} />)}</div>
+      </div>
     );
   }
   return (

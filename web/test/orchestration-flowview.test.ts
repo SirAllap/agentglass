@@ -54,7 +54,7 @@ const flowOf = (html: string): string => {
 describe("right now, the default", () => {
   const f = flowOf(view());
   test("it leads the page and uses the plain role words", () => {
-    expect(view().indexOf("Right now")).toBeLessThan(view().indexOf("Quick setup"));
+    expect(view().indexOf("Right now")).toBeLessThan(view().indexOf("Start from a ready-made setup"));
     for (const w of ["Main agent", "Scouts", "Builders", "Verifiers"]) expect(f).toContain(w);
   });
   test("every job is a card with one Change button, each tile a state word", () => {
@@ -119,7 +119,7 @@ describe("the picture's source", () => {
   test("Change goes to the Fine-tune rows on the page, and the page has them to go to", () => {
     expect(paneSrc).toContain("revealEditor(");
     expect(paneSrc).toContain("<FlowView");
-    expect(view()).toContain('data-row="engine-and-model"');
-    expect(view()).toContain('data-row="scout"');
+    expect(view({ openPicker: "orchestrator" })).toContain('data-row="engine-and-model"');
+    expect(view({ openPicker: "scout" })).toContain('data-row="scout"');
   });
 });
