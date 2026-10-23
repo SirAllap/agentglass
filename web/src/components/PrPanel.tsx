@@ -11780,7 +11780,7 @@ function TimelineEvent({ e }: { e: PrEvent }) {
 /** A GitHub user named in running text: face and name in a quiet pill, so a person stands out from the words around them. */
 function UserPill({ name }: { name: string }) {
   return (
-    <span className="inline-flex items-center gap-1 align-middle rounded-full pl-0.5 pr-1.5" style={{ background: "var(--surface-inset)", border: "1px solid var(--surface-line)", color: "var(--text)", fontWeight: 600 }}>
+    <span className="inline-flex items-center gap-1 align-middle rounded-full pl-0.5 pr-1.5" style={{ background: "var(--surface-inset)", border: LINE, color: "var(--text)", fontWeight: 600 }}>
       <Avatar login={name} size={ICON.sm} />{name}
     </span>
   );
