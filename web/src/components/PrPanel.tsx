@@ -22,6 +22,7 @@
 import { withoutAuthor, authorLeftOutHint } from "../lib/reviewerPick.ts";
 import { dataInk } from "../lib/contrast.ts";
 import { onScreen } from "../lib/findScope.ts";
+import { openPr, prRefFromUrl } from "../lib/openPrs.ts";
 import { PluginPrActions } from "./plugins/PluginPrActions.tsx";
 import { PublishReview } from "./plugins/PublishReview.tsx";
 import { latestRun } from "../lib/publishReview.ts";
@@ -11747,7 +11748,15 @@ const EVENT_TINT: Record<string, string> = {
 function TimelineEvent({ e }: { e: PrEvent }) {
   /* The words are shared/prEventLine.ts, which the phone reads too; this only
      says how each kind of part is drawn. */
+  // A mention from another pull request opens that pull request here, as a chip, not in the browser.
+  const pr = e.kind === "cross-referenced" ? prRefFromUrl(e.url) : null;
   const said = eventParts(e).map((p, i) => {
+    if (pr && i === 1) return (
+      <Fragment key={i}>{" mentioned this in "}
+        <button type="button" onClick={() => openPr(pr.repo, pr.number)} title="Open this pull request here"
+          className="px-1.5 py-0.5 rounded align-middle" style={{ ...CODE_FONT_STYLE, color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 12%, transparent)", cursor: "pointer" }}>{e.detail}</button>
+      </Fragment>
+    );
     switch (p.as) {
       case "who": return <UserPill key={i} name={p.text} />;
       case "strong": return e.kind === "assigned" || e.kind === "unassigned" || e.kind === "review-requested"
@@ -11761,7 +11770,7 @@ function TimelineEvent({ e }: { e: PrEvent }) {
   const inner = <span>{said} <span style={{ color: "var(--text3)" }}>· {agoFull(e.at)}</span></span>;
   return (
     <div className="agx-tiny">
-      {e.url ? <a href={externalUrl(e.url)} target="_blank" rel="noreferrer noopener" style={{ color: "inherit" }}>{inner}</a> : inner}
+      {e.url && !pr ? <a href={externalUrl(e.url)} target="_blank" rel="noreferrer noopener" style={{ color: "inherit" }}>{inner}</a> : inner}
     </div>
   );
 }
