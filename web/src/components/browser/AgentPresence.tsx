@@ -75,6 +75,10 @@ export function AgentPresence({ agent, landing, url = "", onToggle, quiet = fals
     if (!live) setActing(false);
     else if (agent.working > 0 && (isActVerb(agent.op ?? "") || MOVES.has(agent.op ?? ""))) setActing(true);
   }, [live, agent.working, agent.op]);
+  /* Up while the agent is mid-ask and for the dock's hold after, never for the
+     rest of the 30 s linger: a tab nobody is acting on is the person's, and a
+     pane over a webview eats its wheel and its clicks. */
+  const glassUp = live && acting && (agent.working > 0 || held);
   const liveRef = useRef(live);
   liveRef.current = live;
   const [ghost, setGhost] = useState<{ x: number; y: number; label: string; travel: number; seq: number } | null>(null);
@@ -90,8 +94,8 @@ export function AgentPresence({ agent, landing, url = "", onToggle, quiet = fals
      and only from this tab's page, never from wherever else the person is typing. */
   useEffect(() => {
     const a = document.activeElement;
-    if (live && acting && a && a.tagName === "WEBVIEW" && root.current?.parentElement?.contains(a)) glass.current?.focus({ preventScroll: true });
-  }, [live, acting]);
+    if (glassUp && a && a.tagName === "WEBVIEW" && root.current?.parentElement?.contains(a)) glass.current?.focus({ preventScroll: true });
+  }, [glassUp]);
 
   /* The lap is rebuilt only when the page changes size. */
   useEffect(() => {
@@ -132,7 +136,7 @@ export function AgentPresence({ agent, landing, url = "", onToggle, quiet = fals
       {/* A pane of glass over the page while an agent drives it: the person's
           pointer, wheel and keys stop here, so not even a hover reaches the page
           until Take over. The agent's own input goes to the guest directly. */}
-      {live && acting && <div ref={glass} className="agx-presence-glass" tabIndex={-1} onPointerDown={(e) => e.currentTarget.focus({ preventScroll: true })} />}
+      {glassUp && <div ref={glass} className="agx-presence-glass" tabIndex={-1} onPointerDown={(e) => e.currentTarget.focus({ preventScroll: true })} />}
       {ghost && (
         <div className={"agx-presence-ghost" + (stale ? " is-stale" : "")} style={{ transform: `translate(${ghost.x}px, ${ghost.y}px)`, transitionDuration: `${ghost.travel}ms` }}>
           <svg className="agx-presence-arrow" viewBox="0 0 20 20" aria-hidden>

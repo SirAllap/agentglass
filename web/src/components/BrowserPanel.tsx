@@ -66,10 +66,11 @@ import { suggest, type Suggestion } from "../lib/suggest.ts";
 import {
   BackIcon, BlankPageIcon, CloseIcon, CodeIcon, ExternalIcon, ForwardIcon, GlobeIcon,
   HomeIcon, LockIcon, MoreIcon, NoteIcon, PenIcon, ReloadIcon, SearchIcon,
-  SpinnerIcon, StopIcon, TargetIcon, FolderIcon, ContainerIcon, SpaceIcon, CameraIcon, PanelIcon, UpIcon, DownIcon, SplitIcon, PauseIcon,
+  SpinnerIcon, StopIcon, TargetIcon, FolderIcon, ContainerIcon, SpaceIcon, CameraIcon, PanelIcon, UpIcon, DownIcon, SplitIcon, PauseIcon, PlusIcon,
 } from "./browser/icons.tsx";
 import { AgentChip, AgentPill } from "./browser/AgentBadge.tsx";
-import { CheckboxIcon, DoneIcon, SwapIcon } from "../lib/glyphIcons.tsx";
+import { IslandMenu, ZoomIcon } from "./browser/IslandMenu.tsx";
+import { CheckboxIcon, CopyIcon, DoneIcon, SwapIcon } from "../lib/glyphIcons.tsx";
 import { Button, Chip, CTRL_H, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 
 /** Electron's `<webview>` is not in React's JSX catalogue, and its methods are
@@ -657,6 +658,7 @@ export function BrowserView({ active: viewOn, scope }: {
    *  registered once per view switch and would otherwise be holding the first
    *  render's copy of them for the rest of the session. */
   const reopenRef = useRef<() => void>(() => {});
+  const sideNavRef = useRef<(back: boolean) => void>(() => {});
   const closeHereRef = useRef<() => void>(() => {});
   const stepTabRef = useRef<(forward: boolean) => void>(() => {});
   const elRef = useRef<() => WebviewEl | null>(() => null);
@@ -1609,8 +1611,16 @@ export function BrowserView({ active: viewOn, scope }: {
     return () => { ro.disconnect(); window.removeEventListener("resize", send); };
   }, [dtGuest, viewOn, covered, ownOverlay, dtSide, dtSize]);
 
+  /* The mouse's side buttons. The glass is up exactly while an agent holds the
+     page, and the page is then not the person's to navigate. */
+  sideNavRef.current = (back) => {
+    if (document.querySelector(".agx-presence-glass")) return;
+    
+    if (back) el()?.goBack(); else el()?.goForward();
+  };
   useEffect(() => onBrowserKey((k) => {
     if (k === "T") { reopenRef.current(); return; }
+    if (k === "<" || k === ">") { sideNavRef.current(k === "<"); return; }
     if (k === "w") { closeHereRef.current(); return; }
     if (k === "t") { setOmni("new"); return; }
     if (k === "f") { setFind((f) => f ?? ""); setTimeout(() => findRef.current?.focus(), 0); return; }
@@ -1881,6 +1891,7 @@ export function BrowserView({ active: viewOn, scope }: {
 
   const moreBtn = useRef<HTMLButtonElement | null>(null);
   const [menuAtXY, setMenuAtXY] = useState<{ top: number; right: number } | null>(null);
+  const [menuByKey, setMenuByKey] = useState(false);
 
   /*
    * The box opens with something in it.
@@ -2556,7 +2567,7 @@ export function BrowserView({ active: viewOn, scope }: {
     </span>
   );
 
-  const barMenu = menuOpen && menuAtXY ? (
+  const barMenu = menuOpen && menuAtXY && classic ? (
     <Portal>
       <div className="fixed inset-0" style={{ zIndex: 40 }} onClick={() => setMenuOpen(false)} />
       <div className="fixed rounded-lg text-[11px] py-1 shadow-2xl"
@@ -2624,6 +2635,26 @@ export function BrowserView({ active: viewOn, scope }: {
         ))}
       </div>
     </Portal>
+  ) : null;
+
+  /* The island's own ⋯: the few things a person needs from a floating bar.
+     The rows reuse the classic menu's actions, so the two cannot drift apart. */
+  const islandMenu = menuOpen && menuAtXY && !classic ? (
+    <IslandMenu at={menuAtXY} byKey={menuByKey} onClose={() => setMenuOpen(false)} items={[
+      { key: "home", label: "Home", icon: <HomeIcon size={ICON.sm} />, run: () => go(homePage()) },
+      { key: "new", label: "New tab", icon: <PlusIcon size={ICON.sm} />, hint: "Ctrl+T", run: () => setOmni("new") },
+      { key: "find", label: "Find on this page", icon: <SearchIcon size={ICON.sm} />, hint: "Ctrl+F", run: () => { setFind((f) => f ?? ""); setTimeout(() => findRef.current?.focus(), 0); } },
+      { key: "copy", label: "Copy the address", icon: <CopyIcon size={ICON.sm} />, run: () => { void navigator.clipboard.writeText(active?.url ?? ""); say("Address copied"); } },
+      { key: "hard", label: "Reload, ignoring the cache", icon: <ReloadIcon size={ICON.sm} />, run: () => { try { el()?.reloadIgnoringCache(); } catch { el()?.reload(); } } },
+      { key: "zoom", label: "Zoom back to 100%", icon: <ZoomIcon />, hint: "Ctrl+0", run: () => applyZoom(0) },
+      { key: "ext", label: "Open in your own browser", icon: <ExternalIcon size={ICON.sm} />, run: () => {
+        const u = active?.url;
+        if (!u || u === BLANK) { say("There is no page to open"); return; }
+        window.open(u, "_blank");
+        say("Opened in your browser");
+      } },
+      { key: "chrome", label: "Classic tab list", icon: <PanelIcon size={ICON.sm} />, rule: true, run: () => { setClassic(true); setClassicChrome(true); setSideOpen(true); setSidebarOpen(true); } },
+    ]} />
   ) : null;
 
   const sideBody = (
@@ -3104,7 +3135,7 @@ export function BrowserView({ active: viewOn, scope }: {
             canBack={!!active?.canBack} canForward={!!active?.canForward} loading={!!active?.loading}
             onShow={show} onClose={(id) => { close(id); shots.current.delete(id); setLandings((m) => { const { [id]: _gone, ...rest } = m; return rest; }); }} onNew={() => setOmni("new")} onAddress={() => setOmni("edit")}
             onBack={() => el()?.goBack()} onForward={() => el()?.goForward()} onReload={() => el()?.reload()} onStop={() => el()?.stop()}
-            onMenu={(r) => { setMenuAtXY({ top: r.bottom + 6, right: Math.max(6, window.innerWidth - r.right) }); setMenuOpen(true); }}
+            onMenu={(r, byKey) => { setMenuAtXY({ top: r.bottom + 6, right: Math.max(6, window.innerWidth - r.right) }); setMenuByKey(byKey); setMenuOpen(true); }} menuOpen={menuOpen}
             onToggle={(id) => { const a = actsRef.current[id]; if (a) dispatchAct({ type: "pause", tab: id, paused: !a.paused }); }}
             picture={snapTab}
             lastPicture={(id) => shots.current.get(id) ?? null}
@@ -3429,6 +3460,7 @@ export function BrowserView({ active: viewOn, scope }: {
       {/* Drawn here, not in the side bar: with the island there is no side
           bar, and the island's own ⋯ opened a menu nothing rendered. */}
       {barMenu}
+      {islandMenu}
       {/* What the other browser has, before any of it lands here.
           An import that simply happens is one nobody can check — and this one
           adds fourteen folders and seventy-odd pages to something arranged by

@@ -54,7 +54,9 @@ export interface IslandProps {
   onForward: () => void;
   onReload: () => void;
   onStop: () => void;
-  onMenu: (at: DOMRect) => void;
+  onMenu: (at: DOMRect, byKey: boolean) => void;
+  /** The ⋯ menu is open: the bar stays where it is until it closes. */
+  menuOpen?: boolean;
   onToggle: (tab: string) => void;
   /** A fresh picture of an awake tab, or null. */
   picture: (id: string) => Promise<string | null>;
@@ -187,7 +189,7 @@ export function BrowserIsland(p: IslandProps) {
   }, [peek, yours]);
   useEffect(() => { if (!tucked || open) setPeek(false); }, [tucked, open]);
 
-  const cls = "agx-isl" + (open ? " is-open" : "") + (shown ? " is-shown" : "") + (snap ? " is-snap" : "") + (tucked ? " is-tucked" : "") + (peek ? " is-peek" : "") + (yours ? " is-yours" : "") + (act?.paused ? " is-taken" : "");
+  const cls = "agx-isl" + (open ? " is-open" : "") + (shown ? " is-shown" : "") + (snap ? " is-snap" : "") + (tucked ? " is-tucked" : "") + (peek || p.menuOpen ? " is-peek" : "") + (yours ? " is-yours" : "") + (act?.paused ? " is-taken" : "");
   const dot = act?.paused ? "is-taken" : working ? "is-working" : "";
   return (
     <>
@@ -220,7 +222,7 @@ export function BrowserIsland(p: IslandProps) {
                     : <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 2.5v3h-3" /></svg>}
                 </button>
                 <button type="button" className="agx-isl-addr" onClick={p.onAddress} title="Type an address (Ctrl+L)">{p.address || "Type an address"}</button>
-                <button type="button" className="agx-isl-ib" aria-label="Menu" onClick={(e) => p.onMenu(e.currentTarget.getBoundingClientRect())}><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="3.5" cy="8" r="1.2" /><circle cx="8" cy="8" r="1.2" /><circle cx="12.5" cy="8" r="1.2" /></svg></button>
+                <button type="button" className="agx-isl-ib" aria-label="Menu" onClick={(e) => p.onMenu(e.currentTarget.getBoundingClientRect(), e.detail === 0)}><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="3.5" cy="8" r="1.2" /><circle cx="8" cy="8" r="1.2" /><circle cx="12.5" cy="8" r="1.2" /></svg></button>
                 <button type="button" className="agx-isl-count" aria-label="Show every tab" onClick={show}>{tabs.length}</button>
                 {act?.paused && <button type="button" className="agx-isl-hand" onClick={() => active && p.onToggle(active.id)}>Hand back</button>}
               </div>

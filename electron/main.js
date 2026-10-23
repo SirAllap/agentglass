@@ -3535,6 +3535,8 @@ const stepZoom = (level, dir) => {
  * takes the keystroke with it and reads as a browser that ignores Alt+Left.
  */
 /** @param {WebContents} guest @param {number} dir */
+const SIDE_BUTTON_TOKEN = `agx-side:${require("crypto").randomBytes(8).toString("hex")}:`;
+
 function guestNav(guest, dir) {
   const back = dir < 0;
   try {
@@ -3605,6 +3607,25 @@ function guardWebviews(win, opts = {}) {
     // trap. Only the chords that move you *out* are forwarded; everything else
     // belongs to the page, where Ctrl+L, Ctrl+F and the rest still mean what
     // they mean in a browser.
+    /*
+     * The mouse's side buttons, over a page. On Linux Electron raises no
+     * app-command, and the guest is its own process, so neither the window nor
+     * the renderer ever sees the press. The only place it exists is the page's
+     * own mouseup (button 3 back, 4 forward), so a listener goes in on every
+     * document and reports on the console under a per-process token; the
+     * panel decides whether the person may navigate (not while an agent holds
+     * the glass). Ceiling: a page can print the same line and move its own
+     * tab one step in history, and nothing more.
+     */
+    guest.on("dom-ready", () => {
+      guest.executeJavaScript(`(() => { if (window.__agxSide) return; window.__agxSide = 1;
+        addEventListener("mouseup", (e) => { if (e.button === 3 || e.button === 4) { e.preventDefault(); console.info(${JSON.stringify(SIDE_BUTTON_TOKEN)} + e.button); } }, true); })()`).catch(() => {});
+    });
+    guest.on("console-message", (_e, _lvl, message) => {
+      const m = typeof message === "string" ? message : _e && _e.message;
+      if (typeof m !== "string" || !m.startsWith(SIDE_BUTTON_TOKEN) || win.isDestroyed()) return;
+      try { win.webContents.send("ag:browser-key", m.endsWith("3") ? "<" : ">"); } catch { /* gone */ }
+    });
     guest.on("before-input-event", (event, input) => {
       if (input.type !== "keyDown") return;
       const mod = process.platform === "darwin" ? input.meta : input.control;
