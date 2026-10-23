@@ -25,7 +25,8 @@ describe("closeSettings is the same one-slot bus idiom as openSettings", () => {
   });
 
   test("the Open button on a plugin card calls it", () => {
-    const open = paneSrc.slice(paneSrc.indexOf('hasPanel && plugin.enabled && ('));
-    expect(open.slice(0, open.indexOf("Open"))).toContain("closeSettings()");
+    const open = paneSrc.slice(paneSrc.indexOf("const openIt = "));
+    expect(open.slice(0, open.indexOf(";\n"))).toContain("closeSettings()");
+    expect(paneSrc).toContain("onClick={openIt}");
   });
 });

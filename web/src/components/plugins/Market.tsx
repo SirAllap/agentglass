@@ -35,6 +35,7 @@ import { CloseButton } from "../CloseButton.tsx";
 import { LAYER } from "../../lib/layers.ts";
 import { Button, CHIP, CHIP_SURFACE, CHIP_SURFACE_CLS, Chip, EDGE, INPUT, INPUT_STYLE, RefreshButton } from "../workspace/Chrome.tsx";
 import { SettingRow } from "../SettingRow.tsx";
+import { PLUGIN_CTRL_H } from "../../lib/pluginCard.ts";
 import { SettingsCard, StatusBadge } from "../SettingsKit.tsx";
 import type { Catalogue, InstallSource } from "../../../../shared/types.ts";
 
@@ -143,7 +144,9 @@ export function offerFor(entry: Entry, have: InstallSource | null): "install" | 
   return entry.sha256 && have.plugin.sha256 && entry.sha256 !== have.plugin.sha256 ? "update" : null;
 }
 
-export function Market({ installed, onInstalled }: {
+export function Market({ installed, onInstalled, onLoaded }: {
+  /** Told what the market listed, so the installed cards can say an update exists. */
+  onLoaded?: (catalogue: Catalogue | null) => void;
   /** How the plugin from this git source is installed, or null. Passed in
    *  rather than imported, so this file and the page that renders it do not
    *  import each other. */
@@ -159,7 +162,8 @@ export function Market({ installed, onInstalled }: {
     setState({ kind: "loading" });
     const r = await api.pluginCatalogueFetch(MARKET_URL);
     setState(r.ok ? { kind: "ok", catalogue: r.catalogue } : { kind: "error", error: r.error });
-  }, []);
+    onLoaded?.(r.ok ? r.catalogue : null);
+  }, [onLoaded]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -223,11 +227,15 @@ export function Market({ installed, onInstalled }: {
           hint={state.error} actions={<Button onClick={() => void load()}>Try again</Button>} />
       )}
 
-      {state.kind === "ok" && shown.map((entry) => (
-        <Offer key={entry.id} entry={entry} owner={state.catalogue.owner} onInstalled={onInstalled}
-          mode={offerFor(entry, installed(entry.source.url)) ?? "install"}
-          was={(() => { const h = installed(entry.source.url); return h?.kind === "marketplace" ? h.plugin.ref : null; })()} />
-      ))}
+      {state.kind === "ok" && shown.length > 0 && (
+        <div className="agx-market-grid">
+          {shown.map((entry) => (
+            <Offer key={entry.id} entry={entry} owner={state.catalogue.owner} onInstalled={onInstalled}
+              mode={offerFor(entry, installed(entry.source.url)) ?? "install"}
+              was={(() => { const h = installed(entry.source.url); return h?.kind === "marketplace" ? h.plugin.ref : null; })()} />
+          ))}
+        </div>
+      )}
 
       {state.kind === "ok" && found.length === 0 && (
         <SettingRow label={q.trim() || type
@@ -311,44 +319,54 @@ export function Offer({ entry, owner, onInstalled, mode, was = null }: {
 
   return (
     <>
-    <SettingRow
-      /* Its initial, not the same puzzle eight times: a list of things to pick
-         from needs its rows told apart at a glance, and the one piece of
-         identity a catalogue entry carries is its name. */
-      label={<span className="flex items-center gap-2.5">
-        <span aria-hidden className="agx-market-tile shrink-0 grid place-items-center rounded-lg text-[14px] font-semibold" style={{
-          width: 32, height: 32, color: tint,
+    {/* A compact card, the same tokens as an installed one: its initial (a list
+        of things to pick from needs its rows told apart at a glance), what it
+        is, where it draws, and one filled button at the bottom of every card. */}
+    <article className="flex flex-col gap-2.5 p-3.5 min-w-0 rounded-xl"
+      style={{ background: "var(--surface-card)", border: "1px solid var(--surface-line)", boxShadow: "var(--surface-lift)" }}>
+      <div className="flex items-center gap-3 min-w-0">
+        <span aria-hidden className="agx-market-tile shrink-0 grid place-items-center rounded-lg text-[15px] font-semibold" style={{
+          width: 36, height: 36, color: tint,
           background: `color-mix(in srgb, ${tint} 15%, transparent)`,
           border: `1px solid color-mix(in srgb, ${tint} 32%, transparent)`,
         }}>{(entry.title || entry.id).trim().charAt(0).toUpperCase()}</span>
-        <span className="min-w-0">
-          <span className="block">{entry.title || entry.id}</span>
-          <span className="block text-[11.5px] t-dim">by {entry.publisher || owner}</span>
-        </span>
-      </span>}
-      hint={<>
-        <span className="block">{entry.description}</span>
-        {draws.length > 0 && (
-          /* Plain dim text with middots, not seven chips on two rows: every
-             one of those chips was the same weight as the plugin's name. */
-          <span className="block mt-1">{draws.join(" · ")}</span>
-        )}
-        {mode === "update" && (
-          <span className="block mt-1">
-            Installed at <span className="t-mono">{was ? was.slice(0, 7) : "its default branch"}</span>; the market lists{" "}
-            <span className="t-mono">{(entry.source.ref ?? "").slice(0, 7)}</span>. Updating installs the listed version,
-            and asks again if what it declares has changed.
-          </span>
-        )}
-        {error && <span className="block mt-1" style={{ color: "var(--error-ink)" }}>{error}</span>}
-      </>}
-      actions={<>
-        <Button onClick={() => setOpen(true)}>Read the listing</Button>
-        <Button tone="primary" pending={busy} onClick={install}>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-2 min-w-0">
+            <span className="text-[13.5px] font-semibold truncate" style={{ color: "var(--text)" }}>{entry.title || entry.id}</span>
+            {entry.source.ref && (
+              <span className="t-mono text-[10.5px] px-1.5 rounded-md shrink-0 inline-flex items-center" style={{ height: 18, color: "var(--text2)", border: EDGE }}
+                title={entry.source.ref}>{COMMIT.test(entry.source.ref) ? entry.source.ref.slice(0, 7) : entry.source.ref}</span>
+            )}
+          </div>
+          <div className="text-[11.5px] t-dim truncate">by {entry.publisher || owner}</div>
+        </div>
+      </div>
+      <p className="m-0 text-[12px] leading-snug" style={{ color: "var(--text2)", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
+        title={entry.description}>{entry.description}</p>
+      {/* Plain tags, not seven chips on two rows: every one of those chips
+          was the same weight as the plugin's name. */}
+      {draws.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mt-auto">
+          {draws.map((d) => (
+            <span key={d} className="text-[10.5px] px-1.5 rounded-md inline-flex items-center whitespace-nowrap" style={{ height: 20, color: "var(--text2)", border: EDGE }}>{d}</span>
+          ))}
+        </div>
+      )}
+      {mode === "update" && (
+        <p className="m-0 text-[11.5px] leading-snug t-dim">
+          Installed at <span className="t-mono">{was ? was.slice(0, 7) : "its default branch"}</span>; the market lists{" "}
+          <span className="t-mono">{(entry.source.ref ?? "").slice(0, 7)}</span>. Updating installs the listed version,
+          and asks again if what it declares has changed.
+        </p>
+      )}
+      {error && <p className="m-0 text-[11.5px]" style={{ color: "var(--error-ink)" }}>{error}</p>}
+      <div className="flex items-center gap-2 mt-auto pt-0.5">
+        <Button style={{ height: PLUGIN_CTRL_H }} onClick={() => setOpen(true)}>Read the listing</Button>
+        <Button tone="primary" style={{ height: PLUGIN_CTRL_H }} className="ml-auto" pending={busy} onClick={install}>
           {busy ? (mode === "update" ? "Updating…" : "Installing…") : (mode === "update" ? "Update" : "Install")}
         </Button>
-      </>}
-    />
+      </div>
+    </article>
     <Details entry={entry} owner={owner} tint={tint} repo={repo} open={open} busy={busy}
       onClose={() => setOpen(false)} onInstall={install} />
     </>
@@ -449,7 +467,7 @@ function Details({ entry, owner, tint, repo, open, busy, onClose, onInstall }: {
                 Repository <ExternalIcon size={ICON.xs} />
               </a>
             )}
-            <Button tone="primary" className="ml-auto" pending={busy} onClick={onInstall}>
+            <Button tone="primary" style={{ height: PLUGIN_CTRL_H }} className="ml-auto" pending={busy} onClick={onInstall}>
               {busy ? "Installing…" : "Install"}
             </Button>
           </div>

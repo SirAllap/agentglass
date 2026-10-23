@@ -26,6 +26,7 @@ const build = (o = {}) => {
   if (!b.ok) throw new Error(b.error);
   return b.markdown;
 };
+const priced = [run("r1", 1000, { costUsd: 0.5 }), run("r2", 2000, { costUsd: 1.25 }), run("r3", 3000)];
 const blocks = (m: string) => (m.match(/<details/g) ?? []).length;
 
 describe("4 runs, 9 resolved findings in the older ones, a clean last run", () => {
@@ -62,5 +63,25 @@ describe("the preview's stale flag", () => {
     expect((await previewReview(req, deps(other, 4050)) as any).stale).toBe(false);
     expect((await previewReview(req, deps(other, 9000)) as any).stale).toBe(true);
     expect((await previewReview(req, deps(HEAD, 9000)) as any).stale).toBe(false);
+  });
+});
+
+describe("the Cost column with more than one review", () => {
+  const table = (rs: R[]) => {
+    const hdr = headerRun(rs, P);
+    const b = buildReviewComment({ plugin: P, repo: REPO, number: 1042, run: hdr.run!, reviews: hdr.reviews, totalCost: hdr.totalCost, notes: [], options: { ...DEFAULT_PUBLISH_OPTIONS } });
+    if (!b.ok) throw new Error(b.error);
+    return b.markdown;
+  };
+  test("sums every finished review and says so, not the last run's cost alone", () => {
+    expect(headerRun(priced, P).totalCost).toBe(1.75);
+    expect(table(priced)).toContain("| $1.75 total |");
+  });
+  test("one review keeps its own cost, unlabelled", () => {
+    expect(table([priced[1]!])).toContain("| $1.25 |");
+  });
+  test("no run priced: a dash, not $0.00", () => {
+    expect(headerRun(runs, P).totalCost).toBeUndefined();
+    expect(table(runs)).toContain("| - | 1970-01-01 |");
   });
 });

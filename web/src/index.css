@@ -2922,3 +2922,11 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 @container agx-prbar (max-width: 1499px) {
   .agx-prbar-search { order: 10; flex: 1 1 100% !important; max-width: none !important; }
 }
+
+/* Plugins page: installed cards fill the width, two to a row once there is room for two 560px cards. */
+.agx-plugin-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(560px, 100%), 1fr)); gap: 16px; align-items: stretch; }
+.agx-perm > summary::-webkit-details-marker { display: none; }
+.agx-perm-caret { display: inline-block; transition: transform 120ms ease; }
+.agx-perm[open] > summary .agx-perm-caret { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .agx-perm-caret { transition: none; } }
+.agx-market-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr)); gap: 14px; padding: 4px 16px 14px; align-items: stretch; }

@@ -58,8 +58,8 @@ describe("one declaration per place", () => {
     expect(PANE).toContain("node: <PluginDeclaration plugin={plugin} />");
   });
   test("the card's disclosure is closed by default, so it is not open behind the dialog", () => {
-    expect(PANE).toContain('<Disclosure summary="What it can do" wide>');
-    expect(PANE).not.toMatch(/summary="What it can do" defaultOpen/);
+    expect(PANE).toContain('<details className="agx-perm ');
+    expect(PANE).not.toMatch(/<details className="agx-perm[^>]* open[ >=]/);
   });
   test("the grid collapses by container width, and the card body is full width", () => {
     expect(CSS).toMatch(/@container agx-decl \(min-width: \d+px\) \{[^}]*\.agx-decl-row \{ grid-template-columns: 80px/);

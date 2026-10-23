@@ -5803,6 +5803,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         // Every finding of this plugin on this pull request, whichever run last touched it.
         notes: publishNotes(ref.notes, b.plugin, run.repo, run.number),
         reviews: hdr.reviews,
+        totalCost: hdr.totalCost,
         options: cleanPublishOptions(b.options),
       };
       const deps: PublishDeps = {

@@ -91,7 +91,6 @@ export const SETTINGS_ROWS: SettingsRowRaw[] = [
   { pane: "onboarding", section: "What is left to set up", label: "A provider is connected", hint: "" },
   { pane: "onboarding", section: "What is left to set up", label: "An agent is wired in", hint: "" },
   { pane: "onboarding", section: "What is left to set up", label: "The pane engine is ready", hint: "" },
-  { pane: "plugins", section: "Installed", label: "Search installed plugins", hint: "" },
   { pane: "plugins", section: "Plugin system", label: "The master switch was not changed", hint: "" },
   { pane: "plugins", section: "Plugin system", label: "Unboxed plugins are allowed here", hint: "" },
   { pane: "prefs", section: "Size and startup", label: "Clock", hint: "The top bar shows the time in fullscreen, where the desktop's own clock is hidden" },

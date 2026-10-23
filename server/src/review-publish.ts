@@ -28,13 +28,16 @@ export interface BuildInput {
   viewer?: string;
   /** How many finished reviews this plugin has on the pull request; the header says so past one. */
   reviews?: number;
+  /** What those finished reviews cost together; the table shows it past one review, with the word "total". */
+  totalCost?: number;
 }
 
 /** The run the comment's header speaks for: the plugin's latest FINISHED run, by when it finished. */
-export function headerRun<R extends PrRun & { plugin: string }>(runs: readonly R[], plugin: string): { run: R | undefined; reviews: number } {
+export function headerRun<R extends PrRun & { plugin: string }>(runs: readonly R[], plugin: string): { run: R | undefined; reviews: number; totalCost: number | undefined } {
   const mine = runs.filter((r) => r.plugin === plugin);
   const done = mine.filter((r) => r.state === "done").sort((x, y) => (x.finishedAt ?? x.startedAt) - (y.finishedAt ?? y.startedAt));
-  return { run: done[done.length - 1] ?? mine[mine.length - 1], reviews: done.length };
+  const priced = done.filter((r) => r.costUsd !== undefined);
+  return { run: done[done.length - 1] ?? mine[mine.length - 1], reviews: done.length, totalCost: priced.length ? priced.reduce((n, r) => n + r.costUsd!, 0) : undefined };
 }
 
 /** The findings the comment draws from: every one this plugin has on the pull
@@ -105,6 +108,10 @@ function replyBlock(r: NoteReply, viewer?: string): string {
 
 function dateOf(ms: number): string { return new Date(ms).toISOString().slice(0, 10); }
 function money(v: number | undefined): string { return v === undefined ? "-" : v > 0 && v < 0.01 ? "<$0.01" : `$${v.toFixed(2)}`; }
+/** One review: its own cost. Several: the sum of all of them, said so, since the other cells speak for the latest run only. */
+function costCell(run: PrRun, input: BuildInput): string {
+  return input.reviews && input.reviews > 1 && input.totalCost !== undefined ? `${money(input.totalCost)} total` : money(run.costUsd);
+}
 const cell = (v: string | undefined) => (v ? safeInline(v) : "-");
 
 function verdict(notes: readonly PrNote[]): { line: string; open: PrNote[] } {
@@ -168,7 +175,7 @@ export function buildReviewComment(input: BuildInput): Built {
     const reviews = input.reviews && input.reviews > 1 ? ` · ${input.reviews} reviews` : "";
     head.push(`### 🔍 Local review${run.agent ? ` · ${safeInline(run.agent)}` : ""} · ${safeInline(plugin)}${reviews}`, "");
     head.push("| Agent | Model | Commit | Cost | Date |", "|---|---|---|---|---|");
-    head.push(`| ${cell(run.agent)} | ${cell(run.model)} | ${sha ? code(sha) : "-"} | ${money(run.costUsd)} | ${dateOf(run.finishedAt ?? run.startedAt)} |`, "");
+    head.push(`| ${cell(run.agent)} | ${cell(run.model)} | ${sha ? code(sha) : "-"} | ${costCell(run, input)} | ${dateOf(run.finishedAt ?? run.startedAt)} |`, "");
     head.push(`**Verdict: ${v.line}** — ${countLine(mine, o)}. Reviewed locally on the author's machine; not a GitHub review (no approval, no change request).`, "");
   }
   const foot = [

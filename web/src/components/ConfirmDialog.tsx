@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 import { preparedLine, useStageHold } from "../lib/stageHold.ts";
+import { PLUGIN_CTRL_H } from "../lib/pluginCard.ts";
 import { useOwnedQuestion } from "../lib/layerOwner.ts";
 
 /**
@@ -35,6 +36,8 @@ export type ConfirmSpec = {
   node?: ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
+  /** A dialog that holds structure rather than a sentence: 640px wide, 30px buttons, and a line under the title. */
+  wide?: { subtitle?: string };
   /** For a question whose easy answer is the wrong one: Cancel takes the focus and
    *  Enter no longer confirms, so the merge needs a deliberate Tab and press. */
   cancelFocus?: boolean;
@@ -94,7 +97,7 @@ export function ConfirmDialog({ pending }: { pending: Pending | null }) {
           <div className="fixed inset-0 flex items-center justify-center p-6 pointer-events-none" style={{ zIndex: 10005 }}>
             <motion.div
               initial={{ opacity: 0, scale: 0.98, y: 6 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.98 }}
-              className="pointer-events-auto w-full min-w-0 max-w-[520px] rounded-xl overflow-hidden flex flex-col"
+              className={`pointer-events-auto w-full min-w-0 ${pending.wide ? "max-w-[640px]" : "max-w-[520px]"} rounded-xl overflow-hidden flex flex-col`}
               style={{ maxHeight: "calc(100dvh - 48px)", background: "var(--surface-card)", border: EDGE, boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}
               role="dialog" aria-modal="true"
             >
@@ -102,6 +105,7 @@ export function ConfirmDialog({ pending }: { pending: Pending | null }) {
                   so the buttons are reachable at any zoom or window height. */}
               <div className="px-4 pt-3.5 pb-2 shrink-0">
                 <div className="text-[13px] font-medium" style={{ color: "var(--text)" }}>{pending.title}</div>
+                {pending.wide?.subtitle && <div className="mt-0.5 text-[11.5px]" style={{ color: "var(--text3)" }}>{pending.wide.subtitle}</div>}
                 {pending.preparedBy && (
                   <div className="mt-1.5 text-[10.5px]" data-prepared-by="" role="status" style={{ color: "var(--warning-ink)" }}>{preparedLine(pending.preparedBy)}</div>
                 )}
@@ -126,13 +130,13 @@ export function ConfirmDialog({ pending }: { pending: Pending | null }) {
               <div className="px-4 py-2.5 shrink-0 flex items-center justify-end gap-2" style={{ borderTop: LINE }}>
                 <button ref={cancelRef} onClick={() => pending.resolve(isPrompt ? null : false)}
                   className="text-[11px] px-2.5 py-1 rounded"
-                  style={{ color: "var(--text2)", border: EDGE }}>
+                  style={{ color: "var(--text2)", border: EDGE, ...(pending.wide ? { height: PLUGIN_CTRL_H } : null) }}>
                   {pending.cancelLabel ?? "Cancel"}
                 </button>
                 <button ref={confirmRef} onClick={() => pending.resolve(isPrompt ? text.trim() : true)}
                   disabled={(isPrompt && !text.trim()) || held}
                   className="text-[11px] px-2.5 py-1 rounded font-medium disabled:opacity-40"
-                  style={{ color: pending.danger ? "var(--bg)" : "var(--on-primary)", background: pending.danger ? "var(--error)" : "var(--primary)" }}>
+                  style={{ color: pending.danger ? "var(--bg)" : "var(--on-primary)", background: pending.danger ? "var(--error)" : "var(--primary)", ...(pending.wide ? { height: PLUGIN_CTRL_H } : null) }}>
                   {pending.confirmLabel ?? (pending.danger ? "Delete" : "Ok")}
                 </button>
               </div>
