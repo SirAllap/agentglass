@@ -567,7 +567,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   const preview = (
     <QuickLook root={workspace} savedTab={previewTab} onTab={(path, tab) => setPreviewTab({ path, tab })} onEditing={(p) => { editing.current = p; }} path={deepest?.path ?? null} row={deepest?.row ?? null}
       rows={deepest && isFolder(deepest.row) ? (columns[deepest.col + 1]?.state?.rows ?? null) : null}
-      onBench={onBench} onClose={guarded("preview-close", () => (wide ? setPrefs({ preview: false }) : setPeek(false)))} />
+      onBench={onBench} readW={prefs.readW} onReadW={(w) => setPrefs({ readW: w })} onClose={guarded("preview-close", () => (wide ? setPrefs({ preview: false }) : setPeek(false)))} />
   );
 
   /* Strata's footer: the shortcuts button on the left, what is here or selected on the right. */
@@ -632,7 +632,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
             {previewInline && (
               <div className="relative min-h-0 flex" style={{ flex: `${prevDrag === undefined && prefs.view === "columns" ? 1 : 0} 0 ${previewWidth(box.w, prevDrag)}px`, minWidth: 0, borderLeft: LINE, background: PREVIEW_SURFACE }}>
                 <div role="separator" aria-orientation="vertical" aria-label="Resize the preview" tabIndex={0} title="Drag to resize, double-click to reset"
-                  className="absolute top-0 bottom-0" style={{ left: 0, width: 6, cursor: "col-resize", zIndex: 3, touchAction: "none" }}
+                  className="absolute top-0 bottom-0 agx-col-edge" style={{ left: 0, width: 6, cursor: "col-resize", zIndex: 3, touchAction: "none" }}
                   onDoubleClick={() => setPrevDrag(undefined)}
                   onPointerDown={(e) => {
                     e.preventDefault();

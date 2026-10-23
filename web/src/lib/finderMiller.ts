@@ -9,6 +9,7 @@
  * what `visibleWindow` is for and the only reason a folder that size scrolls.
  */
 import { fileKind } from "./paletteModel.ts";
+import { READ_WIDTH_DEFAULT, readWidthOf, type ReadWidth } from "./finderPreview.ts";
 
 /** One entry of a folder, as `/browse/list` reports it. */
 export interface Row {
@@ -195,6 +196,8 @@ export interface Prefs {
   thumb: number;
   /** The full sidebar's width in pixels, as dragged. */
   sideW: number;
+  /** The reading column of a markdown or text preview: 66 / 80 / 100 characters or the whole pane. */
+  readW: ReadWidth;
   /** Choosing a folder opens its column (Strata: "Mirror columns selection"). */
   mirror: boolean;
   /** The footer's "F1 Shortcuts" button. The key works either way. */
@@ -223,7 +226,7 @@ export const TEXT_MAX = 18;
 
 export const DEFAULT_PREFS: Prefs = {
   view: "columns", preview: true, density: "compact", textSize: 13, hidden: false, group: false, sizes: true, sidebar: true, rail: false,
-  sortKey: "name", sortDir: "asc", foldersFirst: true, thumb: THUMB_DEFAULT, sideW: 201, mirror: true, f1: true, peek: false,
+  sortKey: "name", sortDir: "asc", foldersFirst: true, thumb: THUMB_DEFAULT, sideW: 201, readW: READ_WIDTH_DEFAULT, mirror: true, f1: true, peek: false,
 };
 
 function readSortChoice(v: unknown): SortChoice | null {
@@ -258,6 +261,7 @@ export function readPrefs(raw: string | null): Prefs {
     ...(readSortChoice(o.defSort) ? { defSort: readSortChoice(o.defSort)! } : {}),
     thumb: typeof o.thumb === "number" && Number.isFinite(o.thumb) ? Math.min(THUMB_MAX, Math.max(THUMB_MIN, Math.round(o.thumb))) : d.thumb,
     sideW: typeof o.sideW === "number" && Number.isFinite(o.sideW) ? Math.min(360, Math.max(169, Math.round(o.sideW))) : d.sideW,
+    readW: readWidthOf(o.readW),
     mirror: flag(o.mirror, d.mirror),
     f1: flag(o.f1, d.f1),
     peek: flag(o.peek, d.peek),

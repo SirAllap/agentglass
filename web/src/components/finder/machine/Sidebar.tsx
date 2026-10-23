@@ -34,6 +34,12 @@ export function placesFor(home: string, known: readonly DiskPlace[]): Place[] {
   ];
 }
 
+/** Strata pins only the bookmarks that are not already one of the places at the top: a folder listed twice is noise. */
+export function pinnedOnly(pins: readonly PinnedPlace[], places: readonly Place[]): PinnedPlace[] {
+  const shown = new Set(places.flatMap((p) => (p.path ? [p.path.replace(/\/+$/, "")] : [])));
+  return pins.filter((b) => !b.path || !shown.has(b.path.replace(/\/+$/, "")));
+}
+
 /** What a button at the end of a DEVICES row asks for. */
 export type VolumeAsk = LockButton["act"] | ReleaseButton["act"];
 
@@ -48,6 +54,7 @@ export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, o
   dnd?: React.HTMLAttributes<HTMLElement>;
 }) {
   const rail = mode === "rail";
+  const shownPins = pinnedOnly(pins, places);
   const [menu, setMenu] = useState<{ v: Volume; at: DOMRect } | null>(null);
   const row = (p: Place) => {
     const on = !!p.path && (here === p.path);
@@ -66,7 +73,7 @@ export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, o
   const remote = (b: PinnedPlace) => (
     <button key={`pin:${b.uri}`} type="button" aria-label={rail ? b.label : undefined} title={b.uri} onClick={() => onRemote?.(b.uri)}
       className={`agx-btn w-full flex items-center ${rail ? "justify-center" : "gap-2 px-2.5"} rounded-md text-left`} style={{ minHeight: rail ? 28 : 26, color: "var(--text2)" }}>
-      <span className="shrink-0 flex" style={{ color: "var(--primary-ink)" }}><StrataIcon set="act" name="network" size={ICON.md} /></span>
+      <span className="shrink-0 flex" style={{ color: "var(--primary-ink)" }}><StrataIcon set="act" name="folder" size={ICON.md} /></span>
       {!rail && <span className="truncate">{b.label}</span>}
     </button>
   );
@@ -99,9 +106,9 @@ export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, o
       <nav aria-label="Places" data-mode={mode} {...dnd} className="agx-scroll overflow-y-auto overflow-x-hidden flex-1 min-w-0 py-1.5 px-1 text-[12px] flex flex-col gap-0.5"
         style={{ borderRight: LINE, background: "var(--surface-nav)" }}>
         {places.map(row)}
-        {pins.length > 0 && !rail && <div className="px-2.5 pt-2 pb-0.5 text-[10px] uppercase" style={{ color: "var(--text4)" }}>Pinned</div>}
-        {pins.length > 0 && rail && <div role="separator" className="mx-1 my-1" style={{ borderTop: LINE }} />}
-        {pins.map((b) => (b.path ? row({ id: `pin:${b.path}`, label: b.path.slice(b.path.lastIndexOf("/") + 1) || b.path, path: b.path }) : remote(b)))}
+        {shownPins.length > 0 && !rail && <div className="px-2.5 pt-2 pb-0.5 text-[10px] uppercase" style={{ color: "var(--text4)" }}>Pinned</div>}
+        {shownPins.length > 0 && rail && <div role="separator" className="mx-1 my-1" style={{ borderTop: LINE }} />}
+        {shownPins.map((b) => (b.path ? row({ id: `pin:${b.path}`, label: b.path.slice(b.path.lastIndexOf("/") + 1) || b.path, path: b.path }) : remote(b)))}
         {volumes.length > 0 && (
           <>
             <div role="separator" style={{ borderTop: LINE, margin: rail ? "6px 2px" : "6px 0" }} />

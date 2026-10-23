@@ -144,7 +144,7 @@ export interface DiskPlaces {
 /** The usual homes for documents. Listed rather than guessed at, and every one
  *  of them is checked against the disk before it is offered — a menu row for a
  *  folder that is not there is a dead end wearing a name. */
-const HOME_FOLDERS = ["Documents", "Desktop", "Downloads", "Projects", "code", "src", "Notes"];
+const HOME_FOLDERS = ["Documents", "Desktop", "Downloads", "Music", "Pictures", "Videos", "Projects", "code", "src", "Notes"];
 
 export function diskPlaces(): DiskPlaces {
   const at = home();

@@ -10,7 +10,7 @@ import { useDiffHighlight } from "../../../lib/diffHighlight.ts";
 import { humanBytes } from "../../../lib/paletteModel.ts";
 import {
   COLOUR_LINES, GRAPH_MAX_BYTES, HTML_RENDER_MAX_BYTES, JSON_READ_CAP, READ_LINES,
-  graphAllowed, htmlRenderable, isolatedDoc, previewPlan, readWindow, sortedOrder, type PreviewTab,
+  graphAllowed, htmlRenderable, isolatedDoc, nextReadWidth, previewPlan, readMaxWidth, readWidthLabel, readWindow, sortedOrder, type ReadWidth, type PreviewTab,
 } from "../../../lib/finderPreview.ts";
 import { HIT } from "../../../lib/iconSize.ts";
 import type { FileFacts } from "../../../../../shared/types.ts";
@@ -42,7 +42,8 @@ function printPane(el: HTMLElement | null, title: string) {
   document.body.appendChild(f);
 }
 
-export function PreviewBody({ path, facts, canEdit, root, onEditing, savedTab, onTab, bar }: {
+export function PreviewBody({ path, facts, canEdit, root, onEditing, savedTab, onTab, bar, readW, onReadW }: {
+  readW: ReadWidth; onReadW: (w: ReadWidth) => void;
   bar: BarProps;
   path: string;
   /** The workspace the editor session hangs off (the bench's own key). */
@@ -118,6 +119,10 @@ export function PreviewBody({ path, facts, canEdit, root, onEditing, savedTab, o
     <>
       {toggles && <BarButton icon="file-code" label={showsSource ? `Show ${other.toLowerCase()}` : "Show source"} on={showsSource} onClick={() => { setEditing(false); setTab(other); }} />}
       {texty && !editing && <BarButton icon="search" label="Find in preview" on={findOpen} onClick={() => { setFindOpen((o) => !o); setTimeout(() => findRef.current?.focus(), 0); }} />}
+      {(plan.viewer === "markdown" || plan.viewer === "code") && !editing && (
+        <button type="button" className="agx-btn rounded-md px-1.5 text-[10.5px] shrink-0" style={{ height: HIT - 4, minWidth: HIT - 4, color: "var(--text3)", border: EDGE }} title={`Reading width: ${readWidthLabel(readW)} (press to change)`} aria-label={`Reading width ${readWidthLabel(readW)}`}
+          onClick={() => onReadW(nextReadWidth(readW))}>{readWidthLabel(readW)}</button>
+      )}
       {bar.onNvim && <BarButton icon="terminal" label="Open in nvim" onClick={bar.onNvim} />}
     </>
   );
@@ -126,10 +131,10 @@ export function PreviewBody({ path, facts, canEdit, root, onEditing, savedTab, o
   let body: React.ReactNode;
   if (editorOn) body = <FinderNvim root={root} path={path} onEnd={() => setEditing(false)} />;
   else switch (plan.viewer) {
-    case "markdown": body = tab === "Source" ? <Reading facts={facts} name={facts.name} wrap={wrap} /> : <MarkdownView facts={facts} />; break;
+    case "markdown": body = tab === "Source" ? <Reading facts={facts} name={facts.name} wrap={wrap} readW={readW} /> : <MarkdownView facts={facts} readW={readW} />; break;
     case "html": body = tab === "Rendered" ? <HtmlFrame path={path} bytes={facts.bytes} /> : <Reading facts={facts} name={facts.name} wrap={wrap} />; break;
     case "json": body = tab === "Reading" ? <Reading facts={facts} name={facts.name} wrap={wrap} /> : <JsonData path={path} bytes={facts.bytes} graph={tab === "Graph"} />; break;
-    case "code": body = <Reading facts={facts} name={facts.name} wrap={wrap} />; break;
+    case "code": body = <Reading facts={facts} name={facts.name} wrap={wrap} readW={readW} />; break;
     case "image": body = <Picture src={api.previewUrl(path)} facts={facts} />; break;
     case "convert": body = <Converted path={path} facts={facts} />; break;
     case "pdf": body = <iframe title={facts.name} src={api.previewUrl(path)} className="w-full flex-1" style={{ border: EDGE, borderRadius: 6, minHeight: 360, background: "var(--bg)" }} />; break;
@@ -156,7 +161,7 @@ export function PreviewBody({ path, facts, canEdit, root, onEditing, savedTab, o
 
 /* ------------------------------------------------------------------ text */
 
-function Reading({ facts, name, wrap = true }: { facts: FileFacts; name: string; wrap?: boolean }) {
+function Reading({ facts, name, wrap = true, readW }: { facts: FileFacts; name: string; wrap?: boolean; readW?: ReadWidth }) {
   const text = facts.text ?? "";
   const { lines, more } = useMemo(() => readWindow(text, READ_LINES), [text]);
   const { hilite } = useDiffHighlight(name);
@@ -167,7 +172,7 @@ function Reading({ facts, name, wrap = true }: { facts: FileFacts; name: string;
   const cut = more > 0 || !!facts.textTruncated;
   return (
     <>
-      <div role="region" aria-label="File text" className="text-[11.5px] leading-[1.55] min-w-0" style={CODE_FONT_STYLE}>
+      <div role="region" aria-label="File text" className="text-[11.5px] leading-[1.55] min-w-0" style={{ ...CODE_FONT_STYLE, ...(readW ? { maxWidth: readMaxWidth(readW) } : {}) }}>
         {lines.map((l, i) => (
           <div key={i} className="flex min-w-0">
             <span aria-hidden className="shrink-0 select-none text-right mr-2.5" style={{ width: `${String(lines.length).length + 1}ch`, color: "var(--text4)" }}>{i + 1}</span>
@@ -185,7 +190,7 @@ function Reading({ facts, name, wrap = true }: { facts: FileFacts; name: string;
 }
 
 /** Strata draws markdown in the monospace face, a centred column, the title in the accent, under a notice that raw HTML stays text. A table's header sorts its rows. */
-function MarkdownView({ facts }: { facts: FileFacts }) {
+function MarkdownView({ facts, readW }: { facts: FileFacts; readW: ReadWidth }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const root = ref.current;
@@ -217,7 +222,7 @@ function MarkdownView({ facts }: { facts: FileFacts }) {
   return (
     <div className="min-w-0 flex flex-col gap-3" style={CODE_FONT_STYLE}>
       <div role="note" className="rounded-md px-2.5 py-1.5 text-[11px]" style={{ border: EDGE, background: "var(--surface-card)", color: "var(--text2)" }}>Raw HTML is shown as inert text in Markdown previews.</div>
-      <div ref={ref} className="agx-prose agx-prose-pane agx-strata-md mx-auto w-full min-w-0" style={{ ...CODE_FONT_STYLE, fontSize: 11.5, maxWidth: "88ch", overflowWrap: "anywhere" }}>
+      <div ref={ref} className="agx-prose agx-prose-pane agx-strata-md mx-auto w-full min-w-0" style={{ ...CODE_FONT_STYLE, fontSize: 11.5, maxWidth: readMaxWidth(readW), overflowWrap: "anywhere" }}>
         <Markdown text={facts.text ?? ""} />
         {facts.textTruncated && note(`Only the first part of this ${humanBytes(facts.bytes)} file is rendered. Open in nvim for the rest.`, true)}
       </div>

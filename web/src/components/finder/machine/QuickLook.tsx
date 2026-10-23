@@ -8,6 +8,7 @@ import { api } from "../../../lib/api.ts";
 import { TYPE_GROUPS, strataWhen, canEditRow, itemsLabel, isFolder, previewMetaLine, typeGroup, type Row } from "../../../lib/finderMiller.ts";
 import { FileTypeIcon, StrataIcon } from "./StrataIcon.tsx";
 import type { FileFacts } from "../../../../../shared/types.ts";
+import type { ReadWidth } from "../../../lib/finderPreview.ts";
 import { BarButton, PreviewBar } from "./PreviewBar.tsx";
 import { PreviewBody } from "./PreviewBody.tsx";
 
@@ -18,7 +19,9 @@ export function folderSummary(rows: readonly Row[]): string[] {
   return TYPE_GROUPS.filter((g) => n.has(g)).map((g) => `${g.toLowerCase()} ${n.get(g)}`);
 }
 
-export function QuickLook({ path, row, rows, root, savedTab, onTab, onEditing, onBench, onClose }: {
+export function QuickLook({ path, row, rows, root, savedTab, onTab, onEditing, onBench, onClose, readW, onReadW }: {
+  /** The reading column's width and where to say it changed (a preference, so it is kept). */
+  readW: ReadWidth; onReadW: (w: ReadWidth) => void;
   path: string | null;
   row: Row | null;
   /** The rows of the folder, when `row` is one: what the summary counts. */
@@ -79,7 +82,7 @@ export function QuickLook({ path, row, rows, root, savedTab, onTab, onEditing, o
           </div>
         </>
       ) : (
-        <PreviewBody path={path} facts={facts} canEdit={canEditRow(row)} root={root} onEditing={onEditing} savedTab={savedTab} onTab={onTab} bar={bar} />
+        <PreviewBody path={path} facts={facts} canEdit={canEditRow(row)} root={root} onEditing={onEditing} savedTab={savedTab} onTab={onTab} bar={bar} readW={readW} onReadW={onReadW} />
       )}
     </div>
   );

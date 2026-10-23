@@ -171,3 +171,21 @@ describe("a markdown table sorts by its header", () => {
     expect(sortedOrder(["b", "", "a"], "desc")).toEqual([0, 2, 1]);
   });
 });
+
+import { READ_WIDTH_DEFAULT, nextReadWidth, readMaxWidth, readWidthOf } from "../src/lib/finderPreview.ts";
+import { DEFAULT_PREFS, readPrefs } from "../src/lib/finderMiller.ts";
+describe("the reading column's width", () => {
+  test("cycles 66, 80, 100, Full and round again", () => {
+    expect([66, 80, 100, "full"].map((w) => nextReadWidth(w as 66))).toEqual([80, 100, "full", 66]);
+  });
+  test("is characters, or nothing for Full", () => {
+    expect(readMaxWidth(66)).toBe("66ch");
+    expect(readMaxWidth("full")).toBe("none");
+  });
+  test("a stored value that is not one of the four is the default", () => {
+    expect(readWidthOf(72)).toBe(READ_WIDTH_DEFAULT);
+    expect(readWidthOf("full")).toBe("full");
+    expect(readPrefs(JSON.stringify({ readW: 100 })).readW).toBe(100);
+    expect(readPrefs(JSON.stringify({ readW: "wide" })).readW).toBe(DEFAULT_PREFS.readW);
+  });
+});

@@ -2848,3 +2848,5 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-strata-md p { margin: 0.6em 0; }
 .agx-strata-md table { font-family: inherit; }
 .agx-strata-md th { user-select: none; }
+/* A table never breaks a word to fit: it keeps its words whole and scrolls inside its own box. */
+.agx-strata-md td, .agx-strata-md th { overflow-wrap: normal; word-break: normal; }

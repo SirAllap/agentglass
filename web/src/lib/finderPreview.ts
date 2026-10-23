@@ -82,3 +82,15 @@ export function sortedOrder(cells: readonly string[], dir: "asc" | "desc"): numb
   });
   return idx;
 }
+
+/** The reading column's width in characters for text and markdown, or the whole pane. The old palette's 66 / 80 / 100 / Full. */
+export const READ_WIDTHS = [66, 80, 100, "full"] as const;
+export type ReadWidth = (typeof READ_WIDTHS)[number];
+export const READ_WIDTH_DEFAULT: ReadWidth = 80;
+
+export const readWidthOf = (v: unknown): ReadWidth => (READ_WIDTHS as readonly unknown[]).includes(v) ? (v as ReadWidth) : READ_WIDTH_DEFAULT;
+/** The next width when the control is pressed, wrapping round. */
+export const nextReadWidth = (w: ReadWidth): ReadWidth => READ_WIDTHS[(READ_WIDTHS.indexOf(w) + 1) % READ_WIDTHS.length]!;
+/** CSS max-width for the column; Full has none. */
+export const readMaxWidth = (w: ReadWidth): string => (w === "full" ? "none" : `${w}ch`);
+export const readWidthLabel = (w: ReadWidth): string => (w === "full" ? "Full" : String(w));
