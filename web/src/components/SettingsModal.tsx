@@ -57,7 +57,7 @@ import { TerminalIcon, DiffIcon, BrowserIcon, UnderstudyIcon, LanternIcon } from
 import {
   SlidersIcon, ThemeIcon, BellIcon, SidebarIcon, KeyboardIcon, BudgetIcon, PulseIcon,
   CommandIcon, ReviewIcon, QuoteIcon, PanesIcon, PlugIcon, ServerIcon, PhoneIcon,
-  PuzzleIcon, ShieldIcon, InfoIcon, ChecklistIcon, DownloadIcon,
+  PuzzleIcon, ShieldIcon, InfoIcon, ChecklistIcon, DownloadIcon, ColumnsIcon,
 } from "./settingsNavIcons.tsx";
 import { resolvePane, openSettings, paneWhenClickupKnown } from "../lib/openSettings.ts";
 import { SettingsNav } from "./SettingsNav.tsx";
@@ -122,7 +122,7 @@ import { ShellConsole } from "./ShellConsole.tsx";
 import { CloseButton } from "./CloseButton.tsx";
 import "./settingsSplit.css";
 import { HIT, ICON } from "../lib/iconSize.ts";
-import { AgentIcon, CheckboxIcon, ClockIcon, CrossIcon, LinkIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { AgentIcon, CheckboxIcon, ClockIcon, CrossIcon, EditIcon, LinkIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { ciOnlyApproved } from "../lib/ciNotifyPref.ts";
 import { reviewGateOn, setReviewGate } from "../lib/reviewGatePref.ts";
 import { AskedAlertLog } from "./AskedAlertLog.tsx";
@@ -538,6 +538,21 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
  * State lives in localStorage rather than here, and is read back on mount, so
  * this pane and the view cannot disagree about what was chosen.
  */
+/**
+ * The page type for a setting with a live preview: the cards on the left, the
+ * preview on the right, stacked under 1280px. The preview itself is slice 4;
+ * until then `PreviewSlot` holds its place and its name, so the page already
+ * has the shape it will keep.
+ */
+function WithPreview({ slot, children }: { slot: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)] gap-4 items-start">
+      <div className="min-w-0">{children}</div>
+      {slot}
+    </div>
+  );
+}
+
 function BrowserPane() {
   const [home, setHome] = useState(homePageRaw);
   const [engine, setEngine] = useState<SearchEngine>(searchEngine);
@@ -558,7 +573,7 @@ function BrowserPane() {
   };
 
   return (
-    <SettingsCard title="Where it opens"
+    <SettingsCard title="Where it opens" icon={<BrowserIcon size={ICON.sm} />}
       desc="The pages the browser view opens on its own. Everything else — what you have logged into, what you have open — belongs to the page, not to a setting.">
       <SettingRow
         agentNever="a page the browser opens by itself, with the owner's signed-in sessions: not something an agent points elsewhere"
@@ -1735,8 +1750,8 @@ function CookieImport() {
       : "The browser profile the logins are read from.";
 
   return (
-    <SettingsCard title="Your logins"
-      desc="Bring the cookies over from another browser, so pages behind a login work here."
+    <SettingsCard title="Bring your logins" icon={<LinkIcon size={ICON.sm} />}
+      desc="Copies the sessions you already have from another browser, so pages behind a login work here. Nothing leaves this machine."
       actions={current?.readable ? (
         <>
           <Button onClick={() => void run("forget")} disabled={busy || !chosen.size}
@@ -3253,7 +3268,7 @@ function LaunchPermissionsCard({ open }: { open: boolean }) {
   };
   const bad = parseDenyRules(deny).bad;
   return (
-    <SettingsCard title="Launch permissions" desc="How every terminal agentglass opens starts its agent: Review with Claude, a hand-off, an issue, a resumed session, a Command that runs claude.">
+    <SettingsCard title="Launch permissions" icon={<ShieldIcon size={ICON.sm} />} desc="How every terminal agentglass opens starts its agent: Review with Claude, a hand-off, an issue, a resumed session, a Command that runs claude.">
       <SettingRow
         agentNever="the permission mode every agent the app starts runs in: loosening it is an escalation, so only the owner changes it"
         label="Permission mode for terminals agentglass opens"
@@ -3314,7 +3329,7 @@ function TerminalRunsOn({ open }: { open: boolean }) {
   };
 
   return (
-    <SettingsCard title="Terminal runs on" desc="The shell a Terminal view starts.">
+    <SettingsCard title="Terminal runs on" icon={<TerminalIcon size={ICON.sm} />} desc="The shell a Terminal view starts.">
       <SettingRow
         agentNever="which tmux a shell runs in, held by the server: it changes what runs a shell, so the owner chooses it"
         label="Terminal runs on"
@@ -3354,7 +3369,7 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   /** The card the last action belongs to, so its answer appears under it and not at the foot of the page. */
-  const [noteAt, setNoteAt] = useState<"engine" | "config" | "restore">("engine");
+  const [noteAt, setNoteAt] = useState<"engine" | "prefix" | "config" | "restore">("engine");
   const [busy, setBusy] = useState(false);
   /** A failed Restore / Resume save. Not `err`: that one replaces the whole page. */
   const [saveFail, setSaveFail] = useState<string | null>(null);
@@ -3401,7 +3416,7 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
   };
 
   const savePrefix = () => {
-    setBusy(true); setNote(null); setErr(null); setNoteAt("engine");
+    setBusy(true); setNote(null); setErr(null); setNoteAt("prefix");
     api.tmuxSettingsSave({ prefix })
       .then((r) => {
         if (r.ok) setNote(r.appliedNow
@@ -3433,7 +3448,7 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
       confirmLabel: "Reset engine",
       danger: true,
     }))) return;
-    setBusy(true); setNote(null); setNoteAt("engine");
+    setBusy(true); setNote(null); setNoteAt("config");
     api.tmuxReset()
       .then((r) => { setNote(r.ok ? "Reset to defaults." : r.error ?? "Reset failed."); void load(); })
       .catch(() => setErr("Could not reset — server unreachable."))
@@ -3467,14 +3482,14 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
     : null;
   return (
     <>
-    <SettingsCard title="Pane engine"
+    <SettingsCard title="Pane engine" icon={<PanesIcon size={ICON.sm} />}
       desc="The engine runs its own tmux server — its own socket, its own config. Your ~/.tmux.conf is never loaded, and neither is your tmux touched."
       status={!st
         ? <StatusBadge tone="checking">Checking</StatusBadge>
         : cap?.available
           ? <StatusBadge tone="ok">Pane engine ready</StatusBadge>
           : <StatusBadge tone="err">Pane engine unavailable</StatusBadge>}
-      actions={st ? <Button onClick={resetAll} disabled={busy}>Reset tmux to defaults</Button> : undefined}>
+      >
       <SettingRow
         label="tmux binary"
         hint={<>
@@ -3516,10 +3531,14 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
         actions={<Button onClick={onGoTerminal}>Open Terminal settings</Button>}
       />
 
-      {/* The one binding everybody changes, as a choice rather than as three
-          lines of tmux to remember: `set -g prefix` alone leaves C-b working,
-          and without `send-prefix` the new key cannot be typed through to a
-          program inside the pane. The generator writes all three. */}
+      {saidHere("engine")}
+    </SettingsCard>
+
+    {/* The one binding everybody changes, as a choice rather than as three
+        lines of tmux to remember: `set -g prefix` alone leaves C-b working,
+        and without `send-prefix` the new key cannot be typed through to a
+        program inside the pane. The generator writes all three. */}
+    <SettingsCard title="Prefix key" icon={<KeyboardIcon size={ICON.sm} />}>
       <SettingRow
         label="Prefix key"
         hint={<>The chord that starts every tmux command in these panes — the engine's own, not your tmux's. tmux's default is <span className="t-mono text-[11px]">C-b</span>; pick another if that is taken by something you use. "Custom" takes tmux's spelling: <span className="t-mono text-[11px]">C-a</span>, <span className="t-mono text-[11px]">M-Space</span>, <span className="t-mono text-[11px]">F5</span>. Saving hands it to the running engine, so it applies to the panes already open — no restart.</>}
@@ -3539,10 +3558,11 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
           </SettingsForm>
         ) : undefined}
       />
-      {saidHere("engine")}
+      {saidHere("prefix")}
     </SettingsCard>
 
-    <SettingsCard title="Engine config"
+    <SettingsCard title="Engine config" icon={<SlidersIcon size={ICON.sm} />}
+      actions={st ? <Button onClick={resetAll} disabled={busy}>Reset tmux to defaults</Button> : undefined}
       desc="Extra config lines for the engine's own server, validated by tmux before they apply. A rejected config leaves the engine off and chat unaffected, and Reset brings it back.">
       <SettingRow
         label="Mode"
@@ -3571,7 +3591,8 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
       {saidHere("config")}
     </SettingsCard>
 
-    <SettingsCard title="Restore after reboot">
+    <SettingsCard title="Restore after reboot" icon={<PanesIcon size={ICON.sm} />}
+      status={st ? <StatusBadge tone={restore ? "ok" : "off"}>{restore ? "On" : "Off"}</StatusBadge> : undefined}>
       <SettingRow
         label="Restore the layout"
         role="switch" ariaChecked={restore}
@@ -4343,13 +4364,15 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   )}
                   {ql && show("terminal") && <PageMatchHeading id="terminal" onOpen={() => { setPane("terminal" as Pane); setQ(""); }} />}
                   {show("terminal") && (<>
+                  <TerminalRunsOn open={open} />
+                  <LaunchPermissionsCard open={open} />
                   {/* THREE groups, and it was one. Eleven rows in a single
                       unnamed box is a page you have to read end to end to find
                       out whether the thing you came for is on it — the renderer
                       and the word separators are not the same subject and were
                       drawn as though they were. Named groups turn "read the
                       page" into "read three headings". */}
-                  <SettingsCard title="How it draws"
+                  <SettingsCard title="How it draws" icon={<SlidersIcon size={ICON.sm} />}
                     desc="The renderer, the face, and the size of a cell.">
                     {/* GPU (WebGL) is fastest but blanks white on some Linux
                         GPU/compositor stacks; Canvas is the same drawing minus
@@ -4450,7 +4473,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       options={CURSORS} />
                   </SettingsCard>
 
-                  <SettingsCard title="Mouse and clipboard"
+                  <SettingsCard title="Mouse and clipboard" icon={<TerminalIcon size={ICON.sm} />}
                     desc="What pointing at a pane does, and what a selection does.">
                     {/* Off by default: focus that moves on its own is the one
                         terminal habit people either keep for life or cannot
@@ -4481,14 +4504,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       hint="Right-click pastes the clipboard into the shell instead of opening the menu. Ctrl+right-click still opens it." />
                   </SettingsCard>
 
-                  <SettingsCard title="Bench note"
-                    desc="The note tab of the floating bench.">
-                    <Choice<NoteEditor> settingId="terminal.noteEditor" label="Note editor" value={noteEd} modified={noteEd !== "builtin"}
-                      hint="Neovim opens the same note file in a terminal on the bench. Without nvim installed the built-in editor is used."
-                      options={NOTE_EDITORS} onPick={(v) => { setting("terminal.noteEditor").set(v); setNoteEd(v); }} />
-                  </SettingsCard>
-
-                  <SettingsCard title="Tab groups"
+                  <SettingsCard title="Tab groups" icon={<ColumnsIcon size={ICON.sm} />}
                     desc="With tmux, the tabs are grouped by the project each window is working in. The group you are in is open; the others fold into a chip that still shows what their agents are doing.">
                     <Toggle on={groupsOn} modified={!groupsOn} onClick={() => { const v = !groupsOn; setting("terminal.tabGroups").set(v); setGroupsOn(v); }}
                       settingId="terminal.tabGroups" label="Group tabs by project"
@@ -4512,7 +4528,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       } />
                   </SettingsCard>
 
-                  <SettingsCard title="History and selection"
+                  <SettingsCard title="History and selection" icon={<ClockIcon size={ICON.sm} />}
                     desc="How far back a shell remembers, and what a double-click takes.">
                     {/* Sizes rather than a number box: the cost is memory PER
                         SHELL and this app holds several open at once, so the
@@ -4548,12 +4564,18 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                           style={{ ...INPUT_STYLE, fontFamily: "ui-monospace, monospace" }} />
                       } />
                   </SettingsCard>
-                  <TerminalRunsOn open={open} />
-                  <LaunchPermissionsCard open={open} />
+
+                  <SettingsCard title="Bench note" icon={<EditIcon size={ICON.sm} />}
+                    desc="The note tab of the floating bench.">
+                    <Choice<NoteEditor> settingId="terminal.noteEditor" label="Note editor" value={noteEd} modified={noteEd !== "builtin"}
+                      hint="Neovim opens the same note file in a terminal on the bench. Without nvim installed the built-in editor is used."
+                      options={NOTE_EDITORS} onPick={(v) => { setting("terminal.noteEditor").set(v); setNoteEd(v); }} />
+                  </SettingsCard>
                   </>)}
                   {ql && show("diff") && <PageMatchHeading id="diff" onOpen={() => { setPane("diff" as Pane); setQ(""); }} />}
                   {show("diff") && (
-                  <SettingsCard title="How a diff opens"
+                  <WithPreview slot={<PreviewSlot id="diff" title="The real Diff view" />}>
+                  <SettingsCard title="How a diff opens" icon={<DiffIcon size={ICON.sm} />}
                     desc="The view you land on, and what happens to a long line.">
                     {/* Defaults, not the live state: the toggle in each panel
                         still wins while you are looking at that diff. Changing
@@ -4580,11 +4602,12 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                           ...THEMES.map((t) => ({ value: t.id, label: t.label, hint: t.dark ? "Dark" : "Light" })),
                         ]} /></span>} />
                   </SettingsCard>
+                  </WithPreview>
                   )}
                   {ql && show("tasks") && <PageMatchHeading id="tasks" onOpen={() => { setPane("tasks" as Pane); setQ(""); }} />}
                   {show("tasks") && (
                   <>
-                  <SettingsCard title="Opens on" desc="Where the Tasks view starts.">
+                  <SettingsCard title="Opens on" icon={<ChecklistIcon size={ICON.sm} />} desc="Where the Tasks view starts.">
                     {/* There was no setting here before and no default either:
                         the tab was component state initialised to "all", so
                         every visit started over — on the one view that does not
@@ -4600,7 +4623,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                           ...TASK_SOURCES.map((s) => ({ value: s.id, label: s.label })),
                         ]} /></span>} />
                   </SettingsCard>
-                  <SettingsCard title="Task sources"
+                  <SettingsCard title="Task sources" icon={<ColumnsIcon size={ICON.sm} />}
                     desc="Which sources the bar offers, and in what order. One has to stay on, and a source you have not set up is left off by itself — until none is set up, when all of them show, because the bar is then the only place to find them. Connect them under Tools & services."
                     actions={<Button onClick={() => { resetTaskSourceOrder(); setSourceTick((n) => n + 1); }}>Reset order</Button>}>
                     {/* Order is the row's own, and the arrows move a source
@@ -4752,7 +4775,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
 
                   {ql && show("browser") && <PageMatchHeading id="browser" onOpen={() => { setPane("browser" as Pane); setQ(""); }} />}
 
-                  {show("browser") && <><BrowserPane /><CookieImport /></>}
+                  {show("browser") && <WithPreview slot={<PreviewSlot id="browser" title="New tab" />}><BrowserPane /><CookieImport /></WithPreview>}
 
                   {ql && show("rail") && <PageMatchHeading id="rail" onOpen={() => { setPane("rail" as Pane); setQ(""); }} />}
 

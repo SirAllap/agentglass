@@ -232,7 +232,7 @@ const appearance: SettingDef[] = [
     capture: captureTheme, restore: restoreTheme,
   }),
   defineSetting({
-    id: "appearance.accent", page: "appearance", section: "Theme", label: "Accent", level: 2, default: "",
+    id: "appearance.accent", page: "appearance", section: "Accent", label: "Accent", level: 2, default: "",
     read: () => currentAccent(),
     validate: oneOf(ACCENT_IDS),
     // The pref is stored, then the theme is laid again so the overlay (or its
