@@ -47,6 +47,9 @@
   --prio-high-ink: color-mix(in srgb, var(--prio-high) 50%, var(--text));
   --prio-normal-ink: color-mix(in srgb, var(--prio-normal) 62%, var(--text));
   --prio-low-ink: color-mix(in srgb, var(--prio-low) 62%, var(--text));
+  /* A merged pull request: indigo, apart from the blue the app uses for actions. The ink is the form text uses, pulled toward the theme's own text colour like the others. */
+  --merged: #8b8fe8;
+  --merged-ink: color-mix(in srgb, var(--merged) 70%, var(--text));
   /* Somebody is looking at this from their phone.
      Its own colour on purpose, and not one of the four above: those are states
      of the work — good, careful, broken, worth reading — and a second person

@@ -838,8 +838,8 @@ describe("the repository on the board, and results as cards", () => {
     });
     expect(html).toContain('data-results');
     expect((html.match(/data-pr="/g) ?? []).length).toBe(3);
-    expect(html).toContain("Merged.");
-    expect(html).toContain("Closed without merging.");
+    expect(html).toContain('data-finished="merged"');
+    expect(html).toContain('data-finished="closed"');
     expect(html).not.toContain("data-lane=");
     expect(html).toContain("Back to the board");
   });

@@ -8139,7 +8139,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       return json(await personBoard(url.searchParams.get("root") || "", url.searchParams.get("login") || "", url.searchParams.get("force") === "1"));
     }
     if (pathname === "/prs/row-details") {
-      return json(await prRowDetails(url.searchParams.get("root") || "", url.searchParams.get("numbers") || ""));
+      return json(await prRowDetails(url.searchParams.get("root") || "", url.searchParams.get("numbers") || "", url.searchParams.get("finished") || ""));
     }
     if (pathname === "/prs/local-head") {
       return json({ ok: true, local: await localHead(

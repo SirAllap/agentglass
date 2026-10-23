@@ -161,6 +161,6 @@ describe("a conflict GitHub has not computed yet", () => {
   it("a card asks only while it is in the viewport", () => {
     const src = readFileSync(new URL("../src/components/TriageBoard.tsx", import.meta.url), "utf8");
     expect(src).toContain("new IntersectionObserver(");
-    expect(src).toContain("if (root && onScreen) askConflict(root, p);");
+    expect(src).toContain("if (root && onScreen && !fin) askConflict(root, p);");
   });
 });

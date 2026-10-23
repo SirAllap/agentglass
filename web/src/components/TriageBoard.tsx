@@ -45,6 +45,7 @@ import { onKnownBlock, withKnownBlock } from "../lib/prKnownBlock.ts";
 import { failureHint, jobIdOf } from "../lib/prFailureHint.ts";
 import { failureKey, loadCached, summaryOf, useFailureStore } from "../lib/checkFailuresStore.ts";
 import { stamp } from "../lib/whenStamp.ts";
+import { checksLine, closedHeader, finishedKind, reviewsTail, sizeLine } from "../../../shared/prClosed.ts";
 import { onSeenChange, readSeen } from "../lib/prNew.ts";
 import { unreadOf, type Unread } from "../lib/prUnread.ts";
 import { UnreadBadge } from "./UnreadBadge.tsx";
@@ -1201,8 +1202,12 @@ function cardVerdict(p: PrSummary): {
      by a search says so instead of "No review asked for yet". */
   if (p.state !== "OPEN") {
     const merged = p.state === "MERGED";
-    return { tint: merged ? "var(--primary)" : "var(--text3)", glyph: <DoneIcon size={ICON.xs} />,
-      line: merged ? "Merged" : "Closed without merging", aria: merged ? "Merged" : "Closed without merging" };
+    /* Who, when, how and for how long once the details are in; just the word
+       until then. Never a skeleton: nothing about a finished pull request is
+       still being worked out. */
+    const line = closedHeader(p, stamp);
+    return { tint: merged ? "var(--merged)" : "var(--text3)", glyph: merged ? <DoneIcon size={ICON.xs} /> : <CircleIcon size={ICON.xs} />,
+      line, aria: line };
   }
   /* A draft is waiting on nobody, and said so nowhere — it was a label lost
      among the others. */
@@ -1414,8 +1419,9 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
 }) {
   /* Asked for the first time by whoever draws the card, which is the thing that
      knows it is on screen. Null until the answer lands. */
-  const behind = root ? behindOf(root, p.number) : null;
-  const asking = root ? askingBehind(root, p.number) : false;
+  const fin = finishedKind(p);
+  const behind = root && !fin ? behindOf(root, p.number) : null;
+  const asking = root && !fin ? askingBehind(root, p.number) : false;
   /* GitHub answers UNKNOWN for a branch it has not looked at lately. The card
      asks git (lib/prConflictStore.ts) and says so meanwhile, rather than file
      itself under "ready to land" over a silence. */
@@ -1428,8 +1434,8 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
     io.observe(el);
     return () => io.disconnect();
   }, []);
-  useEffect(() => { if (root && onScreen) askConflict(root, p); }, [root, onScreen, p.number, p.mergeable, p.headSha]);
-  const checkingMerge = root ? checkingConflict(root, p) : false;
+  useEffect(() => { if (root && onScreen && !fin) askConflict(root, p); }, [root, onScreen, fin, p.number, p.mergeable, p.headSha]);
+  const checkingMerge = root && !fin ? checkingConflict(root, p) : false;
   /** Said on the number itself for a moment: a clipboard write is invisible. */
   const [copied, setCopied] = useState<number | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
@@ -1452,7 +1458,7 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
     : c.verdict === "green" ? "var(--success)" : "var(--text4)";
   /* What the standing zone says, and how far the bar is filled: see prCardZones. */
   const st = standing(c);
-  const reading = stillReading(p);
+  const reading = !fin && stillReading(p);
   const { pre, rest } = splitTitle(p.title);
   const ev = eventLine(p.filed.reason, p.updatedAt);
   const verdict = cardVerdict(p);
@@ -1538,7 +1544,7 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
           ) : (
             /* `title`: the line gives way to the faces, then to the open-threads
                pill, and a name cut to "tl…" is the one thing the card is for. */
-            <span className="truncate min-w-0" title={verdict.line} style={{ color: "var(--text)", fontWeight: 500 }}>
+            <span className="truncate min-w-0" title={verdict.line} style={{ color: fin === "merged" ? "var(--merged-ink)" : "var(--text)", fontWeight: 500 }}>
               {verdict.line}
             </span>
           )}
@@ -1546,11 +1552,11 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
           {/* Everyone the band waits on or has heard from, one face each with
               its state, on the right: the line keeps the room it truncates in,
               and the open-threads pill and the arrow after them stay put. */}
-          <CardFaces r={reviewers} />
+          {!fin && <CardFaces r={reviewers} />}
           {/* Open line threads: the number that says whether a "changes
               requested" is one nit or twelve, and whether an approval still
               has something under it. Only when there are any. */}
-          {(p.openThreads?.open ?? 0) > 0 && (
+          {!fin && (p.openThreads?.open ?? 0) > 0 && (
             <span className="shrink-0 inline-flex items-center rounded-full px-1.5 tabular-nums"
               title={`${p.openThreads!.open}${p.openThreads!.more ? "+" : ""} review thread${p.openThreads!.open === 1 ? "" : "s"} still unresolved`}
               style={{ fontSize: 9.5, lineHeight: "14px", color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 30%, transparent)" }}>
@@ -1681,6 +1687,7 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
           * The label sits on this line, after the base, and wraps with it: a
           * row of its own cost 22px on every card that has one.
           */}
+        {fin ? <FinishedBody p={p} /> : (
         <div className="agx-prc-stand grid gap-1">
           <div className="flex items-center gap-x-2 gap-y-1 flex-wrap min-w-0" style={{ fontSize: 10.5, color: "var(--text3)", minHeight: 20 }}>
             {reading
@@ -1776,11 +1783,13 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
             </div>
           )}
         </div>
+        )}
 
         {/* WHAT HAPPENED LAST: the sentence that put it in this lane. Without it a
             board is a list whose order you have to re-derive every morning.
             Two lines, then the tooltip; a date beside it for "waiting since
             when", which is one question with the sentence. */}
+        {(!fin || (p.filed.reason !== "Merged." && p.filed.reason !== "Closed without merging.")) && (
         <div className="agx-prc-event min-w-0"
           style={{ fontSize: 10.5, lineHeight: 1.5, color: ev.empty || ev.quiet ? "var(--text3)" : "var(--text2)" }}>
           <div className="flex gap-2 items-baseline min-w-0">
@@ -1811,7 +1820,74 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
               "8d" look exactly like ten reading "1h". */}
           {ev.quiet && <div className="tabular-nums" style={{ fontSize: 10, marginTop: 2, paddingLeft: 18, color: "var(--text3)" }}>{ev.quiet}</div>}
         </div>
+        )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The body of a merged or closed card: everything final, nothing loading.
+ *
+ * Branch and base, the final checks, the size, who reviewed and how much was
+ * said, and for a pull request closed without merging the last thing a person
+ * wrote. The linked card and its status chip are on the identity line above, as
+ * on every card. A row whose details have not arrived draws the branch line only:
+ * leaving a line out is honest, a placeholder for it is not.
+ */
+function FinishedBody({ p }: { p: PrSummary }) {
+  const f = p.closed;
+  const chip = { height: CHIP_H + 2, background: "var(--surface-inset)", border: LINE, color: "var(--text2)" } as const;
+  const checks = f ? checksLine(p, f) : null;
+  const tone = (t: "ok" | "ko" | "dim") => (t === "ok" ? "var(--success-ink)" : t === "ko" ? "var(--error-ink)" : "var(--text3)");
+  return (
+    <div className="agx-prc-stand grid gap-1.5" data-finished={p.state === "MERGED" ? "merged" : "closed"} style={{ fontSize: 10.5, color: "var(--text3)" }}>
+      <div className="flex items-center gap-x-2 gap-y-1 flex-wrap min-w-0" style={{ minHeight: 20 }}>
+        {/* The head branch may be long and is the one that gives way; the base never is. */}
+        <span className="truncate min-w-0" style={{ maxWidth: "55%" }} title={p.headRefName}>{p.headRefName}</span>
+        <span aria-hidden style={{ color: "var(--text4)" }}>→</span>
+        <span className="shrink-0 whitespace-nowrap" title={`${p.headRefName} → ${p.baseRefName}`}
+          style={{ color: isTrunkBranch(p.baseRefName) ? "var(--text3)" : "var(--warning)" }}>{p.baseRefName}</span>
+        <span className="flex-1 min-w-0" />
+        {p.labels.slice(0, 3).map((l) => (
+          <span key={l.name} className="truncate inline-flex items-center rounded-md px-1.5" title={l.name} style={{ ...chip, maxWidth: 120 }}>{l.name}</span>
+        ))}
+        {p.labels.length > 3 && <span className="tabular-nums shrink-0" title={p.labels.map((l) => l.name).join(", ")}>+{p.labels.length - 3}</span>}
+      </div>
+      {f && checks && (
+        <>
+          <div aria-hidden style={{ height: 1, background: "color-mix(in srgb, var(--text) 10%, transparent)" }} />
+          <div className="flex items-center gap-x-2 gap-y-1 flex-wrap min-w-0">
+            <span className="font-semibold inline-flex items-center gap-1" style={{ color: tone(checks.tone) }}
+              title={f.checks.failing.length ? f.checks.failing.join(", ") : undefined}>
+              {checks.tone === "ok" ? <DoneIcon size={ICON.xs} /> : checks.tone === "ko" ? <CrossIcon size={ICON.xs} /> : null}{checks.text}
+            </span>
+            {checks.detail && <span className="truncate min-w-0" title={checks.detail}>{"\u00B7 "}{checks.detail}</span>}
+            <span className="flex-1 min-w-0" />
+            <span className="shrink-0 whitespace-nowrap tabular-nums" title={sizeLine(p, f)}>
+              <span style={{ color: "var(--text)" }}>+{p.additions}</span> <span>{"\u2212"}{p.deletions}</span> {"\u00B7 "}
+              {p.changedFiles} {p.changedFiles === 1 ? "file" : "files"} {"\u00B7 "}{f.commits} {f.commits === 1 ? "commit" : "commits"}
+            </span>
+          </div>
+          <div className="flex items-center gap-x-2 gap-y-1 flex-wrap min-w-0">
+            <span>Reviews</span>
+            {f.reviews.approved.map((who) => (
+              <span key={`a${who}`} className="truncate inline-flex items-center gap-1 rounded-md px-1.5" style={{ ...chip, maxWidth: 120, color: "var(--success-ink)" }} title={`${who} approved`}><DoneIcon size={ICON.xs} />{who}</span>
+            ))}
+            {f.reviews.changes.map((who) => (
+              <span key={`c${who}`} className="truncate inline-flex items-center gap-1 rounded-md px-1.5" style={{ ...chip, maxWidth: 120, color: "var(--error-ink)" }} title={`${who} asked for changes`}><CrossIcon size={ICON.xs} />{who}</span>
+            ))}
+            {!f.reviews.approved.length && !f.reviews.changes.length && <span>none decided</span>}
+            <span className="tabular-nums">{"\u00B7 "}{reviewsTail(f)}</span>
+          </div>
+          {p.state === "CLOSED" && f.why && (
+            <div className="flex items-baseline gap-x-2 min-w-0">
+              <span className="shrink-0">Why</span>
+              <span className="min-w-0" title={f.why} style={{ display: "-webkit-box", WebkitLineClamp: 1, WebkitBoxOrient: "vertical", overflow: "hidden", color: "var(--text2)" }}>{"\u201C"}{f.why}{"\u201D"}</span>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }

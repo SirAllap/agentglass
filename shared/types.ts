@@ -3542,6 +3542,32 @@ export interface PrSummary {
    * is on screen.
    */
   talk?: PrTalk[];
+  /**
+   * What a finished pull request ended as. Only on a merged or closed row, and
+   * only once the details have been read: a finished pull request never changes,
+   * so the server keeps this for good (see prClosedStore.ts) and the card draws
+   * it without a loading state.
+   */
+  closed?: PrClosedFacts;
+}
+
+/** The final facts of a merged or closed pull request. See `closed` on PrSummary. */
+export interface PrClosedFacts {
+  /** When it was merged or closed, ISO. */
+  at: string;
+  /** When it was opened, ISO: the card says how long it stayed open. */
+  openedAt: string;
+  /** Who merged it, or who closed it. Null when GitHub does not say. */
+  by: string | null;
+  /** How it landed. Null when it was not merged or the commit is gone. */
+  method: "squash" | "merge" | "rebase" | null;
+  /** Final check counts at the head commit, and up to two red names. */
+  checks: { total: number; success: number; failure: number; skipped: number; failing: string[] };
+  commits: number;
+  /** Everyone's last verdict, the number of review rounds and of comments. */
+  reviews: { approved: string[]; changes: string[]; rounds: number; comments: number };
+  /** The last human comment, one line, for a pull request closed without merging. */
+  why: string | null;
 }
 
 /** Why the merge button is grey. A disabled control that can't say why is the

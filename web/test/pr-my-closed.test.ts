@@ -78,9 +78,10 @@ describe("the two sections", () => {
     const merged = html.slice(0, html.indexOf('data-section="unmerged"'));
     expect((merged.match(/data-pr="/g) ?? []).length).toBe(2);
     expect((unmerged.match(/data-pr="/g) ?? []).length).toBe(1);
-    expect(merged).toContain("Merged.");
-    expect(merged).not.toContain("Closed without merging.");
-    expect(unmerged).toContain("Closed without merging.");
+    /* The header and the finished body say the state; the old "Merged." event line is gone. */
+    expect(merged).toContain('data-finished="merged"');
+    expect(merged).not.toContain('data-finished="closed"');
+    expect(unmerged).toContain('data-finished="closed"');
     expect((html.match(/Load more/g) ?? []).length).toBe(1);
     expect(html.indexOf("Load more")).toBeLessThan(html.indexOf('data-section="unmerged"'));
   });

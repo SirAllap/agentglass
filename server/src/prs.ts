@@ -27,6 +27,8 @@ import { gitAsync, safeAbs, repoRootOf } from "./git.ts";
 import { makeViewTempDir } from "./viewtemp.ts";
 import { inScopeReal, staysIn } from "./config.ts";
 import { recipePromptText } from "./reviewPrompts.ts";
+import { readClosed, writeClosed, type StoredClosed } from "./prClosedStore.ts";
+import { SEL_CLOSED, SEL_FAILING_NAMES, closedFactsFromNode, failingNames } from "./prClosedFacts.ts";
 import { boardHolding, knownStatuses } from "./clickupviews.ts";
 import { boardHolding as jiraBoardHolding } from "./jiraviews.ts";
 import { heldCard as heldJiraCard, readJiraRef, resolveJiraCards, siteKeys } from "./jiraprcards.ts";
@@ -2122,33 +2124,95 @@ export function carryOver(old: PrSummary | undefined, next: PrSummary): PrSummar
 const ROW_DETAIL_MAX = 24;
 const ROW_DETAIL_TTL_MS = 60_000;
 const rowDetailCache = new Map<string, { at: number; row: Partial<PrSummary> }>();
-export async function prRowDetails(rootIn: unknown, numbersIn: unknown): Promise<{ ok: boolean; rows: Record<number, Partial<PrSummary>>; error?: string }> {
-  const repo = await repoIdFor(rootIn);
+
+/** What the row-details read talks to; replaced in the test that counts requests. */
+export interface RowDetailsIo {
+  repo: (root: unknown) => Promise<PrRepoId | null>;
+  graphql: (query: string) => Promise<{ data?: { repository?: Record<string, any> } } | null>;
+  me: () => Promise<string>;
+}
+const liveRowIo: RowDetailsIo = {
+  repo: (root) => repoIdFor(root),
+  graphql: (query) => ghGraphql<{ data?: { repository?: Record<string, any> } }>(query, {}),
+  me: async () => (await ghCapability().catch(() => null))?.login || "",
+};
+
+/**
+ * `finishedIn` names the numbers the caller knows are merged or closed. For
+ * those the answer comes from the store (prClosedStore.ts) when it holds them,
+ * which is no GitHub request at all; the misses are read in the same one batched
+ * query as the open ones, with the extra fields a finished card shows
+ * (`SEL_CLOSED`), plus one more small query only when some of them ended red and
+ * their check names are wanted. What is read is stored for good. The state is
+ * taken from GitHub's answer, not from the caller: a row claimed finished that
+ * is open comes back as an open one and is not stored.
+ */
+export async function prRowDetails(rootIn: unknown, numbersIn: unknown, finishedIn?: unknown, io: RowDetailsIo = liveRowIo): Promise<{ ok: boolean; rows: Record<number, Partial<PrSummary>>; error?: string }> {
+  const repo = await io.repo(rootIn);
   if (!repo) return { ok: false, rows: {}, error: "no GitHub remote on this repository" };
-  const asked = (Array.isArray(numbersIn) ? numbersIn : String(numbersIn ?? "").split(","))
+  const ints = (v: unknown) => (Array.isArray(v) ? v : String(v ?? "").split(","))
     .map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0);
-  const numbers = [...new Set(asked)].slice(0, ROW_DETAIL_MAX);
+  const numbers = [...new Set(ints(numbersIn))].slice(0, ROW_DETAIL_MAX);
+  const finished = new Set(ints(finishedIn).filter((n) => numbers.includes(n)));
   const rows: Record<number, Partial<PrSummary>> = {};
   const misses: number[] = [];
+  const stored = readClosed(repo.key, [...finished]);
+  const fromStore: { n: number; s: StoredClosed }[] = [];
   for (const n of numbers) {
-    const hit = rowDetailCache.get(`${repo.key}\u0000${n}`);
+    const keep = stored.get(n);
+    if (keep) { fromStore.push({ n, s: keep }); continue; }
+    const hit = finished.has(n) ? undefined : rowDetailCache.get(`${repo.key}\u0000${n}`);
     if (hit && Date.now() - hit.at < ROW_DETAIL_TTL_MS) rows[n] = hit.row; else misses.push(n);
   }
-  if (!misses.length) return { ok: true, rows };
   const [owner, name] = repo.nameWithOwner.split("/");
-  // Integers validated above, owner/name from a parsed remote: nothing a caller controls is interpolated.
-  const body = misses.map((n) => `p${n}: pullRequest(number: ${n}) { ${SEL_ROW_CHECKS} }`).join("\n");
-  const res = await ghGraphql<{ data?: { repository?: Record<string, any> } }>(`query { repository(owner: "${owner}", name: "${name}") { ${body} } }`, {});
-  const repoData = res?.data?.repository;
-  if (!repoData) return { ok: false, rows, error: "GitHub did not answer" };
-  const nodes = misses.map((n) => repoData[`p${n}`]).filter((n) => n && typeof n.number === "number");
-  await resolveJiraCards(nodes);
-  const me = (await ghCapability().catch(() => null))?.login || "";
+  let nodes: any[] = [];
+  if (misses.length) {
+    // Integers validated above, owner/name from a parsed remote: nothing a caller controls is interpolated.
+    const body = misses.map((n) => `p${n}: pullRequest(number: ${n}) { ${SEL_ROW_CHECKS}${finished.has(n) ? SEL_CLOSED : ""} }`).join("\n");
+    const res = await io.graphql(`query { repository(owner: "${owner}", name: "${name}") { ${body} } }`);
+    const repoData = res?.data?.repository;
+    if (!repoData) {
+      for (const { n, s } of fromStore) rows[n] = { ...s.row };
+      return { ok: false, rows, error: "GitHub did not answer" };
+    }
+    nodes = misses.map((n) => repoData[`p${n}`]).filter((n) => n && typeof n.number === "number");
+  }
+  /* The tracker card is the one thing on a finished row that can still change,
+     so it is looked up again on every answer, stored or not. */
+  await resolveJiraCards([...nodes, ...fromStore.map(({ s }) => ({ headRefName: s.head, title: s.title }))]);
+  for (const { n, s } of fromStore) {
+    const card = cardFor(s.head, s.title);
+    rows[n] = card ? { ...s.row, card } : { ...s.row };
+  }
+  if (!nodes.length) return { ok: true, rows };
+  const me = await io.me();
   const done = completeRows(nodes.map((n) => ({ number: n.number }) as PrSummary), nodes, me);
+  /* Check names only for the finished ones that ended red: one small query for all of them. */
+  const nodeBy = new Map<number, any>(nodes.map((x) => [x.number, x]));
+  const isFinished = (n: number) => finished.has(n) && (nodeBy.get(n)?.state === "MERGED" || nodeBy.get(n)?.state === "CLOSED");
+  const red = done.filter((r) => r.checksLoaded === true && r.checks.failure > 0 && isFinished(r.number)).map((r) => r.number);
+  const names = new Map<number, string[]>();
+  if (red.length) {
+    const body = red.map((n) => `p${n}: pullRequest(number: ${n}) { ${SEL_FAILING_NAMES} }`).join("\n");
+    const res = await io.graphql(`query { repository(owner: "${owner}", name: "${name}") { ${body} } }`);
+    for (const n of red) names.set(n, failingNames(res?.data?.repository?.[`p${n}`]));
+  }
   for (const r of done) {
     if (r.checksLoaded !== true) continue;
+    const node = nodeBy.get(r.number);
+    const facts = isFinished(r.number)
+      && Array.isArray(node.reviews?.nodes) && node.commitTotal && node.issueComments && node.threadSizes
+      ? closedFactsFromNode(node, r.checks, names.get(r.number) ?? [], isBotLogin) : null;
+    if (facts) {
+      const row = { ...r, closed: facts } as PrSummary;
+      rows[r.number] = row;
+      const { card: _card, ...keep } = row;
+      writeClosed(repo.key, r.number, typeof node.commits?.nodes?.[0]?.commit?.oid === "string" ? node.commits.nodes[0].commit.oid : "",
+        { row: keep, head: String(node.headRefName ?? ""), title: String(node.title ?? "") });
+      continue;
+    }
     rows[r.number] = r;
-    rowDetailCache.set(`${repo.key}\u0000${r.number}`, { at: Date.now(), row: r });
+    if (node?.state !== "MERGED" && node?.state !== "CLOSED") rowDetailCache.set(`${repo.key}\u0000${r.number}`, { at: Date.now(), row: r });
   }
   return { ok: true, rows };
 }
