@@ -6,6 +6,13 @@ import {
 } from "../lib/settingsNav.ts";
 import { ChevronDownIcon, GroupIcon } from "./settingsNavIcons.tsx";
 
+/** Focus the first control of the page on screen (the page itself when it has none). */
+function skipToPage() {
+  const main = document.querySelector<HTMLElement>(".agx-settings-main");
+  const first = main?.querySelector<HTMLElement>("button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, [tabindex]:not([tabindex='-1'])");
+  (first ?? main)?.focus();
+}
+
 const LEGEND_WORD = { on: "on", needs: "needs you", off: "off", err: "problem" } as const;
 
 type Page = NavPageIn & { icon: (p: { size?: number }) => ReactElement };
@@ -91,6 +98,10 @@ export function SettingsNav({ pages, marks, current, onGo, onClose, pinned, sear
         <span>Back to app</span>
       </button>
       <div className="agx-sn-top shrink-0">{search}</div>
+      {/* Twenty-eight nav buttons sit between the search box and the page: measured, 27 to 40 Tab presses
+          before the first control of any page. The first stop after the search is this, and it only shows
+          while it has focus. */}
+      <button type="button" className="agx-skip" onClick={skipToPage}>Skip to the page</button>
 
       <div className="agx-sn-scroll min-h-0 flex-1 agx-scroll overflow-y-auto overflow-x-hidden">
         {pinned && (

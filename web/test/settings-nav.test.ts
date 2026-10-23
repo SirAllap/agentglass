@@ -344,3 +344,14 @@ describe("legendStates", () => {
     expect(legendStates({ clickup: { state: "err", title: "Not reachable" } })).toEqual(["on", "needs", "off", "err"]);
   });
 });
+
+const navSrc = readFileSync(new URL("../src/components/SettingsNav.tsx", import.meta.url), "utf8");
+const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
+describe("the way past the nav for a keyboard", () => {
+  test("a skip button is the first stop after the search box, before any group", () => {
+    const skip = navSrc.indexOf('className="agx-skip"');
+    expect(skip).toBeGreaterThan(navSrc.indexOf('className="agx-sn-top'));
+    expect(skip).toBeLessThan(navSrc.indexOf("model.sections.map("));
+    expect(css).toContain(".agx-skip:focus-visible");
+  });
+});

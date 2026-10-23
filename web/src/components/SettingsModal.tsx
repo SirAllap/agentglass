@@ -4591,7 +4591,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                 them was measure; on a page the column is capped at 1120 and sits on the nav side,
                 so the slack is free and the gap is what stops the title reading
                 as an extension of the nav it sits beside. */}
-            <div ref={contentRef} className="agx-settings-main agx-scroll flex-1 min-w-0 overflow-y-auto">
+            <div ref={contentRef} tabIndex={-1} className="agx-settings-main agx-scroll flex-1 min-w-0 overflow-y-auto">
               {/* The header stays while the cards scroll under it. It names the
                   page on screen even while a query is stacking other pages
                   below it: those carry their own heading (PageMatchHeading). */}
