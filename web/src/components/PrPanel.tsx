@@ -322,6 +322,20 @@ function ago(iso: string): string {
   return `${Math.round(s / 86400)}d`;
 }
 
+/** The full moment, in the reader's own clock: "2026-10-10 14:32". `ago` says how long, this says when. */
+function fullStamp(iso: string): string {
+  const d = new Date(iso);
+  if (!iso || Number.isNaN(d.getTime())) return "";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/** "4d · 2026-10-10 14:32": the short age and, beside it, the whole timestamp. */
+function agoFull(iso: string): string {
+  const a = ago(iso), t = fullStamp(iso);
+  return a && t ? `${a} · ${t}` : a;
+}
+
 /**
  * Whether a base branch is the repository's trunk.
  *
@@ -5699,7 +5713,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                                       <Avatar key={a} login={a} size={14} />
                                     ))}
                                     <span className="truncate">{commitAuthorLine(c)}</span>
-                                    {c.committedAt && <span>· {ago(c.committedAt)}</span>}
+                                    {c.committedAt && <span>· {agoFull(c.committedAt)}</span>}
                                   </span>
                                 </span>
                                 {c.isMerge && <Chip text="merge" tint="var(--text3)" title="Trunk catch-up, not work to review" />}
@@ -6545,8 +6559,8 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
               <span className="flex items-center gap-1.5 text-[11px] mt-1.5" style={{ color: "var(--text3)" }}>
                 {d.state === "MERGED" && d.mergedBy && <Avatar login={d.mergedBy} size={ICON.sm} />}
                 {d.state === "MERGED"
-                  ? `${d.mergedBy ? `${d.mergedBy} merged ` : "Merged "}into ${d.baseRefName}${d.mergedAt ? ` ${ago(d.mergedAt)}` : ""}`
-                  : `This branch was never merged into ${d.baseRefName}${d.closedAt ? ` · closed ${ago(d.closedAt)}` : ""}`}
+                  ? `${d.mergedBy ? `${d.mergedBy} merged ` : "Merged "}into ${d.baseRefName}${d.mergedAt ? ` ${agoFull(d.mergedAt)}` : ""}`
+                  : `This branch was never merged into ${d.baseRefName}${d.closedAt ? ` · closed ${agoFull(d.closedAt)}` : ""}`}
               </span>
             </span>
           </div>
@@ -11766,7 +11780,7 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline, newSet }: {
           {t.comments.length > 1 && (
             <span className="text-[10px] tabular-nums" style={{ color: "var(--text3)" }}
               title={`Last reply ${ago(last?.createdAt ?? "")}`}>
-              {t.comments.length} replies · {ago(last?.createdAt ?? "")}
+              {t.comments.length} replies · {agoFull(last?.createdAt ?? "")}
             </span>
           )}
           {hot.size > 0 && (
@@ -11844,7 +11858,7 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline, newSet }: {
             )}
             {c.isBot && <Chip text="bot" tint="var(--info)" />}
             <span className="ml-auto flex items-center gap-1.5" style={{ color: "var(--text3)" }}>
-              {ago(c.createdAt)}
+              {agoFull(c.createdAt)}
               {c.url && <GhLink href={c.url} title="Open this comment on GitHub" />}
             </span>
           </div>
@@ -11955,7 +11969,7 @@ function TimelineEvent({ e }: { e: PrEvent }) {
       default: return <Fragment key={i}>{p.text}</Fragment>;
     }
   });
-  const inner = <span>{said} <span style={{ color: "var(--text3)" }}>· {ago(e.at)}</span></span>;
+  const inner = <span>{said} <span style={{ color: "var(--text3)" }}>· {agoFull(e.at)}</span></span>;
   return (
     <div className="agx-tiny">
       {e.actor && <Avatar login={e.actor} size={ICON.md} />}
@@ -11972,7 +11986,7 @@ function CommitsEvent({ commits }: { commits: PrCommit[] }) {
   return (
     <div className="agx-tiny" style={{ alignItems: "flex-start", flexDirection: "column", gap: 2 }}>
       <span className="flex items-center gap-1.5">{first.author && <Avatar login={first.author} size={ICON.md} />}<b>{first.author || "somebody"}</b> added {commits.length} commit{commits.length === 1 ? "" : "s"}
-        {first.committedAt && <span style={{ color: "var(--text3)" }}> · {ago(first.committedAt)}</span>}</span>
+        {first.committedAt && <span style={{ color: "var(--text3)" }}> · {agoFull(first.committedAt)}</span>}</span>
       {commits.map((c) => (
         <span key={c.oid} className="flex gap-2 min-w-0 w-full">
           <code style={{ ...CODE_FONT_STYLE, color: "var(--text3)" }}>{c.short}</code>
@@ -12249,7 +12263,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
               <span><b>{r.author}</b> {badge(r.author, r.isBot)} {r.state === "APPROVED" ? "approved these changes" : r.state === "CHANGES_REQUESTED" ? "requested changes" : "reviewed"} <span style={{ color: "var(--text3)" }}>· {ago(r.submittedAt)}</span></span>
             </div>
             {r.body.trim() && (
-              <Card who={r.author} when={ago(r.submittedAt)} url={r.url}
+              <Card who={r.author} when={agoFull(r.submittedAt)} url={r.url}
                 fresh={newSet.has(anchor)}
                 edited={r.editedAt} assoc={r.association} nodeId={r.nodeId} reactions={r.reactions} onReact={onReact}
                 {...(r.isBot ? {} : acts({ author: r.author, nodeId: r.nodeId, body: r.body, kind: "issue" }))}
@@ -12271,7 +12285,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
         ms: x.ms, key: `c${c.id}`, lane: "human", author: c.author, face: c.author, hot: hotOf([`c${c.id}`]),
         node: <span style={{ color: "var(--text3)" }}><CommentIcon size={ICON.xs} /></span>,
         body: <><span id={anchorId(`c${c.id}`)} />
-          <Card who={c.author} when={ago(c.createdAt)} url={c.url} fresh={newSet.has(`c${c.id}`)} chip={badge(c.author, false)}
+          <Card who={c.author} when={agoFull(c.createdAt)} url={c.url} fresh={newSet.has(`c${c.id}`)} chip={badge(c.author, false)}
             edited={c.editedAt} assoc={c.association} nodeId={c.nodeId} reactions={c.reactions} onReact={onReact}
             {...acts({ author: c.author, nodeId: c.nodeId, body: c.body, kind: "issue" })}><Md body={c.body} /></Card></>,
       });
@@ -12281,7 +12295,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
         ms: x.ms, key: `b${c.id}`, lane: "bot", author: c.author, face: c.author, hot: hotOf([`c${c.id}`]),
         node: <span style={{ color: "var(--info-ink)" }}><AgentIcon size={ICON.xs} /></span>,
         body: (
-          <Card who={c.author} when={ago(c.createdAt)} url={c.url} chip={badge(c.author, true)}
+          <Card who={c.author} when={agoFull(c.createdAt)} url={c.url} chip={badge(c.author, true)}
             nodeId={c.nodeId} reactions={c.reactions} onReact={onReact}>
             {/* Rendered, not dumped. In full these used to be a <pre> of the raw
                 source, so a coverage report arrived as `<!-- Pytest Coverage
