@@ -59,7 +59,7 @@ import { RemoteAccessPane } from "./RemoteAccessPane.tsx";
 import { NOTIFY_KINDS, NOTIFY_CHANNELS, NOTIFY_KIND_LABEL, NOTIFY_CHANNEL_LABEL, type NotifyKind, type NotifyChannel } from "../../../shared/notifyPrefs.ts";
 import { getNotifyPrefs, subscribeNotifyPrefs, saveNotifyPrefs } from "../lib/notifyPrefsStore.ts";
 import { PluginsPane } from "./PluginsPane.tsx";
-import { TerminalIcon, DiffIcon, BrowserIcon, UnderstudyIcon, LanternIcon } from "./workspace/icons.tsx";
+import { TerminalIcon, DiffIcon, BrowserIcon, UnderstudyIcon, LanternIcon, DashIcon } from "./workspace/icons.tsx";
 import {
   SlidersIcon, ThemeIcon, BellIcon, SidebarIcon, KeyboardIcon, BudgetIcon, PulseIcon,
   CommandIcon, ReviewIcon, QuoteIcon, PanesIcon, PlugIcon, ServerIcon, PhoneIcon,
@@ -84,7 +84,7 @@ import { parseRules, setTabGroupsOn, tabGroupRulesText, tabGroupsOn } from "../l
 import { paneActionsMode, setPaneActionsMode, type PaneActionsMode } from "../lib/paneActionsPref.ts";
 import { diffThemePref, setDiffThemePref, diffSplit, diffWrap, setDiffSplit, setDiffWrap, DEFAULT_SPLIT, DEFAULT_WRAP } from "../lib/diffPrefs.ts";
 import {
-  TASK_SOURCES, taskSourceShown,
+  TASK_SOURCES, taskSourceShown, shownTaskSources,
   orderedTaskSources, moveTaskSource, resetTaskSourceOrder, type TaskSourceId,
 } from "../lib/taskSources.ts";
 import { taskLanding, type TaskLanding } from "../lib/taskLanding.ts";
@@ -104,7 +104,7 @@ import {
   sysNotifyMode, setSysNotifyMode, setSysNotifyOn, subscribeSysNotifyMode,
   notifyVoiceId, setNotifyVoice,
   notifyCapability, notifyQuiet, subscribeNotifyQuiet,
-  appNotify, setAppNotify, subscribeAppNotify,
+  appNotify, subscribeAppNotify,
   type SysNotifyMode, type NotifyCapability,
 } from "../lib/sysNotify.ts";
 import { chatEnginePref, setChatEnginePref, type ChatEnginePref } from "../lib/chatEnginePref.ts";
@@ -119,9 +119,9 @@ import { useDialogs } from "./ConfirmDialog.tsx";
 import { bindings, resetBindings, subscribeBindings, isCustomised, LABELS, DEFAULTS, type ActionId,
          chordFor, hasCustomChord, rebindChord, clearChord, resetChords, chordsCustomised, chordFromEvent, chordLabel,
          appChordFor, hasCustomAppChord, rebindAppChord, resetAppChords, appChordsCustomised,
-         APP_CHORD_LABELS, APP_CHORD_DEFAULTS, type AppChordId } from "../lib/keybindings.ts";
+         APP_CHORD_LABELS, APP_CHORD_DEFAULTS, keyRowName, type AppChordId } from "../lib/keybindings.ts";
 import {
-  loadRail, subscribeRail, moveView, resetRail, railIds, railCustomised, SHIPPED_RAIL,
+  loadRail, subscribeRail, moveView, resetRail, railIds, railCustomised, SHIPPED_RAIL, VIEWS, RAIL_PLACES,
   type RailPlace, type ViewId,
 } from "./workspace/views.ts";
 import { AppearancePane } from "./ThemePicker.tsx";
@@ -146,11 +146,14 @@ import { MuteGlyph } from "./TopBarNotes.tsx";
 import { Button, RefreshButton, INPUT, INPUT_STYLE, EDGE, LINE, Segmented } from "./workspace/Chrome.tsx";
 import { LAUNCH_MODES, LAUNCH_MODE_LABEL, isLaunchMode, parseDenyRules, type LaunchMode } from "../../../shared/launchModes.ts";
 import { setLaunchPermissions } from "../lib/launchMode.ts";
-import { SELECT_BOX, SegControl, EmptyState, Field, LinkButton, ProblemNote, SaveChip, SettingsCard, SettingsForm, StatusBadge, helpIdFor, type StatusTone } from "./SettingsKit.tsx";
+import { SELECT_BOX, SegControl, EmptyState, Field, LinkButton, ProblemNote, SaveBar, SaveChip, SettingsCard, SettingsForm, StatusBadge, helpIdFor, type StatusTone } from "./SettingsKit.tsx";
 import { PreviewCard, WithPreview } from "./settings/PreviewCard.tsx";
 import { WindowPreview, SidebarPreview, DiffPreview, LanternPreview, BrowserPreview, LiveTabs, type LiveView } from "./settings/previews/index.ts";
 import { railItems } from "./settings/previews/MiniApp.tsx";
 import { restoredNote } from "../lib/restoredNote.ts";
+import { cardIdIn } from "../../../shared/cardRef.ts";
+import { pageChips, setPageFact, usePageFacts } from "../lib/pageFacts.ts";
+import { COUNTED_VIEWS, railBadgeOn, railBadgesCustomised, railBadgesKey, resetRailBadges, subscribeRailBadges } from "../lib/railBadges.ts";
 
 /** A heading inside a Section, for a pane that answers the same question about
  *  two different sources. Without it "Quiet" and "Alert sounds" sit in one flat
@@ -264,16 +267,25 @@ function SetupCard({ title, steps, note, error, actions, children, icon }: {
  * So this row is a plain div carrying three controls of its own, and the
  * trade — losing the click-anywhere target — buys a keyboard-operable reorder.
  */
-function SourceRow({ id, i, n, onChanged }: {
+const SOURCE_SHORT: Record<TaskSourceId, string> = {
+  github: "Issues from the repository you are in.",
+  local: "Your own list, from Taskwarrior.",
+  clickup: "The boards you work from, and cards assigned to you.",
+  jira: "Open cards assigned to you.",
+};
+function SourceRow({ id, i, n, onChanged, state }: {
   id: TaskSourceId; i: number; n: number; onChanged: () => void;
+  /** The source's own connection, where the app can tell: ClickUp and Jira only. */
+  state?: "connected" | "off";
 }) {
   const s = TASK_SOURCES.find((x) => x.id === id);
   if (!s) return null;
   const on = taskSourceShown(id);
   return (
-    <SettingRow settingId={`tasks.source.${id}`} label={s.label} hint={s.what}
+    <SettingRow settingId={`tasks.source.${id}`} label={s.label} hint={SOURCE_SHORT[id]}
       control={
         <span className="flex items-center gap-2.5 justify-self-end">
+          {state && <StatusBadge tone={state === "connected" ? "ok" : "off"}>{state === "connected" ? "Connected" : "Not connected"}</StatusBadge>}
           <span className="flex shrink-0 gap-1">
             {([-1, 1] as const).map((by) => (
               <Button key={by} size="compact" square
@@ -319,7 +331,9 @@ function Choice<T extends string>({ label, hint, detail, value, options, onPick,
 /** A −/value/+ stepper. A slider would imply the value is continuous and let
  *  you drag the window into a size the cockpit grid can't lay out; the ladder
  *  is short and every rung is one that works, so buttons say more. */
-function Stepper({ label, hint, value, onDec, onInc, canDec, canInc, modified, settingId }: {
+function Stepper({ label, hint, detail, value, onDec, onInc, canDec, canInc, modified, settingId }: {
+  /** Longer words behind a "Details" link; the hint stays one line. */
+  detail?: RowDetail;
   /** See SettingRow. */
   settingId?: string; agentExempt?: boolean; agentNever?: string;
   label: string; hint: string; value: string; onDec: () => void; onInc: () => void; canDec: boolean; canInc: boolean;
@@ -328,7 +342,7 @@ function Stepper({ label, hint, value, onDec, onInc, canDec, canInc, modified, s
   const btn = "w-7 h-7 rounded-md text-[14px] leading-none flex items-center justify-center disabled:opacity-30 enabled:hover:bg-white/10";
   const border = EDGE;
   return (
-    <SettingRow label={label} hint={hint} modified={modified} settingId={settingId}
+    <SettingRow label={label} hint={hint} detail={detail} modified={modified} settingId={settingId}
       control={
         <span className="flex items-center gap-1 justify-self-end">
           <button onClick={onDec} disabled={!canDec} className={btn} style={{ border, color: "var(--text2)" }} aria-label="Smaller">−</button>
@@ -468,9 +482,11 @@ const LAST_PANE_KEY = "agentglass.settings.pane";
  * be the decorative kind he deletes.
  */
 /** Pages with a reset that is always drawn (greyed until something moved), where the mockup has one. */
-const ALWAYS_RESET: ReadonlySet<string> = new Set(["prefs", "appearance"]);
+const ALWAYS_RESET: ReadonlySet<string> = new Set(["prefs", "appearance", "rail"]);
+/** The page header's reset button, where it is not "Reset page". */
+const RESET_WORD: Record<string, string> = { rail: "Reset rail" };
 /** Pages short enough to read whole: they have no "on this page" index. */
-const NO_TOC: ReadonlySet<string> = new Set(["prefs", "appearance"]);
+const NO_TOC: ReadonlySet<string> = new Set(["prefs", "appearance", "rail"]);
 
 const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: string; status?: boolean; icon: (p: { size?: number }) => React.ReactElement }[] = [
   // "sound" removed: it named the Notifications rows, not anything on this
@@ -480,18 +496,18 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
   // to keep claiming a word it has nothing behind.
   { id: "prefs", label: "Window & startup", group: "General", kw: "display size zoom clock fullscreen start login launch animation splash preferences", what: "How big the window is and what it does when the machine boots.", icon: SlidersIcon },
   { id: "appearance", label: "Appearance", group: "General", kw: "theme accent colour color dark light mode palette density compact roomy translucent transparent blur reduce motion animation", what: "How the window looks. Every change shows on the right as you make it.", icon: ThemeIcon },
-  { id: "notifications", label: "Notifications", group: "General", kw: "notifications sound alert desktop notify quiet chime ping alert sounds message mirror this machine approved reminder alarm somebody says collect without interrupting only when pull request something much them agentglass keep what stopped interrupts muted mute unmute lantern silence none all", what: "What is allowed to interrupt you, and how.", icon: BellIcon },
+  { id: "notifications", label: "Notifications", group: "General", kw: "notifications sound alert desktop notify quiet chime ping alert sounds message mirror this machine approved reminder alarm somebody says collect without interrupting only when pull request something much them agentglass keep what stopped interrupts muted mute unmute lantern silence none all", what: "What may interrupt you, how loudly, and what became of the ones you asked for.", icon: BellIcon },
   // Next to Shortcuts on purpose: which drawer a view sits in is what decides
   // whether it has a number, so the two pages answer one question between them.
-  { id: "rail", label: "Sidebar", group: "General", kw: "rail sidebar views order icons hide show reorder tabs drawer group arrange", what: "Which views are on the sidebar, in which drawer, and in what order.", icon: SidebarIcon },
-  { id: "keys", label: "Shortcuts", group: "General", kw: "keyboard keys bindings shortcut chord rebind reset to defaults columns some others", what: "Every binding, rebindable.", icon: KeyboardIcon },
-  { id: "terminal", label: "Terminal", group: "Workspace", kw: "terminal launch permissions permission mode ask auto accept edits bypass yolo deny disallowed tools font size cursor typography monospace face renderer gpu focus follows mouse hover pane sloppy scrollback copy on select right-click paste line height tab tabs group groups grouping project name rules prefix runs on engine own tmux shell", what: "Type, renderer, mouse, tab groups, how much scrollback each shell keeps, what a Terminal opens on, and the permissions an agent it opens starts with.", icon: TerminalIcon },
+  { id: "rail", label: "Sidebar", group: "General", kw: "rail sidebar views order icons hide show reorder tabs drawer group arrange", what: "Which views get an icon on the rail, and whether they sit at the top or the bottom of it.", icon: SidebarIcon },
+  { id: "keys", label: "Shortcuts", group: "General", kw: "keyboard keys bindings shortcut chord rebind reset to defaults columns some others", what: "Every key and chord, by where it works. Rebind one and the app warns before it takes a key twice.", icon: KeyboardIcon },
+  { id: "terminal", label: "Terminal", group: "Workspace", kw: "terminal launch permissions permission mode ask auto accept edits bypass yolo deny disallowed tools font size cursor typography monospace face renderer gpu focus follows mouse hover pane sloppy scrollback copy on select right-click paste line height tab tabs group groups grouping project name rules prefix runs on engine own tmux shell", what: "How terminals draw, what pointing does, and what an agent may do the moment a terminal launches it.", icon: TerminalIcon },
   /* Its own page, not a block inside Tools & services: it is the engine
      every pane and every chat runs on, with a binary, a config and a restore of
      its own — three settings deep is not a row in a list of "is it installed".
      Filed beside Terminal, the view that runs on it. */
-  { id: "tmux", label: "Pane engine (tmux)", group: "Workspace", kw: "tmux panes engine pane prefix key binary bundled config override restore reboot layout resume socket status bar chat warm cli claude", what: "What a pane runs on — the tmux binary, its config and prefix, and restore.", icon: PanesIcon },
-  { id: "diff", label: "Diff", group: "Workspace", kw: "diff split side by side inline unified wrap word wrap changes review default view wrap long lines syntax theme colours", what: "How a diff opens, everywhere the app shows one.", icon: DiffIcon },
+  { id: "tmux", label: "Pane engine", group: "Workspace", kw: "tmux panes engine pane prefix key binary bundled config override restore reboot layout resume socket status bar chat warm cli claude", what: "The engine under every terminal tab: which tmux, how it is configured, and what survives a reboot.", icon: PanesIcon },
+  { id: "diff", label: "Diff", group: "Workspace", kw: "diff split side by side inline unified wrap word wrap changes review default view wrap long lines syntax theme colours", what: "The view you land on, and what happens to a long line.", icon: DiffIcon },
   // Only where there is a browser to configure. A settings tab for something
   // that is not there reads as a broken feature rather than one that doesn't apply.
   // ONE browser page.
@@ -501,8 +517,8 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
   // logins looks under a heading about agents, and the browser's own menu sent
   // people to the wrong one of the two because I picked the obvious name. A
   // setting is filed under the thing it configures.
-  ...(HAS_BROWSER ? [{ id: "browser" as const, label: "Browser", group: "Workspace" as const, kw: "browser web page zoom login cookies import chrome firefox zen profile home search engine", what: "The built-in browser: how it opens, and the logins it borrows.", icon: BrowserIcon }] : []),
-  { id: "tasks", label: "Tasks", group: "Workspace", kw: "tasks sources github issues local taskwarrior clickup hide show providers view opens on", what: "Which sources the Tasks view offers you.", icon: ChecklistIcon },
+  ...(HAS_BROWSER ? [{ id: "browser" as const, label: "Browser", group: "Workspace" as const, kw: "browser web page zoom login cookies import chrome firefox zen profile home search engine", what: "Where the built-in browser starts, and how to bring in the logins you already have.", icon: BrowserIcon }] : []),
+  { id: "tasks", label: "Tasks", group: "Workspace", kw: "tasks sources github issues local taskwarrior clickup hide show providers view opens on", what: "Where the Tasks view starts, which trackers feed it, and how a branch finds its card.", icon: ChecklistIcon },
   { id: "hooks", label: "Agents", group: "Agents", kw: "agents hooks claude code install setup worker roles scout builder verifier lock model opencode qwen how new chats run warm panes browser agent skill drive", what: "Wire Claude Code into this app, how new chats run, whether an agent can drive the browser, what else is installed, and which CLI each worker role runs on.", icon: PlugIcon },
   { id: "engines", label: "Agent engines", group: "Agents", kw: "engine engines provider hermes opencode codex gemini antigravity claude model version minimum signed in sign-in login orchestrator worker role ready test recheck installed update reporting connect events", what: "Which agent CLIs this computer has, whether each is recent enough and signed in, and what each can do here.", icon: ChipIcon },
   { id: "orchestration", label: "Orchestration", group: "Agents", kw: "orchestration orchestrator main agent chair policy rule rules worker workers scout builder verifier engine model fallback chain ask when it runs usage weekly 5h plan hours budget ceiling envelope network commit write limits retries minutes per turn project override", what: "Which engine runs a project's main agent and does its work, the rules that change that for a while, and what a worker may do.", icon: FlowIcon },
@@ -596,8 +612,7 @@ function BrowserPane({ children }: { children?: React.ReactNode }) {
 
   return (
     <WithPreview preview={<PreviewCard id="browser" title="New tab"><BrowserPreview home={savedHome} searchEngine={SEARCH_ENGINE_LABELS[engine]} /></PreviewCard>}>
-    <SettingsCard title="Where it opens" icon={<BrowserIcon size={ICON.sm} />}
-      desc="The pages the browser view opens on its own. Everything else — what you have logged into, what you have open — belongs to the page, not to a setting.">
+    <SettingsCard title="Where it opens" icon={<BrowserIcon size={ICON.sm} />}>
       <SettingRow
         agentNever="a page the browser opens by itself, with the owner's signed-in sessions: not something an agent points elsewhere"
         label="Home page"
@@ -644,156 +659,134 @@ function BrowserPane({ children }: { children?: React.ReactNode }) {
   );
 }
 
-const PLACE_LABEL: Record<RailPlace, string> = { work: "Top group", utility: "Bottom group", hidden: "Hidden" };
-const PLACE_NOTE: Record<RailPlace, string> = {
-  work: "Where you work. The only group the numbers count through — ⌘1 to ⌘9, in this order.",
-  utility: "What you go and look at, down with settings and ports. No numbers here; record a combination on the Shortcuts page if one of these needs a key.",
-  hidden: "Off the rail. Nothing is lost — put one back from here, or from the + at the foot of the rail.",
-};
+const PLACE_LABEL: Record<RailPlace, string> = { work: "Top of the rail", utility: "Bottom of the rail", hidden: "Not on the rail" };
+/** The counts the preview wears while a view's count badge is on: invented, one to a view. */
+const DEMO_COUNT: Record<string, number> = { chat: 2, lantern: 1, tasks: 3 };
 
 /**
- * The rail's layout, in a list.
+ * The rail's layout: the views in their three places, and the one picked.
  *
- * The rail itself is the fast way to do this — pick an icon up and drop it
- * where you want it — but a drag is a poor way to say "and this one I never
- * want to see again", it is unavailable to anyone not using a mouse, and it
- * cannot show you the thing that actually changes when you move a view between
- * groups: its number. So the same three drawers, spelled out, with the key each
- * row currently answers to written next to it.
+ * The rail itself is the fast way to do this — pick an icon up and drop it where
+ * you want it — but a drag is a poor way to say "and this one I never want to
+ * see again", it is unavailable to anyone not using a mouse, and it cannot show
+ * the thing that changes when a view moves between groups: its number. So the
+ * same three places, spelled out as lists on the left (drag a row, or pick one),
+ * and on the right what is true of the picked view: shown or not, top or bottom,
+ * whether it wears a count, and the key it answers to — beside the rail itself,
+ * drawn on one of the app's own screens.
  */
 function RailPane() {
   const rail = useSyncExternalStore(subscribeRail, loadRail, () => SHIPPED_RAIL);
-  /** Which view is being dragged, and where it would land. Held here rather
-   *  than per row: a drop target has to know what is coming. */
+  useSyncExternalStore(subscribeRailBadges, railBadgesKey, railBadgesKey);
+  const keys = useSyncExternalStore(subscribeBindings, bindings, bindings);
+  /** Which view is being dragged. Held here rather than per row: a drop target has to know what is coming. */
   const [drag, setDrag] = useState<{ id: ViewId; from: RailPlace } | null>(null);
-  // The view last touched is the one the picture draws as active.
-  const [touched, setTouched] = useState<ViewId | null>(null);
-  const move = (id: ViewId, place: RailPlace, to: number) => { setTouched(id); moveView(id, place, to); };
+  // The picked view: its controls are on the right and the picture draws it as the active one.
+  const [pick, setPick] = useState<ViewId | null>(null);
+  const [liveView, setLiveView] = useState<LiveView>("lantern");
+  // Where a view goes back to when "Shown on the rail" is turned on again.
+  const lastPlace = useRef(new Map<ViewId, RailPlace>());
+  const placeOf = (id: ViewId): RailPlace => RAIL_PLACES.find((p) => rail[p].some((x) => x.id === id)) ?? "hidden";
+  const first = rail.work[0] ?? rail.utility[0] ?? rail.hidden[0];
+  const v = VIEWS.find((x) => x.id === (pick ?? first?.id));
+  const move = (id: ViewId, place: RailPlace, to: number) => { setPick(id); moveView(id, place, to); };
+  const items = railItems(rail).map((i) => (railBadgeOn(i.id as ViewId) && DEMO_COUNT[i.id] && i.id in COUNTED_VIEWS ? { ...i, badge: true, count: DEMO_COUNT[i.id] } : i));
+
+  const detail = v && (() => {
+    const place = placeOf(v.id);
+    const list = rail[place];
+    const at = list.findIndex((x) => x.id === v.id);
+    const key = keys[`view.${v.id}`];
+    return (
+      <SettingsCard title={v.label} icon={<v.icon size={ICON.sm} />}
+        status={<StatusBadge tone={place === "hidden" ? "off" : "ok"}>{place === "hidden" ? "Not on the rail" : "On the rail"}</StatusBadge>}
+        actions={<span className="flex items-center gap-1.5">
+          <Button size="compact" disabled={place === "hidden" || at <= 0} onClick={() => move(v.id, place, at - 1)}>Move up</Button>
+          <Button size="compact" disabled={place === "hidden" || at < 0 || at >= list.length - 1} onClick={() => move(v.id, place, at + 1)}>Move down</Button>
+        </span>}>
+        <SettingRow
+          agentExempt label="Shown on the rail" hint={v.hint}
+          control={<button role="switch" aria-checked={place !== "hidden"} aria-label="Shown on the rail" className="agx-btn"
+            onClick={() => {
+              if (place !== "hidden") { lastPlace.current.set(v.id, place); setPick(v.id); setting(`rail.place.${v.id}`).set("hidden"); }
+              else { setPick(v.id); setting(`rail.place.${v.id}`).set(lastPlace.current.get(v.id) ?? (RAIL_PLACES.find((p) => SHIPPED_RAIL[p].some((x) => x.id === v.id)) ?? "work")); }
+            }}><Switch on={place !== "hidden"} /></button>} />
+        <Choice<"work" | "utility">
+          settingId={`rail.place.${v.id}`} label="Sits at"
+          hint="Top is where you work and the numbers count; bottom is what you go and look at."
+          disabled={place === "hidden"} disabledHint="Not on the rail: turn Shown on the rail on first."
+          value={place === "utility" ? "utility" : "work"}
+          onPick={(p) => { setPick(v.id); setting(`rail.place.${v.id}`).set(p); }}
+          options={[{ v: "work", label: "Top" }, { v: "utility", label: "Bottom" }]} />
+        {v.id in COUNTED_VIEWS && (
+          <Toggle settingId={`rail.badge.${v.id}`} label="Count badge" hint={COUNTED_VIEWS[v.id as keyof typeof COUNTED_VIEWS]!}
+            on={railBadgeOn(v.id)} onClick={() => { setPick(v.id); setting(`rail.badge.${v.id}`).set(!railBadgeOn(v.id)); }} />
+        )}
+        <SettingRow agentExempt label="Shortcut"
+          hint={<>Change this shortcut on the Shortcuts page. <a href="#keys" className="agx-textlink"
+            onClick={(e) => { e.preventDefault(); openSettings("keys", rowId(keyRowName(`view.${v.id}`))); }}>Open Shortcuts</a></>}
+          control={<span className="agx-keycaps"><kbd>{key === " " ? "space" : key}</kbd></span>} />
+        <div className="agx-settings-x pt-3 pb-3" data-preview-slot="rail">
+          <div className="text-[12px] font-semibold mb-2" style={{ color: "var(--text)" }}>How the rail looks now</div>
+          <div className="mb-2"><LiveTabs view={liveView} onView={setLiveView} /></div>
+          <SidebarPreview items={items} selected={v.id} view={liveView} />
+        </div>
+        <div className="agx-settings-x pb-3 text-[12px]" style={{ color: "var(--text3)" }}>Saved as you go: the rail follows at once.</div>
+      </SettingsCard>
+    );
+  })();
 
   return (
-    <WithPreview preview={<PreviewCard id="rail" title="How the rail looks now"><SidebarPreview items={railItems(rail)} selected={touched ?? rail.work[0]?.id ?? ""} /></PreviewCard>}>
-      {/* The page's own words first, then one card per drawer. The drawers were
-          eyebrows inside one card, each with a line either side of it; a card
-          each gives the three of them a name and an edge, and the divider
-          falls only between two views. */}
-      <SettingsCard title="What is on the rail" icon={<SidebarIcon size={ICON.sm} />}
-        desc="Which views get an icon, and whether they sit at the top or the bottom of it.">
-        <SettingRow
-          agentExempt
-          label="On the rail itself"
-          hint={<><b style={{ color: "var(--text2)" }}>Drag</b> an icon between the groups — a gap opens where it will land — or drop it on the dashed square at the bottom to put it away. <b style={{ color: "var(--text2)" }}>Right-click</b> any icon for the same moves, and <b style={{ color: "var(--text2)" }}>Alt+↑/↓</b> does it from the keyboard.</>}
-          actions={railCustomised() ? <Button onClick={resetRail}>Reset the rail</Button> : undefined}
-        />
-      </SettingsCard>
-
-      {/* Twenty views, three drawers, a few controls each: the one thing that
-          makes this readable is that the controls of every view land on the
-          same lines, and that is what the row grid is for. The icon rides in
-          the label — a column of its own for 20px is how this page ended up
-          drawing to a different left edge than the rest of the dialog. */}
+    <WithPreview preview={detail}>
       {(Object.keys(PLACE_LABEL) as RailPlace[]).map((place) => (
-        <SettingsCard key={place} title={PLACE_LABEL[place]} desc={PLACE_NOTE[place]}
-          status={<StatusBadge tone="off">{rail[place].length}</StatusBadge>}>
+        <SettingsCard key={place} title={PLACE_LABEL[place]} status={<span className="t-dim text-[11px] tabular-nums">{rail[place].length}</span>}>
           {rail[place].length === 0 ? (
-            <EmptyState>
-              {place === "hidden" ? "Nothing put away." : "Empty — drag something here, or use the buttons on the right."}
-            </EmptyState>
-          ) : rail[place].map((v, i) => {
-            const Icon = v.icon;
-            const chord = chordFor(v.id);
+            <div onDragOver={(e) => { if (drag) e.preventDefault(); }}
+              onDrop={(e) => { e.preventDefault(); if (drag) { move(drag.id, place, 0); setDrag(null); } }}>
+              <EmptyState>{place === "hidden" ? "Nothing put away." : "Drop a view here."}</EmptyState>
+            </div>
+          ) : rail[place].map((x, i) => {
+            const Icon = x.icon;
+            const k = keys[`view.${x.id}`];
+            const on = x.id === v?.id;
             return (
               /*
-               * Drag to reorder, a select for the drawer.
-               *
-               * The arrows are still here and still work — they are the only
-               * way to do this from a keyboard — but they no longer occupy the
-               * row when nobody is looking at it. Hover or focus brings them
-               * back, which is the trade the design was drawn with.
-               *
-               * The drag handlers ride on the row itself (`rowProps`), not on
-               * a div around it: a wrapper takes the row out of the card body
-               * and its divider with it.
+               * Drag to reorder, click to pick. The drag handlers ride on the row itself
+               * (`rowProps`), not on a div around it: a wrapper takes the row out of the
+               * card body and its divider with it.
                */
-              <SettingRow key={v.id}
+              <SettingRow key={x.id} agentExempt
                 rowProps={{
-                  draggable: true,
-                  onDragStart: (e) => { setDrag({ id: v.id, from: place }); e.dataTransfer.effectAllowed = "move"; },
+                  draggable: true, tabIndex: 0, "aria-current": on || undefined,
+                  onClick: () => setPick(x.id),
+                  onKeyDown: (e) => { if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) { e.preventDefault(); setPick(x.id); } },
+                  onDragStart: (e) => { setDrag({ id: x.id, from: place }); e.dataTransfer.effectAllowed = "move"; },
                   onDragEnd: () => setDrag(null),
-                  onDragOver: (e) => { if (drag && drag.id !== v.id) e.preventDefault(); },
+                  onDragOver: (e) => { if (drag && drag.id !== x.id) e.preventDefault(); },
                   onDrop: (e) => {
                     e.preventDefault();
-                    if (!drag || drag.id === v.id) return;
-                    // Dropped ONTO a row means "take its place", which is the
-                    // only reading that needs no insertion line to explain it.
+                    if (!drag || drag.id === x.id) return;
+                    // Dropped ONTO a row means "take its place", the only reading that needs no insertion line to explain it.
                     move(drag.id, place, i);
                     setDrag(null);
                   },
-                  style: { opacity: drag?.id === v.id ? 0.4 : 1, cursor: "grab" },
+                  style: { opacity: drag?.id === x.id ? 0.4 : 1, cursor: "grab", ...(on ? { background: "color-mix(in srgb, var(--primary) 9%, transparent)", boxShadow: "inset 3px 0 0 var(--primary)" } : null) },
                 }}
-                settingId={`rail.place.${v.id}`}
                 label={<span className="flex items-center gap-2.5 min-w-0">
                   <span className="shrink-0 select-none" style={{ color: "var(--text4)" }} aria-hidden title="Drag to reorder">⠿</span>
                   <span className="shrink-0 grid place-items-center w-5" style={{ color: "var(--text2)" }}><Icon size={ICON.md} /></span>
-                  <span className="min-w-0">{v.label}</span>
+                  <span className="min-w-0">{x.label}</span>
                 </span>}
-                hint={<span className="block pl-[30px]">{v.hint}</span>}
-                /*
-                 * Two controls, not five.
-                 *
-                 * Eleven views times a chord, two arrows and a three-way chip
-                 * is fifty-five things to hit on one page. The drawer is a
-                 * choice between three named places, which is what a select is
-                 * for; the arrows stay, because reordering is the other half of
-                 * the page and a select cannot express "one higher".
-                 */
-                control={<span className="flex items-center gap-2">
-                  {/* A link, not a second recorder: the chord is rebound on the
-                      Shortcuts page, and this lands on that view's row. */}
-                  <button type="button" onClick={() => openSettings("keys", rowId(LABELS[`view.${v.id}`].label))}
-                    title="Change this shortcut on the Shortcuts page"
-                    className="text-[11px] tabular-nums w-[52px] text-right hover:underline"
-                    style={{ color: chord ? "var(--text2)" : undefined, opacity: chord ? 0.75 : 0.35 }}>
-                    {chord ? chordLabel(chord) : "—"}
-                  </button>
-                  {/* Order only matters where the rail draws it, and in the top
-                      group it also decides which number you get. Kept out of
-                      sight until wanted: `agx-reveal` is opacity-only, so the
-                      row does not change width when they appear. */}
-                  <span className="agx-reveal flex items-center gap-0.5 w-[54px]">
-                    {place !== "hidden" && (
-                      <>
-                        <MiniBtn agentExempt label="Move up" disabled={i === 0} onClick={() => move(v.id, place, i - 1)}>↑</MiniBtn>
-                        <MiniBtn agentExempt label="Move down" disabled={i === rail[place].length - 1} onClick={() => move(v.id, place, i + 1)}>↓</MiniBtn>
-                      </>
-                    )}
-                  </span>
-                  <Select
-                    align="right"
-                    value={place}
-                    onChange={(p) => { setTouched(v.id); setting(`rail.place.${v.id}`).set(p); }}
-                    options={(Object.keys(PLACE_LABEL) as RailPlace[]).map((p) => ({
-                      value: p,
-                      label: p === "work" ? "Top" : p === "utility" ? "Bottom" : "Hidden",
-                      hint: PLACE_LABEL[p],
-                    }))}
-                  />
-                </span>}
-              />
+                control={<span className="flex items-center gap-2.5 justify-self-end">
+                  <span className="agx-keycaps" title={`${x.label} answers to ${k} on the dashboard`}><kbd>{k === " " ? "space" : k}</kbd></span>
+                  <span aria-label={place === "hidden" ? "Not on the rail" : "On the rail"} className="shrink-0 rounded-full"
+                    style={{ width: 7, height: 7, ...(place === "hidden" ? { boxShadow: "inset 0 0 0 1px var(--text4)" } : { background: "var(--success)" }) }} />
+                </span>} />
             );
           })}
         </SettingsCard>
       ))}
     </WithPreview>
-  );
-}
-
-function MiniBtn({ label, disabled, onClick, children }: { settingId?: string; agentExempt?: boolean; label: string; disabled?: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button aria-label={label} title={label} disabled={disabled} onClick={onClick}
-      className="grid place-items-center rounded-md text-[11px] hover:bg-white/10"
-      style={{ width: HIT, height: HIT, color: "var(--text2)", opacity: disabled ? 0.25 : 0.8 }}>
-      {children}
-    </button>
   );
 }
 
@@ -938,77 +931,26 @@ function Section({ title, desc, headerControl, children }: {
 /** The chip alone gave no sign that it records: an explicit verb beside it. The
  *  chip stays a target too. A row with two chips (a view with its chord) has
  *  no room for a third control, so it keeps labelled chips only. */
-function RebindButton({ capturing, onClick, what }: { capturing: boolean; onClick: () => void; what: string }) {
-  return <Button size="compact" onClick={onClick} aria-label={`${capturing ? "Cancel rebinding" : "Rebind"} ${what}`}>{capturing ? "Cancel" : "Rebind"}</Button>;
-}
-
-/**
- * One rebindable shortcut.
- *
- * Capturing is a mode rather than a text field: you press the key you want,
- * which is the only input method that cannot disagree with what will actually
- * fire. `keydown` on the window during capture, so the key never reaches the
- * app's own handler and rebinding `t` does not also open the terminal.
- */
-function KeyRow({ id, keyName, capturing, onCapture, error, chord }: {
-  id: ActionId; keyName: string; capturing: boolean; onCapture: () => void; error: string | null;
-  /** Present only for workspace views, which are the ones reachable from
-   *  inside the workspace and so the ones that need a modified key too. */
-  chord?: { key: string; custom: boolean; capturing: boolean; onCapture: () => void; onClear: () => void };
+/** A key or chord as keycaps: `Ctrl+Alt+T` draws as Ctrl + Alt + T, one cap each. The whole group is the
+ *  button that starts recording, so a click anywhere on it does what Rebind does. */
+function KeyCaps({ text, active, custom, faint, onClick, title }: {
+  text: string; active?: boolean; custom?: boolean; faint?: boolean; onClick: () => void; title?: string;
 }) {
-  const { label, hint } = LABELS[id];
+  // A held combination reads as caps joined by "+"; a lone key (or the arrows) is one cap.
+  const parts = active || text === "—" || text.length < 2 || !/\w\+./.test(text) ? [text] : text.split("+");
   return (
-    <SettingRow settingId={`keys.binding.${id}`} wide={!!chord}
-      /* Its own track: this row's control is genuinely two controls, each with
-         its own label. 300 rather than the shared 210 — and because the row
-         still ends at the column's edge, the chips line up with every other
-         pane's control anyway, which is the 288px jump this used to have. */
-      label={<span onClick={onCapture} className="cursor-pointer">{label}</span>}
-      hint={<span style={{ color: error ? "var(--error)" : undefined }} className={error ? "" : "t-dim"}>{error ?? hint}</span>}
-      control={<span className="flex items-center gap-1.5 justify-self-end">
-      {/* Two keys, labelled, because they answer different questions and the
-          unlabelled pair read as one shortcut written twice. */}
-      {chord && (
-        <span className="shrink-0 flex items-center gap-1.5">
-          <span className="text-[11px] t-dim w-[52px] text-right">anywhere</span>
-          <button onClick={chord.onCapture}
-            // An empty key is a view outside the top group, where numbers do
-            // not reach. Still clickable: recording one is exactly how you give
-            // a bottom-drawer or hidden view a key of its own.
-            title={chord.custom
-              ? `${chordLabel(chord.key)} opens this — click to record another, or the cross to go back to its rail position`
-              : chord.key
-                ? `${chordLabel(chord.key)} opens this, from its position in the top group — click to record your own`
-                : "Only the top group is numbered — click to record a combination for this one"}
-            className="chip h-[22px] justify-center text-[11px] tabular-nums min-w-[74px] text-center"
-            style={chord.capturing
-              ? { color: "var(--primary-hover)", borderColor: "color-mix(in srgb, var(--primary) 60%, transparent)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }
-              : chord.custom
-                ? { color: "var(--primary-hover)" }
-                : { color: "var(--text2)", opacity: 0.6 }}>
-            {chord.capturing ? "Hold a combo…" : chord.key ? chordLabel(chord.key) : "—"}
-          </button>
-          <span className="w-3 shrink-0">
-            {chord.custom && !chord.capturing && (
-              <CloseButton onClick={chord.onClear} title="Back to its position in the rail" />
-            )}
-          </span>
-        </span>
-      )}
-      <span className="shrink-0 flex items-center gap-1.5">
-        {!chord && <RebindButton capturing={capturing} onClick={onCapture} what={label} />}
-        <span className="text-[11px] t-dim w-[62px] text-right">{chord ? "dashboard" : "press"}</span>
-        <button onClick={onCapture} className="chip h-[22px] justify-center text-[11px] tabular-nums min-w-[74px] text-center"
-          style={capturing
-            ? { color: "var(--primary-hover)", borderColor: "color-mix(in srgb, var(--primary) 60%, transparent)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }
-            : { color: "var(--text2)" }}>
-          {capturing ? "Press a key…" : keyName === " " ? "space" : keyName}
-        </button>
-      </span>
-      </span>} />
+    <button type="button" onClick={onClick} title={title} aria-label={active ? text : `Recorded: ${text}. Click to record another`}
+      className="agx-keycaps" data-active={active ? "" : undefined} data-custom={custom ? "" : undefined} data-faint={faint ? "" : undefined}>
+      {parts.map((k, i) => (
+        <Fragment key={i}>{i > 0 && <span className="agx-keycaps-plus" aria-hidden>+</span>}<kbd>{k}</kbd></Fragment>
+      ))}
+    </button>
   );
 }
 
+function RebindButton({ capturing, onClick, what }: { capturing: boolean; onClick: () => void; what: string }) {
+  return <Button size="compact" onClick={onClick} aria-label={`${capturing ? "Cancel rebinding" : "Rebind"} ${what}`}>{capturing ? "Cancel" : "Rebind"}</Button>;
+}
 
 /**
  * Version, and the update that goes with it.
@@ -1704,6 +1646,8 @@ function CookieImport() {
   // as it always did.
   const [wantHistory, setWantHistory] = useState(importHistory());
   const [wantBookmarks, setWantBookmarks] = useState(importBookmarks());
+  // The per-site chooser is behind "Choose sites": a row's Import brings the whole profile in.
+  const [showSites, setShowSites] = useState(false);
 
   const load = useCallback(() => {
     setErr(null);
@@ -1732,9 +1676,10 @@ function CookieImport() {
   const view = siteView(current?.sites ?? [], filter);
   const total = current?.sites.length ?? 0;
 
-  const run = async (kind: "import" | "forget") => {
-    const sites = [...chosen];
-    if (!sites.length) return;
+  const run = async (kind: "import" | "forget", src: CookieSource | null = current, only: ReadonlySet<string> = chosen) => {
+    const sites = [...only];
+    if (!sites.length || !src) return;
+    const pick = src.id;
     setBusy(true); setErr(null); setNote(null);
     // Every profile, not the one this panel happens to think of as "the
     // browser". Read at the moment of the click rather than held in state: the
@@ -1776,6 +1721,8 @@ function CookieImport() {
       + " Open the browser and you should be signed in.");
   };
 
+  // The sites the profiles hold between them: what the header says there is to bring in.
+  useEffect(() => { setPageFact("importableSites", new Set((sources ?? []).filter((s) => s.readable).flatMap((s) => s.sites.map((x) => x.site))).size); }, [sources]);
   const Bulk = ({ text, onClick, off }: { text: string; onClick: () => void; off?: boolean }) => (
     <Button size="compact" onClick={onClick} disabled={off}>{text}</Button>
   );
@@ -1787,8 +1734,8 @@ function CookieImport() {
 
   return (
     <SettingsCard title="Bring your logins" icon={<LinkIcon size={ICON.sm} />}
-      desc="Copies the sessions you already have from another browser, so pages behind a login work here. Nothing leaves this machine."
-      actions={current?.readable ? (
+      desc="Copies sessions from another browser. Nothing leaves this machine."
+      actions={current?.readable && showSites ? (
         <>
           <Button onClick={() => void run("forget")} disabled={busy || !chosen.size}
             title="Remove these sites' cookies from agentglass's browser. Your own browser is untouched.">
@@ -1799,29 +1746,38 @@ function CookieImport() {
           </Button>
         </>
       ) : undefined}>
-      <SettingRow agentExempt label="Import from" hint={sourceHint}
+      <div className="agx-table-head" aria-hidden><span>Profile</span><span>Sites</span></div>
+      {!sources?.length && <SettingRow agentExempt label="Import from" hint={sourceHint} />}
+      {sources?.filter(reachable).map((src, i) => (
+        <SettingRow key={src.id} agentExempt
+          label={src.label}
+          hint={src.readable ? (src.kind === "firefox" ? "Firefox profile" : "Chrome-family profile") : "Sealed with a key this cannot reach."}
+          below={!src.readable ? <div className="text-[12px]" role="note" style={{ color: "var(--warning-ink)" }}>{lockedWhy(src)}</div> : undefined}
+          status={<span className="t-dim text-[12px] tabular-nums">{src.readable ? `${src.sites.length} signed in` : "locked"}</span>}
+          actions={<span className="flex items-center gap-2">
+            {src.readable && src.sites.length > 0 && (
+              <Button size="compact" aria-expanded={showSites && pick === src.id} onClick={() => { setPick(src.id); setShowSites(pick !== src.id || !showSites); }}>
+                {showSites && pick === src.id ? "Hide sites" : "Choose sites"}
+              </Button>
+            )}
+            <Button tone={i === 0 && src.readable ? "primary" : undefined} disabled={!src.readable || busy || !src.sites.length}
+              onClick={() => { setPick(src.id); void run("import", src, allSites(src.sites)); }}>Import</Button>
+          </span>} />
+      ))}
+      <SettingRow agentExempt label="Why cookies, and what comes across" hint="A password manager cannot run in this browser."
         detail={{
-          summary: "Why cookies, and what comes across",
+          summary: "Details",
           body: <>
-            A password manager cannot run in this browser (Electron has no place to put its popup), so the way pages
-            behind a login work here is bringing the cookies over. Chrome, Firefox, Zen, Brave and Chromium, including
-            the Chrome-family ones whose values are sealed: their key is asked of your desktop keyring. Everything is
-            chosen to start with; untick what you would rather leave behind. Anyone who can use this window —
-            including an agent driving it — will be signed in to whatever comes across.
+            Electron has no place to put a password manager's popup, so the way pages behind a login work here is bringing the
+            cookies over. Chrome, Firefox, Zen, Brave and Chromium, including the Chrome-family ones whose values are sealed:
+            their key is asked of your desktop keyring. Import brings every site of a profile; "Choose sites" lets you untick what
+            you would rather leave behind. Anyone who can use this window, including an agent driving it, will be signed in to
+            whatever comes across.
           </>,
-        }}
-        control={sources?.length ? (
-          <span className="flex justify-end">
-            <Select align="right" value={pick} onChange={setPick}
-              options={sources.filter(reachable).map((s) => ({ value: s.id, label: `${s.label}${s.readable ? ` · ${s.sites.length}` : " · locked"}` }))} />
-          </span>
-        ) : undefined}
-        below={current && !current.readable ? (
-          <div className="text-[12px]" role="note" style={{ color: "var(--warning-ink)" }}>{lockedWhy(current)}</div>
-        ) : undefined} />
+        }} />
 
-      {current?.readable && (
-        <SettingRow agentExempt label="Sites"
+      {current?.readable && showSites && (
+        <SettingRow agentExempt label={`Sites in ${current.label}`}
           hint={`${chosen.size} of ${total} chosen. Everything is chosen to start with; untick what you would rather leave behind.`}
           control={<span className="flex gap-2 justify-end">
             <Bulk text="All" onClick={() => setChosen(allSites(current.sites))} off={chosen.size === total} />
@@ -1875,7 +1831,7 @@ function CookieImport() {
           <Toggle on={wantBookmarks} onClick={() => { const next = !wantBookmarks; setWantBookmarks(next); setImportBookmarks(next); }}
             agentNever="imports the owner's cookies and history from another browser: credentials"
             label="Bring bookmarks"
-            hint="The pages you bookmarked, ranked first in the address bar. Cookies are chosen per site above." />
+            hint="Ranked first in the address bar." />
         </>
       )}
 
@@ -2396,6 +2352,7 @@ function NotificationsSection(p: {
   sysNotify: SysNotifyMode; notifyCap: NotifyCapability | null;
 }) {
   const { quiet, mutedList, own } = p;
+  useEffect(() => { setPageFact("volume", quiet ? "Quiet" : own ? "Loud" : "Normal"); }, [quiet, own]);
   const prefs = useSyncExternalStore(subscribeNotifyPrefs, getNotifyPrefs, getNotifyPrefs);
   const [err, setErr] = useState<string | null>(null);
   const save = (next: typeof prefs) => {
@@ -2423,19 +2380,28 @@ function NotificationsSection(p: {
               label={NOTIFY_KIND_LABEL[k].label} hint={NOTIFY_KIND_LABEL[k].desc} />
             {k === "reminders" && (
               <SettingRow agentNever="decides whether an agent blocked on the owner can reach them: notifications are the owner's to silence"
-                label="Alarm voice" hint="A reminder you set takes the screen and rings until it is answered."
+                label="Alarm voice" hint="Spoken when a reminder rings."
                 control={alarmPicker} />
             )}
           </Fragment>
         ))}
-        <Toggle on={own} onClick={() => setAppNotify(!own)}
-          agentNever="turning it on asks the browser for permission, which needs the owner's own gesture, and turning it off silences the app's own notices"
-          label="agentglass's own notifications"
-          hint="Chats finishing, branches falling behind, checks going red. With Quiet on, only what is stopped interrupts either way; this switch decides the rest once Quiet is off. Everything keeps landing in the bell." />
       </SettingsCard>
 
       <SettingsCard title="How it reaches you" icon={<BellIcon size={ICON.sm} />}
-        status={<StatusBadge tone={prefs.none ? "off" : quiet ? "info" : "ok"}>{prefs.none ? "Silenced" : quiet ? "Quiet" : "Normal"}</StatusBadge>}>
+        status={<StatusBadge tone={prefs.none ? "off" : quiet ? "info" : "ok"}>{prefs.none ? "Silenced" : quiet ? "Quiet" : own ? "Loud" : "Normal"}</StatusBadge>}>
+        {/* Three words for two switches: Quiet is the quiet switch; with it off, agentglass's own
+            notices interrupt (Loud) or keep landing in the bell (Normal). */}
+        <Choice<"quiet" | "normal" | "loud">
+          settingId="notifications.volume" wide label="Volume"
+          hint="Quiet lets through only what is stopped."
+          detail={{ summary: "What each level lets through", body: <>
+            Quiet: an approval, an agent blocked on a question, a red check on a pull request about to merge still pop and ring;
+            everything else collects in the bell without a sound. Normal: the same, and agentglass's own notices (chats finishing,
+            branches falling behind, checks going red) still only land in the bell. Loud: those interrupt too.
+          </> }}
+          value={quiet ? "quiet" : own ? "loud" : "normal"} modified={!quiet}
+          onPick={(v) => { if (v === "quiet") setting("notifications.quiet").set(true); else setting("notifications.volume").set(v); }}
+          options={[{ v: "quiet", label: "Quiet" }, { v: "normal", label: "Normal" }, { v: "loud", label: "Loud" }]} />
         {NOTIFY_CHANNELS.map((c) => (
           <Fragment key={c}>
             <Toggle on={prefs.channels[c]} disabled={prefs.none}
@@ -2445,25 +2411,20 @@ function NotificationsSection(p: {
             {c === "sound" && (
               <>
                 <SettingRow agentNever="decides whether an agent blocked on the owner can reach them: notifications are the owner's to silence"
-                  label="Notification sound" hint="Which sound notifications make. Play tries it."
+                  label="Notification sound" hint="Which sound notifications make."
                   control={<VoicePicker label="Notifications" voices={NOTIFY_VOICES} value={p.notifyVoice} onPick={p.onNotifyVoice} />} />
                 <Toggle on={p.sound} onClick={p.onSound}
                   agentExempt label="Chime this session"
-                  hint="A chime when a session errors or needs you. Off at every start; the speaker in the header flips it too." />
+                  hint="Only this window, until you quit."
+                  detail={{ summary: "About the chime", body: <>A chime when a session errors or needs you. It is off at every start; the speaker in the header flips it too.</> }} />
               </>
             )}
           </Fragment>
         ))}
-        {/* Quiet and the muted sources used to sit behind a fold named for
-            both. A switch that decides what interrupts is a setting to find,
-            not a drawer to open, and a fold's rows could not sit on the
-            card's own divider. */}
-        <Toggle on={quiet} onClick={() => setting("notifications.quiet").set(!quiet)}
-          settingId="notifications.quiet" label="Quiet — only what is stopped interrupts"
-          hint="An approval, an agent blocked on a question, a red check on a pull request about to merge: those still pop and ring. Everything else collects in the bell without a sound." />
         {mutedList.length > 0 && (
-          <SettingRow agentExempt label="Muted"
-            hint="Not collected. Mute a source from its row in the bell or from a desktop card; unmute it here or from the bell's footer."
+          <SettingRow agentExempt label="Muted sources"
+            hint="A muted source is not collected."
+            detail={{ summary: "Muting and unmuting", body: <>Mute a source from its row in the bell or from a desktop card; unmute it here or from the bell's footer.</> }}
             below={
               <span className="flex flex-wrap gap-1">
                 {mutedList.map((src) => (
@@ -2480,22 +2441,21 @@ function NotificationsSection(p: {
       <SettingsCard title="Pull requests" icon={<ReviewIcon size={ICON.sm} />}>
         <Toggle on={p.ciApproved} onClick={p.onCiApproved}
           settingId="notifications.ciOnlyApproved" label="Checks: only when the pull request is approved"
-          hint={p.ciApproved
-            ? "A suite finishing on something half-written is a status line; on something approved it is the last thing before merging."
-            : "Every verdict, on every pull request of yours — including the ones nobody has looked at yet."} />
+          hint={p.ciApproved ? "Only once the pull request is approved." : "Every verdict, on every pull request of yours."}
+          detail={{ summary: "Why approved only", body: <>A suite finishing on something half-written is a status line; on something approved it is the last thing before merging. Off: every verdict, including on pull requests nobody has looked at yet.</> }} />
         <Toggle on={p.reviewGate} onClick={p.onReviewGate}
           agentNever="decides whether a reviewer's findings hold a pull request out of the green lane: an agent that could switch it off could clear its own findings from the board"
           label="Review findings block merge-ready pull requests"
-          hint={p.reviewGate
-            ? "A pull request with open critical or high findings from a local review of its CURRENT head moves from “Green, ready to land” to Blocked, with the reason on the card. Resolve or dismiss them, or push and review again, and it moves back. A review of an older head never blocks."
-            : "Off: the board files pull requests by GitHub's own facts only. A card with open critical or high findings still shows “Not ready” as a chip and stays where it is."} />
+          hint={p.reviewGate ? "Blocks merge-ready pull requests." : "The board files pull requests by GitHub's facts only."}
+          detail={{ summary: "What blocking does", body: p.reviewGate
+            ? <>A pull request with open critical or high findings from a local review of its CURRENT head moves from “Green, ready to land” to Blocked, with the reason on the card. Resolve or dismiss them, or push and review again, and it moves back. A review of an older head never blocks.</>
+            : <>Off: the board files pull requests by GitHub's own facts only. A card with open critical or high findings still shows “Not ready” as a chip and stays where it is.</> }} />
         <Choice<TalkNotify>
           settingId="notifications.talk" label="Conversation: when somebody says something"
-          hint={p.talkMode === "everything"
-            ? "A comment from a person, and a review the moment it is submitted — named as what it is: approved, changes requested, or a remark."
-            : p.talkMode === "reviews"
-            ? "Only a review coming back. Comments on the conversation stay to be found on the board, which marks them either way."
-            : "Nothing. The board still marks what has been said since you last looked; it just will not interrupt you."}
+          hint={p.talkMode === "everything" ? "A comment or a review the moment it lands."
+            : p.talkMode === "reviews" ? "Only a review coming back."
+            : "Nothing interrupts; the board still marks it."}
+          detail={{ summary: "What each choice does", body: <>Comments and reviews: a comment from a person, and a review the moment it is submitted, named as what it is (approved, changes requested, or a remark). Reviews only: comments stay to be found on the board, which marks them either way. Off: the board still marks what has been said since you last looked; it just will not interrupt you.</> }}
           value={p.talkMode}
           options={[
             { v: "everything", label: "Comments and reviews" },
@@ -2525,12 +2485,13 @@ function NotificationsSection(p: {
             ? (p.notifyCap.transient
               ? `Checking — ${p.notifyCap.reason}`
               : `Unavailable — ${p.notifyCap.reason}`)
-            : "Slack, mail, calendar — whatever pops up behind agentglass while it is covering your screen. A copy, never an interception: your desktop still shows its own."} />
+            : "Shows other apps' notifications on the fleet card."}
+          detail={{ summary: "What is mirrored", body: <>Slack, mail, calendar: whatever pops up behind agentglass while it is covering your screen. A copy, never an interception: your desktop still shows its own.</> }} />
         {p.sysNotify !== "off" && (
           <Choice<SysNotifyMode>
             agentNever="reads other applications' notifications into this app: what they say is theirs"
             label="How much of the message"
-            hint="Full shows the text on the card; Who shows only who it was from"
+            hint="Full shows the text; Who shows only who it was from."
             value={p.sysNotify}
             onPick={setSysNotifyMode}
             options={[
@@ -3317,40 +3278,40 @@ function LaunchPermissionsCard({ open }: { open: boolean }) {
       .finally(() => setBusy(false));
   };
   const bad = parseDenyRules(deny).bad;
+  useEffect(() => { setPageFact("unsavedRules", deny !== saved ? 1 : 0); return () => setPageFact("unsavedRules", 0); }, [deny, saved]);
   return (
-    <SettingsCard title="Launch permissions" icon={<ShieldIcon size={ICON.sm} />} status={<SaveChip phase={phase} />} desc="How every terminal agentglass opens starts its agent: Review with Claude, a hand-off, an issue, a resumed session, a Command that runs claude.">
+    <SettingsCard title="Launch permissions" icon={<ShieldIcon size={ICON.sm} />} status={<SaveChip phase={phase} />} desc="What an agent may do when a terminal starts it. A rule here beats a tab's own permission mode.">
       <SettingRow
         agentNever="the permission mode every agent the app starts runs in: loosening it is an escalation, so only the owner changes it"
-        label="Permission mode for terminals agentglass opens"
-        hint="A review prompt or a Command can choose its own in its editor."
+        label="Permission mode"
+        hint="Applies to every terminal that starts an agent."
         detail={{
           summary: "What each mode does",
-          body: <>Ask is Claude Code's own default: it asks before a tool it has not been allowed. Auto lets it decide what is safe to run. Accept edits runs file edits without asking. Bypass runs everything without asking — a tab in another mode than your other agents holds what is sent to it until somebody answers in it.</>,
+          body: <>This covers Review with Claude, a hand-off, an issue, a resumed session and a Command that runs claude; a review prompt or a Command can choose its own in its editor. Ask is Claude Code's own default: it asks before a tool it has not been allowed. Auto lets it decide what is safe to run. Accept edits runs file edits without asking. Bypass runs everything without asking — a tab in another mode than your other agents holds what is sent to it until somebody answers in it.</>,
         }}
-        control={<span className="flex justify-end"><Select align="right" style={SELECT_BOX} value={mode} disabled={busy}
-          onChange={(v) => { if (isLaunchMode(v)) { setMode(v); save({ mode: v }); } }}
-          options={LAUNCH_MODES.map((m) => ({ value: m, label: LAUNCH_MODE_LABEL[m] }))} /></span>}
+        wide
+        control={<SegControl label="Permission mode" value={mode} disabled={busy}
+          onPick={(v) => { if (isLaunchMode(v)) { setMode(v); save({ mode: v }); } }}
+          options={LAUNCH_MODES.map((m) => ({ v: m, label: LAUNCH_MODE_LABEL[m] }))} />}
       />
       <SettingRow
         agentNever="what every agent the app starts may never do: an agent does not edit its own leash"
         label="Always deny"
-        hint="One rule per line, passed as --disallowedTools on every launch, whatever the mode."
+        hint="One pattern per line, refused in every terminal."
+        detail={{ summary: "Details", body: <>Each line is passed as <span className="t-mono text-[11px]">--disallowedTools</span> on every launch, whatever the mode. The next terminal the app opens starts with the saved list; the ones already open keep how they started.</> }}
         below={<div className="flex flex-col gap-2">
           <textarea aria-label="Always deny" value={deny} onChange={(e) => setDeny(e.target.value)} rows={Math.max(4, deny.split("\n").length + 1)}
             spellCheck={false} disabled={busy}
             className="w-full text-[12px] px-2.5 py-2 rounded-lg outline-none font-mono bg-[var(--surface-inset)] text-[var(--text)]"
             style={{ ...INPUT_STYLE, resize: "vertical" }} />
-          <div className="flex items-center gap-2">
-            <Button tone="primary" disabled={busy || deny === saved || bad.length > 0} onClick={() => save({ deny })}>Save</Button>
-            {deny !== saved && <Button disabled={busy} onClick={() => setDeny(saved)}>Cancel</Button>}
-            {bad.length > 0 && <span className="text-[12px]" role="alert" style={{ color: "var(--error-ink)" }}>Not a rule: {bad[0]}</span>}
-          </div>
+          {bad.length > 0 && <span className="text-[12px]" role="alert" style={{ color: "var(--error-ink)" }}>Not a rule: {bad[0]}</span>}
           {(err || note) && (
             <div className="text-[12px]" role={err ? "alert" : "status"}
               style={{ color: err ? "var(--error-ink)" : "var(--success-ink)" }}>{err ?? note}</div>
           )}
         </div>}
       />
+      <SaveBar dirty={deny !== saved} canSave={bad.length === 0} busy={busy} onSave={() => save({ deny })} onCancel={() => setDeny(saved)} />
     </SettingsCard>
   );
 }
@@ -3384,13 +3345,14 @@ function TerminalRunsOn({ open }: { open: boolean }) {
       <SettingRow
         agentNever="which tmux a shell runs in, held by the server: it changes what runs a shell, so the owner chooses it"
         label="Terminal runs on"
-        hint="Where the Terminal view opens a shell: on the pane engine, or on the tmux you already run on this machine."
+        hint="On the pane engine (tmux), tabs survive a restart."
         detail={{
           summary: "What each choice does",
           body: <>"The engine" gives it the pane engine — agentglass draws the tabs and splits, the prefix set under Pane engine (tmux) applies, and Restore there can bring it back after a reboot; one session per checkout. "This machine's tmux" resumes the session you left in your own tmux, with your own <span className="t-mono text-[11px]">~/.tmux.conf</span>. They are separate servers: switching moves nothing and loses nothing, and whichever you are not using keeps running.</>,
         }}
-        control={<span className="flex justify-end"><Select align="right" value={terminal} onChange={saveTerminal} disabled={busy}
-          options={[{ value: "engine", label: "The engine" }, { value: "desk", label: "This machine's tmux" }]} /></span>}
+        wide
+        control={<SegControl label="Terminal runs on" value={terminal as "engine" | "desk"} onPick={saveTerminal} disabled={busy}
+          options={[{ v: "engine", label: "Pane engine" }, { v: "desk", label: "My own tmux" }]} />}
         below={(err || note) ? (
           <div className="text-[12px]" role={err ? "alert" : "status"}
             style={{ color: err ? "var(--error-ink)" : "var(--success-ink)" }}>{err ?? note}</div>
@@ -3445,6 +3407,7 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
       .finally(() => setBusy(false));
   };
   useEffect(() => { if (open) void load(); }, [open]);
+  useEffect(() => { setPageFact("tmuxVersion", st?.bin.version?.replace(/^tmux\s+/i, "") || undefined); }, [st?.bin.version]);
 
   const saveSettings = () => {
     setBusy(true); setNote(null); setNoteAt("engine");
@@ -3532,48 +3495,42 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
   const saidHere = (at: typeof noteAt) => note && noteAt === at
     ? <SettingRow label={<span style={{ color: "var(--success-ink)" }}>{note}</span>} />
     : null;
+  const ago = (t: number) => { const m = Math.max(0, Math.round((Date.now() - t) / 60_000)); return m < 1 ? "just now" : m < 60 ? `${m} ${m === 1 ? "minute" : "minutes"} ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
+  const engineDirty = !!st && (source !== st.source || (source === "custom" && path !== (st.bin.path || "")));
+  const prefixDirty = !!st && prefix !== (st.prefix || "");
+  const confDirty = !!st && (confMode !== st.confMode || override !== st.override);
   return (
     <>
     <SettingsCard title="Pane engine" icon={<PanesIcon size={ICON.sm} />}
-      desc="The engine runs its own tmux server — its own socket, its own config. Your ~/.tmux.conf is never loaded, and neither is your tmux touched."
+      desc="Tabs and panes run on tmux, so they outlive a restart."
       status={!st
         ? <StatusBadge tone="checking">Checking</StatusBadge>
         : cap?.available
-          ? <StatusBadge tone="ok">Pane engine ready</StatusBadge>
-          : <StatusBadge tone="err">Pane engine unavailable</StatusBadge>}
+          ? <StatusBadge tone="ok">Ready</StatusBadge>
+          : <StatusBadge tone="err">Unavailable</StatusBadge>}
       >
+      <SettingRow agentExempt
+        label={cap && !cap.available ? "Pane engine unavailable" : "Pane engine ready"}
+        hint={cap && !cap.available ? cap.reason
+          : st?.bin.version ? `${st.bin.version}${st.bin.source === "bundled" ? " · bundled with this build" : ""}` : "Checking…"}
+        detail={{ summary: "Details", body: <>The engine runs its own tmux server: its own socket, its own config. Your <span className="t-mono text-[11px]">~/.tmux.conf</span> is never loaded, and neither is your tmux touched.
+          {st?.bin.path ? <> Currently <span className="t-mono text-[11px] break-all">{st.bin.path}</span>{st.bin.source === "env" ? " (AGENTGLASS_TMUX_PATH override)" : null}.</> : null}
+          {st?.broken ? <> <b style={{ color: "var(--error-ink)" }}>{st.brokenReason}</b></> : null}</> }}
+        control={st && cap?.available ? <StatusBadge tone="ok">Ready</StatusBadge> : undefined} />
       <SettingRow
         label="tmux binary"
-        hint={<>
-          <span className="block">Which executable the engine spawns. "Auto" prefers the bundled static tmux and falls back to the system one; "Custom" points at your own binary (e.g. a newer tmux). Tabs, splits and status are drawn by agentglass either way.</span>
-          {(st?.bin.path || st?.bin.version || (cap && !cap.available) || st?.broken) && (
-            <span className="block mt-1">
-              {st?.bin.path ? <>Currently <span className="t-mono text-[11px] break-all">{st.bin.path}</span></> : null}
-              {st?.bin.version ? <> — {st.bin.version}</> : null}
-              {st?.bin.source === "env" ? " (AGENTGLASS_TMUX_PATH override)" : null}
-              {cap && !cap.available ? <> — {cap.reason}</> : null}
-              {st?.broken ? <> <b style={{ color: "var(--error-ink)" }}>{st.brokenReason}</b></> : null}
-            </span>
-          )}
-        </>}
-        control={<Select value={source} onChange={setSource} disabled={busy} align="right" style={SELECT_BOX}
-          options={[
-            { value: "auto", label: "Auto (bundled first)" },
-            { value: "bundled", label: "Bundled" },
-            { value: "system", label: "System" },
-            { value: "custom", label: "Custom…" },
-          ]} />}
-        actions={<Button onClick={saveSettings} disabled={busy}>Save</Button>}
-        below={source === "custom" ? (
-          <SettingsForm label="Custom tmux binary" onSubmit={saveSettings}>
-            <Field label="Path to the binary" htmlFor="tmux-bin-path">
-              <input id="tmux-bin-path" value={path} onChange={(e) => setPath(e.target.value)} placeholder="/path/to/tmux"
-                className={`t-mono ${INPUT}`} style={INPUT_STYLE} />
-            </Field>
-          </SettingsForm>
-        ) : undefined}
+        hint="Use the bundled one unless you need your own."
+        detail={{ summary: "Details", body: <>"Auto" prefers the bundled static tmux and falls back to the system one; "Custom" points at your own binary (e.g. a newer tmux). Tabs, splits and status are drawn by agentglass either way.</> }}
+        wide
+        control={<SegControl label="tmux binary" value={source as "auto" | "bundled" | "system" | "custom"} disabled={busy} onPick={setSource}
+          options={[{ v: "auto", label: "Auto" }, { v: "bundled", label: "Bundled" }, { v: "system", label: "System" }, { v: "custom", label: "Custom" }]} />}
       />
-
+      <SettingRow
+        label="Path to the binary" hint="Only read when Custom is picked." disabled={source !== "custom"}
+        below={<input id="tmux-bin-path" aria-label="Path to the binary" value={path} onChange={(e) => setPath(e.target.value)} placeholder="/path/to/tmux"
+          disabled={source !== "custom" || busy} spellCheck={false} className={`t-mono w-full ${INPUT}`} style={INPUT_STYLE}
+          onKeyDown={(e) => { if (e.key === "Enter") saveSettings(); }} />}
+      />
       {/* The choice itself lives under Terminal, beside the other things that
           decide what a Terminal does; one row here so somebody who came for the
           engine still finds where a shell opens. */}
@@ -3582,8 +3539,8 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
         hint="Set under Terminal: on this engine, or on your own tmux."
         actions={<Button onClick={onGoTerminal}>Open Terminal settings</Button>}
       />
-
       {saidHere("engine")}
+      <SaveBar dirty={engineDirty} busy={busy} onSave={saveSettings} onCancel={() => { setSource(st?.source ?? "auto"); setPath(st?.bin.path || ""); }} />
     </SettingsCard>
 
     {/* The one binding everybody changes, as a choice rather than as three
@@ -3593,68 +3550,60 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
     <SettingsCard title="Prefix key" icon={<KeyboardIcon size={ICON.sm} />}>
       <SettingRow
         label="Prefix key"
-        hint={<>The chord that starts every tmux command in these panes — the engine's own, not your tmux's. tmux's default is <span className="t-mono text-[11px]">C-b</span>; pick another if that is taken by something you use. "Custom" takes tmux's spelling: <span className="t-mono text-[11px]">C-a</span>, <span className="t-mono text-[11px]">M-Space</span>, <span className="t-mono text-[11px]">F5</span>. Saving hands it to the running engine, so it applies to the panes already open — no restart.</>}
+        hint="The key you press before a tmux command."
+        detail={{ summary: "Details", body: <>The engine's own prefix, not your tmux's. tmux's default is <span className="t-mono text-[11px]">C-b</span>; pick another if that is taken by something you use. Saving hands it to the running engine, so it applies to the panes already open, with no restart.</> }}
         control={<Select value={prefixListed ? prefix : "custom"} disabled={busy} align="right" style={SELECT_BOX}
           onChange={(v) => { setPrefixCustom(v === "custom"); if (v !== "custom") setPrefix(v); }}
           options={[...PREFIXES.map((p) => ({ value: p.value, label: p.label })), { value: "custom", label: "Custom…" }]} />}
-        /* It reloads as well as saves, and a button that only says "Save"
-           over a change that lands immediately is a button people press
-           twice. */
-        actions={<Button onClick={savePrefix} disabled={busy}>Save &amp; apply</Button>}
-        below={(prefixCustom || !prefixListed) ? (
-          <SettingsForm label="Custom prefix key" onSubmit={savePrefix}>
-            <Field label="Prefix key, in tmux's spelling" htmlFor="tmux-prefix">
-              <input id="tmux-prefix" value={prefix} onChange={(e) => setPrefix(e.target.value)} placeholder="C-a" spellCheck={false}
-                className={`t-mono ${INPUT}`} style={INPUT_STYLE} />
-            </Field>
-          </SettingsForm>
-        ) : undefined}
+      />
+      <SettingRow
+        label="Custom prefix key" hint="In tmux's spelling: C-a, M-Space, F5." disabled={prefixListed && !prefixCustom}
+        below={<input id="tmux-prefix" aria-label="Custom prefix key" value={prefix} onChange={(e) => setPrefix(e.target.value)} placeholder="C-a" spellCheck={false}
+          disabled={(prefixListed && !prefixCustom) || busy} className={`t-mono w-full ${INPUT}`} style={INPUT_STYLE}
+          onKeyDown={(e) => { if (e.key === "Enter") savePrefix(); }} />}
       />
       {saidHere("prefix")}
+      <SaveBar dirty={prefixDirty} busy={busy} saveLabel="Save & apply" onSave={savePrefix} onCancel={() => { setPrefix(st?.prefix || ""); setPrefixCustom(!!st?.prefix && !PREFIXES.some((x) => x.value === st.prefix)); }} />
     </SettingsCard>
 
     <SettingsCard title="Engine config" icon={<SlidersIcon size={ICON.sm} />}
-      actions={st ? <Button onClick={resetAll} disabled={busy}>Reset tmux to defaults</Button> : undefined}
-      desc="Extra config lines for the engine's own server, validated by tmux before they apply. A rejected config leaves the engine off and chat unaffected, and Reset brings it back.">
+      desc="Extra tmux lines for the engine's own server, checked by tmux before they apply.">
       <SettingRow
         label="Mode"
-        hint={<>"Append" runs your lines after the generated base (the UI's status bar stays off — that line is re-asserted after yours); "Replace" makes your text the whole config.</>}
-        control={<Select value={confMode} onChange={setConfMode} disabled={busy} align="right" style={SELECT_BOX}
-          options={[
-            { value: "append", label: "Append to base" },
-            { value: "replace", label: "Replace everything" },
-          ]} />}
+        hint="Append keeps the shipped config; Replace is only yours."
+        detail={{ summary: "Details", body: <>"Append" runs your lines after the generated base (the UI's status bar stays off: that line is re-asserted after yours); "Replace" makes your text the whole config. A rejected config leaves the engine off and chat unaffected, and Reset brings it back.</> }}
+        wide
+        control={<SegControl label="Mode" value={confMode as "append" | "replace"} disabled={busy} onPick={setConfMode}
+          options={[{ v: "append", label: "Append" }, { v: "replace", label: "Replace" }]} />}
       />
       <SettingRow
         label="Override config"
-        hint={<>Plain tmux commands, one per line. Your ~/.tmux.conf is never read. Plugins work by adding their own <span className="t-mono text-[11px]">run-shell</span> line.</>}
-        below={
-          <SettingsForm label="Override config" onSubmit={saveConf}>
-            <Field label="tmux commands" htmlFor="tmux-override">
-              <textarea id="tmux-override" value={override} onChange={(e) => setOverride(e.target.value)} spellCheck={false} rows={6} disabled={busy}
-                placeholder={"set -g prefix C-b\nbind-key v split-window -h"}
-                className="text-[11px] t-mono px-2 py-1.5 rounded-lg bg-transparent w-full resize-y"
-                style={{ color: "var(--text2)", border: EDGE }} />
-            </Field>
-            <div><Button type="submit" disabled={busy}>Validate &amp; apply</Button></div>
-          </SettingsForm>
-        }
+        hint="tmux commands, applied after the shipped ones."
+        detail={{ summary: "Details", body: <>Plain tmux commands, one per line. Your ~/.tmux.conf is never read. Plugins work by adding their own <span className="t-mono text-[11px]">run-shell</span> line.</> }}
+        below={<textarea id="tmux-override" aria-label="Override config" value={override} onChange={(e) => setOverride(e.target.value)} spellCheck={false} rows={5} disabled={busy}
+          placeholder={"# set -g mouse on\n# set -g history-limit 50000"}
+          className={`t-mono w-full ${INPUT}`} style={{ ...INPUT_STYLE, height: "auto", resize: "vertical" }} />}
       />
       {saidHere("config")}
+      <SaveBar dirty={confDirty} busy={busy} saveLabel="Validate & apply" onSave={saveConf} onCancel={() => { setConfMode(st?.confMode ?? "append"); setOverride(st?.override ?? ""); }}
+        extra={st ? <Button tone="danger" onClick={resetAll} disabled={busy}>Reset tmux to defaults</Button> : undefined} />
     </SettingsCard>
 
     <SettingsCard title="Restore after reboot" icon={<PanesIcon size={ICON.sm} />}
+      desc="After the PC restarts the panes come back where they were."
       status={st ? <StatusBadge tone={restore ? "ok" : "off"}>{restore ? "On" : "Off"}</StatusBadge> : undefined}>
       <SettingRow
         label="Restore the layout"
         role="switch" ariaChecked={restore}
         onClick={busy ? undefined : () => savePaneField({ restore: !restore }, "Restore")}
-        hint="When the host reboots, the engine's tmux dies with it — this photographs the layout (sessions, tabs, splits, each pane's directory and start command; not what scrolled past) and rebuilds it at the next boot. Nothing here touches your own tmux or its resurrect saves."
+        hint="Windows, panes and their folders."
+        detail={{ summary: "Details", body: "When the host reboots, the engine's tmux dies with it. This photographs the layout (sessions, tabs, splits, each pane's directory and start command; not what scrolled past) and rebuilds it at the next boot. Nothing here touches your own tmux or its resurrect saves." }}
         control={<Switch on={restore} busy={busy} />}
       />
       <SettingRow
         label="Resume mode"
-        hint={<>"Lazy" restores the tree and resumes each agent when you reopen its chat; "All" relaunches every recorded CLI, resuming each conversation.</>}
+        hint="What an agent pane does when it comes back."
+        detail={{ summary: "Details", body: <>"Lazy" restores the tree and resumes each agent when you reopen its chat; "All" relaunches every recorded CLI, resuming each conversation.</> }}
         control={<Select value={resume} onChange={(v) => savePaneField({ resume: v === "all" ? "all" : "lazy" }, "Resume mode")} disabled={busy || !restore} align="right" style={SELECT_BOX}
           options={[
             { value: "lazy", label: "Lazy resume" },
@@ -3668,13 +3617,16 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
         <SettingRow
           label="Layout left alone"
           status={<StatusBadge tone="warn">Skipped</StatusBadge>}
-          hint={`${st.crashLoop.launches} launches in ten minutes looked like a crash loop, so this start neither restored nor re-captured. Restore it by hand below once the app is stable, or delete ${st.crashLoop.file} to clear this.`}
+          hint="This start neither restored nor captured."
+          detail={{ summary: "Details", body: `${st.crashLoop.launches} launches in ten minutes looked like a crash loop. Restore it by hand below once the app is stable, or delete ${st.crashLoop.file} to clear this.` }}
         />
       )}
       {st?.lastCaptureAt ? (
         <SettingRow
           label="Last layout capture"
-          hint={`Taken ${new Date(st.lastCaptureAt).toLocaleString()}. Captures run every minute while the engine is on.`}
+          hint="The restore rebuilds from this."
+          status={<StatusBadge tone="ok">{ago(st.lastCaptureAt)}</StatusBadge>}
+          detail={{ summary: "Details", body: `Taken ${new Date(st.lastCaptureAt).toLocaleString()}. Captures run every minute while the engine is on.` }}
           below={<span className="flex flex-wrap items-center gap-2">
             <Button onClick={() => restoreAction("capture")} disabled={busy}>Capture now</Button>
             <Button onClick={() => restoreAction("restore")} disabled={busy}>Restore now</Button>
@@ -3684,7 +3636,7 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
       ) : (
         <SettingRow
           label="Restore state"
-          hint="Nothing captured yet — enable Restore and the next sweep photographs the layout."
+          hint="Nothing captured yet. Turn on Restore and the next sweep photographs the layout."
         />
       )}
       {saidHere("restore")}
@@ -3715,7 +3667,6 @@ function CardTrackerSection() {
     }).catch(() => { /* the section stays empty rather than guessing */ });
     return () => { live = false; };
   }, [both]);
-  if (!both) return null;
   const pick = async (repo: string, v: TrackerChoice) => {
     const r = await api.setTrackerProject(repo, v);
     if (!r.ok) { setNote(r.error ?? "Could not save that"); return; }
@@ -3723,17 +3674,44 @@ function CardTrackerSection() {
     rememberTrackerChoices(r.projects ?? {});
     setRows((cur) => cur && { ...cur, chosen: r.projects ?? {} });
   };
+  const only = setup?.jira ? "Jira" : setup?.clickup ? "ClickUp" : null;
   return (
     <SettingsCard title="Card tracker" icon={<ChecklistIcon size={ICON.sm} />}
-      desc={<>Which tracker a repository's cards live in. Auto reads the id's prefix.
+      desc={<>Where a card id in a branch or pull request is looked up.
         {note && <span className="block mt-1" role="alert" style={{ color: "var(--error-ink)" }}>{note}</span>}</>}>
-      {!rows?.repos.length && <EmptyState>No repositories to choose for yet.</EmptyState>}
-      {rows?.repos.map((repo) => (
-        <Choice<TrackerChoice> key={repo} label={repo} hint="Where a card id in this repository's branches and pull requests is looked up."
-          value={rows.chosen[repo.toLowerCase()] ?? "auto"} onPick={(v) => void pick(repo, v)}
-          options={[{ v: "auto", label: "Auto" }, { v: "clickup", label: "ClickUp" }, { v: "jira", label: "Jira" }]} />
-      ))}
+      {both ? (<>
+        {!rows?.repos.length && <EmptyState>No repositories to choose for yet.</EmptyState>}
+        {rows?.repos.map((repo) => (
+          <Choice<TrackerChoice> key={repo} label={repo} hint="Auto reads the id's prefix."
+            value={rows.chosen[repo.toLowerCase()] ?? "auto"} onPick={(v) => void pick(repo, v)}
+            options={[{ v: "auto", label: "Auto" }, { v: "clickup", label: "ClickUp" }, { v: "jira", label: "Jira" }]} />
+        ))}
+      </>) : (
+        <SettingRow agentExempt label="Look it up in"
+          hint={only ? "The one tracker connected." : "No tracker connected, so no card is looked up."}
+          detail={only ? undefined : { summary: "Details", body: "Connect ClickUp or Jira under Tools & services and a card id in a branch or pull request is found on its board." }}
+          status={<StatusBadge tone={only ? "ok" : "off"}>{only ?? "None"}</StatusBadge>} />
+      )}
+      <SettingRow agentExempt label="Card id rule" hint="A key like ORBIT-1042 in a branch or title."
+        detail={{ summary: "Details", body: <>A card id is letters, a dash and two to seven digits (<span className="t-mono text-[11px]">ORBIT-1042</span>), found anywhere in a branch name or pull request title. A Jira key must also match a project of the connected site. The rule is built in; it is not editable.</> }} />
+      <TryBranch prefixes={setup?.jira?.prefixes ?? []} clickupPrefix={setup?.clickup?.prefix} />
     </SettingsCard>
+  );
+}
+
+/** Types a branch name and shows what the app would read as its card: the same function the pull request list uses. */
+function TryBranch({ prefixes, clickupPrefix }: { prefixes: readonly string[]; clickupPrefix?: string }) {
+  const [text, setText] = useState("feat/ORBIT-1042-retry");
+  const id = cardIdIn(text);
+  const prefix = id?.split("-")[0]?.toLowerCase();
+  const tracker = !id ? "" : prefixes.some((x) => x.toLowerCase() === prefix) ? " · Jira" : clickupPrefix && clickupPrefix.toLowerCase() === prefix ? " · ClickUp" : "";
+  return (
+    <SettingRow agentExempt label="Try a branch" hint="See what the rule finds."
+      below={<div className="flex items-center gap-3">
+        <input value={text} onChange={(e) => setText(e.target.value)} spellCheck={false} aria-label="Branch name to try"
+          className={`t-mono min-w-0 flex-1 ${INPUT}`} style={INPUT_STYLE} />
+        <span data-try-branch><StatusBadge tone={id ? "ok" : "off"}>{id ? `${id.toUpperCase()}${tracker}` : "No card id"}</StatusBadge></span>
+      </div>} />
   );
 }
 
@@ -4082,6 +4060,10 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
    * defaults. The ceiling: those two rows have no dot and no reset until a
    * confirm step exists for them.
    */
+  // Re-read when the rail or a count badge moves, so the header's reset follows it.
+  useSyncExternalStore(subscribeRail, railCustomised, railCustomised);
+  useSyncExternalStore(subscribeRailBadges, railBadgesKey, railBadgesKey);
+  const railLaidOut = railCustomised() || railBadgesCustomised();
   const pageDirty: Partial<Record<Pane, { modified: boolean; reset: () => void }[]>> = {
     prefs: [
       { modified: !splash, reset: () => { setSplashOn(true); setSplash(true); } },
@@ -4107,6 +4089,9 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
       { modified: !groupsOn, reset: () => { setTabGroupsOn(true); setGroupsOn(true); } },
       { modified: scrollback !== DEFAULT_SCROLLBACK, reset: () => { setScrollback(DEFAULT_SCROLLBACK); setScrollbackState(DEFAULT_SCROLLBACK); } },
     ],
+    rail: [
+      { modified: railLaidOut, reset: () => { resetRail(); resetRailBadges(); } },
+    ],
     diff: [
       { modified: dSplit !== DEFAULT_SPLIT, reset: () => { setDiffSplit(DEFAULT_SPLIT); setDSplitState(DEFAULT_SPLIT); } },
       { modified: dWrap !== DEFAULT_WRAP, reset: () => { setDiffWrap(DEFAULT_WRAP); setDWrapState(DEFAULT_WRAP); } },
@@ -4119,6 +4104,9 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
      move is on screen before the write has settled. */
   const [, setSourceTick] = useState(0);
   const sourceOrder = orderedTaskSources();
+  const trackerSetup = useTrackerSetup();
+  const shownSources = shownTaskSources().length;
+  useEffect(() => { setPageFact("taskSources", shownSources); }, [shownSources]);
   const [landing, setLandingState] = useState<TaskLanding>(() => taskLanding());
   const [keyError, setKeyError] = useState<{ id: ActionId; msg: string } | null>(null);
   useEffect(() => subscribeBindings(() => setKeys({ ...bindings() })), []);
@@ -4360,6 +4348,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
       return next;
     }),
   }), []);
+  const pageFacts = usePageFacts();
   const marks = useMemo(() => withProblems(withNeeds(navMarks({
     ...NO_FACTS, ...facts,
     connectionsNeed: badges.connections ?? null,
@@ -4439,9 +4428,9 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
               {navTab && (
                 <SettingsPageHeader
                   label={navTab.label} group={groupByName(navTab.group) ?? null} icon={navTab.icon} what={navTab.what}
-                  chips={headerChips(navTab.id, marks[navTab.id] ?? NO_MARK, saving.has(navTab.id), savedPages.has(navTab.id))}
+                  chips={pageChips(navTab.id, headerChips(navTab.id, marks[navTab.id] ?? NO_MARK, saving.has(navTab.id), savedPages.has(navTab.id)), pageFacts)}
                   primary={problems[navTab.id] ? <Button tone="primary" onClick={() => retries.current[navTab.id]?.()}>Try again</Button> : undefined}
-                  reset={pageModified(navTab.id) || ALWAYS_RESET.has(navTab.id) ? <Button disabled={!pageModified(navTab.id)} onClick={() => resetPage(navTab.id)}>Reset page</Button> : undefined} />
+                  reset={pageModified(navTab.id) || ALWAYS_RESET.has(navTab.id) ? <Button disabled={!pageModified(navTab.id)} onClick={() => resetPage(navTab.id)}>{RESET_WORD[navTab.id] ?? "Reset page"}</Button> : undefined} />
               )}
               {/* The page's hue (its group's) tints every card's icon chip; a board's width
                   is set here, on the ancestor of both the grid that reads it and the
@@ -4488,7 +4477,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                     <Choice<RendererPref>
                       settingId="terminal.renderer"
                       label="Terminal renderer"
-                      hint="GPU is fastest; Canvas is nearly as fast and never blanks; DOM is the slow fallback. Applies to newly opened shells."
+                      hint="GPU is fastest; Canvas never blanks; DOM is the slow fallback."
+                      detail={{ summary: "Details", body: <>GPU is fastest; Canvas is nearly as fast and never blanks; DOM is the slow fallback. A change applies to newly opened shells.</> }}
                       value={renderer} modified={renderer !== "auto"}
                       onPick={(v) => { setting("terminal.renderer").set(v); setRenderer(v); }}
                       options={[
@@ -4515,16 +4505,11 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                     <SettingRow
                       settingId="terminal.font"
                       label="Font" modified={termFont !== ""}
-                      hint={<>
-                        These faces ship with agentglass — no install needed, and they render the same on
-                        any machine.
+                      hint="These faces ship with agentglass."
+                      detail={{ summary: "Details", body: <>No install needed, and they render the same on any machine.
                         {TERM_FONTS.filter((f) => !(f.bundled || fontAvailable(f.family))).length > 0 && (
-                          <span className="block mt-0.5">
-                            Not on this machine:{" "}
-                            {TERM_FONTS.filter((f) => !(f.bundled || fontAvailable(f.family))).map((f) => f.name).join(", ")}.
-                          </span>
-                        )}
-                      </>}
+                          <> Not on this machine: {TERM_FONTS.filter((f) => !(f.bundled || fontAvailable(f.family))).map((f) => f.name).join(", ")}.</>
+                        )}</> }}
                       control={<span className="flex justify-end"><Select
                         align="right"
                         value={termFont}
@@ -4550,7 +4535,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                     <Stepper
                       settingId="terminal.fontSize"
                       label="Font size"
-                      hint={`Applies live to every open terminal, and is remembered. ${MOD_KEY}+ / ${MOD_KEY}− with the pointer over a terminal does the same without touching the window.`}
+                      hint="Applies live to every open terminal."
+                      detail={{ summary: "Details", body: `Remembered between launches. ${MOD_KEY}+ / ${MOD_KEY}− with the pointer over a terminal does the same without touching the window.` }}
                       value={`${termSize}px`} modified={termSize !== DEFAULT_SIZE}
                       onDec={() => { const n = Math.max(SIZE_MIN, termSize - 1); setting("terminal.fontSize").set(n); setTermSizeState(n); }}
                       onInc={() => { const n = Math.min(SIZE_MAX, termSize + 1); setting("terminal.fontSize").set(n); setTermSizeState(n); }}
@@ -4563,9 +4549,10 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                     <Stepper
                       settingId="terminal.lineHeight"
                       label="Line height"
-                      hint={termLine > LINE_HEIGHT_MIN
+                      hint="Space between rows."
+                      detail={{ summary: "Details", body: termLine > LINE_HEIGHT_MIN
                         ? "Above 1, box-drawing rules — the divider between tmux panes, the frames around an agent's output — are drawn with a gap on every row wherever the GPU renderer is off (the default on Linux). 1 keeps them solid."
-                        : "Space between rows. 1 keeps box-drawing rules solid, which is what a terminal is normally set to."}
+                        : "1 keeps box-drawing rules solid, which is what a terminal is normally set to. Above 1, they are drawn with a gap on every row wherever the GPU renderer is off (the default on Linux)." }}
                       value={termLine.toFixed(2).replace(/0$/, "")} modified={termLine !== DEFAULT_LINE_HEIGHT}
                       onDec={() => { const n = Math.max(LINE_HEIGHT_MIN, Math.round((termLine - 0.05) * 100) / 100); setting("terminal.lineHeight").set(n); setTermLineState(n); }}
                       onInc={() => { const n = Math.min(LINE_HEIGHT_MAX, Math.round((termLine + 0.05) * 100) / 100); setting("terminal.lineHeight").set(n); setTermLineState(n); }}
@@ -4587,7 +4574,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                         the click. */}
                     <Toggle on={ffm} modified={ffm} onClick={() => { const v = !ffm; setting("terminal.focusFollowsMouse").set(v); setFfm(v); }}
                       settingId="terminal.focusFollowsMouse" label="Focus follows mouse"
-                      hint="Hovering a terminal pane types into it, without a click first. Only terminals — the rest of the app still waits to be clicked." />
+                      hint="A pane takes focus when the pointer enters it. Only terminals." />
                     {/* On by default, because it is what this terminal has
                         always done — the switch is for the machine where the
                         clipboard is shared with something that reacts to it. */}
@@ -4600,37 +4587,38 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                     <Toggle on={paneActs !== "off"} modified={paneActs !== "hover"}
                       onClick={() => { const v = paneActs === "off" ? "hover" : "off"; setting("terminal.paneBar").set(v === "hover"); setPaneActs(v); }}
                       settingId="terminal.paneBar" label="Bar on a pane"
-                      hint="Point at the seam along a pane's bottom edge and its branch, changes, pull request and card rise out of it." />
+                      hint="Point at a pane's bottom edge: branch, changes, PR and card."  />
                     <Toggle on={copySel} modified={!copySel} onClick={() => { const v = !copySel; setting("terminal.copyOnSelect").set(v); setCopySel(v); }}
                       settingId="terminal.copyOnSelect" label="Copy on select"
-                      hint="A selection is on the clipboard the instant you make it, the way tmux does it — no Ctrl+Shift+C." />
+                      hint="A selection is on the clipboard at once, as in tmux." />
                     <Toggle on={rcPaste} modified={rcPaste} onClick={() => { const v = !rcPaste; setRightClickPaste(v); setRcPaste(v); }}
                       agentNever="a click then types the clipboard into a live shell: not something an agent switches on for the owner"
                       label="Right-click to paste"
-                      hint="Right-click pastes the clipboard into the shell instead of opening the menu. Ctrl+right-click still opens it." />
+                      hint="Right-click pastes; Ctrl+right-click opens the menu." />
                   </SettingsCard>
 
                   <SettingsCard title="Tab groups" icon={<ColumnsIcon size={ICON.sm} />}
-                    desc="With tmux, the tabs are grouped by the project each window is working in. The group you are in is open; the others fold into a chip that still shows what their agents are doing.">
+                    desc="Tabs grouped by the project each window is working in.">
                     <Toggle on={groupsOn} modified={!groupsOn} onClick={() => { const v = !groupsOn; setting("terminal.tabGroups").set(v); setGroupsOn(v); }}
                       settingId="terminal.tabGroups" label="Group tabs by project"
-                      hint="Off draws every tab in one row, in tmux's order. Right-click a tab to pin it first in its group or move it to another; drag it onto a group to do the same." />
+                      hint="Off draws every tab in one row, in tmux's order."
+                      detail={{ summary: "Details", body: "The group you are in is open; the others fold into a chip that still shows what their agents are doing. Right-click a tab to pin it first in its group or move it to another; drag it onto a group to do the same." }} />
                     {/* The tie-break for a window whose folder is not its
                         project. None ship: a rule is a guess about how
                         somebody names things, and the folder is right for
                         everyone else. */}
                     <SettingRow
                       settingId="terminal.tabGroupRules" label="Group by name" modified={groupRules !== ""}
-                      hint={<>A window whose name starts with a prefix goes to that group, whatever folder it runs in. Pairs like <span className="t-mono text-[11px]">agx=agentglass, ops=infra</span>. {parseRules(groupRules).length
-                        ? `${parseRules(groupRules).length} ${parseRules(groupRules).length === 1 ? "rule" : "rules"} in use.`
-                        : "None yet — windows are grouped by their folder."}</>}
+                      hint={parseRules(groupRules).length
+                        ? `${parseRules(groupRules).length} ${parseRules(groupRules).length === 1 ? "rule" : "rules"} in use. One per line: prefix=group.`
+                        : "None yet: windows are grouped by their folder. One per line: prefix=group."}
+                      detail={{ summary: "Details", body: <>A window whose name starts with a prefix goes to that group, whatever folder it runs in, like <span className="t-mono text-[11px]">agx=agentglass</span>.</> }}
                       below={
-                        <input value={groupRules} onChange={(e) => setGroupRules(e.target.value)}
+                        <textarea value={groupRules} onChange={(e) => setGroupRules(e.target.value)} rows={3}
                           onBlur={() => { setting("terminal.tabGroupRules").set(groupRules); }}
-                          onKeyDown={(e) => { if (e.key === "Enter") setting("terminal.tabGroupRules").set(groupRules); }}
-                          placeholder="agx=agentglass" spellCheck={false} aria-label="Group-by-name rules"
+                          placeholder={"agx=agentglass\nops=infra"} spellCheck={false} aria-label="Group-by-name rules"
                           className={`t-mono w-full ${INPUT}`}
-                          style={INPUT_STYLE} />
+                          style={{ ...INPUT_STYLE, height: "auto", resize: "vertical" }} />
                       } />
                   </SettingsCard>
 
@@ -4642,19 +4630,17 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                         purpose. */}
                     <Choice<string>
                       settingId="terminal.scrollback" label="Scrollback"
-                      hint={scrollback > DEFAULT_SCROLLBACK
+                      hint="Lines kept per shell."
+                      detail={{ summary: "Details", body: scrollback > DEFAULT_SCROLLBACK
                         ? `${scrollback.toLocaleString()} lines are kept per shell. Every line is cell data held in memory and reflowed on every resize — with several shells open, that is where a drag starts to stutter.`
-                        : "How many lines each shell keeps. Applies live; the larger sizes cost memory per shell and make resizing slower."}
+                        : "Applies live. The larger sizes cost memory per shell and make resizing slower." }}
                       value={String(scrollback)} modified={scrollback !== DEFAULT_SCROLLBACK}
                       onPick={(v) => { const n = Number(v); setting("terminal.scrollback").set(n); setScrollbackState(n); }}
                       options={SCROLLBACK_SIZES.map((n) => ({ v: String(n), label: n >= 1000 ? `${n / 1000}k` : String(n) }))} />
                     <SettingRow
                       settingId="terminal.wordSeparators" label="Word separators"
                       modified={wordSep !== DEFAULT_WORD_SEPARATORS}
-                      hint={<>
-                        What a double-click stops at. Take out <code>/</code> — it is not there by default — and a path
-                        selects whole; leave the box empty and a double-click takes the line.
-                      </>}
+                      hint="Characters a double-click stops at. Empty takes the line."
                       control={
                         <span className="flex justify-end">
                           <Button onClick={() => { setting("terminal.wordSeparators").set(DEFAULT_WORD_SEPARATORS); setWordSepState(DEFAULT_WORD_SEPARATORS); }}
@@ -4674,7 +4660,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   <SettingsCard title="Bench note" icon={<EditIcon size={ICON.sm} />}
                     desc="The note tab of the floating bench.">
                     <Choice<NoteEditor> settingId="terminal.noteEditor" label="Note editor" value={noteEd} modified={noteEd !== "builtin"}
-                      hint="Neovim opens the same note file in a terminal on the bench. Without nvim installed the built-in editor is used."
+                      hint="Neovim needs nvim installed; else the built-in one."
                       options={NOTE_EDITORS} onPick={(v) => { setting("terminal.noteEditor").set(v); setNoteEd(v); }} />
                   </SettingsCard>
                   </>)}
@@ -4689,18 +4675,21 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                     <Choice<"split" | "inline">
                       settingId="diff.split" wide
                       label="Default view"
-                      hint="How file changes, source control and pull requests open a diff. The toggle in each panel still overrides it for that diff."
+                      hint="The view you land on."
+                      detail={{ summary: "Details", body: "How file changes, source control and pull requests open a diff. The toggle in each panel still overrides it for that diff." }}
                       value={dSplit ? "split" : "inline"} modified={dSplit !== DEFAULT_SPLIT}
                       onPick={(v) => { setting("diff.split").set(v); setDSplitState(v === "split"); }}
-                      options={[{ v: "split", label: "Side by side" }, { v: "inline", label: "Inline" }]} />
+                      options={[{ v: "split", label: "Split" }, { v: "inline", label: "Inline" }]} />
                     <Toggle on={dWrap} modified={dWrap !== DEFAULT_WRAP} onClick={() => { const v = !dWrap; setting("diff.wrap").set(v); setDWrapState(v); }}
                       settingId="diff.wrap"
                       label="Wrap long lines"
-                      hint="Wrap instead of scrolling sideways. Off keeps the columns aligned, which is what makes a code diff scannable; on is what a markdown or prose diff wants." />
+                      hint="Off scrolls sideways instead."
+                      detail={{ summary: "Details", body: "Off keeps the columns aligned, which is what makes a code diff scannable; on is what a markdown or prose diff wants." }} />
                     <SettingRow
                       settingId="diff.syntaxTheme"
                       label="Diff syntax theme"
-                      hint="The colours code takes in a diff. Auto follows the app's light or dark; the toolbar in a diff changes the same setting."
+                      hint="Colours for code inside a diff."
+                      detail={{ summary: "Details", body: "Auto follows the app's light or dark; the toolbar in a diff changes the same setting." }}
                       control={<span className="flex justify-end"><Select align="right" value={dTheme}
                         onChange={(v) => { setting("diff.syntaxTheme").set(v); setDThemeState(v); }}
                         options={[
@@ -4720,7 +4709,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                         include your ClickUp cards. See taskLanding.ts. */}
                     <SettingRow
                       settingId="tasks.landing" label="Tasks view opens on"
-                      hint="Where the Tasks view lands when you come back to it. “Last used” picks up where you left off; naming a source pins it there whatever you did last. Following a card link from a pull request never changes this."
+                      hint="Where the view lands when you come back."
+                      detail={{ summary: "Details", body: "“Last used” picks up where you left off; naming a source pins it there whatever you did last. Following a card link from a pull request never changes this." }}
                       control={<span className="flex justify-end"><Select align="right" value={landing}
                         onChange={(v) => { setting("tasks.landing").set(v); setLandingState(v as TaskLanding); }}
                         options={[
@@ -4730,7 +4720,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                         ]} /></span>} />
                   </SettingsCard>
                   <SettingsCard title="Task sources" icon={<ColumnsIcon size={ICON.sm} />}
-                    desc="Which sources the bar offers, and in what order. One has to stay on, and a source you have not set up is left off by itself — until none is set up, when all of them show, because the bar is then the only place to find them. Connect them under Tools & services."
+                    desc="Every source adds its cards to the same board."
                     actions={<Button onClick={() => { resetTaskSourceOrder(); setSourceTick((n) => n + 1); }}>Reset order</Button>}>
                     {/* Order is the row's own, and the arrows move a source
                         through the FULL list rather than the visible one — see
@@ -4739,8 +4729,11 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                         target would be the one that does not. */}
                     {sourceOrder.map((id, i) => (
                       <SourceRow key={id} id={id} i={i} n={sourceOrder.length}
-                        onChanged={() => setSourceTick((n) => n + 1)} />
+                        onChanged={() => setSourceTick((n) => n + 1)}
+                        state={id === "clickup" ? (trackerSetup?.clickup ? "connected" : "off") : id === "jira" ? (trackerSetup?.jira ? "connected" : "off") : undefined} />
                     ))}
+                    <SettingRow agentExempt label="How sources are chosen" hint="One has to stay on."
+                      detail={{ summary: "Details", body: "A source you have not set up is left off by itself, until none is set up, when all of them show, because the bar is then the only place to find them. Connect them under Tools & services." }} />
                   </SettingsCard>
                   <CardTrackerSection />
                   </>
@@ -4899,125 +4892,118 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
 
                   {ql && show("keys") && <PageMatchHeading id="keys" onOpen={() => { setPane("keys" as Pane); setQ(""); }} />}
 
-                  {show("keys") && (
-                  <>
-                    {/*
-                      * Grouped by WHERE the key works, not listed flat.
-                      *
-                      * Fourteen identical rows hid the only rule on the page —
-                      * a view has two bindings because it is reachable from two
-                      * places, and everything else has one because it is not.
-                      * Two eyebrows say that without a paragraph, and the
-                      * paragraph that used to say it is now a fold nobody has
-                      * to read.
-                      */}
-                    {(() => {
-                      const ids = Object.keys(DEFAULTS) as ActionId[];
-                      const viewIds = ids.filter((id) => id.startsWith("view."));
-                      const rest = ids.filter((id) => !id.startsWith("view."));
-                      const row = (id: ActionId) => {
-                        const view = id.startsWith("view.") ? (id.slice(5) as ViewId) : null;
-                        return (
-                          <KeyRow key={id} id={id} keyName={keys[id]}
-                            capturing={capturing === id}
-                            error={keyError?.id === id ? keyError.msg : null}
-                            onCapture={() => { setKeyError(null); setCapturingChord(null); setCapturing((c) => (c === id ? null : id)); }}
-                            chord={view ? {
-                              key: chordFor(view),
-                              custom: hasCustomChord(view),
-                              capturing: capturingChord === view,
-                              onCapture: () => { setKeyError(null); setCapturing(null); setCapturingChord((c) => (c === view ? null : view)); },
-                              onClear: () => { clearChord(view); setKeys({ ...bindings() }); },
-                            } : undefined} />
-                        );
-                      };
-                      return (
-                        <>
-                          {/*
-                            * Its own group, above the rest, because it is the
-                            * only binding on this page that keeps working with
-                            * the caret inside a running shell — the terminal is
-                            * told to hand it over rather than pass it to the
-                            * PTY. That is also why it is the one most likely to
-                            * collide with something you already use, and so the
-                            * one that most needs to be movable.
-                            */}
-                          <SettingsCard title="Even inside a shell" icon={<KeyboardIcon size={ICON.sm} />}
-                            desc={<>The terminal gives this one up so it reaches the app. Pick something your
-                            shell does not want — the shipped {chordLabel(APP_CHORD_DEFAULTS["files.palette"])} is
-                            free in bash, tmux and vim; plain Ctrl+P is not.</>}>
-                          {(Object.keys(APP_CHORD_LABELS) as AppChordId[]).map((id) => (
+                  {show("keys") && (() => {
+                    const ids = Object.keys(DEFAULTS) as ActionId[];
+                    const viewIds = ids.filter((id) => id.startsWith("view.")) as `view.${ViewId}`[];
+                    const rest = ids.filter((id) => !id.startsWith("view."));
+                    const stop = () => { setKeyError(null); setCapturing(null); setCapturingChord(null); setCapturingApp(null); };
+                    return (
+                    <>
+                      {/*
+                        * Grouped by WHERE the key works, as the mockup draws it, and one line a key:
+                        * a name, the key as keycaps, Rebind. A view has two bindings because it is
+                        * reachable from two places, so it is in two cards, once in each, rather
+                        * than two columns of chips in one row (which is what made a 1,300px card
+                        * that left two thirds of a wide window empty).
+                        */}
+                      <SettingsCard title="Anywhere" icon={<KeyboardIcon size={ICON.sm} />}
+                        desc="Works in every view, also while a terminal has focus.">
+                        {viewIds.map((id) => {
+                          const view = id.slice(5) as ViewId;
+                          const key = chordFor(view);
+                          const cap = capturingChord === view;
+                          return (
                             <SettingRow key={id}
-                              label={<span onClick={() => { setKeyError(null); setCapturing(null); setCapturingChord(null); setCapturingApp((c) => (c === id ? null : id)); }}
-                                className="cursor-pointer">{APP_CHORD_LABELS[id].label}</span>}
-                              hint={<span style={{ color: appKeyError?.id === id ? "var(--error)" : undefined }}
-                                className={appKeyError?.id === id ? "" : "t-dim"}>
-                                {appKeyError?.id === id ? appKeyError.msg : APP_CHORD_LABELS[id].hint}
-                              </span>}
+                              agentNever="a chord that is delivered while a terminal has the focus, so a binding made for the owner could shadow a key their shell needs"
+                              label={<span onClick={() => { stop(); setCapturingChord(view); }} className="cursor-pointer">{keyRowName(id)}</span>}
                               control={<span className="flex items-center gap-1.5 justify-self-end">
-                                <RebindButton capturing={capturingApp === id} what={APP_CHORD_LABELS[id].label}
-                                  onClick={() => { setKeyError(null); setCapturing(null); setCapturingChord(null); setCapturingApp((c) => (c === id ? null : id)); }} />
-                                <button onClick={() => { setKeyError(null); setCapturing(null); setCapturingChord(null); setCapturingApp((c) => (c === id ? null : id)); }}
-                                  title={hasCustomAppChord(id)
-                                    ? `${chordLabel(appChordFor(id))} opens this — click to record another`
-                                    : `${chordLabel(appChordFor(id))} opens this — click to record your own`}
-                                  className="chip h-[22px] justify-center text-[11px] tabular-nums min-w-[110px] text-center"
-                                  style={capturingApp === id
-                                    ? { color: "var(--primary-hover)", borderColor: "color-mix(in srgb, var(--primary) 60%, transparent)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }
-                                    : hasCustomAppChord(id) ? { color: "var(--primary-hover)" } : { color: "var(--text2)" }}>
-                                  {capturingApp === id ? "Hold a combo…" : chordLabel(appChordFor(id))}
-                                </button>
+                                <KeyCaps text={cap ? "Hold a combo…" : key ? chordLabel(key) : "—"} active={cap} custom={hasCustomChord(view)} faint={!key && !cap}
+                                  onClick={() => { stop(); setCapturingChord((c) => (c === view ? null : view)); }}
+                                  title={hasCustomChord(view)
+                                    ? `${chordLabel(key)} opens this: click to record another`
+                                    : key ? `${chordLabel(key)} opens this, from its position in the top group: click to record your own`
+                                      : "Only the top group is numbered: click to record a combination for this one"} />
+                                {hasCustomChord(view) && !cap && <CloseButton onClick={() => { clearChord(view); setKeys({ ...bindings() }); }} title="Back to its position in the rail" />}
+                                <RebindButton capturing={cap} what={keyRowName(id)} onClick={() => { stop(); setCapturingChord((c) => (c === view ? null : view)); }} />
                               </span>} />
-                          ))}
-                          </SettingsCard>
-                          {rest.length > 0 && (
-                            <SettingsCard title="Anywhere" icon={<KeyboardIcon size={ICON.sm} />}
-                              desc="A held combination, so it cannot be swallowed by whatever has focus.">
-                              {rest.map(row)}
-                            </SettingsCard>
-                          )}
-                          {viewIds.length > 0 && (
-                            <SettingsCard title="Only on the dashboard" icon={<KeyboardIcon size={ICON.sm} />}
-                              desc="A single key each — inside the workspace every keystroke belongs to a shell. The second column is the chord that reaches them from in there.">
-                              {viewIds.map(row)}
-                              {/* Says why the rest of the keyboard is not on this list.
-                                  Read once, by somebody wondering why their key was
-                                  refused — so it waits to be asked. */}
-                              <SettingRow agentExempt label="Anywhere and dashboard"
-                                hint="Why some views have two keys and the rest one."
-                                detail={{
-                                  summary: "Why some keys are two columns and others one",
-                                  body: <>
-                                    <p className="m-0 mb-2">
-                                      <b style={{ color: "var(--text)" }}>anywhere</b> — hold any combination you like
-                                      ({MOD_KEY}J, {MOD_KEY}Alt+J, Alt+Shift+J) and it is recorded as held. Left alone it
-                                      follows the view's position in the rail, so reordering keeps it true.
-                                    </p>
-                                    <p className="m-0">
-                                      <b style={{ color: "var(--text)" }}>dashboard</b> — a single key, and only on the
-                                      dashboard: inside the workspace every keystroke belongs to whatever has focus,
-                                      usually a shell. {MOD_KEY}\\, {MOD_KEY}K and {MOD_KEY}[ / {MOD_KEY}] stay put.
-                                    </p>
-                                  </>,
-                                }} />
-                            </SettingsCard>
-                          )}
-                        </>
-                      );
-                    })()}
-                    {(isCustomised() || chordsCustomised() || appChordsCustomised()) && (
+                          );
+                        })}
+                      </SettingsCard>
+                      <SettingsCard title="Only on the dashboard" icon={<DashIcon size={ICON.sm} />}
+                        desc="Single keys that would type into a shell, so they stay out of terminals.">
+                        {[...viewIds, ...rest].map((id) => {
+                          const err = keyError?.id === id ? keyError.msg : null;
+                          const keyName = keys[id];
+                          const cap = capturing === id;
+                          const begin = () => { setKeyError(null); setCapturingChord(null); setCapturingApp(null); setCapturing((c) => (c === id ? null : id)); };
+                          return (
+                            <SettingRow key={id} settingId={`keys.binding.${id}`}
+                              label={<span onClick={begin} className="cursor-pointer">{keyRowName(id)}</span>}
+                              hint={err ? <span style={{ color: "var(--error-ink)" }}>{err}</span> : id.startsWith("view.") ? undefined : <span className="t-dim">{LABELS[id].hint}</span>}
+                              control={<span className="flex items-center gap-1.5 justify-self-end">
+                                <KeyCaps text={cap ? "Press a key…" : keyName === " " ? "space" : keyName} active={cap} onClick={begin} />
+                                <RebindButton capturing={cap} what={keyRowName(id)} onClick={begin} />
+                              </span>} />
+                          );
+                        })}
+                      </SettingsCard>
+                      {/*
+                        * Its own card, because it is the only binding on this page that keeps working with
+                        * the caret inside a running shell — the terminal is told to hand it over rather
+                        * than pass it to the PTY. That is also why it is the one most likely to collide
+                        * with something you already use, and so the one that most needs to be movable.
+                        */}
+                      <SettingsCard title="Even inside a shell" icon={<TerminalIcon size={ICON.sm} />}
+                        desc={<>A held combination the terminal gives up so it reaches the app. The shipped {chordLabel(APP_CHORD_DEFAULTS["files.palette"])} is free in bash, tmux and vim.</>}>
+                        {(Object.keys(APP_CHORD_LABELS) as AppChordId[]).map((id) => {
+                          const cap = capturingApp === id;
+                          const begin = () => { setKeyError(null); setCapturing(null); setCapturingChord(null); setCapturingApp((c) => (c === id ? null : id)); };
+                          const err = appKeyError?.id === id ? appKeyError.msg : null;
+                          return (
+                            <SettingRow key={id}
+                              agentNever="a chord that is delivered while a terminal has the focus, so a binding made for the owner could shadow a key their shell needs"
+                              label={<span onClick={begin} className="cursor-pointer">{APP_CHORD_LABELS[id].label}</span>}
+                              hint={<span style={{ color: err ? "var(--error-ink)" : undefined }} className={err ? "" : "t-dim"}>{err ?? APP_CHORD_LABELS[id].hint}</span>}
+                              control={<span className="flex items-center gap-1.5 justify-self-end">
+                                <KeyCaps text={cap ? "Hold a combo…" : chordLabel(appChordFor(id))} active={cap} custom={hasCustomAppChord(id)} onClick={begin}
+                                  title={`${chordLabel(appChordFor(id))} opens this: click to record ${hasCustomAppChord(id) ? "another" : "your own"}`} />
+                                <RebindButton capturing={cap} what={APP_CHORD_LABELS[id].label} onClick={begin} />
+                              </span>} />
+                          );
+                        })}
+                      </SettingsCard>
                       <SettingsCard title="Defaults" icon={<SlidersIcon size={ICON.sm} />}>
                         <SettingRow
                           agentExempt label="Reset to defaults"
-                          hint="Puts every key and every chord back to the shipped one."
-                          actions={<Button onClick={() => { resetBindings(); resetChords(); resetAppChords(); setKeyError(null); setAppKeyError(null); setCapturing(null); setCapturingChord(null); setCapturingApp(null); }}>
-                            Reset
-                          </Button>}
-                        />
+                          hint="Puts every key and chord back to the shipped one."
+                          control={<Button tone="danger" disabled={!(isCustomised() || chordsCustomised() || appChordsCustomised())}
+                            onClick={() => { resetBindings(); resetChords(); resetAppChords(); setKeyError(null); setAppKeyError(null); stop(); }}>
+                            Reset to defaults
+                          </Button>} />
+                        {/* Says why the rest of the keyboard is not on this list.
+                            Read once, by somebody wondering why their key was
+                            refused — so it waits to be asked. */}
+                        <SettingRow agentExempt label="Why some views have two keys"
+                          hint="The dashboard uses single letters, everywhere else a chord."
+                          detail={{
+                            summary: "Anywhere and on the dashboard",
+                            body: <>
+                              <p className="m-0 mb-2">
+                                <b style={{ color: "var(--text)" }}>anywhere</b> — hold any combination you like
+                                ({MOD_KEY}J, {MOD_KEY}Alt+J, Alt+Shift+J) and it is recorded as held. Left alone it
+                                follows the view's position in the rail, so reordering keeps it true.
+                              </p>
+                              <p className="m-0">
+                                <b style={{ color: "var(--text)" }}>dashboard</b> — a single key, and only on the
+                                dashboard: inside the workspace every keystroke belongs to whatever has focus,
+                                usually a shell. {MOD_KEY}\\, {MOD_KEY}K and {MOD_KEY}[ / {MOD_KEY}] stay put.
+                              </p>
+                            </>,
+                          }} />
                       </SettingsCard>
-                    )}
-                  </>
-                  )}
+                    </>
+                    );
+                  })()}
 
                   {ql && show("lantern") && <PageMatchHeading id="lantern" onOpen={() => { setPane("lantern" as Pane); setQ(""); }} />}
                   {show("lantern") && <LanternSection open={open} />}

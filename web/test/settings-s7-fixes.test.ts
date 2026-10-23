@@ -22,8 +22,8 @@ describe("settings s7 fixes", () => {
   });
   test("a shortcut row has a Rebind verb, single-chip rows and app chords", () => {
     expect(modal).toContain("function RebindButton(");
-    expect(modal.match(/<RebindButton /g)?.length).toBe(2);
-    expect(modal).toMatch(/\{!chord && <RebindButton/);
+    // One per key: the view chords, the single keys and the held app chords.
+    expect(modal.match(/<RebindButton /g)?.length).toBe(3);
   });
   test("precedents are capped behind a Show all button", () => {
     expect(teach).toContain("const PRECEDENT_ROWS = 8;");

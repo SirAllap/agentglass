@@ -32,8 +32,8 @@ describe("notifications page, rebuilt", () => {
 
   test("each control is present exactly once", () => {
     for (const l of [
-      'label="Silence all"', 'label="agentglass\'s own notifications"', 'label="Chime this session"',
-      'label="Quiet — only what is stopped interrupts"', 'label="Mirror this machine\'s notifications"',
+      'label="Silence all"', 'settingId="notifications.volume"', 'label="Chime this session"',
+      'label="Mirror this machine\'s notifications"',
       'label="How much of the message"',
     ]) expect(count(notif, l)).toBe(1);
     expect(count(notif, "Only when the pull request is approved") + count(notif, "only when the pull request is approved")).toBe(1);

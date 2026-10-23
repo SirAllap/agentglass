@@ -31,6 +31,9 @@ export const DEFAULTS: Record<ActionId, string> = {
   "open.search": "/",
 };
 
+/** A key row's name on the Shortcuts page: the group is already the card's title. */
+export const keyRowName = (id: ActionId): string => LABELS[id].label.replace(/^Workspace — /, "");
+
 export const LABELS: Record<ActionId, { label: string; hint: string }> = {
   ...(Object.fromEntries(VIEWS.map((v) => [`view.${v.id}`, { label: `Workspace — ${v.label}`, hint: v.hint }])) as Record<`view.${ViewId}`, { label: string; hint: string }>),
   "open.help": { label: "Legend & shortcuts", hint: "what the colours mean, and every key binding" },
@@ -383,31 +386,31 @@ export const APP_CHORD_DEFAULTS: Record<AppChordId, string> = {
 export const APP_CHORD_LABELS: Record<AppChordId, { label: string; hint: string }> = {
   "files.palette": {
     label: "Finder",
-    hint: "browse any folder on this machine, search it by name or contents, and read any file in it",
+    hint: "Browse any folder, search it, read any file.",
   },
   "bench.toggle": {
     label: "The bench",
-    hint: "the floating window and its tabs — a shell, a file, a note, an agent — over whatever you were looking at",
+    hint: "The floating window: a shell, a file, a note, an agent.",
   },
   "pane.git": {
     label: "This pane's source control",
-    hint: "opens Source control on the worktree the pane you are typing in is working in",
+    hint: "Source control for the worktree this pane works in.",
   },
   "pane.diff": {
     label: "This pane's changes",
-    hint: "opens File changes on that worktree — the same door the pane's second button opens",
+    hint: "File changes on that worktree.",
   },
   "pane.pr": {
     label: "This pane's pull request",
-    hint: "opens the pull request of the tmux pane you are typing in — the same door its corner button opens",
+    hint: "The pull request of the pane you are typing in.",
   },
   "pane.card": {
     label: "This pane's card",
-    hint: "opens the card the pane's branch came from, in Tasks or in your tracker",
+    hint: "The card this pane's branch came from.",
   },
   "windows.switcher": {
     label: "Go to a window",
-    hint: "every tmux window with what its agent is doing, the ones waiting for you first — press it again for the next one waiting",
+    hint: "Every tmux window, the ones waiting for you first.",
   },
 };
 

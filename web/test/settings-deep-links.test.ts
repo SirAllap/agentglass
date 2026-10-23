@@ -37,7 +37,7 @@ describe("panels link to their settings", () => {
   });
 
   test("a Sidebar chord chip lands on that view's Shortcuts row", () => {
-    expect(code(files.modal)).toContain('openSettings("keys", rowId(LABELS[`view.${v.id}`].label))');
+    expect(code(files.modal)).toContain('openSettings("keys", rowId(keyRowName(`view.${v.id}`)))');
   });
   test("an asked-for page clears the search so the page shows", () => {
     // With text in the search box the results view replaces every page; the

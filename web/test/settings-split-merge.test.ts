@@ -26,7 +26,7 @@ describe("slice 5: Lantern split, usage, data", () => {
     expect(label("budgets")).toBe("Usage & budgets");
     expect(label("privacy")).toBe("Data & privacy");
     expect(label("prefs")).toBe("Window & startup");
-    expect(label("tmux")).toBe("Pane engine (tmux)");
+    expect(label("tmux")).toBe("Pane engine");
     expect(label("export")).toBeUndefined();
   });
 

@@ -55,13 +55,13 @@ export const DEFAULT_NOTIFY_PREFS: NotifyPrefs = {
 };
 
 export const NOTIFY_KIND_LABEL: Record<NotifyKind, { label: string; desc: string }> = {
-  blocked: { label: "Blocked on you", desc: "A gate hold or a permission prompt — an agent stopped until you answer." },
-  idle: { label: "Waiting for input", desc: "An agent asked a question or finished and is idle, nothing stopped." },
-  stalled: { label: "Stalled", desc: "A tool call open a long time with nothing to show for it." },
+  blocked: { label: "Blocked on you", desc: "A gate hold or permission prompt: an agent stopped until you answer." },
+  idle: { label: "Waiting for input", desc: "A question asked, or work finished and now idle." },
+  stalled: { label: "Stalled", desc: "A tool call open a long time with nothing to show." },
   failures: { label: "Failures", desc: "A tool error, or a high failure rate." },
-  autopilot: { label: "Autopilot needs you", desc: "The understudy or the Lantern watch says something needs a person." },
-  reminders: { label: "Reminders", desc: "An alarm you set yourself came due." },
-  usage: { label: "Usage", desc: "A plan window reached your alert level (Budgets › Plan pace), or a usage limit reset." },
+  autopilot: { label: "Autopilot needs you", desc: "The understudy or the Lantern says a person is needed." },
+  reminders: { label: "Reminders", desc: "An alarm you set came due." },
+  usage: { label: "Usage", desc: "A plan window hit your alert level, or a limit reset." },
 };
 
 export const NOTIFY_CHANNEL_LABEL: Record<NotifyChannel, { label: string; desc: string }> = {

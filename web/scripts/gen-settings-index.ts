@@ -143,7 +143,10 @@ function rowsIn(text: string, pane: string): Row[] {
     // from the tag's opening to the label, nothing past it to mistake for the
     // next row's.
     const tagText = before.slice(tagMatch.index!);
-    const settingId = tagText.match(/\bsettingId="([^"]{1,80})"/)?.[1];
+    // A row that draws one control per member of a family names it with a template
+    // (`rail.place.${v.id}`): indexed as the family, `rail.place.*`.
+    const family = tagText.match(/\bsettingId=\{`([A-Za-z0-9.]+\.)\$\{[^}`]+\}`\}/)?.[1];
+    const settingId = tagText.match(/\bsettingId="([^"]{1,80})"/)?.[1] ?? (family ? `${family}*` : undefined);
     const agentExempt = /\bagentExempt\b/.test(tagText);
     // A row an agent must not reach, with the reason on the row itself.
     const agentNever = tagText.match(/\bagentNever="([^"]{1,240})"/)?.[1];
