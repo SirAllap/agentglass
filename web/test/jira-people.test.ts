@@ -16,7 +16,6 @@ const stubGlobal = globalStubs();
 let P: typeof import("../src/lib/trackerPeople.ts");
 let S: typeof import("../src/lib/jiraSettings.ts");
 let T: typeof import("../src/lib/trackerApi.ts");
-let M: typeof import("../src/lib/jiraMine.ts");
 let sent: { method: string; path: string; body: unknown }[] = [];
 let answers: Record<string, (body: unknown) => Response> = {};
 
@@ -34,7 +33,6 @@ beforeAll(async () => {
   P = await import("../src/lib/trackerPeople.ts");
   S = await import("../src/lib/jiraSettings.ts");
   T = await import("../src/lib/trackerApi.ts");
-  M = await import("../src/lib/jiraMine.ts");
 });
 
 beforeEach(() => { sent = []; answers = {}; S.__forgetJiraSettings(); });
@@ -147,31 +145,19 @@ describe("the settings this window holds", () => {
   });
 });
 
-describe("one datum, two views", () => {
-  test("a written card replaces its row; a list without it is the same array", () => {
-    const rows = [card(), card({ id: "20043", customId: "ORBIT-1043" })];
-    const after = card({ status: "QA", people: [] });
-    const next = M.replaceTask(rows, after);
-    expect(next[0]).toBe(after);
-    expect(next[1]).toBe(rows[1]);
-    expect(rows[0]!.status).toBe("In Progress");
-    const other = [card({ id: "1" })];
-    expect(M.replaceTask(other, after)).toBe(other);
-  });
-});
-
 describe("the screens, as source", () => {
   const read = (p: string) => readFileSync(new URL("../src/" + p, import.meta.url), "utf8");
   const code = (p: string) => read(p).split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
 
-  test("the Jira tab's card has the status, the person and the hand-off, and folds a write back into its lists", () => {
+  test("the Jira card has the status, the person and the hand-off, and a write is folded back into the board's list", () => {
     const s = code("components/JiraTasks.tsx");
     // A move's new stamp reaches the card, or the next write from it is a conflict.
     expect(s).toContain("<TrackerStatusPick tracker={TRACKERS.jira} task={t} query={query} onSaid={setSaid} onTask={onTask} />");
     expect(s).toContain("<TrackerPeoplePick tracker={TRACKERS.jira}");
     expect(s).toContain("<TrackerHandOffButton tracker={TRACKERS.jira}");
-    expect(s).toContain("<Facts t={picked} onTask={changed} />");
-    expect(s).toContain("replaceTask(");
+    expect(s).toContain("<Facts t={t} onTask={onTask} />");
+    // And the board folds the written card over its own row, so the list and the pane are one datum.
+    expect(code("components/TasksPanel.tsx")).toContain("onTask={(task) => setOver((m) => ({ ...m, [task.id]: foldCard(byId.get(task.id), task) }))}");
   });
 
   test("the people picker asks the site after a pause, through the house picker, never filtering a short list as everybody", () => {

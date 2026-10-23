@@ -208,3 +208,46 @@ describe("the store on its own", () => {
     for (const v of ["[]", '"jira"', "null", "3"]) { writeFileSync(p, v); expect(trackerProjects()).toEqual({}); }
   });
 });
+
+describe("GET /jira/prs?project=", () => {
+  const pr = (number: number, o: Record<string, unknown>) => ({
+    number, title: "", state: "OPEN", url: `https://github.com/acme/orbit/pull/${number}`, body: "", headRefName: "feat/x", author: { login: "ada" }, ...o,
+  });
+  const projectRows = [
+    pr(91, { title: "Sync the board", headRefName: "feat/ORBIT-1042-sync" }),
+    pr(92, { title: "Longer ids only", body: "touches ORBIT-991 and ORBIT-10420" }),
+    pr(93, { title: "Prefixed by a letter", body: "see XORBIT-77" }),
+    pr(94, { title: "Stacked", headRefName: "feat/ORBIT-1043-top", body: "Depends on #91 (ORBIT-1042)" }),
+  ];
+
+  step("one search for the whole project, each row given to the cards it names and to no others", async () => {
+    writeFileSync(join(dir, "rows.json"), JSON.stringify(projectRows));
+    writeFileSync(calls, "");
+    const r = await get("/jira/prs?project=ORBIT&root=");
+    expect(r.body.ok).toBe(true);
+    expect(ghCalls().length).toBe(1);
+    expect(ghCalls()[0]).toContain("--search ORBIT --state all --limit 200");
+    const by = r.body.byCard as Record<string, { number: number; link: string }[]>;
+    expect(Object.keys(by).sort()).toEqual(["ORBIT-10420", "ORBIT-1042", "ORBIT-1043", "ORBIT-991"].sort());
+    // Asked for ORBIT-99 or ORBIT-77: nothing, the rows name longer or prefixed ids.
+    expect(by["ORBIT-99"]).toBeUndefined();
+    expect(by["ORBIT-77"]).toBeUndefined();
+    // A stacked pull request is cut for one card and only mentions the other.
+    expect(by["ORBIT-1043"]!.map((p) => [p.number, p.link])).toEqual([[94, "own"]]);
+    expect(by["ORBIT-1042"]!.map((p) => [p.number, p.link])).toEqual([[94, "mention"], [91, "own"]]);
+  });
+
+  step("a project key that is not one is refused before gh is asked", async () => {
+    writeFileSync(calls, "");
+    for (const k of ["1", "ORBIT-1", "ORBIT label:x", "--limit", "ORBIT;ls", "-x"]) {
+      expect((await get(`/jira/prs?project=${encodeURIComponent(k)}`)).body, k).toEqual({ ok: false, byCard: {}, error: "That is not a Jira project key" });
+    }
+    expect(ghCalls().length).toBe(0);
+  });
+
+  step("a search that was cut at the limit says so", async () => {
+    writeFileSync(join(dir, "rows.json"), JSON.stringify(Array.from({ length: 200 }, (_, i) => pr(1000 + i, { title: `ORBIT-${i + 1}` }))));
+    const r = await get("/jira/prs?project=ORBIT");
+    expect(r.body.truncated).toBe(true);
+  });
+});

@@ -131,7 +131,7 @@ import {
 import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, addClickupFolder, refreshFoldersIfStale, replaceViewUrl, readView } from "./providers.ts";
 import { clickupPrefs, setClickupPrefs, settleFirstRun } from "./clickupPrefs.ts";
 import { savedViews, savedFolders, currentView, setCurrent, removeView, removeFolder, knownCardPrefix, knownNoCustomIds, boardHolding, setWritesAllowed, patchCachedTask } from "./clickupviews.ts";
-import { assignSelf, setAssignee, setCard, listMembers, workspaceMembers, setStatus, setPriority, setField, clearField, sprintLists, searchTasks, searchTasksStream, warmBodySweep, taskDetail, tagsForTask, findCard, cardPullRequests, clickupWriteEnabled, commentOn, updateTask, setTag, moveToList, createTask, addChecklist, addChecklistItem, setChecklistItem, editComment as editClickupComment, replyToComment, resolveComment, deleteComment as deleteClickupComment } from "./clickup.ts";
+import { assignSelf, setAssignee, setCard, listMembers, workspaceMembers, setStatus, setPriority, setField, clearField, sprintLists, searchTasks, searchTasksStream, warmBodySweep, taskDetail, tagsForTask, findCard, cardPullRequests, projectPullRequests, clickupWriteEnabled, commentOn, updateTask, setTag, moveToList, createTask, addChecklist, addChecklistItem, setChecklistItem, editComment as editClickupComment, replyToComment, resolveComment, deleteComment as deleteClickupComment } from "./clickup.ts";
 import { clickupTasks, dropAssignedCache } from "./clickup.ts";
 import type { ProviderId } from "../../shared/providers.ts";
 import { listTasks, taskCapability, setTaskChangeHook, startTaskSweep, addTask, completeTask, reopenTask, deleteTask, cyclePriority, editTask, addTags, replaceNote, bulkApply, TASK_WRITE_ENABLED, type BulkAction } from "./tasks.ts";
@@ -6364,6 +6364,13 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       return json(r, r.ok ? 200 : 400);
     }
     if (pathname === "/jira/prs" && req.method === "GET") {
+      // A whole project in one search: the board's column. A key is the same
+      // shape as below without its number, and just as unfit for anything else.
+      const project = (url.searchParams.get("project") ?? "").trim();
+      if (project) {
+        if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(project)) return json({ ok: false, byCard: {}, error: "That is not a Jira project key" });
+        return json(await projectPullRequests(project, prRouteRoot(url.searchParams.get("root") ?? "")));
+      }
       const key = (url.searchParams.get("key") ?? "").trim();
       // A key is letters, digits and underscores, a hyphen, digits. It is handed to `gh --search`, so nothing else goes through.
       if (!/^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(key)) return json({ ok: false, prs: [], error: "That is not a Jira card id" });

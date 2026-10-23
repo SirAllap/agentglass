@@ -30,12 +30,12 @@
  */
 import { ASSIGNED_VIEW_ID } from "../../shared/providers.ts";
 import type {
-  JiraColumn, JiraProjectChoice, JiraViewChoice, JiraViewRead, JiraViews, SavedFolder, SavedView,
+  JiraColumn, JiraProjectChoice, JiraViewChoice, JiraViewRead, JiraViews, ListStatus, SavedFolder, SavedView,
 } from "../../shared/providers.ts";
 import { redacted } from "./credentials.ts";
 import {
-  apiOf, jiraCall, jiraGeneration, orderByAt, memoOk, mine, projects, searchJql, withStored,
-  type JiraCreds, type JiraResult, type JiraTasks,
+  CATEGORY_COLOR, apiOf, jiraCall, jiraGeneration, orderByAt, memoOk, memoHas, mine, projects, searchJql, withStored,
+  type JiraCreds, type JiraResult, type JiraTasks, type SeenStatus,
 } from "./jira.ts";
 import {
   addFolder, addView, cachedFor, currentView, isFolderBoard, putCache, removeFolder, removeView, replaceFolder, savedFolders, savedViews, setCurrent,
@@ -132,6 +132,8 @@ export interface BoardConfig {
   filterId: string;
   subQuery?: string;
   projectKey?: string;
+  /** The field a board counts its cards in, when it says. */
+  estimationField?: string;
   columns: JiraColumn[];
 }
 
@@ -154,6 +156,7 @@ export function boardConfig(creds: JiraCreds, id: string): Promise<JiraResult<Bo
     }));
     const sub = isObj(d.subQuery) ? str(d.subQuery.query).trim() : "";
     const loc = isObj(d.location) ? d.location : {};
+    const est = isObj(d.estimation) && isObj(d.estimation.field) ? str(d.estimation.field.fieldId) : "";
     return {
       ok: true,
       data: {
@@ -163,10 +166,11 @@ export function boardConfig(creds: JiraCreds, id: string): Promise<JiraResult<Bo
         // A sub-query is a restriction; an order in it is not ours to apply.
         ...(splitOrder(sub).restriction ? { subQuery: splitOrder(sub).restriction } : {}),
         ...(str(loc.key) || str(loc.projectKey) ? { projectKey: str(loc.key) || str(loc.projectKey) } : {}),
+        ...(/^customfield_\d{1,9}$/.test(est) ? { estimationField: est } : {}),
         columns,
       },
     };
-  });
+  }, true);
 }
 
 /** A saved filter's name and query. Both generations serve it under their own prefix. */
@@ -180,7 +184,104 @@ export function filterJql(creds: JiraCreds, id: string): Promise<JiraResult<{ na
   });
 }
 
-interface ViewRows extends JiraTasks { columns: JiraColumn[] }
+interface ViewRows extends JiraTasks { columns: JiraColumn[]; statuses?: ListStatus[] }
+
+// ---------------------------------------------------------------------------
+// the statuses of a view
+// ---------------------------------------------------------------------------
+
+/** Jira's three status categories, in the order a workflow reads: to do, doing, done. */
+const CATEGORY_RANK: Record<string, number> = { new: 0, indeterminate: 1, done: 2 };
+/** The portable part of a ListStatus: `open` is to do, `custom` is in progress. */
+const CATEGORY_TYPE: Record<string, string> = { new: "open", indeterminate: "custom", done: "done" };
+
+const asListStatus = (s: SeenStatus, orderindex: number): ListStatus => ({
+  status: s.name,
+  type: CATEGORY_TYPE[s.category] ?? "custom",
+  orderindex,
+  ...(CATEGORY_COLOR[s.color] ? { color: CATEGORY_COLOR[s.color] } : {}),
+});
+
+/**
+ * A project's statuses with their categories, for the ones no card wears.
+ * Asked only when a board names a status none of its cards has, and then once
+ * per ten minutes. A project that cannot be read is no statuses, remembered as
+ * such, so a site that refuses it is asked once and not on every read.
+ */
+function projectStatusRows(creds: JiraCreds, project: string): Promise<JiraResult<SeenStatus[]>> {
+  return memoOk<SeenStatus[]>(creds, `statusrows:${project}`, async () => {
+    const r = await jiraCall<unknown>(creds, `/rest/api/${apiOf(creds)}/project/${encodeURIComponent(project)}/statuses`);
+    if (!r.ok) return r.status === 403 || r.status === 404 ? { ok: true, data: [] } : { ...r, data: undefined };
+    const rows = new Map<string, SeenStatus>();
+    for (const type of Array.isArray(r.data) ? r.data : []) {
+      for (const st of isObj(type) && Array.isArray(type.statuses) ? type.statuses : []) {
+        const id = isObj(st) ? idText(st.id) : "";
+        if (!id || !str(isObj(st) ? st.name : "")) continue;
+        const cat = isObj(st) && isObj(st.statusCategory) ? st.statusCategory : {};
+        rows.set(id, { id, name: str((st as Record<string, unknown>).name), category: str(cat.key), color: str(cat.colorName), projects: [project] });
+      }
+    }
+    return { ok: true, data: [...rows.values()] };
+  });
+}
+
+/**
+ * A board's statuses: its columns' statuses in column order. Names and
+ * categories come from the cards that wear them; a status no card wears is
+ * looked up once in the board's project (or the projects of its cards), and
+ * one that cannot be found is left out rather than invented.
+ */
+async function boardStatuses(creds: JiraCreds, cfg: BoardConfig, rows: JiraTasks): Promise<ListStatus[]> {
+  const known = new Map((rows.seen ?? []).map((x) => [x.id, x]));
+  const order = [...new Set(cfg.columns.flatMap((c) => c.statusIds))];
+  if (order.some((id) => !known.has(id))) {
+    const projects = cfg.projectKey ? [cfg.projectKey] : [...new Set(rows.tasks.map((t) => t.listId).filter((k): k is string => !!k))];
+    for (const key of projects) {
+      const r = await projectStatusRows(creds, key);
+      for (const x of r.ok && r.data ? r.data : []) if (!known.has(x.id)) known.set(x.id, x);
+      if (order.every((id) => known.has(id))) break;
+    }
+  }
+  return order.flatMap((id) => known.get(id) ?? []).map((x, i) => asListStatus(x, i));
+}
+
+/**
+ * The statuses a filter, a search or "assigned to me" shows: the ones its
+ * cards wear, merged by name across projects, in the column order of each
+ * project's first board where that board is already known (the project is
+ * saved as a folder, so no list of boards is asked for), then category, then
+ * name. Ceiling: a project that is not a saved folder has no column order, and
+ * a card whose project has several boards follows the first.
+ */
+async function viewStatuses(creds: JiraCreds, rows: JiraTasks): Promise<ListStatus[]> {
+  const seen = rows.seen ?? [];
+  const position = new Map<string, number[]>();
+  const folders = savedFolders(creds.site);
+  // Projects with the most cards first. A project whose first board is not known yet costs one request, and a read pays for at most one
+  // of them: the rest are found on the reads that follow (a known board, or a remembered failure, is free), so a view across many saved
+  // projects never costs more than the field list and one board configuration on top of its search.
+  const cards = new Map<string, number>();
+  for (const x of seen) for (const p of x.projects) cards.set(p, (cards.get(p) ?? 0) + 1);
+  let lookups = 1;
+  for (const key of [...cards.keys()].sort((a, b) => cards.get(b)! - cards.get(a)! || a.localeCompare(b))) {
+    const first = folders.find((f) => f.id === key)?.lists?.[0]?.id;
+    if (!first) continue;
+    if (!memoHas(creds, `board:${first}`)) { if (lookups <= 0) continue; lookups--; }
+    const cfg = await boardConfig(creds, first);
+    const ids = cfg?.ok && cfg.data ? [...new Set(cfg.data.columns.flatMap((c) => c.statusIds))] : [];
+    ids.forEach((id, i) => position.set(`${key}|${id}`, [...(position.get(`${key}|${id}`) ?? []), i]));
+  }
+  const byName = new Map<string, { s: SeenStatus; at: number }>();
+  for (const x of seen) {
+    const at = Math.min(Infinity, ...x.projects.flatMap((p) => position.get(`${p}|${x.id}`) ?? []));
+    const k = x.name.toLowerCase();
+    const have = byName.get(k);
+    if (!have || at < have.at) byName.set(k, { s: x, at });
+  }
+  return [...byName.values()]
+    .sort((a, b) => a.at - b.at || (CATEGORY_RANK[a.s.category] ?? 1) - (CATEGORY_RANK[b.s.category] ?? 1) || a.s.name.localeCompare(b.s.name))
+    .map((x, i) => asListStatus(x.s, i));
+}
 
 export async function readBoard(creds: JiraCreds, id: string): Promise<JiraResult<ViewRows>> {
   const cfg = await boardConfig(creds, id);
@@ -190,15 +291,24 @@ export async function readBoard(creds: JiraCreds, id: string): Promise<JiraResul
   const columns = cfg.data.columns;
   const ids = [...new Set(columns.flatMap((c) => c.statusIds))];
   // A board whose columns map no status shows its columns and no cards.
-  if (!ids.length) return { ok: true, data: { tasks: [], truncated: false, columns } };
+  if (!ids.length) return { ok: true, data: { tasks: [], truncated: false, columns, statuses: [] } };
   const { restriction, order } = splitOrder(f.data.jql);
   const jql = [
     ...(restriction ? [`(${restriction})`] : []),
     `status in (${ids.join(", ")})`,
     ...(cfg.data.subQuery ? [`(${cfg.data.subQuery})`] : []),
   ].join(" AND ") + (order ? ` ${order}` : "");
-  const r = await searchJql(creds, jql);
-  return r.ok && r.data ? { ok: true, data: { ...r.data, columns } } : { ...r, data: undefined };
+  const r = await searchJql(creds, jql, { board: { points: cfg.data.estimationField } });
+  if (!r.ok || !r.data) return { ...r, data: undefined };
+  const { seen: _seen, ...rows } = r.data;
+  return { ok: true, data: { ...rows, columns, statuses: await boardStatuses(creds, cfg.data, r.data) } };
+}
+
+async function plainView(creds: JiraCreds, jql: string): Promise<JiraResult<ViewRows>> {
+  const r = await searchJql(creds, jql, { board: {} });
+  if (!r.ok || !r.data) return { ...r, data: undefined };
+  const { seen: _seen, ...rows } = r.data;
+  return { ok: true, data: { ...rows, columns: [], statuses: await viewStatuses(creds, r.data) } };
 }
 
 export async function readFilter(creds: JiraCreds, id: string): Promise<JiraResult<ViewRows>> {
@@ -207,14 +317,10 @@ export async function readFilter(creds: JiraCreds, id: string): Promise<JiraResu
   if (!splitOrder(f.data.jql).restriction) {
     return { ok: false, error: "That filter has no restriction, so it would read every card. Add a project or an assignee to it in Jira" };
   }
-  const r = await searchJql(creds, f.data.jql);
-  return r.ok && r.data ? { ok: true, data: { ...r.data, columns: [] } } : { ...r, data: undefined };
+  return plainView(creds, f.data.jql);
 }
 
-export async function readJql(creds: JiraCreds, jql: string): Promise<JiraResult<ViewRows>> {
-  const r = await searchJql(creds, jql);
-  return r.ok && r.data ? { ok: true, data: { ...r.data, columns: [] } } : { ...r, data: undefined };
-}
+export const readJql = (creds: JiraCreds, jql: string): Promise<JiraResult<ViewRows>> => plainView(creds, jql);
 
 // ---------------------------------------------------------------------------
 // reading a saved view
@@ -233,8 +339,10 @@ const emptyRead = (error: string, view?: SavedView): JiraViewRead => ({ ok: fals
 
 async function readView(creds: JiraCreds, view: SavedView, force: boolean): Promise<JiraResult<ViewRows>> {
   if (view.id === ASSIGNED_VIEW_ID) {
-    const r = await mine(creds, { fresh: force });
-    return r.ok && r.data ? { ok: true, data: { ...r.data, columns: [] } } : { ...r, data: undefined };
+    const r = await mine(creds, { fresh: force, board: true });
+    if (!r.ok || !r.data) return { ...r, data: undefined };
+    const { seen: _seen, ...rows } = r.data;
+    return { ok: true, data: { ...rows, columns: [], statuses: await viewStatuses(creds, r.data) } };
   }
   const [kind, num] = view.id.split(":");
   if (kind === "board") return readBoard(creds, num);
@@ -252,9 +360,9 @@ function startRead(creds: JiraCreds, site: string, view: SavedView, force: boole
   return Promise.resolve().then(() => { readFault?.(); return readView(creds, view, force); }).then((r): JiraViewRead => {
     if (r.ok && r.data) {
       const at = Date.now();
-      const out: JiraViewRead = { ok: true, view, tasks: r.data.tasks, columns: r.data.columns, at, ...(r.data.truncated ? { truncated: true } : null) };
+      const out: JiraViewRead = { ok: true, view, tasks: r.data.tasks, columns: r.data.columns, ...(r.data.statuses ? { statuses: r.data.statuses } : null), at, ...(r.data.truncated ? { truncated: true } : null) };
       // A disconnect while this was in the air: the rows are not written back.
-      if (gen === jiraGeneration()) putCache(site, view.id, { view, tasks: out.tasks, columns: out.columns, at, ...(out.truncated ? { truncated: true } : null) });
+      if (gen === jiraGeneration()) putCache(site, view.id, { view, tasks: out.tasks, columns: out.columns, ...(out.statuses ? { statuses: out.statuses } : null), at, ...(out.truncated ? { truncated: true } : null) });
       return out;
     }
     // A failed read is never an empty board: the last good rows come back, said to be old.
@@ -262,7 +370,7 @@ function startRead(creds: JiraCreds, site: string, view: SavedView, force: boole
     const error = r.error ?? "Could not read that view";
     return {
       ok: false, error, view, ...(r.throttled ? { throttled: true } : null),
-      tasks: last?.tasks ?? [], columns: last?.columns ?? [], at: last?.at ?? 0,
+      tasks: last?.tasks ?? [], columns: last?.columns ?? [], ...(last?.statuses ? { statuses: last.statuses } : null), at: last?.at ?? 0,
       ...(last?.truncated ? { truncated: true } : null), ...(last ? { cached: true } : null),
     };
   });
@@ -284,7 +392,7 @@ export async function viewRead(id?: string, o: { force?: boolean; cached?: boole
   if (o.cached) {
     const last = cachedFor(site, want);
     return last
-      ? { ok: true, view, tasks: last.tasks, columns: last.columns, at: last.at, ...(last.truncated ? { truncated: true } : null), cached: true }
+      ? { ok: true, view, tasks: last.tasks, columns: last.columns, ...(last.statuses ? { statuses: last.statuses } : null), at: last.at, ...(last.truncated ? { truncated: true } : null), cached: true }
       : { ok: true, view, tasks: [], columns: [], at: 0, cached: true };
   }
 

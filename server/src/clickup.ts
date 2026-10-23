@@ -3445,6 +3445,57 @@ export async function cardPullRequests(
   };
 }
 
+/** How many pull requests one project search reads. */
+export const PROJECT_PR_LIMIT = 200;
+
+/**
+ * Every pull request that names one of a project's cards, from ONE search.
+ *
+ * A board of forty cards used to be forty `gh pr list --search` calls against
+ * GitHub's search budget (about thirty a minute, shared with every other
+ * caller). One search for the project key returns the rows that carry it, and
+ * the card each row belongs to is read from the row itself: the loose pattern
+ * `KEY-<digits>` finds candidates, and each candidate is then held to the same
+ * test a single-card search uses (`prLinkKind`, which wants the id to stand
+ * alone), so a pull request that names ORBIT-991 gives nothing to ORBIT-99 and
+ * `XORBIT-12` gives nothing to ORBIT-12.
+ *
+ * Ceilings: only the newest PROJECT_PR_LIMIT rows are read (`truncated` says
+ * so), and GitHub's search does not look at branch names, so a card whose key
+ * appears only in a branch is missed here; the per-card search finds it.
+ */
+export async function projectPullRequests(
+  project: string, root: string,
+): Promise<{ ok: boolean; byCard: Record<string, CardPr[]>; truncated?: boolean; error?: string }> {
+  const { gh } = await import("./prs.ts");
+  const r = await gh(
+    ["pr", "list", "--search", project, "--state", "all", "--limit", String(PROJECT_PR_LIMIT),
+      "--json", "number,title,state,isDraft,url,body,headRefName,author"],
+    root,
+  );
+  if (r.code !== 0) return { ok: false, byCard: {}, error: r.stderr.trim().slice(0, 160) || "could not search GitHub" };
+  const byCard: Record<string, CardPr[]> = {};
+  let rows: { number: number; title: string; state: string; isDraft?: boolean; url: string; body?: string; headRefName?: string; author?: { login?: string } }[] = [];
+  try { rows = JSON.parse(r.stdout); } catch { /* a search that answered nothing usable is a search with no rows */ }
+  if (!Array.isArray(rows)) rows = [];
+  const me = await viewerLogin(gh, root);
+  const candidate = new RegExp(`${project.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-\\d+`, "gi");
+  for (const p of rows) {
+    const text = `${p.headRefName ?? ""} ${p.title ?? ""} ${p.body ?? ""}`;
+    for (const id of new Set((text.match(candidate) ?? []).map((x) => x.toUpperCase()))) {
+      const link = prLinkKind({ cardId: id }, p);
+      if (!link) continue;
+      (byCard[id] ??= []).push({
+        number: p.number, title: p.title, state: p.state, draft: p.isDraft, url: p.url, author: p.author?.login,
+        ...(link === "own" ? { link } : { link, belongsTo: readTaskRef(p)?.label }),
+        mine: !!me && p.author?.login?.toLowerCase() === me,
+      });
+    }
+  }
+  for (const list of Object.values(byCard)) list.sort((a, b) => b.number - a.number);
+  return { ok: true, byCard, ...(rows.length >= PROJECT_PR_LIMIT ? { truncated: true } : {}) };
+}
+
 // ---------------------------------------------------------------------------
 // the shape of the workspace: spaces, folders, and the lists inside them
 // ---------------------------------------------------------------------------

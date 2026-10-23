@@ -22,7 +22,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { ASSIGNED_VIEW_ID, ASSIGNED_VIEW_NAME } from "../../shared/providers.ts";
-import type { JiraColumn, ProviderTask, SavedFolder, SavedView } from "../../shared/providers.ts";
+import type { JiraColumn, ListStatus, ProviderTask, SavedFolder, SavedView } from "../../shared/providers.ts";
 
 const FILE = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "agentglass", "jira-views.json");
 
@@ -37,6 +37,7 @@ export interface CachedJiraView {
   tasks: ProviderTask[];
   /** The board's columns; empty for a filter or a search. */
   columns: JiraColumn[];
+  statuses?: ListStatus[];
   /** When that read happened. */
   at: number;
   /** The read stopped at the page cap. */

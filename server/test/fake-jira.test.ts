@@ -74,7 +74,7 @@ describe("auth and the request log", () => {
   });
 
   it("answers an unknown route 404 instead of pretending", async () => {
-    const r = await call("GET", "/field");
+    const r = await call("GET", "/dashboard");
     expect(r.status).toBe(404);
     expect(r.json.errorMessages[0]).toContain("does not serve");
   });
@@ -894,6 +894,156 @@ describe("boards and saved filters", () => {
     it(`${flavor}: a clause it cannot read is an error, never an empty answer`, async () => {
       const r = await keys("project = ORBIT AND (sprint in openSprints())");
       expect(JSON.stringify(r)).toContain("does not understand");
+    });
+  }
+});
+
+describe("what a board needs", () => {
+  for (const flavor of ["cloud", "datacenter"] as const) {
+    const f = flavor === "cloud" ? fake : dc;
+    const isDc = flavor === "datacenter";
+    const at = (method: string, path: string, body?: unknown) => call(method, path, { on: f, body });
+    const issue = async (key: string, fields: string) => (await at("GET", `/issue/${key}?fields=${fields}`)).json.fields as Record<string, any>;
+    const field = async (name: string) => ((await at("GET", "/field")).json as any[]).find((x) => x.name === name);
+    const searchKeys = async (jql: string) => {
+      const r = isDc ? await at("POST", "/search", { jql, maxResults: 50, fields: ["summary"] }) : await at("POST", "/search/jql", { jql, maxResults: 50, fields: ["summary"] });
+      return (r.json.issues as { key: string }[]).map((i) => i.key);
+    };
+
+    it(`${flavor}: /field lists the site's fields by type, and the custom ids are this flavor's own`, async () => {
+      const all = (await at("GET", "/field")).json as any[];
+      expect(all.map((x) => x.id)).toContain("summary");
+      const sprint = await field("Sprint");
+      expect(sprint.schema.custom).toBe("com.pyxis.greenhopper.jira:gh-sprint");
+      expect((await field("Rank")).schema.custom).toBe("com.pyxis.greenhopper.jira:gh-lexo-rank");
+      if (isDc) {
+        // Data Center's points are plain numbers and it has no team.
+        expect((await field("Story Points")).schema.custom).toBe("com.atlassian.jira.plugin.system.customfieldtypes:float");
+        expect(await field("Team")).toBeUndefined();
+        expect(sprint.id).toBe("customfield_10104");
+      } else {
+        // Two fields of one type: a client has to take the board's stated one.
+        expect(all.filter((x) => x.schema?.custom === "com.pyxis.greenhopper.jira:jsw-story-points").map((x) => x.id)).toEqual(["customfield_10016", "customfield_10027"]);
+        expect((await field("Team")).schema.type).toBe("team");
+        expect(sprint.id).toBe("customfield_10020");
+      }
+      expect(f.requests.at(-1)?.path).toBe("/field");
+    });
+
+    it(`${flavor}: sprint, points, rank and team come on an issue only when asked by name, and a card without one answers null`, async () => {
+      const sprintId = (await field("Sprint")).id;
+      const pointsId = (await field(isDc ? "Story Points" : "Story point estimate")).id;
+      const rankId = (await field("Rank")).id;
+      const plain = await issue("ORBIT-1042", "summary");
+      expect(Object.keys(plain)).toEqual(["summary"]);
+      expect(Object.keys((await at("GET", "/issue/ORBIT-1042")).json.fields)).not.toContain(sprintId);
+      const fields = await issue("ORBIT-1042", `${sprintId},${pointsId},${rankId}`);
+      expect(fields[pointsId]).toBe(5);
+      expect(fields[rankId]).toMatch(/^0\|i\d+:$/);
+      if (isDc) {
+        // Older Data Center sends a sprint as the bean's own text, newest last.
+        expect(fields[sprintId]).toHaveLength(2);
+        expect(fields[sprintId][1]).toContain("name=Sprint 4");
+        expect(fields[sprintId][1]).toContain("state=ACTIVE");
+      } else {
+        expect(fields[sprintId].map((s: any) => [s.id, s.name, s.state])).toEqual([[3, "Sprint 3", "closed"], [4, "Sprint 4", "active"]]);
+      }
+      const bare = await issue("ORBIT-1001", `${sprintId},${pointsId}`);
+      expect(bare[sprintId]).toBeNull();
+      expect(bare[pointsId]).toBeNull();
+      // Zero is a value, not an absence.
+      expect((await issue("ORBIT-1044", pointsId))[pointsId]).toBe(0);
+      const team = isDc ? null : await field("Team");
+      if (team) {
+        expect((await issue("ORBIT-1042", team.id))[team.id]).toMatchObject({ name: "Orbit crew" });
+        expect((await issue("ORBIT-1001", team.id))[team.id]).toBeNull();
+      }
+      // A board that counts in the second field has its cards' points there, and nowhere else.
+      const alt = await field(isDc ? "Effort" : "Story points (copy)");
+      expect((await issue("ACME-7", `${pointsId},${alt.id}`))).toEqual({ [pointsId]: null, [alt.id]: 2 });
+    });
+
+    it(`${flavor}: issuelinks show a Blocks link on both ends, with the other card's status`, async () => {
+      const types = (await at("GET", "/issueLinkType")).json.issueLinkTypes as any[];
+      expect(types.find((t) => t.name === "Blocks")).toMatchObject({ inward: "is blocked by", outward: "blocks" });
+      const blocked = (await issue("ORBIT-1043", "issuelinks")).issuelinks as any[];
+      const byType = (list: any[], n: string) => list.filter((l) => l.type.name === n);
+      expect(byType(blocked, "Blocks").map((l) => [l.inwardIssue?.key, l.outwardIssue?.key])).toEqual([["ORBIT-1042", undefined], [undefined, "ORBIT-1044"]]);
+      expect(blocked[0].inwardIssue.fields.status.statusCategory.key).toBe("indeterminate");
+      const doneBlocker = (await issue("ORBIT-1044", "issuelinks")).issuelinks as any[];
+      expect(doneBlocker.map((l) => [l.inwardIssue.key, l.inwardIssue.fields.status.statusCategory.key])).toEqual([["ORBIT-1045", "done"], ["ORBIT-1043", "indeterminate"]]);
+      expect((await issue("ORBIT-1000", "issuelinks")).issuelinks).toEqual([]);
+    });
+
+    it(`${flavor}: subtasks and parent come with the card`, async () => {
+      const one = await issue("ORBIT-1043", "subtasks,parent");
+      expect(one.subtasks.map((s: any) => [s.key, s.fields.summary.length > 0])).toEqual([["ORBIT-1046", true]]);
+      expect((await issue("ORBIT-1001", "subtasks")).subtasks).toEqual([]);
+      expect((await issue("ORBIT-1001", "parent")).parent.key).toBe("ORBIT-1000");
+    });
+
+    it(`${flavor}: comment.total is the count and the comments ride along only when the block is asked for`, async () => {
+      for (let n = 0; n < 3; n++) await at("POST", "/issue/ORBIT-1050/comment", isDc ? { body: `note ${n}` } : { body: adf(`note ${n}`) });
+      const c = (await issue("ORBIT-1050", "comment")).comment;
+      expect(c.total).toBe(3);
+      expect(c.comments).toHaveLength(3);
+      expect(Object.keys(await issue("ORBIT-1050", "summary"))).not.toContain("comment");
+    });
+
+    it(`${flavor}: a board states its estimate field and a kanban board states none`, async () => {
+      const cfg = async (id: number) => (await at("GET", `/rest/agile/1.0/board/${id}/configuration`)).json;
+      const primary = (await field(isDc ? "Story Points" : "Story point estimate")).id;
+      const alt = (await field(isDc ? "Effort" : "Story points (copy)")).id;
+      expect((await cfg(3)).estimation).toMatchObject({ type: "field", field: { fieldId: primary } });
+      expect((await cfg(2)).estimation).toMatchObject({ type: "field", field: { fieldId: alt } });
+      expect((await cfg(1)).estimation).toBeUndefined();
+      expect((await cfg(4)).estimation).toBeUndefined();
+    });
+
+    it(`${flavor}: the project's statuses are in workflow order unless the fake is told to shuffle them`, async () => {
+      const ids = async (on: FakeJira) => ((await call("GET", "/project/ORBIT/statuses", { on })).json[0].statuses as any[]).map((s) => s.id);
+      expect(await ids(f)).toEqual(["1", "2", "3", "4", "5"]);
+      const shuffled = startFakeJira({ flavor, shuffleProjectStatuses: true });
+      try {
+        // The board's columns read 1, 2, 3, 4, 5; this is nobody's order.
+        expect(await ids(shuffled)).toEqual(["4", "2", "5", "1", "3"]);
+      } finally { await shuffled.stop(); }
+    });
+
+    it(`${flavor}: remote links: the seed has links with no global id, a post without one always adds, a post with a known one updates`, async () => {
+      const list = async (key: string) => (await at("GET", `/issue/${key}/remotelink`)).json as any[];
+      const seeded = await list("ORBIT-1043");
+      expect(seeded).toHaveLength(2);
+      expect(seeded.every((l) => l.globalId === undefined)).toBe(true);
+      expect(seeded[0].object.url).toContain("/pull/");
+      expect(await list("ORBIT-1001")).toEqual([]);
+      expect((await at("GET", "/issue/NOPE-1/remotelink")).status).toBe(404);
+
+      const link = { object: { url: "https://github.com/acme/orbit/pull/2300", title: "#2300 New" } };
+      expect((await at("POST", "/issue/ORBIT-1001/remotelink", link)).status).toBe(201);
+      expect((await at("POST", "/issue/ORBIT-1001/remotelink", link)).status).toBe(201);
+      expect(await list("ORBIT-1001")).toHaveLength(2);
+
+      const first = await at("POST", "/issue/ORBIT-1046/remotelink", { globalId: "pr=acme/orbit#2300", ...link });
+      expect(first.status).toBe(201);
+      const again = await at("POST", "/issue/ORBIT-1046/remotelink", { globalId: "pr=acme/orbit#2300", object: { url: link.object.url, title: "#2300 Renamed" } });
+      expect(again.status).toBe(200);
+      expect(again.json.id).toBe(first.json.id);
+      const kept = await list("ORBIT-1046");
+      expect(kept.map((l) => l.object.title)).toEqual(["#2300 Renamed"]);
+      // Another id is another link.
+      await at("POST", "/issue/ORBIT-1046/remotelink", { globalId: "pr=acme/orbit#2301", ...link });
+      expect(await list("ORBIT-1046")).toHaveLength(2);
+      expect((await at("POST", "/issue/ORBIT-1046/remotelink", { object: {} })).status).toBe(400);
+    });
+
+    it(`${flavor}: a search ordered by Rank follows the stored rank, and a moved card moves`, async () => {
+      expect(await searchKeys("project = ORBIT AND status in (1) ORDER BY Rank ASC")).toEqual(["ORBIT-1001", "ORBIT-1046", "ORBIT-1050"]);
+      f.state.issues["ORBIT-1050"]!.rank = "0|a00000:";
+      expect(await searchKeys("project = ORBIT AND status in (1) ORDER BY Rank ASC")).toEqual(["ORBIT-1050", "ORBIT-1001", "ORBIT-1046"]);
+      expect(await searchKeys("project = ORBIT AND status in (1) ORDER BY Rank DESC")).toEqual(["ORBIT-1046", "ORBIT-1001", "ORBIT-1050"]);
+      // Without Rank in the query the order is the key's, wherever the rank says.
+      expect(await searchKeys("project = ORBIT AND status in (1) ORDER BY key")).toEqual(["ORBIT-1001", "ORBIT-1046", "ORBIT-1050"]);
     });
   }
 });

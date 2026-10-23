@@ -1,6 +1,9 @@
 import boardFixture from "./jira/boards.json";
 import errors from "./jira/errors.json";
+import fieldFixture from "./jira/fields.json";
+import boardExtras from "./jira/issues-board.json";
 import issueSeeds from "./jira/issues.json";
+import linkTypes from "./jira/link-types.json";
 import myselfFixture from "./jira/myself.json";
 import priorities from "./jira/priorities.json";
 import projects from "./jira/projects.json";
@@ -33,6 +36,21 @@ import workflowFixture from "./jira/workflow.json";
  * `/board/{id}/issue` is deliberately not served: a client that calls it gets
  * the 404 below, and a test can see it.
  *
+ * What a board needs, served beside the above and named only when asked, so
+ * every answer that existed before is unchanged: `GET /field` (the site's
+ * fields; the Cloud list has a sprint, two story-point fields of one type, a
+ * rank and a team, the Data Center list a sprint of legacy strings, two plain
+ * number fields, a rank and no team); on an issue, `issuelinks`, `subtasks` and
+ * those custom fields, each `null` when the card has none, as a real site
+ * answers a requested empty field; `GET /issueLinkType`; board configuration
+ * with an `estimation` field on two boards and none on the others; a search
+ * that orders by the stored `rank`; and `GET|POST /issue/{key}/remotelink`,
+ * where a post that names a known `globalId` updates that link and one
+ * without a `globalId` always adds. `shuffleProjectStatuses` makes
+ * `GET /project/{key}/statuses` list the statuses in an order that is no
+ * board's. Unverified against a real site: the status of a remote-link update
+ * (200 here, 201 for an add) and the exact `object.status` shape.
+ *
  * Why stateful: the risky moves are state moves. A transition changes the
  * status and may run a post-function that assigns somebody; an assignee write
  * changes `updated`. A stub that answers fixed JSON cannot show that a hand-off
@@ -46,8 +64,12 @@ import workflowFixture from "./jira/workflow.json";
  * Ceilings, so a limit that was chosen is not mistaken for a gap that was
  * missed: one workflow serves every project (a real site has one per project
  * and issue type); the JQL reader understands only `AND`-joined equality
- * clauses and `order by key|updated`; the permission model is a list of denied
- * issue keys per action, not a role system; there is no pagination on comments.
+ * clauses and `order by key|updated|rank`; the permission model is a list of
+ * denied issue keys per action, not a role system; there is no pagination on
+ * comments. There are no sprint endpoints (a sprint is only the value on a
+ * card), no field types on transition screens, no link write, no permission
+ * model for remote links, and subtasks are listed from the fixture rather than
+ * derived from `parent`.
  * Data Center in particular: wiki markup is stored and returned as given, never
  * parsed or rendered; people are the fixed directory, with the email always
  * shown; one version's behaviour (9.x) stands for all of Server and Data Center.
@@ -114,6 +136,28 @@ export interface FakeIssue {
   description: unknown | null;
   updated: string;
   comments: FakeComment[];
+  /** The lexicographic rank a board orders by; the seed matches key order. */
+  rank: string;
+  sprints: FakeSprint[];
+  /** Story points; null when the card has none. Zero is a value. */
+  points: number | null;
+  /** Which of the site's two points fields carries it. */
+  pointsIn: "primary" | "alt";
+  team: string | null;
+  subtasks: string[];
+}
+
+export interface FakeSprint { id: number; name: string; state: "active" | "closed" | "future" }
+
+/** `from` blocks `to` when the type is Blocks: "to" is blocked by "from". */
+export interface FakeLink { id: string; type: string; from: string; to: string }
+
+export interface FakeRemoteLink {
+  id: number;
+  globalId?: string;
+  application?: { type?: string; name?: string };
+  relationship?: string;
+  object: { url: string; title?: string; status?: { resolved?: boolean } };
 }
 
 export interface FakeState {
@@ -122,6 +166,13 @@ export interface FakeState {
   /** Issue keys the caller may not act on: transitions list is `[]` (200),
    *  the transition POST is 400, an assignee write or a comment is 403. */
   deny: { transition: string[]; assign: string[]; comment: string[] };
+  /** What `GET /field` answers; a test drops one to play a site that has no sprints. */
+  fields: Record<string, any>[];
+  /** The boards the agile endpoints serve; a test reorders a column to play a board its project did not start with. */
+  boards: (typeof boardFixture.boards)[number][];
+  links: FakeLink[];
+  remoteLinks: Record<string, FakeRemoteLink[]>;
+  nextRemoteLinkId: number;
   /** When true, search answers from the data as it was at the last reset,
    *  the way a real index can trail a write. */
   searchLags: boolean;
@@ -174,6 +225,8 @@ export interface FakeJiraOptions {
   assignableScanCap?: number;
   /** Boards per page of `GET /board`, capped at 50. Default 50. */
   boardPageSize?: number;
+  /** List `GET /project/{key}/statuses` in an order that is no board's. Default: workflow order. */
+  shuffleProjectStatuses?: boolean;
 }
 
 export interface FakeJira {
@@ -209,7 +262,20 @@ function seedState(flavor: FakeFlavor): FakeState {
     if (dc) for (const c of issue.comments) c.body = (wiki.comments as Record<string, string>)[c.id] ?? "";
     issues[s.key] = issue;
   }
-  return { issues, workflow, deny: { transition: [], assign: [], comment: [] }, searchLags: false, tick: 0 };
+  // Rank follows key order until a test moves a card, so a board reads as it always did.
+  const keyOrder = Object.values(issues).sort((a, b) => a.projectKey.localeCompare(b.projectKey) || Number(a.key.split("-")[1]) - Number(b.key.split("-")[1]));
+  keyOrder.forEach((i, n) => {
+    const more = (boardExtras.issues as Record<string, Partial<FakeIssue>>)[i.key] ?? {};
+    Object.assign(i, { rank: `0|i${String(n).padStart(5, "0")}:`, sprints: [], points: null, pointsIn: "primary", team: null, subtasks: [] }, structuredClone(more));
+  });
+  return {
+    issues, workflow, deny: { transition: [], assign: [], comment: [] }, searchLags: false, tick: 0,
+    fields: structuredClone(flavor === "datacenter" ? fieldFixture.datacenter : fieldFixture.cloud),
+    boards: structuredClone(boardFixture.boards),
+    links: structuredClone(boardExtras.links),
+    remoteLinks: structuredClone(boardExtras.remoteLinks) as Record<string, FakeRemoteLink[]>,
+    nextRemoteLinkId: 20000,
+  };
 }
 
 /** A person as the caller of the given flavor sees them. */
@@ -268,14 +334,55 @@ function issueFields(i: FakeIssue, state: FakeState, dc: boolean) {
   };
 }
 
-/** `fields` is a comma list; absent or `*all`/`*navigable` means everything but
- *  the comment block, which a real site also leaves out unless asked for. */
+/** The ids the site gave its custom fields; they differ by flavor so nothing can lean on one. */
+const FIELD_IDS = {
+  cloud: { sprint: "customfield_10020", points: { primary: "customfield_10016", alt: "customfield_10027" }, rank: "customfield_10019", team: "customfield_10001" },
+  datacenter: { sprint: "customfield_10104", points: { primary: "customfield_10106", alt: "customfield_10109" }, rank: "customfield_10105", team: null },
+} as const;
+
+const linkedIssue = (k: string, state: FakeState, dc: boolean) => {
+  const o = state.issues[k]!;
+  return { id: o.id, key: o.key, self: `${prefixOf(dc ? "datacenter" : "cloud")}/issue/${o.id}`, fields: { summary: o.summary, status: statusObject(o.statusId), issuetype: { name: o.issueType } } };
+};
+
+/** Fields that answer only when asked by name (or `*all`): a request that names none sees what it always saw. */
+function boardFields(i: FakeIssue, state: FakeState, dc: boolean): Record<string, unknown> {
+  const ids = FIELD_IDS[dc ? "datacenter" : "cloud"];
+  const typeOf = (name: string) => linkTypes.issueLinkTypes.find((t) => t.name === name)!;
+  const links = state.links.flatMap((l): Record<string, unknown>[] => {
+    const t = typeOf(l.type);
+    const type = { id: t.id, name: t.name, inward: t.inward, outward: t.outward };
+    if (l.from === i.key) return [{ id: l.id, type, outwardIssue: linkedIssue(l.to, state, dc) }];
+    if (l.to === i.key) return [{ id: l.id, type, inwardIssue: linkedIssue(l.from, state, dc) }];
+    return [];
+  });
+  // Cloud sends sprints as objects; older Data Center as the bean's own text.
+  const sprint = i.sprints.map((s) => (dc
+    ? `com.atlassian.greenhopper.service.sprint.Sprint@1b2c3d[id=${s.id},rapidViewId=3,state=${s.state.toUpperCase()},name=${s.name},startDate=2026-01-05T09:00:00.000Z,endDate=2026-01-19T09:00:00.000Z,completeDate=<null>,sequence=${s.id}]`
+    : { id: s.id, name: s.name, state: s.state, boardId: 3 }));
+  const out: Record<string, unknown> = {
+    issuelinks: links,
+    subtasks: i.subtasks.map((k) => linkedIssue(k, state, dc)),
+    [ids.sprint]: sprint.length ? sprint : null,
+    [ids.points.primary]: i.pointsIn === "primary" ? i.points : null,
+    [ids.points.alt]: i.pointsIn === "alt" ? i.points : null,
+    [ids.rank]: i.rank,
+  };
+  if (ids.team) out[ids.team] = i.team ? { id: `team-${i.team.toLowerCase().replace(/\W+/g, "-")}`, name: i.team } : null;
+  return out;
+}
+
+/** `fields` is a comma list; absent or `*navigable` means everything but the
+ *  comment block, which a real site also leaves out unless asked for, and but
+ *  the board fields, which only a name or `*all` brings. */
 function issueObject(i: FakeIssue, state: FakeState, dc: boolean, fieldsParam?: string | null) {
-  const all = issueFields(i, state, dc) as Record<string, unknown>;
+  const base = issueFields(i, state, dc) as Record<string, unknown>;
+  const board = boardFields(i, state, dc);
   const asked = (fieldsParam ?? "").split(",").map((f) => f.trim()).filter(Boolean);
+  const all = { ...base, ...board };
   let fields: Record<string, unknown>;
   if (asked.length === 0 || asked.includes("*all") || asked.includes("*navigable")) {
-    const { comment: _c, ...rest } = all;
+    const { comment: _c, ...rest } = base;
     fields = asked.includes("*all") ? all : rest;
   } else {
     fields = Object.fromEntries(asked.filter((f) => f in all).map((f) => [f, all[f]]));
@@ -383,12 +490,12 @@ function runJql(jql: string, issues: Record<string, FakeIssue>, dc: boolean): Fa
     } else if ((m = /^key\s*=\s*(.+)$/i.exec(c))) rows = rows.filter((i) => i.key === q(m![1]).toUpperCase());
     else return { error: `Error in the JQL Query: the fake does not understand "${c}".` };
   }
-  // `Rank` is the board order; the fake has no rank field, so it reads as the key.
+  // `Rank` is the board order: the stored rank, which starts out as key order.
   const by = order ? /^(key|updated|rank)\s*(asc|desc)?/i.exec(jql.slice(order.index + order[0].length).trim()) : null;
-  const field = by?.[1].toLowerCase() === "rank" ? "key" : by?.[1].toLowerCase() ?? "key";
+  const field = by?.[1].toLowerCase() ?? "key";
   const dir = (by?.[2] ?? (field === "updated" ? "desc" : "asc")).toLowerCase() === "desc" ? -1 : 1;
   const num = (k: string) => Number(k.split("-")[1]);
-  rows.sort((a, b) => dir * (field === "updated" ? a.updated.localeCompare(b.updated) : a.projectKey.localeCompare(b.projectKey) || num(a.key) - num(b.key)));
+  rows.sort((a, b) => dir * (field === "updated" ? a.updated.localeCompare(b.updated) : field === "rank" ? (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0) : a.projectKey.localeCompare(b.projectKey) || num(a.key) - num(b.key)));
   return rows;
 }
 
@@ -404,6 +511,7 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
   const pageSize = opts.pageSize ?? 4;
   const boardPageSize = opts.boardPageSize ?? 50;
   const scanCap = opts.assignableScanCap ?? 3;
+  const shuffleStatuses = opts.shuffleProjectStatuses ?? false;
   const requests: LoggedRequest[] = [];
   let rules: (FailRule & { left: number })[] = [];
   // Data Center sends no rate-limit headers unless a test asks for one.
@@ -541,13 +649,15 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
     if (m === "GET" && (r = /^\/project\/([^/]+)\/statuses$/.exec(path))) {
       const p = projects.find((x) => x.key === decodeURIComponent(r![1]!) || x.id === decodeURIComponent(r![1]!));
       if (!p) return json(404, { errorMessages: [`No project could be found with key '${decodeURIComponent(r[1]!)}'.`], errors: {} });
-      const statuses = live.workflow.statuses.map((s) => ({ ...statusObject(s.id), self: `${PREFIX}/status/${s.id}`, description: "" }));
+      // Shuffled: no board puts To Do after QA, and a client that trusts this order shows it.
+      const listed = shuffleStatuses ? ["4", "2", "5", "1", "3"].flatMap((id) => live.workflow.statuses.filter((s) => s.id === id)) : live.workflow.statuses;
+      const statuses = listed.map((s) => ({ ...statusObject(s.id), self: `${PREFIX}/status/${s.id}`, description: "" }));
       return json(200, ["Task", "Bug"].map((name, i) => ({ id: String(10001 + i), name, subtask: false, self: `${PREFIX}/issuetype/${10001 + i}`, statuses })));
     }
 
     // Jira Software, outside the platform prefix and the same on both flavors.
     if (m === "GET" && path.startsWith("/rest/agile/1.0/")) {
-      const boards = boardFixture.boards;
+      const boards = live.boards;
       const projectOf = (key: string) => projects.find((p) => p.key === key)!;
       const asBoard = (b: (typeof boards)[number]) => ({
         id: b.id, self: `${base}/rest/agile/1.0/board/${b.id}`, name: b.name, type: b.type,
@@ -571,6 +681,10 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
           id: b.id, name: b.name, type: b.type, self: `${base}/rest/agile/1.0/board/${b.id}/configuration`,
           location: { type: "project", key: b.projectKey, id: p.id, self: `${PREFIX}/project/${p.id}`, name: p.name },
           filter: { id: b.filterId, self: `${PREFIX}/filter/${b.filterId}` },
+          // Boards that state an estimate name the field; the others say nothing, as a kanban board does.
+          ...("estimation" in b && b.estimation
+            ? { estimation: { type: "field", field: { fieldId: FIELD_IDS[dc ? "datacenter" : "cloud"].points[b.estimation as "primary" | "alt"], displayName: "Estimate" } } }
+            : {}),
           ...("subQuery" in b && b.subQuery ? { subQuery: { query: b.subQuery } } : {}),
           columnConfig: {
             columns: b.columns.map((c) => ({ name: c.name, statuses: c.statusIds.map((id) => ({ id, self: `${PREFIX}/status/${id}` })) })),
@@ -590,6 +704,9 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
       if (!f || f.visible === false) return json(404, { errorMessages: ["The filter does not exist or you do not have permission to view it."], errors: {} });
       return json(200, filterObject(f));
     }
+
+    if (m === "GET" && path === "/field") return json(200, live.fields);
+    if (m === "GET" && path === "/issueLinkType") return json(200, linkTypes);
 
     if (m === "GET" && path === "/priority") return json(200, priorities);
     if (!dc && m === "GET" && path === "/priority/search") {
@@ -637,7 +754,7 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
       return json(200, { issues: slice.map((i) => issueObject(i, live, false, fields)), isLast: last, ...(last ? {} : { nextPageToken: pageToken(offset + size) }) });
     }
 
-    if ((r = /^\/issue\/([^/]+)(?:\/(transitions|assignee|comment))?$/.exec(path))) {
+    if ((r = /^\/issue\/([^/]+)(?:\/(transitions|assignee|comment|remotelink))?$/.exec(path))) {
       const key = decodeURIComponent(r[1]);
       const sub = r[2];
       const issue = live.issues[key];
@@ -648,6 +765,21 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
       if (m !== "GET") {
         const limit = limited(key);
         if (limit) return limit;
+      }
+
+      if (sub === "remotelink" && m === "GET") {
+        return json(200, (live.remoteLinks[key] ?? []).map((l) => ({ ...l, self: `${PREFIX}/issue/${issue.id}/remotelink/${l.id}` })));
+      }
+
+      if (sub === "remotelink" && m === "POST") {
+        const b = (body ?? {}) as Partial<FakeRemoteLink>;
+        if (typeof b.object?.url !== "string" || !b.object.url) return bad({ url: "'url' is required." });
+        const list = (live.remoteLinks[key] ??= []);
+        // A known `globalId` names the same link again: it is replaced, never doubled.
+        const known = typeof b.globalId === "string" && b.globalId ? list.find((l) => l.globalId === b.globalId) : undefined;
+        const link: FakeRemoteLink = { id: known?.id ?? live.nextRemoteLinkId++, ...b, object: b.object };
+        if (known) list[list.indexOf(known)] = link; else list.push(link);
+        return json(known ? 200 : 201, { id: link.id, self: `${PREFIX}/issue/${issue.id}/remotelink/${link.id}` });
       }
 
       if (sub === "transitions" && m === "GET") {

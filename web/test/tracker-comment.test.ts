@@ -143,7 +143,7 @@ describe("the Jira card pane", () => {
   test("the card a write or a fresher read returns updates the list's row", () => {
     expect(code(pane)).toContain("onTaskRef.current(r.detail.task);");
     expect(code(pane)).toContain("if (r.task) { onTaskRef.current(r.task); putCard(key, r.task); }");
-    // One swap for the whole tab: S5's `changed` updates every list holding the card.
-    expect(code(tab)).toContain("writes={writes} onTask={changed}");
+    // One swap for the whole tab: the pane hands the card to the board, which draws it over its own row.
+    expect(code(tab)).toContain("writes={writable} onTask={onTask}");
   });
 });

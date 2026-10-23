@@ -21,7 +21,8 @@ import { cardPrsOf, onCardPrs, cardPrVersion, widestCardPrChip } from "../lib/ca
 import { digitMetrics, trackPx, whoCellWidth, PR_FLOOR, WHO_FLOOR } from "../lib/tasksColumnFit.ts";
 import { paintThenRevalidate, PRS_TTL_MS, swr, THREAD_TTL_MS } from "../lib/cardTabCache.ts";
 import { api } from "../lib/api.ts";
-import { __forgetClickupSetup } from "../lib/clickupSetup.ts";
+import { CLICKUP_BOARD, type BoardSource } from "../lib/boardSource.ts";
+import { JIRA_BOARD } from "../lib/jiraBoard.ts";
 import { useClickupPrefs, clickupPrefs, clickupPrefsSaved } from "../lib/clickupPrefs.ts";
 import { prLinkValue, swatchField } from "../lib/clickupFields.ts";
 import { Optimistic, commentResolvedPatch } from "../lib/taskOptimistic.ts";
@@ -30,6 +31,7 @@ import { EMPTY, apply as applyFilters, fieldsOf, liveCount as builtCount, type F
 import type { GitRepoRef, IssueDetail, IssuePr, IssueRow, IssueWork, StartMode, LocalTask, TaskCapability, TasksListResponse, SkillInfo } from "../../../shared/types.ts";
 import type { ProviderTask, ProviderTasksResponse, SavedView, SavedFolder, ViewTasksResponse, ListStatus, ListField, ListPlace, ListMember, TaskDetail, CardEvent, CardField as CardFieldValue } from "../../../shared/providers.ts";
 import { compareOrder } from "../../../shared/orderIndex.ts";
+import { blockersOf, foldCard, groupByStatus, looksLikeCardId, readyCount, tableColumns } from "../lib/boardGroups.ts";
 import { CardWrites } from "../lib/cardWrites.ts";
 import { activityRows, eventLine, foldLabel, folds, spanLabel, seenActor, NO_AUTHOR_NOTE } from "../lib/cardActivity.ts";
 import { layoutCard } from "../lib/cardLayout.ts";
@@ -66,7 +68,6 @@ import type { IssueJump } from "../lib/openIssue.ts";
 import { TASK_SOURCES, shownTaskSources, subscribeTaskSources, type TaskSourceId } from "../lib/taskSources.ts";
 import { CHIP, CTRL_H, EDGE, IconChip, INPUT, INPUT_STYLE, RefreshButton, LINE, TL_AVATAR, TL_CSS } from "./workspace/Chrome.tsx";
 import { SCROLLBAR_CSS } from "./diff/DiffLines.tsx";
-import { JiraBody } from "./JiraTasks.tsx";
 import { useTaskConnected, visibleTaskSources } from "../lib/taskConnected.ts";
 import { landingSource, rememberTaskSource } from "../lib/taskLanding.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
@@ -289,7 +290,10 @@ export function TasksView({ active, onOpenChatWith, onOpenBrowser, cardJump, iss
       </ViewHeader>
       {source === "local" ? <LocalBody active={active} repos={repos} here={root} onOpenChatWith={onOpenChatWith} />
       : source === "clickup" ? <ClickUpBody active={active} repos={repos} here={root} onOpenChatWith={onOpenChatWith} onOpenBrowser={onOpenBrowser} jump={cardJump?.tracker === "jira" ? null : cardJump} />
-      : source === "jira" ? <JiraBody active={active} jump={cardJump} />
+      /* Same body, other source. The key keeps the two apart: both are this
+         component in the same place, and without it a switch of tab would hand
+         ClickUp's state to Jira. */
+      : source === "jira" ? <ClickUpBody key="jira" active={active} repos={repos} here={root} onOpenChatWith={onOpenChatWith} onOpenBrowser={onOpenBrowser} jump={cardJump?.tracker === "jira" ? cardJump : null} source={JIRA_BOARD} />
       : (
         <div className="flex flex-col flex-1 min-h-0">
           {source === "all" && <NowBand onChanged={() => {}} />}
@@ -859,8 +863,10 @@ const todayStr = () => {
  * the list behind it knows its own statuses, which is what makes a status
  * picker possible without guessing.
  */
-function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump }: {
+function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump, source = CLICKUP_BOARD }: {
   active: boolean;
+  /** Where boards, cards and writes come from. ClickUp unless a body is given another. */
+  source?: BoardSource;
   repos: GitRepoRef[];
   here: string;
   onOpenChatWith?: (cwd: string, prompt: string, title: string) => void;
@@ -868,6 +874,9 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
   /** "Show me this card" — from the pull-request masthead. See lib/openCard.ts. */
   jump?: CardJump | null;
 }) {
+  /* What this board remembers, under the source's own keys. The names are the
+     module constants' so every line that reads one is the line it was. */
+  const { RAIL_KEY, RAIL_SHUT_KEY, RAIL_W_KEY, CARD_MODE_KEY, CARD_W_KEY, WIDE_KEY } = boardKeys(source);
   const [boards, setBoards] = useState<{ views: SavedView[]; folders?: SavedFolder[]; current?: string; writeEnabled: boolean; writeForced?: boolean; connected?: boolean } | null>(null);
   const [data, setData] = useState<ViewTasksResponse | null>(null);
   const [busy, setBusy] = useState(false);
@@ -907,15 +916,15 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
    *  known or already in flight. */
   const asked = useRef(new Set<string>());
   const ensureListViews = useCallback((listId: string) => {
-    if (!listId || asked.current.has(listId)) return;
+    if (!listId || asked.current.has(listId) || !source.caps.listViews) return;
     asked.current.add(listId);
-    api.clickupListViews(listId)
+    source.listViews(listId)
       .then((r) => {
         setListViews((m) => ({ ...m, [listId]: r.views ?? [] }));
         setListLinks((m) => ({ ...m, [listId]: r.links ?? [] }));
       })
       .catch(() => setListViews((m) => ({ ...m, [listId]: [] })));
-  }, []);
+  }, [source]);
 
   const openList = useCallback((v: SavedView) => {
     if (!v.listId) return;
@@ -1122,7 +1131,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
         key: `l:${v.id}`, level, kind: v.builtin ? "builtin" : "list", label: nameOf(v), v,
         expanded: more ? open : undefined, more,
         title: v.builtin
-          ? "Every card assigned to you, across the workspace, the same list as ClickUp's My Work. Slower than a board (it asks the whole workspace), so it opens on what you last saw."
+          ? source.nouns.assignedHint
           : `${crumb}${v.listName && v.name !== v.listName ? `${v.listName} · ${v.name}` : v.name}`,
         sepAfter: v.builtin,
       });
@@ -1402,8 +1411,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
   }, [active]);
 
   const loadBoards = useCallback(async () => {
-    try { setBoards(await api.clickupViews()); } catch { /* the panel still renders */ }
-  }, []);
+    try { setBoards(await source.views()); } catch { /* the panel still renders */ }
+  }, [source]);
 
   /*
    * `asked` is what somebody CLICKED, held separately from what is on screen.
@@ -1438,12 +1447,12 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
       await new Promise((r) => setTimeout(r, 1500));
       if (settling.current !== run) return; // something else was asked for
       try {
-        const r = await api.clickupView(id, false);
+        const r = await source.read(id, false);
         if (settling.current !== run) return;
         if (r.at > was || !r.revalidating) { setData(r); return; }
       } catch { return; }
     }
-  }, []);
+  }, [source]);
 
   /*
    * Which board was asked for last, so a slow answer cannot win.
@@ -1463,7 +1472,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
     setBusy(true);
     if (asked && id) setWanted(id);
     try {
-      const r = await api.clickupView(id, force);
+      const r = await source.read(id, force);
       if (ticket !== asking.current) return; // a later board already won
       setData(r);
       if (r.revalidating && r.view?.id) void settle(r.view.id, r.at);
@@ -1489,7 +1498,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
     } finally {
       if (ticket === asking.current) { setBusy(false); setWanted(null); }
     }
-  }, [settle]);
+  }, [settle, source]);
 
   useEffect(() => { if (active) { void loadBoards(); void load(); } }, [active, loadBoards, load]);
 
@@ -1599,7 +1608,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
      address there is for a list with no folder around it. */
   const addList = async (listId: string) => {
     setBusy(true);
-    const r = await api.clickupAddView(listId);
+    const r = await source.addView(listId);
     setBusy(false);
     if (!r.ok) { setNote({ ok: false, text: r.error ?? "That did not work" }); return; }
     setAdding(false); setNote(null);
@@ -1613,8 +1622,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
     // The same bar, two errands. Replacing resolves the new address before it
     // drops the old board, so a typo leaves the bar exactly as it was.
     const r = editing
-      ? await api.clickupReplaceView(editing.id, urlText.trim())
-      : await api.clickupAddView(urlText.trim());
+      ? await source.replaceView(editing.id, urlText.trim())
+      : await source.addView(urlText.trim());
     setBusy(false);
     if (!r.ok) { setNote({ ok: false, text: r.error ?? "That did not work" }); return; }
     setUrlText(""); setAdding(false); setEditing(null); setNote(null);
@@ -1633,7 +1642,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
    */
   const addFolder = async (id: string, spaceName: string) => {
     setBusy(true);
-    const r = await api.clickupAddFolder(id, spaceName);
+    const r = await source.addFolder(id, spaceName);
     setBusy(false);
     if (!r.ok) { setNote({ ok: false, text: r.error ?? "That folder did not go on" }); return; }
     setNote({ ok: true, text: `${r.folder?.name ?? "Folder"} added — ${r.folder?.lists?.length ?? 0} list${r.folder?.lists?.length === 1 ? "" : "s"}` });
@@ -1644,8 +1653,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
    *  touched, and a list you had ALSO pasted by hand stays. */
   const dropFolder = async (f: SavedFolder) => {
     setFolderMenu(null);
-    await api.clickupRemoveFolder(f.id).catch(() => {});
-    setNote({ ok: true, text: `${f.name} is off the sidebar — untouched in ClickUp` });
+    await source.removeFolder(f.id).catch(() => {});
+    setNote({ ok: true, text: `${f.name} is off the sidebar — untouched in ${source.nouns.tracker}` });
     await loadBoards();
     if (data?.view?.id && (f.lists ?? []).some((l) => `list:${l.id}` === data.view?.id)) await load(undefined, true);
   };
@@ -1653,8 +1662,15 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
   /** Take a board off the bar. The built-in one has no address and cannot go. */
   const dropBoard = async (v: SavedView) => {
     setMenu(null);
-    await api.clickupRemoveView(v.id).catch(() => {});
-    setNote({ ok: true, text: `${v.listName || v.name} is off this bar — untouched in ClickUp` });
+    const gone = await source.removeView(v.id).catch(() => null);
+    /* Said as it was answered: a board that comes with its project is not stored
+       on the bar, the server refuses to drop it, and "off this bar" would be a
+       claim about nothing. ClickUp answers ok and never says otherwise. */
+    if (gone && (gone as { ok?: boolean }).ok === false) {
+      setNote({ ok: false, text: (gone as { error?: string }).error ?? `${v.listName || v.name} could not be taken off this bar` });
+      return;
+    }
+    setNote({ ok: true, text: `${v.listName || v.name} is off this bar — untouched in ${source.nouns.tracker}` });
     await loadBoards();
     if (data?.view?.id === v.id) await load(undefined, true);
   };
@@ -1772,12 +1788,10 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
    * getting it wrong, and it was getting it wrong in the direction that costs
    * somebody's attention every week.
    */
-  const reads = readState({ error: data?.error, at: data?.at, rows: tasks.length, pollMs });
+  const reads = readState({ error: data?.error, at: data?.at, rows: tasks.length, pollMs, throttled: data?.throttled });
   const softFail = reads === "retrying";
   const alarming = reads === "stale";
-  const blockedBy = useCallback((t: ProviderTask) =>
-    (t.waitsOn ?? []).map((id) => byId.get(id)).filter((x): x is ProviderTask => !!x && x.statusKind !== "done"),
-  [byId]);
+  const blockedBy = useCallback((t: ProviderTask) => blockersOf(t, byId), [byId]);
 
   /*
    * WHAT THE LAST SEARCH FOUND, so the query cannot hide it.
@@ -1813,7 +1827,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
    * when it opens. Once per mount, never awaited, and the server does nothing
    * when its sweep is still warm.
    */
-  const clickupHere = boards?.connected === true;
+  const clickupHere = source.id === "clickup" && boards?.connected === true;
   // Waits for the answer to "is there a ClickUp here": the sweep is a no-op
   // server-side without a token, and a request that can only be refused is
   // still a request.
@@ -1878,7 +1892,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
     for (const t of tasks) for (const p of t.people ?? []) if (p.me && p.avatar) return p.avatar;
     return "";
   }, [tasks]);
-  const listForFace = tasks.find((t) => t.listId)?.listId ?? "";
+  const listForFace = source.caps.listMeta ? tasks.find((t) => t.listId)?.listId ?? "" : "";
   const askedFace = useRef("");
   useEffect(() => {
     if (faceOnBoard || !listForFace || askedFace.current === listForFace) return;
@@ -1898,13 +1912,13 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
       mine: all.filter((t) => t.mine && t.statusKind !== "done").length,
       open: all.filter((t) => t.statusKind !== "done").length,
       done: all.filter((t) => t.statusKind === "done").length,
-      ready: all.filter((t) => t.statusKind !== "done" && !blockedBy(t).length).length,
+      ready: readyCount(all),
     };
   }, [data, blockedBy]);
 
   // A bare number, or a prefixed id. Loose on purpose — the server decides
   // what is really a card, and being asked is cheaper than not being offered.
-  const looksLikeId = /^\s*([A-Za-z][\w]*-)?\d{3,}\s*$/.test(q);
+  const looksLikeId = looksLikeCardId(q, source.caps.workspaceSearch);
 
   /**
    * Show a card by id, wherever it turns out to live.
@@ -2046,7 +2060,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
          the list. The whole answer is still collected, for the sentence at the
          end that says how much was read. */
       const all: ProviderTask[] = [];
-      const r = await api.clickupSearchStream(asked, false, (batch) => {
+      const r = await source.searchStream(asked, false, (batch) => {
         if (!mine()) return;
         all.push(...batch);
         setResults((cur) => {
@@ -2071,7 +2085,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
        * went wrong is said rather than swallowed.
        */
       if (!r.ok || !all.length) {
-        const whole = await api.clickupSearch(asked, false, ac.signal);
+        const whole = await source.search(asked, false, ac.signal);
         if (!mine() || ac.signal.aborted) return;
         if (whole.ok) {
           all.push(...(whole.tasks ?? []));
@@ -2142,7 +2156,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
     } finally {
       if (mine()) { setSearching(false); searchAbort.current = null; }
     }
-  }, [q]);
+  }, [q, source]);
 
   /** Open one of the search's answers. A card that is not on this board has to
    *  live somewhere for the panel to draw it, and the Looked-up list is that
@@ -2163,7 +2177,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
     if (here) { setOnLooked(false); setSel(here.id); setNote(null); return; }
     setFinding(true);
     try {
-      const held = await api.clickupWhere(asked).catch(() => ({ ok: false } as { ok: boolean; viewId?: string; task?: ProviderTask }));
+      const held = await source.where(asked).catch(() => ({ ok: false } as { ok: boolean; viewId?: string; task?: ProviderTask }));
       if (held.ok && held.viewId && held.task) {
         setOnLooked(false);
         setNote(null);
@@ -2171,7 +2185,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
         await load(held.viewId, false, true);
         return;
       }
-      const r = await api.clickupFind(asked);
+      const r = await source.find(asked);
       if (r.ok && r.task) {
         const task = r.task;
         // Newest first, and only once however many times you ask for it: this
@@ -2183,7 +2197,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
       } else setNote({ ok: false, text: r.error ?? "Could not find that card" });
     } catch { setNote({ ok: false, text: "Could not reach the server" }); }
     finally { setFinding(false); }
-  }, [q, data, load]);
+  }, [q, data, load, source]);
 
   /*
    * Serve a "show me this card" from the pull-request panel.
@@ -2243,18 +2257,18 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
    * So the card's own list is asked, once, when you open it. Two calls against a
    * hundred-a-minute budget, on an explicit click, remembered for the session.
    */
-  const otherList = picked?.listId && picked.listId !== data?.view?.listId ? picked.listId : null;
+  const otherList = source.caps.listMeta && picked?.listId && picked.listId !== data?.view?.listId ? picked.listId : null;
   useEffect(() => {
     if (!otherList || listMeta[otherList]) return;
     let gone = false;
-    void api.clickupList(otherList)
+    void source.list(otherList)
       .then((r) => {
         if (gone || !r.ok) return;
         setListMeta((m) => ({ ...m, [otherList]: { statuses: r.statuses ?? [], fields: r.fields ?? [], place: r.place } }));
       })
       .catch(() => { /* the card still reads; it just cannot be moved from here */ });
     return () => { gone = true; };
-  }, [otherList, listMeta]);
+  }, [otherList, listMeta, source]);
   const cardStatuses = otherList ? (listMeta[otherList]?.statuses ?? []) : (data?.statuses ?? []);
   const cardFields = otherList ? (listMeta[otherList]?.fields ?? []) : (data?.fields ?? []);
   /* The card's own breadcrumb once its list has answered, and the list NAME the
@@ -2277,9 +2291,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
     for (const t of tasks) for (const p of t.people ?? []) if (p.id != null) ids.add(p.id);
     return ids;
   }, [data?.tasks]);
-  const anyWho = tasks.some((t) => t.assignees.length);
-  const anySprint = tasks.some((t) => t.sprint);
-  const anyEst = tasks.some((t) => t.estimateHours);
+  const { who: anyWho, sprint: anySprint, est: anyEst, pts: anyPts, cmts: anyCmts } = tableColumns(tasks, source.caps.fieldEdits);
   /* The swatch column names itself after the field it is showing — "Team" on
      one board, "Pod" on the next — so the heading is the board's word rather
      than ours. Taken from the first row that has one; they are all the same
@@ -2294,7 +2306,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
   const prFit = useSyncExternalStore(onCardPrs, widestCardPrChip, () => 0);
   const whoMost = useMemo(() => tasks.reduce((n, t) => Math.max(n, t.people?.length ?? 0), 0), [tasks]);
   const whoFit = whoMost ? whoCellWidth(whoMost, digitMetrics()) : 0;
-  const grid = cuGrid(anyWho, !!squadLabel, anySprint, anyEst, onLooked, trackPx(PR_FLOOR, prFit), trackPx(WHO_FLOOR, whoFit));
+  const grid = cuGrid(anyWho, !!squadLabel, anySprint, anyEst, onLooked, trackPx(PR_FLOOR, prFit), trackPx(WHO_FLOOR, whoFit), anyPts, anyCmts);
 
   /* The looked-up cards, by where each one lives. The search box filters these
      too — it is the only chip that still means anything on this board. */
@@ -2312,12 +2324,6 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
      workflow rather than alphabetically or by count — a board is read in the
      order work moves through it. */
   const groups = useMemo(() => {
-    const order = new Map((data?.statuses ?? []).map((s, i) => [s.status, { i, color: s.color, type: s.type }]));
-    const by = new Map<string, ProviderTask[]>();
-    for (const t of rows) {
-      const k = t.status || "—";
-      (by.get(k) ?? by.set(k, []).get(k)!).push(t);
-    }
     /*
      * Inside a status group, the tracker's own hand — nothing of ours.
      *
@@ -2335,32 +2341,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
       .map((t, i) => ({ t, i }))
       .sort((a, b) => compareOrder(a.t.order, b.t.order) || a.i - b.i)
       .map((x) => x.t);
-
-    /*
-     * EVERY STATUS THE LIST HAS, not only the ones that happen to hold a card.
-     *
-     * A board drew a group per status it SAW in the rows, so a workflow step
-     * with nothing in it right now simply was not there — and a person reading
-     * the board cannot tell "no cards in TO DO" from "this list has no TO DO".
-     * ClickUp's own page draws all fifteen, empty ones included, because the
-     * empty ones are half of what a workflow tells you: a status with no cards
-     * must still show as a group.
-     *
-     * Seeded before the rows are folded in, so the order is the workflow's own
-     * and an empty group lands exactly where it belongs between two full ones.
-     */
-    for (const s of data?.statuses ?? []) if (!by.has(s.status)) by.set(s.status, []);
-
-    return [...by.entries()]
-      .map(([status, list]) => ({
-        status,
-        rows: byOrder(list),
-        color: order.get(status)?.color ?? list[0]?.statusColor,
-        done: (order.get(status)?.type ?? "") === "done" || (order.get(status)?.type ?? "") === "closed",
-        points: list.reduce((n, t) => n + (t.points ?? 0), 0),
-        i: order.get(status)?.i ?? 999,
-      }))
-      .sort((a, b) => a.i - b.i);
+    return groupByStatus(rows, data?.statuses ?? [], byOrder);
   }, [rows, data?.statuses]);
 
   /* The board as one list, in the order the table draws it: status groups in the
@@ -2378,7 +2359,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
      the first screen answers is no longer "have you added anything" but "did the
      one you did not have to add come back with nothing". Which, on a machine
      where ClickUp is not connected yet, it will. */
-  if (!boards.views.some((v) => !v.builtin) && data?.error && !tasks.length) {
+  if (!source.AddView && !boards.views.some((v) => !v.builtin) && data?.error && !tasks.length) {
     return <AddFirstBoard value={urlText} onValue={setUrlText} onAdd={addBoard} busy={busy}
       note={note} why={data.error} />;
   }
@@ -2403,7 +2384,14 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
   /* The card, built once and put in whichever shell is chosen. Two copies of
      this would be two places for a field to go stale. */
   const cardBody = (
-    picked
+    picked && source.CardPane
+    /* A tracker with a card pane of its own: the body still owns the shell, the
+       width, next and previous, and the copy of the card a write changed. */
+    ? <source.CardPane t={picked} writable={boards.writeEnabled}
+        onTask={(task) => setOver((m) => ({ ...m, [task.id]: foldCard(byId.get(task.id), task) }))}
+        nav={cardMode === "modal" ? <CardHop list={cardOrder} id={picked.id} onGo={setSel} /> : undefined}
+        onClose={cardMode === "modal" ? () => setSel(null) : undefined} />
+    : picked
     ? <CardDetail t={picked} today={today} statuses={cardStatuses} fields={cardFields} place={cardPlaceShown}
     writable={boards.writeEnabled} repos={repos} here={here}
     onOpenChatWith={onOpenChatWith}
@@ -2453,7 +2441,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
           aria-expanded={adding}
           className="text-[11px] px-2 py-0.5 rounded-full"
           style={{ border: EDGE, color: adding ? "var(--text2)" : "var(--text3)" }}
-          title={adding ? "Never mind" : "Add a board by pasting its address"}>
+          title={adding ? "Never mind" : source.nouns.addHint}>
           {adding ? <CrossIcon size={ICON.sm} /> : <PlusIcon size={ICON.sm} />}
         </button>
 
@@ -2540,10 +2528,11 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
                * that. `reveal` is still the fallback for an id the sweep has
                * not seen, and only then.
                */
+              if (!source.caps.workspaceSearch) { if (looksLikeId) void reveal(); return; }
               void searchAll();
             }}
             spellCheck={false}
-            placeholder={onLooked ? "Filter what you have looked up" : "Filter this board · Enter searches the workspace"}
+            placeholder={onLooked ? "Filter what you have looked up" : source.caps.workspaceSearch ? "Filter this board · Enter searches the workspace" : "Filter this board"}
             className="flex-1 min-w-0 bg-transparent outline-none text-[12px]"
             style={{ color: "var(--text)", caretColor: "var(--primary)" }} />
           {searching && <span className="agx-spin shrink-0" aria-label="Searching" style={{ width: 11, height: 11, borderWidth: 1.5, borderColor: "var(--text3)", borderTopColor: "transparent" }} />}
@@ -2602,11 +2591,9 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
             const on = !boards.writeEnabled;
             if (on && !confirmWrite) { setConfirmWrite(true); return; }
             setConfirmWrite(false);
-            await api.clickupSetWrites(on);
-            // The pull request sidebar reads this switch from a copy it holds for a minute.
-            __forgetClickupSetup();
+            await source.setWrites(on);
             await loadBoards();
-            setNote({ ok: true, text: on ? "Changes to ClickUp are now allowed" : "Back to read-only" });
+            setNote({ ok: true, text: on ? `Changes to ${source.nouns.tracker} are now allowed` : "Back to read-only" });
           }}
           title={boards.writeForced ? "Forced on by AGENTGLASS_CLICKUP_WRITE=1" : boards.writeEnabled ? "Changes are allowed — click to stop that" : "Let this app change cards on your board"}
           className="text-[10px] px-2 py-0.5 rounded-full"
@@ -2647,9 +2634,9 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
             there is an address to open: the built-in board has none until it
             has been read once, and a link that goes nowhere is worse than no
             link. `externalUrl` rather than the raw string — see its file. */}
-        {externalUrl(data?.view?.url) && (
-          <a href={externalUrl(data?.view?.url)} target="_blank" rel="noreferrer noopener"
-            title={`Open ${data?.view?.name ?? "this board"} in ClickUp`}
+        {externalUrl(source.openAddress(data)) && (
+          <a href={externalUrl(source.openAddress(data))} target="_blank" rel="noreferrer noopener"
+            title={`Open ${data?.view?.name ?? "this board"} in ${source.nouns.tracker}`}
             className={CHIP}
             style={{ border: EDGE, color: "var(--text2)" }}>
             Open ↗
@@ -2717,7 +2704,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
           {/* Only when nothing else is saying it. A board being re-read has its
               own rows on screen and no veil over them, so this line is the only
               sign; a board that gets the veil is already told, at more length. */}
-          {!veiled && boards.views.find((v) => v.id === wanted)?.builtin && (
+          {!veiled && source.caps.slowAssigned && boards.views.find((v) => v.id === wanted)?.builtin && (
             <div className="px-5 py-1 text-[10.5px]" style={{ color: "var(--text3)" }}>
               Re-reading everything assigned to you across the workspace — about ten seconds.
             </div>
@@ -2736,7 +2723,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
             </div>
           </div>
           <span className="flex-1" />
-          <button onClick={async () => { setConfirmWrite(false); await api.clickupSetWrites(true); __forgetClickupSetup(); await loadBoards(); }}
+          <button onClick={async () => { setConfirmWrite(false); await source.setWrites(true); await loadBoards(); }}
             className="text-[11px] px-3 py-1 rounded-lg"
             style={{ background: "color-mix(in srgb, var(--warning) 22%, transparent)",
               border: "1px solid color-mix(in srgb, var(--warning) 50%, transparent)", color: "var(--text)" }}>
@@ -2758,9 +2745,11 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
             </div>
           ) : (
             <>
-              <MenuItem onClick={() => { setEditing(menu.v); setUrlText(menu.v.url); setAdding(true); setNote(null); setMenu(null); }}>
-                Change address…
-              </MenuItem>
+              {source.caps.editAddress && (
+                <MenuItem onClick={() => { setEditing(menu.v); setUrlText(menu.v.url); setAdding(true); setNote(null); setMenu(null); }}>
+                  Change address…
+                </MenuItem>
+              )}
               {externalUrl(menu.v.url) && (
                 <MenuItem onClick={() => { void navigator.clipboard?.writeText(menu.v.url).catch(() => {}); setMenu(null); setNote({ ok: true, text: "Address copied" }); }}>
                   Copy address
@@ -2769,7 +2758,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
             </>
           )}
           {externalUrl(menu.v.url) && (
-            <MenuItem onClick={() => { openExternal(menu.v.url); setMenu(null); }}>Open in ClickUp ↗</MenuItem>
+            <MenuItem onClick={() => { openExternal(menu.v.url); setMenu(null); }}>{source.nouns.openIn} ↗</MenuItem>
           )}
           {/* Named for what it does and, more importantly, for what it does
               not. "Remove" beside a board that lives in a shared team
@@ -2781,7 +2770,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
             <>
               <MenuItem danger onClick={() => void dropBoard(menu.v)}>Take off this bar</MenuItem>
               <div className="px-2 pb-1 text-[9.5px] max-w-[220px]" style={{ color: "var(--text4)" }}>
-                Only here — the board and its cards stay exactly as they are in ClickUp.
+                Only here — the board and its cards stay exactly as they are in {source.nouns.tracker}.
               </div>
             </>
           )}
@@ -2794,18 +2783,23 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
           <div className="px-2 py-1.5 text-[10.5px] max-w-[240px]" style={{ color: "var(--text4)" }}>
             {folderMenu.f.spaceName ? `${folderMenu.f.spaceName} · ` : ""}{folderMenu.f.name}
           </div>
-          <MenuItem danger onClick={() => void dropFolder(folderMenu.f)}>Take this folder off the sidebar</MenuItem>
+          <MenuItem danger onClick={() => void dropFolder(folderMenu.f)}>Take this {source.nouns.folder} off the sidebar</MenuItem>
           <div className="px-2 pb-1 text-[9.5px] max-w-[240px]" style={{ color: "var(--text4)" }}>
-            Only here — the folder and its lists stay exactly as they are in ClickUp.
+            Only here — the {source.nouns.folder} and its {source.nouns.list}s stay exactly as they are in {source.nouns.tracker}.
           </div>
         </ContextMenu>
       )}
-      {adding && (
-        <AddBoardBar value={urlText} onValue={setUrlText} onAdd={addBoard}
-          onClose={closeAddBar}
-          busy={busy} editing={editing?.listName || editing?.name || null}
-          folders={boards?.folders ?? []} onAddFolder={addFolder} onAddList={addList} />
-      )}
+      {adding && (source.AddView
+        /* A tracker that picks from its own site draws its own bar and says
+           what it added; the body only reloads and lands on it. */
+        ? <source.AddView value={urlText} onValue={setUrlText} onAdd={addBoard}
+            onClose={closeAddBar} busy={busy} editing={editing?.listName || editing?.name || null}
+            onAddedView={(id) => { closeAddBar(); void loadBoards().then(() => load(id, true, true)); }}
+            onAddedFolder={() => { closeAddBar(); void loadBoards(); }} />
+        : <AddBoardBar value={urlText} onValue={setUrlText} onAdd={addBoard}
+            onClose={closeAddBar}
+            busy={busy} editing={editing?.listName || editing?.name || null}
+            folders={boards?.folders ?? []} onAddFolder={addFolder} onAddList={addList} />)}
 
       <div className="flex items-center gap-1.5 px-4 pb-1.5 flex-wrap shrink-0">
         {/* The box, with `overflow-hidden` so anything attached to its right
@@ -2816,7 +2810,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
             board, and Enter goes and looks through the workspace. Only when
             there is something to look for, and never for an id — that is a
             jump, and it has its own path. */}
-        {!onLooked && q.trim().length >= 2 && !looksLikeId && (
+        {source.caps.workspaceSearch && !onLooked && q.trim().length >= 2 && !looksLikeId && (
           <button onClick={() => void searchAll()} disabled={searching}
             title="ClickUp has no text search for this token, so this sweeps the most recently updated cards. The first one takes a moment."
             className="text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap disabled:opacity-50"
@@ -2981,7 +2975,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
        */}
       <div className="px-5 shrink-0 flex items-center overflow-hidden" aria-live="polite"
         style={{ height: 22, background: busy && !confirm && !wanted ? "color-mix(in srgb, var(--primary) 10%, transparent)" : "transparent" }}>
-        {busy && !confirm && !wanted && <Spinner label="Telling ClickUp…" className="" />}
+        {busy && !confirm && !wanted && <Spinner label={`Telling ${source.nouns.tracker}…`} className="" />}
       </div>
 
       <div className="flex flex-1 min-h-0 relative">
@@ -3023,8 +3017,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
             </button>
             {railOpen && (
               <div className="relative min-w-0 flex-1">
-                <input ref={railInput} value={railQ} onChange={(e) => setRailQ(e.target.value)} placeholder="Filter lists…" spellCheck={false}
-                  aria-label="Filter lists"
+                <input ref={railInput} value={railQ} onChange={(e) => setRailQ(e.target.value)} placeholder={`Filter ${source.nouns.list}s…`} spellCheck={false}
+                  aria-label={`Filter ${source.nouns.list}s`}
                   onKeyDown={(e) => {
                     if (e.key === "Escape" && railQ) { e.preventDefault(); setRailQ(""); }
                     else if (e.key === "ArrowDown" && railStop) { e.preventDefault(); railFocusKey(railStop); }
@@ -3080,7 +3074,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
               {/* One tree: the built-in board and any list whose folder we do
                   not know yet come first, then spaces and folders, then
                   where you have been. See `railRows`. */}
-              <div ref={railTree} role="tree" aria-label="ClickUp lists" onKeyDown={onRailKey}>
+              <div ref={railTree} role="tree" aria-label="ClickUp lists" onKeyDown={onRailKey}
+                {...(source.id === "clickup" ? null : { "aria-label": `${source.nouns.tracker} ${source.nouns.list}s` })}>
                 {railRows.map(railItem)}
               </div>
             </div>
@@ -3151,10 +3146,10 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
               {anyWho && <span className="text-center agx-colrule" style={COL_RULE}>Who</span>}
               {!!squadLabel && <span className="text-center agx-colrule" style={COL_RULE} title={squadLabel}><span className="truncate">{squadLabel}</span></span>}
               {anySprint && <span className="agx-colrule" style={COL_RULE}>Sprint</span>}
-              <span className="text-center agx-colrule" style={COL_RULE}>Cmts</span>
+              {anyCmts && <span className="text-center agx-colrule" style={COL_RULE}>Cmts</span>}
               <span className="agx-colrule" style={COL_RULE}>Due</span>
               {anyEst && <span className="text-center agx-colrule" style={COL_RULE}>Est</span>}
-              <span className="text-center agx-colrule" style={COL_RULE}>Pts</span>
+              {anyPts && <span className="text-center agx-colrule" style={COL_RULE}>Pts</span>}
               {onLooked && <span />}
             </div>
 
@@ -3166,7 +3161,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
                 className="w-full text-left px-5 py-3 hover:bg-white/5"
                 style={{ borderBottom: LINE }}>
                 <span className="text-[11.5px]" style={{ color: "var(--primary-ink)" }}>
-                  {finding ? `Looking for ${q.trim()}…` : `Fetch card ${q.trim()} from ClickUp →`}
+                  {finding ? `Looking for ${q.trim()}…` : `Fetch card ${q.trim()} from ${source.nouns.tracker} →`}
                 </span>
                 <span className="block text-[10px]" style={{ color: "var(--text4)" }}>
                   Not on this board. It opens under Looked up, beside your boards — or on the board that
@@ -3196,8 +3191,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
                   // One card at a time, because a history you can only throw
                   // away whole is one nobody prunes.
                   <ClickUpRow key={t.id} t={t} today={today} on={t.id === sel} onPick={() => setSel(t.id)}
-                    grid={grid} showWho={anyWho} showSquad={!!squadLabel} showSprint={anySprint} showEst={anyEst} blocked={[]} onHand={handCard}
-                    repos={repos} here={here}
+                    grid={grid} showWho={anyWho} showSquad={!!squadLabel} showSprint={anySprint} showEst={anyEst} showPts={anyPts} showCmts={anyCmts} blocked={[]} onHand={handCard}
+                    repos={repos} here={here} source={source}
                     onForget={() => { setLooked((cur) => { const left = cur.filter((x) => x.id !== t.id); if (!left.length) setOnLooked(false); return left; }); if (sel === t.id) setSel(null); }} />
                 ))}
               </div>
@@ -3227,7 +3222,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
                 {/* Only on the built-in board, and only while it is true. ClickUp's
                     assignee filter leaves subtasks out, so for a team that works in
                     them this empty board is the setting, not the work. */}
-                {data?.view?.builtin && !data?.error && !q && !tag && !mineOnly && !statusPick.length && (
+                {source.caps.slowAssigned && data?.view?.builtin && !data?.error && !q && !tag && !mineOnly && !statusPick.length && (
                   <SubtasksNote onChanged={() => { void load(data?.view?.id, true); }} />
                 )}
               </div>
@@ -3242,8 +3237,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
                   label={<StatusPill status={g.status} color={g.color} dim={g.done} />} />
                 {!folded[g.status] && g.rows.map((t) => (
                   <ClickUpRow key={t.id} t={t} today={today} on={t.id === sel} onPick={() => setSel(t.id)}
-                    grid={grid} showWho={anyWho} showSquad={!!squadLabel} showSprint={anySprint} showEst={anyEst} blocked={blockedBy(t)} onHand={handCard}
-                    repos={repos} here={here} />
+                    grid={grid} showWho={anyWho} showSquad={!!squadLabel} showSprint={anySprint} showEst={anyEst} showPts={anyPts} showCmts={anyCmts} blocked={blockedBy(t)} onHand={handCard}
+                    repos={repos} here={here} source={source} />
                 ))}
               </div>
             ))}
@@ -3263,7 +3258,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
                 <div className="text-[12px]" style={{ color: "var(--text)" }}>
                   Reading {boards.views.find((v) => v.id === wanted)?.name ?? "that board"}…
                 </div>
-                {boards.views.find((v) => v.id === wanted)?.builtin && (
+                {source.caps.slowAssigned && boards.views.find((v) => v.id === wanted)?.builtin && (
                   <div className="text-[11px] max-w-[42ch] leading-relaxed" style={{ color: "var(--text3)" }}>
                     Asking ClickUp for every card assigned to you across the workspace. That question
                     takes about ten seconds — a board takes one, because it is already scoped.
@@ -3284,7 +3279,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
             {/* Said, rather than left as a list that stops. */}
             {data?.truncated && (
               <span style={{ color: "var(--warning-ink)" }}
-                title="More than this was waiting. Open the board in ClickUp to see the rest.">
+                title={`More than this was waiting. Open the board in ${source.nouns.tracker} to see the rest.`}>
                 · and more behind it
               </span>
             )}
@@ -4291,6 +4286,13 @@ interface RailRow {
   sepAfter?: boolean;
 }
 const CARD_MODE_KEY = "agentglass.clickup.cardMode";
+/** ClickUp's keys as they have always been; another tracker's are its source's, by its id. */
+const boardKeys = (source: BoardSource) => source.id === "clickup"
+  ? { RAIL_KEY, RAIL_SHUT_KEY, RAIL_W_KEY, CARD_MODE_KEY, CARD_W_KEY, WIDE_KEY }
+  : {
+    RAIL_KEY: source.storageKey("listRail"), RAIL_SHUT_KEY: source.storageKey("listRail.shut"), RAIL_W_KEY: source.storageKey("listRail.width"),
+    CARD_MODE_KEY: source.storageKey("cardMode"), CARD_W_KEY: source.storageKey("cardWidth"), WIDE_KEY: source.storageKey("wideCard"),
+  };
 /** The width it goes back to. The old narrow setting, kept as the default
  *  because it is the one most cards are read at. */
 const CARD_W_DEFAULT = 380;
@@ -4414,7 +4416,7 @@ const COL_RULE: CSSProperties = {
  */
 const HEAD_H = 34;
 
-const cuGrid = (who: boolean, squad: boolean, sprint: boolean, est: boolean, forget: boolean, prPx = 92, whoPx = 50) =>
+const cuGrid = (who: boolean, squad: boolean, sprint: boolean, est: boolean, forget: boolean, prPx = 92, whoPx = 50, pts = true, cmts = true) =>
   // The comments column is unconditional, unlike Who and Sprint. Those come and
   // go because a board where nobody is assigned has nothing to put in them; a
   // count of zero is a real answer and worth the 30px — "nobody has said
@@ -4440,7 +4442,7 @@ const cuGrid = (who: boolean, squad: boolean, sprint: boolean, est: boolean, for
   // chip and stack of faces in view need, in pixels (tasksColumnFit.ts): the
   // floor (92 and 50, the defaults) is what the cell was drawn for, so an empty
   // board or chips still on their way move nothing.
-  ["1fr", `${prPx}px`, who ? `${whoPx}px` : "", squad ? "36px" : "", sprint ? "88px" : "", "34px", "72px", est ? "38px" : "", "30px", forget ? "30px" : ""].filter(Boolean).join(" ");
+  ["1fr", `${prPx}px`, who ? `${whoPx}px` : "", squad ? "36px" : "", sprint ? "88px" : "", cmts ? "34px" : "", "72px", est ? "38px" : "", pts ? "30px" : "", forget ? "30px" : ""].filter(Boolean).join(" ");
 
 /**
  * The one custom field worth a column of its own: a coloured drop-down.
@@ -4695,9 +4697,15 @@ function PriorityPick({ t, writable, busy, onApply }: {
   );
 }
 
-function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint, showEst, blocked, onHand, onForget, repos, here }: {
+function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint, showEst, showPts = true, showCmts = true, blocked, onHand, onForget, repos, here, source = CLICKUP_BOARD }: {
   t: ProviderTask; today: string; on: boolean; onPick: () => void;
   grid: string; showWho: boolean; showSquad: boolean; showSprint: boolean; showEst: boolean;
+  /** Drawn unless the board has no points to show. */
+  showPts?: boolean;
+  /** Drawn unless the board has no comment counts to show. */
+  showCmts?: boolean;
+  /** Whose card this is: which tracker answers for its pull requests, and the words in its menu. */
+  source?: BoardSource;
   /** Unfinished cards this one is waiting on. Empty means it can be started. */
   blocked: ProviderTask[];
   /** Hand this card over without opening it. Absent where there is no checkout
@@ -4743,7 +4751,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
   useSyncExternalStore(onCardPrs, cardPrVersion, cardPrVersion);
   const prField = prLinkValue(t.custom, cuPrefs?.prLinkField);
   const prCwd = rootForTask(t.list, repos, here) ?? here;
-  const prEntry = cardPrsOf(t.id, t.customId || "", prField, prCwd);
+  const prEntry = cardPrsOf(t.id, t.customId || "", prField, prCwd, source.id);
   const prPick = pickCardPr(prEntry?.prs);
   const openCardPr = (p: CardPr) => {
     const ref = prRefFromUrl(p.url);
@@ -4881,14 +4889,14 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
           on the first sight of a board. Dimmer at zero, because a card nobody
           has commented on is the uninteresting case and should not draw the
           eye the way a thread does. */}
-      <span className="text-[11px] tabular-nums text-center agx-colrule"
+      {showCmts && <span className="text-[11px] tabular-nums text-center agx-colrule"
         title={t.comments == null ? "Not counted yet" : `${t.comments} comment${t.comments === 1 ? "" : "s"}`}
         style={{
           ...COL_RULE,
           color: t.comments ? "var(--text3)" : "var(--text4)", opacity: t.comments ? 1 : 0.55,
         }}>
         {t.comments ?? ""}
-      </span>
+      </span>}
       <span className="text-[11px] tabular-nums agx-colrule" style={{ ...COL_RULE, color: late ? "var(--error)" : now ? "var(--warning)" : "var(--text3)" }}>
         {dueLabel(t.due, today)}
       </span>
@@ -4900,8 +4908,10 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
           {t.estimateHours ? `${t.estimateHours}h` : ""}
         </span>
       )}
-      <span className="text-[11px] tabular-nums text-center agx-colrule"
-        style={{ ...COL_RULE, color: "var(--text4)" }}>{t.points ?? ""}</span>
+      {showPts && (
+        <span className="text-[11px] tabular-nums text-center agx-colrule"
+          style={{ ...COL_RULE, color: "var(--text4)" }}>{t.points ?? ""}</span>
+      )}
       {/* Its own track, not a layer on top of the last cell: a row you can
           forget lives in the grid like every other cell, and only its opacity
           — never its position — answers the hover. */}
@@ -4915,8 +4925,8 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
           {t.customId && (
             <MenuItem onClick={() => copy(t.customId!, t.customId!)}>Copy {t.customId}</MenuItem>
           )}
-          <MenuItem onClick={() => copy(t.id, "the ClickUp id")}>
-            Copy {t.id} <span style={{ color: "var(--text4)" }}>· ClickUp&apos;s own</span>
+          <MenuItem onClick={() => copy(t.id, `the ${source.nouns.tracker} id`)}>
+            Copy {t.id} <span style={{ color: "var(--text4)" }}>· {source.nouns.tracker}&apos;s own</span>
           </MenuItem>
           {/* The link, not the id. Pasting a card into a message, a commit or a
               PR body wants the address somebody can click — and until now the
@@ -4928,7 +4938,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
             <MenuItem onClick={() => copy(t.url, "the card link")}>Copy card URL</MenuItem>
           )}
           {externalUrl(t.url) && (
-            <MenuItem onClick={() => { openExternal(t.url); setMenu(null); }}>Open in ClickUp ↗</MenuItem>
+            <MenuItem onClick={() => { openExternal(t.url); setMenu(null); }}>{source.nouns.openIn} ↗</MenuItem>
           )}
           {onHand && (
             <MenuItem onClick={() => { onHand(t); setMenu(null); }}>

@@ -1,0 +1,641 @@
+{
+  "cloud": [
+    {
+      "id": "summary",
+      "name": "Summary",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "summary"
+      ],
+      "schema": {
+        "type": "string",
+        "system": "summary"
+      }
+    },
+    {
+      "id": "status",
+      "name": "Status",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "status"
+      ],
+      "schema": {
+        "type": "status",
+        "system": "status"
+      }
+    },
+    {
+      "id": "assignee",
+      "name": "Assignee",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "assignee"
+      ],
+      "schema": {
+        "type": "user",
+        "system": "assignee"
+      }
+    },
+    {
+      "id": "reporter",
+      "name": "Reporter",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "reporter"
+      ],
+      "schema": {
+        "type": "user",
+        "system": "reporter"
+      }
+    },
+    {
+      "id": "priority",
+      "name": "Priority",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "priority"
+      ],
+      "schema": {
+        "type": "priority",
+        "system": "priority"
+      }
+    },
+    {
+      "id": "issuetype",
+      "name": "Issue Type",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "issuetype"
+      ],
+      "schema": {
+        "type": "issuetype",
+        "system": "issuetype"
+      }
+    },
+    {
+      "id": "project",
+      "name": "Project",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "project"
+      ],
+      "schema": {
+        "type": "project",
+        "system": "project"
+      }
+    },
+    {
+      "id": "labels",
+      "name": "Labels",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "labels"
+      ],
+      "schema": {
+        "type": "array",
+        "system": "labels"
+      }
+    },
+    {
+      "id": "parent",
+      "name": "Parent",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "parent"
+      ],
+      "schema": {
+        "type": "issuelink",
+        "system": "parent"
+      }
+    },
+    {
+      "id": "description",
+      "name": "Description",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "description"
+      ],
+      "schema": {
+        "type": "string",
+        "system": "description"
+      }
+    },
+    {
+      "id": "created",
+      "name": "Created",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "created"
+      ],
+      "schema": {
+        "type": "datetime",
+        "system": "created"
+      }
+    },
+    {
+      "id": "updated",
+      "name": "Updated",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "updated"
+      ],
+      "schema": {
+        "type": "datetime",
+        "system": "updated"
+      }
+    },
+    {
+      "id": "comment",
+      "name": "Comment",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "comment"
+      ],
+      "schema": {
+        "type": "comments-page",
+        "system": "comment"
+      }
+    },
+    {
+      "id": "issuelinks",
+      "name": "Linked Issues",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "linkedissues"
+      ],
+      "schema": {
+        "type": "array",
+        "system": "issuelinks"
+      }
+    },
+    {
+      "id": "subtasks",
+      "name": "Sub-tasks",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "sub-tasks"
+      ],
+      "schema": {
+        "type": "array",
+        "system": "subtasks"
+      }
+    },
+    {
+      "id": "resolution",
+      "name": "Resolution",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "resolution"
+      ],
+      "schema": {
+        "type": "resolution",
+        "system": "resolution"
+      }
+    },
+    {
+      "id": "customfield_10020",
+      "name": "Sprint",
+      "custom": true,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "cf[10020]",
+        "Sprint"
+      ],
+      "schema": {
+        "type": "array",
+        "custom": "com.pyxis.greenhopper.jira:gh-sprint",
+        "customId": 10020,
+        "items": "json"
+      }
+    },
+    {
+      "id": "customfield_10016",
+      "name": "Story point estimate",
+      "custom": true,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "cf[10016]",
+        "Story point estimate"
+      ],
+      "schema": {
+        "type": "number",
+        "custom": "com.pyxis.greenhopper.jira:jsw-story-points",
+        "customId": 10016
+      }
+    },
+    {
+      "id": "customfield_10027",
+      "name": "Story points (copy)",
+      "custom": true,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "cf[10027]",
+        "Story points (copy)"
+      ],
+      "schema": {
+        "type": "number",
+        "custom": "com.pyxis.greenhopper.jira:jsw-story-points",
+        "customId": 10027
+      }
+    },
+    {
+      "id": "customfield_10019",
+      "name": "Rank",
+      "custom": true,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "cf[10019]",
+        "Rank"
+      ],
+      "schema": {
+        "type": "any",
+        "custom": "com.pyxis.greenhopper.jira:gh-lexo-rank",
+        "customId": 10019
+      }
+    },
+    {
+      "id": "customfield_10001",
+      "name": "Team",
+      "custom": true,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "cf[10001]",
+        "Team"
+      ],
+      "schema": {
+        "type": "team",
+        "custom": "com.atlassian.jira.plugin.system.customfieldtypes:atlassian-team",
+        "customId": 10001
+      }
+    }
+  ],
+  "datacenter": [
+    {
+      "id": "summary",
+      "name": "Summary",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "summary"
+      ],
+      "schema": {
+        "type": "string",
+        "system": "summary"
+      }
+    },
+    {
+      "id": "status",
+      "name": "Status",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "status"
+      ],
+      "schema": {
+        "type": "status",
+        "system": "status"
+      }
+    },
+    {
+      "id": "assignee",
+      "name": "Assignee",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "assignee"
+      ],
+      "schema": {
+        "type": "user",
+        "system": "assignee"
+      }
+    },
+    {
+      "id": "reporter",
+      "name": "Reporter",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "reporter"
+      ],
+      "schema": {
+        "type": "user",
+        "system": "reporter"
+      }
+    },
+    {
+      "id": "priority",
+      "name": "Priority",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "priority"
+      ],
+      "schema": {
+        "type": "priority",
+        "system": "priority"
+      }
+    },
+    {
+      "id": "issuetype",
+      "name": "Issue Type",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "issuetype"
+      ],
+      "schema": {
+        "type": "issuetype",
+        "system": "issuetype"
+      }
+    },
+    {
+      "id": "project",
+      "name": "Project",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "project"
+      ],
+      "schema": {
+        "type": "project",
+        "system": "project"
+      }
+    },
+    {
+      "id": "labels",
+      "name": "Labels",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "labels"
+      ],
+      "schema": {
+        "type": "array",
+        "system": "labels"
+      }
+    },
+    {
+      "id": "parent",
+      "name": "Parent",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "parent"
+      ],
+      "schema": {
+        "type": "issuelink",
+        "system": "parent"
+      }
+    },
+    {
+      "id": "description",
+      "name": "Description",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "description"
+      ],
+      "schema": {
+        "type": "string",
+        "system": "description"
+      }
+    },
+    {
+      "id": "created",
+      "name": "Created",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "created"
+      ],
+      "schema": {
+        "type": "datetime",
+        "system": "created"
+      }
+    },
+    {
+      "id": "updated",
+      "name": "Updated",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "updated"
+      ],
+      "schema": {
+        "type": "datetime",
+        "system": "updated"
+      }
+    },
+    {
+      "id": "comment",
+      "name": "Comment",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "comment"
+      ],
+      "schema": {
+        "type": "comments-page",
+        "system": "comment"
+      }
+    },
+    {
+      "id": "issuelinks",
+      "name": "Linked Issues",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "linkedissues"
+      ],
+      "schema": {
+        "type": "array",
+        "system": "issuelinks"
+      }
+    },
+    {
+      "id": "subtasks",
+      "name": "Sub-tasks",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "sub-tasks"
+      ],
+      "schema": {
+        "type": "array",
+        "system": "subtasks"
+      }
+    },
+    {
+      "id": "resolution",
+      "name": "Resolution",
+      "custom": false,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "resolution"
+      ],
+      "schema": {
+        "type": "resolution",
+        "system": "resolution"
+      }
+    },
+    {
+      "id": "customfield_10104",
+      "name": "Sprint",
+      "custom": true,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "cf[10104]",
+        "Sprint"
+      ],
+      "schema": {
+        "type": "array",
+        "custom": "com.pyxis.greenhopper.jira:gh-sprint",
+        "customId": 10104,
+        "items": "string"
+      }
+    },
+    {
+      "id": "customfield_10106",
+      "name": "Story Points",
+      "custom": true,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "cf[10106]",
+        "Story Points"
+      ],
+      "schema": {
+        "type": "number",
+        "custom": "com.atlassian.jira.plugin.system.customfieldtypes:float",
+        "customId": 10106
+      }
+    },
+    {
+      "id": "customfield_10109",
+      "name": "Effort",
+      "custom": true,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "cf[10109]",
+        "Effort"
+      ],
+      "schema": {
+        "type": "number",
+        "custom": "com.atlassian.jira.plugin.system.customfieldtypes:float",
+        "customId": 10109
+      }
+    },
+    {
+      "id": "customfield_10105",
+      "name": "Rank",
+      "custom": true,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "cf[10105]",
+        "Rank"
+      ],
+      "schema": {
+        "type": "any",
+        "custom": "com.pyxis.greenhopper.jira:gh-lexo-rank",
+        "customId": 10105
+      }
+    }
+  ]
+}

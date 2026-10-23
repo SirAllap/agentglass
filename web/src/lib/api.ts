@@ -1393,6 +1393,9 @@ const realApi = {
   /** The pull requests that name a Jira card, by its key. Same answer as `clickupPrs`. */
   jiraPrs: (key: string, root = "") =>
     get<{ ok: boolean; prs: CardPr[]; error?: string }>(`/jira/prs?${new URLSearchParams({ key, root })}`),
+  /** Every pull request that names a card of one project, from ONE search: card key to its pull requests. */
+  jiraProjectPrs: (project: string, root = "") =>
+    get<{ ok: boolean; byCard: Record<string, CardPr[]>; truncated?: boolean; error?: string }>(`/jira/prs?${new URLSearchParams({ project, root })}`),
   /** Which tracker each repository's cards live in, keyed by lower-case `owner/name`. Absent is auto. */
   trackerProjects: (withRepos = false) =>
     get<{ ok: boolean; projects?: Record<string, Exclude<TrackerChoice, "auto">>; repos?: string[] }>(`/tracker/projects${withRepos ? "?repos=1" : ""}`),
@@ -1403,7 +1406,6 @@ const realApi = {
   /** A card from what was typed: `ORBIT-1042`, or a bare number tried against the site's projects. */
   jiraFind: (q: string) => get<{ ok: boolean; error?: string; task?: ProviderTask; asked?: string }>(`/jira/find?q=${encodeURIComponent(q)}`),
   /** What is assigned to you and not done. `truncated` when the page cap cut it short. */
-  jiraMine: (fresh = false) => get<{ ok: boolean; error?: string; tasks?: ProviderTask[]; truncated?: boolean; throttled?: boolean }>(`/jira/mine${fresh ? "?fresh=1" : ""}`),
   jiraSearch: (q: string) => get<{ ok: boolean; error?: string; tasks?: ProviderTask[]; truncated?: boolean; throttled?: boolean }>(`/jira/search?q=${encodeURIComponent(q)}`),
   /** The moves a Jira card has from where it is. An empty list carries `cannot`, the sentence for it. */
   jiraTransitions: (key: string) =>
@@ -1437,7 +1439,7 @@ const realApi = {
   jiraProjectChoices: () => get<{ ok: boolean; error?: string; projects: JiraProjectChoice[] }>("/jira/project-choices"),
   jiraAddView: (input: { url: string } | { kind: "board" | "filter"; id: string }) =>
     post<{ ok: boolean; error?: string; view?: SavedView }>("/jira/views/add", input),
-  jiraRemoveView: (id: string) => post<{ ok: boolean }>("/jira/views/remove", { id }),
+  jiraRemoveView: (id: string) => post<{ ok: boolean; error?: string }>("/jira/views/remove", { id }),
   jiraAddFolder: (key: string) => post<{ ok: boolean; error?: string; folder?: SavedFolder }>("/jira/folders/add", { key }),
   jiraRemoveFolder: (id: string) => post<{ ok: boolean }>("/jira/folders/remove", { id }),
   /** A Jira card with its description and comments as Markdown; `more` is how many comments the read left out. */
@@ -2798,11 +2800,11 @@ const demoApi: typeof realApi = {
   jiraStatus: () => D({ connected: false, site: null, kind: null, auth: null, api: null, deployment: null, account: null, prefixes: [], writes: false }),
   jiraWrites: (_o: boolean) => D({ ok: false, error: "not available in the demo" }),
   jiraPrs: (_k: string, _r?: string) => D({ ok: true, prs: [] }),
+  jiraProjectPrs: (_p: string, _r?: string) => D({ ok: true, byCard: {} as Record<string, CardPr[]> }),
   trackerProjects: (_r?: boolean) => D({ ok: true, projects: {}, repos: [] }),
   setTrackerProject: (_r: string, _t: TrackerChoice) => D({ ok: false, error: "not available in the demo" }),
   jiraTask: (_i: string) => D({ ok: false, error: "not available in the demo" }),
   jiraFind: (_q: string) => D({ ok: false, error: "not available in the demo" }),
-  jiraMine: (_fresh?: boolean) => D({ ok: false, error: "not available in the demo" }),
   jiraSearch: (_q: string) => D({ ok: false, error: "not available in the demo" }),
   jiraTransitions: (_k: string) => D({ ok: false, error: "not available in the demo" }),
   jiraTransition: (_k: string, _t: string, _u: number) => D({ ok: false, error: "not available in the demo" }),

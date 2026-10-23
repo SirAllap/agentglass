@@ -12,7 +12,7 @@
       ]
     },
     {
-      "id": 2, "name": "ACME sprint board", "type": "scrum", "projectKey": "ACME", "filterId": "10011",
+      "id": 2, "name": "ACME sprint board", "type": "scrum", "projectKey": "ACME", "filterId": "10011", "estimation": "alt",
       "columns": [
         { "name": "To Do", "statusIds": ["1"] },
         { "name": "In Progress", "statusIds": ["2", "3", "4"] },
@@ -20,7 +20,7 @@
       ]
     },
     {
-      "id": 3, "name": "ORBIT sprint board", "type": "scrum", "projectKey": "ORBIT", "filterId": "10010",
+      "id": 3, "name": "ORBIT sprint board", "type": "scrum", "projectKey": "ORBIT", "filterId": "10010", "estimation": "primary",
       "columns": [
         { "name": "To Do", "statusIds": ["1"] },
         { "name": "In Progress", "statusIds": ["2"] },

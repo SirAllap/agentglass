@@ -46,6 +46,7 @@ import { dirname, join } from "node:path";
 import { guardedFetch, privateAddress, type GuardedFetchOptions } from "./net.ts";
 import { isIP } from "node:net";
 import { forgetCached } from "./jiraviews.ts";
+import { cardExtras } from "./jirafields.ts";
 import { clearCredential, redacted, secretFor, setCredential } from "./credentials.ts";
 import type { CallResult, WriteOutcome } from "./trackerTypes.ts";
 import type {
@@ -208,6 +209,7 @@ export function forgetJira(): void {
   generation++;
   flying.clear();
   memo.clear();
+  misses.clear();
   mineHeld.clear();
   holdUntil = 0;
   holdSentence = "";
@@ -359,19 +361,44 @@ async function callOnce<T>(creds: JiraCreds, pathname: string, o: CallOpts): Pro
   }
 }
 
-/** Answers that hold still, asked once per ten minutes. Only a success is kept. */
+/** How long a failed lookup is not asked again, where a caller says it may be remembered. */
+const MISS_TTL_MS = 2 * 60_000;
+const misses = new Map<string, { at: number; r: CallResult<unknown> }>();
+const memoKey = (creds: JiraCreds, key: string): string => `${baseOverride ?? ""}|${fingerprintOf(creds)}|${key}`;
+
+/** Is there a live answer (good, or a remembered failure) for this key, so asking would cost nothing? */
+export function memoHas(creds: JiraCreds, key: string): boolean {
+  const k = memoKey(creds, key);
+  const hit = memo.get(k);
+  if (hit && Date.now() - hit.at < MEMO_TTL_MS) return true;
+  const miss = misses.get(k);
+  return !!miss && Date.now() - miss.at < MISS_TTL_MS;
+}
+
+/**
+ * Answers that hold still, asked once per ten minutes. A success is kept. A
+ * failure is kept for two minutes only when the caller says so (`remember`),
+ * for lookups made on every read of a view: a board that is gone or forbidden
+ * would otherwise be asked again on every focus and every tick.
+ */
 export async function memoOk<T>(
   creds: JiraCreds,
   key: string,
   run: () => Promise<CallResult<T>>,
+  remember = false,
 ): Promise<CallResult<T>> {
-  const k = `${baseOverride ?? ""}|${fingerprintOf(creds)}|${key}`;
+  const k = memoKey(creds, key);
   const hit = memo.get(k);
   if (hit && Date.now() - hit.at < MEMO_TTL_MS) return hit.r;
+  const miss = remember ? misses.get(k) : undefined;
+  if (miss && Date.now() - miss.at < MISS_TTL_MS) return miss.r as CallResult<T>;
   const gen = generation;
   const r = await run();
   // A disconnect while this was in the air: do not write it back.
-  if (r.ok && gen === generation) memo.set(k, { at: Date.now(), r });
+  if (gen === generation) {
+    if (r.ok) { memo.set(k, { at: Date.now(), r }); misses.delete(k); }
+    else if (remember) misses.set(k, { at: Date.now(), r });
+  }
   return r;
 }
 
@@ -498,9 +525,44 @@ const TEXT_PROJECTS = 100;
 const PRIORITY_PAGES = 4;
 
 /** Jira's status category colour names, as a fixed map; a name not here is no colour. */
-const CATEGORY_COLOR: Record<string, string> = {
+export const CATEGORY_COLOR: Record<string, string> = {
   "blue-gray": "#42526e", "medium-gray": "#97a0af", green: "#36b37e", yellow: "#ffab00", brown: "#8b572a", "warm-red": "#de350b",
 };
+
+/**
+ * Whether a board's search asks for `comment`, which makes every card carry
+ * its comments for the sake of one number. Measured on 100 cards with 30
+ * comments each: see the commit that added it. Off, the count comes from the
+ * card's own read.
+ */
+let searchComments = false;
+/** Test seam: the one constant, so both of its branches run. */
+export const __setSearchComments = (on: boolean): void => { searchComments = on; };
+
+/** The site's own ids for the fields a board shows, found by what they are, never by what they are called. */
+export interface JiraFieldIds { sprint?: string; points: string[] }
+
+const CUSTOM_ID = /^customfield_\d{1,9}$/;
+
+/**
+ * `GET /field`, once per ten minutes and again after a reconnect. The sprint is
+ * the field of the sprint type; story points are the fields of the points type,
+ * in the site's order, because a site may carry two and a board names which it
+ * counts in. Data Center's points field has no type of its own (a plain number
+ * called Story Points), so a number field by that name is taken when no field
+ * has the type: the one name this file relies on, and the one a rename breaks.
+ */
+export function siteFields(creds: JiraCreds): Promise<JiraResult<JiraFieldIds>> {
+  return memoOk<JiraFieldIds>(creds, "fields", async () => {
+    const r = await jiraCall<unknown>(creds, `/rest/api/${apiOf(creds)}/field`);
+    if (!r.ok) return { ...r, data: undefined };
+    const rows = (Array.isArray(r.data) ? r.data : []).filter(isObj).filter((f) => CUSTOM_ID.test(str(f.id)));
+    const custom = (f: Record<string, unknown>) => (isObj(f.schema) ? str(f.schema.custom) : "");
+    const byType = rows.filter((f) => custom(f).endsWith(":jsw-story-points"));
+    const points = byType.length ? byType : rows.filter((f) => /^story points?$/i.test(str(f.name)) && isObj(f.schema) && str(f.schema.type) === "number");
+    return { ok: true, data: { sprint: rows.find((f) => custom(f).endsWith(":gh-sprint"))?.id as string | undefined, points: points.map((f) => str(f.id)) } };
+  }, true);
+}
 
 /** Site priorities, most urgent first. */
 export interface JiraPriorities { ids: string[]; names: string[] }
@@ -562,10 +624,12 @@ export interface TaskContext {
   priorities: JiraPriorities | null;
   /** The connected account's id, to mark the card as yours. */
   me?: string;
+  /** Where a board's fields live on this site; absent for a read that did not ask. */
+  fields?: { sprint?: string; points?: string };
 }
 
 /** One issue as the panel's task. Null when it is not an issue at all. */
-export function toTask(issue: unknown, cx: TaskContext): ProviderTask | null {
+export function toTask(issue: unknown, cx: TaskContext, arrival?: number): ProviderTask | null {
   if (!isObj(issue)) return null;
   const key = str(issue.key);
   if (!key) return null;
@@ -605,6 +669,8 @@ export function toTask(issue: unknown, cx: TaskContext): ProviderTask | null {
     mine: !!(cx.me && whoId && cx.me === whoId),
   };
   if (created) task.created = created;
+  Object.assign(task, cardExtras(f, cx.fields));
+  if (arrival !== undefined) task.order = String(arrival).padStart(6, "0");
   return task;
 }
 
@@ -689,7 +755,18 @@ export function boundedJql(jql: string): boolean {
   return (at >= 0 ? jql.slice(0, at) : jql).trim().length > 0;
 }
 
-export interface JiraTasks { tasks: ProviderTask[]; truncated: boolean }
+/** A status as a card wore it, with its category and the projects whose cards wore it. */
+export interface SeenStatus { id: string; name: string; category: string; color: string; projects: string[] }
+
+export interface JiraTasks {
+  tasks: ProviderTask[];
+  truncated: boolean;
+  /** Only a board read (`o.board`) fills it: the statuses the cards wore, in the order first met. */
+  seen?: SeenStatus[];
+}
+
+/** What a view read asks for beyond a card list. `points` is the field the board counts in, when it names one. */
+export interface BoardAsk { points?: string }
 
 /**
  * The only caller of the search endpoints. It refuses a query that is not
@@ -697,45 +774,73 @@ export interface JiraTasks { tasks: ProviderTask[]; truncated: boolean }
  * cap cut the list short. A page that fails is the answer: a search that lost
  * its second page never reads as a short list.
  */
-export async function searchJql(creds: JiraCreds, jql: string, o: { pages?: number; optional?: boolean; light?: boolean } = {}): Promise<JiraResult<JiraTasks>> {
+export async function searchJql(creds: JiraCreds, jql: string, o: { pages?: number; optional?: boolean; light?: boolean; board?: BoardAsk } = {}): Promise<JiraResult<JiraTasks>> {
   if (!boundedJql(jql)) return { ok: false, error: "Refusing to search Jira without a restriction" };
   const pages = Math.max(1, o.pages ?? SEARCH_PAGES);
   // `light`: a caller that never shows a priority does not pay for the list.
-  const cx = o.light ? Promise.resolve<TaskContext>({ site: creds.site, priorities: null, me: redacted("jira")?.accountId }) : taskContext(creds);
+  const base = o.light ? Promise.resolve<TaskContext>({ site: creds.site, priorities: null, me: redacted("jira")?.accountId }) : taskContext(creds);
+  // A board read adds the site's own fields. Where they cannot be read the cards come without them, never fail for them.
+  let fields = CARD_FIELDS;
+  let ask: TaskContext["fields"];
+  if (o.board) {
+    const found = await siteFields(creds);
+    const ids = found.ok && found.data ? found.data : null;
+    const sprint = ids?.sprint;
+    const points = o.board.points && CUSTOM_ID.test(o.board.points) ? o.board.points : ids?.points[0];
+    fields = [...CARD_FIELDS, ...(sprint ? [sprint] : []), ...(points ? [points] : []), "issuelinks", "subtasks", ...(searchComments ? ["comment"] : [])];
+    ask = { sprint, points };
+  }
+  const cx = base.then((c): TaskContext => (ask ? { ...c, fields: ask } : c));
+  // The order a rank-ordered search arrives in is the board's order; the card carries it across pages.
+  const at = orderByAt(jql);
+  const ranked = o.board !== undefined && at >= 0 && /^order\s+by\s+rank\b/i.test(jql.slice(at).trim());
   const tasks: ProviderTask[] = [];
+  const seen = new Map<string, SeenStatus>();
   const keep = async (issues: unknown): Promise<void> => {
     const c = await cx;
-    for (const i of Array.isArray(issues) ? issues : []) { const t = toTask(i, c); if (t) tasks.push(t); }
+    for (const i of Array.isArray(issues) ? issues : []) {
+      const t = toTask(i, c, ranked ? tasks.length : undefined);
+      if (!t) continue;
+      tasks.push(t);
+      if (o.board && t.statusId) {
+        const st = isObj(i) && isObj(i.fields) && isObj(i.fields.status) ? i.fields.status : {};
+        const cat = isObj(st.statusCategory) ? st.statusCategory : {};
+        const hit = seen.get(t.statusId) ?? { id: t.statusId, name: t.status, category: str(cat.key), color: str(cat.colorName), projects: [] };
+        if (t.listId && !hit.projects.includes(t.listId)) hit.projects.push(t.listId);
+        seen.set(t.statusId, hit);
+      }
+    }
   };
+  const done = (truncated: boolean): JiraResult<JiraTasks> => ({ ok: true, data: { tasks, truncated, ...(o.board ? { seen: [...seen.values()] } : null) } });
 
   if (apiOf(creds) === 2) {
     // Data Center: `startAt`. A short page, or an empty one, is the last.
     let start = 0;
     for (let page = 0; page < pages; page++) {
       const r = await jiraCall<{ issues?: unknown[]; maxResults?: number }>(creds, "/rest/api/2/search",
-        { method: "POST", optional: o.optional, body: { jql, fields: CARD_FIELDS, maxResults: SEARCH_PAGE, startAt: start } });
+        { method: "POST", optional: o.optional, body: { jql, fields, maxResults: SEARCH_PAGE, startAt: start } });
       if (!r.ok) return { ...r, data: undefined };
       const issues = Array.isArray(r.data?.issues) ? r.data!.issues! : [];
       await keep(issues);
       start += issues.length;
       // The server may cap a page below what was asked; its own figure is the yardstick.
       const asked = typeof r.data?.maxResults === "number" && r.data.maxResults > 0 ? Math.min(r.data.maxResults, SEARCH_PAGE) : SEARCH_PAGE;
-      if (issues.length < asked) return { ok: true, data: { tasks, truncated: false } };
+      if (issues.length < asked) return done(false);
     }
-    return { ok: true, data: { tasks, truncated: true } };
+    return done(true);
   }
 
   // Cloud: `nextPageToken` until `isLast`.
   let token: string | undefined;
   for (let page = 0; page < pages; page++) {
     const r = await jiraCall<{ issues?: unknown[]; isLast?: boolean; nextPageToken?: string }>(creds, "/rest/api/3/search/jql",
-      { method: "POST", optional: o.optional, body: { jql, fields: CARD_FIELDS, maxResults: SEARCH_PAGE, ...(token ? { nextPageToken: token } : {}) } });
+      { method: "POST", optional: o.optional, body: { jql, fields, maxResults: SEARCH_PAGE, ...(token ? { nextPageToken: token } : {}) } });
     if (!r.ok) return { ...r, data: undefined };
     await keep(r.data?.issues);
     token = typeof r.data?.nextPageToken === "string" && r.data.nextPageToken ? r.data.nextPageToken : undefined;
-    if (r.data?.isLast === true || !token) return { ok: true, data: { tasks, truncated: false } };
+    if (r.data?.isLast === true || !token) return done(false);
   }
-  return { ok: true, data: { tasks, truncated: true } };
+  return done(true);
 }
 
 /** What is on you and not done, newest change first. Bounded by the assignee. */
@@ -751,15 +856,16 @@ export const MINE_JQL = "assignee = currentUser() AND statusCategory != Done ORD
 const MINE_TTL_MS = 60_000;
 const mineHeld = new Map<string, { at: number; r?: JiraResult<JiraTasks>; run?: Promise<JiraResult<JiraTasks>> }>();
 
-export function mine(creds: JiraCreds, o: { fresh?: boolean } = {}): Promise<JiraResult<JiraTasks>> {
-  const k = `${baseOverride ?? ""}|${fingerprintOf(creds)}`;
+export function mine(creds: JiraCreds, o: { fresh?: boolean; board?: boolean } = {}): Promise<JiraResult<JiraTasks>> {
+  // The board's read carries more per card; the plain one is never served in its place, nor the other way round.
+  const k = `${baseOverride ?? ""}|${fingerprintOf(creds)}${o.board ? "|board" : ""}`;
   const hit = mineHeld.get(k);
   if (!o.fresh && hit) {
     if (hit.run) return hit.run;
     if (hit.r && Date.now() - hit.at < MINE_TTL_MS) return Promise.resolve(hit.r);
   }
   const gen = generation;
-  const run = searchJql(creds, MINE_JQL).then((r) => {
+  const run = searchJql(creds, MINE_JQL, o.board ? { board: {} } : {}).then((r) => {
     if (gen !== generation) return r;
     const now = mineHeld.get(k);
     // A newer ask took the slot while this was in the air: leave it its own.

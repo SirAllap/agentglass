@@ -201,6 +201,14 @@ export interface JiraViewRead {
   view?: SavedView;
   tasks: ProviderTask[];
   columns: JiraColumn[];
+  /**
+   * The statuses of the view in the order to draw them. A board gives its
+   * columns' statuses in column order, including ones no card wears; any other
+   * view gives the statuses its cards wear, by the column order of the first
+   * board of the project when that is known, then category, then name. Absent
+   * on an older read kept on disk.
+   */
+  statuses?: ListStatus[];
   /** When the rows were read; 0 when there is nothing yet. */
   at: number;
   truncated?: boolean;
@@ -897,6 +905,8 @@ export interface ViewTasksResponse {
   view?: SavedView;
   error?: string;
   unauthorised?: boolean;
+  /** The tracker is limiting requests: the failure is a wait, not a fault. */
+  throttled?: boolean;
   /** There was more behind this than we were willing to follow. Said out loud,
    *  because a list that silently stops reads as "that is all of them". */
   truncated?: boolean;

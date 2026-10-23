@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api.ts";
 import type { JiraProjectChoice, JiraViewChoice } from "../../../../shared/providers.ts";
 import { CHIP, CHIP_SURFACE, FilterField, LINE } from "../workspace/Chrome.tsx";
+import type { AddViewSlotProps } from "../../lib/boardSource.ts";
 
 /** How long the search box waits after the last key before it asks. */
 export const SEARCH_WAIT_MS = 300;
@@ -138,4 +139,9 @@ export function AddBar({ onAddedView, onAddedFolder, onClose }: {
       )}
     </div>
   );
+}
+
+/** The board's add-a-view slot: this bar, which picks and says what it added instead of handing back text. */
+export function JiraAddView({ onClose, onAddedView, onAddedFolder }: AddViewSlotProps) {
+  return <AddBar onClose={onClose} onAddedView={(id) => onAddedView?.(id)} onAddedFolder={() => onAddedFolder?.()} />;
 }
