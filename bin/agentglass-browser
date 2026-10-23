@@ -3982,7 +3982,11 @@ def main():
         forget_tab(who)
         # And try once more, in the identity we already have: a tab that has
         # been closed is a reason to open another one, not a reason to stop.
-        if a.cmd == "open" and who:
+        # NOT when the caller NAMED the tab. `--page <old id> open <url>` meant
+        # "go there in THAT tab"; answering it by minting a new one made a script
+        # that held a stale id open one extra tab per call (11 in a minute,
+        # measured), and each answer looked like success. The refusal stands.
+        if a.cmd == "open" and who and not getattr(a, "page", None):
             body.pop("page", None)
             # …but NOT `profile: "(default)"` for `--shared`. The panel mints a
             # container for a name it does not know, so retrying the person's

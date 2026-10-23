@@ -2136,7 +2136,7 @@ def run(name, args, raw=False):
     # reason to open another one, not a reason to stop.
     if sent_to and str(res.get("error") or "").startswith("no tab called"):
         forget_tab(who)
-        if verb == "open" and who:
+        if verb == "open" and who and not args.get("page"):
             body.pop("page", None)
             body["profile"] = who
             res = call(verb, body)

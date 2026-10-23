@@ -891,6 +891,18 @@ describe("an agent has an identity without asking for one", () => {
       ["t-gone", undefined], [undefined, "agent-four"],
     ]);
   });
+
+  step("a NAMED tab that is gone is refused, never answered with a new tab", async () => {
+    /* A script held a tab's id and sent `--page <id> open <url>` for a minute;
+       when the id stopped naming anything every call quietly minted a tab. */
+    await openWindow();
+    answers.open = { ok: false, error: "no tab called t-old — the app restarted before that tab was saved" };
+    askedArgs.length = 0;
+    const r = await cliAsMe("--page", "t-old", "open", "--as", "agent-four", "https://example.com/");
+    expect(askedArgs.map((x) => [x.page, x.profile]), "a second ask minted a tab").toEqual([["t-old", undefined]]);
+    expect(r.code).not.toBe(0);
+    expect(r.out + r.err).toContain("no tab called t-old");
+  });
 });
 
 step("`tab <id>` makes that tab the one every later verb goes to", async () => {

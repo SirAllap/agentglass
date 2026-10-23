@@ -72,6 +72,8 @@ export interface IslandProps {
 /* Islands drift a few px off one line so the archipelago does not read as a table. */
 const DRIFT = [6, -12, 8, -6, 10, -8];
 const PlusIcon = () => <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M6 1.5v9M1.5 6h9" /></svg>;
+/* An agent at work lights its island; Done, Waiting and Yours are quiet. */
+const isWork = (k: AgentStateKey | undefined | null) => !!k && k !== "done" && k !== "waiting" && k !== "yours";
 const host = (url: string) => { try { return new URL(url).host; } catch { return url; } };
 
 export function BrowserIsland(p: IslandProps) {
@@ -80,6 +82,7 @@ export function BrowserIsland(p: IslandProps) {
   const [open, setOpen] = useState(false);
   const [tucked, setTucked] = useState(false);
   const [gut, setGut] = useState({ r: 0, b: 0 });
+  const [filter, setFilter] = useState("");
   const [pics, setPics] = useState<Record<string, string>>({});
   const active = tabs.find((t) => t.id === activeId) ?? null;
   const act = active ? acts[active.id] : undefined;
@@ -109,13 +112,23 @@ export function BrowserIsland(p: IslandProps) {
   const groups = useMemo(() => {
     const by = new Map<string, BrowserTab[]>();
     for (const t of tabs) { const k = t.profile || ""; if (!by.has(k)) by.set(k, []); by.get(k)!.push(t); }
-    return [...by.entries()].map(([profile, list]) => {
+    const boxes = [...by.entries()].map(([profile, list]) => {
       const held = list.filter((t) => acts[t.id]?.agent || t.agent);
       const states = Object.fromEntries(list.map((t) => [t.id, tabState(acts[t.id], t.agent, now)]));
       return { profile, name: p.spaceName(profile), list, held: held.length, states, state: boxState(Object.values(states)) };
     });
+    /* With many containers the one an agent is working in must not sit under the fold:
+       working first, then the ones an agent holds, the rest in the order they were made. */
+    const rank = (g: (typeof boxes)[number]) => (isWork(g.state?.key) ? 0 : g.held ? 1 : 2);
+    return boxes.map((g, i) => ({ g, i })).sort((a, b) => rank(a.g) - rank(b.g) || a.i - b.i).map((x) => x.g);
   }, [tabs, acts, p.spaceName, now]); // eslint-disable-line react-hooks/exhaustive-deps
-  const agents = useMemo(() => [...new Set(tabs.map((t) => acts[t.id]?.agent || t.agent).filter(Boolean) as string[])], [tabs, acts]);
+  /* Only an agent that still holds a tab: one that went quiet for IDLE_RELEASE_MS has none. */
+  const agents = useMemo(() => [...new Set(groups.flatMap((g) => g.list.filter((t) => g.states[t.id]).map((t) => acts[t.id]?.agent || t.agent)).filter(Boolean) as string[])], [groups, acts]);
+  const q = filter.trim().toLowerCase();
+  /* A container whose name matches keeps all its tabs; otherwise only the tabs that match. */
+  const visible = useMemo(() => (q ? groups.map((g) => ({ ...g, list: g.name.toLowerCase().includes(q) ? g.list : g.list.filter((t) => `${t.title} ${t.url} ${acts[t.id]?.agent || t.agent || ""}`.toLowerCase().includes(q)) })).filter((g) => g.list.length) : groups), [groups, q, acts]);
+  const many = groups.length > 3 || tabs.length > 24;
+  const busyAgents = agents.filter((a) => groups.some((g) => g.list.some((t) => (acts[t.id]?.agent || t.agent) === a && isWork(g.states[t.id]?.key)))).length;
   const heldTabs = tabs.filter((t) => acts[t.id]?.agent || t.agent).length;
   const heldBoxes = groups.filter((g) => g.held).length;
 
@@ -141,7 +154,7 @@ export function BrowserIsland(p: IslandProps) {
   const [morph, setMorph] = useState(PILL);
   const finish = useCallback(() => {
     if (closer.current) { clearTimeout(closer.current); closer.current = null; }
-    setSnap(true); setOpen(false); unsnap();
+    setSnap(true); setOpen(false); setFilter(""); unsnap();
   }, []);
   const show = useCallback(() => {
     if (closer.current) { clearTimeout(closer.current); closer.current = null; }
@@ -265,11 +278,13 @@ export function BrowserIsland(p: IslandProps) {
           <div className="agx-isl-mc">
             <div className="agx-isl-head">
               <p className="agx-isl-sum" title={agents.join(", ") || undefined}>
-                <strong>{agents.length}</strong> {agents.length === 1 ? "agent" : "agents"} <i>·</i> <strong>{groups.length}</strong> {groups.length === 1 ? "container" : "containers"} <i>·</i> <strong>{tabs.length}</strong> {tabs.length === 1 ? "tab" : "tabs"}
+                <strong>{busyAgents}</strong> {agents.length === 1 ? "agent" : "agents"} {busyAgents === agents.length ? "working" : `working of ${agents.length}`} <i>·</i> <strong>{groups.length}</strong> {groups.length === 1 ? "container" : "containers"} <i>·</i> <strong>{tabs.length}</strong> {tabs.length === 1 ? "tab" : "tabs"}
               </p>
+              {many && <input className="agx-isl-find" type="search" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Find a tab" aria-label="Find a tab, container or agent" />}
               <button type="button" className="agx-isl-ib agx-isl-away" aria-label="Close" onClick={() => hide()}><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="m4 4 8 8M12 4l-8 8" /></svg></button>
             </div>
-            <div className="agx-isl-boxes">
+            <div className={"agx-isl-boxes" + (many ? " is-dense" : "")}>
+              {q && visible.length === 0 && <p className="agx-isl-none">No tab matches “{filter.trim()}”.</p>}
               {groups.length === 0 && (
                 <section className="agx-isl-box">
                   <div className="agx-isl-row">
@@ -277,16 +292,15 @@ export function BrowserIsland(p: IslandProps) {
                   </div>
                 </section>
               )}
-              {groups.map((g, i) => {
-                /* Only an agent at work lights its island; Done, Waiting and Yours are quiet. */
-                const work = !!g.state && g.state.key !== "done" && g.state.key !== "waiting" && g.state.key !== "yours";
+              {visible.map((g, i) => {
+                const work = isWork(g.state?.key);
                 return (
                 <section key={g.profile} data-box={g.profile} className={"agx-isl-box" + (g.held ? " is-agent" : "") + (g.state ? " is-s-" + g.state.key : "") + (work ? " is-live" : "")}
                   style={{ "--i": Math.min(i, 3), "--dy": `${DRIFT[i % DRIFT.length]}px`, "--ph": (i * 3.7) % 12 } as React.CSSProperties}>
                   {work && <><span className="agx-isl-halo" aria-hidden /><i className="agx-isl-sat t2" aria-hidden /><i className="agx-isl-sat t1" aria-hidden /><i className="agx-isl-sat" aria-hidden /></>}
                   <header>
                     <span className="agx-isl-bn">{g.name}</span>
-                    <span className="agx-isl-bc" title={g.held ? `agent on ${g.held}` : undefined}>{g.list.length} {g.list.length === 1 ? "tab" : "tabs"}</span>
+                    <span className="agx-isl-bc" title={g.held ? `agent on ${g.held}` : undefined}>{q && g.list.length !== groups.find((x) => x.profile === g.profile)!.list.length ? `${g.list.length} of ${groups.find((x) => x.profile === g.profile)!.list.length}` : g.list.length} {g.list.length === 1 ? "tab" : "tabs"}</span>
                     <BoxState k={g.state?.key ?? null} />
                   </header>
                   <div className="agx-isl-row">
@@ -294,7 +308,7 @@ export function BrowserIsland(p: IslandProps) {
                       const who = acts[t.id]?.agent || t.agent;
                       const st = g.states[t.id];
                       /* The tab the agent is working in, at a glance: the others in its box step back. */
-                      const driven = !!st && st.key !== "done" && st.key !== "waiting" && st.key !== "yours";
+                      const driven = isWork(st?.key);
                       const mine = !driven && t.id === activeId;
                       return (
                         <div key={t.id} data-tab={t.id} role="button" tabIndex={0}

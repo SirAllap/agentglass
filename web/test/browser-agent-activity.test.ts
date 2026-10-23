@@ -3,7 +3,7 @@ import { FLASH_MS, flashScript } from "../src/lib/browserDrive.ts";
 import { describe, expect, test } from "bun:test";
 import {
   glassHeld, pageOf,
-  LOG_MAX, steadyStep, STEADY_INIT, CANDIDATE_MS, MIN_SHOW_MS, activityReducer, actionOf, agentLabel, doneMayMark, agentState, boxState, lookAt, pointerAt, tabState, ago, flashPlan, isActVerb, lapKeyframes, pausedRefusal, presenceLabel, travelMs, type Activity,
+  LOG_MAX, steadyStep, STEADY_INIT, CANDIDATE_MS, MIN_SHOW_MS, activityReducer, actionOf, agentLabel, doneMayMark, agentState, boxState, lookAt, pointerAt, tabState, IDLE_RELEASE_MS, ago, flashPlan, isActVerb, lapKeyframes, pausedRefusal, presenceLabel, travelMs, type Activity,
 } from "../src/lib/browserAgentActivity.ts";
 
 const begin = (s: Activity, tab = "t1", agent = "orbit-ci") => activityReducer(s, { type: "begin", tab, agent });
@@ -404,5 +404,26 @@ describe("the pointer's label stays on the page", () => {
     const src = await Bun.file(new URL("../src/lib/browserDrive.ts", import.meta.url)).text();
     const fn = src.slice(src.indexOf("function flashWhereActed("), src.indexOf("function flashWhereActed(") + 700);
     expect(fn).toContain("land(ask, r)");
+  });
+});
+
+describe("an agent that went quiet lets go of its tab", () => {
+  // A script ended without saying `done`; its tab read "Waiting" for good and the
+  // overview kept counting the agent as holding it.
+  const quiet = (ago: number, extra = {}) => ({ agent: "agent-a", working: 0, paused: false, log: [], lastAt: Date.now() - ago, ...extra });
+  test("Waiting turns into no state after IDLE_RELEASE_MS, with or without done", () => {
+    const now = Date.now();
+    expect(tabState(quiet(IDLE_RELEASE_MS - 60_000), undefined, now)?.word).toBe("Waiting");
+    expect(tabState(quiet(IDLE_RELEASE_MS + 60_000), undefined, now)).toBeNull();
+    expect(tabState(quiet(IDLE_RELEASE_MS + 60_000, { done: true }), undefined, now)).toBeNull();
+  });
+  test("a paused or mid-ask tab is never released", () => {
+    const now = Date.now();
+    expect(tabState(quiet(IDLE_RELEASE_MS * 3, { paused: true }), undefined, now)).not.toBeNull();
+    expect(tabState(quiet(IDLE_RELEASE_MS * 3, { working: 1 }), undefined, now)).not.toBeNull();
+  });
+  test("the overview counts only agents that still hold a tab", () => {
+    const src = readFileSync(new URL("../src/components/browser/BrowserIsland.tsx", import.meta.url), "utf8");
+    expect(src).toContain("g.list.filter((t) => g.states[t.id])");
   });
 });

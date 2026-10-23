@@ -222,11 +222,16 @@ export function labelFit(x: number, y: number, w: number, h: number, pw: number,
  * restart with no live activity has no state.
  */
 export const STATE_HOLD_MS = 4000;
+/** An agent that has not asked anything of a tab for this long no longer holds it: a
+ *  script that ended without saying `done` left its tab "Waiting" for good, and the
+ *  count in Mission Control kept the agent. Ten minutes outlasts any model call. */
+export const IDLE_RELEASE_MS = 10 * 60_000;
 export function tabState(a: TabAgent | undefined, kept: string | undefined, now: number): { key: AgentStateKey; word: string } | null {
   if (a && (a.paused || a.working > 0)) return agentState(a);
   /* The last ask of any kind, not the last act: an agent reading between clicks
      flipped Reading/Waiting several times a second when only acts counted. */
   const last = a?.lastAt ?? a?.log[a.log.length - 1]?.at ?? 0;
+  if (a && last && now - last > IDLE_RELEASE_MS) return null;
   if (a?.done) return { key: "done", word: STATE_WORD.done };
   // Back-to-back asks keep their word; a state that changes faster than it can be read is noise.
   if (a && now - last < STATE_HOLD_MS) return agentState({ working: 1, paused: false, op: a.op });

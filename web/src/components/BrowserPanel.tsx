@@ -329,7 +329,7 @@ export function BrowserView({ active: viewOn, scope }: {
      * agent's tab should be.
      */
     const here = saved?.current ?? "";
-    const mine = set.tabs.map((t) => ({ ...sleepingTab(t.url, t.title, t.icon, here), ...(t.agent ? { agent: t.agent } : null) }));
+    const mine = set.tabs.map((t) => ({ ...sleepingTab(t.url, t.title, t.icon, here, t.id), ...(t.agent ? { agent: t.agent } : null) }));
     /*
      * A CONTAINER THAT NO LONGER EXISTS BRINGS NOTHING BACK.
      *
@@ -347,7 +347,7 @@ export function BrowserView({ active: viewOn, scope }: {
     const known = new Set(loadProfiles(globalThis.localStorage ?? null).map((p) => p.id));
     const theirs = Object.entries(saved?.byProfile ?? {})
       .filter(([id]) => id !== here && (!id || known.has(id)))
-      .flatMap(([id, s]) => s.tabs.map((t) => ({ ...sleepingTab(t.url, t.title, t.icon, id), ...(t.agent ? { agent: t.agent } : null) })));
+      .flatMap(([id, s]) => s.tabs.map((t) => ({ ...sleepingTab(t.url, t.title, t.icon, id, t.id), ...(t.agent ? { agent: t.agent } : null) })));
     /* And the file is told, once, rather than left to be re-read every launch. */
     for (const id of Object.keys(saved?.byProfile ?? {})) {
       if (id && id !== here && !known.has(id)) forgetProfileTabs(id);
@@ -1029,14 +1029,12 @@ export function BrowserView({ active: viewOn, scope }: {
                ask then sits until its own 45s timeout, and a refusal that took
                that long to arrive reads exactly like a hang. */
             client: clientId(),
-            /* Three causes, and the third is the one that bit a peer session
-             twice: tab ids are minted fresh on every launch, so an id written
-             down before a restart names nothing afterwards — with the page
-             sitting there open. The old wording claimed two causes that were
-             both wrong in that case and sent them looking for who had closed
-             what. */
+            /* Three causes. A tab keeps its id across a restart and across
+             switching container, so the third is only a tab that was never
+             written to the session before the app went away (an old session
+             file has no ids at all). */
           error: `no tab called ${targetId} — it was closed, it belongs to a window that is gone, `
-              + `or the app has restarted since you read that id (ids are not stable across restarts). `
+              + `or the app restarted before that tab was saved. `
               + `Call \`tabs\` to re-read them, or open your own with \`open --as <your name> <url>\`.`,
           }).catch(() => { /* already timed out */ });
           return;
@@ -1397,7 +1395,7 @@ export function BrowserView({ active: viewOn, scope }: {
       ? []
       : set
         ? set.tabs.map((t, i) => {
-            const tab = sleepingTab(t.url, t.title, t.icon, profileId);
+            const tab = sleepingTab(t.url, t.title, t.icon, profileId, kept.some((k) => k.id === t.id) ? undefined : t.id);
             return i === set.active ? { ...tab, asleep: false } : tab;
           })
         : [newTab(homePage(), profileId)];

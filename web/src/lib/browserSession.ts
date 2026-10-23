@@ -39,6 +39,9 @@ export const SESSION_KEY = "agentglass.browser.session";
  *  `failed`, `canBack` and `canForward` are facts about a guest that no longer
  *  exists, and restoring them would be restoring a lie. */
 export interface SavedTab {
+  /** The tab's id, so an address an agent wrote down still names the tab after the
+   *  strip is rebuilt (a restart, or switching container away and back). */
+  id?: string;
   url: string;
   title: string;
   icon: string | null;
@@ -50,7 +53,7 @@ export interface SavedTab {
 /** One profile's worth: its pages and which of them was in front. */
 export interface SavedSet {
   tabs: SavedTab[];
-  /** Index, not id: ids are minted fresh on every launch. */
+  /** Index, not id: a session written before ids were kept has none. */
   active: number;
 }
 
@@ -96,7 +99,7 @@ export function toSet(tabs: BrowserTab[], activeId: string): SavedSet | null {
   const at = keep.findIndex((t) => t.id === activeId);
   return {
     active: at >= 0 ? at : 0,
-    tabs: keep.map((t) => ({ url: t.url, title: t.title, icon: t.icon, ...(t.agent ? { agent: t.agent } : null) })),
+    tabs: keep.map((t) => ({ id: t.id, url: t.url, title: t.title, icon: t.icon, ...(t.agent ? { agent: t.agent } : null) })),
   };
 }
 
@@ -174,6 +177,8 @@ export function setFor(session: SavedSession | null, profileId: string): SavedSe
   return session?.byProfile[isProfileId(profileId) ? profileId : ""] ?? null;
 }
 
+/** The shape `newTab` mints. A hand-edited value is dropped, and so is a repeat. */
+const TAB_ID = /^t\d{1,6}-[a-z0-9]{6}$/;
 const cleanSet = (raw: unknown): SavedSet | null => {
   const v = raw as Partial<SavedSet> | undefined;
   if (!v || !Array.isArray(v.tabs)) return null;
@@ -181,12 +186,15 @@ const cleanSet = (raw: unknown): SavedSet | null => {
     .filter((t): t is SavedTab => !!t && typeof t.url === "string" && isHttpish(t.url))
     .slice(0, MAX)
     .map((t) => ({
+      ...(typeof t.id === "string" && TAB_ID.test(t.id) ? { id: t.id } : null),
       url: t.url,
       title: typeof t.title === "string" ? t.title : "",
       icon: typeof t.icon === "string" ? t.icon : null,
       ...(typeof t.agent === "string" && t.agent.trim() ? { agent: t.agent.trim().slice(0, 40) } : null),
     }));
   if (!tabs.length) return null;
+  const seen = new Set<string>();
+  for (const t of tabs) { if (t.id && seen.has(t.id)) delete t.id; else if (t.id) seen.add(t.id); }
   const active = Number.isInteger(v.active) && v.active! >= 0 && v.active! < tabs.length ? v.active! : 0;
   return { tabs, active };
 };

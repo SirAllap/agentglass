@@ -114,8 +114,8 @@ export function __resetTabIds(): void { seq = 0; }
  *  and this is where they meet: without it, a tab you opened as Work would
  *  return as Default — same title, same icon, same address, signed in as
  *  somebody else, and nothing on screen to say so. */
-export function sleepingTab(url: string, title: string, icon: string | null, profile = ""): BrowserTab {
-  return { ...newTab(url, profile), title, icon, asleep: true };
+export function sleepingTab(url: string, title: string, icon: string | null, profile = "", id?: string): BrowserTab {
+  return { ...newTab(url, profile), ...(id ? { id } : null), title, icon, asleep: true };
 }
 
 /**

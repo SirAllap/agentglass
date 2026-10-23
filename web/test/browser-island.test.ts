@@ -110,7 +110,8 @@ describe("the overview as islands", () => {
 
   // Done, Waiting and Yours are quiet: a violet halo on an island nobody is working on says someone is.
   test("only an island with an agent at work carries the halo and the satellite", () => {
-    expect(overview).toMatch(/const work = !!g\.state && g\.state\.key !== "done" && g\.state\.key !== "waiting" && g\.state\.key !== "yours";/);
+    expect(island).toContain('const isWork = (k: AgentStateKey | undefined | null) => !!k && k !== "done" && k !== "waiting" && k !== "yours";');
+    expect(overview).toContain("const work = isWork(g.state?.key);");
     expect(overview).toMatch(/\{work && <><span className="agx-isl-halo" aria-hidden \/>(<i className="agx-isl-sat[^>]*\/>){3}<\/>\}/);
     expect(overview.match(/agx-isl-halo/g)!.length).toBe(1);
   });
@@ -241,5 +242,31 @@ describe("mission control: which tab the agent is in", () => {
     expect(island).toContain('(work && !driven ? " is-dim" : "")');
     expect(css).toMatch(/\.agx-isl-card\.is-driven \.agx-isl-thumb \{[^}]*0 0 0 3px var\(--ink-agent\)/);
     expect(css).toMatch(/\.agx-isl-card\.is-on:not\(\.is-driven\) \.agx-isl-thumb \{[^}]*var\(--ink-you\)/);
+  });
+});
+
+describe("mission control: many tabs in one container", () => {
+  // 13 tabs in one box ran as a single row past the box's right edge: the last
+  // tile sat under the "+". The box now stops at the width of its container and
+  // the row wraps, so the "+" follows the last tab onto whichever row it lands.
+  test("the box is capped at its container and its row wraps", async () => {
+    const css = await Bun.file(new URL("../src/index.css", import.meta.url)).text();
+    expect(css).toMatch(/\.agx-isl-box \{[^}]*max-width: 100%/);
+    expect(css).toMatch(/\.agx-isl-row \{[^}]*flex-wrap: wrap/);
+  });
+});
+
+describe("mission control: many containers", () => {
+  // 8 containers of 15 tabs ran off the bottom with the agent's own container
+  // somewhere in the middle and nothing to search with. Working containers come
+  // first, the pictures shrink, a field narrows the list, and the count says how
+  // many agents are working rather than how many ever touched a tab.
+  test("working containers lead, the list is searchable and the count says who works", async () => {
+    const css = await Bun.file(new URL("../src/index.css", import.meta.url)).text();
+    expect(island).toMatch(/rank\(a\.g\) - rank\(b\.g\) \|\| a\.i - b\.i/);
+    expect(island).toContain("const rank = (g: (typeof boxes)[number]) => (isWork(g.state?.key) ? 0 : g.held ? 1 : 2);");
+    expect(island).toContain('className="agx-isl-find"');
+    expect(island).toContain('{busyAgents === agents.length ? "working"');
+    expect(css).toMatch(/\.agx-isl-boxes\.is-dense \.agx-isl-thumb \{ height: 64px; \}/);
   });
 });
