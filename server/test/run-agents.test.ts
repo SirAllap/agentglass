@@ -127,7 +127,8 @@ describe("a run with two vendors in it", () => {
     const codexArgv = opened.get(codex!.branch)!;
 
     expect(claudeArgv[0]).toBe(CLAUDE);
-    expect(claudeArgv).toContain("--dangerously-skip-permissions");
+    // Claude's bypass is spelled the way every launch spells it (launchperm.ts).
+    expect(claudeArgv.slice(claudeArgv.indexOf("--permission-mode"), claudeArgv.indexOf("--permission-mode") + 2)).toEqual(["--permission-mode", "bypassPermissions"]);
     expect(codexArgv[0]).toBe(CODEX);
     expect(codexArgv).toContain("--dangerously-bypass-approvals-and-sandbox");
 

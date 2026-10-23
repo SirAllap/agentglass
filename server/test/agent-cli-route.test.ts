@@ -155,7 +155,7 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
     expect(rows.some((r) => r.startsWith(`${agent.paneId}\tagents\tw1`))).toBe(true);
     // The CLI got the yolo flag (granted: bypass is on here), the remote-control name, and the pass-through flags.
     const argv = readFileSync(`${log}.argv`, "utf8").split("\n");
-    expect(argv).toContain("--dangerously-skip-permissions");
+    expect(argv.slice(argv.indexOf("--permission-mode"), argv.indexOf("--permission-mode") + 2)).toEqual(["--permission-mode", "bypassPermissions"]);
     expect(argv.slice(argv.indexOf("--remote-control"), argv.indexOf("--remote-control") + 2)).toEqual(["--remote-control", "w1"]);
     expect(argv.slice(argv.indexOf("--model"), argv.indexOf("--model") + 2)).toEqual(["--model", "sonnet"]);
   }, SLOW);

@@ -47,6 +47,7 @@
  * the only key that was ever going to be common to an agent we started and one
  * we did not.
  */
+import { launchPerm } from "./launchperm.ts";
 import { existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -354,7 +355,7 @@ export async function startRun(
      * its own spelling — see agents/launch.ts, where each one is quoted from
      * the module in this server that already drives that CLI.
      */
-    const argv = launchArgv(agent, bin, { prompt, yolo: spec.yolo === true, title: "" });
+    const argv = launchArgv(agent, bin, { prompt, yolo: spec.yolo === true, title: "", perm: launchPerm(undefined, spec.yolo === true) });
     const opened = await deps.open(root, branch, argv, path);
     legs.push({
       worktree: path,

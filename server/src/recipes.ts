@@ -17,6 +17,8 @@
  * becomes a process with the user's permissions. Everything below that looks
  * like paranoia is that.
  */
+import { isLaunchMode } from "../../shared/launchModes.ts";
+import { launchFlags, launchPerm, type LaunchPerm } from "./launchperm.ts";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
@@ -134,7 +136,20 @@ export interface Rendered {
  * nothing goes in when it is off, so `--rebuild-fe` reads the way a flag reads
  * everywhere else rather than as `"false"`.
  */
-export function renderSteps(r: Recipe, values: Record<string, string>): Rendered {
+/**
+ * A step that starts Claude Code starts it like every other launch the app
+ * makes (launchperm.ts): the command's own mode or the global one, and the deny
+ * list. Only a line whose first word is `claude`; a step that already names a
+ * mode is the author's and is left as written. Each flag is quoted like a
+ * value, and a deny rule cannot hold shell syntax to begin with.
+ */
+export function withLaunchFlags(line: string, perm: LaunchPerm): string {
+  const head = /^\s*(?:exec\s+)?claude(?=\s|$)/.exec(line);
+  if (!head || /--permission-mode|--dangerously-skip-permissions/.test(line)) return line;
+  return `${head[0]} ${launchFlags("claude", perm).map(shellQuote).join(" ")}${line.slice(head[0].length)}`;
+}
+
+export function renderSteps(r: Recipe, values: Record<string, string>, perm: LaunchPerm = launchPerm(r.permissionMode)): Rendered {
   const missing: string[] = [];
   const subs = new Map<string, string>();
   for (const p of r.params ?? []) {
@@ -156,7 +171,7 @@ export function renderSteps(r: Recipe, values: Record<string, string>): Rendered
     subs.set(p.key, shellQuote(raw));
   }
   const steps = r.steps.map((line) =>
-    line.replace(/\{\{\s*([A-Za-z0-9_-]+)\s*\}\}/g, (_m, k: string) => subs.get(k) ?? ""));
+    withLaunchFlags(line.replace(/\{\{\s*([A-Za-z0-9_-]+)\s*\}\}/g, (_m, k: string) => subs.get(k) ?? ""), perm));
   return { steps, confirm: !!r.confirm || looksDestructive(steps), missing };
 }
 
@@ -192,8 +207,10 @@ export function saveRecipe(r: Recipe): { ok: boolean; error?: string; recipe?: R
   if (why) return { ok: false, error: why };
   const s = load();
   const id = r.id || `r${Date.now().toString(36)}${(seq++).toString(36)}`;
+  const { permissionMode, ...rest } = r;
   const next: Recipe = {
-    ...r, id,
+    ...rest, id,
+    ...(isLaunchMode(permissionMode) ? { permissionMode } : {}),
     name: r.name.trim(),
     steps: r.steps.map((x) => x.trimEnd()).filter((x) => x.trim()),
     addedAt: r.addedAt || Date.now(),

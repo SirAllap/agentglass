@@ -135,8 +135,10 @@ describe("starting a role", () => {
     if (!r.ok) return;
     const argv = ops.namedAgentArgv("/usr/bin/claude", r.kind, { name: "w", prompt: "map it", serverArgs: r.args, args: ["--verbose"] }, false);
     expect(argv[0]).toBe("/usr/bin/claude");
-    expect(argv[1]).toBe("--settings");
-    expect(argv.slice(3)).toEqual(["--model", "haiku", "--verbose", "map it"]);
+    // The launch's own permission flags come first (launchperm.ts), then the lock.
+    const lock = argv.indexOf("--settings");
+    expect(lock).toBeGreaterThan(argv.indexOf("--permission-mode"));
+    expect(argv.slice(lock + 2)).toEqual(["--model", "haiku", "--verbose", "map it"]);
   });
 
   step("a role refuses yolo, even when Settings allow it", async () => {

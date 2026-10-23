@@ -26,6 +26,7 @@
  * `__submitVerdict`), so the four surfaces cannot disagree about what a Claude
  * prompt looks like.
  */
+import { launchPerm } from "./launchperm.ts";
 import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -546,7 +547,9 @@ export function namedAgentArgv(
   canName: boolean,
 ): string[] {
   const remote = p.remoteControl && validName(p.remoteControl) && kind === "claude" ? ["--remote-control", p.remoteControl] : [];
-  return agentArgv(bin, { prompt: p.prompt ?? "", yolo: p.yolo === true, title: p.name, kind }, canName, [...remote, ...(p.serverArgs ?? []), ...p.args]);
+  // A named agent keeps its own mode — a locked role is never bypassed by the
+  // global setting — and gets the deny list like every other launch.
+  return agentArgv(bin, { prompt: p.prompt ?? "", yolo: p.yolo === true, title: p.name, kind, perm: launchPerm(p.yolo === true ? "bypassPermissions" : "default") }, canName, [...remote, ...(p.serverArgs ?? []), ...p.args]);
 }
 
 function ownRow(p: { name: string; owner?: { seatRoot: string | null; model: string; startedBy: unknown | null; resumeId: string | null } }): void {

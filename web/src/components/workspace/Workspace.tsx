@@ -18,6 +18,7 @@
 // opened does not exist yet. On a fresh window that is one view rather than
 // eight, and the dashboard — fourteen panels and a poll every four seconds — is
 // not among them until you ask for it.
+import type { LaunchMode } from "../../../../shared/launchModes.ts";
 import { PluginsView } from "../plugins/PluginsView.tsx";
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
@@ -127,8 +128,8 @@ export function Workspace({
    *  their shell was not inside one — see terminal.ts's `review` handler.
    *  Left as a request rather than called directly: the terminal view owns the
    *  socket, and may not be mounted when the button is pressed. */
-  const reviewInTerminal = useCallback((root: string, number: number, recipe = "", card = "") => {
-    requestTermReview(root, number, recipe, card);
+  const reviewInTerminal = useCallback((root: string, number: number, recipe = "", card = "", mode?: LaunchMode) => {
+    requestTermReview(root, number, recipe, card, mode);
     onView("term");
   }, [onView]);
 

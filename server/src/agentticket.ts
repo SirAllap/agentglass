@@ -30,6 +30,8 @@ import { mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from "nod
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { agentKind } from "../../shared/agentKinds.ts";
+import type { LaunchMode } from "../../shared/launchModes.ts";
+import { launchFlags, type LaunchPerm } from "./launchperm.ts";
 
 export interface AgentRequest {
   /** The worktree to start in. Validated by the caller against the open
@@ -41,6 +43,9 @@ export interface AgentRequest {
   /** Permission prompts off. A BOOLEAN, and the flag it buys is written here:
    *  a socket reachable from the UI must not be able to name an argument. */
   yolo: boolean;
+  /** A permission mode named for this one launch, already checked against
+   *  shared/launchModes.ts; absent is the global setting (launchperm.ts). */
+  mode?: LaunchMode;
   /** The session name, already through `sessionTitle`. */
   title: string;
   /** What this session IS to the app, when it is not a person's agent. The
@@ -149,7 +154,9 @@ export function __clearAgentTickets(): void { pending.clear(); }
  */
 export function agentArgv(
   bin: string | null | undefined,
-  req: { prompt: string; yolo: boolean; title: string; kind?: string },
+  /** `perm` is launchperm.ts's answer and replaces `yolo` when present. Every
+   *  spawn site passes one; the guard test fails a call that does not. */
+  req: { prompt: string; yolo: boolean; title: string; kind?: string; perm?: LaunchPerm },
   canName: boolean,
   /** Flags the SERVER adds, placed after this function's own and before the
    *  prompt — which for a `flag` kind is two elements, not one, so a caller
@@ -179,7 +186,8 @@ export function agentArgv(
   // flag below. Only where the CLI HAS such a flag: passing Claude's to Codex
   // is an unknown option and an immediate exit.
   const named = req.title && canName && kind.nameFlag ? [kind.nameFlag, req.title] : [];
-  const skip = [...(req.yolo && kind.yoloFlag ? [kind.yoloFlag] : []), ...extra];
+  const own = req.perm ? launchFlags(kind.id, req.perm) : req.yolo && kind.yoloFlag ? [kind.yoloFlag] : [];
+  const skip = [...own, ...extra];
 
   // The prompt is LAST and is one element. Never split, never through a shell:
   // a review brief contains quotes, newlines and backticks, and every one of

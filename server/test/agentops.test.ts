@@ -4,6 +4,7 @@
  * engine — the yolo gate above all, because a script that can pass the raw
  * flag has bought what Settings refused.
  */
+import { launchFlags, launchPerm } from "../src/launchperm.ts";
 import { describe, expect, test } from "bun:test";
 import { keyNamed, stateOfScreen, startAgent, validName, refusedArg, namedAgentArgv, NAME_RE } from "../src/agentops.ts";
 import { SPELLINGS } from "../src/agents/launch.ts";
@@ -217,10 +218,12 @@ describe("the command line a named agent starts with", () => {
       .toEqual(["/usr/bin/qwen", "--model", "x", "--prompt-interactive", "go"]);
   });
 
+  // A named agent asks unless it was started with yolo, whatever the global mode.
+  const ASK = launchFlags("claude", launchPerm("default"));
   test("and Claude's stays as it was: flags after the name, the prompt last", () => {
     expect(namedAgentArgv("/usr/bin/claude", "claude", { name: "w", prompt: "go", remoteControl: "w", args: ["--model", "opus"] }, true))
-      .toEqual(["/usr/bin/claude", "--name", "w", "--remote-control", "w", "--model", "opus", "go"]);
+      .toEqual(["/usr/bin/claude", "--name", "w", ...ASK, "--remote-control", "w", "--model", "opus", "go"]);
     expect(namedAgentArgv("/usr/bin/claude", "claude", { name: "w", args: ["--model", "opus"] }, false))
-      .toEqual(["/usr/bin/claude", "--model", "opus"]);
+      .toEqual(["/usr/bin/claude", ...ASK, "--model", "opus"]);
   });
 });

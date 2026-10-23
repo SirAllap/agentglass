@@ -31,6 +31,7 @@ import { IconLabel, PlusIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { Button, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 import { Select } from "./Select.tsx";
+import { LaunchModeBadge, LaunchModeSelect } from "./LaunchMode.tsx";
 import { SELECT_BOX } from "./SettingsKit.tsx";
 import { Toggle } from "./SettingRow.tsx";
 import { setting } from "../lib/settingsRegistry.ts";
@@ -200,6 +201,7 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
                       : WHEN.find((w) => w.id === r.when)?.label}
                     {!r.builtIn && " · yours"}
                   </>}
+                  status={g.id === "conflicts" ? undefined : <LaunchModeBadge mode={r.permissionMode} />}
                   actions={<Button onClick={() => setEditing(r)}>Edit</Button>} />
                 {/* Under the row it belongs to, not at the foot of the page.
                     The editor used to render after the whole list, so pressing
@@ -335,6 +337,15 @@ function Editor({ r, skills, projects, presets, onChange, onSave, onCancel, onRe
                 className={SEL} style={INPUT_STYLE}>
                 {WHEN.map((w) => <option key={w.id} value={w.id}>{w.label}</option>)}
               </select>
+            </Field>
+          )}
+
+          {/* Not on a conflict prompt: that tab is opened by the merge view with
+              its own model choice, and the field would be one that does nothing. */}
+          {r.group !== "conflicts" && (
+            <Field label="Permission mode" htmlFor={f("mode")} help="How the terminal this prompt opens asks before a tool runs.">
+              <LaunchModeSelect id={f("mode")} value={r.permissionMode} className={SEL} style={INPUT_STYLE}
+                onChange={(m) => set({ permissionMode: m })} />
             </Field>
           )}
 

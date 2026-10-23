@@ -220,7 +220,7 @@ import {
   windowTree, newWindow, splitPane, killWindow, killPane as killLayoutPane, selectWindow, selectPane,
   renameWindow, resizePane,
 } from "./tmuxlayout.ts";
-import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, tmuxTerminal, validTmuxPrefix, writeTmuxSettings, lanternNudge, lanternWatch, lanternWatchMinutes, cacheTtlMinutes, lanternNudgeMinutes, writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, seatWakeHours, writeSeatSettings, workerRoles, writeWorkerRole, inScopeReal } from "./config.ts";
+import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, tmuxTerminal, validTmuxPrefix, writeTmuxSettings, lanternNudge, lanternWatch, lanternWatchMinutes, cacheTtlMinutes, lanternNudgeMinutes, writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, seatWakeHours, writeSeatSettings, launchMode, launchDeny, writeLaunchPermissions, workerRoles, writeWorkerRole, inScopeReal } from "./config.ts";
 import { claudeModels } from "./claudemodels.ts";
 import { codexStream, codexModels, codexTranscript, codexCwd, CODEX_ENABLED, CODEX_BYPASS_ALLOWED } from "./codex.ts";
 import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_BYPASS_ALLOWED } from "./antigravity.ts";
@@ -9080,6 +9080,26 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      */
     if (pathname === "/orchestration/state" && req.method === "GET") {
       return json({ ok: true, rules: ruleStates(), wakeups: armedWakeups() });
+    }
+    /*
+     * Launch permissions: the mode and the deny list every terminal the app
+     * opens starts its agent with (launchperm.ts). Anyone may read them.
+     *
+     * Writing them is the person's: loosening the mode is an escalation for
+     * every agent the app starts afterwards. So a write needs a page's Origin
+     * (the Settings form), never an Origin-less local caller (a script, an
+     * agent's curl), and never a named worker. The UI door does not reach it
+     * either: its rows are `agentNever` in the settings registry. A local
+     * process can still forge a header; the gate keeps the casual path closed,
+     * not the machine's owner out.
+     */
+    if (pathname === "/launch-permissions" && req.method === "GET") return json({ ok: true, mode: launchMode(), deny: launchDeny() });
+    if (pathname === "/launch-permissions" && req.method === "POST") {
+      if (!req.headers.get("origin") || !trustedCaller(req, from)) return csrfBlocked();
+      if (presentedWorker(req)) return json({ ok: false, error: "a worker does not change the permissions it is launched with" }, 403);
+      let b: { mode?: unknown; deny?: unknown }; try { b = (await req.json()) as typeof b; } catch { b = {}; }
+      const r = writeLaunchPermissions(b);
+      return json({ ...r, mode: launchMode(), deny: launchDeny() }, r.ok ? 200 : 400);
     }
     if (pathname === "/seat/wake" && req.method === "GET") return json({ ok: true, hours: seatWakeHours() });
     if (pathname === "/seat/wake" && req.method === "POST") {

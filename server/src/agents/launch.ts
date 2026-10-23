@@ -33,6 +33,7 @@
  * feature. One `--help` per binary per process is a cheap way never to hand a
  * CLI a word it will refuse to start with.
  */
+import type { LaunchPerm } from "../launchperm.ts";
 import { ROSTER } from "../agentprobe.ts";
 import { AGENT_PROVIDERS, type RunSpelling } from "../../../shared/agentKinds.ts";
 import { agentArgv } from "../agentticket.ts";
@@ -135,7 +136,7 @@ export function __resetFlagProbes(): void { known.clear(); }
 export function launchArgv(
   agent: string,
   bin: string | null | undefined,
-  req: { prompt: string; yolo: boolean; title: string },
+  req: { prompt: string; yolo: boolean; title: string; perm?: LaunchPerm },
   knows: (bin: string, flag: string) => boolean = supportsFlag,
 ): string[] {
   if (!bin) return [];
@@ -151,7 +152,8 @@ export function launchArgv(
   // putting one of those on this binary is the failure this file exists to
   // prevent.
   if (!spell) return req.prompt ? [bin, req.prompt] : [bin];
-  const skip = req.yolo && knows(bin, spell.bypass) ? [spell.bypass] : [];
+  const bypass = req.perm ? req.perm.mode === "bypassPermissions" : req.yolo;
+  const skip = bypass && knows(bin, spell.bypass) ? [spell.bypass] : [];
   // The flag when this binary confirms it, a bare positional otherwise. The
   // fallback is the shipped behaviour rather than a second guess — dropping the
   // question would leave a leg that opened in the right checkout and never

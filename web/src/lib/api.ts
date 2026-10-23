@@ -3,6 +3,7 @@ import { forgetShared, sharedRead } from "./sharedRead.ts";
 import type { UiAction, Field, NoteReply, NoteStatus, PluginPanel, PluginPrNotes, PrNotesSummary } from "./pluginTypes.ts";
 import type { ImportedPlace } from "./desktop.ts";
 import type { Policy } from "../../../shared/orchestration.ts";
+import { DEFAULT_LAUNCH_DENY, type LaunchMode, type LaunchPermissions } from "../../../shared/launchModes.ts";
 import type { PinnedPlace, PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/types.ts";
 import type { AskedAlert } from "../../../shared/notifyPayload.ts";
 import type { CheckOnBasePlan, CheckOnBaseStatus } from "../../../shared/checkOnBase.ts";
@@ -2480,6 +2481,10 @@ const realApi = {
     post<{ ok: boolean; cwd?: string; prompt?: string; branch?: string; error?: string }>("/prs/review-prompt", { root, number, recipe, card }),
   /** The Review menu itself: built-ins with the user's edits already laid over
    *  them, in menu order. */
+  /** The mode and deny list every terminal the app opens starts its agent with. */
+  launchPermissions: () => get<{ ok: boolean } & LaunchPermissions>("/launch-permissions"),
+  launchPermissionsSave: (p: { mode?: LaunchMode; deny?: string }) =>
+    post<{ ok: boolean; error?: string } & LaunchPermissions>("/launch-permissions", p),
   prPrompts: () => get<ReviewRecipesResponse>("/pr-prompts"),
   prPromptSave: (r: ReviewRecipe) =>
     post<{ ok: boolean; recipe?: ReviewRecipe; error?: string }>("/pr-prompts/save", r as unknown as Record<string, unknown>),
@@ -3031,6 +3036,8 @@ const demoApi: typeof realApi = {
   prUnstickClose: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" } as PrActionResult),
   prUnstickReopen: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" } as PrActionResult),
   prReviewPrompt: (_r: string, _n: number, _recipe?: string, _card?: string) => D({ ok: false, error: "not available in the demo" }),
+  launchPermissions: () => D({ ok: true, mode: "default" as LaunchMode, deny: [...DEFAULT_LAUNCH_DENY] }),
+  launchPermissionsSave: (_p: unknown) => D({ ok: false, error: "not available in the demo", mode: "default" as LaunchMode, deny: [...DEFAULT_LAUNCH_DENY] }),
   prPrompts: () => D({ ok: true, recipes: [] as ReviewRecipe[] }),
   prPromptSave: (_r: ReviewRecipe) => D({ ok: false, error: "not available in the demo" }),
   prPromptRemove: (_id: string) => D({ ok: false }),

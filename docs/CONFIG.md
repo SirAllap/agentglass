@@ -209,6 +209,17 @@ too — see the control-plane section of INSTALL.md. The older key `gateTools`
 asking for the move; beside `gateRules` its rows only add denials. One that is
 not a list is an error line and applies nothing.
 
+`launchMode` and `launchDeny` are the launch permissions (Settings ▸ Terminal):
+the `--permission-mode` (`default`, `auto`, `acceptEdits` or
+`bypassPermissions`) and the `--disallowedTools` rules every terminal the app
+opens starts Claude Code with — the Review with Claude menu, a hand-off, an
+issue start, a resumed session, a run's legs, a Command whose step starts
+`claude`. A fresh install asks (`default`) and denies `Bash(gh pr merge:*)` and
+`Bash(gh release:*)`. A review prompt or a Command can name its own mode. The
+chat and the unattended one-shots keep their own. `GET /launch-permissions`
+reads them; `POST` writes them from a page only, never from an Origin-less
+local caller or a named worker.
+
 > **Pricing is a user-editable default.** Numbers in `pricing.ts` are per 1M
 > tokens and matched against `model_name` by substring. Set
 > `AGENTGLASS_PRICING_REFRESH=1` to prefer validated exact-model rates from

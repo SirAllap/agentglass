@@ -2881,7 +2881,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const review = useSyncExternalStore(subscribeTermReview, termReview, termReview);
   useEffect(() => {
     if (!review || !socketLive) return;
-    tmuxCmd({ cmd: "review", root: review.root, number: review.number, recipe: review.recipe, card: review.card });
+    tmuxCmd({ cmd: "review", root: review.root, number: review.number, recipe: review.recipe, card: review.card, ...(review.mode ? { mode: review.mode } : {}) });
     clearTermReview();
   }, [review, socketLive, tmuxCmd]);
 

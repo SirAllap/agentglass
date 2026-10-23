@@ -19,6 +19,8 @@
 //
 // 4. Nothing waits on the network. `gh` costs a second or more per call and the
 //    server has one thread; every read is a cached answer with its age shown.
+import { LAUNCH_MODES, LAUNCH_MODE_LABEL, type LaunchMode } from "../../../shared/launchModes.ts";
+import { LaunchModeBadge } from "./LaunchMode.tsx";
 import { withoutAuthor, authorLeftOutHint } from "../lib/reviewerPick.ts";
 import { dataInk } from "../lib/contrast.ts";
 import { onScreen } from "../lib/findScope.ts";
@@ -1650,7 +1652,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   jumpTo?: import("../lib/openPrs.ts").PrJump | null;
   onOpenChatWith?: (cwd: string, prompt: string, title: string) => void;
   /** Hand the review to the user's own tmux instead of to the chat. */
-  onReviewInTerminal?: (root: string, number: number, recipe?: string, card?: string) => void;
+  onReviewInTerminal?: (root: string, number: number, recipe?: string, card?: string, mode?: LaunchMode) => void;
 }) {
   const { ask, askText, open: askOpen, dialog } = useDialogs();
   const { askMerge, open: mergeOpen, dialog: mergeDialog } = useMergeDialog();
@@ -5167,7 +5169,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 d={d} busy={busy || !!mergeWork} local={local} onShowLocal={showLocal} stackUi={stackUi} onOpenPr={openPr}
                 onEditTitle={doEditTitle} onDraft={() => { void field(draftPatch(d.number, !d.isDraft), () => api.prDraft(root, d.number, !d.isDraft), d.isDraft ? "Mark ready failed" : "Convert to draft failed", "draft"); }}
                 onClose={doClose} onLocalReview={(recipe) => doLocalReview(undefined, recipe)}
-                onReviewInTerminal={onReviewInTerminal && d && !readOnly ? (recipe) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "") : undefined}
+                onReviewInTerminal={onReviewInTerminal && d && !readOnly ? (recipe, mode) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "", mode) : undefined}
                 condensed={condensed}
                 onLabels={doLabels} onReviewers={askReviewers} onNudge={doNudge}
                 onEditField={fieldPicker.open}
@@ -5300,7 +5302,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                           onEditRequest={() => setEditingBody(true)}
                           onToggleTask={doToggleTask}
                           onLocalReview={(recipe) => doLocalReview(undefined, recipe)}
-                          onReviewInTerminal={onReviewInTerminal && d && !readOnly ? (recipe) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "") : undefined}
+                          onReviewInTerminal={onReviewInTerminal && d && !readOnly ? (recipe, mode) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "", mode) : undefined}
                           onMerge={doMerge} onClose={doClose} onAskReview={askReviewers}
                           method={mergeMethod} onMethod={setMergeMethod}
                           onUpdateBranch={doUpdateBranch}
@@ -5782,7 +5784,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
   onLocalReview: (recipe?: string) => void;
   /** The terminal half of the same choice. Absent where there is no terminal —
    *  the phone — and the button then behaves as it always did. */
-  onReviewInTerminal?: (recipe?: string) => void; onMerge: (method: MergeMethod) => void; onClose: () => void;
+  onReviewInTerminal?: (recipe?: string, mode?: LaunchMode) => void; onMerge: (method: MergeMethod) => void; onClose: () => void;
   onRerun: () => void; onAutoMerge: () => void; onCancelAutoMerge: () => void; onDraft: () => void; onGoThreads: () => void;
   /** Take me to that review inside this panel, by the node id of its row —
    *  falling back to `url` outside when this panel has no row for it. */
@@ -6362,7 +6364,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
             alphabets — twice, because the first fix only reached one of
             them. */}
         <ReviewMenu d={d} canTerm={!!onReviewInTerminal}
-          onPick={(recipe, where) => (where === "term" ? onReviewInTerminal?.(recipe) : onLocalReview(recipe))} />
+          onPick={(recipe, where, mode) => (where === "term" ? onReviewInTerminal?.(recipe, mode) : onLocalReview(recipe))} />
         <PluginPrActions number={d.number} local={local} onShowLocal={onShowLocal} root={root} head={{ sha: d.headSha, at: d.readAt }} />
         {/* The panel's own Btn, like its neighbour. A hand-rolled anchor with
             its own padding beside a Btn is two heights in a row of two. */}
@@ -6694,7 +6696,8 @@ const MenuHead = ({ children }: { children: React.ReactNode }) => (
 );
 
 /**
- * The chat, as an afterthought on a row that is already a button.
+ * One prompt in the Review menu, and the chat as an afterthought on a row that
+ * is already a button.
  *
  * It was two icons — a terminal and a chat — on a row whose TITLE did a third
  * thing. Reported straight away: pressing the row anywhere but exactly on the
@@ -6706,14 +6709,55 @@ const MenuHead = ({ children }: { children: React.ReactNode }) => (
  * exception, kept because the chat pane is genuinely the quicker read
  * sometimes. `stopPropagation`, or it would fire the row's terminal underneath
  * it.
+ *
+ * The ⋮ now opens the other ways to run it, under the row rather than as a second floating
+ * menu inside a scrolling one — in the chat instead, or once in another
+ * permission mode than the one it would start in. The quiet badge says when a
+ * prompt's own mode differs from the global one.
  */
-function ChatInstead({ onChat }: { onChat: () => void }) {
+function ReviewItem({ r, ink, canTerm, close, onPick }: {
+  r: ReviewRecipe; ink: string; canTerm: boolean; close: () => void;
+  onPick: (recipe: string, where: "term" | "chat", mode?: LaunchMode) => void;
+}) {
+  const [more, setMore] = useState(false);
+  const run = (where: "term" | "chat", mode?: LaunchMode) => { close(); onPick(r.id, where, mode); };
+  const sub = "agx-mi w-full flex items-center gap-2 pl-6 pr-3 py-1 text-[11px] cursor-pointer";
+  // Only the row's own key press: Enter on the ⋮ inside it bubbles here too, and
+  // would run the prompt instead of opening its other ways.
+  const key = (fn: () => void) => (e: React.KeyboardEvent) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); fn(); } };
   return (
-    <button onClick={(e) => { e.stopPropagation(); onChat(); }} title="In the chat pane instead"
-      className="ml-auto inline-flex items-center justify-center rounded hover:bg-white/10 shrink-0"
-      style={{ width: 20, height: 20, color: "var(--text3)" }} aria-label="In the chat pane instead">
-      <span className="text-[13px] leading-none">&#8942;</span>
-    </button>
+    <>
+      <div role="menuitem" tabIndex={0}
+        onClick={() => run(canTerm ? "term" : "chat")}
+        onKeyDown={key(() => run(canTerm ? "term" : "chat"))}
+        title={r.skill || r.title}
+        className="agx-mi w-full flex items-center gap-2 px-3 py-1.5 text-[11px] cursor-pointer" style={{ color: ink }}>
+        <span className="min-w-0 truncate flex-1">
+          {r.skill && <span style={{ color: "var(--primary-ink)" }}>/ </span>}
+          {r.title}
+        </span>
+        <LaunchModeBadge mode={r.permissionMode} />
+        <button onClick={(e) => { e.stopPropagation(); setMore((m) => !m); }} title="More ways to run it"
+          aria-expanded={more} aria-label="More ways to run it"
+          className="ml-auto inline-flex items-center justify-center rounded hover:bg-white/10 shrink-0"
+          style={{ width: 20, height: 20, color: "var(--text3)" }}>
+          <span className="text-[13px] leading-none">&#8942;</span>
+        </button>
+      </div>
+      {more && (
+        <div role="group" aria-label={`Ways to run ${r.title}`}>
+          <div role="menuitem" tabIndex={0} className={sub} style={{ color: "var(--text2)" }}
+            onClick={() => run("chat")} onKeyDown={key(() => run("chat"))}>In the chat pane instead</div>
+          {canTerm && <>
+            <div className="pl-6 pr-3 pt-1 text-[10px]" style={{ color: "var(--text4)" }}>Run with…</div>
+            {LAUNCH_MODES.map((m) => (
+              <div key={m} role="menuitem" tabIndex={0} className={sub} style={{ color: "var(--text2)" }}
+                onClick={() => run("term", m)} onKeyDown={key(() => run("term", m))}>{LAUNCH_MODE_LABEL[m]}</div>
+            ))}
+          </>}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -6798,7 +6842,7 @@ const PING_RECIPE = "ready-for-review";
  */
 function ReviewMenu({ d, onPick, canTerm, primary = true }: {
   d: PrDetail;
-  onPick: (recipe: string, where: "term" | "chat") => void;
+  onPick: (recipe: string, where: "term" | "chat", mode?: LaunchMode) => void;
   /** False in a window with no terminal to send it to — the row then offers
    *  the chat alone rather than a button that quietly does nothing. */
   canTerm: boolean;
@@ -6835,17 +6879,7 @@ function ReviewMenu({ d, onPick, canTerm, primary = true }: {
                   destination lines it used to be: one shape to learn, and the
                   suggestion is a prompt like the rest — it is just the one this
                   pull request calls for. */}
-              <div role="menuitem" tabIndex={0}
-                onClick={() => { close(); onPick(top.id, canTerm ? "term" : "chat"); }}
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); close(); onPick(top.id, canTerm ? "term" : "chat"); } }}
-                title={top.skill || top.title}
-                className="agx-mi w-full flex items-center gap-2 px-3 py-1.5 text-[11px] cursor-pointer" style={{ color: "var(--text)" }}>
-                <span className="min-w-0 truncate flex-1">
-                  {top.skill && <span style={{ color: "var(--primary-ink)" }}>/ </span>}
-                  {top.title}
-                </span>
-                <ChatInstead onChat={() => { close(); onPick(top.id, "chat"); }} />
-              </div>
+              <ReviewItem r={top} ink="var(--text)" canTerm={canTerm} close={close} onPick={onPick} />
             </>
           )}
           {groups.map((g) => {
@@ -6861,17 +6895,7 @@ function ReviewMenu({ d, onPick, canTerm, primary = true }: {
                      nothing at all. And it runs in a terminal, because that is
                      where a review belongs — a real agent in tmux that survives
                      this app, which you can attach to and keep working in. */
-                  <div key={r.id} role="menuitem" tabIndex={0}
-                    onClick={() => { close(); onPick(r.id, canTerm ? "term" : "chat"); }}
-                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); close(); onPick(r.id, canTerm ? "term" : "chat"); } }}
-                    title={r.skill || r.title}
-                    className="agx-mi w-full flex items-center gap-2 px-3 py-1.5 text-[11px] cursor-pointer" style={{ color: "var(--text2)" }}>
-                    <span className="min-w-0 truncate flex-1">
-                      {r.skill && <span style={{ color: "var(--primary-ink)" }}>/ </span>}
-                      {r.title}
-                    </span>
-                    <ChatInstead onChat={() => { close(); onPick(r.id, "chat"); }} />
-                  </div>
+                  <ReviewItem key={r.id} r={r} ink="var(--text2)" canTerm={canTerm} close={close} onPick={onPick} />
                 ))}
               </Fragment>
             );
@@ -8769,7 +8793,7 @@ function Masthead({ root, repo, d, busy, local, stackUi, onOpenPr, onShowLocal, 
   localHead?: PrLocalHead | null;
   onEditTitle: () => void; onDraft: () => void; onClose: () => void; onLocalReview: (recipe?: string) => void;
   /** Absent when the workspace has no terminal to send it to. */
-  onReviewInTerminal?: (recipe?: string) => void;
+  onReviewInTerminal?: (recipe?: string, mode?: LaunchMode) => void;
   /** Scrolled past the top: the metadata folds away and the title stays. */
   condensed?: boolean;
   /** The typed dialog behind the overflow menu; the inline ＋ buttons use the
@@ -8920,7 +8944,7 @@ function Masthead({ root, repo, d, busy, local, stackUi, onOpenPr, onShowLocal, 
             review. The chat is kept because it is occasionally the quicker
             read, not because it is the better place to send somebody. */}
         <ReviewMenu d={d} canTerm={!!onReviewInTerminal}
-          onPick={(recipe, where) => (where === "term" ? onReviewInTerminal?.(recipe) : onLocalReview(recipe))} />
+          onPick={(recipe, where, mode) => (where === "term" ? onReviewInTerminal?.(recipe, mode) : onLocalReview(recipe))} />
         <PluginPrActions number={d.number} local={local} onShowLocal={onShowLocal} root={root} head={{ sha: d.headSha, at: d.readAt }} />
         {/* Out of the overflow, because it is the most-pressed thing in it.
             "Open on GitHub" is what you reach for whenever this panel does not

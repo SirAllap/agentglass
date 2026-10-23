@@ -131,6 +131,8 @@ import { refreshUnderstudy } from "../lib/understudyStore.ts";
 import { mutedSources, setMuted, sourceLabel, subscribeMuted } from "../lib/notePolicy.ts";
 import { MuteGlyph } from "./TopBarNotes.tsx";
 import { Button, RefreshButton, INPUT, INPUT_STYLE, EDGE, LINE, Segmented } from "./workspace/Chrome.tsx";
+import { LAUNCH_MODES, LAUNCH_MODE_LABEL, isLaunchMode, parseDenyRules, type LaunchMode } from "../../../shared/launchModes.ts";
+import { setLaunchPermissions } from "../lib/launchMode.ts";
 import { SELECT_BOX, EmptyState, Field, LinkButton, SettingsCard, SettingsForm, StatusBadge, helpIdFor, type StatusTone } from "./SettingsKit.tsx";
 import { restoredNote } from "../lib/restoredNote.ts";
 
@@ -444,7 +446,7 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
   // whether it has a number, so the two pages answer one question between them.
   { id: "rail", label: "Sidebar", group: "General", kw: "rail sidebar views order icons hide show reorder tabs drawer group arrange", what: "Which views are on the sidebar, in which drawer, and in what order.", icon: SidebarIcon },
   { id: "keys", label: "Shortcuts", group: "General", kw: "keyboard keys bindings shortcut chord rebind reset to defaults columns some others", what: "Every binding, rebindable.", icon: KeyboardIcon },
-  { id: "terminal", label: "Terminal", group: "Workspace", kw: "terminal font size cursor typography monospace face renderer gpu focus follows mouse hover pane sloppy scrollback copy on select right-click paste line height tab tabs group groups grouping project name rules prefix runs on engine own tmux shell", what: "Type, renderer, mouse, tab groups, how much scrollback each shell keeps, and what a Terminal opens on.", icon: TerminalIcon },
+  { id: "terminal", label: "Terminal", group: "Workspace", kw: "terminal launch permissions permission mode ask auto accept edits bypass yolo deny disallowed tools font size cursor typography monospace face renderer gpu focus follows mouse hover pane sloppy scrollback copy on select right-click paste line height tab tabs group groups grouping project name rules prefix runs on engine own tmux shell", what: "Type, renderer, mouse, tab groups, how much scrollback each shell keeps, what a Terminal opens on, and the permissions an agent it opens starts with.", icon: TerminalIcon },
   { id: "diff", label: "Diff", group: "Workspace", kw: "diff split side by side inline unified wrap word wrap changes review default view wrap long lines syntax theme colours", what: "How a diff opens, everywhere the app shows one.", icon: DiffIcon },
   // Only where there is a browser to configure. A settings tab for something
   // that is not there reads as a broken feature rather than one that doesn't apply.
@@ -3155,6 +3157,77 @@ const PREFIXES: { value: string; label: string }[] = [
 /** "Terminal runs on", moved here from the tmux page: it decides what the
  *  Terminal view does, and nobody looking for it thinks of tmux first. Same
  *  call and same server key as before. */
+/**
+ * Launch permissions: the mode and the deny list every terminal the app opens
+ * starts its agent with (server/src/launchperm.ts). Held by the server, and
+ * `agentNever`: loosening it is an escalation for every agent started after,
+ * so an agent reads it (GET /launch-permissions) and never writes it.
+ */
+function LaunchPermissionsCard({ open }: { open: boolean }) {
+  const [mode, setMode] = useState<LaunchMode>("default");
+  const [deny, setDeny] = useState("");
+  const [saved, setSaved] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    api.launchPermissions().then((r) => {
+      setMode(r.mode); setDeny(r.deny.join("\n")); setSaved(r.deny.join("\n")); setErr(null);
+      setLaunchPermissions({ mode: r.mode, deny: r.deny });
+    }).catch(() => setErr("Could not reach the server — this setting is unavailable."));
+  }, [open]);
+  const save = (p: { mode?: LaunchMode; deny?: string }) => {
+    setBusy(true); setNote(null); setErr(null);
+    api.launchPermissionsSave(p)
+      .then((r) => {
+        if (!r.ok) { setErr(r.error ?? "Could not save that."); return; }
+        setMode(r.mode); setDeny(r.deny.join("\n")); setSaved(r.deny.join("\n"));
+        setLaunchPermissions({ mode: r.mode, deny: r.deny });
+        setNote("Saved. The next terminal the app opens starts this way; the ones already open keep how they started.");
+      })
+      .catch(() => setErr("Could not save — server unreachable."))
+      .finally(() => setBusy(false));
+  };
+  const bad = parseDenyRules(deny).bad;
+  return (
+    <SettingsCard title="Launch permissions" desc="How every terminal agentglass opens starts its agent: Review with Claude, a hand-off, an issue, a resumed session, a Command that runs claude.">
+      <SettingRow
+        agentNever="the permission mode every agent the app starts runs in: loosening it is an escalation, so only the owner changes it"
+        label="Permission mode for terminals agentglass opens"
+        hint="A review prompt or a Command can choose its own in its editor."
+        detail={{
+          summary: "What each mode does",
+          body: <>Ask is Claude Code's own default: it asks before a tool it has not been allowed. Auto lets it decide what is safe to run. Accept edits runs file edits without asking. Bypass runs everything without asking — a tab in another mode than your other agents holds what is sent to it until somebody answers in it.</>,
+        }}
+        control={<span className="flex justify-end"><Select align="right" style={SELECT_BOX} value={mode} disabled={busy}
+          onChange={(v) => { if (isLaunchMode(v)) { setMode(v); save({ mode: v }); } }}
+          options={LAUNCH_MODES.map((m) => ({ value: m, label: LAUNCH_MODE_LABEL[m] }))} /></span>}
+      />
+      <SettingRow
+        agentNever="what every agent the app starts may never do: an agent does not edit its own leash"
+        label="Always deny"
+        hint="One rule per line, passed as --disallowedTools on every launch, whatever the mode."
+        below={<div className="flex flex-col gap-2">
+          <textarea aria-label="Always deny" value={deny} onChange={(e) => setDeny(e.target.value)} rows={Math.max(4, deny.split("\n").length + 1)}
+            spellCheck={false} disabled={busy}
+            className="w-full text-[12px] px-2.5 py-2 rounded-lg outline-none font-mono bg-[var(--surface-inset)] text-[var(--text)]"
+            style={{ ...INPUT_STYLE, resize: "vertical" }} />
+          <div className="flex items-center gap-2">
+            <Button tone="primary" disabled={busy || deny === saved || bad.length > 0} onClick={() => save({ deny })}>Save</Button>
+            {deny !== saved && <Button disabled={busy} onClick={() => setDeny(saved)}>Cancel</Button>}
+            {bad.length > 0 && <span className="text-[12px]" role="alert" style={{ color: "var(--error-ink)" }}>Not a rule: {bad[0]}</span>}
+          </div>
+          {(err || note) && (
+            <div className="text-[12px]" role={err ? "alert" : "status"}
+              style={{ color: err ? "var(--error-ink)" : "var(--success-ink)" }}>{err ?? note}</div>
+          )}
+        </div>}
+      />
+    </SettingsCard>
+  );
+}
+
 function TerminalRunsOn({ open }: { open: boolean }) {
   const [terminal, setTerminal] = useState("engine");
   const [busy, setBusy] = useState(false);
@@ -4627,6 +4700,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       } />
                   </SettingsCard>
                   <TerminalRunsOn open={open} />
+                  <LaunchPermissionsCard open={open} />
                   </>)}
                   {ql && show("diff") && <PageMatchHeading id="diff" onOpen={() => { setPane("diff" as Pane); setQ(""); }} />}
                   {show("diff") && (

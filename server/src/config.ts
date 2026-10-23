@@ -9,6 +9,7 @@
 import type { Budget, GateRule } from "../../shared/types.ts";
 import { agentProvider } from "../../shared/agentKinds.ts";
 import { validateStored, type StoredPolicy } from "../../shared/orchestration.ts";
+import { DEFAULT_LAUNCH_DENY, isLaunchMode, parseDenyRules, type LaunchMode } from "../../shared/launchModes.ts";
 import { WORKER_ROLES, MODEL_RE, workerRole, type RoleChoice, type RoleId } from "../../shared/workerRoles.ts";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, realpathSync, readlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -154,6 +155,12 @@ interface Config {
    *  minutes, twelve said "no change" — a clock is the expensive way to learn
    *  nothing happened. See seat.ts. */
   seatWakeHours?: number;
+  /** The permission mode every terminal the app opens starts its agent in.
+   *  See shared/launchModes.ts; anything else reads as `default`. */
+  launchMode?: string;
+  /** Tools denied on every launch, one rule each. Absent means the shipped
+   *  pair; an empty list is a person having cleared it. */
+  launchDeny?: string[];
   /** How long the provider keeps a prompt cache warm after a turn, in minutes
    *  — 5 on most plans, 60 on some. The Lantern's cards count it down, since
    *  it decides whether the next turn is cheap now or cheap in five minutes. */
@@ -1283,6 +1290,36 @@ export function writeSeatSettings(fields: { seatWakeHours?: number }): { ok: boo
     out.seatWakeHours = Math.min(24, Math.max(1, Math.round(n)));
   }
   return mergeConfig(out, "seat settings");
+}
+
+/** The launch permissions as stored, with anything unusable dropped. */
+export function launchMode(): LaunchMode {
+  const m = config().launchMode;
+  return isLaunchMode(m) ? m : "default";
+}
+
+export function launchDeny(): string[] {
+  const raw = config().launchDeny;
+  if (!Array.isArray(raw)) return [...DEFAULT_LAUNCH_DENY];
+  return parseDenyRules(raw.filter((x): x is string => typeof x === "string").join("\n")).rules;
+}
+
+/** A rule that does not parse refuses the whole write: half a deny list saved
+ *  is a list that quietly allows what the other half named. */
+export function writeLaunchPermissions(fields: { mode?: unknown; deny?: unknown }): { ok: boolean; persisted: boolean; error?: string } {
+  const out: Record<string, unknown> = {};
+  if (fields.mode !== undefined) {
+    if (!isLaunchMode(fields.mode)) return { ok: false, persisted: false, error: "not a permission mode" };
+    out.launchMode = fields.mode;
+  }
+  if (fields.deny !== undefined) {
+    if (typeof fields.deny !== "string" && !Array.isArray(fields.deny)) return { ok: false, persisted: false, error: "the deny list is one rule per line" };
+    const text = Array.isArray(fields.deny) ? fields.deny.map(String).join("\n") : fields.deny;
+    const { rules, bad } = parseDenyRules(text);
+    if (bad.length) return { ok: false, persisted: false, error: `not a rule: ${bad.slice(0, 3).join(", ")}` };
+    out.launchDeny = rules;
+  }
+  return mergeConfig(out, "launch permissions");
 }
 
 export function writeLanternSettings(fields: { lanternNudge?: boolean; lanternNudgeMinutes?: number; lanternWatch?: boolean; lanternWatchMinutes?: number; cacheTtlMinutes?: number }):
