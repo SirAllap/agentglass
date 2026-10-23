@@ -262,7 +262,7 @@ import {
 } from "./plugin-ui.ts";
 import { PANEL_ID_RE, PLUGIN_CONTRACT, validPrRef } from "../../shared/pluginUi.ts";
 import { readNotifyPrefs, writeNotifyPrefs } from "./notifyPrefs.ts";
-import { answerSessions, normalizeRepo, RATE_PER_HOUR, sessionFacts, sessionReadRepos, sessionsGate, setSessionReadRepos, takeSessionsSlot } from "./prsessions.ts";
+import { answerSessions, coerceRepos, normalizeRepo, RATE_PER_HOUR, sessionFacts, sessionReadRepos, sessionsGate, setSessionReadRepos, takeSessionsSlot } from "./prsessions.ts";
 import { fetchCatalogue } from "./plugin-catalogue.ts";
 import { annotate, setAnnotations } from "./inbox-annotations.ts";
 import {
@@ -5300,6 +5300,9 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname === "/remote/serve" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       if (!atMachine()) return notHere();
+      // Every agent shell is on loopback and holds the machine token, so that alone
+      // would let one publish the server to the tailnet: it takes the person, as /pair/accept does.
+      if (!mayReleaseAHold(req, caller)) return heldPartyBlocked();
       const r = await enableServe(srv.port ?? PORT);
       return json({ ...r, status: remoteNow() });
     }
@@ -5413,6 +5416,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      */
     if (pathname === "/pair/forget-all" && req.method === "POST") {
       if (!atMachine()) return notHere();
+      if (!mayReleaseAHold(req, caller)) return heldPartyBlocked();
       const ids = revokeAllDevices();
       return json({ ok: true, revoked: ids.length, closed: closeDeviceSockets(new Set(ids)) });
     }
@@ -5810,7 +5814,9 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
          The request is the window's (the approved change comes back through it). */
       if (!mayPublishReview(req, caller)) {
         const prev = sessionReadRepos().join(",");
-        const next = Array.isArray(b.repos) ? b.repos.map(String).join(",") : "";
+        // Judge what setSessionReadRepos will store: it also takes a comma string, which
+        // would otherwise read as an empty list here and apply without a card.
+        const next = coerceRepos(b.repos).join(",");
         const verdict = agentVerdict("plugins.sessionReads.repos", prev, next, agentsChangeWithoutAsking());
         if (verdict !== "apply") {
           const q = settingsDoor.askForWindow("plugins.sessionReads.repos", "plugins.sessionReads.repos", prev, next, askerOf(req, caller, b.as));

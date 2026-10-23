@@ -248,6 +248,13 @@ describe("what the door lists and refuses", () => {
     expect(by("jira.token")).not.toHaveProperty("value");
   });
 
+  test("the session-read repos sent as a comma string wait for the person, like the array does", async () => {
+    const before = (await get<{ repos: string[] }>("/plugins/session-reads")).repos;
+    const r = await post("/plugins/session-reads", { repos: "acme/orbit,acme/helm" }, fromAgent);
+    expect(r.status).not.toBe(200);
+    expect((await get<{ repos: string[] }>("/plugins/session-reads")).repos).toEqual(before);
+  });
+
   test("a secret is refused on read and on write", async () => {
     expect((await post("/settings/door", { id: "jira.token", value: "tok-example" }, fromAgent)).status).toBe(403);
     expect((await fetch(`${base}/settings/door?id=jira.token`, { headers: auth })).status).toBe(404);
