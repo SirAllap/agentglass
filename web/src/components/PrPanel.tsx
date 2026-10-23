@@ -6369,7 +6369,11 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
             */}
           {/* `conflicted` as well: git naming the files, or GitHub refusing the
               update over them, is a conflict GitHub has not caught up with. */}
-      {(d.mergeable === "CONFLICTING" || conflicted) && !heroHas("resolve-conflicts") && conflictNode}
+      {(d.mergeable === "CONFLICTING" || conflicted) && conflictNode}
+          {/* The draft headline's own button, moved here with the other branch actions. */}
+          {d.isDraft && path.hero.primary?.id === "mark-ready" && (
+            <Btn onClick={onDraft} disabled={busy} pending={busyWhat === "Mark ready"}>Mark ready for review</Btn>
+          )}
           {/*
             * The space the answer will fill, while it is being fetched.
             *
@@ -6385,7 +6389,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
               Checking the base…
             </span>
           )}
-          {canUpdate && !heroHas("update-branch") && (
+          {canUpdate && (
             /*
              * Not while the last push is still landing.
              *
@@ -6573,7 +6577,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
         </section>
       ) : (
         <MergeBox path={path} busy={busy} onAction={onPathAction}
-          mergeNode={mergeNode} conflictNode={conflictNode} autoNode={autoNode} extraNode={extraNode} noticeNode={noticeNode} cornerNode={cornerNode}
+          mergeNode={mergeNode} autoNode={autoNode} extraNode={extraNode} noticeNode={noticeNode} cornerNode={cornerNode}
           notes={hasNotes ? notesNode : undefined}
           actionDisabled={actionDisabled} pendingAction={pendingAction} showMergeRow={!conflicted || !!d.autoMerge}
           history={<ReviewHistory reviews={d.reviews} timeline={d.timeline} pending={d.reviewers} author={d.author} you={d.viewerDidAuthor ? d.author : undefined} onGoReview={onGoReview} />} />

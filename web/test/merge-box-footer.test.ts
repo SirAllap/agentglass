@@ -60,7 +60,7 @@ describe("the merge group never moves", () => {
     // And the notice is drawn after the merge group, on its own full-width
     // line, so it can never push the group sideways or up.
     expect(box.indexOf("{noticeNode && <div className=\"basis-full")).toBeGreaterThan(box.indexOf("{showMergeRow && <span"));
-    expect(box).toContain('if (a.id === "merge") return null');
+    expect(box).toContain("if (actionInFooter(a.id)) return null");
   });
   it("no hero of the model carries the merge, auto-merge or update as its action, in any state", async () => {
     const { mergePath } = await import("../../shared/mergePath.ts");

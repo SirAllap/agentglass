@@ -18,7 +18,7 @@ import { useState, type CSSProperties, type ReactNode } from "react";
 import { CrossIcon, DoneIcon } from "../lib/glyphIcons.tsx";
 import { WarningIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import type { Hero, Mover, MergePath, PathAction, PathRow, Stage } from "../../../shared/mergePath.ts";
+import { actionInFooter, heroPlacement, type Hero, type Mover, type MergePath, type PathAction, type PathRow, type Stage } from "../../../shared/mergePath.ts";
 import { Button, CTRL_H, EDGE, LINE } from "./workspace/Chrome.tsx";
 import { ReviewBar, ReviewFace } from "./ReviewFace.tsx";
 import { wash } from "../lib/reviewBar.ts";
@@ -160,15 +160,13 @@ function Segments({ segs, total }: { segs: { key: string; count: number; label: 
 }
 
 export function MergeBox({
-  path, onAction, busy, mergeNode, conflictNode, autoNode, extraNode, noticeNode, cornerNode, notes, history, actionDisabled, pendingAction, showMergeRow = true,
+  path, onAction, busy, mergeNode, autoNode, extraNode, noticeNode, cornerNode, notes, history, actionDisabled, pendingAction, showMergeRow = true,
 }: {
   path: MergePath;
   onAction: (a: PathAction) => void;
   busy: boolean;
   /** The panel's real merge button, method menu and all. */
   mergeNode: ReactNode;
-  /** The panel's conflict resolver, where the hero's primary is "Resolve conflicts". */
-  conflictNode?: ReactNode;
   /** "Merge when green", or "Cancel auto-merge" once it is armed. */
   autoNode: ReactNode;
   /** The quieter row of what else can be done to the branch. */
@@ -190,6 +188,7 @@ export function MergeBox({
   const [historyOpen, setHistoryOpen] = useState(false);
   const { hero, stages, rows, otherCi, callout, count } = path;
   const tone = heroTone(hero.tone);
+  const heroTop = heroPlacement(hero).top;
   const counted = rows.filter((r) => r.counted);
   const fyiRows = rows.filter((r) => !r.counted && r.mover !== "done");
   const doneRows = rows.filter((r) => r.mover === "done");
@@ -197,8 +196,7 @@ export function MergeBox({
   const showOther = !!otherCi && otherCi.running + otherCi.queued + otherCi.failed > 0;
 
   const action = (a: PathAction, primary: boolean): ReactNode => {
-    if (a.id === "merge") return null; // the merge group lives in the footer, in every state
-    if (a.id === "resolve-conflicts") return conflictNode ?? null;
+    if (actionInFooter(a.id)) return null; // branch moves live in the footer, in every state (see heroPlacement)
     const isHistory = a.id === "history";
     return (
       <Button key={a.id} size="regular" tone={primary ? "primary" : "plain"}
@@ -263,11 +261,9 @@ export function MergeBox({
           </p>
         ))}
         {hero.sub && <p className="text-[11.5px] leading-snug mt-1.5" style={{ color: "var(--text3)" }}>{hero.sub}</p>}
-        {(hero.primary || hero.secondary || hero.also || hero.after) && (
+        {(heroTop.length > 0 || hero.after) && (
           <div className="flex items-center gap-2 flex-wrap mt-3">
-            {hero.primary && action(hero.primary, true)}
-            {hero.secondary && action(hero.secondary, false)}
-            {hero.also && action(hero.also, false)}
+            {heroTop.map((a) => action(a, a === hero.primary))}
             {hero.after && <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>{hero.after}</span>}
           </div>
         )}

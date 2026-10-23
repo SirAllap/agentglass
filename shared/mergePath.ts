@@ -1030,3 +1030,26 @@ export function mergePath(i: MergePathInput): MergePath {
 
   return { ready, hero, stages, rows: ordered, count: counted.length, otherCi, callout, historyCount, guard };
 }
+
+/**
+ * Which hero buttons stay under the headline and which belong in the footer row.
+ *
+ * Measured on the same card in two states: with a conflict as the headline,
+ * "Resolve conflicts" and "Hand to Claude" sat under the sentence, and with the
+ * conflict as a secondary blocker the very same buttons sat in the footer. A
+ * button that moves between rows depending on what else is wrong is one nobody
+ * can learn the place of. So by id: whatever moves the BRANCH (sync, resolve,
+ * hand to Claude, merge, arm auto-merge, mark ready) is always the footer's;
+ * the headline keeps only what inspects or re-runs its own cause (open log,
+ * re-run, review history, open on GitHub, go to a thread or a review, ask).
+ * "unstick" is not listed: it hangs off a row of the list, never off the headline.
+ */
+const FOOTER_ACTIONS: ReadonlySet<ActionId> = new Set<ActionId>([
+  "merge", "resolve-conflicts", "update-branch", "arm-auto", "mark-ready",
+]);
+export const actionInFooter = (id: ActionId): boolean => FOOTER_ACTIONS.has(id);
+
+export function heroPlacement(hero: Hero): { top: PathAction[]; footer: PathAction[] } {
+  const all = [hero.primary, hero.secondary, hero.also].filter((a): a is PathAction => !!a);
+  return { top: all.filter((a) => !actionInFooter(a.id)), footer: all.filter((a) => actionInFooter(a.id)) };
+}
