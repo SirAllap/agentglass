@@ -262,6 +262,16 @@ export const FIND = `((spec) => {
     .filter((n) => everywhere || onScreen(n))
     .map((n) => ({ n, t: norm(texts ? texts(n)[0] : name(n)).slice(0, 40) }))
     .filter((x) => x.t)
+    /* Closest first: the first five in document order were the page header
+       every time ("Skip to content", "Homepage"...), when the one meant was a
+       "Issues 16" further down. One that contains the wanted words, then one
+       that shares a word, then the rest, each in page order. */
+    .map((x, i) => {
+      const t = x.t.toLowerCase();
+      const words = lower.split(" ").filter((w) => w.length > 2);
+      return { ...x, i, s: lower && t.includes(lower) ? 0 : words.some((w) => t.includes(w)) ? 1 : 2 };
+    })
+    .sort((a, b) => a.s - b.s || a.i - b.i)
     .slice(0, 5);
   return { kind: "found", all, hidden, near };
   };

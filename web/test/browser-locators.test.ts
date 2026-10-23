@@ -380,6 +380,15 @@ describe("a locator finds what a person would point at", () => {
     expect(r.error).toMatch(/e[0-9]+ button[^,]*"Delete"/);
   });
 
+  // On GitHub the five offered were the page header every time, never the "Issues 16" that was meant.
+  test("and offers the closest first, not the first in the page", async () => {
+    const { guest } = app();
+    const r = await runBrowserAsk(guest, ask("click", { selector: 'role=button[name="Draft copy"]' }));
+    expect(r.ok).toBe(false);
+    const first = String(r.error).split("on this page:")[1]?.match(/"([^"]*)"/)?.[1];
+    expect(first).toBe("Save draft");
+  });
+
   test("nothing matching says what of that kind IS there", async () => {
     const { guest } = app();
     const r = await runBrowserAsk(guest, ask("click", { selector: 'role=button[name="Publish"]' }));
