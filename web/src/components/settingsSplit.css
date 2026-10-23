@@ -3,8 +3,10 @@
    left scrolls. Under 1180px they stack, picture first, so it is not lost
    below a long column. The wrapper spans the page's card flow (see
    `.agx-settings-col > :not(.agx-scard)`), and lays its own cards out, so the
-   cards' `break-inside` and column rules do not reach them. */
-.agx-split {
+   cards' `break-inside` and column rules do not reach them. Not `.agx-split`:
+   that is the diff's own class, and a grid on it blanked every diff once Settings
+   had loaded this file. */
+.agx-split-page {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 18px;
@@ -13,7 +15,7 @@
 .agx-split-main { min-width: 0; }
 .agx-split-side { min-width: 0; order: -1; }
 @media (min-width: 1180px) {
-  .agx-split { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .agx-split-page { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .agx-split-side { order: 0; position: sticky; top: calc(var(--agx-ph-h, 0px) + 16px); }
 }
 .agx-split-side:empty { display: none; }

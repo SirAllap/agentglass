@@ -140,7 +140,9 @@ import { Button, RefreshButton, INPUT, INPUT_STYLE, EDGE, LINE, Segmented } from
 import { LAUNCH_MODES, LAUNCH_MODE_LABEL, isLaunchMode, parseDenyRules, type LaunchMode } from "../../../shared/launchModes.ts";
 import { setLaunchPermissions } from "../lib/launchMode.ts";
 import { SELECT_BOX, EmptyState, Field, LinkButton, SettingsCard, SettingsForm, StatusBadge, helpIdFor, type StatusTone } from "./SettingsKit.tsx";
-import { PreviewSlot } from "./SettingsPreviewSlot.tsx";
+import { PreviewCard, WithPreview } from "./settings/PreviewCard.tsx";
+import { WindowPreview, SidebarPreview, DiffPreview, LanternPreview, BrowserPreview } from "./settings/previews/index.ts";
+import { railItems } from "./settings/previews/MiniApp.tsx";
 import { restoredNote } from "../lib/restoredNote.ts";
 
 /** A heading inside a Section, for a pane that answers the same question about
@@ -538,23 +540,10 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
  * State lives in localStorage rather than here, and is read back on mount, so
  * this pane and the view cannot disagree about what was chosen.
  */
-/**
- * The page type for a setting with a live preview: the cards on the left, the
- * preview on the right, stacked under 1280px. The preview itself is slice 4;
- * until then `PreviewSlot` holds its place and its name, so the page already
- * has the shape it will keep.
- */
-function WithPreview({ slot, children }: { slot: React.ReactNode; children: React.ReactNode }) {
-  return (
-    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)] gap-4 items-start">
-      <div className="min-w-0">{children}</div>
-      {slot}
-    </div>
-  );
-}
-
-function BrowserPane() {
+function BrowserPane({ children }: { children?: React.ReactNode }) {
   const [home, setHome] = useState(homePageRaw);
+  // What the view opens on is the saved address, not the draft in the box.
+  const [savedHome, setSavedHome] = useState(homePageRaw);
   const [engine, setEngine] = useState<SearchEngine>(searchEngine);
   // An agent's change to the engine lands while this page may be up.
   useEffect(() => subscribeSettings((c) => { if (c.by !== "row" && c.id === "browser.searchEngine") setEngine(searchEngine()); }), []);
@@ -568,11 +557,13 @@ function BrowserPane() {
     // keep saying `example.com` while the browser goes to `https://example.com/`
     // is a small lie about what was saved.
     setHome(homePageRaw());
+    setSavedHome(homePageRaw());
     setBad(false);
     setSaved(true);
   };
 
   return (
+    <WithPreview preview={<PreviewCard id="browser" title="New tab"><BrowserPreview home={savedHome} searchEngine={SEARCH_ENGINE_LABELS[engine]} /></PreviewCard>}>
     <SettingsCard title="Where it opens" icon={<BrowserIcon size={ICON.sm} />}
       desc="The pages the browser view opens on its own. Everything else — what you have logged into, what you have open — belongs to the page, not to a setting.">
       <SettingRow
@@ -616,6 +607,8 @@ function BrowserPane() {
         /></span>}
       />
     </SettingsCard>
+    {children}
+    </WithPreview>
   );
 }
 
@@ -641,9 +634,12 @@ function RailPane() {
   /** Which view is being dragged, and where it would land. Held here rather
    *  than per row: a drop target has to know what is coming. */
   const [drag, setDrag] = useState<{ id: ViewId; from: RailPlace } | null>(null);
+  // The view last touched is the one the picture draws as active.
+  const [touched, setTouched] = useState<ViewId | null>(null);
+  const move = (id: ViewId, place: RailPlace, to: number) => { setTouched(id); moveView(id, place, to); };
 
   return (
-    <>
+    <WithPreview preview={<PreviewCard id="rail" title="How the rail looks now"><SidebarPreview items={railItems(rail)} selected={touched ?? rail.work[0]?.id ?? ""} /></PreviewCard>}>
       {/* The page's own words first, then one card per drawer. The drawers were
           eyebrows inside one card, each with a line either side of it; a card
           each gives the three of them a name and an edge, and the divider
@@ -697,7 +693,7 @@ function RailPane() {
                     if (!drag || drag.id === v.id) return;
                     // Dropped ONTO a row means "take its place", which is the
                     // only reading that needs no insertion line to explain it.
-                    moveView(drag.id, place, i);
+                    move(drag.id, place, i);
                     setDrag(null);
                   },
                   style: { opacity: drag?.id === v.id ? 0.4 : 1, cursor: "grab" },
@@ -734,15 +730,15 @@ function RailPane() {
                   <span className="agx-reveal flex items-center gap-0.5 w-[54px]">
                     {place !== "hidden" && (
                       <>
-                        <MiniBtn agentExempt label="Move up" disabled={i === 0} onClick={() => moveView(v.id, place, i - 1)}>↑</MiniBtn>
-                        <MiniBtn agentExempt label="Move down" disabled={i === rail[place].length - 1} onClick={() => moveView(v.id, place, i + 1)}>↓</MiniBtn>
+                        <MiniBtn agentExempt label="Move up" disabled={i === 0} onClick={() => move(v.id, place, i - 1)}>↑</MiniBtn>
+                        <MiniBtn agentExempt label="Move down" disabled={i === rail[place].length - 1} onClick={() => move(v.id, place, i + 1)}>↓</MiniBtn>
                       </>
                     )}
                   </span>
                   <Select
                     align="right"
                     value={place}
-                    onChange={(p) => setting(`rail.place.${v.id}`).set(p)}
+                    onChange={(p) => { setTouched(v.id); setting(`rail.place.${v.id}`).set(p); }}
                     options={(Object.keys(PLACE_LABEL) as RailPlace[]).map((p) => ({
                       value: p,
                       label: p === "work" ? "Top" : p === "utility" ? "Bottom" : "Hidden",
@@ -755,8 +751,7 @@ function RailPane() {
           })}
         </SettingsCard>
       ))}
-      <PreviewSlot id="rail" title="How the rail looks now" note="The rail, as it follows your arrangement, goes here." />
-    </>
+    </WithPreview>
   );
 }
 
@@ -2171,11 +2166,10 @@ function LanternSection({ open }: { open: boolean }) {
   const nearWatch = String(WATCH_STEPS.find((m) => m >= watchMinutes) ?? 60);
   const ic = <LanternIcon size={ICON.sm} />;
   /* Two cards, split by what they act on: the board and what it asks of a
-     session, and the one seat it wakes. The picture of the board goes in the
-     side slot (the preview is its own piece of work); empty, the column stays
-     at its half and the slot takes no room. */
+     session, and the one seat it wakes. The picture of the board is in the
+     side slot, and its watch line and cache clock follow the controls. */
   return (
-    <div className="agx-split">
+    <div className="agx-split-page">
       <div className="agx-split-main">
         <SettingsCard title="Lantern" icon={ic}
           desc="The board that watches every agent, and how often it taps you on the shoulder. It never starts, stops or queues anything."
@@ -2214,7 +2208,11 @@ function LanternSection({ open }: { open: boolean }) {
         </SettingsCard>
         {note && <div role="status" className="agx-settings-x text-[11px]" style={{ color: "var(--text3)" }}>{note}</div>}
       </div>
-      <aside className="agx-split-side" data-preview-slot="lantern" />
+      <aside className="agx-split-side">
+        <PreviewCard id="lantern" title="The real Lantern card">
+          <LanternPreview watch={watch} everyMin={watchMinutes} wakeMin={cacheTtl} />
+        </PreviewCard>
+      </aside>
     </div>
   );
 }
@@ -3720,7 +3718,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
   // The Shortcuts page reads chordFor, which now answers out of the rail: move
   // a view between groups on the Rail page and every number on this one shifts.
   // Without this the two pages sit side by side disagreeing.
-  useSyncExternalStore(subscribeRail, loadRail, () => SHIPPED_RAIL);
+  const railLayout = useSyncExternalStore(subscribeRail, loadRail, () => SHIPPED_RAIL);
   /**
    * Which page is showing — remembered across opens.
    *
@@ -4578,7 +4576,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   </>)}
                   {ql && show("diff") && <PageMatchHeading id="diff" onOpen={() => { setPane("diff" as Pane); setQ(""); }} />}
                   {show("diff") && (
-                  <WithPreview slot={<PreviewSlot id="diff" title="The real Diff view" />}>
+                  <WithPreview preview={<PreviewCard id="diff" title="The real Diff view"><DiffPreview split={dSplit} wrap={dWrap} syntaxTheme={dTheme} /></PreviewCard>}>
                   <SettingsCard title="How a diff opens" icon={<DiffIcon size={ICON.sm} />}
                     desc="The view you land on, and what happens to a long line.">
                     {/* Defaults, not the live state: the toggle in each panel
@@ -4673,7 +4671,10 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   {show("saved-replies") && <SavedRepliesPane open={open} />}
                   {ql && show("prefs") && <PageMatchHeading id="prefs" onOpen={() => { setPane("prefs" as Pane); setQ(""); }} />}
                   {show("prefs") && (
-                  <>
+                  <WithPreview preview={<PreviewCard id="prefs" title="This window on your desktop">
+                    {/* No on/off for the clock: the top bar shows it in fullscreen whatever the 12h/24h choice. */}
+                    <WindowPreview zoomPct={Math.round(scale * 100)} fullscreen={fullscreen} startAtLogin={autostart === true} launchAnimation={splash}
+                      showClock codexQuota={usageRefresh} rail={railItems(railLayout)} /></PreviewCard>}>
                   <SettingsCard title="Size and startup" icon={<PanesIcon size={ICON.sm} />}
                     desc="How big the window is, and what it does when the machine boots.">
                     {/* Desktop only, like launch-at-login: in a browser tab the
@@ -4731,9 +4732,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       <SettingRow key={name} agentExempt label={`${i + 1}. ${name}`} hint={what} />
                     ))}
                   </SettingsCard>
-
-                  <PreviewSlot id="prefs" title="This window on your desktop" note="The window, as it looks with these settings, goes here." />
-                  </>
+                  </WithPreview>
                   )}
 
                   {/* The engine and the memory it costs, together. Both used to
@@ -4779,7 +4778,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
 
                   {ql && show("browser") && <PageMatchHeading id="browser" onOpen={() => { setPane("browser" as Pane); setQ(""); }} />}
 
-                  {show("browser") && <WithPreview slot={<PreviewSlot id="browser" title="New tab" />}><BrowserPane /><CookieImport /></WithPreview>}
+                  {show("browser") && <BrowserPane><CookieImport /></BrowserPane>}
 
                   {ql && show("rail") && <PageMatchHeading id="rail" onOpen={() => { setPane("rail" as Pane); setQ(""); }} />}
 

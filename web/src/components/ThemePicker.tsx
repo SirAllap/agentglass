@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { SettingRow, Switch } from "./SettingRow.tsx";
 import {
   THEMES, isDarkTheme, EXPERIMENTAL_THEME_IDS,
@@ -12,7 +12,10 @@ import { DoneIcon } from "../lib/glyphIcons.tsx";
 import { HIT, ICON } from "../lib/iconSize.ts";
 import { Button, CTRL_H, EDGE } from "./workspace/Chrome.tsx";
 import { SettingsCard } from "./SettingsKit.tsx";
-import { PreviewSlot } from "./SettingsPreviewSlot.tsx";
+import { PreviewCard, WithPreview } from "./settings/PreviewCard.tsx";
+import { AppearancePreview } from "./settings/previews/index.ts";
+import { railItems } from "./settings/previews/MiniApp.tsx";
+import { loadRail, subscribeRail, SHIPPED_RAIL } from "./workspace/views.ts";
 import { ThemeIcon } from "./settingsNavIcons.tsx";
 
 /* Settings → Appearance.
@@ -208,8 +211,11 @@ export function AppearancePane({ current, onChange, onAccent }: {
      read as rows; the palettes are a picker, and a picker is its own card
      rather than an eyebrow inside this one. Both live here because picking a
      palette moves Mode, and the two share that state. */
+  const rail = useSyncExternalStore(subscribeRail, loadRail, () => SHIPPED_RAIL);
   return (
-    <>
+    <WithPreview preview={<PreviewCard id="appearance" title="The real app">
+      {/* The app has no density, interface-font or translucency setting, so those stay at what it ships with. */}
+      <AppearancePreview theme={current} accent={accent} density="comfortable" fontPx={13} translucent={false} rail={railItems(rail)} /></PreviewCard>}>
       <SettingsCard title="Theme" icon={<ThemeIcon size={ICON.sm} />}
         desc="One palette for the whole cockpit — chrome, terminal, and (on the desktop) your tmux and nvim follow it.">
         <SettingRow
@@ -289,7 +295,6 @@ export function AppearancePane({ current, onChange, onAccent }: {
         />
       </SettingsCard>
 
-      <PreviewSlot id="appearance" title="The real app" note="The app, drawn with this theme and accent, goes here." />
-    </>
+    </WithPreview>
   );
 }

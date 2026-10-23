@@ -338,7 +338,7 @@ export function OrchestrationView(p: OrchestrationViewProps) {
       {/* Editor and flow: the cards that change who does what on the left, the
           picture of who does it right now on the right, in view while the left
           scrolls. Under 1180px they stack, picture first. */}
-      <div className="agx-split">
+      <div className="agx-split-page">
       <div className="agx-split-main">
       <QuickSetup policy={policy} root={root} readiness={readiness} states={states} inherited={inherited} busy={busy}
         note={notes.quick} onSave={save} onOpenEngines={p.onOpenEngines} />

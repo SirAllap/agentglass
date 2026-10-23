@@ -22,7 +22,7 @@ export const PREVIEWS = {
   prefs: { component: WindowPreview, props: ["zoomPct", "fullscreen", "startAtLogin", "launchAnimation", "showClock", "codexQuota", "rail?"] },
   appearance: { component: AppearancePreview, props: ["theme", "accent", "density", "fontPx", "translucent", "rail?"] },
   rail: { component: SidebarPreview, props: ["items", "selected"] },
-  diff: { component: DiffPreview, props: ["split", "wrap"] },
+  diff: { component: DiffPreview, props: ["split", "wrap", "syntaxTheme?"] },
   lantern: { component: LanternPreview, props: ["watch", "everyMin", "wakeMin"] },
   browser: { component: BrowserPreview, props: ["home", "searchEngine"] },
   orchestration: { component: OrchestrationPreview, props: ["policy", "readiness", "root", "limited?", "facts?"] },

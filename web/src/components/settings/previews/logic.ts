@@ -74,6 +74,9 @@ export function ledgerBars(cap: CapLabel): { h: number; over: boolean }[] {
   const k = CAP_BAR_SCALE[cap] ?? 1;
   return DEMO_TURNS.map((v) => ({ h: v * k, over: v * k > 78 }));
 }
+/** The plugin's cap, in tokens, as the nearest of the three the picture draws. */
+export const capLabel = (tokens: number): CapLabel =>
+  (tokens <= 141_000 ? "100K" : tokens <= 316_000 ? "200K" : "500K");
 export const rereadShare = (countSubagents: boolean): number => (countSubagents ? 98.2 : 91.4);
 
 // ---- Lantern ----

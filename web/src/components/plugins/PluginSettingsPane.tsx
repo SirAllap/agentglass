@@ -6,6 +6,8 @@ import { Spinner } from "../Spinner.tsx";
 import { FieldControl } from "./PluginTree.tsx";
 import { SettingRow, Switch } from "../SettingRow.tsx";
 import { SettingsCard, StatusBadge } from "../SettingsKit.tsx";
+import { PreviewCard, WithPreview } from "../settings/PreviewCard.tsx";
+import { pluginPreview } from "../settings/pluginPreviews.tsx";
 
 /**
  * The fields under each heading, in the order they were declared.
@@ -121,7 +123,7 @@ export function PluginSettingsPane({ name, open }: { name: string; open: boolean
     </SettingsCard>
   );
 
-  return (
+  const body = (
     <>
       {error && (
         <SettingsCard label="Problem">
@@ -144,4 +146,7 @@ export function PluginSettingsPane({ name, open }: { name: string; open: boolean
       </SettingsCard>
     </>
   );
+  // The picture reads the same `values` the rows edit, so it moves with each one.
+  const preview = pluginPreview(name, values, secretsSet, fields);
+  return preview ? <WithPreview preview={<PreviewCard id={name} title={preview.title}>{preview.node}</PreviewCard>}>{body}</WithPreview> : body;
 }

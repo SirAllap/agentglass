@@ -1,5 +1,5 @@
 import type { ComponentType, CSSProperties } from "react";
-import { VIEWS, SHIPPED_RAIL } from "../../workspace/views.ts";
+import { VIEWS, SHIPPED_RAIL, type RailLayout } from "../../workspace/views.ts";
 import { densityPad, fontScale, railBadge, railDrawers, type Density, type RailItem } from "./logic.ts";
 
 export type MiniView = "dash" | "pr" | "diff" | "term";
@@ -7,12 +7,15 @@ export const MINI_VIEWS: { id: MiniView; label: string }[] = [
   { id: "dash", label: "Dashboard" }, { id: "pr", label: "Pull requests" }, { id: "diff", label: "Diff" }, { id: "term", label: "Terminal" },
 ];
 
-/** The rail as it ships, in the shape the sidebar page edits. */
-export const DEFAULT_RAIL: RailItem[] = [
-  ...SHIPPED_RAIL.work.map((v) => ({ id: v.id, name: v.label, zone: "top" as const })),
-  ...SHIPPED_RAIL.utility.map((v) => ({ id: v.id, name: v.label, zone: "bottom" as const })),
-  ...SHIPPED_RAIL.hidden.map((v) => ({ id: v.id, name: v.label, zone: "off" as const })),
+/** The rail in the shape the previews draw: the drawers a layout holds, and the views put away as "off". */
+export const railItems = (l: RailLayout): RailItem[] => [
+  ...l.work.map((v) => ({ id: v.id, name: v.label, zone: "top" as const })),
+  ...l.utility.map((v) => ({ id: v.id, name: v.label, zone: "bottom" as const })),
+  ...l.hidden.map((v) => ({ id: v.id, name: v.label, zone: "off" as const })),
 ];
+
+/** The rail as it ships, in the shape the sidebar page edits. */
+export const DEFAULT_RAIL: RailItem[] = railItems(SHIPPED_RAIL);
 
 const ICONS = new Map<string, ComponentType<{ size?: number }>>(VIEWS.map((v) => [v.id, v.icon]));
 const BORDER = "0.08em solid var(--surface-line)";

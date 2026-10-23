@@ -434,6 +434,10 @@ function HRailRow({ rails, children }: { rails: Rail[]; children: ReactNode }) {
 
 // --- unified diff, with old|new gutters, uncapped -----------------------------
 
+/* Wrap needs a width to wrap AT: `max-content` is the longest line unwrapped,
+   so under it `pre-wrap` had nothing to break and Wrap did nothing at all. */
+const fileWidth = (wrap: boolean): CSSProperties => (wrap ? { width: "100%" } : { width: "max-content", minWidth: "100%" });
+
 /*
  * Horizontal only, and this is the whole of the reason.
  *
@@ -475,7 +479,7 @@ export function UnifiedDiff({ c, hunks, wrap, hunkAction, rowAfter, onPick, canP
        * are plain blocks, so they take this width rather than each measuring
        * their own.
        */}
-      <div style={{ width: "max-content", minWidth: "100%" }}>
+      <div style={fileWidth(wrap)}>
       {built.map(({ h, rows }, hi) => (
         <div key={hi}>
           {gapRow?.(hi)}
@@ -506,7 +510,7 @@ export function UnifiedDiff({ c, hunks, wrap, hunkAction, rowAfter, onPick, canP
               const tint = inSel(sel ?? null, r.newN, "RIGHT") || inSel(sel ?? null, r.oldN, "LEFT") ? SEL_BG : cellBg(r.kind);
               return (
                 <Fragment key={ri}>
-                  <div className="flex" style={{ width: "max-content", minWidth: "100%" }}>
+                  <div className="flex" style={fileWidth(wrap)}>
                     {/* Opaque, not tinted-transparent: the code passes BEHIND
                         these two and a translucent gutter shows the line you
                         are trying to read through the number telling you which
