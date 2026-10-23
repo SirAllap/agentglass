@@ -4,7 +4,8 @@
 // A row that cannot be opened is drawn as one that cannot, with the reason on
 // hover — a button that does nothing is a worse thing to ship than a label
 // that says so.
-import { StrataIcon } from "./StrataIcon.tsx";
+import { StrataIcon, StyledIcon } from "./StrataIcon.tsx";
+import { useItemStyle } from "../../../lib/finderStyleStore.ts";
 import { SIDE_DEFAULT } from "../../../lib/finderColumns.ts";
 import { ICON } from "../../../lib/iconSize.ts";
 import { joinPath, RECENT, type SidebarMode } from "../../../lib/finderMiller.ts";
@@ -44,6 +45,13 @@ export function pinnedOnly(pins: readonly PinnedPlace[], places: readonly Place[
 /** What a button at the end of a DEVICES row asks for. */
 export type VolumeAsk = LockButton["act"] | ReleaseButton["act"] | "mount";
 
+/** A pinned folder wears the colour and icon its owner gave it in Customize…; the fixed places keep Strata's own drawings. */
+function PlaceIcon({ p }: { p: Place }) {
+  const own = useItemStyle(p.id.startsWith("pin:") ? p.path : undefined);
+  if (own && p.path) return <StyledIcon style={own} name={p.path.slice(p.path.lastIndexOf("/") + 1)} isDir size={ICON.md} />;
+  return <StrataIcon set="act" name={PLACE_ICON[p.id] ?? "folder"} size={ICON.md} />;
+}
+
 export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, onGo, onRecent, onNetwork, onTrash, dnd, volumes = [], busy, onVolume, onVolumeAct, hidden = [], onSideAct }: {
   places: Place[]; pins: readonly PinnedPlace[]; onRemote?: (uri: string) => void; here: string; mode: Exclude<SidebarMode, "hidden">;
   /** The DEVICES section: drawn only when there is a volume, as in Strata. `busy` is the ids with an action under way. */
@@ -78,7 +86,7 @@ export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, o
         onClick={() => (p.id === "recent" ? onRecent() : p.id === "trash" ? onTrash() : p.id === "network" ? onNetwork?.() : p.path && onGo(p.path))}
         className={`agx-btn w-full flex items-center ${rail ? "justify-center" : "gap-2 px-2.5"} rounded-md text-left disabled:cursor-not-allowed`}
         style={{ minHeight: rail ? 28 : 26, color: off ? "var(--text4)" : on ? "var(--text)" : "var(--text2)", fontWeight: on ? 600 : 400, background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : undefined }}>
-        <span className="shrink-0 flex" style={{ color: "var(--primary-ink)" }}><StrataIcon set="act" name={PLACE_ICON[p.id] ?? "folder"} size={ICON.md} /></span>
+        <span className="shrink-0 flex" style={{ color: "var(--primary-ink)" }}><PlaceIcon p={p} /></span>
         {!rail && <span className="truncate">{p.label}</span>}
       </button>
     );

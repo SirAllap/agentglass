@@ -6,7 +6,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../../../lib/api.ts";
 import { TYPE_GROUPS, strataWhen, canEditRow, itemsLabel, isFolder, previewMetaLine, typeGroup, type Row } from "../../../lib/finderMiller.ts";
-import { FileTypeIcon, StrataIcon } from "./StrataIcon.tsx";
+import { PathIcon, StrataIcon } from "./StrataIcon.tsx";
 import type { FileFacts } from "../../../../../shared/types.ts";
 import type { ReadWidth } from "../../../lib/finderPreview.ts";
 import { BarButton, PreviewBar } from "./PreviewBar.tsx";
@@ -54,7 +54,7 @@ export function QuickLook({ path, row, rows, root, savedTab, onTab, onEditing, o
   if (!path || !row || isFolder(row)) {
     return (
       <div className="flex-1 min-w-0 min-h-0 flex flex-col" aria-label="Preview">
-        <PreviewBar lead={<StrataIcon set="act" name="eye" size={20} />} name={folder && row ? row.name : "Preview"} meta={folder && row ? previewMetaLine({ folder, bytes: null, items: row.items, ago: strataWhen(row.mtime), mime: "", name: row.name }) : ""} onClose={onClose}
+        <PreviewBar lead={folder && row && path ? <PathIcon path={path} name={row.name} isDir size={20} /> : <StrataIcon set="act" name="eye" size={20} />} name={folder && row ? row.name : "Preview"} meta={folder && row ? previewMetaLine({ folder, bytes: null, items: row.items, ago: strataWhen(row.mtime), mime: "", name: row.name }) : ""} onClose={onClose}
           tools={folder && row && !row.locked && path ? <BarButton icon="terminal" label="Terminal here" onClick={() => onBench(path, "terminal")} /> : undefined} />
         <div className="flex-1 flex items-center justify-center p-6 text-center text-[12px]" style={{ color: "var(--text3)" }}>
           {folder && row ? `${itemsLabel(row.items)}${rows && rows.length ? ` · ${folderSummary(rows).join(" · ")}` : ""}. Opens as the next column.` : "No preview for this selection"}
@@ -64,7 +64,7 @@ export function QuickLook({ path, row, rows, root, savedTab, onTab, onEditing, o
   }
   const meta = previewMetaLine({ folder, bytes: row.bytes, items: row.items, ago: strataWhen(row.mtime), mime: facts?.mime ?? "", name: row.name });
   const bar = {
-    lead: <FileTypeIcon name={row.name} isDir={false} size={20} />, name: row.name, meta, title: path, onClose,
+    lead: <PathIcon path={path} name={row.name} isDir={false} size={20} />, name: row.name, meta, title: path, onClose,
     onOpen: row.locked ? undefined : () => { void api.previewOpen(path); },
     onNvim: canEditRow(row) && !row.locked ? () => onBench(path, "edit") : undefined,
   };

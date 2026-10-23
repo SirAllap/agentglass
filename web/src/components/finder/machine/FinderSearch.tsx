@@ -10,7 +10,7 @@ import { ICON } from "../../../lib/iconSize.ts";
 import { SearchIcon } from "../../../lib/glyphIcons.tsx";
 import { EDGE, LINE } from "../../workspace/Chrome.tsx";
 import { MenuCap, MenuItem, Popover } from "./Popover.tsx";
-import { FileTypeIcon, StrataIcon } from "./StrataIcon.tsx";
+import { PathIcon, StrataIcon } from "./StrataIcon.tsx";
 
 interface Row extends SearchHit { text?: string; line?: number }
 
@@ -65,7 +65,7 @@ export function FinderSearch({ home, onTarget, onClose }: { home: string; onTarg
           {note ? <div className="h-full grid place-items-center text-[12px] p-6 text-center" style={{ color: "var(--text3)", minHeight: 200 }}>{note}</div> : rows.map((r, i) => (
             <div key={`${r.path}:${r.line ?? ""}`} role="option" aria-selected={i === hot} onMouseMove={() => setHot(i)} onClick={() => choose(i, false)}
               className="flex items-center gap-3 px-3.5 cursor-pointer" style={{ minHeight: 56, borderBottom: LINE, background: i === hot ? "color-mix(in srgb, var(--primary) 38%, var(--surface-card))" : undefined }}>
-              <FileTypeIcon name={r.path.slice(r.path.lastIndexOf("/") + 1)} isDir={r.dir} size={30} />
+              <PathIcon path={r.path} name={r.path.slice(r.path.lastIndexOf("/") + 1)} isDir={r.dir} size={30} />
               <span className="min-w-0 flex-1 flex flex-col py-1">
                 <span className="truncate text-[12.5px]" style={{ fontWeight: 700 }}>{r.path.slice(r.path.lastIndexOf("/") + 1)}{r.line ? <span style={{ color: "var(--text4)", fontWeight: 400 }}> : {r.line}</span> : null}</span>
                 <span className="truncate text-[10.5px]" style={{ color: "var(--text3)" }}>{r.text ?? hitPath(r.path)}</span>

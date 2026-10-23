@@ -4,6 +4,7 @@
 import { useMemo, useSyncExternalStore } from "react";
 import { ICON } from "../../../lib/iconSize.ts";
 import { iconSvg, strataIconFor } from "../../../lib/strataIcons.ts";
+import { useItemStyle } from "../../../lib/finderStyleStore.ts";
 
 let sources: { ctp: Record<string, string>; act: Record<string, string> } | null = null;
 function vendored() {
@@ -51,4 +52,10 @@ export function StyledIcon({ style, name, isDir, size = ICON.sm }: { style: { co
   const set = style.icon ? "act" : base.set, icon = style.icon ?? base.name;
   const tint = style.color ?? (set === "act" ? (isDir ? "var(--primary)" : "var(--text3)") : undefined);
   return <span className="flex shrink-0" style={{ color: tint }}><StrataIcon set={set} name={icon} size={size} /></span>;
+}
+
+/** The one reader of the look a person chose in Customize…: whatever draws an item by its path (a column row, an icon tile, a search hit, the preview header) goes through here, so a style set once shows everywhere. */
+export function PathIcon({ path, name, isDir, broken, size = ICON.sm }: { path: string | undefined; name: string; isDir: boolean; broken?: boolean; size?: number }) {
+  const own = useItemStyle(path);
+  return own ? <StyledIcon style={own} name={name} isDir={isDir} size={size} /> : <FileTypeIcon name={name} isDir={isDir} broken={broken} size={size} />;
 }
