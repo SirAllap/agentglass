@@ -3045,9 +3045,13 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
  * whole page minus 12px, shown through a clip-path: compact, pill, tucked and
  * open are four clips of one element, so growing never re-lays it out. Hit
  * testing follows the clip, so the page under the hidden part stays clickable.
- * Dark in every theme, like the hardware it is named after; no backdrop-filter,
- * because Chrome blurs the square box and ignores a rounded clip (measured: a
- * pale rectangle round the capsule).
+ * The capsule is dark in every theme, like the hardware it is named after, and
+ * has no backdrop-filter: Chrome blurs the square box and ignores a rounded
+ * clip (measured: a pale rectangle round the capsule). The OPEN overview is
+ * glass that follows the theme: its blur lives on .agx-isl-glass, a sibling
+ * with a real border-radius, in no clipped ancestor (a clip-path makes its
+ * subtree a backdrop root, which would blur nothing), and it only fades in
+ * once the shape has finished growing.
  */
 .agx-isl { position: absolute; left: 12px; right: 12px; top: 12px; bottom: 12px; z-index: 18; color: #f2f0f7; background: rgba(22, 19, 31, .84); border-radius: 20px;
   clip-path: inset(0px calc(50% - 52px) calc(100% - 30px) calc(50% - 52px) round 15px);
@@ -3069,8 +3073,22 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 /* the shape that grows: a solid colour with nothing in it, clipped from the pill to the page */
 .agx-isl-morph { position: absolute; inset: 0; background: rgba(22, 19, 31, .84);
   clip-path: inset(0px calc(50% - var(--pw)) calc(100% - var(--ph)) calc(50% - var(--pw)) round var(--pr));
-  transition: clip-path 320ms cubic-bezier(0.32, 0.72, 0, 1) 20ms, background-color 320ms ease 20ms; will-change: clip-path; }
-.agx-isl.is-shown .agx-isl-morph { clip-path: inset(0px 0px 0px 0px round 20px); background: #16131f; transition: clip-path 380ms cubic-bezier(0.32, 0.72, 0, 1), background-color 200ms ease; }
+  transition: clip-path 320ms cubic-bezier(0.32, 0.72, 0, 1) 20ms, background-color 100ms ease; will-change: clip-path; }
+.agx-isl.is-shown .agx-isl-morph { clip-path: inset(0px 0px 0px 0px round 20px); background: transparent; transition: clip-path 380ms cubic-bezier(0.32, 0.72, 0, 1), background-color 260ms ease 360ms; }
+/* the open overview's glass: the page behind is blurred past reading, the tint is the theme's own */
+.agx-isl-glass { position: absolute; left: 12px; right: 12px; top: 12px; bottom: 12px; z-index: 29; border-radius: 20px; pointer-events: none; opacity: 0;
+  background: color-mix(in srgb, var(--bg) 52%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent), 0 24px 60px -24px rgba(0, 0, 0, .45); transition: opacity 100ms ease-out; }
+/* The blur is switched on once the open has settled and off the moment the close starts (a
+   zero-length animation, so no frame fades through it): the desktop app composites on the
+   CPU, and a blurred backdrop over the growing shape measured p50 33 ms / p95 50 ms per frame
+   against 17 ms without it, under 4x throttle. Settled, it is a static layer. */
+@keyframes agx-glass-blur { to { -webkit-backdrop-filter: blur(40px) saturate(160%); backdrop-filter: blur(40px) saturate(160%); } }
+.agx-isl-glass.is-shown { opacity: 1; transition: opacity 260ms ease-out 360ms; animation: agx-glass-blur 0s 640ms forwards; }
+@media (prefers-reduced-transparency: reduce) {
+  .agx-isl-glass, .agx-isl-glass.is-shown { background: var(--bg); animation: none; }
+  .agx-isl.is-shown .agx-isl-morph { background: var(--bg); }
+}
 /* while it is open the collapsed content stays mounted but out of the way; closing,
    the capsule's icons come back over the last stretch of the shrink */
 .agx-isl.is-open .agx-isl-status, .agx-isl.is-open .agx-isl-bar, .agx-isl.is-open .agx-isl-tuck { opacity: 0; pointer-events: none; transition: opacity 90ms ease-out; }
@@ -3158,7 +3176,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
    wears while it is driven. Thinking slows it; Done leaves a tick. */
 .agx-isl-shot { position: relative; border-radius: 12px; }
 .agx-isl-halo { position: absolute; inset: -3px; border-radius: 15px; pointer-events: none; box-shadow: 0 0 0 1.5px rgba(167, 139, 250, .7), 0 0 22px -4px rgba(139, 92, 246, .7); animation: agx-halo 2.4s ease-in-out infinite; }
-@keyframes agx-halo { 50% { box-shadow: 0 0 0 1.5px rgba(167, 139, 250, .45), 0 0 30px -2px rgba(139, 92, 246, .45); } }
+@keyframes agx-halo { 50% { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--ring, #a78bfa) 62%, transparent), 0 0 30px -2px rgba(139, 92, 246, .45); } }
 .agx-isl-sat { position: absolute; inset: -3px; pointer-events: none; z-index: 2; }
 .agx-isl-sat::before, .agx-isl-sat::after { content: ""; position: absolute; left: 0; top: 0; border-radius: 50%; offset-path: inset(0 round 15px); offset-rotate: 0deg; animation: agx-orbit 2.4s linear infinite; }
 .agx-isl-sat::before { width: 8px; height: 8px; background: #34d399; box-shadow: 0 0 10px 2px rgba(52, 211, 153, .75); animation-delay: -.12s; }
@@ -3194,6 +3212,30 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-isl-who.is-agent { color: #c4b5fd; }
 .agx-isl-new { aspect-ratio: 16 / 10; align-items: center; justify-content: center; gap: 6px; border-radius: 12px; border: 1px dashed rgba(255, 255, 255, .18); color: #8f889e; font-size: 11.5px; }
 .agx-isl-new:hover { border-color: rgba(167, 139, 250, .5); color: #d8ccff; }
+.agx-isl-mc { --ring: color-mix(in srgb, #a78bfa 72%, var(--text)); --ink-agent: color-mix(in srgb, #8b5cf6 62%, var(--text)); --ink-ok: color-mix(in srgb, #10b981 58%, var(--text)); --ink-you: color-mix(in srgb, #f59e0b 62%, var(--text)); color: var(--text); }
+.agx-isl-mc .agx-isl-sum { color: var(--text2); }
+.agx-isl-mc .agx-isl-sum strong, .agx-isl-mc .agx-isl-bn { color: var(--text); }
+.agx-isl-mc :is(.agx-isl-mine, .agx-isl-bc, .agx-isl-who, .agx-isl-mono small, .agx-isl-new) { color: color-mix(in srgb, var(--text2) 85%, transparent); }
+.agx-isl-mc .agx-isl-mono, .agx-isl-mc .agx-isl-ib { color: var(--text2); }
+.agx-isl-mc .agx-isl-ib:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 10%, transparent); }
+.agx-isl-mc .agx-isl-box { background: color-mix(in srgb, var(--text) 5%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent); }
+.agx-isl-mc .agx-isl-box.is-agent { background: linear-gradient(180deg, rgba(139, 92, 246, .13), rgba(139, 92, 246, .04)); box-shadow: inset 0 0 0 1px color-mix(in srgb, #8b5cf6 38%, transparent); }
+.agx-isl-mc .agx-isl-box.is-live { box-shadow: inset 0 0 0 1px color-mix(in srgb, #8b5cf6 50%, transparent), 0 0 32px -12px rgba(139, 92, 246, .55); }
+.agx-isl-mc .agx-isl-state { color: var(--ink-agent); background: rgba(139, 92, 246, .16); }
+.agx-isl-mc .agx-isl-state:is(.is-thinking, .is-waiting) { color: var(--text2); background: color-mix(in srgb, var(--text) 8%, transparent); }
+.agx-isl-mc .agx-isl-state.is-done { color: var(--ink-ok); background: rgba(16, 185, 129, .16); }
+.agx-isl-mc .agx-isl-state.is-yours { color: var(--ink-you); background: rgba(245, 158, 11, .16); }
+.agx-isl-mc .agx-isl-who.is-agent { color: var(--ink-agent); }
+.agx-isl-mc .agx-isl-halo { box-shadow: 0 0 0 1.5px var(--ring), 0 0 22px -4px rgba(139, 92, 246, .7); }
+.agx-isl-mc .agx-isl-shot.is-thinking .agx-isl-halo { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--ring) 55%, transparent), 0 0 16px -6px rgba(139, 92, 246, .45); }
+.agx-isl-mc .agx-isl-shot.is-yours .agx-isl-halo { box-shadow: 0 0 0 1.5px var(--ink-you), 0 0 18px -6px rgba(245, 158, 11, .5); }
+.agx-isl-mc .agx-isl-done { color: var(--ink-ok); background: color-mix(in srgb, var(--bg) 85%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, #10b981 40%, transparent); }
+.agx-isl-mc .agx-isl-thumb { background: var(--bg3); box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent), 0 8px 20px -10px rgba(0, 0, 0, .45); }
+.agx-isl-mc .agx-isl-card.is-on .agx-isl-thumb { box-shadow: 0 0 0 2px var(--ring), 0 8px 20px -10px rgba(0, 0, 0, .45); }
+.agx-isl-mc .agx-isl-x { color: var(--text); background: color-mix(in srgb, var(--bg) 82%, transparent); }
+.agx-isl-mc .agx-isl-x:hover { color: #fff; background: #e5484d; }
+.agx-isl-mc .agx-isl-new { border-color: color-mix(in srgb, var(--text) 24%, transparent); }
+.agx-isl-mc .agx-isl-new:hover { border-color: color-mix(in srgb, #8b5cf6 55%, transparent); color: var(--ink-agent); }
 @media (prefers-reduced-motion: reduce) {
   .agx-isl { transition: background 150ms ease; }
   .agx-isl-mc, .agx-isl.is-shown .agx-isl-mc, .agx-isl-box { transform: none; }

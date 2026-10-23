@@ -192,6 +192,7 @@ export function BrowserIsland(p: IslandProps) {
   return (
     <>
       {open && <div className={"agx-isl-scrim" + (shown ? " is-shown" : "")} onClick={() => hide()} />}
+      {open && <div className={"agx-isl-glass" + (shown ? " is-shown" : "")} aria-hidden />}
       <div ref={box} className={cls} role={open ? "dialog" : undefined} aria-label={open ? "Every tab" : undefined}
         onPointerEnter={() => { if (tucked && !open) setPeek(true); }}
         style={{ "--pw": `${morph.w}px`, "--ph": `${morph.h}px`, "--pr": `${morph.r}px` } as React.CSSProperties}>
