@@ -412,3 +412,27 @@ export const ACTION_LABEL: Record<Suggested, string> = {
   merge: "Merge",
   rerun: "Re-run failed",
 };
+
+/**
+ * The views on the panel's pill row, as filters over the board.
+ *
+ * Each one is a question about the cards already in hand, so none of them
+ * costs a request. `review` and `mine` are the viewer's stake, read the same
+ * way the lanes read it; `failing` and `ready` are the two lanes named for
+ * what is wrong and what can land. The stake is judged AFTER filing, which is
+ * the point: a pull request that is yours and asked of you keeps the lane it
+ * would have everywhere else instead of moving when a pill is pressed.
+ * Ceiling: these are the viewer's two queues, not every open pull request in
+ * the repository.
+ */
+export type BoardView = "all" | "review" | "mine" | "failing" | "ready";
+
+export function viewKeeps(view: BoardView, lane: LaneId, stake: Stake): boolean {
+  switch (view) {
+    case "review": return stake.asked;
+    case "mine": return stake.mine;
+    case "failing": return lane === "blocked";
+    case "ready": return lane === "land";
+    default: return true;
+  }
+}

@@ -45,21 +45,22 @@ describe("a search falls through to the table", () => {
      * component; pinning the three literal style lines only pinned the old
      * markup.
      */
-    expect(src).toContain("<Pill on={boardShown}");
+    expect(src).toContain("boardShown ? boardView === v.id : activeView?.id === v.id");
     expect(src).not.toContain("<Pill on={boardOn}");
   });
 
-  it("gives the pill a way back, because clearing the box is the only one", () => {
+  it("gives a view a way back from a search, because the pill clears the box", () => {
     // By shape: the same handler now also has to leave the inbox, and the
     // order it does that in is not what this is about.
     /* Bounded by the NEXT pill, not by the first `/>`: the first one closes the
        icon nested inside this pill, so that slice ended before the handler and
        the assertion below passed over nothing. Third time this exact cut has
        been got wrong in this repository. */
-    const from = src.indexOf("<Pill on={boardShown}");
-    const board = src.slice(from, src.indexOf("<Pill on={inboxOn}", from));
-    expect(board).toContain('if (searching) setQuery("")');
-    expect(board).toContain("setBoard(true)");
+    const from = src.indexOf("{VIEWS.map((v) => {");
+    const views = src.slice(from, src.indexOf("{!activeView", from));
+    expect(from).toBeGreaterThan(0);
+    expect(views).toContain('setQuery("")');
+    expect(views).toContain("setBoardView(");
   });
 
   it("does not light a scope pill while the board — or the inbox — is showing", () => {
@@ -67,7 +68,7 @@ describe("a search falls through to the table", () => {
        active, and with a search up one of them is. `inboxOn` joined this the day
        the inbox stopped being a toggle: it hides the table too, so a scope lit
        under it was the same lie. */
-    expect(src).toContain("const on = !boardShown && !inboxOn && !metricsOn && activeView?.id === v.id;");
+    expect(src).toContain("const on = !inboxOn && !metricsOn && (boardShown ? boardView === v.id : activeView?.id === v.id);");
   });
 });
 

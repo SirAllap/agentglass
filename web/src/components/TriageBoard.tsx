@@ -20,7 +20,7 @@ import { FACES_MAX, eventLine, splitTitle, standing } from "../lib/prCardZones.t
 import { ALWAYS_OPEN, foldable, foldedLanes, setFoldedLanes, walkable } from "../lib/boardPrefs.ts";
 import type { PrSummary } from "../../../shared/types.ts";
 import { staleApproval } from "../../../shared/mergeBlockers.ts";
-import { LANES, LANE_CAP, board as fileAll, suggestedAction, ACTION_LABEL, type Filed, type LaneId } from "../lib/prLanes.ts";
+import { LANES, LANE_CAP, board as fileAll, suggestedAction, ACTION_LABEL, viewKeeps, type BoardView, type Filed, type LaneId } from "../lib/prLanes.ts";
 import { isTrunkBranch, type Stack } from "../lib/prStack.ts";
 import { usePrStacks } from "../lib/usePrStacks.ts";
 import { spineSentence, type Facts } from "../lib/prStackWords.ts";
@@ -83,7 +83,7 @@ type Card = PrSummary & { filed: Filed };
 export function TriageBoard({
   mine, review, total, hasTaskProvider, pinned,
   onOpen, onTogglePin, onShowTable, onAct, busy, acting, loading, settling, failed, hidden, onRetry, root, repoKey,
-  onlyUnread, onOnlyUnread, unfiltered,
+  onlyUnread, onOnlyUnread, unfiltered, view = "all",
 }: {
   /** The `mine` scope, as the panel already has it. */
   mine: PrSummary[];
@@ -172,6 +172,8 @@ export function TriageBoard({
    * token says it. Absent, the lists above are all there is.
    */
   unfiltered?: { mine: PrSummary[]; review: PrSummary[] };
+  /** Which of the panel's views is picked: a filter over the cards below, see `viewKeeps`. */
+  view?: BoardView;
 }) {
   /* Answers arriving one at a time, each one a re-render of the board and
      nothing else — the cards do not move, a chip appears on one of them. */
@@ -220,10 +222,15 @@ export function TriageBoard({
     for (const p of [...mine, ...review]) if (!by.has(p.number)) by.set(p.number, trueChecks(p));
     const m = new Set(mine.map((p) => p.number));
     const r = new Set(review.map((p) => p.number));
-    return fileAll([...by.values()], (p) => ({ mine: m.has(p.number), asked: r.has(p.number) }),
+    const filed = fileAll([...by.values()], (p) => ({ mine: m.has(p.number), asked: r.has(p.number) }),
       (p) => (root && p.checks?.failing?.length ? failureHint(p.checks.failing, (job) => summaryOf(failureKey(root, job))) : null));
+    if (view === "all") return filed;
+    for (const [id, list] of filed) {
+      filed.set(id, list.filter((p) => viewKeeps(view, id, { mine: m.has(p.number), asked: r.has(p.number) })));
+    }
+    return filed;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mine, review, trueChecks, bumpRollup, root, failureTick, knownTick]);
+  }, [mine, review, trueChecks, bumpRollup, root, failureTick, knownTick, view]);
 
   const cards = useMemo(() => [...lanes.values()].flat(), [lanes]);
   /* Per repository: this board IS one repository's, so the answer is read off

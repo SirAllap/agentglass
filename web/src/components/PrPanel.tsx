@@ -129,6 +129,7 @@ import { PeekFile, type Peek } from "./PeekFile.tsx";
 import { mergeBlockedWhy, checksLine, checksStanding, checksShort, githubWillMerge } from "../../../shared/mergeReason.ts";
 import { mergeBlockers, mergeRefusal, autoMergeRefusal, staleApproval } from "../../../shared/mergeBlockers.ts";
 import { pagerShown, pageRanOut } from "../lib/prPager.ts";
+import type { BoardView } from "../lib/prLanes.ts";
 import { parseQuery, applyFilters, applyRulesKeepUnread, peopleMatched, buildFacets, activeCount, readPrField, builderFields, queryToRules, type RepoFacets } from "../lib/prFilter.ts";
 import { CodeBlock as MdCodeBlock } from "../lib/mdCode.tsx";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
@@ -166,7 +167,7 @@ import { PrIcon } from "./workspace/icons.tsx";
 import { PrWatchMenu } from "./PrWatchMenu.tsx";
 import { onChecksRead } from "../lib/prWatchStore.ts";
 import { CardChip } from "../lib/priority.tsx";
-import { BellIcon, ColumnsIcon, InboxIcon, QuoteIcon } from "./settingsNavIcons.tsx";
+import { BellIcon, InboxIcon, QuoteIcon } from "./settingsNavIcons.tsx";
 import { AnchoredMenu } from "./AnchoredMenu.tsx";
 import { pins, isPinned, togglePin, subscribePins, type Pin } from "../lib/prPins.ts";
 import { TriageBoard } from "./TriageBoard.tsx";
@@ -212,9 +213,9 @@ const STATES: { id: StateSel; label: string }[] = [
 const VIEWS: { id: string; label: string; scope: Filter; query: string; tint?: string; hint: string }[] = [
   { id: "review", label: "Needs my review", scope: "review", query: "", tint: "var(--warning)", hint: "Somebody asked you to look" },
   { id: "mine", label: "Mine", scope: "mine", query: "", tint: "var(--primary)", hint: "Pull requests you opened" },
-  { id: "failing", label: "Failing", scope: "all", query: "checks:red", tint: "var(--error)", hint: "Open here with a red check" },
+  { id: "failing", label: "Failing", scope: "all", query: "checks:red", tint: "var(--error)", hint: "Blocked: a red check or a conflict" },
   { id: "ready", label: "Ready", scope: "all", query: "review:approved checks:green", tint: "var(--success)", hint: "Approved and green — these can land" },
-  { id: "all", label: "All", scope: "all", query: "", hint: "Every open pull request" },
+  { id: "all", label: "All", scope: "all", query: "", hint: "Everything on the board" },
 ];
 
 /*
@@ -3266,9 +3267,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * is opened. Remembered because somebody who prefers the table should not have
    * to say so every morning.
    */
-  const [boardOn, setBoardOn] = useState(() => {
-    try { return localStorage.getItem("agentglass.pr.board") !== "0"; } catch { return true; }
-  });
+  const boardOn = stateSel === "open";
+  const [boardView, setBoardView] = useState<BoardView>("all");
   /*
    * A search and the board are answering different questions, and only one of
    * them can be on screen.
@@ -3302,10 +3302,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   /* The board is never paginated: a page left over from the table would fetch and
      count a page nobody is looking at. Back on the table it starts at page one. */
   useEffect(() => { if (boardShown) setPages([]); }, [boardShown]);
-  const setBoard = useCallback((on: boolean) => {
-    setBoardOn(on);
-    try { localStorage.setItem("agentglass.pr.board", on ? "1" : "0"); } catch { /* private mode */ }
-  }, []);
 
   /*
    * The two scopes the board is built from — and it costs no new request.
@@ -5140,28 +5136,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               * the scopes that are NOT about you — those are a table, and the
               * table is today's list, untouched.
               */}
-            {/* Lit by what is on screen, not by what is stored: while a search
-                is up the board is not showing, and a lit pill over a table is
-                the panel telling you where you are and being wrong. Pressing it
-                mid-search clears the box, which is the only way back. */}
-            {/*
-              * NOT A TOGGLE, and that was a real bug rather than a matter of
-              * taste. The inbox REPLACES what the panel shows — the render is
-              * `inboxOn ? <Inbox/> : board ? <TriageBoard/> : <table/>` — so it
-              * is a third view, the same kind of thing as the board and the
-              * five scopes beside it. Only its button disagreed: nothing else
-              * on this row ever cleared `inboxOn`, so with the inbox open,
-              * pressing Board or any scope changed the state underneath and
-              * left the screen exactly as it was. Asked, looking at it: "I don't
-              * see the point of putting a toggle there for it".
-              *
-              * So all of them are one exclusive group and say so — `role="tab"`,
-              * `aria-selected`, one of them lit. Picking any view is picking a
-              * view.
-              */}
-            <Pill on={boardShown} icon={<ColumnsIcon size={ICON.xs} />} label="Board"
-              title={searching ? "Clear the search and go back to the lanes" : "Yours and the ones you were asked to look at, in lanes"}
-              onClick={() => { if (searching) setQuery(""); setInboxOn(false); setMetricsOn(false); setStateSel("open"); setBoard(true); }} />
             {/* Its number is the only one on this row counting things nobody
                 has looked at yet, so it keeps the warning colour when it is not
                 the view you are in. */}
@@ -5175,11 +5149,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             <span className="self-center shrink-0" style={{ width: 1, height: 12, background: "color-mix(in srgb, var(--text) 14%, transparent)" }} />
             {VIEWS.map((v) => {
               const n = viewCount(v);
-              const on = !boardShown && !inboxOn && !metricsOn && activeView?.id === v.id;
+              const on = !inboxOn && !metricsOn && (boardShown ? boardView === v.id : activeView?.id === v.id);
               return (
                 <Pill key={v.id} on={on} label={v.label} title={v.hint}
                   dot={v.tint ?? undefined} count={n ?? undefined}
-                  onClick={() => { setInboxOn(false); setMetricsOn(false); setBoard(false); setFilter(v.scope); setQuery(v.query); }} />
+                  onClick={() => { setInboxOn(false); setMetricsOn(false); setStateSel("open"); setFilter("all"); setQuery(""); setBoardView(v.id as BoardView); }} />
               );
             })}
             {!activeView && (
@@ -5196,7 +5170,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             <div className="ml-auto self-center">
               <Segmented value={stateSel} label="Pull request state"
                 options={STATES.map((s) => ({ id: s.id, label: s.label, title: `Show ${s.label.toLowerCase()} pull requests` }))}
-                onChange={(s) => { setStateSel(s); if (s !== "open") setBoard(false); }} />
+                onChange={setStateSel} />
             </div>
           </div>
           {/* Always, once the repository is known — not "once rows arrived".
@@ -5255,7 +5229,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                  and search above stays where it was, and picking any of them
                  switches back to the table it belongs to. */
               <TriageBoard
-                mine={boardMineShown} review={boardReviewShown} unfiltered={boardUnfiltered}
+                mine={boardMineShown} review={boardReviewShown} unfiltered={boardUnfiltered} view={boardView}
                 /* The filter bar's own chip and switch — see the comment on
                    `unreadOnly` above. The board used to keep a second, unwired
                    copy of this switch and render a second chip for it, so
@@ -5275,7 +5249,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 pinned={(n) => isPinned(repo.nameWithOwner, n)}
                 onOpen={openPr}
                 onTogglePin={(p) => togglePin(repo.nameWithOwner, p.number, p.title)}
-                onShowTable={() => { setInboxOn(false); setMetricsOn(false); setBoard(false); setFilter("all"); setQuery(""); }}
+                onShowTable={() => { setInboxOn(false); setMetricsOn(false); setStateSel("all"); setFilter("all"); setQuery(""); }}
                 busy={busy}
                 loading={boardLoading} settling={boardSettling} acting={actingOn} root={root}
                 failed={boardFailed} hidden={boardHidden}

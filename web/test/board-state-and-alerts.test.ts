@@ -25,14 +25,16 @@ describe("PR board state axis", () => {
     expect(code(pr)).toMatch(/<Segmented value=\{stateSel\}/);
   });
 
-  it("leaves the board for the table on Closed or All", () => {
-    const at = pr.indexOf("<Segmented value={stateSel}");
-    const call = pr.slice(at, pr.indexOf("/>", at));
-    expect(call).toContain('if (s !== "open") setBoard(false)');
+  it("leaves the board for the table on Closed or All, and has no switch of its own", () => {
+    /* The board is whatever Open shows; there is no stored preference to fall
+       out of step with the state axis. */
+    expect(code(pr)).toContain("const boardOn = stateSel === \"open\";");
+    expect(code(pr)).not.toContain("setBoard(");
+    expect(pr).not.toContain("agentglass.pr.board");
   });
 
-  it("puts the board back on Open when Board is picked", () => {
-    expect(pr).toContain('setInboxOn(false); setMetricsOn(false); setStateSel("open"); setBoard(true);');
+  it("puts the board back on Open when a view is picked", () => {
+    expect(pr).toContain('setInboxOn(false); setMetricsOn(false); setStateSel("open"); setFilter("all"); setQuery(""); setBoardView(v.id as BoardView);');
   });
 });
 
