@@ -84,6 +84,7 @@ const COST = "decides which model runs and what it spends";
 export const SETTING_CLASSES: Readonly<Record<string, ClassRow>> = {
   // ── the window (web/src/lib/settingsRegistry.ts) ──
   "appearance.mode": LOW(), "appearance.theme": LOW(), "appearance.accent": LOW(),
+  "appearance.density": LOW(), "appearance.fontSize": LOW(), "appearance.translucent": LOW(), "appearance.reduceMotion": LOW(),
   "diff.split": LOW(), "diff.wrap": LOW(), "diff.syntaxTheme": LOW(),
   "terminal.renderer": LOW(), "terminal.font": LOW(), "terminal.fontSize": LOW(), "terminal.lineHeight": LOW(),
   "terminal.cursor": LOW(), "terminal.focusFollowsMouse": LOW(), "terminal.paneBar": LOW(), "terminal.copyOnSelect": LOW(),

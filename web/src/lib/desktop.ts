@@ -18,6 +18,9 @@ type DesktopBridge = {
   setFullscreen: (on: boolean) => Promise<boolean>;
   isFullscreen: () => Promise<boolean>;
   setZoom: (factor: number) => Promise<number>;
+  /** Absent on shells built before the sidebar could be see-through. `live` is false where the
+   *  change waits for the next launch (a Linux window is made transparent when it is created). */
+  setTranslucent?: (on: boolean) => Promise<{ ok: boolean; live: boolean }>;
   autostartEnabled: () => Promise<boolean>;
   setAutostart: (on: boolean) => Promise<boolean>;
   revealPath?: (p: string) => Promise<{ ok: boolean; error?: string }>;
@@ -736,6 +739,16 @@ export async function toggleFullscreen(): Promise<boolean> {
  *  instead of just being drawn bigger. Resolves to the factor applied, or null
  *  in a browser tab — there the browser's zoom already covers this, and the
  *  shell has no say. See lib/uiScale.ts for why this beats a font-size knob. */
+/** True where the shell can let the desktop show through the window: only the desktop app, only a shell new enough. */
+export const translucentSupported = (): boolean => typeof bridge()?.setTranslucent === "function";
+
+/** Ask the shell for a see-through window (or put it back). Null in a browser tab. */
+export async function setWindowTranslucent(on: boolean): Promise<{ ok: boolean; live: boolean } | null> {
+  const b = bridge();
+  if (!b?.setTranslucent) return null;
+  try { return await b.setTranslucent(on); } catch { return null; }
+}
+
 export async function setWindowZoom(factor: number): Promise<number | null> {
   const b = bridge();
   if (!b) return null;

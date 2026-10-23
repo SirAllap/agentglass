@@ -249,6 +249,19 @@
           if (meta && typeof bg === "string" && /^#[0-9a-f]{3,8}$/i.test(bg)) meta.setAttribute("content", bg);
         }
 
+        // THE LOOK PREFERENCES (lib/lookPrefs.ts), before the first frame: the same four
+        // attributes applyLook paints, from the same keys (look-prefs.test.ts holds them).
+        var dens = read("agentglass-density");
+        if (dens === "compact" || dens === "roomy") root.setAttribute("data-density", dens);
+        var ufont = read("agentglass-ui-font");
+        if (ufont === "12" || ufont === "14" || ufont === "15") {
+          root.setAttribute("data-ui-font", ufont);
+          root.style.setProperty("--agx-fs", String(Number(ufont) / 13));
+        }
+        var rm = read("agentglass-reduce-motion"), osRm = false;
+        try { osRm = matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (e) { osRm = false; }
+        if (rm === "1" || (rm !== "0" && osRm)) root.setAttribute("data-reduce-motion", "");
+
         // Up until lib/cover.ts says the app has drawn. Switched off in
         // Settings, it is the plain boot screen and goes the moment React mounts.
         root.classList.add("ag-covering");

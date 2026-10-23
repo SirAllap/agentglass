@@ -3768,3 +3768,109 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 @media (max-width: 1100px) {
   .agx-sn-meta[data-keep] { display: flex; position: absolute; top: 4px; right: 6px; }
 }
+
+/*
+ * The look preferences (lib/lookPrefs.ts): four attributes on <html>, read here
+ * and nowhere else. Density and font size are written `[data-...]` without `html`,
+ * so a live preview can wear its own value (settings/previews/LiveWindow.tsx). A chosen value is an attribute; the default is none, so the
+ * stylesheet above is what a person who never opened Appearance sees.
+ *
+ * DENSITY scales the vertical air of rows and cards: the 8, 10 and 12 px
+ * padding steps (py-2, py-2.5, py-3) and the Settings row and card head. A
+ * control with a fixed height keeps it, and the 6 px steps (buttons, chips)
+ * stay, so a compact window is not a window of squashed buttons.
+ */
+[data-density="compact"] { --agx-density: 0.75; }
+[data-density="roomy"] { --agx-density: 1.35; }
+[data-density] [class~="py-2"] { padding-block: calc(0.5rem * var(--agx-density)); }
+[data-density] [class~="py-2.5"] { padding-block: calc(0.625rem * var(--agx-density)); }
+[data-density] [class~="py-3"] { padding-block: calc(0.75rem * var(--agx-density)); }
+[data-density] .agx-settings-row { padding-block: calc(12px * var(--agx-density)); }
+[data-density] .agx-scard-head { padding-top: calc(14px * var(--agx-density)); }
+[data-density] .agx-note-row { padding-block: calc(12px * var(--agx-density)); }
+
+/*
+ * INTERFACE FONT SIZE scales the text a class sets (`text-[11px]` is 716 of the
+ * ~2,000 sizes in the app). --agx-fs is size / 13, the size the app is drawn at.
+ * One rule per size in use; a new size has to be listed to follow (the test
+ * lists them from the source). Inline sizes, icons and the terminal stay.
+ */
+html[data-ui-font] body { font-size: calc(13px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[7px]"] { font-size: calc(7px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[8px]"] { font-size: calc(8px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[8.5px]"] { font-size: calc(8.5px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[9px]"] { font-size: calc(9px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[9.5px]"] { font-size: calc(9.5px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[10px]"] { font-size: calc(10px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[10.5px]"] { font-size: calc(10.5px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[11px]"] { font-size: calc(11px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[11.5px]"] { font-size: calc(11.5px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[12px]"] { font-size: calc(12px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[12.5px]"] { font-size: calc(12.5px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[13px]"] { font-size: calc(13px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[13.5px]"] { font-size: calc(13.5px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[14px]"] { font-size: calc(14px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[15px]"] { font-size: calc(15px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[15.5px]"] { font-size: calc(15.5px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[16px]"] { font-size: calc(16px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[17px]"] { font-size: calc(17px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[18px]"] { font-size: calc(18px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[20px]"] { font-size: calc(20px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[22px]"] { font-size: calc(22px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[23px]"] { font-size: calc(23px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[28px]"] { font-size: calc(28px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[30px]"] { font-size: calc(30px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[32px]"] { font-size: calc(32px * var(--agx-fs)); }
+
+/*
+ * TRANSLUCENT: the rail, the top bar and the settings nav (all --surface-nav)
+ * let the desktop through; the content keeps its own ground. The window has to
+ * be see-through for any of it to show (the shell does that), which is why the
+ * setting is only on offer in the desktop app.
+ */
+html[data-translucent] { --surface-nav: color-mix(in srgb, var(--bg2) 58%, transparent); }
+html[data-translucent] body { background-color: transparent; }
+html[data-translucent] .agx-ws-content { background-color: var(--bg); }
+
+/*
+ * REDUCE MOTION: every animation and transition ends at once, except the
+ * spinner and the working turn, which breathe instead (as under the OS setting)
+ * because a spinner that does not move reads as a frozen window.
+ */
+html[data-reduce-motion] *, html[data-reduce-motion] *::before, html[data-reduce-motion] *::after {
+  animation-duration: 0.01ms !important; animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important; scroll-behavior: auto !important;
+}
+html[data-reduce-motion] .agx-spin, html[data-reduce-motion] .agx-turn {
+  animation: agx-breathe 1.6s ease-in-out infinite !important;
+}
+html[data-reduce-motion] #ag-cover * { animation: none !important; }
+
+/*
+ * Appearance: the palette tiles and the accent circles. A tile is a ground and a
+ * card colour side by side with the name under it; the chosen one wears the
+ * theme's primary as its edge and a soft ring. The first accent circle is half
+ * the text colour and half the ground ("Theme": no override), so it reads as
+ * neither colour; the seven after it are the colours themselves.
+ */
+.agx-theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(78px, 1fr)); gap: 8px; }
+.agx-theme-tile {
+  display: flex; flex-direction: column; gap: 6px; padding: 6px 6px 8px; border-radius: 11px;
+  border: 2px solid var(--surface-line); background: var(--bg); color: var(--text2); cursor: pointer;
+  transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+.agx-theme-tile:hover { border-color: var(--border2); transform: translateY(-1px); }
+.agx-theme-tile[aria-pressed="true"] { border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 22%, transparent); color: var(--text); }
+.agx-theme-tile:focus-visible, .agx-accent-dot:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.agx-theme-sw { display: flex; height: 3.2rem; border-radius: 7px; overflow: hidden; box-shadow: inset 0 0 0 1px var(--surface-line); }
+.agx-theme-sw > i { flex: 1; }
+.agx-theme-name { font-size: 12px; font-weight: 650; text-align: center; line-height: 1.2; }
+.agx-accent-dot {
+  width: 33px; height: 33px; border-radius: 50%; border: 0; padding: 0; cursor: pointer;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent);
+  transition: transform 120ms ease;
+}
+.agx-accent-dot:hover { transform: scale(1.08); }
+.agx-accent-dot[data-theme-dot] { background: linear-gradient(90deg, var(--text) 50%, var(--bg) 50%); box-shadow: inset 0 0 0 1px var(--border2); }
+.agx-accent-dot[aria-pressed="true"] { outline: 2.5px solid var(--text); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .agx-theme-tile, .agx-accent-dot { transition: none; transform: none; } }

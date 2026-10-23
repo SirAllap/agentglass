@@ -1,4 +1,5 @@
 import { useEffect, useState, type RefObject } from "react";
+import { reducedMotion } from "../lib/lookPrefs.ts";
 import { currentToc, tocItems, type TocItem } from "../lib/settingsNav.ts";
 
 /** A card that needs a decision, or is the danger zone, marks its index entry the way its edge marks it. */
@@ -69,7 +70,7 @@ export function SettingsToc({ scope, scroller, page }: {
           onClick={(e) => {
             e.preventDefault();
             setCur(i);
-            const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+            const reduce = reducedMotion();
             document.getElementById(it.id)?.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
           }}>
           {it.dot && <i className="agx-toc-dot" data-tone={it.dot} aria-hidden />}{it.label}

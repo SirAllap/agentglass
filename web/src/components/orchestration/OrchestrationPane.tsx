@@ -21,6 +21,7 @@ import { FlowView } from "./FlowView.tsx";
 import { RolePicker } from "./RolePicker.tsx";
 import { AgentTrustRow } from "./AgentTrustRow.tsx";
 import { rowId } from "../../lib/settingsIndex.ts";
+import { reducedMotion } from "../../lib/lookPrefs.ts";
 import {
   ASK_HINT, BACK_LABEL, CHAIN_TAIL, choiceWords, baseChoice, fineTuneRow, pickedLine, pickUndoable, roleWord, scopeWords, usageLeft, type Picked, LIMIT_RANGE, NO_WORKER_ENGINE, openingScope, recallScope, SAFETY, safetyIsDefault, rememberScope, chainWords, notReady, exhausted, limitedEngines, OLD_WORDS, pickedHint, readyFor, ruleBadge, ruleHolds, ruleLine,
   stepLimit, withAsk, withBaseChoice, withEnvelopes, withLimits, withRule, withRuleEnabled, withoutRule, type Field,
@@ -420,7 +421,7 @@ export function OrchestrationView(p: OrchestrationViewProps) {
 function revealEditor(row: string, focus = "input, select, button"): void {
   const el = document.querySelector<HTMLElement>(`[data-row="${row}"]`);
   if (!el) return;
-  const calm = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const calm = reducedMotion();
   el.scrollIntoView({ block: "center", behavior: calm ? "auto" : "smooth" });
   el.querySelector<HTMLElement>(focus)?.focus({ preventScroll: true });
 }

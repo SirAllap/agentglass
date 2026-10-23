@@ -204,7 +204,7 @@ export function Workspace({
       <ViewRail view={view} onSelect={onView} onSkills={onSkills}
         onSettings={onSettings} onMachine={onMachine} pips={pips} />
 
-      <div className="relative flex-1 min-w-0">
+      <div className="agx-ws-content relative flex-1 min-w-0">
         {mounted.map((v) => {
           const active = v.id === view;
           return (

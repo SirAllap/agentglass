@@ -20,6 +20,7 @@
 // 4. Nothing waits on the network. `gh` costs a second or more per call and the
 //    server has one thread; every read is a cached answer with its age shown.
 import { LAUNCH_MODES, LAUNCH_MODE_LABEL, type LaunchMode } from "../../../shared/launchModes.ts";
+import { reducedMotion } from "../lib/lookPrefs.ts";
 import { LaunchModeBadge } from "./LaunchMode.tsx";
 import { withoutAuthor, authorLeftOutHint } from "../lib/reviewerPick.ts";
 import { dataInk } from "../lib/contrast.ts";
@@ -12047,7 +12048,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
     }
     setCursor(n);
     if (!el) return;
-    el.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    el.scrollIntoView({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
     el.classList.remove("agx-found");
     void el.offsetWidth; // restart the animation when it is the same element twice
     el.classList.add("agx-found");
@@ -12236,7 +12237,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
     setPCursor(next);
     const el = document.getElementById(anchorId(shown[next]!.key));
     if (!el) return;
-    el.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    el.scrollIntoView({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
     el.classList.remove("agx-found");
     void el.offsetWidth;
     el.classList.add("agx-found");

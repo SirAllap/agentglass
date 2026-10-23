@@ -11,6 +11,7 @@
 // of a folder a page at a time is lib/finderFolders.ts. This file only holds the
 // state and draws it.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { reducedMotion } from "../../../lib/lookPrefs.ts";
 import { api } from "../../../lib/api.ts";
 import { FolderStore, type FolderState } from "../../../lib/finderFolders.ts";
 import { columnWidth, fitWidth, previewFits, stripLayout, stripRoom, previewWidth, dragPreviewWidth, sidebarWidth, sidePageWidth, wholeColumnsWidth } from "../../../lib/finderColumns.ts";
@@ -1117,7 +1118,7 @@ function ColumnsRow({ children, widths, active }: { children: React.ReactNode; w
     const t = stripLayout(widths, active, e.clientWidth, e.scrollLeft);
     p.style.width = `${t.pad}px`;
     // Strata scrolls to a column it opens; the first layout, and a person who asked for less motion, jump.
-    if (placed.current && Math.abs(e.scrollLeft - t.scroll) > 1 && !matchMedia("(prefers-reduced-motion: reduce)").matches) e.scrollTo({ left: t.scroll, behavior: "smooth" });
+    if (placed.current && Math.abs(e.scrollLeft - t.scroll) > 1 && !reducedMotion()) e.scrollTo({ left: t.scroll, behavior: "smooth" });
     else e.scrollLeft = t.scroll;
     placed.current = true;
     // `key` is the widths themselves.

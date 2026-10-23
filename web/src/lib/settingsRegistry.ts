@@ -42,6 +42,11 @@ import {
   currentTermCursor, setTermCursor, fontAvailable, type CursorStyle,
 } from "./termPrefs.ts";
 import { ACCENTS, currentAccent, setAccentPref } from "./accent.ts";
+import {
+  DENSITIES, DEFAULT_DENSITY, UI_FONT_SIZES, DEFAULT_UI_FONT, densityPref, setDensityPref, uiFontPref, setUiFontPref,
+  translucentPref, setTranslucentPref, reduceMotionPref, setReduceMotionPref, type Density,
+} from "./lookPrefs.ts";
+import { translucentSupported } from "./desktop.ts";
 import { focusFollowsMouse, setFocusFollowsMouse } from "./termFocusPref.ts";
 import { paneActionsMode, setPaneActionsMode } from "./paneActionsPref.ts";
 import { tabGroupsOn, setTabGroupsOn, tabGroupRulesText, setTabGroupRulesText } from "./tabGroups.ts";
@@ -239,6 +244,30 @@ const appearance: SettingDef[] = [
     // The pref is stored, then the theme is laid again so the overlay (or its
     // removal, for "Theme") lands: the picker has always done both.
     write: (v) => { setAccentPref(v as string); applyTheme(currentThemeId()); },
+  }),
+  defineSetting({
+    id: "appearance.density", page: "appearance", section: "Density & type", label: "Density", level: 2, default: DEFAULT_DENSITY,
+    read: () => densityPref(), validate: oneOf(DENSITIES), write: (v) => setDensityPref(v as Density),
+  }),
+  defineSetting({
+    id: "appearance.fontSize", page: "appearance", section: "Density & type", label: "Interface font size", level: 2, default: DEFAULT_UI_FONT,
+    read: () => uiFontPref(),
+    validate: accepting((raw) => (typeof raw === "number" && UI_FONT_SIZES.includes(raw) ? raw : null), `one of ${UI_FONT_SIZES.join(", ")}`),
+    write: (v) => setUiFontPref(v as number),
+    display: (v) => `${v} px`,
+  }),
+  defineSetting({
+    id: "appearance.translucent", page: "appearance", section: "Density & type", label: "Translucent window", level: 2, default: false,
+    read: () => translucentPref(),
+    // Where the window cannot see through (a browser tab), only off is a value: an agent hears why.
+    validate: accepting((raw) => (typeof raw === "boolean" && (!raw || translucentSupported()) ? raw : null),
+      () => (translucentSupported() ? "true or false" : "false (only the desktop app can show the desktop through its window)")),
+    write: (v) => setTranslucentPref(v as boolean),
+  }),
+  defineSetting({
+    id: "appearance.reduceMotion", page: "appearance", section: "Density & type", label: "Reduce motion", level: 2, default: false,
+    // What is in force: until somebody chooses, the system's own setting.
+    read: () => reduceMotionPref(), validate: bool, write: (v) => setReduceMotionPref(v as boolean),
   }),
 ];
 
