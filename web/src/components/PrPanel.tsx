@@ -11748,7 +11748,9 @@ function TimelineEvent({ e }: { e: PrEvent }) {
   const said = eventParts(e).map((p, i) => {
     switch (p.as) {
       case "who": return <UserPill key={i} name={p.text} />;
-      case "strong": return <b key={i} style={{ color: "var(--text2)" }}>{p.text}</b>;
+      case "strong": return e.kind === "assigned" || e.kind === "unassigned" || e.kind === "review-requested"
+        ? <UserPill key={i} name={p.text} />
+        : <b key={i} style={{ color: "var(--text2)" }}>{p.text}</b>;
       case "code": return <code key={i} style={{ ...CODE_FONT_STYLE, color: "var(--text)" }}>{p.text}</code>;
       case "label": return <Chip key={i} text={p.text} tint={e.kind === "unlabeled" ? "var(--text3)" : p.tint ? `#${p.tint}` : "var(--primary)"} />;
       default: return <Fragment key={i}>{p.text}</Fragment>;
@@ -11757,7 +11759,6 @@ function TimelineEvent({ e }: { e: PrEvent }) {
   const inner = <span>{said} <span style={{ color: "var(--text3)" }}>· {agoFull(e.at)}</span></span>;
   return (
     <div className="agx-tiny">
-      {e.actor && <Avatar login={e.actor} size={ICON.md} />}
       {e.url ? <a href={externalUrl(e.url)} target="_blank" rel="noreferrer noopener" style={{ color: "inherit" }}>{inner}</a> : inner}
     </div>
   );
@@ -11791,7 +11792,7 @@ function CommitsEvent({ commits }: { commits: PrCommit[] }) {
   if (!first) return null;
   return (
     <div className="agx-tiny" style={{ alignItems: "flex-start", flexDirection: "column", gap: 2 }}>
-      <span className="flex items-center gap-1.5">{first.author && <Avatar login={first.author} size={ICON.md} />}<b>{first.author || "somebody"}</b> added {commits.length} commit{commits.length === 1 ? "" : "s"}
+      <span className="flex items-center gap-1.5"><UserPill name={first.author || "somebody"} /> added {commits.length} commit{commits.length === 1 ? "" : "s"}
         {first.committedAt && <span style={{ color: "var(--text3)" }}> · {agoFull(first.committedAt)}</span>}</span>
       {commits.map((c) => (
         <span key={c.oid} className="flex gap-2 min-w-0 w-full">
