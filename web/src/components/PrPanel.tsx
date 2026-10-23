@@ -49,7 +49,7 @@ import { flashElement } from "../lib/flash.ts";
 import { shaFromHref } from "../lib/commitLink.ts";
 import { isShortRef, openInApp, wantsExternal } from "../lib/linkRouter.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
-import { Button, FilterField, RefreshButton, ScopeChip, Segmented, Tabs, CHIP, CTRL_H, EDGE, CHIP_SURFACE, tintEdge, INPUT, INPUT_STYLE, LINE, TL_AVATAR, TL_CSS } from "./workspace/Chrome.tsx";
+import { Button, FilterField, RefreshButton, ScopeChip, Segmented, Tabs, CHIP, BAR_CTRL, BAR_ICON, CTRL_H, EDGE, CHIP_SURFACE, tintEdge, INPUT, INPUT_STYLE, LINE, TL_AVATAR, TL_CSS } from "./workspace/Chrome.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import type {
   PrSummary, PrDetail, PrRepoId, PrThread, PrComment, PrReview, PrReviewer, PrCheck, GitRepoRef, FileChange,
@@ -1671,10 +1671,9 @@ function Pill({ on, label, icon, dot, count, countTint, title, onClick }: {
 }) {
   return (
     <button onClick={onClick} title={title} role="tab" aria-selected={on}
-      /* The `CHIP` rung (28, 11px): the Open / Closed / All `Segmented` at
-         the end of this row is house `Chip`s, and a row of 20px pills beside
-         28px chips read as two kinds of control. */
-      className="agx-btn text-[11px] leading-none px-2.5 min-h-[28px] rounded-lg flex items-center gap-1.5 shrink-0 transition-all"
+      /* `BAR_CTRL`: the one control of this bar. Its active state differs by
+         colour alone — same height, same padding, same type. */
+      className={`agx-btn ${BAR_CTRL} transition-all`}
       style={{
         color: on ? "var(--text)" : "var(--text3)",
         background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
@@ -4823,7 +4822,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               can land); pressing it from anywhere else is the way back. The
               inbox's unread number shows only while the inbox is open: unread
               is that view's business, not the board's. */}
-          <Pill on={!inboxOn && !metricsOn && !closedOn} icon={<PullRequestIcon size={ICON.xs} />} label="Open"
+          <Pill on={!inboxOn && !metricsOn && !closedOn} icon={<PullRequestIcon size={BAR_ICON} />} label="Open"
             title="Your open pull requests and the ones you were asked to review, in lanes"
             count={boardOpenCount || undefined}
             onClick={() => {
@@ -4831,13 +4830,13 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               if (!inboxOn && !metricsOn && !closedOn) { setFilter("all"); setQuery(""); }
               setInboxOn(false); setMetricsOn(false); setClosedOn(false);
             }} />
-          <Pill on={closedOn && !inboxOn && !metricsOn} icon={<MergeIcon size={ICON.xs} />} label="Closed"
+          <Pill on={closedOn && !inboxOn && !metricsOn} icon={<MergeIcon size={BAR_ICON} />} label="Closed"
             title="Your merged pull requests and the ones closed without merging, newest first"
             onClick={() => { setInboxOn(false); setMetricsOn(false); setClosedOn(true); }} />
-          <Pill on={inboxOn && !metricsOn} icon={<InboxIcon size={ICON.xs} />} label="Inbox"
+          <Pill on={inboxOn && !metricsOn} icon={<InboxIcon size={BAR_ICON} />} label="Inbox"
             title="What happened while you were away — GitHub's notifications, filtered to this repository"
             onClick={() => { setMetricsOn(false); setClosedOn(false); setInboxOn(true); }} />
-          <Pill on={metricsOn} icon={<ChartIcon size={ICON.xs} />} label="CI"
+          <Pill on={metricsOn} icon={<ChartIcon size={BAR_ICON} />} label="CI"
             title="Every check of this repository against its own history — slow, passed on a re-run, drifting"
             onClick={() => { setInboxOn(false); setClosedOn(false); setMetricsOn(true); }} />
         </div>
@@ -4901,13 +4900,13 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               as the list constantly reloading. With rows in hand it stays as the
               timestamp, and a quiet "· updating" is all a background refresh
               earns. */}
-          <span className="text-[10px] tabular-nums" style={{ color: (listState.loading || listState.checksPending) && prs.length === 0 ? "var(--warning)" : "var(--text3)" }}>
+          <span className="inline-flex items-center h-[28px] text-[11px] tabular-nums" style={{ color: (listState.loading || listState.checksPending) && prs.length === 0 ? "var(--warning)" : "var(--text3)" }}>
             {prs.length === 0
               ? (listState.loading ? "Loading pull requests…"
                 : listState.checksPending ? "Loading check states…"
-                : listState.fetchedAt ? <span className="inline-flex items-center gap-1"><RefreshIcon size={ICON.xs} />{ago(new Date(listState.fetchedAt).toISOString())}</span> : "")
+                : listState.fetchedAt ? <span className="inline-flex items-center gap-1"><RefreshIcon size={BAR_ICON} />{ago(new Date(listState.fetchedAt).toISOString())}</span> : "")
               : (listState.fetchedAt
-                ? <span className="inline-flex items-center gap-1"><RefreshIcon size={ICON.xs} />{ago(new Date(listState.fetchedAt).toISOString())}{listState.loading || listState.checksPending ? " · updating" : ""}</span>
+                ? <span className="inline-flex items-center gap-1"><RefreshIcon size={BAR_ICON} />{ago(new Date(listState.fetchedAt).toISOString())}{listState.loading || listState.checksPending ? " · updating" : ""}</span>
                 : "")}
           </span>
           {/*
@@ -4976,7 +4975,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             reads.push(Promise.resolve(loadList(listOnScreen)));
             settled();
           }} busy={running} spinning={refreshing}
-            title={selected != null ? "Refresh this pull request" : "Refresh the list"} />
+            title={selected != null ? "Refresh this pull request" : "Refresh the list"} iconSize={BAR_ICON} />
         </div>
       </div>
 
@@ -8725,7 +8724,7 @@ function PrSidebar({ d, root, spend, onEditField, onRerequest }: {
  * exactly the wrong thing.
  */
 function prStateBadge(d: { state: PrSummary["state"]; isDraft: boolean }): { tint: string; state: string; glyph: React.ReactNode } {
-  if (d.state === "MERGED") return { tint: "var(--primary)", state: "Merged", glyph: <MergeIcon size={ICON.xs} /> };
+  if (d.state === "MERGED") return { tint: "var(--primary)", state: "Merged", glyph: <MergeIcon size={BAR_ICON} /> };
   if (d.state === "CLOSED") return { tint: "var(--text3)", state: "Closed", glyph: <BlockedIcon size={ICON.xs} /> };
   if (d.isDraft) return { tint: "var(--text3)", state: "Draft", glyph: <DraftIcon size={ICON.xs} /> };
   return { tint: "var(--success)", state: "Open", glyph: <PrIcon size={ICON.xs} /> };
@@ -11722,7 +11721,7 @@ function groupCommitsByDay(commits: PrCommit[]): [string, PrCommit[]][] {
 const EVENT_GLYPH: Record<string, React.ReactNode> = {
   "force-push": <RefreshIcon size={ICON.xs} />, renamed: <EditIcon size={ICON.xs} />, labeled: <TagIcon size={ICON.xs} />, unlabeled: <TagIcon size={ICON.xs} />,
   assigned: <UserIcon size={ICON.xs} />, unassigned: <UserIcon size={ICON.xs} />, "review-requested": <EyeIcon size={ICON.xs} />, "review-request-removed": <EyeIcon size={ICON.xs} />,
-  "ready-for-review": <PrIcon size={ICON.xs} />, "convert-to-draft": <DraftIcon size={ICON.xs} />, merged: <MergeIcon size={ICON.xs} />, closed: <CrossIcon size={ICON.xs} />, reopened: <UndoIcon size={ICON.xs} />,
+  "ready-for-review": <PrIcon size={ICON.xs} />, "convert-to-draft": <DraftIcon size={ICON.xs} />, merged: <MergeIcon size={BAR_ICON} />, closed: <CrossIcon size={ICON.xs} />, reopened: <UndoIcon size={ICON.xs} />,
   "cross-referenced": <LinkIcon size={ICON.xs} />, milestoned: <FlagIcon size={ICON.xs} />, demilestoned: <FlagIcon size={ICON.xs} />, "head-ref-deleted": <BranchIcon size={ICON.xs} />,
   "auto-merge-enabled": <ClockIcon size={ICON.xs} />, "auto-merge-disabled": <ClockIcon size={ICON.xs} />,
 };

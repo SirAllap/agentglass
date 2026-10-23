@@ -8,7 +8,7 @@ import { ICON } from "../lib/iconSize.ts";
 import { serializeQuery, toggleFacet, type FilterState, type FacetView } from "../lib/prFilter.ts";
 import { SearchIcon } from "../lib/glyphIcons.tsx";
 import { CloseIcon } from "./CloseButton.tsx";
-import { EDGE, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { BAR_CTRL, BAR_ICON, BAR_INPUT, BAR_SQUARE, CHIP_SURFACE, EDGE, INPUT_STYLE, chipTone } from "./workspace/Chrome.tsx";
 
 /**
  * The PR list's filter controls: a query input, the unread chip, the rule
@@ -91,7 +91,6 @@ export function PrFilterBar({
   if (filters.text.trim()) {
     chips.push({ key: "text", label: `"${filters.text.trim()}"`, onRemove: () => emit({ ...filters, text: "" }) });
   }
-  const border = "1px solid color-mix(in srgb, var(--border) 45%, transparent)";
   /* The full syntax is a popover under the box while it has focus; the box
      itself says only what Enter does, so it fits the one bar. */
   const [focused, setFocused] = useState(false);
@@ -135,7 +134,7 @@ export function PrFilterBar({
           placeholder={scoped ? scoped.placeholder : SEARCH_PLACEHOLDER}
           aria-label={scoped ? scoped.placeholder : SEARCH_HINT}
           spellCheck={false}
-          className={`w-full ${INPUT}`}
+          className={`w-full ${BAR_INPUT}`}
           style={INPUT_STYLE} />
         {focused && !menuOpen && !scoped && (
           <div role="note" className="absolute left-0 right-0 top-full mt-1 rounded-lg px-3 py-2 text-[11px] pointer-events-none"
@@ -185,33 +184,33 @@ export function PrFilterBar({
             onClick={onSearch}
             disabled={searching}
             title={searching ? "Asking GitHub…" : "Search every pull request, not just the ones loaded (⏎)"}
-            className="shrink-0 text-[10px] px-2 py-1 rounded flex items-center gap-1 whitespace-nowrap"
+            className={`agx-btn ${BAR_CTRL}`}
             style={{
               color: searching ? "var(--text3)" : "var(--text)",
               background: "color-mix(in srgb, var(--primary) 18%, transparent)",
               border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)",
             }}>
-            {searching ? <span className="agx-spin" aria-hidden style={{ width: 8, height: 8, borderWidth: 1.5 }} /> : <span aria-hidden className="flex"><SearchIcon size={ICON.xs} /></span>}
+            {searching ? <span className="agx-spin" aria-hidden style={{ width: BAR_ICON - 4, height: BAR_ICON - 4, borderWidth: 1.5 }} /> : <span aria-hidden className="flex"><SearchIcon size={BAR_ICON} /></span>}
             <span>{searching ? "Searching" : "Search all"}</span>
           </button>
         )}
         {(scoped ? scoped.value : query).trim() && (
           <button onClick={() => (scoped ? scoped.onChange("") : onQuery(""))} title={scoped ? "Clear the filter" : "Clear all filters"} aria-label={scoped ? "Clear the filter" : "Clear all filters"}
-            className="grid place-items-center w-[22px] h-[22px] rounded shrink-0 hover:bg-white/5" style={{ color: "var(--text3)", border }}>
-            <CloseIcon size={ICON.xs} />
+            className={`agx-btn ${BAR_SQUARE}`} style={{ ...CHIP_SURFACE, color: "var(--text3)" }}>
+            <CloseIcon size={BAR_ICON} />
           </button>
         )}
       </div>
 
       {controls.inboxControls && inbox && (
         <>
-          <span className="inline-flex shrink-0 rounded-md overflow-hidden" role="group" aria-label="Show" style={{ border: EDGE }}>
+          <span className="inline-flex shrink-0 rounded-lg overflow-hidden" role="group" aria-label="Show" style={{ border: EDGE }}>
             {([["all", "All"], ["unread", "Unread"]] as const).map(([id, label]) => {
               const on = (id === "unread") === inbox.unreadOnly;
               return (
                 <button key={id} onClick={() => inbox.onUnreadOnly(id === "unread")} aria-pressed={on}
-                  className="agx-btn px-2 text-[10.5px]"
-                  style={{ minHeight: 24, color: on ? "var(--text)" : "var(--text3)", fontWeight: on ? 600 : 400,
+                  className={`agx-btn ${BAR_CTRL} rounded-none`}
+                  style={{ color: on ? "var(--text)" : "var(--text3)", fontWeight: on ? 600 : 400, border: 0,
                     background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent" }}>
                   {label}
                 </button>
@@ -219,7 +218,7 @@ export function PrFilterBar({
             })}
           </span>
           {inbox.unread > 0 && (
-            <span className="text-[10px] tabular-nums shrink-0" style={{ color: "var(--warning-ink)" }}>{inbox.unread} unread</span>
+            <span className="text-[11px] tabular-nums shrink-0" style={{ color: "var(--warning-ink)" }}>{inbox.unread} unread</span>
           )}
         </>
       )}
@@ -234,17 +233,16 @@ export function PrFilterBar({
       {controls.boardControls && chips.length > 0 && (
         <div className="agx-prbar-chips flex flex-wrap items-center gap-1 basis-full">
           {chips.map((c) => (
-            <button key={c.key} onClick={c.onRemove}
-              className="text-[9.5px] pl-2 pr-1 py-0.5 rounded-full flex items-center gap-1 hover:opacity-80"
-              style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--primary) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 28%, transparent)" }}>
+            <button key={c.key} onClick={c.onRemove} className={`agx-btn ${BAR_CTRL}`}
+              style={{ ...chipTone(true), color: "var(--text2)" }}>
               <span className="truncate max-w-[140px]">{c.label}</span>
-              <span aria-hidden className="flex" style={{ color: "var(--text3)" }}><CloseIcon size={ICON.xs} /></span>
+              <span aria-hidden className="flex" style={{ color: "var(--text3)" }}><CloseIcon size={BAR_ICON} /></span>
             </button>
           ))}
-          <button onClick={() => onQuery("")} className="text-[9.5px] px-1.5 py-0.5 rounded-full hover:bg-white/5" style={{ color: "var(--text3)" }}>
+          <button onClick={() => onQuery("")} className={`agx-btn ${BAR_CTRL}`} style={{ ...CHIP_SURFACE, color: "var(--text3)" }}>
             Clear all
           </button>
-          <span className="ml-auto text-[10px] tabular-nums shrink-0" style={{ color: "var(--text3)" }}>{total} match{total === 1 ? "" : "es"}</span>
+          <span className="ml-auto text-[11px] tabular-nums shrink-0" style={{ color: "var(--text3)" }}>{total} match{total === 1 ? "" : "es"}</span>
         </div>
       )}
     </>

@@ -24,7 +24,7 @@ import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { Portal } from "./Portal.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { CloseIcon } from "./CloseButton.tsx";
-import { EDGE, INPUT, INPUT_STYLE, chipTone } from "./workspace/Chrome.tsx";
+import { BAR_CTRL, BAR_ICON, EDGE, INPUT, INPUT_STYLE, chipTone } from "./workspace/Chrome.tsx";
 import { menuUnder } from "../lib/menuPos.ts";
 import { MAX_NAME, MAX_PRESETS, canAdd, cleanName, dropGone, freeName, nthPreset, rulesToPreset, summarizeRules, type Gone, type Preset } from "../lib/filterPresets.ts";
 import { liveCount, type FieldSpec, type FilterSet } from "./tasks/filters.ts";
@@ -513,14 +513,14 @@ export const FilterPresets = memo(function FilterPresets({ api, counts, rules, f
           onContextMenu={(e) => { e.preventDefault(); openCtx(p.id, e.currentTarget); }}
           title={`${p.name}: ${summaries.get(p.id)}`}
           aria-label={`${p.name}, ${n} ${n === 1 ? "card" : "cards"}${dirty ? ", changed since saved" : ""}${g ? ", a value is missing" : ""}`}
-          className="text-[11.5px] pl-2 pr-2 py-1 rounded-lg flex items-center gap-1.5 whitespace-nowrap agx-btn"
+          className={`agx-btn ${BAR_CTRL}`}
           style={{ border: EDGE, ...chipTone(on), color: on ? "var(--text)" : "var(--text2)" }}>
           <span className="truncate" style={{ maxWidth: 140 }}>{p.name}</span>
           {dirty && <Dirty />}
           {g && <Bang />}
           {/* The number, and the dots that take its place under the pointer: one
               slot, so the chip is the same width hovered or not. */}
-          <span aria-hidden className="tabular-nums text-[10px] text-right shrink-0 group-hover:opacity-0"
+          <span aria-hidden className="tabular-nums text-[11px] text-right shrink-0 group-hover:opacity-0"
             style={{ minWidth: ICON.xs, color: on ? "var(--primary-ink)" : "var(--text4)" }}>{n}</span>
         </button>
         <button tabIndex={-1} aria-label={`Menu for ${p.name}`} title="Rename, move, delete" {...{ [MENU_ATTR]: "" }}
@@ -636,12 +636,12 @@ export const FilterPresets = memo(function FilterPresets({ api, counts, rules, f
             onFocus={() => setFocusId(MORE)}
             onClick={(e) => setMore(more ? null : { anchor: e.currentTarget.getBoundingClientRect() })}
             title={activeHidden ? `${activeHidden.name} is on` : `${hidden.length} more saved filter sets`}
-            className="text-[11.5px] px-2 py-1 rounded-lg flex items-center gap-1.5 whitespace-nowrap shrink-0 agx-btn"
+            className={`agx-btn ${BAR_CTRL}`}
             style={{ border: EDGE, ...chipTone(!!activeHidden), color: activeHidden ? "var(--text)" : "var(--text2)" }}>
             <span className="truncate" style={{ maxWidth: 140 }}>{activeHidden ? activeHidden.name : "More"}</span>
             {activeHidden && modified && <Dirty />}
             {!activeHidden && <span aria-hidden className="tabular-nums text-[10px]" style={{ color: "var(--text4)" }}>{hidden.length}</span>}
-            <Glyph name="chev" />
+            <Glyph name="chev" size={BAR_ICON} />
           </button>
         )}
       </div>
@@ -653,9 +653,9 @@ export const FilterPresets = memo(function FilterPresets({ api, counts, rules, f
           preset that is on and anything built by hand; no saved set is deleted. */}
       <button onClick={api.clear} disabled={live === 0} tabIndex={live === 0 ? -1 : 0} aria-hidden={live === 0}
         title="Remove every filter. Your saved sets stay in the menu"
-        className="text-[11.5px] px-2 py-1 rounded-lg flex items-center gap-1 whitespace-nowrap shrink-0 agx-btn"
+        className={`agx-btn ${BAR_CTRL}`}
         style={{ border: EDGE, color: "var(--text2)", visibility: live === 0 ? "hidden" : "visible" }}>
-        <CloseIcon size={ICON.xs} />Clear filters
+        <CloseIcon size={BAR_ICON} />Clear filters
       </button>
 
       {/* Fixed at the right end: the same place whatever else changes. Lit when
@@ -664,12 +664,12 @@ export const FilterPresets = memo(function FilterPresets({ api, counts, rules, f
       <button ref={saveBtn} onClick={clickMore} {...{ [MENU_ATTR]: "" }}
         aria-haspopup="menu" aria-expanded={!!overflow} aria-label="Filters, save and sort"
         title={modified ? `Filters, save and sort — “${active?.name}” has changed` : "Filters, save a filter set, sort lanes"}
-        className="text-[11.5px] px-2 py-1 rounded-lg flex items-center gap-1.5 whitespace-nowrap shrink-0 agx-btn"
+        className={`agx-btn ${BAR_CTRL}`}
         style={{
           border: EDGE, ...chipTone(!!modified || live > 0 || sort.lit),
           color: modified || live > 0 || sort.lit ? "var(--text)" : "var(--text2)",
         }}>
-        <Glyph name="dots" />
+        <Glyph name="dots" size={BAR_ICON} />
         {live > 0 && <span className="tabular-nums text-[10px]" style={{ color: "var(--primary-ink)" }}>{live}</span>}
       </button>
 

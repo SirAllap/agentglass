@@ -34,7 +34,7 @@ import { CHIP_H } from "../lib/priority.tsx";
 import { CardTracker } from "./CardTracker.tsx";
 import { LANE_WIDTH_PX, RESULT_COLUMNS, resultColumn, resultsHeading, stillReading } from "../lib/prSearch.ts";
 import { repoUsesTracker, trackerBlock } from "../lib/prCardBlock.ts";
-import { CTRL_H, EDGE, LINE } from "./workspace/Chrome.tsx";
+import { BAR_CTRL, CTRL_H, EDGE, LINE } from "./workspace/Chrome.tsx";
 import { CODE_FONT_STYLE } from "./diff/DiffLines.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { CardFaces } from "./CardFaces.tsx";
@@ -664,7 +664,7 @@ export function TriageBoard({
         <div className="shrink-0 px-4 pt-2 pb-1.5 flex items-center gap-2 text-[12.5px]">
           <b className="text-[15px] font-semibold tabular-nums">{resultsHeading(results.rows.length)}</b>
           <span className="min-w-0 truncate" style={{ color: "var(--text3)" }} title={results.title}>{results.title}</span>
-          <button onClick={results.onBack} className="agx-btn ml-auto shrink-0 rounded px-2 py-1 text-[10.5px]"
+          <button onClick={results.onBack} className={`agx-btn ml-auto ${BAR_CTRL}`}
             style={{ color: "var(--text2)", border: EDGE }}>
             Back to the board
           </button>
@@ -1926,8 +1926,8 @@ export function PersonBanner({ login, onBack }: { login: string; onBack: () => v
       <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">
         You are viewing <b className="font-bold">{login}</b>'s board, not yours
       </span>
-      <button onClick={onBack} className="agx-btn shrink-0 rounded px-3 text-[11.5px] font-semibold"
-        style={{ minHeight: HIT, color: "var(--warning-ink)", border: EDGE, borderColor: "var(--warning)" }}>
+      <button onClick={onBack} className={`agx-btn ${BAR_CTRL} font-semibold`}
+        style={{ color: "var(--warning-ink)", border: EDGE, borderColor: "var(--warning)" }}>
         Back to my board
       </button>
     </div>

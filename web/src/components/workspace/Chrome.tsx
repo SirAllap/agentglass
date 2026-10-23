@@ -101,6 +101,35 @@ export const CHIP_SURFACE = {
   color: "var(--text)",
 } as const;
 
+/**
+ * The pull-request bar's one control: every box and button in it, whatever it
+ * holds, is this shape.
+ *
+ * The bar mixed five heights (22, 24, 27.3, 28, 32), four type sizes (10.5, 11,
+ * 11.5, 12) and three paddings, because each control was written where it lives
+ * (the views in PrPanel, the sets in FilterPresets, the box in PrFilterBar) and
+ * none of them knew about the others. So the height is `CTRL_H.regular`, the
+ * rung the other headers' chips already sit on (`CHIP` is the same 28), and
+ * it is set as `h-[28px]`, not `min-h`: a minimum lets a control that wraps its
+ * label come out taller than its neighbours. The type, the padding, the radius,
+ * the gap and the border are `CHIP`'s own, so a text control here is the chip
+ * every other header uses. An icon-only control is `BAR_SQUARE`: the same
+ * height and width, no padding.
+ *
+ * A new control in the bar takes this, and a source test fails on one that
+ * sets its own height or padding there.
+ */
+export const BAR_H = CTRL_H.regular;
+export const BAR_CTRL = "agx-chip text-[11px] px-2.5 h-[28px] inline-flex items-center gap-1.5 rounded-lg whitespace-nowrap shrink-0 leading-none transition-colors";
+/** The icon-only member: `BAR_H` square, nothing inside it to pad. */
+export const BAR_SQUARE = "agx-chip text-[11px] w-[28px] h-[28px] inline-flex items-center justify-center rounded-lg shrink-0 leading-none transition-colors";
+/** The glyph inside any of them. 14 beside 11px type, the ladder's `sm`. */
+export const BAR_ICON = ICON.sm;
+/** The search box: the one control that grows in width, and the same height. */
+export const BAR_INPUT =
+  "text-[11px] px-2.5 h-[28px] rounded-lg bg-[var(--surface-inset)] text-[var(--text)] " +
+  "placeholder:text-[var(--text3)] outline-none transition-colors";
+
 /** The hover half of the same, which cannot be an inline style. */
 export const CHIP_SURFACE_CLS = "hover:brightness-125";
 
@@ -571,7 +600,7 @@ export function Button({
  * a refresh that changed nothing on screen still needs to say that it ran —
  * opt-in, because every other caller has nothing to report back.
  */
-export function RefreshButton({ onRefresh, busy, spinning, done, title, disabled }: {
+export function RefreshButton({ onRefresh, busy, spinning, done, title, disabled, iconSize = CHIP_ICON }: {
   onRefresh: () => void;
   busy?: boolean;
   /** The refresh's own request is out. `busy` also greys the button for work
@@ -581,6 +610,8 @@ export function RefreshButton({ onRefresh, busy, spinning, done, title, disabled
   done?: boolean;
   title: string;
   disabled?: boolean;
+  /** The glyph's size; a bar with its own icon rung passes it. */
+  iconSize?: number;
 }) {
   const turning = spinning ?? busy;
   const showDone = !!done && !busy && !turning;
@@ -599,8 +630,8 @@ export function RefreshButton({ onRefresh, busy, spinning, done, title, disabled
       }}
     >
       {showDone
-        ? <DoneIcon size={CHIP_ICON} />
-        : <RefreshIcon size={CHIP_ICON} className={turning ? "agx-turn" : undefined} />}
+        ? <DoneIcon size={iconSize} />
+        : <RefreshIcon size={iconSize} className={turning ? "agx-turn" : undefined} />}
     </button>
   );
 }
