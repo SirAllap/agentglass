@@ -113,6 +113,24 @@ describe("what may be asked", () => {
     ]) expect(safeUrl(u)).toBeTruthy();
   });
 
+  test("the other clouds' metadata addresses are refused in every spelling; their neighbours in CGNAT and unique-local are not", () => {
+    for (const u of [
+      "http://100.100.100.200/latest/meta-data/",
+      "http://1684301000/",                       // the same v4 as an integer
+      "http://[::ffff:100.100.100.200]/",         // IPv4-mapped (folds to ::ffff:6464:64c8)
+      "http://[::ffff:6464:64c8]/",
+      "http://[64:ff9b::6464:64c8]/",             // NAT64
+      "http://[fd00:ec2::254]/latest/meta-data/",
+      "http://[FD00:EC2:0:0:0:0:0:254]/",         // expanded, upper case
+      "http://[fd00:0ec2:0000:0000:0000:0000:0000:0254]/", // fully padded
+      "http://[fd00:ec2:0::254]/",                // partly compressed
+    ]) expect(safeUrl(u), u).toBeNull();
+    for (const u of [
+      "http://100.100.100.201/", "http://100.64.0.1/",   // CGNAT stays reachable
+      "http://[fd00:ec2::255]/", "http://[fd00:ec3::254]/", "http://[fd00::254]/", "http://[fd12::1]/", // so does unique-local
+    ]) expect(safeUrl(u), u).toBeTruthy();
+  });
+
   test("a selector is one short line", () => {
     expect("ask" in parseAsk("click", { selector: "#login button.primary" })).toBe(true);
     expect("error" in parseAsk("click", { selector: "a\nb" })).toBe(true);

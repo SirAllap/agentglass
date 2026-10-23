@@ -225,6 +225,8 @@ export interface JiraViewRead {
   ok: boolean;
   error?: string;
   throttled?: boolean;
+  /** Jira refused the saved sign-in: "reconnect", not "try later". Same flag as the ClickUp reads. */
+  unauthorised?: boolean;
   view?: SavedView;
   tasks: ProviderTask[];
   columns: JiraColumn[];

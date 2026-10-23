@@ -854,6 +854,29 @@ function rotateToken() {
 }
 
 /**
+ * Ask the running server to revoke every paired device.
+ *
+ * A device holds a credential of its own, so rotating the machine token does
+ * not reach it. Called with the OLD token, before the rotation, because the
+ * route is machine-only. Resolves false when the server did not say yes, and
+ * the caller then rotates nothing: a "revoke" that left the phones paired is
+ * the failure this exists to prevent.
+ * @param {number} port @param {string} token @param {number} [timeoutMs]
+ * @returns {Promise<boolean>}
+ */
+function forgetAllDevices(port, token, timeoutMs = 3000) {
+  return new Promise((resolve) => {
+    const req = http.request(
+      { host: "127.0.0.1", port, path: "/pair/forget-all", method: "POST", headers: { authorization: `Bearer ${token}`, "content-length": 0 } },
+      (r) => { r.resume(); resolve(r.statusCode === 200); }
+    );
+    req.on("error", () => resolve(false));
+    req.setTimeout(timeoutMs, () => { req.destroy(); resolve(false); });
+    req.end();
+  });
+}
+
+/**
  * The environment the sidecar is spawned with.
  *
  * AGENTGLASS_WEB_DIR is always set, remote access or not. Without it the
@@ -3351,8 +3374,11 @@ function registerIpc(win) {
    * first one rather than claiming a phone that can no longer get in.
    */
   ipcMain.handle("ag:revokeRemote", async () => {
+    if (process.env.AGENTGLASS_TOKEN) return false; // the environment is in charge, not the file
+    // Devices first, with the token they are still checked against.
+    if (!(await forgetAllDevices(SERVER_PORT, ensureToken()))) throw new Error("the server did not revoke the paired devices, so the access code was left as it was");
     const next = rotateToken();
-    if (!next) return false; // AGENTGLASS_TOKEN is set in the environment; the file is not in charge
+    if (!next) return false;
     await restartSidecar();
     return true;
   });

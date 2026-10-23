@@ -468,12 +468,19 @@ function storedAnswer(id: string): EngineReadiness["answers"] {
 const cacheKey = (id: string, path: string | null): string =>
   path ? [path, mtimeOf(path), ...configDirs(id).map(mtimeOf)].join("|") : "absent";
 
+/* A probe that timed out costs PROBE_TIMEOUT_MS per command, and a page that
+   asks twice a second re-ran it every time. Held here, not in sqlite, so a
+   restart or a Recheck always asks the CLI again. */
+const SLOW_TTL_MS = 30_000;
+const slowSeen = new Map<string, { key: string; facts: EngineFacts; at: number }>();
+
 /**
  * Every engine's readiness on this machine.
  *
  * Cached by (binary path, binary mtime, config directory mtimes): opening the
  * page twice costs nothing and an upgrade or a login is seen at once. A probe
- * that timed out is never cached, so Recheck asks again. Never on an interval.
+ * that timed out is kept in memory for SLOW_TTL_MS only, never in the database,
+ * and `fresh` (Recheck) skips it. Never on an interval.
  */
 export async function probeEngines(
   o: { fresh?: boolean | readonly string[]; which?: (cmd: string) => string | null } = {},
@@ -487,11 +494,15 @@ export async function probeEngines(
     if (!skip) {
       const row = db.query<{ key: string; facts: string }, [string]>("SELECT key, facts FROM engine_probe WHERE engine = ?").get(p.id);
       if (row?.key === key) { try { facts = JSON.parse(row.facts) as EngineFacts; } catch { facts = null; } }
+      const held = slowSeen.get(p.id);
+      if (!facts && held?.key === key && Date.now() - held.at < SLOW_TTL_MS) facts = held.facts;
     }
     if (!facts) {
       facts = await runCheap(p, path);
       const slow = [facts.version, facts.status, facts.check].some((r) => r?.timedOut);
-      if (!slow) {
+      if (slow) slowSeen.set(p.id, { key, facts, at: Date.now() });
+      else {
+        slowSeen.delete(p.id);
         db.run("INSERT OR REPLACE INTO engine_probe (engine, key, facts, at) VALUES (?, ?, ?, ?)",
           [p.id, key, JSON.stringify(facts), Date.now()]);
       }

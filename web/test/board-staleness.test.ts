@@ -29,6 +29,11 @@ describe("readState", () => {
       .toBe("stale");
   });
 
+  it("a refused token outranks a rate limit and fresh rows alike", () => {
+    expect(readState({ error: "Jira did not accept the saved sign-in", unauthorised: true, throttled: true, at: NOW, rows: 3, pollMs: FAST, now: NOW }))
+      .toBe("stale");
+  });
+
   // The case that was crying wolf.
   it("is a word, not a warning, when the rows are recent", () => {
     expect(readState({ error: "ClickUp did not answer in time", at: NOW - 60_000, rows: 16, pollMs: FAST, now: NOW }))

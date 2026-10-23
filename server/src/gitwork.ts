@@ -2461,13 +2461,20 @@ export function baseCandidates(rootIn: unknown): { ok: boolean; refs: { name: st
  *  - it has not been pushed. Rewriting local history is free; rewriting
  *    published history is somebody else's problem tomorrow.
  *
- * A dirty tree disqualifies it too: the undo is a hard reset, and there is no
- * version of "discard your uncommitted work as a side effect" worth offering.
+ * A dirty tracked tree disqualifies it too: the undo is a hard reset, and there
+ * is no version of "discard your uncommitted work as a side effect" worth
+ * offering. Untracked files only count when the reset would write over one.
  */
 // Awaited: reached from branchInfo (/git/tree) on every poll, and its two reads
 // were among the synchronous spawns holding the loop there. The write path
 // (undoMerge) awaits it too.
 export async function undoableMerge(root: string, ahead: number, upstream: string | null): Promise<boolean> {
+  if (!await tipIsUnpushedMerge(root, ahead, upstream)) return false;
+  const t = await undoTreeState(root);
+  return !t.dirty && !t.clash.length;
+}
+
+async function tipIsUnpushedMerge(root: string, ahead: number, upstream: string | null): Promise<boolean> {
   // Pushed work is never undone this way. `ahead` is already computed for the
   // header, so this costs nothing for a branch level with its remote.
   //
@@ -2477,8 +2484,36 @@ export async function undoableMerge(root: string, ahead: number, upstream: strin
   // one situation where the undo is unambiguously free.
   if (upstream && ahead < 1) return false;
   const parents = (await gitAsync(root, ["rev-list", "--parents", "-n", "1", "HEAD"])).stdout.trim().split(/\s+/);
-  if (parents.length < 3) return false; // sha + two parents = a merge
-  return !(await gitAsync(root, ["status", "--porcelain"])).stdout.trim();
+  return parents.length >= 3; // sha + two parents = a merge
+}
+
+/**
+ * What stands between the tree and a hard reset to the first parent: tracked
+ * changes (`dirty`), and untracked files at a path the merge changed (`clash`).
+ * Untracked files elsewhere survive `reset --hard`, and refusing over a scratch
+ * note sent people to delete it first.
+ *
+ * A path clashes when it is the same, or one holds the other as a directory;
+ * compared lower-cased because on a case-insensitive disk `Notes.txt` is
+ * `notes.txt`. A diff that cannot be read counts every untracked file. Ignored
+ * files count as untracked: the reset overwrites them just the same.
+ * Only called for a tip that is a merge, so `HEAD^1` exists.
+ */
+async function undoTreeState(root: string): Promise<{ dirty: boolean; clash: string[] }> {
+  const st = await gitAsync(root, ["status", "--porcelain", "-z", "--untracked-files=all", "--ignored=matching"]);
+  const entries = st.stdout.split("\0").filter(Boolean);
+  const loose = (e: string) => e.startsWith("?? ") || e.startsWith("!! ");
+  const untrackedPaths = entries.filter(loose).map((e) => e.slice(3).replace(/\/$/, ""));
+  const dirty = st.code !== 0 || entries.some((e) => !loose(e));
+  if (!untrackedPaths.length) return { dirty, clash: [] };
+  const d = await gitAsync(root, ["diff", "--name-only", "--no-renames", "-z", "HEAD^1", "HEAD"]);
+  if (d.code !== 0) return { dirty, clash: untrackedPaths };
+  const changed = d.stdout.split("\0").filter(Boolean).map((p) => p.toLowerCase());
+  const clash = untrackedPaths.filter((u) => {
+    const l = u.toLowerCase();
+    return changed.some((c) => c === l || c.startsWith(l + "/") || l.startsWith(c + "/"));
+  });
+  return { dirty, clash };
 }
 
 /** Put the branch back exactly as it stood before its last merge. */
@@ -2489,6 +2524,15 @@ export async function undoMerge(rootIn: unknown): Promise<GitActionResult> {
   // these conditions are the only thing making it safe.
   const info = await branchInfo(root);
   if (!await undoableMerge(root, info.ahead, info.upstream)) {
+    // Only an unpushed merge tip has a clash worth naming; anything else is the
+    // plain "nothing to undo" (and a root commit has no HEAD^1 to diff).
+    if (await tipIsUnpushedMerge(root, info.ahead, info.upstream)) {
+      const { dirty, clash } = await undoTreeState(root);
+      if (!dirty && clash.length) {
+        const shown = clash.slice(0, 5).join(", ") + (clash.length > 5 ? `, and ${clash.length - 5} more` : "");
+        return { ok: false, error: `cannot undo — the reset would write over untracked ${clash.length === 1 ? "file" : "files"}: ${shown}. Move ${clash.length === 1 ? "it" : "them"} aside, then undo again` };
+      }
+    }
     return { ok: false, error: "nothing to undo — the tip is not an unpushed merge, or the tree is dirty" };
   }
   return run(root, ["reset", "--hard", "HEAD^1"]);

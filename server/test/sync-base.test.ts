@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect } from "bun:test";
 import { story } from "./story.ts";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -315,6 +315,86 @@ describe("undo merge", () => {
     expect(await gw.undoableMerge(repo, 1, null)).toBe(false);
     expect((await gw.undoMerge(repo)).ok).toBe(false);
     rmSync(join(repo, "scratch.txt"));
+    run(repo, "checkout", "-q", "main");
+  });
+
+  step("an untracked file the merge does not touch does not block the undo", async () => {
+    // A scratch note sitting beside the work is not something a hard reset
+    // takes away, and refusing over it sent people to delete it first.
+    run(repo, "checkout", "-q", "-b", "undo-untracked");
+    // A commit of its own, or the merge fast-forwards and there is no merge commit.
+    writeFileSync(join(repo, "untracked-case.txt"), "x\n");
+    run(repo, "add", "untracked-case.txt"); run(repo, "commit", "-qm", "own work");
+    run(repo, "merge", "--no-edit", "undo-side");
+    const before = run(repo, "rev-parse", "HEAD^1").stdout.trim();
+    writeFileSync(join(repo, "notes-to-self.txt"), "keep me\n");
+    mkdirSync(join(repo, "scratch-dir"), { recursive: true });
+    writeFileSync(join(repo, "scratch-dir", "a.txt"), "keep me too\n");
+    expect(await gw.undoableMerge(repo, 1, null)).toBe(true);
+    expect((await gw.undoMerge(repo)).ok).toBe(true);
+    expect(run(repo, "rev-parse", "HEAD").stdout.trim()).toBe(before);
+    expect(readFileSync(join(repo, "notes-to-self.txt"), "utf8")).toBe("keep me\n");
+    expect(existsSync(join(repo, "scratch-dir", "a.txt"))).toBe(true);
+    rmSync(join(repo, "notes-to-self.txt")); rmSync(join(repo, "scratch-dir"), { recursive: true });
+    run(repo, "checkout", "-q", "main");
+  });
+
+  step("an untracked file the reset would overwrite still blocks it, and the message names the file", async () => {
+    // The merge deleted tracked-before.txt; undoing it brings the file back
+    // over whatever now sits at that path.
+    run(repo, "checkout", "-q", "-b", "undo-clash-base");
+    writeFileSync(join(repo, "tracked-before.txt"), "old\n");
+    run(repo, "add", "tracked-before.txt"); run(repo, "commit", "-qm", "add file");
+    run(repo, "checkout", "-q", "-b", "undo-clash-side");
+    run(repo, "rm", "-q", "tracked-before.txt"); run(repo, "commit", "-qm", "drop file");
+    run(repo, "checkout", "-q", "undo-clash-base");
+    writeFileSync(join(repo, "other.txt"), "other\n");
+    run(repo, "add", "other.txt"); run(repo, "commit", "-qm", "other work");
+    run(repo, "merge", "--no-edit", "undo-clash-side");
+    expect(existsSync(join(repo, "tracked-before.txt"))).toBe(false);
+    writeFileSync(join(repo, "tracked-before.txt"), "new, untracked\n");
+    expect(await gw.undoableMerge(repo, 1, null)).toBe(false);
+    const r = await gw.undoMerge(repo);
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("tracked-before.txt");
+    expect(readFileSync(join(repo, "tracked-before.txt"), "utf8")).toBe("new, untracked\n");
+    // Spelled in another case it is the same file on a case-insensitive disk.
+    rmSync(join(repo, "tracked-before.txt"));
+    writeFileSync(join(repo, "Tracked-Before.txt"), "x\n");
+    expect(await gw.undoableMerge(repo, 1, null)).toBe(false);
+    rmSync(join(repo, "Tracked-Before.txt"));
+    run(repo, "checkout", "-q", "main");
+  });
+
+  step("an ignored file the reset would overwrite blocks it too", async () => {
+    run(repo, "checkout", "-q", "-b", "undo-ignored-base");
+    writeFileSync(join(repo, "cache.out"), "old\n");
+    writeFileSync(join(repo, ".gitignore"), "");
+    run(repo, "add", "-f", "cache.out", ".gitignore"); run(repo, "commit", "-qm", "add cache");
+    run(repo, "checkout", "-q", "-b", "undo-ignored-side");
+    run(repo, "rm", "-q", "cache.out"); writeFileSync(join(repo, ".gitignore"), "*.out\n");
+    run(repo, "add", ".gitignore"); run(repo, "commit", "-qm", "drop cache, ignore *.out");
+    run(repo, "checkout", "-q", "undo-ignored-base");
+    writeFileSync(join(repo, "ignored-own.txt"), "x\n");
+    run(repo, "add", "ignored-own.txt"); run(repo, "commit", "-qm", "own");
+    run(repo, "merge", "--no-edit", "undo-ignored-side");
+    writeFileSync(join(repo, "cache.out"), "someone's build output\n");
+    expect(run(repo, "status", "--porcelain").stdout.trim()).toBe(""); // ignored: git status shows nothing
+    expect(await gw.undoableMerge(repo, 1, null)).toBe(false);
+    const r = await gw.undoMerge(repo);
+    expect(r.error).toContain("cache.out");
+    expect(readFileSync(join(repo, "cache.out"), "utf8")).toBe("someone's build output\n");
+    rmSync(join(repo, "cache.out"));
+    run(repo, "checkout", "-q", "main");
+  });
+
+  step("a tip that is not a merge, or is pushed, keeps the plain sentence even with untracked files about", async () => {
+    run(repo, "checkout", "-q", "-b", "undo-plain");
+    writeFileSync(join(repo, "stray.txt"), "x\n");
+    const plain = await gw.undoMerge(repo);
+    expect(plain.error).toMatch(/nothing to undo/i);
+    expect(plain.error).not.toContain("stray.txt");
+    rmSync(join(repo, "stray.txt"));
     run(repo, "checkout", "-q", "main");
   });
 });

@@ -7,7 +7,7 @@
  * changed in this process; `readCalls` is what proves the stub ran.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, utimesSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AGENT_PROVIDERS } from "../../shared/agentKinds.ts";
@@ -193,6 +193,22 @@ describe("the cache", () => {
     expect(readCalls(f.dir, "claude").length).toBe(claude * 2);
     expect(readCalls(f.dir, "codex").length).toBe(codex);
   });
+
+  test("a probe that timed out is not asked again within 30 s, and fresh asks anyway", async () => {
+    const f = fleet({ claude: {} });
+    // A CLI that never answers `--version`: it counts the ask, then hangs.
+    const asks = join(f.dir, "asks.txt");
+    writeFileSync(f.paths.claude, `#!/bin/sh\necho x >> ${asks}\nexec sleep 30\n`);
+    chmodSync(f.paths.claude, 0o755);
+    const count = () => { try { return readFileSync(asks, "utf8").trim().split("\n").length; } catch { return 0; } };
+    const e1 = (await probeEngines({ which: f.which })).engines.find((e) => e.id === "claude")!;
+    expect(e1.found).toBe(true);
+    expect(count()).toBe(1);
+    await probeEngines({ which: f.which });
+    expect(count()).toBe(1);
+    await probeEngines({ which: f.which, fresh: true });
+    expect(count()).toBe(2);
+  }, 30_000);
 
   test("fresh skips the cache", async () => {
     const f = fleet({ claude: {} });

@@ -12,7 +12,7 @@ import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, statSync } from "n
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
-  issueDevice, deviceFor, devices, activeDevices, revokeDevice, markSeen,
+  issueDevice, deviceFor, devices, activeDevices, revokeDevice, revokeAllDevices, markSeen,
   scopeAllows, hashToken, devicesPath, publicDevice, __resetDevices,
 } from "../src/devices.ts";
 
@@ -159,5 +159,25 @@ describe("scope", () => {
 
   test("a phone is paired narrow unless somebody widens it", () => {
     expect(issueDevice("iPhone").device.scope).toBe("answer");
+  });
+});
+
+describe("taking every one back", () => {
+  test("revokeAllDevices ends every live credential and says which", () => {
+    const a = issueDevice("iPhone");
+    const b = issueDevice("iPad");
+    const gone = issueDevice("Pixel");
+    revokeDevice(gone.device.id, 1_000);
+    expect(revokeAllDevices(9_000).sort()).toEqual([a.device.id, b.device.id].sort());
+    expect(deviceFor(a.token)).toBeNull();
+    expect(deviceFor(b.token)).toBeNull();
+    expect(activeDevices()).toHaveLength(0);
+    // An earlier revoke keeps its own date; the rows stay.
+    expect(devices().find((d) => d.id === gone.device.id)!.revokedAt).toBe(1_000);
+    expect(devices()).toHaveLength(3);
+  });
+
+  test("with nothing paired it revokes nothing", () => {
+    expect(revokeAllDevices()).toEqual([]);
   });
 });

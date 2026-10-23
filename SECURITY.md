@@ -125,7 +125,15 @@ complement, rather than replace, the private reporting path below.
 - **The control plane is fail-open by default.** A `PreToolUse` gate that times
   out (`AGENTGLASS_GATE_TIMEOUT`, 300s) falls through rather than blocking your
   agents. Set `AGENTGLASS_GATE_FAILCLOSED=1` if you would rather a timeout or an
-  unreachable control plane denied the call.
+  unreachable control plane denied the call. The same goes for a gate script that
+  has moved (a rebuilt or deleted checkout): its command tests that the file
+  exists and lets the call through when it does not, because a missing script
+  makes python exit 2, which Claude Code reads as "deny" for every tool call in
+  every session. The gate is then not holding anything, so the Lantern shows a
+  warning until the hook is installed again from Settings › Agents. A script that
+  is there and refuses still refuses. A gate installed before this check existed
+  is rewritten to the guarded command when the server starts (only our own
+  command, in its exact old shape; a backup of the settings file is kept).
 - **Who receives a browser ask is the app's to say.** Registering a window that
   can drive the built-in browser (`/browser/ready`), or the app window that makes
   lane hosts, decides who is sent every ask, fill text and URLs included, so it
@@ -260,8 +268,12 @@ credential.
 
 **Revoking one device** (Settings › Remote › Paired devices › Forget) revokes
 that credential and closes the sockets it is holding, and leaves every other
-device — and the desk — alone. Rotating the machine's token is still there for
-the case where you have lost the code itself, and still kicks everything.
+device — and the desk — alone. Rotating the machine's token (Settings › Remote ›
+Revoke this link) is still there for the case where you have lost the code
+itself: it revokes every paired device first, closing their sockets, then
+replaces the token, so every phone has to be paired again. It is done by the
+desktop app, which asks the running server to forget the devices before it
+rotates; if the server does not confirm, nothing is rotated.
 
 ## What the gate does not protect against
 
@@ -1161,13 +1173,16 @@ state, HAR files and page snapshots the CLI writes land as `0600` files.
 
 Where the browser may be sent is held twice. The relay judges the literal host
 of every `open` before the browser sees it — `http(s)` only, and never
-link-local (169.254/16, where a cloud's metadata endpoint lives) or the
+link-local (169.254/16, where a cloud's metadata endpoint lives), the two
+other cloud metadata addresses that sit in ranges left open on purpose
+(100.100.100.200 inside CGNAT, fd00:ec2::254 inside unique-local) or the
 unspecified address; loopback and LAN addresses are allowed on purpose, since a
 dev server on this machine is ordinary use. A hostname cannot be judged there,
 because the browser resolves it again when it connects and a name may answer
 differently the second time. So the desktop app also runs an **egress guard**:
 a proxy on a loopback port that every browsing session is pointed at, which
-resolves each name once per connection, refuses any answer in those ranges,
+resolves each name once per connection, refuses any answer in those ranges
+(and those two addresses),
 opens the socket to the address it judged, reaches a name that answers a public
 and a private address in one set at the public ones only, and refuses a name
 that has ever answered a public address when it later answers a private or

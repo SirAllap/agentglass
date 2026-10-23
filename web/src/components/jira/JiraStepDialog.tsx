@@ -6,6 +6,7 @@ import { CardRef, PersonLine, StatusMove } from "../StepCard.tsx";
 import { Face } from "../AssignPicker.tsx";
 import { EDGE, LINE } from "../workspace/Chrome.tsx";
 import { useOwnedQuestion } from "../../lib/layerOwner.ts";
+import { useFocusTrap } from "../../lib/focusTrap.ts";
 import { CircleIcon, CommentIcon, CrossIcon, DoneIcon, LinkIcon, MinusIcon, RefreshIcon, SwapIcon, UserIcon, WarningIcon } from "../../lib/glyphIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { actionLabel, plainFailure, planRows, settleRows, type Phase, type PlanPerson, type PlanRow, type RowKind, type RowState, type Settled, type StepAnswer } from "../../lib/jiraStepPlan.ts";
@@ -141,25 +142,6 @@ export function footerLine(o: { phase: Phase; writes: boolean; answer: StepAnswe
   if (o.settled.every((s) => s.state === "skipped")) return { text: "Nothing needed to change.", tone: "plain" };
   const now = a.task?.status;
   return { text: now ? `Done. ${o.card} is now ${now}.` : "Done.", tone: "good" };
-}
-
-/** Tab stays inside the dialog, and what had the focus gets it back. */
-export function useFocusTrap(on: boolean, root: React.RefObject<HTMLElement | null>) {
-  useEffect(() => {
-    if (!on) return;
-    const before = document.activeElement as HTMLElement | null;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Tab" || !root.current) return;
-      const f = [...root.current.querySelectorAll<HTMLElement>("button:not([disabled]), [href], input, select, textarea, [tabindex]:not([tabindex='-1'])")].filter((x) => x.offsetParent !== null || x === document.activeElement);
-      if (!f.length) return;
-      const first = f[0]!, last = f[f.length - 1]!;
-      const at = document.activeElement;
-      if (e.shiftKey && (at === first || !root.current.contains(at))) { e.preventDefault(); last.focus(); }
-      else if (!e.shiftKey && (at === last || !root.current.contains(at))) { e.preventDefault(); first.focus(); }
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => { window.removeEventListener("keydown", onKey, true); before?.focus?.(); };
-  }, [on, root]);
 }
 
 export function StepDialog({ spec, onDone }: { spec: StepDialogSpec; onDone: (r: StepDialogResult) => void }) {

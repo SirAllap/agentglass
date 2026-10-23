@@ -470,7 +470,8 @@ that never offered it.
 **Forget** one device and only that one stops working: its credential is
 revoked, the sockets it is holding are closed, and the desk and every other
 phone carry on. Rotating the code is still there for when you have lost the code
-itself, and still kicks everything.
+itself: it forgets every paired device and replaces the token, so every phone
+pairs again.
 
 It is **your network only** — the server binds to the LAN. The same pane will
 tell you when a host firewall is dropping the packets, because otherwise

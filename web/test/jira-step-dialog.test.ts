@@ -131,7 +131,7 @@ describe("the title and the footer", () => {
  * and its motion stops when the person asked for none.
  */
 const read = (p: string) => Bun.file(new URL(p, import.meta.url)).text();
-const SRC = { dialog: await read("../src/components/jira/JiraStepDialog.tsx"), card: await read("../src/components/StepCard.tsx"), buttons: await read("../src/components/jira/JiraStepButtons.tsx"), css: await read("../src/index.css"), face: await read("../src/components/AssignPicker.tsx") };
+const SRC = { dialog: await read("../src/components/jira/JiraStepDialog.tsx"), card: await read("../src/components/StepCard.tsx"), buttons: await read("../src/components/jira/JiraStepButtons.tsx"), css: await read("../src/index.css"), face: await read("../src/components/AssignPicker.tsx"), trap: await read("../src/lib/focusTrap.ts") };
 const code = (s: string) => s.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
 
 describe("a person's picture", () => {
@@ -150,8 +150,9 @@ describe("a person's picture", () => {
 describe("the dialog's promises", () => {
   test("Escape closes it, Tab stays inside, and the focus goes back", () => {
     expect(code(SRC.dialog)).toContain('e.key === "Escape"');
-    expect(code(SRC.dialog)).toContain('e.key !== "Tab"');
-    expect(code(SRC.dialog)).toContain("before?.focus");
+    expect(code(SRC.dialog)).toContain("useFocusTrap(true, panel)");
+    expect(code(SRC.trap)).toContain('e.key !== "Tab"');
+    expect(code(SRC.trap)).toContain("before");
   });
 
   test("a run in flight cannot be closed from under itself", () => {

@@ -53,7 +53,7 @@ export function boardOf(r: JiraViewRead): ViewTasksResponse {
     // Where it sits, as the breadcrumb over the board reads it: the project, then the board. The built-in view has none.
     ...(r.view && !r.view.builtin ? { place: { ...(r.view.folderName ? { folder: r.view.folderName } : {}), list: r.view.name } } : {}),
     ...(r.view ? { view: r.view } : {}),
-    ...(r.ok ? {} : { error: r.error || "Jira did not answer", ...(r.throttled ? { throttled: true } : {}) }),
+    ...(r.ok ? {} : { error: r.error || "Jira did not answer", ...(r.throttled ? { throttled: true } : {}), ...(r.unauthorised ? { unauthorised: true } : {}) }),
     ...(r.truncated ? { truncated: true } : {}),
     at: r.at,
   };

@@ -4110,6 +4110,13 @@ export interface HookSetupStatus {
   gate: boolean;
   /** The gate script ships with this build. False = the switch is unavailable. */
   gateBundled: boolean;
+  /** The wired gate command names a script that is no longer on disk (a moved
+   *  or deleted build). The command passes calls through in that state rather
+   *  than deny everything; this is how the Lantern says the gate is not holding. */
+  gateScriptMissing?: boolean;
+  /** …and the stored command has no guard for that (installed before it existed),
+   *  so every tool call is denied rather than let through. */
+  gateDenies?: boolean;
   /** The hook scripts are shipped with this build (a source checkout, or a
    *  packaged install that carries hooks/). False = install is unavailable. */
   bundled: boolean;

@@ -20,6 +20,7 @@ import { GearIcon } from "./workspace/icons.tsx";
 import { openSettings } from "../lib/openSettings.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { forgottenPorts, type Forgotten } from "../lib/portsForgotten.ts";
+import GateScriptBanner from "./GateScriptBanner.tsx";
 
 /**
  * THE LANTERN. Who needs you, what every agent is working on, and the way there.
@@ -595,6 +596,7 @@ export function LanternView({ active }: { active: boolean }) {
       </ViewHeader>
 
       <div className="flex-1 min-h-0 overflow-y-auto agx-scroll px-5 py-4 flex flex-col gap-6" style={{ background: "var(--bg)" }}>
+        <GateScriptBanner active={active} />
         {rows !== null && rows.length === 0 && (
           <div className="text-[11.5px] max-w-[70ch]" style={{ color: "var(--text3)" }}>
             An agent appears here when its hooks are wired (Settings → Agents), when it says what it is

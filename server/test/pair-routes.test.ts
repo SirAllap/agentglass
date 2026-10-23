@@ -381,3 +381,27 @@ describe("the ceremony a machine token cannot complete on its own", () => {
   });
 });
 });
+
+// Last in the file: it revokes every device, and the tests above name some
+// that must still be there.
+describe("taking every one back", () => {
+  step("one call cuts off every paired device and leaves the machine token alone", async () => {
+    const a = await pair("answer", "the tablet in a drawer");
+    const b = await pair("full", "the phone on the train");
+    expect((await get("/sessions", a.token)).status).toBe(200);
+
+    const r = await jsonOf(await post("/pair/forget-all", {}, TOKEN));
+    expect(r.ok).toBe(true);
+    expect(r.revoked).toBeGreaterThanOrEqual(2);
+
+    expect((await get("/sessions", a.token)).status).toBe(401);
+    expect((await get("/sessions", b.token)).status).toBe(401);
+    expect((await get("/sessions", TOKEN)).status).toBe(200);
+  });
+
+  step("only from the machine — a paired phone cannot cut off the others", async () => {
+    const { token } = await pair("full", "a device with everything");
+    expect((await post("/pair/forget-all", {}, token)).status).toBe(403);
+    expect((await get("/sessions", token)).status).toBe(200);
+  });
+});

@@ -117,6 +117,15 @@ describe("what the board says, in Jira's words", () => {
     expect(body).toContain("throttled: data?.throttled");
   });
 
+  test("a refused sign-in reaches the board as unauthorised, which is news at once even with fresh rows", () => {
+    const r = boardOf({ ok: false, unauthorised: true, error: "Jira did not accept the saved sign-in", tasks: [], columns: [], at: 0 });
+    expect(r.unauthorised).toBe(true);
+    expect(boardOf({ ok: false, error: "x", tasks: [], columns: [], at: 0 }).unauthorised).toBeUndefined();
+    const base = { error: "Jira did not accept the saved sign-in", rows: 3, at: 1e12 - 1_000, pollMs: 60_000, now: 1e12 };
+    expect(readState({ ...base })).toBe("retrying");
+    expect(readState({ ...base, unauthorised: r.unauthorised })).toBe("stale");
+  });
+
   test("the cut-short tooltip names the tracker whose board it is", () => {
     expect(body).toContain("Open the board in ${source.nouns.tracker} to see the rest.");
     expect(body).not.toContain("Open the board in ClickUp");

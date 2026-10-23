@@ -130,6 +130,19 @@ describe("the board routes", () => {
     expect(fake.requests[0]).toMatchObject({ method: "PUT", path: "/rest/agile/1.0/issue/rank" });
   });
 
+  step("a refused sign-in on a board read says unauthorised, like ClickUp, and keeps the last rows", async () => {
+    const good = await call("GET", "/jira/view?id=board:3&force=1");
+    expect(good.body.ok).toBe(true);
+    expect(good.body.unauthorised).toBeUndefined();
+    fake.fail({ path: "/search*", status: 401, times: 4 });
+    const refused = await call("GET", "/jira/view?id=board:3&force=1");
+    expect(refused.body).toMatchObject({ ok: false, unauthorised: true, cached: true });
+    expect(refused.body.error).toContain("Jira");
+    expect(refused.body.tasks.length).toBe(good.body.tasks.length);
+    // A slow or broken Jira is not a refusal: the flag is only for "reconnect".
+    expect((await call("GET", "/jira/view?id=nonexistent:1")).body.unauthorised).toBeUndefined();
+  });
+
   step("the token is in no answer and no log", async () => {
     expect(seen).not.toContain(FAKE_TOKEN);
     expect(seen).not.toContain(BASE64);

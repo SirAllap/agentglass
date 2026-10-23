@@ -238,7 +238,7 @@ import { workspaceRoot, workspaceRoots, setWorkspaceRoot, setWorkspaceRoots, inS
 import { cloneProject, createProject } from "./projectadd.ts";
 import { budgetStatus } from "./budget.ts";
 import type { Budget } from "../../shared/types.ts";
-import { hookStatus, applyHooks, applyGate, hooksDir, hookPython } from "./hooksetup.ts";
+import { hookStatus, applyHooks, applyGate, hooksDir, hookPython, healGateCommand } from "./hooksetup.ts";
 import { probeAgents, probeEngines, testEngine, ROSTER } from "./agentprobe.ts";
 import { join as joinPath, resolve as resolvePath, basename } from "node:path";
 import { hostname, tmpdir } from "node:os";
@@ -1497,7 +1497,7 @@ import { bunBin, NO_BUN } from "./bunbin.ts";
 import { understudyRunEnv } from "./understudy-runenv.ts";
 import { recoverAfterRestart, startUnderstudyWatchdog, stopUnderstudyWatchdog, setResumeHook, setGitHook, setFenceHook, setAliveHook, setBunHook, setBusyHook } from "./understudy-watchdog.ts";
 import { openRequests, helpHistory, markAnswered } from "./understudy-help.ts";
-import { scopeAllows, activeDevices, markSeen, revokeDevice, devices, publicDevice, whenStoreTampered, type Scope } from "./devices.ts";
+import { scopeAllows, activeDevices, markSeen, revokeDevice, revokeAllDevices, devices, publicDevice, whenStoreTampered, type Scope } from "./devices.ts";
 import { credentialsPath, hasCredential } from "./credentials.ts";
 import { startCardWatch, cardForTitle } from "./clickupwatch.ts";
 import * as CardIndex from "./clickupindex.ts";
@@ -5378,13 +5378,24 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       return json({ ok: rejectTicket(typeof b.ticket === "string" ? b.ticket : "") });
     }
 
+    /** Close the open sockets held by these devices. */
+    const closeDeviceSockets = (ids: Set<string>): number => {
+      // Revoking a credential while the terminal it opened keeps streaming is
+      // the worst of both: the list says gone and the wire says otherwise.
+      let closed = 0;
+      for (const ws of [...sockets]) {
+        if (ws.data?.deviceId && ids.has(ws.data.deviceId)) {
+          try { ws.close(1008, "this device was disconnected from the host machine"); closed++; } catch { /* already gone */ }
+        }
+      }
+      return closed;
+    };
+
     /**
      * Cut one device off, and only that one.
      *
-     * The revoke that already existed rotates the machine's token, which kicks
-     * every device including the desk — the right answer when you have lost
-     * control of the code, and far too big a hammer for "that tablet is in a
-     * drawer". This is the small one.
+     * Rotating the machine's token is the big hammer for "I have lost control
+     * of the code"; this is the small one for "that tablet is in a drawer".
      */
     if (pathname === "/pair/forget" && req.method === "POST") {
       if (!atMachine()) return notHere();
@@ -5392,16 +5403,18 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       try { b = (await req.json()) as { id?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const id = typeof b.id === "string" ? b.id : "";
       if (!revokeDevice(id)) return json({ ok: false, error: "no such device" }, 404);
-      // Its open sockets go with it. Revoking a credential while the terminal
-      // it opened keeps streaming is the worst of both: the list says gone and
-      // the wire says otherwise.
-      let closed = 0;
-      for (const ws of [...sockets]) {
-        if (ws.data?.deviceId === id) {
-          try { ws.close(1008, "this device was disconnected from the host machine"); closed++; } catch { /* already gone */ }
-        }
-      }
-      return json({ ok: true, closed });
+      return json({ ok: true, closed: closeDeviceSockets(new Set([id])) });
+    }
+
+    /**
+     * Cut every device off. The desktop shell calls it before it rotates the
+     * machine token: a device holds its own credential, so rotating alone left
+     * every phone paired.
+     */
+    if (pathname === "/pair/forget-all" && req.method === "POST") {
+      if (!atMachine()) return notHere();
+      const ids = revokeAllDevices();
+      return json({ ok: true, revoked: ids.length, closed: closeDeviceSockets(new Set(ids)) });
     }
 
     // --- the three the phone calls, before it has anything to authenticate with ---
@@ -11076,6 +11089,9 @@ setAliveHook(async (title, paneId) => {
 });
 startUnderstudyWatchdog();
 startPolicyEvaluator();
+// A gate installed before its command tested for the script would deny every
+// tool call once the script moved. Not in tests: they would rewrite the real file.
+if (process.env.NODE_ENV !== "test") { try { healGateCommand(); } catch { /* the Lantern still says what the command does */ } }
 // The turn limits lived in memory and are not put back: a worker still on its
 // turn is marked as having lost its ceiling, never stopped by an id from before.
 void workersAfterRestart().catch(() => {});

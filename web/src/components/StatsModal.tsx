@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import type { StatsSummary, UsageHistory } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
+import { useModalDialog } from "../lib/focusTrap.ts";
 import { fmtUsd, fmtTokens, fmtEq, eqTitle, typeColor } from "../lib/format.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { subscribeProviderUsage, providerUsage, usageLoaded, usedTextColor, resetLabel, ageLabel } from "../lib/usageStore.ts";
@@ -260,6 +261,7 @@ function Widget({ title, i, full = false, children }: { title: string; i: number
 
 export function StatsModal({ open, onClose, stats, windowMs }: { open: boolean; onClose: () => void; stats: StatsSummary | null; windowMs: number }) {
   const skills = stats?.top_skills ?? [];
+  const modal = useModalDialog(open, "Statistics");
   const tools = [...(stats?.tool_latency ?? [])].sort((a, b) => b.calls - a.calls).slice(0, 10);
   const apps = (stats?.by_app ?? []).slice(0, 10);
   const types = (stats?.by_type ?? []).slice(0, 10);
@@ -288,7 +290,7 @@ export function StatsModal({ open, onClose, stats, windowMs }: { open: boolean; 
 
             {/* the widgets float directly over the frosted app — no container.
                 One coordinated fade/scale so closing is smooth, not chunky. */}
-            <motion.div
+            <motion.div {...modal}
               initial={{ opacity: 0, scale: 0.985 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.99 }}
               transition={{ duration: 0.2, ease: "easeOut" }}
               className="fixed inset-0 overflow-y-auto" style={{ zIndex: 10001 }} onClick={onClose}>

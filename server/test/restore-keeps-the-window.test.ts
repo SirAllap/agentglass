@@ -51,7 +51,7 @@ const LIVES = "sleep 45";
 function writeLayout(sessions: unknown[]): void {
   const dir = join(process.env.AGENTGLASS_STATE_DIR!, "tmux", "restore");
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "layout.json"), JSON.stringify({ capturedAt: 1, sessions }));
+  writeFileSync(join(dir, "layout.json"), JSON.stringify({ capturedAt: Date.now(), sessions }));
 }
 
 const win = (name: string, startCommand: string, extra: string[] = []) => ({

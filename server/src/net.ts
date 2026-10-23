@@ -335,8 +335,18 @@ export function siteThenNamedHost(site: string, named: string, creds: Record<str
  *  (electron/egress-guard.js) is where a name is judged at connect time. The
  *  robots.txt fetch judges names too, through `resolveTarget(…, blockedTarget)`. */
 function blockedV4(h: string): boolean {
-  return h.startsWith("169.254.") || h === "0.0.0.0";
+  return h.startsWith("169.254.") || h === "0.0.0.0" || h === ALIBABA_METADATA;
 }
+
+/* Two more places a cloud puts its metadata service: Alibaba's 100.100.100.200
+   sits inside CGNAT, which stays allowed (Tailscale lives there), and AWS's IPv6
+   endpoint fd00:ec2::254 sits inside the unique-local range, also allowed. So
+   they are named, not a range. Compared as groups, so every spelling matches. */
+const ALIBABA_METADATA = "100.100.100.200";
+const isAwsV6Metadata = (h: string): boolean => {
+  const g = ipv6Groups(h);
+  return g[0] === 0xfd00 && g[1] === 0x0ec2 && g[7] === 0x254 && g.slice(2, 7).every((n) => n === 0);
+};
 
 /** The eight 16-bit groups of a valid IPv6 address (isIP has already said v6),
  *  with `::` expanded and any trailing dotted-quad (`::ffff:1.2.3.4`) folded
@@ -363,6 +373,7 @@ export function blockedTarget(host: string): boolean {
   if (v === 4) return blockedV4(h);
   if (v === 6) {
     if (/^fe[89ab]/.test(h) || h === "::") return true; // fe80::/10 link-local, unspecified
+    if (isAwsV6Metadata(h)) return true;
     // A v4 host wearing a v6 hat — `[::ffff:169.254.169.254]` (which the URL
     // parser folds to `::ffff:a9fe:a9fe`), NAT64, 6to4 — is judged by the v4
     // rules only; loopback/LAN mapped this way stays allowed, like its v4 self.

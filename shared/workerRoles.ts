@@ -124,7 +124,9 @@ export function roleLaunch(p: Provider, role: WorkerRole, model: string, denied:
   const edits = role.readOnly ? ["Edit", "Write", "NotebookEdit"] : [];
   if (lock.via === "flag") {
     const deny = [...denied.map((c) => `Bash(${c}:*)`), ...edits];
-    return { args: [lock.flag, JSON.stringify({ permissions: { deny } }), ...pick], env: {} };
+    // A subagent with no model of its own inherits the session's; pinning it
+    // keeps a cheap role from spawning helpers at the expensive model.
+    return { args: [lock.flag, JSON.stringify({ permissions: { deny } }), ...pick], env: { CLAUDE_CODE_SUBAGENT_MODEL: model || role.default.model } };
   }
   // Qwen's `Edit` is a meta-rule over its edit, write and notebook tools.
   const deny = [...denied.flatMap((c) => [`Bash(${c})`, `Bash(${c} *)`]), ...(role.readOnly ? ["Edit", "Write"] : [])];

@@ -136,7 +136,7 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
     // looking — a shell profile, a tmux server's environment, a launcher. Say
     // what to do instead, and what happens once it is done.
     if (ok === false) setRevokeNote("AGENTGLASS_TOKEN is set in the environment this app was started from, so rotating a file the server does not read would report a revoke that did not happen. Unset it where it is exported (a shell profile, or `tmux setenv -gu AGENTGLASS_TOKEN` if you start the app from tmux), then start agentglass again. The app will keep its own code from then on, and this button will rotate it.");
-    else if (ok === null) setRevokeNote("This shell cannot rotate the access code.");
+    else if (ok === null) setRevokeNote("Nothing was changed: this shell cannot rotate the access code, or the server did not confirm that it had forgotten every paired device.");
   };
 
   const copy = (text: string) => {
@@ -383,8 +383,8 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
           <SettingRow
             label={<span style={{ color: "var(--error-ink)" }}>Revoke this link</span>}
             hint={confirming
-              ? "Every device that has this link stops working, including the ones you cannot reach. A new code is generated and the phones you still want will need to scan it again."
-              : "Rotates the access code. This is the revoke that reaches a device you no longer have in your hand."}
+              ? "Every paired device is forgotten, including the ones you cannot reach, and a new code is generated. The phones you still want will need to pair again."
+              : "Forgets every paired device and rotates the access code. This is the revoke that reaches a device you no longer have in your hand."}
             actions={confirming ? (
               <>
                 <Button tone="danger" onClick={revoke} disabled={busy}>{busy ? "Revoking…" : "Revoke"}</Button>

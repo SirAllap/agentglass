@@ -43,7 +43,7 @@ describe("the lock, as each CLI is told it", () => {
   const step = story();
   step("Claude Code: one --settings flag, every command as a prefix rule, and the model", () => {
     const l = roleLaunch(row("claude"), scout, "haiku")!;
-    expect(l.env).toEqual({});
+    expect(l.env).toEqual({ CLAUDE_CODE_SUBAGENT_MODEL: "haiku" });
     expect(l.file).toBeUndefined();
     expect(l.args[0]).toBe("--settings");
     expect(l.args.slice(2)).toEqual(["--model", "haiku"]);
@@ -51,6 +51,18 @@ describe("the lock, as each CLI is told it", () => {
     for (const c of DENIED_COMMANDS) expect(deny, c).toContain(`Bash(${c}:*)`);
     expect(deny).toContain("Edit");
     expect(deny).toContain("Write");
+  });
+
+  step("Claude Code: subagents run on the role's model, or the role's default when none is chosen, never the parent's", () => {
+    // A subagent with no model of its own inherits the session's, so a
+    // scout on the cheap model that spawned its own helpers billed them at
+    // the expensive one.
+    expect(roleLaunch(row("claude"), builder, "opus")!.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("opus");
+    expect(roleLaunch(row("claude"), builder, "")!.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("sonnet");
+    expect(roleLaunch(row("claude"), workerRole("verifier")!, "")!.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("haiku");
+    // No other CLI reads the variable.
+    expect(roleLaunch(row("qwen"), builder, "qwen3-coder-plus")!.env.CLAUDE_CODE_SUBAGENT_MODEL).toBeUndefined();
+    expect(roleLaunch(row("opencode"), builder, "")!.env.CLAUDE_CODE_SUBAGENT_MODEL).toBeUndefined();
   });
 
   step("OpenCode: the rules in OPENCODE_CONFIG_CONTENT, on the build agent as well, which is pinned as the default", () => {
