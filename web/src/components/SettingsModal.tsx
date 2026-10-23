@@ -2887,7 +2887,7 @@ function PrivacyPane({ open }: { open: boolean }) {
           control={<span className="text-[13px]" style={{ color: "var(--text2)" }}>file, owner only</span>}
           detail={{ summary: "Where it is, and who reads it", body: <>Tokens for the services you connected, mode 0600. The server uses them and never sends them to the browser.<span className="block mt-1 t-mono break-all">{d?.credentials || "—"}</span></> }} />
         {d && (
-          <SettingRow label="Retention"
+          <SettingRow settingId="privacy.retentionDays" label="Retention"
             hint={d.retentionFromEnv ? "Set by AGENTGLASS_RETENTION_DAYS where the server started: it wins over this page." : "How long history stays before the daily totals replace it."}
             detail={{ summary: "What a shorter time does", body: <>Raw events older than the time you choose are folded into the daily totals and deleted at the next hourly sweep. Choosing a longer time keeps what is still there; it brings nothing back. Deleting the history file deletes all of it.</> }}
             control={<Select align="right" style={SELECT_BOX} value={String(d.retentionDays)} disabled={d.retentionFromEnv} title="How long history is kept"

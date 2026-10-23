@@ -71,7 +71,7 @@ import {
 } from "./themes.ts";
 import { VIEWS, RAIL_PLACES, SHIPPED_RAIL, loadRail, railIds, moveView, saveRail, type RailPlace } from "../components/workspace/views.ts";
 import { autoCheckUpdates, setAutoCheckUpdates, AUTO_CHECK_DEFAULT } from "./updateCheckPref.ts";
-import { classOf, NEEDS_APPROVAL, type SettingClass } from "../../../shared/settingClass.ts";
+import { classOf, NEEDS_APPROVAL, SETTING_CLASSES, type SettingClass } from "../../../shared/settingClass.ts";
 
 export type SettingValue = string | number | boolean;
 
@@ -639,6 +639,8 @@ export function isMigrated(pane: string, section: string): boolean {
 /** A settingId on a row may name a family (`rail.place.*`) when the row draws
  *  one control per member; it is valid when at least one def has the prefix. */
 export function settingIdResolves(id: string, defs: readonly SettingDef[] = SETTING_DEFS): boolean {
+  // A server setting (server/src/serverSettings.ts) has no def in the window; its class row is the proof it exists.
+  if (Object.hasOwn(SETTING_CLASSES, id)) return true;
   return id.endsWith(".*") ? defs.some((d) => d.id.startsWith(id.slice(0, -1))) : defs.some((d) => d.id === id);
 }
 

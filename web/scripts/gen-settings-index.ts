@@ -173,7 +173,7 @@ function subComponentsIn(text: string): string[] {
 }
 
 /** Panes whose container hands what it reads to a view that draws the rows. Opt-in: following every pane two levels adds rows to pages nobody asked about. */
-const DEEP_PANES = new Set(["jira"]);
+const DEEP_PANES = new Set(["jira", "hooks"]);
 
 function rowsForPane(pane: string, block: string, seenComponents: Set<string>, depth = 0): Row[] {
   const rows = rowsIn(block, pane);

@@ -55,6 +55,20 @@ describe("rows in a migrated pane", () => {
   });
 });
 
+describe("server settings on pages the window has not migrated", () => {
+  // hooks and privacy stay out of MIGRATED (the window's own defs); the server doors on them still need a row each,
+  // so a later row on those pages cannot ship with no door and no test going red.
+  const server = readFileSync(new URL("../../server/src/serverSettings.ts", import.meta.url), "utf8");
+  const ids = [...server.matchAll(/id: "([A-Za-z.]+)", page: "(hooks|privacy)"/g)].map((m) => m[1]!);
+
+  test("there are some", () => { expect(ids.length).toBeGreaterThanOrEqual(7); });
+
+  test("each is reached by a row", () => {
+    const linked = new Set(SETTINGS_ROWS.map((r) => r.settingId));
+    expect(ids.filter((id) => !linked.has(id))).toEqual([]);
+  });
+});
+
 /** Each family of defs, and the settingId template its rows are drawn with. */
 const FAMILIES: [string, string][] = [
   ["rail.place.", "settingId={`rail.place.${v.id}`}"],

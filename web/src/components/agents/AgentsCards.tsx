@@ -62,7 +62,7 @@ export function GateCard({ st, busy, onGate, open }: { st: HookSetupStatus; busy
     <SettingsCard title="Gate" icon={<ShieldIcon size={ICON.sm} />} tone={off ? "decision" : "default"}
       desc="Holds an outward action until somebody decides."
       status={<StatusBadge tone={!st.gateBundled ? "off" : st.gate ? "ok" : "warn"}>{!st.gateBundled ? "Not in this build" : st.gate ? "On" : "Off · needs a decision"}</StatusBadge>}>
-      <SettingRow label="Hold what leaves this machine"
+      <SettingRow settingId="hooks.gate" label="Hold what leaves this machine"
         hint="A push, a PR, a comment, a merge or a message waits for an answer."
         detail={{
           summary: "Details",
@@ -77,7 +77,7 @@ export function GateCard({ st, busy, onGate, open }: { st: HookSetupStatus; busy
               {busy ? "Working…" : st.gate ? "Turn the gate off" : "Turn the gate on"}
             </Button>
           : undefined} />
-      <SettingRow label="Who answers"
+      <SettingRow settingId="gate.answerer" label="Who answers"
         hint="Held actions show up in the Lantern first."
         detail={{
           summary: "Details",
@@ -91,7 +91,7 @@ export function GateCard({ st, busy, onGate, open }: { st: HookSetupStatus; busy
           <Select value={d.gateAnswerer} align="right" className="agx-select outline-none w-[210px] justify-between"
             options={GATE_ANSWERERS.map((v) => ({ value: v, label: GATE_ANSWERER_LABEL[v] }))}
             onChange={(v) => void set("gateAnswerer", v as AgentDefaults["gateAnswerer"])} />} />
-      <SettingRow label="If nobody answers"
+      <SettingRow settingId="gate.onTimeout" label="If nobody answers"
         hint={d.gateOnTimeout === "ask" ? "Asks you twice more before the wait ends, then drops it." : "After the wait, the action is dropped, never sent."}
         detail={{
           summary: "Details",
@@ -150,12 +150,12 @@ export function NewChatsCard({ open, tmuxEngine, enginePref, onEngine }: {
           <SegControl label="How new chats run" value={run} disabled={unavailable}
             options={[{ v: "process" as const, label: "Separate" }, { v: "tmux" as const, label: "tmux panes" }]}
             onPick={(v) => onEngine(v === serverDefault ? null : v)} />} />
-      <SettingRow label="Starts in" hint="The folder a new chat opens at."
+      <SettingRow settingId="chats.startIn" label="Starts in" hint="The folder a new chat opens at."
         control={
           <Select value={d.chatStartIn} align="right" className="agx-select outline-none w-[170px] justify-between"
             options={CHAT_START_IN.map((v) => ({ value: v, label: CHAT_START_IN_LABEL[v] }))}
             onChange={(v) => void set("chatStartIn", v as AgentDefaults["chatStartIn"])} />} />
-      <SettingRow label="Permission mode" hint="Applies to chats; terminals have their own."
+      <SettingRow settingId="chats.mode" label="Permission mode" hint="Applies to chats; terminals have their own."
         detail={{
           summary: "Details",
           body: <>For Claude chats. “Like the open chat” keeps what a new chat always did: it starts in the mode of the chat you had open. Skipping every prompt is not offered here; it stays an opt-in of the server.</>,
@@ -164,7 +164,7 @@ export function NewChatsCard({ open, tmuxEngine, enginePref, onEngine }: {
           <Select value={d.chatMode} align="right" className="agx-select outline-none w-[170px] justify-between"
             options={CHAT_MODES.map((v) => ({ value: v, label: CHAT_MODE_LABEL[v] }))}
             onChange={(v) => void set("chatMode", v as AgentDefaults["chatMode"])} />} />
-      <SettingRow label="Extra deny rules" hint="One pattern per line, added to every new chat."
+      <SettingRow settingId="chats.deny" label="Extra deny rules" hint="One pattern per line, added to every new chat."
         status={n ? <StatusBadge tone="off">{n} {n === 1 ? "rule" : "rules"}</StatusBadge> : undefined}
         actions={editing ? undefined : <Button onClick={() => { setDraft(d.chatDeny.join("\n")); setErr(null); setEditing(true); }}>Edit rules</Button>}
         below={editing ? (
