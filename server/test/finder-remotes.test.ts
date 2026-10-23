@@ -221,7 +221,12 @@ describe("a prompt a server draws itself (L1)", () => {
   function chatty(first: string, later: string, gapMs: number) {
     const written: string[] = [];
     let close!: () => void, done!: (c: number) => void;
-    const out = new ReadableStream<string>({ start(c) { c.enqueue(first); setTimeout(() => { c.enqueue(later); setTimeout(() => { c.close(); done(0); }, 5); }, gapMs); close = () => { try { c.close(); } catch { /* closed */ } }; } });
+    // kill() closes the stream while the two timers below are still pending; a
+    // timer that then enqueues or closes throws "Controller is already closed"
+    // from a callback no test is awaiting, and bun attributes it to whichever
+    // test happens to be running in another file.
+    let timers: ReturnType<typeof setTimeout>[] = [];
+    const out = new ReadableStream<string>({ start(c) { c.enqueue(first); timers.push(setTimeout(() => { c.enqueue(later); timers.push(setTimeout(() => { c.close(); done(0); }, 5)); }, gapMs)); close = () => { for (const t of timers) clearTimeout(t); timers = []; try { c.close(); } catch { /* closed */ } }; } });
     const exited = new Promise<number>((r) => { done = r; });
     const proc: GioProc = { out, err: async () => "", write: (s) => { written.push(s); }, kill: () => { close(); done(137); }, exited };
     return { proc, written };

@@ -281,6 +281,15 @@ describe("the promises SECURITY.md makes about retention", () => {
     // check below only shows the handler itself opens no database; the claim
     // it is held to is the document's, which names it.
     "/agents/forget",
+    // Removes one of the person's own action scripts from the folder they keep
+    // them in (a symlink goes, what it points at stays). Their files, written
+    // by them; nothing agentglass recorded is removed and no database is
+    // opened. The check above holds it to that.
+    "/finder/actions/delete",
+    // Empties the in-memory list of finished file jobs the finder shows, so a
+    // finished copy stops being listed. Nothing is stored and no database is
+    // opened. The check above holds it to that.
+    "/fs/jobs/clear",
   ]);
 
   test("the reviewed exceptions still touch no stored data", () => {

@@ -1,5 +1,5 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { parseCatalog, isOffered, todayStamp, claudeModels, catalogPaths } from "../src/claudemodels.ts";
@@ -137,9 +137,15 @@ describe("the catalogue this repo ships", () => {
   test("offers the models Claude Code offers, not one fallback id", () => {
     delete process.env.AGENTGLASS_CLAUDE_MODELS;
     const ids = claudeModels().map((m) => m.id);
-    for (const id of ["claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-1", "claude-haiku-5-5", "claude-haiku-4-5", "claude-sonnet-5", "claude-opus-5", "claude-fable-5", "claude-opus-4-8"]) {
+    for (const id of ["claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-1", "claude-haiku-5-5", "claude-sonnet-5", "claude-opus-5", "claude-fable-5", "claude-opus-4-8"]) {
       expect(ids).toContain(id);
     }
+    // claude-haiku-4-5 is catalogued with a shutdown of 2026-10-15, so it left
+    // the list the next day and a test that names it fails on the calendar, not
+    // on a change. Its retirement is asserted against a fixed day instead.
+    const haiku = JSON.parse(readFileSync(join(import.meta.dir, "../../shared/claude-models.json"), "utf8")).models.find((m: { id: string }) => m.id === "claude-haiku-4-5");
+    expect(isOffered(haiku, "2026-10-15")).toBe(true);
+    expect(isOffered(haiku, "2026-10-16")).toBe(false);
   });
 
   test("today's stamp is a plain calendar date", () => {
