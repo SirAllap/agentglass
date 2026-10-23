@@ -69,7 +69,7 @@ const NODE: Record<RowState, { tint: string; glyph: (s: number) => ReactNode; wo
   skipped: { tint: "var(--text3)", glyph: (s) => <MinusIcon size={s} />, word: "skipped" },
 };
 
-const FIELD_KEY = { color: "var(--text3)", fontSize: 10.5, textTransform: "uppercase" as const, letterSpacing: "0.04em" };
+export const FIELD_KEY = { color: "var(--text3)", fontSize: 10.5, textTransform: "uppercase" as const, letterSpacing: "0.04em" };
 
 function Timeline({ rows, phase, shown, still }: { rows: readonly Settled[]; phase: Phase; shown: number; still: boolean }) {
   return (
@@ -144,7 +144,7 @@ export function footerLine(o: { phase: Phase; writes: boolean; answer: StepAnswe
 }
 
 /** Tab stays inside the dialog, and what had the focus gets it back. */
-function useFocusTrap(on: boolean, root: React.RefObject<HTMLElement | null>) {
+export function useFocusTrap(on: boolean, root: React.RefObject<HTMLElement | null>) {
   useEffect(() => {
     if (!on) return;
     const before = document.activeElement as HTMLElement | null;

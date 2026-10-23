@@ -73,7 +73,7 @@ export interface Tracker {
   /** Where the card can go from here: ClickUp's list statuses, Jira's moves. An error is a sentence for the person. */
   statusOptions(task: ProviderTask): Promise<StatusOptionsResult>;
   /** One move, with the stamp the person saw (`task.updated`). The answer carries the card as it is afterwards. */
-  setStatus(task: ProviderTask, opt: StatusOption): Promise<StatusWriteResult>;
+  setStatus(task: ProviderTask, opt: StatusOption, fields?: Record<string, string | string[]>): Promise<StatusWriteResult>;
   /*
    * People and the hand-off, for a tracker with one assignee. ClickUp has
    * neither here: its multi-person picker and its hand-off button keep the

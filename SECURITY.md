@@ -678,7 +678,7 @@ The agent door (`agentglass-ui jira`, `ui_jira_*`, `POST /jira/door/<verb>`)
 calls what the routes call, so the Jira switch is the screen's switch and its
 refusal is the screen's sentence. It adds:
 
-- **A second switch, and the default is off.** `step`, `link`, `edit`, `comment`, `comment-edit`, `comment-delete`, `move`, `subtask`, `relate`, `unrelate`, `weblink` and `unweblink` change a
+- **A second switch, and the default is off.** `step`, `link`, `edit`, `comment`, `comment-edit`, `comment-delete`, `move`, `subtask`, `relate`, `unrelate`, `weblink`, `unweblink`, `worklog`, `worklog-edit`, `worklog-delete`, `watch` and `vote` change a
   shared site with no click of yours, so they need `AGENTGLASS_CONTROL_LEVEL=3`
   **and** the Jira write switch. The Jira switch alone is not enough: you turn
   it on to use the Jira screen yourself, and that must not hand your cards to
@@ -1219,7 +1219,7 @@ the full list and defaults:
 | `AGENTGLASS_UNDERSTUDY=0` | the Clone, whatever its settings file says — the variable can force it off, never on |
 | `AGENTGLASS_TMUX_OBSERVE_ONLY` | every tmux command that writes to a session — see [docs/BLAST-RADIUS.md](docs/BLAST-RADIUS.md) |
 | `AGENTGLASS_CLICKUP_WRITE=1` | *(opposite sense)* turns **on** writes to a ClickUp board, which are off by default |
-| `AGENTGLASS_JIRA_WRITE=1` | *(opposite sense)* turns **on** writes to a Jira site, which are off by default; the agent door's `step`, `link`, `edit`, `comment`, `comment-edit`, `comment-delete`, `move`, `subtask`, `relate`, `unrelate`, `weblink` and `unweblink` need `AGENTGLASS_CONTROL_LEVEL=3` as well |
+| `AGENTGLASS_JIRA_WRITE=1` | *(opposite sense)* turns **on** writes to a Jira site, which are off by default; the agent door's `step`, `link`, `edit`, `comment`, `comment-edit`, `comment-delete`, `move`, `subtask`, `relate`, `unrelate`, `weblink`, `unweblink`, `worklog`, `worklog-edit`, `worklog-delete`, `watch` and `vote` need `AGENTGLASS_CONTROL_LEVEL=3` as well |
 | `AGENTGLASS_GATE_FAILCLOSED=1` | *(opposite sense)* makes the gate deny on timeout instead of allowing |
 
 The `/control` channel, which drives the app's own window, has a level switch
@@ -1253,7 +1253,7 @@ value; only an unset variable is the default. What each level means:
   filled in; it may not call a route that writes. The person's click is the
   effect. There are no automatic grants, so `AGENTGLASS_CONTROL_LEVEL=3` lets an
   agent prepare something and never perform it, with one exception outside
-  `/control`: the Jira card door's `step`, `link`, `edit`, `comment`, `comment-edit`, `comment-delete`, `move`, `subtask`, `relate`, `unrelate`, `weblink` and `unweblink`, which perform at level 3
+  `/control`: the Jira card door's `step`, `link`, `edit`, `comment`, `comment-edit`, `comment-delete`, `move`, `subtask`, `relate`, `unrelate`, `weblink`, `unweblink`, `worklog`, `worklog-edit`, `worklog-delete`, `watch` and `vote`, which perform at level 3
   when the Jira write switch is also on (see "Jira, and the agent door to a
   card"). Five doors ship, all on one pull
   request: `pr.merge.stage` (method, commit subject and body), `pr.comment.stage`

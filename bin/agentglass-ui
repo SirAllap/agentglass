@@ -426,8 +426,9 @@ JIRA_VERBS = {
                        "args": {"key": ("a card id such as ORBIT-1042", True), "id": ("the comment's id", True),
                                 "confirm": ("true to say you mean it: it cannot be undone", True)}},
     "move": {"acting": True,
-             "surface": "move a card, or a sub-task, to another status by one of the move ids `moves` listed; refused when the card changed since `updated`, below control level 3 or when Jira writes are off",
-             "args": {"key": ("a card id such as ORBIT-1042", True), "id": ("the move's id, from `moves`", True), "updated": ("the stamp from `card` (state.updated)", True)}},
+             "surface": "move a card, or a sub-task, to another status by one of the move ids `moves` listed; a move whose `moves` entry lists `fields` needs the required ones in `fields`, by field key (a choice by its id, several as a list, a comment as Markdown), and is refused with no request while one is empty. Refused when the card changed since `updated`, below control level 3 or when Jira writes are off",
+             "args": {"key": ("a card id such as ORBIT-1042", True), "id": ("the move's id, from `moves`", True), "updated": ("the stamp from `card` (state.updated)", True),
+                      "fields": ("what the move's screen asks for, as a JSON object by field key: {\"resolution\": \"10000\", \"comment\": \"Shipped\"}", False)}},
     "subtask": {"acting": True,
                 "surface": "make a sub-task under a card, with the project's own sub-task type; refused below control level 3 or when Jira writes are off",
                 "args": {"key": ("the parent's card id such as ORBIT-1042", True), "title": ("the sub-task's title, one line", True)}},
@@ -444,9 +445,30 @@ JIRA_VERBS = {
     "unweblink": {"acting": True,
                   "surface": "take one web address off a card, by the id `links` listed for it; refused for an id the card does not hold, below control level 3, when Jira writes are off, and unless confirm is true",
                   "args": {"key": ("a card id such as ORBIT-1042", True), "id": ("the address's id, from `links`", True), "confirm": ("true to say you mean it", True)}},
+    "worklog": {"acting": True,
+                "surface": "log time on a card (only where the site has time tracking on for it): `time` like 1h 30m, an optional `started` day, an optional `note`, and how the remaining estimate follows by `adjust`: auto (lowers it by the time, the default), leave, new (sets it to `estimate`) or manual (lowers it by `estimate`). Refused below control level 3, when Jira writes are off, with no time or a time of nothing, or when the card changed since `updated`; the answer says the remaining estimate before and after",
+                "args": {"key": ("a card id such as ORBIT-1042", True), "time": ("the time spent, like 1h 30m", True), "updated": ("the stamp from `card` (state.updated)", True),
+                         "started": ("the day the work was done, 2026-01-31 (today by default)", False), "note": ("what was done, as Markdown", False),
+                         "adjust": ("auto, leave, new or manual", False), "estimate": ("the time `new` sets the remaining estimate to, or `manual` takes off it", False)}},
+    "worklog-edit": {"acting": True,
+                     "surface": "change one of the connected account's own work-log entries (its time, day or note), by an id from `activity --kind worklog`; `adjust` is auto, leave or new (there is no manual here). Refused for anybody else's entry, below control level 3, when Jira writes are off, or when the card changed since `updated`",
+                     "args": {"key": ("a card id such as ORBIT-1042", True), "id": ("the entry's id, from `activity --kind worklog`", True), "updated": ("the stamp from `card` (state.updated)", True),
+                              "time": ("the new time, like 1h 30m", False), "started": ("the day the work was done, 2026-01-31", False), "note": ("a new note, as Markdown (a note cannot be taken off)", False),
+                              "adjust": ("auto, leave or new", False), "estimate": ("the time `new` sets the remaining estimate to", False)}},
+    "worklog-delete": {"acting": True,
+                       "surface": "delete one of the connected account's own work-log entries, for good; `adjust` is auto (puts the time back on the estimate, the default), leave, new or manual (puts `estimate` back). Refused for anybody else's, below control level 3, when Jira writes are off, when the card changed since `updated`, and unless confirm is true",
+                       "args": {"key": ("a card id such as ORBIT-1042", True), "id": ("the entry's id, from `activity --kind worklog`", True), "updated": ("the stamp from `card` (state.updated)", True),
+                                "adjust": ("auto, leave, new or manual", False), "estimate": ("the time `new` sets the remaining estimate to, or `manual` adds back", False),
+                                "confirm": ("true to say you mean it: it cannot be undone", True)}},
+    "watch": {"acting": True,
+              "surface": "watch a card as the connected account, or stop with `off`; watching twice is watching. One request, no stamp (it does not change the card). Refused below control level 3 or when Jira writes are off",
+              "args": {"key": ("a card id such as ORBIT-1042", True), "off": ("true to stop watching", False)}},
+    "vote": {"acting": True,
+             "surface": "vote for a card as the connected account, or take the vote back with `off`. One request, no stamp. Refused by the site for the account's own cards and where voting is off, below control level 3 and when Jira writes are off",
+             "args": {"key": ("a card id such as ORBIT-1042", True), "off": ("true to take the vote back", False)}},
 }
 _JIRA_INT = ("updated", "pr_number", "start")
-_JIRA_BOOL = ("stay", "clear", "confirm")
+_JIRA_BOOL = ("stay", "clear", "confirm", "off")
 
 
 def jira_body(verb, given, as_name=None):
@@ -475,10 +497,18 @@ def jira_body(verb, given, as_name=None):
                 v = low == "true"
             elif not isinstance(v, bool):
                 return None, f"{k} must be true or false"
+        elif k == "fields":
+            if isinstance(v, str):
+                try:
+                    v = json.loads(v)
+                except ValueError:
+                    return None, "fields must be a JSON object by field key"
+            if not isinstance(v, dict):
+                return None, "fields must be a JSON object by field key"
         elif not isinstance(v, str):
             return None, f"{k} must be text"
         flat[k] = v
-    body = {k: flat[k] for k in ("key", "trigger", "updated", "url", "title", "field", "value", "add", "remove", "id", "text", "reply_to", "confirm", "other", "type", "direction") if k in flat}
+    body = {k: flat[k] for k in ("key", "trigger", "updated", "url", "title", "field", "value", "add", "remove", "id", "text", "reply_to", "confirm", "off", "other", "type", "direction", "fields") if k in flat}
     # `clear` is a step's choice on a step and a top-level word on an edit.
     if verb == "edit" and "clear" in flat:
         body["clear"] = flat["clear"]
@@ -548,7 +578,7 @@ def main(argv=None):
     pm = p.add_mutually_exclusive_group()
     pm.add_argument("--now", action="store_true", help="open it at once: ONLY when the person just asked you to prepare this")
     pm.add_argument("--quiet", action="store_true", help="wait behind a chip if the person is typing (the default)")
-    p = sub.add_parser("jira", help="a Jira card through the routes the screen uses: card, moves, links, linktypes, activity, steps, step, link, edit, comment, comment-edit, comment-delete, move, subtask, relate, unrelate, weblink, unweblink")
+    p = sub.add_parser("jira", help="a Jira card through the routes the screen uses: card, moves, links, linktypes, activity, steps, step, link, edit, comment, comment-edit, comment-delete, move, subtask, relate, unrelate, weblink, unweblink, worklog, worklog-edit, worklog-delete, watch, vote")
     js = p.add_subparsers(dest="jverb", required=True)
     for verb, spec in JIRA_VERBS.items():
         q = js.add_parser(verb, help=spec["surface"])

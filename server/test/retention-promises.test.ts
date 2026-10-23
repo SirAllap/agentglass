@@ -184,7 +184,7 @@ describe("the promises SECURITY.md makes about retention", () => {
     // "no route" half of the claim false.
     const idx = read("server/src/index.ts");
     const routes = [...idx.matchAll(/pathname === "(\/[^"]*)"/g)].map((m) => m[1]!);
-    const suspicious = routes.filter((r) => /delete|purge|clear|wipe|forget|reset/i.test(r) && !REVIEWED.has(r));
+    const suspicious = routes.filter((r) => /delete|purge|clear|wipe|forget|reset|remove/i.test(r) && !REVIEWED.has(r));
     expect(suspicious, "a route now removes data — say so in SECURITY.md").toEqual([]);
   });
 
@@ -243,6 +243,31 @@ describe("the promises SECURITY.md makes about retention", () => {
     // ClickUp comment above: it is their workspace's text, ours records nothing
     // about it, and no database is opened. The check below holds it to that.
     "/jira/comment/delete",
+    // Take off a Jira link the person's own account holds: a card link or a web
+    // address, in Jira, by the id the card itself lists. Same reading as the
+    // comment above: it is their workspace's data, ours records nothing about
+    // it, and no database is opened. The check below holds it to that.
+    "/jira/relate/remove",
+    "/jira/weblink/remove",
+    // Deletes the person's own work-log entry on a Jira card, in Jira, by its id
+    // and only when its author is the connected account (read from the site after
+    // the request). It is their workspace's time record: ours keeps nothing about
+    // it, and no database is opened. The check below holds it to that.
+    "/jira/worklog/delete",
+    // Take one entry out of a list the person set up in a settings file: a saved
+    // view or folder, a saved reply, a recipe, a prompt, a watched address, an
+    // extra source, an installed plugin. Configuration they chose, not anything
+    // the app recorded about their work; no database is opened.
+    "/jira/views/remove",
+    "/jira/folders/remove",
+    "/clickup/folders/remove",
+    "/clickup/views/remove",
+    "/recipes/remove",
+    "/saved-replies/remove",
+    "/pr-prompts/remove",
+    "/prs/notify-watch/remove",
+    "/understudy/source/remove",
+    "/plugins/remove",
     // DOES remove a row, and SECURITY.md says so: a status line on the
     // Lantern's board, by name, whoever posted it — the fourth of the rows the
     // document names as removable, beside `/agents/status` with `done`, which

@@ -222,6 +222,9 @@ async function remotesOf(creds: JiraCreds, upper: string): Promise<{ raw: unknow
   return { raw: Array.isArray(r.data) ? r.data : [] };
 }
 
+/** One address with or without the slash that ends a bare host: a card may hold the form another tool stored. */
+const sameAddress = (a: string, b: string): boolean => a === b || a.replace(/\/$/, "") === b.replace(/\/$/, "");
+
 /** Put a web address on a card, once. */
 export async function addWebLink(creds: JiraCreds, key: string, address: unknown, title: unknown): Promise<RelateOutcome> {
   const stop = guard(key);
@@ -231,7 +234,7 @@ export async function addWebLink(creds: JiraCreds, key: string, address: unknown
   const upper = key.toUpperCase();
   const held = await remotesOf(creds, upper);
   if ("stop" in held) return held.stop;
-  if (webLinksOf(held.raw).some((l) => l.url === url)) return { ok: true, already: true, web: webLinksOf(held.raw) };
+  if (webLinksOf(held.raw).some((l) => sameAddress(l.url, url))) return { ok: true, already: true, web: webLinksOf(held.raw) };
   // eslint-disable-next-line no-control-regex
   const said = (typeof title === "string" ? title : "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, MAX_LABEL) || new URL(url).host;
   const post = await jiraCall<unknown>(creds, remotePath(creds, upper), { method: "POST", body: { globalId: url, object: { url, title: said } } });

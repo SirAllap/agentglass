@@ -16,6 +16,9 @@
  * there.
  */
 
+import type { CardFollow } from "./jiraFollow.ts";
+import type { JiraMoveField } from "./jiraMoveFields.ts";
+
 /** Which half of the app a provider feeds. The two are genuinely different
  *  jobs, and Orca's split is the right one: code you review, and work you owe. */
 export type ProviderKind = "review" | "task";
@@ -129,8 +132,9 @@ export interface JiraStatus {
 /**
  * One move a Jira workflow offers a card from where it stands now. `id` is the
  * transition's, `label` the status it leads to (the site's own words, never
- * ours). `needs` names the screen fields the move cannot be made without: a
- * move with `needs` is shown and not offered, because there is no form for them.
+ * ours). `needs` names the screen fields the move cannot be made without, and
+ * `fields` is the move's screen as a form can draw it: a move with `needs` asks
+ * for them first instead of being made at once.
  */
 export interface JiraMove {
   id: string;
@@ -143,6 +147,7 @@ export interface JiraMove {
   toKind: "open" | "done" | "other";
   color?: string;
   needs?: string[];
+  fields?: JiraMoveField[];
 }
 
 /** The answer to `GET /jira/transitions`. An empty list always carries `cannot`. */
@@ -981,6 +986,8 @@ export interface CardEvent {
   at: number;
   /** `change` and `worklog` are Jira's: one edit of one field by a named person, and one entry of time logged; both carry `who` and their sentence in `text`. */
   kind: "created" | "status" | "seen" | "change" | "worklog";
+  /** Jira's work-log entry behind a `worklog` event: what is needed to change or delete it, and whether it is the connected account's own. */
+  entry?: { id: string; /** The time as Jira wrote it, "1h 30m". */ time: string; /** When the work was done, as Jira wrote it. */ started: string; note: string; mine: boolean };
   /** The status this event put the card in. */
   status?: string;
   /** ClickUp's colour for it, so the row reads like the pill everywhere else. */
@@ -1110,6 +1117,13 @@ export interface TaskDetail {
   task: ProviderTask;
   /** Work-log entries the card has beyond the ones in `events` (the read carries the first 20). */
   worklogMore?: number;
+  /**
+   * Jira: the card's time tracking, said only while the site has it on for this card; absent, there is nothing to log
+   * time against and the pane draws no control. Each is the site's own text ("5h", "1w 2d"), empty when not set.
+   */
+  tracking?: { remaining: string; original: string; spent: string };
+  /** Jira: whether the connected account watches the card and has voted for it, and the counts, from the card's own read. */
+  follow?: CardFollow;
   /** The card's links to other cards, of every type and both directions. Absent when the card was read without them. */
   linked?: CardLinked[];
   /** The card's Details under the properties; a field the site does not offer here and the card does not have is not in it. */

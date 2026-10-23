@@ -26,7 +26,7 @@ import { ACCOUNT_ID, LOGIN, adfToMarkdown, markdownToAdf, markdownToWiki, readMe
 export { readMentions };
 import { worklogEvents } from "./jiraActivity.ts";
 import { editOf, rememberOffered } from "./jiraEdit.ts";
-import { attachmentsOf, commentRows, factsOf, fullReader, linkedOf, offeredFields, textReader } from "./jiraCardRead.ts";
+import { attachmentsOf, commentRows, factsOf, fullReader, linkedOf, offeredFields, personId, textReader } from "./jiraCardRead.ts";
 import type { TaskDetail, ProviderTask } from "../../shared/providers.ts";
 import type { WriteOutcome } from "./trackerTypes.ts";
 
@@ -41,7 +41,6 @@ const MAX_COMMENT = 30_000;
 const PEOPLE_PAGE = 20;
 
 /** Who a person is to Jira: Cloud names them by account id, Data Center by key, then login. */
-const personId = (u: Record<string, unknown>): string => str(u.accountId) || str(u.key) || str(u.name);
 /** What a mention carries: the account id on Cloud, the login on Data Center. */
 const handleOf = (u: Record<string, unknown>, v: 2 | 3): string => (v === 3 ? str(u.accountId) : str(u.name));
 const avatarOf = (u: Record<string, unknown>): string | undefined => {
@@ -64,8 +63,17 @@ export function toDetail(issue: unknown, task: ProviderTask, v: 2 | 3, me?: stri
   const facts = cx ? factsOf(f, ids ?? {}, offeredFields(issue)) : undefined;
   // The first entries of the work log ride on the read (a field, no request); the rest are a page on demand.
   const wl = isObj(f.worklog) ? f.worklog : null;
-  const events = wl ? worklogEvents(wl.worklogs, v) : undefined;
+  const events = wl ? worklogEvents(wl.worklogs, v, me) : undefined;
   const worklogMore = wl && events && typeof wl.total === "number" ? Math.max(0, wl.total - (Array.isArray(wl.worklogs) ? wl.worklogs.length : 0)) : 0;
+  // Time tracking is the site's, per card: where it is off the field is not in the answer at all, and there is nothing to log time against.
+  const tt = isObj(f.timetracking) ? f.timetracking : null;
+  const tracking = tt ? { remaining: str(tt.remainingEstimate), original: str(tt.originalEstimate), spent: str(tt.timeSpent) } : undefined;
+  // The account's own marks on the card ride on the same read. `votes` is absent where the site has voting off.
+  const wt = isObj(f.watches) ? f.watches : null, vt = isObj(f.votes) ? f.votes : null;
+  const follow = wt || vt ? {
+    watching: wt?.isWatching === true, watchers: typeof wt?.watchCount === "number" ? wt.watchCount : null,
+    voted: vt?.hasVoted === true, votes: vt && typeof vt.votes === "number" ? vt.votes : null,
+  } : undefined;
   return {
     // Asked and empty is an answer ("none left"); not asked, the board's own count stands.
     detail: {
@@ -73,6 +81,7 @@ export function toDetail(issue: unknown, task: ProviderTask, v: 2 | 3, me?: stri
       description: f.description == null ? "" : textReader(v, names)(f.description), subtasks, checklists: [], comments,
       ...(attachments ? { attachments } : {}), ...(linked ? { linked } : {}), ...(facts ? { facts } : {}),
       ...(events ? { events } : {}), ...(worklogMore ? { worklogMore } : {}),
+      ...(tracking ? { tracking } : {}), ...(follow ? { follow } : {}),
     },
     more: Math.max(0, total - comments.length),
   };
@@ -91,7 +100,7 @@ export async function readDetail(creds: JiraCreds, key: string, o: { fresh?: boo
   const more = [ids?.start, ids?.flag, ids?.team].filter((x): x is string => !!x);
   const fields = [
     ...CARD_FIELDS, "description", "comment", "parent", "subtasks", "issuelinks", "attachment", "reporter", "issuetype",
-    "components", "fixVersions", "versions", "timetracking", "worklog",
+    "components", "fixVersions", "versions", "timetracking", "worklog", "watches", "votes",
     ...(ask.sprint ? [ask.sprint] : []), ...(ask.points ? [ask.points] : []), ...more,
   ].join(",");
   // `editmeta` says which Details this card's edit screen offers; it rides on the same read.

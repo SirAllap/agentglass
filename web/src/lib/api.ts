@@ -7,6 +7,7 @@ import type { AskedAlert } from "../../../shared/notifyPayload.ts";
 import type { CheckOnBasePlan, CheckOnBaseStatus } from "../../../shared/checkOnBase.ts";
 import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, EnginesReport, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest } from "../../../shared/types.ts";
 import type { JiraUnits } from "../../../shared/jiraStatusUnits.ts";
+import type { WorkSend } from "./jiraWorklog.ts";
 import type { CardEdit, CardFact, ProvidersResponse, JiraBlockOutcome, JiraConnectResult, JiraHandoffRule, JiraMoves, JiraPerson, JiraSettings, JiraStep, JiraStepChoice, JiraStepKey, JiraStepPr, JiraSteps, JiraStepsRead, JiraStatus, JiraViews, JiraViewRead, JiraViewChoice, JiraProjectChoice, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, CardWebLink, CardEvent, TrackerChoice } from "../../../shared/providers.ts";
 import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from "../../../shared/notifyPrefs.ts";
 import type { CheckMetric } from "../../../shared/checkBaseline.ts";
@@ -27,6 +28,10 @@ type ClickUpWrite = { ok: boolean; error?: string; conflict?: boolean; unauthori
 export type JiraLinkKind = { id: string; name: string; inward: string; outward: string };
 /** One field of a Jira card's Details, as `/jira/edit` takes it (see server/src/jiraEdit.ts). */
 export type JiraEditAsk = { field: string; value?: string | boolean | null; add?: string; remove?: string };
+/** What a work-log write answers: the card again, and the remaining estimate either side of it. */
+export type JiraWorkWrite = ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string; entry?: string; before?: string; after?: string; removed?: boolean };
+/** The answer of a watch or a vote: the mark as it now is, and `denied` when the site refused this account itself. */
+export type JiraFollowWrite = ClickUpWrite & { on?: boolean; denied?: boolean };
 /** A Jira write's answer: ClickUp's shape, plus `partial` when only some of it landed (a warning, never plain success). */
 type JiraWrite = ClickUpWrite & { partial?: string; /** What each block of a step did, in run order. */ blocks?: JiraBlockOutcome[] };
 
@@ -1430,8 +1435,8 @@ const realApi = {
   jiraTransitions: (key: string) =>
     get<{ ok: boolean; error?: string; throttled?: boolean } & Partial<JiraMoves>>(`/jira/transitions?key=${encodeURIComponent(key)}`),
   /** One move, with the `updated` the person saw; the server refuses it as a conflict if the card has moved since. */
-  jiraTransition: (key: string, transitionId: string, updated: number) =>
-    post<ClickUpWrite>("/jira/transition", { key, transitionId, updated }),
+  jiraTransition: (key: string, transitionId: string, updated: number, fields?: Record<string, string | string[]>) =>
+    post<ClickUpWrite>("/jira/transition", { key, transitionId, updated, ...(fields ? { fields } : null) }),
   /** Who the card can be given to, by what was typed. A short answer is not "that is everybody": Jira scans part of its directory. */
   jiraAssignable: (key: string, q: string, transition = "") =>
     get<{ ok: boolean; error?: string; throttled?: boolean; people?: JiraPerson[] }>(`/jira/assignable?${new URLSearchParams({ key, q, ...(transition ? { transition } : {}) })}`),
@@ -1503,6 +1508,19 @@ const realApi = {
     post<ClickUpWrite & { web?: CardWebLink[]; already?: boolean }>("/jira/weblink", { key, url, title }),
   jiraWebUnlink: (key: string, id: string) =>
     post<ClickUpWrite & { web?: CardWebLink[] }>("/jira/weblink/remove", { key, id }),
+  /**
+   * Time logged on a card (server/src/jiraWorklog.ts). `updated` is the stamp the person saw; the answer is the card again, with the
+   * remaining estimate before and after the write and, for an add, the id of the entry made.
+   */
+  jiraWorklog: (key: string, send: WorkSend, updated: number) =>
+    post<JiraWorkWrite>("/jira/worklog", { key, ...send, updated }),
+  jiraWorklogEdit: (key: string, id: string, send: WorkSend, updated: number) =>
+    post<JiraWorkWrite>("/jira/worklog/edit", { key, id, ...send, updated }),
+  jiraWorklogDelete: (key: string, id: string, send: Pick<WorkSend, "adjust">, updated: number) =>
+    post<JiraWorkWrite>("/jira/worklog/delete", { key, id, ...send, updated }),
+  /** The connected account's own mark on a card: `on` puts it on or takes it off, one request and no stamp (server/src/jiraFollow.ts). */
+  jiraWatch: (key: string, on: boolean) => post<JiraFollowWrite>("/jira/watch", { key, on }),
+  jiraVote: (key: string, on: boolean) => post<JiraFollowWrite>("/jira/vote", { key, on }),
   /** Labels the site knows that start with what was typed. */
   jiraLabels: (q: string) => get<{ ok: boolean; error?: string; throttled?: boolean; labels?: string[] }>(`/jira/labels?q=${encodeURIComponent(q)}`),
   providerTasks: (force = false) =>
@@ -2934,6 +2952,11 @@ const demoApi: typeof realApi = {
   jiraUnrelate: (_k: string, _i: string) => D({ ok: false, error: "not available in the demo" }),
   jiraWebLink: (_k: string, _u: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
   jiraWebUnlink: (_k: string, _i: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraWorklog: (_k: string, _s: WorkSend, _u: number) => D<JiraWorkWrite>({ ok: false, error: "not available in the demo" }),
+  jiraWorklogEdit: (_k: string, _i: string, _s: WorkSend, _u: number) => D<JiraWorkWrite>({ ok: false, error: "not available in the demo" }),
+  jiraWorklogDelete: (_k: string, _i: string, _s: Pick<WorkSend, "adjust">, _u: number) => D<JiraWorkWrite>({ ok: false, error: "not available in the demo" }),
+  jiraWatch: (_k: string, _o: boolean) => D<JiraFollowWrite>({ ok: false, error: "not available in the demo" }),
+  jiraVote: (_k: string, _o: boolean) => D<JiraFollowWrite>({ ok: false, error: "not available in the demo" }),
   jiraLabels: (_q: string) => D({ ok: true, labels: [] as string[] }),
   providerTasks: (_f?: boolean) => D({ tasks: [], more: false, at: 0 }),
   recipes: (_r?: string) => D({ recipes: [] }),

@@ -23,7 +23,7 @@
  */
 import { apiOf, jiraCall, withStored, type JiraCreds, type JiraResult } from "./jira.ts";
 import { redacted } from "./credentials.ts";
-import { avatarOf, commentRows, epochOf, textReader } from "./jiraCardRead.ts";
+import { avatarOf, commentRows, epochOf, personId, textReader } from "./jiraCardRead.ts";
 import type { CardEvent, TaskDetail } from "../../shared/providers.ts";
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -156,8 +156,11 @@ export function historyEvents(histories: unknown): CardEvent[] {
   return out.sort((x, y) => x.e.at - y.e.at || x.n - y.n).map((x) => x.e);
 }
 
-/** The work log of one answer as events: who logged how much, and the note they left. */
-export function worklogEvents(raw: unknown, v: 2 | 3): CardEvent[] {
+/**
+ * The work log of one answer as events: who logged how much, and the note they left. `me` is the connected account's id,
+ * so an entry of theirs says so and the pane can offer to change or delete it; with no `me` no entry is anybody's own.
+ */
+export function worklogEvents(raw: unknown, v: 2 | 3, me?: string): CardEvent[] {
   const read = textReader(v, {});
   const out: CardEvent[] = [];
   for (const w of Array.isArray(raw) ? raw : []) {
@@ -166,10 +169,13 @@ export function worklogEvents(raw: unknown, v: 2 | 3): CardEvent[] {
     const who = str(a.displayName) || str(a.name) || "Someone";
     const avatar = avatarOf(a);
     const spent = str(w.timeSpent) || (typeof w.timeSpentSeconds === "number" ? humanSeconds(String(w.timeSpentSeconds)) : "");
-    const note = w.comment == null ? "" : read(w.comment).trim().split("\n")[0] ?? "";
+    const full = w.comment == null ? "" : read(w.comment).trim();
+    const note = full.split("\n")[0] ?? "";
     // `started` is when the work was done; `created` is when it was written down. The first is what the log is read by.
     const at = epochOf(w.started) || epochOf(w.created);
-    out.push({ at, kind: "worklog", who, text: `logged ${spent || "time"}${note ? `: ${clip(note, 120)}` : ""}`, ...(avatar ? { avatar } : {}) });
+    const id = typeof w.id === "number" ? String(w.id) : str(w.id);
+    const entry = /^\d{1,12}$/.test(id) ? { id, time: spent, started: str(w.started), note: full, mine: !!me && personId(a) === me } : undefined;
+    out.push({ at, kind: "worklog", who, text: `logged ${spent || "time"}${note ? `: ${clip(note, 120)}` : ""}`, ...(avatar ? { avatar } : {}), ...(entry ? { entry } : {}) });
   }
   return out.sort((x, y) => x.at - y.at);
 }
@@ -206,7 +212,7 @@ export async function historyPage(creds: JiraCreds, key: string, startAt = 0): P
 }
 
 /** The rest of the work log, past the entries the issue read carried. */
-export async function worklogPage(creds: JiraCreds, key: string, startAt = WORKLOG_IN_READ): Promise<JiraResult<ActivityPage>> {
+export async function worklogPage(creds: JiraCreds, key: string, startAt = WORKLOG_IN_READ, me?: string): Promise<JiraResult<ActivityPage>> {
   if (!ISSUE_KEY.test(key)) return { ok: false, error: BAD_KEY };
   const v = apiOf(creds);
   const at = Math.max(0, Math.floor(startAt) || 0);
@@ -215,7 +221,7 @@ export async function worklogPage(creds: JiraCreds, key: string, startAt = WORKL
   const box = isObj(r.data) ? r.data : {};
   const total = typeof box.total === "number" ? box.total : 0;
   const got = Array.isArray(box.worklogs) ? box.worklogs.length : 0;
-  return { ok: true, data: { events: worklogEvents(box.worklogs, v), total, ...(at + got < total && got > 0 ? { next: at + got } : {}) } };
+  return { ok: true, data: { events: worklogEvents(box.worklogs, v, me), total, ...(at + got < total && got > 0 ? { next: at + got } : {}) } };
 }
 
 /** The comments from `startAt` on, oldest first, `COMMENT_PAGE` at a time. */
@@ -238,7 +244,7 @@ export const ACTIVITY_KINDS: readonly ActivityKind[] = ["history", "worklog", "c
 export function activityStored(kind: ActivityKind, key: string, startAt: number): Promise<JiraResult<ActivityPage>> {
   return withStored((c) => {
     if (kind === "history") return historyPage(c, key, startAt);
-    if (kind === "worklog") return worklogPage(c, key, startAt);
+    if (kind === "worklog") return worklogPage(c, key, startAt, redacted("jira")?.accountId);
     return commentsPage(c, key, startAt, redacted("jira")?.accountId);
   });
 }

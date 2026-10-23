@@ -27,8 +27,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api.ts";
 import { fmtAgo } from "../../lib/format.ts";
 import { Markdown } from "../../lib/markdown.tsx";
-import { avatarSrc } from "../../lib/avatarSrc.ts";
-import { chipInk } from "../../lib/contrast.ts";
 import { ACTIVITY_TABS, allRows, eventsFor, needsHistory, type ActivityTab } from "../../lib/jiraActivityRows.ts";
 import { answeredBy, threadsOf } from "../../lib/jiraThreads.ts";
 import type { CardEvent, TaskDetail } from "../../../../shared/providers.ts";
@@ -39,6 +37,9 @@ import { Spinner } from "../Spinner.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { EDGE } from "../workspace/Chrome.tsx";
 import { Section } from "./JiraSections.tsx";
+import { Author } from "./Author.tsx";
+import { WorklogPanel } from "./JiraWorklog.tsx";
+import type { JiraWorkUi } from "./useJiraWork.ts";
 
 type Comment = TaskDetail["comments"][number];
 
@@ -69,18 +70,6 @@ const NEWEST_KEY = "agx.jira.activityNewestFirst";
 
 const readNewest = (): boolean => { try { return localStorage.getItem(NEWEST_KEY) === "1"; } catch { return false; } };
 const writeNewest = (on: boolean): void => { try { localStorage.setItem(NEWEST_KEY, on ? "1" : "0"); } catch { /* the choice lasts as long as the page */ } };
-
-/** A person's face for a comment: their picture, or their initials where there is none or it did not load. */
-export function Author({ who, initials, avatar, size = 18 }: { who: string; initials?: string; avatar?: string; size?: number }) {
-  const [broken, setBroken] = useState(false);
-  const box = { width: size, height: size, borderRadius: 999 } as const;
-  if (avatar && !broken) {
-    return <img src={avatarSrc(avatar)} alt="" title={who} loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken(true)}
-      className="shrink-0 object-cover" style={box} />;
-  }
-  return <span title={who} className="shrink-0 inline-flex items-center justify-center font-medium"
-    style={{ ...box, fontSize: Math.max(9, Math.round(size * 0.36)), background: "var(--bg4)", color: chipInk(null) }}>{initials || "?"}</span>;
-}
 
 /**
  * What a person can do to the comments, handed down by the card while writing to
@@ -229,7 +218,7 @@ const EMPTY: Record<ActivityTab, string> = {
 
 const MORE_BTN = "agx-btn text-[10.5px] px-2.5 py-1 rounded-lg";
 
-export function JiraActivity({ cardKey, comments, moreComments, onMoreComments, worklog, worklogMore, act }: {
+export function JiraActivity({ cardKey, comments, moreComments, onMoreComments, worklog, worklogMore, act, tracking, work }: {
   cardKey: string;
   /** What can be done to the comments; absent where they are only read. */
   act?: CommentAct;
@@ -241,6 +230,10 @@ export function JiraActivity({ cardKey, comments, moreComments, onMoreComments, 
   /** The work log's first entries, from the card read. */
   worklog: CardEvent[];
   worklogMore: number;
+  /** The card's time tracking, when the site has it on for the card; absent, the work log is only a list. */
+  tracking?: TaskDetail["tracking"];
+  /** What can be done to the work log; absent where it is only read. */
+  work?: JiraWorkUi;
 }) {
   const [tab, setTab] = useState<ActivityTab>("comments");
   const [newest, setNewest] = useState(readNewest);
@@ -257,6 +250,10 @@ export function JiraActivity({ cardKey, comments, moreComments, onMoreComments, 
     setTab("comments"); setHistory(NO_HISTORY); setExtraLog({ events: [], left: null, busy: false, error: "" });
     setMoreBusy(false); setMoreError(""); setOpenRuns(new Set());
   }, [cardKey]);
+
+  // A write to the work log returns the card with its first entries again: the pages read in before it describe a log that has changed.
+  const logEpoch = work?.epoch ?? 0;
+  useEffect(() => { setExtraLog({ events: [], left: null, busy: false, error: "" }); }, [logEpoch]);
 
   const loadHistory = useCallback(async (startAt: number) => {
     const forKey = cardKey;
@@ -362,7 +359,9 @@ export function JiraActivity({ cardKey, comments, moreComments, onMoreComments, 
         {tab === "history" && newest && historyBar}
         {tab === "worklog" && newest && logBar}
         {empty && <div className="text-[11px]" style={{ color: "var(--text4)" }}>{EMPTY[tab]}</div>}
-        {!!shown.length && <div className="agx-jtl agx-jtl-flat"><EventRun events={shown} flat open onToggle={() => undefined} /></div>}
+        {tab === "worklog"
+          ? (!!shown.length || tracking) && <WorklogPanel events={events} tracking={tracking} work={work} newest={newest} />
+          : !!shown.length && <div className="agx-jtl agx-jtl-flat"><EventRun events={shown} flat open onToggle={() => undefined} /></div>}
         {tab === "history" && !newest && historyBar}
         {tab === "worklog" && !newest && logBar}
       </>

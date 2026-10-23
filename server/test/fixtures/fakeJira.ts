@@ -68,7 +68,7 @@ import workflowFixture from "./jira/workflow.json";
  * clauses and `order by key|updated|rank`; the permission model is a list of
  * denied issue keys per action, not a role system; there is no pagination on
  * comments. There are no sprint endpoints (a sprint is only the value on a
- * card), no field types on transition screens, no permission model for remote links. A
+ * card), transition screens carry typed fields only where a test gives a transition a `screen` (the rest are bare required keys), no permission model for remote links. A
  * sub-task made through `POST /issue` is listed under its parent; the seeded ones are listed
  * from the fixture rather than derived from `parent`. The link writes and `createmeta` follow the
  * shapes a real sandbox answered (201 with no body for a link, 204 for both deletes).
@@ -94,11 +94,26 @@ const SERVER_INFO = "/rest/api/2/serverInfo";
 const prefixOf = (f: FakeFlavor) => (f === "datacenter" ? "/rest/api/2" : "/rest/api/3");
 const CLOCK_BASE = Date.parse("2026-01-15T10:00:00.000Z");
 
+/**
+ * A field on a move's screen, in the shape the transitions answer gives it:
+ * a schema, and for a choice its allowedValues. Unverified on a real site
+ * apart from resolution, which a sandbox answered the same way.
+ */
+export interface FakeScreenField {
+  key: string;
+  name: string;
+  required: boolean;
+  schema: { type: string; system?: string; custom?: string; items?: string };
+  allowedValues?: { id: string; name?: string; value?: string }[];
+}
+
 export interface FakeTransition {
   id: string;
   name: string;
   toStatusId: string;
   requiredFields: string[];
+  /** Typed screen fields, beside the bare `requiredFields`; a key in both takes the typed one. */
+  screen?: FakeScreenField[];
   acceptsAssignee: boolean;
   /** A workflow post-function: this account becomes the assignee on entry. */
   postAssign?: string;
@@ -168,11 +183,21 @@ export interface FakeIssue {
   fixVersions?: string[];
   versions?: string[];
   timetracking?: { originalEstimate?: string; remainingEstimate?: string; timeSpent?: string };
+  /** Time tracking is off for this card: as on a real site, the field is not in the answer at all. */
+  noTimeTracking?: boolean;
   flagged?: string | null;
   startDate?: string | null;
   /** The change history, oldest first, as the site keeps it; `changelogCount` makes that many status flips instead (a card with a long history). */
   changelog?: FakeHistory[];
   changelogCount?: number;
+  /** Who watches and who voted, by account id. `noVoting`: the site has voting off (no `votes` field, no endpoint). `hideWatchCount`: this account may not see the count. */
+  watchers?: string[];
+  voters?: string[];
+  noVoting?: boolean;
+  hideWatchCount?: boolean;
+  /** The site refuses this account's watch or vote with a 403. */
+  denyWatch?: boolean;
+  denyVote?: boolean;
   /** Work logged, oldest first; `worklogCount` makes that many short ones. */
   worklogs?: FakeWorklog[];
   worklogCount?: number;
@@ -424,7 +449,9 @@ function boardFields(i: FakeIssue, state: FakeState, dc: boolean): Record<string
     components: (i.components ?? []).map((name, n) => ({ id: String(10300 + n), name })),
     fixVersions: (i.fixVersions ?? []).map((name, n) => ({ id: String(10400 + n), name })),
     versions: (i.versions ?? []).map((name, n) => ({ id: String(10500 + n), name })),
-    timetracking: i.timetracking ?? {},
+    ...(i.noTimeTracking ? {} : { timetracking: i.timetracking ?? {} }),
+    watches: { ...(i.hideWatchCount ? {} : { watchCount: (i.watchers ?? []).length }), isWatching: (i.watchers ?? []).includes(myselfFixture.accountId) },
+    ...(i.noVoting ? {} : { votes: { votes: (i.voters ?? []).length, hasVoted: (i.voters ?? []).includes(myselfFixture.accountId) } }),
     worklog: { startAt: 0, maxResults: 20, total: (i.worklogs ?? []).length, worklogs: (i.worklogs ?? []).slice(0, 20).map((w) => worklogObject(w, dc)) },
     [ids.start]: i.startDate ?? null,
     [ids.flag]: i.flagged ? [{ id: "10600", value: i.flagged }] : null,
@@ -464,11 +491,45 @@ function historyObject(h: FakeHistory, dc: boolean) {
   return { id: h.id, author: userObject(h.author, dc), created: h.created, items: h.items.map((it) => ({ fieldtype: "jira", ...it })) };
 }
 
+/** Jira's `started`: the date and time with the zone's offset and no colon in it. */
+const WORKLOG_STARTED = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{4}$/;
+/** A work-log note as plain text from the body the site was sent: an ADF document on Cloud, wiki text on Data Center; null when it is neither. */
+function worklogNote(c: unknown, dc: boolean): string | null {
+  if (dc) return typeof c === "string" ? c : null;
+  const doc = c as { type?: string; content?: { content?: { text?: string }[] }[] } | undefined;
+  if (!doc || doc.type !== "doc" || !Array.isArray(doc.content)) return null;
+  return doc.content.flatMap((p) => (p.content ?? []).map((t) => t.text ?? "")).join("\n");
+}
+
 function worklogObject(w: FakeWorklog, dc: boolean) {
   const secs = w.timeSpentSeconds;
   const human = `${secs >= 3600 ? `${Math.floor(secs / 3600)}h` : ""}${secs % 3600 ? `${secs >= 3600 ? " " : ""}${(secs % 3600) / 60}m` : ""}`;
   const doc = (t: string) => (dc ? t : { type: "doc", version: 1, content: [{ type: "paragraph", content: [{ type: "text", text: t }] }] });
   return { id: w.id, author: userObject(w.author, dc), started: w.started, created: w.created, updated: w.created, timeSpent: human, timeSpentSeconds: secs, ...(w.comment ? { comment: doc(w.comment) } : {}) };
+}
+
+
+/** Jira's default working time: a day is eight hours, a week five days. A site can change both; the fake does not. */
+const UNIT_SECONDS: Record<string, number> = { w: 5 * 8 * 3600, d: 8 * 3600, h: 3600, m: 60 };
+/** `1h 30m` as seconds, or null when it is not a time. */
+function secondsOf(text: unknown): number | null {
+  if (typeof text !== "string" || !text.trim()) return null;
+  const rest = text.trim().replace(/(\d+)\s*([wdhm])/g, "");
+  if (rest.trim() !== "") return null;
+  let n = 0;
+  for (const m of text.matchAll(/(\d+)\s*([wdhm])/g)) n += Number(m[1]) * UNIT_SECONDS[m[2]];
+  return n;
+}
+/** Seconds as Jira writes an estimate: weeks, days, hours, minutes; nothing at all is `0m`. */
+function humanOf(secs: number): string {
+  let left = Math.max(0, Math.round(secs / 60) * 60);
+  const out: string[] = [];
+  for (const u of ["w", "d", "h", "m"]) {
+    const n = Math.floor(left / UNIT_SECONDS[u]);
+    left -= n * UNIT_SECONDS[u];
+    if (n) out.push(`${n}${u}`);
+  }
+  return out.join(" ") || "0m";
 }
 
 /** `listed` is the comment endpoint's shape, which carries `parentId`; the comments inside an issue read do not (measured on a real site). */
@@ -486,7 +547,7 @@ function transitionObject(t: FakeTransition, withFields: boolean, dc: boolean) {
     id: t.id,
     name: t.name,
     to: statusObject(t.toStatusId),
-    hasScreen: t.requiredFields.length > 0 || t.acceptsAssignee,
+    hasScreen: t.requiredFields.length > 0 || t.acceptsAssignee || !!t.screen?.length,
     isGlobal: false,
     isInitial: false,
     // Availability and conditions are reported by Cloud only.
@@ -499,6 +560,14 @@ function transitionObject(t: FakeTransition, withFields: boolean, dc: boolean) {
     fields[k] = { required: true, key: k, name: k[0].toUpperCase() + k.slice(1), hasDefaultValue: false, operations: ["set"] };
   }
   if (t.acceptsAssignee) fields.assignee = { required: false, key: "assignee", name: "Assignee", hasDefaultValue: false, operations: ["set"] };
+  for (const f of t.screen ?? []) {
+    fields[f.key] = {
+      required: f.required, key: f.key, name: f.name, hasDefaultValue: false,
+      operations: f.key === "comment" ? ["add"] : ["set"],
+      schema: f.schema,
+      ...(f.allowedValues ? { allowedValues: f.allowedValues } : null),
+    };
+  }
   return { ...base, fields };
 }
 
@@ -844,6 +913,55 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
       return json(200, { issues: slice.map((i) => issueObject(i, live, false, fields)), isLast: last, ...(last ? {} : { nextPageToken: pageToken(offset + size) }) });
     }
 
+    // One work-log entry: read, change and delete. Whoever the token is may change their own; another's is a 403, as for a non-admin.
+    // The remaining estimate follows `adjustEstimate` as Jira's four modes do; a missing or unknown one is a 400.
+    if ((r = /^\/issue\/([^/]+)\/worklog\/(\d+)$/.exec(path))) {
+      const issue = live.issues[decodeURIComponent(r[1])];
+      if (!issue) return notFound(decodeURIComponent(r[1]));
+      const w = (issue.worklogs ?? []).find((x) => x.id === r![2]);
+      if (!w) return json(404, { errorMessages: ["Can not find a worklog for the given id."], errors: {} });
+      if (m === "GET") return json(200, worklogObject(w, dc));
+      const limit = limited(issue.key);
+      if (limit) return limit;
+      if (issue.noTimeTracking) return json(403, { errorMessages: ["Time tracking is disabled."], errors: {} });
+      if (w.author !== myselfFixture.accountId) return json(403, { errorMessages: ["You do not have permission to edit this worklog."], errors: {} });
+      const tt = (issue.timetracking ??= {});
+      const was = secondsOf(tt.remainingEstimate) ?? 0;
+      const mode = query.adjustEstimate ?? "auto";
+      if (m === "DELETE") {
+        if (!["new", "leave", "manual", "auto"].includes(mode)) return bad({}, ["Invalid adjustEstimate."]);
+        let next = was;
+        if (mode === "auto") next = was + w.timeSpentSeconds;
+        else if (mode === "new") { const n = secondsOf(query.newEstimate); if (n === null) return bad({}, ["Invalid newEstimate."]); next = n; }
+        else if (mode === "manual") { const n = secondsOf(query.increaseBy); if (n === null) return bad({}, ["Invalid increaseBy."]); next = was + n; }
+        issue.worklogs!.splice(issue.worklogs!.indexOf(w), 1);
+        if (mode !== "leave") tt.remainingEstimate = humanOf(next);
+        tt.timeSpent = humanOf(issue.worklogs!.reduce((a, x) => a + x.timeSpentSeconds, 0));
+        bump(issue);
+        return json(204, null);
+      }
+      if (m === "PUT") {
+        // `manual` is the POST's and the DELETE's: an update has no amount to take off or add back.
+        if (!["new", "leave", "auto"].includes(mode)) return bad({}, ["Invalid adjustEstimate."]);
+        const b = (body ?? {}) as { timeSpent?: unknown; started?: unknown; comment?: unknown };
+        const secs = b.timeSpent === undefined ? w.timeSpentSeconds : secondsOf(b.timeSpent);
+        if (!secs) return bad({ timeLogged: "Worklog must not be null or empty." });
+        if (b.started !== undefined && !(typeof b.started === "string" && WORKLOG_STARTED.test(b.started))) return bad({ started: "Invalid date format." });
+        const note = b.comment === undefined ? undefined : worklogNote(b.comment, dc);
+        if (note === null) return bad({ comment: dc ? "Comment must be a string." : "Operation value must be an Atlassian Document" });
+        let next = was;
+        if (mode === "auto") next = Math.max(0, was - (secs - w.timeSpentSeconds));
+        else if (mode === "new") { const n = secondsOf(query.newEstimate); if (n === null) return bad({}, ["Invalid newEstimate."]); next = n; }
+        w.timeSpentSeconds = secs;
+        if (typeof b.started === "string") w.started = b.started;
+        if (note !== undefined) w.comment = note;
+        if (mode !== "leave") tt.remainingEstimate = humanOf(next);
+        tt.timeSpent = humanOf(issue.worklogs!.reduce((a, x) => a + x.timeSpentSeconds, 0));
+        bump(issue);
+        return json(200, worklogObject(w, dc));
+      }
+    }
+
     // One comment by id: read, change and delete. Whoever the token is may change their own; another's is a 403, as for a non-admin.
     if ((r = /^\/issue\/([^/]+)\/comment\/(\d+)$/.exec(path))) {
       const issue = live.issues[decodeURIComponent(r[1])];
@@ -937,6 +1055,29 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
       return json(204, null);
     }
 
+    // Watching and voting: the account's own mark, 204, and idempotent as on the site. A watcher is named in the request (the account id
+    // as a bare JSON string on Cloud, the login on Data Center, removed by `?accountId=` or `?username=`); a vote names nobody.
+    if ((m === "POST" || m === "DELETE") && (r = /^\/issue\/([^/]+)\/(watchers|votes)$/.exec(path))) {
+      const issue = live.issues[decodeURIComponent(r[1])];
+      if (!issue) return notFound(decodeURIComponent(r[1]));
+      if (r[2] === "watchers") {
+        if (issue.denyWatch) return json(403, { errorMessages: ["You do not have permission to manage watchers."], errors: {} });
+        const given = m === "POST" ? body : dc ? query.username : query.accountId;
+        if (typeof given !== "string") return json(400, { errorMessages: ["The watcher must be given as a string."], errors: {} });
+        const id = dc ? userDirectory.find((u) => u.name === given)?.accountId : userById(given)?.accountId;
+        if (!id) return json(404, { errorMessages: ["The user does not exist."], errors: {} });
+        const list = (issue.watchers ??= []);
+        if (m === "POST" && !list.includes(id)) list.push(id);
+        if (m === "DELETE" && list.includes(id)) list.splice(list.indexOf(id), 1);
+        return json(204, null);
+      }
+      if (issue.noVoting || issue.denyVote || issue.reporter === myselfFixture.accountId) return json(404, { errorMessages: ["Voting is disabled, or you cannot vote for an issue you have reported."], errors: {} });
+      const list = (issue.voters ??= []);
+      if (m === "POST" && !list.includes(myselfFixture.accountId)) list.push(myselfFixture.accountId);
+      if (m === "DELETE" && list.includes(myselfFixture.accountId)) list.splice(list.indexOf(myselfFixture.accountId), 1);
+      return json(204, null);
+    }
+
     if ((r = /^\/issue\/([^/]+)(?:\/(transitions|assignee|comment|remotelink|changelog|worklog))?$/.exec(path))) {
       const key = decodeURIComponent(r[1]);
       const sub = r[2];
@@ -1004,6 +1145,32 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
         return json(200, { self: "", maxResults: size, startAt: start, total: hs.length, isLast: start + size >= hs.length, values: hs.slice(start, start + size) });
       }
 
+      if (sub === "worklog" && m === "POST") {
+        if (issue.noTimeTracking) return json(403, { errorMessages: ["Time tracking is disabled."], errors: {} });
+        if (live.deny.comment.includes(key)) return json(403, { errorMessages: ["You do not have permission to work on this issue."], errors: {} });
+        const b = (body ?? {}) as { timeSpent?: unknown; started?: unknown; comment?: unknown };
+        const secs = secondsOf(b.timeSpent);
+        if (!secs) return bad({ timeLogged: "Worklog must not be null or empty." });
+        if (b.started !== undefined && !(typeof b.started === "string" && WORKLOG_STARTED.test(b.started))) return bad({ started: "Invalid date format." });
+        const note = b.comment === undefined ? undefined : worklogNote(b.comment, dc);
+        if (note === null) return bad({ comment: dc ? "Comment must be a string." : "Operation value must be an Atlassian Document" });
+        const tt = (issue.timetracking ??= {});
+        const was = secondsOf(tt.remainingEstimate) ?? 0;
+        const mode = query.adjustEstimate ?? "auto";
+        if (!["new", "leave", "manual", "auto"].includes(mode)) return bad({}, ["Invalid adjustEstimate."]);
+        let next = was;
+        if (mode === "auto") next = Math.max(0, was - secs);
+        else if (mode === "new") { const n = secondsOf(query.newEstimate); if (n === null) return bad({}, ["Invalid newEstimate."]); next = n; }
+        else if (mode === "manual") { const n = secondsOf(query.reduceBy); if (n === null) return bad({}, ["Invalid reduceBy."]); next = Math.max(0, was - n); }
+        const when = stamp(++live.tick);
+        const entry: FakeWorklog = { id: String(60100 + live.tick), author: myselfFixture.accountId, started: typeof b.started === "string" ? b.started : new Date().toISOString().replace("Z", "+0000"), created: when, timeSpentSeconds: secs, ...(note ? { comment: note } : {}) };
+        (issue.worklogs ??= []).push(entry);
+        if (mode !== "leave") tt.remainingEstimate = humanOf(next);
+        tt.timeSpent = humanOf(issue.worklogs.reduce((a, x) => a + x.timeSpentSeconds, 0));
+        bump(issue);
+        return json(201, worklogObject(entry, dc));
+      }
+
       if (sub === "worklog" && m === "GET") {
         const ws = issue.worklogs ?? [];
         const start = Math.max(0, Number(query.startAt) || 0);
@@ -1041,13 +1208,41 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
         const t = live.deny.transition.includes(key) ? undefined : (live.workflow.transitions[issue.statusId] ?? []).find((x) => x.id === id);
         if (!t) return bad({}, [`Transition id '${id}' is not valid for this issue.`]);
         const sent: Record<string, unknown> = { ...b.update, ...b.fields };
-        const onScreen = new Set([...t.requiredFields, ...(t.acceptsAssignee ? ["assignee"] : [])]);
+        const typed = new Map((t.screen ?? []).map((f) => [f.key, f]));
+        const onScreen = new Set([...t.requiredFields, ...(t.acceptsAssignee ? ["assignee"] : []), ...typed.keys()]);
         const stray: Record<string, string> = {};
         for (const k of Object.keys(sent)) if (!onScreen.has(k)) stray[k] = `Field '${k}' cannot be set. It is not on the appropriate screen, or unknown.`;
         if (Object.keys(stray).length) return bad(stray);
         const missing: Record<string, string> = {};
-        for (const k of t.requiredFields) if (!(k in sent) || sent[k] === null) missing[k] = `${k[0].toUpperCase()}${k.slice(1)} is required.`;
+        const must = [...t.requiredFields.filter((k) => !typed.has(k)), ...[...typed.values()].filter((f) => f.required).map((f) => f.key)];
+        for (const k of must) if (!(k in sent) || sent[k] === null) missing[k] = `${k[0].toUpperCase()}${k.slice(1)} is required.`;
         if (Object.keys(missing).length) return bad(missing);
+        // The shape of each typed value, as the real API holds it to.
+        const wrong: Record<string, string> = {};
+        let comment: unknown;
+        for (const [k, f] of typed) {
+          if (!(k in sent)) continue;
+          const val = sent[k];
+          const known = new Set((f.allowedValues ?? []).map((a) => a.id));
+          const isChoice = (x: unknown) => typeof x === "object" && x !== null && known.has(String((x as { id?: unknown }).id));
+          if (k === "comment") {
+            const add = (val as { add?: { body?: unknown } }[] | undefined)?.[0]?.add?.body;
+            const okShape = dc ? typeof add === "string" && add.trim() !== "" : typeof add === "object" && add !== null && (add as { type?: string }).type === "doc";
+            if (!okShape) wrong[k] = dc ? "Comment body can not be empty!" : "Operation value must be an Atlassian Document (see the Atlassian Document Format documentation)";
+            else comment = add;
+          } else if (f.schema.type === "array") {
+            if (!Array.isArray(val) || !val.every(isChoice)) wrong[k] = `${f.name} is not valid.`;
+          } else if (f.allowedValues) {
+            if (!isChoice(val)) wrong[k] = `${f.name} is not valid.`;
+          } else if (f.schema.type === "number") {
+            if (typeof val !== "number") wrong[k] = `${f.name} must be a number.`;
+          } else if (f.schema.type === "string") {
+            const rich = f.schema.system === "description" || f.schema.custom?.endsWith(":textarea");
+            const richOk = !rich || dc ? typeof val === "string" : typeof val === "object" && val !== null && (val as { type?: string }).type === "doc";
+            if (!richOk) wrong[k] = `${f.name} is not valid.`;
+          }
+        }
+        if (Object.keys(wrong).length) return bad(wrong);
         const named = sent.assignee as { accountId?: string; name?: string } | null | undefined;
         // Data Center names a person by login; an account id means nothing to it, and the other way round.
         const who = named ? (dc ? userDirectory.find((u) => u.name === named.name)?.accountId : userById(named.accountId ?? "")?.accountId) : null;
@@ -1055,6 +1250,12 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
         issue.statusId = t.toStatusId;
         if ("assignee" in sent) issue.assignee = who ?? null;
         if (t.requiredFields.includes("resolution")) issue.resolution = String((sent.resolution as { name?: string } | undefined)?.name ?? "Done");
+        const picked = typed.get("resolution");
+        if (picked && sent.resolution) issue.resolution = picked.allowedValues?.find((a) => a.id === String((sent.resolution as { id?: unknown }).id))?.name ?? "Done";
+        if (comment !== undefined) {
+          const at = stamp(++live.tick);
+          issue.comments.push({ id: String(30100 + live.tick), author: myselfFixture.accountId, created: at, updated: at, body: comment });
+        }
         // A workflow post-function runs after the screen fields, so it wins.
         if (t.postAssign) issue.assignee = t.postAssign;
         bump(issue);

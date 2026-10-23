@@ -26,9 +26,12 @@ import { readJiraLinks, setJiraWeb, type JiraLinks } from "../../lib/jiraLinks.t
 import { JiraProps } from "./JiraFacts.tsx";
 import { EditNote } from "./EditNote.tsx";
 import { useJiraEdit, type JiraEditUi } from "./useJiraEdit.ts";
+import type { JiraFollowUi } from "./useJiraFollow.ts";
 import { nowOf, stepFor } from "../../lib/jiraEdit.ts";
 import { keepThreads } from "../../lib/jiraThreads.ts";
 import { JiraActivity, type CommentAct } from "./JiraActivity.tsx";
+import { useJiraWork } from "./useJiraWork.ts";
+import { useJiraFollow } from "./useJiraFollow.ts";
 import { JiraDescription } from "./JiraDescription.tsx";
 import { LinkedBlock, SubtasksBlock, WebLinksBlock, type JoinAct } from "./JiraJoins.tsx";
 import { madeLink, webAddress } from "../../lib/jiraJoins.ts";
@@ -49,7 +52,7 @@ type Row = Mentionable & { initials?: string; avatar?: string };
 export function JiraCard({ t, header, writes, onTask }: {
   t: ProviderTask;
   /** What stays above the tabs, given how to re-read this card. */
-  header: (r: { onRefresh: () => void; refreshing: boolean; ed: JiraEditUi }) => React.ReactNode;
+  header: (r: { onRefresh: () => void; refreshing: boolean; ed: JiraEditUi; follow: JiraFollowUi }) => React.ReactNode;
   /** Whether writing to Jira is switched on; off draws a line instead of the box. */
   writes: boolean;
   /** The card as a fresher read or a write left it, for the list beside this. */
@@ -200,6 +203,20 @@ export function JiraCard({ t, header, writes, onTask }: {
     setDetail((d) => (d ? { ...sent, comments: d.comments } : sent));
     onTaskRef.current(sent.task); putCard(key, sent.task);
   };
+  /* Time logged on the card: each write is one request whose answer is the card again, so nothing is read twice. The comments stay as
+     they were, as for a change to what the card is joined to. Offered only while writing to Jira is on and the site tracks time here. */
+  const work = useJiraWork({
+    cardKey: key, stamp: (detail?.task ?? t).updated ?? 0,
+    onDone: (sent) => take(sent),
+    onStale: refresh,
+  });
+
+  /* Watching and voting: the account's own marks, one request each, with the counts the card was read with moved by the press. */
+  const follow = useJiraFollow({
+    cardKey: key, follow: detail?.follow,
+    onFollow: (f) => setDetail((d) => (d ? { ...d, follow: f } : d)),
+  });
+
   const joinAct: JoinAct = {
     subtask: async (title) => {
       const r = await api.jiraSubtask(key, title).catch(() => null);
@@ -260,7 +277,7 @@ export function JiraCard({ t, header, writes, onTask }: {
   return (
     <div ref={paneRef} className="flex flex-col flex-1 min-w-0 min-h-0">
       <div className="shrink-0" style={{ background: "var(--bg)" }}>
-        {header({ onRefresh: refresh, refreshing, ed })}
+        {header({ onRefresh: refresh, refreshing, ed, follow })}
         {/* One line is kept for what a change says, empty or not, so what it says never moves the controls under it. */}
         <div style={{ minHeight: ed.edit ? NOTE_H : 0 }}><EditNote note={editing.note} busy={!!editing.busy} onUndo={editing.undo} onClose={editing.clear} /></div>
       </div>
@@ -279,7 +296,7 @@ export function JiraCard({ t, header, writes, onTask }: {
             <Section id="development" title="Development">
               <JiraCardPrs query={key} writable={writes} quiet={!writes} mentions={mentions} />
             </Section>
-            <JiraActivity cardKey={key} act={act} comments={detail.comments} moreComments={more} worklog={detail.events ?? []} worklogMore={detail.worklogMore ?? 0}
+            <JiraActivity cardKey={key} act={act} comments={detail.comments} moreComments={more} worklog={detail.events ?? []} worklogMore={detail.worklogMore ?? 0} tracking={detail.tracking} work={writes && detail.tracking ? work : undefined}
               onMoreComments={(page, left) => { setDetail((d) => (d ? { ...d, comments: [...d.comments, ...page] } : d)); setMore(left); }} />
           </>
         )}

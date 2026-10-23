@@ -31,12 +31,14 @@ import { deleteCommentStored, detailStored, editCommentStored, commentStored } f
 import { editStored, type EditAsk } from "./jiraEdit.ts";
 import { addWebLinkStored, createSubtaskStored, linkKindsStored, relateCardsStored, removeWebLinkStored, unrelateCardsStored } from "./jiraRelate.ts";
 import { jiraSteps, runStepBody, STEP_KEYS } from "./jiraSteps.ts";
+import { setVoteStored, setWatchStored } from "./jiraFollow.ts";
+import { deleteWorkStored, editWorkStored, logWorkStored } from "./jiraWorklog.ts";
 import { rememberOwnMove } from "./jirawatch.ts";
 
-export const DOOR_VERBS = ["card", "moves", "links", "linktypes", "activity", "steps", "step", "link", "edit", "comment", "comment-edit", "comment-delete", "move", "subtask", "relate", "unrelate", "weblink", "unweblink"] as const;
+export const DOOR_VERBS = ["card", "moves", "links", "linktypes", "activity", "steps", "step", "link", "edit", "comment", "comment-edit", "comment-delete", "move", "subtask", "relate", "unrelate", "weblink", "unweblink", "worklog", "worklog-edit", "worklog-delete", "watch", "vote"] as const;
 export type DoorVerb = (typeof DOOR_VERBS)[number];
 /** The verbs that change the site. The rest read. */
-export const DOOR_ACTING: readonly DoorVerb[] = ["step", "link", "edit", "comment", "comment-edit", "comment-delete", "move", "subtask", "relate", "unrelate", "weblink", "unweblink"];
+export const DOOR_ACTING: readonly DoorVerb[] = ["step", "link", "edit", "comment", "comment-edit", "comment-delete", "move", "subtask", "relate", "unrelate", "weblink", "unweblink", "worklog", "worklog-edit", "worklog-delete", "watch", "vote"];
 export const isActing = (v: string): boolean => (DOOR_ACTING as readonly string[]).includes(v);
 
 /**
@@ -123,9 +125,11 @@ export function cardParts(t: ProviderTask): { state: Record<string, unknown>; un
 /**
  * The edit a door body asks for. `clear` is the one way to take a value off (a date, the parent, an estimate, the
  * flag), so no verb has to spell Jira's per-field way of clearing; a flag is `true` or `false` as text or as a boolean.
+ * A door body never carries people to notify: an edit keeps the accounts the text already names and no others, so an
+ * agent cannot ping somebody by rewriting a description or a comment (`comment` sends none either).
  */
 export function editAsk(b: Record<string, unknown>): EditAsk | string {
-  const ask: EditAsk = { field: b.field, value: b.value, add: b.add, remove: b.remove, mentions: Array.isArray(b.mentions) ? b.mentions : undefined };
+  const ask: EditAsk = { field: b.field, value: b.value, add: b.add, remove: b.remove };
   if (b.clear !== undefined && typeof b.clear !== "boolean") return "clear must be true or false";
   if (b.clear === true) {
     if (b.value !== undefined || b.add !== undefined || b.remove !== undefined) return "clear takes no value: it only takes one off";
@@ -154,6 +158,25 @@ function written(r: { ok: boolean; error?: string; conflict?: boolean; unauthori
   };
 }
 
+/**
+ * What a work-log verb asks, in the route's shape: the door's `adjust` is the mode as a word and `estimate` the time it
+ * takes, where the route takes them as one object. Nothing else is read, and the route checks all of it again.
+ */
+export function worklogAsk(b: Record<string, unknown>): { time: unknown; started: unknown; note: unknown; adjust: unknown } | string {
+  if (b.adjust !== undefined && typeof b.adjust !== "string") return "adjust is auto, leave, new or manual";
+  if (b.estimate !== undefined && typeof b.estimate !== "string") return "estimate is a time like 2h";
+  return { time: b.time, started: b.started, note: b.note, adjust: b.adjust === undefined ? undefined : { mode: b.adjust, value: b.estimate } };
+}
+
+/** An estimate the site gave, as the state carries it: only what a time looks like, never a free string. */
+const estimate = (s: string | undefined): string | undefined => (s !== undefined && /^[0-9wdhm ]{0,40}$/.test(s) ? s : undefined);
+
+/** The answer of a work-log write: the card's state, and the remaining estimate either side of it. */
+function loggedAs(r: Awaited<ReturnType<typeof logWorkStored>>, extra: Record<string, unknown>): DoorAnswer {
+  const before = estimate(r.before), after = estimate(r.after);
+  return written(r, r.ok ? { ...extra, ...(r.entry ? { entry: r.entry } : null), ...(before !== undefined ? { remainingBefore: before } : null), ...(after !== undefined ? { remainingAfter: after } : null) } : {});
+}
+
 /** The most rows of each list a card answer carries; the count of those left out is in `state`. */
 const ROWS_MAX = 40;
 
@@ -173,6 +196,11 @@ function listsOf(d: TaskDetail): { state: Record<string, unknown>; untrusted: Re
       ...(left(linked.length) ? { linkedNotShown: linked.length - ROWS_MAX } : null),
       ...(left(files.length) ? { attachmentsNotShown: files.length - ROWS_MAX } : null),
       ...(facts.some((f) => f.tone === "flag") ? { flagged: true } : null),
+      // The connected account's own marks and the counts (numbers only): voting is absent where the site has it off.
+      ...(d.follow ? {
+        watching: d.follow.watching, voted: d.follow.voted,
+        ...(d.follow.watchers !== null ? { watchers: d.follow.watchers } : null), ...(d.follow.votes !== null ? { votes: d.follow.votes } : null),
+      } : null),
     },
     untrusted: {
       ...(d.subtasks.length ? { subtasks: d.subtasks.slice(0, ROWS_MAX).map(row) } : null),
@@ -250,7 +278,7 @@ async function readMoves(key: string): Promise<DoorAnswer> {
       ok: true, key: key.toUpperCase(),
       state: { writes: jiraWriteEnabled(), moves: options.map((m) => ({ id: m.id, ...(m.toId ? { toId: m.toId } : null), toKind: m.toKind, needsFields: (m.needs ?? []).length })) },
       untrusted: {
-        moves: options.map((m) => ({ id: m.id, name: m.name, toStatus: m.toStatus, ...(m.needs?.length ? { needs: m.needs } : null) })),
+        moves: options.map((m) => ({ id: m.id, name: m.name, toStatus: m.toStatus, ...(m.needs?.length ? { needs: m.needs } : null), ...(m.fields?.length ? { fields: m.fields } : null) })),
         ...(r.data.cannot ? { cannot: r.data.cannot } : null),
       },
     },
@@ -333,7 +361,7 @@ export async function runDoor(verb: string, b: Record<string, unknown>): Promise
       return written(r);
     }
     case "comment-edit": {
-      const r = await editCommentStored(key, String(b.id ?? ""), typeof b.text === "string" ? b.text : "", Array.isArray(b.mentions) ? b.mentions : undefined);
+      const r = await editCommentStored(key, String(b.id ?? ""), typeof b.text === "string" ? b.text : "", undefined);
       return written(r, r.comment ? { commentId: r.comment.id, edited: true } : {});
     }
     case "comment-delete": {
@@ -343,7 +371,7 @@ export async function runDoor(verb: string, b: Record<string, unknown>): Promise
       return written(r, r.removed ? { removed: true } : {});
     }
     case "move": {
-      const r = await moveStored(key, String(b.id ?? ""), typeof b.updated === "number" ? b.updated : 0);
+      const r = await moveStored(key, String(b.id ?? ""), typeof b.updated === "number" ? b.updated : 0, b.fields);
       // The watch must not announce the move an agent made as news, the same as for the person's own.
       if (r.ok && r.task && r.was) rememberOwnMove({ ...r.task, status: r.was }, r.task.status);
       return written(r, r.was !== undefined ? { moved: true } : {});
@@ -370,6 +398,31 @@ export async function runDoor(verb: string, b: Record<string, unknown>): Promise
       if (b.confirm !== true) return refuse("Taking an address off is not undone here: pass confirm true to say you mean it");
       const r = await removeWebLinkStored(key, b.id);
       return written(r, r.ok ? { removed: true, webLinks: r.web?.length ?? 0 } : {});
+    }
+    case "worklog": {
+      const ask = worklogAsk(b);
+      if (typeof ask === "string") return refuse(ask);
+      return loggedAs(await logWorkStored(key, ask, typeof b.updated === "number" ? b.updated : 0), { logged: true });
+    }
+    case "worklog-edit": {
+      const ask = worklogAsk(b);
+      if (typeof ask === "string") return refuse(ask);
+      return loggedAs(await editWorkStored(key, String(b.id ?? ""), ask, typeof b.updated === "number" ? b.updated : 0), { edited: true });
+    }
+    case "worklog-delete": {
+      // The screen asks the person first; an agent says it meant it, which is the same sentence in a different mouth.
+      if (b.confirm !== true) return refuse("Deleting a time entry cannot be undone: pass confirm true to say you mean it");
+      const ask = worklogAsk(b);
+      if (typeof ask === "string") return refuse(ask);
+      return loggedAs(await deleteWorkStored(key, String(b.id ?? ""), ask, typeof b.updated === "number" ? b.updated : 0), { removed: true });
+    }
+    case "watch":
+    case "vote": {
+      // `off` takes the mark away; saying nothing puts it on, which is what the verb's name asks.
+      if (b.off !== undefined && typeof b.off !== "boolean") return refuse("off must be true or false");
+      const on = b.off !== true;
+      const r = await (verb === "watch" ? setWatchStored : setVoteStored)(key, on);
+      return written(r, r.ok ? { [verb === "watch" ? "watching" : "voted"]: on } : {});
     }
     default:
       return refuse(`That is not a card verb: ${DOOR_VERBS.join(", ")}`);

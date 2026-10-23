@@ -143,6 +143,11 @@ describe("what a comment row says about itself", () => {
 });
 
 describe("the door's edit body", () => {
+  test("a body never carries people to notify: an edit keeps only the accounts the text already names", () => {
+    const ask = D.editAsk({ field: "description", value: "ask @Grace Sample", mentions: [{ id: "acc-0002", name: "Grace Sample" }] }) as { mentions?: unknown };
+    expect(ask.mentions).toBeUndefined();
+  });
+
   test("clear is the one way to take a value off, and it says which fields it applies to", () => {
     expect(D.editAsk({ field: "duedate", clear: true })).toMatchObject({ value: null });
     expect(D.editAsk({ field: "originalEstimate", clear: true })).toMatchObject({ value: "" });
@@ -432,6 +437,15 @@ function suite(flavor: FakeFlavor) {
       const r = await D.runDoor("comment-edit", { key: "ORBIT-1042", id: c.id, text: "hello again @Ada Example" });
       expect(r.body).toMatchObject({ ok: true });
       expect(JSON.stringify(fake.state.issues["ORBIT-1042"]!.comments.find((x) => x.id === c.id)!.body)).toContain(dc ? "[~ada]" : '"type":"mention"');
+    });
+
+    test("an edit at the door cannot name a person the text did not already name", async () => {
+      const grace = dc ? "grace" : "acc-0002";
+      const first = await K.commentStored("ORBIT-1042", "plain words", []);
+      const c = first.detail!.comments.filter((x) => x.mine).at(-1)!;
+      const r = await D.runDoor("comment-edit", { key: "ORBIT-1042", id: c.id, text: "now ask @Grace Sample", mentions: [{ id: grace, name: "Grace Sample" }] });
+      expect(r.body).toMatchObject({ ok: true });
+      expect(JSON.stringify(fake.state.issues["ORBIT-1042"]!.comments.find((x) => x.id === c.id)!.body)).not.toContain(dc ? "[~grace]" : '"type":"mention"');
     });
 
     test("somebody else's comment is refused after the read and never written", async () => {

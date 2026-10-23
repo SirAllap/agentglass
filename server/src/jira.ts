@@ -52,6 +52,7 @@ import type { CardWebLink } from "../../shared/providers.ts";
 import { clearCredential, redacted, secretFor, setCredential } from "./credentials.ts";
 import type { CallResult, WriteOutcome } from "./trackerTypes.ts";
 import { prAddress } from "../../shared/taskref.ts";
+import { moveBody, screenOf } from "./jiraMoveFields.ts";
 import type {
   JiraAuth, JiraBlockOutcome, JiraConnectResult, JiraDeployment, JiraHandoffRule, JiraKind, JiraMove, JiraMoves, JiraPerson, JiraSettings, JiraStatus, ProviderTask,
 } from "../../shared/providers.ts";
@@ -1086,8 +1087,10 @@ export function setJiraWrites(on: boolean): void {
  * a word looked for in it.
  *
  * Ceiling: one move per call. Reaching a distant status through several moves
- * is not here, and neither is a form for the fields a screen may ask for: a
- * move that needs one is listed with `needs` and refused when asked for.
+ * is not here. A move whose screen asks for a field is listed with `needs` and
+ * `fields` (jiraMoveFields.ts reads them); it is made with the values the
+ * person typed, and refused with no request when a required one is empty or of
+ * a kind this cannot fill.
  */
 
 export const ISSUE_KEY = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
@@ -1111,6 +1114,8 @@ export function toMoves(raw: unknown): JiraMove[] {
     const needs = isObj(t.fields)
       ? Object.entries(t.fields).filter(([k, v]) => isObj(v) && v.required === true && FIELD_KEY.test(k)).map(([k]) => k)
       : [];
+    // The screen is carried only by a move that has to ask: the rest are made at once, as before.
+    const screen = needs.length ? screenOf(t.fields) : [];
     const color = CATEGORY_COLOR[str(cat.colorName)];
     moves.push({
       id,
@@ -1121,6 +1126,7 @@ export function toMoves(raw: unknown): JiraMove[] {
       toKind: catKey === "done" ? "done" : catKey === "new" || catKey === "indeterminate" ? "open" : "other",
       ...(color ? { color } : null),
       ...(needs.length ? { needs } : null),
+      ...(needs.length && screen.length ? { fields: screen } : null),
     });
   }
   // Two moves into one status (a quick path and a long one) must not read as one.
@@ -1155,15 +1161,15 @@ export const NOT_ACCEPTED = "Jira did not accept that move. The card may have mo
  *
  * In order, and each step may end it: the write switch, the inputs, a read of
  * `updated` (refused as a conflict when it is not the one the person saw), the
- * move's screen (refused with no write when it asks for a field), the POST,
- * and a read of the card. Three requests, plus one when the site's moves for
+ * move's screen (refused with no write when a required field is empty), the
+ * POST with what was typed, and a read of the card. Three requests, plus one when the site's moves for
  * this status are not remembered yet.
  *
  * The reads that bracket the write skip the in-flight merge: a read of this
  * card already in the air from before the write would be handed back as the
  * card "after" it.
  */
-export async function moveIssue(creds: JiraCreds, key: string, transitionId: string, updated: number): Promise<WriteOutcome> {
+export async function moveIssue(creds: JiraCreds, key: string, transitionId: string, updated: number, fields?: unknown): Promise<WriteOutcome> {
   if (!jiraWriteEnabled()) return { ok: false, error: WRITE_OFF };
   if (!ISSUE_KEY.test(key)) return { ok: false, error: "That is not a Jira card id" };
   if (!/^\d{1,10}$/.test(transitionId)) return { ok: false, error: "That is not one of this card's moves" };
@@ -1206,13 +1212,17 @@ export async function moveIssue(creds: JiraCreds, key: string, transitionId: str
     move = moves.data.find((m) => m.id === transitionId);
     if (!move) return { ok: false, error: "That move is not available any more: reload the card" };
   }
-  if (move.needs?.length) {
+  // A required field with nothing in it, or one this cannot fill, ends it here: no write.
+  // A move whose screen could not be read as fields keeps the old refusal.
+  if (move.needs?.length && !move.fields?.length) {
     return { ok: false, error: `That move needs ${move.needs.join(", ")}, which cannot be filled in here yet` };
   }
+  const built = moveBody(transitionId, move.fields, fields, v);
+  if (!built.ok) return { ok: false, error: built.error };
 
   const post = await jiraCall<unknown>(creds, `/rest/api/${v}/issue/${encodeURIComponent(key)}/transitions`, {
     method: "POST",
-    body: { transition: { id: transitionId } },
+    body: built.body,
   });
   if (!post.ok) {
     if (post.status === 409) return { ok: false, conflict: true, error: "Somebody changed this card while you were moving it, reloaded" };
@@ -1321,9 +1331,9 @@ export async function linkPullRequestStored(key: string, address: string, title 
 /** The stored connection's moves, or the sentence that says there is none. */
 export const movesStored = (key: string): Promise<JiraResult<JiraMoves>> => withStored((c) => movesOf(c, key));
 
-export async function moveStored(key: string, transitionId: string, updated: number): Promise<WriteOutcome> {
+export async function moveStored(key: string, transitionId: string, updated: number, fields?: unknown): Promise<WriteOutcome> {
   const c = storedCreds();
-  return c ? moveIssue(c, key, transitionId, updated) : { ok: false, error: NOT_CONNECTED };
+  return c ? moveIssue(c, key, transitionId, updated, fields) : { ok: false, error: NOT_CONNECTED };
 }
 
 // ---------------------------------------------------------------------------

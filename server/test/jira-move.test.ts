@@ -168,7 +168,7 @@ function suite(flavor: FakeFlavor) {
         expect((await move("ORBIT-1042", "22")).ok).toBe(true);
         fake.requests.length = 0;
         const r = await move("ORBIT-1050", "22");
-        expect(r.error).toBe("That move needs resolution, which cannot be filled in here yet");
+        expect(r.error).toBe("That move needs Resolution, which cannot be filled in here yet");
         expect(posts().length).toBe(0);
       });
 
@@ -215,7 +215,7 @@ function suite(flavor: FakeFlavor) {
       test("a move that needs a field is refused here, with no POST", async () => {
         const r = await move("ORBIT-1044", "41");
         expect(r.ok).toBe(false);
-        expect(r.error).toBe("That move needs resolution, which cannot be filled in here yet");
+        expect(r.error).toBe("That move needs Resolution, which cannot be filled in here yet");
         expect(posts().length).toBe(0);
         expect(fake.state.issues["ORBIT-1044"]!.statusId).toBe("4");
       });

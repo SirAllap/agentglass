@@ -39,10 +39,12 @@ const Done = () => <span className="inline-flex items-center gap-1">copied<DoneI
 
 /**
  * Above the card: what you reach for after reading it. The hand-off sits first on the left (a tracker that
- * may not write passes nothing), then the two copies; Open and Refresh share the far right corner.
+ * may not write passes nothing), then the two copies and the tracker's marks; Open and Refresh share the far right corner.
  */
-export function CardActionBar({ id, url, handoff, copied, onCopy, onRefresh, refreshing }: {
+export function CardActionBar({ id, url, handoff, marks, copied, onCopy, onRefresh, refreshing }: {
   id: string; url: string; handoff?: ReactNode;
+  /** The tracker's own marks on the card (watching, votes), after the copies; a tracker with none passes nothing. */
+  marks?: ReactNode;
   copied: Copied | null; onCopy: (value: string, which: Copied) => void;
   onRefresh: () => void; refreshing: boolean;
 }) {
@@ -58,6 +60,7 @@ export function CardActionBar({ id, url, handoff, copied, onCopy, onRefresh, ref
           {copied === "url" ? <Done /> : "Copy URL"}
         </button>
       )}
+      {marks}
       <span className="flex-1" />
       {open && <a href={open} target="_blank" rel="noreferrer" className={BAR_BTN} style={{ border: LINE, color: "var(--text2)" }}>Open ↗</a>}
       <RefreshButton onRefresh={onRefresh} busy={refreshing} title="Read this card again" />

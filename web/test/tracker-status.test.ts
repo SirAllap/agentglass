@@ -87,8 +87,17 @@ describe("Jira", () => {
     expect(opt.needs).toEqual(["resolution"]);
     sent = [];
     const r = await mod.jiraSetStatus(jiraCard, opt);
-    expect(r).toEqual({ ok: false, error: "That move needs resolution, which cannot be filled in here yet" });
+    expect(r).toEqual({ ok: false, error: "That move needs resolution" });
     expect(sent.length).toBe(0);
+  });
+
+  test("the form's values ride with the move, and the stamp is still the one the person saw", async () => {
+    answers["/jira/transitions"] = moves([m("41", "Done", { needs: ["resolution"] })]);
+    answers["/jira/transition"] = () => new Response(JSON.stringify({ ok: true, task: jiraCard }), { headers: { "content-type": "application/json" } });
+    const opt = (await mod.jiraStatusOptions(jiraCard)).data![0]!;
+    sent = [];
+    expect((await mod.jiraSetStatus(jiraCard, opt, { resolution: "10000", comment: "Shipped" })).ok).toBe(true);
+    expect(sent.map((s) => s.body)).toEqual([{ key: "ORBIT-1042", transitionId: "41", updated: jiraCard.updated, fields: { resolution: "10000", comment: "Shipped" } }]);
   });
 
   test("an empty list is the server's sentence about the person, never 'no statuses'", async () => {

@@ -68,7 +68,7 @@ describe("a face with a Jira picture", () => {
 
 describe("no tracker component sets a raw avatar src", () => {
   const root = join(import.meta.dir, "../src/components");
-  const files = ["TasksPanel.tsx", "AssignPicker.tsx", "TrackerPeoplePick.tsx", "jira/JiraActivity.tsx", "tasks/Composer.tsx"];
+  const files = ["TasksPanel.tsx", "AssignPicker.tsx", "TrackerPeoplePick.tsx", "jira/Author.tsx", "tasks/Composer.tsx"];
   test("every <img> fed by an avatar goes through avatarSrc", () => {
     for (const f of files) {
       const src = readFileSync(join(root, f), "utf8").split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
@@ -78,7 +78,7 @@ describe("no tracker component sets a raw avatar src", () => {
     }
   });
   test("the faces fall back to initials when the picture fails", () => {
-    for (const f of ["TasksPanel.tsx", "AssignPicker.tsx", "TrackerPeoplePick.tsx", "jira/JiraActivity.tsx"]) {
+    for (const f of ["TasksPanel.tsx", "AssignPicker.tsx", "TrackerPeoplePick.tsx", "jira/Author.tsx"]) {
       expect(readFileSync(join(root, f), "utf8"), f).toContain("onError");
     }
   });

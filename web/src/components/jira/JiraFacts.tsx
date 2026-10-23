@@ -34,6 +34,8 @@ import { TrackerHandOffButton } from "../TrackerHandOffButton.tsx";
 import { TypeMark } from "./JiraSections.tsx";
 import { EditDay, EditText, PriorityMenu, TagEditor } from "../tasks/CardEdit.tsx";
 import type { JiraEditUi } from "./useJiraEdit.ts";
+import type { JiraFollowUi } from "./useJiraFollow.ts";
+import { JiraFollow } from "./JiraFollow.tsx";
 import { CardActionBar, CardBand, CardBandField, CardChips, CardField, CardTitle, EYEBROW, useCopied } from "../CardChrome.tsx";
 
 export const WRITES_OFF = "Changes to Jira are switched off, so this card is read-only here. Turn on “Changes in Jira” in the Jira settings.";
@@ -73,9 +75,11 @@ export function Crumbs({ t }: { t: ProviderTask }) {
 }
 
 /** What stays above the tabs: the actions, the key chips and the title. */
-export function JiraHead({ t, writable, onTask, onRefresh, refreshing, ed }: {
+export function JiraHead({ t, writable, onTask, onRefresh, refreshing, ed, follow }: {
   t: ProviderTask; writable: boolean; onTask: (t: ProviderTask) => void;
   onRefresh?: () => void; refreshing?: boolean;
+  /** Watching and voting, with what the last press said; absent until the card is read. */
+  follow?: JiraFollowUi;
   /** What the card lets a person change; absent until the card is read, and where writing is off. */
   ed?: JiraEditUi;
 }) {
@@ -88,8 +92,9 @@ export function JiraHead({ t, writable, onTask, onRefresh, refreshing, ed }: {
     <div className="px-4 pt-4 pb-2 flex flex-col gap-2 min-w-0">
       <CardActionBar id={key} url={t.url} copied={copied} onCopy={(v, w) => void copy(v, w)}
         onRefresh={onRefresh ?? (() => undefined)} refreshing={!!refreshing}
+        marks={follow ? <JiraFollow ui={follow} writes={writable} cardKey={key} /> : undefined}
         handoff={writable ? <TrackerHandOffButton tracker={TRACKERS.jira} task={t} query={key} onSaid={setSaid} onTask={onTask} /> : undefined} />
-      <Said said={said} />
+      <Said said={follow?.said || said} />
       <CardChips id={key} copied={copied} onCopy={(v, w) => void copy(v, w)} mine={t.mine}
         extra={t.customId && t.customId !== t.id ? <span className="text-[10px] px-1.5 py-0.5 rounded-md leading-[1.35] tabular-nums" style={{ color: "var(--text4)", border: EDGE }} title="Jira's own id for this card">{t.id}</span> : undefined} />
       <CardTitle title={t.title} copied={copied} onCopy={(v, w) => void copy(v, w)}>

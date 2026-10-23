@@ -6505,7 +6505,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname === "/jira/transition" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
-      const r = await jiraMove(String(b.key ?? ""), String(b.transitionId ?? ""), typeof b.updated === "number" ? b.updated : 0);
+      const r = await jiraMove(String(b.key ?? ""), String(b.transitionId ?? ""), typeof b.updated === "number" ? b.updated : 0, b.fields);
       // The watch must not announce the person's own move as news.
       if (r.ok && r.task && r.was) jiraRememberOwnMove({ ...r.task, status: r.was }, r.task.status);
       return json(r, r.ok ? 200 : r.conflict ? 409 : 400);
@@ -6693,6 +6693,28 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (!trustedCaller(req, from)) return csrfBlocked();
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
       const r = await jiraCommentDelete(String(b.key ?? ""), String(b.id ?? ""));
+      return json(r, r.ok ? 200 : 400);
+    }
+    /* Time logged on a card (jiraWorklog.ts): an entry added, and your own entries changed or deleted. Each behind the write switch and
+       the card's stamp: 409 when the card moved since the person saw it, 400 with a sentence when refused. The answer is the card again
+       with the remaining estimate before and after. */
+    if ((pathname === "/jira/worklog" || pathname === "/jira/worklog/edit" || pathname === "/jira/worklog/delete") && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const key = String(b.key ?? "");
+      const stamp = typeof b.updated === "number" ? b.updated : 0;
+      const ask = { time: b.time, started: b.started, note: b.note, adjust: b.adjust };
+      const r = pathname === "/jira/worklog" ? await jiraWorkLog(key, ask, stamp)
+        : pathname === "/jira/worklog/edit" ? await jiraWorkEdit(key, String(b.id ?? ""), ask, stamp)
+        : await jiraWorkDelete(key, String(b.id ?? ""), ask, stamp);
+      return json(r, r.ok ? 200 : r.conflict ? 409 : 400);
+    }
+    /* The connected account's own marks on a card (jiraFollow.ts): watching it and voting for it, each `{ key, on }` and one request. Behind
+       the write switch and, unlike the card's other changes, with no stamp: neither moves the card, and both are idempotent. */
+    if ((pathname === "/jira/watch" || pathname === "/jira/vote") && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = await (pathname === "/jira/watch" ? jiraWatch : jiraVote)(String(b.key ?? ""), b.on);
       return json(r, r.ok ? 200 : 400);
     }
     /* One field of a card's Details changed (jiraEdit.ts). 409 when the card moved since the person saw it. */
@@ -10629,6 +10651,8 @@ startCardWatch((n) => broadcast({ type: "card", data: n }));
 import { startJiraWatch, rememberOwnMove as jiraRememberOwnMove, rememberOwnAssign as jiraRememberOwnAssign } from "./jirawatch.ts";
 import { linkKindsStored as jiraLinkKinds, createSubtaskStored as jiraSubtask, relateCardsStored as jiraRelate, unrelateCardsStored as jiraUnrelate, addWebLinkStored as jiraWebLink, removeWebLinkStored as jiraWebUnlink } from "./jiraRelate.ts";
 import { detailStored as jiraDetailRead, mentionableStored as jiraMentionable, commentStored as jiraCommentOn, editCommentStored as jiraCommentEdit, deleteCommentStored as jiraCommentDelete } from "./jiraComments.ts";
+import { setVoteStored as jiraVote, setWatchStored as jiraWatch } from "./jiraFollow.ts";
+import { logWorkStored as jiraWorkLog, editWorkStored as jiraWorkEdit, deleteWorkStored as jiraWorkDelete } from "./jiraWorklog.ts";
 import { editStored as jiraEditCard, labelSuggestionsStored as jiraLabels } from "./jiraEdit.ts";
 startJiraWatch((n) => broadcast({ type: "card", data: n }));
 /* Re-asks the open pull request lists a real client has looked at, on a timer,

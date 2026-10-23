@@ -33,6 +33,8 @@
   ],
   "issues": {
     "ORBIT-1042": {
+      "watchers": ["acc-0002", "acc-0003"],
+      "voters": ["acc-0003"],
       "attachments": [
         {
           "id": "30001",

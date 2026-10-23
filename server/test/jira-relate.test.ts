@@ -244,6 +244,14 @@ function suite(flavor: FakeFlavor) {
         expect(fake.state.remoteLinks["ORBIT-1042"]!.filter((l) => l.object.url === URL1).length).toBe(1);
       });
 
+      test("an address stored without the slash that ends a bare host is the same address", async () => {
+        fake.state.remoteLinks["ORBIT-1042"] = [...(fake.state.remoteLinks["ORBIT-1042"] ?? []), { id: "88001", object: { url: "https://docs.acme.example", title: "Home" } } as never];
+        fake.requests.length = 0;
+        const again = await R.addWebLinkStored("ORBIT-1042", "https://docs.acme.example", "Home again");
+        expect(again).toMatchObject({ ok: true, already: true });
+        expect(writes()).toEqual([]);
+      });
+
       test("an address that is not http(s), or has a password, is refused with no request at all", async () => {
         for (const bad of ["javascript:alert(1)", "file:///etc/passwd", `https://ada:${PW}@docs.acme.example/`, "docs.acme.example", ""]) expect(await R.addWebLinkStored("ORBIT-1042", bad, "x")).toMatchObject({ ok: false });
         expect(fake.requests).toEqual([]);
