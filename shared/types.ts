@@ -2124,6 +2124,12 @@ export interface PrWatch {
   active: boolean;
   lastAt?: number;
   lastText?: string;
+  /** The head commit the watch last read this pull request at: what "Watching run on abc1234" names. */
+  head?: string;
+  /** Set after an Update branch the server accepted: `waiting` = the head has not moved yet (checks of the old head
+   *  are not news), `moved` = it has, its checks are not there yet, `unchanged` = it never moved and the watch has
+   *  gone back to the current head. `from` is the head the sync started on. */
+  sync?: { state: "waiting" | "moved" | "unchanged"; from?: string };
 }
 
 export interface PrWatchFire {
@@ -4071,6 +4077,8 @@ export interface PrActionResult {
   /** Update branch only: GitHub refused because base and head conflict — the
    *  one refusal the panel can offer to resolve. */
   conflict?: boolean;
+  /** Update branch only: the head GitHub had when the request was made, so a watch can tell the new one apart. */
+  headBefore?: string;
   /** Update branch only: GitHub accepted the request (it answers 202, queued)
    *  but the branch had not moved when last read, so nothing was synced here. */
   requested?: boolean;

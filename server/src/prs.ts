@@ -513,7 +513,8 @@ export async function prRollup(rootIn: unknown, numberIn: unknown, fresh = false
     const pr = r?.data?.repository?.pullRequest;
     const ctxs = pr?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts;
     const raw = ctxs?.nodes;
-    if (!raw) return { ok: false, error: "GitHub would not list its checks" };
+    // A commit with no checks yet (the gap after a sync or a push) has no rollup but does have a head: the watch needs it to tell "not started" from "old".
+    if (!raw) return { ok: false, error: "GitHub would not list its checks", sha: pr?.commits?.nodes?.[0]?.commit?.oid || undefined, state: typeof pr?.state === "string" ? pr.state : undefined };
     const normalised = raw.map(withWorkflow);
     const r2 = rollupChecks(normalised);
     // The commit named in this same response, not the cached one: a push since the list read would file these runs under the old commit.
@@ -5337,6 +5338,7 @@ export async function updateBranch(rootIn: unknown, number: unknown, syncLocal?:
   const before = root && pr ? await remoteHeadOf(root, pr.head) : null;
   const r = await runPr(rootIn, Number(number), ["pr", "update-branch", String(Number(number))]);
   if (!r.ok) return updateBranchRefusal(r.error || "") ?? r;
+  const out = (x: PrActionResult): PrActionResult => before ? { ...x, headBefore: before } : x;
   let landed: UpdateLanded = "unknown";
   if (root && pr && before) {
     landed = updateLanded(before, await remoteHeadOf(root, pr.head));
@@ -5347,20 +5349,20 @@ export async function updateBranch(rootIn: unknown, number: unknown, syncLocal?:
     }
   }
   if (landed === "unmoved") {
-    return { ...r, requested: true, detail: "Update requested — GitHub has not moved the branch yet. Your local copy was left as it is." };
+    return out({ ...r, requested: true, detail: "Update requested — GitHub has not moved the branch yet. Your local copy was left as it is." });
   }
   /* A head that could not be read is not a head that moved. Only a sync the
      person asked for claims anything, so only that path is held back. */
   if (landed === "unknown" && wantLocal && root) {
-    return { ...r, requested: true, detail: "Update requested — the branch on GitHub could not be read to confirm it moved. Your local copy was left as it is." };
+    return out({ ...r, requested: true, detail: "Update requested — the branch on GitHub could not be read to confirm it moved. Your local copy was left as it is." });
   }
-  if (!wantLocal || !root) return r;
+  if (!wantLocal || !root) return out(r);
   /* "Synced" first, because what somebody wants to know is whether it worked;
      the two halves follow, in the order they happened. The old wording opened
      with "updated on GitHub", which reads as a report rather than an answer.
      It also said so, and fast-forwarded, straight after the 202, when nothing
      had moved: "your local branch moved up too" over a branch that did not. */
-  return { ...r, detail: `Synced — updated on GitHub, and ${await syncLocalHead(root, Number(number))}` };
+  return out({ ...r, detail: `Synced — updated on GitHub, and ${await syncLocalHead(root, Number(number))}` });
 }
 
 /**

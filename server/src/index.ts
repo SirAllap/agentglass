@@ -175,7 +175,7 @@ import { noteAsk as noteWatchAsk, startPrWatch } from "./prWatch.ts";
 import { onPrChanged, deliverPrChanged } from "./prChanged.ts";
 import {
   listWatches, addWatch, removeWatch, setPreset, applyPreset, sawMine, onTalkSeen as watchOnTalkSeen, pendingFires, ackFire,
-  subscribeWatchChange, subscribeWatchFire, subscribeWatchChecks, startPrNotifyWatch,
+  subscribeWatchChange, subscribeWatchFire, subscribeWatchChecks, startPrNotifyWatch, noteSync,
 } from "./prNotifyWatch.ts";
 import { subscribeAskedAlerts, handleAskedAlertRoute } from "./askedAlerts.ts";
 import { measureFile } from "./filemeasure.ts";
@@ -8676,7 +8676,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         case "/prs/labels": res = await setLabels(root, n, b.add, b.remove); break;
         case "/prs/reviewers": res = await setReviewers(root, n, b.add, b.remove); break;
         case "/prs/draft": res = await setDraft(root, n, b.draft); break;
-        case "/prs/update-branch": res = await updateBranch(root, n, b.syncLocal); break;
+        case "/prs/update-branch": res = await updateBranch(root, n, b.syncLocal); if (res.ok) await noteSyncFor(root, n, res.headBefore); break;
         case "/prs/rerun": res = await rerunFailedChecks(root, n); break;
         case "/prs/rerun-jobs": res = await rerunJobs(root, b.what, b.id); break;
         case "/prs/line-comment": res = await addLineComment(root, n, b); break;
@@ -11144,11 +11144,20 @@ subscribeAskedAlerts((e) => broadcast(e));
 subscribeWatchChecks((c) => broadcast({ type: "prchecks", data: c }));
 const prNotifyKick = process.env.NODE_ENV === "test" ? () => {} : startPrNotifyWatch(async (root, number) => {
   const r = await prRollup(root, number, true); // forced: the watch's own cadence is the budget, and a cached read would add its age to the wait
+  // The new commit after a sync or a push has no checks yet, only a head: that is what tells "not started" from "still the old run".
+  if (!r.ok && r.sha) return { allDone: false, verdict: null, all: [], state: r.state, sha: r.sha };
   if (!(r.ok && r.checks && r.all)) return null;
   // Past 100 contexts `all` is only the first page: never conclude "all done" from it.
   const complete = !r.truncated;
   return { checks: complete ? r.checks : undefined, allDone: r.checks.allDone && complete, verdict: complete ? r.checks.verdict : null, all: r.all, state: r.state, sha: r.sha };
 }).kick;
+/** GitHub accepted an Update branch: a watch on this PR must not take the old head's green for the new run's. One read now, then the watch's own cadence. */
+async function noteSyncFor(root: string, n: unknown, before?: string): Promise<void> {
+  const id = await prRepoIdFor(root).catch(() => null);
+  if (!id) return;
+  noteSync(id.nameWithOwner, Number(n), before ?? null);
+  prNotifyKick();
+}
 // A plugin drew something, or wrote notes on a pull request. The frame says
 // only where to look again; what was drawn is fetched over the token.
 setPluginUiHook((f) => broadcast({ type: "plugin", data: f }));
