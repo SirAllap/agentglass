@@ -2739,7 +2739,9 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-stk[data-warn] .agx-stk-b[data-k="off"] { outline-color: var(--warning); color: var(--warning-ink); }
 .agx-stk-gap { flex: none; height: 16px; display: grid; place-items: center; font-size: 9px; font-weight: 700; line-height: 1; color: var(--text2); }
 /* Pointer-over a token outlines the base card it names: an outline, so nothing moves. */
-.agx-stk-card[data-lit] { outline: 2px solid var(--primary); outline-offset: 1px; }
+.agx-stk-card[data-lit] { position: relative; }
+/* An outline sits outside the card and the lane's scroll box cut it off; a ring drawn inside, over the rows, cannot be clipped and hides nothing of the content. */
+.agx-stk-card[data-lit]::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 5; box-shadow: inset 0 0 0 2px var(--primary); }
 
 .agx-stk-t {
   all: unset; box-sizing: border-box; cursor: pointer;
