@@ -146,7 +146,8 @@ import {
   remindersFor, firedUnacked, setReminderHook, startReminderTick, localZone,
 } from "./reminders.ts";
 import { fileText, fileToTemp, fileTree, findFiles, grepFiles, listRefs, filesExist, heldBackFrom, heldBackTest, HELD_BACK, filesReach, gitReadRefusal, gitReadTest } from "./files.ts";
-import { diskFind, diskGrep, diskPlaces } from "./disk.ts";
+import { diskEnabled, diskFind, diskGrep, diskPlaces } from "./disk.ts";
+import { homeIndex } from "./homeindex.ts";
 import { browseBatch } from "./browselist.ts";
 import { browseDir, fileBytes, fileFacts, previewSlice, openInDesktop, pagePolicy, revealInFileManager } from "./browse.ts";
 import { fileGitFacts } from "./fileGit.ts";
@@ -7413,6 +7414,13 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname.startsWith("/disk/")) {
       if (!FS_BROWSE_ENABLED) return json({ error: "directory browsing is disabled (AGENTGLASS_FS_BROWSE_DISABLED=1)" }, 403);
       if (pathname === "/disk/places") return json(diskPlaces());
+      /* The home index: fuzzy names across the roots, kept by filesystem events. Built on the first question. */
+      if (pathname === "/disk/index/search") {
+        if (!diskEnabled()) return json({ ok: false, hits: [], error: "searching the machine is disabled (AGENTGLASS_DISK_DISABLED=1)" }, 403);
+        const lim = Math.min(200, Math.max(1, Number(url.searchParams.get("limit")) || 60));
+        return json(await homeIndex().search(url.searchParams.get("q") || "", lim, req.signal));
+      }
+      if (pathname === "/disk/index/status") { void homeIndex().ensure(); return json(homeIndex().status()); }
       if (pathname === "/disk/find") return json(diskFind(url.searchParams.get("root") || "", url.searchParams.get("q") || ""));
       // What documents SAY, not just what they are called — the question the
       // Contents tab could only ask inside the open checkout.

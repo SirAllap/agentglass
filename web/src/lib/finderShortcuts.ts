@@ -23,6 +23,7 @@ export const SECTIONS: Section[] = [
     { keys: "Ctrl+C", does: "Copy the selected path" },
   ] },
   { title: "Search and tools", rows: [
+    { keys: "Ctrl+K", does: "Search Home by name or contents" },
     { keys: "Ctrl+L", does: "Edit the location" },
     { keys: "Ctrl+H", does: "Show or hide hidden files" },
     { keys: "Ctrl+B", does: "Compact, hide, then show the sidebar" },

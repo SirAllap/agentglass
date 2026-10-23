@@ -22,7 +22,7 @@ import {
   DEFAULT_PREFS, canEditRow, displayRows, opensOnPick, footerCount, gridStep, indexOfName, isFolder, joinPath, keyStep, nextSidebar, parentOf, readPrefs, rowHeight, sidebarMode, sidebarPrefs, sidebarTip, writePrefs,
   type ColShape, type Display, type Prefs, type Row, type SortKey,
 } from "../../../lib/finderMiller.ts";
-import { CopyIcon, GridIcon } from "../../../lib/glyphIcons.tsx";
+import { CopyIcon, GridIcon, SearchIcon } from "../../../lib/glyphIcons.tsx";
 import { ArrowLeftIcon, ArrowRightIcon, ArrowUpIcon, PanelLeftIcon, SlidersIcon } from "../../../lib/finderIcons.tsx";
 import { HIT, ICON } from "../../../lib/iconSize.ts";
 import { isAppChord } from "../../../lib/keybindings.ts";
@@ -31,7 +31,10 @@ import { EDGE, LINE } from "../../workspace/Chrome.tsx";
 import { Column, type Mod } from "./Column.tsx";
 import { AppearanceMenu, FinderSettings, HelpSheet } from "./FinderChrome.tsx";
 import { FinderPathBar } from "./FinderPathBar.tsx";
+import { FinderSearch } from "./FinderSearch.tsx";
+import type { HitTarget } from "../../../lib/finderSearch.ts";
 import { IconsView, ListView, tilesPerRow } from "./FolderViews.tsx";
+import { CloseButton } from "../../CloseButton.tsx";
 import { QuickLook } from "./QuickLook.tsx";
 import { Sidebar, placesFor } from "./Sidebar.tsx";
 import { useBox } from "./useBox.ts";
@@ -53,17 +56,19 @@ const BIG = 2000;
 
 const basename = (p: string) => p.slice(p.lastIndexOf("/") + 1) || "/";
 
-export function MachineFinder({ home, start, places, target, onPlace, onBench, onRecent }: {
+export function MachineFinder({ home, start, places, target, onPlace, onBench, onRecent, onClose }: {
   home: string;
   /** Where to open, and where to go when the palette's own place changes. */
   start: string;
-  /** A path typed in the search box: its folder opens and it is selected. Null when nothing is typed. */
+  /** A path somebody clicked in a terminal: its folder opens and it is selected. Null when there is none. */
   target?: string | null;
   places: readonly DiskPlace[];
   /** The finder went somewhere on purpose (sidebar, path bar, up): the palette remembers it as the place. */
   onPlace: (path: string) => void;
   onBench: (path: string, mode: "edit" | "terminal") => void;
   onRecent: () => void;
+  /** The way out of the finder: it lives at the end of the path-bar row, where Strata has its close. */
+  onClose: () => void;
 }) {
   const [prefs, setPrefsState] = useState<Prefs>(loadPrefs);
   const setPrefs = useCallback((p: Partial<Prefs>) => setPrefsState((cur) => { const n = { ...cur, ...p }; savePrefs(n); return n; }), []);
@@ -77,6 +82,8 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
   const [peek, setPeek] = useState(() => back?.peek ?? false);
   const [sidePage, setSidePage] = useState(false);
   const [help, setHelp] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const searchingRef = useRef(false); searchingRef.current = searching;
   /** The panel's own width once somebody has dragged its edge. */
   const [prevDrag, setPrevDrag] = useState<number | undefined>(() => back?.prevDrag);
   const [filterTick, setFilterTick] = useState({ col: 0, n: 0 });
@@ -155,6 +162,14 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
     seen.current = path; setHist((h) => visit(h, path));
     setTrail([path]); setSel([null]); setFocusCol(0); setPeek(false); setSidePage(false);
     onPlace(path);
+  }, [onPlace]);
+
+  /* A search hit: a folder becomes the place; a file selects itself inside its own folder, so its preview shows. */
+  const reveal = useCallback((t: HitTarget) => {
+    const at = t.kind === "open-folder" ? t.path : t.dir;
+    seen.current = at; setHist((h) => visit(h, at));
+    setTrail([at]); setSel([t.kind === "select" ? t.name : null]); setFocusCol(0); setPeek(false); setSidePage(false);
+    onPlace(at);
   }, [onPlace]);
 
   const goUp = useCallback(() => {
@@ -342,12 +357,19 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
   const actRef = useRef(act); actRef.current = act;
   useEffect(() => {
     const on = (e: KeyboardEvent) => {
+      if (searchingRef.current) return; // the search overlay has the keys while it is up
+      // Ctrl+K is the app's command palette everywhere else; inside the finder it is Strata's search.
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k" && root.current && (root.current.contains(e.target as Node) || e.target === document.body || (e.target as HTMLElement | null)?.closest?.('[role="dialog"]') === root.current.closest('[role="dialog"]'))) {
+        e.preventDefault(); e.stopPropagation(); setSearching(true); return;
+      }
       if (isAppChord(e)) return;
       const t = e.target as HTMLElement | null;
       const field = !!t && (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t.isContentEditable);
       const own = !!t?.closest?.("[data-finder-box]");
       const inField = field && !(own && (t as HTMLInputElement).value === "");
-      if (!own && !root.current?.contains(t) && t !== document.body) return;
+      // With no search box the palette's own panel holds the focus, so the panel counts as inside.
+      const panel = root.current?.closest('[role="dialog"]') ?? null;
+      if (!own && !root.current?.contains(t) && t !== document.body && !(panel && t === panel)) return;
       // A resize grip owns its arrow keys; the window listener runs first, in capture, and would walk the rows instead.
       if (t?.closest?.('[role="separator"]')) return;
       const a = finderKey({ key: e.key, ctrl: e.ctrlKey, meta: e.metaKey, shift: e.shiftKey, alt: e.altKey }, { inField, hasSelection: !!window.getSelection()?.toString() });
@@ -393,9 +415,11 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
         <button className={tool} disabled={!canForward(hist)} style={{ width: HIT, height: HIT, border: EDGE, color: "var(--text2)", opacity: canForward(hist) ? 1 : 0.4 }} title="Forward (Alt+Right)" aria-label="Forward" onClick={() => goHist(histForward(hist))}><ArrowRightIcon size={ICON.sm} /></button>
         <button className={tool} disabled={!parentOf(trail[0]!)} style={{ width: HIT, height: HIT, border: EDGE, color: "var(--text2)", opacity: parentOf(trail[0]!) ? 1 : 0.4 }} title="Parent folder (Alt+Up)" aria-label="Parent folder" onClick={goUp}><ArrowUpIcon size={ICON.sm} /></button>
         <FinderPathBar path={trail[last] ?? trail[0]!} home={home} onGo={go} signalEdit={pathSignal} />
+        <button className={tool} style={{ width: HIT, height: HIT, border: EDGE, color: "var(--text2)" }} title="Search Home (Ctrl+K)" aria-label="Search Home" onClick={() => setSearching(true)}><SearchIcon size={ICON.sm} /></button>
         <button className={tool} style={{ width: HIT, height: HIT, border: EDGE, color: "var(--text2)" }} title="Copy the selected path (Ctrl+C)" aria-label="Copy path" onClick={copyChosen}><CopyIcon size={ICON.sm} /></button>
         <button className={tool} style={{ width: HIT, height: HIT, border: EDGE, color: "var(--text2)" }} title="Finder settings" aria-label="Finder settings" aria-haspopup="menu" onClick={(e) => setSettings(e.currentTarget.getBoundingClientRect())}><SlidersIcon size={ICON.sm} /></button>
         <button className={tool} style={{ width: HIT, height: HIT, border: EDGE, color: "var(--text2)" }} title="Appearance" aria-label="Appearance" aria-haspopup="menu" onClick={(e) => setMenu(e.currentTarget.getBoundingClientRect())}><GridIcon size={ICON.sm} /></button>
+        <CloseButton onClick={onClose} title="Close the finder (esc)" size={ICON.sm} />
       </div>
 
       <div className="flex-1 min-h-0 flex">
@@ -457,6 +481,7 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
         <span className="truncate" aria-live="polite">{note ?? count}</span>
       </footer>
       {help && <HelpSheet onClose={() => setHelp(false)} />}
+      {searching && <FinderSearch home={home} onTarget={reveal} onClose={() => setSearching(false)} />}
       {settings && <FinderSettings anchor={settings} prefs={prefs} onPref={setPrefs} onReset={() => { setPrefsState(DEFAULT_PREFS); savePrefs(DEFAULT_PREFS); setNote("Finder settings reset"); }} onClose={() => setSettings(null)} />}
       {menu && <AppearanceMenu anchor={menu} prefs={prefs} onPref={setPrefs} onClose={() => setMenu(null)} />}
     </div>

@@ -22,10 +22,8 @@ describe("finderTarget", () => {
 });
 
 describe("the palette hands a typed path to the finder", () => {
-  test("finderOn accepts an empty box or a path, and nothing else", () => {
-    const line = palette.split("\n").find((l) => l.includes("const finderOn ="))!;
-    expect(line).toContain("looksLikePath(q)");
-    expect(line).toContain("!q.trim()");
+  test("only a path (a terminal link) becomes the finder's target; any other text is dropped", () => {
+    expect(palette).toContain("finderOn && q.trim() && looksLikePath(q) ? finderTarget(");
     expect(palette).toMatch(/<MachineFinder[^>]*target=\{/);
   });
 });

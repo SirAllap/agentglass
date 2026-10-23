@@ -383,7 +383,8 @@ export function FilePalette({
     if (!open) return;
     const t = setTimeout(() => {
       const el = inputRef.current;
-      if (!el) return;
+      // The Machine tab has no field: the panel itself takes the keys.
+      if (!el) { panelRef.current?.focus(); return; }
       el.focus();
       if (focusSelection(el.value) === "end") el.setSelectionRange(el.value.length, el.value.length);
       else el.select();
@@ -401,7 +402,7 @@ export function FilePalette({
   }, [q]);
   /* The one chip in the box: names (the default) or what is inside the files, both
      of the folder the finder has open. */
-  const [byText, setByText] = useState(false);
+  const [byText] = useState(false);
   const inside = useSearch(
     () => (tab === "machine" && byText ? api.diskGrep(place, q) : null),
     [tab === "machine" && byText, place, q.trim()],
@@ -479,9 +480,12 @@ export function FilePalette({
 
   /* The Machine tab with nothing typed IS the file manager (finder/machine). A
      query, even one letter, hands the tab back to the search it always was. */
-  const finderOn = tab === "machine" && (!q.trim() || looksLikePath(q)) && !!homeDir && !placeErr;
+  const finderOn = tab === "machine" && !!homeDir && !placeErr;
   /* What a typed path points at: the finder opens its folder and selects it. */
-  const finderTo = useMemo(() => (finderOn && q.trim() ? finderTarget(q, homeDir, place || homeDir) : null), [finderOn, q, homeDir, place]);
+  /* The Machine tab has no box, so a query left over from before the box went
+     would hold the tab on a search nobody can see or clear. */
+  useEffect(() => { if (tab === "machine" && q && !looksLikePath(q)) setQ(""); }, [tab, q]);
+  const finderTo = useMemo(() => (finderOn && q.trim() && looksLikePath(q) ? finderTarget(q, homeDir, place || homeDir) : null), [finderOn, q, homeDir, place]);
   const at = useMemo(() => {
     if (finderOn) return null;
     if (typedPath) return typedPath.dir;
@@ -1029,8 +1033,8 @@ export function FilePalette({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -8, scale: 0.985 }}
             transition={{ duration: 0.14, ease: [0.16, 1, 0.3, 1] }}
-            ref={panelRef}
-            className="flex flex-col overflow-hidden rounded-xl pointer-events-auto"
+            ref={panelRef} tabIndex={-1}
+            className="flex flex-col overflow-hidden rounded-xl pointer-events-auto outline-none"
             style={{
               ...FINDER_BOX,
               background: "var(--surface-card)",
@@ -1053,6 +1057,7 @@ export function FilePalette({
              * `rounded-md` and not `rounded-lg`: that same rule sets a 6px
              * radius on whatever it rings, and a box that rounds itself
              * differently would square up by 2px the moment you typed. */}
+            {tab !== "machine" && (
             <div className="flex items-center gap-3 px-3.5 py-3 shrink-0" style={{ borderBottom: LINE }}>
               <div className="flex items-center gap-2.5 flex-1 min-w-0 px-3 py-2 rounded-md"
                 style={{ background: "var(--bg)", border: "1.5px solid color-mix(in srgb, var(--text) 80%, transparent)" }}>
@@ -1060,14 +1065,6 @@ export function FilePalette({
                 <input ref={inputRef} data-finder-box value={q} onChange={(e) => { setBoxMirror(null); setQ(e.target.value); }}
                   spellCheck={false} autoComplete="off" placeholder={PLACEHOLDER[tab]}
                   className="flex-1 min-w-0 bg-transparent outline-none text-[13px]" style={{ color: "var(--text)" }} />
-                {tab === "machine" && q.trim() && !looksLikePath(q) && (
-                  <button type="button" aria-pressed={byText} onClick={() => { setByText((v) => !v); inputRef.current?.focus(); }}
-                    title={byText ? "Searching inside the files of this folder" : "Search inside the files of this folder"}
-                    className="agx-btn shrink-0 text-[10.5px] px-2 py-0.5 rounded-full"
-                    style={byText ? { background: "var(--text)", color: "var(--bg)", fontWeight: 600 } : { border: EDGE, color: "var(--text3)" }}>
-                    Contents
-                  </button>
-                )}
                 {tab === "recent" && (
                   <RepoChip repo={repo} repos={repos} openState={[pickOpen, setPickOpen]}
                     onPick={(r) => { setRoot(r); setPickOpen(false); inputRef.current?.focus(); }} />
@@ -1096,6 +1093,7 @@ export function FilePalette({
               )}
               <CloseButton onClick={onClose} title="Close the finder (esc)" size={ICON.sm} />
             </div>
+            )}
 
             {/* Where you are, when you are somewhere rather than searching: one
                 rounded bar, Home first, every segment a button that goes there
@@ -1126,7 +1124,7 @@ export function FilePalette({
 
             {/* the drawer, the reader and the rail */}
             {finderOn ? (
-              <MachineFinder home={homeDir} start={place || homeDir} places={places} target={finderTo}
+              <MachineFinder home={homeDir} start={place || homeDir} places={places} target={finderTo} onClose={onClose}
                 onPlace={(p) => { setPlaceRecents(rememberPlace(p)); setPlace(p); setBrowsePath(null); }}
                 onBench={(p, mode) => { onBench(benchOpen(mode, p, root)); onClose(); }}
                 onRecent={() => goTab("recent")} />

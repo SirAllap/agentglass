@@ -32,8 +32,7 @@ describe("the finder has no tab strip", () => {
     expect(palette).not.toMatch(/goTab\(TABS/);
     expect(palette).not.toMatch(/e\.shiftKey \? TABS/);
   });
-  test("Contents is a chip in the box, and Recent is the sidebar's entry", () => {
-    expect(palette).toContain("aria-pressed={byText}");
+  test("Recent is the sidebar's entry", () => {
     expect(palette).toContain('onRecent={() => goTab("recent")}');
   });
 });

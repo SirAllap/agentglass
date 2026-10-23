@@ -43,14 +43,13 @@ describe("house tokens", () => {
 });
 
 describe("only the Machine tab changes", () => {
-  test("the palette swaps its body for the finder when the tab is Machine and the box is empty", () => {
-    expect(palette).toContain('const finderOn = tab === "machine" && (!q.trim() || looksLikePath(q))');
+  test("the palette swaps its body for the finder when the tab is Machine", () => {
+    expect(palette).toContain('const finderOn = tab === "machine" && !!homeDir && !placeErr');
     expect(palette).toContain("{finderOn ? (");
     expect(palette).toContain("<MachineFinder");
   });
-  test("words hand the tab back: finderOn is false once the box has text that is not a path", () => {
-    const line = palette.split("\n").find((l) => l.includes("const finderOn"))!;
-    expect(line).toContain("!q.trim()");
+  test("words no longer hand the tab back: there is no box on Machine, so a leftover query is cleared", () => {
+    expect(palette).toContain('if (tab === "machine" && q && !looksLikePath(q)) setQ("")');
   });
   test("the search box is marked so the finder may share its arrow keys", () => {
     expect(palette).toContain("data-finder-box");

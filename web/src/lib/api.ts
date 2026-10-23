@@ -1348,6 +1348,9 @@ const realApi = {
    *  viewer, not to the editor the text files open in. */
   previewOpen: (path: string) => post<{ ok: boolean; with?: string; error?: string }>("/preview/open", { path }),
   previewReveal: (path: string) => post<{ ok: boolean; with?: string; error?: string }>("/preview/reveal", { path }),
+  /** Fuzzy names across Home from the server's incremental index. */
+  diskIndexSearch: (q: string, signal?: AbortSignal) =>
+    get<{ ok: boolean; hits: { path: string; dir: boolean; score: number }[]; building: boolean; ms: number; error?: string }>(`/disk/index/search?q=${encodeURIComponent(q)}`, signal),
   diskGrep: (root: string, q: string) => get<GrepReport>(`/disk/grep?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}`),
 
   dockerLogs: (id: string, tail = 400) => get<{ ok: boolean; text: string; error?: string }>(`/docker/logs?id=${encodeURIComponent(id)}&tail=${tail}`),
@@ -3190,6 +3193,7 @@ const demoApi: typeof realApi = {
   /* The demo has no machine to search — and saying so is the point: an empty
      result list would read as "your home directory is empty". */
   diskPlaces: () => D({ ok: false, home: "", roots: [], places: [], error: "the demo has no machine to search" }),
+  diskIndexSearch: (_q: string) => D({ ok: false, hits: [], building: false, ms: 0, error: "the demo has no machine to search" }),
   diskFind: (_r: string, _q: string) => D({ ok: false, files: [], dirs: [], truncated: false, via: "", error: "the demo has no machine to search" }),
   /* The demo has no disk to keep a note on and no tmux to run a tab in. Said,
      rather than answered with an empty note that would swallow what was typed. */
