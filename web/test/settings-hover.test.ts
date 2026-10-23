@@ -8,3 +8,10 @@ test("a day chip answers hover, chosen or not", () => {
   expect(css).toMatch(/\.agx-daychip:hover:not\(:disabled\):not\(\[aria-pressed="true"\]\)\s*\{[^}]*border-color/);
   expect(css).toMatch(/\.agx-daychip\[aria-pressed="true"\]:hover:not\(:disabled\)\s*\{[^}]*filter/);
 });
+
+const css2 = await Bun.file(new URL("../src/index.css", import.meta.url)).text();
+const chrome = await Bun.file(new URL("../src/components/workspace/Chrome.tsx", import.meta.url)).text();
+test("a filled primary button draws its focus ring outside, where blue on blue can be seen", () => {
+  expect(css2).toMatch(/\.agx-btn\[data-tone="primary"\]:focus-visible\s*\{\s*outline-offset:\s*2px/);
+  expect(chrome).toContain("data-tone={tint || on !== undefined ? undefined : tone}");
+});

@@ -570,6 +570,7 @@ export function Button({
       title={pending ? "Working…" : title ?? label}
       aria-label={label}
       aria-busy={pending || undefined}
+      data-tone={tint || on !== undefined ? undefined : tone}
       className={`agx-btn ${CHIP_SURFACE_CLS} inline-flex items-center justify-center gap-1 rounded-lg whitespace-nowrap leading-none disabled:opacity-40 ${text} ${pad} ${className}`}
       style={{
         height: h, minWidth: square ? h : undefined, width: square ? h : undefined,

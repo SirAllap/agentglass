@@ -4011,3 +4011,7 @@ html[data-reduce-motion] #ag-cover * { animation: none !important; }
 .agx-skip { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; padding: 0; }
 .agx-skip:focus-visible { position: static; width: auto; height: auto; clip-path: none; margin: 6px 12px 0; padding: 6px 10px; border-radius: 8px; background: var(--surface-inset); color: var(--text); font-size: calc(12px * var(--agx-fs, 1)); text-align: left; }
 .agx-settings-main:focus { outline: none; }
+
+/* A filled primary button is the same blue as the focus ring, so a ring drawn inside it vanished (measured on
+   "Turn the gate on": focus-visible matched, nothing to see). Outside the edge instead, 2px clear of it. */
+.agx-btn[data-tone="primary"]:focus-visible { outline-offset: 2px; }
