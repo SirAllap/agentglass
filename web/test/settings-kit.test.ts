@@ -133,6 +133,6 @@ describe("a wide control", () => {
     expect(row(true)).toContain("agx-row-wide");
     expect(row()).not.toContain("agx-row-wide");
     expect(css).toMatch(/@container agx-settings \(max-width: 560px\) \{\s*\.agx-settings-row\.agx-row-wide \{ grid-template-columns: 1fr; \}/);
-    expect(modal).toContain("wide={choiceIsWide(options.map((o) => o.label))}");
+    expect(modal).toContain("wide={wide ?? choiceIsWide(options.map((o) => o.label))}");
   });
 });

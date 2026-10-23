@@ -37,7 +37,7 @@ export function DiffPreview({ split, wrap, syntaxTheme }: DiffPreviewProps) {
   const hunks = useMemo(() => HUNKS, []);
   return (
     <PreviewBox label="A diff, split or inline">
-      <div data-preview="diff" className="rounded-lg overflow-hidden min-w-0" style={{ background: "var(--bg)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--surface-line)" }}>
+      <div data-preview="diff" className="rounded-lg overflow-x-auto overflow-y-hidden min-w-0" style={{ background: "var(--bg)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--surface-line)" }}>
         <div className="px-3 py-1.5 text-[11px]" style={{ color: "var(--text3)", background: "var(--surface-nav)" }}>src/net/reconnect.ts</div>
         <HiliteCtx.Provider value={hilite}>
           {split ? <SplitDiff hunks={hunks} wrap={wrap} /> : <UnifiedDiff hunks={hunks} wrap={wrap} />}

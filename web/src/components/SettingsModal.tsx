@@ -291,15 +291,17 @@ function SourceRow({ id, i, n, onChanged }: {
 /** A row of mutually exclusive choices, for a preference with three answers
  *  rather than two. A toggle would have forced "show me their message" and
  *  "just tell me someone wrote" to be the same decision. */
-function Choice<T extends string>({ label, hint, value, options, onPick, disabled, disabledHint, modified, settingId }: {
+function Choice<T extends string>({ label, hint, value, options, onPick, disabled, disabledHint, modified, settingId, wide }: {
   /** See SettingRow. */
   settingId?: string; agentExempt?: boolean; agentNever?: string;
   label: string; hint: string; value: T; options: { v: T; label: string }[];
   onPick: (v: T) => void; disabled?: boolean; disabledHint?: string; modified?: boolean;
+  /** Under the words in a narrow card even when the labels are short: a long hint beside two options squeezes them into a stack. */
+  wide?: boolean;
 }) {
   return (
     <SettingRow label={label} hint={disabled ? disabledHint ?? hint : hint} disabled={disabled} modified={modified} settingId={settingId}
-      wide={choiceIsWide(options.map((o) => o.label))}
+      wide={wide ?? choiceIsWide(options.map((o) => o.label))}
       control={
         <span className="agx-seg">
           {options.map((o) => (
@@ -904,6 +906,13 @@ function Section({ title, desc, headerControl, children }: {
   );
 }
 
+/** The chip alone gave no sign that it records: an explicit verb beside it. The
+ *  chip stays a target too. A row with two chips (a view with its chord) has
+ *  no room for a third control, so it keeps labelled chips only. */
+function RebindButton({ capturing, onClick, what }: { capturing: boolean; onClick: () => void; what: string }) {
+  return <Button size="compact" onClick={onClick} aria-label={`${capturing ? "Cancel rebinding" : "Rebind"} ${what}`}>{capturing ? "Cancel" : "Rebind"}</Button>;
+}
+
 /**
  * One rebindable shortcut.
  *
@@ -958,6 +967,7 @@ function KeyRow({ id, keyName, capturing, onCapture, error, chord }: {
         </span>
       )}
       <span className="shrink-0 flex items-center gap-1.5">
+        {!chord && <RebindButton capturing={capturing} onClick={onCapture} what={label} />}
         <span className="text-[11px] t-dim w-[62px] text-right">{chord ? "dashboard" : "press"}</span>
         <button onClick={onCapture} className="chip h-[22px] justify-center text-[11px] tabular-nums min-w-[74px] text-center"
           style={capturing
@@ -4618,7 +4628,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                         still wins while you are looking at that diff. Changing
                         your mind about one file is not a preference. */}
                     <Choice<"split" | "inline">
-                      settingId="diff.split"
+                      settingId="diff.split" wide
                       label="Default view"
                       hint="How file changes, source control and pull requests open a diff. The toggle in each panel still overrides it for that diff."
                       value={dSplit ? "split" : "inline"} modified={dSplit !== DEFAULT_SPLIT}
@@ -4877,6 +4887,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                                 {appKeyError?.id === id ? appKeyError.msg : APP_CHORD_LABELS[id].hint}
                               </span>}
                               control={<span className="flex items-center gap-1.5 justify-self-end">
+                                <RebindButton capturing={capturingApp === id} what={APP_CHORD_LABELS[id].label}
+                                  onClick={() => { setKeyError(null); setCapturing(null); setCapturingChord(null); setCapturingApp((c) => (c === id ? null : id)); }} />
                                 <button onClick={() => { setKeyError(null); setCapturing(null); setCapturingChord(null); setCapturingApp((c) => (c === id ? null : id)); }}
                                   title={hasCustomAppChord(id)
                                     ? `${chordLabel(appChordFor(id))} opens this — click to record another`

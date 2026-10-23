@@ -112,12 +112,16 @@ function TickBox({ on, onClick, disabled, title, plain }: {
   );
 }
 
+/** Precedents are one row per project and a machine can hold hundreds: the page was 9000px tall at 1440. */
+const PRECEDENT_ROWS = 8;
+
 export function Teach({ active }: { active: boolean }) {
   const [data, setData] = useState<SourcesBody | null>(null);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [neverText, setNeverText] = useState("");
   const [addPath, setAddPath] = useState("");
+  const [allPrecedents, setAllPrecedents] = useState(false);
   /* Above the early returns below, and that is the whole point: this sat under
      `if (!data) return` for one build and took the panel down the moment the
      data arrived, because the hook count changed between the loading render
@@ -144,6 +148,7 @@ export function Teach({ active }: { active: boolean }) {
 
   const rules = data.sources.filter((s) => s.kind === "rules");
   const precedents = data.sources.filter((s) => s.kind === "precedents");
+  const shownPrecedents = allPrecedents ? precedents : precedents.slice(0, PRECEDENT_ROWS);
   const allowedCount = data.sources.filter((s) => s.allowed && s.found).length;
 
   const toggle = async (s: UnderstudySource) => {
@@ -371,7 +376,14 @@ export function Teach({ active }: { active: boolean }) {
 
       <SettingsCard title="What you actually did" icon={<ClockIcon size={ICON.sm} />}
         desc="Precedents — the record, not the intent. Messier and far larger. A rule says “never main”; a precedent says what you actually did on a Tuesday when the base had moved. Only precedents can make a prediction yours rather than merely sensible. One row per project rather than one switch, because each project is filed separately — and which side of that line a project sits on decides where its rows may ever be used, not whether they may be read.">
-        {precedents.map((s) => <Source key={s.id} s={s} />)}
+        {shownPrecedents.map((s) => <Source key={s.id} s={s} />)}
+        {precedents.length > PRECEDENT_ROWS && (
+          <div className="agx-settings-x py-2">
+            <Button size="compact" onClick={() => setAllPrecedents((v) => !v)}>
+              {allPrecedents ? "Show fewer" : `Show all ${precedents.length}`}
+            </Button>
+          </div>
+        )}
       </SettingsCard>
 
       <SettingsCard title="Somewhere else" icon={<FolderIcon size={ICON.sm} />}>

@@ -220,6 +220,7 @@ export function AppearancePane({ current, onChange, onAccent }: {
         desc="One palette for the whole cockpit — chrome, terminal, and (on the desktop) your tmux and nvim follow it.">
         <SettingRow
           settingId="appearance.mode"
+          wide
           label="Mode"
           hint={desk && mode === "desktop"
             ? <>Wearing <b style={{ color: "var(--text3)" }}>{desk.name}</b>, your desktop's theme — it follows when you switch there.</>
