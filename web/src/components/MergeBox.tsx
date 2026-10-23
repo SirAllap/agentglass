@@ -163,7 +163,8 @@ export function MergeBox({
   path, onAction, busy, mergeNode, autoNode, extraNode, noticeNode, cornerNode, notes, history, actionDisabled, pendingAction, showMergeRow = true,
 }: {
   path: MergePath;
-  onAction: (a: PathAction) => void;
+  /** `from` is the box of the button pressed, for an action that opens something beside it. */
+  onAction: (a: PathAction, from?: DOMRect) => void;
   busy: boolean;
   /** The panel's real merge button, method menu and all. */
   mergeNode: ReactNode;
@@ -203,7 +204,7 @@ export function MergeBox({
         disabled={busy || !!actionDisabled?.[a.id]} title={actionDisabled?.[a.id]} pending={pendingAction === a.id}
         aria-expanded={isHistory ? historyOpen : undefined}
         style={primary ? { background: "var(--text)", color: "var(--bg)", borderColor: "var(--text)" } : undefined}
-        onClick={() => (isHistory ? setHistoryOpen((o) => !o) : onAction(a))}>
+        onClick={(e) => (isHistory ? setHistoryOpen((o) => !o) : onAction(a, e.currentTarget.getBoundingClientRect()))}>
         {a.label}
       </Button>
     );

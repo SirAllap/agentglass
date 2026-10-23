@@ -3564,6 +3564,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   // renders.
   const fieldPicker = usePrFieldPicker(detail, root, act, flash,
     (add, remove, colors) => setLabels(add, remove, colors), (...a) => field(...a));
+  /** Every "ask for a review" ends in the sidebar's picker, at what was pressed. */
+  const askReviewers = (from?: DOMRect | null) => fieldPicker.openAt("reviewers", from);
 
   const key = repo && detail ? `${repo.key}#${detail.number}` : "";
 
@@ -4338,24 +4340,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       lane: `react:${nodeId}:${content}`,
     });
   };
-  const doReviewers = async () => {
-    if (!detail) return;
-    // Logins, which is what the endpoint takes. A team arrives here under its
-    // name for want of anywhere better to put it — exactly as it did when this
-    // list was strings, so nothing about requesting one changes here.
-    const cur = detail.reviewers.map((r) => r.login);
-    const next = await askText({
-      title: `Reviewers on #${detail.number}`, confirmLabel: "Save",
-      input: { label: "Comma-separated logins — remove one by deleting it", initial: cur.join(", ") },
-    });
-    if (next == null) return;
-    const want = next.split(",").map((s) => s.trim().replace(/^@/, "")).filter(Boolean);
-    const add = want.filter((l) => !cur.includes(l));
-    const remove = cur.filter((l) => !want.includes(l));
-    if (add.length === 0 && remove.length === 0) return;
-    void field(reviewersPatch(detail.number, add, remove), () => api.prReviewers(root, detail.number, add, remove), "Reviewers did not save", "reviewers");
-  };
-
   /** The chase, written for you: who it waits on, what for, where — on the
    *  clipboard always, and down the alerts' channel when one is configured. */
   const doNudge = async () => {
@@ -5178,7 +5162,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 onClose={doClose} onLocalReview={(recipe) => doLocalReview(undefined, recipe)}
                 onReviewInTerminal={onReviewInTerminal && d && !readOnly ? (recipe) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "") : undefined}
                 condensed={condensed}
-                onLabels={doLabels} onReviewers={doReviewers} onNudge={doNudge}
+                onLabels={doLabels} onReviewers={askReviewers} onNudge={doNudge}
                 onEditField={fieldPicker.open}
                 /* Your review, counted where the panel already counts it — the
                    strip is a reader of these three, never a second source. */
@@ -5310,7 +5294,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                           onToggleTask={doToggleTask}
                           onLocalReview={(recipe) => doLocalReview(undefined, recipe)}
                           onReviewInTerminal={onReviewInTerminal && d && !readOnly ? (recipe) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "") : undefined}
-                          onMerge={doMerge} onClose={doClose} onAskReview={doReviewers}
+                          onMerge={doMerge} onClose={doClose} onAskReview={askReviewers}
                           method={mergeMethod} onMethod={setMergeMethod}
                           onUpdateBranch={doUpdateBranch}
                           onRerun={() => act("Re-run checks", () => api.prRerun(root, d.number))}
@@ -5797,7 +5781,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
    *  falling back to `url` outside when this panel has no row for it. */
   onGoReview: (nodeId: string | undefined, url: string) => void;
   /** Opens the reviewers picker: the box's "Ask someone to review". */
-  onAskReview: () => void;
+  onAskReview: (from?: DOMRect) => void;
   /** Open Files with the "since your review" filter already on. */
   onGoMoved: () => void;
   /** How many of this review's files have changed since your own last review — see
@@ -5956,13 +5940,13 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
     conflicted, conflictFiles: conflictFiles?.files.length, behind, awaitingChecks, unknownSince, githubProblem, prLagging, autoArmed: !!d.autoMerge, unstickOffer,
   });
   const heroHas = (id: PathAction["id"]) => path.hero.primary?.id === id || path.hero.secondary?.id === id || path.hero.also?.id === id;
-  const onPathAction = (a: PathAction) => {
+  const onPathAction = (a: PathAction, from?: DOMRect) => {
     switch (a.id) {
       case "open-log": openExternal(a.url); break;
       case "rerun": onRerun(); break;
       case "go-thread": onGoThreads(); break;
       case "go-review": onGoReview(a.nodeId, a.url ?? d.url); break;
-      case "ask-review": onAskReview(); break;
+      case "ask-review": onAskReview(from); break;
       case "mark-ready": onDraft(); break;
       case "open-github": openExternal(d.url); break;
       case "update-branch": onUpdateBranch(updateMove.syncLocal); break;
@@ -6674,7 +6658,7 @@ export function Menu({ label, title, children, align = "right", primary, bare }:
 }
 
 export function MenuItem({ children, onClick, danger, kbd, icon }: {
-  children: React.ReactNode; onClick: () => void; danger?: boolean; kbd?: string;
+  children: React.ReactNode; onClick: (e: React.MouseEvent<HTMLButtonElement>) => void; danger?: boolean; kbd?: string;
   /** Drawn before the words, in the words' own colour. Pass it HERE and not as a
    *  child: the label is a truncating box, and an svg put inside it (they are
    *  `display: block` under the reset) took a line to itself, so the eye sat
@@ -7059,8 +7043,10 @@ type PickOption = { value: string; label: string; sub?: string; color?: string; 
  * the way GitHub's label menu does — so ticking four labels is one write, not
  * four. Single-select (milestone) commits on the click.
  */
-function FieldPicker({ anchor, title, hint, multi, loading, options, selected, onCommit, onClose, side }: {
+function FieldPicker({ anchor, title, hint, multi, loading, options, selected, heldLabel = "Selected", onCommit, onClose, side }: {
   anchor: DOMRect; title: string; hint: string; multi: boolean; loading: boolean;
+  /** What the people already on it are called, pinned above everybody else. */
+  heldLabel?: string;
   options: PickOption[]; selected: string[];
   /** Writes the difference, and says whether it landed. `true` when there was
    *  nothing to write — this is "is it safe to go on", not "did it write". */
@@ -7168,7 +7154,16 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
   const ghChanged = sel.filter((x) => !selected.includes(x)).length + selected.filter((x) => !sel.includes(x)).length;
 
   const t = q.trim().toLowerCase();
-  const shown = t ? options.filter((o) => o.label.toLowerCase().includes(t) || o.value.toLowerCase().includes(t) || !!o.sub?.toLowerCase().includes(t)) : options;
+  /* Who is already on it comes first, from what was there when the menu OPENED
+     (`selected`), not from what is ticked now: a row that jumps under the
+     cursor as you tick it is worse than a list that stays put. Not while
+     filtering — then the list is an answer to the filter, in its own order. */
+  const held = multi && !t ? options.filter((o) => selected.includes(o.value)).map((o) => ({ ...o, section: heldLabel })) : [];
+  const shown = t
+    ? options.filter((o) => o.label.toLowerCase().includes(t) || o.value.toLowerCase().includes(t) || !!o.sub?.toLowerCase().includes(t))
+    : held.length
+      ? [...held, ...options.filter((o) => !selected.includes(o.value)).map((o) => ({ ...o, section: o.section ?? "Others" }))]
+      : options;
 
   /* One width, always. The menu is already tall — that is the space going
      spare, not the width — so the other half of the errand stacks under the
@@ -7204,7 +7199,7 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
           {loading ? (
             <div className="px-3 py-3 text-[11px]" style={{ color: "var(--text3)" }}>Loading…</div>
           ) : shown.length === 0 ? (
-            <div className="px-3 py-3 text-[11px]" style={{ color: "var(--text3)" }}>No matches.</div>
+            <div className="px-3 py-3 text-[11px]" style={{ color: "var(--text3)" }}>{t ? "No matches." : "Nobody to pick from here."}</div>
           ) : shown.map((o, i) => {
             const on = sel.includes(o.value);
             return (
@@ -7214,7 +7209,8 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
               )}
               <button onClick={() => toggle(o.value)}
                 className="agx-mi w-full text-left flex items-center gap-2 px-2.5 py-1.5 text-[11px]"
-                style={{ color: "var(--text2)" }}>
+                aria-pressed={on}
+                style={{ color: on ? "var(--text)" : "var(--text2)", background: on ? "color-mix(in srgb, var(--primary) 14%, transparent)" : undefined }}>
                 <span className="w-3.5 shrink-0 text-center" style={{ color: on ? "var(--primary)" : "transparent" }}><DoneIcon size={ICON.xs} /></span>
                 {o.color != null && <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: `#${o.color}` }} />}
                 {o.avatar != null && <Avatar login={o.avatar} size={16} />}
@@ -7718,10 +7714,16 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
     setLoading(false);
   }, [root, facets, mentions]);
 
-  const open = useCallback((field: SidebarField, e: React.MouseEvent<HTMLButtonElement>) => {
-    setPicker({ field, anchor: e.currentTarget.getBoundingClientRect() });
+  /* `from` is the rect of what was pressed. Without one (the pressed thing is
+     gone, or never had a box) the picker opens in the middle of the window. */
+  const openAt = useCallback((field: SidebarField, from?: DOMRect | null) => {
+    const mid = new DOMRect(window.innerWidth / 2 + 150, window.innerHeight / 4, 0, 0);
+    setPicker({ field, anchor: from && from.width + from.height > 0 ? from : mid });
     void ensureOptions();
   }, [ensureOptions]);
+  const open = useCallback((field: SidebarField, e: React.MouseEvent<HTMLButtonElement>) => {
+    openAt(field, e.currentTarget.getBoundingClientRect());
+  }, [openAt]);
   const close = () => setPicker(null);
 
   // The picker holds its selection locally and hands back the final set; here
@@ -7814,7 +7816,7 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
           : "Collaborators on this repository")}
         options={withFrequent(withoutAuthor([...reviewedOptions, ...rest], d.author), loadUse())}
         side={(h) => <ClickUpSide d={d} note={note} {...h} />}
-        selected={was} onClose={close} onCommit={commit(was, "Reviewers", reviewersPatch, (add, remove) => api.prReviewers(root, d.number, add, remove))} />;
+        selected={was} heldLabel="Already asked" onClose={close} onCommit={commit(was, "Reviewers", reviewersPatch, (add, remove) => api.prReviewers(root, d.number, add, remove))} />;
     } else if (picker.field === "assignees") {
       const was = d.assignees;
       node = <FieldPicker anchor={a} title="Assign people" hint="Up to 10 assignees" multi loading={loading}
@@ -7833,7 +7835,7 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
     }
   }
 
-  return { open, node };
+  return { open, openAt, node };
 }
 
 /**
@@ -8765,7 +8767,7 @@ function Masthead({ root, repo, d, busy, local, stackUi, onOpenPr, onShowLocal, 
   condensed?: boolean;
   /** The typed dialog behind the overflow menu; the inline ＋ buttons use the
    *  picker instead. */
-  onLabels: () => void; onReviewers: () => void; onNudge?: () => void;
+  onLabels: () => void; onReviewers: (from?: DOMRect) => void; onNudge?: () => void;
   /** Opens the shared reviewer/label picker anchored to the clicked ＋. */
   onEditField: (field: SidebarField, e: React.MouseEvent<HTMLButtonElement>) => void;
   /** How far YOUR review has got: files ticked off, threads still open, line
@@ -8945,7 +8947,7 @@ function Masthead({ root, repo, d, busy, local, stackUi, onOpenPr, onShowLocal, 
                   to a pull request that is still going. On a merged one GitHub
                   does not offer them either. */}
               {d.state === "OPEN" && <>
-                <MenuItem icon={<UserIcon size={ICON.sm} />} onClick={() => { close(); onReviewers(); }}>Request a review</MenuItem>
+                <MenuItem icon={<UserIcon size={ICON.sm} />} onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); close(); onReviewers(r); }}>Request a review</MenuItem>
                 <MenuItem icon={<DraftIcon size={ICON.sm} />} onClick={() => { close(); onDraft(); }}>{d.isDraft ? "Mark ready for review" : "Convert to draft"}</MenuItem>
               </>}
               <MenuItem icon={<TagIcon size={ICON.sm} />} onClick={() => { close(); onLabels(); }}>Edit labels</MenuItem>
