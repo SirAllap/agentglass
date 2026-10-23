@@ -20,6 +20,12 @@ export function epicLabel(name: string): string {
   return head.length > LABEL_MAX ? `${head.slice(0, LABEL_MAX - 1).trimEnd()}…` : head;
 }
 
+/** A rail row's title: the whole name minus its "[EPIC]" tag, never cut (the row wraps it to two lines). */
+export const railTitle = (name: string): string => areaName(name);
+
+/** What an empty table says: an epic's words when one is selected, the board's otherwise. */
+export const emptyBodyText = (epicSelected: boolean): string => epicSelected ? "This epic has no cards in the read." : "This board has nothing open.";
+
 /** "area": an "Area: …" epic (or, on a board with none, an epic that holds a card). "epic": another epic still open. */
 export interface AreaRow { key: string; name: string; color?: string; total: number; inSprint: number; done: number; group: "area" | "epic" }
 
@@ -83,6 +89,8 @@ export function countCell(a: Pick<AreaRow, "total" | "done">, truncated: boolean
   const open = Math.max(0, a.total - a.done);
   const total = truncated ? `at least ${a.total}` : `${a.total}`;
   const title = `${open} open of ${total}; ${a.done} done`;
+  // No card held: the epic is unknown or empty, and a check says "everything is done".
+  if (a.total === 0) return { done: false, lead: "0", rest: "", title: "no cards read" };
   return open === 0 ? { done: true, lead: "✓", rest: ` ${a.total}`, title } : { done: false, lead: `${open}`, rest: ` / ${a.total}`, title };
 }
 

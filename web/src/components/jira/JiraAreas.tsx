@@ -11,7 +11,7 @@ import { useState } from "react";
 import { HIT, ICON } from "../../lib/iconSize.ts";
 import { InfoIcon } from "../../lib/glyphIcons.tsx";
 import { CloseButton } from "../CloseButton.tsx";
-import { GROUP_BY, countCell, epicLabel, type AreaRow, type GroupBy, type GroupPref, type ThenBy } from "../../lib/jiraAreas.ts";
+import { GROUP_BY, countCell, railTitle, type AreaRow, type GroupBy, type GroupPref, type ThenBy } from "../../lib/jiraAreas.ts";
 import { epicTone, sprintLine } from "../../lib/jiraBoardContext.ts";
 import type { JiraBoardSprint } from "../../../../shared/providers.ts";
 import { Segmented, EDGE } from "../workspace/Chrome.tsx";
@@ -46,7 +46,7 @@ export function JiraAreaRail({ project, areas, sprint, now, points, sel, onPick,
       title={`${a.name} (${a.key}): ${cell(a).title}, ${a.inSprint} in the sprint`}
       className="agx-rail-row w-full flex items-center gap-2 text-left" style={row(sel === a.key)}>
       <span aria-hidden className="shrink-0 rounded-full" style={{ width: 8, height: 8, background: `var(${epicTone(a.color)})` }} />
-      <span className="truncate min-w-0 flex-1">{epicLabel(a.name)}</span>
+      <span className="min-w-0 flex-1" style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", overflowWrap: "anywhere" }}>{railTitle(a.name)}</span>
       <span className="shrink-0 truncate" style={{ color: "var(--text4)", fontSize: 10, fontWeight: 400, maxWidth: 56 }}>{a.key}</span>
       <span className="tabular-nums shrink-0" style={{ color: "var(--text3)", fontSize: 11, fontVariantNumeric: "tabular-nums" }}>
         <span style={{ color: a.total - a.done > 0 ? "var(--text2)" : "var(--text4)" }}>{cell(a).lead}</span><span style={{ color: "var(--text4)" }}>{cell(a).rest}</span>
@@ -99,9 +99,9 @@ export function JiraAreaHead({ title, fullTitle, sub, chips, hint, done, total, 
   const [gone, setGone] = useState(hintGone);
   return (
     <div className="px-4 pt-2.5 pb-1.5 min-w-0" data-testid="jira-area-head">
-      <div className="flex items-baseline gap-2.5 min-w-0">
-        <span className="font-extrabold truncate" title={fullTitle} style={{ fontSize: 17, color: "var(--text)" }}>{title}</span>
-        {sub && <span className="truncate text-[11px] font-normal" style={{ color: "var(--text3)" }}>{sub}</span>}
+      <div className="flex items-baseline flex-wrap gap-x-2.5 min-w-0">
+        <span className="font-extrabold min-w-0" title={fullTitle} style={{ fontSize: 17, color: "var(--text)", overflowWrap: "anywhere" }}>{title}</span>
+        {sub && <span className="text-[11px] font-normal" style={{ color: "var(--text3)" }}>{sub}</span>}
       </div>
       <div className="flex items-center flex-wrap gap-x-2 gap-y-1 mt-1 min-w-0">
         <span style={chip("open")}>{chips.open}</span>

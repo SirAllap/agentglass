@@ -35,7 +35,7 @@ import { compareOrder } from "../../../shared/orderIndex.ts";
 import { ON_CHIP, ON_CHIP_OK } from "./tasks/chipStyle.ts";
 import { JiraQuickChips, JiraSprintHeader, ParentLabel } from "./jira/JiraBoardContext.tsx";
 import { JiraAreaHead, JiraAreaRail, JiraGroupControl, JiraScope, SPRINTS } from "./jira/JiraAreas.tsx";
-import { areaCards, areaRows, headChips, defaultPref, epicLabel, groupAreas, groupKeyed, parsePref, prefText, type GroupPref, type KeyGroup } from "../lib/jiraAreas.ts";
+import { areaCards, areaRows, headChips, defaultPref, emptyBodyText, railTitle, groupAreas, groupKeyed, parsePref, prefText, type GroupPref, type KeyGroup } from "../lib/jiraAreas.ts";
 import { TypeMark } from "./jira/JiraSections.tsx";
 import { guessOrder, rankOf, rankable, sortedByOrder, splitSprint, sprintTotals, type ParentGroup } from "../lib/jiraBoardContext.ts";
 import { blockersOf, foldCard, groupByStatus, looksLikeCardId, readyCount, tableColumns } from "../lib/boardGroups.ts";
@@ -2985,7 +2985,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
       {!onLooked && inAreaPage && (() => {
         const a = areaList.find((x) => x.key === areaSel);
         return a ? (
-          <JiraAreaHead title={epicLabel(a.name)} fullTitle={a.name} hint={ctx?.sprint ? "Epics are not shown on the sprint board; their cards are." : undefined} sub={`${a.key} · ${areas.read?.truncated ? "at least " : ""}${a.total} cards`} done={a.done} total={a.total}
+          <JiraAreaHead title={railTitle(a.name)} fullTitle={a.name} hint={ctx?.sprint ? "Epics are not shown on the sprint board; their cards are." : undefined} sub={`${a.key} · ${areas.read?.truncated ? "at least " : ""}${a.total} cards`} done={a.done} total={a.total}
             chips={headChips(a, ctx?.sprint?.name, !!areas.read?.truncated)} />
         ) : null;
       })()}
@@ -3420,7 +3420,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
                       <button onClick={() => setShowDone(true)} style={{ color: "var(--primary-ink)" }}>Show them</button>
                     </>
                   )
-                  : "This board has nothing open."}
+                  : emptyBodyText(inAreaPage)}
                 {/* Only on the built-in board, and only while it is true. ClickUp's
                     assignee filter leaves subtasks out, so for a team that works in
                     them this empty board is the setting, not the work. */}

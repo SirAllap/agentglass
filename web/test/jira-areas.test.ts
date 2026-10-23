@@ -4,7 +4,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { headChips, areaCards, areaLine, areaName, areaRows, epicLabel, defaultPref, groupAreas, groupKeyed, parsePref, prefText } from "../src/lib/jiraAreas.ts";
-import { OPEN_EPICS_MAX, countCell, underClause } from "../../shared/jiraAreas.ts";
+import { OPEN_EPICS_MAX, countCell, emptyBodyText, railTitle, underClause } from "../../shared/jiraAreas.ts";
 import type { JiraBoardEpic, ProviderTask } from "../../shared/providers.ts";
 
 const card = (id: string, o: Partial<ProviderTask> = {}): ProviderTask =>
@@ -39,8 +39,24 @@ describe("the areas of a board", () => {
   test("a rail count is open over total, a finished row is a check, a truncated read says at least", () => {
     expect(countCell({ total: 110, done: 109 }, false)).toEqual({ done: false, lead: "1", rest: " / 110", title: "1 open of 110; 109 done" });
     expect(countCell({ total: 4, done: 4 }, false)).toMatchObject({ done: true, lead: "✓", rest: " 4" });
-    expect(countCell({ total: 0, done: 0 }, false)).toMatchObject({ done: true });
+    expect(countCell({ total: 0, done: 0 }, false)).toEqual({ done: false, lead: "0", rest: "", title: "no cards read" });
     expect(countCell({ total: 110, done: 109 }, true).title).toBe("1 open of at least 110; 109 done");
+  });
+  test("a rail title is the whole name minus its tag, never cut", () => {
+    const long = "[GAME][EPIC] Align game engine and the new payment flow across every screen of the old checkout";
+    expect(railTitle(long)).toBe(long);
+    expect(railTitle("[EPIC] Design system as a code library (tokens, components)")).toBe("Design system as a code library (tokens, components)");
+    expect(railTitle("Area: Mobile")).toBe("Mobile");
+  });
+  test("the header and the rail never use the 28-character cut", async () => {
+    const strip = (t: string) => t.split("\n").filter((l) => !l.trim().startsWith("*") && !l.trim().startsWith("//")).join("\n");
+    expect(strip(await Bun.file(new URL("../src/components/TasksPanel.tsx", import.meta.url)).text())).not.toContain("epicLabel(");
+    expect(strip(await Bun.file(new URL("../src/components/jira/JiraAreas.tsx", import.meta.url)).text())).not.toContain("epicLabel(");
+    expect(railTitle("[EPIC] Align game engine and cards with the rulebook")).toBe("Align game engine and cards with the rulebook");
+  });
+  test("an empty table speaks of the epic when one is selected, of the board otherwise", () => {
+    expect(emptyBodyText(true)).toBe("This epic has no cards in the read.");
+    expect(emptyBodyText(false)).toBe("This board has nothing open.");
   });
   test("an epic header's chips: open, done, and the sprint's own count", () => {
     expect(headChips({ total: 9, done: 5, inSprint: 1 }, "Sprint 1", true)).toEqual({ open: "4 open", done: "5 done", sprint: "1 in Sprint 1 of at least 9" });
