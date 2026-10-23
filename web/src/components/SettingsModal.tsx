@@ -38,7 +38,7 @@ import { checkedLine } from "../lib/providerFreshness.ts";
 import { fmtAgo, minutesAgo } from "../lib/format.ts";
 import type { ActionRecord, GateRecord, UnderstudyClassRow } from "../../../shared/types.ts";
 import { mergeActivity, gateLine, actorLabel, activityDays, filterActivity, type ActivityFilter, type ActivityRow, type ActivityRun } from "../lib/activity.ts";
-import { ingestUpdate } from "../lib/updateStore.ts";
+import { ingestUpdate, isUpdateAvailable } from "../lib/updateStore.ts";
 import { ReleaseNotesModal } from "./ReleaseNotesModal.tsx";
 import { installedNotes, type NotesTarget } from "../lib/whatsNew.ts";
 import { autostartEnabled, setAutostart, isFullscreen, toggleFullscreen, IS_DESKTOP, IS_MAC_DESKTOP, HAS_BROWSER } from "../lib/desktop.ts";
@@ -3831,7 +3831,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
       api.logDigest().catch(() => "failed" as const),
       api.jiraStatus().then((r) => r.connected).catch(() => null),
       api.lanternSettings().then((r) => (r.ok && typeof r.watch === "boolean" ? r.watch : null)).catch(() => null),
-      api.updateStatus().then((r) => r.available === true).catch(() => null),
+      api.updateStatus().then((r) => isUpdateAvailable(r)).catch(() => null),
       api.notifyPrefs().then((r) => (r.ok ? !r.prefs.none : null)).catch(() => null),
       api.plugins().then((r) => r.plugins).catch(() => null),
     ]).then(([deps, provs, remote, hookInstalled, digest, jira, lanternWatching, updateAvailable, notificationsOn, plugs]) => {
