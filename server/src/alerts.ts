@@ -421,6 +421,18 @@ export function pushDeviceStoreChanged(path: string) {
   }
 }
 
+/** The chair of a project has no engine left to run it (agents/noplan.ts).
+ *  A blocked agent, like a held gate, so the one kind that is on by default. */
+export function pushNoPlanLeft(project: string, running: number) {
+  deliver(`${project} has no plan left`,
+    `The orchestrator for ${project} has no plan left. ${running} worker${running === 1 ? " is" : "s are"} still running and will stop at their limits.`,
+    2, undefined, { source: "orchestration", key: `noplan:${project}` }, "blocked");
+}
+/** A plan is back: take the card down. */
+export function pushNoPlanCleared(project: string) {
+  deliver(`${project} has a plan again`, "", 0, undefined, { source: "orchestration", key: `noplan:${project}`, clear: true }, "blocked");
+}
+
 export function pushReminder(id: string, title: string, when: string) {
   if (shouldSend(`remind:${id}`)) deliver(`⏰ ${title}`, when, 2, undefined, { kind: "reminder", id, source: "reminder" }, "reminders");
 }

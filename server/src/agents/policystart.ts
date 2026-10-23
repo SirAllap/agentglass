@@ -8,25 +8,33 @@
  * before this file existed: a worker in the role's TUI under the role's lock.
  *
  * A worker started here is stopped, not steered: its engine runs one turn and
- * exits. What a stop kills is the window; a command the engine's tool started
- * in a session of its own can outlive it (measured: Claude's and OpenCode's
- * Bash tool), and this does not walk the tree.
+ * exits. What a stop by hand kills is the window; a command the engine's tool
+ * started in a session of its own can outlive it (measured: Claude's and
+ * OpenCode's Bash tool). Only the turn limit walks the tree (ceilings.ts).
  */
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { basename } from "node:path";
 import { readStoredPolicy } from "../config.ts";
 import { projectRootOf } from "../git.ts";
 import { readPolicy } from "../orchestration.ts";
+import { recordAction } from "../db.ts";
 import { ruleStates } from "../orchpolicy.ts";
 import { probeEngines } from "../agentprobe.ts";
 import { addNeed } from "../seatneed.ts";
+import { addReport } from "../seatreport.ts";
+import { wakeForReport } from "../seatwake.ts";
 import { hermesResumeRefusal } from "../hermes.ts";
-import { workerRole } from "../../../shared/workerRoles.ts";
-import { envelopeWithin, type RuleFacts } from "../../../shared/orchestration.ts";
+import { agentProvider } from "../../../shared/agentKinds.ts";
+import { workerRole, type RoleId } from "../../../shared/workerRoles.ts";
+import { chainFor, envelopeWithin, resolve, type RuleFacts } from "../../../shared/orchestration.ts";
 import type { EngineReadiness } from "../../../shared/types.ts";
 import * as AgentOps from "../agentops.ts";
-import { headlessTurn, prepareRun, runFiles, turnResult, wrapped } from "./headless.ts";
-import { planWorker, type StartedBy } from "./workerstart.ts";
+import { headlessRefusal, headlessTurn, prepareRun, runFiles, turnResult, wrapped } from "./headless.ts";
+import { firstTurnFailure, type FirstTurnFailure } from "./failures.ts";
+import { arm } from "./ceilings.ts";
+import { toldRoots, watchChair } from "./noplan.ts";
+import { pushNoPlanCleared, pushNoPlanLeft } from "../alerts.ts";
+import { nextEngine, planWorker, type StartedBy } from "./workerstart.ts";
 
 export interface Answer { status: number; body: Record<string, unknown> }
 const refuse = (error: string, status = 400): Answer => ({ status, body: { ok: false, error } });
@@ -129,13 +137,14 @@ async function startNow(p: {
   const r = await AgentOps.startAgent({
     root: p.root, name: p.name, cwd: p.cwd, kind: plan.choice.engine, exactArgv: wrapped(files, turn.argv),
     env: turn.env, keep: true, lockedRole: true, yoloAllowed: false,
-    owner: { seatRoot: p.seatRoot, model: plan.choice.model, startedBy: plan.startedBy, resumeId: turn.sessionId ?? null },
+    owner: { seatRoot: p.seatRoot, model: plan.choice.model, startedBy: { ...plan.startedBy, turnMinutes: view.policy.limits.turnMinutes }, resumeId: turn.sessionId ?? null },
   });
   if (!r.ok) {
     if (r.error === "exists") return { status: 409, body: { ok: false, error: "an agent by that name is still running", result: { agent: r.agent } } };
     if (r.error === "lock-loosened") return refuse(`this directory's OpenCode config loosens the worker's lock, so it was not started: ${r.detail}`);
     return refuse(`the worker could not start: ${r.error}`);
   }
+  armWorker(r.agent, view.policy.limits.turnMinutes);
   return {
     status: 200,
     body: {
@@ -212,8 +221,206 @@ async function resumeTurn(asked: AgentOps.NamedAgent, text: string): Promise<Ans
   const r = await AgentOps.startAgent({
     root: a.seatRoot ?? cwd, name: a.name, cwd, kind: by.engine, exactArgv: wrapped(files, turn.argv),
     env: turn.env, keep: true, lockedRole: true, yoloAllowed: false,
-    owner: { seatRoot: a.seatRoot ?? null, model: by.model, startedBy: by, resumeId: resume },
+    owner: { seatRoot: a.seatRoot ?? null, model: by.model, startedBy: nextTurn(by, view.policy.limits.turnMinutes), resumeId: resume },
   });
   if (!r.ok) return refuse(`the next turn could not start: ${r.error}`);
+  armWorker(AgentOps.agentNamed(a.name) ?? a, view.policy.limits.turnMinutes);
   return { status: 200, body: { ok: true, result: { name: a.name, outcome: "sent", resumed: resume, ...(turn.partly ? { partly: turn.partly } : {}) } } };
+}
+
+// ── the ceiling and the end of a turn ────────────────────────────────────
+
+const LOST = "ceiling lost: restarted";
+
+/** The stamp of a worker's next turn: one further on, under the limit in
+ *  force now, and with a ceiling of its own again. A row from before turns
+ *  were counted has been resumed at least once by the time it gets here. */
+function nextTurn(by: StartedBy, turnMinutes: number): StartedBy {
+  const { ceilingLost: _, ...rest } = by;
+  return { ...rest, turn: (by.turn ?? 1) + 1, turnMinutes, because: by.because.filter((l) => !l.startsWith(LOST)) };
+}
+
+/** Arm the turn limit and the watch on the turn's end, for a turn just opened. */
+function armWorker(a: AgentOps.NamedAgent, turnMinutes: number): void {
+  arm(a, {
+    deadline: a.startedAt + turnMinutes * 60_000, limitMinutes: turnMinutes, files: runFiles(a.name),
+    ended: (name) => endedTurn(name),
+  });
+}
+
+/**
+ * Boot. The timers died with the old process and are NOT put back: the pane
+ * and window ids on a row are only good for the tmux that handed them out, and
+ * after a machine or tmux restart the same numbers belong to restored tabs. So
+ * nothing here stops anything.
+ *
+ *   - A turn that ended while the server was away is settled, quietly. It is
+ *     old news: moving it to another engine now would start a task that may be
+ *     days old, and the seat reads the row when it next looks.
+ *   - A turn still going is marked "ceiling lost: restarted" on its row. Its
+ *     end is still watched (a file under its name, no id involved) so a failure
+ *     reaches the seat; its minutes are not counted any more, and it does not
+ *     move to another engine.
+ */
+export async function workersAfterRestart(): Promise<{ lost: string[]; settled: string[] }> {
+  const lost: string[] = [], quiet: string[] = [];
+  for (const a of AgentOps.everyAgent()) {
+    const by = startedByOf(a);
+    if (!by || a.exitCode !== undefined) continue;
+    const files = runFiles(a.name);
+    const r = turnResult(files, a.kind);
+    if (r) { AgentOps.settleTurn(a, r); quiet.push(a.name); continue; }
+    // A window that closed without ever writing its status was stopped by hand,
+    // and one that is not there has no turn to watch. Asked, never written:
+    // boot is no moment to close rows over a tmux that is still coming up.
+    if (a.endedAt !== null || !(await AgentOps.paneAlive(a.paneId))) continue;
+    if (!by.ceilingLost) {
+      const limit = by.turnMinutes ? `${by.turnMinutes}-minute limit` : "turn limit";
+      AgentOps.restamp(a.name, { ...by, ceilingLost: true, because: [...by.because, `${LOST}: the server restarted during this turn, so its ${limit} is no longer enforced`] });
+    }
+    arm(a, { deadline: null, limitMinutes: by.turnMinutes ?? 0, files, ended: (name) => endedTurn(name) });
+    lost.push(a.name);
+  }
+  return { lost, settled: quiet };
+}
+
+/** A worker's turn settled by itself (the timeout is ceilings.ts's own). */
+async function endedTurn(name: string): Promise<void> {
+  const a = AgentOps.agentNamed(name);
+  const by = a && startedByOf(a);
+  if (!a || !by || !a.exitCode) return;
+  /* Asked before the seat's turn is taken and told after it is given back:
+     checking the engines can take seconds a command, and every other start and
+     prompt of this seat would wait behind it. */
+  const ready = (await probeEngines()).engines;
+  const tell = await inTurn(a.seatRoot, name, () => failedTurn(a, by, ready));
+  if (tell) await wakeForReport(tell, name);
+}
+
+/** A plan can only come back by the person's hand: the policy saved, or an
+ *  engine signed in and checked. Asked again then, for the projects whose card
+ *  is up, and for nobody when none is. */
+export async function chairsAgain(): Promise<void> {
+  const roots = toldRoots();
+  if (!roots.length) return;
+  const ready = (await probeEngines()).engines;
+  for (const root of roots) await askChair(root, ready);
+}
+
+async function askChair(root: string, readiness: readonly EngineReadiness[]): Promise<void> {
+  watchChair({
+    root, policy: readPolicy(root).policy, facts: factsNow(), readiness, running: await AgentOps.liveOwnedBy(root),
+    notify: {
+      out: (project, running) => { recordAction({ actor: "policy", action: "chair/no-plan", target: project, ok: false, detail: `${running} workers still running` }); pushNoPlanLeft(project, running); },
+      back: (project) => { recordAction({ actor: "policy", action: "chair/plan-back", target: project, ok: true }); pushNoPlanCleared(project); },
+    },
+  });
+}
+
+const readText = (p: string): string => { try { return readFileSync(p, "utf8"); } catch { return ""; } };
+const engineTitle = (e: string): string => agentProvider(e)?.title ?? e;
+const WHY: Record<FirstTurnFailure, string> = { "rate-limit": "hit its rate limit", "signed-out": "was signed out" };
+
+/**
+ * A turn ended with a non-zero status.
+ *
+ * Moved to the next engine in the chain ONLY when it is the worker's FIRST
+ * turn, that turn never got past the handshake, and its words are a rate limit
+ * or a sign-in problem (failures.ts). A turn after the first starts with empty
+ * output files and can fail just as early, on top of everything the turns
+ * before it wrote, so the turn is counted on the stamp and the files alone
+ * never decide. A failure after work began is reported and left: a second
+ * engine would edit on top of a half-done first, and what to do with that is
+ * the seat's call.
+ *
+ * Once, by default: `maxRetries` is 1. A policy may raise it, and each move is
+ * still a first turn that did nothing, on an engine not tried before, so the
+ * chain's length bounds it. The move is logged and is not news; a second
+ * failure, or a chain with nothing left, is a need for the person, and every
+ * failure that is not a move is one report to the seat. The root to wake comes
+ * back, so the wake happens outside the seat's turn.
+ */
+async function failedTurn(a: AgentOps.NamedAgent, by: StartedBy, ready: readonly EngineReadiness[]): Promise<string | null> {
+  const files = runFiles(a.name);
+  const why = firstTurnFailure(readText(files.out), readText(files.err));
+  const view = readPolicy(a.seatRoot ?? undefined);
+  const retries = by.retries ?? 0;
+  // A row with no count is from before turns were counted: it may have been resumed, so it stays.
+  const first = by.turn === 1 && !by.ceilingLost;
+  let stopped = `${engineTitle(by.engine)} exited with ${a.exitCode}${a.exitLine ? `: ${a.exitLine}` : ""}`;
+
+  if (why && first && retries < view.policy.limits.maxRetries) {
+    const moved = await switchEngine(a, by, why, view, ready);
+    if (moved === true) return null;
+    stopped = moved;
+  }
+  const root = a.seatRoot;
+  if (!root) return null;
+  // An engine is out: is the chair's own plan still there?
+  if (why) await askChair(root, ready);
+  if ((why && first) || retries > 0) {
+    addNeed({
+      root, text: `${a.name} stopped: ${why ? `${engineTitle(by.engine)} ${WHY[why]}` : stopped}${retries > 0 ? `, after moving off ${engineTitle(by.from ?? "the first engine")}` : ""}. No engine is left to try for it.`,
+      recommend: "Settings ▸ Orchestration: add an engine to the chain, or sign one in; then start the worker again.",
+    });
+  }
+  const blocked = !why ? "the turn failed"
+    : first ? `the engine ${WHY[why]} before it did anything`
+    : `the engine ${WHY[why]} on a later turn, so it was not moved to another engine on top of what the turns before it did`;
+  addReport({
+    root, agent: a.name,
+    text: [
+      `STATE: stopped: ${stopped}`,
+      `BLOCKED: ${blocked}${retries > 0 ? ", and the next engine failed as well" : ""}; its files are in ${a.cwd}`,
+      "NEED: decide whether to start it again, hand it to another engine, or drop it",
+      "COST: one decision",
+    ].join("\n"),
+  });
+  return root;
+}
+
+/** Start the next ready entry of the role's chain with the same prompt, in the
+ *  same directory and envelope. True when it started; otherwise why not. */
+async function switchEngine(a: AgentOps.NamedAgent, by: StartedBy, why: FirstTurnFailure, view: ReturnType<typeof readPolicy>, ready: readonly EngineReadiness[]): Promise<true | string> {
+  const prompt = readText(runFiles(a.name).prompt);
+  const role = workerRole(by.role);
+  const cwd = a.seatRoot ? seatMayUse(a.seatRoot, a.cwd) : a.cwd;
+  if (!role || !prompt || !cwd) return `there was nothing to hand to another engine`;
+  if (!envelopeWithin(by.envelope, view.policy.ceiling)) return "the envelope it started with is beyond this project's ceiling now";
+  const facts = factsNow();
+  const pathOf = (engine: string) => { const r = ready.find((e) => e.id === engine); return r?.path && r.roles.worker.ok ? r.path : null; };
+  const resolved = resolve(view.policy, facts, ready).workers[role.id];
+  const next = nextEngine({
+    chain: chainFor(view.policy, facts, role.id), by, ask: resolved.ok && resolved.ask,
+    usable: (c) => !!pathOf(c.engine) && !headlessRefusal(c.engine),
+  });
+  if (!next.ok) return next.why;
+  const bin = pathOf(next.choice.engine)!;
+  const turn = headlessTurn({ engine: next.choice.engine, bin, model: next.choice.model, role, envelope: by.envelope, limits: view.policy.limits, prompt });
+  if (!turn.ok) return turn.error;
+  // The failed turn's tab is still open under this name; it goes before the next opens.
+  if (await AgentOps.keptTabOf(a)) await AgentOps.stopAgent(a, Date.now(), true);
+  const stamp: StartedBy = {
+    ...by, engine: next.choice.engine, model: next.choice.model, position: next.position,
+    retries: (by.retries ?? 0) + 1, from: by.engine, turnMinutes: view.policy.limits.turnMinutes,
+    because: [...by.because, `${engineTitle(by.engine)} ${WHY[why]}, so the next engine in the chain took over`],
+  };
+  const files = prepareRun(a.name, prompt, turn.stdin);
+  const r = await AgentOps.startAgent({
+    root: a.seatRoot ?? cwd, name: a.name, cwd, kind: next.choice.engine, exactArgv: wrapped(files, turn.argv),
+    env: turn.env, keep: true, lockedRole: true, yoloAllowed: false,
+    owner: { seatRoot: a.seatRoot ?? null, model: next.choice.model, startedBy: stamp, resumeId: turn.sessionId ?? null },
+  });
+  /* An engine that fails at launch is `died` here: its row is written and
+     ended all the same, and its wrapper has left the status, so it is armed
+     like any other and its own failure is read by the same path (a second
+     failure, which is a need). */
+  const started = r.ok ? r.agent : r.error === "died" ? AgentOps.agentNamed(a.name) : null;
+  if (!started) return `the next engine could not start: ${r.ok ? "no row" : r.error}`;
+  recordAction({
+    actor: "policy", action: "worker/switch", target: a.name, ok: true,
+    detail: `${a.name}: ${by.engine} to ${next.choice.engine} (${next.choice.model || "default model"}): ${engineTitle(by.engine)} ${WHY[why]} on its first turn`.slice(0, 300),
+  });
+  armWorker(started, stamp.turnMinutes!);
+  return true;
 }

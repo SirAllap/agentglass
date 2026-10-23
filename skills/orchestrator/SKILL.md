@@ -120,6 +120,15 @@ exit code. The result says `{engine, model, because, envelope}`; read `because`.
 - **A worker is stopped, not steered.** It cannot be told something in the middle
   of a turn. When its turn has ended (`wait <name> --until gone`, then `read`),
   `prompt <name> "<next>"` starts the next turn on the same engine, resumed.
+- **A turn has a limit** (Settings ▸ Orchestration, 30 minutes unless changed). A
+  worker still running at it is stopped with everything it started, its row says
+  `timeout` (exit 124), and you get one report. If the app restarted during the
+  turn, the row's `because` says `ceiling lost: restarted`: that turn is no longer
+  stopped at its limit, so check on it yourself and `stop` it if it hangs.
+- **A failed FIRST turn may move to the next engine, once.** Only when the engine
+  was rate-limited or signed out before it did anything, and never for a role the
+  person set to ask. `because` then says which engine it moved off. A failure on a
+  later turn, or after work began, is never moved: you get a report and decide.
 - **Yours only.** You can prompt, read, key and stop the agents you own: the workers
   you started, and any other agent after `agentglass-agent own <name>`. An agent with
   no owner is refused until you do; one another project's seat owns, never. `enlist` and

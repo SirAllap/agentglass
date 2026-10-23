@@ -30,6 +30,18 @@ export interface StartedBy {
   envelope: Envelope;
   /** Always true here: a row with this field is a headless, policy-started worker. */
   headless: true;
+  /** The turn limit this turn runs under. */
+  turnMinutes?: number;
+  /** Which turn of this worker the row is on: 1 for a start, one more for
+   *  every instruction after it. Only a first turn can move to another engine. */
+  turn?: number;
+  /** The server restarted during this turn, so its limit is no longer
+   *  enforced (ceilings.ts). Cleared by the next turn, which has its own. */
+  ceilingLost?: true;
+  /** How many times a first-turn failure moved it to the next engine in the chain. */
+  retries?: number;
+  /** The engine it was moved off, once it has been. */
+  from?: string;
 }
 
 export interface WorkerAsk {
@@ -133,7 +145,30 @@ export function planWorker(
     ok: true, role, choice, envelope,
     startedBy: {
       scope: view.scope, rule: rule.name, ...(rule.id ? { ruleId: rule.id } : {}), because, position,
-      role: role.id, engine: choice.engine, model: choice.model, envelope, headless: true,
+      role: role.id, engine: choice.engine, model: choice.model, envelope, headless: true, turn: 1,
     },
   };
+}
+
+/**
+ * Where a worker goes when its first turn failed before doing anything: the
+ * next usable entry of its role's chain AS IT IS NOW, after the entry it was
+ * on. The chain can have changed since the start (a rule went on or off), so
+ * the place is found by the engine and never by the number stamped then, and
+ * an engine it has already been on is never picked again. A role the person
+ * set to ask is not chosen for them.
+ */
+export function nextEngine(p: {
+  chain: readonly EngineChoice[]; by: Pick<StartedBy, "engine" | "model" | "from">;
+  /** The role is set to "Ask when it runs". */
+  ask: boolean; usable: (c: EngineChoice) => boolean;
+}): { ok: true; choice: EngineChoice; position: number } | { ok: false; why: string } {
+  if (p.ask) return { ok: false, why: "this role is set to ask which engine to use, so the next one was not picked for it" };
+  const tried = new Set([p.by.engine, ...(p.by.from ? [p.by.from] : [])]);
+  const at = p.chain.findIndex((c) => c.engine === p.by.engine && c.model === p.by.model);
+  for (let i = at + 1; i < p.chain.length; i++) {
+    const c = p.chain[i]!;
+    if (!tried.has(c.engine) && p.usable(c)) return { ok: true, choice: c, position: i };
+  }
+  return { ok: false, why: "no other engine in the chain is ready" };
 }

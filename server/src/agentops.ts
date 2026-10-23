@@ -167,6 +167,18 @@ export async function reconcile(now = Date.now()): Promise<NamedAgent[]> {
   return out;
 }
 
+/* A name stops meaning the window it meant: stopped, started again, or
+   enlisted as somebody's own tab. Whoever keeps something per name (the turn
+   limit, agents/ceilings.ts) hears it here, so no exit path has to remember. */
+const lettingGo = new Set<(name: string) => void>();
+export function onLetGo(f: (name: string) => void): void { lettingGo.add(f); }
+const letGo = (name: string): void => { for (const f of lettingGo) f(name); };
+
+/** Rewrite the decision stamped on a row and nothing else. */
+export function restamp(name: string, startedBy: unknown): void {
+  db.query(`UPDATE named_agent SET started_by = ? WHERE name = ?`).run(JSON.stringify(startedBy), name);
+}
+
 export function agentNamed(name: string): NamedAgent | null {
   const r = byName.get(name);
   return r ? toAgent(r) : null;
@@ -653,6 +665,7 @@ export async function startAgent(p: {
     const status = /the CLI exited \((\d+)\)/.exec((await screenOf(opened.paneId)) ?? "")?.[1];
     if (status && status !== "0") {
       const now = p.now ?? Date.now();
+      letGo(p.name);
       upsert.run(p.name, kind.id, p.cwd, opened.paneId, opened.windowId, now);
       end.run(now, p.name);
       ownRow(p);
@@ -664,6 +677,7 @@ export async function startAgent(p: {
     return { ok: false, error: "died" };
   }
   const startedAt = p.now ?? Date.now();
+  letGo(p.name);
   upsert.run(p.name, kind.id, p.cwd, opened.paneId, opened.windowId, startedAt);
   ownRow(p);
   return { ok: true, agent: agentNamed(p.name) ?? { name: p.name, kind: kind.id, cwd: p.cwd, paneId: opened.paneId, windowId: opened.windowId, startedAt, endedAt: null } };
@@ -775,6 +789,7 @@ export async function keptTabOf(a: NamedAgent): Promise<boolean> {
 export async function stopAgent(a: NamedAgent, now = Date.now(), kill = !a.adopted): Promise<{ ok: boolean; killed: boolean }> {
   /* An ended agent is only stopped through its kept tab, found by its pane
      (`keptTabOf`), so that is the window closed. */
+  letGo(a.name);
   const killed = kill ? (await tmux(["kill-window", "-t", a.endedAt === null ? a.windowId : a.paneId])).ok : false;
   end.run(now, a.name);
   return { ok: kill ? killed : true, killed };
@@ -852,6 +867,7 @@ export async function enlistAgent(p: {
     return { ok: false, error: "not-an-agent", detail: command };
   }
   const now = Date.now();
+  letGo(p.name);
   adopt.run(p.name, "claude", cwd, paneId, windowId, now);
   const made = agentNamed(p.name);
   return made ? { ok: true, agent: made } : { ok: false, error: "no-pane" };

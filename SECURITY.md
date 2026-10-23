@@ -955,7 +955,22 @@ agents or touching a seat stops a worker using the CLI as it is, not one that
 means to get past it. A worker is as contained as its engine's permission
 system and the trust placed in what it is asked to read; where that is not
 enough, the answer is a container or another account, which this app does not
-provide. A project
+provide.
+
+A policy-started worker's **turn limit** stops it by process id: the processes
+under its window at that moment, then the window. A command that forked twice
+and no longer answers to the window is not found. The limit is held in the
+server's memory with the pane and start time of the turn it was set for, and
+nothing is stopped unless the row still names that turn, so a name reused by a
+person's own tab is never stopped on a worker's clock. It is **not** put back
+after the server restarts: pane and window ids are only good for the tmux that
+handed them out, and after a restart the same numbers can be somebody's
+restored tab. A worker caught mid-turn by a restart is marked
+`ceiling lost: restarted` on its row and runs without a limit until its turn
+ends or it is stopped by hand. Falling back to the next engine happens only on
+a worker's first turn, before it did anything, with the same prompt, directory
+and envelope, and the envelope is checked against the project's ceiling again:
+it cannot widen what a worker may do. A project
 **OpenCode plugin** (`.opencode/plugin/`, or one named in the project's
 opencode.json) is arbitrary code that OpenCode runs inside the worker, and the
 lock does not cover it: a plugin can run any command itself without asking the

@@ -224,7 +224,7 @@ import { hostname, tmpdir } from "node:os";
 import { privateHost, resolvePeer, originOf, guardedFetch, hostsOnly } from "./net.ts";
 import { DESK_HEADER, claimDesk, deskHeld } from "./desk.ts";
 import { readPolicy, writePolicy } from "./orchestration.ts";
-import { policyEngaged, startThroughPolicy, promptHeadless, startedByOf, settled, seatMayUse } from "./agents/policystart.ts";
+import { policyEngaged, startThroughPolicy, promptHeadless, startedByOf, settled, seatMayUse, workersAfterRestart, chairsAgain } from "./agents/policystart.ts";
 import { armedWakeups, evaluate as evaluatePolicy, ruleStates, startPolicyEvaluator } from "./orchpolicy.ts";
 import { resolveToken, healthProof, tokenOk, isIntake, isAuthExempt, callerFor, allowed, mayReadForeignRoot, scopeNeeded, pluginOfRequest, answersFromADevice, deskKeyOk, understudyRequiresToken, UNDERSTUDY_NO_TOKEN_ERROR, mintUnderstudyToken, revokeUnderstudyToken, tokenlessWarning, type Caller, type Origin } from "./auth.ts";
 import {
@@ -3349,7 +3349,10 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      */
     if (pathname === "/engines" && req.method === "GET") {
       const fresh = url.searchParams.get("fresh");
-      return json(await probeEngines({ fresh: fresh === "1" ? true : fresh ? fresh.split(",") : false }));
+      const report = await probeEngines({ fresh: fresh === "1" ? true : fresh ? fresh.split(",") : false });
+      // An engine signed in is how a chair gets its plan back: take its card down now.
+      void chairsAgain().catch(() => {});
+      return json(report);
     }
 
     /**
@@ -8433,6 +8436,8 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (!r.ok) return json({ ok: false, error: r.error }, 400);
       // Editing the rules is an event too: settle their switches and wake-ups now.
       void evaluatePolicy().catch(() => {});
+      // ...and a chain with an engine added is a plan back for a chair that had none.
+      void chairsAgain().catch(() => {});
       return json({ ok: true, scope: r.view.scope, root: r.view.root, overrides: r.view.overrides, policy: r.view.policy });
     }
     /**
@@ -10133,6 +10138,9 @@ setAliveHook(async (title, paneId) => {
 });
 startUnderstudyWatchdog();
 startPolicyEvaluator();
+// The turn limits lived in memory and are not put back: a worker still on its
+// turn is marked as having lost its ceiling, never stopped by an id from before.
+void workersAfterRestart().catch(() => {});
 startTaskSweep();
 startReminderTick();
 /* Scheduled agent starts ride a clock of the same shape. See agentschedule.ts. */

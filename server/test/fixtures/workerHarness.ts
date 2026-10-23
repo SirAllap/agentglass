@@ -7,7 +7,9 @@
  * engine; started any other way it is the TUI a seat or a legacy worker runs
  * (argv written aside, and for the seat the token it was given). `opencode`
  * answers `debug agent` from the lock it was handed, and a turn is the fake's,
- * or a slow one while the flag file `slow` exists.
+ * or a slow one while the flag file `slow` exists. The `limit` and `work` fakes take a
+ * second to say so: a real CLI does, and one that exits before the start has looked
+ * is reported as having died at launch, which on a slow runner is every start.
  */
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -42,6 +44,11 @@ export interface Harness {
   exited(name: string): Promise<Record<string, any>>;
   /** While set, an OpenCode turn runs for a minute: a worker that stays live. */
   slow(on: boolean): void;
+  /** How many headless turns this engine's stub was asked for, failing ones included. */
+  ran(engine: "opencode" | "claude"): number;
+  /** Make an engine's next turns fail the way a rate-limited CLI does: with
+   *  nothing done (`limit`), or after a tool call (`work`). Null: back to answering. */
+  mode(engine: "opencode" | "claude", how: "limit" | "work" | null): void;
   /** A tab somebody opened by hand in `dir`, running the TUI stub: its pane id. */
   handTab(dir: string): Promise<string>;
   stop(): Promise<void>;
@@ -71,10 +78,23 @@ for k,v in c.items():
 print(json.dumps({"permission":r}))'
 fi
 if [ "$1" = run ] && [ -e "${logs}/slow" ]; then sleep 60; exit 0; fi
+if [ "$1" = run ]; then
+echo x >> "${logs}/ran-opencode"
+[ -e "${logs}/mode-opencode" ] && case "$(cat "${logs}/mode-opencode")" in
+  limit) sleep 1; printf '%s\\n' 'Error: rate limit reached, try again later' >&2; exit 1 ;;
+  work) sleep 1; printf '%s\\n' '{"type":"tool_use","timestamp":3,"sessionID":"ses_fake0001","part":{"type":"tool","tool":"edit","state":{"status":"completed"}}}'; printf '%s\\n' 'Error: rate limit reached, try again later' >&2; exit 1 ;;
+esac
+fi
 exec "${join(engines, "opencode")}" "$@"
 `, { mode: 0o755 });
   writeFileSync(join(fakes, "claude"), `#!/bin/sh
-for a in "$@"; do case "$a" in -p|--print|--version|--help|auth) exec "${join(engines, "claude")}" "$@";; esac; done
+for a in "$@"; do case "$a" in -p|--print)
+echo x >> "${logs}/ran-claude"
+[ -e "${logs}/mode-claude" ] && case "$(cat "${logs}/mode-claude")" in
+  limit) sleep 1; printf '%s\\n' 'Error: rate limit reached, try again later' >&2; exit 1 ;;
+  work) sleep 1; printf '%s\\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_fake0001","name":"Edit","input":{"file_path":"notes.txt"}}]},"session_id":"00000000-0000-4000-8000-000000000001"}'; printf '%s\\n' 'Error: rate limit reached, try again later' >&2; exit 1 ;;
+esac
+exec "${join(engines, "claude")}" "$@";; --version|--help|auth) exec "${join(engines, "claude")}" "$@";; esac; done
 printf '%s\\0' "$@" > "${logs}/tui-$$.argv"
 [ -n "$AGENTGLASS_SEAT" ] && printf '%s' "$AGENTGLASS_TOKEN" > "${logs}/seat.token"
 printf '\\033[2J\\033[H❯ '
@@ -147,6 +167,8 @@ sleep 300
       });
     },
     exited: (name) => until(async () => { const a = await h.row(name); return a?.exitCode !== undefined ? a : undefined; }),
+    ran: (engine) => { try { return readFileSync(join(logs, `ran-${engine}`), "utf8").split("\n").filter(Boolean).length; } catch { return 0; } },
+    mode: (engine, how) => { if (how) writeFileSync(join(logs, `mode-${engine}`), how); else rmSync(join(logs, `mode-${engine}`), { force: true }); },
     slow: (on) => { if (on) writeFileSync(join(logs, "slow"), ""); else rmSync(join(logs, "slow"), { force: true }); },
     handTab: async (dir) => {
       const p = Bun.spawn(["tmux", "-L", SOCKET, ...TMUX_ISOLATED, "new-session", "-d", "-P", "-F", "#{pane_id}", "-c", dir, join(fakes, "claude")],
