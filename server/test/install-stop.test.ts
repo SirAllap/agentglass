@@ -42,9 +42,14 @@ function launch(exe: string, script = "read x", ...args: string[]): number {
 }
 
 /** Call a function from appctl.sh with APP pointed at the fake install. */
+/* appctl reopens the app only where there is a display (or a user manager holding one). A
+   developer's shell has one; a CI runner has neither, and "not reopened" is the right answer
+   there. These tests are about the reopening, so they bring a display of their own. */
+const DISPLAY_FOR_CI = { DISPLAY: ":0" };
+
 async function appctl(app: string, call: string, env: Record<string, string> = {}) {
   const p = Bun.spawn(["bash", "-c", `APP="${app}"; . "${APPCTL}"; ${call}`], {
-    env: { ...process.env, ...env },
+    env: { ...DISPLAY_FOR_CI, ...process.env, ...env },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -241,7 +246,7 @@ describe("putting back what the install took down", () => {
     const app = fakeInstall();
     const p = Bun.spawn([join(app, "resources", "agentglass-server"), "-c", blocker(app)], {
       stdio: ["pipe", "ignore", "ignore"],
-      env: { ...process.env, AGENTGLASS_PROJECT: "/tmp/scoped-repo", SOME_DEAD_SESSION: "nope" },
+      env: { ...DISPLAY_FOR_CI, ...process.env, AGENTGLASS_PROJECT: "/tmp/scoped-repo", SOME_DEAD_SESSION: "nope" },
     });
     p.unref();
     spawned.push(p.pid);
@@ -438,7 +443,7 @@ describe("what survives a reinstall", () => {
     const app = fakeInstall();
     const side = Bun.spawn([join(app, "resources", "agentglass-server"), "-c", blocker(app)], {
       stdio: ["pipe", "ignore", "ignore"],
-      env: { ...process.env, ...POLLUTED, AGENTGLASS_ROOT: "/tmp/scoped-repo" },
+      env: { ...DISPLAY_FOR_CI, ...process.env, ...POLLUTED, AGENTGLASS_ROOT: "/tmp/scoped-repo" },
     });
     side.unref();
     spawned.push(side.pid);

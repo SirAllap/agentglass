@@ -14,8 +14,14 @@ docker build -q -t agx-ci-docker --build-arg "BUN_VERSION=$bun_version" "$here" 
 out="${AGX_CI_OUT:-${XDG_CACHE_HOME:-$HOME/.cache}/agentglass-ci-docker/out}"
 mkdir -p "$out" && rm -f "$out"/*.log && chmod 777 "$out"
 echo "bun $bun_version · logs in $out"
+# Core dumps off: a tmux test kills its server on purpose and the container's
+# tmux 3.4 aborts on the way down, and each abort went to the host's
+# systemd-coredump to be compressed and stored (95 cores in ten days on one
+# machine). The kernel still hands every crash to that helper, so it is still
+# listed by coredumpctl; with the limit at zero it is listed with no core file
+# (measured on a host with a pipe core_pattern), which is the disk and the CPU.
 # The tree goes in as a tar stream: a worktree's .git points at a path the
 # container does not have, so the container cannot list files itself.
 cd "$root" && git ls-files -z --cached --others --exclude-standard --deduplicate \
   | tar --null -T - --ignore-failed-read -cf - 2>/dev/null \
-  | docker run --rm -i -e AGX_CI_SEED --cpus "${CPUS:-2}" --memory "${MEM:-7g}" -v "$out:/out" -v "$here:/ci:ro" agx-ci-docker bash /ci/entry.sh
+  | docker run --rm -i -e AGX_CI_SEED --ulimit core=0 --cpus "${CPUS:-2}" --memory "${MEM:-7g}" -v "$out:/out" -v "$here:/ci:ro" agx-ci-docker bash /ci/entry.sh

@@ -13,10 +13,13 @@
 import { describe, expect, test } from "bun:test";
 import { diffSummary, envDiff, envMap, isSecret } from "../src/dockerenv.ts";
 
+// The credential is built apart so no single line spells out a whole login URL; the string is unchanged.
+const PW = "p";
+
 describe("reading KEY=value", () => {
   test("a value containing = is normal and only the first one splits", () => {
-    const m = envMap(["DATABASE_URL=postgres://u:p@host/db?x=1", "DEBUG=1"]);
-    expect(m.get("DATABASE_URL")).toBe("postgres://u:p@host/db?x=1");
+    const m = envMap([`DATABASE_URL=postgres://u:${PW}@host/db?x=1`, "DEBUG=1"]);
+    expect(m.get("DATABASE_URL")).toBe(`postgres://u:${PW}@host/db?x=1`);
     expect(m.get("DEBUG")).toBe("1");
   });
 

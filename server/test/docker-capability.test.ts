@@ -42,6 +42,24 @@ describe("docker capability", () => {
     if (!cap.available) expect(typeof cap.reason).toBe("string");
   });
 
+  it("a probe still running when the cache is reset does not write into the cache that follows", async () => {
+    // The race: another test (or a poll) left a `docker version` in flight; the
+    // reset forgot it, but it failed afterwards and stamped the check time, so
+    // the next honest ask was told "retry later" with no version at all.
+    const bin = mkdtempSync(join(tmpdir(), "agx-fakedocker-"));
+    const fake = join(bin, "docker");
+    writeFileSync(fake, `#!/bin/sh\nif [ -f "${bin}/up" ]; then echo "27.1"; exit 0; fi\n/bin/sleep 0.3\necho "Cannot connect to the Docker daemon" >&2\nexit 1\n`, { mode: 0o755 });
+    process.env.PATH = bin;
+    __resetDockerCapForTest();
+    const stale = dockerCapability(); // starts the slow, failing probe
+    await Bun.sleep(100);
+    __resetDockerCapForTest(); // forgets it while it is still running
+    writeFileSync(join(bin, "up"), ""); // the daemon is up for everyone who asks from now on
+    await stale; // the old one finishes before anybody asks again
+    expect((await dockerCapability()).version).toBe("27.1");
+    rmSync(bin, { recursive: true, force: true });
+  });
+
   it("re-detects a daemon that dies after its version was cached", async () => {
     // The bug: a success was cached for good, so a daemon that stopped
     // mid-session still reported a version — a phantom daemon. A fake docker

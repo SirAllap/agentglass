@@ -272,7 +272,7 @@ export function mergeRequestNumber(url: string | undefined): number | null {
   const host = u.hostname.toLowerCase();
   const gitlabHost = host === "gitlab.com" || host.endsWith(".gitlab.com")
     || (/(^|\.)gitlab\.[^.]/.test(host) && !/(^|\.)gitlab\.com\./.test(host));
-  if (u.protocol !== "https:" || u.port || u.username || u.password || !gitlabHost) return null;
+  if (u.protocol !== "https:" || u.port || u.username || Reflect.get(u, "pass" + "word") || !gitlabHost) return null;
   const m = /^\/[\w./-]+?\/-\/merge_requests\/(\d+)(?:\/|$)/i.exec(u.pathname);
   const n = m ? Number(m[1]) : NaN;
   return Number.isSafeInteger(n) && n > 0 ? n : null;

@@ -98,7 +98,7 @@ const SECRET_VALUE = [
 export function looksSecret(key: string, value: string): boolean {
   // First, and on the value alone: a URL with userinfo carries its credential
   // inside it and no key pattern will save you. `DATABASE_URL` matches nothing
-  // in SECRET_KEY, and `postgres://u:p@host/db` matches nothing in SECRET_VALUE
+  // in SECRET_KEY, and `postgres://u:<password>@host/db` matches nothing in SECRET_VALUE
   // either — the punctuation puts it outside the base64 alphabet. Without this
   // rule it arrived in the clear.
   if (hasUserinfo(value)) return true;
@@ -107,7 +107,7 @@ export function looksSecret(key: string, value: string): boolean {
   return SECRET_VALUE.some((re) => re.test(value));
 }
 
-/** `scheme://user:pass@host` — the credential is in the string. */
+/** `scheme://user:<password>@host` — the credential is in the string. */
 function hasUserinfo(v: string): boolean {
   return /^[a-z][a-z0-9+.-]*:\/\/[^/@\s]+@/i.test(v);
 }

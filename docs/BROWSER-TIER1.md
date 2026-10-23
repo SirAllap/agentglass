@@ -200,7 +200,7 @@ half-hour otherwise:
 | `file:///etc/passwd` | never attaches — `getWebContentsId()` throws |
 | partition `persist:agentglass` (the APP's own session) | never attaches |
 | partition `persist:agentglass-browser/../agentglass` | never attaches |
-| `https://user:pass@host/` | never attaches |
+| `https://user:<password>@host/` | never attaches |
 | a legitimate guest that also asks for `preload`, `nodeintegration=on` and `webpreferences=contextIsolation=no,sandbox=no,webSecurity=no` | attaches, stripped: inside it `window.agentglass`, `window.process` and `window.require` are all `undefined` |
 
 The last row is the one that matters — the guard does not refuse a guest for

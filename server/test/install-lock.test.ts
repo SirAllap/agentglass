@@ -27,7 +27,7 @@ function fakeInstall() {
 
 function sh(app: string, call: string, env: Record<string, string> = {}) {
   return Bun.spawn(["bash", "-c", `APP="${app}"; . "${APPCTL}"; ${call}`], {
-    env: { ...process.env, ...env }, stdout: "pipe", stderr: "pipe",
+    env: { DISPLAY: ":0", ...process.env, ...env }, stdout: "pipe", stderr: "pipe",
   });
 }
 async function run(app: string, call: string, env: Record<string, string> = {}) {

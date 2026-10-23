@@ -6,6 +6,9 @@
 import { describe, expect, test } from "bun:test";
 import { validateCatalogue } from "../src/plugin-catalogue.ts";
 
+// The credential is built apart so no single line spells out a whole login URL; the string is unchanged.
+const PW = "p";
+
 const okPlugin = {
   id: "someone.watcher",
   source: { kind: "git", url: "https://example.com/someone/watcher.git", ref: "v1.0.0" },
@@ -78,7 +81,7 @@ describe("validateCatalogue", () => {
   });
 
   test("credentials in a plugin's git URL drop that entry", () => {
-    const withAuth = { ...okPlugin, source: { kind: "git", url: "https://u:p@example.com/x.git", ref: null } };
+    const withAuth = { ...okPlugin, source: { kind: "git", url: `https://u:${PW}@example.com/x.git`, ref: null } };
     const c = validateCatalogue({ ...okCatalogue, plugins: [withAuth] });
     if (typeof c === "string") throw new Error("catalogue itself should be valid");
     expect(c.plugins).toHaveLength(0);

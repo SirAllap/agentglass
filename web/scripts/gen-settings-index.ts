@@ -49,7 +49,7 @@ type Page = { id: string; label: string };
 /** Every .tsx file under web/src/components, recursively. */
 function walk(dir: string): string[] {
   const out: string[] = [];
-  for (const name of readdirSync(dir)) {
+  for (const name of readdirSync(dir).sort()) {
     const p = join(dir, name);
     const st = statSync(p);
     if (st.isDirectory()) out.push(...walk(p));

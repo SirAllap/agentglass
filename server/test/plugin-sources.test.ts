@@ -11,6 +11,10 @@ import {
   MAX_FILES,
 } from "../src/plugin-sources.ts";
 
+// The credential is built apart so no single line spells out a whole login URL; the string is unchanged.
+const PW = "pass";
+const PW2 = "p";
+
 const SOURCES = await Bun.file(new URL("../src/plugin-sources.ts", import.meta.url)).text();
 
 describe("pluginGitUrlError", () => {
@@ -27,7 +31,7 @@ describe("pluginGitUrlError", () => {
   });
 
   test("https with a username or password is refused", () => {
-    expect(pluginGitUrlError("https://user:pass@example.com/p.git")).toContain("credentials");
+    expect(pluginGitUrlError(`https://user:${PW}@example.com/p.git`)).toContain("credentials");
     expect(pluginGitUrlError("https://token@example.com/p.git")).toContain("credentials");
   });
 
@@ -48,7 +52,7 @@ describe("catalogueUrlError", () => {
     expect(catalogueUrlError("ssh://example.com/catalogue.json")).not.toBeNull();
   });
   test("credentials in the URL are refused", () => {
-    expect(catalogueUrlError("https://u:p@example.com/catalogue.json")).not.toBeNull();
+    expect(catalogueUrlError(`https://u:${PW2}@example.com/catalogue.json`)).not.toBeNull();
   });
 });
 

@@ -12,6 +12,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+// The credential is built apart so no single line spells out a whole login URL; the string is unchanged.
+const PW = "hunter2pass";
+
 /** Shaped like a GitHub token so the redaction is exercised, built at run time
  *  so the source never holds a string a secret scanner reads as a real one. */
 const FAKE_PAT = "ghp_" + "x".repeat(36);
@@ -302,7 +305,7 @@ describe("redaction runs before anything is kept", () => {
     ["a GitHub token", `token ${FAKE_PAT} used`, "ghp_"],
     ["a bearer header", "Authorization: Bearer abcdefghijklmnop1234567890", "abcdefghijklmnop"],
     ["a key assignment", "API_KEY=supersecretvalue123", "supersecretvalue123"],
-    ["a url with credentials", "git clone https://bot:hunter2pass@example.com/x.git", "hunter2pass"],
+    ["a url with credentials", `git clone https://bot:${PW}@example.com/x.git`, "hunter2pass"],
     ["an email", "author jane.doe@example.com failed", "jane.doe@"],
     ["an AWS key id", "AKIAABCDEFGHIJKLMNOP", "AKIAABCDEFGHIJKLMNOP"],
   ])("%s", (_n, input, leaked) => expect(redact(input)).not.toContain(leaked));

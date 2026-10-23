@@ -114,7 +114,9 @@ describe("a tab on the engine", () => {
     expect(mk.ok, mk.stderr).toBe(true);
     await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "crashed", "sh", "-c", "exit 3"]);
     await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "clean", "sh", "-c", "exit 0"]);
-    await Bun.sleep(400);
+    // Wait for the fact, not a fixed time: the clean tab goes when tmux has reaped its
+    // program, which on a loaded two-core runner takes longer than 400 ms.
+    for (let i = 0; i < 50 && (await windowsOf(S)).includes("clean"); i++) await Bun.sleep(100);
     expect(await windowsOf(S), "the failed program's tab is the one that must still be there").toEqual(["crashed", "keeps"]);
     expect(await show(`=${S}:crashed`, "#{pane_dead} #{pane_dead_status}")).toBe("1 3");
   }, 20_000);

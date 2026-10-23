@@ -22,6 +22,7 @@ import {
   exportRows,
   pruneOldRows,
   reclaimFreePages,
+  trimWal,
   RETENTION_DAYS,
   dbPath,
   dbNotice,
@@ -9393,6 +9394,8 @@ function prune() {
     const folded = rolled ? ` → folded into ${rolled} rollup days` : "";
     console.log(`🧹 pruned ${events} events / ${sessions} sessions older than ${RETENTION_DAYS}d${folded}`);
   }
+  // The hourly moment to hand the WAL back: never waits, see trimWal.
+  trimWal();
 }
 prune();
 setInterval(prune, 3_600_000);

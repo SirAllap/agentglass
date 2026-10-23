@@ -326,6 +326,20 @@ export const SCHEMA_GENERATION = 1;
 }
 
 db.exec("PRAGMA journal_mode = WAL;");
+/*
+ * Cap the WAL file, which SQLite otherwise never shrinks.
+ *
+ * A checkpoint copies the WAL back into the database and lets the next writer
+ * start over at the top of the file, but the file keeps the size of its
+ * largest run. VACUUM writes the whole database through the WAL, so after one
+ * the -wal file is as big as the database, for good: measured at 933 MB beside
+ * a 945 MB database. With this limit the writer that restarts the log
+ * truncates it back to 64 MB; on a scratch 246 MB database the WAL went from
+ * 83 MB after a VACUUM to 67 MB at the next write, where without it it stayed
+ * at 83 MB through every write after. trimWal() below takes it to zero.
+ */
+export const WAL_SIZE_LIMIT = 64 * 1024 * 1024;
+db.exec(`PRAGMA journal_size_limit = ${WAL_SIZE_LIMIT};`);
 db.exec("PRAGMA foreign_keys = ON;");
 
 db.exec(`
@@ -2345,6 +2359,37 @@ function foldExpiringEvents(cutoff: number): number {
  * database would go into RAM and could fail on space. Next to the database is
  * where there is certainly room for a copy of it.
  */
+/**
+ * Checkpoint the WAL into the database and truncate the file to zero bytes,
+ * without ever waiting for it.
+ *
+ * TRUNCATE has to wait for every reader to leave the WAL, and it waits through
+ * the busy handler: with the 5 s busy_timeout this connection runs on, a reader
+ * in another process (a CLI holding a read transaction) would stall the event
+ * loop for those 5 s. So the timeout is zero for this one statement, and a busy
+ * WAL is simply left for the next call. Nothing is lost by that: the frames are
+ * still checkpointed as far as the readers allow, and journal_size_limit still
+ * caps the file.
+ *
+ * The cost is the frames not yet checkpointed, which auto-checkpoint keeps to
+ * about 1000 pages (4 MB); measured at 5-6 ms on a scratch database with an
+ * 8 MB write behind it.
+ */
+export function trimWal(): { busy: boolean; ms: number } {
+  const started = performance.now();
+  let busy = true;
+  try {
+    db.exec("PRAGMA busy_timeout = 0;");
+    const r = db.query("PRAGMA wal_checkpoint(TRUNCATE)").get() as { busy?: number } | null;
+    busy = Number(r?.busy ?? 1) !== 0;
+  } catch {
+    // SQLITE_BUSY raised rather than reported: the same answer, try later.
+  } finally {
+    db.exec("PRAGMA busy_timeout = 5000;");
+  }
+  return { busy, ms: performance.now() - started };
+}
+
 export function reclaimFreePages(): { freed: number; ms: number } | null {
   try {
     const pageCount = Number((db.query("PRAGMA page_count").get() as { page_count?: number } | null)?.page_count ?? 0);
@@ -2354,6 +2399,9 @@ export function reclaimFreePages(): { freed: number; ms: number } | null {
     if (!process.env.SQLITE_TMPDIR) process.env.SQLITE_TMPDIR = dirname(DB_PATH);
     const started = Date.now();
     db.exec("VACUUM");
+    // VACUUM just wrote the whole database through the WAL; give that back now
+    // rather than waiting for the journal_size_limit to bring it down to 64 MB.
+    trimWal();
     return { freed: freelist * pageSize, ms: Date.now() - started };
   } catch {
     // A vacuum that cannot run is not a reason to fail a boot: the database is

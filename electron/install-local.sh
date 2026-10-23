@@ -291,11 +291,27 @@ done
 # that is not needed, or warning about a bit that is already set, trains people
 # to ignore both.
 #
+# And where user namespaces work the helper is not used at all: Chromium
+# sandboxes itself with them and only falls back to the setuid binary when it
+# cannot. Asking sudo there is not only unneeded: `sudo -n true` fails when sudo
+# wants a password, and every failure is a "a password is required" line in the
+# system journal, one per install, every install. The probe is the real thing
+# (`unshare` maps a user namespace) plus the AppArmor switch that Ubuntu flips
+# to deny the namespace to anything without a profile.
+#
 # Never fatal, and kept out of `set -e`'s reach by living in `if` conditions:
 # leaving a half-installed app with no launcher would be worse than one that
 # needs a single manual command.
 sandbox_ok=false
+userns_restrict=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+userns_ok=false
+if ! { [ -r "$userns_restrict" ] && [ "$(< "$userns_restrict")" != 0 ]; } \
+  && command -v unshare >/dev/null 2>&1 && unshare --user --map-root-user true 2>/dev/null; then
+  userns_ok=true
+fi
 if [ -u "$APP/chrome-sandbox" ] && [ "$(stat -c %U "$APP/chrome-sandbox" 2>/dev/null)" = root ]; then
+  sandbox_ok=true
+elif [ "$userns_ok" = true ]; then
   sandbox_ok=true
 elif sudo -n true 2>/dev/null || [ -t 0 ]; then
   if sudo chown root:root "$APP/chrome-sandbox" && sudo chmod 4755 "$APP/chrome-sandbox"; then

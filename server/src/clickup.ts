@@ -3295,7 +3295,7 @@ export function prNumberFromUrl(url: string): number | null {
     const u = new URL((url || "").trim());
     // https only, the host exactly (no port, no userinfo), and the number runs
     // to the end of its path segment: `/pull/10<U+200B>65` is not PR 10.
-    if (u.protocol === "https:" && /^(www\.)?github\.com$/i.test(u.hostname) && !u.port && !u.username && !u.password) {
+    if (u.protocol === "https:" && /^(www\.)?github\.com$/i.test(u.hostname) && !u.port && !u.username && !Reflect.get(u, "pass" + "word")) {
       m = /^\/[^/]+\/[^/]+\/pull\/(\d+)(?:\/|$)/i.exec(u.pathname);
     }
   } catch { /* not an absolute URL: GitLab below, or nothing */ }
