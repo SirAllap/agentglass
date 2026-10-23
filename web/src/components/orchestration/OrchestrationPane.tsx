@@ -12,8 +12,9 @@ import { ROLE_IDS, resolve, type Envelope, type Policy, type PolicyRule, type Re
 import { WORKER_ROLES, type RoleId } from "../../../../shared/workerRoles.ts";
 import type { EngineReadiness, EnginesReport } from "../../../../shared/types.ts";
 import { RuleForm } from "./RuleForm.tsx";
+import { QuickSetup } from "./QuickSetup.tsx";
 import {
-  ASK_HINT, CHAIN_TAIL, LIMIT_RANGE, NO_WORKER_ENGINE, chainWords, engineOptions, exhausted, notReady, readyFor, ruleBadge, ruleLine,
+  ASK_HINT, CHAIN_TAIL, LIMIT_RANGE, NO_WORKER_ENGINE, chainWords, engineOptions, exhausted, notReady, readyFor, ruleBadge, ruleHolds, ruleLine,
   stepLimit, withAsk, withBaseChoice, withEnvelopes, withLimits, withRule, withRuleEnabled, withoutRule, type Field,
 } from "./orchestrationCopy.ts";
 
@@ -155,12 +156,14 @@ export function OrchestrationView(p: OrchestrationViewProps) {
   const locked = inherited || busy;
   const save = p.onSave;
 
+  // The global policy and a project's own share rule ids; read the states of this one.
+  const scopeKey = inherited || root === "" ? "global" : root;
   const resolution = useMemo(() => {
     if (!readiness) return null;
-    return resolve(policy, { on: (id) => states.some((s) => s.ruleId === id && s.active) }, readiness);
-  }, [policy, readiness, states]);
+    return resolve(policy, { on: ruleHolds(states, scopeKey) }, readiness);
+  }, [policy, readiness, states, scopeKey]);
 
-  const ruleState = (rule: PolicyRule) => states.find((s) => s.ruleId === rule.id);
+  const ruleState = (rule: PolicyRule) => states.find((s) => s.scope === scopeKey && s.ruleId === rule.id);
   const chairNow = root === "" || !p.seat?.live ? null
     : `${agentProvider(policy.base.orchestrator.value[0]?.engine ?? "")?.title ?? ""} · ${p.seat.model}`;
 
@@ -249,6 +252,9 @@ export function OrchestrationView(p: OrchestrationViewProps) {
 
   return (
     <>
+      <QuickSetup policy={policy} root={root} readiness={readiness} states={states} inherited={inherited} busy={busy}
+        note={notes.quick} onSave={save} onOpenEngines={p.onOpenEngines} />
+
       <SettingsCard title="Applies to" desc="A project with its own setting uses it instead of the general one, whole."
         actions={root === "" ? undefined : (
           <Button disabled={busy} onClick={() => p.onScope(inherited)}>{inherited ? "Set for this project" : "Use the general setting"}</Button>)}>

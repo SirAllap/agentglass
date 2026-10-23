@@ -407,6 +407,21 @@ environment variable of its own. A project's policy replaces the global one
 whole; with neither stored, the defaults below apply. An entry that does not
 validate is ignored with one line in the log, and reads as absent.
 
+**Quick setup** at the top of **Settings ▸ Orchestration** offers three named
+setups built from the engines this machine reports ready for the role: the
+chair stays Claude Code and the workers go to the other ready engines (refused,
+with the reason, when the chair is another engine or a rule moves it), all
+workers on Claude Code, or builders moved off Claude Code when its weekly plan is nearly
+spent. Applying one adds a single rule whose id starts with `preset-` through the
+same `POST /orchestration` the page already uses, and leaves the base, the
+envelope and the limits as they were; **Back to what it was** removes only the
+rule that was added and puts the earlier rules back in their order. It is
+offered only while the stored policy is exactly what applying left; after any
+other edit it is gone, and the page says to edit the rule instead. **Check my setup** reads the policy against the same readings
+and says who would sit in the chair and which engine each role would use now,
+and what each rule would change if it held; it makes no request and starts
+nothing.
+
 | Field | What it holds | Default |
 | --- | --- | --- |
 | `base` | Read, not stored: the chair's engine and model, and each role's (`scout`, `builder`, `verifier`), as the app runs them today. One copy, so Settings and the policy cannot disagree. | what the seat and `workerRoles` say |

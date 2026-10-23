@@ -10,8 +10,8 @@
  */
 import { agentProvider, engineProviders } from "../../../../shared/agentKinds.ts";
 import {
-  CHAIN_MAX, GAUGED_PROVIDERS, ROLE_IDS,
-  type Chain, type EngineChoice, type Envelope, type Policy, type PolicyRule, type Resolved, type Trigger, type UsageProviderId,
+  CHAIN_MAX, GAUGED_PROVIDERS, ROLE_IDS, resolve,
+  type Chain, type EngineChoice, type Envelope, type Policy, type PolicyRule, type Resolution, type Resolved, type Trigger, type UsageProviderId,
 } from "../../../../shared/orchestration.ts";
 import { WORKER_ROLES, type RoleId } from "../../../../shared/workerRoles.ts";
 import type { EngineReadiness } from "../../../../shared/types.ts";
@@ -129,13 +129,18 @@ const CANNOT: Record<EngineState, string | null> = {
   missing: "is not installed", old: "needs an update", broken: "is not working", signin: "needs sign-in",
 };
 
+/** "Hermes needs an update": why one engine cannot take the role, in a clause. */
+function blockedClause(id: string, role: "orchestrator" | "worker", readiness: readonly EngineReadiness[]): string {
+  const r = readiness.find((e) => e.id === id);
+  const title = agentProvider(id)?.title ?? id;
+  return `${title} ${(r && CANNOT[engineState(r)]) ?? "cannot take this role here"}`;
+}
+
 /** The first engine in a chain that cannot take the role, as a short clause: "Hermes needs an update". */
 function firstBlocked(chain: Chain, role: "orchestrator" | "worker", readiness: readonly EngineReadiness[]): string | null {
   for (const c of chain) {
-    const r = readiness.find((e) => e.id === c.engine);
-    if (r?.roles[role].ok) return null;
-    const title = agentProvider(c.engine)?.title ?? c.engine;
-    return `${title} ${(r && CANNOT[engineState(r)]) ?? "cannot take this role here"}`;
+    if (readiness.find((e) => e.id === c.engine)?.roles[role].ok) return null;
+    return blockedClause(c.engine, role, readiness);
   }
   return null;
 }
@@ -234,3 +239,246 @@ export const stepLimit = (key: keyof Policy["limits"], value: number, by: -1 | 1
 /** The ask chip's hint, as the plan words it. */
 export const ASK_HINT = "The orchestrator chooses each time, from this list";
 export const CHAIN_TAIL = "Then ask me.";
+
+// ── quick setup ──────────────────────────────────────────────────────────
+
+/*
+ * A preset is a rule, never a new kind of setting. Applying one adds a rule
+ * whose id starts with `preset-` and leaves everything else of the policy as it
+ * was: the base (which writes through to the worker roles and the chair), the
+ * envelope and the limits. That is what makes "Back to what it was" exact: the
+ * policy goes back to the one it was applied to, and nothing outside the rules
+ * was ever touched.
+ *
+ * The engines a preset names are chosen from the readings, never typed here:
+ * the ones whose worker verdict is ok, in the provider table's order with
+ * Claude left out (it is the one being spared), at most as many as a chain
+ * holds. A preset that would name an engine the probe says cannot take the
+ * role is not offered; it is disabled with the reason. The reading is the one
+ * the page took when it opened: the server does not check engines on a policy
+ * write, and an engine that breaks afterwards makes the resolver refuse the
+ * role ("no engine in the chain is ready"), never fall back to another.
+ */
+export type PresetId = "claude-orchestrates" | "all-on-claude" | "save-my-plan";
+export const PRESET_IDS: readonly PresetId[] = ["claude-orchestrates", "all-on-claude", "save-my-plan"];
+/** "Nearly spent": the weekly plan has this much left or less. */
+export const PLAN_NEARLY_SPENT = 15;
+export const BACK_LABEL = "Back to what it was";
+export const presetRuleId = (id: PresetId): string => `preset-${id}`;
+/** The two presets that always hold replace each other; the usage one stands apart. */
+const ALWAYS_PRESETS: readonly PresetId[] = ["claude-orchestrates", "all-on-claude"];
+
+const CLAUDE = "claude";
+const claudeTitle = (): string => agentProvider(CLAUDE)?.title ?? CLAUDE;
+
+/**
+ * The order a preset tries the other engines in. A choice, not a measurement:
+ * the ones that run on their own models or a free tier come before the ones
+ * that spend another subscription, and an engine this list does not know
+ * follows in the provider table's order.
+ */
+const PRESET_ORDER: readonly string[] = ["opencode", "hermes", "gemini", "codex", "antigravity"];
+const othersInOrder = (): string[] => {
+  const ids = engineProviders().map((p) => p.id).filter((id) => id !== CLAUDE);
+  const rank = (id: string) => { const i = PRESET_ORDER.indexOf(id); return i < 0 ? PRESET_ORDER.length : i; };
+  return ids.map((id, at) => ({ id, at })).sort((a, b) => rank(a.id) - rank(b.id) || a.at - b.at).map((x) => x.id);
+};
+
+/** The engines, other than Claude, that can work right now, in that order. */
+export function presetEngines(readiness: readonly EngineReadiness[]): string[] {
+  return othersInOrder().filter((id) => readiness.find((e) => e.id === id)?.roles.worker.ok).slice(0, CHAIN_MAX);
+}
+
+const everyRole = (chain: Chain): Partial<Record<RoleId, Chain>> => Object.fromEntries(ROLE_IDS.map((r) => [r, chain.map((c) => ({ ...c }))]));
+const chainOf = (ids: string[]): Chain => ids.map((engine) => ({ engine, model: "" }));
+
+const engineTitle = (id: string): string => agentProvider(id)?.title ?? id;
+
+/**
+ * "The chair stays Claude Code" is a claim about the chair, and this preset sets
+ * workers only, so it holds only if the chair already is that engine: the base
+ * chair, and no rule of the person's that moves it. `policy` is null where a
+ * card is drawn with no policy at hand, and then nothing is checked.
+ */
+function chairIsClaude(policy: Policy): { blocked: string } | null {
+  const base = policy.base.orchestrator.value[0]?.engine;
+  if (base && base !== CLAUDE) return { blocked: `The chair is ${engineTitle(base)}, not ${claudeTitle()}; set the chair first.` };
+  for (const r of policy.rules) {
+    const to = r.enabled ? r.orchestrator?.[0]?.engine : undefined;
+    if (to && to !== CLAUDE) return { blocked: `Rule "${r.name}" moves the chair to ${engineTitle(to)}; edit it first.` };
+  }
+  return null;
+}
+
+/** The rule a preset adds, or why it cannot be built on this machine. */
+function presetRule(id: PresetId, readiness: readonly EngineReadiness[] | null, policy: Policy | null): { rule: PolicyRule } | { blocked: string } {
+  if (!readiness) return { blocked: "Checking this machine." };
+  const need = (): { blocked: string } | null => {
+    if (presetEngines(readiness).length) return null;
+    const order = othersInOrder();
+    const first = order.find((id) => readiness.find((e) => e.id === id)?.found);
+    const why = first ? blockedClause(first, "worker", readiness) : `${agentProvider(order[0] ?? "")?.title ?? "No other engine"} is not installed`;
+    return { blocked: `Needs an engine besides ${claudeTitle()} that can work: ${why}.` };
+  };
+  const claudeWorks = (role: "orchestrator" | "worker"): { blocked: string } | null =>
+    readiness.find((e) => e.id === CLAUDE)?.roles[role].ok ? null : { blocked: `${blockedClause(CLAUDE, role, readiness)}.` };
+
+  if (id === "all-on-claude") {
+    const b = claudeWorks("worker");
+    if (b) return b;
+    return { rule: { id: presetRuleId(id), name: `Quick setup: all workers on ${claudeTitle()}`, enabled: true, when: [{ kind: "always" }], workers: everyRole(chainOf([CLAUDE])) } };
+  }
+  const b = (id === "claude-orchestrates" ? claudeWorks("orchestrator") ?? (policy ? chairIsClaude(policy) : null) : null) ?? need();
+  if (b) return b;
+  const others = chainOf(presetEngines(readiness));
+  if (id === "claude-orchestrates") {
+    return { rule: { id: presetRuleId(id), name: `Quick setup: ${claudeTitle()} orchestrates`, enabled: true, when: [{ kind: "always" }], workers: everyRole(others) } };
+  }
+  return { rule: {
+    id: presetRuleId(id), name: `Quick setup: save my ${claudeTitle()} plan`, enabled: true,
+    when: [{ kind: "usage", provider: "anthropic", window: "weekly", remainingAtMost: PLAN_NEARLY_SPENT }],
+    workers: { builder: others },
+  } };
+}
+
+const PRESET_TITLE: Record<PresetId, () => string> = {
+  "claude-orchestrates": () => `${claudeTitle()} orchestrates, others work`,
+  "all-on-claude": () => `All workers on ${claudeTitle()}`,
+  "save-my-plan": () => `Save my ${claudeTitle()} plan`,
+};
+
+export interface PresetOffer { id: PresetId; title: string; says: string[]; blocked: string | null; confirm: string }
+
+/** What each card says it will set, in plain words, and why it cannot apply if it cannot. */
+export function presetOffers(readiness: readonly EngineReadiness[] | null, policy: Policy | null = null): PresetOffer[] {
+  return PRESET_IDS.map((id) => {
+    const title = PRESET_TITLE[id]();
+    const built = presetRule(id, readiness, policy);
+    const confirm = `Applying adds one rule; nothing already running is moved. "${BACK_LABEL}" undoes it while nothing else has changed.`;
+    if ("blocked" in built) return { id, title, says: [], blocked: built.blocked, confirm };
+    const line = `${ruleLine(built.rule)} ${CHAIN_TAIL}`;
+    const says = id === "claude-orchestrates" ? [`The chair stays ${claudeTitle()}.`, line]
+      : id === "save-my-plan" ? [line, "Scouts and verifiers keep the engines they have."]
+      : [line];
+    return { id, title, says, blocked: null, confirm };
+  });
+}
+
+/**
+ * The policy with a preset's rule added, or null when it cannot apply here.
+ * The usage rule goes first so it wins over a rule that always holds; the
+ * always rules go last so the person's own rules still come before them. A
+ * preset already there is replaced, never doubled.
+ */
+export function applyPreset(p: Policy, id: PresetId, readiness: readonly EngineReadiness[] | null): Policy | null {
+  const built = presetRule(id, readiness, p);
+  if ("blocked" in built) return null;
+  const drop = new Set<string>(ALWAYS_PRESETS.includes(id) ? ALWAYS_PRESETS.map(presetRuleId) : [presetRuleId(id)]);
+  const rest = p.rules.filter((r) => !drop.has(r.id));
+  return { ...p, rules: ALWAYS_PRESETS.includes(id) ? [...rest, built.rule] : [built.rule, ...rest] };
+}
+
+/**
+ * What "Back to what it was" holds: the rules before a preset, the ids the
+ * preset put there, and the whole stored policy as applying left it. Going
+ * back never posts the old policy: that would write a later change to a role,
+ * the envelope or a limit back with it. It removes what was added and puts the
+ * earlier rules in their order, on the policy as it is now.
+ *
+ * Only the latest apply is kept: apply A, then B, and the way back undoes B.
+ */
+export interface Back { rulesBefore: PolicyRule[]; added: string[]; after: string; title: string }
+export const BACK_GONE = "Changed since — edit the rule below instead.";
+export function backOf(before: Policy, next: Policy, title: string): Back {
+  const was = new Map(before.rules.map((r) => [r.id, JSON.stringify(r)]));
+  const added = next.rules.filter((r) => was.get(r.id) !== JSON.stringify(r)).map((r) => r.id);
+  return { rulesBefore: before.rules, added, after: JSON.stringify(next), title };
+}
+/** Offered only while the policy is exactly what applying produced, every field of it. */
+export const backAvailable = (b: Back | null, now: Policy): b is Back => !!b && JSON.stringify(now) === b.after;
+/** The policy as it is now, minus the rules a preset added, with the earlier rules in their old order. */
+export function undoPolicy(now: Policy, b: Back): Policy {
+  const added = new Set(b.added);
+  const keep = new Map(now.rules.filter((r) => !added.has(r.id)).map((r) => [r.id, r]));
+  const rules = b.rulesBefore.map((r) => keep.get(r.id) ?? r);
+  const known = new Set(rules.map((r) => r.id));
+  return { ...now, rules: [...rules, ...now.rules.filter((r) => !added.has(r.id) && !known.has(r.id))] };
+}
+
+// ── check my setup ───────────────────────────────────────────────────────
+
+export interface SetupCheck {
+  chair: string;
+  roles: { id: RoleId; line: string }[];
+  rules: { id: string; name: string; line: string }[];
+}
+
+/**
+ * Whether a rule holds in one scope. Preset ids are fixed, so the global policy
+ * and a project's own share them; a state of another scope is not this rule's.
+ */
+export const ruleHolds = (states: readonly PolicyRuleState[], scope: string) => (id: string): boolean =>
+  states.some((s) => s.scope === scope && s.ruleId === id && s.active);
+
+const stop = (s: string): string => (s.endsWith(".") ? s : `${s}.`);
+/** Who a resolved field names, as the name only. */
+const whoWords = (r: Resolved): string => (r.ok ? choiceWords(r.choice) : "nobody");
+
+/** The claim in the claude-orchestrates preset's name, checked against the answer. */
+function chairNote(rule: PolicyRule, now: Resolution): string {
+  if (rule.id !== presetRuleId("claude-orchestrates") || !now.orchestrator.ok || now.orchestrator.choice.engine === CLAUDE) return "";
+  return ` ${claudeTitle()} orchestrates, but the chair would be ${engineTitle(now.orchestrator.choice.engine)}.`;
+}
+
+/**
+ * A rule that holds is first-rule-wins per field, so an earlier rule can keep
+ * its fields. Says which fields this one wins and who wins the rest.
+ */
+function holdingLine(rule: PolicyRule, now: Resolution): string {
+  const named: { field: Resolved; words: string }[] = [];
+  if (rule.orchestrator) named.push({ field: now.orchestrator, words: "the chair" });
+  for (const id of ROLE_IDS) if (rule.workers?.[id]) named.push({ field: now.workers[id], words: rolePlural(id) });
+  const lost = named.filter((n) => n.field.from !== "rule" || n.field.ruleId !== rule.id);
+  if (!lost.length) return "It holds now, so it is already in the answers above.";
+  const list = (xs: string[]) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
+  const first = [...new Set(lost.map((n) => (n.field.from === "rule" ? `"${n.field.ruleName ?? n.field.ruleId}"` : "the base")))];
+  const kept = list(named.filter((n) => !lost.includes(n)).map((n) => n.words));
+  const loses = `${list(first)} comes first for ${list(lost.map((n) => n.words))}`;
+  return kept ? `It holds now and applies to ${kept}; ${loses}.` : `It holds now, but it does not apply: ${loses}.`;
+}
+
+/**
+ * A dry run: who would sit in the chair and which engine each role would use
+ * right now, and what each rule would change if it held. It reads the policy,
+ * the rules' switches and the readings it is handed, and nothing else: no
+ * request, no write, nothing started.
+ */
+export function checkSetup(policy: Policy, states: readonly PolicyRuleState[], readiness: readonly EngineReadiness[] | null, scope = "global"): SetupCheck {
+  if (!readiness) return { chair: "This machine has not been checked yet, so there is nothing to tell.", roles: [], rules: [] };
+  const holds = ruleHolds(states, scope);
+  const now = resolve(policy, { on: holds }, readiness);
+
+  const chair = !now.orchestrator.ok ? `Nobody could sit in the chair: ${stop(now.orchestrator.why)}`
+    : `${choiceWords(now.orchestrator.choice)} would sit in the chair${now.orchestrator.from === "rule" ? `, from rule "${now.orchestrator.ruleName ?? now.orchestrator.ruleId}"` : ""}.`;
+  const roles = ROLE_IDS.map((id) => {
+    const r = now.workers[id];
+    const who = rolePlural(id).replace(/^./, (c) => c.toUpperCase());
+    if (!r.ok) return { id, line: `${who} would have nobody: ${stop(r.why)}` };
+    const via = r.from === "rule" ? `, from rule "${r.ruleName ?? r.ruleId}"` : "";
+    return { id, line: `${who} would run on ${choiceWords(r.choice)}${via}.` };
+  });
+
+  const rules = policy.rules.map((rule) => {
+    if (rule.enabled && holds(rule.id)) return { id: rule.id, name: rule.name, line: `${holdingLine(rule, now)}${chairNote(rule, now)}` };
+    const trial = { ...policy, rules: policy.rules.map((r) => (r.id === rule.id ? { ...r, enabled: true } : r)) };
+    const then = resolve(trial, { on: (id) => id === rule.id || holds(id) }, readiness);
+    const moves: string[] = [];
+    if (whoWords(now.orchestrator) !== whoWords(then.orchestrator)) moves.push(`the chair would move from ${whoWords(now.orchestrator)} to ${whoWords(then.orchestrator)}`);
+    for (const id of ROLE_IDS) {
+      if (whoWords(now.workers[id]) !== whoWords(then.workers[id])) moves.push(`${rolePlural(id)} would move from ${whoWords(now.workers[id])} to ${whoWords(then.workers[id])}`);
+    }
+    const what = moves.length ? `${moves.join("; ")}.` : "nothing would change.";
+    return { id: rule.id, name: rule.name, line: rule.enabled ? `If it held: ${what}` : `It is off. If it were on and held: ${what}` };
+  });
+  return { chair, roles, rules };
+}

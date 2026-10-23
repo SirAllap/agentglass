@@ -98,6 +98,12 @@ A seat has no role-less start: the role is where the envelope comes from, and
 the directory has to be inside this project or one of its worktrees. Both are
 refused with a sentence that says so.
 
+The person can set the policy in one click with **Quick setup** (Settings ▸
+Orchestration): it adds a rule whose id starts with `preset-`, and only the
+person can apply it or take it back. Leave those rules to them; to see what the
+policy would do right now without starting anything, read `GET /orchestration`
+and `GET /orchestration/state`.
+
 ## Starting a worker through the policy
 
 ```bash
