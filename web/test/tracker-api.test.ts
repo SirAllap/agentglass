@@ -16,6 +16,7 @@ import type { TrackerSetup } from "../src/lib/trackerSetup.ts";
 import { looksLikeCardId } from "../../shared/cardRef.ts";
 
 const cu = (prefix?: string): TrackerSetup["clickup"] => ({ connected: true, prefix });
+const reach = (...keys: string[]) => ({ keys, site: "acme.atlassian.net" });
 const jira = (...prefixes: string[]): TrackerSetup["jira"] => ({ connected: true, prefixes, site: "acme.atlassian.net" });
 const ref = (pr: { headRefName?: string; title?: string; body?: string }): CardRef => cardRef(pr)!;
 const branch = (b: string) => ref({ headRefName: b });
@@ -141,7 +142,7 @@ describe("the chip and the merge form follow the owner", () => {
   const r = branch("feat/ORBIT-1042-x");
   const pr = { headRefName: "feat/ORBIT-1042-x", title: "x", body: "" };
   const view = (setup: TrackerSetup, choice: "auto" | "clickup" | "jira" = "auto") => ({ setup, choice });
-  const withOwner = <S extends { connected: boolean; prefix?: string; jira?: ReturnType<typeof jira> }>(s: S, owner: "clickup" | "jira" | null, jiraSite?: string) =>
+  const withOwner = <S extends { connected: boolean; prefix?: string; jira?: ReturnType<typeof reach> }>(s: S, owner: "clickup" | "jira" | null, jiraSite?: string) =>
     ({ ...s, ownerOf: () => ({ owner, jiraSite }) });
 
   it("without Jira the setup is handed back untouched, the same object", () => {
@@ -165,9 +166,9 @@ describe("the chip and the merge form follow the owner", () => {
     expect(chipAction(r, withOwner({ connected: true }, "jira"))).toBeNull();
   });
   it("a Jira card opens in the Jira tab once a Jira site is connected, and on its site otherwise", () => {
-    expect(chipAction(r, withOwner({ connected: false, jira: jira("ORBIT") }, "jira", "acme.atlassian.net")))
+    expect(chipAction(r, withOwner({ connected: false, jira: reach("ORBIT") }, "jira", "acme.atlassian.net")))
       .toEqual({ in: "tasks", tracker: "jira" });
-    expect(chipAction(JIRA_URL, withOwner({ connected: true, jira: jira("ORBIT") }, "jira")))
+    expect(chipAction(JIRA_URL, withOwner({ connected: true, jira: reach("ORBIT") }, "jira")))
       .toEqual({ in: "tasks", tracker: "jira" });
     expect(chipAction(r, withOwner({ connected: true }, "jira", "acme.atlassian.net")))
       .toEqual({ in: "away", url: "https://acme.atlassian.net/browse/ORBIT-1042" });
