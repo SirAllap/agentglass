@@ -22,6 +22,7 @@ import {
   DEFAULT_PREFS, canEditRow, displayRows, opensOnPick, footerCount, gridStep, indexOfName, isFolder, joinPath, keyStep, nextSidebar, parentOf, readPrefs, rowHeight, sidebarMode, sidebarPrefs, sidebarTip, writePrefs,
   type ColShape, type Display, type Prefs, type Row, type SortKey,
 } from "../../../lib/finderMiller.ts";
+import { activates } from "../../../lib/finderPointer.ts";
 import { HIT } from "../../../lib/iconSize.ts";
 import { isAppChord } from "../../../lib/keybindings.ts";
 import type { DiskPlace } from "../../../../../shared/types.ts";
@@ -291,12 +292,13 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   }), [trail, version, ready, filters, prefs.hidden, prefs.group, prefs.sortKey, prefs.sortDir, prefs.foldersFirst]);
 
   /* ---- selection ---- */
-  const pickRaw = useCallback((col: number, row: Row) => {
+  /** A folder shows as the next column only for the primary click in Columns (`show`); a right click and Icons or List only select, so the folder shown never moves. */
+  const pickRaw = useCallback((col: number, row: Row, show = prefs.view === "columns") => {
     setMulti(null);
     setSel((s) => [...s.slice(0, col), row.name]);
-    setTrail((t) => (opensOnPick(row, prefs.mirror) ? [...t.slice(0, col + 1), joinPath(t[col]!, row.name)] : t.slice(0, col + 1)));
+    setTrail((t) => (opensOnPick(row, prefs.mirror && show) ? [...t.slice(0, col + 1), joinPath(t[col]!, row.name)] : t.slice(0, col + 1)));
     setFocusCol(col);
-  }, [prefs.mirror]);
+  }, [prefs.mirror, prefs.view]);
   const pickHeld = useMemo(() => guarded("row", pickRaw), [guarded, pickRaw]);
   /* Choosing the row that is already chosen is not leaving it. */
   const pick = useCallback((col: number, row: Row): void => ((selRef.current[col] ?? null) === row.name ? pickRaw(col, row) : pickHeld(col, row)), [pickRaw, pickHeld]);
@@ -438,7 +440,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
     chosen: chosenNow,
     rowsIn: (dir) => columns[trail.indexOf(dir)]?.display.rows ?? [],
     here: () => trail[prefs.view === "columns" ? focusCol : last] ?? trail[0]!,
-    choose: (dir, name) => { const col = trail.indexOf(dir); const row = columns[col]?.display.rows.find((r) => r.name === name); if (row) pick(col, row); },
+    choose: (dir, name) => { const col = trail.indexOf(dir); const row = columns[col]?.display.rows.find((r) => r.name === name); if (row && sel[col] !== row.name) pickHeld(col, row, false); },
     reload: (dir) => store.current?.load(dir, prefs.hidden, true),
     say: setNote,
     hidden: prefs.hidden,
@@ -641,7 +643,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
                   {columns.map((c, i) => (
                     <Column key={c.path} dir={c.path} title={isRecent(c.path) ? "Recent" : basename(c.path)} filterSignal={filterTick.col === i ? filterTick.n : 0} width={widths[i]!} onResize={(w) => setDragged((d) => ({ ...d, [c.path]: w }))} onFit={() => setDragged((d) => ({ ...d, [c.path]: fitWidth(c.state?.rows.map((r) => r.name) ?? [], measure, mainBox.w || undefined) }))} state={c.state} display={c.display} selName={sel[i] ?? null} chosen={liveMulti?.col === i ? liveMulti.choice.names : null} focused={i === focusCol} prefs={prefs} rowH={rowH}
                       filter={filters[c.path] ?? ""} onFilter={(v) => setFilters((f) => ({ ...f, [c.path]: v }))}
-                      scrollTop={scrolls.current[c.path]} onScrollTop={(t) => onScrollTop(c.path, t)} onPick={(r, m) => onPickMod(i, r, m)} onOpen={(r) => { if (isFolder(r) && !r.locked) { pick(i, r); enterFolder(i); } else if (canEditRow(r)) onBench(joinPath(c.path, r.name), "edit"); }}
+                      scrollTop={scrolls.current[c.path]} onScrollTop={(t) => onScrollTop(c.path, t)} onPick={(r, m) => onPickMod(i, r, m)} onTab={(r) => newTab(joinPath(c.path, r.name))} onOpen={(r) => { if (isFolder(r) && !r.locked) { pick(i, r); enterFolder(i); } else if (canEditRow(r)) onBench(joinPath(c.path, r.name), "edit"); }}
                       onFocusCol={() => setFocusCol(i)} onRefresh={() => refresh(c.path)} onSort={onSort} onPref={setPrefs} edit={ops.edit?.dir === c.path ? ops.edit : null} />
                   ))}
                 </ColumnsRow>
@@ -649,8 +651,8 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
                 <div className="flex-1 min-w-0 min-h-0 flex flex-col" data-dir={lastCol.path}>
                   {lastCol.state?.error ? <div className="p-3 text-[12px]" role="alert" style={{ color: "var(--warning-ink)" }}>{lastCol.state.error}</div>
                     : prefs.view === "icons"
-                      ? <IconsView peek={folderPeek.peek} display={lastCol.display} dir={lastCol.path} thumb={prefs.thumb} selName={sel[last] ?? null} chosen={liveMulti?.col === last ? liveMulti.choice.names : null} width={mainBox.w} label={`Entries of ${basename(lastCol.path)}`} onPick={(r, m) => onPickMod(last, r, m)} onOpen={(r) => (isFolder(r) && !r.locked ? go(joinPath(lastCol.path, r.name)) : canEditRow(r) && onBench(joinPath(lastCol.path, r.name), "edit"))} />
-                      : <ListView peek={folderPeek.peek} dir={lastCol.path} display={lastCol.display} selName={sel[last] ?? null} chosen={liveMulti?.col === last ? liveMulti.choice.names : null} rowH={rowH} prefs={prefs} label={`Entries of ${basename(lastCol.path)}`} onSort={onSort} onPick={(r, m) => onPickMod(last, r, m)} onOpen={(r) => (isFolder(r) && !r.locked ? go(joinPath(lastCol.path, r.name)) : canEditRow(r) && onBench(joinPath(lastCol.path, r.name), "edit"))} />}
+                      ? <IconsView peek={folderPeek.peek} display={lastCol.display} dir={lastCol.path} thumb={prefs.thumb} selName={sel[last] ?? null} chosen={liveMulti?.col === last ? liveMulti.choice.names : null} width={mainBox.w} label={`Entries of ${basename(lastCol.path)}`} onPick={(r, m) => onPickMod(last, r, m)} onTab={(r) => newTab(joinPath(lastCol.path, r.name))} onOpen={(r) => (isFolder(r) && !r.locked ? go(joinPath(lastCol.path, r.name)) : canEditRow(r) && onBench(joinPath(lastCol.path, r.name), "edit"))} />
+                      : <ListView peek={folderPeek.peek} dir={lastCol.path} display={lastCol.display} selName={sel[last] ?? null} chosen={liveMulti?.col === last ? liveMulti.choice.names : null} rowH={rowH} prefs={prefs} label={`Entries of ${basename(lastCol.path)}`} onSort={onSort} onPick={(r, m) => onPickMod(last, r, m)} onTab={(r) => newTab(joinPath(lastCol.path, r.name))} onOpen={(r) => (isFolder(r) && !r.locked ? go(joinPath(lastCol.path, r.name)) : canEditRow(r) && onBench(joinPath(lastCol.path, r.name), "edit"))} />}
                 </div>
               ) : null}
             </div>
@@ -660,6 +662,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
                   className="absolute top-0 bottom-0 agx-col-edge" style={{ left: 0, width: 6, cursor: "col-resize", zIndex: 3, touchAction: "none" }}
                   onDoubleClick={() => setPrevDrag(undefined)}
                   onPointerDown={(e) => {
+                    if (!activates(e.button, "mousedown")) return;
                     e.preventDefault();
                     const x0 = e.clientX, w0 = previewWidth(box.w, prevDrag), el = e.currentTarget;
                     el.setPointerCapture(e.pointerId);

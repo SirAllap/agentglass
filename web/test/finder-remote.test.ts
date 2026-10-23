@@ -31,6 +31,19 @@ describe("a folder of a mounted remote is shown as its address", () => {
   });
 });
 
+describe("a pin written another way still finds its mount", () => {
+  const bare = mk({ id: "sftp://box.example/", mountPoint: "/run/user/1000/gvfs/sftp:host=box.example", remote: "sftp" });
+  test("user@host against host, a port, a trailing slash, the case of the scheme", () => {
+    const user = mk({ id: "sftp://acme@box.example/", mountPoint: "/run/user/1000/gvfs/sftp:host=box.example,user=acme", remote: "sftp" });
+    for (const pin of ["sftp://box.example", "sftp://box.example:22/", "SFTP://Box.Example/", "ssh://acme@box.example/", "sftp://acme@box.example"]) {
+      expect(resolveAddress(pin, [user])).toEqual({ kind: "open", path: user.mountPoint! });
+      expect(resolveAddress(pin, [bare])).toEqual({ kind: "open", path: bare.mountPoint! });
+    }
+    expect(resolveAddress("sftp://other@box.example/", [user])).toEqual({ kind: "connect", uri: "sftp://other@box.example/" });
+    expect(resolveAddress("sftp://box.example:2222/", [bare])).toEqual({ kind: "connect", uri: "sftp://box.example:2222/" });
+  });
+});
+
 describe("typing an address", () => {
   test("inside a mount that exists it opens the folder, without a new connection", () => {
     expect(resolveAddress("sftp://ana@build.example.org/deploy/", all)).toEqual({ kind: "open", path: sftp.mountPoint! + "/deploy" });

@@ -36,7 +36,7 @@ describe("the finder draws them", () => {
     expect(s).toMatch(/prefs\.f1 && \(?\s*<button/);
     expect(s).toContain('case "help"');
   });
-  test("a pick consults the mirror setting", async () => { expect(await read("MachineFinder.tsx")).toContain("opensOnPick(row, prefs.mirror)"); });
+  test("a pick consults the mirror setting", async () => { expect(await read("MachineFinder.tsx")).toContain("opensOnPick(row, prefs.mirror && show)"); });
   test("the settings sheet lists the three and a reset", async () => {
     const model = await Bun.file(new URL("../src/lib/finderSettingsModel.ts", import.meta.url)).text();
     for (const t of ["Show sizes in Columns view", "Mirror columns selection", "Show F1 Shortcuts button", "Reset finder settings"]) expect(model).toContain(t);

@@ -6,6 +6,7 @@
 // by NAME, not by index: the rows arrive in pages and are re-sorted, so an index
 // would point at a different file a moment later.
 import { useEffect, useRef, useState } from "react";
+import { activates, pointerAction } from "../../../lib/finderPointer.ts";
 import { CaretIcon } from "../../../lib/glyphIcons.tsx";
 import { FileTypeIcon, PathIcon, StrataIcon } from "./StrataIcon.tsx";
 import { HIT, ICON } from "../../../lib/iconSize.ts";
@@ -26,6 +27,12 @@ const ROW_THUMB = 17;
 export interface Mod { ctrl: boolean; shift: boolean }
 export const modOf = (e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): Mod => ({ ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey });
 /** A Shift-click would also select the text between the two rows. */
+/** What a row does with each button, one place for Columns, Icons and List: the primary button picks and opens, the middle one opens a folder in a tab, the right one does neither (its menu is the finder's own). */
+export const rowPointer = (view: "columns" | "icons" | "list", r: Row, h: { onPick: (r: Row, mod?: Mod) => void; onOpen: (r: Row) => void; onTab?: (r: Row) => void }) => ({
+  onClick: (e: React.MouseEvent) => { if (activates(e.button, "click")) h.onPick(r, modOf(e)); },
+  onDoubleClick: (e: React.MouseEvent) => { if (activates(e.button, "click")) h.onOpen(r); },
+  onAuxClick: (e: React.MouseEvent) => { if (pointerAction(view, isFolder(r) && !r.locked ? "folder" : "file", e.button, 1) === "new-tab") { e.preventDefault(); h.onTab?.(r); } },
+});
 export const noRange = (e: React.MouseEvent) => { if (e.shiftKey || e.ctrlKey || e.metaKey) e.preventDefault(); };
 
 /** Strata's drawing for the row: a folder, a broken link (a cross) or what the name says it is. A folder that cannot be read is still a folder; the row itself says it is disabled. */
@@ -33,7 +40,7 @@ export function RowIcon({ row, size = ICON.sm, dir }: { row: Row; size?: number;
   return <PathIcon path={dir ? joinPath(dir, row.name) : undefined} name={row.name} isDir={isFolder(row)} broken={row.broken === true} size={size} />;
 }
 
-export function Column({ dir: folderPath, title, filterSignal, width, onResize, onFit, state, display, selName, chosen, focused, prefs, rowH, filter, onFilter, onPick, onOpen, onFocusCol, onRefresh, onSort, onPref, scrollTop, onScrollTop, edit }: {
+export function Column({ dir: folderPath, title, filterSignal, width, onResize, onFit, state, display, selName, chosen, focused, prefs, rowH, filter, onFilter, onPick, onOpen, onTab, onFocusCol, onRefresh, onSort, onPref, scrollTop, onScrollTop, edit }: {
   /** The folder this column lists: a right click in it says where it landed. */
   dir: string;
   title: string;
@@ -56,6 +63,8 @@ export function Column({ dir: folderPath, title, filterSignal, width, onResize, 
   onFilter: (v: string) => void;
   onPick: (row: Row, mod?: Mod) => void;
   onOpen: (row: Row) => void;
+  /** The middle button on a folder row: the folder in a new tab. */
+  onTab?: (row: Row) => void;
   onFocusCol: () => void;
   onRefresh: () => void;
   onSort: (k: SortKey) => void;
@@ -88,6 +97,7 @@ export function Column({ dir: folderPath, title, filterSignal, width, onResize, 
         className="absolute top-0 bottom-0 agx-col-edge" style={{ right: 0, width: 6, cursor: "col-resize", zIndex: 3, touchAction: "none" }}
         onDoubleClick={onFit}
         onPointerDown={(e) => {
+          if (!activates(e.button, "mousedown")) return;
           e.preventDefault(); e.stopPropagation();
           const x0 = e.clientX, w0 = width, el = e.currentTarget;
           el.setPointerCapture(e.pointerId);
@@ -145,7 +155,7 @@ export function Column({ dir: folderPath, title, filterSignal, width, onResize, 
             const badge = r.name === selName && showsBadge(true, focused);
             return (
               <div key={r.name} role="option" data-row={r.name} data-folder={dir && !r.locked ? "" : undefined} draggable={!r.locked && !(edit && edit.was === r.name)} aria-selected={sel} aria-disabled={r.locked || undefined} title={r.why ?? r.name}
-                onMouseDown={noRange} onClick={(e) => onPick(r, modOf(e))} onDoubleClick={() => onOpen(r)}
+                onMouseDown={noRange} {...rowPointer("columns", r, { onPick, onOpen, onTab })}
                 className="agx-fm-row flex items-center gap-2 px-2.5 mx-1 rounded-md cursor-pointer"
                 style={{ height: rowH, color: r.locked ? "var(--text4)" : "var(--text)", ...rowPaint(rowTone(sel, focused)) }}>
                 <span className="shrink-0 flex">{!r.locked && !dir && isThumbable(r.name) ? <Thumb path={joinPath(folderPath, r.name)} size={ROW_THUMB} radius={3} fallback={<RowIcon row={r} dir={folderPath} />} /> : <RowIcon row={r} dir={folderPath} />}</span>

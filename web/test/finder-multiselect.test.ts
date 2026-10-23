@@ -97,8 +97,9 @@ describe("the rows hand their modifier keys on", () => {
   const src = Promise.all(files.map((f) => Bun.file(new URL(`../src/components/finder/machine/${f}`, import.meta.url)).text()));
   test("every row's click reports ctrl and shift, and mousedown keeps the text unselected", async () => {
     const [col, views] = await src;
-    expect((col!.match(/onPick\(r, modOf\(e\)\)/g) ?? []).length).toBe(1);
-    expect((views!.match(/onPick\(r, modOf\(e\)\)/g) ?? []).length).toBe(2);
+    expect((col!.match(/rowPointer\("columns"/g) ?? []).length).toBe(1);
+    expect((views!.match(/rowPointer\("(icons|list)"/g) ?? []).length).toBe(2);
+    expect((col!.match(/h\.onPick\(r, modOf\(e\)\)/g) ?? []).length).toBe(1);
     expect((col!.match(/onMouseDown=\{noRange\}/g) ?? []).length).toBe(1);
     expect((views!.match(/onMouseDown=\{noRange\}/g) ?? []).length).toBe(2);
   });

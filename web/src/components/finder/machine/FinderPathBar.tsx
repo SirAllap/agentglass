@@ -11,6 +11,7 @@ import { EDGE, INPUT, INPUT_STYLE, LINE } from "../../workspace/Chrome.tsx";
 import { HIT, ICON } from "../../../lib/iconSize.ts";
 import { StrataIcon } from "./StrataIcon.tsx";
 import type { Volume } from "../../../../../shared/types.ts";
+import { activates } from "../../../lib/finderPointer.ts";
 import { isRemoteAddress, remoteView } from "../../../lib/finderRemote.ts";
 
 /** Strata shows where a completion lives as the tail of its parent, cut from the left: "…a/scratchpad/tree". */
@@ -109,12 +110,12 @@ export function FinderPathBar({ path, home, onGo, signalEdit, onEditing, volumes
   // Strata draws the path bare: segments separated by a slash, the last one in the accent.
   return (
     <div className="flex-1 min-w-0 flex items-center gap-1 px-2 overflow-hidden cursor-text whitespace-nowrap" role="navigation" aria-label="Path"
-      onClick={edit} style={{ minHeight: 30 }} title="Click to type a path (Ctrl+L)">
+      onClick={(e) => { if (activates(e.button, "click")) edit(); }} style={{ minHeight: 30 }} title="Click to type a path (Ctrl+L)">
       {parts.map((c, i) => (
         <span key={c.path} className="flex items-center gap-1 min-w-0">
           {i > 0 && <span aria-hidden className="px-1.5" style={{ color: "var(--text4)" }}>/</span>}
           <button className="agx-btn rounded px-1 truncate" style={{ color: i === parts.length - 1 ? "var(--primary-ink)" : "var(--text3)", fontWeight: i === parts.length - 1 ? 700 : 400 }}
-            onClick={(e) => { e.stopPropagation(); onGo(c.path); }}>{c.label}</button>
+            onClick={(e) => { e.stopPropagation(); if (activates(e.button, "click")) onGo(c.path); }}>{c.label}</button>
         </span>
       ))}
       <button type="button" className="agx-btn rounded grid place-items-center shrink-0" style={{ width: HIT, height: HIT, color: copied ? "var(--primary-ink)" : "var(--text3)" }} title={copied ? "Copied" : "Copy path"} aria-label="Copy path"

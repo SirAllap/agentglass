@@ -11,6 +11,7 @@ import { ICON } from "../../../lib/iconSize.ts";
 import { joinPath, RECENT, type SidebarMode } from "../../../lib/finderMiller.ts";
 import type { DiskPlace, PinnedPlace, Volume } from "../../../../../shared/types.ts";
 import { useState } from "react";
+import { activates } from "../../../lib/finderPointer.ts";
 import { Popover, MenuItem } from "./Popover.tsx";
 import { deviceIcon, lockButton, releaseButton, type LockButton, type ReleaseButton } from "../../../lib/finderVolumes.ts";
 import { LINE } from "../../workspace/Chrome.tsx";
@@ -83,7 +84,7 @@ export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, o
     return (
       <button key={p.id} data-drop-path={p.path && !off && p.id !== "recent" && p.id !== "trash" ? p.path : undefined} data-drop-trash={p.id === "trash" ? "" : undefined} disabled={off} aria-current={on ? "true" : undefined} aria-label={rail ? p.label : undefined} title={p.off ?? (rail ? p.label : undefined)}
         {...menuOf(pin ? { kind: "pin", uri: pin.uri, path: pin.path } : { kind: "place", id: p.id, path: p.id === "trash" || p.id === "network" ? undefined : p.path })}
-        onClick={() => (p.id === "recent" ? onRecent() : p.id === "trash" ? onTrash() : p.id === "network" ? onNetwork?.() : p.path && onGo(p.path))}
+        onClick={(e) => activates(e.button, "click") && (p.id === "recent" ? onRecent() : p.id === "trash" ? onTrash() : p.id === "network" ? onNetwork?.() : p.path && onGo(p.path))}
         className={`agx-btn w-full flex items-center ${rail ? "justify-center" : "gap-2 px-2.5"} rounded-md text-left disabled:cursor-not-allowed`}
         style={{ minHeight: rail ? 28 : 26, color: off ? "var(--text4)" : on ? "var(--text)" : "var(--text2)", fontWeight: on ? 600 : 400, background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : undefined }}>
         <span className="shrink-0 flex" style={{ color: "var(--primary-ink)" }}><PlaceIcon p={p} /></span>
@@ -93,7 +94,7 @@ export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, o
   };
   /** A pinned remote (sftp, smb): it has no folder here until it is connected, so the row asks the address flow to open it. */
   const remote = (b: PinnedPlace) => (
-    <button key={`pin:${b.uri}`} type="button" aria-label={rail ? b.label : undefined} title={b.uri} onClick={() => onRemote?.(b.uri)} {...menuOf({ kind: "pin", uri: b.uri })}
+    <button key={`pin:${b.uri}`} type="button" aria-label={rail ? b.label : undefined} title={b.uri} onClick={(e) => { if (activates(e.button, "click")) onRemote?.(b.uri); }} {...menuOf({ kind: "pin", uri: b.uri })}
       className={`agx-btn w-full flex items-center ${rail ? "justify-center" : "gap-2 px-2.5"} rounded-md text-left`} style={{ minHeight: rail ? 28 : 26, color: "var(--text2)" }}>
       <span className="shrink-0 flex" style={{ color: "var(--primary-ink)" }}><StrataIcon set="act" name="folder" size={ICON.md} /></span>
       {!rail && <span className="truncate">{b.label}</span>}
@@ -104,14 +105,14 @@ export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, o
     const on = !!v.mountPoint && (here === v.mountPoint || here.startsWith(v.mountPoint + "/"));
     const lock = lockButton(v), eject = releaseButton(v), working = busy?.has(v.id);
     const act = (b: LockButton | ReleaseButton) => (
-      <button key={b.label} type="button" title={b.label} aria-label={`${b.label} ${v.name}`} disabled={working} onClick={() => onVolumeAct?.(v, b.act)}
+      <button key={b.label} type="button" title={b.label} aria-label={`${b.label} ${v.name}`} disabled={working} onClick={(e) => { if (activates(e.button, "click")) onVolumeAct?.(v, b.act); }}
         className="agx-btn flex items-center justify-center rounded-md shrink-0" style={{ width: 24, height: 24, opacity: 0.75 }}>
         <StrataIcon set="act" name={b.icon} size={ICON.sm} />
       </button>
     );
     return (
       <div key={v.id} data-device={v.id} className="flex items-center rounded-md" style={{ background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : undefined, paddingRight: rail ? 0 : 2 }}>
-        <button type="button" aria-current={on ? "true" : undefined} aria-label={rail ? v.name : undefined} title={rail ? v.name : v.mountPoint ?? undefined} aria-busy={working || undefined} onClick={() => onVolume?.(v)}
+        <button type="button" aria-current={on ? "true" : undefined} aria-label={rail ? v.name : undefined} title={rail ? v.name : v.mountPoint ?? undefined} aria-busy={working || undefined} onClick={(e) => { if (activates(e.button, "click")) onVolume?.(v); }}
           {...menuOf({ kind: "device", volume: v })}
           className={`agx-btn flex-1 min-w-0 flex items-center ${rail ? "justify-center" : "gap-2 px-2.5"} rounded-md text-left`}
           style={{ minHeight: rail ? 28 : 26, color: on ? "var(--text)" : "var(--text2)", fontWeight: on ? 600 : 400 }}>
@@ -151,6 +152,7 @@ export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, o
           title="Drag to resize, double-click to reset" className="absolute top-0 bottom-0 agx-col-edge" style={{ right: 0, width: 6, cursor: "col-resize", zIndex: 3, touchAction: "none" }}
           onDoubleClick={() => onResize(SIDE_DEFAULT)}
           onPointerDown={(e) => {
+            if (!activates(e.button, "mousedown")) return;
             e.preventDefault();
             const x0 = e.clientX, w0 = width, el = e.currentTarget;
             el.setPointerCapture(e.pointerId);

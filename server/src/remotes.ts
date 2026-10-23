@@ -80,6 +80,26 @@ function pathFromEntries(uri: string, entries: readonly string[], dir: string): 
   return hit ? join(dir, hit) : undefined;
 }
 
+interface Addr { scheme: string; user: string; host: string; port: string; path: string }
+function addr(raw: string): Addr | null {
+  let u: URL;
+  try { u = new URL(raw.trim()); } catch { return null; }
+  const scheme = u.protocol.slice(0, -1).toLowerCase().replace(/^ssh$/, "sftp");
+  if (scheme !== "sftp" && scheme !== "smb") return null;
+  try { return { scheme, user: decodeURIComponent(u.username).toLowerCase(), host: u.hostname.toLowerCase(), port: u.port || (scheme === "sftp" ? "22" : "445"), path: decodeURIComponent(u.pathname).replace(/\/+$/, "") }; } catch { return null; }
+}
+
+/**
+ * Whether two addresses name the same mount: scheme (ssh is sftp), host, port and path compare after the case of the scheme and host, the default port, a trailing slash and %-encoding are taken out. A user counts only when both name one, as gio lists a mount with or without it.
+ * The ceiling: it says nothing about two hostnames for one machine.
+ */
+export function sameRemote(a: string, b: string): boolean {
+  const x = addr(a), y = addr(b);
+  if (!x || !y) return false;
+  if (x.scheme !== y.scheme || x.host !== y.host || x.port !== y.port || x.path !== y.path) return false;
+  return !x.user || !y.user || x.user === y.user;
+}
+
 export function remotesFromMounts(text: string, entries: readonly string[], gvfsDir: string): Volume[] {
   return parseMounts(text).map((m) => {
     const sc = schemeOf(m.uri) === "smb" ? "smb" : "sftp";
@@ -216,7 +236,8 @@ export class Sessions {
         const secrets = [...s.used, ...Object.values(s.answers)];
         const code = s.code, uri = s.uri, err = await s.proc.err().catch(() => "");
         this.end(id);
-        if (code === 0) return { state: "done", uri, mountPoint: await this.where(uri) };
+        // gio refuses an address that is already mounted, and that is where the person wanted to be.
+        if (code === 0 || /already mounted/i.test(err)) return { state: "done", uri, mountPoint: await this.where(uri) };
         return failure(uri, err, secrets);
       }
       await new Promise<void>((res) => { s.wake = res; setTimeout(res, 60_000).unref?.(); });

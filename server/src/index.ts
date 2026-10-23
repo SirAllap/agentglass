@@ -151,7 +151,7 @@ import { homeIndex } from "./homeindex.ts";
 import { browseBatch } from "./browselist.ts";
 import { readBookmarks, removeBookmarkUri, toggleBookmark } from "./bookmarks.ts";
 import { actOnDevice, devicePolicy, ensureDeviceWatch, listDevices, type DeviceAct } from "./volumes.ts";
-import { Sessions, discoverNetwork, gvfsDir, remotePolicy, remotesFromMounts } from "./remotes.ts";
+import { Sessions, discoverNetwork, gvfsDir, remotePolicy, remotesFromMounts, sameRemote } from "./remotes.ts";
 import { runTool } from "./volumes.ts";
 import { appsForAll, launchApp, mimeOf, setDefaultApp } from "./openwith.ts";
 import { actionsFor, deleteAction, listActions, readAction, runAction, saveAction } from "./finderactions.ts";
@@ -1576,7 +1576,7 @@ const remoteSessions = new Sessions(undefined, async (uri) => {
   const g = await runTool(["gio", "mount", "-l"]);
   let entries: string[] = [];
   try { entries = readdirSync(gvfsDir()); } catch { /* none */ }
-  return remotesFromMounts(g.out, entries, gvfsDir()).find((r) => r.id === uri || r.id.replace(/\/+$/, "") === uri.replace(/\/+$/, ""))?.mountPoint;
+  return remotesFromMounts(g.out, entries, gvfsDir()).find((r) => sameRemote(r.id, uri))?.mountPoint;
 });
 // A variable that was set to something unreadable has already failed closed
 // (control.ts); the owner hears it once, here, with the value and what is held.

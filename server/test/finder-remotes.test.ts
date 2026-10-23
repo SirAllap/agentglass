@@ -8,7 +8,7 @@
  * "[1] label" lines and "Choice: ".
  */
 import { describe, expect, test } from "bun:test";
-import { backendMessage, parseMounts, parsePending, remotesFromMounts, Sessions, validateUri, type GioProc } from "../src/remotes.ts";
+import { backendMessage, parseMounts, sameRemote, parsePending, remotesFromMounts, Sessions, validateUri, type GioProc } from "../src/remotes.ts";
 
 // The credential is built apart so no single line spells out a whole login URL; the string is unchanged.
 const PW = "hunter2";
@@ -137,6 +137,25 @@ describe("connecting", () => {
     expect(await bad.start("smb://h/x")).toEqual({ state: "error", error: "Failed to mount Windows share: Connection refused" });
     const none = new Sessions(fakeGio([""], 2, "gio: sftp://h/: Operation not supported\n").spawn, async () => undefined);
     expect(await none.start("sftp://h/")).toMatchObject({ state: "error", missing: true, error: expect.stringContaining("backend isn't installed") });
+  });
+
+  test("gio saying the location is already mounted is a success that points at the mount, never an error", async () => {
+    const where: string[] = [];
+    const s = new Sessions(fakeGio([""], 2, "gio: sftp://acme@box.example/: Location is already mounted\n").spawn, async (u) => { where.push(u); return "/run/user/1000/gvfs/sftp:host=box.example,user=acme"; });
+    expect(await s.start("sftp://acme@box.example/")).toEqual({ state: "done", uri: "sftp://acme@box.example/", mountPoint: "/run/user/1000/gvfs/sftp:host=box.example,user=acme" });
+    expect(where).toEqual(["sftp://acme@box.example/"]);
+  });
+
+  test("the same server written two ways is one remote; two servers are not", () => {
+    expect(sameRemote("sftp://acme@box.example/", "sftp://box.example")).toBe(true);
+    expect(sameRemote("sftp://box.example:22/home/acme/", "sftp://box.example/home/acme")).toBe(true);
+    expect(sameRemote("SFTP://Box.Example/", "sftp://box.example/")).toBe(true);
+    expect(sameRemote("ssh://box.example/", "sftp://box.example/")).toBe(true);
+    expect(sameRemote("smb://nas/My%20Share", "smb://nas/My Share/")).toBe(true);
+    expect(sameRemote("sftp://acme@box.example/", "sftp://ana@box.example/")).toBe(false);
+    expect(sameRemote("sftp://box.example:2222/", "sftp://box.example/")).toBe(false);
+    expect(sameRemote("sftp://box.example/a", "sftp://box.example/b")).toBe(false);
+    expect(sameRemote("not a uri", "sftp://box.example/")).toBe(false);
   });
 
   test("an address that is not allowed never starts a process", async () => {
