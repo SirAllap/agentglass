@@ -73,6 +73,7 @@ import { HAS_BROWSER } from "../lib/desktop.ts";
 import { matchesQuery } from "../lib/boardSearch.ts";
 import { openCard, type CardJump } from "../lib/openCard.ts";
 import type { IssueJump } from "../lib/openIssue.ts";
+import { boardView } from "../lib/boardView.ts";
 import { TASK_SOURCES, shownTaskSources, subscribeTaskSources, type TaskSourceId } from "../lib/taskSources.ts";
 import { CHIP, CTRL_H, EDGE, IconChip, INPUT, INPUT_STYLE, RefreshButton, LINE, TL_AVATAR, TL_CSS } from "./workspace/Chrome.tsx";
 import { SCROLLBAR_CSS } from "./diff/DiffLines.tsx";
@@ -2596,6 +2597,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
     : <div className="text-center p-5" style={{ color: "var(--text3)" }}>Pick a card.</div>
   );
 
+  const view = boardView({ data });
   const veiled = !!wanted && (stale || !data?.tasks.length);
 
   return (
@@ -3019,7 +3021,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
             : { border: EDGE, color: "var(--text2)" }}>
           {/* The count has to survive the fill: --text3 on the accent is a
               number you cannot read. */}
-          ready <span style={{ color: readyOnly ? "var(--bg)" : "var(--text3)", opacity: readyOnly ? 0.75 : 1 }}>{counts.ready}</span>
+          ready <span style={{ color: readyOnly ? "var(--bg)" : "var(--text3)", opacity: readyOnly ? 0.75 : 1 }}>{view === "loading" ? "–" : counts.ready}</span>
         </button>
         {/* YOUR FACE ON IT. The board already draws everybody's avatar in the
             WHO column, so the one chip that means "you" was the only place a
@@ -3037,7 +3039,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
               className="rounded-full shrink-0"
               style={{ width: 15, height: 15, objectFit: "cover" }} />
           )}
-          mine <span style={{ color: mineOnly ? "var(--bg)" : "var(--text3)", opacity: mineOnly ? 0.75 : 1 }}>{counts.mine}</span>
+          mine <span style={{ color: mineOnly ? "var(--bg)" : "var(--text3)", opacity: mineOnly ? 0.75 : 1 }}>{view === "loading" ? "–" : counts.mine}</span>
         </button>
         {tags.slice(0, 6).map((t) => (
           <button key={t} onClick={() => setTag((cur) => (cur === t ? null : t))} aria-pressed={tag === t}
@@ -3073,7 +3075,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
           style={showDone
             ? { border: EDGE, color: "var(--text3)" }
             : { border: EDGE, color: "var(--text2)" }}>
-          {showDone ? "showing everything" : `show ${counts.done} done`}
+          {showDone ? "showing everything" : view === "loading" ? "show – done" : `show ${counts.done} done`}
         </button>
         </>}
         {onLooked && (
@@ -3395,7 +3397,12 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
             {onLooked && !lookedGroups.length && (
               <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>Nothing matches that.</div>
             )}
-            {!onLooked && !rows.length && !looksLikeId && (
+            {!onLooked && view === "loading" && !looksLikeId && (
+              <div className="p-5 text-[11.5px] flex items-center gap-2" role="status" style={{ color: "var(--text3)" }}>
+                <span className="agx-spin" aria-hidden style={{ width: 12, height: 12, borderWidth: 1.5 }} />Loading the board…
+              </div>
+            )}
+            {!onLooked && view !== "loading" && !rows.length && !looksLikeId && (
               <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>
                 {data?.error ? "Nothing to show — the last read did not get through."
                   : q || tag || mineOnly || statusPick.length ? "Nothing matches that."
@@ -3490,7 +3497,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
                 at. */}
             {onLooked
               ? <span>{lookedGroups.reduce((n, g) => n + g.rows.length, 0)} looked up · not on your boards</span>
-              : <span>{rows.length} of {data?.tasks.length ?? 0}</span>}
+              : <span>{view === "loading" ? "Loading…" : `${rows.length} of ${data?.tasks.length ?? 0}`}</span>}
             {/* Said, rather than left as a list that stops. */}
             {data?.truncated && (
               <span style={{ color: "var(--warning-ink)" }}
