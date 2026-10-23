@@ -182,7 +182,7 @@ export const UI_ACTIONS = {
   }),
   "esc.peel": def({ inPlace: true, level: 1, kind: "open", surface: "peels the top overlay, as Escape does", legacy: { cmd: "esc" }, args: {} }),
   "panel.open": def({ modals: ["CommandPalette.tsx", "HelpLegend.tsx", "SearchModal.tsx", "SkillsModal.tsx", "StatsModal.tsx"], level: 1, kind: "open", surface: "stats, skills, search, help or the command palette", legacy: { cmd: "open" }, args: { what: { t: "enum", values: PANEL_IDS } } }),
-  "finder.open": def({ modals: ["FilePalette.tsx"],
+  "finder.open": def({ modals: ["FilePalette.tsx", "finder/machine/FinderChrome.tsx", "finder/machine/Popover.tsx"],
     level: 1, kind: "open", surface: "the file finder on one absolute path", legacy: { cmd: "open", pin: { what: "finder" } }, chords: ["files.palette"],
     args: { path: { t: "abspath" }, kind: { t: "pathKind", of: "path" } },
   }),

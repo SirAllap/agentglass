@@ -147,6 +147,7 @@ import {
 } from "./reminders.ts";
 import { fileText, fileToTemp, fileTree, findFiles, grepFiles, listRefs, filesExist, heldBackFrom, heldBackTest, HELD_BACK, filesReach, gitReadRefusal, gitReadTest } from "./files.ts";
 import { diskFind, diskGrep, diskPlaces } from "./disk.ts";
+import { browseBatch } from "./browselist.ts";
 import { browseDir, fileBytes, fileFacts, openInDesktop, pagePolicy, revealInFileManager } from "./browse.ts";
 import { fileGitFacts } from "./fileGit.ts";
 import { benchEdit, benchEnd, benchLive, readNote, writeNote } from "./bench.ts";
@@ -7428,7 +7429,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      *
      * Behind the same switch as directory browsing: turning that off must not
      * leave a second door standing. */
-    if (pathname === "/browse" || pathname.startsWith("/preview/")) {
+    if (pathname === "/browse" || pathname === "/browse/list" || pathname.startsWith("/preview/")) {
       /* "local" opens dotted folders and the agentglass config folder, so it is judged
          like the tokenless sinks: a direct loopback socket AND not another OS
          user on this box (sinkFrom). With a token every route here needs it, but
@@ -7452,6 +7453,13 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         try { b = (await req.json()) as { path?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
         const r = revealInFileManager(b?.path, localBrowse);
         return json(r, r.ok ? 200 : 400);
+      }
+      // A folder a page at a time, for the Machine tab's columns: see browselist.ts.
+      if (pathname === "/browse/list") {
+        const c = Number(url.searchParams.get("cursor"));
+        const n = Number(url.searchParams.get("limit"));
+        return json(browseBatch(url.searchParams.get("path") || "", Number.isFinite(c) ? c : 0,
+          { limit: Number.isFinite(n) && n > 0 ? n : undefined, showHidden: url.searchParams.get("hidden") === "1", local: localBrowse }));
       }
       if (pathname === "/browse") return json(browseDir(url.searchParams.get("path") || "", url.searchParams.get("hidden") === "1", localBrowse));
       if (pathname === "/preview/facts") return json(fileFacts(url.searchParams.get("path") || "", localBrowse));

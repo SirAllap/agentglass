@@ -4650,6 +4650,19 @@ export interface BrowseReport {
   error?: string;
 }
 
+/** One page of a folder, `/browse/list`: the disk's order, 128 at a time. Mirrors server/src/browselist.ts. */
+export interface BrowsePage {
+  ok: boolean;
+  path: string;
+  /** Entries in the folder after the hidden rule, known from the first page. */
+  total: number;
+  entries: BrowseEntry[];
+  /** Where the next page starts; null on the last. */
+  next: number | null;
+  hiddenSkipped: number;
+  error?: string;
+}
+
 export type PreviewKind = "image" | "image-convert" | "text" | "pdf" | "video" | "audio" | "binary" | "dir";
 
 export interface FileFacts {

@@ -35,6 +35,7 @@ import { recents, remember, forget, subscribeRecents, ago } from "../lib/fileRec
 import { reduceSelection } from "../lib/finderSelection.ts";
 import { completion, looksLikePath, parseQuery, passesFilters, readPath, scoreMatch } from "../lib/finderQuery.ts";
 import { FileView, type Jump } from "./finder/FileView.tsx";
+import { MachineFinder } from "./finder/machine/MachineFinder.tsx";
 import { InfoRail } from "./finder/InfoRail.tsx";
 import { useFileSource, type FileSource } from "./finder/useFileSource.ts";
 import { extChips, chipLabel, hasGlob, matchGlob, passesExts, toggleExt } from "../lib/finderFilters.ts";
@@ -497,14 +498,18 @@ export function FilePalette({
     [readQ, homeDir, browsePath, place, root],
   );
 
+  /* The Machine tab with nothing typed IS the file manager (finder/machine). A
+     query, even one letter, hands the tab back to the search it always was. */
+  const finderOn = tab === "machine" && !q.trim() && !!homeDir && !placeErr;
   const at = useMemo(() => {
+    if (finderOn) return null;
     if (typedPath) return typedPath.dir;
     if (browsePath) return browsePath;
     if (asked.text.trim() && !(globAsked && tab !== "contents")) return null;
     if (tab === "machine") return place || null;
     if (tab === "names") return root || null;
     return null;
-  }, [typedPath, browsePath, asked.text, tab, place, root, globAsked]);
+  }, [finderOn, typedPath, browsePath, asked.text, tab, place, root, globAsked]);
 
   /** A click in the centre (a preview row, a header crumb): the drawer lists the
    *  folder the item is in and the item is selected — see finderFolder.goTo. */
@@ -1099,7 +1104,7 @@ export function FilePalette({
               <div className="flex items-center gap-2.5 flex-1 min-w-0 px-3 py-2 rounded-md"
                 style={{ background: "var(--bg)", border: "1.5px solid color-mix(in srgb, var(--text) 80%, transparent)" }}>
                 <span className="flex" style={{ color: "var(--text3)" }}><SearchIcon size={ICON.xs} /></span>
-                <input ref={inputRef} value={q} onChange={(e) => { setBoxMirror(null); setQ(e.target.value); }}
+                <input ref={inputRef} data-finder-box value={q} onChange={(e) => { setBoxMirror(null); setQ(e.target.value); }}
                   spellCheck={false} autoComplete="off" placeholder={active.placeholder}
                   className="flex-1 min-w-0 bg-transparent outline-none text-[13px]" style={{ color: "var(--text)" }} />
                 {/* One control, not two.
@@ -1135,10 +1140,12 @@ export function FilePalette({
                   <RepoChip repo={repo} repos={repos} openState={[pickOpen, setPickOpen]}
                     onPick={(r) => { setRoot(r); setPickOpen(false); inputRef.current?.focus(); }} />
                 )}
+                {!finderOn && (
                 <span className="shrink-0 text-[10.5px] px-2 py-0.5 rounded-full tabular-nums" aria-live="polite"
-                  style={{ background: "color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text2)", fontWeight: 600 }}>
-                  {shown.length} {unit}
-                </span>
+                    style={{ background: "color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text2)", fontWeight: 600 }}>
+                    {shown.length} {unit}
+                  </span>
+                )}
               </div>
 
               <div className="flex items-center rounded-md overflow-hidden shrink-0" role="tablist" aria-label="What to search"
@@ -1153,6 +1160,7 @@ export function FilePalette({
                 ))}
               </div>
 
+              {!finderOn && (
               <div className="flex items-center gap-1.5 shrink-0 text-[11px]" style={{ color: "var(--text3)" }}>
                 <span className="tabular-nums whitespace-nowrap">{canStep ? `${cursor + 1} of ${shown.length}` : "0 of 0"}</span>
                 <button onClick={() => step(-1)} disabled={!canStep} title="Previous result (↑)" aria-label="Previous result"
@@ -1160,6 +1168,7 @@ export function FilePalette({
                 <button onClick={() => step(1)} disabled={!canStep} title="Next result (↓)" aria-label="Next result"
                   className="agx-btn rounded-md grid place-items-center disabled:opacity-40" style={{ width: HIT, height: HIT, border: EDGE, color: "var(--text2)" }}>{"↓"}</button>
               </div>
+              )}
               <CloseButton onClick={onClose} title="Close the finder (esc)" size={ICON.sm} />
             </div>
 
@@ -1191,6 +1200,12 @@ export function FilePalette({
             )}
 
             {/* the drawer, the reader and the rail */}
+            {finderOn ? (
+              <MachineFinder home={homeDir} start={place || homeDir} places={places}
+                onPlace={(p) => { setPlaceRecents(rememberPlace(p)); setPlace(p); setBrowsePath(null); }}
+                onBench={(p, mode) => { onBench(benchOpen(mode, p, root)); onClose(); }}
+                onRecent={() => goTab("recent")} />
+            ) : (
             <div className="flex-1 min-h-0 flex">
               <div className="shrink-0 flex flex-col min-h-0 relative"
                 style={{ width: collapsed ? RAIL_W : drawerW, borderRight: LINE, background: "var(--surface-card)" }}>
@@ -1297,7 +1312,9 @@ export function FilePalette({
                   onOpenBrowser={openInBrowser} />
               )}
             </div>
+            )}
 
+            {!finderOn && (
             <div className="flex items-center gap-4 px-4 py-2 shrink-0 text-[10.5px]"
               style={{ borderTop: LINE, color: "var(--text4)" }}>
               <span>↑↓ next result</span>
@@ -1309,6 +1326,7 @@ export function FilePalette({
                 {chordLabel(appChordFor("files.palette"))} hides · {resumeLine({ file: file.name || null, section: sectionAt, tab: active.label, q })}
               </span>
             </div>
+            )}
           </motion.div>
           </div>
         </Portal>

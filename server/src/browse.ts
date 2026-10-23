@@ -19,7 +19,7 @@
  * rule is loosened here — this is a third door into the same two rooms, not a
  * new room.
  */
-import { readdirSync, statSync, lstatSync, readFileSync } from "node:fs";
+import { opendirSync, readdirSync, statSync, lstatSync, readFileSync } from "node:fs";
 import { failed } from "./refused.ts";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { diskAllows, diskEnabled, diskRoots } from "./disk.ts";
@@ -281,27 +281,8 @@ export function browseDir(pathIn: unknown, showHidden = false, local = false): B
     const hidden = name.startsWith(".");
     if (hidden && !showHidden) { hiddenSkipped++; continue; }
     if (entries.length >= MAX_ENTRIES) { more++; continue; }
-    const full = join(abs, name);
-    try {
-      const st = lstatSync(full);
-      const link = st.isSymbolicLink();
-      // A symlink is followed ONLY to decide whether it behaves as a folder,
-      // and only when its target is somewhere this may look. Anything else is
-      // shown as what it is.
-      const target = link && browseAllows(realish(full), local) ? safeStat(full) : null;
-      const dir = st.isDirectory() || (target?.isDirectory() ?? false);
-      const locked = (hidden || viaDot) && !browseAllows(full, local);
-      entries.push({
-        name,
-        kind: link ? "link" : dir ? "dir" : "file",
-        bytes: dir ? null : (target ?? st).size,
-        items: dir ? countItems(full) : null,
-        mtime: st.mtimeMs,
-        hidden,
-        locked,
-        ...(locked && agentglassPrivate(realish(full)) ? { why: KEYS_WHY } : null),
-      });
-    } catch { /* vanished between readdir and lstat: it is not there, so it is not a row */ }
+    try { entries.push(entryOf(abs, name, viaDot, local)); }
+    catch { /* vanished between readdir and lstat: it is not there, so it is not a row */ }
   }
 
   // Folders first, then files, each alphabetical — the order every file
@@ -313,20 +294,54 @@ export function browseDir(pathIn: unknown, showHidden = false, local = false): B
   return { ok: true, path: abs, parent: parentOf(abs, local), entries, more, hiddenSkipped };
 }
 
+/**
+ * One row of a folder, from `lstat`. Throws when the entry vanished between the
+ * listing and this call, which the caller reads as "not a row". Shared by the
+ * whole-folder listing and the batched one so the two cannot disagree about
+ * what a symlink or a dotted entry is.
+ */
+export function entryOf(abs: string, name: string, viaDot: boolean, local: boolean): BrowseEntry {
+  const hidden = name.startsWith(".");
+  const full = join(abs, name);
+  const st = lstatSync(full);
+  const link = st.isSymbolicLink();
+  // A symlink is followed ONLY to decide whether it behaves as a folder,
+  // and only when its target is somewhere this may look. Anything else is
+  // shown as what it is.
+  const target = link && browseAllows(realish(full), local) ? safeStat(full) : null;
+  const dir = st.isDirectory() || (target?.isDirectory() ?? false);
+  const locked = (hidden || viaDot) && !browseAllows(full, local);
+  return {
+    name,
+    kind: link ? "link" : dir ? "dir" : "file",
+    bytes: dir ? null : (target ?? st).size,
+    items: dir ? countItems(full) : null,
+    mtime: st.mtimeMs,
+    hidden,
+    locked,
+    ...(locked && agentglassPrivate(realish(full)) ? { why: KEYS_WHY } : null),
+  };
+}
+
 const safeStat = (p: string) => { try { return statSync(p); } catch { return null; } };
 
 /** How many things are in a folder, for the row. Bounded: this runs once per
  *  visible row and a home directory full of caches must not make a listing
  *  crawl. */
 function countItems(abs: string): number | null {
+  // Read the entries one at a time and stop at the cap: `readdirSync` would
+  // load every name of a folder with a million of them to count to 9,999.
+  let dir;
   try {
+    dir = opendirSync(abs);
     let n = 0;
-    for (const name of readdirSync(abs)) {
-      if (name.startsWith(".")) continue;
+    for (let e = dir.readSync(); e; e = dir.readSync()) {
+      if (e.name.startsWith(".")) continue;
       if (++n >= 9999) break;
     }
     return n;
   } catch { return null; }
+  finally { try { dir?.closeSync(); } catch { /* already closed */ } }
 }
 
 /* -------------------------------------------------------------------------
