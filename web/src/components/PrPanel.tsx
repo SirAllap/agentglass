@@ -11747,7 +11747,7 @@ function TimelineEvent({ e }: { e: PrEvent }) {
      says how each kind of part is drawn. */
   const said = eventParts(e).map((p, i) => {
     switch (p.as) {
-      case "who": return <b key={i} style={{ color: "var(--text)" }}>{p.text}</b>;
+      case "who": return <UserPill key={i} name={p.text} />;
       case "strong": return <b key={i} style={{ color: "var(--text2)" }}>{p.text}</b>;
       case "code": return <code key={i} style={{ ...CODE_FONT_STYLE, color: "var(--text)" }}>{p.text}</code>;
       case "label": return <Chip key={i} text={p.text} tint={e.kind === "unlabeled" ? "var(--text3)" : p.tint ? `#${p.tint}` : "var(--primary)"} />;
@@ -11765,6 +11765,15 @@ function TimelineEvent({ e }: { e: PrEvent }) {
 
 /** Commits pushed back to back, as GitHub prints them: who, how many, and the
  *  subjects. The Commits tab has the rest. */
+/** A GitHub user named in running text: face and name in a quiet pill, so a person stands out from the words around them. */
+function UserPill({ name }: { name: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 align-middle rounded-full pl-0.5 pr-1.5" style={{ background: "var(--surface-inset)", border: "1px solid var(--surface-line)", color: "var(--text)", fontWeight: 600 }}>
+      <Avatar login={name} size={ICON.sm} />{name}
+    </span>
+  );
+}
+
 /** A branch name in running text, as the same chip the header uses. */
 function RefPill({ name }: { name: string }) {
   return <code className="px-1 py-0.5 rounded text-[10.5px]" style={{ ...CODE_FONT_STYLE, color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 12%, transparent)", overflowWrap: "anywhere" }}>{name}</code>;
@@ -12195,7 +12204,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   const opened = (
     <div key="opened" className="agx-tiny">
       <span className="agx-node"><PlusIcon size={ICON.xs} /></span>
-      <span><b>{d.author}</b> opened this pull request from <RefPill name={d.headRefName} /> into <RefPill name={d.baseRefName} /></span>
+      <span><UserPill name={d.author} /> opened this pull request from <RefPill name={d.headRefName} /> into <RefPill name={d.baseRefName} /></span>
     </div>
   );
   /* The real force-push events now come from the timeline with their own
