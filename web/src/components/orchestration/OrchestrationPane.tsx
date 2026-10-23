@@ -1,7 +1,9 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Filter, SettingRow, Switch, Toggle } from "../SettingRow.tsx";
-import { StatusBadge } from "../SettingsKit.tsx";
-import { CARD, Card, Sec } from "./OrchKit.tsx";
+import { SettingsCard, StatusBadge } from "../SettingsKit.tsx";
+import { BudgetIcon, ShieldIcon } from "../settingsNavIcons.tsx";
+import { AgentIcon } from "../../lib/glyphIcons.tsx";
+import { CARD } from "./OrchKit.tsx";
 import { CloseIcon } from "../CloseButton.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { Button, Chip, INPUT, LINE, INPUT_STYLE, Segmented } from "../workspace/Chrome.tsx";
@@ -333,68 +335,69 @@ export function OrchestrationView(p: OrchestrationViewProps) {
       <ScopeBar root={root} projects={p.projects} overrides={p.overrides ?? []} inherited={inherited} busy={busy}
         note={notes.scope} onRoot={p.onRoot} onScope={p.onScope} />
 
-      <FlowView policy={policy} facts={{ on: ruleHolds(states, scopeKey) }} readiness={readiness} root={root} disabled={false}
-        liveModel={root !== "" && p.seat?.live ? p.seat.model : null} limited={limitedEngines(states, scopeKey)}
-        onPickSetup={() => document.querySelector("[data-orch-presets]")?.scrollIntoView({ block: "start", behavior: "smooth" })}
-        onChange={(field) => { setPicking(field); setPickTick((n) => n + 1); }} />
-
+      {/* Editor and flow: the cards that change who does what on the left, the
+          picture of who does it right now on the right, in view while the left
+          scrolls. Under 1180px they stack, picture first. */}
+      <div className="agx-split">
+      <div className="agx-split-main">
       <QuickSetup policy={policy} root={root} readiness={readiness} states={states} inherited={inherited} busy={busy}
         note={notes.quick} onSave={save} onOpenEngines={p.onOpenEngines} />
 
-      <Sec n={2} id="orch-fine-tune" title="Fine-tune who does what"
-        sub={chairNow ? `Press \u201cChange\u201d on the picture above. The main agent now open runs ${chairNow}.` : "Press \u201cChange\u201d on the picture above, then pick an engine from the tiles and a model."} />
-      <Card data-row={picking ? rowId(fineTuneRow(picking)) : undefined}>
-        {noWorker ? (
-          <div className="flex flex-wrap items-center gap-3 text-[12px]" style={{ color: "var(--text2)" }}>
-            <span>{NO_WORKER_ENGINE}</span>
-            <Button onClick={p.onOpenEngines}>See Agent engines</Button>
-          </div>
-        ) : picking ? fineTune(picking) : (
-          <div className="text-[12px]" style={{ color: "var(--text3)" }}>Press “Change” on a role in the picture above. The tiles open right here.</div>
-        )}
-        <Note text={notes.orchestrator || notes.scout || notes.builder || notes.verifier} />
-      </Card>
+      <SettingsCard title="Fine-tune who does what" icon={<AgentIcon size={ICON.sm} />}
+        desc={chairNow ? `Press \u201cChange\u201d on the flow. The main agent now open runs ${chairNow}.` : "Press \u201cChange\u201d on the flow, then pick an engine from the tiles and a model."}>
+        <div className="p-4" id="orch-fine-tune" data-row={picking ? rowId(fineTuneRow(picking)) : undefined}>
+          {noWorker ? (
+            <div className="flex flex-wrap items-center gap-3 text-[12px]" style={{ color: "var(--text2)" }}>
+              <span>{NO_WORKER_ENGINE}</span>
+              <Button onClick={p.onOpenEngines}>See Agent engines</Button>
+            </div>
+          ) : picking ? fineTune(picking) : (
+            <div className="text-[12px]" style={{ color: "var(--text3)" }}>Press “Change” on a role in the flow. The tiles open right here.</div>
+          )}
+          <Note text={notes.orchestrator || notes.scout || notes.builder || notes.verifier} />
+        </div>
+      </SettingsCard>
 
-      <Sec n={3} title="Switch things automatically"
-        sub="Conditions override the picture while they hold. The first one that holds wins. They only affect agents started afterwards."
-        right={<>
-          <span className="text-[11px]" style={{ color: "var(--text3)" }}>Opens the editor. Nothing is saved until you press Save.</span>
-          <Button tone="primary" disabled={locked} onClick={(e) => openSheet("new", e.currentTarget)}>+ Add a condition</Button>
-        </>} />
-      <div className="rounded-xl overflow-hidden" style={{ background: "var(--bg)", border: "1px solid var(--border)" }} data-rules>
-        {policy.rules.length === 0
-          ? <div className="p-4 text-[12px]" style={{ color: "var(--text3)" }}>No conditions. The choices above always apply.</div> : ruleRows}
+      <SettingsCard title="Switch things automatically" icon={<BudgetIcon size={ICON.sm} />}
+        desc="Conditions override the flow while they hold. The first one that holds wins. They only affect agents started afterwards."
+        actions={<Button tone="primary" disabled={locked} title="Opens the editor. Nothing is saved until you press Save." onClick={(e) => openSheet("new", e.currentTarget)}>+ Add a condition</Button>}>
+        <div data-rules>
+          {policy.rules.length === 0
+            ? <div className="p-4 text-[12px]" style={{ color: "var(--text3)" }}>No conditions. The choices above always apply.</div> : ruleRows}
+        </div>
+        <Note text={notes.rules} />
+      </SettingsCard>
+
+      <SettingsCard title={SAFETY.title} icon={<ShieldIcon size={ICON.sm} />}
+        desc={`${SAFETY.summary} Every change here saves as you make it.`}
+        fold={{ open: safetyOpen, onToggle: setSafetyOpen }}
+        status={safetyIsDefault(policy) ? <StatusBadge tone="off">defaults</StatusBadge> : <StatusBadge tone="ok">changed</StatusBadge>}>
+        <div data-safety className="px-0 pb-3">
+          <SafetyHead {...SAFETY.workers} />
+          <EnvelopeRows prefix="" env={env.workerDefault} locked={locked} onChange={(workerDefault) => setEnv({ ...env, workerDefault })} />
+          <SettingRow label="Always refused" hint={SAFETY.always.hint} detail={{ summary: SAFETY.always.more, body: SAFETY.always.body }} />
+          <SafetyHead {...SAFETY.most} />
+          <EnvelopeRows prefix="At most: " env={env.ceiling} locked={locked} onChange={(ceiling) => setEnv({ ...env, ceiling })} />
+          <SettingRow label="Save these permissions" hint="Both groups save together; the server checks that the default is inside the most allowed."
+            control={<Button tone="primary" pending={busy} disabled={locked || !dirty} onClick={() => void save(withEnvelopes(policy, env), "envelope")}>Save</Button>} />
+          <Note text={notes.envelope} />
+          <SafetyHead {...SAFETY.limits} />
+          {(Object.keys(LIMIT_RANGE) as (keyof Policy["limits"])[]).map((k) => (
+            <StepRow key={k} k={k} value={policy.limits[k]} locked={locked}
+              onStep={(by) => void save(withLimits(policy, { [k]: stepLimit(k, policy.limits[k], by) }), "limits")} />
+          ))}
+          <Note text={notes.limits} />
+          <p className="m-0 mt-3 px-4 text-[11px]" style={{ color: "var(--text3)" }}>{OLD_WORDS}</p>
+        </div>
+      </SettingsCard>
       </div>
-      <Note text={notes.rules} />
-
-      <Sec n={4} title={SAFETY.title} sub={`${SAFETY.summary} Every change here saves as you make it.`} />
-      <section data-safety className="rounded-xl p-4" style={{ background: "var(--surface-card)", border: LINE, boxShadow: "var(--surface-lift)" }}>
-        <button type="button" aria-expanded={safetyOpen} onClick={() => setSafetyOpen(!safetyOpen)}
-          className="flex items-center gap-2 text-[13px] font-semibold bg-transparent border-0 p-0 cursor-pointer" style={{ color: "var(--text)", minHeight: 26 }}>
-          <span aria-hidden className="text-[10px]" style={{ color: "var(--text3)" }}>{safetyOpen ? "\u25be" : "\u25b8"}</span>
-          Show safety and limits
-          {safetyIsDefault(policy) ? <StatusBadge tone="off">defaults</StatusBadge> : <StatusBadge tone="ok">changed</StatusBadge>}
-        </button>
-        {(
-          <div className="mt-3" hidden={!safetyOpen}>
-            <SafetyHead {...SAFETY.workers} />
-            <EnvelopeRows prefix="" env={env.workerDefault} locked={locked} onChange={(workerDefault) => setEnv({ ...env, workerDefault })} />
-            <SettingRow label="Always refused" hint={SAFETY.always.hint} detail={{ summary: SAFETY.always.more, body: SAFETY.always.body }} />
-            <SafetyHead {...SAFETY.most} />
-            <EnvelopeRows prefix="At most: " env={env.ceiling} locked={locked} onChange={(ceiling) => setEnv({ ...env, ceiling })} />
-            <SettingRow label="Save these permissions" hint="Both groups save together; the server checks that the default is inside the most allowed."
-              control={<Button tone="primary" pending={busy} disabled={locked || !dirty} onClick={() => void save(withEnvelopes(policy, env), "envelope")}>Save</Button>} />
-            <Note text={notes.envelope} />
-            <SafetyHead {...SAFETY.limits} />
-            {(Object.keys(LIMIT_RANGE) as (keyof Policy["limits"])[]).map((k) => (
-              <StepRow key={k} k={k} value={policy.limits[k]} locked={locked}
-                onStep={(by) => void save(withLimits(policy, { [k]: stepLimit(k, policy.limits[k], by) }), "limits")} />
-            ))}
-            <Note text={notes.limits} />
-            <p className="m-0 mt-3 text-[11px]" style={{ color: "var(--text3)" }}>{OLD_WORDS}</p>
-          </div>
-        )}
-      </section>
+      <aside className="agx-split-side">
+        <FlowView policy={policy} facts={{ on: ruleHolds(states, scopeKey) }} readiness={readiness} root={root} disabled={false}
+          liveModel={root !== "" && p.seat?.live ? p.seat.model : null} limited={limitedEngines(states, scopeKey)}
+          onPickSetup={() => document.querySelector("[data-orch-presets]")?.scrollIntoView({ block: "start", behavior: "smooth" })}
+          onChange={(field) => { setPicking(field); setPickTick((n) => n + 1); }} />
+      </aside>
+      </div>
 
       {editing && !inherited && (editing === "new" || sheetRule) && (
         <RuleSheet key={editing} initial={sheetRule} policy={policy} readiness={readiness} scope={scopeWords(root)}

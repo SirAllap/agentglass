@@ -9,7 +9,7 @@
 // Here each kind gets its own section, toggles look like toggles and say what
 // they control, and downloads say what you actually get.
 import { PluginSettingsPane } from "./plugins/PluginSettingsPane.tsx";
-import { Fragment, createContext, isValidElement, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Fragment, createContext, isValidElement, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { RecipesPane } from "./RecipesPane.tsx";
 import { ReviewPromptsPane } from "./ReviewPromptsPane.tsx";
 import { SavedRepliesPane } from "./SavedRepliesPane.tsx";
@@ -120,8 +120,9 @@ import {
 import { AppearancePane } from "./ThemePicker.tsx";
 import { ShellConsole } from "./ShellConsole.tsx";
 import { CloseButton } from "./CloseButton.tsx";
+import "./settingsSplit.css";
 import { HIT, ICON } from "../lib/iconSize.ts";
-import { CheckboxIcon, ClockIcon, CrossIcon } from "../lib/glyphIcons.tsx";
+import { AgentIcon, CheckboxIcon, ClockIcon, CrossIcon, LinkIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { ciOnlyApproved } from "../lib/ciNotifyPref.ts";
 import { reviewGateOn, setReviewGate } from "../lib/reviewGatePref.ts";
 import { AskedAlertLog } from "./AskedAlertLog.tsx";
@@ -212,15 +213,15 @@ interface SetupStep {
  * that fixes that step beside the badge, and "N of M done" at the head. Rows
  * that are not steps (a notice, a way back) go in as children.
  */
-function SetupCard({ title, steps, note, error, actions, children }: {
+function SetupCard({ title, steps, note, error, actions, children, icon }: {
   title: string; steps: SetupStep[]; note?: string | null; error?: string | null;
-  actions?: React.ReactNode; children?: React.ReactNode;
+  actions?: React.ReactNode; children?: React.ReactNode; icon?: React.ReactNode;
 }) {
   const known = steps.filter((s) => s.done !== null);
   const done = known.filter((s) => s.done).length;
   const all = known.length > 0 && done === known.length;
   return (
-    <SettingsCard title={title} actions={actions}
+    <SettingsCard title={title} actions={actions} icon={icon}
       status={<StatusBadge tone={all ? "ok" : "off"}>{done} of {known.length} done</StatusBadge>}>
       {steps.map((st) => (
         <SettingRow key={st.title} label={st.title} hint={st.detail} detail={st.more}
@@ -788,7 +789,8 @@ function PacePane() {
   const cfg = useSyncExternalStore(subscribePaceConfig, paceConfig, paceConfig);
   const working = cfg.spread === "working";
   return (
-    <SettingsCard title="Plan pace">
+    <SettingsCard title="Plan pace" icon={<BudgetIcon size={ICON.sm} />}
+      desc="Spreads the week's budget over the days you work, so “runs out Thursday” means something.">
       <Choice<PaceConfig["spread"]>
         label="Spread the week's budget over"
         hint="Working hours earn the budget, so the pace marker holds still overnight and at weekends. Every hour is a straight line across the week."
@@ -1223,22 +1225,16 @@ function UnderstudyPane({ open, onLeave }: { open: boolean; onLeave: () => void 
   const on = !!frame?.enabled;
   return (
     <>
-      {/*
-       * WHAT IT LEARNS FROM, first — because that is what this page is for now.
-       *
-       * This used to be the Clone's settings page, under the Clone's view, and
-       * the consent list lived in the view rather than here. The view is gone
-       * and the bank it filled became the orchestrator's memory, so the thing
-       * that decides what the orchestrator knows about you belongs on a
-       * settings page and not behind a tab in a scoreboard.
-       */}
-      <Teach active={open} />
-      <SettingsCard title="Keeping score">
+      {/* The switch and what it keeps are one card: the second is what the
+          first costs, and it was a card of its own below the portrait pickers. */}
+      <SettingsCard title="Keeping score" icon={<UnderstudyIcon size={ICON.sm} />}
+        desc="A clone learns how you decide and scores itself against your real answers."
+        status={<StatusBadge tone={frame?.halted ? "warn" : on ? "ok" : "off"}>{frame?.halted ? "Halted" : on ? "On" : "Off"}</StatusBadge>}>
         <Toggle
           label="Let the clone watch"
           hint={frame?.halted
             ? "Halted — it is enabled and stopped. Switching it on again is what lowers the fence; there is no timer."
-            : "Separate from the knowledge above, and off is a reasonable answer: this writes down what a stand-in would have done and scores it against what you did. Reading the bank does not depend on it — the orchestrator remembers you either way."}
+            : "Separate from the knowledge below, and off is a reasonable answer: this writes down what a stand-in would have done and scores it against what you did. Reading the bank does not depend on it — the orchestrator remembers you either way."}
           on={on}
           onClick={() => {
             void setUnderstudyEnabled(!on).then((r) => {
@@ -1247,9 +1243,6 @@ function UnderstudyPane({ open, onLeave }: { open: boolean; onLeave: () => void 
             });
           }} />
         {err && <div role="alert" className="agx-settings-x pt-2 pb-3 text-[12px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
-      </SettingsCard>
-      <UnderstudyLook classes={frame?.classes ?? []} />
-      <SettingsCard title="What it keeps">
         <Row label={`Sealed situations — ${RETENTION.snapshotDays} days`}
           hint="The material it read, kept only long enough to check a prediction against it. Swept on a fixed window of its own, deliberately not on the events retention you set: turning that off must not silently turn this off too." />
         <Row label={`The fact of a write — ${RETENTION.stubDays} days`}
@@ -1257,6 +1250,10 @@ function UnderstudyPane({ open, onLeave }: { open: boolean; onLeave: () => void 
         <Row label="The score — kept"
           hint="Decisions and refusals do not expire. They are the score, and a score with holes in it is not a score." />
       </SettingsCard>
+      {/* What it learns from lives on this page, not behind a tab in a
+          scoreboard: it decides what the orchestrator knows about you. */}
+      <Teach active={open} />
+      <UnderstudyLook classes={frame?.classes ?? []} />
     </>
   );
 }
@@ -1862,7 +1859,7 @@ function AgentBrowserPane({ open }: { open: boolean }) {
     load();
   };
 
-  if (!st) return <SettingsCard title="Agent browser use"><EmptyState>Reading…</EmptyState></SettingsCard>;
+  if (!st) return <SettingsCard title="Browser access" icon={<BrowserIcon size={ICON.sm} />}><EmptyState>Reading…</EmptyState></SettingsCard>;
 
   const mono = { color: "var(--text)" };
   /* A Mac has no installer to reinstall: the .dmg carries the CLI inside the
@@ -1889,7 +1886,7 @@ function AgentBrowserPane({ open }: { open: boolean }) {
        feature is read once, by somebody deciding whether to bother, so it
        comes after the verdict. */
     <SetupCard
-      title="Agent browser use"
+      title="Browser access" icon={<BrowserIcon size={ICON.sm} />}
       error={err}
       note={note}
       actions={<Button onClick={load} disabled={busy}>Check again</Button>}
@@ -1929,7 +1926,17 @@ function AgentBrowserPane({ open }: { open: boolean }) {
   );
 }
 
-function HooksPane({ open }: { open: boolean }) {
+/** The Agents page: the hooks and the gate beside it, the cards the modal hands
+ *  in (new chats, browser, card skills), the worker roles, and one danger zone
+ *  that holds both ways back — which is why the hooks state lives here and not
+ *  in the card, and why the cards come in as slots: the flow fills columns in
+ *  order, so the danger zone has to be drawn after every card it follows. */
+function AgentsPage({ open, chats, panes, browser, skills }: {
+  open: boolean; chats: React.ReactNode; panes: React.ReactNode; browser: React.ReactNode; skills: React.ReactNode;
+}) {
+  const [resetTick, setResetTick] = useState(0);
+  const [armed, setArmed] = useState(false);
+  const [resetNote, setResetNote] = useState<string | null>(null);
   const [st, setSt] = useState<HookSetupStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -1983,25 +1990,34 @@ function HooksPane({ open }: { open: boolean }) {
     );
   };
 
-  if (!st) return <SettingsCard title="Claude Code hooks"><EmptyState>Reading hook state…</EmptyState></SettingsCard>;
+  const hooksIcon = <PlugIcon size={ICON.sm} />;
+  /* The pieces that do not depend on the hooks being readable: the cards of the
+     page are the same whatever the hooks say, so a failed read does not blank
+     the page, only the card that read it. */
+  const resetRoles = async () => {
+    if (!armed) { setArmed(true); return; }
+    setArmed(false); setResetNote(null);
+    const rs = await Promise.all(WORKER_ROLES.map((r) =>
+      api.workerRoleSave(r.id, r.default.provider, r.default.model).then((x) => x.ok).catch(() => false)));
+    setResetNote(rs.every(Boolean) ? "Every role is back on its default." : "Could not reset every role.");
+    setResetTick((n) => n + 1);
+  };
 
-  if (!st.bundled) {
-    return (
-      <SettingsCard title="Claude Code hooks">
-        <SettingRow label="The hook scripts are not in this build"
-          hint={<>This build does not carry the hook scripts, so there is nothing to wire. Install from a Release, or run <span className="t-mono">bun run setup</span> in a checkout.</>}
-          status={<StatusBadge tone="warn">Not included</StatusBadge>} />
-      </SettingsCard>
-    );
-  }
-
-  return (
+  const hooksCards = !st ? (
+    <SettingsCard title="Claude Code hooks" icon={hooksIcon}><EmptyState>Reading hook state…</EmptyState></SettingsCard>
+  ) : !st.bundled ? (
+    <SettingsCard title="Claude Code hooks" icon={hooksIcon}>
+      <SettingRow label="The hook scripts are not in this build"
+        hint={<>This build does not carry the hook scripts, so there is nothing to wire. Install from a Release, or run <span className="t-mono">bun run setup</span> in a checkout.</>}
+        status={<StatusBadge tone="warn">Not included</StatusBadge>} />
+    </SettingsCard>
+  ) : (
     <>
       {/* The last step is one only you can take, and there is no way from
           here to see whether you have. It says so and stays out of the count,
           rather than sitting there permanently unticked. */}
       <SetupCard
-        title="Claude Code hooks"
+        title="Claude Code hooks" icon={hooksIcon}
         error={err}
         note={note}
         steps={[
@@ -2022,9 +2038,7 @@ function HooksPane({ open }: { open: boolean }) {
                 backing it up first, and leaves your other hooks untouched.
               </>,
             },
-            action: st.installed
-              ? { label: busy ? "Disabling…" : "Disable hooks", onClick: () => void act("uninstall"), busy, tone: "danger" }
-              : { label: busy ? "Enabling…" : "Enable", onClick: () => void act("install"), busy } },
+            action: st.installed ? undefined : { label: busy ? "Enabling…" : "Enable", onClick: () => void act("install"), busy } },
           { title: "Start a fresh Claude Code session", done: null,
             detail: "Sessions already running keep the hooks they started with." },
         ]}>
@@ -2033,14 +2047,13 @@ function HooksPane({ open }: { open: boolean }) {
             left to a session that streams nothing and no error anywhere. */}
         <SettingRow label="Python on your PATH"
           hint={<>The hooks run under <span className="t-mono">{st.python}</span> — it has to be on your PATH for events to arrive. Takes effect on the next Claude Code session; hooks load at startup.</>} />
-        <SettingRow label="Taking it back out"
-          hint={<>Reversible any time from here, or with <span className="t-mono">python3 hooks/install_hooks.py --uninstall</span> in a checkout. Global (<span className="t-mono">~/.claude</span>), so it covers every project.</>} />
       </SetupCard>
 
       {/* The gate. Its own card, below the forwarder, because it is the
           stronger thing and read second for the same reason. */}
-      <SettingsCard title="Gate" tone={st.gateBundled && !st.gate ? "decision" : "default"}
-        desc="Holds an outward action until somebody decides. A separate switch from the hooks above.">
+      <SettingsCard title="Gate" icon={<ShieldIcon size={ICON.sm} />} tone={st.gateBundled && !st.gate ? "decision" : "default"}
+        desc="Holds an outward action until somebody decides. A separate switch from the hooks above."
+        status={<StatusBadge tone={!st.gateBundled ? "off" : st.gate ? "ok" : "warn"}>{!st.gateBundled ? "Not in this build" : st.gate ? "On" : "Off · needs a decision"}</StatusBadge>}>
         <SettingRow label="Hold what leaves this machine"
           hint={<>
             A push, a pull request, a comment, a review, a merge, a ticket or a message in a channel
@@ -2048,13 +2061,39 @@ function HooksPane({ open }: { open: boolean }) {
             Everything local — writing code, running tests, cutting a worktree — is never held.
             <span className="block mt-1">Until you turn this on, that line is held by each agent remembering it.</span>
           </>}
-          status={<StatusBadge tone={!st.gateBundled ? "off" : st.gate ? "ok" : "off"}>{!st.gateBundled ? "Not in this build" : st.gate ? "On" : "Off"}</StatusBadge>}
           actions={st.gateBundled
             ? <Button tone={st.gate ? "danger" : "primary"} disabled={busy} onClick={() => void gate(!st.gate)}>
                 {busy ? "Working…" : st.gate ? "Turn the gate off" : "Turn the gate on"}
               </Button>
             : undefined} />
       </SettingsCard>
+    </>
+  );
+
+  return (
+    <>
+      {hooksCards}
+      {chats}
+      {panes}
+      {browser}
+      {skills}
+      <WorkerRolesSection open={open} resetTick={resetTick} />
+      <AgentsSection />
+      {/* Both ways back, together and apart from everything that sets
+          something: the hooks come out of the person's own Claude Code
+          settings, the roles go back to the table in shared/workerRoles.ts.
+          Outline buttons, and neither deletes anything that cannot be put back. */}
+      <SettingsCard title="Danger zone" tone="danger" icon={<WarningIcon size={ICON.sm} />}
+          desc="Reversible, but they change what every session does.">
+          {st?.bundled && st.installed && (
+            <SettingRow label="Take the hooks back out"
+              hint={<>Removes the entries above; running sessions keep them until they end. Also <span className="t-mono">python3 hooks/install_hooks.py --uninstall</span> in a checkout. Global (<span className="t-mono">~/.claude</span>), so it covers every project.</>}
+              actions={<Button tone="danger" pending={busy} onClick={() => void act("uninstall")}>{busy ? "Disabling…" : "Disable hooks"}</Button>} />
+          )}
+          <SettingRow label="Forget worker roles"
+            hint={resetNote ?? (armed ? "Press again to put every role back on its default CLI and model." : "Back to the default CLI and model of every role.")}
+            actions={<Button tone="danger" onClick={() => void resetRoles()}>{armed ? "Reset roles?" : "Reset roles"}</Button>} />
+        </SettingsCard>
     </>
   );
 }
@@ -2115,40 +2154,53 @@ function LanternSection({ open }: { open: boolean }) {
   const near = String(STEPS.find((m) => m >= minutes) ?? 90);
   const WATCH_STEPS = [5, 10, 15, 30, 60] as const;
   const nearWatch = String(WATCH_STEPS.find((m) => m >= watchMinutes) ?? 60);
+  const ic = <LanternIcon size={ICON.sm} />;
+  /* Two cards, split by what they act on: the board and what it asks of a
+     session, and the one seat it wakes. The picture of the board goes in the
+     side slot (the preview is its own piece of work); empty, the column stays
+     at its half and the slot takes no room. */
   return (
-    <SettingsCard title="Lantern"
-      desc="What the Lantern (the rail's lantern icon) may ask of a session. It never starts, stops or queues anything; this is the one thing it says to an agent.">
-      {err && <div role="alert" className="agx-settings-x pt-2 pb-3 text-[11px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
-      <Toggle on={nudge} onClick={() => save({ nudge: !nudge })}
-        label="Ask sessions what they are working on"
-        hint="On a prompt, a hooked session may be handed one line asking it to post its task (POST /agents/status). Off, and the Lantern lists sessions by name and pane only." />
-      <Choice label="How often one session may be asked again" value={near}
-        hint="A session that has already answered is left alone for this long, whatever name it chose."
-        options={STEPS.map((m) => ({ v: String(m), label: `${m} min` }))}
-        onPick={(m) => save({ minutes: Number(m) })} disabled={!nudge}
-        disabledHint="Nothing is asked while the reminder is off." />
-      <Toggle on={watch} onClick={() => save({ watch: !watch })}
-        label="Watch the agents and notify me"
-        hint="Every few minutes the agents are re-read and one notification goes out — the app's bell, the phone when paired, the desktop otherwise — if somebody is still stopped on you, a worker's window vanished, or work that was claimed has gone quiet for an hour. The instant alerts stay either way; this is the sweep behind them." />
-      <Choice label="How often it looks" value={nearWatch}
-        hint="One notification per look at most, while something needs you."
-        options={WATCH_STEPS.map((m) => ({ v: String(m), label: `${m} min` }))}
-        onPick={(m) => save({ watchMinutes: Number(m) })} disabled={!watch}
-        disabledHint="Nothing is looked at while the watch is off." />
-      {/* The seat's floor lives here because it rides the same look: the watch
-          re-reads the field, and the orchestrator is prompted only when what
-          it found CHANGED. This is how long a quiet field may stay quiet
-          before it gets a line anyway. */}
-      <Choice label="Wake the orchestrator at least every" value={String(seatWake)}
-        hint="The seat is woken when the field changes. This is the floor under that, so a quiet day still gets a line rather than a silence you cannot tell from a dead agent."
-        options={[1, 2, 4, 8, 12, 24].map((h) => ({ v: String(h), label: h === 1 ? "1 hour" : `${h} hours` }))}
-        onPick={(h) => { void api.seatWakeSave(Number(h)).then(() => setSeatWake(Number(h))); }} />
-      <Choice label="How long the prompt cache stays warm" value={String(cacheTtl === 60 ? 60 : 5)}
-        hint="Each card counts it down from the session's last turn: a turn sent while it is warm is the cheap one. Five minutes on most plans; an hour on some."
-        options={[{ v: "5", label: "5 min" }, { v: "60", label: "1 hour" }]}
-        onPick={(m) => save({ cacheTtlMinutes: Number(m) })} />
-      {note && <div role="status" className="agx-settings-x pt-2 pb-3 text-[11px]" style={{ color: "var(--text3)" }}>{note}</div>}
-    </SettingsCard>
+    <div className="agx-split">
+      <div className="agx-split-main">
+        <SettingsCard title="Lantern" icon={ic}
+          desc="The board that watches every agent, and how often it taps you on the shoulder. It never starts, stops or queues anything."
+          status={<StatusBadge tone={watch ? "ok" : "off"}>{watch ? "Watching" : "Not watching"}</StatusBadge>}>
+          {err && <div role="alert" className="agx-settings-x pt-2 pb-3 text-[11px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
+          <Toggle on={watch} onClick={() => save({ watch: !watch })}
+            label="Watch the agents and notify me"
+            hint="Every few minutes the agents are re-read and one notification goes out — the app's bell, the phone when paired, the desktop otherwise — if somebody is still stopped on you, a worker's window vanished, or work that was claimed has gone quiet for an hour. The instant alerts stay either way; this is the sweep behind them." />
+          <Choice label="How often it looks" value={nearWatch}
+            hint="One notification per look at most, while something needs you."
+            options={WATCH_STEPS.map((m) => ({ v: String(m), label: `${m} min` }))}
+            onPick={(m) => save({ watchMinutes: Number(m) })} disabled={!watch}
+            disabledHint="Nothing is looked at while the watch is off." />
+          <Toggle on={nudge} onClick={() => save({ nudge: !nudge })}
+            label="Ask sessions what they are working on"
+            hint="On a prompt, a hooked session may be handed one line asking it to post its task (POST /agents/status). Off, and the Lantern lists sessions by name and pane only." />
+          <Choice label="How often one session may be asked again" value={near}
+            hint="A session that has already answered is left alone for this long, whatever name it chose."
+            options={STEPS.map((m) => ({ v: String(m), label: `${m} min` }))}
+            onPick={(m) => save({ minutes: Number(m) })} disabled={!nudge}
+            disabledHint="Nothing is asked while the reminder is off." />
+        </SettingsCard>
+        <SettingsCard title="The orchestrator" icon={<AgentIcon size={ICON.sm} />}>
+          {/* The seat's floor lives here because it rides the same look: the watch
+              re-reads the field, and the orchestrator is prompted only when what
+              it found CHANGED. This is how long a quiet field may stay quiet
+              before it gets a line anyway. */}
+          <Choice label="Wake the orchestrator at least every" value={String(seatWake)}
+            hint="The seat is woken when the field changes. This is the floor under that, so a quiet day still gets a line rather than a silence you cannot tell from a dead agent."
+            options={[1, 2, 4, 8, 12, 24].map((h) => ({ v: String(h), label: h === 1 ? "1 hour" : `${h} hours` }))}
+            onPick={(h) => { void api.seatWakeSave(Number(h)).then(() => setSeatWake(Number(h))); }} />
+          <Choice label="How long the prompt cache stays warm" value={String(cacheTtl === 60 ? 60 : 5)}
+            hint="Each card counts it down from the session's last turn: a turn sent while it is warm is the cheap one. Five minutes on most plans; an hour on some."
+            options={[{ v: "5", label: "5 min" }, { v: "60", label: "1 hour" }]}
+            onPick={(m) => save({ cacheTtlMinutes: Number(m) })} />
+        </SettingsCard>
+        {note && <div role="status" className="agx-settings-x text-[11px]" style={{ color: "var(--text3)" }}>{note}</div>}
+      </div>
+      <aside className="agx-split-side" data-preview-slot="lantern" />
+    </div>
   );
 }
 
@@ -2160,7 +2212,7 @@ function LanternSection({ open }: { open: boolean }) {
  * that is offered but not installed says so rather than disappearing, so a
  * choice made on another machine still reads.
  */
-function WorkerRolesSection({ open }: { open: boolean }) {
+function WorkerRolesSection({ open, resetTick = 0 }: { open: boolean; resetTick?: number }) {
   type Choice = { provider: string; model: string };
   const [roles, setRoles] = useState<Record<string, Choice>>({});
   const [clis, setClis] = useState<{ id: string; title: string; installed: boolean }[]>([]);
@@ -2175,7 +2227,7 @@ function WorkerRolesSection({ open }: { open: boolean }) {
     if (!open) return;
     void api.workerRoles().then((r) => { take(r); setClis(r.providers ?? []); })
       .catch(() => setNote("Could not reach the server — the worker roles are unavailable."));
-  }, [open]);
+  }, [open, resetTick]);
   const save = (role: string, c: Choice) => {
     setNote(null);
     void api.workerRoleSave(role, c.provider, c.model)
@@ -2183,7 +2235,7 @@ function WorkerRolesSection({ open }: { open: boolean }) {
       .catch(() => setNote("Could not save."));
   };
   return (
-    <SettingsCard title="Worker roles"
+    <SettingsCard title="Worker roles" icon={<PlugIcon size={ICON.sm} />}
       desc="Which CLI and model a worker started in a role runs on (agentglass-agent start --role). Every role is locked against push, commit, merge and the network clients, in a layer the project's own config cannot loosen (OpenCode's is checked against the project's config at each start, and refused if loosened); a CLI with no such lock is not offered.">
       {WORKER_ROLES.map((r) => {
         const c = roles[r.id];
@@ -2437,7 +2489,7 @@ function NotificationsSection(p: {
 
 function AgentsSection() {
   return (
-    <SettingsCard title="Agent engines">
+    <SettingsCard title="Agent engines" icon={<PlugIcon size={ICON.sm} />}>
       <SettingRow label="Which engines this computer has"
         hint="Version, sign-in, what each can do, and whether it reports to this app: one card per engine, with its Connect button."
         onClick={() => openSettings("engines")} />
@@ -2606,13 +2658,8 @@ function GhBudget({ open }: { open: boolean }) {
   // a subprocess for nothing.
   useEffect(() => { if (open) void load(); }, [open, load]);
 
-  /* Closed until asked for, like the fold it replaces; a search or a deep link
-     opens it, because a result inside a closed card has nothing to land on. */
-  const { on, flash } = useContext(Filter);
-  const [folded, setFolded] = useState(false);
   return (
-    <SettingsCard title="GitHub" desc="The API allowance this app spends, and what is left of it."
-      fold={{ open: folded || on || !!flash, onToggle: setFolded }}>
+    <SettingsCard title="GitHub allowance" icon={<LinkIcon size={ICON.sm} />} desc="The API allowance this app spends, and what is left of it.">
       <SettingRow
         label="How much of your GitHub allowance is left"
         hint="Every pull request, check and search this app shows spends one. GitHub refills them on a rolling window — 5,000 an hour for REST and GraphQL, 30 a minute for Search, which is the one that runs out first because looking up a card's pull requests is a search."
@@ -4669,17 +4716,17 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   {ql && show("budgets") && <PageMatchHeading id="budgets" onOpen={() => { setPane("budgets" as Pane); setQ(""); }} />}
                   {show("budgets") && (
                   <>
+                    <PacePane />
                     {/* A limit you chose, so the spend insights stop firing on
                         constants — which are noise on a project that genuinely
                         costs that and silence on one where a tenth would be
                         alarming. */}
                     <BudgetsPane open={open} />
-                    <PacePane />
                   </>
                   )}
                   {show("budgets") && <GhBudget open={open} />}
                   {show("budgets") && (
-                  <SettingsCard title="Codex quota">
+                  <SettingsCard title="Codex" icon={<PlugIcon size={ICON.sm} />}>
                     {/* Says what it costs, because it costs something: this
                         spends a little of the quota it is measuring. */}
                     <Toggle on={usageRefresh}
@@ -4839,14 +4886,10 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   {show("orchestration") && <OrchestrationPane />}
                   {ql && show("hooks") && <PageMatchHeading id="hooks" onOpen={() => { setPane("hooks" as Pane); setQ(""); }} />}
 
-                  {show("hooks") && <>
-                    <HooksPane open={open} />
-                    {cu && (
-                      <SettingsCard title="Cards" desc="How agent skills relate to the cards of your tracker.">
-                        <CardSkillsRow connected />
-                      </SettingsCard>
-                    )}
-                    <SettingsCard title="New chats"
+                  {show("hooks") && (
+                  <AgentsPage open={open}
+                    chats={
+                    <SettingsCard title="New chats" icon={<PanesIcon size={ICON.sm} />}
                       desc="What a chat gets when it starts.">
                       {/* Merged from a separate "Chat" page: this and the tmux
                           binary above answer the same question — what a pane
@@ -4874,10 +4917,15 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                           { v: "tmux", label: "tmux panes" },
                         ]} />
                     </SettingsCard>
-                    {tmuxEngine?.available && <RunningPanes open={open} />}
-                    {HAS_BROWSER && <AgentBrowserPane open={open} />}
-                    <AgentsSection /><WorkerRolesSection open={open} />
-                  </>}
+                    }
+                    panes={tmuxEngine?.available ? <RunningPanes open={open} /> : null}
+                    browser={HAS_BROWSER ? <AgentBrowserPane open={open} /> : null}
+                    skills={cu ? (
+                      <SettingsCard title="Card skills" icon={<ChecklistIcon size={ICON.sm} />} desc="How agent skills relate to the cards of your tracker.">
+                        <CardSkillsRow connected />
+                      </SettingsCard>
+                    ) : null} />
+                  )}
 
                   {ql && show("tmux") && <PageMatchHeading id="tmux" onOpen={() => { setPane("tmux" as Pane); setQ(""); }} />}
 

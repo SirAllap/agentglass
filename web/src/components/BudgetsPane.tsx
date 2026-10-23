@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { SettingRow } from "./SettingRow.tsx";
+import { ColumnsIcon } from "./settingsNavIcons.tsx";
+import { ICON } from "../lib/iconSize.ts";
 import { EmptyState, Field, SettingsCard, SettingsForm, helpIdFor } from "./SettingsKit.tsx";
 import { api } from "../lib/api.ts";
 import { fmtUsd } from "../lib/format.ts";
@@ -61,7 +63,7 @@ export function BudgetsPane({ open }: { open: boolean }) {
     void save((rows ?? []).map((b, n) => (n === i ? { ...b, ...over } : b)));
 
   const card = (children: ReactNode, actions?: ReactNode) => (
-    <SettingsCard title="Spending" desc="A ceiling you set, so the insights stop firing on constants." actions={actions}>
+    <SettingsCard title="Spending" icon={<ColumnsIcon size={ICON.sm} />} desc="A ceiling you set, so the insights stop firing on constants." actions={actions}>
       {children}
     </SettingsCard>
   );

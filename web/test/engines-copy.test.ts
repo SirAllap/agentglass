@@ -115,7 +115,7 @@ describe("the component", () => {
     // One SettingsCard per engine, built with both slots from the same
     // functions that the table above holds; there is no branch that omits them.
     const card = code.slice(code.indexOf("function EngineCard("), code.indexOf("export function EnginesPane("));
-    expect(card).toMatch(/<SettingsCard title=\{p\.title\} desc=\{p\.what\}\s+status=\{<StatusBadge tone=\{badge\.tone\}>/);
+    expect(card).toMatch(/<SettingsCard title=\{p\.title\} desc=\{p\.what\}\s+icon=\{[^\n]*\}\s+status=\{<StatusBadge tone=\{badge\.tone\}>/);
     expect(card).toMatch(/actions=\{<Button disabled=\{act\.disabled\}/);
     expect(card).toContain("badgeOf(e)");
     expect(card).toContain("actionOf(e)");
@@ -128,7 +128,8 @@ describe("the component", () => {
     expect(card).toContain('e ? versionText(e) : "…"');
     expect(code).toContain("minHeight={56}");
     expect(card).toContain("reportingLoaded");
-    expect(card.match(/<SettingRow label=/g)!.length).toBeGreaterThanOrEqual(6);
+    // Five: what it is held to and how it is run are one disclosure on the roles row now.
+    expect(card.match(/<SettingRow label=/g)!.length).toBeGreaterThanOrEqual(5);
   });
 
   test("no page polls: it loads on open and on Recheck", () => {
@@ -147,12 +148,12 @@ describe("the component", () => {
 
   test("engines that are not installed fold into one card", () => {
     expect(code).toContain("`${absent.length} not installed`");
-    expect(code).toContain("fold={{ open: absentOpen ?? present.length === 0, onToggle: setAbsentOpen }}");
+    expect(code).toContain('fold={{ open: view === "absent" || (absentOpen ?? present.length === 0), onToggle: setAbsentOpen }}');
   });
 
   test("what a worker is held to is not promised as a wall: the lock is rules over a command line", () => {
-    const row = pane.slice(pane.indexOf('label="What it is held to as a worker"'));
-    const hint = row.slice(0, row.indexOf("/>"));
+    const row = pane.slice(pane.indexOf("Held to its own worktree"));
+    const hint = row.slice(0, row.indexOf("</p>"));
     expect(hint).toContain("not a sandbox");
     expect(hint).not.toMatch(/always|never|cannot/);
   });

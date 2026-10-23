@@ -1,5 +1,7 @@
 import { Button } from "../workspace/Chrome.tsx";
-import { Card, Eyebrow } from "./OrchKit.tsx";
+import { SettingsCard } from "../SettingsKit.tsx";
+import { ICON } from "../../lib/iconSize.ts";
+import { PanesIcon } from "../settingsNavIcons.tsx";
 import { ROLE_IDS, type Chain, type Policy } from "../../../../shared/orchestration.ts";
 import type { EngineReadiness } from "../../../../shared/types.ts";
 import { EngineTile } from "./EngineTile.tsx";
@@ -86,8 +88,8 @@ export function FlowView(p: FlowViewProps) {
   const plain = !nodes.some((n) => n.ruleId);
   return (
     <section data-flow="right-now" aria-label="Who does what right now">
-      <Eyebrow>Right now for {scopeWords(p.root)}</Eyebrow>
-      <Card>
+      <SettingsCard title="Flow" icon={<PanesIcon size={ICON.sm} />} desc={`Right now for ${scopeWords(p.root)}. The pickers on the left change it.`}>
+        <div className="p-4">
         <div className="agx-flow">
           <div className="agx-flow-main rounded-xl p-3 grid content-center justify-items-start gap-2" style={{ border: "2px solid var(--primary)", background: "var(--surface-card)" }}>
             <div className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>Main agent</div>
@@ -103,7 +105,7 @@ export function FlowView(p: FlowViewProps) {
                   <div className="text-[13px] font-semibold" style={{ color: "var(--text)" }}>{n.word.charAt(0).toUpperCase() + n.word.slice(1)}</div>
                   <div className="text-[10px]" style={{ color: "var(--text3)" }}>{roleBlurb(n.field)}</div>
                 </div>
-                <div className="flex-1 min-w-0"><ChainTiles node={n} readiness={p.readiness} liveModel={null} limited={p.limited} /></div>
+                <div className="flex-1 min-w-[200px]"><ChainTiles node={n} readiness={p.readiness} liveModel={null} limited={p.limited} /></div>
                 {change(n)}
                 {!n.ok && <p role="alert" className="m-0 basis-full text-[11px] rounded-md px-2 py-1"
                   style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 12%, transparent)" }}>{n.sentence}</p>}
@@ -117,7 +119,8 @@ export function FlowView(p: FlowViewProps) {
           {p.readiness && plain && p.onPickSetup && <button type="button" className="bg-transparent border-0 p-0 cursor-pointer text-[12px] font-semibold" style={{ color: "var(--info)" }} onClick={p.onPickSetup}>Pick a setup below</button>}
         </p>
         <Legend />
-      </Card>
+        </div>
+      </SettingsCard>
     </section>
   );
 }

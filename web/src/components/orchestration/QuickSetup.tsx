@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { StatusBadge } from "../SettingsKit.tsx";
+import { SettingsCard, StatusBadge } from "../SettingsKit.tsx";
+import { PanesIcon } from "../settingsNavIcons.tsx";
 import { Button } from "../workspace/Chrome.tsx";
-import { Card, Sec } from "./OrchKit.tsx";
+import { Card } from "./OrchKit.tsx";
 import { CloseIcon } from "../CloseButton.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { PresetDiagram } from "./PresetDiagram.tsx";
@@ -120,12 +121,14 @@ export function QuickSetup(p: QuickSetupProps) {
   const undoOnCard = offers.some((o) => cardUndo(back, p.policy, o.title));
   return (
     <div data-orch-presets>
-      <Sec n={1} title="Start from a ready-made setup" sub="Each card shows before and after. Nothing running is moved, and you can undo it."
-        right={
+      <SettingsCard title="Quick setup" icon={<PanesIcon size={ICON.sm} />}
+        desc="Start from a ready-made setup. Each card shows before and after. Nothing running is moved, and you can undo it."
+        actions={
           <>
             {canGoBack && !undoOnCard && <Button disabled={locked} title={`Undo "${back?.title}"`} onClick={() => void undo()}>{BACK_LABEL}</Button>}
             <Button disabled={!p.readiness} onClick={() => setCheck(checkSetup(p.policy, p.states, p.readiness, p.inherited || p.root === "" ? "global" : p.root))}>Check my setup</Button>
-          </>} />
+          </>}>
+      <div className="p-4">
       <div className="agx-presets">
         {offers.map((o) => (
           <article key={o.id} data-row={rowId(o.title)} className="rounded-xl p-4 grid content-start gap-3 min-w-0"
@@ -181,6 +184,8 @@ export function QuickSetup(p: QuickSetupProps) {
         </Card>
       )}
       {p.note && <div role="alert" className="pt-2 pb-3 text-[12px]" style={{ color: "var(--error-ink)" }}>{p.note}</div>}
+      </div>
+      </SettingsCard>
     </div>
   );
 }

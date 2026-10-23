@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SettingRow } from "../SettingRow.tsx";
 import { CommandLine, SettingsCard, StatusBadge } from "../SettingsKit.tsx";
-import { Button } from "../workspace/Chrome.tsx";
+import { Button, Segmented } from "../workspace/Chrome.tsx";
 import { api } from "../../lib/api.ts";
 import { engineProviders, type Provider } from "../../../../shared/agentKinds.ts";
 import type { AgentProbe, EngineReadiness, EnginesReport } from "../../../../shared/types.ts";
@@ -60,36 +60,46 @@ function EngineCard({ p, e, now, reporting, reportingLoaded, busy, note, onReche
   const kind = p.headless?.argv;
   return (
     <SettingsCard title={p.title} desc={p.what}
+      icon={<span className="text-[12px] font-semibold">{p.title.charAt(0)}</span>}
       status={<StatusBadge tone={badge.tone}>{badge.text}</StatusBadge>}
       actions={<Button disabled={act.disabled} onClick={act.label === "Test" ? onTest : onRecheck}>{act.label}</Button>}>
       <Right e={e} now={now} />
       <SettingRow label="Version" control={textOf(e ? versionText(e) : "…")} />
       <SettingRow label="Account and model" control={textOf(e ? accountText(e) : "…")}
         detail={{ summary: "Where the credential lives", body: withCode(credentialNote(p.title, p.bin, p.account?.args)) }} />
+      {/* The two rows read once, when an engine is being chosen, sit behind
+          the roles they explain rather than making every tile three rows
+          taller than the next. */}
       <SettingRow label="Can work for an orchestrator"
         status={e ? <StatusBadge tone={roleBadge(e.roles.worker).tone}>{roleBadge(e.roles.worker).text}</StatusBadge> : <StatusBadge tone="checking">Checking</StatusBadge>}
-        hint={e && !e.roles.worker.ok ? withCode(e.roles.worker.why ?? "") : undefined} />
+        hint={e && !e.roles.worker.ok ? withCode(e.roles.worker.why ?? "") : undefined}
+        detail={{
+          summary: "What it is held to, and how agentglass runs it",
+          body: (
+            <div className="grid gap-2">
+              <p className="m-0 text-[12px]" style={{ color: "var(--text3)" }}>
+                {e ? <>Held to its own worktree, with push, pull requests and merges on its deny list. That list is rules over a command line, not a sandbox. {withCode(e.envelope.note)}</> : "…"}
+              </p>
+              <p className="m-0 text-[12px]" style={{ color: "var(--text3)" }}>
+                {p.headless ? "Run one turn at a time, with no terminal. This is derived from the provider table, so it is read here and not typed."
+                  : `agentglass does not know how to run ${p.title} without a terminal yet.`}
+              </p>
+              {p.headless && (
+                <>
+                  <CommandLine command={`${p.bin} ${p.headless.form}`} />
+                  <p className="m-0 text-[12px]" style={{ color: "var(--text3)" }}>
+                    It starts in the worker's own working directory{p.modelFlag ? <>, picks the model with <code className="t-mono">{p.modelFlag}</code></> : null}
+                    {p.headless.resume ? <>, and a follow-up turn names the session with <code className="t-mono">{p.headless.resume}</code></> : null}.
+                    {kind === "hermes" ? " A resumed Hermes session restores its own directory and approvals, so agentglass starts a fresh one." : ""}
+                  </p>
+                </>
+              )}
+            </div>
+          ),
+        }} />
       <SettingRow label="Can orchestrate"
         status={e ? <StatusBadge tone={roleBadge(e.roles.orchestrator).tone}>{roleBadge(e.roles.orchestrator).text}</StatusBadge> : <StatusBadge tone="checking">Checking</StatusBadge>}
         hint={e && !e.roles.orchestrator.ok ? e.roles.orchestrator.why : undefined} />
-      <SettingRow label="What it is held to as a worker"
-        hint={e ? <>Its own worktree, with push, pull requests and merges on its deny list. That list is rules over a command line, not a sandbox. {withCode(e.envelope.note)}</> : "…"} />
-      <SettingRow label="How agentglass runs it"
-        hint={p.headless ? "One turn at a time, with no terminal. This is derived from the provider table, so it is read here and not typed."
-          : `agentglass does not know how to run ${p.title} without a terminal yet.`}
-        detail={p.headless ? {
-          summary: "The command agentglass runs",
-          body: (
-            <div className="grid gap-2">
-              <CommandLine command={`${p.bin} ${p.headless.form}`} />
-              <p className="m-0 text-[12px]" style={{ color: "var(--text3)" }}>
-                It starts in the worker's own working directory{p.modelFlag ? <>, picks the model with <code className="t-mono">{p.modelFlag}</code></> : null}
-                {p.headless.resume ? <>, and a follow-up turn names the session with <code className="t-mono">{p.headless.resume}</code></> : null}.
-                {kind === "hermes" ? " A resumed Hermes session restores its own directory and approvals, so agentglass starts a fresh one." : ""}
-              </p>
-            </div>
-          ),
-        } : undefined} />
       {reporting
         ? <ReportingRow p={reporting} busy={busy} note={note} onConnect={onConnect} />
         : !reportingLoaded && <SettingRow label="Reporting to agentglass" minHeight={56} status={<StatusBadge tone="checking">Checking</StatusBadge>} />}
@@ -147,16 +157,30 @@ export function EnginesPane() {
   const rows = providers.map((p) => ({ p, e: readiness(p) }));
   const absent = rows.filter((r) => engineState(r.e) === "missing");
   const present = rows.filter((r) => engineState(r.e) !== "missing");
+  const ready = present.filter((r) => engineState(r.e) === "ready");
+  const needs = present.filter((r) => !["ready", "checking"].includes(engineState(r.e)));
+  const [view, setView] = useState<"all" | "ready" | "needs" | "absent">("all");
+  const shown = view === "ready" ? ready : view === "needs" ? needs : view === "absent" ? [] : present;
+  const showAbsent = view === "all" || view === "absent";
 
   return (
     <>
-      <SettingsCard title="This computer">
-        <SettingRow label="Host" minHeight={52}
-          hint="These answers are this computer's. A phone or a second computer looking at this server sees this machine's engines, not its own."
-          control={textOf(report?.host ?? "…")} />
-      </SettingsCard>
+      {/* The tiles are one per engine, so the bar says how many are in each
+          state and cuts the list to one of them; the counts are read from the
+          same answers the tiles are drawn from. */}
+      <div className="flex flex-wrap items-center gap-3 mb-4">
+        <Segmented label="Show engines" value={view} onChange={setView}
+          options={[
+            { id: "all", label: `All ${rows.length}` },
+            { id: "ready", label: `Ready ${ready.length}` },
+            { id: "needs", label: `Needs you ${needs.length}` },
+            { id: "absent", label: `Not installed ${absent.length}` },
+          ]} />
+        <span className="flex-1" />
+        <Button onClick={() => load(true)}>Rescan this machine</Button>
+      </div>
 
-      {present.map(({ p, e }) => (
+      {shown.map(({ p, e }) => (
         <EngineCard key={p.id} p={p} e={e} now={now} reporting={reportingOf(p)} reportingLoaded={agents !== null}
           busy={busy === (p.probe?.id ?? p.id)} note={note && note.id === (p.probe?.id ?? p.id) ? note : null}
           onRecheck={() => load(p.id)} onTest={() => void test(p.id)} onConnect={(a, undo) => void connect(a, undo)} />
@@ -164,8 +188,8 @@ export function EnginesPane() {
 
       {/* Engines that are not here fold into one card, like the ready ones on
           Tools & services: a machine with two engines shows two cards. */}
-      {absent.length > 0 && (
-        <SettingsCard title={`${absent.length} not installed`} fold={{ open: absentOpen ?? present.length === 0, onToggle: setAbsentOpen }}>
+      {showAbsent && absent.length > 0 && (
+        <SettingsCard title={`${absent.length} not installed`} fold={{ open: view === "absent" || (absentOpen ?? present.length === 0), onToggle: setAbsentOpen }}>
           {absent.map(({ p, e }) => {
             const r = firstRow(e, now);
             return (
@@ -178,6 +202,12 @@ export function EnginesPane() {
           })}
         </SettingsCard>
       )}
+
+      <SettingsCard title="This computer">
+        <SettingRow label="Host" minHeight={52}
+          hint="These answers are this computer's. A phone or a second computer looking at this server sees this machine's engines, not its own."
+          control={textOf(report?.host ?? "…")} />
+      </SettingsCard>
     </>
   );
 }
