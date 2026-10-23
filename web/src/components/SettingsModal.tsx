@@ -2926,7 +2926,7 @@ function PrivacyPane({ open }: { open: boolean }) {
       {/* Reversible only from a backup: the one red thing on the page, apart from everything that only reads. */}
       <SettingsCard title="Danger zone" tone="danger" icon={<WarningIcon size={ICON.sm} />} desc="Reversible only from a backup.">
         <SettingRow agentNever="erases the person's history for good: only the person at the window decides what it is worth" label="Erase local history"
-          hint="Removes events, sessions and the daily totals. Settings and tokens stay."
+          hint="Removes events, sessions, the daily totals and finished orchestrator and understudy history. Settings and tokens stay."
           actions={erasing === "ask" ? (
             <>
               <Button tone="danger" onClick={() => void erase()}>Erase for good</Button>

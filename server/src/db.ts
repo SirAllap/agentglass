@@ -2452,7 +2452,8 @@ export function reclaimFreePages(): { freed: number; ms: number } | null {
 }
 
 /**
- * Forget the history: every event, session, roll-up day and settled gate or reminder.
+ * Forget the history: every event, session, roll-up day and settled gate or reminder, and the
+ * settled rows of the orchestrator and the understudy.
  *
  * Settings, credentials and anything live stay where they are: a gate still waiting for an
  * answer and a reminder not yet acknowledged are requests, not history. The same tables
@@ -2471,6 +2472,23 @@ export function eraseHistory(): { events: number; sessions: number; days: number
     const days = db.run(`DELETE FROM daily_rollup`);
     db.run(`DELETE FROM gates WHERE decision IS NOT NULL`);
     db.run(`DELETE FROM reminders WHERE acked_at IS NOT NULL OR cancelled_at IS NOT NULL`);
+    /* The orchestrator's and the understudy's history: the settled rows pruneOldRows ages out, with no
+       cutoff. What is still waiting or live (a pending proposal, a running shift, an unanswered need, a
+       live named agent, an act not undone, a decision or a refusal) is a request or a promise, not history.
+       session_role stays: it marks which live session is the chair. */
+    db.run(`DELETE FROM understudy_snapshots`);
+    db.run(`DELETE FROM understudy_ledger WHERE kind = 'stub'`);
+    db.run(`DELETE FROM understudy_proposals WHERE state <> 'pending'`);
+    db.run(`DELETE FROM understudy_shifts WHERE state <> 'running'`);
+    db.run(`DELETE FROM understudy_acts WHERE undone_at IS NOT NULL`);
+    db.run(`DELETE FROM understudy_asked WHERE taken_at IS NOT NULL OR ('asked:' || id) IN (SELECT item_id FROM understudy_work WHERE source = 'asked')`);
+    db.run(`DELETE FROM understudy_work WHERE state <> 'running'`);
+    db.run(`DELETE FROM understudy_help WHERE answered_at IS NOT NULL`);
+    db.run(`DELETE FROM named_agent WHERE ended_at IS NOT NULL`);
+    db.run(`DELETE FROM seat_line`);
+    db.run(`DELETE FROM seat_report`);
+    db.run(`DELETE FROM seat_need WHERE done_at IS NOT NULL`);
+    db.run(`DELETE FROM agent_schedule WHERE fired_at IS NOT NULL OR cancelled_at IS NOT NULL`);
     return { events: ev.changes, sessions: se.changes, days: days.changes };
   })();
   riskMemo.clear();

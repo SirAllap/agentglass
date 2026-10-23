@@ -116,7 +116,7 @@ export const SETTINGS_ROWS: SettingsRowRaw[] = [
   { pane: "prefs", section: "Top bar", label: "Clock", hint: "12 or 24 hours, in fullscreen." },
   { pane: "prefs", section: "Top bar", label: "Codex quota", hint: "Keep Codex usage current." },
   { pane: "privacy", section: "Activity log", label: "Activity log", hint: "Every change this dashboard made, newest first." },
-  { pane: "privacy", section: "Danger zone", label: "Erase local history", hint: "Removes events, sessions and the daily totals. Settings and tokens stay.", agentNever: "erases the person's history for good: only the person at the window decides what it is worth" },
+  { pane: "privacy", section: "Danger zone", label: "Erase local history", hint: "Removes events, sessions, the daily totals and finished orchestrator and understudy history. Settings and tokens stay.", agentNever: "erases the person's history for good: only the person at the window decides what it is worth" },
   { pane: "privacy", section: "Nothing is sent anywhere", label: "ClickUp API", hint: "cards, statuses" },
   { pane: "privacy", section: "Nothing is sent anywhere", label: "Code hosting", hint: "pull requests, checks, comments, through gh" },
   { pane: "privacy", section: "Nothing is sent anywhere", label: "Jira API", hint: "cards, statuses" },

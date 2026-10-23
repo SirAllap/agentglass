@@ -26,11 +26,21 @@ const n = (t) => db.db.query("SELECT COUNT(*) AS n FROM " + t).get().n;
 for (let i = 0; i < 3; i++) db.insertEvent(ev({ timestamp: Date.now() - 30 * DAY + i }));
 for (let i = 0; i < 2; i++) db.insertEvent(ev({ session_id: "s2", timestamp: Date.now() - i }));
 db.pruneOldRows();
+const now = Date.now();
+db.db.run("INSERT INTO seat_line (root, line, at) VALUES ('/w/orbit', 'worker blocked on review', ?)", [now]);
+db.db.run("INSERT INTO seat_report (root, agent, state, at) VALUES ('/w/orbit', 'builder-1', 'done', ?)", [now]);
+db.db.run("INSERT INTO understudy_snapshots (hash, at, body) VALUES ('h1', ?, 'a situation body')", [now]);
+db.db.run("INSERT INTO named_agent (name, cwd, pane_id, window_id, started_at, ended_at) VALUES ('old', '/w/orbit', '%1', '@1', ?, ?)", [now - 10, now - 5]);
+db.db.run("INSERT INTO named_agent (name, cwd, pane_id, window_id, started_at) VALUES ('live', '/w/orbit', '%2', '@2', ?)", [now]);
+db.db.run("INSERT INTO seat_need (id, root, text, created, done_at) VALUES ('n1', '/w/orbit', 'settled question', ?, ?)", [now - 10, now - 5]);
+db.db.run("INSERT INTO seat_need (id, root, text, created) VALUES ('n2', '/w/orbit', 'unanswered question', ?)", [now]);
+const agentRows = () => ({ line: n("seat_line"), report: n("seat_report"), snap: n("understudy_snapshots"), named: n("named_agent"), need: n("seat_need") });
+const agentBefore = agentRows();
 const before = { events: n("events"), sessions: n("sessions"), days: n("daily_rollup") };
 const erased = db.eraseHistory();
 const after = { events: n("events"), sessions: n("sessions"), days: n("daily_rollup") };
 const again = db.eraseHistory();
-console.log(JSON.stringify({ before, erased, after, again }));
+console.log(JSON.stringify({ before, erased, after, again, agentBefore, agentAfter: agentRows() }));
 `;
 
 describe("eraseHistory", () => {
@@ -50,6 +60,22 @@ describe("eraseHistory", () => {
     expect(out.erased?.events).toBe(2);
     expect(out.erased?.days).toBeGreaterThan(0);
     expect(out.after).toEqual({ events: 0, sessions: 0, days: 0 });
+  });
+
+  test("the orchestrator's lines and reports and the understudy's snapshots go too; what is still live or waiting stays", () => {
+    expect(out.agentBefore).toEqual({ line: 1, report: 1, snap: 1, named: 2, need: 2 });
+    expect(out.agentAfter).toEqual({ line: 0, report: 0, snap: 0, named: 1, need: 1 });
+  });
+
+  test("it clears every table the hourly sweep ages out, or names why one stays", async () => {
+    const src = await Bun.file(new URL("../src/db.ts", import.meta.url)).text();
+    const slice = (name: string) => { const i = src.indexOf(`export function ${name}(`); return src.slice(i, src.indexOf("\n}\n", i)); };
+    const tables = (t: string) => new Set([...t.matchAll(/DELETE FROM (\w+)/g)].map((m) => m[1]!));
+    const swept = tables(slice("pruneOldRows"));
+    const erased = tables(slice("eraseHistory"));
+    // session_role marks which live session is the chair or the Lantern: a mark, not history. The rest of the hourly sweep is event retention.
+    const stays = new Set(["session_role"]);
+    expect([...swept].filter((t) => !erased.has(t) && !stays.has(t))).toEqual([]);
   });
 
   test("a second erase finds nothing and is not an error", () => {
