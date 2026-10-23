@@ -139,6 +139,7 @@ import { Button, RefreshButton, INPUT, INPUT_STYLE, EDGE, LINE, Segmented } from
 import { LAUNCH_MODES, LAUNCH_MODE_LABEL, isLaunchMode, parseDenyRules, type LaunchMode } from "../../../shared/launchModes.ts";
 import { setLaunchPermissions } from "../lib/launchMode.ts";
 import { SELECT_BOX, EmptyState, Field, LinkButton, SettingsCard, SettingsForm, StatusBadge, helpIdFor, type StatusTone } from "./SettingsKit.tsx";
+import { PreviewSlot } from "./SettingsPreviewSlot.tsx";
 import { restoredNote } from "../lib/restoredNote.ts";
 
 /** A heading inside a Section, for a pane that answers the same question about
@@ -631,7 +632,7 @@ function RailPane() {
           eyebrows inside one card, each with a line either side of it; a card
           each gives the three of them a name and an edge, and the divider
           falls only between two views. */}
-      <SettingsCard title="What is on the rail"
+      <SettingsCard title="What is on the rail" icon={<SidebarIcon size={ICON.sm} />}
         desc="Which views get an icon, and whether they sit at the top or the bottom of it.">
         <SettingRow
           agentExempt
@@ -647,7 +648,8 @@ function RailPane() {
           the label — a column of its own for 20px is how this page ended up
           drawing to a different left edge than the rest of the dialog. */}
       {(Object.keys(PLACE_LABEL) as RailPlace[]).map((place) => (
-        <SettingsCard key={place} title={PLACE_LABEL[place]} desc={PLACE_NOTE[place]}>
+        <SettingsCard key={place} title={PLACE_LABEL[place]} desc={PLACE_NOTE[place]}
+          status={<StatusBadge tone="off">{rail[place].length}</StatusBadge>}>
           {rail[place].length === 0 ? (
             <EmptyState>
               {place === "hidden" ? "Nothing put away." : "Empty — drag something here, or use the buttons on the right."}
@@ -737,6 +739,7 @@ function RailPane() {
           })}
         </SettingsCard>
       ))}
+      <PreviewSlot id="rail" title="How the rail looks now" note="The rail, as it follows your arrangement, goes here." />
     </>
   );
 }
@@ -904,7 +907,7 @@ function KeyRow({ id, keyName, capturing, onCapture, error, chord }: {
 }) {
   const { label, hint } = LABELS[id];
   return (
-    <SettingRow settingId={`keys.binding.${id}`}
+    <SettingRow settingId={`keys.binding.${id}`} wide={!!chord}
       /* Its own track: this row's control is genuinely two controls, each with
          its own label. 300 rather than the shared 210 — and because the row
          still ends at the column's edge, the chips line up with every other
@@ -2294,7 +2297,7 @@ function NotificationsSection(p: {
   );
   return (
     <>
-      <SettingsCard title="Interrupt me for"
+      <SettingsCard title="Interrupt me for" icon={<BellIcon size={ICON.sm} />}
         desc="Whatever is off still shows quietly on the fleet card."
         status={err ? <StatusBadge tone="err">{err}</StatusBadge> : undefined}
         actions={<span className="flex items-center gap-2 text-[11px] t-dim">Silence all
@@ -2319,7 +2322,8 @@ function NotificationsSection(p: {
           hint="Chats finishing, branches falling behind, checks going red. With Quiet on, only what is stopped interrupts either way; this switch decides the rest once Quiet is off. Everything keeps landing in the bell." />
       </SettingsCard>
 
-      <SettingsCard title="How it reaches you">
+      <SettingsCard title="How it reaches you" icon={<BellIcon size={ICON.sm} />}
+        status={<StatusBadge tone={prefs.none ? "off" : quiet ? "info" : "ok"}>{prefs.none ? "Silenced" : quiet ? "Quiet" : "Normal"}</StatusBadge>}>
         {NOTIFY_CHANNELS.map((c) => (
           <Fragment key={c}>
             <Toggle on={prefs.channels[c]} disabled={prefs.none}
@@ -2361,7 +2365,7 @@ function NotificationsSection(p: {
         )}
       </SettingsCard>
 
-      <SettingsCard title="Pull requests">
+      <SettingsCard title="Pull requests" icon={<ReviewIcon size={ICON.sm} />}>
         <Toggle on={p.ciApproved} onClick={p.onCiApproved}
           settingId="notifications.ciOnlyApproved" label="Checks: only when the pull request is approved"
           hint={p.ciApproved
@@ -2389,12 +2393,12 @@ function NotificationsSection(p: {
           onPick={p.onTalkMode} />
       </SettingsCard>
 
-      <SettingsCard title="Asked for, and what became of it"
+      <SettingsCard title="Asked for, and what became of it" icon={<ChecklistIcon size={ICON.sm} />}
         desc="The notifications you armed, newest first. Quiet: nothing here interrupts.">
         <AskedAlertLog />
       </SettingsCard>
 
-      <SettingsCard title="From other apps">
+      <SettingsCard title="From other apps" icon={<PhoneIcon size={ICON.sm} />}>
         <Toggle
           agentNever="reads other applications' notifications into this app: what they say is theirs"
          
@@ -4588,7 +4592,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   {show("saved-replies") && <SavedRepliesPane open={open} />}
                   {ql && show("prefs") && <PageMatchHeading id="prefs" onOpen={() => { setPane("prefs" as Pane); setQ(""); }} />}
                   {show("prefs") && (
-                  <SettingsCard title="Size and startup"
+                  <>
+                  <SettingsCard title="Size and startup" icon={<PanesIcon size={ICON.sm} />}
                     desc="How big the window is, and what it does when the machine boots.">
                     {/* Desktop only, like launch-at-login: in a browser tab the
                         browser's own zoom already does this, and better. */}
@@ -4621,6 +4626,9 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                         D-Bus monitor at all. On a machine that cannot do this
                         the row stays but says why, rather than vanishing and
                         leaving you wondering whether you imagined it. */}
+                  </SettingsCard>
+
+                  <SettingsCard title="Top bar" icon={<SlidersIcon size={ICON.sm} />}>
                     <Choice<"12" | "24">
                       label="Clock"
                       hint="The top bar shows the time in fullscreen, where the desktop's own clock is hidden"
@@ -4628,6 +4636,23 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       onPick={(v) => { setClock24(v === "24"); setH24(v === "24"); }}
                       options={[{ v: "12", label: "12h" }, { v: "24", label: "24h" }]} />
                   </SettingsCard>
+
+                  {/* Only steps that are true: the cover is listed when it is
+                      on, the login step when the app starts with the machine. */}
+                  <SettingsCard title="What happens at login" icon={<ChecklistIcon size={ICON.sm} />}
+                    desc="In this order, and only the steps you left on.">
+                    {[
+                      ...(autostart ? [["agentglass starts", "when you log in to this machine"]] : []),
+                      ...(splash ? [["The launch cover plays", "while the terminal, sessions and git load"]] : []),
+                      ["agentglass opens", IS_DESKTOP ? `at the size you picked: ${fmtScale(scale)}` : "in its window"],
+                      ["Your panes come back", "where they were, from the last layout capture"],
+                    ].map(([name, what], i) => (
+                      <SettingRow key={name} agentExempt label={`${i + 1}. ${name}`} hint={what} />
+                    ))}
+                  </SettingsCard>
+
+                  <PreviewSlot id="prefs" title="This window on your desktop" note="The window, as it looks with these settings, goes here." />
+                  </>
                   )}
 
                   {/* The engine and the memory it costs, together. Both used to
@@ -4724,7 +4749,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                             * collide with something you already use, and so the
                             * one that most needs to be movable.
                             */}
-                          <SettingsCard title="Even inside a shell"
+                          <SettingsCard title="Even inside a shell" icon={<KeyboardIcon size={ICON.sm} />}
                             desc={<>The terminal gives this one up so it reaches the app. Pick something your
                             shell does not want — the shipped {chordLabel(APP_CHORD_DEFAULTS["files.palette"])} is
                             free in bash, tmux and vim; plain Ctrl+P is not.</>}>
@@ -4751,13 +4776,13 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                           ))}
                           </SettingsCard>
                           {rest.length > 0 && (
-                            <SettingsCard title="Anywhere"
+                            <SettingsCard title="Anywhere" icon={<KeyboardIcon size={ICON.sm} />}
                               desc="A held combination, so it cannot be swallowed by whatever has focus.">
                               {rest.map(row)}
                             </SettingsCard>
                           )}
                           {viewIds.length > 0 && (
-                            <SettingsCard title="Only on the dashboard"
+                            <SettingsCard title="Only on the dashboard" icon={<KeyboardIcon size={ICON.sm} />}
                               desc="A single key each — inside the workspace every keystroke belongs to a shell. The second column is the chord that reaches them from in there.">
                               {viewIds.map(row)}
                               {/* Says why the rest of the keyboard is not on this list.
@@ -4786,7 +4811,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       );
                     })()}
                     {(isCustomised() || chordsCustomised() || appChordsCustomised()) && (
-                      <SettingsCard title="Defaults">
+                      <SettingsCard title="Defaults" icon={<SlidersIcon size={ICON.sm} />}>
                         <SettingRow
                           agentExempt label="Reset to defaults"
                           hint="Puts every key and every chord back to the shipped one."

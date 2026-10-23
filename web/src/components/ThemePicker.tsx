@@ -12,6 +12,8 @@ import { DoneIcon } from "../lib/glyphIcons.tsx";
 import { HIT, ICON } from "../lib/iconSize.ts";
 import { Button, CTRL_H, EDGE } from "./workspace/Chrome.tsx";
 import { SettingsCard } from "./SettingsKit.tsx";
+import { PreviewSlot } from "./SettingsPreviewSlot.tsx";
+import { ThemeIcon } from "./settingsNavIcons.tsx";
 
 /* Settings → Appearance.
  *
@@ -208,7 +210,7 @@ export function AppearancePane({ current, onChange, onAccent }: {
      palette moves Mode, and the two share that state. */
   return (
     <>
-      <SettingsCard title="Theme"
+      <SettingsCard title="Theme" icon={<ThemeIcon size={ICON.sm} />}
         desc="One palette for the whole cockpit — chrome, terminal, and (on the desktop) your tmux and nvim follow it.">
         <SettingRow
           settingId="appearance.mode"
@@ -235,7 +237,15 @@ export function AppearancePane({ current, onChange, onAccent }: {
             })}
           </span>}
         />
+      </SettingsCard>
 
+      <SettingsCard title="Palette" icon={<ThemeIcon size={ICON.sm} />}
+        desc="Pick one by name instead of the neutral pair. Choosing one sets Mode to match.">
+        <PaletteRows current={current} onChange={choose} />
+      </SettingsCard>
+
+      <SettingsCard title="Accent" icon={<ThemeIcon size={ICON.sm} />}
+        desc="Laid over the theme's own colour, for the things that read as live.">
         {/* Accent. The switch is the decision — follow the theme, or choose —
             and the circles are only the second half of it, so they sit under
             the description rather than crowding the control column: eight
@@ -279,10 +289,7 @@ export function AppearancePane({ current, onChange, onAccent }: {
         />
       </SettingsCard>
 
-      <SettingsCard title="Palette"
-        desc="Pick one by name instead of the neutral pair. Choosing one sets Mode to match.">
-        <PaletteRows current={current} onChange={choose} />
-      </SettingsCard>
+      <PreviewSlot id="appearance" title="The real app" note="The app, drawn with this theme and accent, goes here." />
     </>
   );
 }
