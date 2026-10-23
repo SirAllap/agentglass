@@ -98,9 +98,22 @@ export function BrowserIsland(p: IslandProps) {
   const heldTabs = tabs.filter((t) => acts[t.id]?.agent || t.agent).length;
   const heldBoxes = groups.filter((g) => g.held).length;
 
+  /*
+   * The page and the overview never move at the same time. Opening, a copy of
+   * the page covers the live page pixel for pixel, the dark backdrop fades in
+   * BEHIND it, and only the copy moves: it shrinks into its card. Closing runs
+   * it back over a backdrop that stays opaque, and the overlay is removed in one
+   * frame only once the copy has landed full size, so the live page it reveals
+   * is the same picture in the same place. Growing the clip from the pill while
+   * a copy shrank showed the real page and its copy at once (reported on
+   * GitHub: "it minimises into the overview, then maximises over itself").
+   */
+  const [closing, setClosing] = useState(false);
+  const [snap, setSnap] = useState(false);
+  const unsnap = () => requestAnimationFrame(() => requestAnimationFrame(() => setSnap(false)));
   const fly = useCallback((src: string, card: Element | null, outward: boolean) => {
     const b = box.current?.parentElement, c = card?.querySelector(".agx-isl-thumb");
-    if (!b || !c || calmNow()) return;
+    if (!b || !c || calmNow()) return null;
     const s = b.getBoundingClientRect(), r = c.getBoundingClientRect(), k = r.width / s.width;
     const img = document.createElement("img");
     img.src = src; img.className = "agx-isl-fly"; img.alt = "";
@@ -108,38 +121,40 @@ export function BrowserIsland(p: IslandProps) {
     c.classList.add("is-hold");
     const full = { transform: "translate(0px, 0px) scale(1)", borderRadius: "0px" };
     const at = { transform: `translate(${r.left - s.left}px, ${r.top - s.top}px) scale(${k})`, borderRadius: `${12 / k}px` };
-    const a = img.animate(outward ? [full, at] : [at, full], { duration: outward ? 560 : 380, easing: "cubic-bezier(0.32, 0.72, 0, 1)", fill: "forwards" });
-    void a.finished.catch(() => {}).finally(() => { img.remove(); c.classList.remove("is-hold"); });
+    const a = img.animate(outward ? [full, at] : [at, full], { duration: outward ? 520 : 420, easing: "cubic-bezier(0.32, 0.72, 0, 1)", fill: "forwards" });
+    const done = a.finished.catch(() => {}).then(() => { if (outward) { img.remove(); c.classList.remove("is-hold"); } });
+    return { done, remove: () => { img.remove(); c.classList.remove("is-hold"); } };
   }, []);
 
-  /* Opens at once. Waiting for every tab's picture first held the overview
-     shut for 1.5 s whenever a background tab was slow to answer (measured
-     on the installed app: a hidden DuckDuckGo tab never answered). Now the
-     page in front is asked first and gets 250 ms for its flight; every other
-     picture fills its card when it arrives, and a card without one shows its
-     initial until then. */
-  const show = useCallback(() => {
-    setPics({});
-    setOpen(true);
+  const show = useCallback(async () => {
+    if (open) return;
     const front = activeId;
-    const first = front ? p.picture(front).catch(() => null) : Promise.resolve(null);
-    void Promise.race([first, new Promise<null>((r) => setTimeout(() => r(null), 250))]).then((src) => {
-      if (src && front) requestAnimationFrame(() => fly(src, box.current?.querySelector(`[data-tab="${front}"]`) ?? null, true));
-    });
+    // the copy has to exist before anything moves; 250 ms at most, else the overview just fades in
+    const src = front ? await Promise.race([p.picture(front).catch(() => null), new Promise<null>((r) => setTimeout(() => r(null), 250))]) : null;
+    setPics(front && src ? { [front]: src } : {});
+    setSnap(true);
+    setOpen(true);
+    unsnap();
+    if (src && front) requestAnimationFrame(() => { fly(src, box.current?.querySelector(`[data-tab="${front}"]`) ?? null, true); });
     for (const t of tabs) {
-      if (t.asleep) continue;
-      const got = t.id === front ? first : p.picture(t.id).catch(() => null);
-      void got.then((src) => { if (src) setPics((m) => ({ ...m, [t.id]: src })); });
+      if (t.asleep || t.id === front) continue;
+      void p.picture(t.id).catch(() => null).then((pic) => { if (pic) setPics((m) => ({ ...m, [t.id]: pic })); });
     }
-  }, [tabs, activeId, p, fly]);
+  }, [open, tabs, activeId, p, fly]);
   const hide = useCallback((pick?: string) => {
+    if (!open || closing) return;
     const id = pick ?? activeId;
-    if (id && pics[id]) fly(pics[id]!, box.current?.querySelector(`[data-tab="${id}"]`) ?? null, false);
-    setOpen(false);
-    // the pictures go with the overview; they are taken fresh the next time
-    setTimeout(() => setPics({}), 600);
     if (pick && pick !== activeId) p.onShow(pick);
-  }, [activeId, pics, fly, p]);
+    const finish = () => { setSnap(true); setOpen(false); setClosing(false); setPics({}); unsnap(); };
+    const flight = id && pics[id] ? fly(pics[id]!, box.current?.querySelector(`[data-tab="${id}"]`) ?? null, false) : null;
+    if (!flight) { finish(); return; }
+    setClosing(true);
+    void flight.done.then(() => {
+      finish();
+      // the copy goes one frame after the overlay, so no frame shows neither
+      requestAnimationFrame(() => requestAnimationFrame(flight.remove));
+    });
+  }, [open, closing, activeId, pics, fly, p]);
 
   /* Escape is the overview's alone while it is up: other window handlers
      (the address box, the panel) must not close something else on the same key. */
@@ -154,7 +169,7 @@ export function BrowserIsland(p: IslandProps) {
   // focus lands on the page you were on once, when it opens, never again on a re-render
   useEffect(() => { if (open) box.current?.querySelector<HTMLElement>(".agx-isl-card.is-on")?.focus({ preventScroll: true }); }, [open]);
 
-  const cls = "agx-isl" + (open ? " is-open" : "") + (tucked ? " is-tucked" : "") + (yours ? " is-yours" : "") + (act?.paused ? " is-taken" : "");
+  const cls = "agx-isl" + (open ? " is-open" : "") + (closing ? " is-closing" : "") + (snap ? " is-snap" : "") + (tucked ? " is-tucked" : "") + (yours ? " is-yours" : "") + (act?.paused ? " is-taken" : "");
   const dot = act?.paused ? "is-taken" : working ? "is-working" : "";
   return (
     <>
@@ -181,11 +196,11 @@ export function BrowserIsland(p: IslandProps) {
                 </button>
                 <button type="button" className="agx-isl-addr" onClick={p.onAddress} title="Type an address (Ctrl+L)">{p.address || "Type an address"}</button>
                 <button type="button" className="agx-isl-ib" aria-label="Menu" onClick={(e) => p.onMenu(e.currentTarget.getBoundingClientRect())}><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="3.5" cy="8" r="1.2" /><circle cx="8" cy="8" r="1.2" /><circle cx="12.5" cy="8" r="1.2" /></svg></button>
-                <button type="button" className="agx-isl-count" aria-label="Show every tab" onClick={show}>{tabs.length}</button>
+                <button type="button" className="agx-isl-count" aria-label="Show every tab" onClick={() => void show()}>{tabs.length}</button>
                 {act?.paused && <button type="button" className="agx-isl-hand" onClick={() => active && p.onToggle(active.id)}>Hand back</button>}
               </div>
             ) : (
-              <button type="button" className="agx-isl-status" aria-label="Show every tab" onClick={show}>
+              <button type="button" className="agx-isl-status" aria-label="Show every tab" onClick={() => void show()}>
                 <LivingMark size={17} style={{ color: "#a78bfa" }} />
                 <span className="agx-isl-title">{active?.title || (active ? host(active.url) : "")}</span>
                 <span className="agx-isl-doing"><span className={"agx-isl-dot " + dot} /><span className="agx-isl-doing-t">{act!.agent} · {p.doing || "working"}</span></span>
