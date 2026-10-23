@@ -8,7 +8,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
   DEFAULT_SHUT, NAV_GROUPS, NO_FACTS, buildNav, connectionsNeeding, withNeeds, withProblems, currentToc, groupSearch, headerChips, highlightParts, jumpTarget,
-  moveSelection, navMarks, openGroupOf, parseShut, rollup, searchSummary, serializeShut, synonymsUsed, tocItems,
+  legendStates, moveSelection, navMarks, openGroupOf, parseShut, rollup, searchSummary, serializeShut, synonymsUsed, tocItems,
   type NavFacts, type NavGroupId,
 } from "../src/lib/settingsNav.ts";
 
@@ -334,5 +334,13 @@ describe("needs-you is what the person must do (fix 2)", () => {
     expect(m.engines).toEqual({ state: "needs", count: 2, title: "2 engines need sign-in or setup" });
     expect(m.understudy).toBeUndefined();
     expect(withProblems(m, { engines: { chip: "Not scanned", title: "t" } }).engines!.state).toBe("err");
+  });
+});
+
+describe("legendStates", () => {
+  test("the three words are always there; a red dot gets its word only while one is on screen", () => {
+    expect(legendStates({ about: { state: "on" } })).toEqual(["on", "needs", "off"]);
+    expect(legendStates({ about: undefined })).toEqual(["on", "needs", "off"]);
+    expect(legendStates({ clickup: { state: "err", title: "Not reachable" } })).toEqual(["on", "needs", "off", "err"]);
   });
 });

@@ -139,6 +139,10 @@ export function navMarks(f: NavFacts): Record<string, PageMark> {
 }
 
 /** How many of a group's pages want a person: the number on a collapsed group. A page that failed to read wants one too. */
+/** What the nav's legend explains. A red dot (a page that reported a problem) is drawn only while one exists, so its word is only there then. */
+export const legendStates = (marks: Readonly<Record<string, PageMark | undefined>>): ("on" | "needs" | "off" | "err")[] =>
+  Object.values(marks).some((m) => m?.state === "err") ? ["on", "needs", "off", "err"] : ["on", "needs", "off"];
+
 export const rollup = (marks: readonly PageMark[]): number => marks.filter((m) => m.state === "needs" || m.state === "err").length;
 
 /**

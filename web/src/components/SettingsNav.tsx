@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from "react";
 import { ICON } from "../lib/iconSize.ts";
 import {
-  NAV_SHUT_KEY, buildNav, groupByName, hueVar, openGroupOf, parseShut, serializeShut,
+  NAV_SHUT_KEY, buildNav, groupByName, hueVar, legendStates, openGroupOf, parseShut, serializeShut,
   type NavGroupId, type NavPageIn, type NavSection, type PageMark,
 } from "../lib/settingsNav.ts";
 import { ChevronDownIcon, GroupIcon } from "./settingsNavIcons.tsx";
+
+const LEGEND_WORD = { on: "on", needs: "needs you", off: "off", err: "problem" } as const;
 
 type Page = NavPageIn & { icon: (p: { size?: number }) => ReactElement };
 
@@ -121,9 +123,7 @@ export function SettingsNav({ pages, marks, current, onGo, onClose, pinned, sear
         </div>
       )}
       <div className="agx-sn-legend" aria-hidden>
-        <span><i className="agx-sn-dot" data-state="on" />on</span>
-        <span><i className="agx-sn-dot" data-state="needs" />needs you</span>
-        <span><i className="agx-sn-dot" data-state="off" />off</span>
+        {legendStates(marks).map((k) => <span key={k}><i className="agx-sn-dot" data-state={k} />{LEGEND_WORD[k]}</span>)}
       </div>
     </aside>
   );
