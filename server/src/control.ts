@@ -18,8 +18,10 @@ import { UI_ACTIONS, legacyToUi, parseUi, uiToLegacy, idOfLegacy, entryOfBody, l
 /** The highest level of door this server has built. Level 3 is built as STAGE
  *  only: an entry at that level opens a dialog the person finishes with their own
  *  click, and the server runs nothing on its behalf. There are no automatic
- *  grants, so raising the switch to 3 lets an agent prepare things and nothing
- *  more. */
+ *  grants, so raising the switch to 3 lets an agent prepare things through
+ *  `/control` and nothing more. The one thing that performs at level 3 is not in
+ *  this registry: the Jira card door's `step` and `link` (jiraDoor.ts), which
+ *  also need the Jira write switch. */
 export const UI_MAX_LEVEL: UiLevel = 3;
 /** What the switch says when it says nothing, or says something unreadable. */
 export const DEFAULT_CONTROL_LEVEL: UiLevel = 2;

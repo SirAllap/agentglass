@@ -157,6 +157,26 @@ describe("the step routes", () => {
     expect(fake.state.issues["ORBIT-1043"]!.statusId).toBe(was);
   });
 
+  step("a pull request address that is not one on a known host is refused before any request, though only the comment would quote it", async () => {
+    fake.requests.length = 0;
+    for (const url of ["https://evil.example/acme/orbit/pull/1", "javascript:alert(1)", "http://github.com/acme/orbit/pull/1", "https://github.com@evil.example/acme/orbit/pull/1"]) {
+      const r = await call("POST", "/jira/step", { key: "ORBIT-1043", updated: updated("ORBIT-1043"), trigger: "merge", choice: { stay: true }, pr: { ...PR, url } });
+      expect(r.status).toBe(400);
+      expect(r.body).toEqual({ ok: false, error: "That is not a pull request address" });
+    }
+    expect(fake.requests.length).toBe(0);
+  });
+
+  step("the comment names the pull request by the number in its address, whatever number came with it", async () => {
+    fake.requests.length = 0;
+    expect((await call("POST", "/jira/steps", { steps: { merge: { enabled: true, blocks: [{ type: "comment", text: "Merged {pr}" }] } } })).status).toBe(200);
+    const r = await call("POST", "/jira/step", { key: "ORBIT-1043", updated: updated("ORBIT-1043"), trigger: "merge", pr: { ...PR, number: 999 } });
+    expect(r.body.ok).toBe(true);
+    const said = JSON.stringify(fake.requests.find((q) => q.method === "POST" && q.path === "/issue/ORBIT-1043/comment")?.body);
+    expect(said).toContain("#318 Retry the export");
+    expect(said).not.toContain("999");
+  });
+
   step("status units: the projects holding the person's cards, with the site's own statuses, and the pick is kept", async () => {
     const r = await call("GET", "/jira/status-units");
     expect(r.status).toBe(200);

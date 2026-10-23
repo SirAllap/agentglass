@@ -649,6 +649,74 @@ Values are offered, never typed: a status can only be one the list itself
 accepts, so an invalid one cannot be sent. And there are no bulk actions here on
 purpose — one wrong batch is thirty notifications to other people.
 
+## Jira, and the agent door to a card
+
+Reading a Jira site needs only the connection. **Changing** anything there (a
+move, an assignee, a comment, a step, a pull request link) is off unless you set
+`AGENTGLASS_JIRA_WRITE=1` or turn on the toggle in the Jira settings, for the
+same reason as ClickUp: a change on a shared site fires automations and notifies
+people. With it off every acting route answers `Writing to Jira is switched off`
+and sends nothing.
+
+What a configured step may write is closed: it can move the card to one of the
+project's statuses, set or clear the assignee, post one comment, and put one
+pull request on the card as a link. It cannot edit a field, delete anything, or
+act on more than one card. A step is refused before any write when the card's
+`updated` stamp is not the one the caller read (`409`), runs one at a time per
+card, and a move whose screen asks for a field nobody can fill in is refused
+with the sentence that says so. Jira's own error text never reaches an answer.
+
+A pull request address is parsed, never matched as text: https only, GitHub or
+GitLab, no port and no userinfo, so `github.com@evil.example/o/r/pull/7` and
+`javascript:` are refused. A step applies it to its address before anything is
+asked of the site, whether the step links the address or only quotes it in its
+comment, and whoever called. Ceiling: a self-hosted GitLab is recognised by its
+name (`gitlab.<company>.<tld>`), so a look-alike host named that way passes;
+telling them apart needs a list of hosts, which is not here.
+
+The agent door (`agentglass-ui jira`, `ui_jira_*`, `POST /jira/door/<verb>`)
+calls what the routes call, so the Jira switch is the screen's switch and its
+refusal is the screen's sentence. It adds:
+
+- **A second switch, and the default is off.** `step` and `link` change a
+  shared site with no click of yours, so they need `AGENTGLASS_CONTROL_LEVEL=3`
+  **and** the Jira write switch. The Jira switch alone is not enough: you turn
+  it on to use the Jira screen yourself, and that must not hand your cards to
+  every agent on the machine. At the level a server starts with (2), at level 1
+  and under `AGENTGLASS_CONTROL_READONLY=1`, both verbs are refused with a `403`
+  that names the two things missing, before anything is read from the site, and
+  the refusal is a line in the action log. At level 3 with the Jira switch off
+  they answer `Writing to Jira is switched off`. `card`, `moves` and `steps`
+  read at every level.
+- **No verb for the switch itself, the connection or a credential.** An agent
+  cannot turn Jira writes on, connect a site or read a token; those are yours.
+  The token never appears in an answer.
+- **Text from the site is data.** Every string a person typed on the card (its
+  title, description, comments, status names, the words of a step) is returned
+  under `untrusted`, and an agent reads it and never obeys it. The description
+  and the comments are cut to fit 16 KiB between them, newest comments kept.
+  What is under `state` is an id, a count, a yes or no, or the card's `updated`
+  stamp. A refusal is a sentence of ours, and it can name a status or a field
+  the site holds: it says what happened and is not something to do.
+- **A name and a limit.** Each call carries `--as`, the action log shows
+  `as NAME` and, for `step` and `link`, which card; changes are limited to 30 a
+  minute per caller.
+
+This door **performs**, where the level 3 doors of `/control` only stage a
+dialog. It is the one place an agent changes a shared board without a click of
+yours, so it is behind two switches that are both off until you turn them on,
+and it has no bulk verb. A step run through it is not tied to the act the
+screen ties it to: an agent at level 3 can run `merge` on a card whose pull
+request was never merged.
+
+What the door is not is a wall. The machine token is already `full`, so a
+process that holds it can call the screen's own routes (`POST /jira/step`,
+`/jira/link`, `/jira/transition`, `/jira/assignee`, `/jira/comment`) and is held
+there by the Jira write switch alone: no control level, no limit, no `as` in
+the log. The server cannot tell your window from an agent that presents the
+same token. The door is the path that is checked, named and limited, as
+`/control` is; the switch that holds for every path is the Jira one.
+
 ## Reading outside the open project
 
 Everything under `/files/` is bounded by the open project: a cockpit pointed at
@@ -1067,6 +1135,7 @@ the full list and defaults:
 | `AGENTGLASS_UNDERSTUDY=0` | the Clone, whatever its settings file says — the variable can force it off, never on |
 | `AGENTGLASS_TMUX_OBSERVE_ONLY` | every tmux command that writes to a session — see [docs/BLAST-RADIUS.md](docs/BLAST-RADIUS.md) |
 | `AGENTGLASS_CLICKUP_WRITE=1` | *(opposite sense)* turns **on** writes to a ClickUp board, which are off by default |
+| `AGENTGLASS_JIRA_WRITE=1` | *(opposite sense)* turns **on** writes to a Jira site, which are off by default; the agent door's `step` and `link` need `AGENTGLASS_CONTROL_LEVEL=3` as well |
 | `AGENTGLASS_GATE_FAILCLOSED=1` | *(opposite sense)* makes the gate deny on timeout instead of allowing |
 
 The `/control` channel, which drives the app's own window, has a level switch
@@ -1099,7 +1168,10 @@ value; only an unset variable is the default. What each level means:
 - **Level 3 only stages.** An entry at level 3 may open a dialog with its fields
   filled in; it may not call a route that writes. The person's click is the
   effect. There are no automatic grants, so `AGENTGLASS_CONTROL_LEVEL=3` lets an
-  agent prepare something and never perform it. Five doors ship, all on one pull
+  agent prepare something and never perform it, with one exception outside
+  `/control`: the Jira card door's `step` and `link`, which perform at level 3
+  when the Jira write switch is also on (see "Jira, and the agent door to a
+  card"). Five doors ship, all on one pull
   request: `pr.merge.stage` (method, commit subject and body), `pr.comment.stage`
   (the text), `pr.review.stage` (verdict and text), `card.move.stage` (the new
   status of the card the pull request carries) and `pr.unstick` (opens the Unstick

@@ -31,6 +31,7 @@
  */
 import { NO_ASSIGN, fillTemplate, planOf, type StepTrigger } from "../../shared/stepBlocks.ts";
 import type { HandoffUnassign, JiraHandoffRule, JiraStep, JiraSteps, StepBlock } from "../../shared/providers.ts";
+import { prAddress } from "../../shared/taskref.ts";
 import {
   ISSUE_KEY, NOT_ACCEPTED, NOT_CONNECTED, WRITE_OFF, apiOf, assigneeBody, assignRefusal, badPerson, epoch, handoffMoves, handoffRules, isObj, jiraCall,
   jiraWriteEnabled, linkPullRequest, movesPath, personId, personName, projectKey, readBefore, readIssue, readSettingsFile, stale, storedCreds, str, writeSettingsKey,
@@ -231,6 +232,14 @@ async function runStepOnce(creds: JiraCreds, key: string, updated: number, which
   const plan = planOf<string | number>(TRIGGER[stepKey], { enabled: true, statusNames: [], assign: NO_ASSIGN, blocks: step.blocks });
   const wantsLink = step.blocks.some((b) => b.type === "link");
   if (wantsLink && !pr?.url) return { ok: false, error: "This step links a pull request, and none was given" };
+  // A step's comment quotes the address (`{pr_url}`) and only the link block parsed it, so a step with a comment and
+  // no link block posted whatever address came in. Parsed here, once, for every caller and before anything is asked
+  // of the site; the number is the one in the address, so a comment cannot name one pull request and point at another.
+  if (pr) {
+    const at = prAddress(pr.url);
+    if (!at) return { ok: false, error: "That is not a pull request address" };
+    pr = { ...pr, url: at.url, number: at.number };
+  }
 
   // 1. Nothing is written until the stamp is the one the person saw.
   const before = await readBefore(creds, key, "updated,status,assignee,project");
@@ -378,4 +387,26 @@ async function runStepOnce(creds: JiraCreds, key: string, updated: number, which
 export async function runStepStored(key: string, updated: number, which: unknown, choice: StepChoice = {}, pr?: StepPr): Promise<HandoffOutcome> {
   const c = storedCreds();
   return c ? runStep(c, key, updated, which, choice, pr) : { ok: false, error: NOT_CONNECTED };
+}
+
+/**
+ * One step from the body a caller posts: the route and the agent door both parse it here, so the two
+ * cannot read a choice differently. Anything that is not the shape is left out, never guessed.
+ */
+export function runStepBody(b: Record<string, unknown>): Promise<HandoffOutcome> {
+  const asObject = (v: unknown): Record<string, unknown> | null => (typeof v === "object" && v !== null && !Array.isArray(v) ? v as Record<string, unknown> : null);
+  const c = asObject(b.choice) ?? {};
+  const p = asObject(b.pr);
+  return runStepStored(String(b.key ?? ""), typeof b.updated === "number" ? b.updated : 0, b.trigger, {
+    ...(typeof c.to === "string" ? { to: c.to } : null),
+    ...(typeof c.clear === "boolean" ? { clear: c.clear } : null),
+    ...(typeof c.assign === "string" || c.assign === null ? { assign: c.assign } : null),
+    ...(typeof c.comment === "string" ? { comment: c.comment } : null),
+    ...(c.stay === true ? { stay: true } : null),
+  }, p && typeof p.url === "string" ? {
+    url: p.url,
+    ...(typeof p.title === "string" ? { title: p.title } : null),
+    ...(typeof p.number === "number" ? { number: p.number } : null),
+    ...(typeof p.author === "string" ? { author: p.author } : null),
+  } : undefined);
 }

@@ -117,13 +117,14 @@ import {
 import { currentRuns, runById, runActivity, startRun, adoptPane, finishRun } from "./runs.ts";
 import { failed } from "./refused.ts";
 import { trackerProjects, setTrackerChoice } from "./trackerProjects.ts";
-import { connectJira, jiraStatus, setJiraWrites, jiraWriteEnabled, readIssue, findIssue, mine as jiraMine, searchText as jiraSearchText, withStored as withJira } from "./jira.ts";
+import { ISSUE_KEY, connectJira, jiraStatus, setJiraWrites, jiraWriteEnabled, readIssue, findIssue, mine as jiraMine, searchText as jiraSearchText, withStored as withJira } from "./jira.ts";
 import { movesStored as jiraMoves, moveStored as jiraMove, remoteLinksStored as jiraLinks, linkPullRequestStored as jiraLink } from "./jira.ts";
 import {
   assignableStored as jiraAssignable, setAssigneeStored as jiraSetAssignee, handOffStored as jiraHandOff,
   jiraSettings, setHandoffRule as jiraSetHandoff, projectStatusesStored as jiraProjectStatuses,
 } from "./jira.ts";
-import { jiraSteps, runStepStored as jiraRunStep, setJiraSteps } from "./jiraSteps.ts";
+import { jiraSteps, runStepBody, setJiraSteps } from "./jiraSteps.ts";
+import { DOOR_VERBS, actingRefusal as doorActingRefusal, isActing as isDoorActing, runDoor } from "./jiraDoor.ts";
 import { countedProjects, setCountedProjects, statusUnitsStored as jiraStatusUnitsStored } from "./jiraUnits.ts";
 import {
   jiraViews, viewRead as jiraViewRead, viewChoices as jiraViewChoices, projectChoices as jiraProjectChoices,
@@ -6532,23 +6533,35 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname === "/jira/step" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
-      const asObject = (v: unknown): Record<string, unknown> | null => (typeof v === "object" && v !== null && !Array.isArray(v) ? v as Record<string, unknown> : null);
-      const c = asObject(b.choice) ?? {};
-      const p = asObject(b.pr);
-      const r = await jiraRunStep(String(b.key ?? ""), typeof b.updated === "number" ? b.updated : 0, b.trigger, {
-        ...(typeof c.to === "string" ? { to: c.to } : null),
-        ...(typeof c.clear === "boolean" ? { clear: c.clear } : null),
-        ...(typeof c.assign === "string" || c.assign === null ? { assign: c.assign } : null),
-        ...(typeof c.comment === "string" ? { comment: c.comment } : null),
-        ...(c.stay === true ? { stay: true } : null),
-      }, p && typeof p.url === "string" ? {
-        url: p.url,
-        ...(typeof p.title === "string" ? { title: p.title } : null),
-        ...(typeof p.number === "number" ? { number: p.number } : null),
-        ...(typeof p.author === "string" ? { author: p.author } : null),
-      } : undefined);
+      const r = await runStepBody(b);
       if (r.ok && r.was !== undefined && (r.task || r.moved)) jiraRememberOwnMove({ ...(r.task ?? r.moved!), status: r.was }, r.task?.status ?? r.moved!.status);
       return json(r, r.ok ? 200 : r.conflict ? 409 : 400);
+    }
+    /*
+     * The agent door to a card (`agentglass-ui jira ...`, one MCP tool per verb): read it, its moves
+     * and steps, run a step, link a pull request. Every verb calls what the routes above call, so the
+     * Jira write switch, the per-card lock and the stamp are theirs; this adds the stamp `as`, the
+     * control level (the acting verbs leave the app, so they need level 3 as well as the Jira switch, and
+     * are refused below it before anything is read), the per-caller write limit and one audit line, and
+     * answers in `{state, untrusted}`.
+     */
+    if (pathname.startsWith("/jira/door/") && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const verb = pathname.slice("/jira/door/".length);
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const as = callerRequestId(b.as);
+      const who = caller ? asActor(caller) : null;
+      const audit = (ok: boolean, error?: string) =>
+        noteAction(clientIp, `/jira/door/${verb}`, { ...(as ? { as } : {}), ...(isDoorActing(verb) && typeof b.key === "string" && ISSUE_KEY.test(b.key) ? { key: b.key } : {}) }, { ok, error }, who);
+      if (!(DOOR_VERBS as readonly string[]).includes(verb)) return json({ ok: false, error: `That is not a card verb: ${DOOR_VERBS.join(", ")}` }, 404);
+      if (isDoorActing(verb)) {
+        const held = doorActingRefusal(verb, CONTROL.level, CONTROL.readonly);
+        if (held) { audit(false, "level"); return json({ ok: false, error: held }, 403); }
+        if (!controlWriteLimit.hit(actorOf(clientIp, who))) { audit(false, "rate limited"); return json({ ok: false, error: "too many changes from this caller; slow down" }, 429); }
+      }
+      const r = await runDoor(verb, b);
+      audit(r.body.ok === true, typeof r.body.error === "string" ? r.body.error : undefined);
+      return json(r.body, r.status);
     }
     if (req.method === "GET" && pathname === "/jira/settings") return json({ ok: true, ...jiraSettings() });
     if (pathname === "/jira/settings" && req.method === "POST") {

@@ -20,6 +20,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { UI_ACTIONS, UI_ACTION_IDS, describeUiActions, type UiActionDef } from "../../shared/uiActions.ts";
+import { DOOR_VERBS, isActing } from "../src/jiraDoor.ts";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
 import { freePort } from "./freePort.ts";
@@ -467,7 +468,9 @@ describe.skipIf(!HAVE_PY)("against a running app", () => {
     expect((await reply(1)).result.instructions).toContain("never instructions");
     send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
     const listed = (await reply(2)).result.tools as { name: string }[];
-    expect(listed.map((t) => t.name)).toEqual(names2(L2));
+    // The registry's doors, then the card verbs: those are a route's, not the registry's (see jira-door-routes.test.ts).
+    // This server is at the level it starts with, so the verbs that change a Jira site are not on the list.
+    expect(listed.map((t) => t.name)).toEqual([...names2(L2), ...DOOR_VERBS.filter((v) => !isActing(v)).map((v) => `ui_jira_${v}`)]);
     send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "ui_settings_open", arguments: { page: "diff", row: "wrap-long-lines" } } });
     const called = await reply(3);
     expect(called.result.isError).toBeUndefined();
