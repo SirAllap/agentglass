@@ -120,6 +120,11 @@ export function ago(now: number, at: number): string {
  * off and on between every two clicks, which reads as nervous, not as held.
  */
 export const PRESENCE_LINGER_MS = 4000;
+/* The island's shape changes with the driver (the agent's pill is narrower than
+   the person's bar), so it waits out a whole model call before handing the bar
+   back: a think between two clicks often runs past the rim's four seconds, and
+   a pill that changes shape on every one of them reads as broken. */
+export const ISLAND_LINGER_MS = 30_000;
 
 const DOING: Record<string, string> = {
   click: "Clicking", dblclick: "Double-clicking", rightclick: "Right-clicking", check: "Ticking",

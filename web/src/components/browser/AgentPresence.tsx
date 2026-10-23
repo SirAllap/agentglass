@@ -28,15 +28,15 @@ const calmNow = () => typeof matchMedia === "function" && matchMedia("(prefers-r
    with a model call between them, and a rim that blinks between every two
    clicks reads as nervous, not as held. The island reads the same answer, so
    the pill never says an agent is driving while the page shows nobody. */
-export function useAgentLive(agent: TabAgent | undefined): boolean {
+export function useAgentLive(agent: TabAgent | undefined, linger = PRESENCE_LINGER_MS): boolean {
   const working = agent?.working ?? 0, paused = !!agent?.paused;
   const [live, setLive] = useState(working > 0 && !paused);
   useEffect(() => {
     if (paused) { setLive(false); return; }
     if (working > 0) { setLive(true); return; }
-    const t = setTimeout(() => setLive(false), PRESENCE_LINGER_MS);
+    const t = setTimeout(() => setLive(false), linger);
     return () => clearTimeout(t);
-  }, [working, paused]);
+  }, [working, paused, linger]);
   return live;
 }
 

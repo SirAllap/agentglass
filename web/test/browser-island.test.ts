@@ -8,8 +8,13 @@ describe("island pill", () => {
   // A tab an agent had touched an hour earlier still showed "agent · working"
   // with no rim, no pointer and no Take over on the page.
   test("names a driver only while the page shows one", () => {
-    expect(island).toContain("const live = useAgentLive(act);");
+    expect(island).toContain("const live = useAgentLive(act, ISLAND_LINGER_MS);");
     expect(island).toMatch(/const driving = !!act && !act\.paused && live;/);
     expect(presence).toContain("const live = useAgentLive(agent);");
+  });
+
+  // Between two acts the agent's pill said "working" next to a grey dot.
+  test("says working only while an act runs", () => {
+    expect(island).toContain('{working ? p.doing || "working" : "thinking"}');
   });
 });

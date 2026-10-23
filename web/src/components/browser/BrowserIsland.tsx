@@ -26,6 +26,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { BrowserTab } from "../../lib/browserTabs.ts";
 import type { Activity } from "../../lib/browserAgentActivity.ts";
+import { ISLAND_LINGER_MS } from "../../lib/browserAgentActivity.ts";
 import { LivingMark } from "../Logo.tsx";
 import { useAgentLive } from "./AgentPresence.tsx";
 import { CloseIcon } from "./icons.tsx";
@@ -74,7 +75,7 @@ export function BrowserIsland(p: IslandProps) {
   const [pics, setPics] = useState<Record<string, string>>({});
   const active = tabs.find((t) => t.id === activeId) ?? null;
   const act = active ? acts[active.id] : undefined;
-  const live = useAgentLive(act);
+  const live = useAgentLive(act, ISLAND_LINGER_MS);
   /* An agent that holds the tab but has stopped acting leaves it to the person:
      the pill gives back the address and the arrows instead of naming a driver
      nobody can see. */
@@ -204,7 +205,7 @@ export function BrowserIsland(p: IslandProps) {
               <button type="button" className="agx-isl-status" aria-label="Show every tab" onClick={show}>
                 <LivingMark size={17} style={{ color: "#a78bfa" }} />
                 <span className="agx-isl-title">{active?.title || (active ? host(active.url) : "")}</span>
-                <span className="agx-isl-doing"><span className={"agx-isl-dot " + dot} /><span className="agx-isl-doing-t">{act!.agent} · {p.doing || "working"}</span></span>
+                <span className="agx-isl-doing"><span className={"agx-isl-dot " + dot} /><span className="agx-isl-doing-t">{act!.agent} · {working ? p.doing || "working" : "thinking"}</span></span>
                 <span className="agx-isl-num" title={`${tabs.length} tabs open`}>{tabs.length}</span>
               </button>
             )}
