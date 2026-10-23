@@ -88,7 +88,7 @@ export function useTrackerView(repo?: string): TrackerView | null {
  * below it takes the branch it always took. Only with Jira present does it
  * carry `ownerOf`, which they then ask instead of `looksLikeOurs`.
  */
-export function ownerSetup<S extends RefSetup>(setup: S | null, view: TrackerView | null): (S & Pick<RefSetup, "ownerOf">) | null {
+export function ownerSetup<S extends RefSetup>(setup: S | null, view: TrackerView | null): (S & Pick<RefSetup, "ownerOf" | "jira">) | null {
   if (!view || !setup) return setup;
   return {
     ...setup,
@@ -96,10 +96,11 @@ export function ownerSetup<S extends RefSetup>(setup: S | null, view: TrackerVie
       owner: trackerFor(ref, view.setup, view.choice, { whenUnknown, noCustomIds: setup.noCustomIds })?.id ?? null,
       jiraSite: view.setup.jira?.site,
     }),
+    ...(view.setup.jira ? { jira: { keys: view.setup.jira.prefixes, site: view.setup.jira.site } } : null),
   };
 }
 
-export function useOwnerSetup<S extends RefSetup>(setup: S | null, repo?: string): (S & Pick<RefSetup, "ownerOf">) | null {
+export function useOwnerSetup<S extends RefSetup>(setup: S | null, repo?: string): (S & Pick<RefSetup, "ownerOf" | "jira">) | null {
   const view = useTrackerView(repo);
   return useMemo(() => ownerSetup(setup, view), [setup, view]);
 }

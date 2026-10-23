@@ -28,6 +28,7 @@ import { makeViewTempDir } from "./viewtemp.ts";
 import { inScopeReal, staysIn } from "./config.ts";
 import { recipePromptText } from "./reviewPrompts.ts";
 import { boardHolding, knownStatuses } from "./clickupviews.ts";
+import { boardHolding as jiraBoardHolding, knownKeys as jiraKnownKeys } from "./jiraviews.ts";
 import type {
   PrRepoId, PrSummary, PrBranchSummary, PrDetail, PrListResponse, PrActionResult, PrCheck, PrCheckRollup,
   PrCheckState, PrThread, PrReview, PrComment, PrCommit, PrFile, PrChecklistItem, PrMergeState, CiVerdict,
@@ -35,8 +36,9 @@ import type {
   PrAuthored, PrReaction, PrEvent, PrCheckJob, PrReviewer, PrMergePolicy, PrMergeGate, PrMergeMethod, PrLocalHead, FailingTests, ReviewPerson,
 } from "../../shared/types.ts";
 import { CARD_PEOPLE_MAX } from "../../shared/cardPeople.ts";
+import type { ProviderTask } from "../../shared/providers.ts";
 import { cardIdIn } from "../../shared/cardRef.ts";
-import { hasCredential } from "./credentials.ts";
+import { hasCredential, redacted } from "./credentials.ts";
 import { problemFromSummary, STATUS_SUMMARY_URL, type GithubProblem } from "../../shared/githubStatus.ts";
 import { factsOf, unstickLive, NO_WORDS, type Look } from "../../shared/unstick.ts";
 
@@ -1512,11 +1514,18 @@ export function humanVerdict(
  * reason to check the SCREEN and not the bundle after an install.
  */
 export function cardFor(branch: unknown, title: unknown): PrSummary["card"] | undefined {
+  const b = typeof branch === "string" ? branch : "";
+  const t = typeof title === "string" ? title : "";
+  /* ClickUp answers first where it holds the card: that path is the one every
+     machine had before Jira, and it must not move. */
+  return clickupCardFor(`${b} ${t}`) ?? jiraCardFor(b, t);
+}
+
+function clickupCardFor(text: string): PrSummary["card"] | undefined {
   /* No credential, no card. The cache outlives a disconnect unless the
      disconnect cleared it, and a line drawn from a board nobody is signed in to
      is the one thing a disconnect must not leave behind. */
   if (!hasCredential("clickup")) return undefined;
-  const text = `${typeof branch === "string" ? branch : ""} ${typeof title === "string" ? title : ""}`;
   const ref = cardIdIn(text);
   if (!ref) return undefined;
   let held: ReturnType<typeof boardHolding> = null;
@@ -1525,7 +1534,39 @@ export function cardFor(branch: unknown, title: unknown): PrSummary["card"] | un
      is dropped: at that point "we have not looked" is the whole truth. */
   try { held = boardHolding(ref, { freshMs: 24 * 60 * 60_000 }); } catch { return undefined; }
   if (!held) return undefined;
-  const t = held.task;
+  return cardLine(held.task, held.at);
+}
+
+/**
+ * The same line for a Jira card, from the Jira views cache and nothing else.
+ *
+ * The key is read against the project keys the cached cards carry, so a branch
+ * that merely looks like one (`utf-8`, `release/v2-1409`) is never a card, and
+ * a key with one digit or a digit in its prefix is read exactly. Lower case
+ * counts in a branch name, which a tool cuts from a title, and not in a title,
+ * where it is a word. Keys come from cards already read: a site with no cached
+ * board answers nothing, never a request.
+ */
+function jiraCardFor(branch: string, title: string): PrSummary["card"] | undefined {
+  if (!hasCredential("jira")) return undefined;
+  const site = redacted("jira")?.site;
+  if (!site) return undefined;
+  let held: ReturnType<typeof jiraBoardHolding> = null;
+  try {
+    const keys = jiraKnownKeys(site);
+    if (!keys.length) return undefined;
+    const alt = keys.map((k) => k.replace(/[^A-Z0-9_]/g, "")).filter(Boolean).join("|");
+    const read = (text: string, flags: string): string | undefined =>
+      new RegExp(`(?<![A-Za-z0-9_])(${alt})-(\\d+)(?![A-Za-z0-9_]|-\\d)`, flags).exec(text)?.slice(1, 3).join("-").toUpperCase();
+    const ref = read(branch, "i") ?? read(title, "");
+    if (!ref) return undefined;
+    held = jiraBoardHolding(site, ref, { freshMs: 24 * 60 * 60_000 });
+  } catch { return undefined; }
+  if (!held) return undefined;
+  return { ...cardLine(held.task, held.at), tracker: "jira" };
+}
+
+function cardLine(t: ProviderTask, at: number): NonNullable<PrSummary["card"]> {
   return {
     id: t.id, customId: t.customId, title: t.title, url: t.url,
     status: t.status, statusColor: t.statusColor, statusKind: t.statusKind,
@@ -1534,7 +1575,7 @@ export function cardFor(branch: unknown, title: unknown): PrSummary["card"] | un
        tasks view draws. `assignees` is a list of names and a name is not a
        portrait. */
     people: Array.isArray(t.people) ? t.people.slice(0, CARD_PEOPLE_MAX) : undefined,
-    at: held.at || undefined,
+    at: at || undefined,
   };
 }
 

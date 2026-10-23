@@ -3489,6 +3489,8 @@ export interface PrSummary {
      * says how old it is instead of presenting it as current.
      */
     at?: number;
+    /** Whose card this is, when it is not ClickUp's: set for Jira, absent for ClickUp so every existing row reads as it did. */
+    tracker?: "jira";
   };
   checks: PrCheckRollup;
   /**

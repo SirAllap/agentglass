@@ -222,8 +222,11 @@ function stubSource(engine: FakeEngineId, dir: string, spec: FakeSpec): string {
 d=${q(callsDir)}
 mkdir -p "$d"
 f="$d/${engine}-$(date +%s%N)-$$"
-printf '%s\\0' "$@" > "$f.argv"
+# The reader lists calls by their .argv, so that file is written last and
+# moved into place whole: a call is never listed before its env is there.
 env -0 > "$f.env"
+printf '%s\\0' "$@" > "$f.argv.tmp"
+mv "$f.argv.tmp" "$f.argv"
 if [ "$1" = '--version' ] || [ "$1" = 'version' ]; then
 ${answer(version)}
 fi

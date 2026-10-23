@@ -975,6 +975,9 @@ describe("card link parsing is strict about what it reads as a number", () => {
     expect(prNumberFromUrl("https://code.gitlab.acme.example/acme/orbit/-/merge_requests/8")).toBe(8);
     expect(prNumberFromUrl("https://x.gitlab.com.evil.example/acme/orbit/-/merge_requests/8")).toBe(null);
     expect(prNumberFromUrl("https://gitlab.com:8443/acme/orbit/-/merge_requests/8")).toBe(null);
+    // GitLab Pages: anybody registers a subdomain, and a bare `gitlab.<tld>` is not a company's host.
+    expect(prNumberFromUrl("https://attacker.gitlab.io/acme/orbit/-/merge_requests/8")).toBe(null);
+    expect(prNumberFromUrl("https://gitlab.co/acme/orbit/-/merge_requests/8")).toBe(null);
     expect(prNumberFromUrl("https://gitlab.com/acme/orbit/-/merge_requests/8​1")).toBe(null);
   });
 });

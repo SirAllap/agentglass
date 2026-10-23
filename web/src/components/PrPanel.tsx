@@ -81,7 +81,7 @@ import { AskedExtras, sendExtras } from "./AskedExtras.tsx";
 import { prContext, type ExtraItem } from "../lib/stepExtras.ts";
 import { AssignPicker, Face, useAskAssign, useAskTakeOff } from "./AssignPicker.tsx";
 import { blocksSentence, peopleButtonLabel } from "../lib/stepBlocksView.ts";
-import { mergeCardRef, stagedMove, mergeNote, statusColor, readyForQaStatus, reviewStatus, cardNoteText, whoToTell } from "../lib/cardMove.ts";
+import { mergeCardRef, clickupCardRef, stagedMove, mergeNote, statusColor, readyForQaStatus, reviewStatus, cardNoteText, whoToTell } from "../lib/cardMove.ts";
 import { useClickupPrefs, clickupPrefs } from "../lib/clickupPrefs.ts";
 import { cardPlan, cardPlanNote } from "../lib/cardPlan.ts";
 import { cardOf, askingCard, onCard, putCard, forgetCards, cardVersion, withCard } from "../lib/prCardStore.ts";
@@ -140,6 +140,10 @@ import { dirName } from "../lib/worktree.ts";
 import { wtCell, wtCellTitle, folderOf } from "../lib/prWorktreeCell.ts";
 import { conflictBriefing, conflictHandoff } from "../lib/conflictBrief.ts";
 import { openCard } from "../lib/openCard.ts";
+import { TRACKERS } from "../lib/trackerApi.ts";
+import { TrackerStatusPick } from "./TrackerStatusPick.tsx";
+import { TrackerPeoplePick } from "./TrackerPeoplePick.tsx";
+import { TrackerHandOffButton } from "./TrackerHandOffButton.tsx";
 import { openIssue } from "../lib/openIssue.ts";
 import { useClickupSetup } from "../lib/clickupSetup.ts";
 import { useOwnerSetup } from "../lib/trackerView.ts";
@@ -433,7 +437,7 @@ function PrCardChip({ pr, card }: {
   card?: PrSummary["card"];
 }) {
   const setup = useOwnerSetup(useClickupSetup(), useContext(RepoCtx));
-  const ref = useMemo(() => cardRef(pr), [pr.headRefName, pr.title, pr.body]);
+  const ref = useMemo(() => cardRef(pr, setup?.jira), [pr.headRefName, pr.title, pr.body, setup?.jira]);
   const go = chipAction(ref, setup);
   if (!ref || !go) return null;
 
@@ -4257,7 +4261,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   useSyncExternalStore(subscribePrepared, preparedSnapshot, () => 0);
   const stageCardMove = async (want: string, by: string) => {
     if (!detail) return;
-    const ref = mergeCardRef(detail, clickup);
+    const ref = clickupCardRef(detail, clickup);
     if (!ref) { flash(false, `#${detail.number} has no card to move`); return; }
     const blocked = writeBlock(clickup);
     if (blocked) { flash(false, blocked); return; }
@@ -4805,7 +4809,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const [unstickShown, setUnstickShown] = useState<UnstickShown | null>(null);
   const unstickShownRef = useRef<UnstickShown | null>(null);
   unstickShownRef.current = unstickShown;
-  const cardForUnstick = useMemo(() => d ? mergeCardRef(d, clickup) : null, [d?.headRefName, d?.title, d?.body, clickup]); // eslint-disable-line react-hooks/exhaustive-deps
+  const cardForUnstick = useMemo(() => d ? clickupCardRef(d, clickup) : null, [d?.headRefName, d?.title, d?.body, clickup]); // eslint-disable-line react-hooks/exhaustive-deps
   const openUnstick = () => {
     if (!d || !unstickGate || !unstickFacts || unstickShownRef.current) return;
     setUnstickShown({
@@ -7548,7 +7552,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
    * replaced by whoever the card had on it. Reported after measuring it: "a few
    * seconds later what I had selected has reset to its initial state".
    */
-  const ref = useMemo(() => mergeCardRef(d, setup), [d.headRefName, d.title, d.body, setup]);
+  const ref = useMemo(() => clickupCardRef(d, setup), [d.headRefName, d.title, d.body, setup]);
   /* The card, as a string. Everything below keys off this rather than off `ref`
      — an object rebuilt each render is a dependency that is never equal. */
   const query = ref?.query ?? "";
@@ -8416,6 +8420,51 @@ function CardReadyForQaButton({ task, query, onSaid, ask, author, pr }: {
     </button>
   );
 }
+/** A Jira card in the pull request panel: the site's own status and person controls, the hand-off, and a way to open it here or on the site. */
+export function JiraCardFacts({ label, query }: { label: string; query: string }) {
+  const [, redraw] = useState(0);
+  useEffect(() => onCard(() => redraw((n) => n + 1)), []);
+  const [said, setSaid] = useState("");
+  const hit = cardOf(query, undefined, "jira");
+  const asking = askingCard(query);
+  const task = hit?.task ?? null;
+  return (
+    <SidebarSection title="Jira">
+      <div className="flex flex-col gap-1.5 min-w-0">
+        <span className="min-w-0 flex items-center gap-1.5">
+          <CardPill label={label} priority={task?.priority ?? null}
+            onClick={() => openCard(query, label, "jira")}
+            title={`Open ${label} in Tasks${task ? ` — ${task.title}` : ""}`} />
+          {task?.url && (
+            <button onClick={() => openExternal(task.url)} className="text-[10.5px] px-1" aria-label={`Open ${label} on the Jira site`}
+              title="Open on the Jira site" style={{ color: "var(--text3)" }}>↗</button>
+          )}
+        </span>
+        {!task ? (
+          <span className="text-[10.5px]" style={{ color: asking ? "var(--text3)" : "var(--warning)" }}>
+            {asking ? "Reading the card…" : (hit?.error || "Jira could not find it")}
+          </span>
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-1">
+              <span className="text-[8.5px] uppercase tracking-[0.18em]" style={{ color: "var(--text4)" }}>Status</span>
+              <TrackerStatusPick tracker={TRACKERS.jira} task={task} query={query} onSaid={setSaid} />
+            </div>
+            <div className="flex flex-col gap-1 min-w-0">
+              <span className="text-[8.5px] uppercase tracking-[0.18em]" style={{ color: "var(--text4)" }}>Assignee</span>
+              <TrackerPeoplePick tracker={TRACKERS.jira} task={task} query={query} onSaid={setSaid} />
+            </div>
+            <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+              <TrackerHandOffButton tracker={TRACKERS.jira} task={task} query={query} onSaid={setSaid} />
+              {said && <span className="text-[10px]" style={{ color: said.startsWith("!") ? "var(--warning)" : "var(--success)" }}>{said.replace(/^!/, "")}</span>}
+            </div>
+          </div>
+        )}
+      </div>
+    </SidebarSection>
+  );
+}
+
 function CardFacts({ d }: { d: PrDetail }) {
   const setup = useOwnerSetup(useClickupSetup(), useContext(RepoCtx));
   const { ask, dialog } = useDialogs();
@@ -8436,7 +8485,8 @@ function CardFacts({ d }: { d: PrDetail }) {
      place, disabled; this line, once, says why. */
   const blocked = writeBlock(setup);
   const ref = useMemo(() => mergeCardRef(d, setup), [d.headRefName, d.title, d.body, setup]);
-  const query = ref?.query ?? "";
+  /* A Jira-owned card is drawn by `JiraCardFacts`; ClickUp is never asked about it. */
+  const query = ref && !ref.tracker ? ref.query : "";
   /* The store tells everyone when an answer lands; this only has to redraw.
      Subscribed before the early return below — a pull request with no card
      still runs every hook, because `setup` arrives a render late and a
@@ -8447,6 +8497,7 @@ function CardFacts({ d }: { d: PrDetail }) {
   const asking = askingCard(query);
 
   if (!ref) return null;
+  if (ref.tracker === "jira") return <JiraCardFacts label={ref.label} query={ref.query} />;
 
   const task = hit?.task ?? null;
   return (
@@ -8624,7 +8675,7 @@ function AskInChat({ d, root }: { d: PrDetail; root: string }) {
     void slackReach(() => api.notifyReach()).then((r) => { if (live) setSlack(r); });
     return () => { live = false; };
   }, []);
-  const ref = useMemo(() => mergeCardRef(d, setup), [d.headRefName, d.title, d.body, setup]);
+  const ref = useMemo(() => clickupCardRef(d, setup), [d.headRefName, d.title, d.body, setup]);
   const [, redraw] = useState(0);
   useEffect(() => onCard(() => redraw((n) => n + 1)), []);
   const task = ref ? cardOf(ref.query)?.task ?? null : null;

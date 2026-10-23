@@ -17,10 +17,11 @@ import { TrackerPeoplePick } from "./TrackerPeoplePick.tsx";
 import { TrackerHandOffButton } from "./TrackerHandOffButton.tsx";
 import { TRACKERS } from "../lib/trackerApi.ts";
 import { JiraCard } from "./jira/JiraCard.tsx";
+import { JiraCardPrs } from "./jira/JiraCardPrs.tsx";
 import { CloseButton } from "./CloseButton.tsx";
 
 /** The card's facts, and the three things that change it here: its status, its person, the hand-off. */
-function Facts({ t, onTask }: { t: ProviderTask; onTask: (t: ProviderTask) => void }) {
+function Facts({ t, writable, onTask }: { t: ProviderTask; writable: boolean; onTask: (t: ProviderTask) => void }) {
   const url = externalUrl(t.url);
   const [said, setSaid] = useState("");
   const query = t.customId ?? t.id;
@@ -57,6 +58,7 @@ function Facts({ t, onTask }: { t: ProviderTask; onTask: (t: ProviderTask) => vo
           </button>
         )}
       </div>
+      <JiraCardPrs query={query} writable={writable} />
       {said && <div className="text-[10.5px]" role="status" style={{ color: said.startsWith("!") ? "var(--warning-ink)" : "var(--success-ink)" }}>{said.replace(/^!/, "")}</div>}
     </div>
   );
@@ -73,7 +75,7 @@ export function JiraCardPane({ t, writable, onTask, nav, onClose }: CardPaneProp
           {onClose && <CloseButton onClick={onClose} title="Close · Esc" />}
         </div>
       )}
-      <JiraCard key={t.id} t={t} header={<Facts t={t} onTask={onTask} />} writes={writable} onTask={onTask} />
+      <JiraCard key={t.id} t={t} header={<Facts t={t} writable={writable} onTask={onTask} />} writes={writable} onTask={onTask} />
     </div>
   );
 }

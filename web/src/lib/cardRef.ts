@@ -18,7 +18,7 @@
  *   somebody else's      open its address, which needs no credentials
  */
 import {
-  chipFor, readTaskRef, type Evidence, type TaskRef, type TrackerId,
+  chipFor, readTaskRef, type Evidence, type JiraReach, type TaskRef, type TrackerId,
 } from "../../../shared/taskref.ts";
 
 export interface CardRef {
@@ -48,8 +48,8 @@ export interface CardRef {
  * keep `fix/UTF-8-decode` from looking like an id — moved to shared/ with the
  * reading, and the phone's tests cover them.
  */
-export function cardRef(pr: { headRefName?: string; title?: string; body?: string; url?: string }): CardRef | null {
-  return readTaskRef(pr) as TaskRef | null;
+export function cardRef(pr: { headRefName?: string; title?: string; body?: string; url?: string }, jira?: JiraReach): CardRef | null {
+  return readTaskRef(pr, jira) as TaskRef | null;
 }
 
 /**
@@ -112,6 +112,8 @@ export interface RefSetup {
   prefix?: string;
   noCustomIds?: boolean;
   ownerOf?: (ref: CardRef, whenUnknown: boolean) => CardOwner;
+  /** The connected Jira site's project keys and address, so the reader can take `ORBIT-7` and a lower-case branch exactly. Present with `ownerOf`. */
+  jira?: JiraReach;
 }
 
 /**

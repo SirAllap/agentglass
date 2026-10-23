@@ -49,6 +49,7 @@ import { forgetCached } from "./jiraviews.ts";
 import { cardExtras } from "./jirafields.ts";
 import { clearCredential, redacted, secretFor, setCredential } from "./credentials.ts";
 import type { CallResult, WriteOutcome } from "./trackerTypes.ts";
+import { prAddress } from "../../shared/taskref.ts";
 import type {
   JiraAuth, JiraConnectResult, JiraDeployment, JiraHandoffRule, JiraKind, JiraMove, JiraMoves, JiraPerson, JiraSettings, JiraStatus, ProviderTask,
 } from "../../shared/providers.ts";
@@ -1190,6 +1191,90 @@ export async function moveIssue(creds: JiraCreds, key: string, transitionId: str
   const back = await readIssue(creds, key, { fresh: true });
   if (!back.ok || !back.data) return { ok: false, error: `The card was moved, but could not be read back. Reload it. ${back.error ?? ""}`.trim() };
   return { ok: true, task: back.data, was: str(status.name) };
+}
+
+// ---------------------------------------------------------------------------
+// remote links: the pull requests a card is linked to on the site
+// ---------------------------------------------------------------------------
+
+/** One remote link that is a pull request. `title` and `resolved` are as the link was written, never refreshed. */
+export interface JiraPrLink { url: string; number: number; title: string; resolved: boolean }
+
+function remoteLinksPath(creds: JiraCreds, key: string): string {
+  return `/rest/api/${apiOf(creds)}/issue/${encodeURIComponent(key)}/remotelink`;
+}
+
+/** Each remote link of a card as `{ canon, link }` for the ones that are pull request addresses; a link to anything else is not ours to read. */
+function prLinksIn(raw: unknown): { canon: string; globalId: string; link: JiraPrLink }[] {
+  const out: { canon: string; globalId: string; link: JiraPrLink }[] = [];
+  for (const l of Array.isArray(raw) ? raw : []) {
+    if (!isObj(l) || !isObj(l.object)) continue;
+    const a = prAddress(str(l.object.url));
+    if (!a) continue;
+    const status = isObj(l.object.status) ? l.object.status : {};
+    out.push({ canon: a.url, globalId: str(l.globalId), link: { url: a.url, number: a.number, title: str(l.object.title), resolved: status.resolved === true } });
+  }
+  return out;
+}
+
+/** The pull requests this card is linked to on the site: one request. A link with no global id counts like any other. */
+export async function remoteLinks(creds: JiraCreds, key: string): Promise<JiraResult<JiraPrLink[]>> {
+  if (!ISSUE_KEY.test(key)) return { ok: false, error: "That is not a Jira card id" };
+  const r = await jiraCall<unknown>(creds, remoteLinksPath(creds, key));
+  if (!r.ok) return { ...r, data: undefined };
+  const seen = new Set<string>();
+  return { ok: true, data: prLinksIn(r.data).map((x) => x.link).filter((l) => !seen.has(l.url) && !!seen.add(l.url)) };
+}
+export const remoteLinksStored = (key: string): Promise<JiraResult<JiraPrLink[]>> => withStored((c) => remoteLinks(c, key));
+
+export type LinkOutcome = { ok: true; linked: boolean; url: string } | { ok: false; error: string; unauthorised?: boolean };
+
+const TITLE_MAX = 200;
+
+/**
+ * Put one pull request on a card as a remote link, once.
+ *
+ * Idempotent by reading first: the card's links are read (one request) and an
+ * address already there is left alone. Existing links on a real site carry no
+ * global id, so the global id alone cannot say "already linked"; the
+ * canonical address of every link is compared, with or without one. A read
+ * that fails stops the write: a link posted blind is a link that may be a
+ * second one. The link is written with the canonical address as `globalId`, so
+ * a later post of the same address updates rather than adds.
+ *
+ * Writes are off unless switched on, and everything refused is a sentence of
+ * ours: Jira's own error text never reaches the answer.
+ * Ceiling: the title and state on the link are written once and not refreshed.
+ */
+export async function linkPullRequest(creds: JiraCreds, key: string, address: string, title = ""): Promise<LinkOutcome> {
+  if (!jiraWriteEnabled()) return { ok: false, error: WRITE_OFF };
+  if (!ISSUE_KEY.test(key)) return { ok: false, error: "That is not a Jira card id" };
+  const pr = prAddress(address);
+  if (!pr) return { ok: false, error: "That is not a pull request address" };
+
+  const seen = await jiraCall<unknown>(creds, remoteLinksPath(creds, key), { fresh: true });
+  if (!seen.ok) {
+    return { ok: false, unauthorised: seen.unauthorised, error: `Nothing was changed: could not read the card's links first. ${seen.error ?? "Jira did not answer"}` };
+  }
+  if (prLinksIn(seen.data).some((l) => l.canon === pr.url || l.globalId === pr.url)) return { ok: true, linked: false, url: pr.url };
+
+  // eslint-disable-next-line no-control-regex
+  const said = title.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, TITLE_MAX);
+  const label = `${pr.slug}#${pr.number}`;
+  const post = await jiraCall<unknown>(creds, remoteLinksPath(creds, key), {
+    method: "POST",
+    body: { globalId: pr.url, object: { url: pr.url, title: said ? `${label}: ${said}` : label } },
+  });
+  if (!post.ok) {
+    if (post.status === 400) return { ok: false, error: "Jira did not accept that link" };
+    return { ok: false, unauthorised: post.unauthorised, error: post.error ?? "Jira did not accept that link" };
+  }
+  return { ok: true, linked: true, url: pr.url };
+}
+
+export async function linkPullRequestStored(key: string, address: string, title = ""): Promise<LinkOutcome> {
+  const c = storedCreds();
+  return c ? linkPullRequest(c, key, address, title) : { ok: false, error: NOT_CONNECTED };
 }
 
 /** The stored connection's moves, or the sentence that says there is none. */

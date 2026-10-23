@@ -19,7 +19,7 @@
 import { statusSpaces, type CardsRead, type StatusSpaces } from "../../shared/statusSpaces.ts";
 import { singleFlight } from "./singleflight.ts";
 import { cardIdDigits, mentionsCardId } from "../../shared/cardRef.ts";
-import { matchesQuery, mergeRequestNumber, readTaskRef } from "../../shared/taskref.ts";
+import { matchesQuery, mergeRequestNumber, prAddress, readTaskRef } from "../../shared/taskref.ts";
 import * as Index from "./clickupindex.ts";
 import { writesAllowed } from "./clickupviews.ts";
 import { clickupPrefs, matchPref, DEFAULT_SPRINT_LIST_PATTERN, DEFAULT_READ_ONLY_FIELD_PATTERN } from "./clickupPrefs.ts";
@@ -3443,6 +3443,25 @@ export async function cardPullRequests(
     // is the one somebody is looking for.
     prs: [...out.values()].sort((a, b) => Number(!!b.stated) - Number(!!a.stated) || b.number - a.number),
   };
+}
+
+/**
+ * Fold the pull requests a Jira card is linked to on the site into a search's
+ * answer, as "stated": the card says so itself, which outranks any reading of
+ * the text. Matched by canonical address, so a link to a pull request the
+ * search found marks that row instead of doubling it, and a link to one it did
+ * not find (another repository, or older than the search reaches) is added with
+ * what the link carries. State is not known from a link and is left empty.
+ */
+export function withStatedLinks(prs: CardPr[], links: { url: string; number: number; title: string }[]): CardPr[] {
+  if (!links.length) return prs;
+  const out = prs.map((p) => ({ ...p }));
+  for (const l of links) {
+    const at = out.findIndex((p) => prAddress(p.url)?.url === l.url);
+    if (at >= 0) { out[at] = { ...out[at]!, stated: true, link: "own" }; continue; }
+    out.push({ number: l.number, title: l.title, state: "", url: l.url, stated: true, link: "own" });
+  }
+  return out.sort((a, b) => Number(!!b.stated) - Number(!!a.stated) || b.number - a.number);
 }
 
 /** How many pull requests one project search reads. */

@@ -180,6 +180,45 @@ export function removeFolder(site: string, id: string): void {
   });
 }
 
+/**
+ * Which saved view of this site already holds the card, from the cache alone.
+ *
+ * The twin of `boardHolding` in clickupviews.ts, for the pull request list: a
+ * list of four hundred rows cannot spend a request per row, so a card is
+ * drawn only when a view read in the last `freshMs` holds it, and the freshest
+ * read wins when two views do. Matched on the key and on the internal id,
+ * case aside. A view whose read is older than `freshMs` is "not looked at",
+ * which is the whole truth about it.
+ */
+export function boardHolding(site: string, cardId: string, o: { freshMs?: number } = {}): { viewId: string; task: ProviderTask; at: number } | null {
+  const want = cardId.trim().toLowerCase();
+  if (!want) return null;
+  const s = siteOf(site);
+  let best: { viewId: string; task: ProviderTask; at: number } | null = null;
+  for (const [viewId, entry] of Object.entries(s.cache)) {
+    for (const t of entry?.tasks ?? []) {
+      if (t.id.toLowerCase() !== want && (t.customId ?? "").toLowerCase() !== want) continue;
+      const at = entry.at ?? 0;
+      if (!best || at > best.at) best = { viewId, task: t, at };
+    }
+  }
+  if (!best) return null;
+  if (o.freshMs && Date.now() - best.at > o.freshMs) return null;
+  return best;
+}
+
+/** The project keys the cached cards of this site carry: what a branch name can be read against without a request. */
+export function knownKeys(site: string): string[] {
+  const keys = new Set<string>();
+  for (const entry of Object.values(siteOf(site).cache)) {
+    for (const t of entry?.tasks ?? []) {
+      const m = /^([A-Z][A-Z0-9_]*)-\d+$/.exec(t.customId ?? "");
+      if (m) keys.add(m[1]!);
+    }
+  }
+  return [...keys].sort((a, b) => b.length - a.length || a.localeCompare(b));
+}
+
 export function putCache(site: string, id: string, c: CachedJiraView): void {
   const s = siteOf(site);
   put(site, { ...s, cache: { ...s.cache, [id]: c } });

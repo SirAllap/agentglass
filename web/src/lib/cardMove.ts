@@ -42,16 +42,37 @@ import { cardRef, looksLikeOurs, type RefSetup } from "./cardRef.ts";
 export function mergeCardRef(
   pr: { headRefName?: string; title?: string; body?: string },
   setup: RefSetup | null,
-): { label: string; query: string } | null {
+): { label: string; query: string; tracker?: "jira" } | null {
+  /* With Jira connected too, whose card this is was settled by `trackerFor`.
+     A Jira-owned card is offered to the merge form with its tracker named, and
+     that holds on a machine with no ClickUp at all: the ClickUp credential is
+     not a precondition for a card that is not ClickUp's. */
+  if (setup?.ownerOf) {
+    const ref = cardRef(pr, setup.jira);
+    if (!ref) return null;
+    const owner = setup.ownerOf(ref, false).owner;
+    if (owner === "jira") return { label: ref.label, query: ref.query, tracker: "jira" };
+    return owner === "clickup" && setup.connected ? { label: ref.label, query: ref.query } : null;
+  }
   if (!setup?.connected) return null;
   const ref = cardRef(pr);
   if (!ref) return null;
-  /* With Jira connected too, whose card this is was settled by `trackerFor`. A
-     Jira card is not moved from here: its status arrives with transitions. */
-  if (setup.ownerOf) return setup.ownerOf(ref, false).owner === "clickup" ? { label: ref.label, query: ref.query } : null;
   if (ref.from === "url") return { label: ref.label, query: ref.query };
   if (!looksLikeOurs(ref, setup?.prefix, false, setup?.noCustomIds)) return null;
   return { label: ref.label, query: ref.query };
+}
+
+/**
+ * `mergeCardRef`, for the surfaces whose body is ClickUp's alone (the review
+ * menu's card move, a staged move, the unstick form): a Jira-owned card is not
+ * theirs, and gets its own controls where it has them.
+ */
+export function clickupCardRef(
+  pr: { headRefName?: string; title?: string; body?: string },
+  setup: RefSetup | null,
+): { label: string; query: string } | null {
+  const ref = mergeCardRef(pr, setup);
+  return ref && !ref.tracker ? ref : null;
 }
 
 /** Where a card is, and where it could go. */

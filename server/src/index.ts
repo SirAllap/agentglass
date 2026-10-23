@@ -118,7 +118,7 @@ import { currentRuns, runById, runActivity, startRun, adoptPane, finishRun } fro
 import { failed } from "./refused.ts";
 import { trackerProjects, setTrackerChoice } from "./trackerProjects.ts";
 import { connectJira, jiraStatus, setJiraWrites, jiraWriteEnabled, readIssue, findIssue, mine as jiraMine, searchText as jiraSearchText, withStored as withJira } from "./jira.ts";
-import { movesStored as jiraMoves, moveStored as jiraMove } from "./jira.ts";
+import { movesStored as jiraMoves, moveStored as jiraMove, remoteLinksStored as jiraLinks, linkPullRequestStored as jiraLink } from "./jira.ts";
 import {
   assignableStored as jiraAssignable, setAssigneeStored as jiraSetAssignee, handOffStored as jiraHandOff,
   jiraSettings, setHandoffRule as jiraSetHandoff, projectStatusesStored as jiraProjectStatuses,
@@ -131,7 +131,7 @@ import {
 import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, addClickupFolder, refreshFoldersIfStale, replaceViewUrl, readView } from "./providers.ts";
 import { clickupPrefs, setClickupPrefs, settleFirstRun } from "./clickupPrefs.ts";
 import { savedViews, savedFolders, currentView, setCurrent, removeView, removeFolder, knownCardPrefix, knownNoCustomIds, boardHolding, setWritesAllowed, patchCachedTask } from "./clickupviews.ts";
-import { assignSelf, setAssignee, setCard, listMembers, workspaceMembers, setStatus, setPriority, setField, clearField, sprintLists, searchTasks, searchTasksStream, warmBodySweep, taskDetail, tagsForTask, findCard, cardPullRequests, projectPullRequests, clickupWriteEnabled, commentOn, updateTask, setTag, moveToList, createTask, addChecklist, addChecklistItem, setChecklistItem, editComment as editClickupComment, replyToComment, resolveComment, deleteComment as deleteClickupComment } from "./clickup.ts";
+import { assignSelf, setAssignee, setCard, listMembers, workspaceMembers, setStatus, setPriority, setField, clearField, sprintLists, searchTasks, searchTasksStream, warmBodySweep, taskDetail, tagsForTask, findCard, cardPullRequests, projectPullRequests, withStatedLinks, clickupWriteEnabled, commentOn, updateTask, setTag, moveToList, createTask, addChecklist, addChecklistItem, setChecklistItem, editComment as editClickupComment, replyToComment, resolveComment, deleteComment as deleteClickupComment } from "./clickup.ts";
 import { clickupTasks, dropAssignedCache } from "./clickup.ts";
 import type { ProviderId } from "../../shared/providers.ts";
 import { listTasks, taskCapability, setTaskChangeHook, startTaskSweep, addTask, completeTask, reopenTask, deleteTask, cyclePriority, editTask, addTags, replaceNote, bulkApply, TASK_WRITE_ENABLED, type BulkAction } from "./tasks.ts";
@@ -6410,7 +6410,26 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const key = (url.searchParams.get("key") ?? "").trim();
       // A key is letters, digits and underscores, a hyphen, digits. It is handed to `gh --search`, so nothing else goes through.
       if (!/^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(key)) return json({ ok: false, prs: [], error: "That is not a Jira card id" });
-      return json(await cardPullRequests(key, undefined, prRouteRoot(url.searchParams.get("root") ?? "")));
+      const found = await cardPullRequests(key, undefined, prRouteRoot(url.searchParams.get("root") ?? ""));
+      // What the card itself says on the site, one request, only when it is asked for by key (the card opened): never per row.
+      const links = await jiraLinks(key);
+      return json(links.ok && links.data?.length ? { ...found, prs: withStatedLinks(found.prs, links.data) } : found);
+    }
+    /*
+     * The pull requests a card is linked to on the site, and linking one. The
+     * read answers 200 with a sentence like the other Jira reads; the write is
+     * trusted-caller only, behind the write switch, and idempotent: the card's
+     * links are read first and an address already there is not posted again.
+     */
+    if (req.method === "GET" && pathname === "/jira/links") {
+      const r = await jiraLinks((url.searchParams.get("key") ?? "").trim());
+      return json(r.ok ? { ok: true, links: r.data ?? [] } : { ok: false, links: [], error: r.error });
+    }
+    if (pathname === "/jira/link" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = await jiraLink(String(b.key ?? "").trim(), String(b.url ?? ""), typeof b.title === "string" ? b.title : "");
+      return json(r, r.ok ? 200 : 400);
     }
     /*
      * Jira. `/jira/connect` is the second route that receives a token, and like

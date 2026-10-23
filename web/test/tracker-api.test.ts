@@ -172,10 +172,10 @@ describe("the chip and the merge form follow the owner", () => {
     expect(chipAction(r, withOwner({ connected: true }, null))).toBeNull();
     expect(chipAction(CU_URL, withOwner({ connected: false }, null))).toEqual({ in: "away", url: "https://app.clickup.com/t/86abc123" });
   });
-  it("the merge form moves ClickUp's card and offers nothing for Jira's or nobody's", () => {
+  it("the merge form moves ClickUp's card, hands over Jira's with its tracker, and offers nothing for nobody's", () => {
     const setup = { connected: true, prefix: "ORBIT-" };
     expect(mergeCardRef(pr, withOwner(setup, "clickup"))?.label).toBe("ORBIT-1042");
-    expect(mergeCardRef(pr, withOwner(setup, "jira"))).toBeNull();
+    expect(mergeCardRef(pr, withOwner(setup, "jira"))).toEqual({ label: "ORBIT-1042", query: "ORBIT-1042", tracker: "jira" });
     expect(mergeCardRef(pr, withOwner(setup, null))).toBeNull();
     expect(mergeCardRef(pr, setup)?.label).toBe("ORBIT-1042");
     expect(mergeCardRef(pr, withOwner({ connected: false }, "clickup"))).toBeNull();
@@ -186,10 +186,10 @@ describe("the chip and the merge form follow the owner", () => {
     // ClickUp's prefix is unknown and Jira does not claim ORBIT: nobody's, in both readers
     expect(chipAction(r, s)).toBeNull();
     expect(mergeCardRef(pr, s)).toBeNull();
-    // Jira claims it: a chip to the site, no move
+    // Jira claims it: a chip to the site, and the merge form is given its card
     const mine = ownerSetup({ connected: true }, view({ clickup: cu(), jira: jira("ORBIT") }))!;
     expect(chipAction(r, mine)).toEqual({ in: "away", url: "https://acme.atlassian.net/browse/ORBIT-1042" });
-    expect(mergeCardRef(pr, mine)).toBeNull();
+    expect(mergeCardRef(pr, mine)).toEqual({ label: "ORBIT-1042", query: "ORBIT-1042", tracker: "jira" });
     // ClickUp's prefix is read and Jira's list lacks it: the board, and a move
     const board = ownerSetup({ connected: true, prefix: "ORBIT-" }, view({ clickup: cu("ORBIT-"), jira: jira("PLAT") }))!;
     expect(chipAction(r, board)).toEqual({ in: "tasks" });

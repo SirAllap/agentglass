@@ -1393,6 +1393,12 @@ const realApi = {
   /** The pull requests that name a Jira card, by its key. Same answer as `clickupPrs`. */
   jiraPrs: (key: string, root = "") =>
     get<{ ok: boolean; prs: CardPr[]; error?: string }>(`/jira/prs?${new URLSearchParams({ key, root })}`),
+  /** The pull requests a card is linked to on the Jira site: one request, read when the card is opened. */
+  jiraLinks: (key: string) =>
+    get<{ ok: boolean; links: { url: string; number: number; title: string; resolved: boolean }[]; error?: string }>(`/jira/links?${new URLSearchParams({ key })}`),
+  /** Put a pull request on a card as a remote link. Refused by the server unless Jira writes are switched on. */
+  jiraLink: (key: string, url: string, title = "") =>
+    post<{ ok: boolean; linked?: boolean; url?: string; error?: string }>("/jira/link", { key, url, title }),
   /** Every pull request that names a card of one project, from ONE search: card key to its pull requests. */
   jiraProjectPrs: (project: string, root = "") =>
     get<{ ok: boolean; byCard: Record<string, CardPr[]>; truncated?: boolean; error?: string }>(`/jira/prs?${new URLSearchParams({ project, root })}`),
@@ -2800,6 +2806,8 @@ const demoApi: typeof realApi = {
   jiraStatus: () => D({ connected: false, site: null, kind: null, auth: null, api: null, deployment: null, account: null, prefixes: [], writes: false }),
   jiraWrites: (_o: boolean) => D({ ok: false, error: "not available in the demo" }),
   jiraPrs: (_k: string, _r?: string) => D({ ok: true, prs: [] }),
+  jiraLinks: (_k: string) => D({ ok: true, links: [] as { url: string; number: number; title: string; resolved: boolean }[] }),
+  jiraLink: (_k: string, _u: string, _t?: string) => D({ ok: false, error: "not available in the demo" }),
   jiraProjectPrs: (_p: string, _r?: string) => D({ ok: true, byCard: {} as Record<string, CardPr[]> }),
   trackerProjects: (_r?: boolean) => D({ ok: true, projects: {}, repos: [] }),
   setTrackerProject: (_r: string, _t: TrackerChoice) => D({ ok: false, error: "not available in the demo" }),
