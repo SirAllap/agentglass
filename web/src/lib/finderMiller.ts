@@ -455,6 +455,9 @@ export function previewMetaLine(o: { folder: boolean; bytes: number | null; item
 }
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+/** The filter box's placeholder: Strata counts the folder it filters. */
+export const filterPlaceholder = (n: number): string => `Filter ${n === 1 ? "1 item" : `${n} items`}…`;
+
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /** When a file changed, worded as Strata's relative dates are: "Just now", "5m ago", "3h ago", the weekday up to six days, "2w ago" up to thirty, then "Jul 4, 13:24" this year and "Jul 4, 2025" before. */

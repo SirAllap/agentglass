@@ -4,10 +4,9 @@
 // never moves you. Both draw only what is on screen: the list is a
 // VirtualList, and the tiles are a VirtualList of tile ROWS (a row holds as
 // many tiles as fit, so the window is still arithmetic).
-import { ago } from "../../../lib/fileRecents.ts";
 import { api } from "../../../lib/api.ts";
 import { Thumb } from "./Thumb.tsx";
-import { formatSize, isFolder, isThumbable, itemsLabel, joinPath, kindWord, rowLabel, tileSize, tilesPerRow, type Display, type Prefs, type Row, type SortKey } from "../../../lib/finderMiller.ts";
+import { formatSize, strataWhen, isFolder, isThumbable, itemsLabel, joinPath, kindWord, rowLabel, tileSize, tilesPerRow, type Display, type Prefs, type Row, type SortKey } from "../../../lib/finderMiller.ts";
 import { ICON } from "../../../lib/iconSize.ts";
 import { LINE } from "../../workspace/Chrome.tsx";
 import { RowIcon, modOf, noRange, type Mod } from "./Column.tsx";
@@ -61,7 +60,7 @@ export function ListView({ dir, display, selName, chosen, rowH, prefs, onPick, o
   return (
     <div className="flex-1 min-h-0 min-w-0 flex flex-col">
       <div className="grid items-center gap-2 px-3.5 text-[11px] shrink-0" style={{ gridTemplateColumns: COLS, minHeight: 28, borderBottom: LINE }}>
-        {head("name", "Name")}{head("size", "Size", true)}<span className="px-1" style={{ color: "var(--text3)" }}>Type</span>{head("modified", "Modified")}
+        {head("name", "Name")}{head("size", "Size", true)}{head("type", "Type")}{head("modified", "Modified")}
       </div>
       <VirtualList count={display.items.length} rowH={rowH} label={label} className="flex-1" keepInView={at < 0 ? null : display.itemOfRow[at]}
         render={(i) => {
@@ -75,7 +74,7 @@ export function ListView({ dir, display, selName, chosen, rowH, prefs, onPick, o
               <span className="flex items-center gap-2 min-w-0"><span className="shrink-0 flex"><RowIcon row={r} dir={dir} /></span><span className="truncate">{rowLabel(r.name)}</span></span>
               <span className="text-right tabular-nums text-[11px]" style={{ color: "var(--text3)" }}>{isFolder(r) ? itemsLabel(r.items) : r.bytes !== null ? formatSize(r.bytes) : ""}</span>
               <span className="text-[11px] truncate" style={{ color: "var(--text3)" }}>{kindWord(r)}</span>
-              <span className="text-[11px] truncate" style={{ color: "var(--text3)" }} title={new Date(r.mtime).toLocaleString()}>{ago(r.mtime)}</span>
+              <span className="text-[11px] truncate" style={{ color: "var(--text3)" }} title={new Date(r.mtime).toLocaleString()}>{strataWhen(r.mtime)}</span>
             </div>
           );
         }} />

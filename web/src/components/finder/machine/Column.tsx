@@ -10,7 +10,7 @@ import { CaretIcon } from "../../../lib/glyphIcons.tsx";
 import { FileTypeIcon, StrataIcon, StyledIcon } from "./StrataIcon.tsx";
 import { useItemStyle } from "../../../lib/finderStyleStore.ts";
 import { HIT, ICON } from "../../../lib/iconSize.ts";
-import { formatSize, isDefaultSort, isFolder, isThumbable, joinPath, itemsLabel, rowLabel, makeDefaultSort, resetSort, type Display, type Prefs, type Row, type SortKey } from "../../../lib/finderMiller.ts";
+import { filterPlaceholder, formatSize, isDefaultSort, isFolder, isThumbable, joinPath, itemsLabel, rowLabel, makeDefaultSort, resetSort, type Display, type Prefs, type Row, type SortKey } from "../../../lib/finderMiller.ts";
 import type { FolderState } from "../../../lib/finderFolders.ts";
 import { EDGE, INPUT, INPUT_STYLE, LINE } from "../../workspace/Chrome.tsx";
 import { MenuCap, MenuItem, MenuRule, Popover } from "./Popover.tsx";
@@ -115,7 +115,7 @@ export function Column({ dir: folderPath, title, filterSignal, width, onResize, 
       </header>
       {finding && (
         <div className="px-2.5 py-1.5 shrink-0" style={{ borderBottom: LINE }}>
-          <input ref={input} value={filter} onChange={(e) => onFilter(e.target.value)} placeholder="Filter this column…" spellCheck={false} aria-label={`Filter ${title}`}
+          <input ref={input} value={filter} onChange={(e) => onFilter(e.target.value)} placeholder={filterPlaceholder(state?.total ?? display.rows.length)} spellCheck={false} aria-label={`Filter ${title}`}
             onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Escape") { onFilter(""); setFinding(false); } }}
             className={`${INPUT} w-full`} style={INPUT_STYLE} />
         </div>
