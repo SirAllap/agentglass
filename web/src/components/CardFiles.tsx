@@ -17,6 +17,8 @@ import type { CardAttachment } from "../../../shared/providers.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
 import { SERVER, withToken } from "../lib/api.ts";
 import { CloseButton } from "./CloseButton.tsx";
+import { HIT, ICON } from "../lib/iconSize.ts";
+import { fmtAgo } from "../lib/format.ts";
 import { claimZoom } from "../lib/zoomOwner.ts";
 import { EDGE, LINE } from "./workspace/Chrome.tsx";
 
@@ -30,6 +32,9 @@ export function fileSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+/** "Grace Sample · 2d ago": who attached a file and when, whichever the tracker said. */
+const whenOf = (a: CardAttachment): string => [a.who, a.at ? `${fmtAgo(a.at)} ago` : ""].filter(Boolean).join(" · ");
 
 /** Only what the browser will actually draw. ClickUp makes a thumbnail for images and
  *  nothing else, so its absence is the honest test — better than a list of extensions
@@ -86,8 +91,10 @@ const ZOOM_MAX = 8;
  * outside — the grid sets it from a thumbnail, the activity feed from an image in a
  * comment, and both get the same viewer with the same keys.
  */
-export function FileViewer({ files, at, setAt, openLink = true }: {
+export function FileViewer({ files, at, setAt, openLink = true, playUrl = playableUrl }: {
   files: CardAttachment[];
+  /** Where a video is played from. The default is the ClickUp route; a tracker that serves its own says so. */
+  playUrl?: (a: CardAttachment) => string;
   /** Whether to offer "Open ↗". Off for a file read off this machine, whose url
    *  carries the engine's token and is not something to hand to a browser tab. */
   openLink?: boolean;
@@ -195,7 +202,8 @@ export function FileViewer({ files, at, setAt, openLink = true }: {
     if (at === null) return;
     for (const k of [at + 1, at - 1]) {
       const n = images[(k + images.length) % images.length];
-      if (n && n !== images[at]) { const img = new Image(); img.src = n.url; }
+      // A video is not fetched ahead as if it were a picture: pressing → should not cost its whole size.
+      if (n && n !== images[at] && !isVideo(n)) { const img = new Image(); img.src = n.url; }
     }
   }, [at, images]);
 
@@ -345,7 +353,7 @@ export function FileViewer({ files, at, setAt, openLink = true }: {
                * No autoplay either — a recording that starts talking the
                * moment a card opens is why people mute browsers.
                */
-              <video key={open.id} src={playableUrl(open)} controls preload="none" poster={open.thumb}
+              <video key={open.id} src={playUrl(open)} controls preload="none" poster={open.thumb}
                 onError={() => setBroke(open.id)}
                 onClick={(e) => e.stopPropagation()}
                 style={{ maxWidth: "100%", maxHeight: "100%", outline: "none", display: broke === open.id ? "none" : undefined }} />
@@ -378,9 +386,11 @@ export function FileViewer({ files, at, setAt, openLink = true }: {
                 <span className="text-[10.5px]" style={{ color: "var(--text4)" }}>
                   Usually a codec it has no decoder for — some recorders write HEVC. It will open outside.
                 </span>
-                <a href={externalUrl(open.url)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
-                  className="text-[11px] px-2.5 py-1 rounded-lg"
-                  style={{ border: edge(28), color: "var(--text)" }}>Open it outside ↗</a>
+                {openLink && (
+                  <a href={externalUrl(open.url)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
+                    className="text-[11px] px-2.5 py-1 rounded-lg"
+                    style={{ border: edge(28), color: "var(--text)" }}>Open it outside ↗</a>
+                )}
               </span>
             )}
             {shown !== open.id && !isVideo(open) && (
@@ -396,7 +406,18 @@ export function FileViewer({ files, at, setAt, openLink = true }: {
   );
 }
 
-export function CardFiles({ files }: { files: CardAttachment[] }) {
+export function CardFiles({ files, onRemove, openOther = (a) => openExternal(a.url), playUrl, openLink = true, showWhen = false }: {
+  files: CardAttachment[];
+  /** Say who attached a file and when, under its name: a tracker whose cards are read by date asks for it. */
+  showWhen?: boolean;
+  /** Offered on a file that is `mine` and nowhere else: what the control does is the caller's, and it is meant to ask first. */
+  onRemove?: (a: CardAttachment) => void;
+  /** What a file the viewer cannot show does when pressed. */
+  openOther?: (a: CardAttachment) => void;
+  playUrl?: (a: CardAttachment) => string;
+  /** Whether the viewer offers "Open ↗" at the file's own address: off where that address carries this app's token. */
+  openLink?: boolean;
+}) {
   /** Which one the viewer is on, by index into the viewable ones. Null is closed. */
   const [at, setAt] = useState<number | null>(null);
   const images = files.filter(isViewable);
@@ -411,9 +432,10 @@ export function CardFiles({ files }: { files: CardAttachment[] }) {
       {!!images.length && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 10 }}>
           {images.map((a, i) => (
-            <button key={a.id} onClick={() => setAt(i)}
+            <div key={a.id} className="relative min-w-0">
+            <button onClick={() => setAt(i)}
               title={`${a.title}${a.size ? ` · ${fileSize(a.size)}` : ""}${a.who ? ` · ${a.who}` : ""}`}
-              className="agx-btn text-left rounded-lg overflow-hidden flex flex-col"
+              className="agx-btn text-left rounded-lg overflow-hidden flex flex-col w-full"
               style={{ border: EDGE, background: "color-mix(in srgb, var(--text) 4%, transparent)" }}>
               {/* `loading="lazy"` is the whole performance story: fifteen thumbnails
                   are fetched as they scroll into view, not when the tab mounts. */}
@@ -442,7 +464,14 @@ export function CardFiles({ files }: { files: CardAttachment[] }) {
                 )}
               </span>
               <span className="px-2 py-1.5 text-[10px] truncate" style={{ color: "var(--text3)" }}>{a.title}</span>
+              {showWhen && <span className="px-2 pb-1.5 -mt-1 text-[9.5px] truncate" style={{ color: "var(--text4)" }}>{whenOf(a)}</span>}
             </button>
+            {onRemove && a.mine && (
+              <span className="absolute top-1 right-1 rounded-md" style={{ background: "color-mix(in srgb, var(--bg) 78%, transparent)" }}>
+                <CloseButton size={ICON.xs} onClick={() => onRemove(a)} title={`Take ${a.title} off`} />
+              </span>
+            )}
+            </div>
           ))}
         </div>
       )}
@@ -450,19 +479,25 @@ export function CardFiles({ files }: { files: CardAttachment[] }) {
       {!!others.length && (
         <div className="flex flex-col">
           {others.map((a) => (
-            <button key={a.id} onClick={() => openExternal(a.url)}
-              className="agx-btn text-left flex items-center gap-2 py-1.5 text-[11px]"
-              style={{ borderBottom: LINE, color: "var(--text2)" }}>
+            <div key={a.id} className="flex items-center gap-2 min-w-0" style={{ borderBottom: LINE }}>
+            <button onClick={() => openOther(a)}
+              className="agx-btn text-left flex items-center gap-2 py-1.5 text-[11px] flex-1 min-w-0"
+              style={{ color: "var(--text2)" }}>
               <span className="shrink-0 text-[9.5px] px-1.5 py-0.5 rounded uppercase"
                 style={{ color: "var(--text4)", border: EDGE }}>{a.ext || "file"}</span>
               <span className="min-w-0 truncate">{a.title}</span>
-              <span className="ml-auto shrink-0 text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>{fileSize(a.size)}</span>
+              <span className="ml-auto shrink-0 text-[10px] tabular-nums truncate" style={{ color: "var(--text4)" }}>{showWhen ? [fileSize(a.size), whenOf(a)].filter(Boolean).join(" · ") : fileSize(a.size)}</span>
             </button>
+            {/* The same width whether it is there or not, so a row's size and date do not move with who attached it. */}
+            {onRemove && (a.mine
+              ? <CloseButton size={ICON.xs} onClick={() => onRemove(a)} title={`Take ${a.title} off`} />
+              : <span className="shrink-0" style={{ width: HIT }} aria-hidden />)}
+            </div>
           ))}
         </div>
       )}
 
-      <FileViewer files={files} at={at} setAt={setAt} />
+      <FileViewer files={files} at={at} setAt={setAt} openLink={openLink} playUrl={playUrl} />
     </div>
   );
 }

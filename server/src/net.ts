@@ -292,6 +292,36 @@ export function hostsOnly(domains: string[]): (u: URL) => string | null {
   };
 }
 
+/**
+ * The two hosts a tracker's file may come from: the site itself, then ONE named
+ * host that site redirects to. Jira Cloud answers a file request with a 303 to
+ * its media host and a token in that address; Data Center serves the bytes from
+ * the site and never redirects. Anything else a redirect names is refused, and
+ * the credential rides only the first host: `initFor` hands the second hop the
+ * request without it, since that address carries its own. `forward` is what that
+ * second hop is sent instead (a `Range`, so a video seeks): never a credential.
+ *
+ * The redirect address is never returned from here. `guardedFetch` hands back
+ * the response and, on a refusal, a sentence naming the HOST, not the address;
+ * a caller must not forward either to a browser.
+ */
+export function siteThenNamedHost(site: string, named: string, creds: Record<string, string>, forward: Record<string, string> = {}): {
+  allow: (u: URL) => string | null;
+  initFor: (u: URL) => RequestInit;
+} {
+  const first = site.toLowerCase();
+  const second = named.toLowerCase();
+  return {
+    allow: (u) => {
+      if (u.protocol !== "https:") return "fetched over https only";
+      if (u.host.toLowerCase() === first) return null;
+      // `host` carries a port when one is not the default, so the named host is matched on 443 only.
+      return u.host.toLowerCase() === second ? null : `${u.hostname} is not a host this may fetch from`;
+    },
+    initFor: (u) => (u.host.toLowerCase() === first ? { headers: creds } : { headers: forward }),
+  };
+}
+
 /** The browser's URL policy on a host — `safeUrl` in browserdrive.ts and the
  *  robots.txt fetch in robots.ts hold to the same one, which is why it lives
  *  here. Addresses the browser relay refuses even over http(s): link-local — which is
@@ -381,6 +411,8 @@ export interface GuardedFetchOptions {
   resolver?: Resolver;
   /** Which resolved or literal addresses are refused (default: `privateAddress`). */
   refuses?: (address: string) => boolean;
+  /** What each hop is sent with, when it differs from hop to hop: a credential belongs to the first host only. */
+  initFor?: (u: URL) => RequestInit;
 }
 
 /**
@@ -458,7 +490,7 @@ export async function guardedFetch(
       if ("address" in t) address = t.address; else bad = t.error;
     }
     if (bad) return { error: hop === 0 ? bad : `redirected to ${url.host}: ${bad}` };
-    const req = { ...init, redirect: "manual" as const };
+    const req = { ...init, ...(opts.initFor ? opts.initFor(url) : {}), redirect: "manual" as const };
     const res = opts.fetchImpl
       ? await opts.fetchImpl(url.toString(), req, address)
       : address ? await pinnedFetch(url.toString(), req, address) : await fetch(url.toString(), req);

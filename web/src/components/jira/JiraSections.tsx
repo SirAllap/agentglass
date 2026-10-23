@@ -14,13 +14,11 @@
  * request, a card) and in the browser otherwise.
  */
 import { useState, type ReactNode } from "react";
-import { fmtAgo } from "../../lib/format.ts";
 import { followLink } from "../../lib/linkRouter.ts";
 import { ICON } from "../../lib/iconSize.ts";
 import { openCard } from "../../lib/openCard.ts";
 import { prioLook, Flag } from "../../lib/priority.tsx";
-import type { CardAttachment, CardLinked, CardWebLink, ProviderTask } from "../../../../shared/providers.ts";
-import { fileSize } from "../CardFiles.tsx";
+import type { CardLinked, CardWebLink, ProviderTask } from "../../../../shared/providers.ts";
 import { StatusPill } from "../StatusPill.tsx";
 import { LINE } from "../workspace/Chrome.tsx";
 
@@ -160,26 +158,6 @@ export function WebLinksSection({ links, error }: { links: CardWebLink[] | null;
             <span className="flex-1 min-w-0 truncate" style={{ color: "var(--text)" }}>{l.title}</span>
             <span className="shrink-0 text-[10px] truncate" style={{ color: "var(--text4)", maxWidth: "40%" }}>{l.host}</span>
           </button>
-        ))}
-      </div>
-    </Section>
-  );
-}
-
-/** The card's files by name, size, who and when: the bytes are not drawn here (see the file's note). */
-export function AttachmentsSection({ files }: { files: CardAttachment[] }) {
-  if (!files.length) return null;
-  return (
-    <Section id="attachments" title="Attachments" count={files.length}>
-      <div className="flex flex-col">
-        {files.map((a) => (
-          <div key={a.id} className="flex items-center gap-2 min-w-0 text-[11px] py-1.5" style={{ borderBottom: LINE }}>
-            <span className="shrink-0 text-[9px] uppercase tabular-nums rounded px-1" style={{ background: "var(--bg4)", color: "var(--text3)", minWidth: 28, textAlign: "center" }}>{a.ext || "file"}</span>
-            <span className="flex-1 min-w-0 truncate" style={{ color: "var(--text)" }} title={a.title}>{a.title}</span>
-            <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>
-              {[fileSize(a.size), a.who, a.at ? `${fmtAgo(a.at)} ago` : ""].filter(Boolean).join(" · ")}
-            </span>
-          </div>
         ))}
       </div>
     </Section>

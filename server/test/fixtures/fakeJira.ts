@@ -77,6 +77,13 @@ import workflowFixture from "./jira/workflow.json";
  * shown; one version's behaviour (9.x) stands for all of Server and Data Center.
  */
 
+/** The sites the suites connect to, which the file addresses on a card name. */
+const CLOUD_SITE = "acme.atlassian.net";
+const DC_SITE = "jira.acme.example";
+/** A one-pixel PNG: what a file stands as when a test gives it no bytes. */
+export const TINY_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+/** The address a Cloud site's file request is redirected to, standing in for its media host; the token is what must never reach a screen. */
+export const MEDIA_TOKEN = "media-token-orbit-1042";
 export const FAKE_EMAIL = "ada@acme.example";
 export const FAKE_TOKEN = "fake-token";
 export const FAKE_AUTH = `Basic ${Buffer.from(`${FAKE_EMAIL}:${FAKE_TOKEN}`).toString("base64")}`;
@@ -178,7 +185,7 @@ export interface FakeIssue {
   team: string | null;
   subtasks: string[];
   /** What `card-extras.json` gives one card: files, components, versions, time, the flag, a start date, and which fields its edit screen offers. */
-  attachments?: { id: string; filename: string; size: number; mimeType: string; created: string; author: string }[];
+  attachments?: { id: string; filename: string; size: number; mimeType: string; created: string; author: string; /** The file's bytes, base64; a one-pixel picture when left out. */ bytes?: string; /** No small picture is made for it. */ noThumb?: boolean }[];
   components?: string[];
   fixVersions?: string[];
   versions?: string[];
@@ -255,6 +262,10 @@ export interface LoggedRequest {
   auth: string | null;
   /** Parsed JSON, or the raw text when it did not parse, or undefined. */
   body: unknown;
+  /** The anti-forgery header an upload carries. */
+  token?: string;
+  /** The range a request asked for. */
+  range?: string;
 }
 
 export interface FailRule {
@@ -453,7 +464,14 @@ function boardFields(i: FakeIssue, state: FakeState, dc: boolean): Record<string
     [ids.points.primary]: i.pointsIn === "primary" ? i.points : null,
     [ids.points.alt]: i.pointsIn === "alt" ? i.points : null,
     [ids.rank]: i.rank,
-    attachment: (i.attachments ?? []).map((a) => ({ id: a.id, filename: a.filename, size: a.size, mimeType: a.mimeType, created: a.created, author: userObject(a.author, dc) })),
+    attachment: (i.attachments ?? []).map((a) => ({
+      id: a.id, filename: a.filename, size: a.size, mimeType: a.mimeType, created: a.created, author: userObject(a.author, dc),
+      // Where the file is, in the site's own words: an id route on Cloud, a path under /secure on Data Center.
+      content: dc ? `https://${DC_SITE}/secure/attachment/${a.id}/${encodeURIComponent(a.filename)}` : `https://${CLOUD_SITE}/rest/api/3/attachment/content/${a.id}`,
+      ...(a.mimeType.startsWith("image/") && !a.noThumb
+        ? { thumbnail: dc ? `https://${DC_SITE}/secure/thumbnail/${a.id}/${encodeURIComponent(a.filename)}` : `https://${CLOUD_SITE}/rest/api/3/attachment/thumbnail/${a.id}` }
+        : {}),
+    })),
     components: (i.components ?? []).map((name, n) => ({ id: String(10300 + n), name })),
     fixVersions: (i.fixVersions ?? []).map((name, n) => ({ id: String(10400 + n), name })),
     versions: (i.versions ?? []).map((name, n) => ({ id: String(10500 + n), name })),
@@ -735,13 +753,29 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
     return m ? Number(m[1]) : null;
   };
 
+  /** One file's bytes as the site would send them, or its small picture. */
+  const fileReply = (id: string, thumb: boolean): Response => {
+    const found = Object.values(live.issues).flatMap((i) => i.attachments ?? []).find((a) => a.id === id);
+    if (!found) return json(404, { errorMessages: ["The attachment does not exist"], errors: {} });
+    const bytes = Buffer.from(found.bytes ?? TINY_PNG, "base64");
+    const type = thumb ? "image/png" : found.mimeType;
+    const head = new Headers({ "content-type": type, "content-length": String(bytes.length), "accept-ranges": "bytes" });
+    return new Response(bytes, { headers: head });
+  };
+
   async function handle(req: Request): Promise<Response> {
     const url = new URL(req.url);
     // serverInfo is logged whole on both flavors: it is the one path both serve.
     const path = url.pathname !== SERVER_INFO && url.pathname.startsWith(PREFIX) ? url.pathname.slice(PREFIX.length) || "/" : url.pathname;
     const query = Object.fromEntries(url.searchParams);
     let body: unknown;
-    if (req.method === "POST" || req.method === "PUT") {
+    let r0: RegExpExecArray | null;
+    let upload: File | null = null;
+    if (req.method === "POST" && (req.headers.get("content-type") ?? "").startsWith("multipart/form-data")) {
+      const f = (await req.formData()).get("file");
+      upload = f instanceof File ? f : null;
+      body = { file: upload?.name };
+    } else if (req.method === "POST" || req.method === "PUT") {
       const text = await req.text();
       try {
         body = text ? JSON.parse(text) : undefined;
@@ -749,7 +783,18 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
         body = text;
       }
     }
-    requests.push({ method: req.method, path, query, auth: req.headers.get("authorization"), body });
+    requests.push({ method: req.method, path, query, auth: req.headers.get("authorization"), body, ...(req.headers.get("x-atlassian-token") ? { token: req.headers.get("x-atlassian-token")! } : {}), ...(req.headers.get("range") ? { range: req.headers.get("range")! } : {}) });
+
+    // The stand-in for the media host a Cloud site redirects to: no sign-in, the token in the address is the credential.
+    if (req.method === "GET" && (url.pathname.startsWith("/media/file/") || url.pathname.startsWith("/media/thumb/"))) {
+      if (url.searchParams.get("token") !== MEDIA_TOKEN) return json(403, errors["403"] ?? {});
+      return fileReply(url.pathname.split("/").pop()!, url.pathname.startsWith("/media/thumb/"));
+    }
+    // Data Center serves a file from the site itself, signed in, no redirect.
+    if (dc && req.method === "GET" && (r0 = /^\/secure\/(attachment|thumbnail)\/(\d+)\//.exec(url.pathname))) {
+      const ok = [FAKE_PAT_AUTH, FAKE_DC_BASIC].includes(req.headers.get("authorization") ?? "");
+      return ok ? fileReply(r0[2]!, r0[1] === "thumbnail") : statusReply({ path: "", status: 401 });
+    }
 
     const rule = rules.find((r) => r.left > 0 && (!r.method || r.method === req.method) && (r.path.endsWith("*") ? path.startsWith(r.path.slice(0, -1)) : r.path === path));
     if (rule) {
@@ -1077,6 +1122,37 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
       live.links.push({ id, type: type.name, from: from.key, to: to.key });
       bump(from); bump(to);
       return json(201, null);
+    }
+    // Cloud: a file is an id route that answers 303 to the media host, with the token in the address.
+    if (!dc && m === "GET" && (r = /^\/attachment\/(content|thumbnail)\/(\d+)$/.exec(path))) {
+      const thumb = r[1] === "thumbnail";
+      const a = Object.values(live.issues).flatMap((i) => i.attachments ?? []).find((x) => x.id === r![2]);
+      if (!a || (thumb && (!a.mimeType.startsWith("image/") || a.noThumb))) return json(404, { errorMessages: ["The attachment does not exist"], errors: {} });
+      return new Response(null, { status: 303, headers: { location: `${base}/media/${thumb ? "thumb" : "file"}/${a.id}?token=${MEDIA_TOKEN}` } });
+    }
+    if (m === "POST" && (r = /^\/issue\/([^/]+)\/attachments$/.exec(path))) {
+      // The site's own check against forged uploads: a multipart post without the header is refused.
+      if (req.headers.get("x-atlassian-token") !== "no-check") return json(403, { errorMessages: ["XSRF check failed"], errors: {} });
+      const issue = live.issues[decodeURIComponent(r[1])];
+      if (!issue) return notFound(r[1]);
+      if (!upload) return bad({}, ["No files were attached"]);
+      const id = String(20000 + (issue.attachments ?? []).length + Object.values(live.issues).reduce((n, i) => n + (i.attachments ?? []).length, 0));
+      const made = { id, filename: upload.name, size: upload.size, mimeType: upload.type || "application/octet-stream", created: new Date().toISOString().replace("Z", "+0000"), author: myselfFixture.accountId, bytes: Buffer.from(await upload.arrayBuffer()).toString("base64") };
+      (issue.attachments ??= []).push(made);
+      bump(issue);
+      return json(200, [{ id, filename: made.filename, size: made.size, mimeType: made.mimeType, created: made.created, author: userObject(made.author, dc) }]);
+    }
+    if (m === "DELETE" && (r = /^\/attachment\/(\d+)$/.exec(path))) {
+      for (const issue of Object.values(live.issues)) {
+        const at = (issue.attachments ?? []).findIndex((a) => a.id === r![1]);
+        if (at < 0) continue;
+        // Anybody's file is the site's to delete only with the right: here, only your own.
+        if (issue.attachments![at]!.author !== myselfFixture.accountId) return json(403, { errorMessages: ["You do not have permission to delete this attachment"], errors: {} });
+        issue.attachments!.splice(at, 1);
+        bump(issue);
+        return json(204, null);
+      }
+      return json(404, { errorMessages: ["The attachment does not exist"], errors: {} });
     }
     if (m === "DELETE" && (r = /^\/issueLink\/([^/]+)$/.exec(path))) {
       const at = live.links.findIndex((l) => l.id === r![1]);

@@ -1525,6 +1525,18 @@ const realApi = {
   /** The connected account's own mark on a card: `on` puts it on or takes it off, one request and no stamp (server/src/jiraFollow.ts). */
   jiraWatch: (key: string, on: boolean) => post<JiraFollowWrite>("/jira/watch", { key, on }),
   jiraVote: (key: string, on: boolean) => post<JiraFollowWrite>("/jira/vote", { key, on }),
+  /** One file onto a card: a multipart form, the file under `file`. The answer is the card again. */
+  jiraAttach: async (key: string, file: File) => {
+    await whenServerUp();
+    const form = new FormData();
+    form.append("key", key);
+    form.append("file", file, file.name);
+    // No content type: the boundary in it is the browser's to write.
+    const r = await fetch(SERVER + "/jira/attach", { method: "POST", headers: authHeaders(), body: form });
+    return (await r.json()) as ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string; added?: string };
+  },
+  jiraUnattach: (key: string, id: string) =>
+    post<ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string }>("/jira/attach/remove", { key, id }),
   /** Labels the site knows that start with what was typed. */
   jiraLabels: (q: string) => get<{ ok: boolean; error?: string; throttled?: boolean; labels?: string[] }>(`/jira/labels?q=${encodeURIComponent(q)}`),
   providerTasks: (force = false) =>
@@ -2963,6 +2975,8 @@ const demoApi: typeof realApi = {
   jiraWorklogDelete: (_k: string, _i: string, _s: Pick<WorkSend, "adjust">, _u: number) => D<JiraWorkWrite>({ ok: false, error: "not available in the demo" }),
   jiraWatch: (_k: string, _o: boolean) => D<JiraFollowWrite>({ ok: false, error: "not available in the demo" }),
   jiraVote: (_k: string, _o: boolean) => D<JiraFollowWrite>({ ok: false, error: "not available in the demo" }),
+  jiraAttach: (_k: string, _f: File) => D({ ok: false, error: "not available in the demo" }),
+  jiraUnattach: (_k: string, _i: string) => D({ ok: false, error: "not available in the demo" }),
   jiraLabels: (_q: string) => D({ ok: true, labels: [] as string[] }),
   providerTasks: (_f?: boolean) => D({ tasks: [], more: false, at: 0 }),
   recipes: (_r?: string) => D({ recipes: [] }),

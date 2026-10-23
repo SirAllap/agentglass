@@ -49,10 +49,10 @@ export interface JoinAct {
 const PLUS = "M12 5v14M5 12h14";
 const INPUT_STYLE = { background: "var(--bg)", color: "var(--text)", border: EDGE } as const;
 
-interface Said { text: string; warn?: boolean; undo?: () => Promise<string | null> }
+export interface Said { text: string; warn?: boolean; undo?: () => Promise<string | null> }
 
 /** The line a change leaves in the section's header, with its Undo; and the "+" that opens the section's form, always at the end. */
-function Aside({ plain, said, onSaid, open, onToggle, label, canAdd }: {
+export function Aside({ plain, said, onSaid, open, onToggle, label, canAdd }: {
   plain: ReactNode; said: Said | null; onSaid: (s: Said | null) => void; open: boolean; onToggle: () => void; label: string; canAdd: boolean;
 }) {
   const [busy, setBusy] = useState(false);
@@ -90,7 +90,7 @@ function Line({ children, busy, ok, onSend, onCancel, sendLabel, error }: {
   );
 }
 
-const Ask = ({ children, onYes, onNo, yes, busy }: { children: ReactNode; onYes: () => void; onNo: () => void; yes: string; busy: boolean }) => (
+export const Ask = ({ children, onYes, onNo, yes, busy }: { children: ReactNode; onYes: () => void; onNo: () => void; yes: string; busy: boolean }) => (
   <div className="flex items-center gap-2 py-1.5 text-[10.5px] flex-wrap" role="alertdialog" style={{ borderBottom: LINE }}>
     <span className="min-w-0" style={{ color: "var(--text2)" }}>{children}</span>
     <button className="agx-btn rounded-md px-2 py-0.5" disabled={busy} onClick={onYes} style={{ color: "var(--error-ink)", border: EDGE }}>{busy ? "Working…" : yes}</button>

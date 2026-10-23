@@ -6754,6 +6754,36 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         : await jiraWebUnlink(key, b.id);
       return json(r, r.ok ? 200 : 400);
     }
+    /*
+     * A card's files (jiraFiles.ts). `GET /jira/file` streams one file's bytes, or its small picture with `thumb=1`, through
+     * this server so the credential never leaves it, and only a file the card read listed: a caller names a card and an id,
+     * never an address. What the site redirects to is followed here and is never in an answer. A file that is not a picture
+     * or a video is a download (`download=1` makes any file one). `POST /jira/attach` adds one (multipart: `key`, `file`)
+     * and `POST /jira/attach/remove` takes one of your own off, both behind the write switch.
+     */
+    if (req.method === "GET" && pathname === "/jira/file") {
+      const r = await jiraFileServe({
+        key: url.searchParams.get("key") ?? "", id: url.searchParams.get("id") ?? "", thumb: url.searchParams.get("thumb") === "1",
+        download: url.searchParams.get("download") === "1", range: req.headers.get("range"), signal: req.signal,
+      });
+      return "res" in r ? r.res : json({ ok: false, error: r.error }, r.status);
+    }
+    if (req.method === "POST" && pathname === "/jira/attach") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      // The declared length first: a body this large is refused before any of it is read.
+      if (Number(req.headers.get("content-length")) > JIRA_UPLOAD_MAX + 64 * 1024) return json({ ok: false, error: `A file added here is at most ${JIRA_UPLOAD_MAX / (1024 * 1024)} MB. Add a bigger one in Jira` }, 413);
+      const form = await req.formData().catch(() => null);
+      const file = form?.get("file");
+      if (!form || !(file instanceof File)) return json({ ok: false, error: "Send the file as a form with a `file` part" }, 400);
+      const r = await jiraAttach(String(form.get("key") ?? "").trim(), file.name, new Uint8Array(await file.arrayBuffer()));
+      return json(r, r.ok ? 200 : 400);
+    }
+    if (req.method === "POST" && pathname === "/jira/attach/remove") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = await jiraUnattach(String(b.key ?? "").trim(), b.id);
+      return json(r, r.ok ? 200 : 400);
+    }
     if (req.method === "GET" && pathname === "/jira/labels") {
       const r = await jiraLabels(url.searchParams.get("q") ?? "");
       return json(r.ok ? { ok: true, labels: r.data ?? [] } : { ok: false, error: r.error, ...(r.throttled ? { throttled: true } : null) });
@@ -10664,6 +10694,7 @@ startCardWatch((n) => broadcast({ type: "card", data: n }));
 import { startJiraWatch, rememberOwnMove as jiraRememberOwnMove, rememberOwnAssign as jiraRememberOwnAssign } from "./jirawatch.ts";
 import { boardContext as jiraBoardContext } from "./jiraBoardContext.ts";
 import { rankStored as jiraRank } from "./jiraRank.ts";
+import { serveFileStored as jiraFileServe, attachFileStored as jiraAttach, removeFileStored as jiraUnattach, UPLOAD_MAX as JIRA_UPLOAD_MAX } from "./jiraFiles.ts";
 import { linkKindsStored as jiraLinkKinds, createSubtaskStored as jiraSubtask, relateCardsStored as jiraRelate, unrelateCardsStored as jiraUnrelate, addWebLinkStored as jiraWebLink, removeWebLinkStored as jiraWebUnlink } from "./jiraRelate.ts";
 import { detailStored as jiraDetailRead, mentionableStored as jiraMentionable, commentStored as jiraCommentOn, editCommentStored as jiraCommentEdit, deleteCommentStored as jiraCommentDelete } from "./jiraComments.ts";
 import { setVoteStored as jiraVote, setWatchStored as jiraWatch } from "./jiraFollow.ts";

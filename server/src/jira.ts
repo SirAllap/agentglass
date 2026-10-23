@@ -43,7 +43,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { guardedFetch, privateAddress, type GuardedFetchOptions } from "./net.ts";
+import { guardedFetch, privateAddress, siteThenNamedHost, type GuardedFetchOptions } from "./net.ts";
 import { isIP } from "node:net";
 import { forgetCached } from "./jiraviews.ts";
 import { cardExtras } from "./jirafields.ts";
@@ -59,6 +59,8 @@ import type {
 import { hasUrlCredentials } from "../../shared/urlCredentials.ts";
 
 const TIMEOUT_MS = 8_000;
+/** The one host a Jira Cloud site redirects a file request to. Nothing else is followed. */
+export const JIRA_MEDIA_HOST = "api.media.atlassian.com";
 const MEMO_TTL_MS = 10 * 60_000;
 /** Held-off time when a 429 carries no `Retry-After`, and the longest we honour. */
 const HOLD_DEFAULT_S = 10;
@@ -246,6 +248,8 @@ export interface CallOpts {
   optional?: boolean;
   /** Skip the in-flight merge. */
   fresh?: boolean;
+  /** A file to attach, sent as multipart. The anti-forgery header the site asks for rides with it. */
+  form?: FormData;
 }
 
 /**
@@ -288,7 +292,9 @@ async function callOnce<T>(creds: JiraCreds, pathname: string, o: CallOpts): Pro
     Accept: "application/json",
   };
   if (o.body !== undefined) headers["Content-Type"] = "application/json";
-  const body = o.body === undefined ? undefined : JSON.stringify(o.body);
+  // The boundary in a multipart type is the fetch's to write, so no content type here; the site refuses an upload without the header.
+  if (o.form) headers["X-Atlassian-Token"] = "no-check";
+  const body = o.form ?? (o.body === undefined ? undefined : JSON.stringify(o.body));
   const stored = secretFor("jira") === creds.token;
 
   const ctl = new AbortController();
@@ -362,6 +368,57 @@ async function callOnce<T>(creds: JiraCreds, pathname: string, o: CallOpts): Pro
     return { ok: false, error: aborted ? "Jira did not answer in time" : "Could not reach Jira" };
   } finally {
     clearTimeout(kill);
+  }
+}
+
+/**
+ * A request for a file's bytes: the same sign-in, the same site checks and the
+ * same guard as `callOnce`, answered as a Response to stream and not as JSON.
+ *
+ * A file on a Cloud site is a 303 to ONE other host with a token in the address;
+ * Data Center answers from the site. The first hop carries the credential and the
+ * second does not (`siteThenNamedHost`); the address of the second never leaves
+ * this function. Under the test base, a redirect is followed only to the base's
+ * own origin, standing in for that host.
+ */
+export async function jiraFetch(creds: JiraCreds, pathname: string, o: { range?: string | null; timeoutMs: number; signal?: AbortSignal }): Promise<{ res: Response } | { error: string }> {
+  const site = parseSite(creds.site);
+  if (!site.ok) return { error: site.error };
+  const origin = baseOverride ?? `https://${site.site}`;
+  const auth = creds.auth === "bearer"
+    ? `Bearer ${creds.token}`
+    : `Basic ${Buffer.from(`${creds.email ?? ""}:${creds.token}`).toString("base64")}`;
+  const forward: Record<string, string> = o.range ? { Range: o.range } : {};
+  const headers: Record<string, string> = { Authorization: auth, ...forward };
+  // The limit is for the first byte: it is lifted once the headers are in, so a file that takes longer than that to arrive is not cut
+  // mid-stream (`serveFile` holds the stream to an idle limit between chunks instead).
+  const first = new AbortController();
+  const timer = setTimeout(() => first.abort(new DOMException("no first byte", "TimeoutError")), o.timeoutMs);
+  const signal = AbortSignal.any([first.signal, ...(o.signal ? [o.signal] : [])]);
+  const held = "That file is held somewhere this may not fetch from";
+  try {
+    if (baseOverride) {
+      const viaBase = (u: string | URL, h: Record<string, string>) => fetch(u, { headers: h, signal, redirect: "manual" });
+      let res = await viaBase(`${origin}${pathname}`, headers);
+      const to = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
+      if (to) {
+        void res.body?.cancel();
+        const next = new URL(to, origin);
+        if (next.origin !== new URL(origin).origin) return { error: held };
+        res = await viaBase(next, forward);
+      }
+      return { res };
+    }
+    const hostPort = site.site.split("/")[0]!;
+    const hops = siteThenNamedHost(hostPort, JIRA_MEDIA_HOST, headers, forward);
+    const g = await guardedFetch(`${origin}${pathname}`, { signal, headers }, hops.allow, { refuses: refusesAddress, initFor: hops.initFor, ...guardOpts });
+    // The refusal names a host, never the address; it is still turned into our sentence here.
+    return g.res ? { res: g.res } : { error: held };
+  } catch (e) {
+    const name = (e as { name?: string })?.name;
+    return { error: name === "TimeoutError" || name === "AbortError" ? "Jira did not answer in time" : "Could not reach Jira" };
+  } finally {
+    clearTimeout(timer);
   }
 }
 

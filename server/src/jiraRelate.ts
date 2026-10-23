@@ -102,7 +102,7 @@ async function subtaskType(creds: JiraCreds, project: string): Promise<JiraResul
 }
 
 /** Jira's refusal of a write here, in our words. */
-function refusal(r: JiraResult<unknown>, what: string, who: string): RelateOutcome {
+export function refusal(r: JiraResult<unknown>, what: string, who: string): RelateOutcome {
   if (r.status === 400) return no(`Jira did not accept that ${what}`);
   if (r.status === 403) return no(`Your Jira account cannot do that on ${who}`);
   if (r.status === 404) return no("That is gone or not one this site shows you: reload the card");
@@ -110,7 +110,7 @@ function refusal(r: JiraResult<unknown>, what: string, who: string): RelateOutco
 }
 
 /** The card as it now stands, after a write; a read that fails says so and keeps the write's news. */
-async function readBack(creds: JiraCreds, key: string, said: string): Promise<RelateOutcome> {
+export async function readBack(creds: JiraCreds, key: string, said: string): Promise<RelateOutcome> {
   const back = await readDetail(creds, key, { fresh: true, threads: false });
   if (!back.ok || !back.data) return { ok: true, partial: `${said}, but the card could not be read back. Reload it.` };
   return { ok: true, task: back.data.detail.task, detail: back.data.detail, more: back.data.more };

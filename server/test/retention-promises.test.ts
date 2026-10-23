@@ -243,6 +243,11 @@ describe("the promises SECURITY.md makes about retention", () => {
     // ClickUp comment above: it is their workspace's text, ours records nothing
     // about it, and no database is opened. The check below holds it to that.
     "/jira/comment/delete",
+    // Takes one of the person's OWN attachments off a Jira card, in Jira, by its
+    // id, and only a file the card's own read lists as theirs. Their workspace's
+    // file, nothing of ours is recorded about it, and no database is opened. The
+    // check below holds it to that.
+    "/jira/attach/remove",
     // Take off a Jira link the person's own account holds: a card link or a web
     // address, in Jira, by the id the card itself lists. Same reading as the
     // comment above: it is their workspace's data, ours records nothing about

@@ -133,12 +133,13 @@ for (const flavor of ["cloud", "datacenter"] as FakeFlavor[]) {
       expect((await detail("ORBIT-1001")).linked!.map((l) => l.phrase)).toEqual(["relates to", "relates to"]);
     });
 
-    test("files are listed by name, size, who and when, and carry no address", async () => {
+    test("files are listed by name, size, who and when, and carry this app's own route and no address of the site's", async () => {
       const files = (await detail("ORBIT-1042")).attachments!;
       expect(files.map((a) => [a.title, a.ext, a.size, a.who, a.url])).toEqual([
-        ["timeout-trace.png", "png", 48210, "Grace Sample", ""],
-        ["sync-log.txt", "txt", 1290, "Ada Example", ""],
+        ["timeout-trace.png", "png", 48210, "Grace Sample", "/jira/file?key=ORBIT-1042&id=30001"],
+        ["sync-log.txt", "txt", 1290, "Ada Example", "/jira/file?key=ORBIT-1042&id=30002"],
       ]);
+      expect(JSON.stringify(files)).not.toMatch(/atlassian|jira\.acme|token|https?:/);
       expect(files[0]!.at).toBeGreaterThan(0);
       expect((await detail("ORBIT-1001")).attachments).toEqual([]);
     });

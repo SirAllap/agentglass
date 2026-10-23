@@ -26,6 +26,7 @@ import { ACCOUNT_ID, LOGIN, adfToMarkdown, markdownToAdf, markdownToWiki, readMe
 export { readMentions };
 import { worklogEvents } from "./jiraActivity.ts";
 import { editOf, rememberOffered } from "./jiraEdit.ts";
+import { fileRows, rememberFiles } from "./jiraFiles.ts";
 import { attachmentsOf, commentRows, factsOf, fullReader, linkedOf, offeredFields, personId, textReader } from "./jiraCardRead.ts";
 import type { TaskDetail, ProviderTask } from "../../shared/providers.ts";
 import type { WriteOutcome } from "./trackerTypes.ts";
@@ -58,7 +59,7 @@ export function toDetail(issue: unknown, task: ProviderTask, v: 2 | 3, me?: stri
   // A subtask arrives as a stub (key, summary, status): enough for a row, not for a project.
   const subtasks = cx ? (Array.isArray(f.subtasks) ? f.subtasks : []).flatMap((s) => { const t = toTask(s, cx); return t ? [t] : []; }) : [];
   // The rest of the card, only when the read asked for it: a link list that was not asked for is not "no links".
-  const attachments = Array.isArray(f.attachment) ? attachmentsOf(f) : undefined;
+  const attachments = Array.isArray(f.attachment) ? fileRows(attachmentsOf(f), isObj(issue) ? str(issue.key) : "", f, me ?? "") : undefined;
   const linked = cx && Array.isArray(f.issuelinks) ? linkedOf(f, (s) => toTask(s, cx)) : undefined;
   const facts = cx ? factsOf(f, ids ?? {}, offeredFields(issue)) : undefined;
   // The first entries of the work log ride on the read (a field, no request); the rest are a page on demand.
@@ -117,6 +118,7 @@ export async function readDetail(creds: JiraCreds, key: string, o: { fresh?: boo
   // What this card lets a person change is only said while writing to Jira is on: with it off there is no control to draw.
   const offered = offeredFields(r.data);
   rememberOffered(key, offered);
+  rememberFiles(creds, key, isObj(r.data) && isObj(r.data.fields) ? r.data.fields : {}, cx.me ?? "");
   if (jiraWriteEnabled()) {
     const list = await priorities(creds);
     const edit = editOf(offered, { start: ids?.start, flag: ids?.flag }, list.ok && list.data ? list.data : null, v, isObj(r.data) && isObj(r.data.fields) ? r.data.fields : undefined);

@@ -1079,6 +1079,8 @@ export interface CardAttachment {
   at?: number;
   /** Who attached it. */
   who?: string;
+  /** Attached by the connected account: the only files the app offers to take off. */
+  mine?: boolean;
 }
 
 /** One card linked to another, in the words the link type uses for the side this card is on ("blocks", "is blocked by"). */

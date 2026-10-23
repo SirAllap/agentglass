@@ -35,7 +35,8 @@ import { useJiraFollow } from "./useJiraFollow.ts";
 import { JiraDescription } from "./JiraDescription.tsx";
 import { LinkedBlock, SubtasksBlock, WebLinksBlock, type JoinAct } from "./JiraJoins.tsx";
 import { madeLink, webAddress } from "../../lib/jiraJoins.ts";
-import { AttachmentsSection, LinkedSection, Section, SubtasksSection, WebLinksSection } from "./JiraSections.tsx";
+import { AttachmentsBlock, type FileAct } from "./JiraFiles.tsx";
+import { LinkedSection, Section, SubtasksSection, WebLinksSection } from "./JiraSections.tsx";
 import { Spinner } from "../Spinner.tsx";
 import { JiraCardPrs } from "./JiraCardPrs.tsx";
 import { mentionsOfCard } from "../../lib/jiraLinks.ts";
@@ -260,6 +261,24 @@ export function JiraCard({ t, header, writes, onTask }: {
     onRowTask: (t) => setDetail((d) => (d ? { ...d, subtasks: d.subtasks.map((x) => (x.id === t.id ? t : x)) } : d)),
   };
 
+  /* A file is one write whose answer is the card again, so nothing is read twice. */
+  const fileAct: FileAct = {
+    add: async (f) => {
+      const r = await api.jiraAttach(key, f).catch(() => null);
+      if (!r) return "Could not reach agentglass";
+      if (!r.ok) return r.error || "Jira refused that file";
+      if (r.detail) take(r.detail); else void read();
+      return null;
+    },
+    remove: async (a) => {
+      const r = await api.jiraUnattach(key, a.id).catch(() => null);
+      if (!r) return "Could not reach agentglass";
+      if (!r.ok) return r.error || "Jira refused that change";
+      if (r.detail) take(r.detail); else void read();
+      return null;
+    },
+  };
+
   const send = () => {
     if (!say.trim() || saying) return;
     setSaying(true); setSayErr(""); setSayWarn("");
@@ -289,7 +308,7 @@ export function JiraCard({ t, header, writes, onTask }: {
           <>
             <JiraDescription text={detail.description} edit={detail.edit} writes={writes} url={t.url} busy={editing.busy === "description"}
               onSave={(md) => { const step = stepFor("description", { value: md }, ed.now); return step ? editing.run(step) : Promise.resolve(false); }} />
-            <AttachmentsSection files={detail.attachments ?? []} />
+            <AttachmentsBlock files={detail.attachments ?? []} card={key} writable={writes} act={fileAct} />
             {writes ? <SubtasksBlock rows={detail.subtasks} parent={detail.task} writable act={joinAct} /> : <SubtasksSection rows={detail.subtasks} />}
             {writes ? <LinkedBlock linked={detail.linked ?? []} card={key} writable act={joinAct} /> : <LinkedSection linked={detail.linked ?? []} />}
             {writes ? <WebLinksBlock links={links ? links.web : null} error={links?.error ?? ""} writable card={key} act={joinAct} /> : <WebLinksSection links={links ? links.web : null} error={links?.error ?? ""} />}

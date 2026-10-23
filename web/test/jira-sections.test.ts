@@ -10,10 +10,10 @@
 import { describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { AttachmentsSection, groupLinked, LinkedSection, Section, SubtasksSection, WebLinksSection } from "../src/components/jira/JiraSections.tsx";
+import { groupLinked, LinkedSection, Section, SubtasksSection, WebLinksSection } from "../src/components/jira/JiraSections.tsx";
 import { FactValue } from "../src/components/jira/JiraFacts.tsx";
 import { globalStubs } from "./stubGlobal.ts";
-import type { CardAttachment, CardLinked, CardWebLink, ProviderTask } from "../../shared/providers.ts";
+import type { CardLinked, CardWebLink, ProviderTask } from "../../shared/providers.ts";
 
 const stubGlobal = globalStubs();
 const task = (o: Partial<ProviderTask> = {}): ProviderTask => ({
@@ -27,7 +27,6 @@ describe("a section a card does not have is not drawn", () => {
   test("no subtasks, no links, no files, no web links: nothing at all", () => {
     expect(html(React.createElement(SubtasksSection, { rows: [] }))).toBe("");
     expect(html(React.createElement(LinkedSection, { linked: [] }))).toBe("");
-    expect(html(React.createElement(AttachmentsSection, { files: [] }))).toBe("");
     expect(html(React.createElement(WebLinksSection, { links: [], error: "" }))).toBe("");
     expect(html(React.createElement(WebLinksSection, { links: null, error: "" }))).toBe("");
   });
@@ -69,12 +68,6 @@ describe("web links and files", () => {
     const link: CardWebLink = { id: "1", url: "https://docs.acme.example/design/sync", title: "Design note", host: "docs.acme.example" };
     const out = html(React.createElement(WebLinksSection, { links: [link], error: "" }));
     for (const w of ["Design note", "docs.acme.example", 'title="https://docs.acme.example/design/sync"']) expect(out).toContain(w);
-  });
-  test("a file shows its name, size, who and when, and never an address", () => {
-    const a: CardAttachment = { id: "1", title: "timeout-trace.png", ext: "png", size: 48210, url: "", who: "Grace Sample", at: Date.now() - 3_600_000 };
-    const out = html(React.createElement(AttachmentsSection, { files: [a] }));
-    for (const w of ["timeout-trace.png", "47 KB", "Grace Sample", "png"]) expect(out).toContain(w);
-    expect(out).not.toContain("href");
   });
 });
 

@@ -31,15 +31,16 @@ import { deleteCommentStored, detailStored, editCommentStored, commentStored } f
 import { editStored, type EditAsk } from "./jiraEdit.ts";
 import { addWebLinkStored, createSubtaskStored, linkKindsStored, relateCardsStored, removeWebLinkStored, unrelateCardsStored } from "./jiraRelate.ts";
 import { rankStored } from "./jiraRank.ts";
+import { attachFileStored, removeFileStored, UPLOAD_MAX } from "./jiraFiles.ts";
 import { jiraSteps, runStepBody, STEP_KEYS } from "./jiraSteps.ts";
 import { setVoteStored, setWatchStored } from "./jiraFollow.ts";
 import { deleteWorkStored, editWorkStored, logWorkStored } from "./jiraWorklog.ts";
 import { rememberOwnMove } from "./jirawatch.ts";
 
-export const DOOR_VERBS = ["card", "moves", "links", "linktypes", "activity", "steps", "step", "link", "edit", "comment", "comment-edit", "comment-delete", "move", "subtask", "relate", "unrelate", "weblink", "unweblink", "worklog", "worklog-edit", "worklog-delete", "watch", "vote", "rank"] as const;
+export const DOOR_VERBS = ["card", "moves", "links", "linktypes", "activity", "steps", "step", "link", "edit", "comment", "comment-edit", "comment-delete", "move", "subtask", "relate", "unrelate", "weblink", "unweblink", "worklog", "worklog-edit", "worklog-delete", "watch", "vote", "rank", "attach", "unattach"] as const;
 export type DoorVerb = (typeof DOOR_VERBS)[number];
 /** The verbs that change the site. The rest read. */
-export const DOOR_ACTING: readonly DoorVerb[] = ["step", "link", "edit", "comment", "comment-edit", "comment-delete", "move", "subtask", "relate", "unrelate", "weblink", "unweblink", "worklog", "worklog-edit", "worklog-delete", "watch", "vote", "rank"];
+export const DOOR_ACTING: readonly DoorVerb[] = ["step", "link", "edit", "comment", "comment-edit", "comment-delete", "move", "subtask", "relate", "unrelate", "weblink", "unweblink", "worklog", "worklog-edit", "worklog-delete", "watch", "vote", "rank", "attach", "unattach"];
 export const isActing = (v: string): boolean => (DOOR_ACTING as readonly string[]).includes(v);
 
 /**
@@ -206,7 +207,7 @@ function listsOf(d: TaskDetail): { state: Record<string, unknown>; untrusted: Re
     untrusted: {
       ...(d.subtasks.length ? { subtasks: d.subtasks.slice(0, ROWS_MAX).map(row) } : null),
       ...(linked.length ? { linked: linked.slice(0, ROWS_MAX).map((l) => ({ phrase: clip(l.phrase, 60), linkId: l.id, ...row(l.task) })) } : null),
-      ...(files.length ? { attachments: files.slice(0, ROWS_MAX).map((a) => ({ name: clip(a.title, 160), size: a.size, ...(a.who ? { by: clip(a.who, 80) } : null) })) } : null),
+      ...(files.length ? { attachments: files.slice(0, ROWS_MAX).map((a) => ({ fileId: a.id, name: clip(a.title, 160), size: a.size, ...(a.who ? { by: clip(a.who, 80) } : null), ...(a.mine ? { mine: true } : null) })) } : null),
       ...(facts.length ? { details: facts.map((f) => ({ label: f.label, value: clip(f.value, 200) })) } : null),
     },
   };
@@ -307,6 +308,21 @@ function readSteps(): DoorAnswer {
       untrusted: { steps: Object.fromEntries(STEP_KEYS.map((k) => [k, steps[k]])) },
     },
   };
+}
+
+/**
+ * The bytes a caller gave to attach: `text` as it is, or `data` as base64. Nothing is read from a path, so an agent cannot
+ * send a file off this machine that it was not already holding the words of.
+ */
+function attachBytes(b: Record<string, unknown>): Uint8Array | string {
+  const hasText = typeof b.text === "string";
+  const hasData = typeof b.data === "string";
+  if (hasText === hasData) return "Give the file's words as text, or its bytes as data (base64), not both";
+  if (hasText) return new TextEncoder().encode(b.text as string);
+  const d = (b.data as string).replace(/\s+/g, "");
+  if (d.length > Math.ceil((UPLOAD_MAX * 4) / 3) + 4) return `A file added here is at most ${UPLOAD_MAX / (1024 * 1024)} MB`;
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(d) || d.length % 4 !== 0) return "data is not base64";
+  return new Uint8Array(Buffer.from(d, "base64"));
 }
 
 /**
@@ -428,6 +444,17 @@ export async function runDoor(verb: string, b: Record<string, unknown>): Promise
     case "rank":
       // `before` or `after`: the card goes next to that one. Nothing is read back; the answer says only that it was sent.
       return written(await rankStored(key, { before: b.before, after: b.after }), { ranked: true });
+    case "attach": {
+      const bytes = attachBytes(b);
+      if (typeof bytes === "string") return refuse(bytes);
+      const r = await attachFileStored(key, b.name, bytes);
+      return written(r, r.ok ? { added: true, ...("added" in r && r.added ? { fileId: r.added } : null) } : {});
+    }
+    case "unattach": {
+      if (b.confirm !== true) return refuse("Taking a file off is not undone here: pass confirm true to say you mean it");
+      const r = await removeFileStored(key, b.id);
+      return written(r, r.ok ? { removed: true } : {});
+    }
     default:
       return refuse(`That is not a card verb: ${DOOR_VERBS.join(", ")}`);
   }
