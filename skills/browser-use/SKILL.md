@@ -279,6 +279,11 @@ requests from just before it, and a screenshot. `selector matched 3 elements`
 names them with position and text. You do not need a second call to find out
 what went wrong.
 
+**To act on a page, use the act verbs, not `eval`.** `click`, `type`, `fill`,
+`press`, `upload` wait for their effects, and they are what the person watching
+sees: the drawn pointer moves to them. A script that clicks moves nothing they
+can see. `eval` is for reading values and for what no verb does.
+
 **JavaScript is yours.** `eval` reads the app's own runtime — a store, a
 component's state, `document.visibilityState`. `eval --file` for anything a
 shell would mangle. A script gets 10 s (`--timeout-ms`, at most 40000): one that

@@ -151,18 +151,20 @@ export function presenceLabel(verb: string, name: string, key = ""): string {
   return n ? `${doing} ${clip(n, 32)}` : doing;
 }
 
-export type AgentStateKey = "clicking" | "typing" | "navigating" | "scrolling" | "pointing" | "reading" | "thinking" | "yours" | "waiting" | "done";
+export type AgentStateKey = "clicking" | "typing" | "navigating" | "scrolling" | "pointing" | "reading" | "scripting" | "thinking" | "yours" | "waiting" | "done";
 
 const STATE_OF: Record<string, AgentStateKey> = {
   click: "clicking", dblclick: "clicking", rightclick: "clicking", check: "clicking", drag: "clicking", upload: "clicking",
   type: "typing", fill: "typing", press: "typing", select: "typing",
   open: "navigating", back: "navigating", forward: "navigating", reload: "navigating", newtab: "navigating",
-  scroll: "scrolling", hover: "pointing",
+  scroll: "scrolling", hover: "pointing", eval: "scripting",
 };
 const STATE_WORD: Record<AgentStateKey, string> = {
   clicking: "Clicking", typing: "Typing", navigating: "Navigating", scrolling: "Scrolling",
-  pointing: "Pointing", reading: "Reading", thinking: "Thinking", yours: "You have it", waiting: "Waiting", done: "Done",
+  pointing: "Pointing", reading: "Reading", scripting: "Scripting", thinking: "Thinking", yours: "You have it", waiting: "Waiting", done: "Done",
 };
+
+export const stateOf = (key: AgentStateKey) => ({ key, word: STATE_WORD[key] });
 
 /** One word for what the agent is doing now: a state, not an account of it. Anything that is not an act is a read. */
 export function agentState(a: Pick<TabAgent, "working" | "paused" | "op">): { key: AgentStateKey; word: string } {
@@ -190,7 +192,7 @@ export function pointerAt(l: { x: number; y: number; w: number; h: number; vw: n
  * Done only when the agent said so with the `done` verb. A name kept from a
  * restart with no live activity has no state.
  */
-export const STATE_HOLD_MS = 2000;
+export const STATE_HOLD_MS = 4000;
 export function tabState(a: TabAgent | undefined, kept: string | undefined, now: number): { key: AgentStateKey; word: string } | null {
   if (a && (a.paused || a.working > 0)) return agentState(a);
   /* The last ask of any kind, not the last act: an agent reading between clicks
@@ -203,8 +205,31 @@ export function tabState(a: TabAgent | undefined, kept: string | undefined, now:
   return a ? { key: "waiting", word: STATE_WORD.waiting } : null;
 }
 
+/**
+ * A state shown to a person must hold still: an agent driving a page by `eval`
+ * and `tabs` (measured: 134 and 217 calls in a few minutes) flipped the chip
+ * between two words several times a second. A new word is shown only once it
+ * has been the raw answer for CANDIDATE_MS, and a shown word stays at least
+ * MIN_SHOW_MS. "You have it" skips both: a person's click is answered at once.
+ * Ceiling: a word that was raw for less than CANDIDATE_MS is never seen.
+ */
+export const CANDIDATE_MS = 700;
+export const MIN_SHOW_MS = 1500;
+export interface Steady<K extends string = AgentStateKey> { shown: K | null; shownAt: number; cand: K | null; candAt: number }
+export const STEADY_INIT: Steady<never> = { shown: null, shownAt: 0, cand: null, candAt: 0 };
+/** Next steady state for the raw one at `now`, and the ms until it could change (0 = nothing pending). */
+export function steadyStep<K extends string>(s: Steady<K>, raw: K | null, now: number): { s: Steady<K>; wait: number } {
+  if (raw === null) return { s: STEADY_INIT as Steady<K>, wait: 0 };
+  if (s.shown === null) return { s: { shown: raw, shownAt: now, cand: null, candAt: 0 }, wait: 0 };
+  if (raw === s.shown) return { s: s.cand === null ? s : { ...s, cand: null }, wait: 0 };
+  const c = s.cand === raw ? s : { ...s, cand: raw, candAt: now };
+  const instant = raw === ("yours" as string) || s.shown === ("yours" as string);
+  const due = instant ? now : Math.max(c.candAt + CANDIDATE_MS, s.shownAt + MIN_SHOW_MS);
+  return now >= due ? { s: { shown: raw, shownAt: now, cand: null, candAt: 0 }, wait: 0 } : { s: c, wait: due - now };
+}
+
 /** The busiest of a container's tabs speaks for the box. */
-const RANK: Record<AgentStateKey, number> = { yours: 5, clicking: 4, typing: 4, navigating: 4, scrolling: 4, pointing: 4, reading: 4, thinking: 3, waiting: 2, done: 1 };
+const RANK: Record<AgentStateKey, number> = { yours: 5, clicking: 4, typing: 4, navigating: 4, scrolling: 4, pointing: 4, reading: 4, scripting: 4, thinking: 3, waiting: 2, done: 1 };
 export function boxState(states: Array<{ key: AgentStateKey; word: string } | null>): { key: AgentStateKey; word: string } | null {
   return states.reduce<{ key: AgentStateKey; word: string } | null>((best, s) => (s && (!best || RANK[s.key] > RANK[best.key]) ? s : best), null);
 }

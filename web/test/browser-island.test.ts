@@ -27,7 +27,7 @@ describe("island pill", () => {
 
   // The pill named the act and the dock repeated it: the state lives in the dock only.
   test("names the agent and nothing it is doing", () => {
-    expect(island).toContain('<span className="agx-isl-doing-t">{act!.agent}</span>');
+    expect(island).toContain('>{act!.agent}</span>');
     expect(island).not.toContain("p.doing");
   });
 });

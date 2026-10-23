@@ -16,8 +16,8 @@
  * act is done), and page zoom other than 100 % puts it off by the zoom factor.
  */
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { AgentStateKey, TabAgent } from "../../lib/browserAgentActivity.ts";
-import { PRESENCE_LINGER_MS, STATE_HOLD_MS, agentState, isActVerb, lapKeyframes, pointerAt, presenceLabel, travelMs } from "../../lib/browserAgentActivity.ts";
+import type { AgentStateKey, Steady, TabAgent } from "../../lib/browserAgentActivity.ts";
+import { PRESENCE_LINGER_MS, STATE_HOLD_MS, STEADY_INIT, agentState, isActVerb, stateOf, steadyStep, lapKeyframes, pointerAt, presenceLabel, travelMs } from "../../lib/browserAgentActivity.ts";
 import type { ActLanding } from "../../lib/browserDrive.ts";
 import { LivingMark } from "../Logo.tsx";
 
@@ -45,6 +45,20 @@ export function useAgentLive(agent: TabAgent | undefined): boolean {
   return live;
 }
 
+/* The raw state, held still: see steadyStep. Re-renders itself when a pending change comes due. */
+export function useSteadyState(raw: AgentStateKey | null): { key: AgentStateKey; word: string } | null {
+  const ref = useRef<Steady>(STEADY_INIT);
+  const [, tick] = useState(0);
+  const r = steadyStep(ref.current, raw, Date.now());
+  ref.current = r.s;
+  useEffect(() => {
+    if (r.wait <= 0) return;
+    const t = setTimeout(() => tick((n) => n + 1), r.wait);
+    return () => clearTimeout(t);
+  }, [raw, r.s.shown, r.s.candAt]); // eslint-disable-line react-hooks/exhaustive-deps
+  return r.s.shown && stateOf(r.s.shown);
+}
+
 export function AgentPresence({ agent, landing, url = "", onToggle, quiet = false }: {
   agent: TabAgent;
   /** The tab's address: a new page leaves the pointer pointing at something no longer there. */
@@ -69,7 +83,7 @@ export function AgentPresence({ agent, landing, url = "", onToggle, quiet = fals
     const t = setTimeout(() => setHeld(false), STATE_HOLD_MS);
     return () => clearTimeout(t);
   }, [agent.working, agent.paused]);
-  const state = agentState(held ? { ...agent, working: 1 } : agent);
+  const state = useSteadyState(agentState(held ? { ...agent, working: 1 } : agent).key) ?? agentState(agent);
   /* The glass is for a page an agent is changing: one that only reads it
      (a look, a screenshot) leaves the person's hand on it. Up from the first
      act, down with the rest of the presence. */
@@ -161,7 +175,7 @@ export function AgentPresence({ agent, landing, url = "", onToggle, quiet = fals
         <div className={"agx-presence-dock is-" + state.key} role="status" aria-live="polite">
           <LivingMark size={24} className="agx-presence-mark" style={{ color: "var(--agx-dock-mark)" }} />
           <div className="agx-presence-who">
-            <span className="agx-presence-task">{agent.agent}</span>
+            <span className="agx-presence-task" title={`${agent.agent} (this agent's container name)`}>{agent.agent}</span>
             {/* Keyed by the state, so a new one comes in instead of the text swapping in place. */}
             <span key={state.key} className="agx-presence-state"><StateIcon k={state.key} />{state.word}</span>
           </div>
@@ -185,6 +199,7 @@ export function StateIcon({ k }: { k: AgentStateKey }) {
     case "scrolling": return <svg {...p}><path className="agx-st-up" d="m5 6 3-3 3 3" /><path className="agx-st-down" d="m5 10 3 3 3-3" /></svg>;
     case "pointing": return <svg {...p}><path d="M4 2.5 12 7l-3.6.9L6.8 11.5z" /></svg>;
     case "reading": return <svg {...p}><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z" /><circle className="agx-st-pupil" cx="8" cy="8" r="2" /></svg>;
+    case "scripting": return <svg {...p}><path d="m6 5-3.5 3L6 11M10 5l3.5 3L10 11" /></svg>;
     case "thinking": return <svg {...p} stroke="none" fill="currentColor"><circle className="agx-st-dot" cx="3.5" cy="8" r="1.5" /><circle className="agx-st-dot" cx="8" cy="8" r="1.5" /><circle className="agx-st-dot" cx="12.5" cy="8" r="1.5" /></svg>;
     case "done": return <svg {...p}><circle cx="8" cy="8" r="6" /><path className="agx-st-tick" d="m5.4 8.2 1.8 1.8 3.4-3.6" /></svg>;
     case "waiting": return <svg {...p}><circle cx="8" cy="8" r="6" /><path d="M8 4.8V8l2.2 1.4" /></svg>;

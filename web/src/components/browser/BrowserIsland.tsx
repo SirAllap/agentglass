@@ -26,9 +26,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { BrowserTab } from "../../lib/browserTabs.ts";
 import type { Activity } from "../../lib/browserAgentActivity.ts";
-import { boxState, tabState } from "../../lib/browserAgentActivity.ts";
+import { boxState, tabState, type AgentStateKey } from "../../lib/browserAgentActivity.ts";
 import { LivingMark } from "../Logo.tsx";
-import { StateIcon, useAgentLive } from "./AgentPresence.tsx";
+import { StateIcon, useAgentLive, useSteadyState } from "./AgentPresence.tsx";
 import { CloseIcon } from "./icons.tsx";
 
 /** How long "You have this tab" stays where the person is looking before the island tucks away. */
@@ -253,7 +253,7 @@ export function BrowserIsland(p: IslandProps) {
               <button type="button" className="agx-isl-status" aria-label="Show every tab" onClick={show}>
                 <LivingMark size={17} style={{ color: "#a78bfa" }} />
                 <span className="agx-isl-title">{active?.title || (active ? host(active.url) : "")}</span>
-                <span className="agx-isl-doing"><span className={"agx-isl-dot " + dot} /><span className="agx-isl-doing-t">{act!.agent}</span></span>
+                <span className="agx-isl-doing"><span className={"agx-isl-dot " + dot} /><span className="agx-isl-doing-t" title={`${act!.agent} (this agent's container name)`}>{act!.agent}</span></span>
                 <span className="agx-isl-num" title={`${tabs.length} tabs open`}>{tabs.length}</span>
               </button>
             )}
@@ -285,7 +285,7 @@ export function BrowserIsland(p: IslandProps) {
                   <header>
                     <span className="agx-isl-bn">{g.name}</span>
                     <span className="agx-isl-bc" title={g.held ? `agent on ${g.held}` : undefined}>{g.list.length} {g.list.length === 1 ? "tab" : "tabs"}</span>
-                    {g.state && <span key={g.state.key} className={"agx-isl-state is-" + g.state.key}><StateIcon k={g.state.key} />{g.state.word}</span>}
+                    <BoxState k={g.state?.key ?? null} />
                   </header>
                   <div className="agx-isl-row">
                     {g.list.map((t) => {
@@ -320,4 +320,10 @@ export function BrowserIsland(p: IslandProps) {
       </div>
     </>
   );
+}
+
+/* The box's word, held still like the dock's (see steadyStep). */
+function BoxState({ k }: { k: AgentStateKey | null }) {
+  const st = useSteadyState(k);
+  return st ? <span key={st.key} className={"agx-isl-state is-" + st.key}><StateIcon k={st.key} />{st.word}</span> : null;
 }

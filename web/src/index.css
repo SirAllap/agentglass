@@ -3008,8 +3008,8 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 /* As wide as the longest word, so the dock and Take over stay put as the state changes. */
 .agx-presence-state { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; min-width: 96px; height: 20px; padding: 0 8px 0 6px; border-radius: 10px;
   font-size: 11px; font-weight: 500; letter-spacing: .01em; color: #c4b5fd; background: color-mix(in srgb, var(--agx-mark) 18%, transparent);
-  animation: agx-state-in 200ms var(--agx-ease); }
-@keyframes agx-state-in { from { opacity: 0; transform: translateY(4px); } }
+  animation: agx-state-in 180ms ease-out; }
+@keyframes agx-state-in { from { opacity: 0; transform: translateY(2px); } }
 .agx-presence-dock.is-thinking .agx-presence-state { color: rgba(242, 240, 247, .72); background: rgba(255, 255, 255, .08); }
 .agx-presence-dock.is-yours .agx-presence-state { color: var(--agx-dock-yours); background: color-mix(in srgb, var(--agx-dock-yours) 16%, transparent); }
 .agx-presence-state svg { flex: none; overflow: visible; }

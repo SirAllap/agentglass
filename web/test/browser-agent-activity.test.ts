@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { FLASH_MS, flashScript } from "../src/lib/browserDrive.ts";
 import { describe, expect, test } from "bun:test";
 import {
-  LOG_MAX, activityReducer, actionOf, agentLabel, doneMayMark, agentState, boxState, pointerAt, tabState, ago, flashPlan, isActVerb, lapKeyframes, pausedRefusal, presenceLabel, travelMs, type Activity,
+  LOG_MAX, steadyStep, STEADY_INIT, CANDIDATE_MS, MIN_SHOW_MS, activityReducer, actionOf, agentLabel, doneMayMark, agentState, boxState, pointerAt, tabState, ago, flashPlan, isActVerb, lapKeyframes, pausedRefusal, presenceLabel, travelMs, type Activity,
 } from "../src/lib/browserAgentActivity.ts";
 
 const begin = (s: Activity, tab = "t1", agent = "orbit-ci") => activityReducer(s, { type: "begin", tab, agent });
@@ -271,7 +271,8 @@ describe("the overview's states", () => {
     expect(tabState(s.t1, undefined, now)?.word).toBe("Reading");
     s = activityReducer(s, { type: "end", tab: "t1", action: null, at: now - 500 });
     expect(tabState(s.t1, undefined, now)?.word).toBe("Reading");
-    expect(tabState(s.t1, undefined, now + 3000)?.word).toBe("Thinking");
+    expect(tabState(s.t1, undefined, now + 3000)?.word).toBe("Reading");
+    expect(tabState(s.t1, undefined, now + 4500)?.word).toBe("Thinking");
   });
   test("quiet without `done` is Waiting, `done` is Done, a restored name alone is nothing", () => {
     const now = 1_000_000;
@@ -285,5 +286,42 @@ describe("the overview's states", () => {
     const now = 1_000_000;
     expect(boxState([tabState(a(0, 1), undefined, now), tabState(a(1), undefined, now), null])?.word).toBe("Clicking");
     expect(boxState([tabState(a(1), undefined, now), tabState(a(1, 0, true), undefined, now)])?.word).toBe("You have it");
+  });
+});
+
+describe("steadyStep: a word shown to a person holds still", () => {
+  type K = "reading" | "scripting" | "thinking" | "yours";
+  const run = (events: Array<[number, K]>) => {
+    let s = STEADY_INIT as import("../src/lib/browserAgentActivity.ts").Steady<K>;
+    const seen: K[] = [];
+    for (const [t, raw] of events) { const r = steadyStep(s, raw, t); s = r.s; if (s.shown && seen[seen.length - 1] !== s.shown) seen.push(s.shown); }
+    return seen;
+  };
+  test("the first word shows at once", () => {
+    expect(steadyStep(STEADY_INIT as never, "reading" as K, 0).s.shown).toBe("reading");
+  });
+  test("a flip-flop faster than CANDIDATE_MS never shows the other word", () => {
+    const ev: Array<[number, K]> = [[0, "reading"]];
+    for (let t = 100; t < 5000; t += 100) ev.push([t, t % 200 ? "scripting" : "reading"]);
+    expect(run(ev)).toEqual(["reading"]);
+  });
+  test("a new word shows once it has held CANDIDATE_MS, and not before", () => {
+    expect(run([[0, "reading"], [2000, "scripting"], [2000 + CANDIDATE_MS - 1, "scripting"]])).toEqual(["reading"]);
+    expect(run([[0, "reading"], [2000, "scripting"], [2000 + CANDIDATE_MS, "scripting"]])).toEqual(["reading", "scripting"]);
+  });
+  test("a shown word stays MIN_SHOW_MS even when the candidate is old enough", () => {
+    expect(run([[0, "reading"], [100, "scripting"], [100 + CANDIDATE_MS, "scripting"], [MIN_SHOW_MS - 1, "scripting"]])).toEqual(["reading"]);
+    expect(run([[0, "reading"], [100, "scripting"], [MIN_SHOW_MS, "scripting"]])).toEqual(["reading", "scripting"]);
+  });
+  test("wait says when the change comes due", () => {
+    const a = steadyStep(steadyStep(STEADY_INIT as never, "reading" as K, 0).s, "scripting" as K, 100);
+    expect(a.wait).toBe(MIN_SHOW_MS - 100);
+  });
+  test("You have it is immediate both ways", () => {
+    expect(run([[0, "reading"], [10, "yours"], [20, "reading"]])).toEqual(["reading", "yours", "reading"]);
+  });
+  test("eval is Scripting, ranked like a read", () => {
+    expect(agentState({ working: 1, paused: false, op: "eval" }).word).toBe("Scripting");
+    expect(boxState([{ key: "scripting", word: "Scripting" }, { key: "thinking", word: "Thinking" }])?.word).toBe("Scripting");
   });
 });
