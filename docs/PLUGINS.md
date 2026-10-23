@@ -337,6 +337,7 @@ catalogues added, and the settings values the person typed (a `secret` field's
 value is the exception: it is in `secrets.json`, below) — which is why a
 prompt written in a settings box never travels with the plugin.
 | `POST /plugin/self/pr/run` | Start or finish a pass over a pull request |
+| `GET /plugin/self/github?op=…` | Read from GitHub with the machine's `gh` login, for a box that has no keyring. Operations: `user`, `repos`, `pr-list`, `pr-view`, `pr-view-context`, `pr-diff`, `threads`, `compare`, `tarball`. Read only; the token never leaves the server |
 | `POST /plugin/self/pr/notes` `{notes}` | Add or update notes |
 | `POST /plugin/self/pr/notes/reply` `{id, text}` | Answer a finding's thread as the plugin (below) |
 

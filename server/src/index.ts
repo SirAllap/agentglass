@@ -5599,6 +5599,17 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         const r = upsertRun(self, c, await body<unknown>());
         return json(r, r.ok ? 200 : 400);
       }
+      /* GitHub reads for a plugin whose box has no keyring: the server holds
+         the `gh` login and answers only the operations in plugin-github.ts. */
+      if (pathname === "/plugin/self/github" && (req.method as string) === "GET") {
+        const op = url.searchParams.get("op") ?? "";
+        if (op === "tarball") {
+          const built = ghReadArgs(op, url.searchParams);
+          return built.ok ? streamTarball(built.args) : json({ ok: false, error: built.error }, 400);
+        }
+        const r = await runGhRead(op, url.searchParams);
+        return json(r, r.ok ? 200 : 400);
+      }
       if (pathname === "/plugin/self/pr/notes") {
         const b = await body<{ notes?: unknown }>();
         const r = upsertNotes(self, c, b?.notes);
@@ -11192,6 +11203,7 @@ import { detailStored as jiraDetailRead, mentionableStored as jiraMentionable, c
 import { setVoteStored as jiraVote, setWatchStored as jiraWatch } from "./jiraFollow.ts";
 import { logWorkStored as jiraWorkLog, editWorkStored as jiraWorkEdit, deleteWorkStored as jiraWorkDelete } from "./jiraWorklog.ts";
 import { editStored as jiraEditCard, labelSuggestionsStored as jiraLabels } from "./jiraEdit.ts";
+import { ghReadArgs, runGhRead, streamTarball } from "./plugin-github.ts";
 startJiraWatch((n) => broadcast({ type: "card", data: n }));
 /* Re-asks the open pull request lists a real client has looked at, on a timer,
    so a comment posted while nobody is on the PRs tab still reaches `noteTalk`
