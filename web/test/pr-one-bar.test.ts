@@ -34,8 +34,8 @@ describe("the pull-request list header is one bar", () => {
   });
 
   it("the search says one short thing in the box and the whole syntax in a popover", () => {
-    expect(bar).toContain("placeholder={SEARCH_PLACEHOLDER}");
-    expect(bar).toContain("focused && !menuOpen");
+    expect(bar).toContain("scoped ? scoped.placeholder : SEARCH_PLACEHOLDER");
+    expect(bar).toContain("focused && !menuOpen && !scoped");
   });
 
   it("Sort and Save left the bar for the \"⋯\" menu; the builder has no button of its own", () => {

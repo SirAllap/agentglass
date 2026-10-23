@@ -21,7 +21,7 @@ import { ALWAYS_OPEN, boardScroll, foldable, foldedLanes, laneSorts, setBoardScr
 import { SORT_KEYS, SORT_LABEL, sortCards, type SortKey } from "../lib/prSort.ts";
 import type { PrSummary } from "../../../shared/types.ts";
 import { staleApproval } from "../../../shared/mergeBlockers.ts";
-import { LANES, lanesFor, LANE_CAP, board as fileAll, fileInLane, suggestedAction, ACTION_LABEL, viewKeeps, viewIsWide, type BoardView, type Filed, type LaneId } from "../lib/prLanes.ts";
+import { LANES, lanesFor, LANE_CAP, board as fileAll, fileInLane, suggestedAction, ACTION_LABEL, BOARD_IS_WIDE, type Filed, type LaneId } from "../lib/prLanes.ts";
 import { isTrunkBranch, type Stack } from "../lib/prStack.ts";
 import { usePrStacks } from "../lib/usePrStacks.ts";
 import { spineSentence, type Facts } from "../lib/prStackWords.ts";
@@ -94,7 +94,7 @@ type Card = PrSummary & { filed: Filed };
 export function TriageBoard({
   mine, review, total, hasTaskProvider, pinned,
   onOpen, onTogglePin, onShowTable, onAct, busy, acting, loading, settling, failed, hidden, onRetry, root, repoKey,
-  onlyUnread, onOnlyUnread, unfiltered, view = "all", others, results, more, viewer, person,
+  onlyUnread, onOnlyUnread, unfiltered, others, results, more, viewer, person,
 }: {
   /** The `mine` scope, as the panel already has it. */
   mine: PrSummary[];
@@ -183,13 +183,11 @@ export function TriageBoard({
    * token says it. Absent, the lists above are all there is.
    */
   unfiltered?: { mine: PrSummary[]; review: PrSummary[] };
-  /** Which of the panel's views is picked: a filter over the cards below, see `viewKeeps`. */
-  view?: BoardView;
   /**
    * The rest of the repository, one page of it: pull requests that are neither
    * yours nor asked of you. Filed in the same lanes (they have no stake, so they
    * land in "waiting on someone else" unless they are ready to land) and drawn
-   * only by the views that reach past your two queues — see `viewIsWide`.
+   * only by the views that reach past your two queues — see `BOARD_IS_WIDE`.
    */
   others?: PrSummary[];
   /**
@@ -274,7 +272,7 @@ export function TriageBoard({
 
   /* Whether the repository's page is on this board at all. Counted from the
      * view, not from `others` being non-empty: an empty page is still "wide". */
-  const wide = viewIsWide(view) && !!others;
+  const wide = BOARD_IS_WIDE && !!others;
   const lanes = useMemo(() => {
     // De-duplicated by number before filing: a pull request that is both yours
     // and asked of you arrives twice, and would otherwise be drawn twice.
@@ -285,13 +283,9 @@ export function TriageBoard({
     const filed = fileAll([...by.values()], (p) => ({ mine: m.has(p.number), asked: r.has(p.number) }),
       (p) => (root && p.checks?.failing?.length ? failureHint(p.checks.failing, (job) => summaryOf(failureKey(root, job))) : null),
       viewer);
-    if (view === "all") return filed;
-    for (const [id, list] of filed) {
-      filed.set(id, list.filter((p) => viewKeeps(view, id, { mine: m.has(p.number), asked: r.has(p.number) }, p)));
-    }
     return filed;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mine, review, others, wide, trueChecks, bumpRollup, root, failureTick, knownTick, view, viewer]);
+  }, [mine, review, others, wide, trueChecks, bumpRollup, root, failureTick, knownTick, viewer]);
 
   const cards = useMemo(() => [...lanes.values()].flat(), [lanes]);
   /* Per repository: this board IS one repository's, so the answer is read off

@@ -12,8 +12,7 @@
  * whole width and a card per thread can say who, where, why and how long ago.
  * Ticking is for bulk work and only shows itself on hover or once something is
  * ticked. The filter text comes from outside (`filterText`): the bar at the top
- * of the panel owns the one search box, and a local state stands in until a bar
- * feeds it. Two differences from GitHub's own inbox, both deliberate:
+ * of the panel owns the one search box, and the All / Unread switch. Two differences from GitHub's own inbox, both deliberate:
  *
  *   * It opens filtered to the repository the panel is showing. This app is one
  *     repository at a time; an inbox that starts with four repositories in it
@@ -112,7 +111,7 @@ function Switch<T extends string>({ value, options, onChange, label }: {
   );
 }
 
-export function Inbox({ repo, root, prs, onFlash, onUnread, active = true, filterText, onFilterText }: {
+export function Inbox({ repo, root, prs, onFlash, onUnread, active = true, filterText, onFilterText, unreadOnly }: {
   /** The repository the panel is showing, which is what this opens filtered to. */
   repo: string;
   /** The checkout and the pull requests the panel has loaded: what a failed CI row is worded from. Neither asks GitHub. */
@@ -125,8 +124,10 @@ export function Inbox({ repo, root, prs, onFlash, onUnread, active = true, filte
   /** Whether the list can be seen. False while a pull request is open on top. */
   active?: boolean;
   /** The text the panel's one search box holds. This view draws no box of its own. */
-  filterText?: string;
-  onFilterText?: (v: string) => void;
+  filterText: string;
+  onFilterText: (v: string) => void;
+  /** The All / Unread switch lives in the panel's bar, beside the box. */
+  unreadOnly: boolean;
 }) {
   /* The app's own dialog, not the browser's — see no-native-dialogs.test.ts.
      This one had a `window.confirm` and the lint could not see it: its
@@ -147,10 +148,8 @@ export function Inbox({ repo, root, prs, onFlash, onUnread, active = true, filte
   /** "turn" is a view of the inbox shelf, not a shelf: nothing is stored under it. */
   const [shelf, setShelf] = useState<Shelf | "turn">("inbox");
   const [facet, setFacet] = useState("");
-  const [unreadOnly, setUnreadOnly] = useState(false);
-  const [localQ, setLocalQ] = useState("");
-  const q = filterText ?? localQ;
-  const setQ = onFilterText ?? setLocalQ;
+  const q = filterText;
+  const setQ = onFilterText;
   const [newest, setNewest] = useState(true);
   /** A plugin whose numbers order the list, or null for time. Only ever the person's pick. */
   const [sortBy, setSortBy] = useState<string | null>(null);
@@ -413,8 +412,6 @@ export function Inbox({ repo, root, prs, onFlash, onUnread, active = true, filte
           )}
         </Menu>
         <span className="flex-1" />
-        <Switch<"all" | "unread"> label="Show" value={unreadOnly ? "unread" : "all"} onChange={(v) => setUnreadOnly(v === "unread")}
-          options={[{ id: "all", label: "All" }, { id: "unread", label: "Unread" }]} />
         {orderers.length > 0 && (
           <div title="Sort by time, or by the numbers an installed plugin gave the rows">
             <Switch<string> label="Sort" value={sortBy && orderers.includes(sortBy) ? sortBy : "time"} onChange={(v) => setSortBy(v === "time" ? null : v)}

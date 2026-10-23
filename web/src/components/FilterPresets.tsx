@@ -23,6 +23,7 @@ import { memo, useEffect, useMemo, useRef, useState, type KeyboardEvent as React
 import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { Portal } from "./Portal.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { CloseIcon } from "./CloseButton.tsx";
 import { EDGE, INPUT, INPUT_STYLE, chipTone } from "./workspace/Chrome.tsx";
 import { menuUnder } from "../lib/menuPos.ts";
 import { MAX_NAME, MAX_PRESETS, canAdd, cleanName, dropGone, freeName, nthPreset, rulesToPreset, summarizeRules, type Gone, type Preset } from "../lib/filterPresets.ts";
@@ -474,6 +475,7 @@ export const FilterPresets = memo(function FilterPresets({ api, counts, rules, f
     else if (e.key === "ArrowRight" && !e.altKey) step(at + 1);
     else if (e.key === "Home") step(0);
     else if (e.key === "End") step(order.length - 1);
+    else if (e.key === "Escape" && live > 0) { e.preventDefault(); e.stopPropagation(); api.clear(); }
     else if (e.key === "F2" && isPreset) { e.preventDefault(); startRename(id); }
     else if (e.key === "Delete" && isPreset) { e.preventDefault(); doDelete(id); }
     else if (isMenuKey(e) && isPreset) { e.preventDefault(); openCtx(id, el); }
@@ -507,7 +509,7 @@ export const FilterPresets = memo(function FilterPresets({ api, counts, rules, f
         <button ref={(el) => { chipEls.current[p.id] = el; }} data-chip={p.id}
           tabIndex={tabStop === p.id ? 0 : -1} aria-pressed={on}
           onFocus={() => setFocusId(p.id)}
-          onClick={() => api.apply(p.id)}
+          onClick={() => (on ? api.clear() : api.apply(p.id))}
           onContextMenu={(e) => { e.preventDefault(); openCtx(p.id, e.currentTarget); }}
           title={`${p.name}: ${summaries.get(p.id)}`}
           aria-label={`${p.name}, ${n} ${n === 1 ? "card" : "cards"}${dirty ? ", changed since saved" : ""}${g ? ", a value is missing" : ""}`}
@@ -645,6 +647,16 @@ export const FilterPresets = memo(function FilterPresets({ api, counts, rules, f
       </div>
 
       <span className="flex-1" />
+
+      {/* Always in the row, so the row never moves: with nothing to clear it
+          is only invisible and out of the tab order. Clears the live rules, the
+          preset that is on and anything built by hand; no saved set is deleted. */}
+      <button onClick={api.clear} disabled={live === 0} tabIndex={live === 0 ? -1 : 0} aria-hidden={live === 0}
+        title="Remove every filter. Your saved sets stay in the menu"
+        className="text-[11.5px] px-2 py-1 rounded-lg flex items-center gap-1 whitespace-nowrap shrink-0 agx-btn"
+        style={{ border: EDGE, color: "var(--text2)", visibility: live === 0 ? "hidden" : "visible" }}>
+        <CloseIcon size={ICON.xs} />Clear filters
+      </button>
 
       {/* Fixed at the right end: the same place whatever else changes. Lit when
           a rule, a modified set or a non-default order is in force, so the

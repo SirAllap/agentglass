@@ -3,6 +3,7 @@ import { Avatar } from "./Avatar.tsx";
 import { LAYER } from "../lib/layers.ts";
 import { applyPick, atToken, loadUse, recordPicks, suggestPeople } from "../lib/personUsage.ts";
 import { SEARCH_HINT, SEARCH_PLACEHOLDER } from "../lib/prSearch.ts";
+import { barControls, type BarView } from "../lib/prBarView.ts";
 import { ICON } from "../lib/iconSize.ts";
 import { serializeQuery, toggleFacet, type FilterState, type FacetView } from "../lib/prFilter.ts";
 import { SearchIcon } from "../lib/glyphIcons.tsx";
@@ -23,8 +24,14 @@ import { EDGE, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
  * state; it turns clicks into new query strings and hands them up via `onQuery`.
  */
 export function PrFilterBar({
-  query, filters, facets, onQuery, onSearch, onPickPerson, pending, searching, shown, total, swept, unread, builder, people,
+  query, filters, facets, onQuery, onSearch, onPickPerson, pending, searching, shown, total, swept, builder, people, view = "board", scoped, inbox,
 }: {
+  /** Which view the box points at. Everything below the box is the board's and is drawn only there. */
+  view?: BarView;
+  /** The box for a view that is not the board: its own text, its own hint. It asks nobody on a keystroke. */
+  scoped?: { value: string; onChange: (v: string) => void; placeholder: string };
+  /** The inbox's two controls: which list is showing and how many are unread. */
+  inbox?: { unreadOnly: boolean; onUnreadOnly: (v: boolean) => void; unread: number };
   query: string;
   /** The repository's people, already loaded by the panel. Null while they are
    *  not: typing "@" then says so instead of asking for them. */
@@ -48,16 +55,8 @@ export function PrFilterBar({
   /** How far the background sweep has read, while free text is filtering. A
    *  count over a partial pool has to say so. */
   swept?: { rows: number; done: boolean };
-  /**
-   * Rows with something said on them since you last looked.
-   *
-   * Not a facet: every other pill here is a GitHub search qualifier, and "since I last
-   * looked" is a timestamp in this browser that GitHub has never heard of. It sits
-   * with them because that is where somebody looks for it, and its tooltip says out
-   * loud that it counts only the rows this table has loaded.
-   */
-  unread?: { count: number; on: boolean; onToggle: () => void; onMarkAllRead: () => void };
 }) {
+  const controls = barControls(view);
   const emit = (next: FilterState) => onQuery(serializeQuery(next));
 
   /* "@" in the box: the repository's people, from the list the panel already
@@ -67,7 +66,7 @@ export function PrFilterBar({
   const at = atToken(query);
   const suggest = at && people ? suggestPeople(people, loadUse(), at.token) : null;
   const flat = suggest ? [...suggest.frequent, ...suggest.rest] : [];
-  const menuOpen = !!at && dismissed !== query;
+  const menuOpen = !scoped && !!at && dismissed !== query;
   const pick = (login: string) => {
     recordPicks([login]);
     const next = applyPick(query, login);
@@ -119,9 +118,10 @@ export function PrFilterBar({
         <div className="relative flex-1 min-w-0">
         <input
           data-pr-filter-input
-          value={query}
-          onChange={(e) => { setCursor(0); onQuery(e.target.value); }}
+          value={scoped ? scoped.value : query}
+          onChange={(e) => { setCursor(0); (scoped ? scoped.onChange : onQuery)(e.target.value); }}
           onKeyDown={(e) => {
+            if (scoped) return;
             if (menuOpen && flat.length) {
               if (e.key === "ArrowDown") { e.preventDefault(); setCursor((c) => (c + 1) % flat.length); return; }
               if (e.key === "ArrowUp") { e.preventDefault(); setCursor((c) => (c - 1 + flat.length) % flat.length); return; }
@@ -132,12 +132,12 @@ export function PrFilterBar({
           }}
           role="combobox" aria-expanded={menuOpen} aria-autocomplete="list" aria-controls="pr-at-people"
           onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
-          placeholder={SEARCH_PLACEHOLDER}
-          aria-label={SEARCH_HINT}
+          placeholder={scoped ? scoped.placeholder : SEARCH_PLACEHOLDER}
+          aria-label={scoped ? scoped.placeholder : SEARCH_HINT}
           spellCheck={false}
           className={`w-full ${INPUT}`}
           style={INPUT_STYLE} />
-        {focused && !menuOpen && (
+        {focused && !menuOpen && !scoped && (
           <div role="note" className="absolute left-0 right-0 top-full mt-1 rounded-lg px-3 py-2 text-[11px] pointer-events-none"
             style={{ zIndex: LAYER.menu, border: EDGE, color: "var(--text2)", background: "color-mix(in srgb, var(--bg2) 98%, black)", boxShadow: "0 18px 44px -18px rgba(0,0,0,.8)" }}>
             {SEARCH_HINT}
@@ -180,7 +180,7 @@ export function PrFilterBar({
           * goes away again once it has — so its presence IS the message: there
           * is more behind this than the rows you can see.
           */}
-        {(pending || searching) && (
+        {!scoped && (pending || searching) && (
           <button
             onClick={onSearch}
             disabled={searching}
@@ -195,54 +195,43 @@ export function PrFilterBar({
             <span>{searching ? "Searching" : "Search all"}</span>
           </button>
         )}
-        {query.trim() && (
-          <button onClick={() => onQuery("")} title="Clear all filters" aria-label="Clear all filters"
+        {(scoped ? scoped.value : query).trim() && (
+          <button onClick={() => (scoped ? scoped.onChange("") : onQuery(""))} title={scoped ? "Clear the filter" : "Clear all filters"} aria-label={scoped ? "Clear the filter" : "Clear all filters"}
             className="grid place-items-center w-[22px] h-[22px] rounded shrink-0 hover:bg-white/5" style={{ color: "var(--text3)", border }}>
             <CloseIcon size={ICON.xs} />
           </button>
         )}
       </div>
 
-      {!!unread?.count && (
-          <button onClick={unread.onToggle} aria-pressed={unread.on}
-            title={unread.on
-              ? "Showing only the pull requests somebody has spoken on since you last looked. Press again for all of them."
-              : `${unread.count} of the loaded pull requests have something said on them since you last looked. Counted here rather than on GitHub — the mark is this browser\u2019s.`}
-            className="agx-btn inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded tabular-nums"
-            style={{
-              color: "var(--warning-ink)",
-              border: `1px solid color-mix(in srgb, var(--warning) ${unread.on ? 70 : 40}%, transparent)`,
-              background: unread.on ? "color-mix(in srgb, var(--warning) 16%, transparent)" : "transparent",
-            }}>
-            <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 24 24" fill="none" aria-hidden
-              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
-            </svg>
-            {unread.count} unread
-          </button>
-        )}
-        {/* Beside the chip it clears, not inside it: pressing this is a
-            different act from pressing the chip (one filters, one writes),
-            and a single control that did both would need a second click to
-            find out which. Only offered while there is something to mark —
-            once the count reaches zero the button would have nothing to do. */}
-        {!!unread?.count && (
-          <button onClick={unread.onMarkAllRead}
-            title={`Mark all ${unread.count} as read`}
-            className="agx-btn text-[10px] px-2 py-1 rounded"
-            style={{ color: "var(--text3)", border }}>
-            Mark all read
-          </button>
-        )}
+      {controls.inboxControls && inbox && (
+        <>
+          <span className="inline-flex shrink-0 rounded-md overflow-hidden" role="group" aria-label="Show" style={{ border: EDGE }}>
+            {([["all", "All"], ["unread", "Unread"]] as const).map(([id, label]) => {
+              const on = (id === "unread") === inbox.unreadOnly;
+              return (
+                <button key={id} onClick={() => inbox.onUnreadOnly(id === "unread")} aria-pressed={on}
+                  className="agx-btn px-2 text-[10.5px]"
+                  style={{ minHeight: 24, color: on ? "var(--text)" : "var(--text3)", fontWeight: on ? 600 : 400,
+                    background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent" }}>
+                  {label}
+                </button>
+              );
+            })}
+          </span>
+          {inbox.unread > 0 && (
+            <span className="text-[10px] tabular-nums shrink-0" style={{ color: "var(--warning-ink)" }}>{inbox.unread} unread</span>
+          )}
+        </>
+      )}
         {/* No row of pills: the builder is the filter, and it says everything
             they said plus `is not`, `is set`, `is not set`, and several joined.
             It reads the same field table (`builderFields` reads `buildFacets`),
             so every menu they had is a field in it, and a query string still
             fills it through `queryToRules`. */}
-        {builder}
+        {controls.boardControls && builder}
 
       {/* Active-filter chips + count. Only when something is narrowing the list. */}
-      {chips.length > 0 && (
+      {controls.boardControls && chips.length > 0 && (
         <div className="agx-prbar-chips flex flex-wrap items-center gap-1 basis-full">
           {chips.map((c) => (
             <button key={c.key} onClick={c.onRemove}

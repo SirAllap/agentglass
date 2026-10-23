@@ -15,7 +15,7 @@
  *
  * Four tiles above the table filter it; the filter text comes from outside
  * (`filterText`), because the bar at the top of the panel owns the one search
- * box. Without a bar feeding it, a local state stands in so the view still works.
+ * box.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RERUN_DAYS, MIN_SAMPLES, type CheckMetric } from "../../../../shared/checkBaseline.ts";
@@ -133,9 +133,9 @@ const QUIET = "1px solid color-mix(in srgb, var(--text) 6%, transparent)";
 
 export function CiMetrics({ root, repo, active, filterText, onFilterText }: {
   root: string; repo: string; active: boolean;
-  /** The text the panel's one search box holds. The bar owns the box, so this view draws none; with no bar feeding it a local state stands in. */
-  filterText?: string;
-  onFilterText?: (v: string) => void;
+  /** The text the panel's one search box holds. The bar owns the box, so this view draws none. */
+  filterText: string;
+  onFilterText: (v: string) => void;
 }) {
   const [checks, setChecks] = useState<CheckMetric[] | null>(null);
   const [err, setErr] = useState("");
@@ -148,9 +148,8 @@ export function CiMetrics({ root, repo, active, filterText, onFilterText }: {
   // What the last refresh did stays on the page: the next poll re-reads the table and carries no refresh of its own.
   const [lastRefresh, setLastRefresh] = useState<FailingTests["refresh"]>(undefined);
   const refreshed = useRef(new Set<string>());
-  const [localQuery, setLocalQuery] = useState("");
-  const query = filterText ?? localQuery;
-  const setQuery = onFilterText ?? setLocalQuery;
+  const query = filterText;
+  const setQuery = onFilterText;
   const [sort, setSort] = useState<Sort>(DEFAULT_SORT);
 
   // The newest request wins: an answer for the project the panel has since left must not be drawn under the new one's name.

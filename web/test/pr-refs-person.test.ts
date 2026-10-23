@@ -157,7 +157,7 @@ describe("no request on typing", async () => {
     });
   });
   test("onChange only edits the box; a person opens on Enter or on the @ pick", () => {
-    expect(bar).toContain("onChange={(e) => { setCursor(0); onQuery(e.target.value); }}");
+    expect(bar).toContain("(scoped ? scoped.onChange : onQuery)(e.target.value)");
     expect(bar).toContain("onPickPerson?.(login)");
   });
   test("the person board closes the search it never needed: Enter on a login sends no list search", () => {
@@ -190,12 +190,12 @@ describe("the branch read is asked once per key", async () => {
 
 describe("the owner's board: pills and leftover copy", async () => {
   const panel = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
-  test("no Mine pill; the other three stay, and every count is over the two queues only", () => {
-    const views = panel.slice(panel.indexOf("const VIEWS:"), panel.indexOf("];", panel.indexOf("const VIEWS:")));
-    expect(views).not.toContain('label: "Mine"');
-    for (const l of ["Needs my review", "Failing", "Ready"]) expect(views).toContain(`label: "${l}"`);
-    const counts = panel.slice(panel.indexOf("const boardViewCounts = useMemo("), panel.indexOf("}, [boardMineShown, boardReviewShown]);"));
-    expect(counts).toContain("const all = [...mine, ...review];");
+  test("no Mine pill and no lane pills; the Open count is over the two queues only", () => {
+    expect(panel).not.toContain("const VIEWS:");
+    expect(panel).not.toContain('label="Mine"');
+    const counts = panel.slice(panel.indexOf("const boardOpenCount = useMemo("), panel.indexOf("}, [boardMineShown, boardReviewShown]);"));
+    expect(counts).toContain("boardMineShown");
+    expect(counts).toContain("boardReviewShown");
     expect(counts).not.toContain("listRows");
   });
   test("the board's own stragglers fill themselves once the settle window is over, never before", () => {

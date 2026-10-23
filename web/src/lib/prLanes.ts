@@ -464,45 +464,13 @@ export const ACTION_LABEL: Record<Suggested, string> = {
 };
 
 /**
- * The views on the panel's pill row, as filters over the board.
+ * Whether the board reaches past the viewer's own two queues, to the repository.
  *
- * Each one is a question about the cards already in hand, so none of them
- * costs a request. `review` is the viewer's stake, read the same
- * way the lanes read it (there is no "mine" pill: the board is already only
- * what they opened and what they were asked for); `failing` and `ready` are the two lanes named for
- * what is wrong and what can land. The stake is judged AFTER filing, which is
- * the point: a pull request that is yours and asked of you keeps the lane it
- * would have everywhere else instead of moving when a pill is pressed.
- * Every view is a filter over the viewer's two queues, and the default one
- * (no pill) is those queues whole: what wants something from them. Somebody
- * else's pull request reaches the board only through a search.
+ * It does not. The default board once took in a page of the repository, which
+ * put other people's pull requests under "Waiting on someone else" and a "Load
+ * more" under the board. The pills that filtered the board (Needs my review,
+ * Failing, Ready) are gone: the lanes already say it. The wide branches in
+ * PrPanel and TriageBoard are left behind this one constant until a board needs
+ * a page of the repository badly enough to pay for its request.
  */
-export type BoardView = "all" | "review" | "failing" | "ready";
-
-/**
- * Whether a view reaches past the viewer's own two queues, to the repository.
- *
- * None does. The default board once took in a page of the repository, which put
- * other people's pull requests under "Waiting on someone else" and a "Load
- * more" under the board. The question stays a function so a board for another
- * person can say yes without the callers changing; "failing" and "ready" are
- * stake-only until a view needs a page of the repository badly enough to pay
- * for its request.
- */
-export function viewIsWide(_view: BoardView): boolean {
-  return false;
-}
-
-/**
- * `p` is read only by `failing`: somebody else's red pull request files under
- * "others" (not yours to move), which is not "blocked", yet it is exactly what
- * the old `checks:red` search listed.
- */
-export function viewKeeps(view: BoardView, lane: LaneId, stake: Stake, p?: { checks?: { failure?: number }; mergeable?: string }): boolean {
-  switch (view) {
-    case "review": return stake.asked;
-    case "failing": return lane === "blocked" || (p?.checks?.failure ?? 0) > 0 || p?.mergeable === "CONFLICTING";
-    case "ready": return lane === "land";
-    default: return true;
-  }
-}
+export const BOARD_IS_WIDE = false;

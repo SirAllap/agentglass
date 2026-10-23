@@ -13,7 +13,7 @@
  * PrPanel): per repository, in this browser, nothing sent anywhere.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { liveCount, type FieldSpec, type FilterSet } from "./tasks/filters.ts";
+import { EMPTY, liveCount, type FieldSpec, type FilterSet } from "./tasks/filters.ts";
 import {
   ACTIVE_KEY, PRESETS_KEY, addPreset, deletePreset, dropGone, goneValues, isModified, movePreset, presetToFilterSet,
   readActiveMap, readPresetMap, renamePreset, restorePreset, setPresetRules, updatePreset,
@@ -46,6 +46,8 @@ export interface PresetsApi {
   gone: Record<string, Gone[]>;
   undo: { name: string; id: string } | null;
   apply: (id: string) => void;
+  /** No filters. Deletes nothing: every saved set stays where it was. */
+  clear: () => void;
   saveNew: (name: string) => PresetFailure | null;
   update: () => PresetFailure | null;
   revert: () => void;
@@ -128,6 +130,11 @@ export function useFilterPresets({ repoKey, rules, setRules, fields }: {
     setRules(presetToFilterSet(p, ruleId));
     setActive(id);
   }, [key, setRules, setActive]);
+
+  const clear = useCallback(() => {
+    setRules(EMPTY);
+    setActive(null);
+  }, [setRules, setActive]);
 
   const saveNew = useCallback((name: string): PresetFailure | null => {
     const r = addPreset(cur(), name, rules, presetId());
@@ -214,6 +221,6 @@ export function useFilterPresets({ repoKey, rules, setRules, fields }: {
   // the row is memoised on it, and the Alt+1..9 listener hangs off it.
   return useMemo(() => ({
     presets, activeId: active?.id ?? null, active, modified, gone, undo,
-    apply, saveNew, update, revert, rename, move, remove, restore, removeGone,
-  }), [presets, active, modified, gone, undo, apply, saveNew, update, revert, rename, move, remove, restore, removeGone]);
+    apply, clear, saveNew, update, revert, rename, move, remove, restore, removeGone,
+  }), [presets, active, modified, gone, undo, apply, clear, saveNew, update, revert, rename, move, remove, restore, removeGone]);
 }

@@ -24,7 +24,7 @@ describe("PR board has no state axis", () => {
   it("has no Open / Closed / All switch and no All pill", () => {
     expect(code(pr)).not.toMatch(/<Segmented value=\{stateSel\}/);
     expect(code(pr)).not.toContain("setStateSel");
-    expect(code(pr)).toContain('VIEWS.filter((v) => v.id !== "all")');
+    expect(code(pr)).not.toContain("VIEWS.filter");
   });
 
   it("asks GitHub for every state only once Enter was pressed", () => {
@@ -39,8 +39,8 @@ describe("PR board has no state axis", () => {
     expect(pr).not.toContain("agentglass.pr.board");
   });
 
-  it("a view pill clears the search and pressing the lit one again goes back to everything", () => {
-    expect(pr).toContain('setInboxOn(false); setMetricsOn(false); setClosedOn(false); setFilter("all"); setQuery(""); setBoardView(boardView === v.id ? "all" : (v.id as BoardView));');
+  it("the Open pill leaves the other views and clears a search only when already on the board", () => {
+    expect(pr).toContain('if (!inboxOn && !metricsOn && !closedOn) { setFilter("all"); setQuery(""); }');
   });
 });
 

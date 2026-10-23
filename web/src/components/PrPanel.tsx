@@ -124,6 +124,7 @@ import { withoutWhitespace } from "../lib/diffNoWhitespace.ts";
 import { loginOf, ownersOf } from "../lib/codeowners.ts";
 import { excerpt, findInDiffs, groupByFile, type Match } from "../lib/diffFind.ts";
 import { PrFilterBar } from "./PrFilterBar.tsx";
+import { barControls, barPlaceholder, barView } from "../lib/prBarView.ts";
 import { FilterBuilder } from "./tasks/FilterBuilder.tsx";
 import { FilterPresets } from "./FilterPresets.tsx";
 import { useFilterPresets } from "./useFilterPresets.ts";
@@ -135,7 +136,7 @@ import { PeekFile, type Peek } from "./PeekFile.tsx";
 import { mergeBlockedWhy, checksLine, checksStanding, checksShort, githubWillMerge } from "../../../shared/mergeReason.ts";
 import { mergeBlockers, mergeRefusal, autoMergeRefusal } from "../../../shared/mergeBlockers.ts";
 import { pageRanOut } from "../lib/prPager.ts";
-import { viewIsWide, viewKeeps, board as fileBoard, stakeFrom, type BoardView } from "../lib/prLanes.ts";
+import { BOARD_IS_WIDE, board as fileBoard, stakeFrom } from "../lib/prLanes.ts";
 import { parseQuery, applyFilters, applyRulesKeepUnread, buildFacets, readPrField, builderFields, queryToRules, serializeQuery, setSort, DEFAULT_SORT, SORT_OPTIONS, type RepoFacets, type SortTok } from "../lib/prFilter.ts";
 import { CodeBlock as MdCodeBlock } from "../lib/mdCode.tsx";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
@@ -169,7 +170,7 @@ import { usePrStacks } from "../lib/usePrStacks.ts";
 import { factsReader, laneMap, rungReader } from "../lib/prStackFacts.ts";
 import { BaseToken, StackControl, type Neighbour } from "./StackMarks.tsx";
 import { wordOf, type Facts, type Rung } from "../lib/prStackWords.ts";
-import { AgentIcon, ArrowIcon, AttachIcon, BlockedIcon, BoltIcon, BranchIcon, CaretIcon, ChartIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CommitIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, EditIcon, EyeIcon, FileIcon, FlagIcon, IconLabel, LinkIcon, MarkdownIcon, MergeIcon, MoreIcon, PinIcon, PlusIcon, RefreshIcon, SearchIcon, SparkleIcon, TagIcon, UndoIcon, UserIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { AgentIcon, ArrowIcon, PullRequestIcon, AttachIcon, BlockedIcon, BoltIcon, BranchIcon, CaretIcon, ChartIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CommitIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, EditIcon, EyeIcon, FileIcon, FlagIcon, IconLabel, LinkIcon, MarkdownIcon, MergeIcon, MoreIcon, PinIcon, PlusIcon, RefreshIcon, SearchIcon, SparkleIcon, TagIcon, UndoIcon, UserIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { PrIcon } from "./workspace/icons.tsx";
 import { PrWatchMenu } from "./PrWatchMenu.tsx";
 import { onChecksRead } from "../lib/prWatchStore.ts";
@@ -201,23 +202,6 @@ type Tab = "overview" | "conversation" | "commits" | "files" | "checks" | "revie
 // The open/closed axis, orthogonal to the scope views. "closed" holds merged +
 // closed, exactly like GitHub's own Closed tab; "all" is everything.
 type StateSel = "open" | "closed" | "all";
-
-/**
- * Saved views: a scope and a query, together, under one name.
- *
- * The three scopes are what the server can fetch; the interesting questions
- * ("what of mine is red", "what of mine could land right now") are a scope plus
- * a filter, and asking them used to mean picking a tab and then building the
- * query by hand every time. A view is only ever shorthand — it writes the same
- * query string the facets write, so the chips below still show what is on and
- * still take it off again.
- */
-const VIEWS: { id: string; label: string; scope: Filter; query: string; tint?: string; hint: string }[] = [
-  { id: "review", label: "Needs my review", scope: "review", query: "", tint: "var(--warning)", hint: "Somebody asked you to look" },
-  { id: "failing", label: "Failing", scope: "all", query: "checks:red", tint: "var(--error)", hint: "Blocked: a red check or a conflict" },
-  { id: "ready", label: "Ready", scope: "all", query: "review:approved checks:green", tint: "var(--success)", hint: "Approved and green — these can land" },
-  { id: "all", label: "All", scope: "all", query: "", hint: "Everything on the board" },
-];
 
 /*
  * The last thing each pull request said, kept for the session.
@@ -3046,7 +3030,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * to say so every morning.
    */
   const boardOn = stateSel === "open";
-  const [boardView, setBoardView] = useState<BoardView>("all");
   /*
    * A search and the board are answering different questions, and only one of
    * them can be on screen.
@@ -3076,6 +3059,12 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const [inboxUnread, setInboxUnread] = useState(0);
   /* CI metrics: the repository's checks against their own history. Another view of the same exclusive row as the Inbox. */
   const [metricsOn, setMetricsOn] = useState(false);
+  /* Each view keeps its own text and comes back to it: the board's is `query`. */
+  const [inboxQ, setInboxQ] = useState("");
+  const [ciQ, setCiQ] = useState("");
+  const [inboxUnreadOnly, setInboxUnreadOnly] = useState(false);
+  const bar = barView(inboxOn, metricsOn);
+  const barShows = barControls(bar);
   /* The lanes: open work, nothing typed in the search box. */
   const boardShown = boardOn && !searching && !inboxOn && !metricsOn && !closedOn;
   /* The rest of the board's surface: a search, or the closed and merged ones,
@@ -3085,7 +3074,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   /* Needs my review and Mine are the viewer's two queues, read once and never
      paginated: a page left over from a wide view would fetch and count a page
      nobody is looking at. Everything else on the board is a page of the list. */
-  const queuesOnly = boardShown && !viewIsWide(boardView);
+  const queuesOnly = boardShown && !BOARD_IS_WIDE;
   useEffect(() => { if (queuesOnly) setPages([]); }, [queuesOnly]);
   queuesOnlyRef.current = queuesOnly;
   /* Leaving the board for a search or the closed ones: the list held the
@@ -3193,7 +3182,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * switch keeps the previous rows on screen until the new ones land, and a
    * closed row filed into a lane would sit under "Blocked".
    */
-  const boardWide = boardShown && viewIsWide(boardView);
+  const boardWide = boardShown && BOARD_IS_WIDE;
   const boardOthersCards = useMemo(
     () => (boardWide ? listRows.filter((p) => p.state === "OPEN").map((p) => withConflict(root, withCard(p, hasTaskProvider))) : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3209,35 +3198,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [boardReviewCards, rules, repo?.key, seenMarks],
   );
-  /*
-   * What each pill counts is what its board shows, and nothing else.
-   *
-   * The pills used to print the server's total for the scope, which counts every
-   * pull request you ever opened (175) under a board that draws the open ones
-   * (16). Now the same pools, the same rules and the same filing the board uses.
-   * The three wide views count the repository's list, which is a page at a time:
-   * while there is another page the number would be a floor, so it is left off
-   * rather than printed wrong.
-   */
-  const boardViewCounts = useMemo(() => {
+  /* The Open item's number is the cards the board draws: the same pools, the
+     same rules, a pull request that is both yours and asked of you counted once. */
+  const boardOpenCount = useMemo(() => {
     const open = (rows: PrSummary[]) => rows.filter((p) => p.state === "OPEN");
-    const mine = open(boardMineShown);
-    const review = open(boardReviewShown);
-    const stakeOf = stakeFrom(mine, review);
-    const byNumber = (rows: PrSummary[]) => [...new Map(rows.map((p) => [p.number, p])).values()];
-    const count = (view: BoardView, rows: PrSummary[]) => {
-      const filed = fileBoard(byNumber(rows), stakeOf);
-      let n = 0;
-      for (const [lane, list] of filed) for (const p of list) if (viewKeeps(view, lane, stakeOf(p), p)) n++;
-      return n;
-    };
-    /* The board is the viewer's two queues and nothing else (`viewIsWide` is
-       always false), so every pill counts exactly those: the number on a pill
-       is the number of cards the board then draws. */
-    const all = [...mine, ...review];
-    const out: Partial<Record<BoardView, number>> = {};
-    for (const v of ["review", "failing", "ready", "all"] as BoardView[]) out[v] = count(v, all);
-    return out;
+    return new Set([...open(boardMineShown), ...open(boardReviewShown)].map((p) => p.number)).size;
   }, [boardMineShown, boardReviewShown]);
 
   /*
@@ -4853,31 +4818,28 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             * the scopes that are NOT about you — those are a table, and the
             * table is today's list, untouched.
             */}
-          {/* Its number is the only one on this row counting things nobody
-              has looked at yet, so it keeps the warning colour when it is not
-              the view you are in. */}
-          <Pill on={inboxOn} icon={<InboxIcon size={ICON.xs} />} label="Inbox"
+          {/* One switcher, four places, the one you are in lit. Open is the whole
+              board (the four lanes say what needs you, what is blocked and what
+              can land); pressing it from anywhere else is the way back. The
+              inbox's unread number shows only while the inbox is open: unread
+              is that view's business, not the board's. */}
+          <Pill on={!inboxOn && !metricsOn && !closedOn} icon={<PullRequestIcon size={ICON.xs} />} label="Open"
+            title="Your open pull requests and the ones you were asked to review, in lanes"
+            count={boardOpenCount || undefined}
+            onClick={() => {
+              /* From another view this only comes back: the board's text is where it was left. Already on the board, it is the way out of a search. */
+              if (!inboxOn && !metricsOn && !closedOn) { setFilter("all"); setQuery(""); }
+              setInboxOn(false); setMetricsOn(false); setClosedOn(false);
+            }} />
+          <Pill on={closedOn && !inboxOn && !metricsOn} icon={<MergeIcon size={ICON.xs} />} label="Closed"
+            title="Your merged pull requests and the ones closed without merging, newest first"
+            onClick={() => { setInboxOn(false); setMetricsOn(false); setClosedOn(true); }} />
+          <Pill on={inboxOn && !metricsOn} icon={<InboxIcon size={ICON.xs} />} label="Inbox"
             title="What happened while you were away — GitHub's notifications, filtered to this repository"
-            count={inboxUnread || undefined} countTint="warning"
             onClick={() => { setMetricsOn(false); setClosedOn(false); setInboxOn(true); }} />
           <Pill on={metricsOn} icon={<ChartIcon size={ICON.xs} />} label="CI"
             title="Every check of this repository against its own history — slow, passed on a re-run, drifting"
             onClick={() => { setInboxOn(false); setClosedOn(false); setMetricsOn(true); }} />
-          <span className="self-center shrink-0" style={{ width: 1, height: 12, background: "color-mix(in srgb, var(--text) 14%, transparent)" }} />
-          {VIEWS.filter((v) => v.id !== "all").map((v) => {
-            const n = boardViewCounts[v.id as BoardView] ?? null;
-            const on = !inboxOn && !metricsOn && boardShown && boardView === v.id;
-            return (
-              <Pill key={v.id} on={on} label={v.label} title={v.hint}
-                dot={v.tint ?? undefined} count={n ?? undefined}
-                onClick={() => { setInboxOn(false); setMetricsOn(false); setClosedOn(false); setFilter("all"); setQuery(""); setBoardView(boardView === v.id ? "all" : (v.id as BoardView)); }} />
-            );
-          })}
-          {/* Not a lane and not a search: a second press is the way back, and
-              his filters are not applied here unless he applies them. */}
-          <Pill on={closedOn && !inboxOn && !metricsOn} label="Closed"
-            title="Your merged pull requests and the ones closed without merging, newest first"
-            onClick={() => { setInboxOn(false); setMetricsOn(false); setClosedOn((v) => !v); }} />
         </div>
         {/* Always, once the repository is known — not "once rows arrived".
             The bar is built from the rows, so gating it on them made it drop
@@ -4885,6 +4847,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             placeholder row until it has something to count. */}
         {repo && (
           <PrFilterBar
+            view={bar}
+            scoped={bar === "inbox" ? { value: inboxQ, onChange: setInboxQ, placeholder: barPlaceholder(bar) }
+              : bar === "ci" ? { value: ciQ, onChange: setCiQ, placeholder: barPlaceholder(bar) } : undefined}
+            inbox={{ unreadOnly: inboxUnreadOnly, onUnreadOnly: setInboxUnreadOnly, unread: inboxUnread }}
             query={query}
             filters={filters}
             facets={facets}
@@ -4895,20 +4861,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             pending={wanted.trim() !== serverQuery.trim()}
             searching={listState.loading}
             shown={visiblePrs.length}
-            unread={{
-              count: unreadPrs.length,
-              on: unreadOnly,
-              onToggle: () => setUnreadOnly((v) => !v),
-              /* Same population the chip counts — `unreadPrs`, not a second
-                 pass over `basePrs` that could drift from it. Mark first,
-                 then drop the filter: pressing this while it is narrowed to
-                 "unread" would otherwise leave the table showing zero rows
-                 with nothing on screen to say why. */
-              onMarkAllRead: () => {
-                markAllSeen(unreadPrs.map((p) => p.number), repo?.key, Date.now());
-                setUnreadOnly(false);
-              },
-            }}
       /* How much of the scope the filter actually saw. A count that says "12"
          over a scope of ninety-three, having read twenty-five of them, is a
          number nobody can act on. */
@@ -5020,7 +4972,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               setBoardTick((n) => n + 1);
               reads.push(new Promise<void>((r) => { boardSettle.current = r; }));
             }
-            const listOnScreen = !boardShown || viewIsWide(boardView);
+            const listOnScreen = !boardShown || BOARD_IS_WIDE;
             reads.push(Promise.resolve(loadList(listOnScreen)));
             settled();
           }} busy={running} spinning={refreshing}
@@ -5067,16 +5019,17 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
         <div className="flex flex-col min-h-0 flex-1 min-w-0">
           <div ref={listRef} tabIndex={-1} onKeyDown={onListKey} className="flex-1 overflow-y-auto min-h-0 agx-scroll outline-none">
             {metricsOn ? (
-              <CiMetrics root={projectRoot} repo={repo?.nameWithOwner ?? ""} active={active && selected == null} />
+              <CiMetrics root={projectRoot} repo={repo?.nameWithOwner ?? ""} active={active && selected == null} filterText={ciQ} onFilterText={setCiQ} />
             ) : inboxOn ? (
-              <Inbox repo={repo?.nameWithOwner ?? ""} root={projectRoot} prs={prs} onFlash={flash} onUnread={setInboxUnread} active={active && selected == null} />
+              <Inbox repo={repo?.nameWithOwner ?? ""} root={projectRoot} prs={prs} onFlash={flash} onUnread={setInboxUnread} active={active && selected == null}
+                filterText={inboxQ} onFilterText={setInboxQ} unreadOnly={inboxUnreadOnly} />
             ) : (boardShown || resultsShown || personLogin) && repo && !listState.needsAuth ? (
               /* The board is the panel's one surface: every pill, facet and
                  search above stays where it was, and a search or the closed
                  and merged ones draw as rows inside it (`results`). */
               <TriageBoard
                 mine={personLogin ? personLists.mine : boardMineShown} review={personLogin ? personLists.review : boardReviewShown}
-                unfiltered={personLogin ? undefined : boardUnfiltered} view={personLogin ? "all" : boardView}
+                unfiltered={personLogin ? undefined : boardUnfiltered}
                 viewer={personLogin ?? undefined}
                 person={personLogin ? { onBack: backToMine, more: person.state.kind === "ready" && person.state.more } : undefined}
                 others={boardWide && !personLogin ? boardOthersShown : undefined}
@@ -5117,7 +5070,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 pinned={(n) => isPinned(repo.nameWithOwner, n)}
                 onOpen={openPr}
                 onTogglePin={(p) => togglePin(repo.nameWithOwner, p.number, p.title)}
-                onShowTable={() => { setPersonLogin(null); setInboxOn(false); setMetricsOn(false); setFilter("all"); setQuery(""); setBoardView("all"); }}
+                onShowTable={() => { setPersonLogin(null); setInboxOn(false); setMetricsOn(false); setFilter("all"); setQuery("") }}
                 busy={busy}
                 loading={personLogin ? person.state.kind !== "ready" && person.state.kind !== "failed" : boardLoading || (boardWide && listState.loading && boardOthersCards.length === 0)}
                 settling={personLogin ? false : boardSettling} acting={actingOn} root={root}

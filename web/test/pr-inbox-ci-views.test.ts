@@ -126,11 +126,11 @@ const ci = await Bun.file(new URL("../src/components/prs/CiMetrics.tsx", import.
 const code = (t: string) => t.split("\n").filter((l) => !/^\s*(\/\/|\/\*|\*|\{\/\*)/.test(l)).join("\n");
 
 describe("the bar owns the search box", () => {
-  test("neither view draws a text input; both take the text from a prop with a local stand-in", () => {
+  test("neither view draws a text input; both take the text from a prop and keep no copy of it", () => {
     expect(code(inbox)).not.toMatch(/<input\b/);
     expect(code(ci)).not.toMatch(/<input\b|<FilterField/);
-    expect(inbox).toContain("filterText ?? localQ");
-    expect(ci).toContain("filterText ?? localQuery");
+    expect(inbox).toContain("const q = filterText;");
+    expect(ci).toContain("const query = filterText;");
   });
 });
 

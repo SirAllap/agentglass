@@ -49,7 +49,7 @@ describe("a search is a section of the board", () => {
      * component; pinning the three literal style lines only pinned the old
      * markup.
      */
-    expect(src).toContain("boardShown && boardView === v.id");
+    expect(src).toContain("on={!inboxOn && !metricsOn && !closedOn}");
     expect(src).not.toContain("<Pill on={boardOn}");
   });
 
@@ -60,19 +60,18 @@ describe("a search is a section of the board", () => {
        icon nested inside this pill, so that slice ended before the handler and
        the assertion below passed over nothing. Third time this exact cut has
        been got wrong in this repository. */
-    const from = src.indexOf("{VIEWS.filter((v) => v.id !== \"all\").map((v) => {");
-    const views = src.slice(from, src.indexOf("})}", from));
+    const from = src.indexOf('label="Open"');
+    const views = src.slice(from, src.indexOf("/>", src.indexOf("onClick", from)));
     expect(from).toBeGreaterThan(0);
     expect(views).toContain('setQuery("")');
-    expect(views).toContain("setBoardView(");
   });
 
-  it("does not light a scope pill while the board — or the inbox — is showing", () => {
+  it("lights Open only while neither the inbox, CI nor Closed is showing", () => {
     /* The scopes are the table's; with either other surface up none of them is
        active, and with a search up one of them is. `inboxOn` joined this the day
        the inbox stopped being a toggle: it hides the table too, so a scope lit
        under it was the same lie. */
-    expect(src).toContain("const on = !inboxOn && !metricsOn && boardShown && boardView === v.id;");
+    expect(src).toContain("on={!inboxOn && !metricsOn && !closedOn}");
   });
 });
 

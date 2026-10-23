@@ -26,7 +26,7 @@ const mk = (id: string, name: string): Preset => ({
 const noop = () => {};
 const api = (over: Partial<PresetsApi> = {}): PresetsApi => ({
   presets: [], activeId: null, active: null, modified: false, gone: {}, undo: null,
-  apply: noop, saveNew: () => null, update: () => null, revert: noop, rename: () => null, move: noop,
+  apply: noop, clear: noop, saveNew: () => null, update: () => null, revert: noop, rename: () => null, move: noop,
   remove: noop, restore: noop, removeGone: noop, ...over,
 });
 const fields: FieldSpec[] = [{ key: "cardstatus", label: "Card status", options: [{ value: "Pre QA", label: "Pre QA" }] }];

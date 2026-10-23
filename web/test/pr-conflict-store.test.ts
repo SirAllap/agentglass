@@ -16,7 +16,7 @@ const mod = await import("../src/lib/api.ts");
 
 const { askConflict, checkingConflict, conflictsFrom, forgetConflicts, reopenConflicts, learn, withConflict, onConflict } =
   await import("../src/lib/prConflictStore.ts");
-const { fileInLane, stakeFrom, viewKeeps } = await import("../src/lib/prLanes.ts");
+const { fileInLane, stakeFrom } = await import("../src/lib/prLanes.ts");
 import type { PrSummary } from "../../shared/types.ts";
 import { readFileSync } from "node:fs";
 import { globalStubs } from "./stubGlobal.ts";
@@ -49,7 +49,6 @@ describe("a conflict GitHub has not computed yet", () => {
     const card = withConflict("/repo", row());
     expect(card.mergeable).toBe("CONFLICTING");
     expect(fileInLane(card, stake).lane).toBe("blocked");
-    expect(viewKeeps("failing", "blocked", stake, card)).toBe(true);
   });
 
   it("tells the board when the page learns, so it redraws at once", () => {

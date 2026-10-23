@@ -31,9 +31,9 @@ const board = (sections: NonNullable<React.ComponentProps<typeof TriageBoard>["r
   }));
 
 describe("the Closed pill", () => {
-  it("sits with the other pills and toggles", () => {
+  it("sits with the other pills; Open is the way back", () => {
     expect(panel).toContain('label="Closed"');
-    expect(panel).toContain("setClosedOn((v) => !v)");
+    expect(panel).toContain("setClosedOn(true)");
   });
   it("asks for the viewer's own, merged first, as two searches", () => {
     expect(CLOSED_SECTIONS.map((s) => s.id)).toEqual(["merged", "unmerged"]);
