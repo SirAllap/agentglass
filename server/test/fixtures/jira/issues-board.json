@@ -1,0 +1,130 @@
+{
+  "issues": {
+    "ORBIT-1042": {
+      "sprints": [
+        {
+          "id": 3,
+          "name": "Sprint 3",
+          "state": "closed"
+        },
+        {
+          "id": 4,
+          "name": "Sprint 4",
+          "state": "active"
+        }
+      ],
+      "points": 5,
+      "team": "Orbit crew"
+    },
+    "ORBIT-1043": {
+      "sprints": [
+        {
+          "id": 4,
+          "name": "Sprint 4",
+          "state": "active"
+        }
+      ],
+      "points": 3,
+      "subtasks": [
+        "ORBIT-1046"
+      ]
+    },
+    "ORBIT-1044": {
+      "sprints": [
+        {
+          "id": 5,
+          "name": "Sprint 5",
+          "state": "future"
+        }
+      ],
+      "points": 0
+    },
+    "ORBIT-1045": {
+      "points": 8,
+      "team": "Orbit crew"
+    },
+    "ACME-7": {
+      "sprints": [
+        {
+          "id": 6,
+          "name": "ACME 1",
+          "state": "active"
+        }
+      ],
+      "points": 2,
+      "pointsIn": "alt"
+    }
+  },
+  "links": [
+    {
+      "id": "10100",
+      "type": "Blocks",
+      "from": "ORBIT-1042",
+      "to": "ORBIT-1043"
+    },
+    {
+      "id": "10101",
+      "type": "Blocks",
+      "from": "ORBIT-1045",
+      "to": "ORBIT-1044"
+    },
+    {
+      "id": "10102",
+      "type": "Blocks",
+      "from": "ORBIT-1043",
+      "to": "ORBIT-1044"
+    },
+    {
+      "id": "10103",
+      "type": "Relates",
+      "from": "ORBIT-1001",
+      "to": "ORBIT-1046"
+    }
+  ],
+  "remoteLinks": {
+    "ORBIT-1042": [
+      {
+        "id": 10200,
+        "application": {
+          "type": "com.github",
+          "name": "GitHub"
+        },
+        "relationship": "mentioned in",
+        "object": {
+          "url": "https://github.com/acme/orbit/pull/2196",
+          "title": "#2196 Fix the timeout",
+          "status": {
+            "resolved": false
+          }
+        }
+      }
+    ],
+    "ORBIT-1043": [
+      {
+        "id": 10201,
+        "application": {
+          "type": "com.github",
+          "name": "GitHub"
+        },
+        "object": {
+          "url": "https://github.com/acme/orbit/pull/2201",
+          "title": "#2201 Review the report",
+          "status": {
+            "resolved": true
+          }
+        }
+      },
+      {
+        "id": 10202,
+        "application": {
+          "type": "com.github",
+          "name": "GitHub"
+        },
+        "object": {
+          "url": "https://github.com/acme/orbit/pull/2202",
+          "title": "#2202 Follow-up"
+        }
+      }
+    ]
+  }
+}

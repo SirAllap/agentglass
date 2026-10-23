@@ -124,7 +124,8 @@ describe("what switching a plugin on approves", () => {
        gate is two chances to describe the same plugin differently. */
     const pane = await Bun.file(new URL("../../web/src/components/PluginsPane.tsx", import.meta.url)).text();
     expect(pane, "the dialog carries the component, not a joined string").toContain("node: <PluginDeclaration plugin={plugin} />");
-    expect(pane).toContain("<PluginDeclaration plugin={plugin} />\n        </Fold>");
+    // In the card it sits in the page's own disclosure (flat: the card already frames it).
+    expect(pane).toContain("<PluginDeclaration plugin={plugin} flat />");
     expect(pane, "and the sentences it replaced are gone").not.toContain("function drawsWhere");
 
     const decl = await Bun.file(new URL("../../web/src/components/plugins/PluginDeclaration.tsx", import.meta.url)).text();

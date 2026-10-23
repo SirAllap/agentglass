@@ -56,7 +56,7 @@ describe("naming the agent an alert is about", () => {
   test("no pane is reported when nothing recorded one", () => {
     // Not every agent runs in tmux, and inventing a pane is worse than omitting
     // one — it would send somebody to a pane that is running something else.
-    expect(describeAgent(ev({ cwd: "/home/u/code/repo" }, { session_id: "no-pane-was-ever-noted" })))
+    expect(describeAgent(ev({ cwd: "/home/u/code/repo" }, { session_id: "unnoted-session" })))
       .not.toContain("pane");
   });
 
@@ -91,12 +91,16 @@ describe("naming the pane", () => {
    * handle, it is not what a status bar shows, and it is not a thing a person
    * navigates by. `main:3 «claude»` is.
    */
+  test("the prefix is eight characters, so a short id is not cut mid-word", () => {
+    expect(describeAgent(ev({ cwd: "/home/u/code/repo" }, { session_id: "sess-one" }))).toContain("(sess-one)");
+  });
+
   test("the session prefix goes when a pane can be named", () => {
     // Carrying both left six characters of a UUID on a line that had just been
     // made readable. The pane already tells two agents in one checkout apart,
     // which is the only job the prefix had.
-    const s = describeAgent(ev({ cwd: "/home/u/code/repo" }, { session_id: "no-pane-was-ever-noted" }));
-    expect(s).toContain("(no-pan");
+    const s = describeAgent(ev({ cwd: "/home/u/code/repo" }, { session_id: "unnoted-session" }));
+    expect(s).toContain("(unnoted-)");
 
     // Nothing recorded a pane for that session, so the prefix is all there is —
     // which is the case the fallback exists for.

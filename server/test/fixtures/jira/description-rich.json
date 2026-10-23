@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "type": "doc",
+  "content": [
+    { "type": "heading", "attrs": { "level": 2 }, "content": [{ "type": "text", "text": "Problem" }] },
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "text", "text": "The export stalls when the board has more than " },
+        { "type": "text", "text": "200 cards", "marks": [{ "type": "strong" }] },
+        { "type": "text", "text": ". See the " },
+        { "type": "text", "text": "runbook", "marks": [{ "type": "link", "attrs": { "href": "https://docs.acme.example/runbook" } }] },
+        { "type": "text", "text": " and ask " },
+        { "type": "mention", "attrs": { "id": "acc-0002", "text": "@Grace Sample" } },
+        { "type": "text", "text": "." }
+      ]
+    },
+    {
+      "type": "bulletList",
+      "content": [
+        { "type": "listItem", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Reproduce with the large board" }] }] },
+        { "type": "listItem", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Compare against the small board" }] }] }
+      ]
+    },
+    { "type": "codeBlock", "attrs": { "language": "ts" }, "content": [{ "type": "text", "text": "await exportBoard(board, { limit: 200 });" }] },
+    {
+      "type": "table",
+      "attrs": { "isNumberColumnEnabled": false, "layout": "default" },
+      "content": [
+        {
+          "type": "tableRow",
+          "content": [
+            { "type": "tableHeader", "attrs": {}, "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Board" }] }] },
+            { "type": "tableHeader", "attrs": {}, "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Seconds" }] }] }
+          ]
+        },
+        {
+          "type": "tableRow",
+          "content": [
+            { "type": "tableCell", "attrs": {}, "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "small" }] }] },
+            { "type": "tableCell", "attrs": {}, "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "2" }] }] }
+          ]
+        }
+      ]
+    }
+  ]
+}

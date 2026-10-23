@@ -257,6 +257,14 @@ make desktop-install    # install for this user (no root)
 
 Then launch **agentglass** from your desktop menu, or `agentglass` from a shell.
 
+An install stops the app if it is running and reopens it afterwards, with the
+arguments and `AGENTGLASS_*` scoping it had. Run over ssh, the shell has no
+display, so the reopened instance borrows the graphical session's display and
+session variables from the user manager (`systemctl --user show-environment`),
+never overriding one already set. With no graphical session at all the app is
+not reopened, the install still succeeds, and the output says to run
+`gtk-launch agentglass.desktop` inside the session.
+
 The packaged app's bundled server serves the API and nothing else: the UI is
 loaded from the shell's own `agentglass://` origin, which a browser cannot
 reach, so an install never exposes a dashboard on a port.

@@ -18,8 +18,10 @@
  * import from a 9,000-line component or copy four hex values — and copying is
  * how the three answers happened in the first place.
  */
+import { useState } from "react";
 import type { ProviderTask } from "../../../shared/providers.ts";
 import { FlagIcon } from "./glyphIcons.tsx";
+import { avatarSrc } from "./avatarSrc.ts";
 
 /**
  * THE HEIGHT EVERY CHIP ON A ROW SHARES.
@@ -179,9 +181,12 @@ export function CardFace({ p, n = 0, size = 16, overlap, ring = 3 }: {
     position: "relative" as const,
   };
   const title = p.me ? `${p.name} — you` : p.name;
-  if (p.avatar) {
-    return <img src={p.avatar} alt="" title={title} loading="lazy" referrerPolicy="no-referrer"
-      style={{ ...base, objectFit: "cover" }} />;
+  /* A photo that cannot load (a blocked or dead address) falls back to the
+     initials, the way the card pane does, instead of a broken-image glyph. */
+  const [broken, setBroken] = useState(false);
+  if (p.avatar && !broken) {
+    return <img src={avatarSrc(p.avatar)} alt="" title={title} loading="lazy" referrerPolicy="no-referrer"
+      onError={() => setBroken(true)} style={{ ...base, objectFit: "cover" }} />;
   }
   /* No photo: initials on the colour the workspace gave them, which is how two
      people who share initials stay apart. */

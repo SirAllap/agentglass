@@ -44,8 +44,11 @@ export function readState(o: {
   /** How often this board re-reads itself. */
   pollMs: number;
   now?: number;
+  /** The tracker asked us to slow down. A wait is never an alarm, with rows or without. */
+  throttled?: boolean;
 }): ReadState {
   if (!o.error) return "fine";
+  if (o.throttled) return "retrying";
   // Nothing on screen: there is no "last answer" to fall back on, so the failure IS
   // the whole state of the panel and it has to say so.
   if (o.rows <= 0) return "stale";

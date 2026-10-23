@@ -8,7 +8,7 @@
 import { describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { ListMember, StepBlock } from "../../shared/providers.ts";
+import type { ListMember, ClickUpStepBlock as StepBlock } from "../../shared/providers.ts";
 import { planOf, touchesPeople, legacyFromBlocks } from "../../shared/stepBlocks.ts";
 import { askModel, filterAsk, isPicked, pickedIds, pickName, pickSentence, pickToEnsure, shortName, startingPick, startingTakeOff, togglePick, type Picked } from "../src/lib/askAtRun.ts";
 import { orderMembers } from "../src/lib/peopleOrder.ts";

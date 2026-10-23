@@ -1,0 +1,45 @@
+{
+  "boards": [
+    {
+      "id": 1, "name": "ORBIT board", "type": "kanban", "projectKey": "ORBIT", "filterId": "10010",
+      "subQuery": "issuetype != Epic",
+      "columns": [
+        { "name": "Backlog", "statusIds": [] },
+        { "name": "To Do", "statusIds": ["1"] },
+        { "name": "Doing", "statusIds": ["2", "3"] },
+        { "name": "QA", "statusIds": ["4"] },
+        { "name": "Done", "statusIds": ["5"] }
+      ]
+    },
+    {
+      "id": 2, "name": "ACME sprint board", "type": "scrum", "projectKey": "ACME", "filterId": "10011", "estimation": "alt",
+      "columns": [
+        { "name": "To Do", "statusIds": ["1"] },
+        { "name": "In Progress", "statusIds": ["2", "3", "4"] },
+        { "name": "Done", "statusIds": ["5"] }
+      ]
+    },
+    {
+      "id": 3, "name": "ORBIT sprint board", "type": "scrum", "projectKey": "ORBIT", "filterId": "10010", "estimation": "primary",
+      "columns": [
+        { "name": "To Do", "statusIds": ["1"] },
+        { "name": "In Progress", "statusIds": ["2"] },
+        { "name": "Review", "statusIds": ["3", "4"] },
+        { "name": "Done", "statusIds": ["5"] }
+      ]
+    },
+    {
+      "id": 4, "name": "ACME ideas", "type": "kanban", "projectKey": "ACME", "filterId": "10011",
+      "columns": [
+        { "name": "Ideas", "statusIds": [] }
+      ]
+    }
+  ],
+  "filters": [
+    { "id": "10010", "name": "ORBIT board filter", "jql": "project = ORBIT ORDER BY Rank ASC", "favourite": false, "owner": "acc-0001" },
+    { "id": "10011", "name": "ACME board filter", "jql": "project = ACME ORDER BY Rank ASC", "favourite": false, "owner": "acc-0001" },
+    { "id": "10020", "name": "Orbit bugs", "jql": "project = ORBIT AND assignee is EMPTY ORDER BY key", "favourite": true, "owner": "acc-0002" },
+    { "id": "10030", "name": "Everything", "jql": "ORDER BY key", "favourite": true, "owner": "acc-0002" },
+    { "id": "10040", "name": "Private to somebody else", "jql": "project = ORBIT", "favourite": false, "owner": "acc-0003", "visible": false }
+  ]
+}

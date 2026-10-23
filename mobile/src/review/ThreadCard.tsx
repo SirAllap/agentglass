@@ -11,10 +11,11 @@
  * single worst thing this app used to show: five lines of markup wrapped at
  * eleven points, with the code the person is proposing hidden inside it.
  */
-import { Linking, Pressable, Text, TextInput, View } from "react-native";
+import { Pressable, Text, TextInput, View } from "react-native";
 import type { PrThread } from "../../../shared/types.ts";
 import { suggestionRange, suggestionsIn } from "../../../shared/suggestion.ts";
 import { since } from "../lib/dates.ts";
+import { openHttp } from "../lib/openHttp.ts";
 import type { Host } from "../lib/host.ts";
 import { Md } from "../md/Md.tsx";
 import { hunkTail, replyAnchor, whereOf } from "../model/threads.ts";
@@ -184,7 +185,7 @@ export function ThreadCard({ thread, host, actions, where = true, hunk = true, n
 
       {thread.url ? (
         <Pressable
-          onPress={() => { void Linking.openURL(thread.url!); }}
+          onPress={() => { openHttp(thread.url); }}
           accessibilityRole="button"
           style={{ minHeight: TAP, justifyContent: "center" }}
         >

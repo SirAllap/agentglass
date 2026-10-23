@@ -24,9 +24,9 @@ describe("slice 6 nav groups", () => {
     expect(idsIn("General")).toEqual(["prefs", "appearance", "notifications", "rail", "keys"]);
     // browser is filed only where HAS_BROWSER; the test source has both spellings of one entry
     expect(idsIn("Workspace")).toEqual(["terminal", "diff", "browser", "tasks"]);
-    expect(idsIn("Agents")).toEqual(["hooks", "lantern", "understudy", "budgets"]);
+    expect(idsIn("Agents")).toEqual(["hooks", "engines", "orchestration", "lantern", "understudy", "budgets"]);
     expect(idsIn("Library")).toEqual(["recipes", "review-prompts", "saved-replies"]);
-    expect(idsIn("Connections")).toEqual(["connections", "clickup", "remote", "plugins"]);
+    expect(idsIn("Connections")).toEqual(["connections", "clickup", "jira", "remote", "plugins"]);
     expect(idsIn("System")).toEqual(["tmux", "privacy", "about"]);
   });
 
@@ -55,6 +55,6 @@ describe("slice 6 nav groups", () => {
   });
 
   test("the server log digest is a fold on About", () => {
-    expect(fn("LogDigestSection")).toContain('<Fold label="Server log digest">');
+    expect(fn("LogDigestSection")).toContain("fold={{ open, onToggle: setOpen }}");
   });
 });

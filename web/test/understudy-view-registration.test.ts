@@ -32,6 +32,7 @@ const workspaceSrc = read("web/src/components/workspace/Workspace.tsx");
 const registrySrc = read("shared/uiActions.ts");
 const iconsSrc = read("web/src/components/workspace/icons.tsx");
 const settingsSrc = read("web/src/components/SettingsModal.tsx");
+const teachSrc = read("web/src/components/understudy/Teach.tsx");
 
 /** The `ViewId` union, in the order it is written. */
 const unionIds = (() => {
@@ -117,7 +118,7 @@ describe("the Clone view is retired, and left nothing dangling", () => {
   it("but its settings page and its art are still here", () => {
     /* The half that was worth keeping. A test that only checked the removal
        would pass just as happily if somebody deleted the consent list too. */
-    expect(settingsSrc).toContain("What the orchestrator learns from");
+    expect(teachSrc).toContain("What the orchestrator learns from");
     expect(settingsSrc).toContain("<Teach active={open} />");
     expect(iconsSrc).toContain("export function UnderstudyIcon");
   });

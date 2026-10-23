@@ -17,6 +17,8 @@ import { useClickupPrefs } from "../lib/clickupPrefs.ts";
 import { resolveEnsure, stepChanges, type CardWrite, type Ensure, type PrAuthor } from "../lib/stepAssign.ts";
 import { api } from "../lib/api.ts";
 import { __forgetClickupSetup } from "../lib/clickupSetup.ts";
+import { MergeJiraCard } from "./MergeJiraCard.tsx";
+import { jiraMergeMove, type JiraMergeCard } from "../lib/mergeJira.ts";
 import { MOD_KEY } from "../lib/format.ts";
 import { WarningIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
@@ -63,7 +65,7 @@ export type MergeSpec = {
   /** The card this pull request came from, when it has one — see cardRef. The
    *  dialog resolves it against ClickUp itself, because the panel should not
    *  pay a round trip before it can open. */
-  card?: { label: string; query: string } | null;
+  card?: { label: string; query: string; tracker?: "clickup" | "jira" } | null;
   /** Who opened the pull request, for the merge option's "Also assign: the pull request's author". */
   author?: PrAuthor | null;
   /**
@@ -110,6 +112,16 @@ export type MergeChoice = {
     write?: CardWrite;
     /** Said after the write: who was put on, and why nobody was when the author could not be told. */
     note?: string;
+    /** A Jira card: `id` is its key and `to` the id of the move, not a status name. */
+    tracker?: "jira";
+    /** A Jira move that comes from the merge step: run as the step, so what the step also does rides on it. */
+    step?: true;
+    /** Jira only: the status's own name (what a step resolves), and a step told to leave the card where it is. */
+    toStatus?: string;
+    stay?: true;
+    /** Jira only: the card store's key, and the status the move leads to, in the site's words. */
+    query?: string;
+    toLabel?: string;
   };
 };
 
@@ -137,6 +149,10 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
   const [deleteBranch, setDeleteBranch] = useState(false);
   const [card, setCard] = useState<CardState>({ kind: "none" });
   const [status, setStatus] = useState("");
+  /* A Jira card: the row reads the card itself and reports what it found and what was picked. */
+  const [jira, setJira] = useState<{ card: JiraMergeCard | null; pick: string }>({ card: null, pick: LEAVE_ALONE });
+  const jiraCard = pending?.card?.tracker === "jira" ? pending.card : null;
+  useEffect(() => { setJira({ card: null, pick: LEAVE_ALONE }); }, [pending]);
   /* The card choice is a step the workspace adds: absent until it is, and
      unknown prefs read as absent so the row never flashes in and out. */
   const mergePrefs = useClickupPrefs()?.merge;
@@ -230,7 +246,8 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
 
   useEffect(() => {
     const ref = pending?.card;
-    if (!pending || !ref || !mergeOn) { setCard({ kind: "none" }); setStatus(""); return; }
+    // A Jira card has no ClickUp setting to wait for and no ClickUp list to read.
+    if (!pending || !ref || ref.tracker === "jira" || !mergeOn) { setCard({ kind: "none" }); setStatus(""); return; }
     let live = true;
     setCard({ kind: "loading" });
     void lookUp(ref, () => live);
@@ -259,6 +276,11 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
   /** One answer, built in one place, so the button and the chord cannot drift.
    *  The card travels only when the pick actually moves it — see movesCard. */
   const answer = (): MergeChoice => {
+    const base = answerClickUp();
+    // A Jira card: the move picked in its own row, never ClickUp's.
+    return jiraCard && jira.card ? { ...base, card: jiraMergeMove(jira.card, jira.pick) } : base;
+  };
+  const answerClickUp = (): MergeChoice => {
     const on = card.kind === "ready" ? card.card : null;
     const moves = !!on && movesCard(on.status, status);
     /* Only when the card actually moves: the assignment rides on the move, never on its own. */
@@ -296,7 +318,7 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
     // too and a dialog owns the keyboard until it is answered.
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [pending, subject, body, deleteBranch, rebase, card, status, ensure, held]);
+  }, [pending, subject, body, deleteBranch, rebase, card, status, ensure, held, jira]);
 
   const how = pending ? MERGE_OPTION[pending.method] : null;
 
@@ -424,6 +446,11 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
                     days after the work shipped. The select opens on where the
                     card IS, so leaving it alone writes nothing at all; moving
                     it is a deliberate pick, made once, here. */}
+                {jiraCard && (
+                  <div className="pt-2.5" style={{ borderTop: LINE }}>
+                    <MergeJiraCard card={jiraCard} pick={jira.pick} onPick={(c, pick) => setJira({ card: c, pick })} />
+                  </div>
+                )}
                 {card.kind !== "none" && (
                   <div className="pt-2.5" style={{ borderTop: LINE }}>
                     {card.kind === "loading" && (

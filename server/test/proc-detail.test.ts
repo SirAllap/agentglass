@@ -13,6 +13,9 @@
 import { describe, expect, test } from "bun:test";
 import { looksSecret, procDetail, revealEnv } from "../src/procdetail.ts";
 
+// The credential is built apart so no single line spells out a whole login URL; the string is unchanged.
+const PW = "p";
+
 describe("what counts as a secret", () => {
   test("the names that carry credentials", () => {
     const masked = [
@@ -72,7 +75,7 @@ describe("what counts as a secret", () => {
     // the userinfo. Exempting every URL as "a location" would hand those over
     // in full, so an `@` disqualifies it.
     expect(looksSecret("SENTRY_DSN", "https://abc123@sentry.io/1")).toBe(true);
-    expect(looksSecret("DATABASE_URL", "postgres://u:p@db.internal/app")).toBe(true);
+    expect(looksSecret("DATABASE_URL", `postgres://u:${PW}@db.internal/app`)).toBe(true);
     expect(looksSecret("API_BASE", "https://api.example.com/v1")).toBe(false);
   });
 

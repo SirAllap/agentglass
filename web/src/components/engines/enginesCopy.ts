@@ -1,0 +1,118 @@
+/*
+ * Every sentence the Agent engines page says, as pure functions of what the
+ * server measured (`EngineReadiness`). There is no renderer in this project, so
+ * the words are held here and a table-driven test pins them; the component
+ * only places them.
+ *
+ * One rule for every line: say what is true, then the next thing to do, with
+ * the command. No "unavailable", no "error", no badge without words.
+ */
+import type { EngineReadiness } from "../../../../shared/types.ts";
+import type { StatusTone } from "../SettingsKit.tsx";
+
+export type EngineState =
+  | "checking" | "missing" | "old" | "broken" | "signin" | "ready" | "failed" | "testing";
+
+/** Where an engine stands. `null` is the answer that has not arrived. */
+export function engineState(e: EngineReadiness | null): EngineState {
+  if (!e) return "checking";
+  if (!e.found) return "missing";
+  if (e.versionOk === false) return "old";
+  // Found, but its version could not be told: it timed out, exited, or printed
+  // something that is not a version. Never "not installed".
+  if (e.versionOk === null) return "broken";
+  if (e.missing[0]?.kind === "login") return "signin";
+  if (e.answers.state === "running") return "testing";
+  if (e.answers.state === "failed") return "failed";
+  return "ready";
+}
+
+const BADGE: Record<EngineState, { tone: StatusTone; text: string }> = {
+  checking: { tone: "checking", text: "Checking" },
+  missing: { tone: "off", text: "Not installed" },
+  old: { tone: "warn", text: "Needs update" },
+  broken: { tone: "err", text: "Not working" },
+  signin: { tone: "warn", text: "Needs sign-in" },
+  ready: { tone: "ok", text: "Ready" },
+  failed: { tone: "err", text: "Not answering" },
+  testing: { tone: "checking", text: "Testing" },
+};
+export const badgeOf = (e: EngineReadiness | null) => BADGE[engineState(e)];
+
+/** The one action in the card header. It is always there and always in the same
+ *  place; what it is called, and whether it can be pressed, is all that moves. */
+export function actionOf(e: EngineReadiness | null): { label: "Recheck" | "Test"; disabled: boolean } {
+  const s = engineState(e);
+  if (s === "ready" || s === "failed") return { label: "Test", disabled: false };
+  if (s === "testing") return { label: "Test", disabled: true };
+  return { label: "Recheck", disabled: s === "checking" };
+}
+
+/** "3 minutes ago", in words; `now` is a parameter so a test can hold it. */
+export function agoWords(at: number, now: number): string {
+  const d = Math.max(0, now - at);
+  if (d < 60_000) return "just now";
+  const unit = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"} ago`;
+  if (d < 3_600_000) return unit(Math.floor(d / 60_000), "minute");
+  if (d < 86_400_000) return unit(Math.floor(d / 3_600_000), "hour");
+  return unit(Math.floor(d / 86_400_000), "day");
+}
+
+/** The first row under the header: the sentence, and the command it points at. */
+export interface FirstRow { text: string; command?: string; hint?: string }
+
+export function firstRow(e: EngineReadiness | null, now: number): FirstRow {
+  const s = engineState(e);
+  const fix = e?.missing[0];
+  switch (s) {
+    case "checking": return { text: "Looking for it on this machine." };
+    case "missing":
+      return fix?.kind === "command"
+        ? { text: "Not on this machine.", command: fix.command }
+        : { text: `Not on this machine. ${fix?.what ?? ""}`.trim() };
+    case "old": return { text: fix?.what ?? "", command: fix?.command };
+    case "broken": return { text: fix?.what ?? "" };
+    case "signin":
+      return { text: "Not signed in.", command: fix?.command, hint: "Run it in a terminal; agentglass does not see the password." };
+    case "failed": return { text: e?.answers.error ?? "It did not answer." };
+    case "testing": return { text: "Sending one word. This takes a few seconds." };
+    case "ready": {
+      const a = e!.answers;
+      return a.state === "ok" && a.at
+        ? { text: `Answered in ${Math.max(1, Math.round((a.ms ?? 0) / 1000))} s, ${agoWords(a.at, now)}.` }
+        : { text: "Not tested yet. Test sends one word and costs one small turn." };
+    }
+  }
+}
+
+export function versionText(e: EngineReadiness): string {
+  if (e.version && e.versionOk === false && e.min) return `${e.version} · needs ${e.min}`;
+  if (e.version) return e.version;
+  return e.found ? "Could not be read" : "Not installed";
+}
+
+export function accountText(e: EngineReadiness): string {
+  const a = e.account;
+  if (a.signedIn === false) return "Not signed in";
+  if (a.signedIn === null) return e.found ? "Sign-in is not checked" : "Not installed";
+  if (a.account) return `Signed in with ${a.account}${a.model ? ` · ${a.model}` : ""}`;
+  const names = [a.provider, a.model].filter(Boolean).join(" · ");
+  return names || "Signed in";
+}
+
+export const roleBadge = (v: { ok: boolean }) => (v.ok ? { tone: "ok" as const, text: "Yes" } : { tone: "off" as const, text: "No" });
+
+/** The disclosure on the account row: where the credential lives. */
+export const credentialNote = (title: string, bin: string, statusArgs: string[] | undefined): string =>
+  statusArgs
+    ? `In ${title}'s own files. agentglass never reads them; it asks \`${bin} ${statusArgs.join(" ")}\`.`
+    : `In ${title}'s own files. agentglass never reads them, and has no read-only command to ask ${title} with.`;
+
+/** What a row under "reporting" says. The words are the old Agents list's. */
+export type ReportState = "live" | "waiting" | "ready" | "missing";
+export const REPORT_BADGE: Record<ReportState, { tone: StatusTone; text: string }> = {
+  live: { tone: "ok", text: "Reporting" },
+  waiting: { tone: "warn", text: "Waiting for events" },
+  ready: { tone: "off", text: "Not connected" },
+  missing: { tone: "off", text: "Not found" },
+};

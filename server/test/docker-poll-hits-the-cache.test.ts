@@ -42,7 +42,9 @@ console.log(JSON.stringify({ seen, fresh: fresh.freshness }));
 
 test("polls every 5 s are answered from the cache half the time, and Refresh still asks the daemon", async () => {
   stub();
-  const p = Bun.spawn(["bun", "-e", PROBE], {
+  // spawnSync, not pipes read through Response: in the shared test process the pipe read has died
+  // with EBADF in epoll_ctl on the CI runner, and this probe is a short blocking script anyway.
+  const p = Bun.spawnSync(["bun", "-e", PROBE], {
     env: {
       PATH: `${join(dir, "bin")}:${process.env.PATH ?? ""}`,
       HOME: dir, XDG_CONFIG_HOME: dir, XDG_DATA_HOME: dir, XDG_CACHE_HOME: dir,
@@ -51,8 +53,7 @@ test("polls every 5 s are answered from the cache half the time, and Refresh sti
     },
     stdout: "pipe", stderr: "pipe",
   });
-  const [out, err] = await Promise.all([new Response(p.stdout as ReadableStream).text(), new Response(p.stderr as ReadableStream).text()]);
-  await p.exited;
+  const out = p.stdout.toString(), err = p.stderr.toString();
   expect(err.length === 0 || !out, err.slice(0, 300)).toBe(true);
   const { seen, fresh } = JSON.parse(out.trim().split("\n").pop()!) as { seen: string[]; fresh: string };
   const hits = seen.filter((f) => f === "stale").length;

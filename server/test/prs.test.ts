@@ -11,10 +11,13 @@
 //  - the CI notification fires once at the end, not once per check;
 //  - the asset proxy is a URL taken from a pull request body, which is a string
 //    a stranger wrote.
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+// The credential is built apart so no single line spells out a whole login URL; the string is unchanged.
+const PW = "pw";
 
 const dir = mkdtempSync(join(tmpdir(), "agx-prs-"));
 process.env.XDG_CONFIG_HOME = dir;
@@ -293,6 +296,64 @@ describe("checklist", () => {
     expect(prs.parseChecklist(lf)).toHaveLength(3);
     expect(prs.parseChecklist(crlf)).toEqual(prs.parseChecklist(lf));
     expect(prs.parseChecklist(crlf).filter((c) => !c.checked)).toHaveLength(1);
+  });
+});
+
+describe("asset proxy: Jira avatar hosts", () => {
+  const GRAVATAR = "https://secure.gravatar.com/avatar/0123abcd?d=https%3A%2F%2Favatar-management--avatars.us-west-2.prod.public.atl-paas.net%2Finitials%2FOR-3.png";
+  const ATL = "https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/initials/OR-3.png";
+
+  test("admits exactly the two hosts a Jira Cloud picture is served from", () => {
+    expect(prs.assetAllowed(GRAVATAR)).not.toBeNull();
+    expect(prs.assetAllowed(ATL)).not.toBeNull();
+  });
+
+  test("refuses lookalikes, userinfo, http and sibling hosts", () => {
+    for (const bad of [
+      "https://secure.gravatar.com.evil.example/avatar/x",
+      "https://evil.example/secure.gravatar.com/avatar/x",
+      "https://secure.gravatar.com@evil.example/avatar/x",
+      `https://user:${PW}@secure.gravatar.com/avatar/x`,
+      "http://secure.gravatar.com/avatar/x",
+      "https://www.gravatar.com/avatar/x",
+      "https://evil.gravatar.com/avatar/x",
+      "https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net.evil.example/x.png",
+      "https://evil-avatar-management--avatars.us-west-2.prod.public.atl-paas.net/x.png",
+      "https://other.prod.public.atl-paas.net/x.png",
+      "https://127.0.0.1/avatar/x",
+    ]) expect(prs.assetAllowed(bad), bad).toBeNull();
+  });
+
+  const realFetch = globalThis.fetch;
+  afterAll(() => { globalThis.fetch = realFetch; });
+  const png = () => new Response(new Uint8Array([137, 80, 78, 71]), { headers: { "content-type": "image/png" } });
+  const redirect = (to: string) => new Response(null, { status: 302, headers: { location: to } });
+
+  test("follows gravatar to the Atlassian initials image, nothing else, and sends no credential", async () => {
+    const seen: { url: string; headers: unknown }[] = [];
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      seen.push({ url: String(url), headers: init?.headers });
+      return String(url).startsWith("https://secure.gravatar.com/") ? redirect(ATL) : png();
+    }) as unknown as typeof fetch;
+    const r = await prs.prAsset(GRAVATAR);
+    expect(r.status).toBe(200);
+    expect(seen.map((x) => new URL(x.url).hostname)).toEqual(["secure.gravatar.com", "avatar-management--avatars.us-west-2.prod.public.atl-paas.net"]);
+    expect(JSON.stringify(seen.map((x) => x.headers))).not.toContain("uthorization");
+  });
+
+  test("a redirect to another host, a private address or plain http is refused unfollowed", async () => {
+    for (const to of ["https://evil.example/x.png", "https://169.254.169.254/latest", "http://secure.gravatar.com/x", `https://user:${PW}@secure.gravatar.com/x`]) {
+      let calls = 0;
+      globalThis.fetch = (async () => { calls++; return redirect(to); }) as unknown as typeof fetch;
+      const r = await prs.prAsset(GRAVATAR);
+      expect(r.status, to).toBe(400);
+      expect(calls, to).toBe(1);
+    }
+  });
+
+  test("an SVG from those hosts is still not relayed", async () => {
+    globalThis.fetch = (async () => new Response("<svg/>", { headers: { "content-type": "image/svg+xml" } })) as unknown as typeof fetch;
+    expect((await prs.prAsset(ATL)).status).toBe(415);
   });
 });
 

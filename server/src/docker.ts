@@ -127,6 +127,8 @@ const VERSION_UNSURE_RETRY_MS = 2_000;
  *  that died mid-session surface as down instead of a phantom empty daemon. */
 const VERSION_OK_TTL_MS = 15_000;
 let versionInflight: Promise<DaemonProbe> | null = null;
+/** Bumped by the test reset: a probe that began before it must not write into the cache that came after. */
+let probeGen = 0;
 /** Whether the last failure was the CLI answering, or us giving up on it. */
 let lastProbeInconclusive = false;
 
@@ -183,6 +185,7 @@ async function probeDaemon(): Promise<DaemonProbe> {
       return { version: null, inconclusive: lastProbeInconclusive };
     }
   }
+  const gen = probeGen;
   versionInflight = (async () => {
     try {
       // Six seconds, not the eight everything else here gets, and deliberately
@@ -193,6 +196,7 @@ async function probeDaemon(): Promise<DaemonProbe> {
       // snap, Desktop's shim) its pipes stay open until the grandchild exits —
       // so leaving room under the request timeout is what actually bounds this.
       const r = await dockerAsync(["version", "--format", "{{.Server.Version}}"], 6_000);
+      if (gen !== probeGen) return { version: null, inconclusive: true };
       versionCheckedAt = Date.now();
       if (r.code === 0) {
         cachedVersion = r.stdout.trim() || null;
@@ -208,7 +212,7 @@ async function probeDaemon(): Promise<DaemonProbe> {
       if (!lastProbeInconclusive) cachedVersion = null;
       return { version: cachedVersion, inconclusive: !cachedVersion && lastProbeInconclusive };
     } finally {
-      versionInflight = null;
+      if (gen === probeGen) versionInflight = null;
     }
   })();
   return versionInflight;
@@ -258,6 +262,7 @@ export function __resetDockerCapForTest(): void {
   versionCheckedAt = 0;
   lastProbeInconclusive = false;
   versionInflight = null;
+  probeGen++;
 }
 
 /** Test seam: pretend the liveness window elapsed, keeping any cached version so

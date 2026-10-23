@@ -14,7 +14,7 @@
  * skipped, and the rest of the step still runs. Ceiling: people fields and checkboxes are not here
  * (the wire shape of a people field has not been checked against a real board).
  */
-import type { ListField, StepBlock } from "../../../shared/providers.ts";
+import type { ListField, ClickUpStepBlock as StepBlock } from "../../../shared/providers.ts";
 import { fillTemplate, type Placeholder } from "../../../shared/stepBlocks.ts";
 
 /** The kinds of field this writes, as ClickUp names them, and what each reads as. */

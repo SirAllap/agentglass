@@ -93,3 +93,27 @@ describe("the Git view serves them while hidden", () => {
     expect(mount).not.toContain("setView");
   });
 });
+
+describe("the way out", () => {
+  const COMPONENTS = ["Insights", "Bisect", "Compare", "Blame", "Rebase"];
+
+  it("every Git modal closes on Escape through the one hook", () => {
+    for (const m of COMPONENTS) {
+      const t = stripComments(src(`components/${m}Modal.tsx`));
+      expect(t, m).toContain("useEscapeClose(onClose);");
+    }
+  });
+
+  it("the hook listens in the bubble phase and keeps the key from the panel behind", () => {
+    const hook = stripComments(block(src("lib/useDismiss.ts"), "export function useEscapeClose("));
+    expect(hook).toContain('document.addEventListener("keydown", onKey);');
+    expect(hook).not.toContain("true)");
+    expect(hook).toContain("e.stopPropagation();");
+  });
+
+  it("a request from a terminal pane moves the view to that pane's checkout before opening", () => {
+    const drain = block(src("components/GitPanel.tsx"), "useEffect(() => {\n    if (!root) return;\n    const run = () => {");
+    expect(drain.indexOf("setRoot(m.root)")).toBeGreaterThan(-1);
+    expect(drain.indexOf("setRoot(m.root)")).toBeLessThan(drain.indexOf("setInsightsOpen(true)"));
+  });
+});

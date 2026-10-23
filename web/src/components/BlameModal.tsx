@@ -10,6 +10,7 @@ import { CloseButton } from "./CloseButton.tsx";
 import { api } from "../lib/api.ts";
 import type { BlameLine, FileHistoryEntry } from "../../../shared/types.ts";
 import { EDGE } from "./workspace/Chrome.tsx";
+import { useEscapeClose } from "../lib/useDismiss.ts";
 
 const SHORT = 7;
 
@@ -19,6 +20,7 @@ export function BlameModal({ root, path, onClose, onOpenCommit }: {
   onClose: () => void;
   onOpenCommit: (hash: string, subject: string) => void;
 }) {
+  useEscapeClose(onClose);
   const [lines, setLines] = useState<BlameLine[]>([]);
   const [history, setHistory] = useState<FileHistoryEntry[]>([]);
   const [at, setAt] = useState("HEAD");

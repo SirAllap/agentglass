@@ -7,7 +7,8 @@
  * "move your page into a 2,700-line file", so nobody did, and twelve pages
  * grew their own idea of what a row looks like.
  */
-import { createContext, isValidElement, useContext, useId, useLayoutEffect, useState } from "react";
+import { createContext, isValidElement, useContext, useLayoutEffect, useState } from "react";
+import { Disclosure } from "./SettingsKit.tsx";
 import { rowMatches, rowId } from "../lib/settingsIndex.ts";
 
 /* ─────────────────────────── Searching the settings ─────────────────────────
@@ -55,38 +56,18 @@ export function textOf(n: React.ReactNode): string {
   return "";
 }
 
-/** A hint longer than this is one line and a More control. Twelve words is what
- *  fits a 760px column at 12px without wrapping; measured on the Terminal page,
- *  where the long hints were the reason two rows sat at four times the height
- *  of their neighbours. */
-export const HINT_FOLD_WORDS = 12;
-
-export function hintNeedsFold(text: string): boolean {
-  const t = text.trim();
-  return t !== "" && t.split(/\s+/).length > HINT_FOLD_WORDS;
-}
-
 /*
- * The More/Less control after a folded hint.
+ * A description is shown whole.
  *
- * A real <button>, and never inside the row's own button or link: a control
- * nested in a `role="switch"` is presentational to assistive tech (its name
- * is flattened into the switch's and it is never exposed as a button), and
- * axe fails it as nested-interactive. So an operable row draws it as a
- * sibling under the row (see SettingRow); a plain row draws it inline.
- * `controls` names the hint it opens.
+ * It used to fold past twelve words into one clipped line and a More button.
+ * Measured across the settings pages, that cut 89 descriptions mid-sentence
+ * and put 85 More buttons on screen, and a reader has to press every one to
+ * find the row they came for. A description is now one or two sentences,
+ * written to be read in full; anything longer goes in a `detail` disclosure
+ * named for what it holds (see SettingsKit's Disclosure).
  */
-function HintMore({ open, toggle, controls, className }: { open: boolean; toggle: () => void; controls: string; className?: string }) {
-  return (
-    <button type="button" aria-expanded={open} aria-controls={controls}
-      onClick={toggle}
-      className={`text-[12px] t-dim underline cursor-pointer ${className ?? ""}`}>
-      {open ? "Less" : "More"}
-    </button>
-  );
-}
 
-export function SettingRow({ label, hint, control, onClick, href, download, disabled, role, ariaChecked, align, modified, settingId }: {
+export function SettingRow({ label, hint, control, status, actions, below, detail, rowRef, rowProps, minHeight, onClick, href, download, disabled, role, ariaChecked, align, modified, settingId }: {
   /** The SettingDef this row binds to (web/src/lib/settingsRegistry.ts), written
    *  BEFORE `label` so the settings index generator reads it with the row. Also
    *  `agentExempt`, a row that is not a setting, which is read from source only. */
@@ -95,7 +76,30 @@ export function SettingRow({ label, hint, control, onClick, href, download, disa
   agentNever?: string;
   label: React.ReactNode;
   hint?: React.ReactNode;
+  /** Inline, in the control column: one switch, segmented set, select,
+   *  stepper, or at most two buttons. A text field, a textarea, a form, a
+   *  preview or a list is `below`, never here. */
   control?: React.ReactNode;
+  /** The verdict on this row (a StatusBadge), always first in the control
+   *  column, so it stays put whatever comes after it. */
+  status?: React.ReactNode;
+  /** What can be done to the established thing (Disconnect, Change), after
+   *  the status. A confirmation replaces its action in the same place. */
+  actions?: React.ReactNode;
+  /** The stacked slot under the description, full width: forms, text fields,
+   *  previews, lists. Not on a row that is itself a button or a link. */
+  below?: React.ReactNode;
+  /** Secondary detail in a named disclosure under the description. Not on a
+   *  row that is itself a button or a link. */
+  detail?: { summary: string; body: React.ReactNode };
+  /** A plain row only: measured by a caller that holds its height while it
+   *  waits for an answer, so the page does not jump when the answer lands. */
+  rowRef?: React.Ref<HTMLDivElement>;
+  /** A plain row only: attributes for the row element itself, for a row that
+   *  is dragged or dropped on. A wrapper div around the row would take it out
+   *  of the card body, where its divider is drawn. */
+  rowProps?: Pick<React.HTMLAttributes<HTMLDivElement>, "draggable" | "onDragStart" | "onDragEnd" | "onDragOver" | "onDrop" | "style">;
+  minHeight?: number;
   onClick?: () => void;
   href?: string;
   download?: string;
@@ -111,22 +115,21 @@ export function SettingRow({ label, hint, control, onClick, href, download, disa
   modified?: boolean;
 }) {
   const { on, q, seen } = useContext(Filter);
-  const [hintOpen, setHintOpen] = useState(false);
-  const hintId = useId();
   // Counted on every render, filtering or not: the count is what decides
   // whether filtering is worth doing at all on this page.
   const matched = !q || rowMatches(textOf(label) + " " + textOf(hint), q);
   seen(matched);
   if (on && !matched) return null;
-  const fold = hintNeedsFold(textOf(hint));
   const operable = !!(onClick || href);
-  // Under the row, not inside it: see HintMore. Pulled up into the row's own
-  // bottom padding so the pair still reads as one row.
-  const more = fold && operable ? (
-    <div className="px-4 -mt-2.5 pb-3">
-      <HintMore open={hintOpen} toggle={() => setHintOpen((v) => !v)} controls={hintId} />
-    </div>
-  ) : null;
+  // A button or a link cannot hold a form or a <details>: those slots are for
+  // plain rows only (see the props).
+  const stacked = operable ? undefined : below;
+  const more = operable ? undefined : detail;
+  // Status, actions and anything stacked hang from the top: a badge centred
+  // against a three-line description lands in the middle of nowhere, and it
+  // must not move when the description grows a line.
+  const slotted = status !== undefined || actions !== undefined;
+  const top = align === "start" || slotted || stacked !== undefined || more !== undefined;
 
   const body = (
     <>
@@ -140,40 +143,43 @@ export function SettingRow({ label, hint, control, onClick, href, download, disa
           {label}
         </span>
         {/* mt-1, not mt-0.5. A 2px gap under 13.5px type is not a gap — the
-            sweep found this pair "touching" on every settings pane there is,
-            which is the single most repeated instance of the complaint that
-            started this: things that belong together drawn as one block of
-            text. 4px is the step for "these two are one thought". */}
+            sweep found this pair "touching" on every settings pane there is.
+            4px is the step for "these two are one thought". */}
         {hint !== undefined && hint !== "" && (
-          <span className="block text-[12px] t-dim mt-1">
-            {/* The words stay in the DOM when folded, so search still finds them. */}
-            {fold ? <span id={hintId} className={hintOpen ? undefined : "agx-settings-hint-clamp"}>{hint}</span> : hint}
-            {fold && !operable && <HintMore open={hintOpen} toggle={() => setHintOpen((v) => !v)} controls={hintId} className="ml-1.5" />}
-          </span>
+          <span className="block text-[12px] t-dim mt-1">{hint}</span>
         )}
+        {more && <Disclosure summary={more.summary}>{more.body}</Disclosure>}
       </span>
-      {control !== undefined && <span className="min-w-0">{control}</span>}
+      {slotted
+        ? <span className="agx-slot">{status}{control}{actions}</span>
+        : control !== undefined && (
+          /* A switch is `inline-block`, and an inline-block sitting on a text baseline
+             leaves the descender gap under it: 7px more space below a toggle than
+             above it once the control drops under the words (the sweep measured
+             row padding of 14 above and 21 below). A flex wrapper has no line box. */
+          <span className={`min-w-0${role === "switch" ? " flex" : ""}`}>{control}</span>
+        )}
+      {stacked !== undefined && <div className="agx-row-below">{stacked}</div>}
     </>
   );
-  const cls = `agx-settings-row${align === "start" ? " items-start" : ""}${onClick || href ? " agx-hover" : ""}`;
-  const style: React.CSSProperties | undefined = disabled ? { opacity: 0.55 } : undefined;
+  const cls = `agx-settings-row${top ? " items-start" : ""}${onClick || href ? " agx-hover" : ""}`;
+  const style: React.CSSProperties | undefined = disabled || minHeight
+    ? { ...(disabled ? { opacity: 0.55 } : null), ...(minHeight && !operable ? { minHeight } : null) }
+    : undefined;
   // The row's own anchor. openSettings(pane, row) and the command palette
   // both scroll to and flash `[data-row=…]` after the page mounts — derived
   // from the label text so it can never fall out of sync with what the row
   // is now called.
   const dataRow = rowId(textOf(label));
-  if (href) return <><a href={href} download={download} className={cls} style={style} data-row={dataRow}>{body}</a>{more}</>;
+  if (href) return <a href={href} download={download} className={cls} style={style} data-row={dataRow}>{body}</a>;
   const dataSetting = settingId ? { "data-setting-id": settingId } : undefined;
   if (onClick) {
     return (
-      <>
-        <button onClick={onClick} disabled={disabled} role={role} aria-checked={ariaChecked}
-          className={`${cls} text-left disabled:cursor-not-allowed`} style={style} data-row={dataRow} {...dataSetting}>{body}</button>
-        {more}
-      </>
+      <button onClick={onClick} disabled={disabled} role={role} aria-checked={ariaChecked}
+        className={`${cls} text-left disabled:cursor-not-allowed`} style={style} data-row={dataRow} {...dataSetting}>{body}</button>
     );
   }
-  return <div className={cls} style={style} data-row={dataRow} {...dataSetting}>{body}</div>;
+  return <div ref={rowRef} className={cls} data-row={dataRow} {...dataSetting} {...rowProps} style={{ ...style, ...rowProps?.style }}>{body}</div>;
 }
 
 /**
@@ -263,7 +269,7 @@ export function Fold({ label, hint, children, defaultOpen }: {
          * continuing the label, and as a mistake when it is anything with a
          * border, which is most of what folds hold here.
          */
-        <div className="pt-1.5 pb-3 text-[12px] leading-relaxed" style={{ color: "var(--text2)" }}>
+        <div className="pt-1.5 pb-3 text-[12px] leading-relaxed agx-fold-body" style={{ color: "var(--text2)" }}>
           {children}
         </div>
       )}

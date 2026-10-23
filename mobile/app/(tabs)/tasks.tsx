@@ -27,7 +27,7 @@
  * branch on them.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { FlatList, Linking, Pressable, RefreshControl, Text, View } from "react-native";
+import { FlatList, Pressable, RefreshControl, Text, View } from "react-native";
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
@@ -45,6 +45,7 @@ import { projectNames, scopeLocal } from "../../src/model/taskScope.ts";
 import { matchesQuery } from "../../../shared/taskref.ts";
 import { Btn, Card, Label, ListEmpty, Note, Segmented, groupEdge } from "../../src/ui.tsx";
 import { dueIn } from "../../src/lib/dates.ts";
+import { openHttp } from "../../src/lib/openHttp.ts";
 import { BoardHeader } from "../../src/cards/BoardHeader.tsx";
 import { CardFilterSheet } from "../../src/cards/CardFilterSheet.tsx";
 import { CardRow } from "../../src/cards/CardRow.tsx";
@@ -98,7 +99,7 @@ function LocalRow({ task, onCopied }: {
       // A tap opens the task's first link when it has one — the nearest thing
       // a local task has to a page of its own. There is no detail screen to
       // push: the list IS the tracker, and everything it knows is on the row.
-      onPress={link ? () => { void Linking.openURL(link); } : undefined}
+      onPress={link ? () => { openHttp(link); } : undefined}
       onLongPress={() => {
         void Clipboard.setStringAsync(task.uuid);
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);

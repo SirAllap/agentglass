@@ -18,6 +18,7 @@ import { CloseButton } from "./CloseButton.tsx";
 import { api } from "../lib/api.ts";
 import { ICON } from "../lib/iconSize.ts";
 import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
+import { useEscapeClose } from "../lib/useDismiss.ts";
 
 export type RebaseStep = { action: "pick" | "squash" | "fixup" | "drop" | "reword" | "edit"; hash: string; subject: string; newMessage?: string };
 
@@ -40,6 +41,7 @@ export function RebaseModal({ root, base, branch, onClose, onDone }: {
   /** Called after a successful run so the log can reload. */
   onDone: () => void;
 }) {
+  useEscapeClose(onClose);
   const [steps, setSteps] = useState<RebaseStep[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);

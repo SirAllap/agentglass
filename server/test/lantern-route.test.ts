@@ -84,7 +84,9 @@ step("a session that answered is on the board by its own name, and not reminded 
   await prompt("lantern-b"); // asked
   const said = await post("/agents/status", { name: "orbit-1042-migration", doing: "the migration", worktree: dir, session: "lantern-b" });
   expect(said.status).toBe(200);
-  const board = await fetch(base + "/agents/board").then((r) => r.json() as Promise<{ agents: { name: string; doing?: string; session?: string; from: string }[] }>);
+  const board = await fetch(base + "/agents/board").then((r) => r.json() as Promise<{ agents: { name: string; doing?: string; session?: string; from: string }[]; chairs?: unknown[] }>);
+  // The chairs ride on the same answer the view already reads, so showing them costs no request.
+  expect(board.chairs).toEqual([]);
   const row = board.agents.find((a) => a.name === "orbit-1042-migration");
   expect(row, "the answer is a row, by the name the session chose").toBeDefined();
   expect(row!.doing).toBe("the migration");

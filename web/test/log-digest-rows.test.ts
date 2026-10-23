@@ -24,12 +24,14 @@ describe("log digest rows", () => {
     expect(code).toContain("g.example");
     expect(code).not.toMatch(/text=\{[^}]*\.sig\b/);
   });
-  test("count and time sit in fixed columns", () => {
-    expect(code).toContain("gridTemplateColumns");
+  test("severity is a badge, and the count and time are the row's description", () => {
+    expect(code).toContain('<StatusBadge tone={level === "error" ? "err" : "warn"}>');
+    expect(code).toContain("hint={`${count} · ${when}`}");
   });
-  test("message holds two lines and expands", () => {
-    expect(code).toContain("WebkitLineClamp: 2");
-    expect(code).toContain("aria-expanded");
+  test("the message is shown whole, never folded to two lines behind a click", () => {
+    expect(code).not.toContain("WebkitLineClamp");
+    expect(code).not.toContain("aria-expanded");
+    expect(code).not.toContain("useClipped");
   });
 });
 
@@ -44,16 +46,11 @@ describe("Server log rows: time and clamping", () => {
     expect(minutesAgo(now - 3 * 3_600_000, now)).toBe("3 h ago");
   });
 
-  test("is a button only while its text is clamped or open", () => {
+  test("a row is a plain SettingRow: no button, no clamp, nothing to measure", () => {
     const start = src.indexOf("function LogRow(");
     expect(start).toBeGreaterThan(-1);
     const body = src.slice(start, src.indexOf("\n}\n", start));
-    // Measured, not guessed from the text length.
-    expect(body).toContain("useClipped([textRef]");
-    expect(body).toMatch(/const clickable = open \|\| clamped;/);
-    expect(body).toMatch(/clickable \? "button" : "div"/);
-    // The pointer and the click come only with the button.
-    expect(body).toMatch(/clickable \? "agx-logrow cursor-pointer" : ""/);
-    expect(body).not.toMatch(/className="[^"]*cursor-pointer/);
+    expect(body).toContain("<SettingRow");
+    expect(body).not.toMatch(/useClipped|clickable|cursor-pointer|"button"/);
   });
 });

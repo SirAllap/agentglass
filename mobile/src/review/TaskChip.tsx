@@ -13,7 +13,8 @@
  * the majority and it has to feel deliberate rather than broken.
  */
 import { useMemo } from "react";
-import { Linking, Pressable, Text } from "react-native";
+import { Pressable, Text } from "react-native";
+import { openHttp } from "../lib/openHttp.ts";
 import { chipFor, readTaskRef } from "../../../shared/taskref.ts";
 import { cardIdFromUrl } from "../model/cardFromUrl.ts";
 import { C, RADIUS, SPACE, T } from "../theme.ts";
@@ -48,7 +49,7 @@ export function TaskChip({ pr, tracked, onFind, onOpenCard }: {
           : `Find ${ref.label} in the cards on this machine`}
       onPress={() => {
         if (cardId) onOpenCard?.(cardId);
-        else if ("open" in go) void Linking.openURL(go.open).catch(() => { /* no app for it */ });
+        else if ("open" in go) openHttp(go.open);
         else onFind(go.find, ref.label);
       }}
       style={({ pressed }) => ({

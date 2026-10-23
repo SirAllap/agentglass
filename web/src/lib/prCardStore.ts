@@ -39,9 +39,12 @@ const FRESH_ENOUGH_MS = 5 * 60_000;
 /** At once. The server holds one ClickUp token and the sidebar is a glance. */
 const AT_ONCE = 2;
 
-type Entry = { at: number; task: ProviderTask | null; error: string };
+/** `by` is the tracker that was asked, when a lookup (not a write) made it. */
+type Entry = { at: number; task: ProviderTask | null; error: string; by?: "clickup" | "jira" };
 
 const seen = new Map<string, Entry>();
+/** The queries whose card is Jira's: asked of Jira, not of ClickUp. A key is one tracker's for as long as the page is open. */
+const jiraOwned = new Set<string>();
 const inflight = new Set<string>();
 const waiting: string[] = [];
 const listeners = new Set<() => void>();
@@ -79,12 +82,14 @@ function pump(): void {
     const query = waiting.shift()!;
     running++;
     inflight.add(query);
-    api.clickupFind(query)
+    const jira = jiraOwned.has(query);
+    (jira ? api.jiraFind(query) : api.clickupFind(query))
       .then((r) => {
         hold(query, {
           at: Date.now(),
           task: r?.ok && r.task ? r.task : null,
-          error: r?.ok && r.task ? "" : (r?.error || "ClickUp could not find it"),
+          error: r?.ok && r.task ? "" : (r?.error || `${jira ? "Jira" : "ClickUp"} could not find it`),
+          by: jira ? "jira" : "clickup",
         });
       })
       // A failure is remembered too, as "no answer" — otherwise every render
@@ -101,15 +106,29 @@ export function onCard(fn: () => void): () => void {
 }
 
 /**
+ * What is held for a key, unless the other tracker wrote it.
+ *
+ * The PR list asks ClickUp for every row the server did not name as Jira's, so
+ * `ORBIT-1042` was stored as "ClickUp could not find it" before anybody opened
+ * the panel; the panel's Jira section then read that miss for the whole TTL and
+ * never asked Jira. A reading from ClickUp is no answer to a question put to Jira.
+ */
+function heldFor(query: string, tracker: "clickup" | "jira"): Entry | undefined {
+  const hit = seen.get(query);
+  return tracker === "jira" && hit?.by === "clickup" ? undefined : hit;
+}
+
+/**
  * The card, or null while nobody knows.
  *
  * Asking is the side effect: calling this for a reference nothing has asked
  * about yet puts it in the queue. The thing that knows a card is on screen is
  * the thing drawing it.
  */
-export function cardOf(query: string, maxAgeMs: number = TTL_MS): Entry | null {
+export function cardOf(query: string, maxAgeMs: number = TTL_MS, tracker: "clickup" | "jira" = "clickup"): Entry | null {
   if (!query) return null;
-  const hit = seen.get(query);
+  if (tracker === "jira") jiraOwned.add(query);
+  const hit = heldFor(query, tracker);
   if (hit && Date.now() - hit.at < maxAgeMs) return hit;
   if (!inflight.has(query) && !waiting.includes(query)) {
     waiting.push(query);
@@ -122,7 +141,7 @@ export function cardOf(query: string, maxAgeMs: number = TTL_MS): Entry | null {
  *  draws nothing rather than a space kept for one. */
 export function askingCard(query: string): boolean {
   if (!query) return false;
-  const hit = seen.get(query);
+  const hit = heldFor(query, jiraOwned.has(query) ? "jira" : "clickup");
   return !hit || Date.now() - hit.at >= TTL_MS;
 }
 
@@ -169,6 +188,7 @@ export function forgetCard(query: string): void {
  */
 export function forgetCards(): void {
   seen.clear();
+  jiraOwned.clear();
   waiting.length = 0;
   tell();
 }
@@ -188,6 +208,9 @@ export function forgetCards(): void {
  * hundred.
  */
 export function withCard<T extends PrSummary>(p: T, hasTaskProvider: boolean): T {
+  /* A Jira card is read from the Jira views cache by the server, and asking
+     ClickUp for a Jira key is a request that can only come back empty. */
+  if (p.card?.tracker === "jira") return p;
   const t = taskLink(p, hasTaskProvider);
   if (!t) return p;
   /* A reading young enough to stand behind is left alone — that is the free

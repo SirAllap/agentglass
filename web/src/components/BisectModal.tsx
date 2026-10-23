@@ -13,6 +13,7 @@ import type { GitBisectStatus } from "../../../shared/types.ts";
 import { CrossIcon, DoneIcon, IconLabel } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
+import { useEscapeClose } from "../lib/useDismiss.ts";
 
 export function BisectModal({ root, onClose, onReset, onOpenCommit, onChanged }: {
   root: string;
@@ -21,6 +22,7 @@ export function BisectModal({ root, onClose, onReset, onOpenCommit, onChanged }:
   onOpenCommit: (hash: string, subject: string) => void;
   onChanged: () => void;
 }) {
+  useEscapeClose(onClose);
   const [st, setSt] = useState<GitBisectStatus | null>(null);
   const [bad, setBad] = useState("");
   const [good, setGood] = useState("");

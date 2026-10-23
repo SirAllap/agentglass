@@ -28,17 +28,18 @@ import { AgentOffersList, AGENT_BTN, AGENT_CARD } from "./AgentOffers.tsx";
 import { AgentBackChip, useBackOffer } from "./AgentBackChip.tsx";
 import type { ViewId } from "../../../shared/types.ts";
 import { offers } from "../lib/agentOffers.ts";
-import { changeText, CHIP_MS, CHIP_BOTTOM } from "../lib/quietPresent.ts";
+import { changeText, chipLeftMs, CHIP_BOTTOM } from "../lib/quietPresent.ts";
 
 export function AgentChangeChip({ onBack }: { onBack: (v: ViewId) => void }) {
   const log = useSyncExternalStore(settings.subscribeChanges, settings.changes, () => []);
   const c = shownChange(log);
   const handle = c?.handle;
+  const changedAt = c?.at ?? 0;
   useEffect(() => {
     if (!handle) return;
-    const t = setTimeout(() => settings.dismiss(handle), CHIP_MS);
+    const t = setTimeout(() => settings.dismiss(handle), chipLeftMs(changedAt, Date.now()));
     return () => clearTimeout(t);
-  }, [handle]);
+  }, [handle, changedAt]);
   const held = useSyncExternalStore(offers.subscribe, () => offers.list().length, () => 0);
   const backed = useBackOffer();
   if (!c && !held && !backed) return null;

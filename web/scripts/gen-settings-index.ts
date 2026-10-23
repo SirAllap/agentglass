@@ -23,7 +23,7 @@
  * per-row jump (Enter on a search result, the command palette's row entry)
  * cannot land on that one row. Nested components deeper than one level (a
  * component that itself renders another component that renders a row) are
- * also not indexed, for the same reason: this script does not evaluate the
+ * not indexed, except for the panes in DEEP_PANES, which are followed one level more, for the same reason: this script does not evaluate the
  * tree, it reads text.
  *
  * Regenerate with `bun run gen:settings-index` from web/.
@@ -49,7 +49,7 @@ type Page = { id: string; label: string };
 /** Every .tsx file under web/src/components, recursively. */
 function walk(dir: string): string[] {
   const out: string[] = [];
-  for (const name of readdirSync(dir)) {
+  for (const name of readdirSync(dir).sort()) {
     const p = join(dir, name);
     const st = statSync(p);
     if (st.isDirectory()) out.push(...walk(p));
@@ -98,6 +98,7 @@ function componentBody(path: string, component: string): string {
 function sectionMarkers(text: string): { at: number; title: string }[] {
   const out: { at: number; title: string }[] = [];
   for (const m of text.matchAll(/<Section\s+title="([^"]*)"/g)) out.push({ at: m.index!, title: m[1]! });
+  for (const m of text.matchAll(/<SettingsCard\b[^>]*?\stitle="([^"]*)"/g)) out.push({ at: m.index!, title: m[1]! });
   for (const m of text.matchAll(/agx-settings-head-t"[^>]*>([^<]{1,80})</g)) out.push({ at: m.index!, title: m[1]!.trim() });
   out.sort((a, b) => a.at - b.at);
   return out;
@@ -158,7 +159,7 @@ function rowsIn(text: string, pane: string): Row[] {
  *  defines under web/src/components, minus the small set of primitives that
  *  are not pages of their own (they are how a ROW draws, not what a pane is
  *  made of). */
-const SKIP_TAGS = new Set(["SettingRow", "Row", "Toggle", "Fold", "Select", "Switch", "Section", "Fragment"]);
+const SKIP_TAGS = new Set(["SettingRow", "Row", "Toggle", "Fold", "Select", "Switch", "Section", "SettingsCard", "Fragment"]);
 function subComponentsIn(text: string): string[] {
   const found = new Set<string>();
   for (const m of text.matchAll(/<([A-Z][A-Za-z0-9]*)\b/g)) {
@@ -168,7 +169,10 @@ function subComponentsIn(text: string): string[] {
   return [...found];
 }
 
-function rowsForPane(pane: string, block: string, seenComponents: Set<string>): Row[] {
+/** Panes whose container hands what it reads to a view that draws the rows. Opt-in: following every pane two levels adds rows to pages nobody asked about. */
+const DEEP_PANES = new Set(["jira"]);
+
+function rowsForPane(pane: string, block: string, seenComponents: Set<string>, depth = 0): Row[] {
   const rows = rowsIn(block, pane);
   for (const comp of subComponentsIn(block)) {
     if (seenComponents.has(`${pane}:${comp}`)) continue;
@@ -178,6 +182,8 @@ function rowsForPane(pane: string, block: string, seenComponents: Set<string>): 
     const body = componentBody(file, comp);
     if (!body) continue;
     rows.push(...rowsIn(body, pane));
+    // A pane whose container hands what it reads to a view (JiraPane -> JiraSettingsView) has its rows one level further down.
+    if (depth < 1 && DEEP_PANES.has(pane)) rows.push(...rowsForPane(pane, body, seenComponents, depth + 1).slice(rowsIn(body, pane).length));
   }
   return rows;
 }

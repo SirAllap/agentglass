@@ -421,6 +421,18 @@ export function pushDeviceStoreChanged(path: string) {
   }
 }
 
+/** The chair of a project has no engine left to run it (agents/noplan.ts).
+ *  A blocked agent, like a held gate, so the one kind that is on by default. */
+export function pushNoPlanLeft(project: string, running: number) {
+  deliver(`${project} has no plan left`,
+    `The orchestrator for ${project} has no plan left. ${running} worker${running === 1 ? " is" : "s are"} still running and will stop at their limits.`,
+    2, undefined, { source: "orchestration", key: `noplan:${project}` }, "blocked");
+}
+/** A plan is back: take the card down. */
+export function pushNoPlanCleared(project: string) {
+  deliver(`${project} has a plan again`, "", 0, undefined, { source: "orchestration", key: `noplan:${project}`, clear: true }, "blocked");
+}
+
 export function pushReminder(id: string, title: string, when: string) {
   if (shouldSend(`remind:${id}`)) deliver(`⏰ ${title}`, when, 2, undefined, { kind: "reminder", id, source: "reminder" }, "reminders");
 }
@@ -476,7 +488,9 @@ export function describeSession(sourceApp: string, sessionId: string, cwdIn = ""
   // The session prefix ONLY when there is no pane. It is a disambiguator, and a
   // pane already disambiguates — carrying both left six characters of a UUID on
   // a line that had just been made readable.
-  return at ? `${where} · ${at}` : `${where} (${sessionId.slice(0, 6)})`;
+  // Eight characters, as every other place that shows a session id does. Six cut
+  // a short id mid-word: "sess-one" read "(sess-o)" on a phone's notification.
+  return at ? `${where} · ${at}` : `${where} (${sessionId.slice(0, 8)})`;
 }
 
 /**

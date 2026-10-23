@@ -58,6 +58,18 @@ describe("the request", () => {
     expect(seen, "the signal reached fetch").toBe(ac.signal);
   });
 
+  test("a Jira id lookup carries the signal too, so a superseded Enter stops its GET", async () => {
+    let seen: AbortSignal | null | undefined;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input instanceof Request ? input.url : input).includes("/jira/find")) return realFetch(input as RequestInfo, init);
+      seen = init?.signal;
+      return ok({ ok: true });
+    }) as typeof fetch;
+    const ac = new AbortController();
+    await api.jiraFind("ORBIT-1042", ac.signal);
+    expect(seen, "the signal reached fetch").toBe(ac.signal);
+  });
+
   test("an already-aborted search never leaves", async () => {
     // The gate in `get` waits for the sidecar first, and a person can give up
     // during that wait. Checking only inside fetch would let the call go out.
@@ -114,6 +126,16 @@ describe("the controls that reach it", () => {
 
   test("and so does the × on the banner that says it is running", () => {
     expect(bare).toContain("cancelSearch(); setNote(null);");
+  });
+
+  test("the id lookup beside the sweep is aborted with it", () => {
+    expect(bare).toContain("source.find(asked, ac.signal)");
+  });
+
+  test("a cut list that has matches says so, not only an empty one", () => {
+    // `wholeTruncated` used to be read only for "nothing matches"; with some
+    // matches the note was cleared, and "not in the list" read as "not there".
+    expect(bare).toMatch(/setNote\(wholeTruncated \? \{ ok: true, text: `These are the matches in the part of/);
   });
 
   test("the × stays drawn while a search is running", () => {

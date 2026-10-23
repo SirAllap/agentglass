@@ -13,7 +13,7 @@
  * Ceiling: the people are the list's members the server already holds, so a person who is on the
  * workspace but not on that list is not offered. That is the same set "Assign" has always named.
  */
-import type { ListMember, StepAssign } from "../../../shared/providers.ts";
+import type { ListMember, ClickUpStepAssign as StepAssign } from "../../../shared/providers.ts";
 import { authorMember, type Ensure, type PrAuthor } from "./stepAssign.ts";
 import { orderMembers } from "./peopleOrder.ts";
 

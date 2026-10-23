@@ -12,6 +12,7 @@ import { describe, expect, it } from "bun:test";
 
 const css = await Bun.file(new URL("../src/index.css", import.meta.url)).text();
 const panel = await Bun.file(new URL("../src/components/TasksPanel.tsx", import.meta.url)).text();
+const groupHead = await Bun.file(new URL("../src/components/tasks/GroupHead.tsx", import.meta.url)).text();
 
 const layerOf = (rule: string): number => {
   const body = new RegExp(`\\.${rule}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ?? "";
@@ -55,6 +56,8 @@ describe("what passes behind the Task column", () => {
     // It is about the group, not about the columns: watching it slide out of
     // the pane while its own rows stayed read as it having come loose.
     expect(layerOf("agx-stick-group")).toBeGreaterThan(0);
-    expect(panel).toContain('className="agx-stick-group');
+    // The heading is the shared GroupHead; the panel uses it for its groups.
+    expect(groupHead).toContain('className="agx-stick-group');
+    expect(panel).toContain("<GroupHead");
   });
 });

@@ -27,7 +27,7 @@ describe("before the answer arrives", () => {
     // of "needs-auth" made every card claim "Not connected" for as long as the
     // check took — a wrong answer that then corrects itself, which is worse
     // than no answer, because somebody acts on it.
-    expect(pane).toMatch(/waiting\s*\n?\s*\?\s*\{ label: "Checking…"/);
+    expect(pane).toMatch(/waiting\s*\n?\s*\?\s*\{ label: "Checking", tone: "checking" \}/);
   });
 
   it("offers no action it cannot yet know is the right one", () => {
@@ -35,7 +35,10 @@ describe("before the answer arrives", () => {
     // still in flight.
     // Matched on the guard, not on what follows it: the card became a row and
     // the fragment became a div, and neither changes what is being asserted.
-    expect(pane).toMatch(/\{waiting \? null : </);
+    expect(pane).toContain("const form = wantsToken && !connected && !waiting ?");
+    expect(pane).toContain("actions={isJira && !waiting");
+    expect(pane).toContain("!waiting && connected && wantsToken");
+    expect(pane).toContain("detail={spec.note && !connected && !waiting && !isJira ?");
   });
 
   it("stands in for itself at the size it will be", () => {
@@ -55,7 +58,7 @@ describe("before the answer arrives", () => {
 
   it("drops the min-height once the answer is in", () => {
     // Left on, it would pin a row that has since grown a line.
-    expect(pane).toMatch(/waiting \? \{ minHeight: rememberedHeights\(\)/);
+    expect(pane).toMatch(/minHeight=\{waiting \? rememberedHeights\(\)\[spec\.id\] \?\? 56 : undefined\}/);
     expect(pane).toMatch(/: undefined\}>/);
   });
 });

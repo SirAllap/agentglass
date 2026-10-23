@@ -19,12 +19,13 @@ import { envHatchNotice } from "../lib/pluginBoxState.ts";
 import { ICON } from "../lib/iconSize.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { useCallback, useEffect, useState, useMemo, useSyncExternalStore } from "react";
-import { Fold, SettingRow, Switch } from "./SettingRow.tsx";
+import { SettingRow, Switch } from "./SettingRow.tsx";
+import { Disclosure, EmptyState, Field, SettingsCard, SettingsForm, StatusBadge, type StatusTone } from "./SettingsKit.tsx";
 import { api } from "../lib/api.ts";
 import { fmtAgo } from "../lib/format.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import type { DeviceScope, InstallSource, PublicPlugin } from "../../../shared/types.ts";
-import { Button, EDGE, INPUT, INPUT_STYLE, RefreshButton } from "./workspace/Chrome.tsx";
+import { Button, INPUT, INPUT_STYLE, RefreshButton } from "./workspace/Chrome.tsx";
 
 /** The one-line "From …" a reviewer reads — a local path plainly, a git
  *  source with its ref if one was pinned, a market install naming the list
@@ -50,23 +51,10 @@ function formatSource(source: InstallSource): string {
  */
 const SCOPE_WORD: Record<DeviceScope, string> = { read: "Read", answer: "Answer", full: "Full" };
 
-/** The house card shape (see TriageBoard.tsx's `CardView`, SkillsModal.tsx's
- *  `SkillCard`): a bordered tile on `--bg2`, not a row. A plugin is a thing
- *  somebody else made — name, publisher, description, a state, a decision —
- *  and that is what this shape is for everywhere else it appears. */
-const CARD_STYLE: React.CSSProperties = {
-  border: EDGE,
-  background: "var(--surface-card)",
-  boxShadow: "var(--surface-lift)",
-};
-
 /**
- * A tile the same size and shape as a plugin card, not a text field wedged
- * into a settings row — this page is a board of things, and adding one is
- * an action on that board. Closed, it reads as the "+" every other add
- * affordance in this app is; opened, it is the one field installing a
- * plugin actually needs. Install accepts an absolute local path or a git
- * URL — installPlugin on the server tells them apart by `isAbsolute`, so
+ * Adding one is an action on the list, so the form opens as a row of the
+ * Installed card and nowhere else. Install accepts an absolute local path or a
+ * git URL — installPlugin on the server tells them apart by `isAbsolute`, so
  * this asks for one field rather than a toggle nobody needs to set.
  */
 function AddPluginCard({ onInstalled, open, setOpen, prefill }: {
@@ -94,26 +82,29 @@ function AddPluginCard({ onInstalled, open, setOpen, prefill }: {
   if (!open) return null;
 
   return (
-    <div className="rounded-xl p-3 mb-3" style={CARD_STYLE}>
-      <div className="text-[12.5px] font-medium" style={{ color: "var(--text)" }}>Install a plugin</div>
-      <div className="text-[11px] t-dim mt-0.5">
-        A local folder's absolute path, or a git URL. Copies the folder and reads its manifest — nothing in it runs yet.
-      </div>
-      <div className="flex items-center gap-2 mt-2">
-        <input value={source} onChange={(e) => setSource(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") install(); if (e.key === "Escape") setOpen(false); }}
-          placeholder="/path/to/plugin or https://…"
-          disabled={busy}
-          autoFocus
-          className={`t-mono min-w-0 flex-1 ${INPUT}`}
-          style={INPUT_STYLE} />
-        <Button pending={busy} disabled={!source.trim()} onClick={install}>
-          {busy ? "Installing…" : "Install"}
-        </Button>
-        <Button disabled={busy} onClick={() => { setOpen(false); setError(null); }}>Cancel</Button>
-      </div>
-      {error && <Alert tone="error">{error}</Alert>}
-    </div>
+    <SettingRow
+      label="Install a plugin"
+      hint="A local folder's absolute path, or a git URL. Copies the folder and reads its manifest — nothing in it runs yet."
+      below={
+        <SettingsForm label="Install a plugin" onSubmit={() => void install()}>
+          <Field label="Folder path or git URL" htmlFor="plugin-source" error={error}>
+            <input id="plugin-source" value={source} onChange={(e) => setSource(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Escape") setOpen(false); }}
+              placeholder="/path/to/plugin or https://…"
+              disabled={busy}
+              autoFocus
+              className={`t-mono ${INPUT}`}
+              style={INPUT_STYLE} />
+          </Field>
+          <div className="flex items-center gap-2">
+            <Button type="submit" pending={busy} disabled={!source.trim()}>
+              {busy ? "Installing…" : "Install"}
+            </Button>
+            <Button disabled={busy} onClick={() => { setOpen(false); setError(null); }}>Cancel</Button>
+          </div>
+        </SettingsForm>
+      }
+    />
   );
 }
 
@@ -227,7 +218,7 @@ export function PluginsPane({ open, focus }: {
           <PluginMark name={here.name} icon={here.icon} color={here.color} size={ICON.lg} stamp={here.contentHash} />
           <div className="min-w-0">
             <div className="text-[14px]" style={{ color: "var(--text)" }}>{here.name}</div>
-            <div className="text-[11.5px] t-dim truncate">by {here.publisher}</div>
+            <div className="text-[11.5px] t-dim">by {here.publisher}</div>
           </div>
         </div>
         <PluginSettingsPane key={here.name} name={here.name} open={open} />
@@ -238,91 +229,65 @@ export function PluginsPane({ open, focus }: {
   return (
     <div className="pb-5">
       {/* The one thing on this page that IS a setting keeps the settings
-          idiom — a titled card with a row and a switch — so that everything
-          below, which is not a setting, is free to stop looking like one. */}
-      <div className="agx-settings-section">
-          <div className="agx-settings-head">
-            <div className="agx-settings-head-t">Plugin system</div>
-            <div className="agx-settings-head-d">Nothing runs until you have read what it declares and switched it on.</div>
-          </div>
-          <div className="agx-settings-rows">
-            <SettingRow
-              onClick={busyMaster ? undefined : toggleMaster}
-              role="switch"
-              ariaChecked={!!master}
-              label={master ? "Plugins are switched on" : "Plugins are switched off"}
-              hint={master
-                ? "Enabled plugins may run. Turning this off stops every one of them immediately."
-                : "Nothing installed runs, no matter what it is enabled to do. Install and review still work."}
-              control={<Switch on={!!master} busy={busyMaster || master === null} />}
-            />
-            {masterError && <Alert tone="error">{masterError}</Alert>}
-          </div>
-      </div>
-      {envHatchNotice(envAllowsUnboxed) && <div className="mb-3"><Alert tone="warning">{envHatchNotice(envAllowsUnboxed)}</Alert></div>}
+          idiom — a titled card with a row and a switch. Everything about one
+          plugin is a row of the Installed card below, and the market is a card
+          of its own: one idiom for the whole page, where there used to be a
+          board of bordered tiles between two cards. */}
+      <SettingsCard title="Plugin system" desc="Nothing runs until you have read what it declares and switched it on.">
+        <SettingRow
+          onClick={busyMaster ? undefined : toggleMaster}
+          role="switch"
+          ariaChecked={!!master}
+          label={master ? "Plugins are switched on" : "Plugins are switched off"}
+          hint={master
+            ? "Enabled plugins may run. Turning this off stops every one of them immediately."
+            : "Nothing installed runs, no matter what it is enabled to do. Install and review still work."}
+          control={<Switch on={!!master} busy={busyMaster || master === null} />}
+        />
+        {masterError && <SettingRow label="The master switch was not changed" status={<StatusBadge tone="err">Failed</StatusBadge>} hint={masterError} />}
+        {envHatchNotice(envAllowsUnboxed) && (
+          <SettingRow label="Unboxed plugins are allowed here" status={<StatusBadge tone="warn">Environment override</StatusBadge>}
+            hint={envHatchNotice(envAllowsUnboxed)} />
+        )}
+      </SettingsCard>
 
-      {/* THE BOARD, and it used to be a shelf: a tinted, bordered zone with
-          every card stacked one-per-row inside it. That zone was doing the
-          job the cards should do — one box holding boxes reads as a single
-          object with a wall of text in it, blended into the settings around
-          it until it was hard to tell apart. The cards are the shape
-          now; there is nothing behind them but the page. */}
-      <div className="flex items-center gap-2.5 pb-3 flex-wrap">
-        <span className="text-[13.5px] font-semibold" style={{ color: "var(--text)" }}>Installed</span>
-        <span className="chip tabular-nums t-dim">{plugins.length}</span>
-        <div className="ml-auto flex items-center gap-2">
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search plugins"
-            className={`w-[190px] ${INPUT}`}
-            style={INPUT_STYLE} />
+      {/* One card for everything installed, a row per plugin. It used to be a
+          grid of bordered tiles: a box holding boxes, and the tiles' own
+          dividers, chips and buttons drawn a third way. */}
+      <SettingsCard title="Installed"
+        status={<StatusBadge tone="off">{plugins.length} installed</StatusBadge>}
+        actions={<>
           {/* The house refresh, the same icon control as the Market's just
               below: a text "Refresh" here and an icon there was one pane with
               two idioms for the same verb. */}
           <RefreshButton onRefresh={() => void load()} title="Refresh the installed plugins" />
-          {/* In the header, with the other things you do to this list. It was
-              a dashed half-width tile at the end of the grid, which on an
-              empty list was the only thing there and read as a stray box. */}
           <Button tone="primary" disabled={installing} onClick={() => setInstalling(true)}>Install a plugin</Button>
-        </div>
-      </div>
-
-      {/* auto-fill, not a fixed column count: one plugin on a narrow window
-          should be one full-width card rather than a half-width card with a
-          hole beside it, and the same grid has to survive the sidebar being
-          open on a laptop. 360 is the floor a card of this density needs —
-          below it the description wraps to five lines and the footer buttons
-          stack, which is the letterbox again. */}
-      {already && (
-        <Alert tone="ok">
-          <span>
-            <b>{already}</b> is already installed — the link you followed asked for this one. It is in the list below;
-            <span className="t-dim"> Update re-clones it at the source it came from.</span>
-          </span>
-        </Alert>
-      )}
-      <AddPluginCard onInstalled={load} open={installing} setOpen={setInstalling} prefill={prefill} />
-      {plugins.length === 0 ? (
-        <div className="rounded-xl px-4 py-5 text-[12px] t-dim" style={{ border: "1px dashed var(--surface-line)" }}>
-          Nothing installed yet. Install one from a folder or a git URL, or take one from the market below.
-        </div>
-      ) : (
-        /* `items-start`, because a card in here can grow: opening one card's
-           "What it can do" made the card BESIDE it grow with it, into a tall
-           box with nothing in the bottom two thirds of it. A grid item
-           stretches to its row by default, and the row is as tall as whatever
-           is open in it. Each card owns its own height now. */
-        <div className="grid gap-3 items-start" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))" }}>
-          {shown.map((p) => (
+        </>}>
+        {/* The list narrows by name, publisher and description at once, because
+            "the one that watches the cockpit" is as likely a thing to remember
+            as its name, and this list is not always short. */}
+        {plugins.length > 0 && (
+          <SettingRow label="Search installed plugins"
+            below={<input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search plugins"
+              aria-label="Search installed plugins" className={`max-w-[360px] ${INPUT}`} style={INPUT_STYLE} />} />
+        )}
+        {already && (
+          <SettingRow label={`${already} is already installed`} status={<StatusBadge tone="ok">Installed</StatusBadge>}
+            hint="The link you followed asked for this one. It is in the list below; Update re-clones it at the source it came from." />
+        )}
+        <AddPluginCard onInstalled={load} open={installing} setOpen={setInstalling} prefill={prefill} />
+        {plugins.length === 0 ? (
+          <EmptyState>Nothing installed yet. Install one from a folder or a git URL, or take one from the market below.</EmptyState>
+        ) : (
+          shown.map((p) => (
             <PluginCard key={p.name} plugin={p} masterOn={!!master} envAllowsUnboxed={envAllowsUnboxed} onChanged={load} onSettings={() => setShowing(p.name)} />
-          ))}
-        </div>
-      )}
-      {plugins.length > 0 && shown.length === 0 && (
-        <div className="pt-3 text-[12px] t-dim">Nothing installed matches “{q.trim()}”.</div>
-      )}
+          ))
+        )}
+        {plugins.length > 0 && shown.length === 0 && (
+          <SettingRow label={`Nothing installed matches “${q.trim()}”`} />
+        )}
+      </SettingsCard>
 
-      {/* The same 24px every settings card keeps from the next one. The grid
-          sat directly on the card below it, with nothing between them. */}
-      <div className="h-6" aria-hidden />
       <Market installed={(url) => installedFrom(url, plugins)?.source ?? null} onInstalled={load} />
     </div>
   );
@@ -413,198 +378,170 @@ function PluginCard({ plugin, masterOn, envAllowsUnboxed, onChanged, onSettings 
   const hasSettings = (plugin.contributes?.settings?.length ?? 0) > 0;
   return (
     <>
-    {/* Outside the card: the card clips what spills over its rounded edge,
-        and a dialog drawn inside it was clipped away entirely. */}
+    {/* Outside the row: a dialog drawn inside it would sit in the row's grid. */}
     {dialog}
-    <div className="rounded-xl p-4 flex flex-col relative overflow-hidden" style={{
-      ...CARD_STYLE,
-      // The plugin's own colour, as a wash in the corner its mark sits in:
-      // enough to tell two cards apart at a glance, never enough to fight the
-      // text. No colour declared, the app's accent.
-      backgroundImage: `radial-gradient(120% 90% at 0% 0%, color-mix(in srgb, ${tint} 13%, transparent), transparent 55%)`,
-    }}>
-      {/* Name and publisher stack against the mark rather than running along
-          one line with the description under all three. A card is scanned in
-          a grid, and what gets scanned is the top-left corner: a shape, then
-          a name, then who wrote it. */}
-      <div className="flex items-start gap-3">
+    <SettingRow
+      /* Name, then who made it, stacked: a list is scanned down its left edge,
+         and what gets scanned is a shape, then a name, then who wrote it. */
+      label={<span className="flex items-center gap-2.5">
         <PluginMark name={plugin.name} icon={plugin.icon} color={plugin.color} stamp={plugin.contentHash} />
-        <div className="min-w-0 flex-1 pt-0.5">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[15px] font-semibold tracking-tight" style={{ color: "var(--text)" }}>{plugin.name}</span>
-            <StatePill enabled={plugin.enabled} running={running} reconsent={reconsent} needsReview={needsReview} pid={plugin.pid} />
-          </div>
-          <div className="text-[11.5px] t-dim mt-0.5">by {plugin.publisher}</div>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <button onClick={() => setEnabled(!plugin.enabled)}
-            disabled={busy || (!plugin.enabled && !masterOn)}
-            title={!plugin.enabled && needsReview ? "Switching it on approves what it declares below" : !plugin.enabled && !masterOn ? "Plugins are switched off" : undefined}
-            className="disabled:cursor-not-allowed">
-            <Switch on={plugin.enabled} busy={busy} />
-          </button>
-        </div>
-      </div>
-
-      <div className="text-[12.5px] leading-relaxed mt-3" style={{ color: "var(--text2)" }}>{plugin.description}</div>
-
-      {/* Chips, because a card in a grid is read by its badges before its
-          prose — the scope is the one fact worth knowing before installing
-          anything, and buried mid-sentence it was not being read. */}
-      <div className="flex items-center gap-1.5 flex-wrap mt-2">
-        <span className="chip text-[10px]" style={{
-          color: "var(--text2)",
-          background: "color-mix(in srgb, var(--border) 20%, transparent)",
-          borderColor: "color-mix(in srgb, var(--border) 45%, transparent)",
-        }}>
-          {SCOPE_WORD[plugin.scope]}
+        <span className="min-w-0">
+          <span className="block">{plugin.name}</span>
+          <span className="block text-[11.5px] t-dim">by {plugin.publisher}</span>
         </span>
-        {/* Where it shows up, before any prose: a panel, a settings page, notes
-            in pull requests. The same facts the review below spells out. */}
-        {(plugin.contributes?.panels ?? []).map((p) => (
-          <DrawChip key={p.id} tint={tint} label={`panel · ${p.title}`} />
-        ))}
-        {hasSettings && <DrawChip tint={tint} label="settings" />}
-        {plugin.contributes?.prNotes && <DrawChip tint={tint} label="notes in PRs" />}
-      </div>
-      <div className="text-[11px] t-dim mt-1.5 truncate" title={formatSource(plugin.source)}>
-        From <span className="t-mono">{formatSource(plugin.source)}</span>
-      </div>
-      {pinned && (
-        <div className="text-[11px] t-dim mt-1">
-          Pinned to <span className="t-mono" title={pinned}>{pinned.slice(0, 7)}</span> by the market. It updates by
-          installing the version the market lists: the plugin shows up there with an Update button when it lists a newer version.
+      </span>}
+      hint={<>
+        <span className="block">{plugin.description}</span>
+        <span className="block mt-1">installed {fmtAgo(plugin.installedAt)}</span>
+      </>}
+      status={<StatePill enabled={plugin.enabled} running={running} reconsent={reconsent} needsReview={needsReview} pid={plugin.pid} />}
+      control={
+        <button onClick={() => setEnabled(!plugin.enabled)}
+          disabled={busy || (!plugin.enabled && !masterOn)}
+          role="switch" aria-checked={plugin.enabled} aria-label={`${plugin.name} on or off`}
+          title={!plugin.enabled && needsReview ? "Switching it on approves what it declares below" : !plugin.enabled && !masterOn ? "Plugins are switched off" : undefined}
+          className="disabled:cursor-not-allowed">
+          <Switch on={plugin.enabled} busy={busy} />
+        </button>
+      }
+      below={<div className="flex flex-col gap-2.5 min-w-0">
+        {/* Chips, because a plugin is read by its badges before its prose —
+            the scope is the one fact worth knowing before installing anything,
+            and buried mid-sentence it was not being read. */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="chip text-[10px]" style={{
+            color: "var(--text2)",
+            background: "color-mix(in srgb, var(--border) 20%, transparent)",
+            borderColor: "color-mix(in srgb, var(--border) 45%, transparent)",
+          }}>
+            {SCOPE_WORD[plugin.scope]}
+          </span>
+          {/* Where it shows up, before any prose: a panel, a settings page, notes
+              in pull requests. The same facts the review below spells out. */}
+          {(plugin.contributes?.panels ?? []).map((p) => (
+            <DrawChip key={p.id} tint={tint} label={`panel · ${p.title}`} />
+          ))}
+          {hasSettings && <DrawChip tint={tint} label="settings" />}
+          {plugin.contributes?.prNotes && <DrawChip tint={tint} label="notes in PRs" />}
         </div>
-      )}
-
-      {/* The re-consent case, drawn so it cannot be mistaken for an ordinary
-          disabled card: its own colour, its own sentence, above the fold that
-          holds the scope explanation everyone else gets. */}
-      {reconsent && manifestChanged && (
-        <Alert tone="warning">
-          <strong>This plugin is asking for something different now.</strong> What is installed no
-          longer matches what you last approved — the manifest changed since then. It was turned off
-          automatically and stays off until you review the current declaration below and enable it again.
-        </Alert>
-      )}
-      {reconsent && !manifestChanged && (
-        <Alert tone="warning">
-          <strong>This plugin's code changed since you approved it.</strong> What it declares below is
-          the same as what you approved — same scope, same drawing, same sandbox — but an update can
-          rewrite what the code actually does without touching the manifest at all, so it was turned off
-          automatically anyway. Review it below and enable it again.
-        </Alert>
-      )}
-      {!plugin.hadApproval && needsReview && (
-        <div className="text-[11.5px] mt-1.5" style={{ color: "var(--text2)" }}>
-          Not reviewed yet. Read what it declares before enabling it.
+        <div className="text-[11.5px] t-dim break-all">
+          From <span className="t-mono">{formatSource(plugin.source)}</span>
         </div>
-      )}
+        {pinned && (
+          <div className="text-[11.5px] t-dim">
+            Pinned to <span className="t-mono" title={pinned}>{pinned.slice(0, 7)}</span> by the market. It updates by
+            installing the version the market lists: the plugin shows up there with an Update button when it lists a newer version.
+          </div>
+        )}
 
-      {/* `agx-settings-col`: a Fold with no control is the row's only grid
-          item, and `.agx-settings-row` always reserves the wide control
-          column's width for it (fixed at var(--settings-control-w), even
-          with nothing in it — see index.css). In a page-width settings
-          column that leftover is still hundreds of pixels; in a ~360px
-          plugin card it left "What it can do" about 70px to fit in, one
-          word per line. `agx-settings-col` opens the container query that
-          drops to a single track below 588px, which this card always is.
-          `w-full` because that container's intrinsic width is zero: without
-          it the fold shrank to its longest word and was centred. */}
-      <div className="mt-1.5 w-full agx-settings-col">
-        {/* Open by default only while there is a decision to make — the fold
-            defaults open for a fresh install or a changed manifest, closed
-            once it has been approved. The sentence has to be legible at the
+        {/* The re-consent case, drawn so it cannot be mistaken for an ordinary
+            disabled plugin: its own colour and its own sentence, above the
+            disclosure that holds what it declares. */}
+        {reconsent && manifestChanged && (
+          <Note tone="warn">
+            <strong>This plugin is asking for something different now.</strong> What is installed no
+            longer matches what you last approved — the manifest changed since then. It was turned off
+            automatically and stays off until you review the current declaration below and enable it again.
+          </Note>
+        )}
+        {reconsent && !manifestChanged && (
+          <Note tone="warn">
+            <strong>This plugin's code changed since you approved it.</strong> What it declares below is
+            the same as what you approved — same scope, same drawing, same sandbox — but an update can
+            rewrite what the code actually does without touching the manifest at all, so it was turned off
+            automatically anyway. Review it below and enable it again.
+          </Note>
+        )}
+        {!plugin.hadApproval && needsReview && (
+          <div className="text-[12px]" style={{ color: "var(--text2)" }}>
+            Not reviewed yet. Read what it declares before enabling it.
+          </div>
+        )}
+
+        {/* Open by default only while there is a decision to make — a fresh
+            install or a changed manifest. The sentence has to be legible at the
             moment somebody is approving it; once approved, showing it every
-            visit is the noise a four-line paragraph on every card would be. */}
-        {/* Where it draws is part of what is being approved: a plugin that
+            visit is the noise a four-line paragraph on every plugin would be.
+            Where it draws is part of what is being approved: a plugin that
             starts drawing somewhere new has a new manifest hash, and is asked
             about again. Drawn by this app, never run in it. */}
-        <Fold label="What it can do" defaultOpen={needsReview}>
-          <PluginDeclaration plugin={plugin} />
-        </Fold>
-      </div>
+        <Disclosure summary="What it can do" defaultOpen={needsReview}>
+          <PluginDeclaration plugin={plugin} flat />
+        </Disclosure>
 
-      {/* Only on the card of a plugin the server refuses to start for lack of a
-          box, or one running on this plugin's own consent — see unboxedControl. */}
-      <UnboxedConsent plugin={plugin} envAllowsAll={envAllowsUnboxed} onChanged={onChanged} />
+        {/* Only for a plugin the server refuses to start for lack of a box, or
+            one running on this plugin's own consent — see unboxedControl. */}
+        <UnboxedConsent plugin={plugin} envAllowsAll={envAllowsUnboxed} onChanged={onChanged} />
 
-      {updateError && <Alert tone="error">{updateError}</Alert>}
+        {updateError && <Note tone="err">{updateError}</Note>}
 
-      {/* Kept by default: what was typed into the settings page belongs to
-          the person, and a reinstall picks it back up. */}
-      {confirmRemove && hasSettings && (
-        <label className="mt-auto pt-1.5 flex items-center gap-2 self-end text-[11px] cursor-pointer select-none" style={{ color: "var(--text2)" }}>
-          <input type="checkbox" checked={dropSettings} onChange={(e) => setDropSettings(e.target.checked)} disabled={busy} />
-          <span>Also remove its settings <span className="t-dim">— otherwise they are kept on this machine for a reinstall</span></span>
-        </label>
-      )}
-      <div className={`${confirmRemove && hasSettings ? "" : "mt-auto "}pt-1.5 flex items-center justify-between`}>
-        <span className="text-[10.5px] t-dim">installed {fmtAgo(plugin.installedAt)}</span>
-        {confirmRemove ? (
-          <span className="flex items-center gap-1.5">
-            <Button size="compact" tone="danger" pending={busy} onClick={remove}>{busy ? "Removing…" : "Remove"}</Button>
-            <Button size="compact" disabled={busy} onClick={() => { setConfirmRemove(false); setDropSettings(false); }}>Keep it</Button>
-          </span>
-        ) : (
-          <span className="flex items-center gap-1.5">
-            {/* A re-fetch that changes the declaration lands on the same
-                re-consent path as a fresh install — see updatePlugin on the
-                server — so this never claims to have "updated" anything
-                itself, only to have gone and looked. */}
-            {/* Straight to where it shows up — the answer to "I switched it on,
-                now what". */}
-            {hasPanel && plugin.enabled && (
-              <Button size="compact" tint={tint} onClick={() => { emitControl({ cmd: "view", to: "plugins" }); emitControl({ cmd: "esc" }); closeSettings(); }}>Open</Button>
-            )}
-            {hasSettings && (
-              <Button size="compact" onClick={onSettings}>Settings</Button>
-            )}
-            {updatable && (
-              <Button size="compact" pending={updating} disabled={busy} onClick={update}
-                title="Re-fetch this plugin at its recorded source. A changed declaration will need review again before it can run.">
-                {updating ? "Updating…" : "Update"}
-              </Button>
-            )}
-            <Button size="compact" tone="danger" disabled={busy} onClick={() => setConfirmRemove(true)}>Remove</Button>
-          </span>
+        {/* Kept by default: what was typed into the settings page belongs to
+            the person, and a reinstall picks it back up. */}
+        {confirmRemove && hasSettings && (
+          <label className="flex items-center gap-2 text-[11.5px] cursor-pointer select-none" style={{ color: "var(--text2)" }}>
+            <input type="checkbox" checked={dropSettings} onChange={(e) => setDropSettings(e.target.checked)} disabled={busy} />
+            <span>Also remove its settings <span className="t-dim">— otherwise they are kept on this machine for a reinstall</span></span>
+          </label>
         )}
-      </div>
-    </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {confirmRemove ? (
+            <>
+              <Button tone="danger" pending={busy} onClick={remove}>{busy ? "Removing…" : "Remove"}</Button>
+              <Button disabled={busy} onClick={() => { setConfirmRemove(false); setDropSettings(false); }}>Keep it</Button>
+            </>
+          ) : (
+            <>
+              {/* Straight to where it shows up — the answer to "I switched it on,
+                  now what". */}
+              {hasPanel && plugin.enabled && (
+                <Button tint={tint} onClick={() => { emitControl({ cmd: "view", to: "plugins" }); emitControl({ cmd: "esc" }); closeSettings(); }}>Open</Button>
+              )}
+              {hasSettings && (
+                <Button onClick={onSettings}>Settings</Button>
+              )}
+              {/* A re-fetch that changes the declaration lands on the same
+                  re-consent path as a fresh install — see updatePlugin on the
+                  server — so this never claims to have "updated" anything
+                  itself, only to have gone and looked. */}
+              {updatable && (
+                <Button pending={updating} disabled={busy} onClick={update}
+                  title="Re-fetch this plugin at its recorded source. A changed declaration will need review again before it can run.">
+                  {updating ? "Updating…" : "Update"}
+                </Button>
+              )}
+              <Button tone="danger" disabled={busy} onClick={() => setConfirmRemove(true)}>Remove</Button>
+            </>
+          )}
+        </div>
+      </div>}
+    />
     </>
   );
 }
 
-function Alert({ tone, children }: { tone: "warning" | "error" | "ok"; children: React.ReactNode }) {
-  const c = tone === "error" ? "var(--error)" : tone === "ok" ? "var(--success)" : "var(--warning)";
+/** A sentence about this plugin that the person has to act on, in the ink of
+ *  its tone and with no box around it: the row it sits in is the frame. */
+function Note({ tone, children }: { tone: "warn" | "err"; children: React.ReactNode }) {
   return (
-    <div className="mt-1.5 px-3 py-2 rounded-lg text-[12px] leading-relaxed" style={{
-      color: "var(--text2)",
-      background: `color-mix(in srgb, ${c} 9%, transparent)`,
-      border: `1px solid color-mix(in srgb, ${c} 32%, transparent)`,
-    }}>
+    <p className="m-0 text-[12px] leading-relaxed" style={{ color: tone === "err" ? "var(--error-ink)" : "var(--text2)" }}>
       {children}
-    </div>
+    </p>
   );
 }
 
-
 /** Running, off, or waiting on you — a word, not only a dot, because the dot
- *  alone had to be learned and it is the first thing asked of a card. */
+ *  alone had to be learned and it is the first thing asked of a row. */
 function StatePill({ enabled, running, reconsent, needsReview, pid }: { enabled: boolean; running: boolean; reconsent: boolean; needsReview: boolean; pid: number | null }) {
-  const [label, tint] = reconsent ? ["asks again", "var(--warning)"]
-    : needsReview && !enabled ? ["not approved", "var(--warning)"]
-    : enabled && running ? ["running", "var(--success)"]
+  const [label, tone]: [string, StatusTone] = reconsent ? ["Asks again", "warn"]
+    : needsReview && !enabled ? ["Not approved", "warn"]
+    : enabled && running ? ["Running", "ok"]
     // Switched on and nothing running: the failure a plugin screen exists to
     // show, and the one an `enabled` flag alone cannot.
-    : enabled ? ["enabled, not running", "var(--warning)"]
-    : ["off", "var(--text3)"];
+    : enabled ? ["Enabled, not running", "warn"]
+    : ["Off", "off"];
   return (
-    <span className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wide px-1.5 py-px rounded-full"
-      title={running && pid ? `pid ${pid}` : undefined}
-      style={{ color: tint, background: `color-mix(in srgb, ${tint} 12%, transparent)` }}>
-      <span className="w-1.5 h-1.5 rounded-full" style={{ background: tint, boxShadow: enabled && running ? `0 0 6px ${tint}` : undefined }} />
-      {label}
+    <span title={running && pid ? `pid ${pid}` : undefined}>
+      <StatusBadge tone={tone}>{label}</StatusBadge>
     </span>
   );
 }

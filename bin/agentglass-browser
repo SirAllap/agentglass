@@ -1920,7 +1920,29 @@ def _profile_cookie_db(path):
     return db if os.path.exists(db) else None
 
 
-def read_firefox_cookies(path, domain, subdomains=True, now=None):
+def firefox_container_id(path, container):
+    """userContextId for a Firefox-family container given by number or name
+    (containers.json beside cookies.sqlite). Raises ValueError with the names
+    that exist when it is not there."""
+    if str(container).isdigit():
+        return int(container)
+    base = path if os.path.isdir(path) else os.path.dirname(path)
+    try:
+        ids = json.load(open(os.path.join(base, "containers.json"))).get("identities", [])
+    except (OSError, ValueError):
+        ids = []
+    names = {str(i.get("name")).lower(): i.get("userContextId") for i in ids if i.get("name")}
+    if str(container).lower() in names:
+        return int(names[str(container).lower()])
+    raise ValueError(f"no container {container!r} in that profile; named ones: {', '.join(sorted(names)) or 'none'}")
+
+
+def _origin_attrs(attrs):
+    """originAttributes ('^userContextId=2&partitionKey=...') as a dict."""
+    return dict(kv.split("=", 1) for kv in (attrs or "").lstrip("^").split("&") if "=" in kv)
+
+
+def read_firefox_cookies(path, domain, subdomains=True, now=None, container=None):
     """Every live cookie for DOMAIN (and its subdomains) in a Firefox-family
     profile, as `cookies --set` payloads — session cookies KEPT. Never prints a
     value; the caller sends them and reports counts only.
@@ -1956,7 +1978,16 @@ def read_firefox_cookies(path, domain, subdomains=True, now=None):
         # has no place to put one, so importing it unpartitioned would change
         # what it means.
         if attrs:
-            skipped["partitioned"] += 1
+            # One container asked for by the caller: its own cookies come over
+            # (the agent's browser has no containers, so they land unpartitioned
+            # on purpose); partitioned third-party storage still does not.
+            oa = _origin_attrs(attrs)
+            if container is None or oa.get("userContextId") != str(container) or oa.get("partitionKey"):
+                skipped["partitioned"] += 1
+                continue
+        elif container is not None:
+            # With a container named, only that container's cookies come.
+            skipped["not-domain"] += 1
             continue
         exp = _ff_expiry_seconds(expiry, ver)
         if exp and exp <= now:
@@ -2152,7 +2183,11 @@ def session_import(a, page):
         print(refusal, file=sys.stderr)
         return 2
     try:
-        payloads, skipped = read_firefox_cookies(src, a.domain, subdomains=not a.no_subdomains)
+        cid = firefox_container_id(src, a.container) if a.container else None
+        payloads, skipped = read_firefox_cookies(src, a.domain, subdomains=not a.no_subdomains, container=cid)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 2
     except (FileNotFoundError, OSError) as e:
         print(f"could not read {src}: {e}", file=sys.stderr)
         return 1
@@ -2775,6 +2810,9 @@ def main():
     sp3.add_argument("--no-localstorage", action="store_true",
                      help="cookies only; skip localStorage (imported by default for the origin "
                           "the tab is on, since a login is as often a token there as a cookie)")
+    sp3.add_argument("--container", default=None,
+                     help="take the cookies of one Firefox/Zen container (its name or number) "
+                          "instead of the default ones; the session you need is often inside one")
     sp3.add_argument("--align-ua", dest="align_ua", action="store_true",
                      help="also set the user agent to Firefox's, since a strict site compares it "
                           "to the one the session signed in with")

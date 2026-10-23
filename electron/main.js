@@ -4226,6 +4226,11 @@ function createWindow() {
   const win = new BrowserWindow({
     width: st.width,
     height: st.height,
+    // Below this the dashboard has no layout to fall back to: the Settings
+    // sidebar does not collapse and the toolbars wrap onto each other. 640 is
+    // the narrowest width the panels were measured readable at.
+    minWidth: 640,
+    minHeight: 480,
     ...place,
     // Until a theme has been painted once: the ground a first run opens on,
     // Graphite's or Porcelain's by the OS, as the page's own first run does.

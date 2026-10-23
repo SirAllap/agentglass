@@ -20,6 +20,8 @@ import { basename } from "node:path";
 export interface ActorSource {
   kind: "machine" | "device";
   device?: { id: string; label: string };
+  /** A seat's credential: the project it sits for, named in the log as `seat:<project>`. */
+  seat?: string;
   /**
    * Whether this request came from one of the app's own pages — the desktop
    * shell's renderer or the dashboard in a browser — as opposed to a bare
@@ -129,6 +131,7 @@ export function deviceActor(d: { id: string; label: string }): string {
  * say how it arrived.
  */
 export function actorOf(ip: string | null | undefined, caller?: ActorSource | null): string {
+  if (caller?.seat) return `seat:${caller.seat}`;
   const dev = caller?.kind === "device" ? caller.device : null;
   if (dev) return deviceActor(dev);
   const where = !ip || isLoopback(ip) ? "local" : ip.replace(/^::ffff:/, "");
@@ -164,6 +167,8 @@ export function targetOf(pathname: string, b: Record<string, unknown>): string {
   // A door an agent opened: who (the name it stamped), and for a settings
   // change which setting, never to what.
   if (pathname.startsWith("/control/")) return [b.as ? `as ${named(b.as)}` : "", named(b.setting), named(b.present), b.queued ? "queued" : "", b.refused ? `+${named(b.refused)} refused` : ""].filter(Boolean).join(" · ");
+  // The agent door to a Jira card: who asked, and for a verb that changes the card, which card (an id the site minted, never its words).
+  if (pathname.startsWith("/jira/door/")) return [b.as ? `as ${named(b.as)}` : "", named(b.key)].filter(Boolean).join(" · ");
   // A chat launch: where it runs and on what. Never the prompt — see index.ts.
   if (pathname === "/chat/send") return clip([repo, named(b.name)].filter(Boolean).join(" · "));
   if (pathname.startsWith("/prs/")) {

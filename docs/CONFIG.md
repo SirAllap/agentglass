@@ -131,8 +131,9 @@ are:
 | `AGENTGLASS_BUDGET_WRITE_DISABLED` | — | `1` → refuse changes to spend budgets from the app (`POST /budgets/set`). Reading them still works. |
 | `AGENTGLASS_TASK_WRITE_DISABLED` | — | `1` → make the **Tasks** view's local list read-only: no add, done, edit, delete or tag change reaches your Taskwarrior store. Reminders, which are the app's own, are unaffected. |
 | `AGENTGLASS_CLICKUP_WRITE` | — | `1` → allow **writes to a ClickUp board** (status, assignee, comments, checklists). Off by default, the opposite of the local list — a status change on a shared board fires automations and notifies people. Also a runtime toggle (`POST /clickup/writes`). See SECURITY.md. |
+| `AGENTGLASS_JIRA_WRITE` | — | `1` → allow **writes to a Jira site** (a move, an assignee, a comment, a step, a pull request link) from the app and, on a server at `AGENTGLASS_CONTROL_LEVEL=3`, from the agent door (`agentglass-ui jira step`, `jira link`). Off by default, like ClickUp's: a change on a shared site fires automations and notifies people. Also a stored toggle in the Jira settings (`POST /jira/writes`), which the door has no verb for. With it off, every acting route answers `Writing to Jira is switched off` and sends nothing, and so does the door at level 3; below level 3 the door's acting verbs are refused whatever this is set to. See SECURITY.md. |
 | `AGENTGLASS_BROWSER_READONLY` | — | `1` → when an agent drives the built-in browser (`agentglass-browser`, the MCP server), every **acting** verb — clicks, typing, `eval`, `cdp`, init scripts, uploads — is refused; reading, screenshots, the console and network logs keep working. |
-| `AGENTGLASS_CONTROL_LEVEL` | `2` | How far `POST /control` goes, read once when the server starts. `1` → opens and reads only; every change (`settings.set`) is refused with a `403` that names the door and this switch. `2` (the default) → also changes one of the settings the window exposes, with an undo chip. `3` → also level 3 doors, which **stage** only: they open a dialog filled in and the person's click is the effect (`pr.merge.stage`, `pr.comment.stage`, `pr.review.stage`, `card.move.stage`; no automatic grant exists). Unset is 2. A value that is set and is not 1, 2 or 3 (`0`, `off`, empty) fails **closed** to level 1, with one warning line at start naming the value. Nothing a caller can send changes it: restart the server to move it. |
+| `AGENTGLASS_CONTROL_LEVEL` | `2` | How far `POST /control` goes, read once when the server starts. `1` → opens and reads only; every change (`settings.set`) is refused with a `403` that names the door and this switch. `2` (the default) → also changes one of the settings the window exposes, with an undo chip. `3` → also level 3 doors, which **stage** only: they open a dialog filled in and the person's click is the effect (`pr.merge.stage`, `pr.comment.stage`, `pr.review.stage`, `card.move.stage`; no automatic grant exists). Level 3 is also what the Jira card door's `step` and `link` need, together with `AGENTGLASS_JIRA_WRITE`: those two perform, with no click, and are the only thing at this level that does. Unset is 2. A value that is set and is not 1, 2 or 3 (`0`, `off`, empty) fails **closed** to level 1, with one warning line at start naming the value. Nothing a caller can send changes it: restart the server to move it. |
 | `AGENTGLASS_CONTROL_READONLY` | — | `1` (or `true`, `yes`, `on`) → the same as level 1, and it wins over `AGENTGLASS_CONTROL_LEVEL`; `0`, `false`, `no`, `off` do nothing, anything else is read-only with a warning. The stricter alias, mirroring `AGENTGLASS_BROWSER_READONLY`: opens and reads work, every write is refused (a setting, the palette, the zoom). |
 | `AGENTGLASS_MCP_HTTP` | — | `[HOST:]PORT` → serve the MCP server (`agentglass-browser-mcp`) over **Streamable HTTP** instead of stdio, e.g. `8765` (loopback) or `127.0.0.1:8765`. The same flag exists as `--http`. Serves the same tools; every request needs `AGENTGLASS_MCP_TOKEN` as a Bearer token; only answers to the bound address — DNS rebinding, any browser `Origin` and any body over 1 MiB are refused. A bind off loopback needs `--expose` (or `AGENTGLASS_MCP_EXPOSE=1`) as well as a token, and warns that the token crosses the network in the clear until TLS terminates in front of it. |
 | `AGENTGLASS_MCP_TOKEN` | minted | The Bearer token the Streamable-HTTP MCP endpoint requires on every request, 32+ chars. It is the endpoint's own, never `AGENTGLASS_TOKEN` (refused if equal): whoever holds it can drive the browser, not the app. Unset, one is minted for the process and printed on stderr at start. |
@@ -218,6 +219,12 @@ not a list is an error line and applies nothing.
 
 The table above is the set a person is likely to want. These are the rest, so
 that nothing the code reads goes unnamed. None is required.
+
+**Jira**
+
+| var | default | what it does |
+|---|---|---|
+| `AGENTGLASS_JIRA_BASE` | — | Send every Jira request to this base address instead of the connected site. A seam for a local fake in tests; the site typed in the connect form never takes this path on its own. Not needed in use. |
 
 **The driven browser and its CLIs** (`agentglass-browser`, `agentglass-browser-mcp`)
 
@@ -345,6 +352,9 @@ Every route is behind the token and the origin/Host gates described in [Security
 | `GET /clickup/{views,spaces,folders,list-views,view,list,task,prs,find,where,members,sprints,search,search/stream,warm,file,…}` | ClickUp boards, lists, saved views and cards, read with the token from Settings → Integrations. `file` proxies an attachment from ClickUp's hosts only. |
 | `GET` · `POST /clickup/prefs` | How this workspace uses ClickUp: read, and partially updated. Settings and defaults: [ClickUp workflow settings](#clickup-workflow-settings). Saved on this machine only; never writes to ClickUp. |
 | `POST /clickup/{card,create,move,status,priority,assign,tag,field*,task,comment*,checklist*,views/*,folders/*,writes}` | Changing a card on a shared board — **off unless `AGENTGLASS_CLICKUP_WRITE=1`** (or the `writes` toggle); each write re-reads the card and refuses if it moved. |
+| `GET /jira/{status,task,find,mine,search,detail,people,links,prs,transitions,assignable,steps,settings,status-units,project-statuses,views,view,view-choices,project-choices}` | Jira cards, boards and the connection, read with the stored credential. A refusal is a `200` with `ok: false` and a sentence, like ClickUp's reads. |
+| `POST /jira/{transition,assignee,handoff,step,link,comment}` | Changing a card on a Jira site — **off unless `AGENTGLASS_JIRA_WRITE=1`** (or the `writes` toggle). A write that carries the card's `updated` stamp is refused with a `409` when the card moved since; one step runs as one request with one run per card at a time. `POST /jira/{connect,writes,steps,settings,status-units,views/*,folders/*}` set the connection or a local file and never change the site. |
+| `POST /jira/door/{card,moves,steps,step,link}` | The agent door to a card (`agentglass-ui jira ...`, `ui_jira_*` over MCP). Each verb calls what the route above calls, so the switch, the stamp and the lock are the same and a refusal is the sentence the screen shows. `card`, `moves` and `steps` read at every level. `step` and `link` change the site with no click from the person, so they need **both** `AGENTGLASS_CONTROL_LEVEL=3` and the Jira write switch: below level 3 (the default is 2, and `AGENTGLASS_CONTROL_READONLY` is 1) they are refused with a `403` that names both, before anything is read from the site; at level 3 with the switch off they answer `Writing to Jira is switched off`. They are limited to 30 a minute per caller (`429`). The body takes `as` like `POST /control`. An answer is `{ok, state, untrusted}`: ids, counts and the card's `updated` stamp in `state`; every string a person typed on the site (title, description, comments, status names, a step's blocks) in `untrusted`, the description and the comments cut to fit 16 KiB between them (newest comments kept; the short fields are as long as the site made them). A step that landed short of the whole is `ok` with `state.partial: true` and the sentence in `untrusted.partial`. One `/actions` line per call: `as NAME`, and the card for `step` and `link`. |
 | `GET /providers` · `/providers/workspaces?id=` · `POST /providers/{connect,disconnect,workspace}` | Integration status and workspaces. `connect` is the only route that receives a service token, and no route returns one. |
 | `GET /files/{tree,find,grep,read,measure,temp,refs,exist}` | A checkout's tree one level at a time, filename and content search, one file at a ref, a ref's copy in a temp file for the editor. Scoped to the fleet's repos; the whole prefix is 403 under `AGENTGLASS_FS_BROWSE_DISABLED`. |
 | `GET /disk/{places,find,grep}` · `GET /browse?path=` · `GET /preview/{facts,git}?path=` · `GET /fs/complete?prefix=` | The finder's **Machine** tab — under your home, nothing hidden, symlinks resolved first; one listing across project and machine; path completion; `preview/git` is one file's status, +/-, branch and last commit for the info rail, read-only, same allowlist. Off under `AGENTGLASS_FS_BROWSE_DISABLED`; `/disk` also under `AGENTGLASS_DISK_DISABLED`. |
@@ -355,10 +365,14 @@ Every route is behind the token and the origin/Host gates described in [Security
 | `GET /recipes?root=` · `/recipes/render` · `POST /recipes/{save,remove}` | Saved command lines and what a recipe *would* run. Nothing here executes anything. |
 | `GET /hooks/status` · `POST /hooks/{install,uninstall}` · `POST /agents/connect` | Whether the Claude Code hooks are wired into `~/.claude/settings.json`, and wiring or removing them; connect one agent from the roster (hooks or OTel, with a scrubbed env). What **Settings ▸ Hooks** calls. |
 | `GET /dependencies?force=1` · `GET /browser-use/status` · `POST /browser-use/install` | Every outside tool probed for the Requirements pane; whether an agent could drive the built-in browser and what is missing; install that skill. |
-| `GET /agents/board` | The **Lantern**: every hooked session — name, worktree, branch, whether it is **stopped on you** and why, what it said it is on, `facts` and `git` for the cards, and `watch`. Read-only; the Lantern's own chat is `role: "lantern"` and never "needs you". |
+| `GET /agents/board` | The **Lantern**: every hooked session — name, worktree, branch, whether it is **stopped on you** and why, what it said it is on, `facts` and `git` for the cards, and `watch`. A worker an orchestrator started carries `under` (the project whose chair it answers to), `startedBy` (the engine, model and rule that put it there) or `orphaned` when that chair is empty; the chair's own row carries `chairOf`. `chairs` lists each occupied chair with `next`, the engine the policy would seat instead, and `handedOff`, whether its brief or doctrine was written since it sat down. Read-only; the Lantern's own chat is `role: "lantern"` and never "needs you". |
+| `GET /orchestration?root=` · `POST /orchestration` | The **orchestration policy** in force for a project: its own, or the global one (`scope`), the roots that carry their own (`overrides`), and the whole `policy`. `POST {root?, policy}` stores a whole policy (no `root` writes the global one), checks it against a closed schema, and answers with the one now in force. **Only the person can write it**: the machine token (the one every agent shell holds), a seat's, an understudy's and a plugin's are refused with a `403`, and the refusal is a line in the action log. See [The orchestration policy](#the-orchestration-policy). |
+| `GET /orchestration/state` | Read-only: which rules are on and why a reading did not change one (`holding: the last usage reading is 47 min old`), and the wake-ups armed. Nothing here asks anybody for a reading. |
+| `POST /seat/change` | "Change now": stands the chair down and seats the engine named by `next`. Refused with the reason while there is no `next` or the hand-off is not written, and never open to a seat's own credential. |
 | `POST /agents/status` | A session saying what it is on — `{name, doing, worktree?, branch?, left?, session?}`; `{name, done: true}` clears it, from the same session only. Fields capped (512 / 4096). Tokenless on loopback: a hook carries it. |
 | `GET` · `POST /lantern/settings` · `POST /lantern/ticket` | The status reminder (`{nudge, minutes}`) and the server-side **watch** (`{watch, watchMinutes}`) that notifies when somebody is still stopped on you; a ticket opening a chat with the board as its first message. |
 | `GET /agents/named` · `POST /agents/named/{start,prompt,wait,read,keys,stop}` | **Named agents** — seat a CLI by name in a checkout (`--yolo` only if Settings allow; permission-shaped args refused with a 400 naming the flag), prompt it, wait for a state, read its screen, press a key, kill it. `agentglass-agent` is the CLI in front (`send-keys` → `keys`). |
+| `GET /engines` · `POST /engines/test` | **Engine readiness** — per engine (Claude Code, Codex, Antigravity, Gemini, Hermes, OpenCode): found, version against the minimum, account names (never a key), the roles it can take, and `missing`, whose first entry is the next thing to do. Cached by the binary's and the config directory's mtime; `?fresh=1` skips the cache and `?fresh=hermes` rechecks one engine. Never polled. The test route runs one real turn (`Reply with the single word: ok`) in a throwaway directory, one at a time per engine; it is `full` scope and origin-checked. |
 | `GET /agents/roles` · `POST /agents/roles` | **Worker roles** — which CLI and model a `scout`, `builder` or `verifier` runs on (`{role, provider, model}`), saved as `workerRoles` in `config.json`. Only a CLI with a lock this app can apply is accepted (Claude Code, OpenCode, Qwen Code). A named start with `role` takes its CLI, model and lock from here; naming a different `kind` beside it is a 400. |
 | `GET` · `POST /agents/schedule` · `POST /agents/schedule/cancel` | **Scheduled starts** — `{name, cwd, when, prompt?, yolo?, kind?}`, `when` as `08:00`, `2026-09-06 08:00` or `+30m`. The named-agent rules are checked when written and again when it fires. The machine must be awake. |
 | `POST /agents/handoff` · `GET /agents/working` | Hand a session's conversation to another agent as a brief (`{session, kind}`), seated on the floating bench; whether anything is working — what the desktop's `agent` power mode polls. |
@@ -382,6 +396,65 @@ Every route is behind the token and the origin/Host gates described in [Security
 | `POST /control/result` | **Not agent-facing.** A window answering a command `/control` is holding open (`{rid, ok, applied, value?, error?}`). Same `trustedCaller` gate as `POST /browser/result`; `rid` is server-minted and goes only to windows that said `hello`; first answer wins, anything else is `{known:false}`. |
 | `GET /export?format=csv\|json` · `?kind=daily` | Download all events (bounded by retention), or the daily totals with the rollup included. |
 | `WS /stream` | Live frames — `initial` · `openTools` · `event` · `session` · `git` · `ci` · `alert` · `control`. Read-only: the socket never accepts commands. |
+
+### The orchestration policy
+
+Which engine and model sits in a project's chair, which ones do the work it
+hands out, what a worker may do, and when that changes. It is stored as the
+`orchestration` key of `config.json` (`{global, projects: {<root>: …}}`), edited
+in **Settings ▸ Orchestration** or through `POST /orchestration`, and it has no
+environment variable of its own. A project's policy replaces the global one
+whole; with neither stored, the defaults below apply. An entry that does not
+validate is ignored with one line in the log, and reads as absent.
+
+**Quick setup** at the top of **Settings ▸ Orchestration** offers three named
+setups built from the engines this machine reports ready for the role: the
+chair stays Claude Code and the workers go to the other ready engines (refused,
+with the reason, when the chair is another engine or a rule moves it), all
+workers on Claude Code, or builders moved off Claude Code when its weekly plan is nearly
+spent. Applying one adds a single rule whose id starts with `preset-` through the
+same `POST /orchestration` the page already uses, and leaves the base, the
+envelope and the limits as they were; **Back to what it was** removes only the
+rule that was added and puts the earlier rules back in their order. It is
+offered only while the stored policy is exactly what applying left; after any
+other edit it is gone, and the page says to edit the rule instead. **Check my setup** reads the policy against the same readings
+and says who would sit in the chair and which engine each role would use now,
+and what each rule would change if it held; it makes no request and starts
+nothing.
+
+| Field | What it holds | Default |
+| --- | --- | --- |
+| `base` | Read, not stored: the chair's engine and model, and each role's (`scout`, `builder`, `verifier`), as the app runs them today. One copy, so Settings and the policy cannot disagree. | what the seat and `workerRoles` say |
+| `ask` | Per role and for the chair: `true` is "ask when it runs", so the person picks at the moment and the default is preselected. A role set to ask is never moved to another engine on its own. | all `false` |
+| `rules` | Up to 20, each `{id, name, when, orchestrator?, workers?, enabled}`. `when` is 1 to 4 triggers, all of which must hold: `always`, `usage` (a provider's `5h`, `weekly` or `either` window with at most N % left), `limit` (a provider is rate-limited), `hours` (days and a `HH:MM` span) and `budget`. A chain is 1 to 4 `{engine, model}` entries, tried in order. The first enabled rule whose triggers hold wins, per field. | none |
+| `ceiling` | The widest envelope an orchestrator may ask for in this project. | `write: worktree`, `network: false`, `commit: true` |
+| `workerDefault` | The envelope a worker gets when the orchestrator says nothing. | `write: worktree`, `network: false`, `commit: false` |
+| `limits` | `maxWorkers` (1–12), `turnMinutes` (1–240), `maxRetries` (0–5). | `3`, `30`, `1` |
+
+An envelope is `{write: none|worktree, network, commit, deny}`. It has no field
+for a push, a pull request, a merge, a release or spend, so none can be
+granted: those stay the person's, whatever is stored. `deny` only adds command
+prefixes on top of the ones compiled in. No string field can hold a credential:
+every one is an engine id from the table, a model name, a label or a command
+prefix, and each is also refused when it is shaped like a key.
+
+**Resolution happens when a worker starts.** A running worker is never killed,
+moved or re-pointed by a rule changing, and a resume keeps the engine the worker
+was started with. An engine this machine cannot run (not installed, signed out,
+older than its minimum) is skipped, the next in the chain is taken, and the
+row's `because` says why. A chain that runs out refuses the start with that
+sentence, and the chair gets it as a need for the person: there is no silent
+fallback to an engine nobody listed. The chair is the exception: a rule that
+names another engine for it never swaps a running one. The chair's row carries
+`next`, the Lantern offers **Change now**, and `POST /seat/change` writes it to
+the action log.
+
+A seat starts a worker with `agentglass-agent start <name> --role <role> --cwd
+<dir>`, plus optionally `--engine` and `--model` (an entry of the role's chain),
+`--allow network|commit` (each within `ceiling`) and `--prompt`. Anything else
+is refused with a sentence, not dropped. A turn that is still running when the
+server restarts is marked `ceiling lost: restarted` on its row and is not
+stopped at its limit afterwards; see SECURITY.md.
 
 ### The CLIs in front of the API
 
@@ -456,6 +529,9 @@ over plain `http://` to any host that is not this machine.
   `settings list|get|set`, `--as NAME` on any of them; the MCP server has one
   tool per registry entry, generated from `GET /control/actions`. One JSON
   object per answer, a one-sentence `error` and exit `1` when no window ran it.
+  A Jira card is a route and not a window: `agentglass-ui jira card|moves|steps|step|link`
+  (MCP: `ui_jira_card`, `ui_jira_moves`, `ui_jira_steps`, `ui_jira_step`, `ui_jira_link`)
+  talks to `POST /jira/door/<verb>`.
   See [`docs/EXTENDING.md`](EXTENDING.md) and `skills/ui-control/SKILL.md`.
 
 ---

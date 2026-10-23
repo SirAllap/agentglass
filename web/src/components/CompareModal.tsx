@@ -14,6 +14,7 @@ import type { GitFileChange } from "../../../shared/types.ts";
 import { SwapIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { EDGE } from "./workspace/Chrome.tsx";
+import { useEscapeClose } from "../lib/useDismiss.ts";
 
 type CompareResult = {
   ok: boolean;
@@ -37,6 +38,7 @@ export function CompareModal({ root, initialBase, onClose }: {
   initialBase: string;
   onClose: () => void;
 }) {
+  useEscapeClose(onClose);
   const [refs, setRefs] = useState<string[]>([]);
   const [base, setBase] = useState(initialBase);
   const [other, setOther] = useState("");

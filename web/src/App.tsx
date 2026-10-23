@@ -61,7 +61,7 @@ import ServerBanner from "./components/ServerBanner.tsx";
 import GitMissingBanner from "./components/GitMissingBanner.tsx";
 import DbNoticeBanner from "./components/DbNoticeBanner.tsx";
 import { chordFromEvent, viewForChord, appActionForChord } from "./lib/keybindings.ts";
-import { openFocusedPaneDoor, type PaneDoor } from "./components/TerminalPanel.tsx";
+import { focusedPaneRoot, openFocusedPaneDoor, type PaneDoor } from "./components/TerminalPanel.tsx";
 import { FilePalette } from "./components/FilePalette.tsx";
 import { onFinderAt, type FinderTarget } from "./lib/finderTarget.ts";
 import { WindowSwitcher } from "./components/terminal/WindowSwitcher.tsx";
@@ -1111,6 +1111,7 @@ export default function App() {
       },
       openSession: (id, app) => setSessionView({ id, app: app ?? "" }),
       paneDoor: (which) => openFocusedPaneDoor(which),
+      paneRoot: focusedPaneRoot,
       // What ui.state / ui.read describe. Read through the ref App refreshes on
       // every render, because this effect runs once and would otherwise answer
       // with the first render's state.
@@ -1174,7 +1175,7 @@ export default function App() {
     // The card the notification is about, in Tasks — the same errand the pull
     // request masthead sends, so it lands on the board that holds it when there
     // is one and under Looked up when there is not.
-    if (g.kind === "card") { openCard(g.id, g.label); return; }
+    if (g.kind === "card") { openCard(g.id, g.label, g.tracker); return; }
     /*
      * The pane the agent is in — resolved here rather than carried whole.
      *

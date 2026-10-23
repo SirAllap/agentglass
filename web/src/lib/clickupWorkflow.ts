@@ -7,13 +7,14 @@
  * `ClickUpPrefs`. A person who already had them set opens the map and finds them
  * as steps; nothing is migrated on disk, because nothing needs to be.
  */
-import type { ClickUpPrefs, StepBlock } from "../../../shared/providers.ts";
+import type { ClickUpPrefs, ClickUpStepBlock as StepBlock } from "../../../shared/providers.ts";
 import { blocksOf, planOf, type StepTrigger } from "../../../shared/stepBlocks.ts";
 import type { TrackerAdapter, Step, StepKind } from "./workflowMap.ts";
 import { STEP_ORDER } from "./workflowMap.ts";
 import { NO_ASSIGN } from "./stepAssign.ts";
 
 export const CLICKUP: TrackerAdapter = {
+  tracker: "clickup",
   nouns: { name: "ClickUp", workspace: "workspace", space: "space", spaces: "spaces", list: "list", lists: "lists", item: "card", items: "cards", move: "Move to", verb: "Move" },
   kinds: STEP_ORDER,
   suggest: { move: /qa|test/i, menu: /review/i, merge: /^(done|complete|completed|released|approved|closed)$/i },

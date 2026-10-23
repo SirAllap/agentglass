@@ -10,7 +10,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
-import { LEAVE_ALONE, mergeCardRef, movesCard, mergeNote, statusColor, statusOptions, readyForQaStatus, handoffChanges, handoffRemovals } from "../src/lib/cardMove.ts";
+import { LEAVE_ALONE, mergeCardRef, movesCard, mergeNote, statusColor, statusOptions, readyForQaStatus, handoffChanges, handoffRemovals, stagedMove } from "../src/lib/cardMove.ts";
 import type { HandoffConfig, ListStatus } from "../../shared/providers.ts";
 import { globalStubs } from "./stubGlobal.ts";
 
@@ -295,5 +295,32 @@ describe("the colour a status is drawn in", () => {
     // A made-up colour standing beside real ones reads as a real one.
     expect(statusColor([s("To Do", 0)], "To Do")).toBeUndefined();
     expect(statusColor([s("To Do", 0)], "Nowhere")).toBeUndefined();
+  });
+});
+
+describe("a staged request to move the card", () => {
+  // The success path needs the whole chain: a branch carrying the card id, the
+  // workspace's id prefix (without it the merge gate says "no card to move"),
+  // then the list's own statuses.
+  const pr = { headRefName: "fix/ORBIT-1042-pagination", title: "Fix pagination", body: "" };
+  const statuses = [
+    { status: "In progress", orderindex: 1 },
+    { status: "Ready for QA", orderindex: 2 },
+  ] as ListStatus[];
+
+  it("finds the card once the workspace prefix is read, and not before", () => {
+    expect(mergeCardRef(pr, { connected: true })).toBeNull();
+    expect(mergeCardRef(pr, { connected: true, prefix: "ORBIT-" })).toEqual({ label: "ORBIT-1042", query: "ORBIT-1042" });
+  });
+
+  it("asks the person to move it, with the status spelled as the board spells it", () => {
+    expect(mergeCardRef(pr, { connected: true, prefix: "ORBIT-" })).not.toBeNull();
+    expect(stagedMove("ready for qa", { status: "In progress" }, statuses)).toEqual({ step: "ask", status: "Ready for QA" });
+  });
+
+  it("asks nothing when the card is already there or the list has no such status", () => {
+    expect(stagedMove("Ready for QA", { status: "ready for qa" }, statuses)).toEqual({ step: "already", status: "Ready for QA" });
+    expect(stagedMove("Done", { status: "In progress" }, statuses)).toEqual({ step: "missing" });
+    expect(stagedMove("Done", { status: "In progress" }, [])).toEqual({ step: "missing" });
   });
 });

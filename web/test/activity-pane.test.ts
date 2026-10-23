@@ -29,7 +29,7 @@ describe("what it says about a held tool call", () => {
     // "approved" and "allowed" are one glance apart in a list of past-tense
     // verbs, and they mean opposite things about whether anybody looked.
     expect(pane).toMatch(/resolution !== "human"/);
-    expect(pane).toContain("var(--warning)");
+    expect(pane).toContain('<StatusBadge tone="warn">');
   });
 
   test("and the pane says so in the words the rule chose", () => {

@@ -28,7 +28,7 @@
  */
 import { useEffect, useState } from "react";
 import { api } from "./api.ts";
-import { TASK_SOURCES, type TaskSourceId } from "./taskSources.ts";
+import { OPTIONAL_TASK_SOURCES, TASK_SOURCES, type TaskSourceId } from "./taskSources.ts";
 import type { ProviderId, ProviderState } from "../../../shared/providers.ts";
 
 /** The Tasks view's names for things, and `/providers`' names for the same
@@ -39,6 +39,7 @@ const PROVIDER_OF: Record<TaskSourceId, ProviderId> = {
   github: "github",
   local: "taskwarrior",
   clickup: "clickup",
+  jira: "jira",
 };
 
 /**
@@ -57,7 +58,7 @@ const setUp = (state: ProviderState): boolean => state === "connected" || state 
 export type TaskConnected = Record<TaskSourceId, boolean>;
 
 const ALL_ON = (): TaskConnected =>
-  Object.fromEntries(TASK_SOURCES.map((s) => [s.id, true])) as TaskConnected;
+  Object.fromEntries(TASK_SOURCES.map((s) => [s.id, !OPTIONAL_TASK_SOURCES.includes(s.id)])) as TaskConnected;
 
 const TTL = 60_000;
 let held: { at: number; value: TaskConnected } | null = null;
@@ -79,8 +80,9 @@ export function taskConnected(): Promise<TaskConnected> {
           const state = by.get(PROVIDER_OF[s.id]);
           // A provider the server did not mention is unknown, not absent —
           // shown, because taking a tab away on a missing answer is the one
-          // failure mode with no way back for the person looking at it.
-          return [s.id, state === undefined || setUp(state)];
+          // failure mode with no way back for the person looking at it. An
+          // optional source is the exception: it has no tab to take away.
+          return [s.id, state === undefined ? !OPTIONAL_TASK_SOURCES.includes(s.id) : setUp(state)];
         }),
       ) as TaskConnected;
       held = { at: Date.now(), value };
@@ -103,10 +105,12 @@ export function taskConnected(): Promise<TaskConnected> {
  */
 export function visibleTaskSources(shown: TaskSourceId[], connected: TaskConnected | null): TaskSourceId[] {
   // Not known yet. Showing the preference unchanged is what stops the bar
-  // rearranging itself a beat after it is drawn.
-  if (!connected) return shown;
+  // rearranging itself a beat after it is drawn; an optional source waits for
+  // the answer, because it would otherwise appear for a beat and vanish.
+  const plain = shown.filter((id) => !OPTIONAL_TASK_SOURCES.includes(id));
+  if (!connected) return plain.length ? plain : shown;
   const live = shown.filter((id) => connected[id]);
-  return live.length ? live : shown;
+  return live.length ? live : plain.length ? plain : shown;
 }
 
 /** Null until the answer is in, which is what keeps the bar from flickering on

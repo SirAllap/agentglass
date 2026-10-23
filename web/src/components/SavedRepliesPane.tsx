@@ -12,7 +12,9 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api.ts";
 import { bumpSavedReplies } from "./PrPanel.tsx";
-import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
+import { Button, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { SettingRow } from "./SettingRow.tsx";
+import { EmptyState, Field, SettingsCard, SettingsForm, helpIdFor } from "./SettingsKit.tsx";
 
 interface Reply { id: string; title: string; text: string }
 
@@ -60,79 +62,54 @@ export function SavedRepliesPane({ open }: { open: boolean }) {
 
   const editRow = (r: Reply) => { setEditing(r.id); setTitle(r.title); setText(r.text); setErr(""); };
 
+  /* A card, like every other settings page: the replies are rows, Edit is
+     the one action on a row, and the form that writes one is the card's last
+     row, always there, so adding is not behind a button. Delete is beside Save
+     only while a reply is open for editing, apart from it at the far end. */
   return (
-    /* This page had no group at all — no card, no heading of the kind every
-       other settings page has, just a stack of divs on the page's own ground.
-       It is the shape now, so the one CSS rule that draws a settings group
-       reaches it too. */
-    <div className="agx-settings-section">
-      <div className="agx-settings-head">
-        <div className="agx-settings-head-t">Saved replies</div>
-        <div className="agx-settings-head-d">
-          Offered in every comment box in the pull request panel, under the quote button. Nothing ships in
-          this list — these go out under your name.
-        </div>
-      </div>
-      <div className="flex flex-col gap-2 py-2">
+    <SettingsCard title="Saved replies"
+      desc="Offered in every comment box in the pull request panel, under the quote button. Nothing ships in this list — these go out under your name.">
+      {replies === null && <EmptyState>Reading…</EmptyState>}
+      {replies !== null && replies.length === 0 && editing === null && <EmptyState>Nothing saved yet.</EmptyState>}
+      {replies?.map((r) => (
+        <SettingRow key={r.id} label={r.title}
+          /* The text itself is what a person wrote to post under their own
+             name — the same reason a pull request body reads in --font-prose
+             rather than the app's mono stack. Shown whole: a reply is a
+             sentence or two, and a cut one hides the word that tells it from
+             the next. */
+          hint={<span className="block whitespace-pre-wrap" style={{ fontFamily: "var(--font-prose)", lineHeight: 1.5 }}>{r.text}</span>}
+          actions={<Button onClick={() => editRow(r)} disabled={busy}>Edit</Button>} />
+      ))}
 
-      {replies === null ? (
-        <div className="px-3 py-2 text-[11px]" style={{ color: "var(--text3)" }}>Reading…</div>
-      ) : replies.length === 0 && editing === null ? (
-        <div className="px-3 py-2 text-[11px]" style={{ color: "var(--text3)" }}>Nothing saved yet.</div>
-      ) : (
-        <div className="flex flex-col gap-1 px-3">
-          {replies.map((r) => (
-            <div key={r.id} className="rounded-lg px-2.5 py-2 flex items-start gap-2" style={{ border: EDGE }}>
-              <div className="min-w-0 flex-1">
-                <div className="text-[11.5px]" style={{ color: "var(--text)" }}>{r.title}</div>
-                {/* Two lines of it, so a list of twelve is still a list. The whole
-                    thing is one press away. The text itself is what a person wrote
-                    to post under their own name — the same reason a pull request
-                    body reads in --font-prose rather than the app's mono stack. */}
-                <div className="text-[10.5px] mt-0.5" style={{
-                  color: "var(--text3)", display: "-webkit-box", WebkitLineClamp: 2,
-                  WebkitBoxOrient: "vertical", overflow: "hidden", whiteSpace: "pre-wrap",
-                  fontFamily: "var(--font-prose)", lineHeight: 1.5,
-                }}>{r.text}</div>
-              </div>
-              <button onClick={() => editRow(r)} disabled={busy}
-                className="agx-btn shrink-0 px-2 py-0.5 rounded text-[10.5px]"
-                style={{ color: "var(--text2)", border: EDGE }}>Edit</button>
-              <button onClick={() => void remove(r.id)} disabled={busy}
-                title="Delete this saved reply"
-                className="agx-btn shrink-0 px-2 py-0.5 rounded text-[10.5px]"
-                style={{ color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 35%, transparent)" }}>Delete</button>
+      <div className="agx-settings-row">
+        <div className="agx-row-below">
+          <SettingsForm label={editing ? "Edit this reply" : "New reply"} onSubmit={() => void save()}>
+            <div className="text-[13.5px]" style={{ color: "var(--text)" }}>{editing ? "Edit this reply" : "New reply"}</div>
+            <Field label="Title" htmlFor="saved-reply-title" help="What the menu shows. Left empty, the first line is used.">
+              <input id="saved-reply-title" value={title} onChange={(e) => setTitle(e.target.value)}
+                aria-describedby={helpIdFor("saved-reply-title")} className={`w-full ${INPUT}`} style={INPUT_STYLE} />
+            </Field>
+            <Field label="Reply" htmlFor="saved-reply-text" help="What goes in the box. Markdown works here.">
+              <textarea id="saved-reply-text" value={text} onChange={(e) => setText(e.target.value)} rows={5}
+                aria-describedby={helpIdFor("saved-reply-text")}
+                className="w-full px-2.5 py-2 rounded-lg text-[12px] outline-none resize-y bg-[var(--surface-inset)] text-[var(--text)]"
+                style={{ ...INPUT_STYLE, fontFamily: "var(--font-prose)", lineHeight: 1.5 }} />
+            </Field>
+            <div className="agx-sform-actions">
+              <Button type="submit" tone="primary" disabled={busy || !text.trim()}>{editing ? "Save" : "Add"}</Button>
+              {editing !== null && (
+                <Button onClick={() => { setEditing(null); setTitle(""); setText(""); setErr(""); }}>Cancel</Button>
+              )}
+              {editing && <span className="flex-1" />}
+              {editing && (
+                <Button tone="danger" onClick={() => void remove(editing)} disabled={busy} title="Delete this saved reply">Delete</Button>
+              )}
             </div>
-          ))}
-        </div>
-      )}
-
-      <div className="px-3 pb-2 flex flex-col gap-1.5">
-        <div className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>
-          {editing ? "Edit this reply" : "New reply"}
-        </div>
-        <input value={title} onChange={(e) => setTitle(e.target.value)}
-          placeholder="What the menu shows — left empty, the first line is used"
-          className={INPUT}
-          style={INPUT_STYLE} />
-        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={5}
-          placeholder="What goes in the box. Markdown works here."
-          className="px-2 py-1.5 rounded text-[11px] outline-none resize-y"
-          style={{ background: "var(--surface-inset)", color: "var(--text)", border: EDGE, fontFamily: "var(--font-prose)", lineHeight: 1.5 }} />
-        {err && <div className="text-[10.5px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
-        <div className="flex items-center gap-1.5">
-          <button onClick={() => void save()} disabled={busy || !text.trim()}
-            className="agx-btn px-2 py-1 rounded text-[10.5px] disabled:opacity-40"
-            style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--primary) 50%, transparent)" }}>
-            {editing ? "Save" : "Add"}
-          </button>
-          {editing !== null && (
-            <button onClick={() => { setEditing(null); setTitle(""); setText(""); setErr(""); }}
-              className="agx-btn px-2 py-1 rounded text-[10.5px]" style={{ color: "var(--text3)" }}>Cancel</button>
-          )}
+            {err && <div role="alert" className="agx-field-e">{err}</div>}
+          </SettingsForm>
         </div>
       </div>
-      </div>
-    </div>
+    </SettingsCard>
   );
 }

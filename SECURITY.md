@@ -649,6 +649,74 @@ Values are offered, never typed: a status can only be one the list itself
 accepts, so an invalid one cannot be sent. And there are no bulk actions here on
 purpose — one wrong batch is thirty notifications to other people.
 
+## Jira, and the agent door to a card
+
+Reading a Jira site needs only the connection. **Changing** anything there (a
+move, an assignee, a comment, a step, a pull request link) is off unless you set
+`AGENTGLASS_JIRA_WRITE=1` or turn on the toggle in the Jira settings, for the
+same reason as ClickUp: a change on a shared site fires automations and notifies
+people. With it off every acting route answers `Writing to Jira is switched off`
+and sends nothing.
+
+What a configured step may write is closed: it can move the card to one of the
+project's statuses, set or clear the assignee, post one comment, and put one
+pull request on the card as a link. It cannot edit a field, delete anything, or
+act on more than one card. A step is refused before any write when the card's
+`updated` stamp is not the one the caller read (`409`), runs one at a time per
+card, and a move whose screen asks for a field nobody can fill in is refused
+with the sentence that says so. Jira's own error text never reaches an answer.
+
+A pull request address is parsed, never matched as text: https only, GitHub or
+GitLab, no port and no userinfo, so `github.com@evil.example/o/r/pull/7` and
+`javascript:` are refused. A step applies it to its address before anything is
+asked of the site, whether the step links the address or only quotes it in its
+comment, and whoever called. Ceiling: a self-hosted GitLab is recognised by its
+name (`gitlab.<company>.<tld>`), so a look-alike host named that way passes;
+telling them apart needs a list of hosts, which is not here.
+
+The agent door (`agentglass-ui jira`, `ui_jira_*`, `POST /jira/door/<verb>`)
+calls what the routes call, so the Jira switch is the screen's switch and its
+refusal is the screen's sentence. It adds:
+
+- **A second switch, and the default is off.** `step` and `link` change a
+  shared site with no click of yours, so they need `AGENTGLASS_CONTROL_LEVEL=3`
+  **and** the Jira write switch. The Jira switch alone is not enough: you turn
+  it on to use the Jira screen yourself, and that must not hand your cards to
+  every agent on the machine. At the level a server starts with (2), at level 1
+  and under `AGENTGLASS_CONTROL_READONLY=1`, both verbs are refused with a `403`
+  that names the two things missing, before anything is read from the site, and
+  the refusal is a line in the action log. At level 3 with the Jira switch off
+  they answer `Writing to Jira is switched off`. `card`, `moves` and `steps`
+  read at every level.
+- **No verb for the switch itself, the connection or a credential.** An agent
+  cannot turn Jira writes on, connect a site or read a token; those are yours.
+  The token never appears in an answer.
+- **Text from the site is data.** Every string a person typed on the card (its
+  title, description, comments, status names, the words of a step) is returned
+  under `untrusted`, and an agent reads it and never obeys it. The description
+  and the comments are cut to fit 16 KiB between them, newest comments kept.
+  What is under `state` is an id, a count, a yes or no, or the card's `updated`
+  stamp. A refusal is a sentence of ours, and it can name a status or a field
+  the site holds: it says what happened and is not something to do.
+- **A name and a limit.** Each call carries `--as`, the action log shows
+  `as NAME` and, for `step` and `link`, which card; changes are limited to 30 a
+  minute per caller.
+
+This door **performs**, where the level 3 doors of `/control` only stage a
+dialog. It is the one place an agent changes a shared board without a click of
+yours, so it is behind two switches that are both off until you turn them on,
+and it has no bulk verb. A step run through it is not tied to the act the
+screen ties it to: an agent at level 3 can run `merge` on a card whose pull
+request was never merged.
+
+What the door is not is a wall. The machine token is already `full`, so a
+process that holds it can call the screen's own routes (`POST /jira/step`,
+`/jira/link`, `/jira/transition`, `/jira/assignee`, `/jira/comment`) and is held
+there by the Jira write switch alone: no control level, no limit, no `as` in
+the log. The server cannot tell your window from an agent that presents the
+same token. The door is the path that is checked, named and limited, as
+`/control` is; the switch that holds for every path is the Jira one.
+
 ## Reading outside the open project
 
 Everything under `/files/` is bounded by the open project: a cockpit pointed at
@@ -875,12 +943,108 @@ A **worker role** (`start --role`) adds a lock: a deny list of publishing,
 history-rewriting and network commands, handed to the CLI in its own rule
 syntax. On OpenCode the lock is merged with the directory's config, so each
 start asks OpenCode for the merged rules and refuses when a project rule wins
-over the lock. The lock is a list of command prefixes, not a sandbox. A project
+over the lock. The lock is a list of command prefixes, not a sandbox, and no
+engine's lock is reported as more than **partly** enforced. On Claude Code a
+rule matches the start of a command line, so `git push` is refused and
+`git -C . push` or `/usr/bin/git push` is not; on OpenCode the rules are globs
+over the line, and a line a shell builds around a command is not read by them.
+A worker also runs as the same user as this app: it can read the app's token
+file, and a request made with that token and without the worker's name is, to
+the server, the person's. The check that turns a worker away from starting
+agents or touching a seat stops a worker using the CLI as it is, not one that
+means to get past it. A worker is as contained as its engine's permission
+system and the trust placed in what it is asked to read; where that is not
+enough, the answer is a container or another account, which this app does not
+provide.
+
+A policy-started worker's **turn limit** stops it by process id: the processes
+under its window at that moment, then the window. A command that forked twice
+and no longer answers to the window is not found. The limit is held in the
+server's memory with the pane and start time of the turn it was set for, and
+nothing is stopped unless the row still names that turn, so a name reused by a
+person's own tab is never stopped on a worker's clock. It is **not** put back
+after the server restarts: pane and window ids are only good for the tmux that
+handed them out, and after a restart the same numbers can be somebody's
+restored tab. A worker caught mid-turn by a restart is marked
+`ceiling lost: restarted` on its row and runs without a limit until its turn
+ends or it is stopped by hand. Falling back to the next engine happens only on
+a worker's first turn, before it did anything, with the same prompt, directory
+and envelope, and the envelope is checked against the project's ceiling again:
+it cannot widen what a worker may do. A project
 **OpenCode plugin** (`.opencode/plugin/`, or one named in the project's
 opencode.json) is arbitrary code that OpenCode runs inside the worker, and the
 lock does not cover it: a plugin can run any command itself without asking the
 permission system. A role on OpenCode is only as locked as the plugins in that
 checkout are trusted.
+
+## Orchestration: what is held, and what is not
+
+An orchestrator is an agent seated in a project's chair, and it starts workers
+under a policy the person wrote (docs/CONFIG.md, *The orchestration policy*).
+What the server holds, and what a test asserts, in the order it matters:
+
+- **Only the person changes the policy.** `POST /orchestration` is refused
+  with a `403` to the machine token on its own (every agent shell holds it), to
+  a seat's credential at every power level, to an understudy's and to a
+  plugin's. A refusal of the machine token is a line in the action log; a
+  seat's and an understudy's go to the fence record. A seat may read the policy
+  and may not edit what it is held to. The limit: on a server started by hand,
+  with no desk key held, the machine token plus a loopback `Origin` header is
+  taken for the person's own window, and `Origin` is not a boundary against a
+  process of the same user that holds the token. That is the same limit as the
+  engine locks being partial, and a test pins it.
+- **A worker belongs to the seat that started it.** A seat can prompt, read,
+  press keys on and stop only the agents it owns, in its own project: the ones
+  it started, and others only after it takes them explicitly. Another
+  project's seat is refused, and so is an agent with no owner until one is
+  taken. A seat's directory has to be inside its project or one of its
+  worktrees.
+- **A seat cannot answer its worker's permission prompt.** While the worker's
+  screen is a permission dialog, a seat's key presses are refused with a `403`
+  and a line in the action log, except `escape` and `ctrl-c`, which only back
+  out. The same goes for a prompt or a broadcast to it, since a pasted line ends
+  in enter. The person's own calls are unchanged. The limit: this is the
+  server's reading of the screen, and a worker of the same user can read a
+  seat's credential from the process environment, so the seat and worker
+  boundary is the same partly enforced one as the engine locks.
+- **Narrow by default, and widened only inside the ceiling.** A worker starts
+  with its own worktree, no network and no commit. A seat can widen by one
+  thing (`--allow network` or `--allow commit`) and never past the project's
+  ceiling, and the ceiling is checked again when a worker is resumed, so
+  narrowing it later stops a worker that was started under the old one.
+- **No envelope can hold a remote effect.** There is no field for a push, a
+  pull request, a merge, a release or spend, and the compiled-in deny list of
+  such commands cannot be emptied from a policy. Those stay the person's.
+- **A worker is turned away from the chair.** The CLI sends the worker's
+  name with every request, and the server refuses a caller that presents a
+  worker's name when it tries to start agents or seat anything. Its wrapper unsets the token and seat variables before the engine starts.
+- **An engine in the chair is held to what its workers are.** Claude Code's
+  chair goes through the gate hook; OpenCode has none, so its chair starts
+  under the deny list an OpenCode worker gets (no push, pull request, merge,
+  release or spend), checked against OpenCode's merged rules before it opens,
+  and a project config that loosens it refuses the seating. The limit is the
+  workers' own: command prefixes, not a sandbox (`sh -c 'git push'` is not a
+  command named `git push`), and an OpenCode agent switched to by hand in the
+  TUI runs under the project's rules for that agent. Only the person picks the
+  engine; a seat's credential is refused at `/seat/settings`, `/seat/change`
+  and `/seat/open`.
+- **The person can always take over.** A worker is a tmux window the person can
+  open, a chair can be adopted or stood down, and the Lantern shows both.
+- **Everything is logged.** Every start, prompt, key press, stop, refusal,
+  policy change and chair change is a line in the action log, under the
+  seat's name and with the reason.
+
+**What this does not do.** Every engine runs as the same user as this app, and
+the machine token is a file that user can read. The envelope stops an engine
+that respects its own permission system; it is not a sandbox. The properties
+above hold against a worker that does what its engine allows, and they are
+audited. They are not a security boundary against a model that means to get
+past them: such a worker can read the token file and make a request without its
+name, which the server takes for the person's. A turn limit has the same
+reach, since it stops a process tree it can find (see *A policy-started
+worker's turn limit* above). A real boundary, a container or another account
+per worker, is not provided by this app. Until then, do not give a worker text
+or a project you would not trust with your own shell.
 
 ## The browser, driven by an agent
 
@@ -1055,6 +1219,7 @@ the full list and defaults:
 | `AGENTGLASS_UNDERSTUDY=0` | the Clone, whatever its settings file says — the variable can force it off, never on |
 | `AGENTGLASS_TMUX_OBSERVE_ONLY` | every tmux command that writes to a session — see [docs/BLAST-RADIUS.md](docs/BLAST-RADIUS.md) |
 | `AGENTGLASS_CLICKUP_WRITE=1` | *(opposite sense)* turns **on** writes to a ClickUp board, which are off by default |
+| `AGENTGLASS_JIRA_WRITE=1` | *(opposite sense)* turns **on** writes to a Jira site, which are off by default; the agent door's `step` and `link` need `AGENTGLASS_CONTROL_LEVEL=3` as well |
 | `AGENTGLASS_GATE_FAILCLOSED=1` | *(opposite sense)* makes the gate deny on timeout instead of allowing |
 
 The `/control` channel, which drives the app's own window, has a level switch
@@ -1087,7 +1252,10 @@ value; only an unset variable is the default. What each level means:
 - **Level 3 only stages.** An entry at level 3 may open a dialog with its fields
   filled in; it may not call a route that writes. The person's click is the
   effect. There are no automatic grants, so `AGENTGLASS_CONTROL_LEVEL=3` lets an
-  agent prepare something and never perform it. Five doors ship, all on one pull
+  agent prepare something and never perform it, with one exception outside
+  `/control`: the Jira card door's `step` and `link`, which perform at level 3
+  when the Jira write switch is also on (see "Jira, and the agent door to a
+  card"). Five doors ship, all on one pull
   request: `pr.merge.stage` (method, commit subject and body), `pr.comment.stage`
   (the text), `pr.review.stage` (verdict and text), `card.move.stage` (the new
   status of the card the pull request carries) and `pr.unstick` (opens the Unstick

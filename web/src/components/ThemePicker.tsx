@@ -9,8 +9,9 @@ import { ACCENTS, currentAccent, lastAccent } from "../lib/accent.ts";
 import { setting } from "../lib/settingsRegistry.ts";
 import { SERVER, authHeaders } from "../lib/api.ts";
 import { DoneIcon } from "../lib/glyphIcons.tsx";
-import { ICON } from "../lib/iconSize.ts";
-import { EDGE } from "./workspace/Chrome.tsx";
+import { HIT, ICON } from "../lib/iconSize.ts";
+import { Button, CTRL_H, EDGE } from "./workspace/Chrome.tsx";
+import { SettingsCard } from "./SettingsKit.tsx";
 
 /* Settings → Appearance.
  *
@@ -51,9 +52,9 @@ function ThemeBtn({ t, current, onPick }: { t: Theme; current: string; onPick: (
         <span style={{ flex: 1, background: v["--primary"] ?? t.preview.accent }} />
         <span style={{ flex: 1, background: v["--success"] ?? t.preview.secondary }} />
       </span>
-      <span className="flex items-center gap-1.5 px-2 py-1 text-[11.5px]"
+      <span className="flex items-center gap-1.5 px-2 py-1 text-[11.5px] leading-tight"
         style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", color: on ? "var(--primary-hover)" : "var(--text3)" }}>
-        <span className="truncate">{t.name}</span>
+        <span className="min-w-0 break-words">{t.name}</span>
         {on && <span className="ml-auto shrink-0 flex"><DoneIcon size={ICON.xs} /></span>}
       </span>
     </button>
@@ -61,21 +62,24 @@ function ThemeBtn({ t, current, onPick }: { t: Theme; current: string; onPick: (
 }
 
 /** One list, split into its dark run and its light run — empty runs dropped so
- *  the experimental section never shows a bare header with nothing under it. */
-function Grid({ items, current, onPick }: { items: Theme[]; current: string; onPick: (id: string) => void }) {
+ *  the experimental section never shows a bare row with nothing under it. Each
+ *  run is a row of its own (a name and the tiles under it), not an eyebrow
+ *  inside a card. `more` renames the rows so a second set under the first does
+ *  not repeat their names. */
+function Grid({ items, current, onPick, more }: { items: Theme[]; current: string; onPick: (id: string) => void; more?: boolean }) {
   const groups = [
-    { label: "dark", items: items.filter(isDarkTheme) },
-    { label: "light", items: items.filter((t) => !isDarkTheme(t)) },
+    { label: more ? "More dark palettes" : "Dark palettes", items: items.filter(isDarkTheme) },
+    { label: more ? "More light palettes" : "Light palettes", items: items.filter((t) => !isDarkTheme(t)) },
   ].filter((g) => g.items.length);
   return (
     <>
       {groups.map((g) => (
-        <div key={g.label} className="mb-2">
-          <div className="panel-eyebrow pt-1 pb-1.5" style={{ paddingLeft: 0, paddingRight: 0 }}>{g.label}</div>
-          <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(96px, 1fr))" }}>
-            {g.items.map((t) => <ThemeBtn key={t.id} t={t} current={current} onPick={onPick} />)}
-          </div>
-        </div>
+        <SettingRow key={g.label} agentExempt label={g.label}
+          below={
+            <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(128px, 1fr))" }}>
+              {g.items.map((t) => <ThemeBtn key={t.id} t={t} current={current} onPick={onPick} />)}
+            </div>
+          } />
       ))}
     </>
   );
@@ -94,7 +98,7 @@ function Grid({ items, current, onPick }: { items: Theme[]; current: string; onP
  */
 const FEATURED = 6;
 
-export function ThemePicker({ current, onChange }: { current: string; onChange: (id: string) => void }) {
+export function PaletteRows({ current, onChange }: { current: string; onChange: (id: string) => void }) {
   const [showAll, setShowAll] = useState(false);
   const curated = THEMES.filter((t) => !EXPERIMENTAL_THEME_IDS.has(t.id));
   const experimental = THEMES.filter((t) => EXPERIMENTAL_THEME_IDS.has(t.id));
@@ -106,32 +110,16 @@ export function ThemePicker({ current, onChange }: { current: string; onChange: 
   }
   const rest = THEMES.filter((t) => !featured.some((f) => f.id === t.id));
 
+  /* Rows, so the card's one divider falls between them: the curated run, then
+     a row that opens the rest instead of a bordered full-width button. */
   return (
-    /* Bottom padding of its own: this is the last thing in the card, and without
-       it the "N more" row sat directly on the card's bottom border. */
-    <div className="pb-3">
+    <>
       <Grid items={featured} current={current} onPick={onChange} />
-
-      <button
-        onClick={() => setShowAll((v) => !v)}
-        className="mt-1.5 w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-[12px]"
-        style={{ border: EDGE, background: "color-mix(in srgb, var(--bg3) 22%, transparent)", color: "var(--text3)" }}
-      >
-        <span className="inline-block w-2.5 text-[10px]" aria-hidden>{showAll ? "▾" : "▸"}</span>
-        <span style={{ color: "var(--text2)" }}>{rest.length} more</span>
-        <span className="t-dim">including {experimental.length} experimental</span>
-      </button>
-
-      {showAll && (
-        <div className="mt-2">
-          <p className="pb-1.5 text-[12px] t-dim">
-            The rest of the curated palettes, then the decorative and second-flavour ones kept for
-            tinkering.
-          </p>
-          <Grid items={rest} current={current} onPick={onChange} />
-        </div>
-      )}
-    </div>
+      <SettingRow agentExempt label="More palettes"
+        hint={`${rest.length} more, including ${experimental.length} experimental: the rest of the curated palettes, then the decorative and second-flavour ones kept for tinkering.`}
+        control={<Button aria-expanded={showAll} onClick={() => setShowAll((v) => !v)}>{showAll ? "Hide" : "Show"}</Button>} />
+      {showAll && <Grid more items={rest} current={current} onPick={onChange} />}
+    </>
   );
 }
 
@@ -214,81 +202,87 @@ export function AppearancePane({ current, onChange, onAccent }: {
      broken with every circle dark. */
   const following = accent === "";
 
-  /* Mode and accent are settings and read as rows; the palette grid is a
-     picker and stays a grid. Both used a label floated left with the control
-     pushed right by `ml-auto`, which is the row shape drawn by hand — and drawn
-     to a different left edge than every other page in the dialog. */
+  /* Two cards, one decision between them: Mode and Accent are settings and
+     read as rows; the palettes are a picker, and a picker is its own card
+     rather than an eyebrow inside this one. Both live here because picking a
+     palette moves Mode, and the two share that state. */
   return (
     <>
-      <SettingRow
-        settingId="appearance.mode"
-        label="Mode"
-        hint={desk && mode === "desktop"
-          ? <>Wearing <b style={{ color: "var(--text3)" }}>{desk.name}</b>, your desktop's theme — it follows when you switch there.</>
-          : desk
-            ? <>Your desktop's theme is {desk.name}, one click away. <b style={{ color: "var(--text3)" }}>System</b> follows your OS's dark or light.</>
-            : <>A serious neutral pair. <b style={{ color: "var(--text3)" }}>System</b> follows your OS.</>}
-        control={<span className="flex p-0.5 rounded-lg" style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: EDGE }}>
-          {[...(desk ? [{ m: "desktop" as ThemeMode, label: "" }] : []), ...MODES].map(({ m, label }) => {
-            const on = mode === m;
-            return (
-              <button key={m} onClick={() => chooseMode(m)}
-                title={m === "desktop" && desk ? `Wear ${desk.name}, your desktop's theme, and follow it when you switch` : undefined}
-                className="px-3 py-1 rounded-md text-[12px] transition-colors"
-                style={on
-                  ? { background: "var(--surface-card)", color: "var(--text)", boxShadow: "0 1px 2px rgba(0,0,0,0.25)" }
-                  : { color: "var(--text3)" }}>
-                {m === "desktop" && desk ? <DesktopMark source={desk.source} /> : label}
-              </button>
-            );
-          })}
-        </span>}
-      />
+      <SettingsCard title="Theme"
+        desc="One palette for the whole cockpit — chrome, terminal, and (on the desktop) your tmux and nvim follow it.">
+        <SettingRow
+          settingId="appearance.mode"
+          label="Mode"
+          hint={desk && mode === "desktop"
+            ? <>Wearing <b style={{ color: "var(--text3)" }}>{desk.name}</b>, your desktop's theme — it follows when you switch there.</>
+            : desk
+              ? <>Your desktop's theme is {desk.name}, one click away. <b style={{ color: "var(--text3)" }}>System</b> follows your OS's dark or light.</>
+              : <>A serious neutral pair. <b style={{ color: "var(--text3)" }}>System</b> follows your OS.</>}
+          control={<span className="inline-flex items-center p-0.5 rounded-lg" role="group" aria-label="Mode"
+            style={{ height: CTRL_H.regular, background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: EDGE }}>
+            {[...(desk ? [{ m: "desktop" as ThemeMode, label: "" }] : []), ...MODES].map(({ m, label }) => {
+              const on = mode === m;
+              return (
+                <button key={m} onClick={() => chooseMode(m)} aria-pressed={on}
+                  title={m === "desktop" && desk ? `Wear ${desk.name}, your desktop's theme, and follow it when you switch` : undefined}
+                  className="px-3 h-[22px] inline-flex items-center rounded-md text-[12px] transition-colors"
+                  style={on
+                    ? { background: "var(--surface-card)", color: "var(--text)", boxShadow: "0 1px 2px rgba(0,0,0,0.25)" }
+                    : { color: "var(--text3)" }}>
+                  {m === "desktop" && desk ? <DesktopMark source={desk.source} /> : label}
+                </button>
+              );
+            })}
+          </span>}
+        />
 
-      {/* Accent. The switch is the decision — follow the theme, or choose —
-          and the circles are only the second half of it. It was a dashed
-          circle in the row with the other seven, which reads as an eighth
-          colour: somebody ran this app for weeks laying a hand-picked green
-          over a desktop theme whose own accent they wanted, because nothing on
-          that circle said what it did. A sentence can say it; a swatch cannot. */}
-      <SettingRow
-        settingId="appearance.accent"
-        label="Accent" modified={!following}
-        hint={following
-          ? <>Following your theme{desk && mode === "desktop" ? <> — <b style={{ color: "var(--text3)" }}>{desk.name}</b> brings its own</> : <>'s own primary</>}.</>
-          : <>Laid over the theme's own primary, for the things that read as live.</>}
-        control={<span className="flex items-center gap-4">
-          <button onClick={() => chooseAccent(following ? lastAccent() : "")}
+        {/* Accent. The switch is the decision — follow the theme, or choose —
+            and the circles are only the second half of it, so they sit under
+            the description rather than crowding the control column: eight
+            round targets and a switch on one line pushed the words narrow.
+            It was a dashed circle in the row with the other seven, which reads
+            as an eighth colour: somebody ran this app for weeks laying a
+            hand-picked green over a desktop theme whose own accent they
+            wanted, because nothing on that circle said what it did. A sentence
+            can say it; a swatch cannot. */}
+        <SettingRow
+          settingId="appearance.accent"
+          label="Accent" modified={!following}
+          hint={following
+            ? <>Following your theme{desk && mode === "desktop" ? <> — <b style={{ color: "var(--text3)" }}>{desk.name}</b> brings its own</> : <>'s own primary</>}.</>
+            : <>Laid over the theme's own primary, for the things that read as live.</>}
+          control={<span className="flex justify-end"><button onClick={() => chooseAccent(following ? lastAccent() : "")}
             role="switch" aria-checked={following} aria-label="Follow the theme's accent"
-            title="Follow the theme's accent" className="flex items-center gap-1.5">
+            title="Follow the theme's accent" className="inline-flex items-center gap-1.5">
             <Switch on={following} />
             {own
               /* Smaller than the seven on purpose: it is the colour being
-                 followed, not an eighth colour to pick. The wider gap before
-                 the row says the same thing again. */
+                 followed, not an eighth colour to pick. */
               ? <span className="w-3.5 h-3.5 rounded-full shrink-0" style={{ background: own, opacity: following ? 1 : 0.35 }} />
               : null}
-          </button>
-          <span className="flex items-center gap-1.5" aria-hidden={following}
+          </button></span>}
+          below={<span className="flex flex-wrap items-center gap-2" aria-hidden={following}
             style={{ opacity: following ? 0.3 : 1, pointerEvents: following ? "none" : undefined }}>
             {ACCENTS.filter((a) => a.primary).map((a) => {
               const on = accent === a.id;
               return (
-                <button key={a.id} onClick={() => chooseAccent(a.id)} title={a.name}
-                  className="w-5 h-5 rounded-full transition-transform hover:scale-110"
+                <button key={a.id} onClick={() => chooseAccent(a.id)} title={a.name} aria-label={a.name}
+                  className="rounded-full transition-transform hover:scale-110"
                   style={{
-                    background: a.primary,
+                    width: HIT, height: HIT, background: a.primary,
                     outline: on ? "2px solid var(--text)" : "none",
                     outlineOffset: "1.5px",
                   }} />
               );
             })}
-          </span>
-        </span>}
-      />
+          </span>}
+        />
+      </SettingsCard>
 
-      <div className="panel-eyebrow pt-3 pb-1.5">Or pick a palette</div>
-      <ThemePicker current={current} onChange={choose} />
+      <SettingsCard title="Palette"
+        desc="Pick one by name instead of the neutral pair. Choosing one sets Mode to match.">
+        <PaletteRows current={current} onChange={choose} />
+      </SettingsCard>
     </>
   );
 }

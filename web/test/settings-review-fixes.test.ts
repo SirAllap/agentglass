@@ -79,8 +79,12 @@ describe("the modal re-reads what other screens write", () => {
   });
 });
 
-describe("the type sample has the row's top padding", () => {
-  test("its label does not sit on the Font row's border", () => {
-    expect(modal).toMatch(/<div className="pt-3\.5 pb-3">\s*<div className="panel-eyebrow pb-1"[^>]*>How it looks</);
+describe("the type sample hangs under the Font row", () => {
+  test("it is the row's own `below`, with no eyebrow and no box of its own", () => {
+    const at = modal.indexOf('settingId="terminal.font"');
+    const row = modal.slice(at, modal.indexOf("terminal.fontSize", at));
+    expect(row).toMatch(/below=\{\s*<div className="rounded-lg px-3 py-2 whitespace-pre/);
+    expect(row).not.toContain("panel-eyebrow");
+    expect(row).not.toContain("border: EDGE");
   });
 });

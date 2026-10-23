@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { StatusBadge } from "./SettingsKit.tsx";
 import { Button, LINE } from "./workspace/Chrome.tsx";
 import { Dot, StatusPanel, StatusPopover, type PanelView } from "./StatusPanel.tsx";
 import { WFM_CSS } from "./workflowMapStyle.ts";
 import { ArrowIcon, CaretIcon, DoneIcon, EyeIcon, EyeOffIcon, ListIcon, MergeIcon, NoteIcon, PlusIcon, UserIcon, WarningIcon, CrossIcon } from "../lib/glyphIcons.tsx";
 import { StepBlocks, type MapPerson } from "./StepBlocks.tsx";
 import type { FieldChoice } from "./StepExtraRows.tsx";
-import type { StepBlock } from "../../../shared/providers.ts";
+import type { MapBlock as StepBlock } from "../../../shared/providers.ts";
 import { blocksSentence, blockNeedsValue, stepIsEmpty, triggerOf } from "../lib/stepBlocksView.ts";
 import { HIT, ICON } from "../lib/iconSize.ts";
 import {
@@ -365,7 +366,7 @@ export function WorkflowMap(p: MapProps) {
             <>
               <StepBlocks trigger={trig} blocks={st.blocks} status={st.status} statusType={stDot?.type ?? "custom"} statusColor={stDot?.color}
                 {...(awaiting ? { moveTone: "empty" as const } : pill?.tone === "ignored" ? { moveTone: "ignored" as const } : bad ? { moveTone: "bad" as const } : null)}
-                n={n} frozen={frozen} people={p.people} {...(p.fields ? { fields: p.fields } : null)} statusOpen={picker?.kind === st.kind}
+                n={n} tracker={p.adapter.tracker} frozen={frozen} people={p.people} {...(p.fields ? { fields: p.fields } : null)} statusOpen={picker?.kind === st.kind}
                 onChange={(next) => p.onBlocks(st.kind, next)}
                 onPickStatus={(anchor) => (picker?.kind === st.kind ? closePicker(false) : openPicker(st.kind)(anchor))} />
               <div className="text-[13px]" data-press={st.kind} style={{ color: "var(--text2)", borderLeft: "3px solid var(--text)", padding: "8px 12px", borderRadius: 10, background: "var(--bg)", boxShadow: "inset 0 0 0 1px var(--w-line)" }}>
@@ -418,21 +419,26 @@ export function WorkflowMap(p: MapProps) {
   const moments_ = <div className="wfm-moments" role="group" aria-label="Where in agentglass">{kinds.map(momentCard)}</div>;
 
   return (
-    <section ref={root} className="wfm agx-settings-section" aria-labelledby={`${uid}-h`}>
+    /* A settings card (SettingsKit's classes): the verdict and the one
+       action, Add a step, at the header's right in every state. */
+    <section ref={root} className="wfm agx-scard" aria-labelledby={`${uid}-h`}>
       <style>{WFM_CSS}</style>
-      <div className="agx-settings-head flex items-center gap-4 flex-wrap">
-        <div className="flex flex-col gap-0.5 flex-1 min-w-0">
-          <div className="agx-settings-head-t" id={`${uid}-h`}>Workflow map</div>
-          {hint("Each step puts one control into agentglass. You build what it does from blocks.")}
+      <div className="agx-scard-head">
+        <div className="min-w-0">
+          <h3 className="agx-settings-head-t m-0" id={`${uid}-h`}>Workflow map</h3>
+          <div className="agx-scard-desc">Each step puts one control into agentglass. You build what it does from blocks.</div>
         </div>
-        <Badge tone={changesOn ? "warn" : "dim"}>{changesOn ? "Changes on" : "Changes off"}</Badge>
-        {frozen && <Badge tone="warn">Paused: token refused</Badge>}
-        <Button tone="primary" data-add="" aria-expanded={composer} disabled={loading || frozen}
-          onClick={() => { setComposer((c) => !c); setFocusNext(composer ? "[data-add]" : "[data-mom]"); }}>
-          <PlusIcon size={ICON.xs} /> Add a step
-        </Button>
+        <div className="agx-slot">
+          {frozen
+            ? <StatusBadge tone="warn">Paused: token refused</StatusBadge>
+            : <StatusBadge tone={changesOn ? "warn" : "off"}>{changesOn ? "Changes on" : "Changes off"}</StatusBadge>}
+          <Button tone="primary" data-add="" aria-expanded={composer} disabled={loading || frozen}
+            onClick={() => { setComposer((c) => !c); setFocusNext(composer ? "[data-add]" : "[data-mom]"); }}>
+            <PlusIcon size={ICON.xs} /> Add a step
+          </Button>
+        </div>
       </div>
-      <div className="agx-settings-rows" style={{ padding: 24 }}>
+      <div className="agx-scard-body agx-settings-x pt-3 pb-4">
         <div ref={grid} className="wfm-grid" {...(frozen ? ({ inert: "" } as object) : {})} style={{ opacity: frozen ? 0.55 : 1 }}>
           <div ref={stepsBox} className="wfm-steps">
             {!changesOn && steps.length > 0 && (

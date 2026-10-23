@@ -667,6 +667,8 @@ export function actions(): { actions: ActionRecord[] } {
   const now = Date.now();
   const rows: [string, string, string, boolean, string | null][] = [
     ["local", "/gate/deny", "Bash · rm -rf ./dist ./node_modules", true, null],
+    ["seat:orchestrator-shop", "/agents/named/start", "builder-coupon-table", true, null],
+    ["policy", "policy/on", "Night hours", true, "shop-api: the 5 h window is 91% used"],
     ["192.168.1.42", "/prs/merge", "shop-api #482", true, null],
     ["192.168.1.42", "/gate/allow", "Write · src/checkout/index.ts", true, null],
     ["local", "/git/discard", "shop-api src/pay.ts", true, null],

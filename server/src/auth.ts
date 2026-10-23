@@ -391,7 +391,7 @@ const SEAT_POST_NUDGE = new Set([
    the reach it grants: enlisting decides WHICH panes on this machine the seat's
    other verbs can touch, including ones in projects that are none of its
    business. Deciding who exists is the assigning half of the job. */
-const SEAT_POST_ASSIGN = new Set(["/agents/named/start", "/agents/named/stop", "/agents/named/keys", "/agents/named/enlist"]);
+const SEAT_POST_ASSIGN = new Set(["/agents/named/start", "/agents/named/stop", "/agents/named/keys", "/agents/named/enlist", "/agents/named/own"]);
 
 export function seatAllows(powers: "speak" | "nudge" | "assign", method: string, pathname: string): boolean {
   if (method === "GET" || method === "HEAD") return !FULL_GET.has(pathname);

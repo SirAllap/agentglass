@@ -4,12 +4,12 @@ import { Dot } from "./StatusPanel.tsx";
 import { AnchoredMenu } from "./AnchoredMenu.tsx";
 import { PeoplePick } from "./PeoplePick.tsx";
 import { Face } from "./AssignPicker.tsx";
-import { ArrowIcon, CaretIcon, CrossIcon, DoneIcon, GripIcon, PlusIcon, UserMinusIcon, UserPlusIcon, CommentIcon } from "../lib/glyphIcons.tsx";
+import { ArrowIcon, CaretIcon, CrossIcon, DoneIcon, GripIcon, LinkIcon, PlusIcon, UserMinusIcon, UserPlusIcon, CommentIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { ASSIGN_LABEL, ASSIGN_WHO, assignLabel, type Assign } from "../lib/stepAssign.ts";
 import { UNASSIGN_LABEL, type Unassign } from "../lib/workflowMap.ts";
-import { BLOCK_INFO, blockRefusal, type StepTrigger } from "../../../shared/stepBlocks.ts";
-import { AUTHOR_IS_MEMBER, type ListMember, type StepBlock } from "../../../shared/providers.ts";
+import { blockInfoFor, blockRefusal, type StepTrigger } from "../../../shared/stepBlocks.ts";
+import { AUTHOR_IS_MEMBER, type ListMember, type MapBlock as StepBlock } from "../../../shared/providers.ts";
 import { moveBlock } from "../lib/stepBlocksView.ts";
 const blocksHaveExtras = (bs: readonly StepBlock[]): boolean => bs.some((b) => b.type === "comment" || b.type === "field");
 import { CommentEditor, FieldEditor, type FieldChoice } from "./StepExtraRows.tsx";
@@ -77,7 +77,7 @@ export function UnassignMenu({ anchor, value, people, onPick, onPeople, onClose 
     <AnchoredMenu anchor={anchor} align="left" minWidth={200} onClose={onClose}>
       <div className="wfm" style={{ display: "contents" }}>
         {(["none", "me", "all"] as const).map((w) => <Row key={w} selected={value.who === w} onClick={() => onPick(w)}><Check on={value.who === w} /><span className="n">{UNASSIGN_LABEL[w]}</span></Row>)}
-        <Row selected={value.who === "people"} onClick={() => setView("people")}><Check on={value.who === "people"} /><span className="n">people…</span></Row>
+        {people && (<Row selected={value.who === "people"} onClick={() => setView("people")}><Check on={value.who === "people"} /><span className="n">people…</span></Row>)}
       </div>
     </AnchoredMenu>
   );
@@ -113,7 +113,7 @@ export function AssignMenu({ anchor, value, people, withNobody, also, onPeople, 
   return (
     <AnchoredMenu anchor={anchor} align="left" minWidth={200} onClose={onClose}>
       <div className="wfm" style={{ display: "contents" }}>
-        {ASSIGN_WHO.filter((w) => (w !== "none" || withNobody) && (w !== "author" || AUTHOR_IS_MEMBER.clickup)).map((w) => (
+        {ASSIGN_WHO.filter((w) => (w !== "none" || withNobody) && (w !== "author" || AUTHOR_IS_MEMBER.clickup) && (w !== "person" || !!people)).map((w) => (
           <Row key={w} selected={value.who === w} onClick={() => (w === "person" ? setView("people") : onPick({ who: w }))}><Check on={value.who === w} /><span className="n">{w === "none" ? "nobody" : ASSIGN_LABEL[w]}</span></Row>))}
       </div>
     </AnchoredMenu>
@@ -129,14 +129,14 @@ const withoutAsk = (b: StepBlock): StepBlock => {
   return b;
 };
 const hint = (c: ReactNode) => <span className="text-[11px]" style={{ color: "var(--text3)" }}>{c}</span>;
-const GLYPH: Record<string, (p: { size?: number }) => React.ReactElement> = { move: ArrowIcon, unassign: UserMinusIcon, assign: UserPlusIcon, comment: CommentIcon, field: ListGlyph };
+const GLYPH: Record<string, (p: { size?: number }) => React.ReactElement> = { move: ArrowIcon, unassign: UserMinusIcon, assign: UserPlusIcon, comment: CommentIcon, field: ListGlyph, link: LinkIcon };
 function ListGlyph({ size }: { size?: number }) { return <PlusIcon size={size} />; }
 
 const titleOf = (b: StepBlock["type"], trigger: StepTrigger, n: { item: string; verb: string }): string =>
-  b === "move" ? (trigger === "merge" ? "Preselect" : `${n.verb} the ${n.item} to`) : b === "unassign" ? `Take people off the ${n.item}` : b === "comment" ? `Comment on the ${n.item}` : b === "field" ? "Set a field" : "Assign the " + n.item + " to";
+  b === "move" ? (trigger === "merge" ? "Preselect" : `${n.verb} the ${n.item} to`) : b === "unassign" ? `Take people off the ${n.item}` : b === "comment" ? `Comment on the ${n.item}` : b === "field" ? "Set a field" : b === "link" ? `Link the pull request on the ${n.item}` : "Assign the " + n.item + " to";
 const hintOf = (b: StepBlock["type"], trigger: StepTrigger, n: { item: string }): string =>
   b === "move" ? (trigger === "merge" ? "Offered at merge time; you can still change it" : `Where the ${n.item} goes`)
-    : b === "unassign" ? "Who comes off" : b === "comment" ? "One comment, posted when it runs" : b === "field" ? `One of the ${n.item}'s custom fields` : trigger === "merge" ? "Added if missing, when the merge moves the card" : "Added if missing";
+    : b === "unassign" ? "Who comes off" : b === "comment" ? "One comment, posted when it runs" : b === "field" ? `One of the ${n.item}'s custom fields` : b === "link" ? "Once, as a link on the card" : trigger === "merge" ? "Added if missing, when the merge moves the card" : "Added if missing";
 
 type Open = { type: StepBlock["type"] | "add" };
 
@@ -150,6 +150,8 @@ export interface StepBlocksProps {
   /** The move block's value needs attention: nothing picked, or a status no list has. */
   moveTone?: "empty" | "bad" | "ignored";
   n: { item: string; verb: string };
+  /** Which tracker the blocks are for: what blocks exist, and what a list of them may hold. Absent: ClickUp. */
+  tracker?: string;
   frozen?: boolean;
   people?: () => Promise<MapPerson[] | null>;
   onChange: (next: StepBlock[]) => void;
@@ -295,7 +297,8 @@ export function StepBlocks(p: StepBlocksProps) {
     setSaid(`Added “Set a field” at position ${shown.length + 1}.`);
   };
   const add = (type: string) => {
-    if (blockRefusal(trigger, shown, type)) return;
+    if (blockRefusal(trigger, shown, type, p.tracker)) return;
+    if (type === "link") { commit([...shown, { type: "link" }]); setUndo(null); setOpen(null); setSaid(`Added “Link the pull request on the ${n.item}” at position ${shown.length + 1}.`); return; }
     if (type === "field") { void addField(); return; }
     if (type === "comment") { commit([...shown, { type: "comment", text: "{pr_url}" }]); setUndo(null); setOpen(null); setSaid(`Added “Comment on the ${n.item}” at position ${shown.length + 1}.`); return; }
     const b: StepBlock = type === "move" ? { type: "move", statusNames: [] } : type === "unassign" ? { type: "unassign", who: "none" } : { type: "assign", who: "me" };
@@ -311,7 +314,7 @@ export function StepBlocks(p: StepBlocksProps) {
 
   /* ---- a row ---- */
   const valueButton = (b: StepBlock, i: number) => {
-    if (b.type === "comment" || b.type === "field") return null;
+    if (b.type === "comment" || b.type === "field" || b.type === "link") return null;
     const id = `${uid}-${b.type}`;
     const common = { type: "button" as const, "data-val": "", className: "wfm-pick", disabled: p.frozen, "aria-haspopup": "listbox" as const, "aria-labelledby": `${id}-l ${id}-v` };
     if (b.type === "move") {
@@ -345,12 +348,12 @@ export function StepBlocks(p: StepBlocksProps) {
         <button type="button" data-grip="" className="wfm-grip" disabled={p.frozen} aria-roledescription="drag handle"
           aria-label={`Reorder “${titleOf(b.type, trigger, n)}”. Drag it, or press arrow up and down.`}
           onPointerDown={(e) => startDrag(e, b.type)} onKeyDown={(e) => keyMove(e, i, b)}><GripIcon size={ICON.md} /></button>
-        <span className="wfm-lb"><b id={`${id}-l`} className="text-[13px] inline-flex items-center gap-2"><span className="wfm-gl"><Icon size={ICON.xs} /></span>{titleOf(b.type, trigger, n)}</b>{hint(hintOf(b.type, trigger, n))}{b.type !== undefined && (
+        <span className="wfm-lb"><b id={`${id}-l`} className="text-[13px] inline-flex items-center gap-2"><span className="wfm-gl"><Icon size={ICON.xs} /></span>{titleOf(b.type, trigger, n)}</b>{hint(hintOf(b.type, trigger, n))}{b.type !== "link" && (
             <button type="button" data-ask="" className="wfm-ask" aria-pressed={b.ask === true} disabled={p.frozen}
               title={b.ask ? "It asks when it runs; the value is where the question starts. Press to fix it." : "Fix this value, or ask when it runs: the value becomes where the question starts."}
               onClick={() => setBlock(b.type, b.ask ? withoutAsk(b) : { ...b, ask: true } as StepBlock, '[data-blk="' + b.type + '"] [data-ask]')}>Ask when it runs</button>
           )}</span>
-        <span className="relative">{b.type === "comment" || b.type === "field" ? null : valueButton(b, i)}</span>
+        <span className="relative">{b.type === "comment" || b.type === "field" || b.type === "link" ? null : valueButton(b, i)}</span>
         <button type="button" data-rmb="" className="wfm-rmx" disabled={p.frozen} aria-label={`Remove block: ${titleOf(b.type, trigger, n)}`} onClick={() => remove(i)}><CrossIcon size={ICON.xs} /></button>
         {b.type === "comment" && <div className="wfm-blk-wide"><CommentEditor block={b} frozen={p.frozen} onChange={(nb) => setBlock("comment", nb, undefined, true)} /></div>}
         {b.type === "field" && <div className="wfm-blk-wide"><FieldEditor block={b} fields={known} frozen={p.frozen} onChange={(nb) => setBlock("field", nb, undefined, true)} /></div>}
@@ -380,8 +383,8 @@ export function StepBlocks(p: StepBlocksProps) {
       {open?.type === "add" && (
         <AnchoredMenu anchor={anchorRef} align="left" minWidth={380} onClose={() => { setOpen(null); focusNext.current = "[data-addblock]"; }}>
           <div className="wfm" style={{ display: "contents" }}>
-            {BLOCK_INFO.map((info) => {
-              const why = blockRefusal(trigger, shown, info.type);
+            {blockInfoFor(p.tracker ?? "clickup").map((info) => {
+              const why = blockRefusal(trigger, shown, info.type, p.tracker);
               const I = GLYPH[info.type] ?? PlusIcon;
               return (
                 <Row key={info.type} disabled={!!why} data-add={info.type} onClick={() => { if (!why) add(info.type); }}>

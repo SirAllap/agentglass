@@ -31,7 +31,7 @@ export type TaskLanding = "last" | "all" | TaskSourceId;
 const MODE_KEY = "agentglass.tasks.landing";
 const LAST_KEY = "agentglass.tasks.last";
 
-const MODES: TaskLanding[] = ["last", "all", "github", "local", "clickup"];
+const MODES: TaskLanding[] = ["last", "all", "github", "local", "clickup", "jira"];
 
 const read = (key: string): string | null => {
   try { return localStorage.getItem(key); } catch { return null; }

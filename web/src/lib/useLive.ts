@@ -347,12 +347,12 @@ export function useLive(paused = false): LiveData {
           : c.kind === "status" ? `${c.title}${c.was ? ` · was ${c.was}` : ""}`
           : c.said || c.title;
         recordNote({
-          app: "ClickUp",
+          app: c.tracker === "jira" ? "Jira" : "ClickUp",
           summary,
           body,
           // A mention is somebody asking you something; the rest is news.
           urgency: c.kind === "mention" ? 2 : 1,
-          goto: { kind: "card", id: c.id, label: c.label },
+          goto: { kind: "card", id: c.id, label: c.label, ...(c.tracker ? { tracker: c.tracker } : null) },
         });
         return;
       }

@@ -46,8 +46,8 @@ export const VIEW_IDS = ["dash", "git", "diff", "pr", "tasks", "docker", "term",
 /** The pages Settings can be opened on. `plugin:<name>` pages come and go with
  *  the installed plugins and are not a closed set, so they are not here. */
 export const SETTINGS_PAGE_IDS = [
-  "prefs", "appearance", "notifications", "rail", "keys", "terminal", "diff", "browser", "tasks", "hooks", "lantern",
-  "understudy", "budgets", "recipes", "review-prompts", "saved-replies", "connections", "clickup", "remote", "plugins",
+  "prefs", "appearance", "notifications", "rail", "keys", "terminal", "diff", "browser", "tasks", "hooks", "engines", "orchestration", "lantern",
+  "understudy", "budgets", "recipes", "review-prompts", "saved-replies", "connections", "clickup", "jira", "remote", "plugins",
   "tmux", "privacy", "about", "log", "onboarding",
 ] as const;
 
@@ -221,7 +221,7 @@ export const UI_ACTIONS = {
   "bench.file": def({ level: 1, kind: "open", surface: "a file on the bench, read-write as the bench always is", args: { root: { t: "abspath" }, path: { t: "relpath" } } }),
   "bench.board": def({ level: 1, kind: "open", surface: "a board (pull requests, tasks, files) as a bench tab", args: { root: { t: "abspath" }, kind: { t: "enum", values: BOARD_KINDS } } }),
   "peek.file": def({ modals: ["PeekFile.tsx"], level: 1, kind: "open", surface: "the file viewer, reading", args: { root: { t: "abspath" }, path: { t: "relpath" } } }),
-  "git.modal": def({ modals: ["InsightsModal.tsx", "BisectModal.tsx", "GitPalette.tsx", "GitPanel.tsx"], level: 1, kind: "open", surface: "Insights, Bisect or the git command palette over the checkout the Git view is on", args: { which: { t: "enum", values: GIT_MODALS } } }),
+  "git.modal": def({ modals: ["InsightsModal.tsx", "BisectModal.tsx", "GitPalette.tsx", "GitPanel.tsx"], level: 1, kind: "open", surface: "Insights, Bisect or the git command palette over the focused terminal pane's checkout, else the one the Git view is on", args: { which: { t: "enum", values: GIT_MODALS } } }),
   "git.compare": def({ modals: ["CompareModal.tsx"], level: 1, kind: "open", surface: "the Compare modal against one ref", args: { base: { t: "ref" } } }),
   "git.blame": def({ modals: ["BlameModal.tsx"], level: 1, kind: "open", surface: "the Blame modal on one file of the checkout", args: { path: { t: "relpath" } } }),
   // Opening shows a plan and moves nothing: the rebase starts only when the owner
@@ -312,7 +312,10 @@ export const UI_READ_NOT_COVERED: Readonly<Record<string, string>> = {
   "settings.connections": "credential pane: values are never read through this channel (settings.privacy says only whether ClickUp is set)",
   "settings.remote": "credential pane: values are never read through this channel (settings.privacy says only how many devices are paired)",
   "settings.clickup": "credential pane: values are never read through this channel (settings.privacy says only whether it is set)",
+  "settings.jira": "credential pane: the token, the site and the write switch are never read through this channel (the one setting on it is a def, and the steps have their own door, GET /jira/steps)",
   "settings.onboarding": "not a setting",
+  "settings.orchestration": "no setting of its own: the page shows the policy GET /orchestration answers, and only a person writes it (the route refuses an agent), so there is nothing here for an agent to read or change",
+  "settings.engines": "no setting of its own: the page shows what GET /engines measures on this machine, and an agent reads that route (the tests there are a real turn and are not an agent's to start)",
 };
 
 /**

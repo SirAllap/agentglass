@@ -39,7 +39,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ActivityIndicator, KeyboardAvoidingView, Linking, Pressable, ScrollView, Text, TextInput, View,
+  ActivityIndicator, KeyboardAvoidingView, Pressable, ScrollView, Text, TextInput, View,
 } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
@@ -61,6 +61,7 @@ import { requestHandoff } from "../../src/terminal/handoff.ts";
 import { mainCheckouts } from "../../src/model/prRows.ts";
 import { cardSkills, namedForIt, skillCommand, skillModes, windowName } from "../../../shared/cardSkills.ts";
 import { dueIn, since } from "../../src/lib/dates.ts";
+import { openHttp } from "../../src/lib/openHttp.ts";
 import { Btn, Card, Chip, Group, GroupTitle, Label, LabelChip, Note, Row, Sheet, SheetRow, TAP } from "../../src/ui.tsx";
 import { FieldRow } from "../../src/cards/FieldRow.tsx";
 import { AssigneeSheet } from "../../src/cards/AssigneeSheet.tsx";
@@ -829,7 +830,7 @@ export default function CardScreen(): React.ReactNode {
                 {card.customId || card.id}
               </Text>
               {card.url ? (
-                <Btn label={`Open in ${providerTitle(PROVIDER)}`} onPress={() => { void Linking.openURL(card.url); }} />
+                <Btn label={`Open in ${providerTitle(PROVIDER)}`} onPress={() => { openHttp(card.url); }} />
               ) : null}
             </View>
           </>

@@ -28,6 +28,8 @@ export interface CardJump {
   /** Rises per request, so asking for the same card twice is two arrivals
    *  rather than one that looks already served. */
   n: number;
+  /** Which tracker's tab the card is in. Absent means ClickUp. */
+  tracker?: "jira";
 }
 
 let listener: ((j: CardJump) => void) | null = null;
@@ -38,7 +40,7 @@ export function onOpenCard(fn: ((j: CardJump) => void) | null): () => void {
   return () => { if (listener === fn) listener = null; };
 }
 
-/** Open the Tasks view on this ClickUp card. */
-export function openCard(query: string, label?: string): void {
-  listener?.({ query, label: label || query, n: ++seq });
+/** Open the Tasks view on this card, in the tracker it belongs to. */
+export function openCard(query: string, label?: string, tracker?: "jira"): void {
+  listener?.({ query, label: label || query, n: ++seq, ...(tracker ? { tracker } : null) });
 }

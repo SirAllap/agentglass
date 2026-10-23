@@ -43,6 +43,7 @@ const MUTATING = [
   `pathname === "/projects/roots"`,
   `pathname === "/projects/new"`,
   `pathname === "/agents/connect"`,
+  `pathname === "/engines/test"`,
   `pathname === "/budgets/set"`,
   // Widens what a plugin process may reach: it lets one run outside its box.
   `pathname === "/plugins/allow-unboxed"`,
@@ -84,6 +85,27 @@ const MUTATING = [
   `pathname.startsWith("/providers/")`,
   `pathname.startsWith("/recipes/")`,
   `pathname.startsWith("/clickup/")`,
+  // Jira: connect stores a credential, writes flips the switch every later write asks.
+  `pathname === "/jira/connect"`,
+  `pathname === "/jira/writes"`,
+  `pathname === "/tracker/projects" && req.method === "POST"`,
+  `pathname === "/jira/transition"`,
+  // The assignee and the hand-off write the card; the settings choose what the hand-off writes.
+  `pathname === "/jira/assignee"`,
+  `pathname === "/jira/handoff"`,
+  `pathname === "/jira/settings" && req.method === "POST"`,
+  // A step runs a move, an assignee change, a comment and a link on a shared card; its settings choose which.
+  `pathname === "/jira/step"`,
+  `pathname === "/jira/steps" && req.method === "POST"`,
+  // Which projects count for the workflow map: the local settings file only.
+  `pathname === "/jira/status-units" && req.method === "POST"`,
+  // A comment lands on a shared card and notifies whoever it names.
+  `pathname === "/jira/comment"`,
+  // Saved Jira views change the local address book only.
+  `pathname === "/jira/views/add"`,
+  `pathname === "/jira/views/remove"`,
+  `pathname === "/jira/folders/add"`,
+  `pathname === "/jira/folders/remove"`,
   `pathname.startsWith("/tasks/write/")`,
   `pathname.startsWith("/tasks/remind")`,
   // The read marks every device syncs through. Not dangerous, but durable and

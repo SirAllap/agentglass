@@ -33,7 +33,7 @@ describe("slice 5: Lantern split, usage, data", () => {
   test("Export rows are a section of Data & privacy", () => {
     const b = block("privacy");
     expect(b).toContain("<PrivacyPane");
-    expect(b).toContain('<Section title="Take your data out"');
+    expect(b).toContain('<SettingsCard title="Take your data out"');
     expect(b).toContain("api.exportUrl(");
     expect(b).toContain("api.skillsExportUrl()");
     expect(src).not.toContain('show("export")');

@@ -55,6 +55,7 @@ import { talkNotify, setTalkNotify, TALK_NOTIFY_DEFAULT, type TalkNotify } from 
 import { searchEngine, setSearchEngine } from "./browserPrefs.ts";
 import { DEFAULT_SEARCH_ENGINE, SEARCH_ENGINE_LABELS, type SearchEngine } from "./browserUrl.ts";
 import { countedSpacesNow, countedSpacesText, setCountedSpaces } from "./clickupPrefs.ts";
+import { countedUnitsNow, setCountedUnits } from "./jiraUnits.ts";
 import { taskLanding, setTaskLanding, type TaskLanding } from "./taskLanding.ts";
 import { TASK_SOURCES, taskSourceShown, setTaskSourceShown, shownTaskSources, type TaskSourceId } from "./taskSources.ts";
 import { bindings, rebind, DEFAULTS as DEFAULT_BINDINGS, LABELS as KEY_LABELS, type ActionId } from "./keybindings.ts";
@@ -214,7 +215,7 @@ const ACCENT_IDS = ACCENTS.map((a) => a.id);
 
 const appearance: SettingDef[] = [
   defineSetting({
-    id: "appearance.mode", page: "appearance", section: "", label: "Mode", level: 2, default: "system",
+    id: "appearance.mode", page: "appearance", section: "Theme", label: "Mode", level: 2, default: "system",
     read: () => themeMode(),
     // `desktop` is on offer only where the desktop publishes a palette, like the row.
     validate: accepting((raw) => (raw === "desktop" ? (desktopPaletteName() ? "desktop" : null) : oneOf(MODE_VALUES)(raw)),
@@ -223,14 +224,14 @@ const appearance: SettingDef[] = [
     capture: captureTheme, restore: restoreTheme,
   }),
   defineSetting({
-    id: "appearance.theme", page: "appearance", section: "", label: "Theme", level: 2, default: "graphite",
+    id: "appearance.theme", page: "appearance", section: "Theme", label: "Theme", level: 2, default: "graphite",
     read: () => currentThemeId(),
     validate: oneOf(PALETTE_IDS),
     write: (v) => { chooseTheme(v as string); },
     capture: captureTheme, restore: restoreTheme,
   }),
   defineSetting({
-    id: "appearance.accent", page: "appearance", section: "", label: "Accent", level: 2, default: "",
+    id: "appearance.accent", page: "appearance", section: "Theme", label: "Accent", level: 2, default: "",
     read: () => currentAccent(),
     validate: oneOf(ACCENT_IDS),
     // The pref is stored, then the theme is laid again so the overlay (or its
@@ -399,7 +400,7 @@ const notifications: SettingDef[] = [
 // sessions) and the cookie and history import (credentials).
 const browser: SettingDef[] = [
   defineSetting({
-    id: "browser.searchEngine", page: "browser", section: "", label: "Search engine", level: 2, default: DEFAULT_SEARCH_ENGINE,
+    id: "browser.searchEngine", page: "browser", section: "Where it opens", label: "Search engine", level: 2, default: DEFAULT_SEARCH_ENGINE,
     read: () => searchEngine(), validate: oneOf(Object.keys(SEARCH_ENGINE_LABELS) as SearchEngine[]), write: (v) => setSearchEngine(v as SearchEngine),
   }),
 ];
@@ -446,6 +447,26 @@ const clickup: SettingDef[] = [
   }),
 ];
 
+// ── jira: the part of the page that is not the connection ───────────────────
+
+/** Project keys as one comma-separated string, "" for none chosen. A key is what Jira makes one of: capitals, digits and underscores. */
+const projectKeys = accepting((raw: unknown): string | null => {
+  if (typeof raw !== "string") return null;
+  const keys = raw.split(",").map((x) => x.trim()).filter(Boolean);
+  if (keys.length > 200 || keys.some((x) => !/^[A-Z][A-Z0-9_]{0,19}$/.test(x))) return null;
+  return [...new Set(keys)].join(",");
+}, "comma-separated project keys (capitals, digits, underscore; up to 200), or \"\" for none");
+
+const jira: SettingDef[] = [
+  defineSetting({
+    id: "jira.statusUnits.counted", page: "jira", section: "", label: "Projects that count for statuses", level: 2, default: "",
+    read: () => countedUnitsNow().join(","), validate: projectKeys,
+    // The local settings file only; the pick is re-answered from what the server holds, and Jira is asked for nothing.
+    write: (v) => { void setCountedUnits(splitIds(v)); },
+    display: (v) => (splitIds(v).join(", ") || "where your cards live"),
+  }),
+];
+
 // ── keys: the single-letter shortcuts ───────────────────────────────────────
 
 // Not here: the view chords and the "even inside a shell" app chord. Those are
@@ -462,7 +483,7 @@ const keys: SettingDef[] = (Object.keys(KEY_LABELS) as ActionId[]).map((a) => de
 
 // ── the registry ────────────────────────────────────────────────────────────
 
-export const SETTING_DEFS: readonly SettingDef[] = [...appearance, ...diff, ...terminal, ...terminalMore, ...rail, ...notifications, ...browser, ...tasks, ...clickup, ...keys];
+export const SETTING_DEFS: readonly SettingDef[] = [...appearance, ...diff, ...terminal, ...terminalMore, ...rail, ...notifications, ...browser, ...tasks, ...clickup, ...jira, ...keys];
 
 /** Which panes (and, for Terminal, which groups) have been migrated. A row in
  *  here must carry a settingId or be marked agentExempt; a guard test reads this. */
@@ -476,6 +497,8 @@ export const MIGRATED: Readonly<Record<string, "all" | readonly string[]>> = {
   tasks: "all",
   /* Only what is not the connection: the page's own refusals are in NEVER_ON_PAGE. */
   clickup: [""],
+  /* Only what is not the connection: the token, the site and the write switch are in NEVER_ON_PAGE. */
+  jira: [""],
   keys: "all",
 };
 
@@ -483,7 +506,7 @@ export const MIGRATED: Readonly<Record<string, "all" | readonly string[]>> = {
  *  the two lists, so adding a page forces a decision rather than a silent gap. */
 export const NOT_YET_MIGRATED = [
   "prefs", "hooks", "lantern", "understudy", "budgets", "recipes",
-  "review-prompts", "saved-replies", "connections", "remote", "plugins", "tmux", "privacy", "about", "log", "onboarding",
+  "review-prompts", "saved-replies", "connections", "engines", "orchestration", "remote", "plugins", "tmux", "privacy", "about", "log", "onboarding",
 ] as const;
 
 /**
@@ -511,6 +534,10 @@ export const NOT_EXPOSED_ON_PURPOSE: Readonly<Record<string, string>> = {
  * these words (token, connection, workspace, account, credential, remote).
  */
 export const NEVER_ON_PAGE: Readonly<Record<string, { pattern: RegExp; why: string }>> = {
+  jira: {
+    pattern: /token|connect|site|account|credential|secret|remote|writes?\b/i,
+    why: "the Jira token, the site it is sent to and the switch that lets agentglass write to a card: what the app is allowed to do with the owner's account is the owner's alone (the steps have their own door, GET/POST /jira/steps)",
+  },
   clickup: {
     pattern: /token|connect|workspace|account|credential|secret|remote|writes?\b/i,
     why: "the ClickUp token, the workspace link and the switch that lets agentglass write to a board: what the app is allowed to do with the owner's account is the owner's alone",
@@ -613,6 +640,10 @@ export function makeSettings(defs: readonly SettingDef[], now: () => number = Da
       // without it that window offered an "x → x" chip whose Undo did nothing.
       if (r.prev === r.value) return { ok: true, id: d.id, prev: r.prev, value: r.value, undo: "", unchanged: true };
       const handle = `u${++seq}`;
+      /* A newer write to the same setting retires the older chips for it: they
+         would come back one after another as each newer one went, and Undo on
+         one would put back a value this setting no longer follows. */
+      for (const x of log) if (x.id === d.id) x.shown = false;
       log = [...log, { handle, id: d.id, label: d.label, prev: r.prev, value: r.value, at: now(), ...(as ? { as } : {}), shown: true, undone: false, revert: r.revert }].slice(-KEPT);
       touch();
       return { ok: true, id: d.id, prev: r.prev, value: r.value, undo: handle };

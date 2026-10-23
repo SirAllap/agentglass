@@ -1,0 +1,30 @@
+  ┃
+  ┃  $ sleep 25
+  ┃
+  ┃  (no output)
+  ┃
+
+     done
+
+     ▣  Build · Big Pickle · 29.3s
+
+  ┃
+  ┃  Use the read tool on /etc/hostname and tell me what it says
+  ┃
+
+     ⠙ Read /etc/hostname
+
+     ▣  Build · Big Pickle
+
+  ┃
+  ┃  △ Permission required
+  ┃    ← Access external directory /etc
+  ┃
+  ┃  Patterns
+  ┃
+  ┃  - /etc/*
+  ┃
+  ┃
+  ┃   Allow once   Allow always   Reject                       ctrl+f fullscreen  ⇆ select  enter confirm
+  ┃
+

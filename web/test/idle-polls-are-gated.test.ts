@@ -45,14 +45,13 @@ describe("the dashboard's own polls", () => {
 describe("panels found still holding a bare interval", () => {
   // ChatPanel's "which sessions are mid-turn" poll predated usePoll and was
   // never moved over: twenty requests a minute for a chat tab nobody was
-  // looking at. RunningPanes, AgentsPane, PluginsPane, CommandLog and
+  // looking at. RunningPanes, the old AgentsPane, PluginsPane, CommandLog and
   // RemoteAccessPane gated on `open` but still ran their own `setInterval`,
   // so they stopped when the panel closed but not when the window lost focus
   // — the same half of the fix Alerts and Sessions already had above.
   test.each([
     "components/ChatPanel.tsx",
     "components/RunningPanes.tsx",
-    "components/AgentsPane.tsx",
     "components/PluginsPane.tsx",
     "components/CommandLog.tsx",
     "components/RemoteAccessPane.tsx",

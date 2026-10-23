@@ -167,15 +167,16 @@ describe("the schedule of sources", () => {
     expect(SRC, "a list of empty sources must not divide by zero").toContain("Math.max(1,");
   });
 
-  test("the paragraph and the path move to the row's hover", () => {
-    const at = SRC.indexOf("s.found && s.bytes > 0");
-    const row = SRC.slice(at, at + 900);
+  test("the paragraph and the path move to the row's hover, and nothing is cut", () => {
+    const at = SRC.indexOf("const hint = ");
+    const row = SRC.slice(at, SRC.indexOf("if (s.added)", at));
     expect(row).toContain("title={`${s.what}");
     expect(row).toContain("s.path");
+    expect(row).not.toMatch(/truncate|line-clamp/);
   });
 
   test("private sources are drawn in their own colour, not the accent", () => {
-    const at = SRC.indexOf("s.found && s.bytes > 0");
+    const at = SRC.indexOf("s.bytes > 0 && (");
     expect(SRC.slice(at, at + 900)).toContain('s.sensitive ? "var(--phone)"');
   });
 });

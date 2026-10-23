@@ -29,6 +29,8 @@
  * own address was in the body; otherwise `tracker` is null and stays null.
  */
 
+import { hasUrlCredentials } from "./urlCredentials.ts";
+
 /** The trackers whose addresses can be read without ambiguity. Not a list of
  *  what is supported — nothing here needs supporting — but of URL shapes that
  *  cannot be mistaken for somebody else's. */
@@ -81,6 +83,35 @@ const ADDRESSES: { tracker: TrackerId; re: RegExp; pick?: (m: RegExpExecArray) =
 ];
 
 /**
+ * What a connected Jira site adds to the reading: its project keys and its own
+ * address. Both are known, so the reader can be exact where the general one
+ * has to be strict.
+ */
+export interface JiraReach { keys: string[]; site: string }
+
+/**
+ * A card of one of these projects, read exactly: any number of digits
+ * (`ORBIT-7`), digits in the project key (`AB2-12`), and lower case in a branch
+ * name, which a tool cuts from a title. In a title lower case is a word.
+ * The general `HUMAN_ID` keeps all of those out because with nothing to check
+ * against they are `utf-8` and `release/v2-1409`; a key the site itself listed
+ * is not a guess.
+ */
+function keyIn(text: string, keys: string[], anyCase: boolean): string | null {
+  const alt = [...new Set(keys.map((k) => k.replace(/[^A-Za-z0-9_]/g, "")).filter(Boolean))]
+    .sort((a, b) => b.length - a.length).join("|");
+  if (!alt) return null;
+  const m = new RegExp(`(?<![A-Za-z0-9_])(${alt})-(\\d+)(?![A-Za-z0-9_]|-\\d)`, anyCase ? "i" : "").exec(text || "");
+  return m ? `${m[1]!.toUpperCase()}-${m[2]}` : null;
+}
+
+/** `https://<site>/browse/KEY-1`, for a Jira that is not on atlassian.net (the built-in pattern only knows that host). */
+function siteAddress(site: string): (typeof ADDRESSES)[number] {
+  const host = site.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return { tracker: "jira", re: new RegExp(`https?://${host}/browse/([A-Z][A-Z0-9_]*-\\d+)`, "i") };
+}
+
+/**
  * The item addresses a body MEANS, which is not every address in it.
  *
  * Lines that are a list item or a quotation are skipped. That is where a
@@ -91,11 +122,11 @@ const ADDRESSES: { tracker: TrackerId; re: RegExp; pick?: (m: RegExpExecArray) =
  * are all written from links an item of its own. What survives is a reference
  * somebody wrote for THIS pull request — on its own line, bare or as a link.
  */
-function addresses(body: string): { id: string; url: string; tracker: TrackerId }[] {
+function addresses(body: string, extra: typeof ADDRESSES = []): { id: string; url: string; tracker: TrackerId }[] {
   const found = new Map<string, { id: string; url: string; tracker: TrackerId }>();
   for (const line of (body || "").split(/\r?\n/)) {
     if (/^\s*(?:[-*+>]|\d+[.)])\s/.test(line)) continue;
-    for (const { tracker, re, pick } of ADDRESSES) {
+    for (const { tracker, re, pick } of [...ADDRESSES, ...extra]) {
       const m = re.exec(line);
       if (!m) continue;
       const id = pick ? pick(m) : m[1]!;
@@ -212,13 +243,19 @@ function closesIssue(body: string): { label: string; query: string; repo?: strin
  */
 export function readTaskRef(
   pr: { headRefName?: string; title?: string; body?: string; url?: string },
+  jira?: JiraReach,
 ): TaskRef | null {
   // The label people recognise, wherever it turns up. Branch first: it is
   // written by the tool that cut it, so it is the id far more often than a
   // title somebody typed.
   const branch = nativeId(pr.headRefName ?? "") ?? human(pr.headRefName ?? "");
-  const named = branch ?? nativeId(pr.title ?? "") ?? human(pr.title ?? "");
-  const [only, ...rest] = addresses(pr.body ?? "");
+  const keyedBranch = jira ? keyIn(pr.headRefName ?? "", jira.keys, true) : null;
+  // The list row reads a Jira key from the branch before it reads the title
+  // (server/src/prs.ts jiraCardFor), so this reads in the same order: branch
+  // `orbit-7-retry` with title `Fix CVE-2026-1234` is ORBIT-7 on both screens.
+  const named = branch ?? keyedBranch ?? nativeId(pr.title ?? "") ?? human(pr.title ?? "")
+    ?? (jira ? keyIn(pr.title ?? "", jira.keys, false) : null);
+  const [only, ...rest] = addresses(pr.body ?? "", jira ? [siteAddress(jira.site)] : []);
 
   if (only && !rest.length) {
     return { label: named ?? only.id, query: only.id, url: only.url, from: "url", tracker: only.tracker };
@@ -244,7 +281,7 @@ export function readTaskRef(
     const inBody = nativeIdInBody(pr.body ?? "");
     return inBody ? { label: inBody, query: inBody, from: "body", tracker: "clickup" } : null;
   }
-  return { label: named, query: named, from: branch ? "branch" : "title", tracker: native(named) ? "clickup" : null };
+  return { label: named, query: named, from: named === (branch ?? keyedBranch) ? "branch" : "title", tracker: native(named) ? "clickup" : null };
 }
 
 /** `…/owner/repo/pull/91` → `…/owner/repo/issues/12`, and the same for a
@@ -266,16 +303,50 @@ function issueUrl(prUrl: string | undefined, repo: string | undefined, number: s
 export function mergeRequestNumber(url: string | undefined): number | null {
   let u: URL;
   try { u = new URL((url ?? "").trim()); } catch { return null; }
-  // https only, no port or userinfo. A self-hosted `gitlab.<company>` (or
-  // `code.gitlab.<company>`) is kept; `gitlab.com.<anything>` is somebody
-  // else's domain wearing the name.
+  // https only, no port or userinfo. A self-hosted `gitlab.<company>.<tld>` (or
+  // `code.gitlab.<company>.<tld>`) is kept; `gitlab.com.<anything>` is somebody
+  // else's domain wearing the name, and so is a subdomain of GitLab Pages
+  // (`<anyone>.gitlab.io`), which anybody can register. Ceiling: a look-alike
+  // like `gitlab.evil.example` cannot be told from a self-hosted one without a
+  // configured host list.
   const host = u.hostname.toLowerCase();
   const gitlabHost = host === "gitlab.com" || host.endsWith(".gitlab.com")
-    || (/(^|\.)gitlab\.[^.]/.test(host) && !/(^|\.)gitlab\.com\./.test(host));
-  if (u.protocol !== "https:" || u.port || u.username || u.password || !gitlabHost) return null;
+    || (/(^|\.)gitlab\.[^.]+\.[^.]/.test(host) && !/(^|\.)gitlab\.com\./.test(host));
+  if (u.protocol !== "https:" || u.port || hasUrlCredentials(u) || !gitlabHost) return null;
   const m = /^\/[\w./-]+?\/-\/merge_requests\/(\d+)(?:\/|$)/i.exec(u.pathname);
   const n = m ? Number(m[1]) : NaN;
   return Number.isSafeInteger(n) && n > 0 ? n : null;
+}
+
+/**
+ * A pull request's own address, as one canonical string, or null for anything
+ * that is not one.
+ *
+ * Parsed, never matched as text: an address comes from somebody else's Jira
+ * card or from a request body, and `github.com@evil.example/o/r/pull/7` or
+ * `javascript:` must not pass for one. https only, the host exactly (no port,
+ * no userinfo), GitHub and GitLab (self-hosted `gitlab.<company>` included, as
+ * `mergeRequestNumber` takes it). Two spellings of one pull request (a trailing
+ * path, a query, upper-case letters in the owner) come out as one string, which
+ * is what lets "is it linked already" be a comparison.
+ */
+export function prAddress(url: string | null | undefined): { url: string; number: number; slug: string } | null {
+  let u: URL;
+  try { u = new URL((url ?? "").trim()); } catch { return null; }
+  if (u.protocol !== "https:" || u.port || hasUrlCredentials(u)) return null;
+  const host = u.hostname.toLowerCase();
+  const gh = /^(?:www\.)?github\.com$/.test(host) ? /^\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)(?:\/|$)/.exec(u.pathname) : null;
+  if (gh) {
+    const number = Number(gh[3]);
+    if (!Number.isSafeInteger(number) || number < 1) return null;
+    const slug = `${gh[1]}/${gh[2]}`.toLowerCase();
+    return { url: `https://github.com/${slug}/pull/${number}`, number, slug };
+  }
+  const number = mergeRequestNumber(u.href);
+  const gl = number ? /^\/([\w./-]+?)\/-\/merge_requests\/\d+(?:\/|$)/.exec(u.pathname) : null;
+  if (!number || !gl) return null;
+  const slug = gl[1]!.toLowerCase();
+  return { url: `https://${host}/${slug}/-/merge_requests/${number}`, number, slug };
 }
 
 /** The tracker item an address names, when the WHOLE string is that address

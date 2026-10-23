@@ -1,0 +1,4 @@
+[
+  { "id": "10000", "key": "ORBIT", "name": "Orbit", "projectTypeKey": "software", "simplified": false, "style": "classic", "defaultAssignee": "acc-0002" },
+  { "id": "10001", "key": "ACME", "name": "Acme Platform", "projectTypeKey": "software", "simplified": false, "style": "classic", "defaultAssignee": "acc-0003" }
+]

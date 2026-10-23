@@ -1,11 +1,13 @@
 import { forgetShared, sharedRead } from "./sharedRead.ts";
 import type { UiAction, Field, NoteStatus, PluginPanel, PluginPrNotes } from "./pluginTypes.ts";
 import type { ImportedPlace } from "./desktop.ts";
+import type { Policy } from "../../../shared/orchestration.ts";
 import type { PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/types.ts";
 import type { AskedAlert } from "../../../shared/notifyPayload.ts";
 import type { CheckOnBasePlan, CheckOnBaseStatus } from "../../../shared/checkOnBase.ts";
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest } from "../../../shared/types.ts";
-import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr } from "../../../shared/providers.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, EnginesReport, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest } from "../../../shared/types.ts";
+import type { JiraUnits } from "../../../shared/jiraStatusUnits.ts";
+import type { ProvidersResponse, JiraConnectResult, JiraHandoffRule, JiraMoves, JiraPerson, JiraSettings, JiraStep, JiraStepChoice, JiraStepKey, JiraStepPr, JiraSteps, JiraStepsRead, JiraStatus, JiraViews, JiraViewRead, JiraViewChoice, JiraProjectChoice, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, TrackerChoice } from "../../../shared/providers.ts";
 import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from "../../../shared/notifyPrefs.ts";
 import type { CheckMetric } from "../../../shared/checkBaseline.ts";
 import type { UiReply } from "../../../shared/uiActions.ts";
@@ -21,6 +23,8 @@ type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? Partial<T[K]> : T
    because this provider answers 401 for a card that does not exist and a code
    pretending to know which it was would be wrong on the common case. */
 type ClickUpWrite = { ok: boolean; error?: string; conflict?: boolean; unauthorised?: boolean; task?: ProviderTask };
+/** A Jira write's answer: ClickUp's shape, plus `partial` when only some of it landed (a warning, never plain success). */
+type JiraWrite = ClickUpWrite & { partial?: string };
 
 /** Local agent spend, attributed to the work objects it happened in — see
  *  server/src/spend.ts, which is where the rule and its limits are written.
@@ -779,6 +783,14 @@ function viewerTz(): string | null {
 const D = <T,>(v: T) => Promise.resolve(v); // demo helper
 const demoPrAction = (): PrActionResult => ({ ok: false, error: "the demo is read-only" });
 
+/** One rule's switch as the evaluator stored it (GET /orchestration/state). */
+export interface PolicyRuleState {
+  scope: string; ruleId: string; name: string; active: boolean; since: number;
+  reading: string; readingAt: number;
+  /** "holding: the last usage reading is 47 min old", or empty. */
+  holding: string;
+}
+
 /** What `/seat` answers: the chair for one project, and what is in it. */
 export interface SeatAnswer {
   ok: boolean;
@@ -1381,6 +1393,89 @@ const realApi = {
     get<{ ok: boolean; workspaces?: { id: string; name: string }[]; error?: string }>(`/providers/workspaces?id=${encodeURIComponent(id)}`),
   providerWorkspace: (id: string, workspaceId: string, name: string) =>
     post<{ ok: boolean; error?: string; status?: ProviderStatus }>("/providers/workspace", { id, workspaceId, name }),
+  /* Jira's own door, because it needs three fields where the others need one.
+     Like `providerConnect` it sends a secret and receives none back. */
+  jiraConnect: (email: string, site: string, token: string) =>
+    post<JiraConnectResult>("/jira/connect", { email, site, token }),
+  jiraStatus: () => get<JiraStatus>("/jira/status"),
+  jiraWrites: (on: boolean) => post<{ ok: boolean; error?: string; writes?: boolean }>("/jira/writes", { on }),
+  /** The pull requests that name a Jira card, by its key. Same answer as `clickupPrs`. */
+  jiraPrs: (key: string, root = "") =>
+    get<{ ok: boolean; prs: CardPr[]; error?: string }>(`/jira/prs?${new URLSearchParams({ key, root })}`),
+  /** The pull requests a card is linked to on the Jira site: one request, read when the card is opened. */
+  jiraLinks: (key: string) =>
+    get<{ ok: boolean; links: { url: string; number: number; title: string; resolved: boolean }[]; error?: string }>(`/jira/links?${new URLSearchParams({ key })}`),
+  /** Put a pull request on a card as a remote link. Refused by the server unless Jira writes are switched on. */
+  jiraLink: (key: string, url: string, title = "") =>
+    post<{ ok: boolean; linked?: boolean; url?: string; error?: string }>("/jira/link", { key, url, title }),
+  /** Every pull request that names a card of one project, from ONE search: card key to its pull requests. */
+  jiraProjectPrs: (project: string, root = "") =>
+    get<{ ok: boolean; byCard: Record<string, CardPr[]>; truncated?: boolean; error?: string }>(`/jira/prs?${new URLSearchParams({ project, root })}`),
+  /** Which tracker each repository's cards live in, keyed by lower-case `owner/name`. Absent is auto. */
+  trackerProjects: (withRepos = false) =>
+    get<{ ok: boolean; projects?: Record<string, Exclude<TrackerChoice, "auto">>; repos?: string[] }>(`/tracker/projects${withRepos ? "?repos=1" : ""}`),
+  setTrackerProject: (repo: string, tracker: TrackerChoice) =>
+    post<{ ok: boolean; error?: string; projects?: Record<string, Exclude<TrackerChoice, "auto">> }>("/tracker/projects", { repo, tracker }),
+  /** One Jira card by its key or numeric id. */
+  jiraTask: (id: string) => get<{ ok: boolean; error?: string; task?: ProviderTask }>(`/jira/task?id=${encodeURIComponent(id)}`),
+  /** A card from what was typed: `ORBIT-1042`, or a bare number tried against the site's projects. */
+  jiraFind: (q: string, signal?: AbortSignal) => get<{ ok: boolean; error?: string; task?: ProviderTask; asked?: string }>(`/jira/find?q=${encodeURIComponent(q)}`, signal),
+  /** What is assigned to you and not done. `truncated` when the page cap cut it short. */
+  jiraSearch: (q: string, signal?: AbortSignal) => get<{ ok: boolean; error?: string; tasks?: ProviderTask[]; truncated?: boolean; throttled?: boolean }>(`/jira/search?q=${encodeURIComponent(q)}`, signal),
+  /** The moves a Jira card has from where it is. An empty list carries `cannot`, the sentence for it. */
+  jiraTransitions: (key: string) =>
+    get<{ ok: boolean; error?: string; throttled?: boolean } & Partial<JiraMoves>>(`/jira/transitions?key=${encodeURIComponent(key)}`),
+  /** One move, with the `updated` the person saw; the server refuses it as a conflict if the card has moved since. */
+  jiraTransition: (key: string, transitionId: string, updated: number) =>
+    post<ClickUpWrite>("/jira/transition", { key, transitionId, updated }),
+  /** Who the card can be given to, by what was typed. A short answer is not "that is everybody": Jira scans part of its directory. */
+  jiraAssignable: (key: string, q: string, transition = "") =>
+    get<{ ok: boolean; error?: string; throttled?: boolean; people?: JiraPerson[] }>(`/jira/assignable?${new URLSearchParams({ key, q, ...(transition ? { transition } : {}) })}`),
+  /** Give the card to `to` (a person's `key`), or to nobody with null. */
+  jiraSetAssignee: (key: string, to: string | null, updated: number) =>
+    post<JiraWrite>("/jira/assignee", { key, to, updated }),
+  /** The hand-off, in one request; `to`/`clear` absent is the project's setting. */
+  jiraHandOff: (key: string, updated: number, choice: { to?: string; clear?: boolean } = {}) =>
+    post<JiraWrite>("/jira/handoff", { key, updated, ...choice }),
+  jiraSettings: () => get<{ ok: boolean } & JiraSettings>("/jira/settings"),
+  /** One project's hand-off, or null to drop it. */
+  setJiraHandoff: (project: string, rule: JiraHandoffRule | null) =>
+    post<{ ok: boolean; error?: string } & Partial<JiraSettings>>("/jira/settings", { project, rule }),
+  /** The steps in effect, global to the site and by status name; `overrides` are projects whose older hand-off rule still wins. */
+  jiraSteps: () => get<{ ok: boolean; error?: string } & Partial<JiraStepsRead>>("/jira/steps"),
+  setJiraSteps: (steps: Partial<Record<keyof JiraSteps, Partial<JiraStep>>>) => post<{ ok: boolean; error?: string } & Partial<JiraStepsRead>>("/jira/steps", { steps }),
+  /** Run one step on a card, as one request. Behind the write switch. */
+  jiraRunStep: (key: string, updated: number, trigger: JiraStepKey, choice: JiraStepChoice = {}, pr?: JiraStepPr) =>
+    post<JiraWrite>("/jira/step", { key, updated, trigger, choice, ...(pr ? { pr } : null) }),
+  /** The projects the workflow map is drawn from, with their statuses; `fresh` goes past the server's held answer. */
+  jiraStatusUnits: (fresh = false) =>
+    get<{ ok: boolean; error?: string; throttled?: boolean; counted?: string[] } & Partial<JiraUnits>>(`/jira/status-units${fresh ? "?fresh=1" : ""}`),
+  setJiraCounted: (counted: string[]) => post<{ ok: boolean; error?: string; counted?: string[] }>("/jira/status-units", { counted }),
+  jiraProjectStatuses: (project: string) =>
+    get<{ ok: boolean; error?: string; statuses?: { id: string; name: string; kind: "open" | "done" | "other" }[] }>(`/jira/project-statuses?project=${encodeURIComponent(project)}`),
+  /** The saved Jira views and folders: local, no request to Jira. */
+  jiraViews: () => get<JiraViews>("/jira/views"),
+  /** One saved view's cards. `cached` answers from disk only; `force` skips the server's held answer. */
+  jiraView: (id: string, o?: { force?: boolean; cached?: boolean }) =>
+    get<JiraViewRead>(`/jira/view?${new URLSearchParams({ id, ...(o?.force ? { force: "1" } : {}), ...(o?.cached ? { cached: "1" } : {}) })}`),
+  /** Boards and favourite filters the add-a-view list offers. */
+  jiraViewChoices: (q = "") =>
+    get<{ ok: boolean; error?: string; boards: JiraViewChoice[]; filters: JiraViewChoice[]; truncated?: boolean }>(`/jira/view-choices?q=${encodeURIComponent(q)}`),
+  jiraProjectChoices: () => get<{ ok: boolean; error?: string; projects: JiraProjectChoice[] }>("/jira/project-choices"),
+  jiraAddView: (input: { url: string } | { kind: "board" | "filter"; id: string }) =>
+    post<{ ok: boolean; error?: string; view?: SavedView }>("/jira/views/add", input),
+  jiraRemoveView: (id: string) => post<{ ok: boolean; error?: string }>("/jira/views/remove", { id }),
+  jiraAddFolder: (key: string) => post<{ ok: boolean; error?: string; folder?: SavedFolder }>("/jira/folders/add", { key }),
+  jiraRemoveFolder: (id: string) => post<{ ok: boolean }>("/jira/folders/remove", { id }),
+  /** A Jira card with its description and comments as Markdown; `more` is how many comments the read left out. */
+  jiraDetail: (key: string) =>
+    get<{ ok: boolean; error?: string; throttled?: boolean; detail?: TaskDetail; more?: number }>(`/jira/detail?key=${encodeURIComponent(key)}`),
+  /** Who a comment on this card may mention, for what was typed after `@`. `key` is the id a mention carries. */
+  jiraPeople: (key: string, q: string) =>
+    get<{ ok: boolean; error?: string; throttled?: boolean; people?: { key: string; name: string; initials: string; avatar?: string }[] }>(`/jira/people?${new URLSearchParams({ key, q })}`),
+  /** One comment, Markdown; `mentions` are the people named in it, by the id `jiraPeople` gave. */
+  jiraComment: (key: string, text: string, mentions: { id: string; name: string }[] = []) =>
+    post<ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string }>("/jira/comment", { key, text, mentions }),
   providerTasks: (force = false) =>
     get<ProviderTasksResponse>(`/tasks/provider${force ? "?force=1" : ""}`),
 
@@ -1399,7 +1494,7 @@ const realApi = {
       `/recipes/render?id=${encodeURIComponent(id)}&values=${encodeURIComponent(JSON.stringify(values))}`),
   /** Who is working on what: what each agent said, joined with the panes,
    *  worktrees and deputy runs this app already reads. */
-  agentBoard: () => get<{ ok: boolean; agents?: import("../components/LanternView.tsx").LanternRow[]; watch?: import("../components/LanternView.tsx").LanternWatch; cacheTtlMinutes?: number }>("/agents/board"),
+  agentBoard: () => get<{ ok: boolean; agents?: import("../components/LanternView.tsx").LanternRow[]; chairs?: import("../components/LanternView.tsx").LanternChair[]; watch?: import("../components/LanternView.tsx").LanternWatch; cacheTtlMinutes?: number }>("/agents/board"),
   /** Take a status line off the board, whoever posted it — a person's call,
    *  which is why it is not the tokenless `done` an agent sends for itself. */
   agentForget: (name: string) => post<{ ok: boolean; cleared?: boolean; error?: string }>("/agents/forget", { name }),
@@ -1409,6 +1504,8 @@ const realApi = {
   seatOpen: (root: string, powers?: string, model?: string) =>
     post<{ ok: boolean; already?: boolean; error?: string }>("/seat/open", { root, powers, model }),
   seatClose: (root: string) => post<{ ok: boolean; was?: boolean }>("/seat/close", { root }),
+  /** Stand the chair down and seat the engine the policy names. Refused until the hand-off is written. */
+  seatChange: (root: string) => post<{ ok: boolean; error?: string }>("/seat/change", { root }),
   seatSettingsSave: (root: string, f: { powers?: string; model?: string }) =>
     post<{ ok: boolean; error?: string }>("/seat/settings", { root, ...f }),
   seatDoctrineSave: (root: string, text: string) =>
@@ -1435,6 +1532,18 @@ const realApi = {
   workerRoleSave: (role: string, provider: string, model: string) =>
     post<{ ok: boolean; error?: string; roles: Record<string, { provider: string; model: string }>;
     providers?: { id: string; title: string; installed: boolean }[] }>("/agents/roles", { role, provider, model }),
+  /** The orchestration policy in force for a project, or the global one. */
+  orchestration: (root?: string) =>
+    get<{ ok: boolean; error?: string; scope: "project" | "global"; root?: string; overrides: string[]; policy: Policy }>(
+      `/orchestration${root ? `?root=${encodeURIComponent(root)}` : ""}`),
+  /** Store a whole policy (null removes a project's own). Refused for anything
+   *  but the person's own window or a paired device. */
+  orchestrationSave: (policy: Policy | null, root?: string) =>
+    post<{ ok: boolean; error?: string; scope?: "project" | "global"; root?: string; overrides?: string[]; policy?: Policy }>(
+      "/orchestration", { root, policy }),
+  /** Which rules are on and why a reading did not change one. Read when the
+   *  page opens and after a save: the server settles it on events, not on a clock. */
+  orchestrationState: () => get<{ ok: boolean; rules: PolicyRuleState[] }>("/orchestration/state"),
   /** Whether hooked sessions get asked what they are working on, and how
    *  often — the Lantern's one setting. */
   lanternSettings: () => get<{ ok: boolean; nudge: boolean; minutes: number; watch: boolean; watchMinutes: number; cacheTtlMinutes: number; min: number; max: number }>("/lantern/settings"),
@@ -1955,6 +2064,10 @@ const realApi = {
 
   /** Which agent CLIs are on this machine, and whether any is reporting. */
   agents: () => get<{ agents: AgentProbe[] }>("/agents"),
+  /** What this machine has of each engine. `fresh` is Recheck: true skips the server's cache, an id rechecks that engine only. */
+  engines: (fresh: boolean | string = false) => get<EnginesReport>(fresh === true ? "/engines?fresh=1" : fresh ? `/engines?fresh=${encodeURIComponent(fresh)}` : "/engines"),
+  /** The one-line test: a real turn, so only ever on a click. */
+  testEngine: (engine: string) => post<{ ok: boolean; ms: number; error?: string }>("/engines/test", { engine }),
   /** Wire one — and only the one asked for. */
   agentConnect: (id: string, undo = false) =>
     post<{ ok: boolean; detail?: string; error?: string; agents?: AgentProbe[] }>("/agents/connect", { id, undo }),
@@ -2296,6 +2409,22 @@ function demoLanternField(): import("../components/LanternView.tsx").LanternRow[
     { name: "deployment", from: "seen", state: "idle", paneId: "%25", session: "d7", worktree: "/home/you/code/orbit", branch: "main", saidAt: m(300),
       facts: { model: "claude-sonnet-5", tools: 105, errors: 0, turns: 113, cost: 17.2, startedAt: m(900), lastSeen: m(300), lastTool: { name: "Bash", what: "Tail the deploy log until the health check passes", at: m(300) } },
       git: { dirty: 0, ahead: 0, at: now } },
+    { name: "orchestrator-orbit", role: "orchestrator", chairOf: "/home/you/code/orbit", from: "seen", state: "working", paneId: "%40", session: "d8", worktree: "/home/you/code/orbit", branch: "main", saidAt: m(1), doing: "assigning the export fixes",
+      facts: { model: "claude-sonnet-5", tools: 61, errors: 0, turns: 18, cost: 4.4, startedAt: m(140), lastSeen: m(1), lastTool: { name: "Bash", what: "Open a builder for the retry fix", at: m(1) } },
+      git: { dirty: 0, ahead: 0, at: now } },
+    { name: "builder-export-retry", under: "/home/you/code/orbit", startedBy: { engine: "opencode", model: "big-pickle", rule: "Night hours", position: 1 }, from: "seen", state: "working", paneId: "%41", worktree: "/home/you/code/orbit-wt/orbit-1042", branch: "feat/orbit-1042", saidAt: m(0), doing: "the retry keeps the last page",
+      facts: { model: "big-pickle", tools: 38, errors: 0, turns: 9, cost: 0, startedAt: m(20), lastSeen: m(0), lastTool: { name: "Edit", what: "server/src/export.ts", at: m(0) } },
+      git: { dirty: 3, ahead: 1, at: now } },
+    { name: "scout-invoice-paths", under: "/home/you/code/orbit", startedBy: { engine: "claude", model: "haiku", rule: "base", position: 0 }, from: "seen", state: "idle", paneId: "%42", worktree: "/home/you/code/orbit", branch: "main", saidAt: m(12),
+      facts: { model: "claude-haiku-5", tools: 21, errors: 0, turns: 4, cost: 0.2, startedAt: m(30), lastSeen: m(12), lastTool: { name: "Grep", what: "invoice.total", at: m(12) } },
+      git: { dirty: 0, ahead: 0, at: now } },
+    { name: "builder-calendar-docs", under: "/home/you/code/orbit", startedBy: { engine: "claude", model: "sonnet", rule: "base", position: 0 }, from: "seen", state: "waiting", paneId: "%43", worktree: "/home/you/code/orbit-wt/orbit-1051", branch: "feat/orbit-1051",
+      needsYou: { kind: "permission", why: "Claude needs your permission to use Bash: bun run docs", since: m(4) }, saidAt: m(4),
+      facts: { model: "claude-sonnet-5", tools: 17, errors: 0, turns: 5, cost: 0.9, startedAt: m(25), lastSeen: m(4) },
+      git: { dirty: 1, ahead: 0, at: now } },
+    { name: "builder-old-retention", orphaned: true, startedBy: { engine: "claude", model: "sonnet", rule: "base", position: 0 }, from: "seen", state: "working", paneId: "%44", worktree: "/home/you/code/orbit-wt/orbit-0998", branch: "feat/orbit-0998", saidAt: m(3), doing: "pruning rows past ninety days",
+      facts: { model: "claude-sonnet-5", tools: 54, errors: 1, turns: 12, cost: 2.1, startedAt: m(60), lastSeen: m(3) },
+      git: { dirty: 2, ahead: 1, at: now } },
     { name: "cards-to-work", from: "said", state: "idle", doing: "queued: the three returned cards", saidAt: m(95), paneId: "%13", session: "d8", worktree: "/home/you/code/orbit-wt/cards", branch: "chore/cards-to-work", landed: false, landedInto: "main", left: "branch chore/cards-to-work, 2 commits",
       facts: { model: "claude-opus-5", tools: 77, errors: 0, turns: 30, cost: 9.1, startedAt: m(500), lastSeen: m(95) },
       git: { dirty: 0, ahead: 2, lastCommit: { subject: "chore(cards): take the three returned ones", at: m(96) }, at: now } },
@@ -2547,6 +2676,8 @@ const demoApi: typeof realApi = {
   // The demo runs on a page, not a machine — there is no PATH to probe and
   // nothing to wire, and an empty list is the truth rather than a placeholder.
   agents: () => D({ agents: [] as AgentProbe[] }),
+  engines: (_fresh?: boolean | string) => D({ host: "demo", engines: [] as EnginesReport["engines"] }),
+  testEngine: (_engine: string) => D({ ok: true, ms: 1200 } as { ok: boolean; ms: number; error?: string }),
   agentConnect: (_id: string, _undo?: boolean) => D({ ok: false, error: "not available in the demo" }),
   budgets: () => D({ budgets: [], status: [], models: [] }),
   budgetsSet: (_budgets: Budget[]) => D({ ok: false, error: "not available in the demo" }),
@@ -2711,6 +2842,57 @@ const demoApi: typeof realApi = {
   providerDisconnect: (_i: string, _o?: { forgetBoards?: boolean }) => D({ ok: false, error: "not available in the demo" }),
   providerWorkspaces: (_i: string) => D({ ok: false, error: "not available in the demo" }),
   providerWorkspace: (_i: string, _w: string, _n: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraConnect: (_e: string, _s: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraStatus: () => D({ connected: false, site: null, kind: null, auth: null, api: null, deployment: null, account: null, prefixes: [], writes: false }),
+  jiraWrites: (_o: boolean) => D({ ok: false, error: "not available in the demo" }),
+  jiraPrs: (_k: string, _r?: string) => D({ ok: true, prs: [] }),
+  jiraLinks: (_k: string) => D({ ok: true, links: [] as { url: string; number: number; title: string; resolved: boolean }[] }),
+  jiraLink: (_k: string, _u: string, _t?: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraProjectPrs: (_p: string, _r?: string) => D({ ok: true, byCard: {} as Record<string, CardPr[]> }),
+  trackerProjects: (_r?: boolean) => D({ ok: true, projects: {}, repos: [] }),
+  setTrackerProject: (_r: string, _t: TrackerChoice) => D({ ok: false, error: "not available in the demo" }),
+  jiraTask: (_i: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraFind: (_q: string, _signal?: AbortSignal) => D({ ok: false, error: "not available in the demo" }),
+  jiraSearch: (_q: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraTransitions: (_k: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraTransition: (_k: string, _t: string, _u: number) => D({ ok: false, error: "not available in the demo" }),
+  jiraAssignable: (_k: string, _q: string, _t?: string) => D({ ok: true, people: [] as JiraPerson[] }),
+  jiraSetAssignee: (_k: string, _to: string | null, _u: number) => D({ ok: false, error: "not available in the demo" }),
+  jiraHandOff: (_k: string, _u: number, _c?: { to?: string; clear?: boolean }) => D({ ok: false, error: "not available in the demo" }),
+  jiraSettings: () => D({ ok: true, writes: false, handoff: {} as Record<string, JiraHandoffRule> }),
+  setJiraHandoff: (_p: string, _r: JiraHandoffRule | null) => D({ ok: false, error: "not available in the demo" }),
+  jiraSteps: () => D({ ok: true, steps: { handoff: { enabled: false, blocks: [] }, review: { enabled: false, blocks: [] }, merge: { enabled: false, blocks: [] } } as JiraSteps, overrides: [] as string[] }),
+  setJiraSteps: (_s: Partial<Record<keyof JiraSteps, Partial<JiraStep>>>) => D({ ok: false, error: "not available in the demo" }),
+  jiraRunStep: (_k: string, _u: number, _t: JiraStepKey, _c?: JiraStepChoice, _p?: JiraStepPr) => D({ ok: false, error: "not available in the demo" }),
+  jiraStatusUnits: (_f?: boolean) => D({ ok: true, spaces: [], source: "spaces" as const, counted: [] as string[] }),
+  setJiraCounted: (_c: string[]) => D({ ok: false, error: "not available in the demo" }),
+  jiraProjectStatuses: (_p: string) => D({ ok: true, statuses: [] as { id: string; name: string; kind: "open" | "done" | "other" }[] }),
+  jiraViews: () => D<JiraViews>({
+    connected: true, site: "acme.example", current: "board:1",
+    views: [{ id: "board:1", name: "ORBIT board", url: "", addedAt: 0 }], folders: [],
+  }),
+  jiraView: (_id: string, _o?: { force?: boolean; cached?: boolean }) => D<JiraViewRead>({
+    ok: true, at: Date.now(),
+    columns: [
+      { name: "To Do", statusIds: ["1"] },
+      { name: "Doing", statusIds: ["2"] },
+      { name: "Done", statusIds: ["3"] },
+    ],
+    tasks: [
+      { id: "10001", customId: "ORBIT-1042", title: "Draft the launch checklist", status: "To Do", statusId: "1", statusKind: "open", assignees: [], tags: [], priority: null, due: null, list: "ORBIT" },
+      { id: "10002", customId: "ORBIT-1043", title: "Wire the status page", status: "In Progress", statusId: "2", statusKind: "open", assignees: [], tags: [], priority: null, due: null, list: "ORBIT" },
+      { id: "10003", customId: "ORBIT-1044", title: "Retire the old banner", status: "Done", statusId: "3", statusKind: "done", assignees: [], tags: [], priority: null, due: null, list: "ORBIT" },
+    ] as unknown as ProviderTask[],
+  }),
+  jiraViewChoices: (_q?: string) => D({ ok: true, boards: [{ kind: "board" as const, id: "1", name: "ORBIT board", type: "kanban", projectKey: "ORBIT" }], filters: [] as JiraViewChoice[] }),
+  jiraProjectChoices: () => D({ ok: true, projects: [{ key: "ORBIT", name: "Orbit" }] }),
+  jiraAddView: (_i: { url: string } | { kind: "board" | "filter"; id: string }) => D({ ok: false, error: "not available in the demo" }),
+  jiraRemoveView: (_i: string) => D({ ok: false }),
+  jiraAddFolder: (_k: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraRemoveFolder: (_i: string) => D({ ok: false }),
+  jiraDetail: (_k: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraPeople: (_k: string, _q: string) => D({ ok: true, people: [] as { key: string; name: string; initials: string; avatar?: string }[] }),
+  jiraComment: (_k: string, _t: string, _m?: { id: string; name: string }[]) => D({ ok: false, error: "not available in the demo" }),
   providerTasks: (_f?: boolean) => D({ tasks: [], more: false, at: 0 }),
   recipes: (_r?: string) => D({ recipes: [] }),
   recipeSave: (_r: Recipe) => D({ ok: false, error: "not available in the demo" }),
@@ -2718,11 +2900,12 @@ const demoApi: typeof realApi = {
   recipeRender: (_i: string, _v: Record<string, string>) => D({ ok: false, error: "not available in the demo" }),
   // `connected: false` — the demo has no token, and every chip that gates on
   // this stays off rather than leading somewhere that does not exist.
-  agentBoard: () => D({ ok: true, agents: demoLanternField(), watch: { at: Date.now() - 6 * 60_000, flagged: 2, every: 15, on: true }, cacheTtlMinutes: 5 }),
+  agentBoard: () => D({ ok: true, agents: demoLanternField(), chairs: [{ root: "/home/you/code/orbit", name: "orchestrator-orbit", kind: "claude", model: "sonnet", next: { engine: "opencode", model: "big-pickle" }, handedOff: true }], watch: { at: Date.now() - 6 * 60_000, flagged: 2, every: 15, on: true }, cacheTtlMinutes: 5 }),
   agentForget: (_name: string) => D({ ok: true, cleared: true }),
   seat: () => D({ ok: true, root: "/demo/orbit", live: false, seat: null, agent: null, doctrine: "", doctrineText: "", tasks: [], needs: [], models: [], defaultModel: "", field: [], lines: [], wokenAt: null, floorHours: 4, screen: "", reports: [], unread: 0 } as SeatAnswer),
   seatOpen: (_r: string, _p?: string, _m?: string) => D({ ok: false, error: "not available in the demo" }),
   seatClose: (_r: string) => D({ ok: false }),
+  seatChange: (_r: string) => D({ ok: false, error: "not available in the demo" }),
   seatSettingsSave: (_r: string, _f: object) => D({ ok: false, error: "not available in the demo" }),
   seatDoctrineSave: (_r: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
   seatTaskAdd: (_r: string, _t: string, _p?: string) => D({ ok: false, error: "not available in the demo" }),
@@ -2737,6 +2920,25 @@ const demoApi: typeof realApi = {
     providers: [{ id: "claude", title: "Claude Code", installed: true }, { id: "opencode", title: "OpenCode", installed: true }, { id: "qwen", title: "Qwen Code", installed: false }],
   }),
   workerRoleSave: (_r: string, _p: string, _m: string) => D({ ok: false, error: "not available in the demo", roles: {} }),
+  orchestration: (_root?: string) => D({
+    ok: true, scope: "global" as const, overrides: [] as string[],
+    policy: {
+      base: {
+        orchestrator: { value: [{ engine: "claude", model: "haiku" }], ask: false },
+        workers: {
+          scout: { value: [{ engine: "opencode", model: "" }], ask: false },
+          builder: { value: [{ engine: "claude", model: "sonnet" }], ask: false },
+          verifier: { value: [{ engine: "claude", model: "haiku" }], ask: false },
+        },
+      },
+      rules: [],
+      ceiling: { write: "worktree" as const, network: false, commit: true, deny: [] as string[] },
+      workerDefault: { write: "worktree" as const, network: false, commit: false, deny: [] as string[] },
+      limits: { maxWorkers: 3, turnMinutes: 30, maxRetries: 1 },
+    } as Policy,
+  }),
+  orchestrationSave: (_p: Policy | null, _root?: string) => D({ ok: false, error: "not available in the demo" }),
+  orchestrationState: () => D({ ok: true, rules: [] as PolicyRuleState[] }),
   lanternSettings: () => D({ ok: true, nudge: true, minutes: 20, watch: true, watchMinutes: 15, cacheTtlMinutes: 5, min: 5, max: 180 }),
   lanternSettingsSave: (_f: object) => D({ ok: false, error: "not available in the demo" }),
   lanternTicket: (_c?: string) => D({ ok: false, error: "not available in the demo" }),

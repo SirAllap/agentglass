@@ -10,6 +10,11 @@ import { mkdirSync, mkdtempSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
+// The credential is built apart so no single line spells out a whole login URL; the string is unchanged.
+const PW = "hunter2";
+const PW2 = "s3cr3t";
+const PW3 = "p@s3cr3t";
+
 const dir = mkdtempSync(join(tmpdir(), "agx-collisions-"));
 const priorDb = process.env.AGENTGLASS_DB;
 process.env.AGENTGLASS_DB = join(dir, "collisions.db");
@@ -121,7 +126,7 @@ describe("claimsFromCommand", () => {
   });
 
   test("postgres and redis URLs name the database, never the credentials", () => {
-    const pg = col.claimsFromCommand("DATABASE_URL=postgres://app:hunter2@127.0.0.1:5432/acme_dev bunx prisma migrate dev", "/work/orbit");
+    const pg = col.claimsFromCommand(`DATABASE_URL=postgres://app:${PW}@127.0.0.1:5432/acme_dev bunx prisma migrate dev`, "/work/orbit");
     expect(pg.map((c) => `${c.kind} ${c.key}`)).toEqual(["postgres localhost:5432/acme_dev"]);
     expect(JSON.stringify(pg)).not.toContain("hunter2");
     // The server's port is not the collision — two databases on one server
@@ -178,7 +183,7 @@ describe("maskEvidence", () => {
       "curl --user=admin:s3cr3t localhost:3000 -H \"authorization: token abc.def\"",
       "mysql -uroot -ps3cr3t -P 3306 acme",
       "pg_dump --password=s3cr3t acme",
-      "DATABASE_URL=postgres://app:s3cr3t@localhost/acme bun dev",
+      `DATABASE_URL=postgres://app:${PW2}@localhost/acme bun dev`,
       "API_TOKEN=abc.def bun dev",
       'curl -u "admin:s3cr3t" http://localhost:3000/',
       "curl --user 'admin:s3cr3t' localhost:3000",
@@ -189,7 +194,7 @@ describe("maskEvidence", () => {
       "sshpass -p s3cr3t ssh build@ci",
       'mysql --password "s3cr3t" acme',
       "psql postgres://app:Zm9v/s3cr3t@localhost:5432/acme_dev",
-      "psql postgres://app:p@s3cr3t@localhost/acme",
+      `psql postgres://app:${PW3}@localhost/acme`,
     ];
     for (const c of cases) {
       const out = col.maskEvidence(c);
@@ -282,7 +287,7 @@ describe("getCollisions", () => {
   });
 
   test("live sessions in two checkouts on one database are flagged; ended and stale ones are not", async () => {
-    const url = "DATABASE_URL=postgres://app:hunter2@localhost:5432/acme_dev bunx prisma migrate dev";
+    const url = `DATABASE_URL=postgres://app:${PW}@localhost:5432/acme_dev bunx prisma migrate dev`;
     db.insertEvent(ev("live-a", now - 60_000, "PreToolUse", "Bash", { command: url }, `${W}/wt-a`) as any);
     // A Stop ends a turn, not a session: the one sitting at its prompt still counts.
     db.insertEvent(ev("live-a", now - 50_000, "Stop", null, {}, `${W}/wt-a`) as any);

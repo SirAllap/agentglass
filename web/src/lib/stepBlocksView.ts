@@ -4,7 +4,7 @@
  * what a block is and where it can go are in shared/stepBlocks.ts, where the
  * server reads them too.
  */
-import type { StepBlock, HandoffUnassign } from "../../../shared/providers.ts";
+import type { MapBlock as StepBlock, HandoffUnassign } from "../../../shared/providers.ts";
 import { blockRefusal, type StepTrigger } from "../../../shared/stepBlocks.ts";
 import type { StepKind } from "./workflowMap.ts";
 import { assignWords } from "./stepAssign.ts";
@@ -38,6 +38,7 @@ export function blockClause(trigger: StepTrigger, b: StepBlock, o: { item: strin
     return b.ask ? `ask what to comment on the ${o.item}, starting from “${quoted}”` : `comment “${quoted}”`;
   }
   if (b.type === "field") return b.ask ? `ask for ${b.field}, starting at ${b.value || "empty"}` : `set ${b.field} to ${b.value}`;
+  if (b.type === "link") return `link the pull request on the ${o.item}`;
   const w = assignWords(b);
   const who = b.who === "person" && b.also?.length ? pickSentence([b.person!, ...b.also].map((x) => ({ kind: "person" as const, id: x.id, name: x.name }))) : w === "whoever presses it" ? "you" : (w ?? "nobody");
   return b.ask ? `ask who to assign it to, starting at ${who}` : `assign it to ${who}`;

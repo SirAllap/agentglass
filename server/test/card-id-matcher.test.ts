@@ -51,3 +51,23 @@ describe("the two matchers differ on purpose", () => {
     expect(readTaskRef({ headRefName: "release/v2-1409" })).toBeNull();
   });
 });
+
+describe("one id wins, whichever screen reads it", () => {
+  const reach = { keys: ["ORBIT"], site: "https://acme.atlassian.net" };
+
+  it("reads the Jira key in the branch before a look-alike id in the title", () => {
+    const r = readTaskRef({ headRefName: "orbit-7-retry", title: "Fix CVE-2026-1234 in parser" }, reach);
+    expect(r).toMatchObject({ label: "ORBIT-7", query: "ORBIT-7", from: "branch" });
+  });
+
+  it("says `title` when the title is where the id came from", () => {
+    const r = readTaskRef({ headRefName: "retry-export", title: "Port ORBIT-12 changes" }, reach);
+    expect(r).toMatchObject({ label: "ORBIT-12", from: "title" });
+  });
+
+  it("a key that is also a common word is not a card when its number continues into more numbers", () => {
+    const common = { keys: ["API", "ORBIT"], site: "https://acme.atlassian.net" };
+    expect(readTaskRef({ headRefName: "api-3-1-bump", title: "Bump the client" }, common)).toBeNull();
+    expect(readTaskRef({ headRefName: "api-3-bump", title: "Bump the client" }, common)).toMatchObject({ label: "API-3" });
+  });
+});

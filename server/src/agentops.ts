@@ -26,8 +26,8 @@
  * `__submitVerdict`), so the four surfaces cannot disagree about what a Claude
  * prompt looks like.
  */
-import { mkdirSync, renameSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { db } from "./db.ts";
 import { tmux, engineWindowRunning, KEPT_MARK } from "./tmuxpane.ts";
@@ -38,7 +38,7 @@ import { roleLaunch, workerRole } from "../../shared/workerRoles.ts";
 import { workerRoles } from "./config.ts";
 import { claudeCode, supportsSessionName } from "./agents/claudecode.ts";
 import { SPELLINGS } from "./agents/launch.ts";
-import { inputBox, __submitVerdict, __needsYou, __running } from "./chatpane.ts";
+import { screenReaderFor } from "./chatpane.ts";
 import { boardNow } from "./lantern.ts";
 import type { BoardRow } from "./agentboard.ts";
 
@@ -60,16 +60,32 @@ export interface NamedAgent {
   /** True when this app did not open the window — somebody's own tab, enlisted
    *  so the verbs can reach it. What keeps `stop` from killing it. */
   adopted?: boolean;
+  /** The project whose seat started it. Only that seat reaches it. */
+  seatRoot?: string;
+  model?: string;
+  /** The policy decision that started it (agents/workerstart.ts `StartedBy`):
+   *  present on a headless, policy-started worker and nowhere else. */
+  startedBy?: unknown;
+  /** How the latest turn of a headless worker ended; absent while it runs. */
+  exitCode?: number;
+  exitLine?: string;
 }
 
 interface Row {
   name: string; kind: string; cwd: string; pane_id: string; window_id: string;
   started_at: number; ended_at: number | null; adopted?: number;
+  seat_root?: string | null; model?: string | null; started_by?: string | null; resume_id?: string | null;
+  exit_code?: number | null; exit_line?: string | null;
 }
+const parsed = (s: string | null | undefined): unknown => { try { return s ? JSON.parse(s) : undefined; } catch { return undefined; } };
 const toAgent = (r: Row): NamedAgent => ({
   name: r.name, kind: r.kind, cwd: r.cwd, paneId: r.pane_id, windowId: r.window_id,
   startedAt: r.started_at, endedAt: r.ended_at,
   ...(r.adopted ? { adopted: true } : null),
+  ...(r.seat_root ? { seatRoot: r.seat_root } : null),
+  ...(r.model ? { model: r.model } : null),
+  ...(r.started_by ? { startedBy: parsed(r.started_by) } : null),
+  ...(r.exit_code != null ? { exitCode: r.exit_code, exitLine: r.exit_line ?? "" } : null),
 });
 
 const upsert = db.query<never, [string, string, string, string, string, number]>(`
@@ -83,15 +99,26 @@ const byName = db.query<Row, [string]>(`SELECT * FROM named_agent WHERE name = ?
 const live = db.query<Row, []>(`SELECT * FROM named_agent WHERE ended_at IS NULL ORDER BY started_at DESC`);
 const everything = db.query<Row, []>(`SELECT * FROM named_agent ORDER BY started_at DESC LIMIT 200`);
 const end = db.query<never, [number, string]>(`UPDATE named_agent SET ended_at = ? WHERE name = ? AND ended_at IS NULL`);
+/* Ownership and the decision, written right after the row, and the previous
+   turn's outcome cleared: a restart under the same name is a new turn. */
+const stamp = db.query<never, [string | null, string | null, string | null, string | null, string]>(
+  `UPDATE named_agent SET seat_root = ?, model = ?, started_by = ?, resume_id = ?, exit_code = NULL, exit_line = NULL WHERE name = ?`);
+const settle = db.query<never, [number, string, string | null, string]>(
+  `UPDATE named_agent SET exit_code = ?, exit_line = ?, resume_id = COALESCE(?, resume_id) WHERE name = ?`);
+const ownedLive = db.query<{ n: number }, [string]>(`SELECT COUNT(*) AS n FROM named_agent WHERE seat_root = ? AND ended_at IS NULL`);
 /* The same row `startAgent` writes, with `adopted` set: one registry, so every
    verb that reads it reaches an enlisted tab without knowing there are two
-   ways in. */
+   ways in. A name that was a worker's before starts again as nobody's: the
+   owner, the policy stamp and the session to resume described the window this
+   app opened, and kept on the row they would send that worker's next turn to
+   whatever directory the lent tab sits in. */
 const adopt = db.query<never, [string, string, string, string, string, number]>(`
   INSERT INTO named_agent (name, kind, cwd, pane_id, window_id, started_at, ended_at, adopted)
   VALUES (?, ?, ?, ?, ?, ?, NULL, 1)
   ON CONFLICT(name) DO UPDATE SET
     kind = excluded.kind, cwd = excluded.cwd, pane_id = excluded.pane_id,
-    window_id = excluded.window_id, started_at = excluded.started_at, ended_at = NULL, adopted = 1
+    window_id = excluded.window_id, started_at = excluded.started_at, ended_at = NULL, adopted = 1,
+    seat_root = NULL, model = NULL, started_by = NULL, resume_id = NULL, exit_code = NULL, exit_line = NULL
 `);
 
 /** Whether ONE pane is on the engine. The same fact `panesAlive` rests on,
@@ -138,6 +165,18 @@ export async function reconcile(now = Date.now()): Promise<NamedAgent[]> {
     else end.run(now, r.name);
   }
   return out;
+}
+
+/* A name stops meaning the window it meant: stopped, started again, or
+   enlisted as somebody's own tab. Whoever keeps something per name (the turn
+   limit, agents/ceilings.ts) hears it here, so no exit path has to remember. */
+const lettingGo = new Set<(name: string) => void>();
+export function onLetGo(f: (name: string) => void): void { lettingGo.add(f); }
+const letGo = (name: string): void => { for (const f of lettingGo) f(name); };
+
+/** Rewrite the decision stamped on a row and nothing else. */
+export function restamp(name: string, startedBy: unknown): void {
+  db.query(`UPDATE named_agent SET started_by = ? WHERE name = ?`).run(JSON.stringify(startedBy), name);
 }
 
 export function agentNamed(name: string): NamedAgent | null {
@@ -350,6 +389,27 @@ export function roleStart(
  * where the person's global config lives, are not pinned: they are the same
  * user's on both sides.
  */
+/**
+ * The lock a chair runs under when its engine has no gate hook: the deny list a
+ * worker of that engine gets, rendered the same way, so a chair cannot push,
+ * open a pull request or spend any more than a worker can. Empty for an engine
+ * with a hook of its own (Claude Code's goes through the gate) or with no lock
+ * this app can apply.
+ *
+ * It is a list of command prefixes, not a sandbox: `sh -c 'git push'` is not a
+ * command named `git push`, and the chair's own server-side powers are a
+ * separate wall.
+ */
+export function chairLock(kind: string): Record<string, string> {
+  const p = agentProvider(kind);
+  if (!p || p.lock?.via !== "env") return {};
+  const launch = roleLaunch(p, workerRole("builder")!, "");
+  if (!launch?.env.OPENCODE_CONFIG_CONTENT) return {};
+  const env = { ...launch.env };
+  for (const k of OPENCODE_ENV_LAYERS) env[k] = process.env[k] ?? "";
+  return env;
+}
+
 const OPENCODE_ENV_LAYERS = ["OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_PERMISSION", "OPENCODE_DISABLE_PROJECT_CONFIG"];
 
 type OpenCodeRule = { permission: string; pattern: string; action: string };
@@ -421,21 +481,34 @@ export function lockLoosened(rules: OpenCodeRule[], lock: string): { subject: st
  * Fails closed: an OpenCode that will not say, or says something this cannot
  * read, is a lock nobody checked. About two seconds per start, measured.
  */
-export async function openCodeLockLoosened(bin: string, cwd: string, env: Record<string, string>): Promise<string | null> {
+export async function openCodeLockLoosened(bin: string, cwd: string, env: Record<string, string>, timeoutMs = 20_000): Promise<string | null> {
   const lock = env.OPENCODE_CONFIG_CONTENT;
   if (!lock) return "the role carries no OpenCode lock";
   const agent = (JSON.parse(lock) as { default_agent?: string }).default_agent ?? "build";
   let out = "";
+  /* The answer goes to a file, not a pipe. OpenCode starts helpers of its own,
+     and one that outlives it keeps a pipe's write end open: reading to EOF then
+     waits for that helper, not for OpenCode, and the kill below (which reaches
+     only OpenCode) never ends the wait. Measured: a role-start test with a 30 s
+     ceiling timed out twice in 41 loaded runs. A file is complete the moment
+     OpenCode has exited, whoever else still holds it open. */
+  const dir = mkdtempSync(join(tmpdir(), "agx-oc-rules-"));
   try {
+    const file = join(dir, "rules.json");
     const proc = Bun.spawn([bin, "debug", "agent", agent], {
-      cwd, env: { ...process.env, ...env }, stdin: "ignore", stdout: "pipe", stderr: "ignore",
+      cwd, env: { ...process.env, ...env }, stdin: "ignore", stdout: Bun.file(file), stderr: "ignore",
     });
-    const timer = setTimeout(() => proc.kill(), 20_000);
-    [out] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<"late">((r) => { timer = setTimeout(() => r("late"), timeoutMs); });
+    const done = await Promise.race([proc.exited, late]);
     clearTimeout(timer);
-    if (proc.exitCode !== 0) return `OpenCode would not show its ${agent} agent's rules`;
+    if (done === "late") { try { proc.kill(); } catch { /* gone */ } return `OpenCode would not show its ${agent} agent's rules`; }
+    if (done !== 0) return `OpenCode would not show its ${agent} agent's rules`;
+    out = readFileSync(file, "utf8");
   } catch {
     return `OpenCode would not show its ${agent} agent's rules`;
+  } finally {
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
   }
   let rules: OpenCodeRule[];
   try {
@@ -476,6 +549,45 @@ export function namedAgentArgv(
   return agentArgv(bin, { prompt: p.prompt ?? "", yolo: p.yolo === true, title: p.name, kind }, canName, [...remote, ...(p.serverArgs ?? []), ...p.args]);
 }
 
+function ownRow(p: { name: string; owner?: { seatRoot: string | null; model: string; startedBy: unknown | null; resumeId: string | null } }): void {
+  const o = p.owner;
+  stamp.run(o?.seatRoot ?? null, o?.model || null, o?.startedBy ? JSON.stringify(o.startedBy) : null, o?.resumeId ?? null, p.name);
+}
+
+/** A seat takes an agent that has no owner. Never one that has. */
+export function ownAgent(name: string, seatRoot: string): void {
+  db.query(`UPDATE named_agent SET seat_root = ? WHERE name = ? AND seat_root IS NULL`).run(seatRoot, name);
+}
+
+/** Workers this seat owns that are still on the engine. */
+export async function liveOwnedBy(seatRoot: string): Promise<number> {
+  await reconcile();
+  return ownedLive.get(seatRoot)?.n ?? 0;
+}
+
+const ownedRows = db.query<Row, []>(`SELECT * FROM named_agent WHERE seat_root IS NOT NULL AND ended_at IS NULL`);
+/** Every live worker a seat owns, with how it was started: the board's join
+ *  reads this to put a worker under its chair. One query, no tmux. */
+export function liveOwned(): { name: string; paneId: string; seatRoot: string; startedBy?: unknown }[] {
+  return ownedRows.all().map((r) => {
+    const a = toAgent(r);
+    return { name: a.name, paneId: a.paneId, seatRoot: a.seatRoot!, ...(a.startedBy !== undefined ? { startedBy: a.startedBy } : null) };
+  });
+}
+
+/** The engine session a headless worker's last turn ran in, for a resume. */
+export function resumeIdOf(name: string): string | null {
+  return byName.get(name)?.resume_id ?? null;
+}
+
+/** Read the latest turn's outcome off disk into the row, once it has ended
+ *  (the wrapper wrote it). Called when somebody asks, never on a timer. */
+export function settleTurn(a: NamedAgent, result: { exitCode: number; line: string; resumeId?: string } | null): NamedAgent {
+  if (!result || a.exitCode !== undefined) return a;
+  settle.run(result.exitCode, result.line, result.resumeId ?? null, a.name);
+  return agentNamed(a.name) ?? a;
+}
+
 export async function startAgent(p: {
   root: string; name: string; cwd: string; kind?: string; prompt?: string; yolo?: boolean;
   /** Extra CLI flags after the ones this app builds, each one argv element. */
@@ -499,11 +611,19 @@ export async function startAgent(p: {
   keep?: boolean;
   yoloAllowed: boolean;
   now?: number;
+  /** The whole command, built by this server for a headless worker
+   *  (agents/headless.ts). Not reachable from a request body, for the same
+   *  reason as `env`; a caller's `args` must be empty beside it. */
+  exactArgv?: string[];
+  /** Who owns the row and why it was started this way. The seat's root is
+   *  taken from the credential, never from the body. */
+  owner?: { seatRoot: string | null; model: string; startedBy: unknown | null; resumeId: string | null };
 }): Promise<StartResult> {
   if (!validName(p.name)) return { ok: false, error: "bad-name" };
-  const kind = agentKind(p.kind ?? "claude");
+  const kind = p.exactArgv ? (agentProvider(p.kind ?? "") ? { id: p.kind! } : undefined) : agentKind(p.kind ?? "claude");
   if (!kind) return { ok: false, error: "no-cli" };
   const args = p.args ?? [];
+  if (p.exactArgv && args.length) return { ok: false, error: "bad-args" };
   if (args.some((a) => typeof a !== "string" || /[\n\r\0]/.test(a))) return { ok: false, error: "bad-args" };
   const refused = refusedArg(args, kind.id) ?? (p.lockedRole ? args.find((a) => ROLE_FIXED.has(a.split("=", 1)[0]!)) ?? null : null);
   if (refused !== null) return { ok: false, error: "arg-refused", flag: refused };
@@ -515,7 +635,7 @@ export async function startAgent(p: {
   /* OpenCode's lock is merged into the configs around it rather than laid over
      them, so whether it holds depends on the directory: asked of OpenCode, in
      that directory, before anything opens. */
-  if (p.lockedRole && kind.id === "opencode") {
+  if ((p.lockedRole || p.env?.OPENCODE_CONFIG_CONTENT) && kind.id === "opencode") {
     const bin = agentBinFor(kind.id);
     const why = bin ? await openCodeLockLoosened(bin, p.cwd, p.env ?? {}) : null;
     if (why) return { ok: false, error: "lock-loosened", detail: why };
@@ -532,9 +652,9 @@ export async function startAgent(p: {
     end.run(p.now ?? Date.now(), p.name);
   }
 
-  const bin = agentBinFor(kind.id);
+  const bin = p.exactArgv ? "sh" : agentBinFor(kind.id);
   if (!bin) return { ok: false, error: "no-cli" };
-  const argv = namedAgentArgv(bin, kind.id, { ...p, args }, supportsSessionName(bin));
+  const argv = p.exactArgv ?? namedAgentArgv(bin, kind.id, { ...p, args }, supportsSessionName(bin));
   if (!argv.length) return { ok: false, error: "no-cli" };
 
   /* One tmux session for every named agent, apart from the project's own:
@@ -576,8 +696,10 @@ export async function startAgent(p: {
     const status = /the CLI exited \((\d+)\)/.exec((await screenOf(opened.paneId)) ?? "")?.[1];
     if (status && status !== "0") {
       const now = p.now ?? Date.now();
+      letGo(p.name);
       upsert.run(p.name, kind.id, p.cwd, opened.paneId, opened.windowId, now);
       end.run(now, p.name);
+      ownRow(p);
       return { ok: false, error: "died" };
     }
   }
@@ -586,8 +708,10 @@ export async function startAgent(p: {
     return { ok: false, error: "died" };
   }
   const startedAt = p.now ?? Date.now();
+  letGo(p.name);
   upsert.run(p.name, kind.id, p.cwd, opened.paneId, opened.windowId, startedAt);
-  return { ok: true, agent: { name: p.name, kind: kind.id, cwd: p.cwd, paneId: opened.paneId, windowId: opened.windowId, startedAt, endedAt: null } };
+  ownRow(p);
+  return { ok: true, agent: agentNamed(p.name) ?? { name: p.name, kind: kind.id, cwd: p.cwd, paneId: opened.paneId, windowId: opened.windowId, startedAt, endedAt: null } };
 }
 
 /** `capture-pane` on a pane that is gone fails outright, so null is "gone". */
@@ -599,22 +723,29 @@ export async function screenOf(paneId: string, lines = 0): Promise<string | null
 export type AgentState = "starting" | "ready" | "working" | "needs-you" | "gone";
 
 /** What one screen says, in the words the worker waits on. */
-export function stateOfScreen(screen: string | null): AgentState {
+export function stateOfScreen(screen: string | null, kind?: string): AgentState {
   if (screen === null) return "gone";
-  if (__needsYou(screen)) return "needs-you";
-  if (__running(screen)) return "working";
-  if (inputBox(screen) !== null) return "ready";
+  /* An engine nobody has captured is read as Claude's, which is what every
+     caller did before a kind was passed; the chair does not take such an
+     engine (seat.ts), so the one place that types on this answer never does. */
+  const r = screenReaderFor(kind) ?? screenReaderFor()!;
+  if (r.needsYou(screen)) return "needs-you";
+  if (r.running(screen)) return "working";
+  /* A denylist of dialogs is only as long as the dialogs seen: a banner worded
+     differently draws its own text into the box row. "Ready" is the one screen
+     that is known — a box with nothing in it — and anything else is starting. */
+  if (r.blank ? r.blank(screen) : r.inputBox(screen) !== null) return "ready";
   return "starting";
 }
 
 /** Wait until the agent is in one of the states asked for, or the deadline
  *  passes. `gone` always ends the wait: nothing later is coming. */
-export async function waitFor(paneId: string, until: AgentState[], timeoutMs: number, tick = 250): Promise<{ state: AgentState; reached: boolean }> {
+export async function waitFor(paneId: string, until: AgentState[], timeoutMs: number, tick = 250, kind?: string): Promise<{ state: AgentState; reached: boolean }> {
   const deadline = Date.now() + Math.max(0, timeoutMs);
   for (;;) {
     /* A kept tab is still on screen after its CLI has exited; the agent in
        it is gone all the same. */
-    const state = (await panesAlive()).has(paneId) ? stateOfScreen(await screenOf(paneId)) : "gone";
+    const state = (await panesAlive()).has(paneId) ? stateOfScreen(await screenOf(paneId), kind) : "gone";
     if (until.includes(state) || state === "gone") return { state, reached: until.includes(state) };
     if (Date.now() >= deadline) return { state, reached: false };
     await Bun.sleep(tick);
@@ -631,11 +762,23 @@ export type PromptOutcome = "sent" | "queued" | "diverted" | "stuck" | "gone";
  * prompt on screen is `diverted`: the text is in the box, unsent, and the
  * worker's own recovery (`send-keys enter` after a look) applies.
  */
-export async function promptAgent(paneId: string, text: string, timeoutMs = 10_000): Promise<PromptOutcome> {
+export async function promptAgent(paneId: string, text: string, timeoutMs = 10_000, kind?: string): Promise<PromptOutcome> {
+  const r = screenReaderFor(kind) ?? screenReaderFor()!;
   /* A kept tab whose CLI has exited: a paste would land in a `sleep`. */
   if (!(await panesAlive()).has(paneId)) return "gone";
+  /* Another engine's box is only typed into once it reads empty: a dialog this
+     app has no screen for would take the paste and the Enter. Claude's reading
+     is unchanged. */
+  if (r.blank) {
+    const first = await screenOf(paneId);
+    if (first === null) return "gone";
+    if (r.needsYou(first) || !r.blank(first)) return "stuck";
+  }
   const buf = `agx-agent-${paneId.replace("%", "")}`;
-  const load = await tmux(["load-buffer", "-b", buf, "-"], text);
+  /* A paste ends at ESC [ 2 0 1 ~ and tmux does not strip one inside it: what
+     follows would be typed raw, and CR submits. Control bytes other than a
+     newline and a tab are not part of a message. */
+  const load = await tmux(["load-buffer", "-b", buf, "-"], text.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, ""));
   if (!load.ok) return "gone";
   if (!(await tmux(["paste-buffer", "-b", buf, "-t", paneId, "-d", "-p"])).ok) return "gone";
   const deadline = Date.now() + timeoutMs;
@@ -643,7 +786,7 @@ export async function promptAgent(paneId: string, text: string, timeoutMs = 10_0
   for (;;) {
     const screen = await screenOf(paneId);
     if (screen === null) return "gone";
-    const box = inputBox(screen);
+    const box = r.inputBox(screen);
     if (box?.trim()) { pasted = box; break; }
     if (Date.now() > deadline) return "stuck";
     await Bun.sleep(60);
@@ -653,7 +796,7 @@ export async function promptAgent(paneId: string, text: string, timeoutMs = 10_0
     await Bun.sleep(600);
     const screen = await screenOf(paneId);
     if (screen === null) return "gone";
-    const verdict = __submitVerdict(screen, pasted);
+    const verdict = r.submitVerdict(screen, pasted);
     if (verdict !== "retry") return verdict;
     if (Date.now() > deadline) return "stuck";
   }
@@ -696,6 +839,7 @@ export async function keptTabOf(a: NamedAgent): Promise<boolean> {
 export async function stopAgent(a: NamedAgent, now = Date.now(), kill = !a.adopted): Promise<{ ok: boolean; killed: boolean }> {
   /* An ended agent is only stopped through its kept tab, found by its pane
      (`keptTabOf`), so that is the window closed. */
+  letGo(a.name);
   const killed = kill ? (await tmux(["kill-window", "-t", a.endedAt === null ? a.windowId : a.paneId])).ok : false;
   end.run(now, a.name);
   return { ok: kill ? killed : true, killed };
@@ -718,9 +862,14 @@ export async function stopAgent(a: NamedAgent, now = Date.now(), kill = !a.adopt
  */
 export type EnlistResult =
   | { ok: true; agent: NamedAgent }
-  | { ok: false; error: "bad-name" | "exists" | "no-pane" | "many-panes" | "not-an-agent"; detail?: string };
+  | { ok: false; error: "bad-name" | "exists" | "no-pane" | "many-panes" | "not-an-agent" | "taken" | "refused"; detail?: string };
 
-export async function enlistAgent(p: { name: string; pane?: string; window?: string }): Promise<EnlistResult> {
+export async function enlistAgent(p: {
+  name: string; pane?: string; window?: string;
+  /** The caller's own reason not to hand this pane over, as a sentence, asked
+   *  once the pane is known: a seat's reach stops at its project. */
+  refuse?: (pane: { paneId: string; cwd: string }) => string | null;
+}): Promise<EnlistResult> {
   if (!validName(p.name)) return { ok: false, error: "bad-name" };
   const existing = agentNamed(p.name);
   if (existing && existing.endedAt === null && await paneAlive(existing.paneId)) {
@@ -739,6 +888,12 @@ export async function enlistAgent(p: { name: string; pane?: string; window?: str
      picking the first would enlist a coin toss. */
   if (wanted.length > 1) return { ok: false, error: "many-panes", detail: wanted.map((c) => c[0]).join(", ") };
   const [paneId = "", windowId = "", , cwd = "", command = "", startedWith = ""] = wanted[0]!;
+  /* A pane some other agent already answers to is that agent's: enlisting it
+     under a second name would hand its verbs to whoever asked. */
+  const held = (await reconcile()).find((a) => a.paneId === paneId && a.name !== p.name);
+  if (held) return { ok: false, error: "taken", detail: held.name };
+  const refused = p.refuse?.({ paneId, cwd }) ?? null;
+  if (refused) return { ok: false, error: "refused", detail: refused };
   /*
    * IS AN AGENT RUNNING IN THERE — asked of both the process and the command
    * the pane was born with, because either alone is wrong.
@@ -762,6 +917,7 @@ export async function enlistAgent(p: { name: string; pane?: string; window?: str
     return { ok: false, error: "not-an-agent", detail: command };
   }
   const now = Date.now();
+  letGo(p.name);
   adopt.run(p.name, "claude", cwd, paneId, windowId, now);
   const made = agentNamed(p.name);
   return made ? { ok: true, agent: made } : { ok: false, error: "no-pane" };

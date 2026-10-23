@@ -42,7 +42,7 @@ describe("rows in a migrated pane", () => {
     // The credential-bearing rows are among them: if the cookie import or the
     // mirror of other apps' notifications ever gets a def, this says so.
     const never = new Set(SETTINGS_ROWS.filter((x) => x.agentNever).map((x) => x.label));
-    for (const l of ["Home page", "Right-click to paste", "Terminal runs on", "Mirror this machine's notifications", "How much of the message", "All", "None"]) expect(never.has(l), l).toBe(true);
+    for (const l of ["Home page", "Right-click to paste", "Terminal runs on", "Mirror this machine's notifications", "How much of the message", "Bring browsing history", "Bring bookmarks"]) expect(never.has(l), l).toBe(true);
   });
 
   test("every settingId names a def", () => {
@@ -63,7 +63,7 @@ const FAMILIES: [string, string][] = [
 ];
 
 describe("defs and rows agree", () => {
-  const modal = src("components/SettingsModal.tsx") + src("components/ThemePicker.tsx") + src("components/ClickUpPane.tsx");
+  const modal = src("components/SettingsModal.tsx") + src("components/ThemePicker.tsx") + src("components/ClickUpPane.tsx") + src("components/jira/JiraSettingsView.tsx");
 
   test("every def is reached by a row: a settingId in the generated list, or in source for the rows the generator cannot read", () => {
     const fromGen = new Set(SETTINGS_ROWS.map((r) => r.settingId).filter(Boolean) as string[]);

@@ -182,3 +182,18 @@ export function openInApp(
 export function followLink(raw: string, e?: Click): void {
   if (!openInApp(raw, e)) openExternal(raw);
 }
+
+/**
+ * What xterm does with an OSC 8 hyperlink (a link the program printed, with its
+ * own target rather than text that looks like one).
+ *
+ * Left alone, xterm asks `confirm()` and then opens a window of its own, which
+ * the desktop shell denies: the link did nothing there. This sends it down the
+ * same path as a URL in the output. `allowNonHttpProtocols` stays off, so xterm
+ * never offers a scheme other than http(s), and `openExternal` declines one
+ * again at the point of opening: two checks, either enough on its own.
+ */
+export const oscLinkHandler = {
+  allowNonHttpProtocols: false,
+  activate(e: Click, uri: string): void { followLink(uri, e); },
+};

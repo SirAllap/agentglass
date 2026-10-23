@@ -116,6 +116,24 @@ describe("where a seat may be opened", () => {
   });
 });
 
+describe("whose project a seat's own request is about", () => {
+  const own = "/home/a/code/orbit";
+  test("its own, when it names none, its own, or a directory or worktree of its own", () => {
+    expect(Seat.seatSpeaksFor(own, undefined)).toEqual({ root: own });
+    expect(Seat.seatSpeaksFor(own, "")).toEqual({ root: own });
+    expect(Seat.seatSpeaksFor(own, own)).toEqual({ root: own });
+    expect(Seat.seatSpeaksFor(own, `${own}/server/src`)).toEqual({ root: own });
+    expect(Seat.seatSpeaksFor(own, `${own}/.worktrees/thing`)).toEqual({ root: own });
+  });
+
+  test("never another one, known to this app or not", () => {
+    for (const asked of ["/home/a/code/orbit-other", `${own}-v2`, "/", "code/orbit"]) {
+      const r = Seat.seatSpeaksFor(own, asked);
+      expect("error" in r && r.error).toContain("its own project (orbit)");
+    }
+  });
+});
+
 describe("what the seat is told", () => {
   test("carries the mark first, so only a prompt this server composed can claim the role", async () => {
     const root = join(dir, "proj-prompt");

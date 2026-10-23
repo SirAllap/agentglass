@@ -1,0 +1,30 @@
+  ┃  Use the bash tool to run: sleep 25 ; then say done
+  ┃
+
+     I'll run the sleep command.
+
+  ┃
+  ┃  $ sleep 25
+  ┃
+  ┃  (no output)
+  ┃
+
+     done
+
+     ▣  Build · Big Pickle · 29.3s
+
+  ┃
+  ┃  Use the read tool on /etc/hostname and tell me what it says
+  ┃
+
+     → Read /etc/hostname
+
+     ▣  Build · Big Pickle
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · Big Pickle OpenCode Zen
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /home/orbit/work                                   13.8K (7%)  ctrl+p commands
+

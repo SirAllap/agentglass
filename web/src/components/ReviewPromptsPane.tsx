@@ -19,18 +19,17 @@
  * line goes first and the body follows it as context, so the two are not an
  * either/or.
  */
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api.ts";
 import { taskConnected } from "../lib/taskConnected.ts";
 import { CONFLICT_EFFORTS, CONFLICT_MODELS, type ConflictEffort, type ConflictModel } from "../../../shared/types.ts";
 import type { ReviewRecipe, ReviewRecipeGroup, ReviewRecipeWhen, SkillInfo } from "../../../shared/types.ts";
 import { SettingRow } from "./SettingRow.tsx";
+import { EmptyState, Field, SettingsCard, SettingsForm, helpIdFor } from "./SettingsKit.tsx";
 import { bumpReviewRecipes } from "./PrPanel.tsx";
 import { IconLabel, PlusIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
-
-const edge = (pct: number) => `1px solid color-mix(in srgb, var(--border) ${pct}%, transparent)`;
+import { Button, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 const GROUPS: { id: ReviewRecipeGroup; label: string; what: string }[] = [
   { id: "reviewing", label: "Reviewing", what: "Somebody else's pull request." },
@@ -145,7 +144,7 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
     await after(`${r.title} back to the wording it ships with`);
   };
 
-  if (!list) return <Wrap><div className="py-3 text-[12.5px]" style={{ color: "var(--text3)" }}>Reading your prompts…</div></Wrap>;
+  if (!list) return <SettingsCard title="Review prompts"><EmptyState>Reading your prompts…</EmptyState></SettingsCard>;
 
   const offered = (r: ReviewRecipe) => hasCards || r.id !== "note-on-card";
   const hidden = GROUPS.flatMap((g) => list.filter((r) => r.group === g.id && offered(r))).length;
@@ -158,81 +157,59 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
           told you where to stop were the smallest type on it. Each group
           already carries the two lines a heading needs; they just were not
           being used as one. */}
-      <p className="text-[12.5px] px-1 pb-4" style={{ color: "var(--text3)" }}>
+      <p className="text-[12.5px] m-0 pb-4" style={{ color: "var(--text3)" }}>
         What the Review with Claude button offers on a pull request. The one that fits the pull request in front of you is
         suggested at the top; the rest are always in the menu, because GitHub's fields describe what somebody remembered to set.
       </p>
 
       {note && (
-        <div className="mb-4 text-[12px] px-2.5 py-1.5 rounded-lg"
-          style={{ color: note.ok ? "var(--success)" : "var(--error)",
-            background: `color-mix(in srgb, var(--${note.ok ? "success" : "error"}) 10%, transparent)` }}>
+        <div role={note.ok ? "status" : "alert"} className="pb-4 text-[12px]"
+          style={{ color: note.ok ? "var(--success-ink)" : "var(--error-ink)" }}>
           {note.text}
         </div>
       )}
 
       {GROUPS.map((g) => {
         const rows = list.filter((r) => r.group === g.id && offered(r));
+        const common = { skills, projects, onChange: setEditing, onSave: save, onCancel: () => setEditing(null) };
         return (
-          <Wrap key={g.id} title={g.label} desc={g.what}>
+          <SettingsCard key={g.id} title={g.label} desc={g.what}
+            actions={<Button disabled={!!editing} onClick={() => setEditing(blank(g.id))}>
+              <IconLabel icon={<PlusIcon size={ICON.xs} />}>New prompt</IconLabel>
+            </Button>}>
             {rows.map((r) => (
               <Fragment key={r.id}>
-              <SettingRow
-                label={<span className="flex items-center gap-1.5">
-                  {r.skill && <span className="text-[10px] px-1 rounded" style={{ color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}>skill</span>}
-                  {r.title}
-                </span>}
-                hint={<>
-                  {r.skill && <span className="block font-mono truncate" style={{ color: "var(--text3)" }}>{r.skill}</span>}
-                  {g.id === "conflicts"
-                    ? `${r.repo ? `Only in ${projects.find((p) => p.root === r.repo)?.name ?? r.repo.split("/").pop()}` : "Every project"} · ${r.model && r.model !== "auto" ? r.model : "model from the conflict"}`
-                    : WHEN.find((w) => w.id === r.when)?.label}
-                  {!r.builtIn && " · yours"}
-                </>}
-                control={<span className="flex items-center gap-2">
-                  <button onClick={() => setEditing(r)} className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-                    style={{ border: EDGE, color: "var(--text2)" }}>Edit</button>
-                  {r.builtIn && (
-                    <button onClick={() => void reset(r)} title="Back to the wording it ships with"
-                      className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-                      style={{ border: EDGE, color: "var(--text3)" }}>Reset</button>
-                  )}
-                  <button onClick={() => void drop(r)} title={r.builtIn ? "Take it out of the menu" : "Delete it"}
-                    className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-                    style={{ border: EDGE, color: "var(--error-ink)" }}>{r.builtIn ? "Hide" : "Delete"}</button>
-                </span>}
-              />
-              {/* Under the row it belongs to, not at the foot of the page.
-                  The editor used to render after the whole list, so pressing
-                  Edit on the first prompt appeared to do nothing at all until
-                  you scrolled past thirteen others to find it. */}
-              {editing?.id === r.id && (
-                <Editor r={editing} skills={skills} projects={projects} presets={[]}
-                  onChange={setEditing} onSave={save} onCancel={() => setEditing(null)} />
-              )}
+                <SettingRow
+                  label={r.title}
+                  hint={<>
+                    {r.skill && <span className="block t-mono break-all" style={{ color: "var(--text3)" }}>Skill {r.skill}</span>}
+                    {g.id === "conflicts"
+                      ? `${r.repo ? `Only in ${projects.find((p) => p.root === r.repo)?.name ?? r.repo.split("/").pop()}` : "Every project"} · ${r.model && r.model !== "auto" ? r.model : "model from the conflict"}`
+                      : WHEN.find((w) => w.id === r.when)?.label}
+                    {!r.builtIn && " · yours"}
+                  </>}
+                  actions={<Button onClick={() => setEditing(r)}>Edit</Button>} />
+                {/* Under the row it belongs to, not at the foot of the page.
+                    The editor used to render after the whole list, so pressing
+                    Edit on the first prompt appeared to do nothing at all until
+                    you scrolled past thirteen others to find it. */}
+                {editing?.id === r.id && (
+                  <Editor r={editing} presets={[]} {...common}
+                    onReset={r.builtIn ? () => void reset(r) : undefined}
+                    onDrop={() => void drop(r)} />
+                )}
               </Fragment>
             ))}
-            {!rows.length && (
-              <div className="py-1.5 text-[12px]" style={{ color: "var(--text4)" }}>Nothing here — the built-ins were hidden.</div>
-            )}
-            {!editing && (
-              <div className="py-1.5">
-                <button onClick={() => setEditing(blank(g.id))} className="text-[12px] px-2.5 py-1 rounded-lg"
-                  style={{ border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)", color: "var(--text)" }}>
-                  <IconLabel icon={<PlusIcon size={ICON.xs} />}>New prompt in {g.label.toLowerCase()}</IconLabel>
-                </button>
-              </div>
-            )}
+            {!rows.length && <EmptyState>Nothing here — the built-ins were hidden.</EmptyState>}
             {editing && !editing.id && editing.group === g.id && (
-              <Editor r={editing} skills={skills} projects={projects} presets={list.filter((x) => x.builtIn && (x.group === "conflicts") === (g.id === "conflicts"))}
-                onChange={setEditing} onSave={save} onCancel={() => setEditing(null)} />
+              <Editor r={editing} presets={list.filter((x) => x.builtIn && (x.group === "conflicts") === (g.id === "conflicts"))} {...common} />
             )}
-          </Wrap>
+          </SettingsCard>
         );
       })}
 
       {!hidden && (
-        <div className="px-1 pb-4 text-[12px]" style={{ color: "var(--text4)" }}>
+        <div className="pb-4 text-[12px]" style={{ color: "var(--text4)" }}>
           Every built-in is hidden. Reset one from the list, or write your own.
         </div>
       )}
@@ -240,27 +217,19 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
   );
 }
 
-/** The shape SettingsModal's Section renders, written out rather than imported
- *  because SettingsModal imports this file. */
-function Wrap({ title, desc, children }: { title?: string; desc?: string; children: React.ReactNode }) {
-  return (
-    <div className="agx-settings-section">
-      {title && (
-        <div className="agx-settings-head">
-          <div className="agx-settings-head-t">{title}</div>
-          {desc && <div className="agx-settings-head-d">{desc}</div>}
-        </div>
-      )}
-      <div className="agx-settings-rows">{children}</div>
-    </div>
-  );
-}
-
-function Editor({ r, skills, projects, presets, onChange, onSave, onCancel }: {
+/**
+ * The editor: a form row under the prompt it changes. Stacked labelled
+ * fields, one primary Save, and what undoes the prompt (Reset, Hide or
+ * Delete) at the far end of the same line, apart from Save and Cancel.
+ */
+function Editor({ r, skills, projects, presets, onChange, onSave, onCancel, onReset, onDrop }: {
   r: ReviewRecipe; skills: SkillInfo[]; projects: { root: string; name: string }[]; presets: ReviewRecipe[];
   onChange: (r: ReviewRecipe) => void; onSave: (r: ReviewRecipe) => void; onCancel: () => void;
+  onReset?: () => void; onDrop?: () => void;
 }) {
   const set = (patch: Partial<ReviewRecipe>) => onChange({ ...r, ...patch });
+  const uid = useId();
+  const f = (k: string) => `${uid}-${k}`;
   /* Bring it into view and put the cursor in it. Even directly under its row,
      an editor that opens below the fold is an editor somebody thinks did not
      open — which is exactly how this started. `nearest` rather than `center`:
@@ -271,8 +240,6 @@ function Editor({ r, skills, projects, presets, onChange, onSave, onCancel }: {
     box.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     first.current?.focus();
   }, []);
-  const inp = "w-full text-[11.5px] px-2 py-1.5 rounded-lg outline-none";
-  const style = { background: "var(--surface-inset)", border: EDGE, color: "var(--text)" };
 
   /* Skills whose name suggests they belong on a pull request go first: this
      list is 60 entries on a real machine and the four that matter here are
@@ -282,135 +249,129 @@ function Editor({ r, skills, projects, presets, onChange, onSave, onCancel }: {
     return [...skills].sort((a, b) => score(a) - score(b) || a.name.localeCompare(b.name));
   }, [skills]);
   const chosen = ordered.find((s) => r.skill?.slice(1).split(/\s/)[0] === s.name);
+  const SEL = `w-full ${INPUT}`;
 
   return (
-    <div ref={box} className="rounded-xl p-3 flex flex-col gap-2.5 my-2" style={{ border: edge(28), background: "color-mix(in srgb, var(--bg3) 25%, transparent)" }}>
-      <div className="flex gap-2 flex-wrap items-end">
-        <label className="flex flex-col gap-1 flex-1 min-w-[200px]">
-          <span className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>Title — what the menu shows</span>
-          <input ref={first} value={r.title} onChange={(e) => set({ title: e.target.value })} placeholder="What changed since my review"
-            className={INPUT} style={INPUT_STYLE} />
-        </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>Group</span>
-          <select value={r.group} onChange={(e) => set({ group: e.target.value as ReviewRecipeGroup })}
-            className="text-[11.5px] px-2 py-1.5 rounded-lg" style={style}>
-            {GROUPS.map((g) => <option key={g.id} value={g.id}>{g.label}</option>)}
-          </select>
-        </label>
-      </div>
-
-      {r.group === "conflicts" ? (
-        <div className="flex gap-2 flex-wrap">
-          <label className="flex flex-col gap-1 flex-1 min-w-[160px]">
-            <span className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>{r.builtIn ? "Project — saves a copy for it" : "Project"}</span>
-            <select value={r.repo ?? ""} onChange={(e) => set({ repo: e.target.value || undefined })}
-              className="text-[11.5px] px-2 py-1.5 rounded-lg" style={style}>
-              <option value="">Every project</option>
-              {projects.map((p) => <option key={p.root} value={p.root}>{p.name}</option>)}
-              {/* A project that is no longer listed (moved, hidden, the list did
-                  not load) must not read as "every project" while the old path
-                  is still what gets saved. */}
-              {r.repo && !projects.some((p) => p.root === r.repo) && <option value={r.repo}>{r.repo.split("/").pop()} (not found)</option>}
+    <div ref={box} className="agx-settings-row">
+      <div className="agx-row-below">
+        <SettingsForm label={r.id ? `Edit ${r.title}` : "New prompt"} onSubmit={() => onSave(r)}>
+          <Field label="Title" htmlFor={f("title")} help="What the menu shows.">
+            <input id={f("title")} ref={first} value={r.title} onChange={(e) => set({ title: e.target.value })}
+              aria-describedby={helpIdFor(f("title"))} placeholder="What changed since my review"
+              className={INPUT} style={INPUT_STYLE} />
+          </Field>
+          <Field label="Group" htmlFor={f("group")}>
+            <select id={f("group")} value={r.group} onChange={(e) => set({ group: e.target.value as ReviewRecipeGroup })}
+              className={SEL} style={INPUT_STYLE}>
+              {GROUPS.map((g) => <option key={g.id} value={g.id}>{g.label}</option>)}
             </select>
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>Model</span>
-            <select value={r.model ?? "auto"} onChange={(e) => set({ model: e.target.value as ConflictModel })}
-              className="text-[11.5px] px-2 py-1.5 rounded-lg" style={style}>
-              {MODELS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+          </Field>
+
+          {r.group === "conflicts" ? (
+            <>
+              <Field label="Project" htmlFor={f("repo")} help={r.builtIn ? "Choosing one saves a copy for it." : undefined}>
+                <select id={f("repo")} value={r.repo ?? ""} onChange={(e) => set({ repo: e.target.value || undefined })}
+                  aria-describedby={r.builtIn ? helpIdFor(f("repo")) : undefined} className={SEL} style={INPUT_STYLE}>
+                  <option value="">Every project</option>
+                  {projects.map((p) => <option key={p.root} value={p.root}>{p.name}</option>)}
+                  {/* A project that is no longer listed (moved, hidden, the list did
+                      not load) must not read as "every project" while the old path
+                      is still what gets saved. */}
+                  {r.repo && !projects.some((p) => p.root === r.repo) && <option value={r.repo}>{r.repo.split("/").pop()} (not found)</option>}
+                </select>
+              </Field>
+              <Field label="Model" htmlFor={f("model")}>
+                <select id={f("model")} value={r.model ?? "auto"} onChange={(e) => set({ model: e.target.value as ConflictModel })}
+                  className={SEL} style={INPUT_STYLE}>
+                  {MODELS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+                </select>
+              </Field>
+              <Field label="Effort" htmlFor={f("effort")}>
+                <select id={f("effort")} value={r.effort ?? "auto"} onChange={(e) => set({ effort: e.target.value as ConflictEffort })}
+                  className={SEL} style={INPUT_STYLE}>
+                  {EFFORTS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+                </select>
+              </Field>
+            </>
+          ) : (
+            <Field label="Suggest it" htmlFor={f("when")}>
+              <select id={f("when")} value={r.when} onChange={(e) => set({ when: e.target.value as ReviewRecipeWhen })}
+                className={SEL} style={INPUT_STYLE}>
+                {WHEN.map((w) => <option key={w.id} value={w.id}>{w.label}</option>)}
+              </select>
+            </Field>
+          )}
+
+          {/* The skill, in two halves: which one, and what to pass it. Split
+              because the arguments are where the placeholders go and a single
+              text box made people type the slash and the name by hand every
+              time — with the name being the half the machine already knows. */}
+          <Field label="Run a skill" htmlFor={f("skill")} help="Optional.">
+            <select id={f("skill")} value={chosen?.name ?? ""} className={SEL} style={INPUT_STYLE}
+              aria-describedby={helpIdFor(f("skill"))}
+              onChange={(e) => {
+                const name = e.target.value;
+                if (!name) { set({ skill: "" }); return; }
+                const rest = r.skill?.split(/\s+/).slice(1).join(" ") ?? "";
+                set({ skill: `/${name}${rest ? ` ${rest}` : ""}` });
+              }}>
+              <option value="">— none, just the prompt —</option>
+              {ordered.map((s) => <option key={s.path} value={s.name}>/{s.name}</option>)}
             </select>
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>Effort</span>
-            <select value={r.effort ?? "auto"} onChange={(e) => set({ effort: e.target.value as ConflictEffort })}
-              className="text-[11.5px] px-2 py-1.5 rounded-lg" style={style}>
-              {EFFORTS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-            </select>
-          </label>
-        </div>
-      ) : (
-        <label className="flex flex-col gap-1">
-        <span className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>Suggest it</span>
-        <select value={r.when} onChange={(e) => set({ when: e.target.value as ReviewRecipeWhen })}
-          className="text-[11.5px] px-2 py-1.5 rounded-lg" style={style}>
-          {WHEN.map((w) => <option key={w.id} value={w.id}>{w.label}</option>)}
-        </select>
-        </label>
-      )}
+          </Field>
+          <Field label="Arguments" htmlFor={f("args")} help={chosen?.argument_hint}>
+            <input id={f("args")} value={r.skill?.split(/\s+/).slice(1).join(" ") ?? ""}
+              disabled={!chosen}
+              aria-describedby={chosen?.argument_hint ? helpIdFor(f("args")) : undefined}
+              placeholder={chosen?.argument_hint ?? "{number}"}
+              onChange={(e) => set({ skill: `/${chosen?.name ?? ""}${e.target.value ? ` ${e.target.value}` : ""}` })}
+              className={`t-mono ${INPUT}`} style={{ ...INPUT_STYLE, opacity: chosen ? 1 : 0.5 }} />
+          </Field>
 
-      {/* The skill, in two halves: which one, and what to pass it. Split
-          because the arguments are where the placeholders go and a single
-          text box made people type the slash and the name by hand every
-          time — with the name being the half the machine already knows. */}
-      <div className="flex gap-2 flex-wrap items-end">
-        <label className="flex flex-col gap-1 min-w-[200px]">
-          <span className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>Run a skill (optional)</span>
-          <select value={chosen?.name ?? ""} className="text-[11.5px] px-2 py-1.5 rounded-lg" style={style}
-            onChange={(e) => {
-              const name = e.target.value;
-              if (!name) { set({ skill: "" }); return; }
-              const rest = r.skill?.split(/\s+/).slice(1).join(" ") ?? "";
-              set({ skill: `/${name}${rest ? ` ${rest}` : ""}` });
-            }}>
-            <option value="">— none, just the prompt —</option>
-            {ordered.map((s) => <option key={s.path} value={s.name}>/{s.name}</option>)}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1 flex-1 min-w-[200px]">
-          <span className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>
-            Arguments {chosen?.argument_hint ? <span style={{ textTransform: "none", letterSpacing: 0 }}>· {chosen.argument_hint}</span> : null}
-          </span>
-          <input value={r.skill?.split(/\s+/).slice(1).join(" ") ?? ""}
-            disabled={!chosen}
-            placeholder={chosen?.argument_hint ?? "{number}"}
-            onChange={(e) => set({ skill: `/${chosen?.name ?? ""}${e.target.value ? ` ${e.target.value}` : ""}` })}
-            className={`font-mono ${INPUT}`} style={{ ...INPUT_STYLE, opacity: chosen ? 1 : 0.5 }} />
-        </label>
-      </div>
+          <Field label="The prompt" htmlFor={f("body")} help={r.skill ? "Sent after the skill line, as context." : undefined}>
+            <textarea id={f("body")} value={r.body} onChange={(e) => set({ body: e.target.value })}
+              aria-describedby={r.skill ? helpIdFor(f("body")) : undefined}
+              rows={Math.min(24, Math.max(8, r.body.split("\n").length + 1))} spellCheck={false}
+              placeholder={"Pull request #{number} of {repo}.\n\nRead-only: change nothing…"}
+              className="w-full text-[12px] px-2.5 py-2 rounded-lg outline-none t-mono bg-[var(--surface-inset)] text-[var(--text)]"
+              style={{ ...INPUT_STYLE, resize: "vertical" }} />
+          </Field>
 
-      <label className="flex flex-col gap-1">
-        <span className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>
-          The prompt{r.skill ? " — sent after the skill line, as context" : ""}
-        </span>
-        <textarea value={r.body} onChange={(e) => set({ body: e.target.value })}
-          rows={Math.min(24, Math.max(8, r.body.split("\n").length + 1))} spellCheck={false}
-          placeholder={"Pull request #{number} of {repo}.\n\nRead-only: change nothing…"}
-          className={`${inp} font-mono`} style={{ ...style, resize: "vertical" }} />
-      </label>
+          <div className="flex flex-wrap gap-1" role="group" aria-label="Placeholders">
+            {(r.group === "conflicts" ? CONFLICT_TOKENS : TOKENS).map(([tok, what]) => (
+              <Button key={tok} size="compact" title={what} className="t-mono"
+                onClick={() => set({ body: `${r.body}${tok}` })}>{tok}</Button>
+            ))}
+          </div>
 
-      <div className="flex flex-wrap gap-1">
-        {(r.group === "conflicts" ? CONFLICT_TOKENS : TOKENS).map(([tok, what]) => (
-          <button key={tok} title={what} onClick={() => set({ body: `${r.body}${tok}` })}
-            className="text-[10px] font-mono px-1.5 py-0.5 rounded"
-            style={{ border: EDGE, color: "var(--text3)" }}>{tok}</button>
-        ))}
-      </div>
+          {/* Starting from one that exists beats starting from an empty box: the
+              built-ins are the worked examples, and copying one is how somebody
+              gets a prompt of their own that is any good. */}
+          {!r.id && !!presets.length && (
+            <Field label="Or start from one of these" htmlFor={f("preset")}>
+              <select id={f("preset")} value="" className={SEL} style={INPUT_STYLE}
+                onChange={(e) => {
+                  const p = presets.find((x) => x.id === e.target.value);
+                  if (p) set({ title: `${p.title} (mine)`, body: p.body, skill: p.skill, group: p.group, when: p.when, model: p.model, effort: p.effort });
+                }}>
+                <option value="">— empty —</option>
+                {presets.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
+              </select>
+            </Field>
+          )}
 
-      {/* Starting from one that exists beats starting from an empty box: the
-          built-ins are the worked examples, and copying one is how somebody
-          gets a prompt of their own that is any good. */}
-      {!r.id && !!presets.length && (
-        <label className="flex flex-col gap-1">
-          <span className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>Or start from one of these</span>
-          <select value="" className="text-[11.5px] px-2 py-1.5 rounded-lg" style={style}
-            onChange={(e) => {
-              const p = presets.find((x) => x.id === e.target.value);
-              if (p) set({ title: `${p.title} (mine)`, body: p.body, skill: p.skill, group: p.group, when: p.when, model: p.model, effort: p.effort });
-            }}>
-            <option value="">— empty —</option>
-            {presets.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
-          </select>
-        </label>
-      )}
-
-      <div className="flex gap-2 pt-0.5">
-        <button onClick={() => onSave(r)} className="text-[12px] px-3 py-1.5 rounded-lg"
-          style={{ border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }}>
-          Save
-        </button>
-        <button onClick={onCancel} className="text-[12px] px-3 py-1.5 rounded-lg"
-          style={{ border: EDGE, color: "var(--text2)" }}>Cancel</button>
+          <div className="agx-sform-actions">
+            <Button type="submit" tone="primary">Save</Button>
+            <Button onClick={onCancel}>Cancel</Button>
+            {(onReset || onDrop) && <span className="flex-1" />}
+            {onReset && <Button onClick={onReset} title="Back to the wording it ships with">Reset</Button>}
+            {onDrop && (
+              <Button tone="danger" onClick={onDrop} title={r.builtIn ? "Take it out of the menu" : "Delete it"}>
+                {r.builtIn ? "Hide" : "Delete"}
+              </Button>
+            )}
+          </div>
+        </SettingsForm>
       </div>
     </div>
   );

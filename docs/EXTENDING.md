@@ -207,6 +207,28 @@ radar: only a chat this panel starts is teed into the store (`source_app:
 hermes`). No pane engine, no phone tab, no ACP, and this app does not write
 `~/.hermes/config.yaml`. Turn it off with `AGENTGLASS_HERMES_DISABLED=1`.
 
+### Making an engine one an orchestrator can use
+
+The orchestration policy (docs/CONFIG.md) names engines from the provider table
+in `shared/agentKinds.ts`. An engine is offered to it only for the facets its
+entry carries, and a facet that is absent means nobody measured that CLI doing
+it: leave it out rather than fill it from memory. The row on **Settings ▸ Agent
+engines** says which role each engine can take and what is `missing`, whose
+first entry is the next thing to do.
+
+| Facet | What it is | What it decides |
+| --- | --- | --- |
+| `version` | `args`, a `pattern` whose first capture is the dotted version, and the oldest version this app can drive (`min`, with `minWhy`). | An older engine is skipped by the resolver, and `because` says "0.21.0 is older than 0.21.4". |
+| `account` | The CLI's own read-only status command, and a pattern that matches when somebody is signed in. `optional` for a CLI that works without an account. | Names only: the app asks the CLI and never opens a credential file. A signed-out engine is skipped. |
+| `headless` | Which argv builder runs one turn without a terminal (`claude`, `codex`, `antigravity`, `hermes`, `opencode`, `gemini`), the `form` shown to the person, how a follow-up names its session (`resume`), and the CLI's own `ceilings` flags where it has them. | Whether a worker can run there at all, and how its next turn resumes. |
+| `envelope` | How a worker's permissions are fixed before its turn: `settings-flag`, `config-env`, `sandbox-flags` or `own-config`; for `own-config`, the `check` argv and the exit code that says the deny list holds. | What the lock is called: no engine is reported as more than **partly** enforced. |
+| `screen` | What a TUI pane says: `needsYou` (waiting on a person) and `running` for every engine, and for an engine other than Claude Code also `inputBox` (a regex whose first group is what sits in the input box), `hint` (text drawn inside an empty box) and `starting` (a dialog drawn in front of the box). Add one only from screens captured by hand from the real TUI: idle, working, asking, and one it does not know. | Whether that engine can take the chair. `POST /seat/open`, `/seat/orchestrate` and `/seat/settings` take a `kind`; an engine with no `screen` is refused with a sentence, and only a box with nothing in it reads "ready" (a dialog the facet does not name, or a half-typed draft, reads "starting"), and a wake is never pasted into anything else. `seatModel` is the model a chair on it starts with. |
+
+A new `headless.argv` needs its builder in the server first; the facet only
+names one that exists. Add the entry to the table, not a branch wherever the
+engine is used, and add a test that reads the entry the way the existing ones
+do (`server/test/agent-kinds-facets.test.ts`).
+
 ## 2. Use the gate in your own harness
 
 `POST /gate` is a generic approval primitive: hold an action until a human

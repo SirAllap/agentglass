@@ -8,7 +8,7 @@
  * step has it is still ONE write to the tracker.
  */
 import { describe, expect, test } from "bun:test";
-import type { StepBlock } from "../../shared/providers.ts";
+import type { ClickUpStepBlock as StepBlock } from "../../shared/providers.ts";
 import { BLOCK_INFO, blockRefusal, blocksFromLegacy, blocksOf, blocksProblem, legacyFromBlocks, MAX_BLOCKS, planOf, touchesPeople, type StepTrigger } from "../../shared/stepBlocks.ts";
 import { blocksSentence, moveBlock, peopleButtonLabel } from "../src/lib/stepBlocksView.ts";
 import { stepChanges, resolveEnsure } from "../src/lib/stepAssign.ts";

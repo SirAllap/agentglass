@@ -48,3 +48,29 @@ export function useDismiss(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, ref]);
 }
+
+/**
+ * Escape closes a modal that has no menu of its own to dismiss.
+ *
+ * The Git modals (Insights, Bisect, Compare, Blame, Rebase) closed by their X
+ * or the scrim only; a keyboard user who opened one with a chord had no way out
+ * without reaching for the pointer.
+ *
+ * Bubble phase on the document, not capture: a Select open inside the modal
+ * stops Escape at capture to close its own list, and one press must close one
+ * layer. Stopping it here keeps the workspace's own Escape from also peeling
+ * the panel behind.
+ */
+export function useEscapeClose(close: () => void) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      close();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+    // `close` is called, never compared; see useDismiss.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+}

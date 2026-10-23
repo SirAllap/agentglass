@@ -22,7 +22,7 @@
  * filter that sits in the middle of the things it filters reads as one of them.
  */
 
-export type TaskSourceId = "github" | "local" | "clickup";
+export type TaskSourceId = "github" | "local" | "clickup" | "jira";
 
 /**
  * The catalogue, in the order a fresh install gets.
@@ -36,7 +36,16 @@ export const TASK_SOURCES: { id: TaskSourceId; label: string; what: string }[] =
   { id: "github", label: "GitHub", what: "Issues from the repository you are in, and a button that starts work on one." },
   { id: "local", label: "Local", what: "Your own list, read from the Taskwarrior store you already write to." },
   { id: "clickup", label: "ClickUp", what: "The boards you work from, and every card assigned to you." },
+  { id: "jira", label: "Jira", what: "Every open card assigned to you, on the site you connected." },
 ];
+
+/**
+ * Sources that have no tab until they are set up, whatever the fresh-install
+ * rule says. ClickUp is on every fresh bar because it was there first and the
+ * bar is how it is found; a newer tracker is found in Integrations, and a tab
+ * for something nobody connected is clutter on every existing install.
+ */
+export const OPTIONAL_TASK_SOURCES: readonly TaskSourceId[] = ["jira"];
 
 const ALL_IDS = (): TaskSourceId[] => TASK_SOURCES.map((s) => s.id);
 

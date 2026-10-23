@@ -29,7 +29,8 @@ async function runGitIn(args: string[], cwd: string): Promise<{ ok: boolean; out
 
 import { LANTERN_PROMPT_MARK } from "./lanternmark.ts";
 import { isSeatSession } from "./seatrole.ts";
-import { seatPanes } from "./seatpanes.ts";
+import { seatPanes, seatRoots } from "./seatpanes.ts";
+import { liveOwned } from "./agentops.ts";
 import { attention, isGone, type Attention } from "../../shared/fieldRules.ts";
 export { LANTERN_PROMPT_MARK };
 
@@ -296,7 +297,7 @@ export async function boardNow(): Promise<LanternCard[]> {
      this on — see seatpanes.ts — and the cost of missing it was the seat being
      woken every hour by a finding about itself. */
   const chairs = seatPanes();
-  const rows: LanternCard[] = AgentBoard.merged({ said, hooks, panes, trees, runs, landedBy, names, waiting, gone }).map((r) => {
+  const rows: LanternCard[] = AgentBoard.placed(AgentBoard.merged({ said, hooks, panes, trees, runs, landedBy, names, waiting, gone }), { chairs: seatRoots(), owned: liveOwned() }).map((r) => {
     /* The two readers of this board, set aside the same way: the Lantern's
        chat and the project's seat. Neither is somebody's work, and a "needs
        you" on either is a person mid-conversation with it. */

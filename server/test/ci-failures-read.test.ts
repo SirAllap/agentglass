@@ -71,8 +71,11 @@ async function read(mode: string, o: { ann?: string; out?: string; job?: string;
     stdout: "pipe", stderr: "pipe",
   });
   const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
-  await proc.exited;
+  const code = await proc.exited;
   expect(err).not.toContain("error:");
+  // A child that exits without its answer is a failure with a name. One CI run lost the answer of
+  // the "big" read and the only trace was a JSON parse error on an empty string.
+  if (!out.trim()) throw new Error(`the child printed nothing (exit ${code}, ${Date.now() - t0} ms): ${err.slice(0, 400)}`);
   const lines = readFileSync(calls, "utf8").split("\n").filter(Boolean);
   return { got: JSON.parse(out.trim().split("\n").pop()!), lines, ms: Date.now() - t0 };
 }

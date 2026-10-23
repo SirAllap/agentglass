@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { fmtAgo, since as agoSentence } from "../lib/format.ts";
 import { jumpToPane } from "../lib/paneJump.ts";
-import { subscribeLantern, lanternRows, lanternFailed, lanternWatch, lanternCacheTtlMs, refreshLantern, groupLantern } from "../lib/lanternStore.ts";
+import { subscribeLantern, lanternRows, lanternChairs, lanternFailed, lanternWatch, lanternCacheTtlMs, refreshLantern, groupLantern } from "../lib/lanternStore.ts";
+import { nestUnderChairs, type ChairGroup } from "../lib/lanternChairs.ts";
+import { choiceLabel, originLine, type Origin } from "../../../shared/orchestration.ts";
 import { askLantern, hasLanternTab } from "../lib/lanternAsk.ts";
 import { subscribeBench } from "../lib/benchStore.ts";
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
@@ -48,6 +50,14 @@ export interface LanternRow {
    *  counted. Or the project's seat, which the view counts like any agent.
    *  The server's BoardRow.role, both values. */
   role?: "lantern" | "orchestrator";
+  /** The project whose chair started this worker, while that chair is occupied. */
+  under?: string;
+  /** Started by a chair that is not in its seat any more. */
+  orphaned?: true;
+  /** How the policy started it: kept on the row, so it outlives a restart. */
+  startedBy?: Origin;
+  /** On the orchestrator's own row: the project it sits for. */
+  chairOf?: string;
   doing?: string;
   saidAt?: number;
   startedAt?: number;
@@ -83,6 +93,14 @@ export interface LanternRow {
   };
   /** Its checkout, as git sees it — see GitFacts on the server. */
   git?: { dirty: number; ahead: number; lastCommit?: { subject: string; at: number }; at: number };
+}
+
+/** One occupied chair, riding on the board's answer: what the policy would
+ *  seat instead (`next`) and whether the seat has written down what it knows. */
+export interface LanternChair {
+  root: string; name: string; kind: string; model: string;
+  next: { engine: string; model: string } | null;
+  handedOff: boolean;
 }
 
 /** What the watch last found, riding on the board's answer. */
@@ -259,6 +277,14 @@ export function AgentCard({ r, onJump, onClear, quiet, cacheTtlMs, kinds }: { r:
               )}
             </span>
           </div>
+          {(r.startedBy || r.orphaned || (r.under && w)) && (
+            <div className="flex items-center gap-1.5 min-w-0 text-[10.5px]" style={{ color: "var(--text4)" }}>
+              {/* What is wrong comes first, so a long origin cuts its own tail and never the warning. */}
+              {r.orphaned && <span className="shrink-0" style={{ color: "var(--warning-ink)" }} title="The orchestrator that started this worker is not in its chair, so nobody is reading its reports">its orchestrator is gone</span>}
+              {r.under && w && <span className="shrink-0" title="Its orchestrator's project">under {here(r.under)}'s chair</span>}
+              {r.startedBy && <span className="truncate min-w-0" title={originLine(r.startedBy)}>{r.orphaned || (r.under && w) ? "· " : ""}{originLine(r.startedBy)}</span>}
+            </div>
+          )}
           <div className="flex items-center gap-1.5 min-w-0">
             <Where r={r} />
             {/*
@@ -374,6 +400,66 @@ export function LanternLine(p: { r: LanternRow; onJump?: (paneId: string) => voi
 
 const GRID: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 14, alignItems: "start" };
 
+/**
+ * A chair and the workers that answer to it.
+ *
+ * The workers sit under the chair's card, indented on a rule, so whose they are
+ * is read off the shape. One that is stopped on a person is not here (see
+ * lanternChairs.ts); the chair says how many of its own are drawn above.
+ *
+ * "Next in the chair" appears only when the policy resolves to a different
+ * engine than the one sitting. It never changes anything by itself: the
+ * person says when. The button is in the same place whether it can act or not;
+ * until the orchestrator has written down what it knows, it is off and says why.
+ */
+function ChairBlock({ g, info, onJump, cacheTtlMs, onChanged }: {
+  g: ChairGroup; info?: LanternChair; onJump: (p: string) => void; cacheTtlMs?: number; onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const change = async () => {
+    if (!info) return;
+    setBusy(true); setErr("");
+    const r = await api.seatChange(info.root).catch((e) => ({ ok: false, error: String(e) }));
+    setBusy(false);
+    if (!r.ok) setErr(r.error ?? "could not change the chair");
+    onChanged();
+  };
+  return (
+    <div className="flex flex-col gap-2" data-lantern-chair={g.chair.chairOf}>
+      {/* The width of one card in the grid below, so a chair is not a banner. */}
+      <div style={{ width: "min(100%, 520px)" }} className="flex flex-col gap-2">
+      <AgentCard r={g.chair} onJump={onJump} cacheTtlMs={cacheTtlMs} />
+      {info?.next && (
+        <div className="flex items-center gap-3 min-w-0 text-[11px] pl-4" style={{ color: "var(--text3)" }} data-lantern-next>
+          <span className="min-w-0">
+            Next in the chair: <strong style={{ color: "var(--text2)", fontWeight: 600 }}>{choiceLabel(info.next)}</strong>, when you say so.
+            {!info.handedOff && <span style={{ color: "var(--text4)" }}> {info.name} has not written its hand-off yet.</span>}
+          </span>
+          <button type="button" onClick={() => { void change(); }} disabled={busy || !info.handedOff}
+            className="agx-btn ml-auto shrink-0 text-[10.5px] px-2 py-0.5 rounded disabled:opacity-50" style={{ color: "var(--text)", border: EDGE, minHeight: MIN_BOX }}
+            title={info.handedOff ? "Stand this orchestrator down and seat the next engine, which starts from the brief and the doctrine on disk" : "Ask the orchestrator to update its brief and doctrine first; the next one starts from them"}>
+            {busy ? "Changing…" : "Change now"}
+          </button>
+        </div>
+      )}
+      {err && <div className="text-[10.5px] pl-4" style={{ color: "var(--error-ink)" }} role="alert">{err}</div>}
+      </div>
+      {(g.workers.length > 0 || g.above > 0) && (
+        <div className="flex flex-col gap-2 pl-4 ml-3" style={{ borderLeft: LINE }}>
+          {g.above > 0 && <div className="text-[10.5px]" style={{ color: "var(--text4)" }}>{g.above} more {g.above === 1 ? "needs" : "need"} you, above</div>}
+          {g.workers.length > 0 && (
+            <div style={GRID}>
+              {g.workers.map((w) => <AgentCard key={w.paneId ?? w.name} r={w} onJump={onJump} quiet cacheTtlMs={cacheTtlMs} />)}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 export function LanternView({ active }: { active: boolean }) {
   const all = useSyncExternalStore((l) => subscribeLantern(l, active), lanternRows, lanternRows);
   const failed = useSyncExternalStore((l) => subscribeLantern(l, false), lanternFailed, lanternFailed);
@@ -442,7 +528,13 @@ export function LanternView({ active }: { active: boolean }) {
      for whatever you say next — amber, its own group, not a number on the
      rail: every session that ever answers you would otherwise be red until
      you typed again. */
-  const { need, finished, working, idle, gone } = groupLantern(rows ?? []);
+  const seatedChairs = useSyncExternalStore((l) => subscribeLantern(l, false), lanternChairs, lanternChairs);
+  /* Counts are over every row, nested or not; the sections below are over what
+     is NOT drawn under a chair. A worker stopped on a person is never nested,
+     so "needs you" is the same number either way. */
+  const counts = groupLantern(rows ?? []);
+  const { chairs: nested, rest } = nestUnderChairs(rows ?? []);
+  const { need, finished, working, idle, gone } = groupLantern(rest);
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -487,7 +579,7 @@ export function LanternView({ active }: { active: boolean }) {
         )}
         {rows !== null && rows.length > 0 && (
           <span className="text-[10.5px]" style={{ color: "var(--text4)" }}>
-            {working.length} working · {idle.length} idle{gone.length ? ` · ${gone.length} gone` : ""}
+            {counts.working.length} working · {counts.idle.length} idle{counts.gone.length ? ` · ${counts.gone.length} gone` : ""}
           </span>
         )}
         {/* The watch's one line: that it looks, how often, and what the last
@@ -527,6 +619,15 @@ export function LanternView({ active }: { active: boolean }) {
             <div style={GRID}>
               {finished.map((r) => <AgentCard key={r.paneId ?? r.name} r={r} onJump={jump} cacheTtlMs={cacheTtlMs} kinds={kinds} />)}
             </div>
+          </section>
+        )}
+
+        {nested.length > 0 && (
+          <section data-lantern-chairs className="flex flex-col gap-4">
+            {nested.map((g) => (
+              <ChairBlock key={g.chair.chairOf} g={g} info={seatedChairs.find((c) => c.root === g.chair.chairOf)}
+                onJump={jump} cacheTtlMs={cacheTtlMs} onChanged={() => { void refreshLantern(); }} />
+            ))}
           </section>
         )}
 

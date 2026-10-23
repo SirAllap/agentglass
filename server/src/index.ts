@@ -22,6 +22,7 @@ import {
   exportRows,
   pruneOldRows,
   reclaimFreePages,
+  trimWal,
   RETENTION_DAYS,
   dbPath,
   dbNotice,
@@ -115,10 +116,25 @@ import {
 } from "./issues.ts";
 import { currentRuns, runById, runActivity, startRun, adoptPane, finishRun } from "./runs.ts";
 import { failed } from "./refused.ts";
+import { trackerProjects, setTrackerChoice } from "./trackerProjects.ts";
+import { ISSUE_KEY, connectJira, jiraStatus, setJiraWrites, jiraWriteEnabled, readIssue, findIssue, mine as jiraMine, searchText as jiraSearchText, withStored as withJira } from "./jira.ts";
+import { movesStored as jiraMoves, moveStored as jiraMove, remoteLinksStored as jiraLinks, linkPullRequestStored as jiraLink } from "./jira.ts";
+import {
+  assignableStored as jiraAssignable, setAssigneeStored as jiraSetAssignee, handOffStored as jiraHandOff,
+  jiraSettings, setHandoffRule as jiraSetHandoff, projectStatusesStored as jiraProjectStatuses,
+} from "./jira.ts";
+import { jiraSteps, runStepBody, setJiraSteps } from "./jiraSteps.ts";
+import { DOOR_VERBS, actingRefusal as doorActingRefusal, isActing as isDoorActing, runDoor } from "./jiraDoor.ts";
+import { countedProjects, setCountedProjects, statusUnitsStored as jiraStatusUnitsStored } from "./jiraUnits.ts";
+import {
+  jiraViews, viewRead as jiraViewRead, viewChoices as jiraViewChoices, projectChoices as jiraProjectChoices,
+  addViewByUrl as jiraAddViewByUrl, addViewByChoice as jiraAddViewByChoice, addFolderByKey as jiraAddFolder,
+  removeViewById as jiraRemoveView, removeFolderById as jiraRemoveFolder, refreshJiraFoldersIfStale,
+} from "./jiraboards.ts";
 import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, addClickupFolder, refreshFoldersIfStale, replaceViewUrl, readView } from "./providers.ts";
 import { clickupPrefs, setClickupPrefs, settleFirstRun } from "./clickupPrefs.ts";
 import { savedViews, savedFolders, currentView, setCurrent, removeView, removeFolder, knownCardPrefix, knownNoCustomIds, boardHolding, setWritesAllowed, patchCachedTask } from "./clickupviews.ts";
-import { assignSelf, setAssignee, setCard, listMembers, workspaceMembers, setStatus, setPriority, setField, clearField, sprintLists, searchTasks, searchTasksStream, warmBodySweep, taskDetail, tagsForTask, findCard, cardPullRequests, clickupWriteEnabled, commentOn, updateTask, setTag, moveToList, createTask, addChecklist, addChecklistItem, setChecklistItem, editComment as editClickupComment, replyToComment, resolveComment, deleteComment as deleteClickupComment } from "./clickup.ts";
+import { assignSelf, setAssignee, setCard, listMembers, workspaceMembers, setStatus, setPriority, setField, clearField, sprintLists, searchTasks, searchTasksStream, warmBodySweep, taskDetail, tagsForTask, findCard, cardPullRequests, projectPullRequests, withStatedLinks, clickupWriteEnabled, commentOn, updateTask, setTag, moveToList, createTask, addChecklist, addChecklistItem, setChecklistItem, editComment as editClickupComment, replyToComment, resolveComment, deleteComment as deleteClickupComment } from "./clickup.ts";
 import { clickupTasks, dropAssignedCache } from "./clickup.ts";
 import type { ProviderId } from "../../shared/providers.ts";
 import { listTasks, taskCapability, setTaskChangeHook, startTaskSweep, addTask, completeTask, reopenTask, deleteTask, cyclePriority, editTask, addTags, replaceNote, bulkApply, TASK_WRITE_ENABLED, type BulkAction } from "./tasks.ts";
@@ -202,11 +218,14 @@ import { cloneProject, createProject } from "./projectadd.ts";
 import { budgetStatus } from "./budget.ts";
 import type { Budget } from "../../shared/types.ts";
 import { hookStatus, applyHooks, applyGate, hooksDir, hookPython } from "./hooksetup.ts";
-import { probeAgents, ROSTER } from "./agentprobe.ts";
+import { probeAgents, probeEngines, testEngine, ROSTER } from "./agentprobe.ts";
 import { join as joinPath, resolve as resolvePath, basename } from "node:path";
 import { hostname, tmpdir } from "node:os";
 import { privateHost, resolvePeer, originOf, guardedFetch, hostsOnly } from "./net.ts";
 import { DESK_HEADER, claimDesk, deskHeld } from "./desk.ts";
+import { readPolicy, writePolicy } from "./orchestration.ts";
+import { policyEngaged, startThroughPolicy, promptHeadless, startedByOf, settled, seatMayUse, workersAfterRestart, chairsAgain } from "./agents/policystart.ts";
+import { armedWakeups, evaluate as evaluatePolicy, ruleStates, startPolicyEvaluator } from "./orchpolicy.ts";
 import { resolveToken, healthProof, tokenOk, isIntake, isAuthExempt, callerFor, allowed, mayReadForeignRoot, scopeNeeded, pluginOfRequest, answersFromADevice, deskKeyOk, understudyRequiresToken, UNDERSTUDY_NO_TOKEN_ERROR, mintUnderstudyToken, revokeUnderstudyToken, tokenlessWarning, type Caller, type Origin } from "./auth.ts";
 import {
   listPlugins, masterEnabled, setMaster, installPlugin, installFromCatalogue, updatePlugin, enablePlugin, disablePlugin, removePlugin, setPluginUnboxedConsent, envAllowsUnboxed,
@@ -1423,7 +1442,7 @@ import { bunBin, NO_BUN } from "./bunbin.ts";
 import { understudyRunEnv } from "./understudy-runenv.ts";
 import { recoverAfterRestart, startUnderstudyWatchdog, stopUnderstudyWatchdog, setResumeHook, setGitHook, setFenceHook, setAliveHook, setBunHook, setBusyHook } from "./understudy-watchdog.ts";
 import { openRequests, helpHistory, markAnswered } from "./understudy-help.ts";
-import { activeDevices, markSeen, revokeDevice, devices, publicDevice, whenStoreTampered, type Scope } from "./devices.ts";
+import { scopeAllows, activeDevices, markSeen, revokeDevice, devices, publicDevice, whenStoreTampered, type Scope } from "./devices.ts";
 import { credentialsPath, hasCredential } from "./credentials.ts";
 import { startCardWatch, cardForTitle } from "./clickupwatch.ts";
 import * as CardIndex from "./clickupindex.ts";
@@ -1677,6 +1696,28 @@ function mayHostBrowser(req: Request): boolean {
   return !!o && vouchedOrigin(o);
 }
 
+/**
+ * Who may change the orchestration policy: the person. It decides which engine
+ * runs, what a worker may do and when that changes, so it is closed to every
+ * credential an agent on this machine holds: the machine token (every agent
+ * shell has it), a seat's, an understudy's, a plugin's. A paired device with
+ * the full grant was minted at the desk with somebody looking; the desktop
+ * app's own window holds the desk key, or, on a hand-started server with no
+ * key, speaks from the app's origin (the limit SECURITY.md states for one).
+ */
+function mayChangePolicy(req: Request, caller: Caller | null): boolean {
+  if (caller?.principal || caller?.kind === "plugin") return false;
+  if (caller?.kind === "device") return scopeAllows(caller.scope, "full");
+  return mayHostBrowser(req);
+}
+
+/** A project root as a policy key: absolute and plain, or nothing. */
+function policyRoot(v: unknown): string | undefined | null {
+  if (v === undefined || v === null || v === "") return undefined;
+  if (typeof v !== "string" || v.includes("\0") || !v.startsWith("/") || v.length > 500) return null;
+  return resolvePath(v);
+}
+
 function localOrigin(req: Request): boolean {
   const o = req.headers.get("origin");
   if (!o) return !crossSiteSubresource(req);
@@ -1779,7 +1820,42 @@ const attachmentHostError = hostsOnly(["clickup.com", "clickup-attachments.com"]
  */
 function asActor(c: Caller | null | undefined): ActorSource | null {
   if (!c) return null;
+  if (c.principal === "seat" && c.seat) return { kind: "machine", seat: basename(c.seat.root) };
   return c.kind === "plugin" ? { kind: "device" } : { kind: c.kind, device: c.device };
+}
+
+/** The name a request presents as its own (`X-Agentglass-Agent`, set by the
+ *  CLI from AGENTGLASS_AGENT_NAME), when it is a policy-started worker's. Such a
+ *  caller may not start workers or touch the seat (a role's TUI worker from
+ *  before the policy still reports to its seat, so it is not counted here). This stops a worker that uses the CLI
+ *  as it is; it does not stop one that means to get past it. The header is the
+ *  worker's to send or leave out, the token file is readable by anything that
+ *  runs as this user, and an engine's command rules are prefixes, so a request
+ *  without the header is the person's as far as this server can tell
+ *  (SECURITY.md, "A worker role"). */
+function presentedWorker(req: Request): string | null {
+  const n = req.headers.get("x-agentglass-agent");
+  const w = n ? AgentOps.agentNamed(n) : null;
+  return w && startedByOf(w) ? w.name : null;
+}
+
+/** A seat's own chair: the row it sits in, the pane it was adopted in, or a
+ *  name only a chair carries. No seat owns one, its own included: a seat that
+ *  could would prompt, key or kill another project's orchestrator, which runs
+ *  with permissions skipped. */
+function isChair(a: { name: string; paneId: string }): boolean {
+  return Seat.isSeatName(a.name) || Seat.everySeat().some((s) => s.name === a.name || (!!s.adoptedPane && s.adoptedPane === a.paneId));
+}
+
+/** A seat reaches only the agents it owns. One nobody owns (an enlisted tab,
+ *  one the person started, one from before owners existed) waits for a seat to
+ *  say `own` on purpose; one another project's seat owns is not its to read,
+ *  prompt, key or stop. */
+function notYours(c: Caller | null | undefined, a: AgentOps.NamedAgent): string | null {
+  if (c?.principal !== "seat" || !c.seat) return null;
+  if (!a.seatRoot) return `${a.name} has no owner yet; adopt it first: agentglass-agent own ${a.name}`;
+  if (a.seatRoot === c.seat.root) return null;
+  return `${a.name} belongs to the seat of ${basename(a.seatRoot)}, not to yours (${basename(c.seat.root)}). Ask that seat, or the person.`;
 }
 
 /**
@@ -2244,7 +2320,9 @@ const UNDERSTUDY_MACHINE = new Set([
   "/ingest", "/browser/ready", "/statusline", "/v1/traces", "/otlp/v1/traces", "/v1/logs", "/otlp/v1/logs",
   "/desk/claim",
 ]);
-const UNDERSTUDY_BLIND = new Set(["/control", "/control/result", "/providers", "/pair", ...UNDERSTUDY_MACHINE]);
+// `/jira/connect` by name and not `/jira/` by prefix: it is the one Jira route
+// that receives a token, and the card routes that follow should be recorded.
+const UNDERSTUDY_BLIND = new Set(["/control", "/control/result", "/providers", "/pair", "/jira/connect", ...UNDERSTUDY_MACHINE]);
 function understudyBlind(pathname: string): boolean {
   return UNDERSTUDY_BLIND.has(pathname) || UNDERSTUDY_BLIND_PREFIXES.some((p) => pathname.startsWith(p));
 }
@@ -3264,6 +3342,33 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      */
     if (pathname === "/agents") return json({ agents: probeAgents() });
 
+    /**
+     * What this machine has of each engine and what each can do: version,
+     * account names, the roles it can take, and the next thing to fix. Cheap
+     * and read-only; `?fresh=1` is Recheck and skips the cache; `?fresh=hermes` rechecks one engine. Never polled.
+     */
+    if (pathname === "/engines" && req.method === "GET") {
+      const fresh = url.searchParams.get("fresh");
+      const report = await probeEngines({ fresh: fresh === "1" ? true : fresh ? fresh.split(",") : false });
+      // An engine signed in is how a chair gets its plan back: take its card down now.
+      void chairsAgain().catch(() => {});
+      return json(report);
+    }
+
+    /**
+     * The one-line test: one real turn on the engine's own login, so a person
+     * asks for it and nothing runs it by itself. One at a time per engine.
+     */
+    if (pathname === "/engines/test" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { engine?: unknown };
+      try { b = (await req.json()) as { engine?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const engine = typeof b.engine === "string" ? b.engine : "";
+      const r = await testEngine(engine);
+      noteAction(clientIp, "/engines/test", { engine }, r, asActor(caller));
+      return json(r, r.error === "no such engine" ? 400 : 200);
+    }
+
     /*
      * WHO IS WORKING ON WHAT.
      *
@@ -3280,7 +3385,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname === "/agents/board") {
       /* Every source at once — see lantern.ts, which the terminal's "Ask
          about the field" reads too, so the view and the chat cannot disagree. */
-      return json({ ok: true, agents: await boardNow(), watch: lastLook(), cacheTtlMinutes: cacheTtlMinutes() });
+      return json({ ok: true, agents: await boardNow(), chairs: await Seat.chairsNow(), watch: lastLook(), cacheTtlMinutes: cacheTtlMinutes() });
     }
     if (pathname === "/agents/status" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
@@ -6280,6 +6385,284 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (!r) return json({ ok: false, error: "not found" }, 404);
       return json(r, r.ok ? 200 : 400);
     }
+    /*
+     * Which tracker each repository's cards live in, and the pull requests that
+     * name a Jira card. One block: the choice is read by the card chip and the
+     * merge form, and `/jira/prs` is the same search `/clickup/prs` runs, asked
+     * with the card's key and no ClickUp id.
+     */
+    if (pathname === "/tracker/projects" && req.method === "GET") {
+      // The repositories to offer a choice for are asked for, because naming
+      // them reads each known project's remote (cached five minutes by prs.ts).
+      const repos = url.searchParams.get("repos") === "1"
+        ? [...new Set((await Promise.all(knownProjects().slice(0, 60).map((p) => prRepoIdFor(p.path).catch(() => null)))).flatMap((r) => r ? [r.nameWithOwner] : []))].sort()
+        : undefined;
+      return json({ ok: true, projects: trackerProjects(), ...(repos ? { repos } : null) });
+    }
+    if (pathname === "/tracker/projects" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = setTrackerChoice(b.repo, b.tracker);
+      return json(r, r.ok ? 200 : 400);
+    }
+    if (pathname === "/jira/prs" && req.method === "GET") {
+      // A whole project in one search: the board's column. A key is the same
+      // shape as below without its number, and just as unfit for anything else.
+      const project = (url.searchParams.get("project") ?? "").trim();
+      if (project) {
+        if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(project)) return json({ ok: false, byCard: {}, error: "That is not a Jira project key" });
+        return json(await projectPullRequests(project, prRouteRoot(url.searchParams.get("root") ?? "")));
+      }
+      const key = (url.searchParams.get("key") ?? "").trim();
+      // A key is letters, digits and underscores, a hyphen, digits. It is handed to `gh --search`, so nothing else goes through.
+      if (!/^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(key)) return json({ ok: false, prs: [], error: "That is not a Jira card id" });
+      const found = await cardPullRequests(key, undefined, prRouteRoot(url.searchParams.get("root") ?? ""));
+      // What the card itself says on the site, one request, only when it is asked for by key (the card opened): never per row.
+      const links = await jiraLinks(key);
+      return json(links.ok && links.data?.length ? { ...found, prs: withStatedLinks(found.prs, links.data) } : found);
+    }
+    /*
+     * The pull requests a card is linked to on the site, and linking one. The
+     * read answers 200 with a sentence like the other Jira reads; the write is
+     * trusted-caller only, behind the write switch, and idempotent: the card's
+     * links are read first and an address already there is not posted again.
+     */
+    if (req.method === "GET" && pathname === "/jira/links") {
+      const r = await jiraLinks((url.searchParams.get("key") ?? "").trim());
+      return json(r.ok ? { ok: true, links: r.data ?? [] } : { ok: false, links: [], error: r.error });
+    }
+    if (pathname === "/jira/link" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = await jiraLink(String(b.key ?? "").trim(), String(b.url ?? ""), typeof b.title === "string" ? b.title : "");
+      return json(r, r.ok ? 200 : 400);
+    }
+    /*
+     * Jira. `/jira/connect` is the second route that receives a token, and like
+     * `/providers/connect` it answers with who you are and never with the
+     * credential, the email or the address as typed. It is on the understudy's
+     * blind list by name (UNDERSTUDY_BLIND) for the same reason that one is.
+     */
+    if (pathname === "/jira/status") return json(await jiraStatus());
+    /*
+     * Reading cards. Answers are 200 with `ok: false` and a sentence, the way
+     * the ClickUp reads answer: "not connected" is not a failed request. The
+     * token is read inside `withStored` and never reaches a response.
+     */
+    if (req.method === "GET" && pathname === "/jira/task") {
+      const r = await withJira((c) => readIssue(c, url.searchParams.get("id") ?? ""));
+      return json(r.ok ? { ok: true, task: r.data } : { ok: false, error: r.error });
+    }
+    if (req.method === "GET" && pathname === "/jira/find") {
+      const r = await withJira((c) => findIssue(c, url.searchParams.get("q") ?? ""));
+      return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error });
+    }
+    if (req.method === "GET" && (pathname === "/jira/mine" || pathname === "/jira/search")) {
+      const r = await withJira((c) => pathname === "/jira/mine" ? jiraMine(c, { fresh: url.searchParams.get("fresh") === "1" }) : jiraSearchText(c, url.searchParams.get("q") ?? ""));
+      return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error, ...(r.throttled ? { throttled: true } : null) });
+    }
+    if (pathname === "/jira/connect" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = await connectJira({ email: b.email, site: b.site, token: b.token, auth: b.auth });
+      return json(r, r.ok ? 200 : 400);
+    }
+    if (pathname === "/jira/writes" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      if (typeof b.on !== "boolean") return json({ ok: false, error: "on must be true or false" }, 400);
+      setJiraWrites(b.on);
+      return json({ ok: true, writes: jiraWriteEnabled() });
+    }
+    /*
+     * Moving a card. The list is a read, answered 200 like the other Jira reads
+     * (an empty list carries the sentence "You cannot move ..."). The move is a
+     * write: ClickUp's status codes, 409 for a card that changed underneath.
+     */
+    if (req.method === "GET" && pathname === "/jira/transitions") {
+      const r = await jiraMoves(url.searchParams.get("key") ?? "");
+      return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error, ...(r.throttled ? { throttled: true } : null) });
+    }
+    if (pathname === "/jira/transition" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = await jiraMove(String(b.key ?? ""), String(b.transitionId ?? ""), typeof b.updated === "number" ? b.updated : 0);
+      // The watch must not announce the person's own move as news.
+      if (r.ok && r.task && r.was) jiraRememberOwnMove({ ...r.task, status: r.was }, r.task.status);
+      return json(r, r.ok ? 200 : r.conflict ? 409 : 400);
+    }
+    /*
+     * Who is on a card, and the hand-off. People are a read (200 with a
+     * sentence); the two writes answer like the move, and like it tell the watch
+     * the change was ours. The hand-off is ONE route on purpose: the server
+     * orders its writes, so no client can race its own stamp (see handOff).
+     * `/jira/settings` is local: the write switch and the hand-off per project.
+     */
+    if (req.method === "GET" && pathname === "/jira/assignable") {
+      const r = await jiraAssignable(url.searchParams.get("key") ?? "", url.searchParams.get("q") ?? "", url.searchParams.get("transition") ?? "");
+      return json(r.ok ? { ok: true, people: r.data ?? [] } : { ok: false, error: r.error, ...(r.throttled ? { throttled: true } : null) });
+    }
+    if (pathname === "/jira/assignee" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      // Anything but a person key or null is refused inside, before a request.
+      const r = await jiraSetAssignee(String(b.key ?? ""), b.to as string | null, typeof b.updated === "number" ? b.updated : 0);
+      if (r.ok && r.task) jiraRememberOwnAssign(r.task);
+      return json(r, r.ok ? 200 : r.conflict ? 409 : 400);
+    }
+    if (pathname === "/jira/handoff" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = await jiraHandOff(String(b.key ?? ""), typeof b.updated === "number" ? b.updated : 0, {
+        ...(typeof b.to === "string" ? { to: b.to } : null),
+        ...(typeof b.clear === "boolean" ? { clear: b.clear } : null),
+      });
+      // A card that moved but could not be read back is still our move (`moved` carries it).
+      if (r.ok && r.was !== undefined && (r.task || r.moved)) jiraRememberOwnMove({ ...(r.task ?? r.moved!), status: r.was }, r.task?.status ?? r.moved!.status);
+      return json(r, r.ok ? 200 : r.conflict ? 409 : 400);
+    }
+    /*
+     * Steps: what a button on a pull request does to a Jira card, global to the site and by status name.
+     * `POST /jira/step` runs one, as ONE request, ordered here (the stamp is checked once, before any write);
+     * the settings write only the local file. Behind the write switch like every other write.
+     */
+    if (req.method === "GET" && pathname === "/jira/steps") return json({ ok: true, ...jiraSteps() });
+    if (pathname === "/jira/steps" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = setJiraSteps(b.steps);
+      return json(r.ok ? { ok: true, steps: r.steps, overrides: r.overrides } : r, r.ok ? 200 : 400);
+    }
+    if (pathname === "/jira/step" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = await runStepBody(b);
+      if (r.ok && r.was !== undefined && (r.task || r.moved)) jiraRememberOwnMove({ ...(r.task ?? r.moved!), status: r.was }, r.task?.status ?? r.moved!.status);
+      return json(r, r.ok ? 200 : r.conflict ? 409 : 400);
+    }
+    /*
+     * The agent door to a card (`agentglass-ui jira ...`, one MCP tool per verb): read it, its moves
+     * and steps, run a step, link a pull request. Every verb calls what the routes above call, so the
+     * Jira write switch, the per-card lock and the stamp are theirs; this adds the stamp `as`, the
+     * control level (the acting verbs leave the app, so they need level 3 as well as the Jira switch, and
+     * are refused below it before anything is read), the per-caller write limit and one audit line, and
+     * answers in `{state, untrusted}`.
+     */
+    if (pathname.startsWith("/jira/door/") && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const verb = pathname.slice("/jira/door/".length);
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const as = callerRequestId(b.as);
+      const who = caller ? asActor(caller) : null;
+      const audit = (ok: boolean, error?: string) =>
+        noteAction(clientIp, `/jira/door/${verb}`, { ...(as ? { as } : {}), ...(isDoorActing(verb) && typeof b.key === "string" && ISSUE_KEY.test(b.key) ? { key: b.key } : {}) }, { ok, error }, who);
+      if (!(DOOR_VERBS as readonly string[]).includes(verb)) return json({ ok: false, error: `That is not a card verb: ${DOOR_VERBS.join(", ")}` }, 404);
+      if (isDoorActing(verb)) {
+        const held = doorActingRefusal(verb, CONTROL.level, CONTROL.readonly);
+        if (held) { audit(false, "level"); return json({ ok: false, error: held }, 403); }
+        if (!controlWriteLimit.hit(actorOf(clientIp, who))) { audit(false, "rate limited"); return json({ ok: false, error: "too many changes from this caller; slow down" }, 429); }
+      }
+      const r = await runDoor(verb, b);
+      audit(r.body.ok === true, typeof r.body.error === "string" ? r.body.error : undefined);
+      return json(r.body, r.status);
+    }
+    if (req.method === "GET" && pathname === "/jira/settings") return json({ ok: true, ...jiraSettings() });
+    if (pathname === "/jira/settings" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = jiraSetHandoff(b.project, b.rule === undefined ? undefined : b.rule);
+      return json(r.ok ? { ok: true, ...r.settings } : r, r.ok ? 200 : 400);
+    }
+    /*
+     * The projects the workflow map is drawn from, with their statuses: the ones the person chose, else where
+     * their cards live. The pick is local; nothing here writes to Jira.
+     */
+    if (req.method === "GET" && pathname === "/jira/status-units") {
+      const r = await jiraStatusUnitsStored(url.searchParams.get("fresh") === "1");
+      return json(r.ok ? { ok: true, ...r.data, counted: countedProjects() } : { ok: false, error: r.error, ...(r.throttled ? { throttled: true } : null) });
+    }
+    if (pathname === "/jira/status-units" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const raw = await req.json().catch(() => null) as unknown;
+      const b = typeof raw === "object" && raw !== null && !Array.isArray(raw) ? raw as Record<string, unknown> : null;
+      const r = b && Object.keys(b).every((k) => k === "counted") ? setCountedProjects(b.counted) : { ok: false as const, error: "That is not a list of Jira project keys" };
+      return json(r, r.ok ? 200 : 400);
+    }
+    if (req.method === "GET" && pathname === "/jira/project-statuses") {
+      const r = await jiraProjectStatuses(url.searchParams.get("project") ?? "");
+      return json(r.ok ? { ok: true, statuses: r.data ?? [] } : { ok: false, error: r.error, ...(r.throttled ? { throttled: true } : null) });
+    }
+    /*
+     * Saved Jira views: boards, saved filters and searches, and projects as
+     * folders. Nothing here writes to Jira (so no write gate); the POSTs change
+     * only the local address book, behind the same CSRF check as the other
+     * local writes. Reads answer 200 with `ok: false` and a sentence.
+     * `/jira/views` is the local store alone: its only request, made in the
+     * background, is the stale-folder refresh.
+     */
+    if (req.method === "GET" && pathname === "/jira/views") {
+      void refreshJiraFoldersIfStale();
+      return json(jiraViews());
+    }
+    if (req.method === "GET" && pathname === "/jira/view") {
+      return json(await jiraViewRead(url.searchParams.get("id") || undefined, { force: url.searchParams.get("force") === "1", cached: url.searchParams.get("cached") === "1" }));
+    }
+    if (req.method === "GET" && pathname === "/jira/view-choices") {
+      const r = await withJira((c) => jiraViewChoices(c, url.searchParams.get("q") ?? ""));
+      return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error, ...(r.throttled ? { throttled: true } : null) });
+    }
+    if (req.method === "GET" && pathname === "/jira/project-choices") {
+      const r = await withJira((c) => jiraProjectChoices(c));
+      return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error, ...(r.throttled ? { throttled: true } : null) });
+    }
+    if (pathname === "/jira/views/add" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = typeof b.url === "string" ? await jiraAddViewByUrl(b.url) : await jiraAddViewByChoice(b.kind, b.id);
+      const out = r.ok && r.data ? r.data : { ok: false, error: r.error };
+      return json(out, out.ok ? 200 : 400);
+    }
+    if (pathname === "/jira/views/remove" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = jiraRemoveView(String(b.id ?? ""));
+      return json(r, r.ok ? 200 : 400);
+    }
+    if (pathname === "/jira/folders/add" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = await jiraAddFolder(b.key);
+      return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error }, r.ok ? 200 : 400);
+    }
+    if (pathname === "/jira/folders/remove" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      jiraRemoveFolder(String(b.id ?? ""));
+      return json({ ok: true });
+    }
+    /*
+     * A Jira card's words. `/jira/detail` is the card with its description and
+     * comments as Markdown (one issue read); `/jira/people` is who a comment
+     * may mention, for what was typed after `@`. Both answer 200 with `ok:
+     * false` and a sentence, like the other Jira reads. `/jira/comment` is a
+     * write behind the write switch: 400 with a sentence when refused. The
+     * format on the wire (ADF or wiki markup) is the connection's, decided in
+     * jiraComments.ts.
+     */
+    if (req.method === "GET" && pathname === "/jira/detail") {
+      const r = await jiraDetailRead(url.searchParams.get("key") ?? "");
+      return json(r.ok && r.data ? { ok: true, detail: r.data.detail, more: r.data.more } : { ok: false, error: r.error, ...(r.throttled ? { throttled: true } : null) });
+    }
+    if (req.method === "GET" && pathname === "/jira/people") {
+      const r = await jiraMentionable(url.searchParams.get("key") ?? "", url.searchParams.get("q") ?? "");
+      return json(r.ok ? { ok: true, people: r.data ?? [] } : { ok: false, error: r.error, ...(r.throttled ? { throttled: true } : null) });
+    }
+    if (pathname === "/jira/comment" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = await jiraCommentOn(String(b.key ?? ""), typeof b.text === "string" ? b.text : "", b.mentions);
+      return json(r, r.ok ? 200 : 400);
+    }
     /* Boards, saved by pasting their address. Reads and one write path, and
        the write path refuses unless AGENTGLASS_CLICKUP_WRITE=1 — see
        clickup.ts for why this one defaults to off while the local list
@@ -7901,7 +8284,8 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       let b: { data?: unknown; name?: unknown };
       try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const said = await transcribe(b.data, b.name);
-      return json(said, said.ok ? 200 : 400);
+      const { status, ...body } = said;
+      return json(body, said.ok ? 200 : status ?? 400);
     }
 
     if (pathname === "/terminal/image" && req.method === "POST") {
@@ -8023,9 +8407,52 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const r = writeWorkerRole(b.role, { provider: b.provider, model: b.model });
       return json({ ...r, roles: workerRoles() }, r.ok ? 200 : 400);
     }
+    /**
+     * The orchestration policy (shared/orchestration.ts). GET answers the
+     * policy in force for `?root=` (its own, or the global one); POST stores a
+     * whole policy and answers with the one now in force. Workers and
+     * orchestrators resolve their engine from it when they start.
+     */
+    if (pathname === "/orchestration" && req.method === "GET") {
+      const root = policyRoot(url.searchParams.get("root"));
+      if (root === null) return json({ ok: false, error: "root: has to be an absolute path" }, 400);
+      const v = readPolicy(root);
+      return json({ ok: true, scope: v.scope, root: v.root, overrides: v.overrides, policy: v.policy });
+    }
+    if (pathname === "/orchestration" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { root?: unknown; policy?: unknown } = {};
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const root = policyRoot(b.root);
+      if (!mayChangePolicy(req, caller)) {
+        const r = { ok: false, error: "only the person can change the orchestration policy: change it in Settings, not from an agent" };
+        noteAction(clientIp, "/orchestration", { ...(root ? { root } : {}) }, r, asActor(caller));
+        return json(r, 403);
+      }
+      if (root === null) return json({ ok: false, error: "root: has to be an absolute path" }, 400);
+      if (!("policy" in b)) return json({ ok: false, error: "policy: is missing" }, 400);
+      const r = writePolicy(root, b.policy);
+      noteAction(clientIp, "/orchestration", { ...(root ? { root } : {}) }, r.ok ? { ok: true } : r, asActor(caller));
+      if (!r.ok) return json({ ok: false, error: r.error }, 400);
+      // Editing the rules is an event too: settle their switches and wake-ups now.
+      void evaluatePolicy().catch(() => {});
+      // ...and a chain with an engine added is a plan back for a chair that had none.
+      void chairsAgain().catch(() => {});
+      return json({ ok: true, scope: r.view.scope, root: r.view.root, overrides: r.view.overrides, policy: r.view.policy });
+    }
+    /**
+     * Which rules are on, and why a reading did not change one ("holding: the
+     * last usage reading is 47 min old"). Read-only; the evaluator hangs on
+     * events, so nothing here asks anybody for a reading.
+     */
+    if (pathname === "/orchestration/state" && req.method === "GET") {
+      return json({ ok: true, rules: ruleStates(), wakeups: armedWakeups() });
+    }
     if (pathname === "/seat/wake" && req.method === "GET") return json({ ok: true, hours: seatWakeHours() });
     if (pathname === "/seat/wake" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
+      const worker = presentedWorker(req);
+      if (worker) return json({ ok: false, error: `${worker} is a worker, and a worker has no say over the seat: it reports in its own window.` }, 403);
       let b: { hours?: unknown }; try { b = (await req.json()) as typeof b; } catch { b = {}; }
       const r = writeSeatSettings({ seatWakeHours: Number(b.hours) });
       return json({ ...r, hours: seatWakeHours() }, r.ok ? 200 : 400);
@@ -8040,24 +8467,36 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      * re-reads its whole context every turn. So the same facts, as text, with
      * nothing else in the envelope.
      */
+    /* Whose project a read is about: the person says, with `?root=`; a seat's is
+       the one its credential was minted for, whatever the query names. */
+    const readGate = (): { root: string } | { error: string; status: number } => {
+      if (caller?.principal === "seat") {
+        const own = caller.seat?.root;
+        if (!own) return { error: "this seat's project is not known, so it speaks for none", status: 403 };
+        const g = Seat.seatSpeaksFor(own, url.searchParams.get("root"));
+        return "error" in g ? { ...g, status: 403 } : g;
+      }
+      const g = Seat.seatable(url.searchParams.get("root") || workspaceRoot());
+      return "error" in g ? { ...g, status: 400 } : g;
+    };
     /* The queue, read-only, for a seat that would rather not carry the whole
        `/seat` answer to find out what is waiting. */
     if (pathname === "/seat/tasks" && req.method === "GET") {
-      const gate = Seat.seatable(url.searchParams.get("root") || workspaceRoot());
-      if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
+      const gate = readGate();
+      if ("error" in gate) return json({ ok: false, error: gate.error }, gate.status);
       return json({ ok: true, root: gate.root, tasks: SeatQueue.tasksFor(gate.root) });
     }
     /* What the seat has asked the person for, as text, for the same reason the
        field is text: the thing reading it pays to read. */
     if (pathname === "/seat/needs" && req.method === "GET") {
-      const gate = Seat.seatable(url.searchParams.get("root") || workspaceRoot());
-      if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
+      const gate = readGate();
+      if ("error" in gate) return json({ ok: false, error: gate.error }, gate.status);
       if (url.searchParams.get("format") === "json") return json({ ok: true, root: gate.root, needs: SeatNeeds.needsFor(gate.root) });
       return new Response(SeatNeeds.needReadout(gate.root), { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
     }
     if (pathname === "/seat/field" && req.method === "GET") {
-      const gate = Seat.seatable(url.searchParams.get("root") || workspaceRoot());
-      if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
+      const gate = readGate();
+      if ("error" in gate) return json({ ok: false, error: gate.error }, gate.status);
       const rows = Seat.fieldFor(gate.root, await boardNow().catch(() => []));
       if (url.searchParams.get("format") === "json") {
         return json({ ok: true, root: gate.root, field: rows, unread: SeatInbox.unreadCount(gate.root), stopped: SeatInbox.unreadWorthWaking(gate.root) });
@@ -8079,16 +8518,23 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       return new Response(fieldReadout(rows) + tray, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
     }
     if (pathname === "/seat" && req.method === "GET") {
-      const gate = Seat.seatable(url.searchParams.get("root") || workspaceRoot());
-      if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
+      const gate = readGate();
+      if ("error" in gate) return json({ ok: false, error: gate.error }, gate.status);
       return json({ ok: true, ...(await Seat.seatStatus(gate.root)), doctrineText: readDoctrine(gate.root).text, tasks: SeatQueue.tasksFor(gate.root), needs: SeatNeeds.needsFor(gate.root), lines: Seat.seatLines(gate.root), floorHours: seatWakeHours(), models: claudeModels(), defaultModel: Seat.defaultSeatModel() });
     }
     if (pathname.startsWith("/seat/") && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       let b: Record<string, unknown>;
       try { b = (await req.json()) as Record<string, unknown>; } catch { return json({ ok: false, error: "invalid json" }, 400); }
-      const gate = Seat.seatable(typeof b.root === "string" && b.root ? b.root : workspaceRoot());
-      if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
+      const worker = presentedWorker(req);
+      if (worker) return json({ ok: false, error: `${worker} is a worker, and a worker has no say over the seat: it reports in its own window.` }, 403);
+      /* Whose project: the person says, a seat does not. A seat's is the one
+         its credential was minted for, whatever root the body carries. */
+      const asSeat = caller?.principal === "seat";
+      const own = asSeat ? caller?.seat?.root : undefined;
+      if (asSeat && !own) return json({ ok: false, error: "this seat's project is not known, so it speaks for none" }, 403);
+      const gate = own ? Seat.seatSpeaksFor(own, b.root) : Seat.seatable(typeof b.root === "string" && b.root ? b.root : workspaceRoot());
+      if ("error" in gate) return json({ ok: false, error: gate.error }, own ? 403 : 400);
       const root = gate.root;
       const verb = pathname.slice("/seat/".length);
 
@@ -8096,17 +8542,37 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
         const powers = Seat.isPower(b.powers) ? b.powers : undefined;
         const model = typeof b.model === "string" ? b.model : undefined;
-        const r = await Seat.openSeat({ root, powers, model, wakeHours: seatWakeHours() });
+        const kind = typeof b.kind === "string" && b.kind ? b.kind : undefined;
+        const r = await Seat.openSeat({ root, powers, model, kind, wakeHours: seatWakeHours() });
         return json(r, r.ok ? 200 : 400);
       }
       if (verb === "close") return json(await Seat.closeSeat(root));
+      /* Changing the engine in the chair is the person's: a seat standing
+         itself down to sit again as something else is not a thing it asks. */
+      if (verb === "change") {
+        if (asSeat) return json({ ok: false, error: "only a person changes the chair" }, 403);
+        if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
+        const r = await Seat.changeChair(root, { wakeHours: seatWakeHours() });
+        noteAction(clientIp, "/seat/change", { root }, r, asActor(caller));
+        return json(r, r.ok ? 200 : 409);
+      }
       /* The seat's own report. Not `/agents/status`: that is the board, and
          the seat is deliberately not on it. */
       if (verb === "say") return json(Seat.seatSays(root, typeof b.line === "string" ? b.line : ""), 200);
+      /* The engine and the powers are the person's. A seat's credential is
+         turned away at the wall first (auth.ts has no /seat/settings for any
+         power); this is the same sentence for the day that list grows. */
       if (verb === "settings") {
+        if (asSeat) return json({ ok: false, error: "only a person changes the chair" }, 403);
         if (b.powers !== undefined && !Seat.isPower(b.powers)) return json({ ok: false, error: "powers: speak, nudge or assign" }, 400);
         const row = Seat.seatRow(root);
-        Seat.setSeatSettings(root, typeof b.model === "string" ? b.model : row?.model ?? "", Seat.isPower(b.powers) ? b.powers : row?.powers ?? "speak");
+        const kind = typeof b.kind === "string" && b.kind ? b.kind : undefined;
+        const refused = kind ? Seat.chairRefusal(kind) : null;
+        if (refused) return json({ ok: false, error: refused }, 400);
+        /* A model is one engine's: moving the chair to another engine without
+           naming a model leaves the choice to that engine's default. */
+        const swapped = !!kind && kind !== (row?.kind || "claude");
+        Seat.setSeatSettings(root, typeof b.model === "string" ? b.model : swapped ? "" : row?.model ?? "", Seat.isPower(b.powers) ? b.powers : row?.powers ?? "speak", kind);
         return json({ ok: true, seat: Seat.seatRow(root) });
       }
       /*
@@ -8239,8 +8705,9 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
         const powers = Seat.isPower(b.powers) ? b.powers : undefined;
         const model = typeof b.model === "string" ? b.model : undefined;
+        const kind = typeof b.kind === "string" && b.kind ? b.kind : undefined;
         const seeded = { doctrine: readDoctrine(root), brief: readBrief(root) };
-        const r = await Seat.openSeat({ root, powers, model, wakeHours: seatWakeHours() });
+        const r = await Seat.openSeat({ root, powers, model, kind, wakeHours: seatWakeHours() });
         if (!r.ok) return json(r, 400);
         return json({
           ok: true, already: r.already, seat: r.seat, agent: r.agent,
@@ -8326,7 +8793,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     }
     if (pathname === "/agents/named" && req.method === "GET") {
       const all = url.searchParams.get("all") === "1";
-      return json({ ok: true, result: { agents: await AgentOps.listAgents(all) } });
+      return json({ ok: true, result: { agents: (await AgentOps.listAgents(all)).map(settled) } });
     }
     if (pathname.startsWith("/agents/named/") && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
@@ -8334,7 +8801,28 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const verb = pathname.slice("/agents/named/".length);
       let b: Record<string, unknown>;
       try { b = (await req.json()) as Record<string, unknown>; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      /* One row in the Activity log per act, with the seat's project as the
+         actor, and a refusal is an act: what was turned away is the part worth
+         reading later. */
+      const say = (r: Record<string, unknown>, status = 200): Response => {
+        if (["start", "prompt", "keys", "stop", "broadcast", "own", "enlist"].includes(verb)) {
+          noteAction(clientIp, `/agents/named/${verb}`, { name: typeof b.name === "string" ? b.name : "" },
+            r.ok === true ? { ok: true } : { ok: false, error: String(r.error ?? "") }, asActor(caller));
+        }
+        return json(r, status);
+      };
+      const worker = presentedWorker(req);
+      if (worker) {
+        return say({ ok: false, error: `${worker} is a worker, and a worker does not start, prompt or stop agents: it reports its result in its own window, and the seat that started it reads that.` }, 403);
+      }
       const timeoutMs0 = Math.min(600_000, Math.max(0, Number(b.timeout ?? 0) || 0));
+      /* A permission prompt on a worker's screen is the person's to answer. A
+         seat that owns the worker could otherwise approve it by pressing enter,
+         or by pasting a line and its enter: the same answer, by the back door.
+         Only the way out (escape, ctrl-c) stays a seat's. */
+      const seatAtPrompt = async (paneId: string): Promise<boolean> =>
+        caller?.principal === "seat" && AgentOps.stateOfScreen(await AgentOps.screenOf(paneId)) === "needs-you";
+      const PROMPT_IS_THE_PERSONS = "a permission prompt is the person's; ask with agentglass-agent need";
       /*
        * BROADCAST — one message, N agents.
        *
@@ -8348,25 +8836,46 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         const names = Array.isArray(b.names) ? b.names.filter((n): n is string => typeof n === "string") : [];
         const text = typeof b.text === "string" ? b.text : "";
         if (!text.trim()) return json({ ok: false, error: "nothing to send" }, 400);
-        const live = (await AgentOps.listAgents()).filter((a) => a.endedAt === null);
+        const live = (await AgentOps.listAgents()).filter((a) => a.endedAt === null && !notYours(caller, a));
         const want = names.length ? live.filter((a) => names.includes(a.name)) : live;
         const missing = names.filter((n) => !live.some((a) => a.name === n));
         const sent: { name: string; outcome: string }[] = [];
         for (const a of want) {
-          const outcome = await AgentOps.promptAgent(a.paneId, text, timeoutMs0 || 10_000).catch(() => "gone");
+          const outcome = await seatAtPrompt(a.paneId) ? `refused: ${PROMPT_IS_THE_PERSONS}` : await AgentOps.promptAgent(a.paneId, text, timeoutMs0 || 10_000, a.kind).catch(() => "gone");
           sent.push({ name: a.name, outcome: String(outcome) });
         }
-        return json({
+        return say({
           ok: sent.some((x) => x.outcome === "sent" || x.outcome === "queued"),
           result: { sent, missing, asked: want.length },
         });
       }
-      if (!AgentOps.validName(b.name)) return json({ ok: false, error: "name: letters, digits, dot, dash or underscore, 64 at most" }, 400);
+      if (!AgentOps.validName(b.name)) return say({ ok: false, error: "name: letters, digits, dot, dash or underscore, 64 at most" }, 400);
       const name = b.name;
       const timeoutMs = Math.min(600_000, Math.max(0, Number(b.timeout ?? 0) || 0));
 
       if (verb === "start") {
         const cwd = gitSafeAbs(b.cwd);
+        const seatRoot = caller?.principal === "seat" ? caller.seat?.root ?? null : null;
+        /* A seat starts workers with a role, in its own project. The role is
+           where the envelope comes from, so a start without one would be the
+           policy as advice; and a worker in another project would answer to
+           this project's policy. Both are refused before anything else is read. */
+        if (seatRoot) {
+          /* Nor under a name a chair carries: `seated` knows an orchestrator
+             by its name, so the worker would be one. Measured: with the other
+             chair down, the start answered 200. */
+          if (isChair({ name, paneId: "" })) {
+            return say({ ok: false, error: `${name} is a seat's name, and no worker is started under one` }, 403);
+          }
+          if (b.role === undefined) {
+            return say({ ok: false, error: "a seat starts workers with --role (scout, builder or verifier): the role's envelope is what keeps a worker inside the policy, so a start without one is refused" }, 400);
+          }
+          if (!cwd || !seatMayUse(seatRoot, cwd)) {
+            return say({ ok: false, error: `that directory is not inside ${basename(seatRoot)}'s own tree or worktrees, and a seat starts workers only there` }, 400);
+          }
+        }
+        // What the window opens in is the directory that was checked, links followed.
+        const runIn = (seatRoot && cwd ? seatMayUse(seatRoot, cwd) : null) ?? cwd;
         /*
          * A SIBLING WORKTREE IS THE SAME PROJECT.
          *
@@ -8386,7 +8895,20 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
          */
         const sameProject = !!cwd && workspaceRoots().includes(projectRootOf(cwd) ?? "");
         if (!cwd || (!inScope(cwd) && !sameProject) || !fsExists(cwd)) {
-          return json({ ok: false, error: "that directory is not in the open project, nor a worktree of it" }, 400);
+          return say({ ok: false, error: "that directory is not in the open project, nor a worktree of it" }, 400);
+        }
+        /* A name another seat's worker answers to, live or finished, is not
+           this seat's to take over: taking it would erase the other's answer.
+           One nobody owns is refused only while it is running. */
+        const had = AgentOps.agentNamed(name);
+        const clash = had ? notYours(caller, had) : null;
+        if (clash && (had!.seatRoot || await AgentOps.paneAlive(had!.paneId))) return say({ ok: false, error: clash }, 403);
+        const policyRoot = seatRoot ?? projectRootOf(cwd) ?? workspaceRoot() ?? cwd;
+        if (policyEngaged(policyRoot, b)) {
+          const r = await startThroughPolicy({
+            root: workspaceRoot() || cwd, policyRoot, name, cwd: runIn!, prompt: typeof b.prompt === "string" ? b.prompt : "", body: b, seatRoot,
+          });
+          return say(r.body, r.status);
         }
         /* A worker ROLE picks the CLI itself — Settings says which one each
            role runs on — and brings that CLI's lock and model with it. The
@@ -8395,21 +8917,22 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
            caller cannot ask for a role and quietly get another CLI unlocked. */
         const role = b.role === undefined ? null : AgentOps.roleStart(b.role);
         if (role && !role.ok) {
-          return json({ ok: false, error: role.error === "no-role" ? "no such role" : "the CLI this role is set to has no lock this app can apply" }, 400);
+          return say({ ok: false, error: role.error === "no-role" ? "no such role" : "the CLI this role is set to has no lock this app can apply" }, 400);
         }
         const wanted = role?.ok ? role.kind : typeof b.kind === "string" ? b.kind : "claude";
         if (role?.ok && typeof b.kind === "string" && b.kind !== role.kind) {
-          return json({ ok: false, error: `this role runs on ${role.kind} (Settings ▸ Worker roles), not ${b.kind}` }, 400);
+          return say({ ok: false, error: `this role runs on ${role.kind} (Settings ▸ Worker roles), not ${b.kind}` }, 400);
         }
-        if (!agentKind(wanted)) return json({ ok: false, error: "no such agent" }, 400);
+        if (!agentKind(wanted)) return say({ ok: false, error: "no such agent" }, 400);
         const args = Array.isArray(b.args) ? b.args.filter((a): a is string => typeof a === "string") : [];
         const r = await AgentOps.startAgent({
-          root: workspaceRoot() || cwd, name, cwd, kind: wanted,
+          root: workspaceRoot() || cwd, name, cwd: runIn!, kind: wanted,
           prompt: typeof b.prompt === "string" ? b.prompt : "",
           yolo: b.yolo === true, yoloAllowed: chatBypassAllowed(), args,
           remoteControl: typeof b.remoteControl === "string" ? b.remoteControl : undefined,
           keep: b.keep === true,
           ...(role?.ok ? { serverArgs: role.args, env: role.env, lockedRole: true } : {}),
+          owner: { seatRoot, model: "", startedBy: null, resumeId: null },
         });
         if (!r.ok) {
           /* `arg-refused` and `lock-loosened` are answered below, with their detail in them. */
@@ -8429,18 +8952,18 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
              an agent is allowed to do is decided in Settings (yolo) or by this
              server, never by a flag riding in `args` — see refusedArg. */
           if (r.error === "lock-loosened") {
-            return json({ ok: false, error: `this directory's OpenCode config loosens the role's lock, so it was not started: ${r.detail}` }, 400);
+            return say({ ok: false, error: `this directory's OpenCode config loosens the role's lock, so it was not started: ${r.detail}` }, 400);
           }
           if (r.error === "arg-refused") {
-            return json({ ok: false, error: `${r.flag} is not an arg a start may carry: it changes what the agent is allowed to do, and that is decided in Settings, not in args` }, 400);
+            return say({ ok: false, error: `${r.flag} is not an arg a start may carry: it changes what the agent is allowed to do, and that is decided in Settings, not in args` }, 400);
           }
-          return json({ ok: false, error: why[r.error], result: r.error === "exists" ? { agent: r.agent } : undefined }, r.error === "exists" ? 409 : 400);
+          return say({ ok: false, error: why[r.error], result: r.error === "exists" ? { agent: r.agent } : undefined }, r.error === "exists" ? 409 : 400);
         }
         /* `--timeout` on start is Herdr's "wait until the CLI is up": the
            worker's next verb is a prompt, and a paste into a pane whose CLI has
            not drawn its box yet is a paste into a shell. */
-        const wait = timeoutMs > 0 ? await AgentOps.waitFor(r.agent.paneId, ["ready", "working", "needs-you"], timeoutMs) : null;
-        return json({ ok: true, result: { agent: r.agent, state: wait?.state ?? "starting", ready: wait?.reached ?? false } });
+        const wait = timeoutMs > 0 ? await AgentOps.waitFor(r.agent.paneId, ["ready", "working", "needs-you"], timeoutMs, 250, r.agent.kind) : null;
+        return say({ ok: true, result: { agent: r.agent, state: wait?.state ?? "starting", ready: wait?.reached ?? false } });
       }
 
       /*
@@ -8451,22 +8974,67 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
        * hand, and the registry held only what this app had started.
        */
       if (verb === "enlist") {
+        /* From a seat, only a tab inside its own project, never a seat's
+           chair, and never under a name that is another seat's or a chair's:
+           enlisting decides what the seat's other verbs can reach, and the
+           name's old row is replaced by the new one. */
+        const seat = caller?.principal === "seat" ? caller.seat?.root ?? null : null;
+        const had = AgentOps.agentNamed(name);
+        if (seat && isChair({ name, paneId: had?.paneId ?? "" })) {
+          return say({ ok: false, error: `${name} is a seat's name, and a seat is nobody's to enlist` }, 403);
+        }
+        if (seat && had?.seatRoot) {
+          const why = notYours(caller, had);
+          if (why) return say({ ok: false, error: why }, 403);
+        }
         const r = await AgentOps.enlistAgent({
           name, pane: typeof b.pane === "string" ? b.pane : undefined,
           window: typeof b.window === "string" ? b.window : undefined,
+          refuse: seat ? (p) => isChair({ name, paneId: p.paneId }) ? "that pane is a seat, and a seat is nobody's to enlist"
+            : seatMayUse(seat, p.cwd) ? null
+            : `that tab is not inside ${basename(seat)}'s own tree or worktrees, and a seat enlists only there` : undefined,
         });
-        if (r.ok) return json({ ok: true, result: { agent: r.agent } });
+        if (r.ok) return say({ ok: true, result: { agent: r.agent } });
         const why: Record<string, string> = {
           "bad-name": "name: letters, digits, dot, dash or underscore, 64 at most",
           exists: `an agent by that name is already live in pane ${r.detail}`,
           "no-pane": "no pane by that id or window name on the engine",
           "many-panes": `more than one window is called that (${r.detail}) — say which pane`,
           "not-an-agent": `that pane is running ${r.detail}, not an agent — prompting it would type into a shell`,
+          taken: `that pane is already agent ${r.detail}: it answers to that name and its owner`,
+          refused: r.detail ?? "",
         };
-        return json({ ok: false, error: why[r.error] }, r.error === "exists" ? 409 : 400);
+        return say({ ok: false, error: why[r.error] }, r.error === "exists" ? 409 : 400);
       }
 
       const a = AgentOps.agentNamed(name);
+      /* OWN — a seat takes an agent nobody owns, on purpose. Only a seat: the
+         person's own token and a worker are refused, and an agent already
+         owned, by anyone, is not taken. */
+      if (verb === "own") {
+        if (caller?.principal !== "seat" || !caller.seat) return say({ ok: false, error: "only a seat can own an agent: ask from the orchestrator's own session" }, 403);
+        if (!a) return say({ ok: false, error: "no agent by that name" }, 404);
+        if (a.seatRoot && a.seatRoot !== caller.seat.root) return say({ ok: false, error: `${a.name} belongs to the seat of ${basename(a.seatRoot)}, not to yours (${basename(caller.seat.root)}). Ask that seat, or the person.` }, 403);
+        if (a.endedAt !== null) return say({ ok: false, error: "no agent by that name" }, 404);
+        /* Having no owner is not enough: a seat's own row has none either, and
+           so does every tab the person works in, in any project. */
+        if (isChair(a)) return say({ ok: false, error: `${a.name} is a seat, and a seat is nobody's to own` }, 403);
+        if (!seatMayUse(caller.seat.root, a.cwd)) {
+          return say({ ok: false, error: `${a.name} is not inside ${basename(caller.seat.root)}'s own tree or worktrees, and a seat owns agents only there` }, 403);
+        }
+        AgentOps.ownAgent(a.name, caller.seat.root);
+        return say({ ok: true, result: { name, owner: caller.seat.root } });
+      }
+      const theirs = a ? notYours(caller, a) : null;
+      if (theirs) return say({ ok: false, error: theirs }, 403);
+      /* A policy-started worker is a one-shot that has usually finished by the
+         time it is told something: that is a resumed turn, not keys in a pane. */
+      if (verb === "prompt" && a && startedByOf(a)) {
+        const text = typeof b.text === "string" ? b.text : "";
+        if (!text.trim()) return say({ ok: false, error: "nothing to send" }, 400);
+        const r = await promptHeadless(a, text);
+        return say(r.body, r.status);
+      }
       /* An ended agent can still be READ while its own tab is on screen: a
          `--keep` one-shot's answer is what it was kept for. And STOPPED, which
          closes that tab: otherwise it stays for the wrapper's day — only a
@@ -8480,14 +9048,15 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (verb === "prompt") {
         const text = typeof b.text === "string" ? b.text : "";
         if (!text.trim()) return json({ ok: false, error: "nothing to send" }, 400);
-        const outcome = await AgentOps.promptAgent(a.paneId, text, timeoutMs || 10_000);
-        return json({ ok: outcome === "sent" || outcome === "queued", result: { name, outcome } }, outcome === "gone" ? 410 : 200);
+        if (await seatAtPrompt(a.paneId)) return say({ ok: false, error: PROMPT_IS_THE_PERSONS }, 403);
+        const outcome = await AgentOps.promptAgent(a.paneId, text, timeoutMs || 10_000, a.kind);
+        return say({ ok: outcome === "sent" || outcome === "queued", result: { name, outcome } }, outcome === "gone" ? 410 : 200);
       }
       if (verb === "wait") {
         const raw = typeof b.until === "string" ? b.until.split(",") : [];
         const until = raw.map((s) => s.trim()).filter((s): s is AgentOps.AgentState => ["starting", "ready", "working", "needs-you", "gone"].includes(s));
         if (!until.length) return json({ ok: false, error: "until: ready, working, needs-you or gone" }, 400);
-        const w = await AgentOps.waitFor(a.paneId, until, timeoutMs || 90_000);
+        const w = await AgentOps.waitFor(a.paneId, until, timeoutMs || 90_000, 250, a.kind);
         return json({ ok: w.reached, result: { name, state: w.state, reached: w.reached } });
       }
       if (verb === "read") {
@@ -8497,20 +9066,22 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         /* The bottom of a pane is blank rows, not content: trimmed before the
            tail is cut, or "the last 3 lines" of a 50-row pane are three blanks. */
         const text = lines > 0 ? screen.trimEnd().split("\n").slice(-lines).join("\n") : screen;
-        return json({ ok: true, result: { name, state: readable ? "gone" : AgentOps.stateOfScreen(screen), text } });
+        const turn = settled(a);
+        return json({ ok: true, result: { name, state: readable ? "gone" : AgentOps.stateOfScreen(screen, a.kind), text, ...(turn.exitCode !== undefined ? { exitCode: turn.exitCode, exitLine: turn.exitLine } : {}) } });
       }
       if (verb === "keys") {
         const key = AgentOps.keyNamed(b.key);
         if (!key) return json({ ok: false, error: "key: enter, escape, up, down, left, right, tab, space, backspace or ctrl-c" }, 400);
+        if (key !== "Escape" && key !== "C-c" && await seatAtPrompt(a.paneId)) return say({ ok: false, error: PROMPT_IS_THE_PERSONS }, 403);
         const ok = await AgentOps.pressKey(a.paneId, key);
-        return json({ ok, result: { name, key } }, ok ? 200 : 410);
+        return say({ ok, result: { name, key } }, ok ? 200 : 410);
       }
       if (verb === "stop") {
         /* An enlisted tab is let go, not killed: it is somebody's own window
            with their work in it. `kill: true` says the caller meant the window
            and not the registration. The answer says which happened. */
         const r = await AgentOps.stopAgent(a, Date.now(), b.kill === true || !a.adopted);
-        return json({ ok: r.ok, result: { name, killed: r.killed, letGo: !r.killed } });
+        return say({ ok: r.ok, result: { name, killed: r.killed, letGo: !r.killed } });
       }
       return json({ ok: false, error: "no such verb" }, 404);
     }
@@ -9393,6 +9964,8 @@ function prune() {
     const folded = rolled ? ` → folded into ${rolled} rollup days` : "";
     console.log(`🧹 pruned ${events} events / ${sessions} sessions older than ${RETENTION_DAYS}d${folded}`);
   }
+  // The hourly moment to hand the WAL back: never waits, see trimWal.
+  trimWal();
 }
 prune();
 setInterval(prune, 3_600_000);
@@ -9606,6 +10179,10 @@ setAliveHook(async (title, paneId) => {
   return !!(await paneOfRun(title));
 });
 startUnderstudyWatchdog();
+startPolicyEvaluator();
+// The turn limits lived in memory and are not put back: a worker still on its
+// turn is marked as having lost its ceiling, never stopped by an id from before.
+void workersAfterRestart().catch(() => {});
 startTaskSweep();
 startReminderTick();
 /* Scheduled agent starts ride a clock of the same shape. See agentschedule.ts. */
@@ -9987,6 +10564,11 @@ subscribeNotifications((n) => {
    what they had, and who did not starts from the defaults. See settleFirstRun. */
 settleFirstRun(hasCredential("clickup"));
 startCardWatch((n) => broadcast({ type: "card", data: n }));
+/* The same bell for a connected Jira: one search every six minutes, nothing
+   at all while Jira is not connected. See jirawatch.ts. */
+import { startJiraWatch, rememberOwnMove as jiraRememberOwnMove, rememberOwnAssign as jiraRememberOwnAssign } from "./jirawatch.ts";
+import { detailStored as jiraDetailRead, mentionableStored as jiraMentionable, commentStored as jiraCommentOn } from "./jiraComments.ts";
+startJiraWatch((n) => broadcast({ type: "card", data: n }));
 /* Re-asks the open pull request lists a real client has looked at, on a timer,
    so a comment posted while nobody is on the PRs tab still reaches `noteTalk`
    the next time somebody could actually be told about it. See prWatch.ts. Off

@@ -5,6 +5,7 @@ import { CaretIcon, DoneIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { EDGE, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 import { AUTHOR_IS_MEMBER, type ListMember } from "../../../shared/providers.ts";
+import { avatarSrc } from "../lib/avatarSrc.ts";
 import type { Ensure, PrAuthor } from "../lib/stepAssign.ts";
 import { askModel, isPicked, pickName, pickSentence, pickedIds, pickToEnsure, startingPick, startingTakeOff, togglePick, type AskModel, type Picked } from "../lib/askAtRun.ts";
 
@@ -57,8 +58,9 @@ export function useAskAssign(o: {
 }
 
 export function Face({ m }: { m: { avatar?: string; color?: string; initials?: string } }) {
-  return m.avatar
-    ? <img src={m.avatar} alt="" loading="lazy" referrerPolicy="no-referrer" style={{ width: 16, height: 16, borderRadius: 999, objectFit: "cover", flexShrink: 0 }} />
+  const [broken, setBroken] = useState(false);
+  return m.avatar && !broken
+    ? <img src={avatarSrc(m.avatar)} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken(true)} style={{ width: 16, height: 16, borderRadius: 999, objectFit: "cover", flexShrink: 0 }} />
     : <span className="shrink-0 rounded-full inline-flex items-center justify-center" style={{ width: 16, height: 16, background: m.color || "var(--bg4)", color: "#fff", fontSize: 8 }}>{m.initials}</span>;
 }
 

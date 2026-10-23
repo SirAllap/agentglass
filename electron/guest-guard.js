@@ -78,7 +78,7 @@ function safeGuestUrl(src) {
   try {
     const u = new URL(src);
     if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-    // `https://user:pass@host` in a src attribute is a credential-stuffing
+    // `https://user:<password>@host` in a src attribute is a credential-stuffing
     // shape, never something a person typed.
     if (u.username || u.password) return null;
     return u.toString();

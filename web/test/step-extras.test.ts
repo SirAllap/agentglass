@@ -11,7 +11,7 @@
 import { describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { ListField, StepBlock } from "../../shared/providers.ts";
+import type { ListField, ClickUpStepBlock as StepBlock } from "../../shared/providers.ts";
 import { PLACEHOLDERS, fillTemplate, hasExtras, planOf } from "../../shared/stepBlocks.ts";
 import { extrasOf, fieldIsWritable, prContext, resolveComment, resolveField, runExtras } from "../src/lib/stepExtras.ts";
 import { blocksSentence } from "../src/lib/stepBlocksView.ts";

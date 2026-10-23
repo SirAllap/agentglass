@@ -81,7 +81,7 @@ import { AskedExtras, sendExtras } from "./AskedExtras.tsx";
 import { prContext, type ExtraItem } from "../lib/stepExtras.ts";
 import { AssignPicker, Face, useAskAssign, useAskTakeOff } from "./AssignPicker.tsx";
 import { blocksSentence, peopleButtonLabel } from "../lib/stepBlocksView.ts";
-import { mergeCardRef, mergeNote, statusColor, readyForQaStatus, reviewStatus, cardNoteText, whoToTell } from "../lib/cardMove.ts";
+import { mergeCardRef, clickupCardRef, stagedMove, mergeNote, statusColor, readyForQaStatus, reviewStatus, cardNoteText, whoToTell } from "../lib/cardMove.ts";
 import { useClickupPrefs, clickupPrefs } from "../lib/clickupPrefs.ts";
 import { cardPlan, cardPlanNote } from "../lib/cardPlan.ts";
 import { cardOf, askingCard, onCard, putCard, forgetCards, cardVersion, withCard } from "../lib/prCardStore.ts";
@@ -140,8 +140,13 @@ import { dirName } from "../lib/worktree.ts";
 import { wtCell, wtCellTitle, folderOf } from "../lib/prWorktreeCell.ts";
 import { conflictBriefing, conflictHandoff } from "../lib/conflictBrief.ts";
 import { openCard } from "../lib/openCard.ts";
+import { TRACKERS } from "../lib/trackerApi.ts";
+import { TrackerStatusPick } from "./TrackerStatusPick.tsx";
+import { TrackerPeoplePick } from "./TrackerPeoplePick.tsx";
+import { JiraStepButtons } from "./jira/JiraStepButtons.tsx";
 import { openIssue } from "../lib/openIssue.ts";
 import { useClickupSetup } from "../lib/clickupSetup.ts";
+import { useOwnerSetup } from "../lib/trackerView.ts";
 import { writeBlock } from "../lib/cardWrites.ts";
 import type { ListStatus as CuStatus, ListMember as CuMember, ProviderTask, HandoffUnassign } from "../../../shared/providers.ts";
 import { CloseButton, CloseIcon } from "./CloseButton.tsx";
@@ -431,8 +436,8 @@ function PrCardChip({ pr, card }: {
    *  colour and the status beside the id. Absent is "we have not seen it". */
   card?: PrSummary["card"];
 }) {
-  const setup = useClickupSetup();
-  const ref = useMemo(() => cardRef(pr), [pr.headRefName, pr.title, pr.body]);
+  const setup = useOwnerSetup(useClickupSetup(), useContext(RepoCtx));
+  const ref = useMemo(() => cardRef(pr, setup?.jira), [pr.headRefName, pr.title, pr.body, setup?.jira]);
   const go = chipAction(ref, setup);
   if (!ref || !go) return null;
 
@@ -1943,7 +1948,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   // reference that is actually ClickUp's. A Jira shop's `ABC-12-thing` branch
   // looks identical, and offering to move a card that does not exist is worse
   // than offering nothing.
-  const clickup = useClickupSetup();
+  const [repo, setRepo] = useState<PrRepoId | null>(null);
+  /* With Jira connected too, this carries who owns a card id; without it, it is the plain ClickUp setup. */
+  const clickup = useOwnerSetup(useClickupSetup(), repo?.nameWithOwner);
 
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [root, setRoot] = useState("");
@@ -1953,7 +1960,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     () => repos.find((r) => r.root === root)?.worktreeOf ?? root,
     [repos, root],
   );
-  const [repo, setRepo] = useState<PrRepoId | null>(null);
   /** The panel opens on what is waiting on you, not on what you wrote — that
    *  is the question a review dashboard exists to answer. If nothing is waiting
    *  the first load falls through to your own pull requests once, so opening it
@@ -4204,15 +4210,17 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       // than quietly winning.
       /* Without "Also assign" this is the status write it always was; with it, the same single
          write carries the person too (one card, one request), never a second call racing `updated`. */
-      const r = await (move.write ? api.clickupCard(move.id, move.write, move.updated) : api.clickupStatus(move.id, move.to, move.updated))
+      const r = await (move.tracker === "jira" ? jiraMergeWrite(move, detail)
+        : move.write ? api.clickupCard(move.id, move.write, move.updated) : api.clickupStatus(move.id, move.to, move.updated))
         .catch((e) => ({ ok: false, error: String(e) }));
       // The chip and the board's row read the status from the store: hand it the
       // write's own answer rather than wait out its minute.
-      const query = mergeCardRef(detail, clickup)?.query;
+      const query = move.tracker === "jira" ? move.query : mergeCardRef(detail, clickup)?.query;
       if (r.ok && query) putCard(query, "task" in r ? r.task : undefined);
       const ex = r.ok ? await sendMergeExtras() : null;
-      flash(r.ok && (!ex || ex.ok), mergeNote(true, {
-        asked: true, ok: r.ok, to: move.to, extra: [move.note, ex?.ok ? ex.done.join(" · ") : ex ? `but ${ex.error}` : ""].filter(Boolean).join(" · ") || undefined,
+      const part = "partial" in r && r.partial ? `but ${r.partial}` : "";
+      flash(r.ok && !part && (!ex || ex.ok), mergeNote(true, {
+        asked: true, ok: r.ok, to: move.toLabel ?? move.to, ...(move.tracker === "jira" ? { tracker: "Jira" as const } : null), ...(move.stay ? { stayed: true } : null), extra: [move.note, part, ex?.ok ? ex.done.join(" · ") : ex ? `but ${ex.error}` : ""].filter(Boolean).join(" · ") || undefined,
         unauthorised: "unauthorised" in r ? r.unauthorised : undefined,
         error: r.ok ? undefined : ("conflict" in r && r.conflict ? "somebody moved it while this was open" : r.error),
       }));
@@ -4254,7 +4262,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   useSyncExternalStore(subscribePrepared, preparedSnapshot, () => 0);
   const stageCardMove = async (want: string, by: string) => {
     if (!detail) return;
-    const ref = mergeCardRef(detail, clickup);
+    const ref = clickupCardRef(detail, clickup);
     if (!ref) { flash(false, `#${detail.number} has no card to move`); return; }
     const blocked = writeBlock(clickup);
     if (blocked) { flash(false, blocked); return; }
@@ -4262,9 +4270,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     if (!found?.ok || !found.task) { flash(false, found?.error || "ClickUp could not find the card"); return; }
     const task = found.task;
     const meta = task.listId ? await api.clickupList(task.listId).catch(() => null) : null;
-    const target = (meta?.ok ? (meta.statuses ?? []) : []).find((st) => st.status.toLowerCase() === want.toLowerCase());
-    if (!target) { flash(false, `${ref.label}: its list has no status called "${want}"`); return; }
-    if (target.status === task.status) { flash(true, `${ref.label} is already ${target.status}`); return; }
+    const plan = stagedMove(want, task, meta?.ok ? (meta.statuses ?? []) : []);
+    if (plan.step === "missing") { flash(false, `${ref.label}: its list has no status called "${want}"`); return; }
+    if (plan.step === "already") { flash(true, `${ref.label} is already ${plan.status}`); return; }
+    const target = { status: plan.status };
     const said = await ask({
       title: `Move to ${target.status}?`, preparedBy: by, confirmLabel: `Move to ${target.status}`,
       body: `${ref.label}\n${task.status} \u2192 ${target.status}`,
@@ -4801,7 +4810,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const [unstickShown, setUnstickShown] = useState<UnstickShown | null>(null);
   const unstickShownRef = useRef<UnstickShown | null>(null);
   unstickShownRef.current = unstickShown;
-  const cardForUnstick = useMemo(() => d ? mergeCardRef(d, clickup) : null, [d?.headRefName, d?.title, d?.body, clickup]); // eslint-disable-line react-hooks/exhaustive-deps
+  const cardForUnstick = useMemo(() => d ? clickupCardRef(d, clickup) : null, [d?.headRefName, d?.title, d?.body, clickup]); // eslint-disable-line react-hooks/exhaustive-deps
   const openUnstick = () => {
     if (!d || !unstickGate || !unstickFacts || unstickShownRef.current) return;
     setUnstickShown({
@@ -7530,7 +7539,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
    */
   onPlan: (plan: { lines: string[]; run: () => Promise<boolean> }) => void;
 }) {
-  const setup = useClickupSetup();
+  const setup = useOwnerSetup(useClickupSetup(), useContext(RepoCtx));
   /* Writes off: the controls stay where they are, disabled, and the plan below
      is built from nothing picked, so it has no lines, the button downstairs is
      plain Done and nothing is sent. */
@@ -7544,7 +7553,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
    * replaced by whoever the card had on it. Reported after measuring it: "a few
    * seconds later what I had selected has reset to its initial state".
    */
-  const ref = useMemo(() => mergeCardRef(d, setup), [d.headRefName, d.title, d.body, setup]);
+  const ref = useMemo(() => clickupCardRef(d, setup), [d.headRefName, d.title, d.body, setup]);
   /* The card, as a string. Everything below keys off this rather than off `ref`
      — an object rebuilt each render is a dependency that is never equal. */
   const query = ref?.query ?? "";
@@ -8175,7 +8184,7 @@ export function AskedHandoff({ task, statuses, start, author, askStatus, askAssi
   author: PrAuthor | null;
   askStatus: boolean;
   /** Where the person picker starts; null when the assignment is fixed. */
-  askAssign: import("../../../shared/providers.ts").StepAssign | null;
+  askAssign: import("../../../shared/providers.ts").ClickUpStepAssign | null;
   /** The assignment when it is fixed. */
   fixed: Ensure;
   unassign: HandoffUnassign;
@@ -8184,7 +8193,7 @@ export function AskedHandoff({ task, statuses, start, author, askStatus, askAssi
   /** Named people the step takes off, when that is fixed. */
   takeOff?: number[];
   /** The step's comment and field blocks, shown (and asked, where they ask) beside the rest. */
-  extras?: { blocks: import("../../../shared/providers.ts").StepBlock[]; fields: import("../../../shared/providers.ts").ListField[] | null; pr: { number: number; title: string; url: string }; ctxAuthor: PrAuthor | null };
+  extras?: { blocks: import("../../../shared/providers.ts").ClickUpStepBlock[]; fields: import("../../../shared/providers.ts").ListField[] | null; pr: { number: number; title: string; url: string }; ctxAuthor: PrAuthor | null };
   onChange: (c: { status: string; ensure: Ensure; takeOff?: number[]; extras: ExtraItem[] }) => void;
 }) {
   const [extraItems, setExtraItems] = useState<ExtraItem[]>([]);
@@ -8412,8 +8421,59 @@ function CardReadyForQaButton({ task, query, onSaid, ask, author, pr }: {
     </button>
   );
 }
+/** The write a merge makes on a Jira card: the merge step when the move came from it (so what the step also does rides on it), else the plain move with the stamp. */
+function jiraMergeWrite(move: { id: string; to: string; toLabel?: string; toStatus?: string; stay?: true; updated: number; step?: true }, pr: { url: string; title: string; number: number; author: string }) {
+  return move.step
+    ? api.jiraRunStep(move.id, move.updated, "merge", move.stay ? { stay: true } : { to: move.toStatus ?? move.toLabel ?? move.to }, { url: pr.url, title: pr.title, number: pr.number, author: pr.author })
+    : api.jiraTransition(move.id, move.to, move.updated);
+}
+/** A Jira card in the pull request panel: the site's own status and person controls, the steps that are set up (hand-off, review), and a way to open it here or on the site. */
+export function JiraCardFacts({ label, query, pr }: { label: string; query: string; pr?: { url: string; title?: string; number?: number; author?: string } }) {
+  const [, redraw] = useState(0);
+  useEffect(() => onCard(() => redraw((n) => n + 1)), []);
+  const [said, setSaid] = useState("");
+  const hit = cardOf(query, undefined, "jira");
+  const asking = askingCard(query);
+  const task = hit?.task ?? null;
+  return (
+    <SidebarSection title="Jira">
+      <div className="flex flex-col gap-1.5 min-w-0">
+        <span className="min-w-0 flex items-center gap-1.5">
+          <CardPill label={label} priority={task?.priority ?? null}
+            onClick={() => openCard(query, label, "jira")}
+            title={`Open ${label} in Tasks${task ? ` — ${task.title}` : ""}`} />
+          {task?.url && (
+            <button onClick={() => openExternal(task.url)} className="text-[10.5px] px-1" aria-label={`Open ${label} on the Jira site`}
+              title="Open on the Jira site" style={{ color: "var(--text3)" }}>↗</button>
+          )}
+        </span>
+        {!task ? (
+          <span className="text-[10.5px]" style={{ color: asking ? "var(--text3)" : "var(--warning)" }}>
+            {asking ? "Reading the card…" : (hit?.error || "Jira could not find it")}
+          </span>
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-1">
+              <span className="text-[8.5px] uppercase tracking-[0.18em]" style={{ color: "var(--text4)" }}>Status</span>
+              <TrackerStatusPick tracker={TRACKERS.jira} task={task} query={query} onSaid={setSaid} />
+            </div>
+            <div className="flex flex-col gap-1 min-w-0">
+              <span className="text-[8.5px] uppercase tracking-[0.18em]" style={{ color: "var(--text4)" }}>Assignee</span>
+              <TrackerPeoplePick tracker={TRACKERS.jira} task={task} query={query} onSaid={setSaid} />
+            </div>
+            <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+              <JiraStepButtons task={task} query={query} {...(pr ? { pr } : null)} onSaid={setSaid} />
+              {said && <span className="text-[10px]" style={{ color: said.startsWith("!") ? "var(--warning)" : "var(--success)" }}>{said.replace(/^!/, "")}</span>}
+            </div>
+          </div>
+        )}
+      </div>
+    </SidebarSection>
+  );
+}
+
 function CardFacts({ d }: { d: PrDetail }) {
-  const setup = useClickupSetup();
+  const setup = useOwnerSetup(useClickupSetup(), useContext(RepoCtx));
   const { ask, dialog } = useDialogs();
   /* The note on the card is the only thing this section writes. Telling
      somebody in chat is `AskInChat`, which does not need a card at all. */
@@ -8432,7 +8492,8 @@ function CardFacts({ d }: { d: PrDetail }) {
      place, disabled; this line, once, says why. */
   const blocked = writeBlock(setup);
   const ref = useMemo(() => mergeCardRef(d, setup), [d.headRefName, d.title, d.body, setup]);
-  const query = ref?.query ?? "";
+  /* A Jira-owned card is drawn by `JiraCardFacts`; ClickUp is never asked about it. */
+  const query = ref && !ref.tracker ? ref.query : "";
   /* The store tells everyone when an answer lands; this only has to redraw.
      Subscribed before the early return below — a pull request with no card
      still runs every hook, because `setup` arrives a render late and a
@@ -8443,6 +8504,7 @@ function CardFacts({ d }: { d: PrDetail }) {
   const asking = askingCard(query);
 
   if (!ref) return null;
+  if (ref.tracker === "jira") return <JiraCardFacts label={ref.label} query={ref.query} pr={{ url: d.url, title: d.title, number: d.number, author: d.author }} />;
 
   const task = hit?.task ?? null;
   return (
@@ -8604,7 +8666,7 @@ function pingPrompt(recipes: ReviewRecipe[], ctx: ReviewRecipeContext): string {
  * window with it.
  */
 function AskInChat({ d, root }: { d: PrDetail; root: string }) {
-  const setup = useClickupSetup();
+  const setup = useOwnerSetup(useClickupSetup(), useContext(RepoCtx));
   const recipes = useReviewRecipes();
   const repoName = useContext(RepoCtx);
   /* Whether the agent here can post to Slack — see server/src/slackreach.ts.
@@ -8620,7 +8682,7 @@ function AskInChat({ d, root }: { d: PrDetail; root: string }) {
     void slackReach(() => api.notifyReach()).then((r) => { if (live) setSlack(r); });
     return () => { live = false; };
   }, []);
-  const ref = useMemo(() => mergeCardRef(d, setup), [d.headRefName, d.title, d.body, setup]);
+  const ref = useMemo(() => clickupCardRef(d, setup), [d.headRefName, d.title, d.body, setup]);
   const [, redraw] = useState(0);
   useEffect(() => onCard(() => redraw((n) => n + 1)), []);
   const task = ref ? cardOf(ref.query)?.task ?? null : null;

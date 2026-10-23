@@ -250,6 +250,26 @@ start_app() {
     [ -n "$line" ] && env+=("$line")
   done <<< "$APPCTL_RESTART_ENV"
 
+  # A shell with no display cannot host the app: Electron dies with SIGSEGV in
+  # uv_close within a second. That is what an install over ssh is. The user
+  # manager holds the graphical session's variables, so borrow those and only
+  # those, for the reopened instance alone, and never over one already set.
+  if [ -z "${WAYLAND_DISPLAY:-}" ] && [ -z "${DISPLAY:-}" ]; then
+    local sess k v
+    sess=$(systemctl --user show-environment 2>/dev/null || true)
+    for k in WAYLAND_DISPLAY DISPLAY XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS HYPRLAND_INSTANCE_SIGNATURE XDG_SESSION_TYPE; do
+      v=$(printf '%s\n' "$sess" | sed -n "s/^$k=//p" | head -n 1)
+      [ -n "$v" ] && [ -z "${!k:-}" ] && env+=("$k=$v")
+    done
+    case " ${env[*]} " in
+      *" WAYLAND_DISPLAY="*|*" DISPLAY="*) ;;
+      *)
+        echo "==> not reopened: no graphical session to open it in; run \`gtk-launch agentglass.desktop\` inside the session"
+        return 0
+        ;;
+    esac
+  fi
+
   echo "==> reopening (${#args[@]} arg(s)${env:+, scoped})"
   # Detached from this shell in its own session, so the app outlives the install
   # script rather than dying with the terminal it was rebuilt from. `setsid`

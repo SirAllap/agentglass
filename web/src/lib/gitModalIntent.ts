@@ -9,6 +9,10 @@
  * and opens the view, and the view drains it when it has a checkout, which
  * covers both orderings without a timing assumption.
  *
+ * A request made from a terminal pane carries that pane's worktree. Measured:
+ * with two worktrees of one repo, Insights asked for from the pane on the
+ * second one drew the numbers of the checkout the Git view happened to be on.
+ *
  * The request does not switch the view. The modals are portals, so they draw
  * over whichever view is up, and the Git view only has to be MOUNTED for them
  * (Workspace mounts it hidden when a request arrives, GitView loads its
@@ -20,13 +24,18 @@
  * it is the end of a worktree-removal flow, a promise that flow settles, and has
  * no state of its own to open.
  */
-export type GitModalIntent =
+export type GitModalIntent = (
   | { which: "insights" }
   | { which: "bisect" }
   | { which: "palette" }
   | { which: "compare"; base: string }
   | { which: "blame"; path: string }
-  | { which: "rebase"; base: string };
+  | { which: "rebase"; base: string }
+) & {
+  /** The checkout the request is about, when the caller was in one: the
+   *  worktree of the focused terminal pane. Absent, the Git view's own. */
+  root?: string;
+};
 
 /** Long enough for the view to mount and read its repos; short enough that a
  *  request nobody was there for does not fire at the next unrelated visit. */

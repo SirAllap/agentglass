@@ -46,6 +46,28 @@ export function mergeActivity(actions: ActionRecord[], gates: GateRecord[]): Act
   return rows.sort((x, y) => y.at - x.at || x.key.localeCompare(y.key));
 }
 
+/*
+ * THE FILTER: what the orchestration did, set apart from what a person did.
+ *
+ * Once a chair and its workers act through the same doors a person does, the
+ * list answers "what happened" with a mix, and the question people have is
+ * usually one side of it. An action row names who made it: a seat's own is
+ * `seat:<name>` and the policy's is `policy`; a held tool call a seat answered
+ * is a gate whose `decided_by` is that same name. Everything else is a person, a
+ * timeout, a rule or a restart, and stays under "All".
+ *
+ * It narrows the rows already read. It asks for nothing.
+ */
+export type ActivityFilter = "all" | "orchestration";
+
+export const isOrchestration = (row: ActivityRow): boolean =>
+  row.kind === "gate"
+    ? (row.row.decided_by ?? "").startsWith("seat:")
+    : row.row.actor === "policy" || (row.row.actor ?? "").startsWith("seat:");
+
+export const filterActivity = (rows: ActivityRow[], f: ActivityFilter): ActivityRow[] =>
+  f === "all" ? rows : rows.filter(isOrchestration);
+
 /**
  * What a resolved gate says, in the words of the thing that resolved it.
  *

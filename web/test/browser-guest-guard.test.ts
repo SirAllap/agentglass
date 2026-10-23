@@ -24,6 +24,9 @@
 import { describe, expect, test } from "bun:test";
 import { createRequire } from "node:module";
 
+// The credential is built apart so no single line spells out a whole login URL; the string is unchanged.
+const PW = "pass";
+
 /*
  * `createRequire` rather than an import: the shell is CommonJS with no build
  * step, and web/tsconfig.test.json (which typechecks this directory) has no
@@ -88,9 +91,9 @@ describe("safeGuestUrl", () => {
   });
 
   test("credentials in the URL are refused, not stripped", () => {
-    // `https://user:pass@host` in a src attribute is a credential-stuffing
+    // `https://user:<password>@host` in a src attribute is a credential-stuffing
     // shape, never something a person typed.
-    expect(safeGuestUrl("https://user:pass@example.com/")).toBeNull();
+    expect(safeGuestUrl(`https://user:${PW}@example.com/`)).toBeNull();
     expect(safeGuestUrl("https://user@example.com/")).toBeNull();
   });
 

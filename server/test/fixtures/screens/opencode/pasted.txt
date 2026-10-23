@@ -1,0 +1,30 @@
+
+
+
+
+
+
+
+
+                                                                     ▄
+                                    █▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█
+                                    █  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀
+                                    ▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀
+
+
+                  ┃
+                  ┃  [Pasted ~4 lines]
+                  ┃
+                  ┃  Build · Big Pickle OpenCode Zen
+                  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                  tab agents  ctrl+p commands
+
+
+
+                           ● Tip Run /connect to add an AI provider and start coding
+
+
+
+
+  /home/orbit/work                                                                     1.18.32
+

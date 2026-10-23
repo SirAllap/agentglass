@@ -267,7 +267,7 @@ describe("what the export may do", () => {
   }, 120_000);
 
   test("unsafePath refuses empty, dot, dot-dot, .git in any case, absolute and NUL", () => {
-    for (const p of ["", ".", "a/../b", "../x", "/etc/passwd", ".git/config", "sub/.GIT/hooks/x", "a//b", "a\0b"]) expect(unsafePath(p)).toBe(true);
+    for (const p of ["", ".", "a/../b", "../x", "/etc/hosts", ".git/config", "sub/.GIT/hooks/x", "a//b", "a\0b"]) expect(unsafePath(p)).toBe(true);
     for (const p of ["a.txt", "dir/sub/file.py", ".github/workflows/ci.yml", ".gitattributes", "x.git/y"]) expect(unsafePath(p)).toBe(false);
   });
 

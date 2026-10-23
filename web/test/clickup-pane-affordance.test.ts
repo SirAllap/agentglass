@@ -11,7 +11,10 @@ import { describe, expect, test } from "bun:test";
 import { HIT } from "../src/lib/iconSize.ts";
 
 const pane = await Bun.file(new URL("../src/components/ClickUpPane.tsx", import.meta.url)).text();
+// The section card and the pill drawing are shared by every tracker's page, so they live in one file.
+const parts = await Bun.file(new URL("../src/components/TrackerMapParts.tsx", import.meta.url)).text();
 const css = await Bun.file(new URL("../src/index.css", import.meta.url)).text();
+const kit = await Bun.file(new URL("../src/components/SettingsKit.tsx", import.meta.url)).text();
 const rule = (sel: string) => new RegExp(`${sel.replace(/[.:>()*]/g, "\\$&")}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ?? "";
 
 describe("the changes switch", () => {
@@ -33,7 +36,9 @@ describe("the changes switch", () => {
 
 describe("the folding cards", () => {
   test("the header bar is the target, with hover and press from the same tokens as the rest", () => {
-    expect(pane).toContain("agx-settings-head agx-fold");
+    // The folding cards are SettingsCard's `fold`, whose summary is the header.
+    expect(parts).toContain("fold={onToggle ? { open: !!open, onToggle } : undefined}");
+    expect(kit).toContain('<summary className="agx-scard-head agx-fold list-none">');
     expect(rule(".agx-fold")).toContain("cursor: pointer");
     expect(rule(".agx-fold:hover")).toContain("--text");
     expect(rule(".agx-fold:active")).toContain("--text");
@@ -47,7 +52,7 @@ describe("every Button has a pressed state", () => {
 });
 
 describe("a drawing of a pill is not drawn like a control", () => {
-  const chip = pane.slice(pane.indexOf("const Chip2 ="), pane.indexOf("function PrView("));
+  const chip = parts.slice(parts.indexOf("const Chip2 ="), parts.indexOf("export function PrView("));
   test("no outline, and the pointer stays an arrow", () => {
     expect(chip).not.toContain("border");
     expect(chip).not.toContain("EDGE");

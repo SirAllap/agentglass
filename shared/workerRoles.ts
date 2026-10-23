@@ -97,7 +97,7 @@ export const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,79}$/;
  * the variable that must name it. Null when the CLI has no lock this app
  * knows how to apply — the caller refuses the role rather than run it without.
  */
-export function roleLaunch(p: Provider, role: WorkerRole, model: string): {
+export function roleLaunch(p: Provider, role: WorkerRole, model: string, denied: readonly string[] = DENIED_COMMANDS): {
   args: string[];
   env: Record<string, string>;
   file?: { env: string; content: string };
@@ -111,7 +111,7 @@ export function roleLaunch(p: Provider, role: WorkerRole, model: string): {
     // arguments, because its patterns are globs over the whole line and
     // `git push*` would also refuse `git pushd-helper`.
     const bash: Record<string, "deny"> = {};
-    for (const c of DENIED_COMMANDS) { bash[c] = "deny"; bash[`${c} *`] = "deny"; }
+    for (const c of denied) { bash[c] = "deny"; bash[`${c} *`] = "deny"; }
     const perm: Record<string, unknown> = { bash, task: "deny" };
     if (role.readOnly) perm.edit = "deny";
     const config = { default_agent: "build", permission: perm, agent: { build: { permission: perm } } };
@@ -123,11 +123,11 @@ export function roleLaunch(p: Provider, role: WorkerRole, model: string): {
   // one is `cmd *`, with the bare command as a rule of its own.
   const edits = role.readOnly ? ["Edit", "Write", "NotebookEdit"] : [];
   if (lock.via === "flag") {
-    const deny = [...DENIED_COMMANDS.map((c) => `Bash(${c}:*)`), ...edits];
+    const deny = [...denied.map((c) => `Bash(${c}:*)`), ...edits];
     return { args: [lock.flag, JSON.stringify({ permissions: { deny } }), ...pick], env: {} };
   }
   // Qwen's `Edit` is a meta-rule over its edit, write and notebook tools.
-  const deny = [...DENIED_COMMANDS.flatMap((c) => [`Bash(${c})`, `Bash(${c} *)`]), ...(role.readOnly ? ["Edit", "Write"] : [])];
+  const deny = [...denied.flatMap((c) => [`Bash(${c})`, `Bash(${c} *)`]), ...(role.readOnly ? ["Edit", "Write"] : [])];
   return {
     args: pick,
     env: {},

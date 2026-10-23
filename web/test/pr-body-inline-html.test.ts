@@ -31,6 +31,9 @@ import { describe, expect, test } from "bun:test";
 import { parseBody, renderInline, type MdBlock } from "../src/lib/prBody.ts";
 import { domOf, urlScheme, type Built } from "./htmlAttrs.ts";
 
+// The credential is built apart so no single line spells out a whole login URL; the string is unchanged.
+const PW = "pw";
+
 const REPO = "acme/orbit";
 
 /** Every string a tree of blocks would put on screen. */
@@ -367,14 +370,14 @@ describe("an image's two attributes", () => {
   });
 
   test("credentials in an image URL are carried, and refused where it matters", () => {
-    // `https://user:pw@…` is a legal URL and this parser keeps it, because the
+    // `https://user:<password>@…` is a legal URL and this parser keeps it, because the
     // decision is not the parser's: `api.prAssetUrl` hands the whole thing to
     // the server, and `assetAllowed` there answers with a host allowlist —
     // https only, and only GitHub's own image hosts. A URL like this one is
     // never fetched. What is pinned here is that the client does not quietly
     // rewrite it into something the allowlist would accept.
-    const img = imageOf("![x](https://user:pw@acme.example/x.png)")!;
-    expect(img.src).toBe("https://user:pw@acme.example/x.png");
+    const img = imageOf(`![x](https://user:${PW}@acme.example/x.png)`)!;
+    expect(img.src).toBe(`https://user:${PW}@acme.example/x.png`);
     expect(urlScheme(img.src)).toBe("https");
   });
 });

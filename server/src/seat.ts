@@ -29,6 +29,8 @@
  * and enforced where the verb is served — the same lesson `refusedArg` in
  * agentops.ts learned about permission flags arriving as parameters.
  */
+import { statSync } from "node:fs";
+import { basename } from "node:path";
 import * as AgentOps from "./agentops.ts";
 import type * as AgentBoard from "./agentboard.ts";
 import { mintSeatToken, revokeSeatTokens } from "./auth.ts";
@@ -40,6 +42,14 @@ import { fieldReadout, boardNow, isGone } from "./lantern.ts";
 import { knownProjects } from "./transcripts.ts";
 import { doctrinePath, doctrineSlug, readDoctrine } from "./seatdoctrine.ts";
 import { REPORT_SHAPE, briefPath, readBrief } from "./seatbrief.ts";
+import { resolve as resolvePolicy, type EngineChoice, type Resolved } from "../../shared/orchestration.ts";
+import type { EnginesReport } from "../../shared/types.ts";
+import { readPolicy } from "./orchestration.ts";
+import { ruleStates } from "./orchpolicy.ts";
+import { probeEngines } from "./agentprobe.ts";
+import { seatRoots } from "./seatpanes.ts";
+import { screenReaderFor } from "./chatpane.ts";
+import { agentProvider } from "../../shared/agentKinds.ts";
 import { SEAT_PROMPT_MARK } from "./seatmark.ts";
 import { queueReadout } from "./seatqueue.ts";
 import { inboxReadout, recentReports, unreadCount, type SeatReport } from "./seatreport.ts";
@@ -71,6 +81,28 @@ export function defaultSeatModel(offered = claudeModels().map((m) => m.id)): str
   }
   return offered[0] ?? "";
 }
+
+/** Why an engine cannot take the chair, as a sentence, or null when it can.
+ *  The chair is woken by a paste, so it needs a tab to paste into and a reading
+ *  of that tab's screen; an engine without both is refused here rather than
+ *  opened and typed into blind. */
+export function chairRefusal(kind: string): string | null {
+  const p = agentProvider(kind);
+  if (!p) return `"${kind}" is not an agent engine.`;
+  if (!p.tab) return `${p.title} cannot take the chair yet: it does not open in a terminal tab.`;
+  if (!screenReaderFor(kind)) return `${p.title} cannot take the chair yet: agentglass has not captured its screen, so it could not tell when it is ready to be woken.`;
+  return null;
+}
+
+/** The model a chair on this engine starts with when nobody chose one. */
+export const seatDefaultModelFor = (kind: string): string =>
+  kind === "claude" ? defaultSeatModel() : agentProvider(kind)?.seatModel ?? "";
+
+/** The model on the engine's own flag; none for an engine that has no flag. */
+export const seatModelArgs = (kind: string, model: string): string[] => {
+  const flag = agentProvider(kind)?.modelFlag;
+  return model && flag ? [flag, model] : [];
+};
 
 export const POWERS = ["speak", "nudge", "assign"] as const;
 export type Power = (typeof POWERS)[number];
@@ -124,13 +156,14 @@ const settings = db.query<never, [string, string, string, string]>(`
   VALUES (?, ?, ?, ?, 0, 0)
   ON CONFLICT(root) DO UPDATE SET model = excluded.model, powers = excluded.powers
 `);
+const settingKind = db.query<never, [string, string]>(`UPDATE seat SET kind = ? WHERE root = ?`);
 const closeRow = db.query<never, [number, string]>(`UPDATE seat SET ended_at = ? WHERE root = ?`);
 const adoptRow = db.query<never, [string, string, string, string, string, number]>(`
   INSERT INTO seat (root, name, powers, adopted_session, adopted_pane, started_at, ended_at)
   VALUES (?, ?, ?, ?, ?, ?, NULL)
   ON CONFLICT(root) DO UPDATE SET
     adopted_session = excluded.adopted_session, adopted_pane = excluded.adopted_pane,
-    started_at = excluded.started_at, ended_at = NULL
+    kind = 'claude', started_at = excluded.started_at, ended_at = NULL
 `);
 const unadopt = db.query<never, [string]>(`UPDATE seat SET adopted_session = '', adopted_pane = '' WHERE root = ?`);
 const saidRow = db.query<never, [string, number, string]>(`UPDATE seat SET last_line = ?, last_turn_at = ? WHERE root = ?`);
@@ -148,8 +181,37 @@ const recentLines = db.query<{ line: string; at: number }, [string, number]>(
  * fight over one `named_agent` row — and it has to survive `NAME_RE`, so the
  * path's hash rides along rather than the path.
  */
+const SEAT_PREFIX = "orchestrator-";
 export function seatName(root: string): string {
-  return `orchestrator-${doctrineSlug(root).slice(0, 40)}`;
+  return `${SEAT_PREFIX}${doctrineSlug(root).slice(0, 40)}`;
+}
+
+/**
+ * A name only a chair carries, seated or not.
+ *
+ * Whoever answers to a project's `seatName` IS its orchestrator as far as
+ * `seated` can tell: it gets the wake text, it blocks the seating, and closing
+ * the seat kills it. The name follows from the path, so a row in `seat` is not
+ * what reserves it: a project nobody has seated yet has one too. The whole
+ * prefix is kept back rather than the names computed so far.
+ */
+export function isSeatName(name: string): boolean {
+  return name.startsWith(SEAT_PREFIX);
+}
+
+/**
+ * The project a seat's own request is about: its own, from its credential.
+ *
+ * The root in a request is for the person, who has every project. A seat that
+ * could name another one would drain that project's tray, say its line, file
+ * its decisions and wake its orchestrator with a sentence of its own. Its own
+ * root, a directory under it or a worktree of it is accepted, because its CLI
+ * sends the directory it was run in.
+ */
+export function seatSpeaksFor(own: string, asked: unknown): { root: string } | { error: string } {
+  const root = typeof asked === "string" ? asked.trim() : "";
+  if (!root || root === own || root.startsWith(`${own}/`) || projectRootOf(root) === own) return { root: own };
+  return { error: `a seat speaks for its own project (${basename(own)}), not for another one` };
 }
 
 /** The row for a project, whether or not it is seated. */
@@ -229,10 +291,17 @@ export async function seated(root: string): Promise<AgentOps.NamedAgent | null> 
     return null;
   }
   return {
-    name: row.name || "orchestrator", kind: row.kind || "claude", cwd: root,
+    name: row.name || "orchestrator", kind: occupantKind(row), cwd: root,
     paneId: row.adoptedPane, windowId: "", startedAt: row.startedAt, endedAt: null,
   };
 }
+
+/** What sits in the chair now. A session this app adopted is a Claude Code
+ *  one (adoption knows no other), whatever the row's `kind` holds: that column
+ *  is also the next seating's choice, and reading it for the occupant made a
+ *  wake type into a Claude pane with another engine's reader. */
+const occupantKind = (row: Seat | null): string =>
+  row?.adoptedPane || row?.adoptedSession ? "claude" : row?.kind || "claude";
 
 /**
  * Adopt a session that is already orchestrating this project.
@@ -396,8 +465,18 @@ export async function openSeat(p: {
   const gate = seatable(p.root);
   if ("error" in gate) return { ok: false, error: gate.error };
   const root = gate.root;
+  /* Before the occupant is looked at: a chair that is taken answers with its
+     occupant, and an engine that could never sit there should not be told
+     "already" as though it might. */
+  const asked = p.kind ? chairRefusal(p.kind) : null;
+  if (asked) return { ok: false, error: asked };
   const there = await seated(root);
   const row = seatRow(root);
+  /* The engine asked for is not the one sitting: answering "already" would
+     read as success and drop it. Only a person changes who sits (/seat/change). */
+  if (there && p.kind && p.kind !== there.kind) {
+    return { ok: false, error: `${there.name} (${there.kind}) already sits in this chair; stand it down or change the chair before seating ${p.kind}` };
+  }
   if (there) return { ok: true, seat: row ?? toSeat({ root, name: there.name, kind: there.kind, model: "", powers: "speak", started_at: there.startedAt, ended_at: null, last_line: "", last_turn_at: 0, adopted_session: "", adopted_pane: "" }), agent: there, already: true };
 
   const powers: Power = p.powers ?? row?.powers ?? "speak";
@@ -409,8 +488,13 @@ export async function openSeat(p: {
      chosen", and an empty string is not nullish — with `??` the default below
      would be skipped and the CLI would fall back to the most expensive model
      on the machine. */
-  const model = p.model || row?.model || defaultSeatModel();
-  const kind = p.kind ?? row?.kind ?? "claude";
+  const kind = p.kind || row?.kind || "claude";
+  /* A saved row can name an engine that has since lost its facet. */
+  const refusal = chairRefusal(kind);
+  if (refusal) return { ok: false, error: refusal };
+  /* A saved model belongs to the engine it was saved for: a Claude row's id on
+     another engine's flag is a model that engine does not have. */
+  const model = p.model || (row?.kind === kind ? row.model : "") || seatDefaultModelFor(kind);
   const { prompt } = await seatPrompt(root, powers, p.wakeHours ?? 4);
   const name = seatName(root);
   /*
@@ -428,8 +512,8 @@ export async function openSeat(p: {
   const r = await AgentOps.startAgent({
     root, name, cwd: root, kind, prompt,
     yolo: true, yoloAllowed: chatBypassAllowed(),
-    args: model ? ["--model", model] : [],
-    env: { AGENTGLASS_TOKEN: token, AGENTGLASS_SEAT: root },
+    args: seatModelArgs(kind, model),
+    env: { ...AgentOps.chairLock(kind), AGENTGLASS_TOKEN: token, AGENTGLASS_SEAT: root },
     now: p.now,
   });
   if (!r.ok) {
@@ -491,8 +575,9 @@ export function seatLines(root: string, limit = 8): { line: string; at: number }
 /** Change what a seat is worth paying for and what it may do, seated or not.
  *  Takes effect on the NEXT seating: a prompt already handed to a running CLI
  *  cannot be edited, and pretending otherwise would be a setting that lies. */
-export function setSeatSettings(root: string, model: string, powers: Power): void {
+export function setSeatSettings(root: string, model: string, powers: Power, kind?: string): void {
   settings.run(root, seatName(root), model, powers);
+  if (kind) settingKind.run(kind, root);
 }
 
 /**
@@ -590,4 +675,172 @@ export async function seatStatus(root: string): Promise<{
     reports: recentReports(root, 8),
     brief: briefPath(root), briefText: readBrief(root).text,
   };
+}
+
+
+/*
+ * THE CHAIR CHANGING ENGINE — suggested, never done to a running orchestrator.
+ *
+ * A rule turning on can make the policy name another engine for the chair. The
+ * seat in it is mid-thought, with a day of context in a window, and swapping
+ * it under itself throws that away. So the board says what the policy wants
+ * (`next`) and the person decides when ("Change now"). The row is not stored:
+ * `next` is the policy as it resolves this minute, read when somebody looks,
+ * so a rule that turns off again takes the suggestion with it and there is no
+ * stale one to clear.
+ */
+
+/** What the policy puts in the chair that is not what sits there. Null when it
+ *  names the same engine and model, names nothing ready, or says "ask". */
+export function nextInChair(sitting: { kind: string; model: string }, r: Resolved): EngineChoice | null {
+  if (!r.ok || r.ask) return null;
+  const c = r.choice;
+  if (c.engine !== sitting.kind) return c;
+  /* An unknown model is not a different one: an adopted session is saved
+     without it, and the policy always resolves one. */
+  return c.model && sitting.model && c.model !== sitting.model ? c : null;
+}
+
+/** How far before the seat's closing line a brief may have been written and
+ *  still be that round's hand-off: the seat writes its brief and then says its
+ *  line, so the line is always a little after the file. A longer gap is a brief
+ *  from earlier work, and the context since then is not in it. A ceiling, not
+ *  a measure: a round longer than this that wrote its brief at the start reads
+ *  as not handed off, and the button waits for one more write. */
+const ROUND_MS = 10 * 60_000;
+
+/** Whether the seat has handed its work over: its brief was written since it
+ *  sat down AND not before its latest round. The next orchestrator reads the
+ *  brief on disk, not the window, so a brief from minute two says nothing about
+ *  hour six. Only the brief counts: a person's edit to the doctrine changes the
+ *  rules, not what the seat knows. A seating with no start time has written
+ *  nothing. */
+export function handOffWritten(startedAt: number, lastTurnAt: number, briefAt: number): boolean {
+  return startedAt > 0 && briefAt > startedAt && briefAt >= lastTurnAt - ROUND_MS;
+}
+
+const mtimeOf = (p: string): number => { try { return statSync(p).mtimeMs; } catch { return 0; } };
+
+export interface ChairView {
+  root: string;
+  name: string;
+  kind: string;
+  model: string;
+  /** What the policy would seat now, when it is not what sits there. */
+  next: EngineChoice | null;
+  handedOff: boolean;
+  /** The person's own running session, adopted into the chair. The policy
+   *  cannot swap it: standing it down would leave it running, unknowing. */
+  adopted?: boolean;
+}
+
+/* What the policy wants is asked of the engine probe's cache, which never
+   spawns a command for an answer it has... except one that timed out, and that
+   is never cached. The board is read every five seconds while the view is open,
+   so the answer is kept for half a minute: a suggestion this old is still a
+   suggestion, and the button that ACTS on it asks again (`fresh`). */
+const NEXT_TTL_MS = 30_000;
+const nextSeen = new Map<string, { at: number; next: EngineChoice | null }>();
+export function __forgetNext(): void { nextSeen.clear(); probed = null; }
+
+/* The probe itself is shared by every chair and kept apart from the per-chair
+   answer above: three chairs asked at once are one set of version/status
+   spawns, not three. An engine whose command timed out is never cached by the
+   probe (so Recheck can ask again), which left every read past the half minute
+   spawning it again, for as long as the app ran. Here a probe that could not
+   tell a version is left alone for five minutes; "Change now" asks regardless.
+   No timer: the answer is looked at when somebody looks. */
+const PROBE_BACKOFF_MS = 5 * 60_000;
+let probed: { at: number; wait: number; report: Promise<EnginesReport> } | null = null;
+
+export function engineReport(o: { fresh?: boolean; now?: number; probe?: typeof probeEngines } = {}): Promise<EnginesReport> {
+  const now = o.now ?? Date.now();
+  if (!o.fresh && probed && now - probed.at < probed.wait) return probed.report;
+  const entry = { at: now, wait: NEXT_TTL_MS, report: (o.probe ?? probeEngines)() };
+  probed = entry;
+  entry.report.then(
+    (r) => { if (r.engines.some((e) => e.found && e.versionOk === null)) entry.wait = PROBE_BACKOFF_MS; },
+    () => { entry.wait = PROBE_BACKOFF_MS; },
+  );
+  return entry.report;
+}
+
+async function readNext(root: string, sitting: { kind: string; model: string }, fresh = false): Promise<EngineChoice | null> {
+  try {
+    const on = new Set(ruleStates().filter((s) => s.active).map((s) => s.ruleId));
+    const res = resolvePolicy(readPolicy(root).policy, { on: (id) => on.has(id) }, (await engineReport({ fresh })).engines);
+    return nextInChair(sitting, res.orchestrator);
+  } catch { return null; /* a policy that cannot be read suggests nothing */ }
+}
+
+export async function nextFor(root: string, sitting: { kind: string; model: string }, o: {
+  fresh?: boolean; now?: number; read?: typeof readNext;
+} = {}): Promise<EngineChoice | null> {
+  const key = `${root}\n${sitting.kind}\n${sitting.model}`;
+  const now = o.now ?? Date.now();
+  const had = nextSeen.get(key);
+  if (!o.fresh && had && now - had.at < NEXT_TTL_MS) return had.next;
+  const next = await (o.read ?? readNext)(root, sitting, !!o.fresh);
+  nextSeen.set(key, { at: now, next });
+  return next;
+}
+
+/** One chair as the board draws it. */
+async function chairView(root: string, seat: Seat | null, fresh = false): Promise<ChairView> {
+  const sitting = { kind: occupantKind(seat), model: seat?.model ?? "" };
+  const adopted = !!(seat?.adoptedSession || seat?.adoptedPane);
+  return {
+    root, name: seat?.name || seatName(root), ...sitting, adopted,
+    next: adopted ? null : await nextFor(root, sitting, { fresh }),
+    handedOff: handOffWritten(seat?.startedAt ?? 0, seat?.lastTurnAt ?? 0, mtimeOf(briefPath(root))),
+  };
+}
+
+/** Every chair that is occupied now, for the board's answer. */
+export async function chairsNow(): Promise<ChairView[]> {
+  const roots = [...new Set(seatRoots().values())];
+  return Promise.all(roots.map((root) => chairView(root, seatRow(root))));
+}
+
+export type ChangeResult = { ok: true; seat: Seat } | { ok: false; error: string };
+
+/* One change at a time per project. Two interleaved runs stop the seat the
+   other just started, or let `openSeat` answer "already" for a seat whose
+   credential the other is about to revoke, and it then runs deaf. */
+const changing = new Set<string>();
+
+/**
+ * "Change now": stand the chair down, then seat the engine the policy names.
+ *
+ * Refused until the seat has handed over, because the new orchestrator starts
+ * from the brief and the doctrine on disk and nothing else: changing before
+ * they are written is how a day of context is lost to a button. Refused, too,
+ * with nothing to change to, so the button cannot empty a chair for nothing.
+ * Each refusal says what is true and the next thing to do.
+ */
+export async function changeChair(root: string, deps: {
+  view?: (root: string) => Promise<ChairView | null>;
+  close?: (root: string) => Promise<{ ok: boolean; was: boolean }>;
+  open?: (p: { root: string; kind: string; model: string; wakeHours?: number }) => Promise<OpenResult>;
+  /** The wake floor the person set; the seat is told it, as when opened by hand. */
+  wakeHours?: number;
+} = {}): Promise<ChangeResult> {
+  if (changing.has(root)) return { ok: false, error: "the chair is already changing; wait for it to finish" };
+  changing.add(root);
+  try {
+    const v = await (deps.view ?? (async (r) => ((await seated(r)) ? chairView(r, seatRow(r), true) : null)))(root);
+    if (!v) return { ok: false, error: "nobody is in this project's chair" };
+    if (v.adopted) return { ok: false, error: `${v.name} is your own session, adopted into the chair, so it is yours to change: stand it down yourself.` };
+    if (!v.next) return { ok: false, error: "the policy names no other engine for the chair right now, so there is nothing to change to" };
+    if (!v.handedOff) {
+      return { ok: false, error: `${v.name} has not written its hand-off yet. Ask it to update the brief, then change the chair.` };
+    }
+    const { engine, model } = v.next;
+    const closed = await (deps.close ?? closeSeat)(root);
+    if (!closed.ok) return { ok: false, error: "the chair could not be stood down, so nothing was changed" };
+    const r = await (deps.open ?? ((p) => openSeat(p)))({ root, kind: engine, model, wakeHours: deps.wakeHours });
+    return r.ok ? { ok: true, seat: r.seat } : { ok: false, error: `the chair was stood down and ${engine} did not take it: ${r.error}` };
+  } finally {
+    changing.delete(root);
+  }
 }

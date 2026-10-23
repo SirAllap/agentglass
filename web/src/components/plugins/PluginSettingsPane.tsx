@@ -3,8 +3,9 @@ import { api } from "../../lib/api.ts";
 import type { Field } from "../../lib/pluginTypes.ts";
 import { subscribePluginFrame } from "../../lib/pluginBus.ts";
 import { Spinner } from "../Spinner.tsx";
-import { FieldRow } from "./PluginTree.tsx";
-import { EDGE, LINE } from "../workspace/Chrome.tsx";
+import { FieldControl } from "./PluginTree.tsx";
+import { SettingRow, Switch } from "../SettingRow.tsx";
+import { SettingsCard, StatusBadge } from "../SettingsKit.tsx";
 
 /**
  * The fields under each heading, in the order they were declared.
@@ -32,19 +33,34 @@ function groupsOf(fields: Field[]): { name?: string; fields: Field[] }[] {
  *  with it shut is a page that looks like less work. */
 function Group({ name, count, children }: { name?: string; count: number; children: React.ReactNode }) {
   const [open, setOpen] = useState(!/^advanced$/i.test(name ?? ""));
-  const box = { background: "var(--surface-card)", border: EDGE };
-  if (!name) return <div className="rounded-lg flex flex-col" style={box}>{children}</div>;
+  if (!name) return <SettingsCard label="Settings">{children}</SettingsCard>;
   return (
-    <section className="rounded-lg flex flex-col" style={box}>
-      <button onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-2 px-4 py-2.5 text-left"
-        style={{ background: "transparent", border: 0, borderBottom: open ? LINE : undefined }}>
-        <span className="text-[10px] uppercase tracking-[.12em]" style={{ color: "var(--text3)" }}>{name}</span>
-        <span className="text-[10px] tabular-nums t-dim">{count}</span>
-        <span className="ml-auto text-[11px] t-dim">{open ? "−" : "+"}</span>
-      </button>
-      {open && children}
-    </section>
+    <SettingsCard title={name} fold={{ open, onToggle: setOpen }}
+      status={<StatusBadge tone="off">{count} {count === 1 ? "setting" : "settings"}</StatusBadge>}>
+      {children}
+    </SettingsCard>
+  );
+}
+
+/** One field as a row: the label and its sentence (whole) on the left, the
+ *  switch beside them, and anything that takes typing under them. */
+function PluginField({ field, value, secretSet, saved, onChange, onCommit }: {
+  field: Field; value: unknown; secretSet?: boolean; saved: boolean;
+  onChange: (v: unknown) => void; onCommit: (v: unknown) => void;
+}) {
+  const status = saved ? <StatusBadge tone="ok">Saved</StatusBadge> : undefined;
+  if (field.type === "boolean") {
+    const on = value === true;
+    return (
+      <SettingRow label={field.label} hint={field.description} status={status}
+        role="switch" ariaChecked={on}
+        onClick={() => { onChange(!on); onCommit(!on); }}
+        control={<Switch on={on} />} />
+    );
+  }
+  return (
+    <SettingRow label={field.label} hint={field.description} status={status}
+      below={<FieldControl named field={field} value={value} secretSet={secretSet} onChange={onChange} onCommit={onCommit} />} />
   );
 }
 
@@ -99,29 +115,33 @@ export function PluginSettingsPane({ name, open }: { name: string; open: boolean
     savedTimer.current = setTimeout(() => setSaved(null), 1600);
   };
 
-  if (fields === null) return <div className="px-4 py-6"><Spinner label="Loading settings…" /></div>;
+  if (fields === null) return (
+    <SettingsCard label="Settings">
+      <SettingRow label={<Spinner label="Loading settings…" />} />
+    </SettingsCard>
+  );
 
   return (
-    <div className="flex flex-col gap-4 px-1 pb-6">
+    <>
       {error && (
-        <div className="text-[11.5px] rounded-md px-3 py-2" style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 8%, transparent)" }}>{error}</div>
+        <SettingsCard label="Problem">
+          <SettingRow label="This was not saved" status={<StatusBadge tone="err">Failed</StatusBadge>} hint={error} />
+        </SettingsCard>
       )}
       {groupsOf(fields).map((g) => (
         <Group key={g.name ?? ""} name={g.name} count={g.fields.length}>
-          {g.fields.map((f, i) => (
-            <div key={f.key} className="px-4 py-3.5 flex flex-col gap-1" style={{ borderTop: i ? LINE : undefined }}>
-              <FieldRow field={f} value={values[f.key]} secretSet={f.type === "secret" ? secretsSet.includes(f.key) : undefined}
-                onChange={(v) => setValues((s) => ({ ...s, [f.key]: v }))}
-                onCommit={(v) => { void commit(f.key, v); }} />
-              <div className="h-3 text-[10.5px]" style={{ color: "var(--success-ink)" }} aria-live="polite">{saved === f.key ? "Saved" : ""}</div>
-            </div>
+          {g.fields.map((f) => (
+            <PluginField key={f.key} field={f} value={values[f.key]} saved={saved === f.key}
+              secretSet={f.type === "secret" ? secretsSet.includes(f.key) : undefined}
+              onChange={(v) => setValues((s) => ({ ...s, [f.key]: v }))}
+              onCommit={(v) => { void commit(f.key, v); }} />
           ))}
         </Group>
       ))}
-      <p className="text-[11px] m-0 px-1" style={{ color: "var(--text3)" }}>
-        These are {name}'s own settings, declared in its manifest and kept by this app. The plugin reads them over its
-        own token and hears every change.
-      </p>
-    </div>
+      <SettingsCard label="About these settings">
+        <SettingRow label="Where these settings live"
+          hint={`These are ${name}'s own settings, declared in its manifest and kept by this app. The plugin reads them over its own token and hears every change.`} />
+      </SettingsCard>
+    </>
   );
 }

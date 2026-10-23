@@ -110,6 +110,11 @@ def call(path, body=None, method="POST", timeout=630):
         method=method,
         headers={"Content-Type": "application/json", "Origin": SERVER},
     )
+    # Who is asking, when it is a worker: the server turns a worker away from
+    # the verbs that start, stop or seat anything. Not a credential.
+    me = os.environ.get("AGENTGLASS_AGENT_NAME", "").strip()
+    if me:
+        req.add_header("X-Agentglass-Agent", me)
     t = token()
     if t:
         req.add_header("Authorization", f"Bearer {t}")
@@ -166,6 +171,10 @@ def main():
     p.add_argument("--kind", default=None, help="which CLI: claude (default), codex, ...")
     p.add_argument("--role", choices=["scout", "builder", "verifier"],
                    help="a worker role: the CLI and model Settings pick for it, locked against push, commit and merge")
+    p.add_argument("--engine", help="with --role: which engine of the policy's chain runs it (the policy decides the choices)")
+    p.add_argument("--model", help="with --engine: which model of that chain entry")
+    p.add_argument("--allow", action="append", metavar="network|commit",
+                   help="with --role: widen the worker's envelope by one thing, up to the project's ceiling (repeatable or comma-separated)")
     p.add_argument("--yolo", action="store_true", help="skip permissions, if Settings allow it")
     p.add_argument("--remote-control", metavar="NAME", help="Claude's --remote-control NAME")
     p.add_argument("--prompt", default="", help="a first message on the command line (prefer `prompt` after `start`)")
@@ -179,6 +188,9 @@ def main():
     p.add_argument("text", nargs="?", default="", help="the message, as ONE quoted argument")
     p.add_argument("--file", help="read the message from this file instead")
     p.add_argument("--timeout", type=int, default=10000, help="ms to wait for the paste to land and be taken")
+
+    p = sub.add_parser("own", help="take an agent nobody owns (an enlisted tab, one from before owners): a seat reaches only the agents it owns")
+    p.add_argument("name")
 
     p = sub.add_parser("wait", help="block until the agent is in a state")
     p.add_argument("name")
@@ -326,6 +338,12 @@ def main():
             body["kind"] = a.kind
         if a.role:
             body["role"] = a.role
+        if a.engine:
+            body["engine"] = a.engine
+        if a.model:
+            body["model"] = a.model
+        if a.allow:
+            body["allow"] = [w.strip() for x in a.allow for w in x.split(",") if w.strip()]
         if a.remote_control:
             body["remoteControl"] = a.remote_control
         if a.keep:
@@ -339,6 +357,8 @@ def main():
         if not text.strip():
             return emit({"ok": False, "error": "nothing to send: pass the text or --file"})
         return emit(call("/agents/named/prompt", {"name": a.name, "text": text, "timeout": a.timeout}))
+    if a.cmd == "own":
+        return emit(call("/agents/named/own", {"name": a.name}, timeout=30))
     if a.cmd == "wait":
         return emit(call("/agents/named/wait", {"name": a.name, "until": a.until, "timeout": a.timeout}))
     if a.cmd == "read":

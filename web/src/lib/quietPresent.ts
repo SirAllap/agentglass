@@ -86,6 +86,12 @@ export function idleDueAt(lastInputAt: number | null, heldAt: number): number {
  *  preferences is worth a minute of a corner, and the cross is one click. */
 export const CHIP_MS = 60_000;
 
+/** What is left of a chip's minute, counted from the change and not from the
+ *  moment it came to the front: a burst of twelve changes used to leave twelve
+ *  chips in a row, each given its own full minute as the one before went (the
+ *  last gone four and a half minutes after a burst of twenty seconds). */
+export const chipLeftMs = (changedAt: number, nowMs: number): number => Math.max(0, changedAt + CHIP_MS - nowMs);
+
 /** How far the chip column sits above the bottom edge. The Git view's shortcut
  *  bar is 22 px tall and the terminal's last rows sit right on the edge: measured
  *  in the rendered app, a chip at 16 px covered the shortcuts it was drawn over.

@@ -49,6 +49,9 @@ export interface UiCtx {
   openSession(id: string, app?: string): void;
   /** The pane chords' own function: false when no focused pane has anything to open. */
   paneDoor(which: UiArgs<"pane.open">["which"]): boolean;
+  /** The worktree of the focused terminal pane, or null when no terminal is up.
+   *  A Git modal asked for from a terminal is about this checkout. */
+  paneRoot?(): string | null;
   /** Where the reads gather their data (uiSnapshotSources.ts in the window; a
    *  fixture in a test). Absent in a window that cannot describe itself. */
   sources?: Sources;
@@ -88,6 +91,12 @@ export function nextThemeId(cur: string, a: { name?: string; dir?: 1 | -1 }, ids
 
 const baseName = (p: string) => p.split("/").pop() || p;
 
+/** The checkout a Git modal is about when the caller is in a terminal pane. */
+const paneCheckout = (c: UiCtx): { root?: string } => {
+  const root = c.paneRoot?.();
+  return root ? { root } : {};
+};
+
 export const UI_HANDLERS: { [Id in UiActionId]: Handler<Id> } = {
   "view.open": (a, c) => c.goView(a.to),
   "workspace.toggle": (_a, c) => c.workspace(),
@@ -123,10 +132,10 @@ export const UI_HANDLERS: { [Id in UiActionId]: Handler<Id> } = {
   "peek.file": (a) => openPeek({ root: a.root, path: `${a.root}/${a.path}`, label: a.path }),
   // The Git modals draw over the current view (they are portals); the Git view
   // is mounted hidden for them, never switched to. See lib/gitModalIntent.ts.
-  "git.modal": (a) => { latchGitModal({ which: a.which }); },
-  "git.compare": (a) => { latchGitModal({ which: "compare", base: a.base }); },
-  "git.blame": (a) => { latchGitModal({ which: "blame", path: a.path }); },
-  "git.rebase": (a) => { latchGitModal({ which: "rebase", base: a.base }); },
+  "git.modal": (a, c) => { latchGitModal({ which: a.which, ...paneCheckout(c) }); },
+  "git.compare": (a, c) => { latchGitModal({ which: "compare", base: a.base, ...paneCheckout(c) }); },
+  "git.blame": (a, c) => { latchGitModal({ which: "blame", path: a.path, ...paneCheckout(c) }); },
+  "git.rebase": (a, c) => { latchGitModal({ which: "rebase", base: a.base, ...paneCheckout(c) }); },
   "event.open": async (a, c) => { if (!(await c.openEvent(a.id))) throw new Error("no recent event has that id"); },
   "session.open": (a, c) => c.openSession(a.id, a.app),
   "whatsnew.open": () => showWhatsNew(),

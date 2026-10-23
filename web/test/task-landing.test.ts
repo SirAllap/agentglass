@@ -36,7 +36,7 @@ describe("the stored preference", () => {
   test("ignores a value it does not recognise", () => {
     // Written by a future version, or by hand. Falling back beats landing on a
     // tab that does not exist.
-    store.set("agentglass.tasks.landing", "jira");
+    store.set("agentglass.tasks.landing", "gone");
     expect(taskLanding()).toBe("last");
   });
 });

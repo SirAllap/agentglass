@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SettingRow } from "./SettingRow.tsx";
+import { CommandLine, EmptyState, SettingsCard, SettingsForm, StatusBadge } from "./SettingsKit.tsx";
 import { api } from "../lib/api.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import { qrMatrix, qrSvgPath } from "../lib/qr.ts";
 import { fmtAgo } from "../lib/format.ts";
 import type { DeviceScope, PairedDevice, PairRequest, PairState } from "../../../shared/types.ts";
-import { CopyIcon, DoneIcon, IconLabel, PhoneIcon } from "../lib/glyphIcons.tsx";
-import { ICON } from "../lib/iconSize.ts";
-import { EDGE } from "./workspace/Chrome.tsx";
+import { Button } from "./workspace/Chrome.tsx";
 
 /**
  * Adding a phone, from the machine's side.
@@ -51,10 +50,6 @@ export function PairPanel({ baseUrl, variant = "hero", onPaired }: {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(() => Date.now());
-  const [copiedCmd, setCopiedCmd] = useState<string | null>(null);
-  const copyCmd = (c: string) => {
-    navigator.clipboard?.writeText(c).then(() => { setCopiedCmd(c); setTimeout(() => setCopiedCmd(null), 1500); }).catch(() => { /* no clipboard */ });
-  };
   /**
    * Which invitation is open, as a ref rather than only as state.
    *
@@ -138,15 +133,6 @@ export function PairPanel({ baseUrl, variant = "hero", onPaired }: {
   const insecure = /^http:\/\//i.test(baseUrl) && !/^https?:\/\/(localhost|127\.0\.0\.1|\[?::1\]?)([:/]|$)/i.test(baseUrl);
   const tailnet = /^https?:\/\/100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(baseUrl);
   const port = baseUrl.match(/:(\d{2,5})(?:\/|$)/)?.[1] ?? "4000";
-  const cmdBlock = (cmd: string) => (
-    <button key={cmd} onClick={() => copyCmd(cmd)} title="Click to copy"
-      className="t-mono text-[10.5px] text-left px-2 py-1.5 rounded-lg break-all w-full hover:opacity-80 flex items-center gap-2"
-      style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: EDGE }}>
-      <span className="flex-1 min-w-0">{cmd}</span>
-      <span className="shrink-0 text-[10px]" style={{ color: copiedCmd === cmd ? "var(--success)" : "var(--text3)" }}>{copiedCmd === cmd ? <IconLabel icon={<DoneIcon size={ICON.xs} />}>copied</IconLabel> : <IconLabel icon={<CopyIcon size={ICON.xs} />}>copy</IconLabel>}</span>
-    </button>
-  );
-
   const hero = variant === "hero";
   /* Told upward from an effect, not from a render. The page above uses this to
      choose between its two faces, and setting a parent's state while a child is
@@ -155,147 +141,104 @@ export function PairPanel({ baseUrl, variant = "hero", onPaired }: {
   useEffect(() => { onPaired?.(state.devices.length); }, [state.devices.length, onPaired]);
 
   return (
-    <div className="flex flex-col gap-2.5">
-      {insecure && (
-        <div className="flex flex-col gap-2 text-[10.5px] px-2.5 py-2.5 rounded-lg" style={{
-          color: "var(--text2)",
-          background: "color-mix(in srgb, var(--error) 10%, transparent)",
-          border: "1px solid color-mix(in srgb, var(--error) 35%, transparent)",
-        }}>
-          {/* Whose limitation this is, said in the first clause. It used to be
-              phrased as something the PHONE could not do, which was a fact
-              about the browser wearing the phone's clothes — and it stopped
-              being true the moment there was an app, which does not ask a page
-              for its primitives. Getting that wrong is not cosmetic here: this
-              sits directly above the QR, so it talks somebody out of the
-              address that would have worked for them.
-
-              "The companion" is gone from the sentence with the companion
-              itself: the limitation was never about which application the page
-              mounts, it is about what a plain-HTTP origin is allowed to do, so
-              the cockpit inherits it unchanged. The subject stays "… in a
-              browser", which is what pair-secure-context.test.ts pins — the
-              clause that keeps this from sliding back to blaming the phone. */}
-          <div>
-            <span style={{ color: "var(--error-ink)" }}>The cockpit in a browser cannot pair over this address.</span>{" "}
-            A plain-HTTP page gets no WebCrypto, and pairing has to encrypt the credential to the
-            phone — so the handshake can't even start. The agentglass app pairs over it fine: it
-            makes its own key. The traffic is still readable by anything else on this network.
-          </div>
-          {tailnet ? (
-            <>
-              <div>You are on Tailscale already — put its HTTPS in front of agentglass. Run this on the machine:</div>
-              {cmdBlock(`tailscale serve --bg ${port}`)}
-              <div className="text-[10px] t-dim2">The first run may stop for one of these. Do it, then run the command again:</div>
-              <div className="flex flex-col gap-1.5 text-[10px] t-dim2">
-                <div>• <b>“Serve is not enabled”</b> — it prints a one-click link; open it (as your tailnet admin) to turn Serve on.</div>
-                <div>• <b>“Access denied”</b> — grant permission once (or just prefix <span className="t-mono">sudo</span>):</div>
-                {cmdBlock("sudo tailscale set --operator=$USER")}
-                <div>• <b>a certificate / HTTPS error</b> — Tailscale admin console → <b>DNS</b> → enable <b>HTTPS Certificates</b>.</div>
-              </div>
-              <div>When it prints <span className="t-mono">https://…ts.net/</span>, a <b>Tailscale (HTTPS)</b> address shows up in the list above — pick it and scan its QR.</div>
-              <div className="text-[10px] t-dim2">Undo any time:</div>
-              {cmdBlock("tailscale serve reset")}
-            </>
-          ) : (
-            <div>Serve the cockpit over HTTPS, or forward the port so the phone reaches it as <span className="t-mono">http://localhost</span>.</div>
-          )}
-        </div>
-      )}
-      {hero && ticket && (
-        <div className="flex items-center gap-2">
-          <span className="panel-eyebrow flex-1" style={{ paddingLeft: 0, paddingRight: 0 }}>Connect a phone</span>
-          <button onClick={start} disabled={busy}
-            className="text-[11px] px-2 py-0.5 rounded-lg hover:opacity-80"
-            style={{ color: "var(--text2)", border: EDGE }}>
-            New code
-          </button>
-        </div>
-      )}
-
-      {/* Requests come before the invitation. Somebody standing with a phone in
-          their hand waiting to be let in is more urgent than the code, and a
-          decision buried under a QR is one that gets made late or not at all. */}
-      {state.pending.map((req) => (
-        <Request key={req.id} req={req} busy={busy} onDecide={decide} />
-      ))}
-
-      {!ticket ? (
-        /* One line among the others once there is a phone on the list, and the
-           whole point of the page before there is one. Same handler either way
-           — what changes is how much of the screen it is worth. */
-        hero ? (
-          /* First run: there is one thing to do on this page, so it is the size
-             of one thing to do. The code is still not minted until it is asked
-             for — opening Settings should not burn a two-minute invitation — so
-             what fills the pane is the ask, not a ticking code. */
-          <div className="flex flex-col items-center text-center gap-2 py-6">
-            <span className="flex" aria-hidden><PhoneIcon size={ICON.xl} /></span>
-            <span className="text-[15px]" style={{ color: "var(--text)" }}>
-              {busy ? "Starting…" : "Put this on your phone"}
-            </span>
-            <span className="text-[12.5px] t-dim max-w-[44ch]">
-              You get a QR code and six digits. Scan one, type the other, and say yes here — good for
-              two minutes and one device.
-            </span>
-            <button onClick={start} disabled={busy}
-              className="mt-1 text-[13px] px-4 py-2 rounded-lg font-medium"
-              style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 44%, transparent)", opacity: busy ? 0.5 : 1 }}>
-              Show the code
-            </button>
-          </div>
-        ) : (
+    <>
+      <SettingsCard title="Connect your phone"
+        actions={ticket
+          ? <Button onClick={start} disabled={busy}>New code</Button>
+          : <Button tone="primary" onClick={start} disabled={busy}>{busy ? "Starting…" : "Show the code"}</Button>}>
+        {insecure && (
           <SettingRow
-            label={busy ? "Starting…" : "Pair a phone"}
-            hint="A QR code and six digits, good for two minutes and one device."
-            control={<button onClick={start} disabled={busy}
-              className="text-[12px] px-3 py-1.5 rounded-lg whitespace-nowrap"
-              style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
-              Show the code
-            </button>}
-          />
-        )
-      ) : (
-        /* Centred and large on first run, because it is the only thing to do;
-           beside the words afterwards, because by then it is one task among
-           several and the page has other rows to keep its shape. */
-        <div className={`flex items-center gap-5 ${hero ? "flex-col text-center py-3" : "items-start"}`}>
-          <div className="shrink-0 flex flex-col items-center gap-1.5">
-            <Qr text={pairUrl} big={hero} />
-            <span className="text-[11px] t-dim">Scan with the camera</span>
-          </div>
-          <div className={`min-w-0 flex flex-col gap-1 ${hero ? "items-center" : "flex-1"}`}>
-            <span className="panel-eyebrow" style={{ paddingLeft: 0, paddingRight: 0 }}>Then type this on the phone</span>
-            {/* The biggest thing in the pane. It is being read off this screen
-                and copied onto another one, and every point of size is a
-                mis-typed digit that costs one of five attempts. */}
-            <div className="t-mono select-all" style={{
-              fontSize: hero ? 38 : 30, letterSpacing: "0.24em", color: "var(--text)", lineHeight: 1.15,
-            }}>
-              {ticket.code}
-            </div>
-            <div className="text-[12px]" style={{ color: left <= 20 ? "var(--warning)" : "var(--text3)" }}>
-              {left > 0 ? `Expires in ${left}s` : "Expired — start a new one"}
-            </div>
-            <div className={`text-[12px] t-dim ${hero ? "max-w-[46ch]" : ""}`}>
-              The code is not in the QR. Scanning it from a photo or a shared screen gets no further
-              than asking for these six digits.
-            </div>
-            {!hero && (
-              <button onClick={start} disabled={busy}
-                className="self-start mt-1 text-[11px] px-2 py-0.5 rounded-lg hover:opacity-80"
-                style={{ color: "var(--text2)", border: EDGE }}>
-                New code
-              </button>
-            )}
-          </div>
-        </div>
-      )}
+            /* Whose limitation this is, said in the first clause. It used to be
+               phrased as something the PHONE could not do, which was a fact
+               about the browser wearing the phone's clothes — and it stopped
+               being true the moment there was an app, which does not ask a page
+               for its primitives. Getting that wrong is not cosmetic here: this
+               sits directly above the QR, so it talks somebody out of the
+               address that would have worked for them.
 
-      {err && <div className="text-[10.5px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
+               "The companion" is gone from the sentence with the companion
+               itself: the limitation was never about which application the page
+               mounts, it is about what a plain-HTTP origin is allowed to do, so
+               the cockpit inherits it unchanged. The subject stays "… in a
+               browser", which is what pair-secure-context.test.ts pins — the
+               clause that keeps this from sliding back to blaming the phone. */
+            label={<span style={{ color: "var(--error-ink)" }}>The cockpit in a browser cannot pair over this address.</span>}
+            status={<StatusBadge tone="err">Plain HTTP</StatusBadge>}
+            hint={<>
+              A plain-HTTP page gets no WebCrypto, and pairing has to encrypt the credential to the
+              phone — so the handshake can't even start. The agentglass app pairs over it fine: it
+              makes its own key. The traffic is still readable by anything else on this network.
+              {!tailnet && <span className="block mt-1">Serve the cockpit over HTTPS, or forward the port so the phone reaches it as <span className="t-mono">http://localhost</span>.</span>}
+            </>}
+            below={tailnet ? (
+              <div className="flex flex-col gap-2 text-[12px]" style={{ color: "var(--text2)" }}>
+                <div>You are on Tailscale already — put its HTTPS in front of agentglass. Run this on the machine:</div>
+                <CommandLine command={`tailscale serve --bg ${port}`} />
+                <div className="t-dim">The first run may stop for one of these. Do it, then run the command again:</div>
+                <div className="flex flex-col gap-1.5 t-dim">
+                  <div>• <b>“Serve is not enabled”</b> — it prints a one-click link; open it (as your tailnet admin) to turn Serve on.</div>
+                  <div>• <b>“Access denied”</b> — grant permission once (or just prefix <span className="t-mono">sudo</span>):</div>
+                  <CommandLine command="sudo tailscale set --operator=$USER" />
+                  <div>• <b>a certificate / HTTPS error</b> — Tailscale admin console → <b>DNS</b> → enable <b>HTTPS Certificates</b>.</div>
+                </div>
+                <div>When it prints <span className="t-mono">https://…ts.net/</span>, a <b>Tailscale (HTTPS)</b> address shows up in the list below — pick it and scan its QR.</div>
+                <div className="t-dim">Undo any time:</div>
+                <CommandLine command="tailscale serve reset" />
+              </div>
+            ) : undefined}
+          />
+        )}
+
+        {/* Requests come before the invitation. Somebody standing with a phone in
+            their hand waiting to be let in is more urgent than the code, and a
+            decision buried under a QR is one that gets made late or not at all. */}
+        {state.pending.map((req) => (
+          <Request key={req.id} req={req} busy={busy} onDecide={decide} />
+        ))}
+
+        {!ticket ? (
+          /* The code is still not minted until it is asked for — opening
+             Settings should not burn a two-minute invitation — so what fills
+             the card is the ask, and the button that answers it is in the
+             header, where it stays once there is a code. */
+          <EmptyState>
+            {hero
+              ? "You get a QR code and six digits. Scan one, type the other, and say yes here — good for two minutes and one device."
+              : "A QR code and six digits, good for two minutes and one device."}
+          </EmptyState>
+        ) : (
+          /* Centred and large on first run, because it is the only thing to do;
+             beside the words afterwards, because by then it is one task among
+             several and the page has other rows to keep its shape. */
+          <SettingRow
+            label="Scan with the camera, then type the code on the phone"
+            hint="The code is not in the QR. Scanning it from a photo or a shared screen gets no further than asking for these six digits."
+            below={
+              <div className={`flex gap-5 ${hero ? "flex-col items-center text-center" : "items-start flex-wrap"}`}>
+                <div className="shrink-0"><Qr text={pairUrl} big={hero} /></div>
+                <div className={`min-w-0 flex flex-col gap-1 ${hero ? "items-center" : ""}`}>
+                  {/* The biggest thing on the page. It is being read off this
+                      screen and copied onto another one, and every point of
+                      size is a mis-typed digit that costs one of five attempts. */}
+                  <div className="t-mono select-all" style={{
+                    fontSize: hero ? 38 : 30, letterSpacing: "0.24em", color: "var(--text)", lineHeight: 1.15,
+                  }}>
+                    {ticket.code}
+                  </div>
+                  <div className="text-[12px]" style={{ color: left <= 20 ? "var(--warning-ink)" : "var(--text3)" }}>
+                    {left > 0 ? `Expires in ${left}s` : "Expired — start a new one"}
+                  </div>
+                </div>
+              </div>
+            }
+          />
+        )}
+
+        {err && <SettingRow label="Could not start an invitation" status={<StatusBadge tone="err">Failed</StatusBadge>} hint={err} />}
+      </SettingsCard>
 
       <Paired devices={state.devices} busy={busy} onForget={forget} />
-    </div>
+    </>
   );
 }
 
@@ -313,64 +256,47 @@ function Request({ req, busy, onDecide }: {
 }) {
   const [scope, setScope] = useState<DeviceScope>("answer");
   return (
-    <div className="flex flex-col gap-2 px-3 py-2.5 rounded-xl" style={{
-      background: "color-mix(in srgb, var(--primary) 9%, transparent)",
-      border: "1px solid color-mix(in srgb, var(--primary) 38%, transparent)",
-    }}>
-      <div className="flex items-center gap-2.5">
-        <span className="min-w-0 flex-1">
-          <span className="block text-[13px] font-medium truncate" style={{ color: "var(--text)" }}>
-            {req.label} wants to connect
-          </span>
-          <span className="block text-[10.5px] t-dim2 truncate">
-            {req.agent ? `${req.agent.slice(0, 80)} · ` : ""}from {req.ip || "an unknown address"}
-          </span>
+    <SettingRow
+      label={`${req.label} wants to connect`}
+      status={
+        <span className="t-mono" style={{ fontSize: 17, letterSpacing: "0.16em", color: "var(--text)" }}>{req.code}</span>
+      }
+      hint={<>
+        <span className="block">{req.agent ? `${req.agent.slice(0, 80)} · ` : ""}from {req.ip || "an unknown address"}</span>
+        <span className="block mt-1">
+          Check those six digits are the ones on the phone. If they are not, this is not the device you
+          are holding — decline it.
         </span>
-        <span className="t-mono shrink-0" style={{ fontSize: 17, letterSpacing: "0.16em", color: "var(--text)" }}>
-          {req.code}
-        </span>
-      </div>
-
-      <div className="text-[10.5px] t-dim2">
-        Check those six digits are the ones on the phone. If they are not, this is not the device you
-        are holding — decline it.
-      </div>
-
-      {/* Chosen here rather than assumed, because this is the one moment
-          somebody is already thinking about what this device is for. The
-          default is the narrow one: a phone that answers gates does not need a
-          terminal, and a default of "everything" is how every device ends up
-          with everything. */}
-      <div className="flex flex-col gap-1">
-        <span className="text-[10px] t-dim2 uppercase tracking-wider">Give it</span>
-        {SCOPES.map((s) => (
-          <label key={s.key} className="flex items-start gap-2 px-2 py-1.5 rounded-lg cursor-pointer" style={{
-            background: scope === s.key ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent",
-            border: `1px solid color-mix(in srgb, ${scope === s.key ? "var(--primary)" : "var(--border)"} ${scope === s.key ? 45 : 28}%, transparent)`,
-          }}>
-            <input type="radio" name={`scope-${req.id}`} checked={scope === s.key}
-              onChange={() => setScope(s.key)} className="mt-0.5" />
-            <span className="min-w-0">
-              <span className="block text-[11.5px]" style={{ color: "var(--text)" }}>{s.title}</span>
-              <span className="block text-[10px] t-dim2">{s.what}</span>
-            </span>
-          </label>
-        ))}
-      </div>
-
-      <div className="flex items-center gap-2">
-        <button onClick={() => onDecide(req, scope)} disabled={busy}
-          className="text-[11.5px] px-3 py-1.5 rounded-lg font-medium"
-          style={{ color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 44%, transparent)" }}>
-          Accept
-        </button>
-        <button onClick={() => onDecide(req, null)} disabled={busy}
-          className="text-[11.5px] px-3 py-1.5 rounded-lg hover:opacity-80"
-          style={{ color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 38%, transparent)" }}>
-          Decline
-        </button>
-      </div>
-    </div>
+      </>}
+      below={
+        /* Chosen here rather than assumed, because this is the one moment
+           somebody is already thinking about what this device is for. The
+           default is the narrow one: a phone that answers gates does not need a
+           terminal, and a default of "everything" is how every device ends up
+           with everything. */
+        <SettingsForm label={`Let ${req.label} in`} onSubmit={() => onDecide(req, scope)}>
+          <div role="radiogroup" aria-label="Give it" className="flex flex-col gap-1">
+            <span className="agx-field-l">Give it</span>
+            {SCOPES.map((s) => (
+              <label key={s.key} className="flex items-start gap-2 px-2 py-1.5 rounded-lg cursor-pointer" style={{
+                background: scope === s.key ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent",
+              }}>
+                <input type="radio" name={`scope-${req.id}`} checked={scope === s.key}
+                  onChange={() => setScope(s.key)} className="mt-0.5" />
+                <span className="min-w-0">
+                  <span className="block text-[12.5px]" style={{ color: "var(--text)" }}>{s.title}</span>
+                  <span className="block text-[11.5px] t-dim">{s.what}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button type="submit" tone="ok" disabled={busy}>Accept</Button>
+            <Button tone="danger" disabled={busy} onClick={() => onDecide(req, null)}>Decline</Button>
+          </div>
+        </SettingsForm>
+      }
+    />
   );
 }
 
@@ -402,35 +328,22 @@ function Paired({ devices, busy, onForget }: {
   const [confirming, setConfirming] = useState<string | null>(null);
   if (!devices.length) return null;
   return (
-    <>
-      <div className="panel-eyebrow pt-2 pb-1">Paired devices</div>
+    <SettingsCard title="Paired devices">
       {devices.map((d) => (
         <SettingRow key={d.id}
           label={d.label}
           hint={`${SCOPE_WORD[d.scope]} · ${d.lastSeenAt ? `last used ${fmtAgo(d.lastSeenAt)}` : "not used yet"}`}
-          control={confirming === d.id ? (
-            <span className="flex items-center gap-1.5">
-              <button onClick={() => { setConfirming(null); onForget(d); }} disabled={busy}
-                className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-                style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}>
-                Forget it
-              </button>
-              <button onClick={() => setConfirming(null)}
-                className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80"
-                style={{ color: "var(--text2)", border: EDGE }}>
-                Keep
-              </button>
-            </span>
+          actions={confirming === d.id ? (
+            <>
+              <Button tone="danger" onClick={() => { setConfirming(null); onForget(d); }} disabled={busy}>Forget it</Button>
+              <Button onClick={() => setConfirming(null)}>Keep</Button>
+            </>
           ) : (
-            <button onClick={() => setConfirming(d.id)}
-              className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80"
-              style={{ color: "var(--text3)", border: EDGE }}>
-              Forget
-            </button>
+            <Button onClick={() => setConfirming(d.id)}>Forget</Button>
           )}
         />
       ))}
-    </>
+    </SettingsCard>
   );
 }
 

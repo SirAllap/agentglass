@@ -1,16 +1,16 @@
-// Layout and scrollback persistence for the pane engine's own tmux server.
+// Layout persistence for the pane engine's own tmux server.
 //
 // The engine's tmux server survives app restarts (it is a daemon of its own),
 // so "quit and reopen the app" needs nothing here. What needs this is the case
 // tmux itself cannot answer: the host rebooted, the daemon died with it, and
-// the panes are gone — sessions, splits and scrollback included. This module
-// periodically photographs the layout and the scrollback of every pane on OUR
-// socket, and on demand rebuilds the whole tree in a fresh server.
+// the panes are gone — sessions and splits included. This module periodically
+// photographs the layout of every pane on OUR socket, and on demand rebuilds
+// the whole tree in a fresh server.
 //
 // What a restore gives back, in order of decreasing fidelity:
 //
 //   * the session/window/pane tree, each pane's working directory and size;
-//   * each pane's scrollback (up to 2000 lines, replayed into the new pane);
+//   * no scrollback: it is not replayed, on purpose (see the note further down);
 //   * what was RUNNING in each pane, as the argv it was running with — an
 //     agent CLI, or whatever command the pane was born from. "all" mode brings
 //     it back: a Claude conversation is resumed by its id, any other program is
@@ -1180,7 +1180,7 @@ const SESSION_ID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]
 const printed = (r: { ok: boolean; stdout: string }): string => (r.ok ? r.stdout.trim() : "");
 
 /** The panes of a window beyond its first, split into the window that exists
- *  now and given their scrollback back. */
+ *  now. */
 async function restorePanes(name: string, windowId: string, panes: CapturedPane[], mode: "lazy" | "all"): Promise<void> {
   /* Each split targets the pane the previous one printed. Targeting the window
      means its ACTIVE pane, the first, so every new pane landed right after it
@@ -1197,8 +1197,8 @@ async function restorePanes(name: string, windowId: string, panes: CapturedPane[
 /**
  * Rebuild every captured session in a fresh tmux server.
  *
- * "lazy" (default): restore the tree — sessions, windows, splits, directories,
- * scrollback — with login shells in each pane; agent conversations resume the
+ * "lazy" (default): restore the tree — sessions, windows, splits, directories —
+ * with login shells in each pane; agent conversations resume the
  * moment their chat is reopened (the chat engine resumes from the transcript,
  * which survives the reboot on disk). "all": additionally replay each pane's
  * captured start command, which for agent panes relaunches the CLI with its

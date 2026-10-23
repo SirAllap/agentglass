@@ -20,14 +20,15 @@
  * The exclusion list comes FIRST, above the sources, because it is the only
  * control here that can prevent something rather than undo it.
  */
-import { useCallback, useEffect, useState, type ReactNode, useRef } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import type { UnderstudyLearned, UnderstudySource } from "../../../../shared/types.ts";
 import { SERVER, authHeaders } from "../../lib/api.ts";
-import { Chip } from "../workspace/Chrome.tsx";
-import { Empty, wash } from "../git/ui.tsx";
+import { Button } from "../workspace/Chrome.tsx";
+import { Empty } from "../git/ui.tsx";
+import { SettingRow } from "../SettingRow.tsx";
+import { Field, SettingsCard, SettingsForm, StatusBadge } from "../SettingsKit.tsx";
 import { fmtBytes } from "../../lib/goneCleanup.ts";
 import { HIT, ICON } from "../../lib/iconSize.ts";
-import { DoneIcon } from "../../lib/glyphIcons.tsx";
 import { INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
 
 interface SourcesBody {
@@ -61,44 +62,6 @@ const post = async (path: string, body: unknown) => {
    threshold and is right to be that blunt. */
 
 /**
- * A numbered step, dimmed until its turn.
- *
- * The screen was reported as "very confusing and I do not even know where to
- * start", which is a fair description of what it was: three unrelated jobs
- * stacked down a page with no order implied and no state showing. Numbering
- * them and dimming the ones that are not yet the point is most of the fix —
- * the rest is having a recommended answer so that nobody has to invent one.
- */
-function Step({ n, title, hint, done, active, children }: {
-  n: number;
-  title: string;
-  hint?: string;
-  done?: boolean;
-  active: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <section style={{ opacity: active || done ? 1 : 0.55, borderTop: `1px solid ${wash("--border", 40)}` }}>
-      <div className="flex items-baseline gap-2 px-4 pt-3">
-        <span
-          className="grid place-items-center shrink-0 tabular-nums"
-          style={{
-            width: 18, height: 18, borderRadius: 9, fontSize: 10,
-            background: done ? wash("--success", 20) : active ? wash("--primary", 20) : wash("--text", 8),
-            color: done ? "var(--success)" : active ? "var(--primary)" : "var(--text4)",
-          }}
-        >
-          {done ? <DoneIcon size={ICON.xs} /> : n}
-        </span>
-        <span className="panel-title" style={{ fontSize: 13 }}>{title}</span>
-        {hint && <span className="chip t-dim ml-auto">{hint}</span>}
-      </div>
-      {children}
-    </section>
-  );
-}
-
-/**
  * The control that decides what is read off this machine.
  *
  * It was 20x20 with a 14px glyph — the smallest target in the view, failing
@@ -112,9 +75,23 @@ function Step({ n, title, hint, done, active, children }: {
  * `role="checkbox"` and not `switch`: it is drawn as a square with a tick, and
  * a role that disagrees with the shape is read out as the wrong control.
  */
-function TickBox({ on, onClick, disabled, title }: {
-  on: boolean; onClick: () => void; disabled?: boolean; title: string;
+function TickBox({ on, onClick, disabled, title, plain }: {
+  on: boolean; onClick?: () => void; disabled?: boolean; title: string;
+  /** Only the picture: the row around it is the control. A button inside a
+   *  button row is invalid, so a row that is itself operable draws this. */
+  plain?: boolean;
 }) {
+  const box = (
+    <svg width={ICON.md} height={ICON.md} viewBox="0 0 24 24" fill="none"
+      stroke={on ? "var(--primary)" : "var(--text3)"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="3" y="3" width="18" height="18" rx="3" />
+      {on && <path d="M7 12.5l3.2 3.2L17 9" />}
+    </svg>
+  );
+  const style = { width: HIT, height: HIT, opacity: disabled ? 0.4 : 1 };
+  if (plain) {
+    return <span aria-hidden className="agx-tick shrink-0 grid place-items-center rounded-md" style={style}>{box}</span>;
+  }
   return (
     <button
       type="button"
@@ -124,25 +101,16 @@ function TickBox({ on, onClick, disabled, title }: {
       title={title}
       disabled={disabled}
       onClick={onClick}
-      tabIndex={-1}
-      className="agx-tick shrink-0 grid place-items-center rounded-md pointer-events-none"
-      style={{ width: HIT, height: HIT, opacity: disabled ? 0.4 : 1 }}
+      className="agx-tick shrink-0 grid place-items-center rounded-md"
+      style={style}
     >
-      <svg width={ICON.md} height={ICON.md} viewBox="0 0 24 24" fill="none"
-        stroke={on ? "var(--primary)" : "var(--text3)"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-        <rect x="3" y="3" width="18" height="18" rx="3" />
-        {on && <path d="M7 12.5l3.2 3.2L17 9" />}
-      </svg>
+      {box}
     </button>
   );
 }
 
 export function Teach({ active }: { active: boolean }) {
   const [data, setData] = useState<SourcesBody | null>(null);
-  /** Whether the "what exactly does it read" detail is open. Closed: it answers
-   *  questions a first visit has not asked yet, and it sat between a person and
-   *  the button they had just been told to press. */
-  const [why, setWhy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [neverText, setNeverText] = useState("");
@@ -228,264 +196,211 @@ export function Teach({ active }: { active: boolean }) {
     requestAnimationFrame(() => receipt.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }));
   };
 
-  /*
-   * The whole row is the target, and the box only reports the state.
-   *
-   * 20x20 was the smallest thing on the screen and the most consequential —
-   * this is what says whether the understudy may read your conventions, your
-   * skills, your memory. As a row it is roughly 640x48, which is a target you
-   * cannot miss rather than one you aim at.
-   *
-   * The box keeps `role="checkbox"` and the accessible name so nothing is lost
-   * to a screen reader, and takes `tabIndex={-1}` plus `pointer-events-none` so
-   * there is exactly ONE target here rather than a big one with a small one
-   * inside it.
-   */
   /* The largest source on the list, so a bar is a comparison and not a raw
      byte count nobody can hold in their head. Floors at 1 so a list of empty
      sources cannot divide by zero. */
   const biggest = Math.max(1, ...(data?.sources ?? []).map((x) => x.bytes || 0));
-  const Source = ({ s }: { s: UnderstudySource }) => (
-    <div
-      role="button"
-      tabIndex={s.found ? 0 : -1}
-      aria-disabled={!s.found}
-      onClick={() => s.found && void toggle(s)}
-      onKeyDown={(e) => {
-        if (!s.found) return;
-        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); void toggle(s); }
-      }}
-      className={`flex items-start gap-3 px-4 py-2.5 transition-colors${s.found ? " agx-rowhit" : ""}`}
-      style={{ borderTop: `1px solid ${wash("--border", 40)}`, cursor: s.found ? "pointer" : "not-allowed" }}
-    >
-      <TickBox
-        on={s.allowed}
-        disabled={!s.found}
-        onClick={() => void toggle(s)}
-        title={s.found ? `Let it read ${s.label}` : `${s.label} — not on this machine`}
-      />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-2 flex-wrap">
-          <span style={{ fontSize: 11.5 }}>{s.label}</span>
-          {/* WHERE IT IS FILED, not whose work it is.
-              The first version of this chip said "somebody else's work", which
-              told the reader the opposite of the truth — it is all their work.
-              What the flag decides is the partition, and the partition decides
-              where a name may end up, never whether the material may be read. */}
-          {s.sensitive
-            ? <span className="chip"
-                title="Filed closed. Read and learned from like everything else — but retrieval can never surface it into anything bound for a public repository."
-                style={{ color: "var(--phone)", background: wash("--phone", 12), borderColor: "transparent" }}>kept private</span>
-            : <span className="chip"
-                title="Your open project. Rows from here may be used for predictions about public work."
-                style={{ color: "var(--success-ink)", background: wash("--success", 10), borderColor: "transparent" }}>open project</span>}
-          {s.recommended && <span className="chip" style={{ color: "var(--primary-ink)", background: wash("--primary", 12), borderColor: "transparent" }}>suggested</span>}
-          {!s.found && <span className="chip" style={{ color: "var(--text4)" }}>not found</span>}
-          {s.found && <span className="chip t-dim tabular-nums">{s.files.toLocaleString()} files · {fmtBytes(s.bytes)}</span>}
-          {s.added && (
-            /* The only destructive control on the screen, and it was a bare
-               `.chip` at 50x19 — pixel-identical to the four decorative spans
-               beside it, and under the target floor. */
-            <span className="ml-auto" onClick={(e) => e.stopPropagation()}>
-              <Chip danger ariaLabel={`Remove ${s.label}`} title="Stop reading this, and forget it is on the list."
-                onClick={() => void post("/understudy/source/remove", { id: s.id }).then(load)}>
-                <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                  strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                  <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
-                </svg>
-                remove
-              </Chip>
-            </span>
-          )}
-        </div>
-        {/*
-          * A SCHEDULE, NOT THIRTY-SIX PARAGRAPHS.
-          *
-          * Every source carried its own sentence and its own path, so the list
-          * of what it has read was three lines times thirty-six — the single
-          * densest block in the panel, and unreadable as a list.
-          *
-          * The bar says the thing a tick never could: which source is actually
-          * shaping the answers. Scaled against the largest on the list, so it
-          * is a comparison rather than a number nobody can hold. The sentence
-          * and the path are still here, on the row's own hover.
-          */}
-        {s.found && s.bytes > 0 && (
-          <div className="flex items-center gap-2 mt-1" title={`${s.what}\n${s.path}`}>
-            <span aria-hidden
-              style={{
-                height: 3, borderRadius: 2, flex: "0 0 auto",
-                width: `${Math.max(2, Math.round((s.bytes / biggest) * 100))}%`,
-                maxWidth: "18rem",
-                background: s.sensitive ? "var(--phone)" : "var(--primary)",
-                opacity: s.added ? 1 : .35,
-              }} />
-            <span className="text-[10px] truncate" style={{ color: "var(--text4)", minWidth: 0 }}>{s.what}</span>
-          </div>
+
+  /*
+   * One row per source, and the whole row is the target for the ones the
+   * person did not add: 20x20 was the smallest thing on the screen and the
+   * most consequential — this is what says whether the understudy may read
+   * your conventions, your skills, your memory — and as a row it is a target
+   * you cannot miss rather than one you aim at. A source the person added
+   * also carries a Remove, and a button cannot sit inside a button row, so
+   * that row is plain and its tick is the real checkbox.
+   *
+   * A SCHEDULE, NOT THIRTY-SIX PARAGRAPHS: the bar says what a tick never
+   * could — which source is actually shaping the answers — scaled against the
+   * largest on the list; where it is filed is the badge.
+   */
+  const Source = ({ s }: { s: UnderstudySource }) => {
+    const badges = (
+      <>
+        {s.found && (s.sensitive
+          /* WHERE IT IS FILED, not whose work it is. The first version of this
+             said "somebody else's work", which told the reader the opposite of
+             the truth — it is all their work. What the flag decides is the
+             partition, and the partition decides where a name may end up,
+             never whether the material may be read. */
+          ? <span title="Filed closed. Read and learned from like everything else — but retrieval can never surface it into anything bound for a public repository."><StatusBadge tone="off">Kept private</StatusBadge></span>
+          : <span title="Your open project. Rows from here may be used for predictions about public work."><StatusBadge tone="off">Open project</StatusBadge></span>)}
+        {s.recommended && <StatusBadge tone="ok">Suggested</StatusBadge>}
+        {!s.found && <StatusBadge tone="off">Not found</StatusBadge>}
+      </>
+    );
+    const hint = s.found ? (
+      <>
+        <span className="block tabular-nums">{s.files.toLocaleString()} files · {fmtBytes(s.bytes)}</span>
+        {s.bytes > 0 && (
+          <span aria-hidden className="block mt-1.5"
+            style={{
+              height: 3, borderRadius: 2,
+              width: `${Math.max(2, Math.round((s.bytes / biggest) * 100))}%`,
+              maxWidth: "18rem",
+              background: s.sensitive ? "var(--phone)" : "var(--primary)",
+              opacity: s.added ? 1 : .35,
+            }} />
         )}
-      </div>
-    </div>
-  );
+      </>
+    ) : undefined;
+    const title = s.found ? `Let it read ${s.label}` : `${s.label} — not on this machine`;
+    /* The sentence and the path are the row's own hover: thirty-six
+       paragraphs were the densest block in the panel, and the name says which
+       row this is. */
+    const label = <span title={`${s.what}\n${s.path}`}>{s.label}</span>;
+    if (s.added) {
+      return (
+        <SettingRow label={label} hint={hint} disabled={!s.found}
+          status={badges}
+          control={<TickBox on={s.allowed} disabled={!s.found} onClick={() => void toggle(s)} title={title} />}
+          actions={
+            <Button tone="danger" label={`Remove ${s.label}`}
+              title="Stop reading this, and forget it is on the list."
+              onClick={() => void post("/understudy/source/remove", { id: s.id }).then(load)}>
+              Remove
+            </Button>
+          } />
+      );
+    }
+    return (
+      <SettingRow label={label} hint={hint} disabled={!s.found}
+        role="checkbox" ariaChecked={s.allowed}
+        onClick={s.found ? () => void toggle(s) : undefined}
+        status={badges}
+        control={<TickBox plain on={s.allowed} disabled={!s.found} title={title} />} />
+    );
+  };
+
+  const stepTone = (done: boolean, active: boolean) => done ? "ok" as const : active ? "warn" as const : "off" as const;
+  const stepWord = (done: boolean, active: boolean, doneText: string) => done ? doneText : active ? "Your turn" : "Later";
+  const step1Active = data.never.length === 0;
+  const step2Active = data.never.length > 0 && allowedCount === 0;
+  const step3Active = allowedCount > 0 && !data.learned;
 
   return (
-    <div className="min-h-0 overflow-y-auto">
+    <>
       {/* The gate that decides whether reading is safe at all. First, because
           it is the only thing here that can prevent rather than undo. */}
       {!data.terms.ok && (
-        <div className="px-4 py-2 text-[11.5px] leading-relaxed"
-          style={{ color: "var(--text2)", background: wash("--error", 10), borderBottom: `1px solid ${wash("--error", 30)}` }}>
-          <b style={{ color: "var(--error-ink)" }}>It will not read anything yet.</b> There is no private-terms list at{" "}
-          <span className="tabular-nums">{data.terms.path}</span>. That list is what stops a private name reaching a
-          file it should not, and without it this cannot tell "checked, clean" from "could not check" — so it refuses
-          rather than guessing. Create the file (one name, word or pattern per line; <span className="tabular-nums">AGENTGLASS_PRIVATE_TERMS</span> points
-          it elsewhere), or say so here if this machine genuinely has nothing to protect:
-          <div className="mt-1.5">
-            <button type="button" className="text-[11px] px-2 py-0.5 rounded-md" disabled={busy || allowedCount === 0}
-              style={{ color: "var(--text)", border: `1px solid ${wash("--error", 40)}` }}
-              onClick={() => void learn(true)}
-              title="Reads the ticked sources with no private-terms check at all. Only for a machine with nothing on it that must not leave.">
-              Read anyway — nothing here is private
-            </button>
-          </div>
-        </div>
+        <SettingsCard title="Private-terms list" status={<StatusBadge tone="err">Missing</StatusBadge>}>
+          <SettingRow label="It will not read anything yet"
+            hint={<>
+              There is no private-terms list at <span className="t-mono break-all">{data.terms.path}</span>. That list is what stops a private name reaching a
+              file it should not, and without it this cannot tell "checked, clean" from "could not check" — so it refuses
+              rather than guessing. Create the file (one name, word or pattern per line; <span className="t-mono">AGENTGLASS_PRIVATE_TERMS</span> points
+              it elsewhere), or say so here if this machine genuinely has nothing to protect.
+            </>}
+            actions={
+              <Button tone="danger" disabled={busy || allowedCount === 0}
+                onClick={() => void learn(true)}
+                title="Reads the ticked sources with no private-terms check at all. Only for a machine with nothing on it that must not leave.">
+                Read anyway — nothing here is private
+              </Button>
+            } />
+        </SettingsCard>
       )}
 
       {/* The way in, for somebody who has just opened this and has no idea
           which of twenty rows to tick. One press does the whole of steps one
           and two with a defensible answer, and every part of it can be undone
-          by hand afterwards. */}
-      <div className="px-4 py-3" style={{ background: wash("--primary", 6) }}>
-        <div className="flex items-center gap-3 flex-wrap">
-          <Chip on onClick={() => void applyRecommended(false)} disabled={busy}>Set this up for me</Chip>
-          <Chip onClick={() => void applyRecommended(true)} disabled={busy}
-            title="Adds the scratch directories too — the litter of one afternoon rather than a record of how you work.">
-            Everything I have
-          </Chip>
-          {/*
-            * ONE SENTENCE, and the rest a click away.
-            *
-            * This was six lines of dense text sitting between a person and the
-            * button they had just been told to press — the reasoning is all
-            * correct and all of it is answering questions nobody has asked yet.
-            * The answer to "is this safe" belongs next to the button; the proof
-            * belongs under a link for the person who wants it.
-            */}
-          <span className="text-[11.5px] flex-1 min-w-[240px]" style={{ color: "var(--text2)" }}>
-            It reads the repositories on this machine and learns how you decide. Nothing leaves it.
-          </span>
-          <button className="agx-linkish text-[11px]" style={{ color: "var(--text4)" }}
-            onClick={() => setWhy((v) => !v)}>
-            {why ? "hide the detail" : "what exactly does it read?"}
-          </button>
-        </div>
-        {why && (
-          <div className="text-[11.5px] leading-relaxed mt-2.5" style={{ color: "var(--text2)", maxWidth: "72ch" }}>
-            <b style={{ fontWeight: 400 }}>Set this up for me</b> ticks everything real on this machine — your work
-            included, because that is where most of your decisions are. It skips only scratch directories.{" "}
-            <b style={{ fontWeight: 400 }}>Everything I have</b> adds those too.{" "}
-            <b style={{ fontWeight: 400 }}>Reading is not the risk.</b> Anything outside your open project is filed
-            <em> kept private</em>, and retrieval can never cross that line — a prediction about public work cannot
-            surface a private row. The one thing it cannot do is recognise a name nobody told it about, which is
-            what step 1 is for.
-          </div>
-        )}
-      </div>
+          by hand afterwards. One sentence, and the proof a click away: the
+          reasoning is all correct and all of it answers questions nobody has
+          asked yet. */}
+      <SettingsCard title="What the orchestrator learns from"
+        desc="Three steps: what it must never see, what it may read, and then reading it.">
+        <SettingRow label="Set this up for me"
+          hint="It reads the repositories on this machine and learns how you decide. Nothing leaves it."
+          actions={<>
+            <Button tone="primary" onClick={() => void applyRecommended(false)} disabled={busy}>Set this up for me</Button>
+            <Button onClick={() => void applyRecommended(true)} disabled={busy}
+              title="Adds the scratch directories too — the litter of one afternoon rather than a record of how you work.">
+              Everything I have
+            </Button>
+          </>}
+          detail={{
+            summary: "What exactly it reads",
+            body: <>
+              <b style={{ fontWeight: 400, color: "var(--text)" }}>Set this up for me</b> ticks everything real on this machine — your work
+              included, because that is where most of your decisions are. It skips only scratch directories.{" "}
+              <b style={{ fontWeight: 400, color: "var(--text)" }}>Everything I have</b> adds those too.{" "}
+              <b style={{ fontWeight: 400, color: "var(--text)" }}>Reading is not the risk.</b> Anything outside your open project is filed
+              <em> kept private</em>, and retrieval can never cross that line — a prediction about public work cannot
+              surface a private row. The one thing it cannot do is recognise a name nobody told it about, which is
+              what step 1 is for.
+            </>,
+          }} />
+      </SettingsCard>
 
-      <Step n={1} title="Say what it must never see" active={data.never.length === 0} done={data.never.length > 0}
-        hint={data.never.length ? `${data.never.length} words` : "empty"}>
-      <div className="px-4 pt-2 pb-2">
-        <p className="m-0 mt-1 text-[11.5px] leading-relaxed" style={{ color: "var(--text3)" }}>
-          One per line. Anything with these words in its path or its text is not read — not skimmed, not stored, not
-          summarised. Plain words rather than patterns, on purpose: you should be able to predict this exactly.
-        </p>
-        <textarea
-          value={neverText}
-          onChange={(e) => setNeverText(e.target.value)}
-          onBlur={() => void saveNever()}
-          spellCheck={false}
-          rows={4}
-          placeholder={"Documents/private\nclient-name\n.ssh"}
-          className="w-full mt-2 px-2 py-1.5 text-[11.5px] rounded-lg"
-          style={{
-            background: wash("--text", 4),
-            border: `1px solid ${wash("--border", 60)}`,
-            color: "var(--text)",
-            fontFamily: "inherit",
-            resize: "vertical",
-          }}
-        />
-        <div className="text-[11.5px] mt-1" style={{ color: "var(--text4)" }}>
-          {data.never.length} in the list · saved when you click away
-        </div>
-      </div>
-      </Step>
+      <SettingsCard title="What it must never see"
+        status={<StatusBadge tone={stepTone(!step1Active, step1Active)}>
+          {stepWord(!step1Active, step1Active, `${data.never.length} word${data.never.length === 1 ? "" : "s"}`)}
+        </StatusBadge>}
+        desc="Step 1. The only control here that can prevent something rather than undo it.">
+        <SettingRow label="Words it must never read"
+          hint="One per line. Anything with these words in its path or its text is not read — not skimmed, not stored, not summarised. Plain words rather than patterns, on purpose: you should be able to predict this exactly."
+          below={
+            <div className="flex flex-col gap-1.5" style={{ maxWidth: 480 }}>
+              <textarea
+                value={neverText}
+                onChange={(e) => setNeverText(e.target.value)}
+                onBlur={() => void saveNever()}
+                aria-label="Words it must never read"
+                aria-describedby="never-help"
+                spellCheck={false}
+                rows={4}
+                placeholder={"Documents/private\nclient-name\n.ssh"}
+                className="w-full px-2.5 py-2 text-[12px] rounded-lg bg-[var(--surface-inset)] text-[var(--text)] outline-none"
+                style={{ ...INPUT_STYLE, fontFamily: "inherit", resize: "vertical" }}
+              />
+              <div id="never-help" className="agx-field-h">{data.never.length} in the list · saved when you click away</div>
+            </div>
+          } />
+      </SettingsCard>
 
-      <Step n={2} title="Choose what it may read" active={data.never.length > 0 && allowedCount === 0}
-        done={allowedCount > 0} hint={allowedCount ? `${allowedCount} ticked` : "none yet"}>
-      <div className="px-4 pt-2 pb-1">
-        <div className="panel-eyebrow">What you wrote down</div>
-        <div style={{ fontSize: 11.5, color: "var(--text2)" }}>Rules — you saying what you do</div>
-        <p className="m-0 mt-1 text-[11.5px] leading-relaxed" style={{ color: "var(--text3)" }}>
-          Deliberate, written for an audience, and the highest-quality material here. These become the policy it reads
-          before every prediction.
-        </p>
-      </div>
-      {rules.map((s) => <Source key={s.id} s={s} />)}
+      <SettingsCard title="Rules you wrote down"
+        status={<StatusBadge tone={stepTone(allowedCount > 0, step2Active)}>
+          {stepWord(allowedCount > 0, step2Active, `${allowedCount} ticked`)}
+        </StatusBadge>}
+        desc="Step 2. Rules — you saying what you do. Deliberate, written for an audience, and the highest-quality material here. These become the policy it reads before every prediction.">
+        {rules.map((s) => <Source key={s.id} s={s} />)}
+      </SettingsCard>
 
-      <div className="px-4 pt-3 pb-1" style={{ borderTop: `1px solid ${wash("--border", 40)}` }}>
-        <div className="panel-eyebrow">What you actually did</div>
-        <div style={{ fontSize: 11.5, color: "var(--text2)" }}>Precedents — the record, not the intent</div>
-        <p className="m-0 mt-1 text-[11.5px] leading-relaxed" style={{ color: "var(--text3)" }}>
-          Messier and far larger. A rule says "never main"; a precedent says what you actually did on a Tuesday when
-          the base had moved. Only precedents can make a prediction yours rather than merely sensible. One row per
-          project rather than one switch, because each project is filed separately — and which side of that line a
-          project sits on decides where its rows may ever be used, not whether they may be read.
-        </p>
-      </div>
-      {precedents.map((s) => <Source key={s.id} s={s} />)}
+      <SettingsCard title="What you actually did"
+        desc="Precedents — the record, not the intent. Messier and far larger. A rule says “never main”; a precedent says what you actually did on a Tuesday when the base had moved. Only precedents can make a prediction yours rather than merely sensible. One row per project rather than one switch, because each project is filed separately — and which side of that line a project sits on decides where its rows may ever be used, not whether they may be read.">
+        {precedents.map((s) => <Source key={s.id} s={s} />)}
+      </SettingsCard>
 
-      <div className="px-4 py-3" style={{ borderTop: `1px solid ${wash("--border", 40)}` }}>
-        <div className="panel-eyebrow">Somewhere else</div>
-        <div className="flex gap-2 mt-1">
-          <input
-            value={addPath}
-            onChange={(e) => setAddPath(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") void add(); }}
-            spellCheck={false}
-            placeholder="/home/you/notes"
-            className={`flex-1 min-w-0 ${INPUT}`}
-            style={INPUT_STYLE}
-          />
-          <Chip onClick={() => void add()}>Add</Chip>
-        </div>
-        <div className="text-[11.5px] mt-1" style={{ color: "var(--text4)" }}>
-          A folder of notes, a journal, anything else you keep. Markdown is read as rules; everything else as record.
-        </div>
-      </div>
+      <SettingsCard title="Somewhere else">
+        <SettingRow label="Add a folder"
+          hint="A folder of notes, a journal, anything else you keep. Markdown is read as rules; everything else as record."
+          below={
+            <SettingsForm label="Add a folder" onSubmit={() => void add()}>
+              <Field label="Folder path" htmlFor="understudy-add-path">
+                <input id="understudy-add-path"
+                  value={addPath}
+                  onChange={(e) => setAddPath(e.target.value)}
+                  spellCheck={false}
+                  placeholder="/home/you/notes"
+                  className={`w-full ${INPUT}`}
+                  style={INPUT_STYLE} />
+              </Field>
+              <div className="agx-sform-actions"><Button type="submit">Add</Button></div>
+            </SettingsForm>
+          } />
+        {problem && <div role="alert" className="agx-settings-x pt-2 pb-3 text-[12px]" style={{ color: "var(--error-ink)" }}>{problem}</div>}
+      </SettingsCard>
 
-      {problem && (
-        <div className="px-4 py-2 text-[11.5px]" style={{ color: "var(--error-ink)", background: wash("--error", 8) }}>
-          {problem}
-        </div>
-      )}
-
-      </Step>
-
-      <Step n={3} title="Let it read them" active={allowedCount > 0 && !data.learned} done={!!data.learned}
-        hint={data.learned ? "done" : "local only"}>
-      <div className="px-4 py-3 flex items-center gap-3">
-        <Chip on onClick={() => void learn()} disabled={busy || allowedCount === 0}>
-          {busy
-            ? "Reading…"
-            : read
-              ? "Read them again"
-              : `Learn from ${allowedCount} source${allowedCount === 1 ? "" : "s"}`}
-        </Chip>
+      <SettingsCard title="Let it read them"
+        status={<StatusBadge tone={stepTone(!!data.learned, step3Active)}>
+          {stepWord(!!data.learned, step3Active, "Done")}
+        </StatusBadge>}
+        desc="Step 3. Local only: no network, no model, no key.">
         {/* The outcome, next to the thing that caused it. This used to say the
             same sentence before and after, so a run that read sixteen hundred
             files looked identical to no run at all. */}
-        <span className="text-[11.5px]" style={{ color: read ? "var(--text3)" : "var(--text4)" }}>
-          {allowedCount === 0
+        <SettingRow label="Read what is ticked"
+          hint={allowedCount === 0
             ? "Nothing is allowed yet, so there is nothing to read."
             : read
               ? <>{data.learned
@@ -494,81 +409,72 @@ export function Teach({ active }: { active: boolean }) {
                   <b style={{ fontWeight: 400, color: "var(--text)" }}>{(data.policy?.rules ?? 0).toLocaleString()} rules</b>,{" "}
                   <b style={{ fontWeight: 400, color: "var(--text)" }}>{data.banked.toLocaleString()} precedents</b>
                   {data.learned && data.learned.quarantined > 0 && <>, {data.learned.quarantined} refused</>}. Detail below.</>
-              : "Reads only what is ticked. Local — no network, no model, no key."}
-        </span>
-      </div>
-
-      </Step>
+              : "Reads only what is ticked."}
+          actions={
+            <Button tone="primary" onClick={() => void learn()} disabled={busy || allowedCount === 0}>
+              {busy
+                ? "Reading…"
+                : read
+                  ? "Read them again"
+                  : `Learn from ${allowedCount} source${allowedCount === 1 ? "" : "s"}`}
+            </Button>
+          } />
+      </SettingsCard>
 
       {(data.learned || data.policy) && (
-        <div ref={receipt} className="px-4 py-3" style={{ borderTop: `1px solid ${wash("--border", 40)}`, background: wash("--primary", 5) }}>
-          <div className="panel-eyebrow">What it knows now</div>
-          <div className="grid gap-3 mt-1.5" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
-            <div>
-              <div className="text-[10px] uppercase" style={{ letterSpacing: ".08em", color: "var(--text4)" }}>rules</div>
-              <div className="tabular-nums" style={{ fontSize: 17 }}>{data.policy?.rules ?? 0}</div>
-            </div>
-            <div>
-              <div className="text-[10px] uppercase" style={{ letterSpacing: ".08em", color: "var(--text4)" }}>precedents</div>
-              <div className="tabular-nums" style={{ fontSize: 17 }}>{data.banked.toLocaleString()}</div>
-            </div>
-            <div>
-              {/*
-                * EVER, not "in the last read", and the difference showed a zero
-                * on a machine with eight refusals on record.
-                *
-                * `learned.quarantined` is counted in memory during one pass and
-                * discarded with it, so this read 0 whenever the last read
-                * happened to refuse nothing — while the table that records
-                * them held eight. Wrong in the dangerous direction: a zero
-                * here reads as "the privacy gate has never had to stop
-                * anything", and that is the one thing this figure exists to
-                * report honestly.
-                *
-                * The last read's own number stays in the sentence below, where
-                * it says which pass it is talking about.
-                */}
-              <div className="text-[10px] uppercase" style={{ letterSpacing: ".08em", color: "var(--text4)" }}>refused</div>
-              <div className="tabular-nums" style={{ fontSize: 17, color: data.refusedEver ? "var(--warning)" : "var(--text3)" }}
-                title={data.refusedEver
-                  ? `${data.refusedEver} passages have been refused for holding a private term, across every read. The term itself is never stored — only that one matched.`
-                  : "Nothing has ever tripped the private-terms list."}>
-                {(data.refusedEver ?? 0).toLocaleString()}
-              </div>
-            </div>
-          </div>
+        <SettingsCard title="What it knows now"
+          desc="The rules are compiled into files you can open and argue with. What it believes about you should never be something you have to query a database to find out.">
+          <SettingRow rowRef={receipt} label="Rules" control={<span className="tabular-nums text-[15px]">{data.policy?.rules ?? 0}</span>} />
+          <SettingRow label="Precedents" control={<span className="tabular-nums text-[15px]">{data.banked.toLocaleString()}</span>} />
+          {/*
+            * EVER, not "in the last read", and the difference showed a zero
+            * on a machine with eight refusals on record.
+            *
+            * `learned.quarantined` is counted in memory during one pass and
+            * discarded with it, so this read 0 whenever the last read
+            * happened to refuse nothing — while the table that records
+            * them held eight. Wrong in the dangerous direction: a zero
+            * here reads as "the privacy gate has never had to stop
+            * anything", and that is the one thing this figure exists to
+            * report honestly.
+            *
+            * The last read's own number stays in the sentence below, where
+            * it says which pass it is talking about.
+            */}
+          <SettingRow label="Refused"
+            hint={data.refusedEver
+              ? `${data.refusedEver} passages have been refused for holding a private term, across every read. The term itself is never stored — only that one matched.`
+              : "Nothing has ever tripped the private-terms list."}
+            control={<span className="tabular-nums text-[15px]" style={{ color: data.refusedEver ? "var(--warning-ink)" : "var(--text3)" }}>{(data.refusedEver ?? 0).toLocaleString()}</span>} />
           {data.learned && (
-            <>
-              {/* "new", not "precedents", and the difference caused a real
-                  false alarm: a second run over the same transcripts reports
-                  near-zero here while the bank is fully populated, because a
-                  precedent already banked is recognised and not duplicated. The
-                  column was reading as "this source gave almost nothing". */}
-              <div className="text-[11.5px] mt-2" style={{ color: "var(--text3)" }}>
+            /* "new", not "precedents", and the difference caused a real
+               false alarm: a second run over the same transcripts reports
+               near-zero here while the bank is fully populated, because a
+               precedent already banked is recognised and not duplicated. The
+               column was reading as "this source gave almost nothing". */
+            <SettingRow label="What each source added this time"
+              hint={<>
                 Read {data.learned.filesRead.toLocaleString()} files. Counts are what each source added{" "}
                 <em>this time</em> — a passage already banked is recognised, not stored twice, so a second
                 run over unchanged files reports little and is not doing less.{" "}
                 {data.learned.quarantined > 0
                   ? `${data.learned.quarantined} passages were refused because a private term was in them — they were dropped, not stored.`
                   : "Nothing tripped the private-terms list."}
-              </div>
-              <div className="mt-2">
-                {data.learned.bySource.map((b) => (
-                  <div key={b.id} className="flex items-baseline gap-2 text-[11.5px] py-0.5">
-                    <span className="flex-1 min-w-0 truncate" style={{ color: "var(--text3)" }}>{b.label}</span>
-                    <span className="tabular-nums" style={{ color: "var(--text4)" }}>{b.rules} rules</span>
-                    <span className="tabular-nums" style={{ color: "var(--text4)" }}>{b.precedents} new</span>
-                  </div>
-                ))}
-              </div>
-            </>
+              </>}
+              below={
+                <div>
+                  {data.learned.bySource.map((b) => (
+                    <div key={b.id} className="flex items-baseline gap-2 text-[12px] py-0.5">
+                      <span className="flex-1 min-w-0 break-words" style={{ color: "var(--text3)" }}>{b.label}</span>
+                      <span className="tabular-nums" style={{ color: "var(--text3)" }}>{b.rules} rules</span>
+                      <span className="tabular-nums" style={{ color: "var(--text3)" }}>{b.precedents} new</span>
+                    </div>
+                  ))}
+                </div>
+              } />
           )}
-          <div className="text-[11.5px] mt-2 leading-relaxed" style={{ color: "var(--text3)" }}>
-            The rules are compiled into files you can open and argue with. What it believes about you should never be
-            something you have to query a database to find out.
-          </div>
-        </div>
+        </SettingsCard>
       )}
-    </div>
+    </>
   );
 }

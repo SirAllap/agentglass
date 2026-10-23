@@ -16,6 +16,7 @@
  * close; the controls live where the work does.
  */
 import { db } from "./db.ts";
+import { originOf, type Origin } from "../../shared/orchestration.ts";
 
 export interface AgentRow {
   name: string;
@@ -197,6 +198,21 @@ export interface HookSeen {
 }
 
 export interface BoardRow extends AgentRow {
+  /**
+   * WHICH CHAIR THIS WORKER ANSWERS TO — the project root of the seat that
+   * started it, while that seat is in its chair. The screen nests the card
+   * under the chair's; a row that carries this is never moved out of the
+   * "needs you" count by being nested.
+   */
+  under?: string;
+  /** A worker whose seat is not in its chair any more. Not dropped and not
+   *  hidden: it is somebody's work with nobody reading its reports. */
+  orphaned?: true;
+  /** How the policy started it, from `named_agent.started_by`: the row keeps
+   *  it, so the line survives a restart of this server. */
+  startedBy?: Origin;
+  /** On the orchestrator's own row: the project it sits for. */
+  chairOf?: string;
   /** What this machine can see about it, whoever said what. */
   paneId?: string;
   /**
@@ -708,3 +724,38 @@ export function nudgeDue(sessionId: string, intervalMs: number, now = Date.now()
 
 /** For a test that needs a clean clock. */
 export function __resetNudges(): void { lastNudge.clear(); }
+
+
+/**
+ * WHERE EACH ROW SITS UNDER A CHAIR — a join over two facts, kept pure.
+ *
+ * `chairs` is pane to project for every chair that is in its seat now;
+ * `owned` is every live worker with the project of the seat that started it
+ * (`named_agent.seat_root`) and how. The board's rows are matched to workers by
+ * pane, and by name when the row has no pane yet.
+ *
+ * A worker whose seat is in its chair is `under` it. A worker whose seat is
+ * NOT (it was stood down, adopted away, or its window died) is `orphaned` and
+ * stays where it was, at the top level: nesting it under nothing would hide
+ * it, and dropping the owner would read as if it had never had one. Nothing
+ * here changes `state` or `needsYou`, so what a nested worker asks of a person
+ * is counted exactly as if it were not nested.
+ */
+export function placed<T extends BoardRow>(rows: T[], p: {
+  chairs: ReadonlyMap<string, string>;
+  owned: readonly { name: string; paneId: string; seatRoot: string; startedBy?: unknown }[];
+}): T[] {
+  const sitting = new Set(p.chairs.values());
+  return rows.map((r) => {
+    const chair = r.paneId ? p.chairs.get(r.paneId) : undefined;
+    if (chair) return { ...r, chairOf: chair };
+    const w = p.owned.find((o) => (r.paneId ? o.paneId === r.paneId : o.name === r.name));
+    if (!w) return r;
+    const origin = originOf(w.startedBy);
+    return {
+      ...r,
+      ...(sitting.has(w.seatRoot) ? { under: w.seatRoot } : { orphaned: true as const }),
+      ...(origin ? { startedBy: origin } : null),
+    };
+  });
+}

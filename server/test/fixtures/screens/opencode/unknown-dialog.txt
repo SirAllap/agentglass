@@ -1,0 +1,30 @@
+
+
+
+
+
+
+
+
+
+                           Share this session?                                     esc
+
+                           Anyone with the link could read it. Do you want to
+                           publish it?
+
+                  ┃
+                  ┃  Later                                           Publish
+                  ┃
+                  ┃  Build · Big Pickle OpenCode Zen
+                  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                  tab agents  ctrl+p commands
+
+
+
+                           ● Tip Run /connect to add an AI provider and start coding
+
+
+
+
+  /home/orbit/work                                                                     1.18.32
+

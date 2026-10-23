@@ -7,7 +7,7 @@ export function gotoOfTarget(t: NotifyTarget): NonNullable<SystemNote["goto"]> |
     case "pr": return { kind: "pr", repo: t.repo, number: t.number };
     case "pane": return { kind: "pane", pane: t.pane };
     case "file": return { kind: "file", root: t.root, path: t.path };
-    case "card": return { kind: "card", id: t.id, label: t.label };
+    case "card": return { kind: "card", id: t.id, label: t.label, ...(t.tracker ? { tracker: t.tracker } : null) };
     case "url": return null;
   }
 }

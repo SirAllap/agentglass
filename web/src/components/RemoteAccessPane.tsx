@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { Fold, SettingRow, Switch } from "./SettingRow.tsx";
+import { SettingRow, Switch } from "./SettingRow.tsx";
+import { CommandLine, SELECT_BOX, EmptyState, SettingsCard, StatusBadge } from "./SettingsKit.tsx";
 import { Select } from "./Select.tsx";
 import { api } from "../lib/api.ts";
 import { IS_DESKTOP, remoteAccessEnabled, setRemoteAccess, revokeRemoteAccess } from "../lib/desktop.ts";
@@ -8,7 +9,7 @@ import { pickIndex, readPick, writePick, type PickedAddress } from "../lib/remot
 import { PairPanel } from "./PairPanel.tsx";
 import { usePoll } from "../lib/usePoll.ts";
 import type { RemoteStatus, RemoteDevice } from "../../../shared/types.ts";
-import { EDGE } from "./workspace/Chrome.tsx";
+import { Button } from "./workspace/Chrome.tsx";
 
 /**
  * Open the dashboard on your phone.
@@ -119,7 +120,11 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
       .catch(() => { /* no clipboard permission — the text is on screen anyway */ });
   };
 
-  if (!st) return <Wrap><div className="py-2 text-[12px] t-dim">Reading network state…</div></Wrap>;
+  if (!st) return (
+    <SettingsCard title="Remote access" desc="Reaching this machine from a phone, and what that phone is allowed to do.">
+      <SettingRow label="Reading network state…" status={<StatusBadge tone="checking">Checking</StatusBadge>} />
+    </SettingsCard>
+  );
 
   /*
    * Every address here pairs the app, and that is the change.
@@ -158,171 +163,182 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
   const firstRun = live && paired === 0 && seen.length === 0;
 
   return (
-    <Wrap>
-      {/* Always first, always the same row: what the server is doing, whether
-          anything is attached to it at this instant, and the switch. */}
-      {enabled === null ? (
-        /* A browser tab cannot rebind the server it is talking to: only the
-           process that spawned it can. Rather than a switch that would do
-           nothing, this is the recipe — the same one the desktop toggle
-           performs. */
-        <Recipe port={st.port} />
-      ) : (
-        <SettingRow
-          onClick={busy ? undefined : toggle}
-          role="switch"
-          ariaChecked={!!enabled}
-          label={<span className="flex items-center gap-2.5">
-            <StateDot on={!!enabled} live={st.clients.liveCount > 0} />
-            {busy ? "Restarting the server…" : enabled ? "Listening on your network" : "Remote access is off"}
-          </span>}
-          hint={
-            /* This promised "the companion" — a phone-shaped web app that is
-               deleted. What answers on a phone now is the agentglass app, and
-               the browser that opens one of these addresses gets the cockpit,
-               so the sentence names the app rather than a page. */
-            enabled
-              ? "The agentglass app can reach this machine from the sofa: monitoring, sessions and gate approvals."
-              : "The server answers this machine only. Nothing off-box can reach it."}
-          control={<span className="flex items-center gap-2.5">
+    <>
+      <SettingsCard title="Remote access" desc="Reaching this machine from a phone, and what that phone is allowed to do.">
+        {/* Always first, always the same row: what the server is doing, whether
+            anything is attached to it at this instant, and the switch. */}
+        {enabled === null ? (
+          /* A browser tab cannot rebind the server it is talking to: only the
+             process that spawned it can. Rather than a switch that would do
+             nothing, this is the recipe — the same one the desktop toggle
+             performs. */
+          <Recipe port={st.port} />
+        ) : (
+          <SettingRow
+            onClick={busy ? undefined : toggle}
+            role="switch"
+            ariaChecked={!!enabled}
+            label={<span className="flex items-center gap-2.5">
+              <StateDot on={!!enabled} live={st.clients.liveCount > 0} />
+              {busy ? "Restarting the server…" : enabled ? "Listening on your network" : "Remote access is off"}
+            </span>}
+            hint={
+              /* This promised "the companion" — a phone-shaped web app that is
+                 deleted. What answers on a phone now is the agentglass app, and
+                 the browser that opens one of these addresses gets the cockpit,
+                 so the sentence names the app rather than a page. */
+              enabled
+                ? "The agentglass app can reach this machine from the sofa: monitoring, sessions and gate approvals."
+                : "The server answers this machine only. Nothing off-box can reach it."}
+            /* Live count as a badge rather than a sentence: it changes every
+               three seconds, and a number that moves inside prose is noise. */
+            status={enabled && st.clients.liveCount > 0
+              ? <StatusBadge tone="ok">{st.clients.liveCount} connected</StatusBadge>
+              : undefined}
+            control={<Switch on={!!enabled} busy={busy} />}
+          />
+        )}
 
-            {/* Live count as a chip rather than a sentence: it changes every
-                three seconds, and a number that moves inside prose is noise. */}
-            {enabled && st.clients.liveCount > 0 && (
-              <span className="chip t-mono whitespace-nowrap" style={{
-                color: "var(--success-ink)",
-                background: "color-mix(in srgb, var(--success) 12%, transparent)",
-                borderColor: "color-mix(in srgb, var(--success) 34%, transparent)",
-              }}>
-                {st.clients.liveCount} connected
-              </span>
-            )}
-            <Switch on={!!enabled} busy={busy} />
-          </span>}
-        />
-      )}
+        {/* The plain-HTTP blocker is NOT said here. PairPanel already says it, in
+            more detail and with the one-command Tailscale recipe attached, and it
+            says it right above the button it disables. Saying it twice in two
+            wordings was the first thing measuring this page caught: two red boxes
+            eleven lines apart making the same claim, which reads as two problems. */}
 
-      {/* The plain-HTTP blocker is NOT said here. PairPanel already says it, in
-          more detail and with the one-command Tailscale recipe attached, and it
-          says it right above the button it disables. Saying it twice in two
-          wordings was the first thing measuring this page caught: two red boxes
-          eleven lines apart making the same claim, which reads as two problems. */}
+        {/* OUTSIDE `live`, and above everything, because it is about the route
+            silently stopping rather than about setting one up. See TailnetTrouble. */}
+        <TailnetTrouble st={st} />
 
-      {/* OUTSIDE `live`, and above everything, because it is about the route
-          silently stopping rather than about setting one up. See TailnetTrouble. */}
-      <TailnetTrouble st={st} />
+        {/* Exposed, but the origin gate is shut: the page would load on the phone
+            and every request inside it would 403. Open, not folded — it looks
+            like a broken app rather than a setting. */}
+        {st.exposed && !st.trustLan && (
+          <SettingRow
+            label="Private-network origins are not trusted"
+            status={<StatusBadge tone="warn">Phone will be refused</StatusBadge>}
+            hint={<>
+              The server is bound to {st.bind} but private-network origins are not trusted, so a phone would
+              load the page and then be refused by every request in it. Set{" "}
+              <span className="t-mono">AGENTGLASS_TRUST_LAN=1</span> as well.
+            </>} />
+        )}
+
+        {!st.webUi && (
+          <SettingRow
+            label="No dashboard build to serve"
+            hint={<>
+              This server has no dashboard build to serve, so the address above answers the API only. Run{" "}
+              <span className="t-mono">bun run build</span> in the checkout.
+            </>} />
+        )}
+      </SettingsCard>
 
       {live && (
         <>
-          {firstRun && <div className="panel-eyebrow pt-3 pb-1">Connect your phone</div>}
           {/* Mounted in both faces so the paired list — the thing that decides
               which face — is never unmounted and re-fetched. */}
           <PairPanel baseUrl={url} variant={firstRun ? "hero" : "row"} onPaired={setPaired} />
 
-          <SettingRow
-            label="Address"
-            hint={copied === url
-              ? "Copied."
-              : "Safe to share — it is an address, not a key. On a device that is not paired it opens a page and nothing else."}
-            control={<span className="flex items-center gap-2 min-w-0">
-              <span className="t-mono text-[11px] truncate" style={{ color: "var(--text2)", maxWidth: 260 }}>
-                {url.replace(/^https?:\/\//, "").replace(/\/$/, "")}
-              </span>
-              <button onClick={() => copy(url)}
-                className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80"
-                style={{ color: "var(--text2)", border: EDGE }}>
-                {copied === url ? "Copied" : "Copy"}
-              </button>
-            </span>}
-          />
-
-          {/* More than one route to this machine is normal (wifi plus a
-              tailnet), and they are not equivalent — one crosses a café, the
-              other does not. A stack of tall option cards is how that fact
-              used to be told; a select says it in one line, and the choice is
-              kept (see remoteLink.ts) because the pane used to forget it. */}
-          {pairAddrs.length > 1 && (
+          <SettingsCard title="Address">
             <SettingRow
-              label="Route"
-              hint={
-                /* "a phone can pair over" was the old claim and it is false now:
-                   the app makes its own key and pairs over plain HTTP fine. What
-                   a plain-HTTP origin denies is WebCrypto, so it is the BROWSER
-                   that cannot — see PairPanel, which states it once. */
-                address?.secure
-                  ? "Served over HTTPS, so this is the one a browser can pair over."
-                  : "Reachable, but not a secure context — the app pairs over it anyway."}
-              control={<Select
-                align="right"
-                value={address?.address ?? ""}
-                onChange={(v) => {
-                  const a = pairAddrs.find((x) => x.address === v);
-                  if (a) { setChosen(a); writePick(a); }
-                }}
-                options={pairAddrs.map((a) => ({
-                  value: a.address,
-                  label: `${a.label ?? (a.tailnet ? "Tailscale" : a.iface)}${a.secure ? " · HTTPS" : ""}`,
-                  hint: a.address,
-                }))}
-              />}
+              label="Address"
+              hint="Safe to share — it is an address, not a key. On a device that is not paired it opens a page and nothing else."
+              below={<CommandLine command={url} shown={url.replace(/^https?:\/\//, "").replace(/\/$/, "")} />}
             />
-          )}
 
-          {/* A second list of addresses "a phone can't pair over" stood here
-              and is gone with the bucket that fed it. `otherIdx` split the
-              addresses in two because pairing needed a secure context; the app
-              makes its own key, so every address pairs it and `pairAddrs` is
-              now simply `st.addresses`. Keeping the fold would have hidden the
-              LAN address — the one needing no tailnet — behind a disclosure
-              triangle labelled "you cannot use these". */}
+            {/* More than one route to this machine is normal (wifi plus a
+                tailnet), and they are not equivalent — one crosses a café, the
+                other does not. A stack of tall option cards is how that fact
+                used to be told; a select says it in one line, and the choice is
+                kept (see remoteLink.ts) because the pane used to forget it. */}
+            {pairAddrs.length > 1 && (
+              <SettingRow
+                label="Route"
+                hint={
+                  /* "a phone can pair over" was the old claim and it is false now:
+                     the app makes its own key and pairs over plain HTTP fine. What
+                     a plain-HTTP origin denies is WebCrypto, so it is the BROWSER
+                     that cannot — see PairPanel, which states it once. */
+                  address?.secure
+                    ? "Served over HTTPS, so this is the one a browser can pair over."
+                    : "Reachable, but not a secure context — the app pairs over it anyway."}
+                control={<Select
+                  align="right"
+                  style={SELECT_BOX}
+                  value={address?.address ?? ""}
+                  onChange={(v) => {
+                    const a = pairAddrs.find((x) => x.address === v);
+                    if (a) { setChosen(a); writePick(a); }
+                  }}
+                  options={pairAddrs.map((a) => ({
+                    value: a.address,
+                    label: `${a.label ?? (a.tailnet ? "Tailscale" : a.iface)}${a.secure ? " · HTTPS" : ""}`,
+                    hint: a.address,
+                  }))}
+                />}
+              />
+            )}
 
-          {/* Read once, ever — so it costs one line until somebody wants it.
-              It follows the route actually chosen: a tailnet link is reachable
-              from anywhere and only by devices signed into their own Tailscale,
-              and saying "anyone on this network" over the top of that would be
-              false in the direction that teaches people to stop reading. */}
-          <Fold label="What this exposes, and to whom">
-            {address?.tailnet
-              ? <>Over Tailscale this is encrypted end to end and reaches only devices signed into your
-                  tailnet, which makes it the safer of the two routes and the one to use on wifi you do
-                  not own. Each paired device still gets exactly what you granted it, and nothing more —
-                  forgetting one revokes only its own credential and closes what it is holding, and the
-                  others keep working.</>
-              : <>Everything between a phone and this machine crosses your local network in the clear, so
-                  anything else on that network can read it. Each paired device gets exactly what you
-                  granted it and nothing more, but the link itself is not private. On wifi you do not own,
-                  use a Tailscale route instead.</>}
-          </Fold>
+            {/* A second list of addresses "a phone can't pair over" stood here
+                and is gone with the bucket that fed it. `otherIdx` split the
+                addresses in two because pairing needed a secure context; the app
+                makes its own key, so every address pairs it and `pairAddrs` is
+                now simply `st.addresses`. Keeping the fold would have hidden the
+                LAN address — the one needing no tailnet — behind a disclosure
+                triangle labelled "you cannot use these". */}
 
-          {/* The failure this page exists for: the port is open, the server is
-              listening, and the firewall drops the packets without answering,
-              so the phone hangs on a blank page and nothing here looks wrong.
-              Only after ninety seconds of nobody arriving — before that it is a
-              diagnosis of a problem that is not happening yet. */}
-          {stalled && seen.length === 0 && st.firewall && (
-            <Fold defaultOpen label="Nothing has arrived yet"
-              hint={`If the phone shows a blank page, this machine's firewall (${st.firewall.tool}) is the likely reason.`}>
-              <p className="m-0 mb-2">
-                It drops the connection rather than refusing it, which is why the phone shows nothing at
-                all rather than an error. Run this in a terminal to let your own network in:
-              </p>
-              <button onClick={() => copy(st.firewall!.command)}
-                className="t-mono text-[11px] text-left px-2.5 py-1.5 rounded-lg break-all hover:opacity-80 w-full"
-                style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: EDGE }}>
-                {st.firewall.command}
-              </button>
-              <p className="m-0 mt-1.5 text-[11.5px] t-dim">
-                {copied === st.firewall.command
-                  ? "Copied."
-                  : "Tap to copy. agentglass will not run this for you: it needs root, and a dashboard should not have it."}
-              </p>
-            </Fold>
-          )}
+            {/* Read once, ever — so it costs one line until somebody wants it.
+                It follows the route actually chosen: a tailnet link is reachable
+                from anywhere and only by devices signed into their own Tailscale,
+                and saying "anyone on this network" over the top of that would be
+                false in the direction that teaches people to stop reading. */}
+            <SettingRow
+              label="What this exposes, and to whom"
+              detail={{
+                summary: address?.tailnet ? "How Tailscale protects this route" : "What crosses your network in the clear",
+                body: address?.tailnet
+                  ? <>Over Tailscale this is encrypted end to end and reaches only devices signed into your
+                      tailnet, which makes it the safer of the two routes and the one to use on wifi you do
+                      not own. Each paired device still gets exactly what you granted it, and nothing more —
+                      forgetting one revokes only its own credential and closes what it is holding, and the
+                      others keep working.</>
+                  : <>Everything between a phone and this machine crosses your local network in the clear, so
+                      anything else on that network can read it. Each paired device gets exactly what you
+                      granted it and nothing more, but the link itself is not private. On wifi you do not own,
+                      use a Tailscale route instead.</>,
+              }}
+            />
+
+            {/* The failure this page exists for: the port is open, the server is
+                listening, and the firewall drops the packets without answering,
+                so the phone hangs on a blank page and nothing here looks wrong.
+                Only after ninety seconds of nobody arriving — before that it is a
+                diagnosis of a problem that is not happening yet. */}
+            {stalled && seen.length === 0 && st.firewall && (
+              <SettingRow
+                label="Nothing has arrived yet"
+                status={<StatusBadge tone="warn">No device after 90 s</StatusBadge>}
+                hint={`If the phone shows a blank page, this machine's firewall (${st.firewall.tool}) is the likely reason.`}
+                below={
+                  <div className="flex flex-col gap-2">
+                    <p className="m-0 text-[12px]" style={{ color: "var(--text2)" }}>
+                      It drops the connection rather than refusing it, which is why the phone shows nothing at
+                      all rather than an error. Run this in a terminal to let your own network in:
+                    </p>
+                    <CommandLine command={st.firewall.command} />
+                    <p className="m-0 text-[12px] t-dim">
+                      Copy it, then run it yourself. agentglass will not run this for you: it needs root, and a dashboard should not have it.
+                    </p>
+                  </div>
+                }
+              />
+            )}
+          </SettingsCard>
 
           {/* Addresses that have reached this server, which is a different list
               from the phones you paired — a paired phone can arrive from three
-              addresses in a day. Folded, because the list people manage is the
-              paired one, and this is the one they audit. */}
+              addresses in a day. Its own card, because the list people manage is
+              the paired one, and this is the one they audit. */}
           {seen.length > 0 && <Seen st={st} onChanged={load} />}
         </>
       )}
@@ -334,90 +350,29 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
           take back the key, and since the desktop app began requiring a token
           on loopback too, the code still guards something with the switch off. */}
       {enabled !== null && st.tokenRequired && (
-        <SettingRow
-          align={confirming ? "start" : "center"}
-          label={<span style={{ color: "var(--error-ink)" }}>Revoke this link</span>}
-          hint={confirming
-            ? "Every device that has this link stops working, including the ones you cannot reach. A new code is generated and the phones you still want will need to scan it again."
-            : "Rotates the access code. This is the revoke that reaches a device you no longer have in your hand."}
-          control={confirming ? (
-            <span className="flex items-center gap-2">
-              <button onClick={revoke} disabled={busy}
-                className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap font-medium"
-                style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 44%, transparent)", opacity: busy ? 0.5 : 1 }}>
-                {busy ? "Revoking…" : "Revoke"}
-              </button>
-              <button onClick={() => setConfirming(false)} disabled={busy}
-                className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80"
-                style={{ color: "var(--text2)", border: EDGE }}>
-                Keep it
-              </button>
-            </span>
-          ) : (
-            <button onClick={() => { setConfirming(true); setRevokeNote(null); }} disabled={busy}
-              className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80"
-              style={{ color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 32%, transparent)", opacity: busy ? 0.5 : 1 }}>
-              Revoke
-            </button>
+        <SettingsCard title="Access code">
+          <SettingRow
+            label={<span style={{ color: "var(--error-ink)" }}>Revoke this link</span>}
+            hint={confirming
+              ? "Every device that has this link stops working, including the ones you cannot reach. A new code is generated and the phones you still want will need to scan it again."
+              : "Rotates the access code. This is the revoke that reaches a device you no longer have in your hand."}
+            actions={confirming ? (
+              <>
+                <Button tone="danger" onClick={revoke} disabled={busy}>{busy ? "Revoking…" : "Revoke"}</Button>
+                <Button onClick={() => setConfirming(false)} disabled={busy}>Keep it</Button>
+              </>
+            ) : (
+              <Button tone="danger" onClick={() => { setConfirming(true); setRevokeNote(null); }} disabled={busy}>Revoke</Button>
+            )}
+          />
+          {revokeNote && (
+            <SettingRow label="The link was not revoked" status={<StatusBadge tone="warn">Declined</StatusBadge>} hint={revokeNote} />
           )}
-        />
+        </SettingsCard>
       )}
-      {revokeNote && <Alert tone="warning">{revokeNote}</Alert>}
-
-      {/* Exposed, but the origin gate is shut: the page would load on the phone
-          and every request inside it would 403. Open, not folded — it looks
-          like a broken app rather than a setting. */}
-      {st.exposed && !st.trustLan && (
-        <Alert tone="warning">
-          The server is bound to {st.bind} but private-network origins are not trusted, so a phone would
-          load the page and then be refused by every request in it. Set{" "}
-          <span className="t-mono">AGENTGLASS_TRUST_LAN=1</span> as well.
-        </Alert>
-      )}
-
-      {!st.webUi && (
-        <div className="py-2 text-[12px] t-dim">
-          This server has no dashboard build to serve, so the address above answers the API only. Run{" "}
-          <span className="t-mono">bun run build</span> in the checkout.
-        </div>
-      )}
-    </Wrap>
+    </>
   );
 }
-
-/** Same shape as the other settings panes; kept local rather than exported from
- *  SettingsModal, which imports this file. */
-function Wrap({ children }: { children: React.ReactNode }) {
-  return (
-    /* The same shape as SettingsModal's own Section — an eyebrow and a rows
-       box — so the column's one padding rule reaches this page too. Written
-       out rather than imported because SettingsModal imports THIS file, and
-       the other way round is a cycle. */
-    <div className="agx-settings-section">
-      <div className="agx-settings-head">
-        <div className="agx-settings-head-t">Remote access</div>
-        <div className="agx-settings-head-d">Reaching this machine from a phone, and what that phone is allowed to do.</div>
-      </div>
-      <div className="agx-settings-rows">{children}</div>
-    </div>
-  );
-}
-
-/** The one shape a warning takes on this page, so three of them cannot be three
- *  different objects. Sized to the column, not to its own words. */
-function Alert({ tone, children }: { tone: "warning" | "error"; children: React.ReactNode }) {
-  const c = tone === "error" ? "var(--error)" : "var(--warning)";
-  return (
-    <div className="my-1.5 px-3 py-2 rounded-lg text-[12px] leading-relaxed" style={{
-      color: "var(--text2)",
-      background: `color-mix(in srgb, ${c} 9%, transparent)`,
-      border: `1px solid color-mix(in srgb, ${c} 32%, transparent)`,
-    }}>
-      {children}
-    </div>
-  );
-}
-
 
 /**
  * The tailnet name could not be confirmed — said out loud, because the failure
@@ -441,13 +396,15 @@ function TailnetTrouble({ st }: { st: RemoteStatus }) {
   const held = t.names.length;
   return (
     <SettingRow
-      align="start"
-      label={<span style={{ color: t.dropped ? "var(--error)" : "var(--warning)" }}>
-        {t.dropped ? "Tailscale name dropped" : "Tailscale is not answering"}
-      </span>}
+      label={t.dropped ? "Tailscale name dropped" : "Tailscale is not answering"}
+      /* The count is the honest measure of "a blip" versus "it is down":
+         one failed probe and forty look identical without it. */
+      status={<StatusBadge tone={t.dropped ? "err" : "warn"}>
+        {t.fails ?? 1} failed {t.fails === 1 ? "probe" : "probes"}
+      </StatusBadge>}
       hint={<>
         <span className="block">{t.problem}.</span>
-        <span className="block mt-0.5">
+        <span className="block mt-1">
           {t.dropped
             ? "The name this machine answers to on your tailnet has been let go, so a phone connecting over it is now refused and will stop receiving alerts. It comes back on the first probe that works."
             : held
@@ -455,15 +412,6 @@ function TailnetTrouble({ st }: { st: RemoteStatus }) {
               : "There is no tailnet name to fall back on, so a phone connecting over its MagicDNS name is refused until tailscale answers."}
         </span>
       </>}
-      control={<span className="chip t-mono whitespace-nowrap" style={{
-        color: t.dropped ? "var(--error)" : "var(--warning)",
-        background: `color-mix(in srgb, ${t.dropped ? "var(--error)" : "var(--warning)"} 12%, transparent)`,
-        borderColor: `color-mix(in srgb, ${t.dropped ? "var(--error)" : "var(--warning)"} 34%, transparent)`,
-      }}>
-        {/* The count is the honest measure of "a blip" versus "it is down":
-            one failed probe and forty look identical without it. */}
-        {t.fails ?? 1} failed {t.fails === 1 ? "probe" : "probes"}
-      </span>}
     />
   );
 }
@@ -488,9 +436,9 @@ function Seen({ st, onChanged }: { st: RemoteStatus; onChanged: () => void }) {
   };
 
   return (
-    <Fold
-      label="Who has reached this machine"
-      hint={clients.liveCount > 0
+    <SettingsCard
+      title="Who has reached this machine"
+      desc={clients.liveCount > 0
         ? `${clients.liveCount === 1 ? "One device is" : `${clients.liveCount} devices are`} connected right now`
         : clients.count > 0
           ? `${clients.count === 1 ? "One device has" : `${clients.count} devices have`} connected before`
@@ -503,71 +451,55 @@ function Seen({ st, onChanged }: { st: RemoteStatus; onChanged: () => void }) {
         // confusing, but named for what it is and with no button: cutting it
         // off would black out this window.
         const self = !!d.self;
-        const tint = d.blocked ? "var(--error)" : self ? "var(--text3)" : live ? "var(--success)" : "var(--text3)";
         return (
-          <div key={d.address} className="flex items-center gap-2.5 py-1.5">
-            <span className="shrink-0 rounded-full" aria-hidden style={{
-              width: 7, height: 7, background: live && !self ? "var(--success)" : "transparent",
-              border: live && !self ? "none" : `1px solid ${tint}`,
-            }} />
-            <span className="min-w-0 flex-1">
-              <span className="block truncate" style={{ color: "var(--text)" }}>
-                {d.label}
-                <span className="t-mono text-[11px] t-dim"> {d.address}</span>
-                {self && <span className="chip ml-1.5 text-[10px] t-dim">this machine</span>}
-              </span>
-              <span className="block text-[11.5px]" style={{ color: tint }}>
-                {self
-                  ? "Reaching its own server through one of its addresses rather than through localhost."
-                  : d.blocked
-                    ? "Disconnected. Refused on every request until you let it back in."
-                    : live
-                      ? `Connected now · ${d.live === 1 ? "one open connection" : `${d.live} open connections`}`
-                      : `Last seen ${fmtAgo(d.lastAt)} · ${d.hits === 1 ? "one request" : `${d.hits} requests`}`}
-              </span>
-            </span>
-            {!self && (
-              <button onClick={() => setBlocked(d, !d.blocked)} disabled={busy === d.address}
-                className="shrink-0 text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80"
-                style={{
-                  color: d.blocked ? "var(--text2)" : "var(--error)",
-                  border: `1px solid color-mix(in srgb, ${d.blocked ? "var(--border)" : "var(--error)"} ${d.blocked ? 45 : 32}%, transparent)`,
-                  opacity: busy === d.address ? 0.5 : 1,
-                }}>
+          <SettingRow key={d.address}
+            label={<>{d.label} <span className="t-mono text-[11px] t-dim">{d.address}</span></>}
+            status={self
+              ? <StatusBadge tone="off">This machine</StatusBadge>
+              : d.blocked
+                ? <StatusBadge tone="err">Disconnected</StatusBadge>
+                : live
+                  ? <StatusBadge tone="ok">Connected</StatusBadge>
+                  : <StatusBadge tone="off">Idle</StatusBadge>}
+            hint={self
+              ? "Reaching its own server through one of its addresses rather than through localhost."
+              : d.blocked
+                ? "Disconnected. Refused on every request until you let it back in."
+                : live
+                  ? `Connected now · ${d.live === 1 ? "one open connection" : `${d.live} open connections`}`
+                  : `Last seen ${fmtAgo(d.lastAt)} · ${d.hits === 1 ? "one request" : `${d.hits} requests`}`}
+            actions={!self ? (
+              <Button tone={d.blocked ? undefined : "danger"} onClick={() => setBlocked(d, !d.blocked)} disabled={busy === d.address}>
                 {busy === d.address ? "Working…" : d.blocked ? "Let it back in" : "Disconnect"}
-              </button>
-            )}
-          </div>
+              </Button>
+            ) : undefined}
+          />
         );
       })}
-      <p className="m-0 mt-1.5 text-[11.5px] t-dim">
-        Disconnecting closes what that device is holding and refuses it by address until this server
-        restarts. A device that can take a new address on your network can come back, so revoke the
-        link when the answer needs to be permanent.
-      </p>
-    </Fold>
+      <SettingRow
+        label="What disconnecting does"
+        hint="Disconnecting closes what that device is holding and refuses it by address until this server restarts. A device that can take a new address on your network can come back, so revoke the link when the answer needs to be permanent." />
+    </SettingsCard>
   );
 }
 
 /** The manual route, for a shell that cannot restart its own server. */
 function Recipe({ port }: { port: number }) {
   return (
-    <div className="py-2 flex flex-col gap-1.5">
-      <div className="text-[12.5px]" style={{ color: "var(--text2)" }}>
-        Only the process that started the server can change what it listens on, and in a browser tab that
-        is not this page. Start it like this instead:
-      </div>
-      <div className="t-mono text-[11px] px-2.5 py-2 rounded-lg whitespace-pre-wrap" style={{
-        color: "var(--text)", background: "color-mix(in srgb, var(--bg) 70%, transparent)",
-        border: EDGE,
-      }}>
-        {`AGENTGLASS_BIND=0.0.0.0 \\\n  AGENTGLASS_TRUST_LAN=1 \\\n  AGENTGLASS_TOKEN=$(openssl rand -base64 24) \\\n  bun run server   # port ${port}`}
-      </div>
-      <div className="text-[12px] t-dim">
-        Run <span className="t-mono">bun run build</span> first, so the same port serves the dashboard as
-        well as the API. The desktop app has this as a switch.
-      </div>
-    </div>
+    <SettingRow
+      label="Start the server with the network open"
+      hint={<>
+        <span className="block">
+          Only the process that started the server can change what it listens on, and in a browser tab that
+          is not this page. Start it like this instead:
+        </span>
+        <span className="block mt-1">
+          Run <span className="t-mono">bun run build</span> first, so the same port serves the dashboard as
+          well as the API. The desktop app has this as a switch.
+        </span>
+      </>}
+      below={<CommandLine command={`AGENTGLASS_BIND=0.0.0.0 \\\n  AGENTGLASS_TRUST_LAN=1 \\\n  AGENTGLASS_TOKEN=$(openssl rand -base64 24) \\\n  bun run server   # port ${port}`} />}
+    />
   );
 }
 

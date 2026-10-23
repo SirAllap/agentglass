@@ -2076,7 +2076,9 @@ export interface CardNote {
    * workspace with two people called Ada in it makes that difference the whole feature.
    */
   kind: "assigned" | "status" | "comment" | "mention";
-  /** ClickUp's own id, which is what opens the card. */
+  /** The tracker the card is in. Absent means ClickUp, which is all there was. */
+  tracker?: "jira";
+  /** ClickUp's own id, which is what opens the card; a Jira card's key. */
   id: string;
   /** What a person calls it — `ORBIT-1042` — falling back to the internal id. */
   label: string;
@@ -3487,6 +3489,8 @@ export interface PrSummary {
      * says how old it is instead of presenting it as current.
      */
     at?: number;
+    /** Whose card this is, when it is not ClickUp's: set for Jira, absent for ClickUp so every existing row reads as it did. */
+    tracker?: "jira";
   };
   checks: PrCheckRollup;
   /**
@@ -4183,6 +4187,50 @@ export interface KnownAgent {
   install: string;
   /** What connecting it actually does, in a few words. */
   connects: string;
+}
+
+/** One thing to do next about an engine. `command` is typed in a terminal as
+ *  is; `login` is a command that asks the person for a password agentglass
+ *  never sees; `action` is a button in the app; `manual` is a sentence. */
+export interface EngineFix {
+  what: string;
+  kind: "command" | "login" | "action" | "manual";
+  command?: string;
+  action?: string;
+}
+
+export interface EngineVerdict {
+  ok: boolean;
+  /** The sentence that says why not, with what to do next. */
+  why?: string;
+}
+
+/** What this machine knows about one engine. Names only: nothing here is read
+ *  from a credential file, and a line a CLI printed is cut down to names
+ *  before it gets in. */
+export interface EngineReadiness {
+  id: string;
+  title: string;
+  found: boolean;
+  path: string | null;
+  version: string | null;
+  /** The oldest version agentglass can drive, when there is one. */
+  min: string | null;
+  /** null: it could not be told (the command timed out or failed). */
+  versionOk: boolean | null;
+  account: { signedIn: boolean | null; provider?: string; account?: string; model?: string };
+  /** The one-line test costs a turn, so it is never run by itself. */
+  answers: { state: "ok" | "failed" | "never" | "running"; at?: number; ms?: number; error?: string };
+  roles: { worker: EngineVerdict; orchestrator: EngineVerdict };
+  /** Ordered: the first one is the next thing to do. */
+  missing: EngineFix[];
+  envelope: { via: string | null; enforced: "yes" | "partly" | "no"; note: string };
+}
+
+export interface EnginesReport {
+  /** The machine these answers are about. */
+  host: string;
+  engines: EngineReadiness[];
 }
 
 export interface AgentProbe extends KnownAgent {

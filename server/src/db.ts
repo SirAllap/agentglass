@@ -67,6 +67,7 @@ function defaultDbPath(): string {
     // `B:/~BUN/root/…` is the same thing on Windows.
     compiled: Bun.main.startsWith("/$bunfs/") || Bun.main.includes("~BUN"),
     execPath: process.execPath,
+    appImage: process.env.APPIMAGE,
     tmp: tmpdir(),
   });
   if (refused) throw new Error(refused);
@@ -204,12 +205,18 @@ function copyInto(src: string, dst: string): boolean {
  */
 export function defaultDbRefusal(
   path: string,
-  run: { compiled: boolean; execPath: string; tmp: string },
+  run: { compiled: boolean; execPath: string; tmp: string; appImage?: string },
 ): string | null {
   const under = (p: string, dir: string) => { const r = relative(dir, p); return !!r && !r.startsWith("..") && !isAbsolute(r); };
   if (under(path, run.tmp)) return null;
   let where: string | null = null;
   if (run.compiled) {
+    // An AppImage runs from a mount (or an extraction) under the temp directory
+    // but is installed: the file the person launched, named by the runtime in
+    // APPIMAGE, lives elsewhere. A build copied into the temp directory has no
+    // such file outside it. A variable set by hand passes for an install, as a
+    // binary copied by hand does (see the ceilings above).
+    if (under(run.execPath, run.tmp) && run.appImage && !under(run.appImage, run.tmp) && existsSync(run.appImage)) return null;
     if (under(run.execPath, run.tmp)) where = run.tmp;
     else for (let d = dirname(run.execPath); ; d = dirname(d)) {
       if (existsSync(join(d, ".git")) && existsSync(join(d, "electron", "build.mjs"))) { where = d; break; }
@@ -326,6 +333,20 @@ export const SCHEMA_GENERATION = 1;
 }
 
 db.exec("PRAGMA journal_mode = WAL;");
+/*
+ * Cap the WAL file, which SQLite otherwise never shrinks.
+ *
+ * A checkpoint copies the WAL back into the database and lets the next writer
+ * start over at the top of the file, but the file keeps the size of its
+ * largest run. VACUUM writes the whole database through the WAL, so after one
+ * the -wal file is as big as the database, for good: measured at 933 MB beside
+ * a 945 MB database. With this limit the writer that restarts the log
+ * truncates it back to 64 MB; on a scratch 246 MB database the WAL went from
+ * 83 MB after a VACUUM to 67 MB at the next write, where without it it stayed
+ * at 83 MB through every write after. trimWal() below takes it to zero.
+ */
+export const WAL_SIZE_LIMIT = 64 * 1024 * 1024;
+db.exec(`PRAGMA journal_size_limit = ${WAL_SIZE_LIMIT};`);
 db.exec("PRAGMA foreign_keys = ON;");
 
 db.exec(`
@@ -1648,6 +1669,30 @@ CREATE TABLE IF NOT EXISTS seat (
 `);
 
 /*
+ * WHETHER A POLICY RULE IS ON, kept so a restart does not forget it.
+ *
+ * A rule's switch has hysteresis: it turns on at a threshold and off only some
+ * way past it, so a reading that wobbles around the line cannot flap it. That
+ * is memory, and memory in the process dies with it. `memory` is each
+ * trigger's own last answer (and the `resetsAt` it saw), `holding` the reason
+ * the last reading could not change anything, `reading` what the rule saw when
+ * it last changed. See server/src/orchpolicy.ts.
+ */
+db.run(`
+CREATE TABLE IF NOT EXISTS policy_state (
+  scope TEXT NOT NULL,
+  rule_id TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 0,
+  since INTEGER NOT NULL DEFAULT 0,
+  reading TEXT NOT NULL DEFAULT '',
+  reading_at INTEGER NOT NULL DEFAULT 0,
+  holding TEXT NOT NULL DEFAULT '',
+  memory TEXT NOT NULL DEFAULT '[]',
+  PRIMARY KEY (scope, rule_id)
+);
+`);
+
+/*
  * THE SEAT'S QUEUE — what a project's orchestrator has been asked to see done,
  * and who it handed each one to (seatqueue.ts).
  *
@@ -1804,6 +1849,12 @@ try { db.exec("ALTER TABLE seat ADD COLUMN adopted_pane TEXT NOT NULL DEFAULT ''
  * window somebody opened is not this app's to kill.
  */
 try { db.exec("ALTER TABLE named_agent ADD COLUMN adopted INTEGER NOT NULL DEFAULT 0"); } catch { /* already present */ }
+/* Who started a worker and how it ended: the seat that owns it, the model it
+   runs, the policy decision as JSON, the engine's session to resume, and the
+   exit status and last stderr line of its latest turn (agents/workerstart.ts). */
+for (const col of ["seat_root TEXT", "model TEXT", "started_by TEXT", "resume_id TEXT", "exit_code INTEGER", "exit_line TEXT"]) {
+  try { db.exec(`ALTER TABLE named_agent ADD COLUMN ${col}`); } catch { /* already present */ }
+}
 
 /* What a run's branch pointed at when something last looked at it.
  *
@@ -2345,6 +2396,37 @@ function foldExpiringEvents(cutoff: number): number {
  * database would go into RAM and could fail on space. Next to the database is
  * where there is certainly room for a copy of it.
  */
+/**
+ * Checkpoint the WAL into the database and truncate the file to zero bytes,
+ * without ever waiting for it.
+ *
+ * TRUNCATE has to wait for every reader to leave the WAL, and it waits through
+ * the busy handler: with the 5 s busy_timeout this connection runs on, a reader
+ * in another process (a CLI holding a read transaction) would stall the event
+ * loop for those 5 s. So the timeout is zero for this one statement, and a busy
+ * WAL is simply left for the next call. Nothing is lost by that: the frames are
+ * still checkpointed as far as the readers allow, and journal_size_limit still
+ * caps the file.
+ *
+ * The cost is the frames not yet checkpointed, which auto-checkpoint keeps to
+ * about 1000 pages (4 MB); measured at 5-6 ms on a scratch database with an
+ * 8 MB write behind it.
+ */
+export function trimWal(): { busy: boolean; ms: number } {
+  const started = performance.now();
+  let busy = true;
+  try {
+    db.exec("PRAGMA busy_timeout = 0;");
+    const r = db.query("PRAGMA wal_checkpoint(TRUNCATE)").get() as { busy?: number } | null;
+    busy = Number(r?.busy ?? 1) !== 0;
+  } catch {
+    // SQLITE_BUSY raised rather than reported: the same answer, try later.
+  } finally {
+    db.exec("PRAGMA busy_timeout = 5000;");
+  }
+  return { busy, ms: performance.now() - started };
+}
+
 export function reclaimFreePages(): { freed: number; ms: number } | null {
   try {
     const pageCount = Number((db.query("PRAGMA page_count").get() as { page_count?: number } | null)?.page_count ?? 0);
@@ -2354,6 +2436,9 @@ export function reclaimFreePages(): { freed: number; ms: number } | null {
     if (!process.env.SQLITE_TMPDIR) process.env.SQLITE_TMPDIR = dirname(DB_PATH);
     const started = Date.now();
     db.exec("VACUUM");
+    // VACUUM just wrote the whole database through the WAL; give that back now
+    // rather than waiting for the journal_size_limit to bring it down to 64 MB.
+    trimWal();
     return { freed: freelist * pageSize, ms: Date.now() - started };
   } catch {
     // A vacuum that cannot run is not a reason to fail a boot: the database is

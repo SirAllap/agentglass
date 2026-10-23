@@ -12,19 +12,18 @@
  * console path a typed command takes. That separation is the whole reason a
  * parameter box is safe to have.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { api } from "../lib/api.ts";
 import { retryLoad } from "../lib/retryLoad.ts";
 import type { Recipe, RecipeParam, GitRepoRef } from "../../../shared/types.ts";
 import { consoleRoot, runInConsole } from "./TerminalPanel.tsx";
-import { CloseButton } from "./CloseButton.tsx";
 import { SettingRow } from "./SettingRow.tsx";
+import { EmptyState, Field, SettingsCard, SettingsForm, helpIdFor } from "./SettingsKit.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { IconLabel, PlusIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
+import { Button, INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
 
-const edge = (pct: number) => `1px solid color-mix(in srgb, var(--border) ${pct}%, transparent)`;
 const PARAM_TYPES: RecipeParam["type"][] = ["text", "choice", "flag", "repo", "worktree", "branch"];
 
 const blank = (): Recipe => ({
@@ -61,182 +60,194 @@ export function RecipesPane({ open }: { open: boolean }) {
     await load();
   };
 
-  if (!list) return <Wrap><div className="py-3 text-[12.5px]" style={{ color: "var(--text3)" }}>Reading your recipes…</div></Wrap>;
-
   /* One row per command, on the dialog's grid: the Run and Edit buttons of
      every recipe land on the same two lines, which is the whole reason a list
-     of saved things is faster to use than a stack of cards. */
+     of saved things is faster to use than a stack of cards. The editor and the
+     run form are cards of their own under the list, so the list never moves
+     to make room for them. New is the card's one action, in the same place
+     whether the list is empty or not. */
   return (
-    <Wrap>
-      {note && (
-        <div className="my-2 text-[12px] px-2 py-1 rounded"
-          style={{ color: note.ok ? "var(--success)" : "var(--error)",
-            background: `color-mix(in srgb, var(--${note.ok ? "success" : "error"}) 10%, transparent)` }}>
-          {note.text}
-        </div>
-      )}
-
-      {list.map((r) => (
-        <SettingRow key={r.id}
-          label={r.name}
-          hint={<>
-            {r.desc && <span className="block truncate">{r.desc}</span>}
-            {r.scope === "global" ? "global" : (r.repo?.split("/").pop() ?? "repo")} · {r.steps.length} step{r.steps.length === 1 ? "" : "s"}
-            {r.params?.length ? ` · ${r.params.length} param${r.params.length === 1 ? "" : "s"}` : ""}
-            {r.boot ? " · at start" : ""}
-          </>}
-          control={<span className="flex items-center gap-2">
-            <button onClick={() => setRunning(r)} className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-              style={{ border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }}>Run…</button>
-            <button onClick={() => setEditing(r)} className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-              style={{ border: EDGE, color: "var(--text2)" }}>Edit</button>
-          </span>}
-        />
-      ))}
-      {!list.length && (
-        <div className="py-2 text-[12.5px]" style={{ color: "var(--text4)" }}>
-          Nothing saved yet. The first one is usually a thing you have typed three times this week.
-        </div>
-      )}
-
-      {!editing && (
-        <div className="py-2">
-          <button onClick={() => setEditing(blank())} className="text-[12px] px-2.5 py-1 rounded-lg"
-            style={{ border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)", color: "var(--text)" }}>
-            <IconLabel icon={<PlusIcon size={ICON.xs} />}>New recipe</IconLabel>
-          </button>
-        </div>
-      )}
+    <>
+      <SettingsCard title="Project commands"
+        desc="Ready-to-run commands for the project that is open, and the five you pinned."
+        actions={<Button disabled={!!editing} onClick={() => setEditing(blank())}>
+          <IconLabel icon={<PlusIcon size={ICON.xs} />}>New recipe</IconLabel>
+        </Button>}>
+        {!list && <EmptyState>Reading your recipes…</EmptyState>}
+        {list?.map((r) => (
+          <SettingRow key={r.id}
+            label={r.name}
+            hint={<>
+              {r.desc && <span className="block">{r.desc}</span>}
+              {r.scope === "global" ? "global" : (r.repo?.split("/").pop() ?? "repo")} · {r.steps.length} step{r.steps.length === 1 ? "" : "s"}
+              {r.params?.length ? ` · ${r.params.length} param${r.params.length === 1 ? "" : "s"}` : ""}
+              {r.boot ? " · at start" : ""}
+            </>}
+            actions={<>
+              <Button onClick={() => setRunning(r)}>Run…</Button>
+              <Button onClick={() => setEditing(r)}>Edit</Button>
+            </>} />
+        ))}
+        {list && !list.length && (
+          <EmptyState>Nothing saved yet. The first one is usually a thing you have typed three times this week.</EmptyState>
+        )}
+        {note && (
+          <div role={note.ok ? "status" : "alert"} className="agx-settings-x pt-2 pb-3 text-[12px]"
+            style={{ color: note.ok ? "var(--success-ink)" : "var(--error-ink)" }}>
+            {note.text}
+          </div>
+        )}
+      </SettingsCard>
 
       {editing && <Editor r={editing} repos={repos} onChange={setEditing} onSave={save} onDrop={drop} onCancel={() => setEditing(null)} />}
-      {running && <RunDialog r={running} repos={repos} onClose={() => setRunning(null)} onNote={setNote} />}
-    </Wrap>
+      {running && <RunForm r={running} repos={repos} onClose={() => setRunning(null)} onNote={setNote} />}
+    </>
   );
 }
 
-/** The same shape SettingsModal's Section renders — an eyebrow-less rows box —
- *  so the settings column's one padding rule reaches this page. Written out
- *  rather than imported because SettingsModal imports this file. */
-function Wrap({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="agx-settings-section">
-      <div className="agx-settings-head">
-        <div className="agx-settings-head-t">Project commands</div>
-        <div className="agx-settings-head-d">Ready-to-run commands for the project that is open, and the five you pinned.</div>
-      </div>
-      <div className="agx-settings-rows">{children}</div>
-    </div>
-  );
-}
+/** One stacked field's control: the kit's input height and edge. */
+const FIELD = `w-full ${INPUT}`;
 
+/**
+ * The editor, a card of its own under the list: one form of stacked labelled
+ * fields, one primary Save, and Delete up in the card's header where a Save
+ * press cannot land on it.
+ */
 function Editor({ r, repos, onChange, onSave, onDrop, onCancel }: {
   r: Recipe; repos: GitRepoRef[];
   onChange: (r: Recipe) => void; onSave: (r: Recipe) => void; onDrop: (r: Recipe) => void; onCancel: () => void;
 }) {
+  const uid = useId();
+  const f = (k: string) => `${uid}-${k}`;
   const set = (patch: Partial<Recipe>) => onChange({ ...r, ...patch });
+  const setParam = (i: number, patch: Partial<RecipeParam>) =>
+    set({ params: (r.params ?? []).map((x, j) => j === i ? { ...x, ...patch } : x) });
   /** Boot and the two things that would need asking are mutually exclusive —
    *  the server refuses saving the combination, so the editor says so up
    *  front rather than letting the save be the first to find out. */
   const cannotBoot = !!(r.params?.length) || !!r.confirm;
-  const inp = "w-full text-[11.5px] px-2 py-1.5 rounded-lg outline-none";
-  const style = { background: "var(--surface-card)", border: EDGE, color: "var(--text)" };
   return (
-    <div className="rounded-xl p-3 flex flex-col gap-2.5" style={{ border: edge(28), background: "color-mix(in srgb, var(--bg3) 25%, transparent)" }}>
-      <div className="flex gap-2 flex-wrap">
-        <input value={r.name} onChange={(e) => set({ name: e.target.value })} placeholder="Name — how you will call it"
-          className={`max-w-[220px] ${INPUT}`} style={INPUT_STYLE} />
-        <input value={r.desc} onChange={(e) => set({ desc: e.target.value })} placeholder="What it does"
-          className={`flex-1 min-w-[180px] ${INPUT}`} style={INPUT_STYLE} />
-      </div>
+    <SettingsCard title={r.id ? `Edit ${r.name || "recipe"}` : "New recipe"}
+      actions={r.id ? <Button tone="danger" onClick={() => onDrop(r)}>Delete</Button> : undefined}>
+      <div className="agx-settings-row">
+        <div className="agx-row-below">
+          <SettingsForm label={r.id ? "Edit recipe" : "New recipe"} onSubmit={() => onSave(r)}>
+            <Field label="Name" htmlFor={f("name")} help="How you will call it.">
+              <input id={f("name")} value={r.name} onChange={(e) => set({ name: e.target.value })}
+                aria-describedby={helpIdFor(f("name"))} className={FIELD} style={INPUT_STYLE} />
+            </Field>
+            <Field label="What it does" htmlFor={f("desc")}>
+              {/* Two lines, not one: a sentence about what a command does is
+                  longer than the 480px a form field gets, and an input would
+                  cut it off at the edge. */}
+              <textarea id={f("desc")} value={r.desc} onChange={(e) => set({ desc: e.target.value })} rows={2}
+                className="w-full text-[12px] px-2.5 py-2 rounded-lg outline-none bg-[var(--surface-inset)] text-[var(--text)]"
+                style={{ ...INPUT_STYLE, resize: "vertical" }} />
+            </Field>
 
-      {/* One step per line. A textarea rather than a list of rows: these are
-          lines of shell, and people write them the way they write shell. */}
-      <label className="flex flex-col gap-1">
-        <span className="text-[10.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>Steps — one per line, {"{{name}}"} for a parameter</span>
-        <textarea value={r.steps.join("\n")} onChange={(e) => set({ steps: e.target.value.split("\n") })}
-          rows={Math.max(3, r.steps.length + 1)} spellCheck={false}
-          className={`${inp} font-mono`} style={{ ...style, resize: "vertical" }} />
-      </label>
+            {/* One step per line. A textarea rather than a list of rows: these
+                are lines of shell, and people write them the way they write
+                shell. */}
+            <Field label="Steps" htmlFor={f("steps")} help={<>One per line. {"{{name}}"} marks a parameter.</>}>
+              <textarea id={f("steps")} value={r.steps.join("\n")} onChange={(e) => set({ steps: e.target.value.split("\n") })}
+                aria-describedby={helpIdFor(f("steps"))}
+                rows={Math.max(3, r.steps.length + 1)} spellCheck={false}
+                className="w-full text-[12px] px-2.5 py-2 rounded-lg outline-none font-mono bg-[var(--surface-inset)] text-[var(--text)]"
+                style={{ ...INPUT_STYLE, resize: "vertical" }} />
+            </Field>
 
-      <div className="flex gap-2 flex-wrap items-end">
-        <label className="flex flex-col gap-1">
-          <span className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>Where it applies</span>
-          <select value={r.scope} onChange={(e) => set({ scope: e.target.value as Recipe["scope"], repo: e.target.value === "global" ? undefined : (r.repo || repos[0]?.root) })}
-            className="text-[11.5px] px-2 py-1.5 rounded-lg" style={style}>
-            <option value="global">Everywhere</option>
-            <option value="repo">One repository</option>
-          </select>
-        </label>
-        {r.scope === "repo" && (
-          <label className="flex flex-col gap-1 min-w-[180px]">
-            <span className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>Repository</span>
-            <select value={r.repo ?? ""} onChange={(e) => set({ repo: e.target.value })}
-              className="text-[11.5px] px-2 py-1.5 rounded-lg" style={style}>
-              {repos.map((x) => <option key={x.root} value={x.root}>{x.name || x.root}</option>)}
-            </select>
-          </label>
-        )}
-        {/* The "run inside tmux" box was here, promising "survives closing the
-            app". It kept that promise on the MACHINE's tmux, by typing a bare
-            `tmux new-session` into the shell. The console runs on the engine
-            now and every recipe outlives the app already, so the box had
-            nothing left to offer. The stored flag is left alone rather than
-            migrated away — an old recipe carrying it is not wrong, it is just
-            describing something that is now true of all of them. */}
-        <label className="flex items-center gap-1.5 text-[11px] pb-1.5" style={{ color: "var(--text2)" }}>
-          <input type="checkbox" checked={!!r.confirm} onChange={(e) => set({ confirm: e.target.checked })}
-            disabled={!!r.boot} title={r.boot ? "A command that runs at start fires with nobody to ask" : undefined} />
-          Always ask first
-        </label>
-        {/* A boot recipe runs the moment the app opens, with nobody to fill a
-            box or click anything. The server refuses saving one that has
-            parameters, asks first, or reads as destructive — these two
-            checkboxes just keep the editor from leading somewhere the save
-            would refuse. */}
-        <label className="flex items-center gap-1.5 text-[11px] pb-1.5" style={{ color: cannotBoot ? "var(--text4)" : "var(--text2)" }}>
-          <input type="checkbox" checked={!!r.boot} disabled={cannotBoot}
-            title={cannotBoot ? "Remove the parameters or the ask-first to run it at start" : undefined}
-            onChange={(e) => set(e.target.checked ? { boot: true, confirm: false } : { boot: false })} />
-          Run when the app starts <span style={{ color: "var(--text4)" }}>— in the docked console, on every open</span>
-        </label>
-      </div>
-
-      {/* Parameters. Kept next to the steps that use them, because the only way
-          to get a `{{key}}` right is to see both at once. */}
-      <div className="flex flex-col gap-1.5">
-        <span className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>Parameters</span>
-        {(r.params ?? []).map((p, i) => (
-          <div key={i} className="flex gap-1.5 flex-wrap items-center">
-            <input value={p.key} onChange={(e) => set({ params: (r.params ?? []).map((x, j) => j === i ? { ...x, key: e.target.value } : x) })}
-              placeholder="name" className={`w-[130px] font-mono ${INPUT}`} style={INPUT_STYLE} />
-            <select value={p.type} onChange={(e) => set({ params: (r.params ?? []).map((x, j) => j === i ? { ...x, type: e.target.value as RecipeParam["type"] } : x) })}
-              className="text-[11px] px-2 py-1 rounded-lg" style={style}>
-              {PARAM_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-            </select>
-            {p.type === "choice" && (
-              <input value={(p.options ?? []).join(", ")} onChange={(e) => set({ params: (r.params ?? []).map((x, j) => j === i ? { ...x, options: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) } : x) })}
-                placeholder="one, two, three" className={`flex-1 min-w-[140px] ${INPUT}`} style={INPUT_STYLE} />
+            <Field label="Where it applies" htmlFor={f("scope")}>
+              <select id={f("scope")} value={r.scope} className={`w-56 ${INPUT}`} style={INPUT_STYLE}
+                onChange={(e) => set({ scope: e.target.value as Recipe["scope"], repo: e.target.value === "global" ? undefined : (r.repo || repos[0]?.root) })}>
+                <option value="global">Everywhere</option>
+                <option value="repo">One repository</option>
+              </select>
+            </Field>
+            {r.scope === "repo" && (
+              <Field label="Repository" htmlFor={f("repo")}>
+                <select id={f("repo")} value={r.repo ?? ""} onChange={(e) => set({ repo: e.target.value })}
+                  className={FIELD} style={INPUT_STYLE}>
+                  {repos.map((x) => <option key={x.root} value={x.root}>{x.name || x.root}</option>)}
+                </select>
+              </Field>
             )}
-            {p.type === "flag" && (
-              <input value={p.value ?? ""} onChange={(e) => set({ params: (r.params ?? []).map((x, j) => j === i ? { ...x, value: e.target.value } : x) })}
-                placeholder="--rebuild-fe" className={`font-mono flex-1 min-w-[140px] ${INPUT}`} style={INPUT_STYLE} />
-            )}
-            <CloseButton onClick={() => set({ params: (r.params ?? []).filter((_, j) => j !== i) })} style={{ color: "var(--text4)" }} className="rounded" />
-          </div>
-        ))}
-        <button onClick={() => set({ boot: false, params: [...(r.params ?? []), { key: "", label: "", type: "text" }] })}
-          className="self-start text-[10.5px] px-2 py-0.5 rounded" style={{ border: EDGE, color: "var(--text3)" }}><IconLabel icon={<PlusIcon size={ICON.xs} />}>parameter</IconLabel></button>
-      </div>
 
-      <div className="flex gap-2 flex-wrap pt-1">
-        <button onClick={() => onSave(r)} className="text-[11px] px-3 py-1 rounded-lg"
-          style={{ background: "color-mix(in srgb, var(--primary) 20%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 48%, transparent)", color: "var(--text)" }}>Save</button>
-        <button onClick={onCancel} className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text3)" }}>Cancel</button>
-        <span className="flex-1" />
-        {r.id && <button onClick={() => onDrop(r)} className="text-[11px] px-2 py-1 rounded-lg"
-          style={{ border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)", color: "var(--error-ink)" }}>Delete</button>}
+            {/* The "run inside tmux" box was here, promising "survives closing
+                the app". It kept that promise on the MACHINE's tmux, by typing
+                a bare `tmux new-session` into the shell. The console runs on
+                the engine now and every recipe outlives the app already, so
+                the box had nothing left to offer. The stored flag is left
+                alone rather than migrated away — an old recipe carrying it is
+                not wrong, it is just describing something that is now true of
+                all of them. */}
+            <label className="flex items-center gap-2 text-[12px]" style={{ color: "var(--text2)" }}
+              title={r.boot ? "A command that runs at start fires with nobody to ask" : undefined}>
+              <input type="checkbox" checked={!!r.confirm} onChange={(e) => set({ confirm: e.target.checked })} disabled={!!r.boot} />
+              Always ask first
+            </label>
+            {/* A boot recipe runs the moment the app opens, with nobody to fill
+                a box or click anything. The server refuses saving one that has
+                parameters, asks first, or reads as destructive — these two
+                checkboxes just keep the editor from leading somewhere the save
+                would refuse. */}
+            <label className="flex items-start gap-2 text-[12px]" style={{ color: cannotBoot ? "var(--text4)" : "var(--text2)" }}
+              title={cannotBoot ? "Remove the parameters or the ask-first to run it at start" : undefined}>
+              <input type="checkbox" className="mt-0.5" checked={!!r.boot} disabled={cannotBoot}
+                onChange={(e) => set(e.target.checked ? { boot: true, confirm: false } : { boot: false })} />
+              <span>Run when the app starts<span className="block agx-field-h">In the docked console, on every open.</span></span>
+            </label>
+
+            {/* Parameters. Kept next to the steps that use them, because the
+                only way to get a `{{key}}` right is to see both at once. */}
+            <div className="flex flex-col gap-2">
+              <span className="agx-field-l">Parameters</span>
+              {(r.params ?? []).map((p, i) => (
+                <div key={i} className="flex flex-col gap-3 rounded-lg p-3" style={{ background: "var(--surface-inset)" }}>
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="text-[12px]" style={{ color: "var(--text2)" }}>Parameter {i + 1}</span>
+                    <button type="button" className="agx-textlink text-[12px]"
+                      onClick={() => set({ params: (r.params ?? []).filter((_, j) => j !== i) })}>Remove parameter {i + 1}</button>
+                  </div>
+                  <Field label="Name" htmlFor={f(`p${i}-key`)}>
+                    <input id={f(`p${i}-key`)} value={p.key} onChange={(e) => setParam(i, { key: e.target.value })}
+                      className={`t-mono ${FIELD}`} style={INPUT_STYLE} />
+                  </Field>
+                  <Field label="Type" htmlFor={f(`p${i}-type`)}>
+                    <select id={f(`p${i}-type`)} value={p.type} onChange={(e) => setParam(i, { type: e.target.value as RecipeParam["type"] })}
+                      className={`w-40 ${INPUT}`} style={INPUT_STYLE}>
+                      {PARAM_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  </Field>
+                  {p.type === "choice" && (
+                    <Field label="Choices" htmlFor={f(`p${i}-opts`)} help="Separated by commas.">
+                      <input id={f(`p${i}-opts`)} value={(p.options ?? []).join(", ")}
+                        onChange={(e) => setParam(i, { options: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })}
+                        aria-describedby={helpIdFor(f(`p${i}-opts`))} placeholder="one, two, three" className={FIELD} style={INPUT_STYLE} />
+                    </Field>
+                  )}
+                  {p.type === "flag" && (
+                    <Field label="Flag" htmlFor={f(`p${i}-flag`)}>
+                      <input id={f(`p${i}-flag`)} value={p.value ?? ""} onChange={(e) => setParam(i, { value: e.target.value })}
+                        placeholder="--rebuild-fe" className={`t-mono ${FIELD}`} style={INPUT_STYLE} />
+                    </Field>
+                  )}
+                </div>
+              ))}
+              <div>
+                <Button onClick={() => set({ boot: false, params: [...(r.params ?? []), { key: "", label: "", type: "text" }] })}>
+                  <IconLabel icon={<PlusIcon size={ICON.xs} />}>Add parameter</IconLabel>
+                </Button>
+              </div>
+            </div>
+
+            <div className="agx-sform-actions">
+              <Button type="submit" tone="primary">Save</Button>
+              <Button onClick={onCancel}>Cancel</Button>
+            </div>
+          </SettingsForm>
+        </div>
       </div>
-    </div>
+    </SettingsCard>
   );
 }
 
@@ -304,16 +315,10 @@ export function runBootRecipes(): void {
     .catch(() => false));
 }
 
-/**
- * Ask for the values, then show the exact lines before anything happens.
- *
- * The preview is not decoration and not a courtesy: it is the moment the person
- * running this can see what their typing turned into. It comes from the server,
- * already substituted and quoted, so what is shown is literally what will be
- * sent — not this component's idea of it.
- */
-export function RunDialog({ r, repos, onClose, onNote, onRunStep, targetInTmux }: {
-  r: Recipe; repos: GitRepoRef[]; onClose: () => void; onNote: (n: { ok: boolean; text: string }) => void;
+/** What a recipe's run needs, shared by the command bar's dialog and the
+ *  settings form: the values, the server's preview of the lines, and the send. */
+function useRecipeRun({ r, onClose, onNote, onRunStep, targetInTmux }: {
+  r: Recipe; onClose: () => void; onNote: (n: { ok: boolean; text: string }) => void;
   /** How to run a step, when the caller has a shell in view (a command bar's
    *  focused pane or console). Absent from Settings, which has no shell on
    *  screen and so runs in the docked console instead. */
@@ -384,6 +389,28 @@ export function RunDialog({ r, repos, onClose, onNote, onRunStep, targetInTmux }
     onClose();
   };
 
+  return { values, setValues, preview, go, inTmux, where };
+}
+
+/**
+ * Ask for the values, then show the exact lines before anything happens.
+ *
+ * The preview is not decoration and not a courtesy: it is the moment the person
+ * running this can see what their typing turned into. It comes from the server,
+ * already substituted and quoted, so what is shown is literally what will be
+ * sent — not this component's idea of it.
+ */
+export function RunDialog({ r, repos, onClose, onNote, onRunStep, targetInTmux }: {
+  r: Recipe; repos: GitRepoRef[]; onClose: () => void; onNote: (n: { ok: boolean; text: string }) => void;
+  /** How to run a step, when the caller has a shell in view (a command bar's
+   *  focused pane or console). Absent from Settings, which has no shell on
+   *  screen and so runs in the docked console instead. */
+  onRunStep?: (cmd: string) => void;
+  /** Whether that shell is inside tmux. Only consulted when `onRunStep` is set;
+   *  otherwise the console's own tmux state stands in. */
+  targetInTmux?: boolean;
+}) {
+  const { values, setValues, preview, go, inTmux, where } = useRecipeRun({ r, onClose, onNote, onRunStep, targetInTmux });
   const style = { background: "var(--surface-card)", border: EDGE, color: "var(--text)" };
   return (
     <div className="rounded-xl p-3 flex flex-col gap-2.5" style={{ border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
@@ -444,5 +471,86 @@ export function RunDialog({ r, repos, onClose, onNote, onRunStep, targetInTmux }
         <button onClick={onClose} className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text3)" }}>Cancel</button>
       </div>
     </div>
+  );
+}
+
+/**
+ * The same run, as a card of its own in Settings: the values as stacked
+ * labelled fields, the lines that will run under them, one primary Run. The
+ * command bar keeps its small dialog; both read the same hook, so what is
+ * previewed is what is sent in either place.
+ */
+function RunForm({ r, repos, onClose, onNote }: {
+  r: Recipe; repos: GitRepoRef[]; onClose: () => void; onNote: (n: { ok: boolean; text: string }) => void;
+}) {
+  const uid = useId();
+  const { values, setValues, preview, go, inTmux } = useRecipeRun({ r, onClose, onNote });
+  const set = (k: string, v: string) => setValues((cur) => ({ ...cur, [k]: v }));
+  const blocked = !preview || !!preview.missing.length || inTmux;
+  return (
+    <SettingsCard title={`Run ${r.name}`}>
+      <div className="agx-settings-row">
+        <div className="agx-row-below">
+          <SettingsForm label={`Run ${r.name}`} onSubmit={go}>
+            {(r.params ?? []).map((p) => {
+              const id = `${uid}-${p.key}`;
+              const label = p.label || p.key;
+              if (p.type === "flag") {
+                return (
+                  <label key={p.key} className="flex items-center gap-2 text-[12px]" style={{ color: "var(--text2)" }}>
+                    <input type="checkbox" checked={values[p.key] === "1"} onChange={(e) => set(p.key, e.target.checked ? "1" : "0")} />
+                    {(p.value || `--${p.key}`).replace(/^!/, "")}
+                  </label>
+                );
+              }
+              return (
+                <Field key={p.key} label={label} htmlFor={id}>
+                  {p.type === "choice" ? (
+                    <select id={id} value={values[p.key] ?? ""} onChange={(e) => set(p.key, e.target.value)}
+                      className={`w-full ${INPUT}`} style={INPUT_STYLE}>
+                      <option value="">—</option>
+                      {(p.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  ) : p.type === "repo" || p.type === "worktree" ? (
+                    <div id={id}>
+                      <CheckoutPicker repos={repos} value={values[p.key] ?? ""}
+                        onPick={(v) => set(p.key, v)} placeholder="—" triggerMaxWidth={320} />
+                    </div>
+                  ) : (
+                    <input id={id} value={values[p.key] ?? ""} onChange={(e) => set(p.key, e.target.value)}
+                      className={`w-full ${INPUT}`} style={INPUT_STYLE} spellCheck={false} />
+                  )}
+                </Field>
+              );
+            })}
+
+            <div className="flex flex-col gap-1.5">
+              <span className="agx-field-l">Will run</span>
+              <pre className="text-[12px] font-mono px-2.5 py-2 rounded-lg overflow-x-auto whitespace-pre m-0"
+                style={{ background: "var(--surface-inset)", color: "var(--text2)" }}>{preview?.steps.join("\n") || "…"}</pre>
+            </div>
+
+            {preview?.confirm && (
+              <div role="alert" className="text-[12px]" style={{ color: "var(--warning-ink)" }}>
+                This one is not easily undone. Read the lines above before you run it.
+              </div>
+            )}
+            {!!preview?.missing.length && (
+              <div className="agx-field-h">Still needs: {preview.missing.join(", ")}</div>
+            )}
+            {inTmux && (
+              <div role="alert" className="text-[12px]" style={{ color: "var(--warning-ink)" }}>
+                The console is inside tmux, so this would type into the pane's program, not a prompt.
+              </div>
+            )}
+
+            <div className="agx-sform-actions">
+              <Button type="submit" tone="primary" disabled={blocked}>{preview?.confirm ? "Run it anyway" : "Run"}</Button>
+              <Button onClick={onClose}>Cancel</Button>
+            </div>
+          </SettingsForm>
+        </div>
+      </div>
+    </SettingsCard>
   );
 }

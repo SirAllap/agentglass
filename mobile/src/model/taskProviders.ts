@@ -34,8 +34,10 @@ import { PROVIDERS, type ProviderId, type ProviderSpec, type ProviderState, type
 
 /** The ids that feed the work-you-owe half, read from the catalogue rather
  *  than listed — a list here would be wrong the first time somebody adds a
- *  provider, and wrong silently. */
-const TASK_IDS = new Set(PROVIDERS.filter((p) => p.kind === "task").map((p) => p.id));
+ *  provider, and wrong silently. Jira is the one named exception: the computer
+ *  can connect it, but nothing here reads a Jira card yet, and a Cards tab
+ *  switched on by a tracker it cannot show is worse than a hidden one. */
+const TASK_IDS = new Set(PROVIDERS.filter((p) => p.kind === "task" && p.id !== "jira").map((p) => p.id));
 
 /**
  * Whether a provider counts as "this person uses this".

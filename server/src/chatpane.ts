@@ -24,6 +24,7 @@ import type { PaneAgent } from "./paneagent.ts";
 import { claudeCode, claudeHome, projectSlug } from "./agents/claudecode.ts";
 import { stat } from "node:fs/promises";
 import { costUsd } from "./pricing.ts";
+import { agentProvider, type ScreenFacet } from "../../shared/agentKinds.ts";
 import {
   paneAlive, startPane, killPane, pasteText, submit, interrupt, capture,
   touchPane, forgetPane, tmuxCapability, validPaneName, attachCommand,
@@ -357,7 +358,7 @@ export interface PaneTurnOptions {
  *  are shared by every picker and are what make it a prompt at all. Careful not
  *  to catch a running turn: that one says "esc to interrupt", which is a
  *  different string and deliberately not matched here. */
-const NEEDS_YOU_RE = /Esc to cancel|Enter to confirm|to use this session only/;
+const NEEDS_YOU_RE = new RegExp(agentProvider("claude")!.screen!.needsYou);
 /** The pane is showing a prompt of its own (a permission, a confirmation). */
 export const screenNeedsYou = (screen: string): boolean => NEEDS_YOU_RE.test(screen);
 export const __needsYou = screenNeedsYou;
@@ -418,10 +419,81 @@ export function __submitVerdict(screen: string, pasted: string): SubmitOutcome |
 
 /** A turn that is actually working says so. Used to tell "idle" apart from
  *  "thinking", which is the difference between ending a turn and abandoning it. */
-const RUNNING_RE = /esc to interrupt/i;
+const RUNNING_RE = new RegExp(agentProvider("claude")!.screen!.running, "i");
 /** Exported for the named-agent verbs (agentops.ts): one regex, read by the
  *  chat, the clone and a script's `wait --until working` alike. */
 export const __running = (screen: string): boolean => RUNNING_RE.test(screen);
+
+/**
+ * HOW ONE ENGINE'S SCREEN IS READ.
+ *
+ * Everything above is Claude Code's, and stays exactly that: a reader is the
+ * same five questions asked of another engine's pane, built from its facet. The
+ * chair of a project can be sat by an engine whose TUI draws its box and its
+ * working line differently, and a wake is typed on the answers, so the answers
+ * have to be that engine's. `null` is an engine nobody has captured: it has no
+ * reader and the chair refuses it, rather than reading its screen with Claude's
+ * patterns and typing into whatever that turns out to be.
+ */
+export interface ScreenReader {
+  needsYou(screen: string): boolean;
+  running(screen: string): boolean;
+  queued(screen: string): boolean;
+  inputBox(screen: string): string | null;
+  /** The box is on screen AND empty (nothing typed, or only its hint). Absent:
+   *  any box counts, as Claude's always has. */
+  blank?(screen: string): boolean;
+  submitVerdict(screen: string, pasted: string): SubmitOutcome | "retry";
+}
+
+const CLAUDE_READER: ScreenReader = {
+  needsYou: screenNeedsYou, running: __running, queued: __isQueued,
+  inputBox, submitVerdict: __submitVerdict,
+};
+
+function readerFromFacet(f: ScreenFacet): ScreenReader | null {
+  if (!f.inputBox) return null;
+  const needs = new RegExp(f.needsYou), run = new RegExp(f.running, "i");
+  const rows = new RegExp(f.inputBox, "gm");
+  const hint = f.hint ? new RegExp(f.hint) : null;
+  const starting = f.starting ? new RegExp(f.starting) : null;
+  const box = (screen: string): string | null => {
+    /* A dialog in front of the box: whatever box is drawn behind it is not one
+       a paste can land in. */
+    if (starting?.test(screen)) return null;
+    let last: string | null = null;
+    for (const m of screen.matchAll(rows)) last = m[1] ?? "";
+    if (last !== null && hint?.test(last)) return "";
+    return last;
+  };
+  return {
+    needsYou: (s) => needs.test(s),
+    running: (s) => run.test(s),
+    /* None of the captured TUIs queues a prompt typed mid-turn in a way that
+       has been seen; a queued state is added with the screen that shows it. */
+    queued: () => false,
+    inputBox: box,
+    blank: (s) => box(s)?.trim() === "",
+    submitVerdict(screen, pasted) {
+      if (needs.test(screen)) return "diverted";
+      const b = box(screen);
+      if (!b?.trim()) return "sent";
+      if (b.trim() !== pasted.trim()) return "diverted";
+      return "retry";
+    },
+  };
+}
+
+const READERS = new Map<string, ScreenReader | null>();
+/** The reader for one engine's chair or agent; no kind means Claude Code's. */
+export function screenReaderFor(kind = "claude"): ScreenReader | null {
+  if (kind === "claude") return CLAUDE_READER;
+  if (!READERS.has(kind)) {
+    const f = agentProvider(kind)?.screen;
+    READERS.set(kind, f ? readerFromFacet(f) : null);
+  }
+  return READERS.get(kind) ?? null;
+}
 
 /** How often to look at the screen while a turn has produced nothing at all. */
 const NEEDS_YOU_PROBE_MS = 4_000;

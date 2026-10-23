@@ -59,6 +59,18 @@ export interface Credential {
   /** The workspace/team this is scoped to, where a service has them. */
   workspace?: string;
   workspaceId?: string;
+  /** The address the account signs in with, where the service authenticates by
+   *  it as well as by the token (Jira: Basic email:token). Not a secret. */
+  email?: string;
+  /** The service's per-customer site: a host, with a port and context path
+   *  where it has them (Jira: `acme.atlassian.net`, `jira.example.com:8443/jira`). */
+  site?: string;
+  /** How the token is presented: `basic` (account + token) or `bearer`. */
+  auth?: "basic" | "bearer";
+  /** The REST generation detected when connecting (Jira: 3 on Cloud, 2 on Data Center). */
+  api?: 2 | 3;
+  /** What the service said it is running as (Jira: `cloud` or `server`). */
+  deployment?: "cloud" | "server";
   /** When it was last accepted by the service. */
   verifiedAt?: number;
 }

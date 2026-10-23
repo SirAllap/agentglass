@@ -183,6 +183,26 @@ export function finished(mark: Mark): void {
   mark.done = Date.now();
 }
 
+/**
+ * Whether a "stall" was the machine asleep rather than the loop held.
+ *
+ * performance.now() goes on counting while the machine is suspended in Bun on
+ * Linux, so the first tick after a resume sees the whole sleep as drift: one
+ * server logged "event loop blocked 219287314ms (3 ms CPU)", two and
+ * a half days with the lid closed. The CPU clock does stop, which is what tells
+ * the two apart: a held loop burns its own length when it computes and a
+ * little when it waits on a read or a child, while a suspend burns nothing.
+ *
+ * Over a minute with under 1% of it in CPU is taken as a suspend. The ceiling
+ * of that rule: a genuine synchronous wait longer than a minute that burns less
+ * than 1% CPU is dropped with it. The longest real stall in two weeks of one
+ * server's log was 50 s, so the minute sits above every one seen.
+ */
+export const SUSPEND_MIN_MS = 60_000;
+export function suspended(ms: number, cpuMs: number): boolean {
+  return ms > SUSPEND_MIN_MS && cpuMs < ms / 100;
+}
+
 export function watchLoop(): void {
   if (timer) return;
   started = Date.now();
@@ -199,6 +219,11 @@ export function watchLoop(): void {
     last = now;
     if (drift < STALL_MS) return;
     const ms = Math.round(drift);
+    // Process-wide CPU, not the main thread's: the other threads (GC, sqlite)
+    // are mostly idle, and a block this long on the main thread burns its own
+    // length in CPU, so half of it is a wide margin either way.
+    const cpuMs = Math.round((usage.userCPUTime + usage.systemCPUTime - was.userCPUTime - was.systemCPUTime) / 1000);
+    if (suspended(ms, cpuMs)) return;
     total += ms;
     if (ms > worst) worst = ms;
     // Whatever was on the stack when the loop came back is the best witness we
@@ -215,10 +240,6 @@ export function watchLoop(): void {
     // paid for.
     const quick = !!recent?.done && recent.done - recent.at < ms / 2;
     const what = recent && !quick && recent.at >= freeAt - BLAME_MARGIN_MS ? recent.what : BACKGROUND;
-    // Process-wide CPU, not the main thread's: the other threads (GC, sqlite)
-    // are mostly idle, and a block this long on the main thread burns its own
-    // length in CPU, so half of it is a wide margin either way.
-    const cpuMs = Math.round((usage.userCPUTime + usage.systemCPUTime - was.userCPUTime - was.systemCPUTime) / 1000);
     const waiting = cpuMs < ms / 2;
     const majorFaults = usage.majorPageFault - was.majorPageFault;
     const diskReads = usage.fsRead - was.fsRead;

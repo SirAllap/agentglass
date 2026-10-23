@@ -17,7 +17,7 @@ import type { HandoffConfig, HandoffUnassign, ListStatus } from "../../../shared
 import { planOf } from "../../../shared/stepBlocks.ts";
 import type { ReviewRecipeContext } from "../../../shared/types.ts";
 import { expandRecipe } from "../../../shared/recipeText.ts";
-import { cardRef, looksLikeOurs } from "./cardRef.ts";
+import { cardRef, looksLikeOurs, type RefSetup } from "./cardRef.ts";
 
 /**
  * The card to offer moving, or nothing.
@@ -41,14 +41,38 @@ import { cardRef, looksLikeOurs } from "./cardRef.ts";
  */
 export function mergeCardRef(
   pr: { headRefName?: string; title?: string; body?: string },
-  setup: { connected: boolean; prefix?: string; noCustomIds?: boolean } | null,
-): { label: string; query: string } | null {
+  setup: RefSetup | null,
+): { label: string; query: string; tracker?: "jira" } | null {
+  /* With Jira connected too, whose card this is was settled by `trackerFor`.
+     A Jira-owned card is offered to the merge form with its tracker named, and
+     that holds on a machine with no ClickUp at all: the ClickUp credential is
+     not a precondition for a card that is not ClickUp's. */
+  if (setup?.ownerOf) {
+    const ref = cardRef(pr, setup.jira);
+    if (!ref) return null;
+    const owner = setup.ownerOf(ref, false).owner;
+    if (owner === "jira") return { label: ref.label, query: ref.query, tracker: "jira" };
+    return owner === "clickup" && setup.connected ? { label: ref.label, query: ref.query } : null;
+  }
   if (!setup?.connected) return null;
   const ref = cardRef(pr);
   if (!ref) return null;
   if (ref.from === "url") return { label: ref.label, query: ref.query };
   if (!looksLikeOurs(ref, setup?.prefix, false, setup?.noCustomIds)) return null;
   return { label: ref.label, query: ref.query };
+}
+
+/**
+ * `mergeCardRef`, for the surfaces whose body is ClickUp's alone (the review
+ * menu's card move, a staged move, the unstick form): a Jira-owned card is not
+ * theirs, and gets its own controls where it has them.
+ */
+export function clickupCardRef(
+  pr: { headRefName?: string; title?: string; body?: string },
+  setup: RefSetup | null,
+): { label: string; query: string } | null {
+  const ref = mergeCardRef(pr, setup);
+  return ref && !ref.tracker ? ref : null;
 }
 
 /** Where a card is, and where it could go. */
@@ -91,6 +115,23 @@ export function statusOptions(statuses: ListStatus[], current: string): ListStat
   return [...statuses]
     .filter((s) => !eqStatus(s.status, current))
     .sort((a, b) => a.orderindex - b.orderindex);
+}
+
+/**
+ * What a staged "move the card" request does once the card and its list are
+ * read: nothing to ask because the list has no such status, nothing to do
+ * because the card is already there, or the question to put to the person.
+ * The status is matched by the board's own spelling, case aside, and the
+ * target comes back as the board wrote it.
+ */
+export function stagedMove(
+  want: string,
+  card: { status: string },
+  statuses: ListStatus[],
+): { step: "missing" } | { step: "already"; status: string } | { step: "ask"; status: string } {
+  const target = statuses.find((st) => eqStatus(st.status, want));
+  if (!target) return { step: "missing" };
+  return eqStatus(target.status, card.status) ? { step: "already", status: target.status } : { step: "ask", status: target.status };
 }
 
 /** The value of "do not touch the board", and the option the dialog opens on.
@@ -240,17 +281,18 @@ export function statusColor(statuses: ListStatus[], status: string): string | un
  */
 export function mergeNote(
   merged: boolean,
-  move: { asked: boolean; ok?: boolean; to?: string; error?: string; unauthorised?: boolean; extra?: string },
+  move: { asked: boolean; ok?: boolean; to?: string; error?: string; unauthorised?: boolean; extra?: string; tracker?: "ClickUp" | "Jira"; /** The card was left where it was, on purpose. */ stayed?: boolean },
 ): string {
   if (!merged) return "Merge failed";
   if (!move.asked) return "Merged";
-  if (move.ok) return `Merged · card moved to ${move.to}${move.extra ? ` · ${move.extra}` : ""}`;
+  if (move.ok) return `Merged · card ${move.stayed ? "left in" : "moved to"} ${move.to}${move.extra ? ` · ${move.extra}` : ""}`;
   /*
    * A refused token is the one failure here that pressing the button again
    * cannot fix, and the sentence has to say so — otherwise "ClickUp refused
    * this token" reads as a hiccup and the next move is a retry that will be
    * refused in exactly the same way. Where to go instead is the actual news.
    */
-  if (move.unauthorised) return "Merged — the card did not move: ClickUp refused this token. Reconnect it in Settings.";
-  return `Merged — but the card did not move: ${move.error || "ClickUp refused"}`;
+  const name = move.tracker ?? "ClickUp";
+  if (move.unauthorised) return `Merged — the card did not move: ${name} refused this token. Reconnect it in Settings.`;
+  return `Merged — but the card did not move: ${move.error || `${name} refused`}`;
 }

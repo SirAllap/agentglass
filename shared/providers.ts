@@ -33,7 +33,11 @@ export type ProviderKind = "review" | "task";
  */
 export type AuthKind = "cli" | "token" | "none";
 
-export type ProviderId = "github" | "gitlab" | "taskwarrior" | "clickup";
+export type ProviderId = "github" | "gitlab" | "taskwarrior" | "clickup" | "jira";
+
+/** Which tracker a repository's cards live in. "auto" is the absence of a choice. */
+export const TRACKER_CHOICES = ["auto", "clickup", "jira"] as const;
+export type TrackerChoice = (typeof TRACKER_CHOICES)[number];
 
 export interface ProviderSpec {
   id: ProviderId;
@@ -51,6 +55,9 @@ export interface ProviderSpec {
   /** Said on the card before anything is typed. The place to be honest about
    *  what will be stored and where. */
   note?: string;
+  /** The summary the note sits behind, named for what it holds ("Where the
+   *  token is stored"): a reader decides from it whether to open it. */
+  noteTitle?: string;
 }
 
 /**
@@ -62,11 +69,13 @@ export const PROVIDERS: ProviderSpec[] = [
     id: "github", title: "GitHub", kind: "review", auth: "cli", dep: "gh",
     what: "Pull requests, issues, checks and reviews.",
     note: "The `gh` CLI owns this credential — it lives in your system keyring and agentglass never reads or stores it.",
+    noteTitle: "Where the credential lives",
   },
   {
     id: "gitlab", title: "GitLab", kind: "review", auth: "cli", dep: "glab",
     what: "Merge requests and pipelines, once there is a GitLab remote to read them from.",
     note: "Reported here so its absence is visible. Reading merge requests is not built yet — this row tells you whether the tool is ready for when it is.",
+    noteTitle: "What works today",
   },
   {
     id: "taskwarrior", title: "Taskwarrior", kind: "task", auth: "none", dep: "task",
@@ -77,8 +86,164 @@ export const PROVIDERS: ProviderSpec[] = [
     what: "The tasks assigned to you, alongside your local ones.",
     help: "https://developer.clickup.com/docs/authentication",
     note: "A personal API token, from ClickUp's Settings → Apps. It starts with `pk_` and does not expire. Stored on this machine in a file only you can read, and never sent to the browser.",
+    noteTitle: "Where the token is stored",
+  },
+  {
+    id: "jira", title: "Jira", kind: "task", auth: "token",
+    what: "Your Jira cards next to your local tasks, read from Jira Cloud or from your own Jira Data Center.",
+    help: "https://id.atlassian.com/manage-profile/security/api-tokens",
+    note: "On Jira Cloud it is your email and an API token, which expires at most a year after you make it. On Jira Data Center it is a personal access token from your profile, with no account name. Either way it is stored on this machine in a file only you can read, and never sent to the browser.",
+    noteTitle: "Where the token is stored",
   },
 ];
+
+/** The answer to `POST /jira/connect`. The account is its display name; the
+ *  token, the email and the site as typed never come back. */
+export interface JiraConnectResult { ok: boolean; error?: string; account?: string }
+
+/** How a Jira connection signs in: an account and a token (`basic`, Jira
+ *  Cloud and Data Center) or a personal access token alone (`bearer`). */
+export type JiraAuth = "basic" | "bearer";
+/** `cloud` for exactly `<name>.atlassian.net`; `custom` for any other host: a
+ *  Cloud site behind a domain, or Data Center / Server. */
+export type JiraKind = "cloud" | "custom";
+/** What the site says it runs as, from `serverInfo.deploymentType`. */
+export type JiraDeployment = "cloud" | "server";
+
+/** The answer to `GET /jira/status`: enough for a card to decide whether it is
+ *  Jira's, and no secret. `prefixes` are the project keys this account can see.
+ *  `api` is the REST generation kept on the connection: 3 (with ADF) on Cloud,
+ *  2 (wiki markup) on Data Center. */
+export interface JiraStatus {
+  connected: boolean;
+  site: string | null;
+  kind: JiraKind | null;
+  auth: JiraAuth | null;
+  api: 2 | 3 | null;
+  deployment: JiraDeployment | null;
+  account: string | null;
+  prefixes: string[];
+  writes: boolean;
+}
+
+/**
+ * One move a Jira workflow offers a card from where it stands now. `id` is the
+ * transition's, `label` the status it leads to (the site's own words, never
+ * ours). `needs` names the screen fields the move cannot be made without: a
+ * move with `needs` is shown and not offered, because there is no form for them.
+ */
+export interface JiraMove {
+  id: string;
+  /** The transition's own name, e.g. a verb a team chose. */
+  name: string;
+  label: string;
+  toStatus: string;
+  /** The status it leads to, by the site's own id: what the hand-off setting names. */
+  toId?: string;
+  toKind: "open" | "done" | "other";
+  color?: string;
+  needs?: string[];
+}
+
+/** The answer to `GET /jira/transitions`. An empty list always carries `cannot`. */
+export interface JiraMoves { options: JiraMove[]; cannot?: string }
+
+/** Somebody a Jira card can be given to. */
+export interface JiraPerson {
+  /** What a write sends: the account id on Cloud, the login name on Data Center. */
+  key: string;
+  /** The same id a card's `people[].key` carries, to tell who is on it now. */
+  id: string;
+  name: string;
+  avatar?: string;
+}
+
+/**
+ * What the hand-off button does for one Jira project. Each value is a default:
+ * with its `ask` set, the dialog asks when it runs and starts from it.
+ * `to` is a status by the site's own id, with its name for the label.
+ */
+export interface JiraHandoffRule {
+  to: { id: string; name: string } | null;
+  askTo: boolean;
+  /** Take the assignee off on the way. */
+  clear: boolean;
+  askClear: boolean;
+}
+
+/** One Jira step: where it shows is its key in `JiraSteps`, what it does is its blocks. Steps are global by status NAME, like ClickUp's. */
+export interface JiraStep { enabled: boolean; blocks: StepBlock[] }
+export interface JiraSteps { handoff: JiraStep; review: JiraStep; merge: JiraStep }
+/** Which step a button runs: the key it has in `JiraSteps`. */
+export type JiraStepKey = keyof JiraSteps;
+/** What a person chose when a step asked (all optional): the status by name, the assignee, the comment as edited. */
+export interface JiraStepChoice { to?: string; clear?: boolean; assign?: string | null; comment?: string; /** Skip the step's move; the rest of it still runs. */ stay?: boolean }
+/** The pull request a step links on the card. */
+export interface JiraStepPr { url: string; title?: string; number?: number; author?: string }
+
+/** `GET /jira/settings`: the write switch and the hand-off, by project key. */
+export interface JiraSettings { writes: boolean; handoff: Record<string, JiraHandoffRule> }
+
+/**
+ * `GET /jira/steps`: the steps in effect. `overrides` are the projects whose older per-project hand-off rule
+ * still wins over the hand-off step, because it would resolve differently from the merged step; it empties
+ * when the person saves that step.
+ */
+export interface JiraStepsRead { steps: JiraSteps; overrides: string[] }
+
+/*
+ * Saved Jira views. They reuse `SavedView` and `SavedFolder`: a view's id says
+ * what it is (`board:12`, `filter:10000`, `jql:<hash>`, or the built-in
+ * `ASSIGNED_VIEW_ID`), and a folder is a project whose `lists` are its boards.
+ */
+export type JiraViewKind = "board" | "filter" | "jql";
+
+/** One board column, in the board's own order and words, by the status ids it holds. */
+export interface JiraColumn { name: string; statusIds: string[] }
+
+/** `GET /jira/views`: read from the local store, no request to Jira. */
+export interface JiraViews {
+  connected: boolean;
+  site: string | null;
+  views: SavedView[];
+  folders: SavedFolder[];
+  current?: string;
+}
+
+/** `GET /jira/view`. `columns` is set for a board; empty means group by status. */
+export interface JiraViewRead {
+  ok: boolean;
+  error?: string;
+  throttled?: boolean;
+  view?: SavedView;
+  tasks: ProviderTask[];
+  columns: JiraColumn[];
+  /**
+   * The statuses of the view in the order to draw them. A board gives its
+   * columns' statuses in column order, including ones no card wears; any other
+   * view gives the statuses its cards wear, by the column order of the first
+   * board of the project when that is known, then category, then name. Absent
+   * on an older read kept on disk.
+   */
+  statuses?: ListStatus[];
+  /** When the rows were read; 0 when there is nothing yet. */
+  at: number;
+  truncated?: boolean;
+  /** These rows are the last read kept on disk, not a new one. */
+  cached?: boolean;
+}
+
+/** Something the add-a-view list offers. */
+export interface JiraViewChoice {
+  kind: "board" | "filter";
+  id: string;
+  name: string;
+  /** Board only: `scrum` | `kanban` | `simple`, as the site says. */
+  type?: string;
+  projectKey?: string;
+}
+
+export interface JiraProjectChoice { key: string; name: string }
 
 /** What a provider is doing right now, as one of four answers a person can act
  *  on. Deliberately not a boolean: "installed but not logged in" and "not
@@ -179,6 +344,9 @@ export interface ProviderTask {
    *  glance, and inventing our own would make agentglass disagree with the tool
    *  it is showing. */
   statusColor?: string;
+  /** The tracker's own id for the status, where it has one (Jira). A board
+   *  column holds status ids, and two statuses may share a name. */
+  statusId?: string;
   priority: "urgent" | "high" | "normal" | "low" | null;
   /** Local calendar date, `YYYY-MM-DD`, converted from the provider's epoch. */
   due: string | null;
@@ -212,6 +380,9 @@ export interface ProviderTask {
      *  sharing initials — and a picker that toggles by name is a picker that
      *  eventually removes the wrong person. */
     id?: number;
+    /** The tracker's own id where it is not a number: Jira's `accountId` (Cloud)
+     *  or `key`/`name` (Data Center). Identity, like `id`: a name is not. */
+    key?: string;
     name: string;
     initials: string;
     /** The colour ClickUp assigned this person. */
@@ -269,6 +440,8 @@ export interface ProviderTask {
   blocks?: string[];
   /** How many subtasks it has, so a card with hidden work says so. */
   subtasks?: number;
+  /** The card this one sits under, when it has one (a Jira subtask's parent, a story's epic). Read on a card's own read, not on a board's. */
+  parent?: { key: string; title: string };
   /**
    * Custom field values worth showing, already resolved from ids to names.
    *
@@ -563,11 +736,13 @@ export type AssignWho = "none" | "me" | "author" | "person";
  * member are different systems and never the same identity, so nothing here guesses one from the other
  * and "the pull request's author" is not a choice ClickUp offers.
  */
-export const AUTHOR_IS_MEMBER: Record<string, boolean> = { clickup: false };
-export interface StepAssign {
+export const AUTHOR_IS_MEMBER: Record<string, boolean> = { clickup: false, jira: false };
+/** A tracker's person id: ClickUp's members are numbers, Jira's users are account ids or logins. */
+export type PersonId = number | string;
+export interface StepAssign<I extends PersonId = PersonId> {
   who: AssignWho;
   /** Only with `who: "person"`: the member's tracker id, and the name it had when chosen. */
-  person?: { id: number; name: string };
+  person?: { id: I; name: string };
 }
 
 /**
@@ -575,8 +750,11 @@ export interface StepAssign {
  * list's order is the order it reads in. The kinds are in shared/stepBlocks.ts
  * (BLOCK_INFO); a new kind is a new member here, not a new field on every step.
  * A step is sent to the tracker as one write whatever its blocks.
+ *
+ * `StepBlock` holds any tracker's person ids; `ClickUpStepBlock` is the same list with ClickUp's
+ * numbers and without the kinds ClickUp does not have, which is what its settings and its screens hold.
  */
-export type StepBlock =
+export type StepBlockOf<I extends PersonId> =
   /**
    * Move the card. No names with `fallback` is the built-in guess; with neither, a status still to be picked.
    * With `ask` the names are the starting choice, and the person picks the status when it runs.
@@ -586,12 +764,12 @@ export type StepBlock =
    * Take people off the card. `who: "people"` names them (`people`); `none`, `me` and `all` are the fixed
    * choices. With `ask` the person ticks who comes off when it runs, starting at this value.
    */
-  | { type: "unassign"; who: HandoffUnassign | "people"; people?: { id: number; name: string }[]; ask?: true }
+  | { type: "unassign"; who: HandoffUnassign | "people"; people?: { id: I; name: string }[]; ask?: true }
   /**
    * Assign the card. With `ask` the person is picked when it runs, and `who` is where the picker starts
    * (`none` is "nobody"; without `ask` that is not a block, it is the absence of one).
    */
-  | ({ type: "assign"; ask?: true; /** More people the question starts with, beside `person` (only with `ask`). */ also?: { id: number; name: string }[] } & StepAssign)
+  | ({ type: "assign"; ask?: true; /** More people the question starts with, beside `person` (only with `ask`). */ also?: { id: I; name: string }[] } & StepAssign<I>)
   /**
    * Comment on the card. `text` is a template (see PLACEHOLDERS in shared/stepBlocks.ts). With `ask` it is
    * the text the person edits when it runs, prefilled with the template filled in.
@@ -603,17 +781,33 @@ export type StepBlock =
    * With `ask` the value is where the question starts.
    */
   | { type: "field"; field: string; value: string; ask?: true };
+export type BlockOf<I extends PersonId> =
+  | StepBlockOf<I>
+  /**
+   * Put the pull request on the card as a link. Only a tracker that says it can (Jira: a remote link); the
+   * link is the pull request itself, so there is nothing to ask. ClickUp's list has no such kind.
+   */
+  | (string extends I ? { type: "link" } : never);
+export type StepBlock = BlockOf<PersonId>;
+export type ClickUpStepBlock = BlockOf<number>;
+export type ClickUpStepAssign = StepAssign<number>;
+/**
+ * What the workflow map's block editor holds: ClickUp's blocks, plus the link Jira has. The editor treats a
+ * person's id as opaque (it compares and stores it, never reads it), so a Jira step whose blocks name a
+ * person by account id passes through it unchanged; naming one from the editor is not offered for Jira.
+ */
+export type MapBlock = ClickUpStepBlock | { type: "link" };
 
 export interface HandoffConfig {
   /** Off until a workspace says it has a QA column. */
   enabled: boolean;
   /** What the step does, in order. Absent in a file from before blocks: read from the three keys below. */
-  blocks?: StepBlock[];
+  blocks?: ClickUpStepBlock[];
   /** Status names to look for, in order; the first one the card's list has wins. */
   statusNames: string[];
   unassign: HandoffUnassign;
   /** Who is made sure to be on the card after the move (after `unassign` has run). */
-  assign: StepAssign;
+  assign: ClickUpStepAssign;
 }
 
 /** The kinds of note the card bell can raise. */
@@ -645,14 +839,14 @@ export interface ClickUpPrefs {
     /** Status names the review menu moves a card to; empty falls back to /review/i, then leaves it alone. */
     statusNames: string[];
     /** What the move item does, in order (see HandoffConfig.blocks). */
-    blocks?: StepBlock[];
+    blocks?: ClickUpStepBlock[];
     assignReviewer: boolean;
     /** Who the move item also makes sure is on the card. */
-    assign: StepAssign;
+    assign: ClickUpStepAssign;
   };
   /** The card choice in the merge dialog. Off until a workspace adds it; the first of
    *  `statusNames` the card's list has is preselected, none means "Leave it there". */
-  merge: { enabled: boolean; statusNames: string[]; assign: StepAssign; blocks?: StepBlock[] };
+  merge: { enabled: boolean; statusNames: string[]; assign: ClickUpStepAssign; blocks?: ClickUpStepBlock[] };
   flows: { noteOnCard: boolean };
   /** Custom field that holds a PR link; empty means the guess (a name containing "github"). */
   prLinkField: string;
@@ -751,6 +945,8 @@ export interface ViewTasksResponse {
   view?: SavedView;
   error?: string;
   unauthorised?: boolean;
+  /** The tracker is limiting requests: the failure is a wait, not a fault. */
+  throttled?: boolean;
   /** There was more behind this than we were willing to follow. Said out loud,
    *  because a list that silently stops reads as "that is all of them". */
   truncated?: boolean;

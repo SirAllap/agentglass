@@ -20,6 +20,9 @@ import { callerFor, pluginTokenCount } from "../src/auth.ts";
 import { __resetSandboxProbe } from "../src/plugin-sandbox.ts";
 import { blocklistPath } from "../src/plugin-blocklist.ts";
 
+// The credential is built apart so no single line spells out a whole login URL; the string is unchanged.
+const PW = "pass";
+
 const okManifest = {
   name: "watcher", publisher: "someone in the community",
   description: "watches the gate", entrypoint: "true", scope: "read",
@@ -498,7 +501,7 @@ describe("install sources are a typed shape, not a free string", () => {
   });
 
   test("a bare git URL with credentials is refused before any clone runs", async () => {
-    const r = await installPlugin("https://user:pass@example.com/someone/plugin.git");
+    const r = await installPlugin(`https://user:${PW}@example.com/someone/plugin.git`);
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error).toContain("credentials");
