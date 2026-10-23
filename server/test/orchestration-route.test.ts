@@ -176,11 +176,14 @@ describe("/orchestration", () => {
 
 describe("/orchestration/state", () => {
   type State = { ok: boolean; rules: { scope: string; ruleId: string; active: boolean; holding: string }[]; wakeups: unknown[] };
+  // A stored rule is listed before its first evaluation writes the row, so
+  // "listed" is not "settled": under load a poll caught it with active false
+  // and no holding yet. Wait for the row to say something about itself.
   const settled = async (ruleId: string): Promise<State["rules"][number] | undefined> => {
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 100; i++) {
       const st = await get<State>("/orchestration/state");
       const r = st.rules.find((x) => x.ruleId === ruleId && x.scope === "global");
-      if (r) return r;
+      if (r && (r.active || r.holding)) return r;
       await Bun.sleep(50);
     }
     return undefined;
