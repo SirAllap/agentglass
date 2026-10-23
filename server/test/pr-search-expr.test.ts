@@ -114,3 +114,12 @@ describe("free text", () => {
     expect(expr("author:")).toBe(expr());
   });
 });
+
+describe("people", () => {
+  test("the role typed is the role asked", () => {
+    expect(expr("author:ana")).toContain("author:ana");
+    expect(expr("assignee:bo")).toContain("assignee:bo");
+    expect(expr("reviewer:cy")).toContain("review-requested:cy");
+    expect(expr("involves:ana")).toContain("involves:ana");
+  });
+});

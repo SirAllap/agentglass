@@ -30,6 +30,7 @@ import { taskLink } from "../lib/taskLink.ts";
 import { onCard, cardVersion, withCard } from "../lib/prCardStore.ts";
 import { CHIP_H } from "../lib/priority.tsx";
 import { CardTracker } from "./CardTracker.tsx";
+import { LANE_MIN_PX, resultColumn, resultsHeading, stillReading } from "../lib/prSearch.ts";
 import { repoUsesTracker, trackerBlock } from "../lib/prCardBlock.ts";
 import { CTRL_H, EDGE, LINE } from "./workspace/Chrome.tsx";
 import { CODE_FONT_STYLE } from "./diff/DiffLines.tsx";
@@ -195,6 +196,8 @@ export function TriageBoard({
    */
   more?: { loading: boolean; onMore: () => void };
   results?: {
+    /** Why a card is in this search, when the box is about a person: "name: author, reviewer". */
+    why?: (p: PrSummary) => string | null;
     title: string;
     rows: PrSummary[];
     /** The list is being fetched and has nothing to show yet. */
@@ -626,17 +629,21 @@ export function TriageBoard({
   if (results) {
     return (
       <div ref={frame} data-board tabIndex={0} onKeyDown={onKey} className="flex flex-col h-full min-h-0 outline-none">
-        <div className="shrink-0 px-4 pt-3 pb-2 flex items-center gap-3 text-[12.5px]">
-          <b className="text-[17px] font-semibold tabular-nums">{results.rows.length}</b>
-          <span className="min-w-0 truncate" title={results.title}>{results.title}</span>
+        <div className="shrink-0 px-4 pt-2 pb-1.5 flex items-center gap-2 text-[12.5px]">
+          <b className="text-[15px] font-semibold tabular-nums">{resultsHeading(results.rows.length)}</b>
+          <span className="min-w-0 truncate" style={{ color: "var(--text3)" }} title={results.title}>{results.title}</span>
           <button onClick={results.onBack} className="agx-btn ml-auto shrink-0 rounded px-2 py-1 text-[10.5px]"
             style={{ color: "var(--text2)", border: EDGE }}>
             Back to the board
           </button>
         </div>
+        {/* A search that is still out: the cards stay, and this says so. */}
+        <div aria-hidden className="shrink-0 h-0.5 mx-4 rounded-full"
+          style={{ background: results.loading && results.rows.length > 0 ? "color-mix(in srgb, var(--primary) 55%, transparent)" : "transparent" }}
+          {...(results.loading && results.rows.length > 0 ? { role: "progressbar" } : {})} />
         <div className="flex-1 min-h-0 overflow-y-auto agx-scroll px-4 pb-3" data-results>
           {results.loading && results.rows.length === 0 ? (
-            <div aria-hidden className="grid gap-2.5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(268px, 1fr))" }}>
+            <div aria-hidden className="grid gap-2.5" style={{ gridTemplateColumns: `repeat(auto-fill, ${resultColumn(LANES.length)})` }}>
               {[0, 1, 2, 3].map((k) => (
                 <div key={k} className="rounded-lg animate-pulse"
                   style={{ height: 74, background: "var(--surface-card)", border: EDGE, animationDelay: `${k * 0.08}s` }} />
@@ -649,12 +656,15 @@ export function TriageBoard({
                request, and the board has one way to draw those. Dimmed while
                the next page loads, so what is there is still readable. */
             <div className="grid gap-x-2.5 items-start"
-              style={{ gridTemplateColumns: "repeat(auto-fill, minmax(268px, 1fr))", opacity: results.loading ? 0.45 : 1, transition: "opacity .15s" }}>
+              style={{ gridTemplateColumns: `repeat(auto-fill, ${resultColumn(LANES.length)})`, opacity: results.loading ? 0.7 : 1, transition: "opacity .15s" }}>
               {results.rows.map((r) => {
                 const p = trueChecks(r);
-                const filed: Filed = p.state === "MERGED" ? { lane: "others", reason: "Merged." }
+                const base: Filed = p.state === "MERGED" ? { lane: "others", reason: "Merged." }
                   : p.state === "CLOSED" ? { lane: "others", reason: "Closed without merging." }
+                  : stillReading(p) ? { lane: "others", reason: "Reading its checks…" }
                   : fileInLane(p, { mine: false, asked: false });
+                const why = results.why?.(p);
+                const filed: Filed = why ? { ...base, reason: `${base.reason} · ${why}` } : base;
                 return (
                   <CardView key={p.number} p={{ ...p, filed }} hasTaskProvider={hasTaskProvider} repoUses={repoUses}
                     pinned={pinned(p.number)} onOpen={() => onOpen(p.number)} onPin={() => onTogglePin(p)}
@@ -908,7 +918,7 @@ export function TriageBoard({
                stays the floor for the open ones — it is what a card needs
                before its title starts wrapping, measured at 120px of title box
                where a 33-character subject already runs to three lines. */
-            gridTemplateColumns: cols.map((l) => (isFolded(l.id) ? "44px" : "minmax(268px, 1fr)")).join(" "),
+            gridTemplateColumns: cols.map((l) => (isFolded(l.id) ? "44px" : `minmax(${LANE_MIN_PX}px, 1fr)`)).join(" "),
           }}>
             {cols.map((l, i) => {
               const all = lanes.get(l.id) ?? [];
@@ -1409,6 +1419,7 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
     : c.verdict === "green" ? "var(--success)" : "var(--text4)";
   /* What the standing zone says, and how far the bar is filled: see prCardZones. */
   const st = standing(c);
+  const reading = stillReading(p);
   const { pre, rest } = splitTitle(p.title);
   const ev = eventLine(p.filed.reason, p.updatedAt);
   const verdict = cardVerdict(p);
@@ -1641,7 +1652,9 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
           */}
         <div className="agx-prc-stand grid gap-1">
           <div className="flex items-center gap-x-2 gap-y-1 flex-wrap min-w-0" style={{ fontSize: 10.5, color: "var(--text3)", minHeight: 20 }}>
-            <span className="shrink-0 font-semibold tabular-nums" style={{ color: st.kind === "none" ? "var(--text3)" : tint }}>{st.word}</span>
+            {reading
+              ? <span aria-hidden className="shrink-0 rounded animate-pulse" style={{ width: 54, height: 11, background: "color-mix(in srgb, var(--text) 10%, transparent)" }} />
+              : <span className="shrink-0 font-semibold tabular-nums" style={{ color: st.kind === "none" ? "var(--text3)" : tint }}>{st.word}</span>}
             {/* CONFLICTS, beside the checks. A green pull request that
                 conflicts with its base reads as ready to merge, and it is
                 not. `CONFLICTING` only: `UNKNOWN` is GitHub still working it
@@ -1709,17 +1722,28 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
                 title="Working out how far behind its base this branch is"
                 style={{ width: 26, height: 11, background: "color-mix(in srgb, var(--text) 10%, transparent)" }} />
             ) : null}
-            <span className="shrink-0 whitespace-nowrap tabular-nums">
-              <span style={{ color: "var(--text)" }}>+{p.additions}</span>{" "}
-              <span>−{p.deletions}</span>{" "}
-              <span aria-hidden style={{ color: "var(--text4)" }}>·</span>{" "}
-              <span>{p.changedFiles}f</span>
-            </span>
+            {reading ? (
+              <span aria-hidden className="shrink-0 rounded animate-pulse" title="Reading the size of this change"
+                style={{ width: 62, height: 11, background: "color-mix(in srgb, var(--text) 10%, transparent)" }} />
+            ) : (
+              <span className="shrink-0 whitespace-nowrap tabular-nums">
+                <span style={{ color: "var(--text)" }}>+{p.additions}</span>{" "}
+                <span>−{p.deletions}</span>{" "}
+                <span aria-hidden style={{ color: "var(--text4)" }}>·</span>{" "}
+                <span>{p.changedFiles}f</span>
+              </span>
+            )}
           </div>
-          <div role="img" aria-label={`Checks ${st.word}`} className="rounded-full overflow-hidden"
-            style={{ height: 3, background: "color-mix(in srgb, var(--text) 12%, transparent)" }}>
-            <span className="block h-full rounded-full" style={{ width: `${st.done}%`, background: tint, transition: "width .25s" }} />
-          </div>
+          {/* An open card keeps its empty track (nothing reported yet is a
+              state, and the lanes hold their height); a merged or closed one
+              with no checks has nothing left to report, and the grey line under
+              it looked like a bar that had not loaded. */}
+          {(reading || st.kind !== "none" || p.state === "OPEN") && (
+            <div role="img" aria-label={reading ? "Reading checks" : `Checks ${st.word}`} className={`rounded-full overflow-hidden${reading ? " animate-pulse" : ""}`}
+              style={{ height: 3, background: "color-mix(in srgb, var(--text) 12%, transparent)" }}>
+              {!reading && <span className="block h-full rounded-full" style={{ width: `${st.done}%`, background: tint, transition: "width .25s" }} />}
+            </div>
+          )}
         </div>
 
         {/* WHAT HAPPENED LAST: the sentence that put it in this lane. Without it a

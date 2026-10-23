@@ -184,7 +184,7 @@ import {
   rerunFailedChecks, mergePr, closePr, unstickLook, unstickClose, unstickReopen, filesSince, codeowners, prepareReviewPrompt, pendingReviewFor, branchUrl, subscribeCi, subscribeTalk, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
   prBaseOf,
   ghRateLimit,
-  branchBehind, localHead, prRollup, repoIdFor as prRepoIdFor, subscribeTalkSeen,
+  branchBehind, localHead, prRollup, prRowDetails, repoIdFor as prRepoIdFor, subscribeTalkSeen,
   prBranches, githubStatusCached, prsForBranch, prForHead, nodeIdOk, locateRepo, isForeignRoot } from "./prs.ts";
 import { planCheckOnBase, startCheckOnBase, checkOnBaseStatus, cancelCheckOnBase } from "./checkOnBasePr.ts";
 import { repoSpend } from "./spend.ts";
@@ -8131,6 +8131,9 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     }
     if (pathname === "/prs/rollup") {
       return json(await prRollup(url.searchParams.get("root") || "", url.searchParams.get("number") || 0, url.searchParams.get("force") === "1"));
+    }
+    if (pathname === "/prs/row-details") {
+      return json(await prRowDetails(url.searchParams.get("root") || "", url.searchParams.get("numbers") || ""));
     }
     if (pathname === "/prs/local-head") {
       return json({ ok: true, local: await localHead(

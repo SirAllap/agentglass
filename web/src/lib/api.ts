@@ -1779,6 +1779,10 @@ const realApi = {
   prRollup: (root: string, number: number, force = false) =>
     get<{ ok: boolean; checks?: PrCheckRollup; error?: string }>(
       `/prs/rollup?${new URLSearchParams({ root, number: String(number), ...(force ? { force: "1" } : {}) })}`),
+  /** The second pass (checks, size, review) for up to 24 pull requests in one request. */
+  prRowDetails: (root: string, numbers: number[]) =>
+    get<{ ok: boolean; rows: Record<number, Partial<PrSummary>>; error?: string }>(
+      `/prs/row-details?${new URLSearchParams({ root, numbers: numbers.join(",") })}`),
   /** `force` skips the server's 60 s copy: after "Update branch", or when the
    *  person pressed Refresh. The panel's own 30 s tick does not need it. */
   /** GitHub's own status, only worth asking once a pull request has been stuck
@@ -3151,6 +3155,7 @@ const demoApi: typeof realApi = {
     local: { branch, exists: false, ahead: 0, behind: 0, dirty: false, sync: "absent" as const },
   }),
   prRollup: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
+  prRowDetails: (_r: string, _n: number[]) => D({ ok: true, rows: {} }),
   prGithubStatus: () => D({ ok: true, problem: null as GithubProblem | null }),
   prUnstickLook: (_r: string, _n: number, _f?: boolean) => D<Look>({ ok: false, error: "not available in the demo" }),
   prBehind: (_r: string, n: number) => D(n === 461

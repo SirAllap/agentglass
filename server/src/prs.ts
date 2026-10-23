@@ -1675,6 +1675,9 @@ const QUEUES_QUERY = `query($m:String!,$r:String!,$first:Int!){
 const QUALIFIER: Record<string, string> = {
   author: "author", assignee: "assignee", label: "label",
   milestone: "milestone", review: "review", base: "base",
+  /* People: the role typed is the role asked. `involves` is the bare-login
+     search (author, assignee, mentioned, commenting). */
+  reviewer: "review-requested", "reviewed-by": "reviewed-by", involves: "involves",
 };
 
 function quoteQ(v: string): string {
@@ -2088,6 +2091,52 @@ export function carryOver(old: PrSummary | undefined, next: PrSummary): PrSummar
        "never asked" — undefined — falls back. */
     talk: next.talk ?? old.talk,
   };
+}
+
+/**
+ * The second pass for a handful of pull requests, by number.
+ *
+ * A search can show rows the second pass never reached (the cards in hand,
+ * filtered live, are first-pass rows: no checks, no size). The card for such a
+ * row asks for exactly itself, in batches, here — one GraphQL request for up to
+ * `ROW_DETAIL_MAX` numbers, the same fields and the same mapping the list's own
+ * second pass uses (`completeRows`), so a card never has two answers.
+ *
+ * Cached per pull request for a minute; ceiling: a pull request pushed to inside
+ * that minute shows the previous head until the next ask.
+ */
+const ROW_DETAIL_MAX = 24;
+const ROW_DETAIL_TTL_MS = 60_000;
+const rowDetailCache = new Map<string, { at: number; row: Partial<PrSummary> }>();
+export async function prRowDetails(rootIn: unknown, numbersIn: unknown): Promise<{ ok: boolean; rows: Record<number, Partial<PrSummary>>; error?: string }> {
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return { ok: false, rows: {}, error: "no GitHub remote on this repository" };
+  const asked = (Array.isArray(numbersIn) ? numbersIn : String(numbersIn ?? "").split(","))
+    .map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0);
+  const numbers = [...new Set(asked)].slice(0, ROW_DETAIL_MAX);
+  const rows: Record<number, Partial<PrSummary>> = {};
+  const misses: number[] = [];
+  for (const n of numbers) {
+    const hit = rowDetailCache.get(`${repo.key}\u0000${n}`);
+    if (hit && Date.now() - hit.at < ROW_DETAIL_TTL_MS) rows[n] = hit.row; else misses.push(n);
+  }
+  if (!misses.length) return { ok: true, rows };
+  const [owner, name] = repo.nameWithOwner.split("/");
+  // Integers validated above, owner/name from a parsed remote: nothing a caller controls is interpolated.
+  const body = misses.map((n) => `p${n}: pullRequest(number: ${n}) { ${SEL_ROW_CHECKS} }`).join("\n");
+  const res = await ghGraphql<{ data?: { repository?: Record<string, any> } }>(`query { repository(owner: "${owner}", name: "${name}") { ${body} } }`, {});
+  const repoData = res?.data?.repository;
+  if (!repoData) return { ok: false, rows, error: "GitHub did not answer" };
+  const nodes = misses.map((n) => repoData[`p${n}`]).filter((n) => n && typeof n.number === "number");
+  await resolveJiraCards(nodes);
+  const me = (await ghCapability().catch(() => null))?.login || "";
+  const done = completeRows(nodes.map((n) => ({ number: n.number }) as PrSummary), nodes, me);
+  for (const r of done) {
+    if (r.checksLoaded !== true) continue;
+    rows[r.number] = r;
+    rowDetailCache.set(`${repo.key}\u0000${r.number}`, { at: Date.now(), row: r });
+  }
+  return { ok: true, rows };
 }
 
 async function fetchCheckRollups(repo: PrRepoId, numbers: number[]): Promise<Map<number, PrCheckRollup>> {

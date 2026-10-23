@@ -1,4 +1,5 @@
 import { FacetMenu } from "./FacetMenu.tsx";
+import { SEARCH_HINT } from "../lib/prSearch.ts";
 import { ICON } from "../lib/iconSize.ts";
 import {
   serializeQuery, toggleFacet, setSort, DEFAULT_SORT, SORT_OPTIONS,
@@ -90,7 +91,8 @@ export function PrFilterBar({
           value={query}
           onChange={(e) => onQuery(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); onSearch(); } }}
-          placeholder="Filter these, or press ⏎ to search them all"
+          placeholder={SEARCH_HINT}
+          title={SEARCH_HINT}
           spellCheck={false}
           className={`flex-1 min-w-0 ${INPUT}`}
           style={INPUT_STYLE} />

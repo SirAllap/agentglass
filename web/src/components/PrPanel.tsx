@@ -100,6 +100,8 @@ import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, parseShieldBadge
 import { afterViewed, fileAtFloor, stepFileIndex, verticalScrollerOf } from "../lib/prNav.ts";
 import { buildFileTree, treeOrder, type TreeNode } from "../lib/prFileTree.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
+import { knownLogins, matchedAs, normalizeFree, personIn, searchPool, toServerQuery } from "../lib/prSearch.ts";
+import { useRowDetails } from "../lib/useRowDetails.ts";
 import { BOARD_ASK_MS, listOutcome, type ListOutcome } from "../lib/boardFace.ts";
 import { keepLoadedChecks } from "../lib/prMerge.ts";
 import { applyFilter, checkLabel, checkRowId, checkSpan, checkStatusLine, checkVerdict, filterCounts, formatSpan, sectionChecks, shortName, slowest, spanShare, usualTick, usualTip, verdictHero, workflowCards, type CheckFilter } from "../lib/prChecksList.ts";
@@ -1735,22 +1737,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    */
   const stateSel: StateSel = serverQuery.trim() ? "all" : "open";
   /*
-   * Everything in this scope, collected page by page so a text filter can see
-   * past the page on screen.
-   *
-   * Started only when there is free text to match: an idle panel must not walk
-   * four requests nobody asked for, and a scope tab is normally read one page
-   * at a time on purpose.
-   *
-   * Capped, and the cap is the honest part. "Mine" is ninety-three rows and
-   * sweeps in four calls; "All" is fifteen thousand and would be forty minutes
-   * of pagination for a search GitHub can do server-side in one. Past the cap
-   * the sweep stops and says how far it got, so a partial answer never poses as
-   * a complete one — the box's own "press ⏎ to search them all" is the way out.
-   */
-  const [sweep, setSweep] = useState<{ key: string; rows: PrSummary[]; done: boolean } | null>(null);
-  const sweepKey = `${root}|${filter}|${stateSel}`;
-  /*
    * Somebody sent us here looking for one particular pull request.
    *
    * Two things have to be true at once and the first attempt only managed one.
@@ -1792,7 +1778,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     // is asked for only when the thing being looked for is already closed,
     // which the sender knows and says.
     // An errand for one that is already closed asks GitHub at once.
-    if (jumpTo.scope === "all") setServerQuery(jumpTo.query);
+    if (jumpTo.scope === "all") setServerQuery(toServerQuery(jumpTo.query));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, jumpTo?.n]);
 
@@ -1821,11 +1807,14 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * their list back would be a chore with nothing behind it.
    */
   useEffect(() => { if (!query.trim() && serverQuery) setServerQuery(""); }, [query, serverQuery]);
-  const runSearch = useCallback(() => setServerQuery(query), [query]);
   // A new server search is a new list — start it at page one, never continuing a
   // cursor that belonged to the previous query.
   useEffect(() => { setPages([]); }, [serverQuery]);
   const [prs, setPrs] = useState<PrSummary[]>([]);
+  /* The box as GitHub is asked it: numbers normalised, a known login made a person search. */
+  const logins = useMemo(() => knownLogins(prs), [prs]);
+  const wanted = useMemo(() => toServerQuery(query, logins), [query, logins]);
+  const runSearch = useCallback(() => setServerQuery(wanted), [wanted]);
   /*
    * The pages walked so far, kept together.
    *
@@ -2407,57 +2396,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     }).catch(() => {});
   }, [active]);
 
-  /** How far a sweep will walk. Ten pages of the sizes GitHub returns is a few
-   *  hundred rows — enough for every scoped tab, and a wall in front of "All". */
-  const SWEEP_PAGES = 10;
-
-  useEffect(() => {
-    const text = parseQuery(query).text.trim();
-    // No text, nothing to sweep for. The scope's own paging is unaffected.
-    if (!root || !text) return;
-    if (sweep?.key === sweepKey && sweep.done) return;
-    let live = true;
-    void (async () => {
-      const rows: PrSummary[] = [];
-      const seen = new Set<number>();
-      let after: string | undefined;
-      for (let page = 0; page < SWEEP_PAGES; page++) {
-        /*
-         * Wait for the page to SETTLE before deciding there is not another.
-         *
-         * This is what limited the sweep to twenty-five rows. The list endpoint
-         * answers immediately from cache while it fetches — `loading: true`,
-         * and in that state it reports `hasNext: false` and no cursor, because
-         * it does not have them yet. The loop read that as the end of the view
-         * and stopped on page one, so a filter over ninety-three rows searched
-         * twenty-five and said "1 match" with complete confidence.
-         *
-         * Measured on a real view: the same request answers `hasNext: true`
-         * with a cursor once it settles, about a second later.
-         */
-        let r = await api.prList(root, filter, stateSel, false, after).catch(() => null);
-        for (let wait = 0; r?.loading && wait < 20; wait++) {
-          await new Promise((res) => setTimeout(res, 400));
-          if (!live) return;
-          r = await api.prList(root, filter, stateSel, false, after).catch(() => null);
-        }
-        if (!live || !r) break;
-        // Deduplicated on the number: a row can land on two pages when
-        // something is opened or closed between the calls that fetch them.
-        for (const pr of r.prs) if (!seen.has(pr.number)) { seen.add(pr.number); rows.push(pr); }
-        // Published as it grows, so the list fills in rather than appearing
-        // whole after four round trips.
-        const done = !r.hasNext || !r.cursor || page === SWEEP_PAGES - 1;
-        setSweep({ key: sweepKey, rows: [...rows], done });
-        if (done) break;
-        after = r.cursor!;
-      }
-    })();
-    return () => { live = false; };
-    // `sweep` is deliberately absent: it is what this writes, and depending on
-    // it would restart the walk on its own first result.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [root, filter, stateSel, sweepKey, query]);
+  /* Typing sends nothing anywhere: it narrows the cards already loaded, and
+     GitHub is asked once, when Enter is pressed (`runSearch`). A walk of the
+     scope behind the box used to run here on every word. */
 
   /** Collecting on a list the server said was not finished yet. Same shape as
    *  `staleTimer` on the detail pane: its refresh is already running, this
@@ -2495,6 +2436,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       // Same rule as the board: a refresh may add and correct, but it may not
       // un-know. Every fetch starts at the fast pass, so without this a list
       // that had its check states dropped back to "not in yet" on every poll.
+      if (!reading && !r.loading) setAnsweredQuery(serverQuery);
       if (!reading) setPrs((cur) => (want === "mine" ? withReopened : (x: PrSummary[]) => x)(openLists(holdEdits(keepLoadedChecks(cur, r.prs), editLog.current, r.fetchedAt)), r.startedAt));
       // fetchedAt 0 is "nothing read yet", not a time: the masthead keeps "ago · updating" over the rows that stayed.
       setListState((st) => ({ fetchedAt: reading ? st.fetchedAt : r.fetchedAt, loading: r.loading, checksPending: r.checksPending, error: r.error, needsAuth: r.needsAuth, total: r.total, hasNext: r.hasNext, cursor: r.cursor ?? null, pageSize: r.pageSize }));
@@ -2888,17 +2830,25 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   // stored, so the bar and the menus can never disagree.
   const filters = useMemo(() => parseQuery(query), [query]);
   /*
-   * What the filter runs over: the page on screen, or everything swept.
-   *
-   * The list is paged by GitHub's cursors, so the panel holds ONE page — and a
-   * local filter over one page of four answers "no matches" about rows it has
-   * never seen. When there is free text to match, the sweep below walks the
-   * rest of the scope in the background and this widens to whatever it has
-   * collected so far, growing as it lands.
+   * What the filter runs over: the cards loaded, until GitHub has answered this
+   * search. A local filter over one page can say "no matches" about rows it has
+   * never seen, and the heading says "in the loaded pull requests" so that is
+   * never taken for the whole repository; Enter asks for all of it. (A walk of
+   * the scope behind the box used to widen this on every word typed — a request
+   * nobody asked for.)
    */
+  /* GitHub's answer to THIS search has landed. Until then the cards in hand stay
+     on screen, filtered live, under a thin loading bar — never a blank list. */
+  const [answeredQuery, setAnsweredQuery] = useState("");
+  const answered = serverQuery.trim() !== "" && answeredQuery === serverQuery;
+  useEffect(() => { if (!serverQuery) setAnsweredQuery(""); }, [serverQuery]);
   const pool = useMemo(
-    () => (filters.text.trim() && sweep?.key === sweepKey ? sweep.rows : listRows),
-    [listRows, filters.text, sweep, sweepKey],
+    () => searchPool({
+      answered,
+      answer: listRows,
+      inHand: listRows,
+    }),
+    [answered, listRows],
   );
   /*
    * Filtered HERE, not only on the server.
@@ -2969,12 +2919,27 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       return nextMap;
     });
   };
+  /*
+   * The rules of a search are its own.
+   *
+   * The board's saved rules (the Main / QA chips, the Filters builder) shape the
+   * board; a search for somebody's pull request ran through them and answered
+   * "0 pull requests" about a card that was right there. While there is a query
+   * the builder and the chips read and write `searchRules`, empty until somebody
+   * applies one for THIS search, and the board's own come back when the box is
+   * cleared — they were never touched.
+   */
+  const [searchRules, setSearchRules] = useState<FilterSet>(EMPTY_RULES);
+  const searchingNow = query.trim().length > 0;
+  useEffect(() => { if (!searchingNow) setSearchRules(EMPTY_RULES); }, [searchingNow]);
+  const activeRules = searchingNow ? searchRules : rules;
+  const setActiveRules = searchingNow ? setSearchRules : setRules;
   // Same predicate the "N unread" chip counts by — see applyRulesKeepUnread.
   const isRuleExempt = (p: PrSummary) => !!unreadOf(p, repo?.key, seenMarks);
   const basePrs = useMemo(
-    () => applyRulesKeepUnread(applyFilters(pool, filters), rules, readPrField, isRuleExempt),
+    () => applyRulesKeepUnread(applyFilters(pool, answered ? { ...parseQuery(""), sort: filters.sort } : { ...filters, text: normalizeFree(filters.text) }), activeRules, readPrField, isRuleExempt),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [pool, filters, rules, repo?.key, seenMarks],
+    [pool, answered, filters, activeRules, repo?.key, seenMarks],
   );
   const unreadPrs = useMemo(
     () => basePrs.filter((p) => unreadOf(p, repo?.key, seenMarks)),
@@ -2983,7 +2948,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   /* Turned off by itself when it would select nothing: a filter with no answers is a
      table that looks empty for a reason nobody can see. */
   useEffect(() => { if (unreadOnly && !unreadPrs.length) setUnreadOnly(false); }, [unreadOnly, unreadPrs.length]);
-  const visiblePrs = unreadOnly ? unreadPrs : basePrs;
+  const shownPrs = unreadOnly ? unreadPrs : basePrs;
+  /* Cards of a search the second pass never reached fill themselves in, in one batched request. */
+  const visiblePrs = useRowDetails(root, shownPrs, query.trim().length > 0);
   const facets = useMemo(() => buildFacets(prs, filters, facetOpts), [prs, filters, facetOpts]);
 
 
@@ -3178,7 +3145,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * way the board counts — so a chip can never disagree with the line it sits
    * under. Off the board it is the table's pool, narrowed by the pills.
    */
-  const presetsApi = useFilterPresets({ repoKey: repo?.key ?? null, rules, setRules, fields: ruleFields });
+  const presetsApi = useFilterPresets({ repoKey: repo?.key ?? null, rules: activeRules, setRules: setActiveRules, fields: ruleFields });
   const presetCountsById = useMemo(
     () => presetCounts<PrSummary>(
       presetsApi.presets,
@@ -4928,7 +4895,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               facets={facets}
               onQuery={setQuery}
               onSearch={runSearch}
-              pending={query.trim() !== serverQuery.trim()}
+              pending={wanted.trim() !== serverQuery.trim()}
               searching={listState.loading}
               shown={visiblePrs.length}
               unread={{
@@ -4948,15 +4915,14 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
         /* How much of the scope the filter actually saw. A count that says "12"
            over a scope of ninety-three, having read twenty-five of them, is a
            number nobody can act on. */
-        swept={filters.text.trim() && sweep?.key === sweepKey ? { rows: sweep.rows.length, done: sweep.done } : undefined}
-              total={listState.total ?? prs.length}
+              total={searching ? visiblePrs.length : listState.total ?? prs.length}
               /* The half the pills cannot say: `is not`, `is set`, and rules
                  joined together. Handed the same fields the pills offer, so the
                  two lists can never disagree about what a field is. */
               builder={(
                 <>
-                  <FilterBuilder fields={ruleFields} value={rules} onChange={setRules} openSignal={builderOpenSignal} />
-                  <FilterPresets api={presetsApi} counts={presetCountsById} rules={rules} fields={ruleFields}
+                  <FilterBuilder fields={ruleFields} value={activeRules} onChange={setActiveRules} openSignal={builderOpenSignal} />
+                  <FilterPresets api={presetsApi} counts={presetCountsById} rules={activeRules} fields={ruleFields}
                     hotkeys={active && selected == null}
                     onEditRule={editPresetRule} />
                 </>
@@ -4975,16 +4941,15 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               <TriageBoard
                 mine={boardMineShown} review={boardReviewShown} unfiltered={boardUnfiltered} view={boardView}
                 others={boardWide ? boardOthersShown : undefined}
-                more={listState.hasNext && listState.cursor && !(filters.text.trim() && sweep?.key === sweepKey)
+                more={listState.hasNext && listState.cursor 
                   ? { loading: listState.loading, onMore: () => { if (listState.cursor) setPages((p) => [...p, listState.cursor!]); } }
                   : undefined}
                 results={resultsShown ? {
-                  title: serverQuery.trim()
-                    ? `pull requests of any state matching “${query.trim()}”`
-                    : `open pull requests matching “${query.trim()}” — press ⏎ to search every state`,
+                  title: answered ? `for “${query.trim()}”, every state` : `in the loaded pull requests — press ⏎ to search them all`,
+                  why: (p) => matchedAs(p, personIn(query, logins)),
                   rows: visiblePrs,
-                  loading: listState.loading && pages.length === 0,
-                  empty: serverQuery.trim() ? "No pull request of this repository matches." : "No open pull request matches — press ⏎ to search closed and merged ones too.",
+                  loading: (listState.loading && pages.length === 0) || (serverQuery.trim() !== "" && !answered),
+                  empty: answered ? "No pull request of this repository matches." : "No loaded pull request matches — press ⏎ to search every state.",
                   onBack: () => { setQuery(""); },
                 } : undefined}
                 /* The filter bar's own chip and switch — see the comment on
