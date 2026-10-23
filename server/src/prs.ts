@@ -16,6 +16,7 @@
 //    named separately from the rest.
 import { ttlRead, forgetReads } from "./ttlread.ts";
 import { singleFlight } from "./singleflight.ts";
+import { heldUntil, noteBody, noteHeaders, noteLimitedBlind, rateView, LIMIT_TEXT } from "./ghlimit.ts";
 import { learnFromRead } from "./checkRuns.ts";
 import { failingTests, refreshFailingTests, type LensSources, type MainRun, type MainJob } from "./ciFailureLens.ts";
 import { readCheckFailures, cachedSummaries, type LogRead, type AnnotationsRead, type OutputRead, type CheckAnnotation } from "./ciFailures.ts";
@@ -89,6 +90,14 @@ export interface GhResult { code: number; stdout: string; stderr: string }
 export async function gh(args: string[], cwd?: string, stdin?: string): Promise<GhResult> {
   const bin = ghBin();
   if (!bin) return { code: 127, stdout: "", stderr: "gh not found" };
+  const graphql = args[0] === "api" && args[1] === "graphql";
+  /* The GraphQL budget is spent: nothing is sent until it refills, and the
+     answer says so in GitHub's own words so every caller reads it as the
+     limit it is (see graphqlQuotaGone, RATE_LIMITED). */
+  if (graphql) {
+    const held = heldUntil();
+    if (held) return { code: 1, stdout: "", stderr: `GitHub API rate limit exceeded; no request is sent until ${new Date(held).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` };
+  }
   try {
     const proc = Bun.spawn([bin, ...args], {
       cwd: cwd || undefined,
@@ -104,6 +113,9 @@ export async function gh(args: string[], cwd?: string, stdin?: string): Promise<
       proc.exited,
     ]);
     clearTimeout(timer);
+    /* Only a failed call is read for the limit: a successful body may be a pull
+       request whose text says "rate limit". */
+    if (graphql && (code ?? 1) !== 0 && LIMIT_TEXT.test(`${stdout} ${stderr}`)) noteLimitedBlind();
     return { code: code ?? 1, stdout, stderr };
   } catch (e) {
     return { code: 1, stdout: "", stderr: String(e) };
@@ -1081,7 +1093,9 @@ export function ciNotifiesFor(filter: PrFilter): boolean {
  */
 const LIST_FIELDS_FAST = "number,title,author,state,isDraft,headRefName,baseRefName,isCrossRepository,url,updatedAt,reviewDecision,additions,deletions,changedFiles,labels,assignees,milestone";
 
-type Entry = { at: number; prs: PrSummary[]; loading: boolean; checksPending: boolean; error?: string; total?: number; hasNext?: boolean; cursor?: string | null; fp?: string; began?: number };
+type Entry = { at: number; prs: PrSummary[]; loading: boolean; checksPending: boolean; error?: string; total?: number; hasNext?: boolean; cursor?: string | null; fp?: string; began?: number;
+  /** When rows were last really read from GitHub (or confirmed unchanged by the probe). `at` also moves on a failed read, so it cannot say how old the rows are. */
+  okAt?: number };
 const listCache = new Map<string, Entry>();
 /** List key -> when its read began. */
 const inflight = new Map<string, number>();
@@ -2323,7 +2337,7 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
   const prev = listCache.get(key);
   const startedAt = Date.now();
   const keep = (over: Partial<Entry>): Entry => ({
-    at: prev?.at ?? 0, prs: prev?.prs ?? [], loading: true, checksPending: true, error: prev?.error, began: prev?.began, ...over,
+    at: prev?.at ?? 0, prs: prev?.prs ?? [], loading: true, checksPending: true, error: prev?.error, began: prev?.began, okAt: prev?.okAt, ...over,
   });
   listCache.set(key, keep({}));
 
@@ -2351,7 +2365,7 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
           /* An empty queue is an answer too: its fingerprint carries the
              count, so "still none" is one point, not three. */
           if (fp && prev?.fp === fp && !prev.error) {
-            listCache.set(key, { ...prev, at: Date.now(), began: startedAt, loading: false, checksPending: false });
+            listCache.set(key, { ...prev, at: Date.now(), okAt: Date.now(), began: startedAt, loading: false, checksPending: false });
             return;
           }
         }
@@ -2385,7 +2399,7 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
          */
         const before = new Map((listCache.get(key)?.prs ?? []).map((p) => [p.number, p]));
         listCache.set(key, {
-          at: Date.now(), began: readStart, prs: early.rows.map((r) => carryOver(before.get(r.number), r)),
+          at: Date.now(), okAt: Date.now(), began: readStart, prs: early.rows.map((r) => carryOver(before.get(r.number), r)),
           loading: false, checksPending: true,
           total: early.total, hasNext: early.hasNext, cursor: early.cursor,
         });
@@ -2698,7 +2712,7 @@ function storePage(repo: PrRepoId, filter: PrFilter, state: PrState, key: string
      the write `saveDiskCache` persists, so a blank that gets here outlives
      the session that caused it. */
   listCache.set(key, {
-    at: Date.now(), began: since, prs: stampRequired(repo, keepNewerDetails(repo, page.rows.map((r) => carryOver(prior.get(r.number), r)), since)),
+    at: Date.now(), okAt: Date.now(), began: since, prs: stampRequired(repo, keepNewerDetails(repo, page.rows.map((r) => carryOver(prior.get(r.number), r)), since)),
     loading: false, checksPending: false,
     total: page.total, hasNext: page.hasNext, cursor: page.cursor, fp,
   });
@@ -3041,6 +3055,8 @@ export async function listPrs(rootIn: unknown, filterIn: unknown, stateIn: unkno
     repo,
     prs,
     fetchedAt: cur?.at ?? 0,
+    dataAt: cur?.okAt ?? cur?.at ?? 0,
+    rate: rateView() ?? undefined,
     startedAt: cur?.began ?? 0,
     stale: !cur?.at || Date.now() - (cur?.at ?? 0) > LIST_TTL_MS,
     loading: !!cur?.loading,
@@ -4465,6 +4481,8 @@ let tokenCache: { at: number; token: string } | null = null;
  * cannot be read (an unusual `gh` setup, a keyring that will not answer).
  */
 export async function ghGraphql<T>(query: string, variables: Record<string, unknown>): Promise<T | null> {
+  /* Held while the budget is spent: no request, the callers keep what they had. */
+  if (heldUntil()) return null;
   const token = await ghToken();
   if (!token) return ghJson<T>(["api", "graphql", "-f", `query=${query}`,
     ...Object.entries(variables).flatMap(([k, v]) => ["-F", `${k}=${String(v)}`])]);
@@ -4479,8 +4497,12 @@ export async function ghGraphql<T>(query: string, variables: Record<string, unkn
       body: JSON.stringify({ query, variables }),
       signal: AbortSignal.timeout(GH_TIMEOUT_MS),
     });
+    /* The budget rides on every answer: read it, ask nobody. */
+    noteHeaders(res.headers, res.status);
     if (!res.ok) return null;
-    return (await res.json()) as T;
+    const body = (await res.json()) as T;
+    noteBody(body);
+    return body;
   } catch {
     return null;
   }

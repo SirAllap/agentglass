@@ -52,7 +52,7 @@ import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
 import { Button, FilterField, RefreshButton, ScopeChip, Segmented, Tabs, CHIP, BAR_CTRL, BAR_ICON, CTRL_H, EDGE, CHIP_SURFACE, tintEdge, INPUT, INPUT_STYLE, LINE, TL_AVATAR, TL_CSS } from "./workspace/Chrome.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import type {
-  PrSummary, PrDetail, PrRepoId, PrThread, PrComment, PrReview, PrReviewer, PrCheck, GitRepoRef, FileChange,
+  PrSummary, PrRate, PrDetail, PrRepoId, PrThread, PrComment, PrReview, PrReviewer, PrCheck, GitRepoRef, FileChange,
   PrReaction, PrAuthorAssociation, PrEvent, PrCommit, PrFile, PrCheckJob, PrLocalHead,
   ReviewRecipe, ReviewRecipeGroup, ReviewRecipeContext, PrActionResult,
 } from "../../../shared/types.ts";
@@ -105,6 +105,9 @@ import { knownLogins, matchedAs, normalizeFree, personIn, searchPool, singleLogi
 import { refsIn, refWhy, withBranchHits } from "../lib/prRefs.ts";
 import { useRefBranches } from "../lib/refBranches.ts";
 import { usePersonBoard } from "../lib/personBoard.ts";
+import { useSearchFocus } from "../lib/useSearchFocus.ts";
+import { refreshTitle } from "../lib/prFreshness.ts";
+import { PrFreshness } from "./prs/PrFreshness.tsx";
 import { useRowDetails } from "../lib/useRowDetails.ts";
 import { BOARD_ASK_MS, listOutcome, type ListOutcome } from "../lib/boardFace.ts";
 import { keepLoadedChecks } from "../lib/prMerge.ts";
@@ -1832,11 +1835,18 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   /* A box that is one login is that person's board, opened by Enter itself —
      the board needs no search of the whole repository, so none is sent. */
   const [personLogin, setPersonLogin] = useState<string | null>(null);
-  const runSearch = useCallback(() => {
-    const who = singleLogin(query, logins);
-    if (who) { setPersonLogin(who); return; }
-    setServerQuery(wanted);
-  }, [wanted, query, logins]);
+  /* The one road every search takes: Enter, and a row of the focus panel. The
+     box takes the text; one login is a person's board, anything else is asked
+     of GitHub once (the server answers from its cache while it is fresh). */
+  const lastRun = useRef<{ q: string; wanted: string } | null>(null);
+  const searchText = useCallback((q: string) => {
+    setQuery(q);
+    const who = singleLogin(q, logins);
+    if (who) { lastRun.current = null; setPersonLogin(who); return; }
+    const asked = toServerQuery(q, logins);
+    lastRun.current = { q, wanted: asked };
+    setServerQuery(asked);
+  }, [logins]);
   /*
    * The pages walked so far, kept together.
    *
@@ -1859,7 +1869,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     });
   }, [prs, accKey, pages.length]);
   const listRows = acc.key === accKey ? acc.rows : prs;
-  const [listState, setListState] = useState<{ fetchedAt: number; loading: boolean; checksPending?: boolean; error?: string; needsAuth?: boolean; total?: number; hasNext?: boolean; cursor?: string | null; pageSize?: number }>({ fetchedAt: 0, loading: false });
+  const [listState, setListState] = useState<{ fetchedAt: number; dataAt?: number; rate?: PrRate; loading: boolean; checksPending?: boolean; error?: string; needsAuth?: boolean; total?: number; hasNext?: boolean; cursor?: string | null; pageSize?: number }>({ fetchedAt: 0, loading: false });
   // `selected` is the pull request you are *in* — the list gives way to it, as a
   // page. Where the keyboard is in the board is the board's own business.
   const [selected, setSelected] = useState<number | null>(null);
@@ -2467,7 +2477,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       if (!reading && !r.loading) setAnsweredQuery(serverQuery);
       if (!reading) setPrs((cur) => (want === "mine" ? withReopened : (x: PrSummary[]) => x)(openLists(holdEdits(keepLoadedChecks(cur, r.prs), editLog.current, r.fetchedAt)), r.startedAt));
       // fetchedAt 0 is "nothing read yet", not a time: the masthead keeps "ago · updating" over the rows that stayed.
-      setListState((st) => ({ fetchedAt: reading ? st.fetchedAt : r.fetchedAt, loading: r.loading, checksPending: r.checksPending, error: r.error, needsAuth: r.needsAuth, total: r.total, hasNext: r.hasNext, cursor: r.cursor ?? null, pageSize: r.pageSize }));
+      setListState((st) => ({ fetchedAt: reading ? st.fetchedAt : r.fetchedAt, loading: r.loading, checksPending: r.checksPending, error: r.error, needsAuth: r.needsAuth, total: r.total, hasNext: r.hasNext, cursor: r.cursor ?? null, pageSize: r.pageSize, dataAt: reading ? st.dataAt : r.dataAt, rate: r.rate ?? st.rate }));
       // The keyboard cursor, never the open pull request. This lands on every
       // poll and on every scope switch, and when the list was a column beside a
       // detail pane, falling back to `prs[0]` only decided which one the pane
@@ -2869,6 +2879,21 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
      on screen, filtered live, under a thin loading bar — never a blank list. */
   const [answeredQuery, setAnsweredQuery] = useState("");
   const answered = serverQuery.trim() !== "" && answeredQuery === serverQuery;
+  /* Recent and saved searches, the people followed: what the box offers on
+     focus. Local to this browser; nothing is asked until a row is chosen. */
+  const openPerson = useCallback((login: string) => searchText(`author:${login}`), [searchText]);
+  const sf = useSearchFocus(repo?.key, mentions?.users ?? null, { run: searchText, openPerson });
+  const runSearch = useCallback(() => {
+    if (query.trim()) sf.remember(query);
+    searchText(query);
+  }, [query, searchText, sf.remember]);
+  /* The count a search found goes on its row once that search is answered. */
+  useEffect(() => {
+    const r = lastRun.current;
+    if (!r || answeredQuery !== r.wanted || listState.loading || listState.total == null) return;
+    lastRun.current = null;
+    sf.count(r.q, listState.total);
+  }, [answeredQuery, listState.loading, listState.total, sf.count]);
   useEffect(() => { if (!serverQuery) setAnsweredQuery(""); }, [serverQuery]);
   /* The board's two lists, held here so a reference search can look in them. */
   const [boardMine, setBoardMine] = useState<PrSummary[]>([]);
@@ -4855,6 +4880,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             facets={facets}
             onQuery={setQuery}
             onSearch={runSearch}
+            focus={sf.focus}
             onPickPerson={setPersonLogin}
             people={mentions?.users ?? null}
             pending={wanted.trim() !== serverQuery.trim()}
@@ -4900,15 +4926,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               as the list constantly reloading. With rows in hand it stays as the
               timestamp, and a quiet "· updating" is all a background refresh
               earns. */}
-          <span className="inline-flex items-center h-[28px] text-[11px] tabular-nums" style={{ color: (listState.loading || listState.checksPending) && prs.length === 0 ? "var(--warning)" : "var(--text3)" }}>
-            {prs.length === 0
-              ? (listState.loading ? "Loading pull requests…"
-                : listState.checksPending ? "Loading check states…"
-                : listState.fetchedAt ? <span className="inline-flex items-center gap-1"><RefreshIcon size={BAR_ICON} />{ago(new Date(listState.fetchedAt).toISOString())}</span> : "")
-              : (listState.fetchedAt
-                ? <span className="inline-flex items-center gap-1"><RefreshIcon size={BAR_ICON} />{ago(new Date(listState.fetchedAt).toISOString())}{listState.loading || listState.checksPending ? " · updating" : ""}</span>
-                : "")}
-          </span>
+          <PrFreshness at={listState.dataAt ?? listState.fetchedAt} rate={listState.rate} loading={listState.loading} checksPending={!!listState.checksPending} empty={prs.length === 0} />
           {/*
             * Refresh means "ask again for what is in front of me".
             *
@@ -4975,7 +4993,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             reads.push(Promise.resolve(loadList(listOnScreen)));
             settled();
           }} busy={running} spinning={refreshing}
-            title={selected != null ? "Refresh this pull request" : "Refresh the list"} iconSize={BAR_ICON} />
+            title={refreshTitle(selected != null ? "Refresh this pull request" : "Refresh the list", listState.rate)} iconSize={BAR_ICON} />
         </div>
       </div>
 
@@ -5030,7 +5048,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 mine={personLogin ? personLists.mine : boardMineShown} review={personLogin ? personLists.review : boardReviewShown}
                 unfiltered={personLogin ? undefined : boardUnfiltered}
                 viewer={personLogin ?? undefined}
-                person={personLogin ? { onBack: backToMine, more: person.state.kind === "ready" && person.state.more } : undefined}
+                person={personLogin ? { onBack: backToMine, more: person.state.kind === "ready" && person.state.more, follow: { on: sf.focus.isFollowed(personLogin), toggle: () => sf.focus.toggleFollow(personLogin) } } : undefined}
                 others={boardWide && !personLogin ? boardOthersShown : undefined}
                 more={!personLogin && resultsShown && !closedOn && listState.hasNext && listState.cursor 
                   ? { loading: listState.loading, onMore: () => { if (listState.cursor) setPages((p) => [...p, listState.cursor!]); } }

@@ -6,7 +6,9 @@ import { SEARCH_HINT, SEARCH_PLACEHOLDER } from "../lib/prSearch.ts";
 import { barControls, type BarView } from "../lib/prBarView.ts";
 import { ICON } from "../lib/iconSize.ts";
 import { serializeQuery, toggleFacet, type FilterState, type FacetView } from "../lib/prFilter.ts";
-import { SearchIcon } from "../lib/glyphIcons.tsx";
+import { PinIcon, SearchIcon, StarIcon } from "../lib/glyphIcons.tsx";
+import { focusItems, type SearchFocus } from "../lib/useSearchFocus.ts";
+import { SearchFocusPanel } from "./prs/SearchFocusPanel.tsx";
 import { CloseIcon } from "./CloseButton.tsx";
 import { BAR_CTRL, BAR_ICON, BAR_INPUT, BAR_SQUARE, CHIP_SURFACE, EDGE, INPUT_STYLE, chipTone } from "./workspace/Chrome.tsx";
 
@@ -24,7 +26,7 @@ import { BAR_CTRL, BAR_ICON, BAR_INPUT, BAR_SQUARE, CHIP_SURFACE, EDGE, INPUT_ST
  * state; it turns clicks into new query strings and hands them up via `onQuery`.
  */
 export function PrFilterBar({
-  query, filters, facets, onQuery, onSearch, onPickPerson, pending, searching, shown, total, swept, builder, people, view = "board", scoped, inbox,
+  query, filters, facets, onQuery, onSearch, onPickPerson, pending, searching, shown, total, swept, builder, people, view = "board", scoped, inbox, focus,
 }: {
   /** Which view the box points at. Everything below the box is the board's and is drawn only there. */
   view?: BarView;
@@ -32,6 +34,8 @@ export function PrFilterBar({
   scoped?: { value: string; onChange: (v: string) => void; placeholder: string };
   /** The inbox's two controls: which list is showing and how many are unread. */
   inbox?: { unreadOnly: boolean; onUnreadOnly: (v: boolean) => void; unread: number };
+  /** Recent and saved searches and the people followed, offered while the box has focus and is empty. */
+  focus?: SearchFocus;
   query: string;
   /** The repository's people, already loaded by the panel. Null while they are
    *  not: typing "@" then says so instead of asking for them. */
@@ -94,6 +98,36 @@ export function PrFilterBar({
   /* The full syntax is a popover under the box while it has focus; the box
      itself says only what Enter does, so it fits the one bar. */
   const [focused, setFocused] = useState(false);
+  /* The focus panel: open while the box has focus and nothing is typed. Escape
+     closes it until the box is focused again or typed in; Up and Down walk it
+     (it is a menu), and nothing outside it. */
+  const [panelShut, setPanelShut] = useState(false);
+  const [row, setRow] = useState(-1);
+  const items = focus ? focusItems(focus) : [];
+  const panelOpen = focused && !scoped && !!focus && !menuOpen && !query.trim() && !panelShut && items.length > 0;
+  const activate = (i: number) => {
+    const it = items[i];
+    if (!it || !focus) return;
+    setRow(-1);
+    if (it.kind === "person") focus.openPerson(it.value); else focus.run(it.value);
+  };
+
+  const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (scoped) return;
+    if (panelOpen) {
+      if (e.key === "ArrowDown") { e.preventDefault(); setRow((r) => (r + 1) % items.length); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); setRow((r) => (r <= 0 ? items.length - 1 : r - 1)); return; }
+      if (e.key === "Enter" && row >= 0) { e.preventDefault(); e.stopPropagation(); activate(row); return; }
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setPanelShut(true); setRow(-1); return; }
+    }
+    if (menuOpen && flat.length) {
+      if (e.key === "ArrowDown") { e.preventDefault(); setCursor((c) => (c + 1) % flat.length); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); setCursor((c) => (c - 1 + flat.length) % flat.length); return; }
+      if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); e.stopPropagation(); pick(flat[Math.min(cursor, flat.length - 1)]!); return; }
+    }
+    if (menuOpen && e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setDismissed(query); return; }
+    if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); onSearch(); }
+  };
 
   return (
     <>
@@ -118,25 +152,17 @@ export function PrFilterBar({
         <input
           data-pr-filter-input
           value={scoped ? scoped.value : query}
-          onChange={(e) => { setCursor(0); (scoped ? scoped.onChange : onQuery)(e.target.value); }}
-          onKeyDown={(e) => {
-            if (scoped) return;
-            if (menuOpen && flat.length) {
-              if (e.key === "ArrowDown") { e.preventDefault(); setCursor((c) => (c + 1) % flat.length); return; }
-              if (e.key === "ArrowUp") { e.preventDefault(); setCursor((c) => (c - 1 + flat.length) % flat.length); return; }
-              if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); e.stopPropagation(); pick(flat[Math.min(cursor, flat.length - 1)]!); return; }
-            }
-            if (menuOpen && e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setDismissed(query); return; }
-            if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); onSearch(); }
-          }}
-          role="combobox" aria-expanded={menuOpen} aria-autocomplete="list" aria-controls="pr-at-people"
-          onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+          onChange={(e) => { setCursor(0); setRow(-1); setPanelShut(false); (scoped ? scoped.onChange : onQuery)(e.target.value); }}
+          onKeyDown={onKey}
+          role="combobox" aria-expanded={menuOpen || panelOpen} aria-autocomplete="list" aria-controls={panelOpen ? "pr-search-focus" : "pr-at-people"}
+          onFocus={() => { setFocused(true); setPanelShut(false); setRow(-1); }} onBlur={() => setFocused(false)}
           placeholder={scoped ? scoped.placeholder : SEARCH_PLACEHOLDER}
           aria-label={scoped ? scoped.placeholder : SEARCH_HINT}
           spellCheck={false}
           className={`w-full ${BAR_INPUT}`}
           style={INPUT_STYLE} />
-        {focused && !menuOpen && !scoped && (
+        {panelOpen && focus && <SearchFocusPanel focus={focus} cursor={row} />}
+        {focused && !menuOpen && !scoped && !panelOpen && !panelShut && (
           <div role="note" className="absolute left-0 right-0 top-full mt-1 rounded-lg px-3 py-2 text-[11px] pointer-events-none"
             style={{ zIndex: LAYER.menu, border: EDGE, color: "var(--text2)", background: "color-mix(in srgb, var(--bg2) 98%, black)", boxShadow: "0 18px 44px -18px rgba(0,0,0,.8)" }}>
             {SEARCH_HINT}
@@ -162,6 +188,16 @@ export function PrFilterBar({
                       style={{ color: "var(--text2)", background: i === cursor ? "color-mix(in srgb, var(--primary) 14%, transparent)" : undefined }}>
                       <Avatar login={login} size={ICON.md} />
                       <span className="truncate">{login}</span>
+                      {focus && (
+                        <span role="button" tabIndex={-1} aria-pressed={focus.isFollowed(login)}
+                          aria-label={focus.isFollowed(login) ? `Unfollow ${login}` : `Follow ${login}`}
+                          title={focus.isFollowed(login) ? "Unfollow" : "Follow: one click to their board"}
+                          onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); focus.toggleFollow(login); }}
+                          className="agx-btn ml-auto grid place-items-center rounded-md shrink-0"
+                          style={{ width: ICON.md + 8, height: ICON.md + 8, color: focus.isFollowed(login) ? "var(--warning)" : "var(--text4)" }}>
+                          <StarIcon size={BAR_ICON} filled={focus.isFollowed(login)} />
+                        </span>
+                      )}
                     </button>
                   </div>
                 ))}
@@ -192,6 +228,15 @@ export function PrFilterBar({
             }}>
             {searching ? <span className="agx-spin" aria-hidden style={{ width: BAR_ICON - 4, height: BAR_ICON - 4, borderWidth: 1.5 }} /> : <span aria-hidden className="flex"><SearchIcon size={BAR_ICON} /></span>}
             <span>{searching ? "Searching" : "Search all"}</span>
+          </button>
+        )}
+        {!scoped && focus && focus.isRemembered(query) && (
+          <button onClick={() => focus.pin(query)} aria-pressed={focus.isPinned(query)}
+            title={focus.isPinned(query) ? "Unpin this search" : "Pin this search: it stays under Saved"}
+            aria-label={focus.isPinned(query) ? "Unpin this search" : "Pin this search"}
+            className={`agx-btn ${BAR_SQUARE}`}
+            style={{ ...CHIP_SURFACE, color: focus.isPinned(query) ? "var(--primary-ink)" : "var(--text3)" }}>
+            <PinIcon size={BAR_ICON} filled={focus.isPinned(query)} />
           </button>
         )}
         {(scoped ? scoped.value : query).trim() && (

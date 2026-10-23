@@ -15,6 +15,7 @@ const filterBar = code(read("../src/components/PrFilterBar.tsx"));
 const presetsAll = code(read("../src/components/FilterPresets.tsx"));
 const panel = code(read("../src/components/PrPanel.tsx"));
 const triage = code(read("../src/components/TriageBoard.tsx"));
+const freshness = code(read("../src/components/prs/PrFreshness.tsx"));
 
 /** The opening tag of every <button …>: its props, not the children that follow. */
 const buttons = (src: string) => src.split(/<button\b/).slice(1).map((c) => c.split(/>\s*\n\s*(?=[<{A-Za-z])/)[0]!);
@@ -66,7 +67,8 @@ describe("the pull-request bar's one control", () => {
 
   it("the refresh, the age and the banner buttons take the bar's height and icon", () => {
     expect(panel).toContain("iconSize={BAR_ICON}");
-    expect(panel).toMatch(/inline-flex items-center h-\[28px\] text-\[11px\] tabular-nums/);
+    expect(freshness).toMatch(/inline-flex items-center h-\[28px\] text-\[11px\] tabular-nums/);
+    expect(panel).toContain("<PrFreshness ");
     expect(triage).toMatch(/agx-btn ml-auto \$\{BAR_CTRL\}/);
     expect(triage).toMatch(/agx-btn \$\{BAR_CTRL\} font-semibold/);
   });

@@ -114,8 +114,8 @@ describe("no request unless Enter opens the board", () => {
     const src = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
     const opens = [...src.matchAll(/setPersonLogin\(([^)]*\)?)\)/g)].map((m) => m[1]).filter((a) => !a.startsWith("null"));
     expect(opens).toEqual(["who"]);
-    const run = src.slice(src.indexOf("const runSearch = useCallback("));
-    expect(run.slice(0, run.indexOf("}, [wanted"))).toContain("setPersonLogin(who)");
+    const run = src.slice(src.indexOf("const searchText = useCallback("));
+    expect(run.slice(0, run.indexOf("}, [logins]"))).toContain("setPersonLogin(who)");
     expect(src).toContain("onPickPerson={setPersonLogin}");
     expect((await Bun.file(new URL("../src/lib/personBoard.ts", import.meta.url)).text()).match(/api\.prPerson\(/g)?.length).toBe(1);
   });

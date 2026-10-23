@@ -16,7 +16,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { HIT, ICON, MIN_BOX } from "../lib/iconSize.ts";
 import { InfoIcon } from "./settingsNavIcons.tsx";
 import { AnchoredMenu } from "./AnchoredMenu.tsx";
-import { CircleIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, FlagIcon, LinkIcon, PinIcon, RefreshIcon, SearchIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { CircleIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, FlagIcon, LinkIcon, PinIcon, RefreshIcon, SearchIcon, StarIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { FACES_MAX, eventLine, splitTitle, standing } from "../lib/prCardZones.ts";
 import { ALWAYS_OPEN, boardScroll, foldable, foldedLanes, laneSorts, setBoardScroll, setFoldedLanes, setLaneSorts, walkable } from "../lib/boardPrefs.ts";
 import { SORT_KEYS, SORT_LABEL, sortCards, type SortKey } from "../lib/prSort.ts";
@@ -34,7 +34,7 @@ import { CHIP_H } from "../lib/priority.tsx";
 import { CardTracker } from "./CardTracker.tsx";
 import { LANE_WIDTH_PX, RESULT_COLUMNS, resultColumn, resultsHeading, stillReading } from "../lib/prSearch.ts";
 import { repoUsesTracker, trackerBlock } from "../lib/prCardBlock.ts";
-import { BAR_CTRL, CTRL_H, EDGE, LINE } from "./workspace/Chrome.tsx";
+import { BAR_CTRL, BAR_ICON, BAR_SQUARE, CTRL_H, EDGE, LINE } from "./workspace/Chrome.tsx";
 import { CODE_FONT_STYLE } from "./diff/DiffLines.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { CardFaces } from "./CardFaces.tsx";
@@ -212,7 +212,7 @@ export function TriageBoard({
   viewer?: string;
   /** Only on a person's board: the way back to the owner's, and whether the
    *  person has more than the first page of either list. */
-  person?: { onBack: () => void; more: boolean };
+  person?: { onBack: () => void; more: boolean; /** Star on the banner: follow this colleague. */ follow?: { on: boolean; toggle: () => void } };
   results?: {
     /** Why a card is in this search, when the box is about a person: "name: author, reviewer". */
     why?: (p: PrSummary) => string | null;
@@ -723,7 +723,7 @@ export function TriageBoard({
      * scrolling belongs to each column, one per lane, below.
      */
     <div ref={frame} data-board tabIndex={0} onKeyDown={onKey} className="flex flex-col h-full min-h-0 outline-none">
-      {person && viewer && <PersonBanner login={viewer} onBack={person.onBack} />}
+      {person && viewer && <PersonBanner login={viewer} onBack={person.onBack} follow={person.follow} />}
       {/*
         * The scope, said out loud, in ONE line.
         *
@@ -1913,7 +1913,7 @@ const K = ({ children }: { children: React.ReactNode }) => (
  * queue is the mistake this prevents. Warning colour tokens, the house icon and
  * hit sizes, and its own row: nothing is drawn over it or under it.
  */
-export function PersonBanner({ login, onBack }: { login: string; onBack: () => void }) {
+export function PersonBanner({ login, onBack, follow }: { login: string; onBack: () => void; follow?: { on: boolean; toggle: () => void } }) {
   return (
     <div role="status" data-person-banner className="shrink-0 flex items-center gap-3 mx-4 mt-3 mb-1 rounded-lg pl-3 pr-1.5 py-1.5"
       style={{
@@ -1926,6 +1926,13 @@ export function PersonBanner({ login, onBack }: { login: string; onBack: () => v
       <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">
         You are viewing <b className="font-bold">{login}</b>'s board, not yours
       </span>
+      {follow && (
+        <button onClick={follow.toggle} aria-pressed={follow.on} aria-label={follow.on ? `Unfollow ${login}` : `Follow ${login}`}
+          title={follow.on ? "Unfollow: remove from People" : "Follow: one click to this board from the search box"}
+          className={`agx-btn ${BAR_SQUARE}`} style={{ color: "var(--warning-ink)", border: EDGE, borderColor: "var(--warning)" }}>
+          <StarIcon size={BAR_ICON} filled={follow.on} />
+        </button>
+      )}
       <button onClick={onBack} className={`agx-btn ${BAR_CTRL} font-semibold`}
         style={{ color: "var(--warning-ink)", border: EDGE, borderColor: "var(--warning)" }}>
         Back to my board

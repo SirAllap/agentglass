@@ -161,10 +161,11 @@ describe("no request on typing", async () => {
     expect(bar).toContain("onPickPerson?.(login)");
   });
   test("the person board closes the search it never needed: Enter on a login sends no list search", () => {
-    const run = panel.slice(panel.indexOf("const runSearch = useCallback("));
-    const body = run.slice(0, run.indexOf("}, [wanted"));
+    // Enter and a row of the focus panel both take this one road.
+    const run = panel.slice(panel.indexOf("const searchText = useCallback("));
+    const body = run.slice(0, run.indexOf("}, [logins]"));
     expect(body.indexOf("setPersonLogin(who); return;")).toBeGreaterThan(-1);
-    expect(body.indexOf("setPersonLogin(who); return;")).toBeLessThan(body.indexOf("setServerQuery(wanted)"));
+    expect(body.indexOf("setPersonLogin(who); return;")).toBeLessThan(body.indexOf("setServerQuery(asked)"));
   });
 });
 

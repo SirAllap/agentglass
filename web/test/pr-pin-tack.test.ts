@@ -17,7 +17,9 @@ const code = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").filte
 
 describe("pull request pins use the tack", () => {
   it("neither the board nor the panel draws a star", () => {
-    expect(code(board)).not.toContain("StarIcon");
+    // The one star is "follow this colleague" on the person banner, which pins nothing.
+    const banner = code(board).slice(code(board).indexOf("export function PersonBanner("));
+    expect(code(board).replace(banner, "").replace(/import \{[^}]*\} from "..\/lib\/glyphIcons.tsx";/, "")).not.toContain("StarIcon");
     expect(code(panel)).not.toContain("StarIcon");
   });
 

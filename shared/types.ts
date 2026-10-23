@@ -4009,6 +4009,17 @@ export interface PrDetail extends PrSummary {
   truncated?: { files?: number; commits?: number; comments?: number; threads?: number; checks?: number };
 }
 
+/** What the last GitHub answer said about the hourly budget. */
+export interface PrRate {
+  limit: number;
+  remaining: number;
+  /** Epoch ms when it refills; 0 when never said. */
+  resetAt: number;
+  /** A limit answer is in force: nothing is asked until `resetAt`. */
+  limited: boolean;
+  seenAt: number;
+}
+
 export interface PrListResponse {
   ok: boolean;
   /** Null when this directory has no forge remote we understand. */
@@ -4017,6 +4028,12 @@ export interface PrListResponse {
   /** When the cached copy was taken. The UI shows this rather than pretending
    *  to be live — every number here costs a subprocess. */
   fetchedAt: number;
+  /** When the rows were last really read from GitHub. `fetchedAt` also moves on
+   *  a read that failed (so the poll does not re-ask every beat); this does not,
+   *  so it is the age of what is on screen. */
+  dataAt?: number;
+  /** GitHub's GraphQL budget as the last answer left it; absent before any. */
+  rate?: PrRate;
   /** When the read behind these rows was SENT, on the server's clock (0 when
    *  unknown). A write's `at` is on the same clock: the only pair a client may
    *  compare to know whether a read saw the write. */

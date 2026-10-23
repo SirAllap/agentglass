@@ -132,11 +132,12 @@ describe("a search has rules of its own", () => {
     const deps = /\}, \[([^\]]*)\]\);/.exec(load)![1];
     expect(deps).toContain("serverQuery");
     expect(deps.split(",").map((x) => x.trim())).not.toContain("query");
-    // The server query is set from exactly two places: Enter (runSearch) and an errand's jump.
+    // The server query is set from exactly two places: a search (Enter, or a row of the focus panel, both through searchText) and an errand's jump.
     const sets = c.split("\n").filter((l) => l.includes("setServerQuery(") && !l.includes("setServerQuery(\"\")"));
     expect(sets.length).toBe(2);
     expect(c).toContain("const runSearch = useCallback(() => {");
-    expect(c).toContain("setServerQuery(wanted);");
+    expect(c).toContain("const searchText = useCallback((q: string) => {");
+    expect(c).toContain("setServerQuery(asked);");
     // No timer anywhere turns what is typed into a search.
     expect(c).not.toMatch(/setTimeout\([^)]*setServerQuery/);
   });
