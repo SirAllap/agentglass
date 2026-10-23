@@ -224,7 +224,9 @@ describe("paths and sizes", () => {
   });
   test("airy rows are taller than compact ones at every text size", () => {
     for (const s of [11, 13, 18]) expect(rowHeight("airy", s)).toBeGreaterThan(rowHeight("compact", s));
-    expect(rowHeight("compact", 13)).toBe(28);
+    // Strata's `.file-row` min-height at the default text size: 26 compact, 42 airy.
+    expect(rowHeight("compact", 13)).toBe(26);
+    expect(rowHeight("airy", 13)).toBe(42);
   });
 });
 

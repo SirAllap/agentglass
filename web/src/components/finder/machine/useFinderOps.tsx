@@ -3,7 +3,7 @@
 // awaited. The decisions are lib/finderOps.ts (tested); the work is /fs/op.
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { api } from "../../../lib/api.ts";
-import { clipPaths, deleteWords, doneNote, dropAsks, dropPlan, freeName, menuFor, menuHead, pasteOp, withActions, type Clip, type Item, type Target } from "../../../lib/finderOps.ts";
+import { failedNote, clipPaths, deleteWords, doneNote, dropAsks, dropPlan, freeName, menuFor, menuHead, pasteOp, withActions, type Clip, type Item, type Target } from "../../../lib/finderOps.ts";
 import { actionGroup, confirmWords } from "../../../lib/finderActions.ts";
 import { isFolder, isRecent, joinPath, type Row } from "../../../lib/finderMiller.ts";
 import { inTrash } from "../../../lib/finderPointer.ts";
@@ -97,7 +97,7 @@ export function useFinderOps(env: OpsEnv) {
     const e = envRef.current;
     const r = await api.fsOp(body);
     for (const d of new Set(dirs)) e.reload(d);
-    if (!r.ok) { e.say(r.error ?? "That did not work"); return false; }
+    if (!r.ok) { e.say(failedNote(body.op, r.error)); return false; }
     if (r.job && r.job.state === "running") { e.say(`${r.job.label}…`); setPolling(true); }
     else e.say(`${doneNote(body.op, count, name)}${r.undo?.available ? " — Ctrl+Z undoes it" : ""}`);
     return true;

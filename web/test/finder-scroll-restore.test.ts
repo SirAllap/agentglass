@@ -42,8 +42,8 @@ describe("the store", () => {
 
 describe("every view reports and restores", () => {
   test("Icons and List are handed their place and tell it", () => {
-    expect(machine).toMatch(/<IconsView firstItem=\{iconsFirst\.current\[lastCol\.path\]\} onFirstItem=/);
-    expect(machine).toMatch(/<ListView scrollTop=\{scrolls\.current\[lastCol\.path\]\} onScrollTop=/);
+    expect(machine).toMatch(/<IconsView [^>]*firstItem=\{iconsFirst\.current\[lastCol\.path\]\} onFirstItem=/);
+    expect(machine).toMatch(/<ListView [^>]*scrollTop=\{scrolls\.current\[lastCol\.path\]\} onScrollTop=/);
     expect(folderViews).toMatch(/initialTop=\{firstItem === undefined/);
     expect(folderViews).toMatch(/initialTop=\{scrollTop\} onTop=\{onScrollTop\}/);
   });

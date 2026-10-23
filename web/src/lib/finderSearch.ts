@@ -31,8 +31,8 @@ export function hitPath(path: string, max = 118): string {
 export const partialResults = (status: "idle" | "building" | "ready", _found: number): boolean => status === "building";
 
 /** What the empty and the unanswered states say. */
-export function emptyText(q: string, _status: "idle" | "building" | "ready", found: number): string {
+export function emptyText(q: string, status: "idle" | "building" | "ready", found: number): string {
   if (!q.trim()) return "Type to search Home and mounted local drives";
   if (found > 0) return "";
-  return "No matching files or folders";
+  return status === "building" ? "Searching…" : "No matching files or folders";
 }

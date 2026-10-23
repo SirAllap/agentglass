@@ -179,6 +179,12 @@ export function stemEnd(name: string): number {
   return dot > 0 ? dot : name.length;
 }
 
+/** Strata's heading for an operation that failed; the server's own words follow it. */
+export function failedNote(op: string, error: string | undefined): string {
+  const title = op === "rename" ? "Unable to rename item" : op === "trash" ? "Unable to move to Trash" : op === "restore" ? "Unable to restore" : op === "empty-trash" ? "Unable to empty Trash" : "Unable to complete operation";
+  return error ? `${title}: ${error}` : title;
+}
+
 /** "Move to Trash", "Permanently delete": the one-line answer in the footer after it ran. */
 export function doneNote(op: string, n: number, name: string): string {
   const what = n === 1 ? name : `${n} items`;

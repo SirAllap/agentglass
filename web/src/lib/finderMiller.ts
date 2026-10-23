@@ -390,8 +390,11 @@ export const joinPath = (dir: string, name: string): string => (name.startsWith(
 /** What a row is called on screen: its last segment, whether its name is one segment or a whole path. */
 export const rowLabel = (name: string): string => (name.startsWith("/") ? name.slice(name.lastIndexOf("/") + 1) || name : name);
 
-/** The row height a density and a text size draw: the text, and the room round it. */
-export const rowHeight = (density: Prefs["density"], textSize: number): number => textSize + (density === "airy" ? 23 : 15);
+/** A long name cut in two for a middle ellipsis: the start may shrink, the tail (the last `keep` characters) never does. */
+export const middleSplit = (text: string, keep = 8): [string, string] => (text.length <= keep * 2 ? [text, ""] : [text.slice(0, text.length - keep), text.slice(text.length - keep)]);
+
+/** The row height a density and a text size draw: Strata's 26 (compact) and 42 (airy) at the default 13 px text, growing with it. */
+export const rowHeight = (density: Prefs["density"], textSize: number): number => textSize + (density === "airy" ? 29 : 13);
 
 const NOT_TEXT = new Set((
   "png jpg jpeg gif webp avif bmp ico heic heif tif tiff pdf mp3 flac ogg wav m4a opus mp4 mkv webm mov avi " +

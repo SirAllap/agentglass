@@ -11,7 +11,7 @@ import { filterKey, filterKeptBy } from "../../../lib/finderKeys.ts";
 import { CaretIcon } from "../../../lib/glyphIcons.tsx";
 import { FileTypeIcon, PathIcon, StrataIcon } from "./StrataIcon.tsx";
 import { HIT, ICON } from "../../../lib/iconSize.ts";
-import { type RecentSort, filterPlaceholder, formatSize, isDefaultSort, isFolder, isThumbable, joinPath, itemsLabel, rowLabel, makeDefaultSort, resetSort, type Display, type Prefs, type Row, type SortKey } from "../../../lib/finderMiller.ts";
+import { type RecentSort, filterPlaceholder, formatSize, isDefaultSort, isFolder, isThumbable, joinPath, itemsLabel, middleSplit, rowLabel, makeDefaultSort, resetSort, type Display, type Prefs, type Row, type SortKey } from "../../../lib/finderMiller.ts";
 import type { FolderState } from "../../../lib/finderFolders.ts";
 import { EDGE, INPUT, INPUT_STYLE, LINE } from "../../workspace/Chrome.tsx";
 import { MenuCap, MenuItem, MenuRule, Popover } from "./Popover.tsx";
@@ -56,7 +56,7 @@ export function RowIcon({ row, size = ICON.sm, dir }: { row: Row; size?: number;
   return <PathIcon path={dir ? joinPath(dir, row.name) : undefined} name={row.name} isDir={isFolder(row)} broken={row.broken === true} size={size} />;
 }
 
-export function Column({ fill, dir: folderPath, title, filterSignal, width, onResize, onFit, state, display, selName, chosen, focused, prefs, rowH, filter, onFilter, onPick, onOpen, onTab, onReveal, onFocusChild, onSlow, onSlowCancel, onFocusCol, onRefresh, onSort, recent, onPref, scrollTop, onScrollTop, edit, finding, onFinding, onClosePane, onSpace }: {
+export function Column({ fill, dir: folderPath, title, filterSignal, width, onResize, onFit, state, display, selName, chosen, focused, prefs, rowH, filter, onFilter, onPick, onOpen, onTab, onReveal, onFocusChild, onSlow, onSlowCancel, onFocusCol, onRefresh, onSort, recent, onPref, scrollTop, onScrollTop, edit, cut, finding, onFinding, onClosePane, onSpace }: {
   /** The folder this column lists: a right click in it says where it landed. */
   dir: string;
   title: string;
@@ -103,6 +103,8 @@ export function Column({ fill, dir: folderPath, title, filterSignal, width, onRe
   edit?: InlineEdit | null;
   /** Whether this pane's filter is open; opening it turns every other pane's off (the finder keeps the one). */
   finding: boolean;
+  /** Names in this folder that a Cut is holding: drawn faded until they are pasted. */
+  cut?: ReadonlySet<string>;
   onFinding: (on: boolean) => void;
   /** Set on every pane but the first: the header's close button. */
   onClosePane?: () => void;
@@ -143,8 +145,8 @@ export function Column({ fill, dir: folderPath, title, filterSignal, width, onRe
           if (e.key === "ArrowLeft" || e.key === "ArrowRight") { e.preventDefault(); e.stopPropagation(); onResize(dragWidth(width, e.key === "ArrowLeft" ? -16 : 16)); }
           else if (e.key === "Enter" || e.key === "0") { e.preventDefault(); e.stopPropagation(); onFit(); }
         }} />
-      <header className="flex items-center gap-1 px-2.5 pt-2 pb-1.5 shrink-0" style={{ borderBottom: LINE, background: hover ? "color-mix(in srgb, var(--primary) 7%, transparent)" : undefined }}>
-        <b className="flex-1 min-w-0 truncate text-[12px]" title={title} style={{ color: titleColor(focused) }}>{title}</b>
+      <header className="flex items-center gap-1 shrink-0" style={{ minHeight: 31, padding: "5px 5px 4px 12px", borderBottom: LINE, background: hover ? "color-mix(in srgb, var(--primary) 7%, transparent)" : undefined }}>
+        <b className="flex-1 min-w-0 flex text-[12px]" title={folderPath} aria-label={title} style={{ color: titleColor(focused), fontWeight: 700 }}><MiddleText text={title} /></b>
         <button className={btn} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Refresh (F5)" aria-label="Refresh" onClick={onRefresh}><StrataIcon set="act" name="refresh" size={ICON.md} /></button>
         <button className={btn} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} aria-label={(recent?.dir ?? prefs.sortDir) === "asc" ? "Ascending — click to reverse" : "Descending — click to reverse"}
           title={(recent?.dir ?? prefs.sortDir) === "asc" ? "Ascending — click to reverse" : "Descending — click to reverse"} onClick={() => onSort(recent?.key ?? prefs.sortKey)}>
@@ -161,7 +163,7 @@ export function Column({ fill, dir: folderPath, title, filterSignal, width, onRe
       {state?.error ? (
         <div className="flex-1 min-h-0 grid place-items-center p-6 text-center text-[12px]" role="alert">
           <div className="flex flex-col items-center gap-2">
-            <b style={{ fontWeight: 600 }}>Unable to read this directory</b>
+            <b style={{ fontWeight: 600 }}>Unable to open directory</b>
             <span style={{ color: "var(--text3)" }}>{state.error}</span>
             <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE }} onClick={onRefresh}>Retry</button>
           </div>
@@ -187,16 +189,16 @@ export function Column({ fill, dir: folderPath, title, filterSignal, width, onRe
               <div key={r.name} role="option" data-row={r.name} data-folder={dir && !r.locked ? "" : undefined} draggable={!r.locked && !(edit && edit.was === r.name)} aria-selected={sel} aria-disabled={r.locked || undefined} title={r.why ?? r.name}
                 onMouseDown={noRange} {...rowPointer("columns", r, { onPick, onOpen, onTab, onReveal, onFocusChild, onSlow, onSlowCancel, filtered: filter !== "", trash: inTrash(folderPath) })}
                 className="agx-fm-row flex items-center gap-2 px-2.5 mx-1 rounded-md cursor-pointer"
-                style={{ height: rowH, color: r.locked ? "var(--text4)" : "var(--text)", ...rowPaint(rowTone(sel, focused)) }}>
+                style={{ opacity: cut?.has(r.name) ? CUT_OPACITY : undefined, height: rowH, color: r.locked ? "var(--text4)" : "var(--text)", ...rowPaint(rowTone(sel, focused)) }}>
                 <span data-icon className="shrink-0 flex">{!r.locked && !dir && isThumbable(r.name) ? <Thumb path={joinPath(folderPath, r.name)} size={ROW_THUMB} radius={3} fallback={<RowIcon row={r} dir={folderPath} />} /> : <RowIcon row={r} dir={folderPath} />}</span>
                 {edit && edit.was === r.name ? <InlineName key="ren" edit={edit} rowH={rowH - 4} icon={null} /> : <NameCell name={rowLabel(r.name)} />}
                 {dir ? (
                   <>
-                    {r.items !== null && !tight && badge && <span className="shrink-0 tabular-nums text-[10px] px-1.5 rounded-md" style={{ background: "color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text3)", fontWeight: 400 }}>{itemsLabel(r.items)}</span>}
+                    {r.items !== null && !tight && <span data-badge-on={badge ? "" : undefined} className="agx-fm-badge shrink-0 tabular-nums text-[10px] px-1.5 rounded-md" style={{ background: "color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text3)", fontWeight: 400 }}>{itemsLabel(r.items)}</span>}
                     <span className="shrink-0 flex" style={{ color: "var(--text4)", transform: "rotate(-90deg)" }}><CaretIcon size={ICON.xs} /></span>
                   </>
-                ) : prefs.sizes && r.bytes !== null && !tight && badge ? (
-                  <span className="shrink-0 tabular-nums text-[10px] px-1.5 rounded-md" style={{ background: "color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text3)", fontWeight: 400 }}>{formatSize(r.bytes)}</span>
+                ) : prefs.sizes && r.bytes !== null && !tight ? (
+                  <span data-badge-on={badge ? "" : undefined} className="agx-fm-badge shrink-0 tabular-nums text-[10px] px-1.5 rounded-md" style={{ background: "color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text3)", fontWeight: 400 }}>{formatSize(r.bytes)}</span>
                 ) : null}
               </div>
             );
@@ -264,6 +266,15 @@ export function FilterField({ inputRef, value, total, title, onChange, onDone, n
         className={`${INPUT} w-full`} style={INPUT_STYLE} />
     </div>
   );
+}
+
+/** A cut row's opacity (Strata's `.cut`). */
+export const CUT_OPACITY = 0.65;
+
+/** A heading that gives way in the middle, as Strata's header title does: the start shrinks, the last characters stay. */
+function MiddleText({ text }: { text: string }) {
+  const [head, tail] = middleSplit(text);
+  return <><span className="truncate min-w-0">{head}</span>{tail && <span className="shrink-0">{tail}</span>}</>;
 }
 
 /** The name, ending in an ellipsis when the column is narrower than it, as Strata's does. */

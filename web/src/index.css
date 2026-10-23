@@ -2842,6 +2842,9 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 /* What a drag would drop on: a folder row, a column, a place in the sidebar, the Trash. */
 [data-drop-on] { outline: 2px solid var(--primary); outline-offset: -2px; background: color-mix(in srgb, var(--primary) 14%, transparent); border-radius: 6px; }
 .agx-fm-row:hover { background: color-mix(in srgb, var(--primary) 8%, transparent); }
+/* A row's size or count badge is drawn at rest only on the chosen row; the pointer on any row brings its own. */
+.agx-fm-badge { opacity: 0; }
+.agx-fm-badge[data-badge-on], .agx-fm-row:hover .agx-fm-badge { opacity: 1; }
 
 /* Markdown in the Finder preview, as Strata draws it: one monospace face, the
    title in the accent, tables as plain grids with a header that sorts. */

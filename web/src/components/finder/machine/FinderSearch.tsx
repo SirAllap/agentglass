@@ -49,7 +49,7 @@ export function FinderSearch({ home, onTarget, onClose }: { home: string; onTarg
         <div className="flex items-center gap-2.5 px-3.5 shrink-0" style={{ minHeight: 58, borderBottom: LINE }}>
           <span className="flex" style={{ color: "var(--primary-ink)" }}><SearchIcon size={ICON.sm} /></span>
           <input ref={input} value={q} onChange={(e) => setQ(e.target.value)} spellCheck={false} autoComplete="off" aria-label="Search files and folders"
-            placeholder={contents ? "Search inside files..." : "Search files and folders..."} className="flex-1 min-w-0 bg-transparent outline-none text-[14px]" style={{ color: "var(--text)" }}
+            placeholder={contents ? "Search inside files…" : "Search files and folders…"} className="flex-1 min-w-0 bg-transparent outline-none text-[14px]" style={{ color: "var(--text)" }}
             onKeyDown={(e) => {
               e.stopPropagation();
               if (e.key === "Escape") { e.preventDefault(); onClose(); }

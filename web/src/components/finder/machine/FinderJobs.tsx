@@ -25,7 +25,7 @@ export function JobsPanel({ jobs, onCancel, onDone }: { jobs: readonly FsJob[]; 
         return (
           <div key={j.id} className="rounded-lg px-3 py-2 text-[12px] shadow-xl" style={{ background: "var(--surface-card)", border: EDGE }}>
             <div className="flex items-center gap-2">
-              <span className="flex-1 min-w-0 truncate">{j.state === "running" ? j.label : j.state === "done" ? `${j.label} — done` : j.state === "cancelled" ? "Cancelled" : j.error ?? "Failed"}</span>
+              <span className="flex-1 min-w-0 truncate">{j.state === "running" ? j.label : j.state === "done" ? `${j.label} — done` : j.state === "cancelled" ? "Operation cancelled" : j.error ?? "Failed"}</span>
               {j.output && <button className="agx-btn rounded-md px-2" style={{ minHeight: HIT - 6, border: EDGE }} aria-expanded={open === j.id} onClick={() => setOpen(open === j.id ? null : j.id)}>Details</button>}
               {j.state === "running" && <button className="agx-btn rounded-md px-2" style={{ minHeight: HIT - 6, border: EDGE }} onClick={() => onCancel(j.id)}>Cancel</button>}
             </div>

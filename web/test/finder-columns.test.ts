@@ -108,7 +108,7 @@ describe("names and badges in a row", () => {
   });
   test("the item count shows on the selected folder of the active column only", async () => {
     const t = await Bun.file(new URL("../src/components/finder/machine/Column.tsx", import.meta.url)).text();
-    expect(t).toContain("r.items !== null && !tight && badge &&");
+    expect(t).toContain("r.items !== null && !tight && <span data-badge-on");
     expect(t).toContain("r.name === selName && showsBadge(true, focused)");
   });
 });

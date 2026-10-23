@@ -40,7 +40,7 @@ describe("the list", () => {
     expect(emptyText("", "idle", 0)).toBe("Type to search Home and mounted local drives");
     expect(emptyText("pl", "ready", 3)).toBe("");
     expect(emptyText("pl", "ready", 0)).toBe("No matching files or folders");
-    expect(emptyText("pl", "building", 0)).toBe("No matching files or folders");
+    expect(emptyText("pl", "building", 0)).toBe("Searching…");
   });
 });
 
