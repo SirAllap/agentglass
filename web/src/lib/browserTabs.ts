@@ -53,6 +53,8 @@ export interface BrowserTab {
    * shelf entry wherever it wanders, and the entry shows where it is.
    */
   shelfId?: string;
+  /** The last agent that acted on this tab, kept across a restart (see SavedTab). */
+  agent?: string;
   /**
    * `newtab --from-template`'s own in-memory jar — the visible-tab twin of a
    * lane's ephemeral fork. Set only for a tab minted that way; absent means

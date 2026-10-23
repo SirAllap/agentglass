@@ -125,6 +125,16 @@ describe("round trip", () => {
     expect(set.active).toBe(1);
   });
 
+  it("keeps which agent last acted on a tab, and nothing about what it did", () => {
+    // The overview counts the tabs an agent holds; without this a restart
+    // reported every one of them as nobody's until the agent acted again.
+    const tabs = [tab("https://shop.example.com/", { agent: "orbit-ci" }), tab("https://docs.example.com/")];
+    saveSession("", tabs, tabs[0]!.id);
+    const set = setFor(readSession(), "")!;
+    expect(set.tabs[0]!.agent).toBe("orbit-ci");
+    expect("agent" in set.tabs[1]!).toBe(false);
+  });
+
   it("points at the right tab after the blank ones are dropped", () => {
     // The index is into the SAVED list, not the live one. Saving the live index
     // would open on the wrong page, or past the end of the list.

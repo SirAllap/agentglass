@@ -290,7 +290,7 @@ export function BrowserView({ active: viewOn, scope }: {
      * agent's tab should be.
      */
     const here = saved?.current ?? "";
-    const mine = set.tabs.map((t) => sleepingTab(t.url, t.title, t.icon, here));
+    const mine = set.tabs.map((t) => ({ ...sleepingTab(t.url, t.title, t.icon, here), ...(t.agent ? { agent: t.agent } : null) }));
     /*
      * A CONTAINER THAT NO LONGER EXISTS BRINGS NOTHING BACK.
      *
@@ -308,7 +308,7 @@ export function BrowserView({ active: viewOn, scope }: {
     const known = new Set(loadProfiles(globalThis.localStorage ?? null).map((p) => p.id));
     const theirs = Object.entries(saved?.byProfile ?? {})
       .filter(([id]) => id !== here && (!id || known.has(id)))
-      .flatMap(([id, s]) => s.tabs.map((t) => sleepingTab(t.url, t.title, t.icon, id)));
+      .flatMap(([id, s]) => s.tabs.map((t) => ({ ...sleepingTab(t.url, t.title, t.icon, id), ...(t.agent ? { agent: t.agent } : null) })));
     /* And the file is told, once, rather than left to be re-read every launch. */
     for (const id of Object.keys(saved?.byProfile ?? {})) {
       if (id && id !== here && !known.has(id)) forgetProfileTabs(id);
@@ -1031,6 +1031,7 @@ export function BrowserView({ active: viewOn, scope }: {
       const serve = (wv: DrivableWebview | null) => {
         if (!owner) { void serveBrowserAsk(wv, ask); return; }
         dispatchAct({ type: "begin", tab: owner.id, agent });
+        if (owner.agent !== agent) patch(owner.id, { agent });
         serveBrowserAsk(wv, ask).then(
           (ok) => dispatchAct({ type: "end", tab: owner.id, action: actionOf(ask, ok, Date.now()) }),
           () => dispatchAct({ type: "end", tab: owner.id, action: actionOf(ask, false, Date.now()) }),

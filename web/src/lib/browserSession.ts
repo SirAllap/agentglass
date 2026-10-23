@@ -42,6 +42,9 @@ export interface SavedTab {
   url: string;
   title: string;
   icon: string | null;
+  /** The last agent that acted on it, so the overview can still count what an
+   *  agent holds after a restart. Who, never what it did. */
+  agent?: string;
 }
 
 /** One profile's worth: its pages and which of them was in front. */
@@ -93,7 +96,7 @@ export function toSet(tabs: BrowserTab[], activeId: string): SavedSet | null {
   const at = keep.findIndex((t) => t.id === activeId);
   return {
     active: at >= 0 ? at : 0,
-    tabs: keep.map((t) => ({ url: t.url, title: t.title, icon: t.icon })),
+    tabs: keep.map((t) => ({ url: t.url, title: t.title, icon: t.icon, ...(t.agent ? { agent: t.agent } : null) })),
   };
 }
 
@@ -175,6 +178,7 @@ const cleanSet = (raw: unknown): SavedSet | null => {
       url: t.url,
       title: typeof t.title === "string" ? t.title : "",
       icon: typeof t.icon === "string" ? t.icon : null,
+      ...(typeof t.agent === "string" && t.agent.trim() ? { agent: t.agent.trim().slice(0, 40) } : null),
     }));
   if (!tabs.length) return null;
   const active = Number.isInteger(v.active) && v.active! >= 0 && v.active! < tabs.length ? v.active! : 0;
