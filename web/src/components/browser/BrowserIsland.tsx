@@ -102,12 +102,14 @@ export function BrowserIsland(p: IslandProps) {
   const heldBoxes = groups.filter((g) => g.held).length;
 
   /*
-   * Opening and closing are a fade with a 1.5 % zoom on one layer, as CSS
-   * transitions, so they can be reversed halfway and look the same every
-   * time. Measured on the installed app, a copy of the page flying into its
-   * card stuttered: Electron draws here without the GPU, and a transform over
-   * the whole page repaints all of it every frame. The box itself never
-   * animates its size when it opens or closes (is-snap), only what is on it.
+   * The pill grows into the overview. What grows is ONE empty dark shape (a
+   * solid colour, nothing inside it), because Electron draws here without the
+   * GPU and that is the only thing the size of the page that is cheap to
+   * repaint every frame; a copy of the page flying into its card, or the
+   * overview's own content clipped as it grew, stuttered (measured on the
+   * installed app). The content arrives once the shape is nearly full and
+   * leaves first on the way back; all of it CSS transitions, so a reversal
+   * halfway runs back from where it is.
    */
   const [shown, setShown] = useState(false);
   const [snap, setSnap] = useState(false);
@@ -129,7 +131,8 @@ export function BrowserIsland(p: IslandProps) {
     if (pick && pick !== activeId) p.onShow(pick);
     setShown(false);
     if (closer.current) clearTimeout(closer.current);
-    closer.current = setTimeout(() => { closer.current = null; setSnap(true); setOpen(false); unsnap(); }, 170);
+    // the shape shrinks back into the pill (300 ms) before the overview goes
+    closer.current = setTimeout(() => { closer.current = null; setSnap(true); setOpen(false); unsnap(); }, 380);
   }, [open, activeId, p]);
   useEffect(() => () => { if (closer.current) clearTimeout(closer.current); }, []);
 
@@ -146,12 +149,14 @@ export function BrowserIsland(p: IslandProps) {
   // focus lands on the page you were on once, when it opens, never again on a re-render
   useEffect(() => { if (open) box.current?.querySelector<HTMLElement>(".agx-isl-card.is-on")?.focus({ preventScroll: true }); }, [open]);
 
+  const from = yours ? { w: 300, h: 40, r: 20 } : { w: 210, h: 36, r: 18 };
   const cls = "agx-isl" + (open ? " is-open" : "") + (shown ? " is-shown" : "") + (snap ? " is-snap" : "") + (tucked ? " is-tucked" : "") + (yours ? " is-yours" : "") + (act?.paused ? " is-taken" : "");
   const dot = act?.paused ? "is-taken" : working ? "is-working" : "";
   return (
     <>
       {open && <div className={"agx-isl-scrim" + (shown ? " is-shown" : "")} onClick={() => hide()} />}
-      <div ref={box} className={cls} role={open ? "dialog" : undefined} aria-label={open ? "Every tab" : undefined}>
+      <div ref={box} className={cls} role={open ? "dialog" : undefined} aria-label={open ? "Every tab" : undefined}
+        style={{ "--pw": `${from.w}px`, "--ph": `${from.h}px`, "--pr": `${from.r}px` } as React.CSSProperties}>
         {!open && (
           <>
             <span className="agx-isl-compact" aria-hidden>
@@ -186,7 +191,7 @@ export function BrowserIsland(p: IslandProps) {
             )}
           </>
         )}
-        {open && <div className="agx-isl-veil" aria-hidden />}
+        {open && <div className="agx-isl-morph" aria-hidden />}
         {open && (
           <div className="agx-isl-mc">
             <div className="agx-isl-head">
