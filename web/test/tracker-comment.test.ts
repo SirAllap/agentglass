@@ -108,7 +108,7 @@ const code = (s: string) => s.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.te
 describe("the Jira card pane", () => {
   test("header and composer stay put; only the thread between them scrolls", () => {
     const src = code(pane);
-    const header = src.indexOf('<div className="shrink-0" style={{ borderBottom: LINE }}>{header}</div>');
+    const header = src.indexOf('<div className="shrink-0" style={{ background: "var(--bg)" }}>{header({ onRefresh: refresh, refreshing })}</div>');
     const scroller = src.indexOf('<div ref={listRef} className="agx-scroll flex-1 min-h-0 overflow-y-auto');
     const foot = src.indexOf('<div className="shrink-0 px-4 pt-2 pb-3" style={{ borderTop: LINE }}>');
     const box = src.indexOf("<Composer value={say}");

@@ -9,7 +9,7 @@
 import type { CardPaneProps } from "../lib/boardSource.ts";
 import { LINE } from "./workspace/Chrome.tsx";
 import { JiraCard } from "./jira/JiraCard.tsx";
-import { JiraFacts } from "./jira/JiraFacts.tsx";
+import { JiraHead } from "./jira/JiraFacts.tsx";
 import { CloseButton } from "./CloseButton.tsx";
 
 /** The pane the board opens for a Jira card: facts on top, thread and composer beneath. */
@@ -23,7 +23,7 @@ export function JiraCardPane({ t, writable, onTask, nav, onClose }: CardPaneProp
           {onClose && <CloseButton onClick={onClose} title="Close · Esc" />}
         </div>
       )}
-      <JiraCard key={t.id} t={t} header={<JiraFacts t={t} writable={writable} onTask={onTask} />} writes={writable} onTask={onTask} />
+      <JiraCard key={t.id} t={t} header={(r) => <JiraHead t={t} writable={writable} onTask={onTask} onRefresh={r.onRefresh} refreshing={r.refreshing} />} writes={writable} onTask={onTask} />
     </div>
   );
 }

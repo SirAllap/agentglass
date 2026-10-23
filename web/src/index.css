@@ -1840,6 +1840,8 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
   margin-bottom: 24px;
 }
 .agx-scard:has(> .agx-scard-body:empty) { display: none; }
+/* The Orchestration page keeps its project bar stuck to the top (ScopeBar writes its height here); a card or row scrolled to stops under it. */
+.agx-orch .agx-scard, .agx-orch [data-row] { scroll-margin-top: calc(var(--orch-stick, 0px) + 8px); }
 .agx-scard-head {
   display: flex;
   flex-wrap: wrap;
@@ -2789,3 +2791,25 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-stk-row:not(:last-child) .agx-stk-rail::after { content: ""; position: absolute; left: 50%; top: 22px; bottom: -12px; width: 2px; margin-left: -1px; background: color-mix(in srgb, var(--text) 22%, transparent); }
 .agx-stk-rail .agx-stk-b { width: 20px; flex: none; position: relative; z-index: 1; }
 .agx-stk-trunk { position: relative; z-index: 1; height: 16px; max-width: 44px; padding: 0 2px; display: grid; place-items: center; border-radius: 3px; font-size: 8px; text-transform: uppercase; line-height: 1; color: var(--text3); background: var(--surface-card); box-shadow: inset 0 0 0 1px var(--surface-line); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The glyph on a step row that is waiting on Jira: still when motion is reduced, the row's word says it. */
+@keyframes agx-step-turn { to { transform: rotate(360deg); } }
+.agx-step-spin { animation: agx-step-turn 1s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .agx-step-spin { animation: none; } }
+/* The Orchestration page's "Right now" picture: the main agent, a wire to each job. */
+.agx-flow { display: grid; grid-template-columns: minmax(200px, 240px) minmax(0, 1fr); gap: 24px; align-items: stretch; }
+.agx-flow-roles { display: grid; gap: 8px; }
+.agx-flow-main, .agx-flow-job { position: relative; }
+.agx-flow-main::after { content: ""; position: absolute; top: 50%; right: -12px; width: 12px; height: 1px; background: var(--surface-line); }
+.agx-flow-job::after { content: ""; position: absolute; top: 50%; left: -12px; width: 12px; height: 1px; background: var(--surface-line); }
+.agx-flow-job::before { content: ""; position: absolute; left: -12px; top: -8px; bottom: -8px; width: 1px; background: var(--surface-line); }
+.agx-flow-job:first-child::before { top: 50%; }
+.agx-flow-job:last-child::before { bottom: 50%; }
+@media (max-width: 720px) {
+  .agx-flow { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .agx-flow-main::after, .agx-flow-job::after, .agx-flow-job::before { display: none; }
+}
+/* The ready-made setups: three cards that share the row, and stack when it is narrow. */
+.agx-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.agx-presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: start; }
+@media (max-width: 1100px) { .agx-presets { grid-template-columns: minmax(0, 1fr); } }

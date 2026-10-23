@@ -72,6 +72,7 @@ import { factsOf } from "../../../shared/unstick.ts";
 import { updateStanding, awaitingChecksOf, updateHeld, updateHeldTitle, stalledNote, REQUEST_WINDOW_MS, type UpdateStanding } from "../../../shared/justUpdated.ts";
 import { updateBranchMove, branchNoticeJump, prConflicted, gitSaysClean as cleanMerge, type BranchNotice } from "../lib/updateBranch.ts";
 import { depSpec } from "../../../shared/deps.ts";
+import { CardRef, StatusMove } from "./StepCard.tsx";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { confirmMergeGuard } from "../lib/mergeGuard.ts";
@@ -8251,18 +8252,10 @@ export function ReadyForQaSummary({ task, target, targetColor, unassign = "all",
   const key = { color: "var(--text3)", fontSize: 10.5, textTransform: "uppercase" as const, letterSpacing: "0.04em" };
   return (
     <div className="mt-3 text-[11.5px]" style={{ color: "var(--text2)" }}>
-      <div className="rounded-lg px-3 py-2.5" style={{ border: EDGE }}>
-        <span className="inline-flex items-center gap-1 rounded px-1.5 text-[10.5px]" style={{ border: EDGE }}>
-          <FlagIcon size={ICON.xs} />{task.customId || task.id}
-        </span>
-        <div className="mt-1.5 text-[12.5px] leading-snug" style={{ color: "var(--text)" }}>{task.title}</div>
-      </div>
+      <CardRef id={task.customId || task.id} title={task.title} />
       <div className="mt-3 grid items-center gap-y-2" style={{ gridTemplateColumns: "84px 1fr" }}>
         <div style={key}>Status</div>
-        <div className="flex items-center gap-1.5 min-w-0">
-          <StatusPill status={task.status} color={task.statusColor} />
-          {target ? <><span style={{ color: "var(--text3)" }}>→</span><StatusPill status={target} color={targetColor} /></> : <span style={{ color: "var(--text3)" }}>stays</span>}
-        </div>
+        <StatusMove from={task.status} fromColor={task.statusColor} to={target} toColor={targetColor} />
         <div style={key}>Unassign</div>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           {comesOff.length

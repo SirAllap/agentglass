@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { SettingRow } from "../SettingRow.tsx";
 import { SettingsCard, StatusBadge } from "../SettingsKit.tsx";
-import { Button } from "../workspace/Chrome.tsx";
+import { Button, EDGE, tintEdge } from "../workspace/Chrome.tsx";
+import { CloseIcon } from "../CloseButton.tsx";
+import { ICON } from "../../lib/iconSize.ts";
+import { PresetDiagram } from "./PresetDiagram.tsx";
 import type { PolicyRuleState } from "../../lib/api.ts";
 import type { Policy } from "../../../../shared/orchestration.ts";
 import type { EngineReadiness } from "../../../../shared/types.ts";
 import { rowId } from "../../lib/settingsIndex.ts";
-import { BACK_GONE, BACK_LABEL, appliedLine, applyPreset, presetInForce, scopeWords, backAvailable, backOf, checkSetup, undoPolicy, presetOffers, type Back, type PresetId, type SetupCheck } from "./orchestrationCopy.ts";
+import { BACK_GONE, BACK_LABEL, appliedLine, applyPreset, presetInForce, scopeWords, backAvailable, backOf, cardUndo, checkSetup, presetDiagram, undoPolicy, presetOffers, type Back, type PresetId, type SetupCheck } from "./orchestrationCopy.ts";
 
 /**
  * Named setups, built from what this machine can run, and a dry run of the
@@ -114,30 +117,49 @@ export function QuickSetup(p: QuickSetupProps) {
     setResult(null);
   };
 
+  const undoOnCard = offers.some((o) => cardUndo(back, p.policy, o.title));
   return (
     <SettingsCard title="Quick setup"
-      desc="One click sets how work is handed out, from the engines this machine can run now. Each one adds a rule you can see, edit and remove below."
+      desc="Start from a ready-made setup. Each card shows before and after; nothing running is moved, and you can undo it."
       actions={
         <>
-          {canGoBack && <Button disabled={locked} title={`Undo "${back.title}"`} onClick={() => void undo()}>{BACK_LABEL}</Button>}
+          {canGoBack && !undoOnCard && <Button disabled={locked} title={`Undo "${back?.title}"`} onClick={() => void undo()}>{BACK_LABEL}</Button>}
           <Button disabled={!p.readiness} onClick={() => setCheck(checkSetup(p.policy, p.states, p.readiness, p.inherited || p.root === "" ? "global" : p.root))}>Check my setup</Button>
         </>}>
-      {offers.map((o) => (
-        <SettingRow key={o.id} label={o.title} disabled={p.inherited}
-          hint={o.blocked ? o.blocked : (
-            <>{o.says.map((line) => <span key={line} className="block">{line}</span>)}<span className="block">{o.confirm}</span></>)}
-          status={o.blocked && p.readiness ? <StatusBadge tone="off">Not available</StatusBadge>
-            : o.active ? <StatusBadge tone="ok">{`Active for ${scopeWords(p.root)}`}</StatusBadge> : undefined}
-          actions={<Button tone={o.active ? undefined : "primary"} disabled={locked || !!o.blocked || o.active} title={o.blocked ?? o.confirm} onClick={() => void apply(o.id, o.title, o.ruleName ?? o.title)}>{o.active ? "Applied" : "Apply"}</Button>}
-          below={o.blocked && p.readiness ? (
-            <p className="m-0 text-[12px]" style={{ color: "var(--text3)" }}>
-              <button type="button" className="agx-field-link" onClick={p.onOpenEngines}>See Agent engines</button>
-            </p>) : undefined} />
-      ))}
+      <div className="agx-settings-x agx-presets pt-2 pb-4">
+        {offers.map((o) => (
+          <div key={o.id} data-row={rowId(o.title)} className="rounded-lg p-3 grid content-start gap-3 min-w-0"
+            style={{ border: o.active ? tintEdge("var(--success)", 60) : EDGE, opacity: p.inherited ? 0.6 : 1 }}>
+            <div className="grid gap-1">
+              <h4 className="m-0 text-[13px] font-medium" style={{ color: "var(--text)" }}>{o.title}</h4>
+              <div className="text-[12px]" style={{ color: "var(--text3)" }}>
+                {o.blocked ? o.blocked : o.says.map((line) => <span key={line} className="block">{line}</span>)}
+              </div>
+            </div>
+            <PresetDiagram rows={presetDiagram(p.policy, o.workers)} />
+            <div className="flex flex-wrap items-center gap-2">
+              {o.active ? (
+                <>
+                  <StatusBadge tone="ok">{`Applied for ${scopeWords(p.root)}`}</StatusBadge>
+                  {cardUndo(back, p.policy, o.title) && <Button disabled={locked} title={`Undo "${back?.title}"`} onClick={() => void undo()}>{BACK_LABEL}</Button>}
+                </>
+              ) : (
+                <>
+                  <Button tone="primary" disabled={locked || !!o.blocked} title={o.blocked ?? o.confirm} onClick={() => void apply(o.id, o.title, o.ruleName ?? o.title)}>Use this setup</Button>
+                  {o.blocked && p.readiness && <button type="button" className="agx-field-link" onClick={p.onOpenEngines}>See Agent engines</button>}
+                </>
+              )}
+            </div>
+            <p className="m-0 text-[11px]" style={{ color: "var(--text3)" }}>{o.confirm}</p>
+          </div>
+        ))}
+      </div>
       {result && (
-        <p role="status" className="agx-settings-x m-0 pb-3 text-[12px]" style={{ color: "var(--text)" }}>
-          {appliedLine(result.ruleName, result.changed)}{" "}
-          <button type="button" className="agx-field-link" onClick={() => showRule(result.ruleName)}>See it in Rules below</button>
+        <p role="status" className="agx-settings-x m-0 pb-3 text-[12px] flex flex-wrap items-center gap-x-3 gap-y-1" style={{ color: "var(--text)" }}>
+          <span>{appliedLine(result.ruleName, result.changed, p.root)}</span>
+          {result.changed && canGoBack && <button type="button" className="agx-field-link" disabled={locked} onClick={() => void undo()}>{BACK_LABEL}</button>}
+          <button type="button" className="agx-field-link" onClick={() => showRule(result.ruleName)}>See it in Conditions below</button>
+          <Button label="Dismiss" square size="compact" onClick={() => setResult(null)}><CloseIcon size={ICON.sm} /></Button>
         </p>)}
       {gone && !canGoBack && <p className="agx-settings-x m-0 pb-3 text-[12px]" style={{ color: "var(--text3)" }}>{BACK_GONE}</p>}
       {p.inherited && <p className="agx-settings-x m-0 pb-3 text-[12px]" style={{ color: "var(--text3)" }}>This project uses the general setting. Set it for this project first, or pick All projects.</p>}

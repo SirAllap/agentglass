@@ -57,11 +57,11 @@ export function useAskAssign(o: {
   return { model, members, pick, setPick: setChosen, ensure: pickToEnsure(pick), ready };
 }
 
-export function Face({ m }: { m: { avatar?: string; color?: string; initials?: string } }) {
+export function Face({ m, size = 16 }: { m: { avatar?: string | undefined; color?: string | undefined; initials?: string | undefined }; size?: number }) {
   const [broken, setBroken] = useState(false);
   return m.avatar && !broken
-    ? <img src={avatarSrc(m.avatar)} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken(true)} style={{ width: 16, height: 16, borderRadius: 999, objectFit: "cover", flexShrink: 0 }} />
-    : <span className="shrink-0 rounded-full inline-flex items-center justify-center" style={{ width: 16, height: 16, background: m.color || "var(--bg4)", color: "#fff", fontSize: 8 }}>{m.initials}</span>;
+    ? <img src={avatarSrc(m.avatar)} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken(true)} style={{ width: size, height: size, borderRadius: 999, objectFit: "cover", flexShrink: 0 }} />
+    : <span className="shrink-0 rounded-full inline-flex items-center justify-center" style={{ width: size, height: size, background: m.color || "var(--bg4)", color: "#fff", fontSize: size === 16 ? 8 : Math.round(size * 0.5) }}>{m.initials}</span>;
 }
 
 /**

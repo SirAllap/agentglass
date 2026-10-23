@@ -399,7 +399,7 @@ Every route is behind the token and the origin/Host gates described in [Security
 
 ### The orchestration policy
 
-Which engine and model sits in a project's chair, which ones do the work it
+Which engine and model runs a project's main agent, which ones do the work it
 hands out, what a worker may do, and when that changes. It is stored as the
 `orchestration` key of `config.json` (`{global, projects: {<root>: …}}`), edited
 in **Settings ▸ Orchestration** or through `POST /orchestration`, and it has no
@@ -407,20 +407,41 @@ environment variable of its own. A project's policy replaces the global one
 whole; with neither stored, the defaults below apply. An entry that does not
 validate is ignored with one line in the log, and reads as absent.
 
-**Quick setup** at the top of **Settings ▸ Orchestration** offers three named
+The **project bar** stays at the top of **Settings ▸ Orchestration** while the page
+scrolls: one chip per project and "All projects", a dot on a project with a
+setting of its own, one line saying whose setting is on screen, and the one
+action that changes it (**Set for this project** copies the general setting to
+it; **Use the general setting** removes the project's own). The last choice is
+kept in the window (`agx.orchestration.scope` in its local storage) and the page
+opens on it while that project is still on offer.
+
+**Right now** comes next: the main agent and the three
+jobs (scouts, builders, verifiers) as chains of engine tiles, each with its state
+in a word, and one line saying whether the defaults, a ready-made setup or a rule
+put them there. It reads what the page already holds and makes no request.
+
+**Safety and limits** closes the page and is shut until opened (`defaults` shows while
+nothing in it differs from a fresh install). It holds what a worker may do by
+default, the most the main agent may allow, the commands also refused, the
+limits, and one **Save** for the two permission groups; each item is a sentence
+and an example. It changes the same `workerDefault`, `ceiling` and `limits`
+fields below, through the same `POST /orchestration`.
+
+**Quick setup**, under it, offers three named
 setups built from the engines this machine reports ready for the role: the
-chair stays Claude Code and the workers go to the other ready engines (refused,
-with the reason, when the chair is another engine or a rule moves it), all
+main agent stays Claude Code and the workers go to the other ready engines (refused,
+with the reason, when the main agent is another engine or a rule moves it), all
 workers on Claude Code, or builders moved off Claude Code when its weekly plan is nearly
 spent. Applying one adds a single rule whose id starts with `preset-` through the
-same `POST /orchestration` the page already uses, says under the card which rule it
-added and links to it, shows the setup as active once it is in force (pressing it
+same `POST /orchestration` the page already uses, draws before and after on each card, says
+"Saved for <where>. Nothing running was moved." with an Undo and a link to the rule,
+marks the card applied once it is in force (pressing it
 again changes nothing and keeps the way back), and leaves the base, the
-envelope and the limits as they were; **Back to what it was** removes only the
+envelope and the limits as they were; **Undo** (beside the applied card) removes only the
 rule that was added and puts the earlier rules back in their order. It is
 offered only while the stored policy is exactly what applying left; after any
 other edit it is gone, and the page says to edit the rule instead. **Check my setup** reads the policy against the same readings
-and says who would sit in the chair and which engine each role would use now,
+and says who would run the main agent and which engine each role would use now,
 and what each rule would change if it held; it makes no request and starts
 nothing.
 

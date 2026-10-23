@@ -178,6 +178,11 @@ export interface JiraSteps { handoff: JiraStep; review: JiraStep; merge: JiraSte
 export type JiraStepKey = keyof JiraSteps;
 /** What a person chose when a step asked (all optional): the status by name, the assignee, the comment as edited. */
 export interface JiraStepChoice { to?: string; clear?: boolean; assign?: string | null; comment?: string; /** Skip the step's move; the rest of it still runs. */ stay?: boolean }
+/**
+ * What one block of a step did, in the order the server ran them. `assignee` stands for the take-off and the
+ * assign together: the server writes who is on the card once. `why` is a sentence of ours, never the site's words.
+ */
+export interface JiraBlockOutcome { block: "move" | "assignee" | "comment" | "link"; state: "done" | "skipped" | "failed"; why?: string }
 /** The pull request a step links on the card. */
 export interface JiraStepPr { url: string; title?: string; number?: number; author?: string }
 

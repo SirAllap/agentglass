@@ -153,7 +153,7 @@ describe("what a card says", () => {
   test("it says what it sets, in the sentence a rule has, and that the list ends in asking", () => {
     const o = offer("claude-orchestrates", OPENCODE_AND_CLAUDE);
     expect(o.says).toEqual([
-      `The chair stays ${title("claude")}.`,
+      `The main agent stays ${title("claude")}.`,
       `When this always holds: scouts use ${title("opencode")}; builders use ${title("opencode")}; verifiers use ${title("opencode")}. ${CHAIN_TAIL}`,
     ]);
     expect(offer("save-my-plan", OPENCODE_AND_CLAUDE).says).toEqual([
@@ -163,7 +163,7 @@ describe("what a card says", () => {
   });
   test("the sentence under the card states what applying does and is not a question", () => {
     const o = offer("all-on-claude", OPENCODE_AND_CLAUDE);
-    expect(o.confirm).toBe(`Applying adds one rule; nothing already running is moved. "${BACK_LABEL}" undoes it while nothing else has changed.`);
+    expect(o.confirm).toBe(`Adds one rule; nothing already running is moved. ${BACK_LABEL} puts the earlier setup back while nothing else has changed.`);
     expect(o.confirm).not.toContain("?");
   });
   test("every title comes from the table", () => {
@@ -177,15 +177,15 @@ describe("the chair claim", () => {
   const chairOn = (engine: string): Policy => ({ ...policy(), base: { ...policy().base, orchestrator: { ask: false, value: [{ engine, model: "" }] } } });
   const READY3 = [...OPENCODE_AND_CLAUDE, engine("codex")];
   test("the card says the chair stays only when the chair is that engine, and refuses with the reason when it is not", () => {
-    expect(presetOffers(READY3, policy()).find((o) => o.id === "claude-orchestrates")!.says[0]).toBe(`The chair stays ${title("claude")}.`);
+    expect(presetOffers(READY3, policy()).find((o) => o.id === "claude-orchestrates")!.says[0]).toBe(`The main agent stays ${title("claude")}.`);
     const o = presetOffers(READY3, chairOn("codex")).find((o) => o.id === "claude-orchestrates")!;
-    expect(o.blocked).toBe(`The chair is ${title("codex")}, not ${title("claude")}; set the chair first.`);
+    expect(o.blocked).toBe(`The main agent is ${title("codex")}, not ${title("claude")}; change the main agent first.`);
     expect(applyPreset(chairOn("codex"), "claude-orchestrates", READY3)).toBeNull();
   });
   test("a rule of the person's that moves the chair refuses it too, and names the rule", () => {
     const moves = { id: "m", name: "Chair on Codex", enabled: true, when: [{ kind: "always" as const }], orchestrator: [{ engine: "codex", model: "" }] };
     const p: Policy = { ...policy(), rules: [moves] };
-    expect(presetOffers(READY3, p).find((o) => o.id === "claude-orchestrates")!.blocked).toBe(`Rule "Chair on Codex" moves the chair to ${title("codex")}; edit it first.`);
+    expect(presetOffers(READY3, p).find((o) => o.id === "claude-orchestrates")!.blocked).toBe(`Rule "Chair on Codex" moves the main agent to ${title("codex")}; edit it first.`);
     expect(applyPreset(p, "claude-orchestrates", READY3)).toBeNull();
   });
   test("the other presets make no claim about the chair, so a chair on another engine does not stop them", () => {
@@ -195,7 +195,7 @@ describe("the chair claim", () => {
     const p = applyPreset(policy(), "claude-orchestrates", READY3)!;
     const moved: Policy = { ...p, base: { ...p.base, orchestrator: { ask: false, value: [{ engine: "codex", model: "" }] } } };
     const on = [state({ ruleId: presetRuleId("claude-orchestrates"), active: true })];
-    expect(checkSetup(moved, on, READY3).rules[0]!.line).toContain(`${title("claude")} orchestrates, but the chair would be ${title("codex")}`);
+    expect(checkSetup(moved, on, READY3).rules[0]!.line).toContain(`${title("claude")} orchestrates, but the main agent would be ${title("codex")}`);
     expect(checkSetup(p, on, READY3).rules[0]!.line).not.toContain("but the chair");
   });
 });
@@ -204,7 +204,7 @@ describe("Check my setup", () => {
   test("says who sits in the chair and which engine each role uses right now", () => {
     const p = policy();
     const c = checkSetup(p, [], OPENCODE_AND_CLAUDE);
-    expect(c.chair).toBe(`${title("claude")} sonnet would sit in the chair.`);
+    expect(c.chair).toBe(`${title("claude")} sonnet would run the main agent.`);
     expect(c.roles.map((r) => r.line)).toEqual([
       `Scouts would run on ${title("opencode")}.`,
       `Builders would run on ${title("claude")} sonnet.`,

@@ -10,7 +10,7 @@ const mod = await import("../src/lib/api.ts");
 const a = mod.api as unknown as Record<string, unknown>;
 const saved = a.jiraLinks;
 a.jiraLinks = (k: string) => { calls.push(k); return answer(); };
-const { readJiraLinks, addJiraLink, forgetJiraLinks } = await import("../src/lib/jiraLinks.ts");
+const { readJiraLinks, addJiraLink, forgetJiraLinks, peekJiraLinks, jiraLinksVersion } = await import("../src/lib/jiraLinks.ts");
 afterAll(() => { a.jiraLinks = saved; forgetJiraLinks(); });
 
 describe("reading a card's links", () => {
@@ -61,5 +61,20 @@ describe("where it is wired", () => {
 
   it("nothing in the store polls", async () => {
     expect(strip(await store.text())).not.toMatch(/setInterval|setTimeout/);
+  });
+});
+
+describe("the tab counter reads what is held and asks for nothing", () => {
+  beforeEach(() => { calls.length = 0; forgetJiraLinks(); });
+
+  it("peeking is empty before a read, costs no request, and tells listeners when the read lands", async () => {
+    answer = async () => ({ ok: true, links: [{ url: "https://github.com/acme/orbit/pull/7", number: 7, title: "acme/orbit#7", resolved: true }] });
+    expect(peekJiraLinks("ORBIT-7")).toBeNull();
+    expect(calls).toEqual([]);
+    const v = jiraLinksVersion();
+    await readJiraLinks("ORBIT-7");
+    expect(peekJiraLinks("ORBIT-7")?.links.length).toBe(1);
+    expect(jiraLinksVersion()).toBeGreaterThan(v);
+    expect(calls).toEqual(["ORBIT-7"]);
   });
 });

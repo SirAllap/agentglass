@@ -12,7 +12,7 @@
  * comments). A comment is one write and the card read back, and that answer
  * replaces the thread, so posting costs no second read here.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api } from "../../lib/api.ts";
 import { avatarSrc } from "../../lib/avatarSrc.ts";
 import { fmtAgo } from "../../lib/format.ts";
@@ -26,9 +26,13 @@ import type { ProviderTask, TaskDetail } from "../../../../shared/providers.ts";
 import { openCard } from "../../lib/openCard.ts";
 import { Composer, COMPOSER_MIN } from "../tasks/Composer.tsx";
 import { LINE } from "../workspace/Chrome.tsx";
+import { jiraLinksVersion, onJiraLinks, peekJiraLinks } from "../../lib/jiraLinks.ts";
+import { CardFiles } from "../CardFiles.tsx";
+import { CardTabs } from "../CardChrome.tsx";
+import { JiraProps } from "./JiraFacts.tsx";
 import { Spinner } from "../Spinner.tsx";
 import { JiraCardPrs } from "./JiraCardPrs.tsx";
-import { mentionsOfCard } from "../../lib/jiraLinks.ts";
+import { mentionsOfCard, withMentions } from "../../lib/jiraLinks.ts";
 
 /** The box may grow to this share of the pane, then scrolls inside; the ClickUp card's share. */
 const COMPOSER_SHARE = 0.3;
@@ -48,7 +52,7 @@ function Author({ who, initials, avatar }: { who: string; initials?: string; ava
     style={{ ...size, background: "var(--bg4)", color: chipInk(null) }}>{initials || "?"}</span>;
 }
 
-type Tab = "card" | "github" | "subtasks";
+type Tab = "card" | "files" | "github" | "subtasks";
 
 /** Subtasks as the detail read gave them: the key, the title, the status as the site spells it. A row opens the card in the app. */
 export function SubtaskRows({ rows }: { rows: ProviderTask[] }) {
@@ -71,8 +75,8 @@ export function SubtaskRows({ rows }: { rows: ProviderTask[] }) {
 
 export function JiraCard({ t, header, writes, onTask }: {
   t: ProviderTask;
-  /** The card's facts, drawn above the thread and kept there. */
-  header: React.ReactNode;
+  /** What stays above the tabs, given how to re-read this card. */
+  header: (r: { onRefresh: () => void; refreshing: boolean }) => React.ReactNode;
   /** Whether writing to Jira is switched on; off draws a line instead of the box. */
   writes: boolean;
   /** The card as a fresher read or a write left it, for the list beside this. */
@@ -86,6 +90,7 @@ export function JiraCard({ t, header, writes, onTask }: {
   const onTaskRef = useRef(onTask);
   onTaskRef.current = onTask;
 
+  const [refreshing, setRefreshing] = useState(false);
   const read = useCallback(async () => {
     const mine = ++tok.current;
     const r = await api.jiraDetail(key).catch(() => ({ ok: false as const, error: "Could not reach agentglass" } as Awaited<ReturnType<typeof api.jiraDetail>>));
@@ -95,6 +100,11 @@ export function JiraCard({ t, header, writes, onTask }: {
       onTaskRef.current(r.detail.task);
     } else setErr(r.error || `${key} could not be read`);
   }, [key]);
+  /* The card's own refresh: the detail read again, the same one a pick makes, no timer and no second request. */
+  const refresh = useCallback(() => {
+    setRefreshing(true);
+    void read().finally(() => setRefreshing(false));
+  }, [read]);
 
   useEffect(() => { setDetail(null); setMore(0); setErr(""); void read(); }, [read]);
 
@@ -106,7 +116,11 @@ export function JiraCard({ t, header, writes, onTask }: {
   const subtasks = detail?.subtasks ?? [];
   // The pull requests the card's own words name, from the read already made.
   const mentions = useMemo(() => (detail ? mentionsOfCard(detail) : []), [detail]);
-  const view: Tab = tab === "subtasks" && !subtasks.length ? "card" : tab;
+  const files = detail?.attachments ?? [];
+  /* The counter reads what the GitHub tab's own read already holds; it asks for nothing. */
+  useSyncExternalStore(onJiraLinks, jiraLinksVersion, jiraLinksVersion);
+  const prCount = withMentions(peekJiraLinks(key)?.links ?? [], mentions).length;
+  const view: Tab = (tab === "subtasks" && !subtasks.length) || (tab === "files" && !files.length) ? "card" : tab;
 
   /* The composer, pinned under the thread. */
   const [say, setSay] = useState("");
@@ -182,32 +196,23 @@ export function JiraCard({ t, header, writes, onTask }: {
 
   return (
     <div ref={paneRef} className="flex flex-col flex-1 min-w-0 min-h-0">
-      <div className="shrink-0" style={{ borderBottom: LINE }}>{header}</div>
-      <div className="shrink-0">
-        <div className="flex items-center gap-1.5 px-5" style={{ borderBottom: LINE }}>
-          {([
-            ["card", "Card"],
-            ["github", "GitHub"],
-            ...(subtasks.length ? [["subtasks", `Subtasks ${subtasks.length}`] as const] : []),
-          ] as const).map(([id, label]) => (
-            <button key={id} onClick={() => setTab(id)} aria-current={view === id ? "page" : undefined}
-              className="agx-btn text-[10px] uppercase tracking-[0.14em] px-2.5 py-1.5 -mb-px rounded-t-md"
-              style={{
-                color: view === id ? "var(--text)" : "var(--text3)",
-                background: view === id ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent",
-                borderBottom: `2px solid ${view === id ? "var(--primary)" : "transparent"}`,
-              }}>
-              {label}
-            </button>
-          ))}
-        </div>
+      <div className="shrink-0" style={{ background: "var(--bg)" }}>{header({ onRefresh: refresh, refreshing })}</div>
+      <div className="shrink-0 px-4">
+        <CardTabs active={view} onPick={setTab} tabs={[
+          { id: "card", label: "Card" },
+          ...(files.length ? [{ id: "files" as const, label: "Files", count: files.length }] : []),
+          { id: "github", label: "GitHub", count: prCount },
+          ...(subtasks.length ? [{ id: "subtasks" as const, label: "Subtasks", count: subtasks.length }] : []),
+        ]} />
       </div>
 
-      <div ref={listRef} className="agx-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-5 py-3">
+      <div ref={listRef} className="agx-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 py-3">
+        {view === "files" && <CardFiles files={files} />}
         {view === "github" && <JiraCardPrs query={key} writable={writes} quiet={!writes} mentions={mentions} />}
         {view === "subtasks" && <SubtaskRows rows={subtasks} />}
         {view === "card" && err && <div className="text-[11px] mb-3" role="alert" style={{ color: "var(--error-ink)" }}>{err}</div>}
         {view === "card" && !detail && !err && <Spinner label="Reading the card…" className="" />}
+        {view === "card" && <JiraProps t={detail?.task ?? t} writable={writes} onTask={onTask} />}
         {view === "card" && detail && (
           <>
             <div className="text-[10px] uppercase tracking-wide mb-1.5" style={{ color: "var(--text3)" }}>Description</div>

@@ -138,7 +138,7 @@ describe("a preset, stored", () => {
     const wide = { ...applyPreset(before, "all-on-claude"), workerDefault: { ...before.workerDefault, network: true }, ceiling: { ...before.ceiling, network: false } };
     const res = await save(wide);
     expect(res.status).toBe(400);
-    expect(((await res.json()) as { error: string }).error).toContain("is wider than the ceiling");
+    expect(((await res.json()) as { error: string }).error).toContain("is wider than the most the main agent may allow");
     expect(stored()).toBe(bytes);
   });
 

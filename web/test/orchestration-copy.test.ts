@@ -70,7 +70,7 @@ describe("the sentence form of each trigger kind", () => {
       workers: { scout: [{ engine: "opencode", model: "" }], verifier: [{ engine: "claude", model: "" }] },
     });
     expect(ruleLine(r)).toBe(
-      `When the project's budget is used up and it is Sat, 00:00 to 23:59: the chair is ${title("claude")} haiku; scouts use ${title("opencode")}; verifiers use ${title("claude")}.`);
+      `When the project's budget is used up and it is Sat, 00:00 to 23:59: the main agent is ${title("claude")} haiku; scouts use ${title("opencode")}; verifiers use ${title("claude")}.`);
   });
 });
 

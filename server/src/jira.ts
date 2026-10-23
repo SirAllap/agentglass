@@ -51,7 +51,7 @@ import { clearCredential, redacted, secretFor, setCredential } from "./credentia
 import type { CallResult, WriteOutcome } from "./trackerTypes.ts";
 import { prAddress } from "../../shared/taskref.ts";
 import type {
-  JiraAuth, JiraConnectResult, JiraDeployment, JiraHandoffRule, JiraKind, JiraMove, JiraMoves, JiraPerson, JiraSettings, JiraStatus, ProviderTask,
+  JiraAuth, JiraBlockOutcome, JiraConnectResult, JiraDeployment, JiraHandoffRule, JiraKind, JiraMove, JiraMoves, JiraPerson, JiraSettings, JiraStatus, ProviderTask,
 } from "../../shared/providers.ts";
 import { hasUrlCredentials } from "../../shared/urlCredentials.ts";
 
@@ -1541,7 +1541,7 @@ export interface HandoffChoice {
  * assignee write to close it.
  */
 /** A hand-off's answer. `moved`: the card moved but could not be read back, as much of it as the watch needs. */
-export type HandoffOutcome = WriteOutcome & { moved?: ProviderTask };
+export type HandoffOutcome = WriteOutcome & { moved?: ProviderTask; /** What each block of a step did; a step run says it, the older hand-off does not. */ blocks?: JiraBlockOutcome[] };
 
 export async function handOff(creds: JiraCreds, key: string, updated: number, choice: HandoffChoice = {}): Promise<HandoffOutcome> {
   if (!jiraWriteEnabled()) return { ok: false, error: WRITE_OFF };

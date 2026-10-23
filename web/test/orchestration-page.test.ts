@@ -18,7 +18,7 @@ import { agentProvider } from "../../shared/agentKinds.ts";
 import { composePolicy, defaultStored, validatePolicy, type Policy, type PolicyRule } from "../../shared/orchestration.ts";
 import type { EngineReadiness } from "../../shared/types.ts";
 import type { PolicyRuleState } from "../src/lib/api.ts";
-import { GAUGE_HELP, NO_WORKER_ENGINE } from "../src/components/orchestration/orchestrationCopy.ts";
+import { GAUGE_HELP, LIMIT_RANGE, NO_WORKER_ENGINE, SAFETY, safetyIsDefault } from "../src/components/orchestration/orchestrationCopy.ts";
 
 const DIR = join(import.meta.dir, "..", "src", "components", "orchestration");
 const strip = (s: string) => s.replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
@@ -116,8 +116,8 @@ describe("a rule's row, in each state", () => {
 });
 
 describe("the page, in its other states", () => {
-  test("no rules: the empty state says the choices above always apply", () => {
-    expect(view()).toContain("No rules. The choices above always apply.");
+  test("no conditions: the empty state says the choices above always apply", () => {
+    expect(view()).toContain("No conditions. The choices above always apply.");
   });
   test("no engine can work: the Workers card is one empty state, with no role rows", () => {
     const html = view({ readiness: NONE });
@@ -154,8 +154,9 @@ describe("the page, in its other states", () => {
     expect(html).not.toContain("Set for this project");
     expect(html).toContain("Worker roles are global.");
   });
-  test("All projects says the chair's model is a project's choice", () => {
-    expect(view()).toContain("The chair&#x27;s model is a project&#x27;s choice: pick a project above.");
+  test("All projects says the main agent's model is a project's choice, once its tiles are open", () => {
+    expect(view({ openPicker: "orchestrator" })).toContain("The main agent&#x27;s model is a project&#x27;s choice: pick a project above.");
+    expect(view()).not.toContain("is a project&#x27;s choice");
   });
 });
 
@@ -165,7 +166,7 @@ describe("saving permissions", () => {
     const r = validatePolicy(JSON.parse(JSON.stringify(wide)));
     expect(r.ok).toBe(false);
     const sentence = r.ok ? "" : r.error;
-    expect(sentence).toContain("is wider than the ceiling");
+    expect(sentence).toContain("is wider than the most the main agent may allow");
     const html = view({ notes: { envelope: sentence } });
     const save = html.indexOf("Save these permissions");
     const note = html.indexOf(sentence.replace(/'/g, "&#x27;"));
@@ -186,5 +187,114 @@ describe("the rule form", () => {
     expect(GAUGE_HELP()).not.toBe("");
     expect(html).toContain(GAUGE_HELP().replace(/'/g, "&#x27;"));
     expect(html).toContain("Then ask me.");
+  });
+});
+
+describe("the tile pickers (a disabled engine says why once and cannot be picked)", () => {
+  const html = view({ openPicker: "builder" });
+  const picker = html.slice(html.indexOf('data-picker="builder"'));
+  const tiles = picker.slice(0, picker.indexOf("2. Which model"));
+  test("every engine is a tile; the one that cannot run is disabled and its reason is written once", () => {
+    for (const id of ["claude", "opencode", "hermes"]) expect(tiles).toContain(`>${title(id)}<`);
+    const why = "0.21.0 is older than 0.21.4.";
+    expect(tiles.split(why).length - 1).toBe(1);
+    expect(tiles).not.toContain(`title="${why}`);
+  });
+  test("the disabled tile is a disabled button, so pressing it does nothing", () => {
+    const old = tiles.slice(tiles.indexOf(`>${title("hermes")}<`));
+    const open = tiles.lastIndexOf("<button", tiles.indexOf(`>${title("hermes")}<`));
+    expect(tiles.slice(open, open + 400)).toContain('disabled=""');
+    expect(old).toContain("Needs update");
+  });
+  test("a ready tile is enabled and keeps its reason as the hover only", () => {
+    const at = tiles.lastIndexOf("<button", tiles.indexOf(`>${title("opencode")}<`));
+    const tag = tiles.slice(at, tiles.indexOf(">", at));
+    expect(tag).not.toContain("disabled");
+    expect(tag).toContain(`title="${title("opencode")} is ready."`);
+  });
+  test("the main agent's models are tiles; a worker's model is typed", () => {
+    const o = view({ openPicker: "orchestrator", root: "/w/orbit", scope: "project", seat: { live: true, model: "sonnet", models: [{ id: "sonnet", label: "Sonnet" }, { id: "opus", label: "Opus" }] } });
+    expect(o).toContain("Sonnet</button>");
+    expect(o).toContain("default model</button>");
+    expect(picker).toContain('placeholder="its default model"');
+  });
+  test("each press saves at once and Undo only while the choice is still that one", () => {
+    const pane = FILES.find((x) => x.f === "OrchestrationPane.tsx")!.text;
+    expect(pane).toContain("withBaseChoice(policy, field, to)");
+    expect(pane).toContain("pickUndoable(policy, picked)");
+  });
+});
+
+describe("conditions with their strips, and the side sheet", () => {
+  const night = rule("night", { when: [{ kind: "hours", days: [1, 2, 3, 4, 5], from: "22:00", to: "07:00" }] });
+  const html = view({
+    policy: { ...base(), rules: [rule("a"), night] },
+    states: [st("a", { reading: "Claude 62% left", readingAt: 5 })],
+    now: new Date(2026, 9, 12, 18, 0),
+  });
+  test("an hours condition draws its clock strip, with now at 75%, and a usage one its meter", () => {
+    const row = rowOf(html, "Rule night");
+    expect(row).toContain('data-strip="clock"');
+    expect(row).toContain('data-mark="now" style="left:75%');
+    expect(row).toContain("left:91.67%;width:8.33%");
+    const a = rowOf(html, "Rule a");
+    expect(a).toContain('data-strip="meter"');
+    expect(a).toContain('data-mark="threshold" style="left:10%');
+    expect(a).toContain("62% left now");
+  });
+  test("the sheet shows the draft's sentence, the test button and the three actions, and only when asked for", () => {
+    expect(html).not.toContain('data-sheet="rule"');
+    const open = view({ openRule: "night", policy: { ...base(), rules: [night] }, now: new Date(2026, 9, 12, 18, 0) });
+    expect(open).toContain('data-sheet="rule"');
+    expect(open).toContain("Editing condition for all projects");
+    expect(open).toContain(`it is Mon, Tue, Wed, Thu, Fri, 22:00 to 07:00: builders use ${title("opencode")} big-pickle.`);
+    for (const t of [">Test it now<", ">Delete<", ">Cancel<", ">Save for all projects<"]) expect(open, t).toContain(t);
+  });
+  test("a sheet for a rule that does not exist is not drawn", () => {
+    expect(view({ openRule: "ghost" })).not.toContain('data-sheet="rule"');
+  });
+});
+
+describe("Safety and limits", () => {
+  const PANE = FILES.find((x) => x.f === "OrchestrationPane.tsx")!.text;
+  const SAFE = (html: string) => html.slice(html.indexOf("Safety and limits"));
+  test("it is one disclosure, shut by default, that says defaults while nothing in it was changed", () => {
+    const html = view();
+    const at = html.indexOf("Safety and limits");
+    expect(at).toBeGreaterThan(-1);
+    const det = html.slice(html.lastIndexOf("<details", at), at);
+    expect(det).not.toContain(" open");
+    expect(SAFE(html)).toContain(">defaults<");
+    expect(SAFE(html)).not.toContain(">changed<");
+    const changed = base();
+    changed.limits = { ...changed.limits, maxWorkers: 5 };
+    expect(SAFE(view({ policy: changed }))).toContain(">changed<");
+  });
+  test("a stored policy with the server's key order still reads as defaults, and one added refusal does not", () => {
+    const p = base();
+    p.workerDefault = { deny: [], commit: p.workerDefault.commit, network: p.workerDefault.network, write: p.workerDefault.write };
+    expect(safetyIsDefault(p)).toBe(true);
+    p.workerDefault = { ...p.workerDefault, deny: ["docker compose down"] };
+    expect(safetyIsDefault(p)).toBe(false);
+  });
+  test("every item says what it does in one sentence and gives an example", () => {
+    for (const k of ["write", "network", "commit", "deny"] as const) expect(SAFETY[k]).toMatch(/\. Example: /);
+    for (const k of ["workers", "most"] as const) expect(SAFETY[k].note).toMatch(/\. Example: /);
+    expect(SAFETY.always.hint).toMatch(/\. Example: /);
+    for (const r of Object.values(LIMIT_RANGE)) expect(r.hint).toMatch(/\. Example: /);
+    const html = SAFE(view());
+    for (const t of ["What a worker may do by default", "The most the main agent may allow", "Limits", "Save these permissions", "Always refused", "Workers at once"]) expect(html).toContain(t);
+  });
+  test("a refusal under Save or a step opens the disclosure, so the sentence is not hidden", () => {
+    expect(PANE).toContain("setSafetyOpen(true)");
+    expect(PANE).toMatch(/const safetyNote = notes\.envelope \|\| notes\.limits;/);
+  });
+  test("a search result that lands on a row inside the shut card opens it", () => {
+    expect(PANE).toContain("useContext(Filter).flash");
+    expect(PANE).toMatch(/textContent === SAFETY\.title\) setSafetyOpen\(true\)/);
+  });
+  test("nothing the person reads says chair, seat, envelope or ceiling", () => {
+    const html = view({ notes: {} }).replace(/<[^>]+>/g, " ");
+    expect(/\b(chair|seat|envelope|ceiling)\b/i.test(html)).toBe(false);
   });
 });

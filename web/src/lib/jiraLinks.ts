@@ -19,6 +19,14 @@ export type JiraLinks = { links: JiraLink[]; error: string };
 const TTL_MS = 60_000;
 const held = new Map<string, { at: number; value: JiraLinks }>();
 const pending = new Map<string, Promise<JiraLinks>>();
+const listeners = new Set<() => void>();
+let version = 0;
+const changed = () => { version++; for (const f of listeners) f(); };
+
+/** What is held for a card, without asking: the pane's tab counter reads this and costs no request. */
+export function peekJiraLinks(key: string): JiraLinks | null { return held.get(key)?.value ?? null; }
+export function onJiraLinks(fn: () => void): () => void { listeners.add(fn); return () => { listeners.delete(fn); }; }
+export function jiraLinksVersion(): number { return version; }
 
 /** The card's links: from memory while fresh, otherwise one request, shared by whoever asks meanwhile. */
 export function readJiraLinks(key: string): Promise<JiraLinks> {
@@ -29,7 +37,7 @@ export function readJiraLinks(key: string): Promise<JiraLinks> {
   const p = api.jiraLinks(key)
     .then((r): JiraLinks => ({ links: r?.ok ? r.links ?? [] : [], error: r?.ok ? "" : r?.error || "Jira did not answer" }))
     .catch((): JiraLinks => ({ links: [], error: "Could not reach the server" }))
-    .then((value) => { held.set(key, { at: Date.now(), value }); pending.delete(key); return value; });
+    .then((value) => { held.set(key, { at: Date.now(), value }); pending.delete(key); changed(); return value; });
   pending.set(key, p);
   return p;
 }
@@ -39,10 +47,11 @@ export function addJiraLink(key: string, link: JiraLink): JiraLinks {
   const cur = held.get(key)?.value ?? { links: [], error: "" };
   const value = { links: cur.links.some((l) => l.url === link.url) ? cur.links : [...cur.links, link], error: "" };
   held.set(key, { at: Date.now(), value });
+  changed();
   return value;
 }
 
-export function forgetJiraLinks(): void { held.clear(); pending.clear(); }
+export function forgetJiraLinks(): void { held.clear(); pending.clear(); changed(); }
 
 /** Most rows the tab will hold: a card quoting a whole release's pull requests is not a list of its own. */
 export const MENTION_CAP = 20;

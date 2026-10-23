@@ -1,20 +1,25 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { SettingRow, Switch, Toggle } from "../SettingRow.tsx";
-import { EmptyState, SELECT_BOX, SettingsCard, StatusBadge } from "../SettingsKit.tsx";
-import { Select } from "../Select.tsx";
+import { Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { Filter, SettingRow, Switch, Toggle } from "../SettingRow.tsx";
+import { EmptyState, SettingsCard, StatusBadge } from "../SettingsKit.tsx";
 import { CloseIcon } from "../CloseButton.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { Button, Chip, INPUT, INPUT_STYLE, Segmented } from "../workspace/Chrome.tsx";
 import { api, type PolicyRuleState, type SeatAnswer } from "../../lib/api.ts";
 import { openSettings } from "../../lib/openSettings.ts";
 import { agentProvider } from "../../../../shared/agentKinds.ts";
-import { ROLE_IDS, resolve, type Envelope, type Policy, type PolicyRule, type Resolved } from "../../../../shared/orchestration.ts";
+import { ROLE_IDS, resolve, type EngineChoice, type Envelope, type Policy, type PolicyRule, type Resolved } from "../../../../shared/orchestration.ts";
 import { WORKER_ROLES, type RoleId } from "../../../../shared/workerRoles.ts";
 import type { EngineReadiness, EnginesReport } from "../../../../shared/types.ts";
-import { RuleForm } from "./RuleForm.tsx";
+import { RuleSheet } from "./RuleForm.tsx";
+import { RuleStrip } from "./RuleStrips.tsx";
 import { QuickSetup } from "./QuickSetup.tsx";
+import { ScopeBar } from "./ScopeBar.tsx";
+import { FlowView } from "./FlowView.tsx";
+import { EngineTile } from "./EngineTile.tsx";
+import { RolePicker } from "./RolePicker.tsx";
+import { rowId } from "../../lib/settingsIndex.ts";
 import {
-  ASK_HINT, CHAIN_TAIL, LIMIT_RANGE, NO_WORKER_ENGINE, OWN_SETTING, openingScope, chainWords, engineOptions, exhausted, notReady, readyFor, ruleBadge, ruleHolds, ruleLine,
+  ASK_HINT, BACK_LABEL, CHAIN_TAIL, baseChoice, fineTuneRow, pickedLine, pickUndoable, roleWord, scopeWords, usageLeft, type Picked, LIMIT_RANGE, NO_WORKER_ENGINE, openingScope, recallScope, SAFETY, safetyIsDefault, rememberScope, chainWords, exhausted, notReady, readyFor, ruleBadge, ruleHolds, ruleLine,
   stepLimit, withAsk, withBaseChoice, withEnvelopes, withLimits, withRule, withRuleEnabled, withoutRule, type Field,
 } from "./orchestrationCopy.ts";
 
@@ -31,8 +36,6 @@ import {
  * settles a rule's switch on the events that change a reading, so the badges
  * are as fresh as the last time somebody looked.
  */
-
-const baseName = (root: string) => root.split("/").filter(Boolean).pop() ?? root;
 
 /** The server's sentence, or a note, under the control that produced it. */
 function Note({ text }: { text: string | undefined }) {
@@ -83,15 +86,15 @@ function EnvelopeRows({ prefix, env, locked, onChange }: { prefix: string; env: 
   const L = (w: string) => (prefix ? `${prefix}${w}` : w.charAt(0).toUpperCase() + w.slice(1));
   return (
     <>
-      <SettingRow label={L("write files")} hint="Never wider than the worker's own worktree."
+      <SettingRow label={L("write files")} hint={SAFETY.write}
         control={<Segmented label={L("write files")} value={env.write}
-          options={[{ id: "none", label: "Nothing" }, { id: "worktree", label: "Its own worktree" }]}
+          options={[{ id: "none", label: "Nothing" }, { id: "worktree", label: "Its own copy" }]}
           onChange={(w) => { if (!locked) onChange({ ...env, write: w }); }} />} />
-      <Toggle label={L("network")} hint="Fetching from the web and calling its APIs: curl, wget and the like." disabled={locked}
+      <Toggle label={L("network")} hint={SAFETY.network} disabled={locked}
         on={env.network} onClick={() => onChange({ ...env, network: !env.network })} />
-      <Toggle label={L("commit in its worktree")} hint="Local commits only. Pushing is never part of this." disabled={locked}
+      <Toggle label={L("commit in its own copy")} hint={SAFETY.commit} disabled={locked}
         on={env.commit} onClick={() => onChange({ ...env, commit: !env.commit })} />
-      <SettingRow label={L("also refuse")} hint="Commands refused on top of the ones that are always refused."
+      <SettingRow label={L("also refuse")} hint={SAFETY.deny}
         below={<DenyList id={`${prefix}deny`.replace(/\W+/g, "-")} deny={env.deny} disabled={locked} onChange={(deny) => onChange({ ...env, deny })} />} />
     </>
   );
@@ -108,6 +111,16 @@ function StepRow({ k, value, locked, onStep }: { k: keyof Policy["limits"]; valu
           <Button label={`More: ${r.label}`} square disabled={locked || value >= r.max} onClick={() => onStep(1)}>+</Button>
         </span>
       } />
+  );
+}
+
+/** The name of a group inside Safety and limits, and the one sentence that says what it is for. */
+function SafetyHead({ title, note }: { title: string; note: string }) {
+  return (
+    <div className="agx-settings-x pt-4 pb-1">
+      <h4 className="m-0 text-[13px] font-semibold" style={{ color: "var(--text)" }}>{title}</h4>
+      <p className="m-0 mt-1 text-[12px]" style={{ color: "var(--text3)" }}>{note}</p>
+    </div>
   );
 }
 
@@ -138,6 +151,10 @@ export interface OrchestrationViewProps {
   busy: boolean;
   /** A rule's form or the new-rule form open from the start (a test and a screenshot show it). */
   openRule?: string | "new";
+  /** The moment the strips mark as now; the clock when left out. */
+  now?: Date;
+  /** A job's tiles open from the start (a test and a screenshot show them). */
+  openPicker?: Field;
   onRoot: (root: string) => void;
   /** Answers null when it saved, or the server's sentence. */
   onSave: (next: Policy, card: string) => Promise<string | null>;
@@ -150,7 +167,35 @@ export function OrchestrationView(p: OrchestrationViewProps) {
   const { policy, readiness, states, root, notes, busy } = p;
   const [editing, setEditing] = useState<string | null>(p.openRule ?? null);
   const [seed, setSeed] = useState<PolicyRule | null>(null);
-  useEffect(() => { if (editing === "new") revealEditor("new-rule"); }, [editing, seed]);
+  // Which job's tiles are open, and the last press, so the line under it can offer Undo.
+  const [picking, setPicking] = useState<Field | null>(p.openPicker ?? null);
+  const [pickTick, setPickTick] = useState(0);
+  const [picked, setPicked] = useState<Picked | null>(null);
+  useEffect(() => { if (picking) revealEditor(rowId(fineTuneRow(picking)), "[data-pick-first]"); }, [picking, pickTick]);
+  useEffect(() => { setPicking(null); setPicked(null); }, [root]);
+  // The sheet is fixed over the page, so it opens where the person is looking; closing it hands the focus back to what opened it.
+  const opener = useRef<HTMLElement | null>(null);
+  const openSheet = (id: string | null, from: HTMLElement, withSeed: PolicyRule | null = null) => {
+    if (id) opener.current = from;
+    setSeed(withSeed);
+    setEditing(id);
+  };
+  useEffect(() => {
+    if (editing !== null || !opener.current) return;
+    opener.current.focus();
+    opener.current = null;
+  }, [editing]);
+  // Shut until the person opens it; a refusal under Save or a step opens it, so a sentence is never hidden.
+  const [safetyOpen, setSafetyOpen] = useState(false);
+  const safetyNote = notes.envelope || notes.limits;
+  useEffect(() => { if (safetyNote) setSafetyOpen(true); }, [safetyNote]);
+  // A search result lands on a row by scrolling to it; one inside the shut card would be nowhere to be seen, so the card opens.
+  const flash = useContext(Filter).flash;
+  useEffect(() => {
+    if (!flash) return;
+    const card = document.querySelector(`[data-row="${flash}"]`)?.closest("section");
+    if (card?.querySelector("h3")?.textContent === SAFETY.title) setSafetyOpen(true);
+  }, [flash]);
   const [env, setEnv] = useState({ ceiling: policy.ceiling, workerDefault: policy.workerDefault });
   // A save, or a project switch, brings a policy the draft did not make.
   useEffect(() => { setEnv({ ceiling: policy.ceiling, workerDefault: policy.workerDefault }); }, [policy]);
@@ -166,6 +211,16 @@ export function OrchestrationView(p: OrchestrationViewProps) {
     return resolve(policy, { on: ruleHolds(states, scopeKey) }, readiness);
   }, [policy, readiness, states, scopeKey]);
 
+  const commit = (field: Field, to: EngineChoice) => {
+    const from = baseChoice(policy, field);
+    void save(withBaseChoice(policy, field, to), field).then((err) => { if (!err) setPicked({ field, from, to }); });
+  };
+  const undoPick = () => {
+    if (!picked || !pickUndoable(policy, picked)) return;
+    const u = picked;
+    setPicked(null);
+    void save(withBaseChoice(policy, u.field, u.from), u.field);
+  };
   const ruleState = (rule: PolicyRule) => states.find((s) => s.scope === scopeKey && s.ruleId === rule.id);
   const chairNow = root === "" || !p.seat?.live ? null
     : `${agentProvider(policy.base.orchestrator.value[0]?.engine ?? "")?.title ?? ""} · ${p.seat.model}`;
@@ -175,35 +230,35 @@ export function OrchestrationView(p: OrchestrationViewProps) {
     const ask = field === "orchestrator" ? policy.base.orchestrator : policy.base.workers[field];
     const c = ask.value[0]!;
     const bad = notReady(c, role, resolved, readiness);
-    const chairLock = field === "orchestrator" ? { engine: c.engine, why: "The chair's engine is set when the seat opens; another engine in the chair comes later." } : undefined;
+    const chairLock = field === "orchestrator" ? { engine: c.engine, why: "The main agent's engine is set when it opens; another engine comes later." } : undefined;
     const workerGlobal = field !== "orchestrator" && root !== "";
-    const commitModel = (model: string) => { if (model !== c.model) void save(withBaseChoice(policy, field, { engine: c.engine, model }), field); };
+    const open = picking === field && !inherited && !workerGlobal;
+    const orchModels = field === "orchestrator" ? (root === "" ? [] : p.seat?.models ?? []) : null;
+    const undoable = picked?.field === field && pickUndoable(policy, picked);
     return (
       <SettingRow key={field} label={label} hint={hint} disabled={inherited}
         status={<ChoiceStatus bad={bad} checking={!readiness} />}
-        control={<Select value={c.engine} title={`${label}: engine`} style={SELECT_BOX} disabled={locked || workerGlobal}
-          options={engineOptions(role, readiness, chairLock).map((o) => ({ value: o.value, label: o.label, disabled: o.disabled, hint: o.hint }))}
-          onChange={(engine) => { if (engine !== c.engine) void save(withBaseChoice(policy, field, { engine, model: "" }), field); }} />}
-        actions={<AskChip on={ask.ask} disabled={locked}
-          hint={field === "orchestrator" ? "The dialog that opens the chair offers this one first, and you pick." : ASK_HINT}
-          onToggle={() => void save(withAsk(policy, field, !ask.ask), field)} />}
+        control={<EngineTile engine={c.engine} model={c.model} role={role} readiness={readiness} />}
+        actions={
+          <>
+            <AskChip on={ask.ask} disabled={locked}
+              hint={field === "orchestrator" ? "The dialog that opens the main agent offers this one first, and you pick." : ASK_HINT}
+              onToggle={() => void save(withAsk(policy, field, !ask.ask), field)} />
+            <Button disabled={locked || workerGlobal} label={`Change the ${roleWord(field)}`} onClick={() => setPicking(open ? null : field)}>{open ? "Done" : "Change"}</Button>
+          </>}
         below={
           <div className="grid gap-2">
-            {field === "orchestrator" ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <Select value={c.model} title="The chair's model" style={SELECT_BOX} disabled={locked || root === "" || !p.seat?.models.length}
-                  options={(p.seat?.models ?? []).map((m) => ({ value: m.id, label: m.label }))} placeholder="Its default model"
-                  onChange={commitModel} />
-                <span className="text-[12px]" style={{ color: "var(--text3)" }}>
-                  {root === "" ? "The chair's model is a project's choice: pick a project above." : ""}
-                </span>
-              </div>
-            ) : (
-              <input defaultValue={c.model} key={`${root}:${field}:${c.engine}:${c.model}`} spellCheck={false} placeholder="its default model"
-                aria-label={`${label}: model`} disabled={locked || workerGlobal}
-                onBlur={(e) => commitModel(e.target.value.trim())}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLInputElement).blur(); } }}
-                className={`t-mono ${INPUT}`} style={{ ...INPUT_STYLE, width: 260 }} />
+            {open && (
+              <RolePicker id={rowId(fineTuneRow(field))} role={role} word={roleWord(field)} current={c} readiness={readiness} lock={chairLock}
+                models={orchModels} disabled={locked}
+                modelNote={field === "orchestrator" && root === "" ? "The main agent's model is a project's choice: pick a project above." : ""}
+                onPick={(choice) => commit(field, choice)} />
+            )}
+            {undoable && (
+              <p role="status" data-toast="picked" className="m-0 text-[12px] flex flex-wrap items-center gap-x-3 gap-y-1" style={{ color: "var(--text)" }}>
+                <span>{pickedLine(root)}</span>
+                <button type="button" className="agx-field-link" disabled={locked} onClick={undoPick}>{BACK_LABEL}</button>
+              </p>
             )}
             {bad && (
               <p className="m-0 text-[12px]" style={{ color: "var(--error-ink)" }}>
@@ -226,7 +281,7 @@ export function OrchestrationView(p: OrchestrationViewProps) {
     return (
       <SettingRow key={`${field}-fb`} label={`If ${label.toLowerCase()} is not available`} disabled={inherited}
         hint={<>{chainWords(ask.value)}. {CHAIN_TAIL}</>}
-        actions={<Button disabled={locked} onClick={() => { setSeed(rule); setEditing("new"); }}>Add a fallback rule</Button>} />
+        actions={<Button disabled={locked} onClick={(e) => openSheet("new", e.currentTarget, rule)}>Add a fallback rule</Button>} />
     );
   };
 
@@ -234,8 +289,13 @@ export function OrchestrationView(p: OrchestrationViewProps) {
   const noWorker = !!readiness && readyFor("worker", readiness).length === 0;
   const dirty = JSON.stringify(env) !== JSON.stringify({ ceiling: policy.ceiling, workerDefault: policy.workerDefault });
 
+  const now = p.now ?? new Date();
+  const left = usageLeft(states, scopeKey);
+  const closeSheet = () => { setEditing(null); setSeed(null); };
+  const sheetRule = editing && editing !== "new" ? policy.rules.find((r) => r.id === editing) ?? null : seed;
   const ruleRows = policy.rules.map((rule) => {
     const badge = ruleBadge(rule, ruleState(rule), readiness);
+    const pictured = rule.when.some((t) => t.kind === "hours" || t.kind === "usage");
     return (
       <SettingRow key={rule.id} label={rule.name} hint={ruleLine(rule)} disabled={inherited}
         status={<StatusBadge tone={badge.tone}>{badge.text}</StatusBadge>}
@@ -244,37 +304,28 @@ export function OrchestrationView(p: OrchestrationViewProps) {
             onClick={() => void save(withRuleEnabled(policy, rule.id, !rule.enabled), "rules")} className="flex">
             <Switch on={rule.enabled} />
           </button>}
-        actions={<Button disabled={locked} onClick={() => { setSeed(null); setEditing(editing === rule.id ? null : rule.id); }}>Edit</Button>}
-        below={editing === rule.id ? (
-          <RuleForm initial={rule} policy={policy} readiness={readiness} onCancel={() => setEditing(null)}
-            onDelete={() => { void save(withoutRule(policy, rule.id), "rules").then((e) => { if (!e) setEditing(null); }); }}
-            onSave={async (r) => { const e = await save(withRule(policy, r), "rules"); if (!e) setEditing(null); return e; }} />
-        ) : undefined} />
+        actions={<Button disabled={locked} onClick={(e) => openSheet(rule.id, e.currentTarget)}>Edit</Button>}
+        below={pictured ? <div className="grid gap-2"><RuleStrip when={rule.when} now={now} left={left} /></div> : undefined} />
     );
   });
 
   return (
-    <>
+    <div className="agx-orch">
+      <ScopeBar root={root} projects={p.projects} overrides={p.overrides ?? []} inherited={inherited} busy={busy}
+        note={notes.scope} onRoot={p.onRoot} onScope={p.onScope} />
+
+      <FlowView policy={policy} facts={{ on: ruleHolds(states, scopeKey) }} readiness={readiness} root={root} disabled={false}
+        liveModel={root !== "" && p.seat?.live ? p.seat.model : null}
+        onChange={(field) => { setPicking(field); setPickTick((n) => n + 1); }} />
+
       <QuickSetup policy={policy} root={root} readiness={readiness} states={states} inherited={inherited} busy={busy}
         note={notes.quick} onSave={save} onOpenEngines={p.onOpenEngines} />
 
-      <SettingsCard title="Applies to" desc="A project with its own setting uses it instead of the general one, whole."
-        actions={root === "" ? undefined : (
-          <Button disabled={busy} onClick={() => p.onScope(inherited)}>{inherited ? "Set for this project" : "Use the general setting"}</Button>)}>
-        <SettingRow label="Scope"
-          hint={root === "" ? "The setting every project without its own uses." : inherited ? `${baseName(root)} has no setting of its own, so it uses the general one, shown here as it is.` : `${baseName(root)} has its own setting.`}
-          below={<Segmented label="Applies to" value={root} onChange={p.onRoot}
-            options={[{ id: "", label: "All projects" }, ...p.projects.map((r) => ((p.overrides ?? []).includes(r)
-              ? { id: r, label: <>{baseName(r)}<span aria-hidden className="inline-block rounded-full ml-1.5 align-middle" style={{ width: 6, height: 6, background: "var(--primary)" }} /></>, title: `${r} — ${OWN_SETTING}` }
-              : { id: r, label: baseName(r), title: r }))]} />} />
-        <Note text={notes.scope} />
-      </SettingsCard>
-
-      <SettingsCard title="Orchestrator" desc="Who sits in the project's chair and decides who works."
+      <SettingsCard title="Main agent" desc="Decides the plan and hands the work out."
         status={root === "" ? <StatusBadge tone="off">All projects</StatusBadge>
-          : chairNow ? <StatusBadge tone="ok">{chairNow}</StatusBadge> : <StatusBadge tone="off">Nobody in the chair</StatusBadge>}>
-        {choiceRow("orchestrator", "Engine and model", "What a new chair opens with. Running sessions are never moved.", resolution?.orchestrator)}
-        {fallbackRow("orchestrator", "The chair")}
+          : chairNow ? <StatusBadge tone="ok">{chairNow}</StatusBadge> : <StatusBadge tone="off">Not open</StatusBadge>}>
+        {choiceRow("orchestrator", "Engine and model", "What a new main agent opens with. Running sessions are never moved.", resolution?.orchestrator)}
+        {fallbackRow("orchestrator", "The main agent")}
         <Note text={notes.orchestrator} />
       </SettingsCard>
 
@@ -300,41 +351,38 @@ export function OrchestrationView(p: OrchestrationViewProps) {
         <Note text={notes.scout || notes.builder || notes.verifier} />
       </SettingsCard>
 
-      <SettingsCard title="Rules" desc="A rule replaces the choices above while its condition holds. The first one that holds wins. Running sessions are never moved: a rule applies to sessions started after it turns on."
-        actions={<Button disabled={locked} onClick={() => { setSeed(null); setEditing(editing === "new" ? null : "new"); }}>Add a rule</Button>}>
-        {editing === "new" && (
-          <SettingRow label="New rule" disabled={inherited}
-            below={<RuleForm initial={seed} policy={policy} readiness={readiness} onCancel={() => { setEditing(null); setSeed(null); }}
-              onSave={async (r) => { const e = await save(withRule(policy, r), "rules"); if (!e) { setEditing(null); setSeed(null); } return e; }} />} />
-        )}
-        {policy.rules.length === 0 && editing !== "new" ? <EmptyState>No rules. The choices above always apply.</EmptyState> : ruleRows}
+      <SettingsCard title="Conditions" desc="A condition replaces the choices above while it holds. The first one that holds wins. Running sessions are never moved: a condition applies to sessions started after it turns on."
+        actions={<Button disabled={locked} onClick={(e) => openSheet("new", e.currentTarget)}>Add a condition</Button>}>
+        {policy.rules.length === 0 ? <EmptyState>No conditions. The choices above always apply.</EmptyState> : ruleRows}
         <Note text={notes.rules} />
       </SettingsCard>
 
-      <SettingsCard title="What workers may do"
-        desc="What a worker gets when the orchestrator says nothing. Save is under the next card; both save together.">
+      <SettingsCard title={SAFETY.title} desc={SAFETY.summary}
+        status={safetyIsDefault(policy) ? <StatusBadge tone="off">defaults</StatusBadge> : <StatusBadge tone="ok">changed</StatusBadge>}
+        fold={{ open: safetyOpen, onToggle: setSafetyOpen }}>
+        <SafetyHead {...SAFETY.workers} />
         <EnvelopeRows prefix="" env={env.workerDefault} locked={locked} onChange={(workerDefault) => setEnv({ ...env, workerDefault })} />
-        <SettingRow label="Always refused"
-          hint="Push, pull requests, merges, releases, anything that spends."
-          detail={{ summary: "Why this cannot be changed here", body: "A worker's permissions have no setting for these, here or anywhere: nothing an orchestrator or a rule says can grant them. They are done by a person." }} />
-      </SettingsCard>
-
-      <SettingsCard title="The most an orchestrator may allow"
-        desc="The widest a worker's permissions can be made when the orchestrator asks for more. A default wider than this is refused.">
+        <SettingRow label="Always refused" hint={SAFETY.always.hint} detail={{ summary: SAFETY.always.more, body: SAFETY.always.body }} />
+        <SafetyHead {...SAFETY.most} />
         <EnvelopeRows prefix="At most: " env={env.ceiling} locked={locked} onChange={(ceiling) => setEnv({ ...env, ceiling })} />
         <SettingRow label="Save these permissions" hint="Both groups save together; the server checks that the default is inside the most allowed."
           control={<Button tone="primary" pending={busy} disabled={locked || !dirty} onClick={() => void save(withEnvelopes(policy, env), "envelope")}>Save</Button>} />
         <Note text={notes.envelope} />
-      </SettingsCard>
-
-      <SettingsCard title="Limits">
+        <SafetyHead {...SAFETY.limits} />
         {(Object.keys(LIMIT_RANGE) as (keyof Policy["limits"])[]).map((k) => (
           <StepRow key={k} k={k} value={policy.limits[k]} locked={locked}
             onStep={(by) => void save(withLimits(policy, { [k]: stepLimit(k, policy.limits[k], by) }), "limits")} />
         ))}
         <Note text={notes.limits} />
       </SettingsCard>
-    </>
+
+      {editing && !inherited && (editing === "new" || sheetRule) && (
+        <RuleSheet key={editing} initial={sheetRule} policy={policy} readiness={readiness} scope={scopeWords(root)}
+          facts={{ on: ruleHolds(states, scopeKey) }} left={left} now={now} onCancel={closeSheet}
+          onDelete={sheetRule && editing !== "new" ? () => { void save(withoutRule(policy, sheetRule.id), "rules").then((e) => { if (!e) closeSheet(); }); } : undefined}
+          onSave={async (r) => { const e = await save(withRule(policy, r), "rules"); if (!e) closeSheet(); return e; }} />
+      )}
+    </div>
   );
 }
 
@@ -343,28 +391,22 @@ export function OrchestrationView(p: OrchestrationViewProps) {
  * asked for it. Bring it to the eye and put the cursor in its first field; the
  * scroll is instant when the person asked for less motion.
  */
-function revealEditor(row: string): void {
+function revealEditor(row: string, focus = "input, select, button"): void {
   const el = document.querySelector<HTMLElement>(`[data-row="${row}"]`);
   if (!el) return;
   const calm = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
   el.scrollIntoView({ block: "center", behavior: calm ? "auto" : "smooth" });
-  el.querySelector<HTMLElement>("input, select, button")?.focus({ preventScroll: true });
+  el.querySelector<HTMLElement>(focus)?.focus({ preventScroll: true });
 }
 
-const SCOPE_KEY = "agx.orchestration.scope";
-function readScope(): string | null {
-  try { return localStorage.getItem(SCOPE_KEY); } catch { return null; }
-}
-function writeScope(root: string): void {
-  try { localStorage.setItem(SCOPE_KEY, root); } catch { /* no storage: the page opens on the project the app shows */ }
-}
+const storage = (): Storage | null => { try { return localStorage; } catch { return null; } };
 
 export function OrchestrationPane() {
   // Remembered for this window, so leaving Settings and coming back does not
   // read as the project's setting being lost. Never chosen: the project the app shows.
-  const chosen = useRef<boolean>(readScope() !== null);
-  const [root, setRoot] = useState(() => readScope() ?? "");
-  const pick = useCallback((r: string) => { chosen.current = true; writeScope(r); setRoot(r); }, []);
+  const chosen = useRef<boolean>(recallScope(storage()) !== null);
+  const [root, setRoot] = useState(() => recallScope(storage()) ?? "");
+  const pick = useCallback((r: string) => { chosen.current = true; rememberScope(storage(), r); setRoot(r); }, []);
   const [loaded, setLoaded] = useState<{ policy: Policy; scope: "project" | "global"; overrides: string[] } | null>(null);
   const [report, setReport] = useState<EnginesReport | null>(null);
   const [states, setStates] = useState<PolicyRuleState[]>([]);
