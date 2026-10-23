@@ -38,7 +38,8 @@ export function ComputerSheet({ open, onClose }: { open: boolean; onClose: () =>
       onClose={close}
       title="Your computers"
       footer={
-        <View style={{ gap: SPACE.sm }}>
+        // The sheet's footer is a row, so the column has to ask for the width.
+        <View style={{ flex: 1, gap: SPACE.sm }}>
           <Btn
             label="Add computer"
             tone="primary"

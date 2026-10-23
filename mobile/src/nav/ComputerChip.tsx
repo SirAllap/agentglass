@@ -45,7 +45,9 @@ export function ComputerChip({ colors = C, compact }: { colors?: Palette; compac
         })}
       >
         <StatusDot status={status} colors={K} />
-        <Text numberOfLines={1} style={{ color: K.text, fontSize: compact ? T.body : T.title, fontWeight: "600", flexShrink: 1 }}>
+        {/* In the terminal the project's name shares this row and is the one that
+            matters there, so the computer's gives way after about 14 letters. */}
+        <Text numberOfLines={1} style={{ color: K.text, fontSize: compact ? T.body : T.title, fontWeight: "600", flexShrink: 1, maxWidth: compact ? 130 : undefined }}>
           {name}
         </Text>
         <Glyph name="down" color={K.text3} size={18} />
