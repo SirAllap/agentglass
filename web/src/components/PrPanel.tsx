@@ -9482,7 +9482,7 @@ function FileStack({ files, split, wrap, onSplit, onWrap, scope }: {
     const put = () => {
       if (!alive) return;
       let done = true;
-      for (const el of Array.from(root.querySelectorAll<HTMLElement>("[data-vscroll]"))) {
+      for (const el of Array.from(root.querySelectorAll<HTMLElement>("[data-vscroll]:not([data-hpane])"))) {
         const k = keyOf(el);
         const want = k ? DIFF_SCROLL.get(k) ?? 0 : 0;
         if (!want) continue;
@@ -9508,7 +9508,8 @@ function FileStack({ files, split, wrap, onSplit, onWrap, scope }: {
           style={{ border: EDGE, maxHeight: 520 }}>
           <DiffToolbar path={f.file_path} add={f.additions} del={f.deletions}
             split={split} wrap={wrap} onSplit={i === 0 ? onSplit : onSplit} onWrap={onWrap} />
-          <div className="flex-1 min-h-0 flex">
+          {/* The box is capped at 520px, so the diff has to scroll inside it: UnifiedDiff and SplitDiff no longer carry a scroller of their own since the Files tab scrolls with the page, and without this the rest of a long file was clipped with no way to reach it. */}
+          <div data-vscroll className="flex-1 min-h-0 overflow-auto agx-scroll">
             <DiffPane file={f} split={split} wrap={wrap} />
           </div>
         </div>
