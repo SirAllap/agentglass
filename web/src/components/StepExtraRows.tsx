@@ -3,7 +3,7 @@ import { Select } from "./Select.tsx";
 import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 import { PLACEHOLDERS, PLACEHOLDER_HELP } from "../../../shared/stepBlocks.ts";
 import { FIELD_KINDS } from "../lib/stepExtras.ts";
-import type { StepBlock } from "../../../shared/providers.ts";
+import type { ClickUpStepBlock as StepBlock } from "../../../shared/providers.ts";
 
 /*
  * The rows of the two blocks that have more to say than one value: the comment's text and the field's name and value.

@@ -18,13 +18,13 @@
  * Ceiling: one block of each kind per step; a second move or a second assign has
  * no meaning yet, and the registry below says so rather than the screen.
  */
-import type { HandoffUnassign, StepAssign, StepBlock } from "./providers.ts";
+import type { BlockOf, HandoffUnassign, PersonId, StepAssign, StepBlock, StepBlockOf } from "./providers.ts";
 
 /** Where a step shows: the hand-off button, the review menu's item, the merge dialog's choice. */
 export type StepTrigger = "move" | "menu" | "merge";
 export type BlockType = StepBlock["type"];
 
-export const NO_ASSIGN: StepAssign = { who: "none" };
+export const NO_ASSIGN: StepAssign<never> = { who: "none" };
 
 /** What the block list can hold, for the screen, the docs and an agent. `built` false is a kind the list is open for. */
 export const BLOCK_INFO: readonly { type: string; name: string; blurb: string; built: boolean }[] = [
@@ -35,6 +35,12 @@ export const BLOCK_INFO: readonly { type: string; name: string; blurb: string; b
   { type: "field", name: "Set a field", blurb: "Fill one of the card's custom fields.", built: true },
 ];
 export const BLOCK_TYPES: readonly BlockType[] = ["move", "unassign", "assign", "comment", "field"];
+
+/** A kind only some trackers have. It is not in BLOCK_INFO: that list is ClickUp's, and a tracker that lacks a kind refuses it by name. */
+export const LINK_BLOCK = { type: "link", name: "Link the pull request on the card", blurb: "Put the pull request on the card as a link, once.", built: true } as const;
+/** What the block list can hold on one tracker. ClickUp's is BLOCK_INFO as it was. */
+export const blockInfoFor = (tracker: string): readonly { type: string; name: string; blurb: string; built: boolean }[] =>
+  tracker === "jira" ? [...BLOCK_INFO.filter((b) => b.type !== "field"), LINK_BLOCK] : BLOCK_INFO;
 
 /** The longest a comment template, a field's name and a field's value may be: a settings file is not a document. */
 export const MAX_COMMENT = 2000;
@@ -75,8 +81,8 @@ const WHERE: Record<StepTrigger, string> = { move: "a button on a pull request",
 const CAN: Record<StepTrigger, string> = { move: "move, take people off or assign", menu: "move or assign", merge: "preselect a move or assign" };
 
 /** Why a block cannot be added to a step, or null when it can. `type` may be a kind the list is only open for. */
-export function blockRefusal(trigger: StepTrigger, blocks: readonly StepBlock[], type: string): string | null {
-  const info = BLOCK_INFO.find((b) => b.type === type);
+export function blockRefusal(trigger: StepTrigger, blocks: readonly StepBlock[], type: string, tracker = "clickup"): string | null {
+  const info = blockInfoFor(tracker).find((b) => b.type === type);
   if (!info) return `“${type}” is not a block.`;
   if (!info.built) return "Not built yet. The list is open for it.";
   if (blocks.some((b) => b.type === type)) return "Already in this step. Remove it to add it again.";
@@ -86,25 +92,25 @@ export function blockRefusal(trigger: StepTrigger, blocks: readonly StepBlock[],
 }
 
 /** What is wrong with a whole list, or null. The one rule the screen's disabled rows and the server's refusal share. */
-export function blocksProblem(trigger: StepTrigger, blocks: readonly StepBlock[]): string | null {
+export function blocksProblem(trigger: StepTrigger, blocks: readonly StepBlock[], tracker = "clickup"): string | null {
   if (blocks.length > MAX_BLOCKS) return `has more than ${MAX_BLOCKS} blocks`;
   for (let i = 0; i < blocks.length; i++) {
-    const why = blockRefusal(trigger, blocks.slice(0, i), blocks[i]!.type);
+    const why = blockRefusal(trigger, blocks.slice(0, i), blocks[i]!.type, tracker);
     if (why) return `block ${i + 1} (${blocks[i]!.type}): ${why}`;
   }
   return null;
 }
 
 /** The three keys a step used to be, which the blocks are read from and written back to. */
-export interface LegacyStep { enabled: boolean; statusNames: string[]; unassign?: HandoffUnassign; assign: StepAssign }
+export interface LegacyStep<I extends PersonId = PersonId> { enabled: boolean; statusNames: string[]; unassign?: HandoffUnassign; assign: StepAssign<I> }
 
 /**
  * A file from before blocks: the move, then the take-off, then the assign. `enabled`
  * is not read: it says whether the step exists, and a step that is off keeps what
  * it had chosen, as it always did, so turning it on again finds it.
  */
-export function blocksFromLegacy(trigger: StepTrigger, g: LegacyStep): StepBlock[] {
-  const out: StepBlock[] = [];
+export function blocksFromLegacy<I extends PersonId = number>(trigger: StepTrigger, g: LegacyStep<I>): BlockOf<I>[] {
+  const out: BlockOf<I>[] = [];
   /* The merge choice with no names is "Leave it there": no move to show. The others with no names ran the built-in guess. */
   if (g.statusNames.length || trigger !== "merge") out.push({ type: "move", statusNames: [...g.statusNames], ...(g.statusNames.length ? null : { fallback: true }) });
   if (trigger === "move" && g.unassign && g.unassign !== "none") out.push({ type: "unassign", who: g.unassign });
@@ -116,59 +122,63 @@ export function blocksFromLegacy(trigger: StepTrigger, g: LegacyStep): StepBlock
 }
 
 /** The three keys the blocks mean, so an older reader of the file still sees the same step. */
-export function legacyFromBlocks(blocks: readonly StepBlock[]): { statusNames: string[]; unassign: HandoffUnassign; assign: StepAssign } {
-  const mv = blocks.find((b): b is Extract<StepBlock, { type: "move" }> => b.type === "move");
-  const un = blocks.find((b): b is Extract<StepBlock, { type: "unassign" }> => b.type === "unassign");
-  const as = blocks.find((b): b is Extract<StepBlock, { type: "assign" }> => b.type === "assign");
+export function legacyFromBlocks<I extends PersonId = number>(blocks: readonly BlockOf<I>[]): { statusNames: string[]; unassign: HandoffUnassign; assign: StepAssign<I> } {
+  const mv = blocks.find((b): b is Extract<StepBlockOf<I>, { type: "move" }> => b.type === "move");
+  const un = blocks.find((b): b is Extract<StepBlockOf<I>, { type: "unassign" }> => b.type === "unassign");
+  const as = blocks.find((b): b is Extract<StepBlockOf<I>, { type: "assign" }> => b.type === "assign");
   /* A block that asks when it runs fixes nobody: an older reader of the file sees no assignment, not a guess. */
-  const assign: StepAssign = as && !as.ask ? (as.who === "person" && as.person ? { who: "person", person: as.person } : { who: as.who }) : NO_ASSIGN;
+  const assign: StepAssign<I> = as && !as.ask ? (as.who === "person" && as.person ? { who: "person", person: as.person } : { who: as.who }) : NO_ASSIGN as StepAssign<I>;
   /* What an older reader can hold: none, me or all. Named people, and a question asked when it runs, are not in the old keys. */
   const unassign: HandoffUnassign = un && !un.ask && un.who !== "people" ? un.who : "none";
   return { statusNames: mv ? [...mv.statusNames] : [], unassign, assign };
 }
 
 /** The step's blocks: its own list, or the one its old keys mean. */
-export const blocksOf = (trigger: StepTrigger, g: LegacyStep & { blocks?: StepBlock[] }): StepBlock[] => g.blocks ?? blocksFromLegacy(trigger, g);
+export const blocksOf = <I extends PersonId = number>(trigger: StepTrigger, g: LegacyStep<I> & { blocks?: BlockOf<I>[] }): BlockOf<I>[] => g.blocks ?? blocksFromLegacy<I>(trigger, g);
 
 /** What a step does, flattened for the places that run it. */
-export interface StepPlan {
+export interface StepPlan<I extends PersonId = number> {
   /** Null: no move block, so the card's status is left where it is. `ask`: the person picks it when it runs, starting at `names`. */
   move: { names: string[]; fallback: boolean; ask: boolean } | null;
   unassign: HandoffUnassign;
   /** Who is fixed on the card. `none` when the assign block asks: see `askAssign`. */
-  assign: StepAssign;
+  assign: StepAssign<I>;
   /** The assign block asks when it runs; this is where its picker starts. Null when it does not ask, or there is no block. */
-  askAssign: (StepAssign & { also?: { id: number; name: string }[] }) | null;
+  askAssign: (StepAssign<I> & { also?: { id: I; name: string }[] }) | null;
   /** Named people the step takes off the card (a fixed choice). */
-  takeOff: { id: number; name: string }[];
+  takeOff: { id: I; name: string }[];
   /** The take-off asks when it runs: where its picker starts (`people` for named people). */
-  askUnassign: { who: HandoffUnassign | "people"; people: { id: number; name: string }[] } | null;
+  askUnassign: { who: HandoffUnassign | "people"; people: { id: I; name: string }[] } | null;
   /** Comment on the card: the template, and whether the person edits it when it runs. */
   comment: { text: string; ask: boolean } | null;
   /** Set a field: which, to what, and whether the value is asked when it runs. */
   field: { field: string; value: string; ask: boolean } | null;
+  /** Link the pull request on the card. Absent unless the step has the block. */
+  link?: true;
 }
-export function planOf(trigger: StepTrigger, g: LegacyStep & { blocks?: StepBlock[] }): StepPlan {
-  const blocks = blocksOf(trigger, g);
-  const mv = blocks.find((b): b is Extract<StepBlock, { type: "move" }> => b.type === "move");
-  const l = legacyFromBlocks(blocks);
-  const as = blocks.find((b): b is Extract<StepBlock, { type: "assign" }> => b.type === "assign");
-  const askAssign: StepPlan["askAssign"] = as?.ask ? (as.who === "person" && as.person ? { who: "person", person: as.person, ...(as.also?.length ? { also: as.also } : null) } : { who: as.who }) : null;
-  const un = blocks.find((b): b is Extract<StepBlock, { type: "unassign" }> => b.type === "unassign");
-  const cm = blocks.find((b): b is Extract<StepBlock, { type: "comment" }> => b.type === "comment");
-  const fd = blocks.find((b): b is Extract<StepBlock, { type: "field" }> => b.type === "field");
+export function planOf<I extends PersonId = number>(trigger: StepTrigger, g: LegacyStep<I> & { blocks?: BlockOf<I>[] }): StepPlan<I> {
+  const blocks = blocksOf<I>(trigger, g);
+  const mv = blocks.find((b): b is Extract<StepBlockOf<I>, { type: "move" }> => b.type === "move");
+  const l = legacyFromBlocks<I>(blocks);
+  const as = blocks.find((b): b is Extract<StepBlockOf<I>, { type: "assign" }> => b.type === "assign");
+  const askAssign: StepPlan<I>["askAssign"] = as?.ask ? (as.who === "person" && as.person ? { who: "person", person: as.person, ...(as.also?.length ? { also: as.also } : null) } : { who: as.who }) : null;
+  const un = blocks.find((b): b is Extract<StepBlockOf<I>, { type: "unassign" }> => b.type === "unassign");
+  const cm = blocks.find((b): b is Extract<StepBlockOf<I>, { type: "comment" }> => b.type === "comment");
+  const fd = blocks.find((b): b is Extract<StepBlockOf<I>, { type: "field" }> => b.type === "field");
+  const link = blocks.some((b) => b.type === "link");
   return {
     move: mv ? { names: [...mv.statusNames], fallback: mv.fallback === true, ask: mv.ask === true } : null, unassign: l.unassign, assign: l.assign, askAssign,
     takeOff: un && !un.ask && un.who === "people" ? [...(un.people ?? [])] : [],
     askUnassign: un?.ask ? { who: un.who, people: [...(un.people ?? [])] } : null,
     comment: cm ? { text: cm.text, ask: cm.ask === true } : null,
     field: fd ? { field: fd.field, value: fd.value, ask: fd.ask === true } : null,
+    ...(link ? { link: true as const } : null),
   };
 }
 
 /** A move the step has chosen, or is allowed to guess: false while the person still has to pick one. */
-export const moveChosen = (p: StepPlan): boolean => !!p.move && (p.move.names.length > 0 || p.move.fallback);
+export const moveChosen = (p: StepPlan<PersonId>): boolean => !!p.move && (p.move.names.length > 0 || p.move.fallback);
 /** Does pressing the step change anything about the people? */
 /** Does the step post a comment or set a field? Each is a request of its own: the card's status and people are one write, these are not part of it. */
-export const hasExtras = (p: StepPlan): boolean => p.comment !== null || p.field !== null;
-export const touchesPeople = (p: StepPlan): boolean => p.unassign !== "none" || p.assign.who !== "none" || p.askAssign !== null || p.takeOff.length > 0 || p.askUnassign !== null;
+export const hasExtras = (p: StepPlan<PersonId>): boolean => p.comment !== null || p.field !== null || p.link === true;
+export const touchesPeople = (p: StepPlan<PersonId>): boolean => p.unassign !== "none" || p.assign.who !== "none" || p.askAssign !== null || p.takeOff.length > 0 || p.askUnassign !== null;

@@ -4,7 +4,7 @@
  * what a block is and where it can go are in shared/stepBlocks.ts, where the
  * server reads them too.
  */
-import type { StepBlock, HandoffUnassign } from "../../../shared/providers.ts";
+import type { ClickUpStepBlock as StepBlock, HandoffUnassign } from "../../../shared/providers.ts";
 import { blockRefusal, type StepTrigger } from "../../../shared/stepBlocks.ts";
 import type { StepKind } from "./workflowMap.ts";
 import { assignWords } from "./stepAssign.ts";

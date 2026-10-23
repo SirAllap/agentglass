@@ -9,7 +9,7 @@ import { ICON } from "../lib/iconSize.ts";
 import { ASSIGN_LABEL, ASSIGN_WHO, assignLabel, type Assign } from "../lib/stepAssign.ts";
 import { UNASSIGN_LABEL, type Unassign } from "../lib/workflowMap.ts";
 import { BLOCK_INFO, blockRefusal, type StepTrigger } from "../../../shared/stepBlocks.ts";
-import { AUTHOR_IS_MEMBER, type ListMember, type StepBlock } from "../../../shared/providers.ts";
+import { AUTHOR_IS_MEMBER, type ListMember, type ClickUpStepBlock as StepBlock } from "../../../shared/providers.ts";
 import { moveBlock } from "../lib/stepBlocksView.ts";
 const blocksHaveExtras = (bs: readonly StepBlock[]): boolean => bs.some((b) => b.type === "comment" || b.type === "field");
 import { CommentEditor, FieldEditor, type FieldChoice } from "./StepExtraRows.tsx";

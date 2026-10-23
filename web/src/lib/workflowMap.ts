@@ -13,7 +13,7 @@
  * land on it.
  */
 
-import type { StepBlock } from "../../../shared/providers.ts";
+import type { ClickUpStepBlock as StepBlock } from "../../../shared/providers.ts";
 
 export type StepKind = "move" | "menu" | "merge" | "people" | "note";
 

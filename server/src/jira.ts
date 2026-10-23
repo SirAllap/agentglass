@@ -178,7 +178,7 @@ export interface JiraCreds {
 }
 
 /** The stored credential, whole, for the server's own call. Never serialise it. */
-function storedCreds(): JiraCreds | null {
+export function storedCreds(): JiraCreds | null {
   const token = secretFor("jira");
   const r = redacted("jira");
   if (!token || !r?.site) return null;
@@ -461,7 +461,7 @@ export interface JiraProjects {
   names?: Record<string, string>;
 }
 
-const projectKey = (v: unknown): v is string => typeof v === "string" && /^[A-Z][A-Z0-9_]*$/.test(v);
+export const projectKey = (v: unknown): v is string => typeof v === "string" && /^[A-Z][A-Z0-9_]*$/.test(v);
 
 /** The project keys this person can see, for telling a card id from a word. */
 export function projects(creds: JiraCreds, o: { optional?: boolean } = {}): Promise<JiraResult<JiraProjects>> {
@@ -511,9 +511,9 @@ export function projects(creds: JiraCreds, o: { optional?: boolean } = {}): Prom
  */
 
 export const apiOf = (c: JiraCreds): 2 | 3 => (c.api === 2 ? 2 : 3);
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
-const str = (v: unknown): string => (typeof v === "string" ? v : "");
-const idText = (v: unknown): string => (typeof v === "string" ? v : typeof v === "number" ? String(v) : "");
+export const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+export const str = (v: unknown): string => (typeof v === "string" ? v : "");
+export const idText = (v: unknown): string => (typeof v === "string" ? v : typeof v === "number" ? String(v) : "");
 
 /** Asked by name, so a site with hundreds of custom fields does not send them. */
 export const CARD_FIELDS = ["summary", "status", "assignee", "priority", "duedate", "labels", "project", "updated", "created"];
@@ -617,7 +617,7 @@ const initialsOf = (name: string): string =>
   name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => Array.from(w)[0]!.toUpperCase()).join("") || "?";
 
 /** Jira writes `2026-01-13T09:00:00.000+0000`; anything unreadable is 0, not NaN. */
-const epoch = (v: unknown): number => { const t = Date.parse(str(v)); return Number.isFinite(t) ? t : 0; };
+export const epoch = (v: unknown): number => { const t = Date.parse(str(v)); return Number.isFinite(t) ? t : 0; };
 
 export interface TaskContext {
   /** The connection's site, for the card's address. */
@@ -901,7 +901,7 @@ export async function searchText(creds: JiraCreds, q: string): Promise<JiraResul
 }
 
 // What the routes call: the stored connection, or the sentence that says there is none.
-const NOT_CONNECTED = "Jira is not connected";
+export const NOT_CONNECTED = "Jira is not connected";
 export async function withStored<T>(run: (c: JiraCreds) => Promise<JiraResult<T>>): Promise<JiraResult<T>> {
   const c = storedCreds();
   return c ? run(c) : { ok: false, error: NOT_CONNECTED };
@@ -1005,7 +1005,7 @@ export function __setJiraSettingsPath(p: string | null): void { settingsOverride
 const settingsPath = (): string => settingsOverride ?? SETTINGS;
 
 /** The settings file as it is on disk; unreadable is empty, never an error. */
-function readSettingsFile(): Record<string, unknown> {
+export function readSettingsFile(): Record<string, unknown> {
   try {
     const p = settingsPath();
     if (!existsSync(p)) return {};
@@ -1015,7 +1015,7 @@ function readSettingsFile(): Record<string, unknown> {
 }
 
 /** One key changed, the others kept: the write switch and the hand-off share the file. */
-function writeSettingsKey(key: string, value: unknown): void {
+export function writeSettingsKey(key: string, value: unknown): void {
   const p = settingsPath();
   mkdirSync(dirname(p), { recursive: true });
   // Written aside and renamed: a half-written file would read as empty and lose every rule.
@@ -1059,9 +1059,9 @@ export function setJiraWrites(on: boolean): void {
  * move that needs one is listed with `needs` and refused when asked for.
  */
 
-const ISSUE_KEY = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
+export const ISSUE_KEY = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
 const FIELD_KEY = /^[A-Za-z0-9_.-]{1,64}$/;
-const WRITE_OFF = "Writing to Jira is switched off";
+export const WRITE_OFF = "Writing to Jira is switched off";
 
 /** What a workflow's `transitions` answer says, as moves. Unreadable entries are dropped, never guessed. */
 export function toMoves(raw: unknown): JiraMove[] {
@@ -1099,7 +1099,7 @@ export function toMoves(raw: unknown): JiraMove[] {
   return moves;
 }
 
-const movesPath = (creds: JiraCreds, key: string): string =>
+export const movesPath = (creds: JiraCreds, key: string): string =>
   `/rest/api/${apiOf(creds)}/issue/${encodeURIComponent(key)}/transitions?expand=transitions.fields`;
 
 /**
@@ -1117,7 +1117,7 @@ export async function movesOf(creds: JiraCreds, key: string): Promise<JiraResult
 }
 
 /** The sentence for a write Jira refused with a 400: its own words are never passed on. */
-const NOT_ACCEPTED = "Jira did not accept that move. The card may have moved on, or you cannot move it";
+export const NOT_ACCEPTED = "Jira did not accept that move. The card may have moved on, or you cannot move it";
 
 /**
  * Make one move, and give back the card as it is afterwards.
@@ -1305,8 +1305,8 @@ const QUERY_MAX = 100;
 const PERSON_KEY = /^[^\s\u0000-\u001f\u007f]{1,255}$/;
 
 /** The id a card's people carry, from a raw user object: the order `toTask` and `whoAmI` use. */
-const personId = (u: unknown): string => (isObj(u) ? str(u.accountId) || str(u.key) || str(u.name) : "");
-const personName = (u: unknown): string => (isObj(u) ? str(u.displayName) || str(u.name) || personId(u) : "");
+export const personId = (u: unknown): string => (isObj(u) ? str(u.accountId) || str(u.key) || str(u.name) : "");
+export const personName = (u: unknown): string => (isObj(u) ? str(u.displayName) || str(u.name) || personId(u) : "");
 
 function toPerson(u: unknown, v: 2 | 3): JiraPerson | null {
   if (!isObj(u) || u.active === false) return null;
@@ -1344,10 +1344,10 @@ export function assignable(creds: JiraCreds, key: string, query: string, transit
 export const assignableStored = (key: string, query: string, transitionId = ""): Promise<JiraResult<JiraPerson[]>> =>
   withStored((c) => assignable(c, key, query, transitionId));
 
-const assigneeBody = (creds: JiraCreds, who: string | null) => (apiOf(creds) === 3 ? { accountId: who } : { name: who });
+export const assigneeBody = (creds: JiraCreds, who: string | null) => (apiOf(creds) === 3 ? { accountId: who } : { name: who });
 
 /** A person key a write may carry: never the default-assignee word. */
-function badPerson(to: unknown): string | null {
+export function badPerson(to: unknown): string | null {
   if (to === null) return null;
   if (typeof to !== "string" || !PERSON_KEY.test(to)) return "That is not somebody Jira knows";
   if (to.trim() === "-1") return "That is not somebody Jira knows";
@@ -1355,7 +1355,7 @@ function badPerson(to: unknown): string | null {
 }
 
 /** The card's stamp and people before a write, or the sentence that stops it. */
-async function readBefore(creds: JiraCreds, key: string, fields: string): Promise<{ f: Record<string, unknown>; id: string } | { stop: WriteOutcome }> {
+export async function readBefore(creds: JiraCreds, key: string, fields: string): Promise<{ f: Record<string, unknown>; id: string } | { stop: WriteOutcome }> {
   const seen = await jiraCall<unknown>(creds, `/rest/api/${apiOf(creds)}/issue/${encodeURIComponent(key)}?fields=${fields}`, { fresh: true });
   if (!seen.ok) {
     return { stop: { ok: false, unauthorised: seen.unauthorised, error: `Nothing was changed: could not check the card first. ${seen.error ?? "Jira did not answer"}` } };
@@ -1363,10 +1363,10 @@ async function readBefore(creds: JiraCreds, key: string, fields: string): Promis
   return { f: isObj(seen.data) && isObj(seen.data.fields) ? seen.data.fields : {}, id: isObj(seen.data) ? idText(seen.data.id) : "" };
 }
 
-const stale = (): WriteOutcome => ({ ok: false, conflict: true, error: "Somebody changed this card while you had it open, reloaded" });
+export const stale = (): WriteOutcome => ({ ok: false, conflict: true, error: "Somebody changed this card while you had it open, reloaded" });
 
 /** Why Jira refused an assignee write, in our words. */
-function assignRefusal(r: JiraResult<unknown>): WriteOutcome {
+export function assignRefusal(r: JiraResult<unknown>): WriteOutcome {
   if (r.status === 400) return { ok: false, error: "Jira did not take that person: they may not be assignable to this card" };
   if (r.status === 403) return { ok: false, error: "Your Jira account cannot assign this card" };
   return { ok: false, unauthorised: r.unauthorised, error: r.error };
@@ -1473,9 +1473,9 @@ export const projectStatusesStored = (project: string) => withStored((c) => proj
 // --- the hand-off itself ----------------------------------------------------
 
 /** A move as the hand-off needs it: where it leads, and whether its screen has the assignee on it. */
-interface HandoffMove { id: string; toId: string; toName: string; needs: string[]; takesAssignee: boolean }
+export interface HandoffMove { id: string; toId: string; toName: string; needs: string[]; takesAssignee: boolean }
 
-function handoffMoves(raw: unknown): HandoffMove[] {
+export function handoffMoves(raw: unknown): HandoffMove[] {
   const list = isObj(raw) && Array.isArray(raw.transitions) ? raw.transitions : [];
   const out: HandoffMove[] = [];
   for (const t of list) {

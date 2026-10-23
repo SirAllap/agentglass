@@ -4,7 +4,7 @@ import { listMembers } from "../lib/listMembers.ts";
 import { Select } from "./Select.tsx";
 import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 import { fillTemplate, planOf, type Placeholder } from "../../../shared/stepBlocks.ts";
-import type { ListField, StepBlock } from "../../../shared/providers.ts";
+import type { ListField, ClickUpStepBlock as StepBlock } from "../../../shared/providers.ts";
 import { FIELD_KINDS, extrasOf, runExtras, type Extra, type ExtraItem } from "../lib/stepExtras.ts";
 
 /**

@@ -123,6 +123,7 @@ import {
   assignableStored as jiraAssignable, setAssigneeStored as jiraSetAssignee, handOffStored as jiraHandOff,
   jiraSettings, setHandoffRule as jiraSetHandoff, projectStatusesStored as jiraProjectStatuses,
 } from "./jira.ts";
+import { jiraSteps, runStepStored as jiraRunStep, setJiraSteps } from "./jiraSteps.ts";
 import {
   jiraViews, viewRead as jiraViewRead, viewChoices as jiraViewChoices, projectChoices as jiraProjectChoices,
   addViewByUrl as jiraAddViewByUrl, addViewByChoice as jiraAddViewByChoice, addFolderByKey as jiraAddFolder,
@@ -6512,6 +6513,38 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         ...(typeof b.clear === "boolean" ? { clear: b.clear } : null),
       });
       // A card that moved but could not be read back is still our move (`moved` carries it).
+      if (r.ok && r.was !== undefined && (r.task || r.moved)) jiraRememberOwnMove({ ...(r.task ?? r.moved!), status: r.was }, r.task?.status ?? r.moved!.status);
+      return json(r, r.ok ? 200 : r.conflict ? 409 : 400);
+    }
+    /*
+     * Steps: what a button on a pull request does to a Jira card, global to the site and by status name.
+     * `POST /jira/step` runs one, as ONE request, ordered here (the stamp is checked once, before any write);
+     * the settings write only the local file. Behind the write switch like every other write.
+     */
+    if (req.method === "GET" && pathname === "/jira/steps") return json({ ok: true, ...jiraSteps() });
+    if (pathname === "/jira/steps" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = setJiraSteps(b.steps);
+      return json(r.ok ? { ok: true, steps: r.steps, overrides: r.overrides } : r, r.ok ? 200 : 400);
+    }
+    if (pathname === "/jira/step" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const asObject = (v: unknown): Record<string, unknown> | null => (typeof v === "object" && v !== null && !Array.isArray(v) ? v as Record<string, unknown> : null);
+      const c = asObject(b.choice) ?? {};
+      const p = asObject(b.pr);
+      const r = await jiraRunStep(String(b.key ?? ""), typeof b.updated === "number" ? b.updated : 0, b.trigger, {
+        ...(typeof c.to === "string" ? { to: c.to } : null),
+        ...(typeof c.clear === "boolean" ? { clear: c.clear } : null),
+        ...(typeof c.assign === "string" || c.assign === null ? { assign: c.assign } : null),
+        ...(typeof c.comment === "string" ? { comment: c.comment } : null),
+      }, p && typeof p.url === "string" ? {
+        url: p.url,
+        ...(typeof p.title === "string" ? { title: p.title } : null),
+        ...(typeof p.number === "number" ? { number: p.number } : null),
+        ...(typeof p.author === "string" ? { author: p.author } : null),
+      } : undefined);
       if (r.ok && r.was !== undefined && (r.task || r.moved)) jiraRememberOwnMove({ ...(r.task ?? r.moved!), status: r.was }, r.task?.status ?? r.moved!.status);
       return json(r, r.ok ? 200 : r.conflict ? 409 : 400);
     }

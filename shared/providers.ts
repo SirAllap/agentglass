@@ -171,8 +171,19 @@ export interface JiraHandoffRule {
   askClear: boolean;
 }
 
+/** One Jira step: where it shows is its key in `JiraSteps`, what it does is its blocks. Steps are global by status NAME, like ClickUp's. */
+export interface JiraStep { enabled: boolean; blocks: StepBlock[] }
+export interface JiraSteps { handoff: JiraStep; review: JiraStep; merge: JiraStep }
+
 /** `GET /jira/settings`: the write switch and the hand-off, by project key. */
 export interface JiraSettings { writes: boolean; handoff: Record<string, JiraHandoffRule> }
+
+/**
+ * `GET /jira/steps`: the steps in effect. `overrides` are the projects whose older per-project hand-off rule
+ * still wins over the hand-off step, because it would resolve differently from the merged step; it empties
+ * when the person saves that step.
+ */
+export interface JiraStepsRead { steps: JiraSteps; overrides: string[] }
 
 /*
  * Saved Jira views. They reuse `SavedView` and `SavedFolder`: a view's id says
@@ -717,11 +728,13 @@ export type AssignWho = "none" | "me" | "author" | "person";
  * member are different systems and never the same identity, so nothing here guesses one from the other
  * and "the pull request's author" is not a choice ClickUp offers.
  */
-export const AUTHOR_IS_MEMBER: Record<string, boolean> = { clickup: false };
-export interface StepAssign {
+export const AUTHOR_IS_MEMBER: Record<string, boolean> = { clickup: false, jira: false };
+/** A tracker's person id: ClickUp's members are numbers, Jira's users are account ids or logins. */
+export type PersonId = number | string;
+export interface StepAssign<I extends PersonId = PersonId> {
   who: AssignWho;
   /** Only with `who: "person"`: the member's tracker id, and the name it had when chosen. */
-  person?: { id: number; name: string };
+  person?: { id: I; name: string };
 }
 
 /**
@@ -729,8 +742,11 @@ export interface StepAssign {
  * list's order is the order it reads in. The kinds are in shared/stepBlocks.ts
  * (BLOCK_INFO); a new kind is a new member here, not a new field on every step.
  * A step is sent to the tracker as one write whatever its blocks.
+ *
+ * `StepBlock` holds any tracker's person ids; `ClickUpStepBlock` is the same list with ClickUp's
+ * numbers and without the kinds ClickUp does not have, which is what its settings and its screens hold.
  */
-export type StepBlock =
+export type StepBlockOf<I extends PersonId> =
   /**
    * Move the card. No names with `fallback` is the built-in guess; with neither, a status still to be picked.
    * With `ask` the names are the starting choice, and the person picks the status when it runs.
@@ -740,12 +756,12 @@ export type StepBlock =
    * Take people off the card. `who: "people"` names them (`people`); `none`, `me` and `all` are the fixed
    * choices. With `ask` the person ticks who comes off when it runs, starting at this value.
    */
-  | { type: "unassign"; who: HandoffUnassign | "people"; people?: { id: number; name: string }[]; ask?: true }
+  | { type: "unassign"; who: HandoffUnassign | "people"; people?: { id: I; name: string }[]; ask?: true }
   /**
    * Assign the card. With `ask` the person is picked when it runs, and `who` is where the picker starts
    * (`none` is "nobody"; without `ask` that is not a block, it is the absence of one).
    */
-  | ({ type: "assign"; ask?: true; /** More people the question starts with, beside `person` (only with `ask`). */ also?: { id: number; name: string }[] } & StepAssign)
+  | ({ type: "assign"; ask?: true; /** More people the question starts with, beside `person` (only with `ask`). */ also?: { id: I; name: string }[] } & StepAssign<I>)
   /**
    * Comment on the card. `text` is a template (see PLACEHOLDERS in shared/stepBlocks.ts). With `ask` it is
    * the text the person edits when it runs, prefilled with the template filled in.
@@ -757,17 +773,27 @@ export type StepBlock =
    * With `ask` the value is where the question starts.
    */
   | { type: "field"; field: string; value: string; ask?: true };
+export type BlockOf<I extends PersonId> =
+  | StepBlockOf<I>
+  /**
+   * Put the pull request on the card as a link. Only a tracker that says it can (Jira: a remote link); the
+   * link is the pull request itself, so there is nothing to ask. ClickUp's list has no such kind.
+   */
+  | (string extends I ? { type: "link" } : never);
+export type StepBlock = BlockOf<PersonId>;
+export type ClickUpStepBlock = BlockOf<number>;
+export type ClickUpStepAssign = StepAssign<number>;
 
 export interface HandoffConfig {
   /** Off until a workspace says it has a QA column. */
   enabled: boolean;
   /** What the step does, in order. Absent in a file from before blocks: read from the three keys below. */
-  blocks?: StepBlock[];
+  blocks?: ClickUpStepBlock[];
   /** Status names to look for, in order; the first one the card's list has wins. */
   statusNames: string[];
   unassign: HandoffUnassign;
   /** Who is made sure to be on the card after the move (after `unassign` has run). */
-  assign: StepAssign;
+  assign: ClickUpStepAssign;
 }
 
 /** The kinds of note the card bell can raise. */
@@ -799,14 +825,14 @@ export interface ClickUpPrefs {
     /** Status names the review menu moves a card to; empty falls back to /review/i, then leaves it alone. */
     statusNames: string[];
     /** What the move item does, in order (see HandoffConfig.blocks). */
-    blocks?: StepBlock[];
+    blocks?: ClickUpStepBlock[];
     assignReviewer: boolean;
     /** Who the move item also makes sure is on the card. */
-    assign: StepAssign;
+    assign: ClickUpStepAssign;
   };
   /** The card choice in the merge dialog. Off until a workspace adds it; the first of
    *  `statusNames` the card's list has is preselected, none means "Leave it there". */
-  merge: { enabled: boolean; statusNames: string[]; assign: StepAssign; blocks?: StepBlock[] };
+  merge: { enabled: boolean; statusNames: string[]; assign: ClickUpStepAssign; blocks?: ClickUpStepBlock[] };
   flows: { noteOnCard: boolean };
   /** Custom field that holds a PR link; empty means the guess (a name containing "github"). */
   prLinkField: string;

@@ -6,7 +6,7 @@ import { WFM_CSS } from "./workflowMapStyle.ts";
 import { ArrowIcon, CaretIcon, DoneIcon, EyeIcon, EyeOffIcon, ListIcon, MergeIcon, NoteIcon, PlusIcon, UserIcon, WarningIcon, CrossIcon } from "../lib/glyphIcons.tsx";
 import { StepBlocks, type MapPerson } from "./StepBlocks.tsx";
 import type { FieldChoice } from "./StepExtraRows.tsx";
-import type { StepBlock } from "../../../shared/providers.ts";
+import type { ClickUpStepBlock as StepBlock } from "../../../shared/providers.ts";
 import { blocksSentence, blockNeedsValue, stepIsEmpty, triggerOf } from "../lib/stepBlocksView.ts";
 import { HIT, ICON } from "../lib/iconSize.ts";
 import {

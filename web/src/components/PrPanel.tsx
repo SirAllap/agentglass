@@ -8183,7 +8183,7 @@ export function AskedHandoff({ task, statuses, start, author, askStatus, askAssi
   author: PrAuthor | null;
   askStatus: boolean;
   /** Where the person picker starts; null when the assignment is fixed. */
-  askAssign: import("../../../shared/providers.ts").StepAssign | null;
+  askAssign: import("../../../shared/providers.ts").ClickUpStepAssign | null;
   /** The assignment when it is fixed. */
   fixed: Ensure;
   unassign: HandoffUnassign;
@@ -8192,7 +8192,7 @@ export function AskedHandoff({ task, statuses, start, author, askStatus, askAssi
   /** Named people the step takes off, when that is fixed. */
   takeOff?: number[];
   /** The step's comment and field blocks, shown (and asked, where they ask) beside the rest. */
-  extras?: { blocks: import("../../../shared/providers.ts").StepBlock[]; fields: import("../../../shared/providers.ts").ListField[] | null; pr: { number: number; title: string; url: string }; ctxAuthor: PrAuthor | null };
+  extras?: { blocks: import("../../../shared/providers.ts").ClickUpStepBlock[]; fields: import("../../../shared/providers.ts").ListField[] | null; pr: { number: number; title: string; url: string }; ctxAuthor: PrAuthor | null };
   onChange: (c: { status: string; ensure: Ensure; takeOff?: number[]; extras: ExtraItem[] }) => void;
 }) {
   const [extraItems, setExtraItems] = useState<ExtraItem[]>([]);
