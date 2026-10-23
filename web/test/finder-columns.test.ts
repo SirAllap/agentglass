@@ -4,7 +4,7 @@
  * cut while there is room. Drag and double-click change one column's width.
  */
 import { describe, expect, test } from "bun:test";
-import { COL_CHROME, COL_MAX, COL_MIN, columnWidth, dragWidth, longestNames, revealScroll, stripPad, previewWidth, splitName } from "../src/lib/finderColumns.ts";
+import { COL_CHROME, COL_MAX, COL_MIN, columnWidth, dragWidth, longestNames, revealScroll, stripPad, previewWidth, splitName, stripLayout, headerInline, TIGHT_W } from "../src/lib/finderColumns.ts";
 
 const px = (s: string) => s.length * 7;
 
@@ -131,5 +131,54 @@ describe("the preview panel's width", () => {
     expect(previewWidth(1200, 700)).toBe(700);
     expect(previewWidth(1200, 1100)).toBe(880);
     expect(previewWidth(400, 1100)).toBe(240);
+  });
+});
+
+describe("the strip layout cannot loop", () => {
+  /** What the browser does to a scroll position once the strip has `pad` of room after it. */
+  const clamp = (scroll: number, widths: number[], pad: number, page: number) => Math.max(0, Math.min(scroll, widths.reduce((a, b) => a + b, 0) + pad - page));
+  test("dragging an edge back and forth settles on the first answer each time", () => {
+    let seed = 7; const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+    let cur = 0;
+    for (let i = 0; i < 400; i++) {
+      const n = 2 + Math.floor(rnd() * 5);
+      const widths = Array.from({ length: n }, () => 120 + Math.floor(rnd() * 500));
+      const active = Math.floor(rnd() * n), page = 500 + Math.floor(rnd() * 900);
+      let a = stripLayout(widths, active, page, cur);
+      cur = clamp(a.scroll, widths, a.pad, page);
+      // The layout effect runs again only when widths or the active column change. Asked again with what the browser did, it must not move the pad, or a state holding the pad would be set again and again.
+      const b = stripLayout(widths, active, page, cur);
+      expect(b.pad, `${widths} @${active}/${page}`).toBe(a.pad);
+      expect(b.scroll).toBe(cur);
+    }
+  });
+  test("the strip's room is not React state", async () => {
+    const src = await Bun.file(new URL("../src/components/finder/machine/MachineFinder.tsx", import.meta.url)).text();
+    const row = src.slice(src.indexOf("function ColumnsRow("));
+    expect(row.slice(0, row.indexOf("\n}\n"))).not.toMatch(/useState|setPad/);
+  });
+  test("a narrow header keeps options and gives the rest up in order, and never needs more room than it has", () => {
+    for (let w = 120; w <= 420; w += 10) {
+      const on = headerInline(w, 26, true);
+      expect(on.has("options")).toBe(true);
+      expect(on.size * 30 + 20 + 56 + 38).toBeLessThanOrEqual(Math.max(w, 20 + 56 + 38 + 30));
+    }
+    expect([...headerInline(120, 26, true)]).toEqual(["options"]);
+    expect(headerInline(420, 26, true).size).toBe(6);
+    expect(headerInline(420, 26, false).has("close")).toBe(false);
+  });
+  test("the rows of a tight column drop their size and count", async () => {
+    expect(TIGHT_W).toBeGreaterThan(120);
+    const src = await Bun.file(new URL("../src/components/finder/machine/Column.tsx", import.meta.url)).text();
+    expect(src).toContain("!tight &&");
+    expect(src).toMatch(/overflow-hidden">\s*<span className="truncate"/);
+  });
+});
+
+describe("free room goes to the preview, not to a gap", () => {
+  test("with the preview beside the columns and nothing dragged, the preview grows and the columns do not", async () => {
+    const src = await Bun.file(new URL("../src/components/finder/machine/MachineFinder.tsx", import.meta.url)).text();
+    expect(src).toContain('"0 1 auto" : "1 1 0%"');
+    expect(src).toMatch(/flex: `\$\{prevDrag === undefined && prefs\.view === "columns" \? 1 : 0\} 0 /);
   });
 });

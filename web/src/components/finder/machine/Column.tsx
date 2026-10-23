@@ -15,7 +15,7 @@ import type { FolderState } from "../../../lib/finderFolders.ts";
 import { INPUT, INPUT_STYLE, LINE, RefreshButton } from "../../workspace/Chrome.tsx";
 import { MenuCap, MenuItem, MenuRule, Popover } from "./Popover.tsx";
 import { VirtualList } from "./VirtualList.tsx";
-import { dragWidth, splitName } from "../../../lib/finderColumns.ts";
+import { TIGHT_W, dragWidth, headerInline, splitName } from "../../../lib/finderColumns.ts";
 
 /** Ctrl and Shift on a click: what makes it a choice of several rows. */
 export interface Mod { ctrl: boolean; shift: boolean }
@@ -69,6 +69,10 @@ export function Column({ title, closable, onClosePane, filterSignal, width, onRe
   const selItem = (() => { const i = display.rows.findIndex((r) => r.name === selName); return i < 0 ? null : display.itemOfRow[i]!; })();
   const loading = !state || !state.done;
   const btn = "agx-btn rounded-md grid place-items-center shrink-0";
+  // Under this a row has no room for a count or a size beside the name, and the name comes first.
+  const tight = width < TIGHT_W;
+  const inline = headerInline(width, HIT, closable, !!state);
+  const toggleFilter = () => { const on = !finding; setFinding(on); if (!on) onFilter(""); else setTimeout(() => input.current?.focus(), 0); };
   const open = (kind: "sort" | "opts") => (e: React.MouseEvent<HTMLButtonElement>) => setMenu({ kind, at: e.currentTarget.getBoundingClientRect() });
 
   return (
@@ -100,16 +104,18 @@ export function Column({ title, closable, onClosePane, filterSignal, width, onRe
             {state.total.toLocaleString()}{loading ? "…" : ""}
           </span>
         )}
-        <RefreshButton onRefresh={onRefresh} title="Reload this folder (F5)" />
-        <button className={btn} style={{ width: HIT, height: HIT, color: "var(--text3)" }} aria-label={prefs.sortDir === "asc" ? "Ascending — click to reverse" : "Descending — click to reverse"}
-          title={prefs.sortDir === "asc" ? "Ascending — click to reverse" : "Descending — click to reverse"} onClick={() => onSort(prefs.sortKey)}>
-          {prefs.sortDir === "asc" ? <ArrowUpIcon size={ICON.sm} /> : <ArrowDownIcon size={ICON.sm} />}
-        </button>
-        <button className={btn} style={{ width: HIT, height: HIT, color: "var(--text3)" }} title="Sort this folder" aria-label="Sort this folder" aria-haspopup="menu" onClick={open("sort")}><SwapIcon size={ICON.sm} /></button>
+        {inline.has("refresh") && <RefreshButton onRefresh={onRefresh} title="Reload this folder (F5)" />}
+        {inline.has("direction") && (
+          <button className={btn} style={{ width: HIT, height: HIT, color: "var(--text3)" }} aria-label={prefs.sortDir === "asc" ? "Ascending — click to reverse" : "Descending — click to reverse"}
+            title={prefs.sortDir === "asc" ? "Ascending — click to reverse" : "Descending — click to reverse"} onClick={() => onSort(prefs.sortKey)}>
+            {prefs.sortDir === "asc" ? <ArrowUpIcon size={ICON.sm} /> : <ArrowDownIcon size={ICON.sm} />}
+          </button>
+        )}
+        {inline.has("sort") && <button className={btn} style={{ width: HIT, height: HIT, color: "var(--text3)" }} title="Sort this folder" aria-label="Sort this folder" aria-haspopup="menu" onClick={open("sort")}><SwapIcon size={ICON.sm} /></button>}
         <button className={btn} style={{ width: HIT, height: HIT, color: "var(--text3)" }} title="Options" aria-label="Options" aria-haspopup="menu" onClick={open("opts")}><MoreIcon size={ICON.sm} /></button>
-        <button className={btn} aria-pressed={finding} style={{ width: HIT, height: HIT, color: finding ? "var(--primary-ink)" : "var(--text3)" }} title="Filter this pane (Ctrl+F)" aria-label="Filter this pane"
-          onClick={() => { const on = !finding; setFinding(on); if (!on) onFilter(""); else setTimeout(() => input.current?.focus(), 0); }}><SearchIcon size={ICON.sm} /></button>
-        {closable && <button className={btn} style={{ width: HIT, height: HIT, color: "var(--text3)" }} title="Close this pane" aria-label="Close this pane" onClick={onClosePane}><CrossIcon size={ICON.sm} /></button>}
+        {inline.has("filter") && <button className={btn} aria-pressed={finding} style={{ width: HIT, height: HIT, color: finding ? "var(--primary-ink)" : "var(--text3)" }} title="Filter this pane (Ctrl+F)" aria-label="Filter this pane"
+          onClick={toggleFilter}><SearchIcon size={ICON.sm} /></button>}
+        {closable && inline.has("close") && <button className={btn} style={{ width: HIT, height: HIT, color: "var(--text3)" }} title="Close this pane" aria-label="Close this pane" onClick={onClosePane}><CrossIcon size={ICON.sm} /></button>}
       </header>
       {finding && (
         <div className="px-2.5 py-1.5 shrink-0" style={{ borderBottom: LINE }}>
@@ -148,10 +154,10 @@ export function Column({ title, closable, onClosePane, filterSignal, width, onRe
                 <NameCell name={r.name} />
                 {dir ? (
                   <>
-                    {r.items !== null && <span className="shrink-0 tabular-nums text-[10px] px-1.5 rounded-md" style={{ background: "color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text3)", fontWeight: 400 }}>{itemsLabel(r.items)}</span>}
+                    {r.items !== null && !tight && <span className="shrink-0 tabular-nums text-[10px] px-1.5 rounded-md" style={{ background: "color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text3)", fontWeight: 400 }}>{itemsLabel(r.items)}</span>}
                     <span className="shrink-0 flex" style={{ color: "var(--text4)", transform: "rotate(-90deg)" }}><CaretIcon size={ICON.xs} /></span>
                   </>
-                ) : prefs.sizes && r.bytes !== null ? (
+                ) : prefs.sizes && r.bytes !== null && !tight ? (
                   <span className="shrink-0 tabular-nums text-[10.5px]" style={{ color: "var(--text4)", fontWeight: 400 }}>{formatSize(r.bytes)}</span>
                 ) : null}
               </div>
@@ -176,6 +182,13 @@ export function Column({ title, closable, onClosePane, filterSignal, width, onRe
           <MenuItem on={prefs.sizes} onClick={() => onPref({ sizes: !prefs.sizes })}>Show sizes</MenuItem>
           <MenuRule />
           <MenuItem onClick={() => { onRefresh(); setMenu(null); }}>Reload this folder</MenuItem>
+          {(!inline.has("filter") || !inline.has("direction") || !inline.has("sort") || (closable && !inline.has("close"))) && <MenuRule />}
+          {!inline.has("filter") && <MenuItem on={finding} onClick={() => { toggleFilter(); setMenu(null); }}>Filter this pane</MenuItem>}
+          {!inline.has("direction") && <MenuItem onClick={() => { onSort(prefs.sortKey); setMenu(null); }}>{prefs.sortDir === "asc" ? "Sort descending" : "Sort ascending"}</MenuItem>}
+          {!inline.has("sort") && (["name", "size", "modified"] as const).map((k) => (
+            <MenuItem key={k} on={prefs.sortKey === k} onClick={() => { onSort(k); setMenu(null); }}>{`Sort by ${k}`}</MenuItem>
+          ))}
+          {closable && !inline.has("close") && <MenuItem onClick={() => { setMenu(null); onClosePane(); }}>Close this pane</MenuItem>}
         </Popover>
       )}
     </section>
@@ -186,7 +199,7 @@ export function Column({ title, closable, onClosePane, filterSignal, width, onRe
 function NameCell({ name }: { name: string }) {
   const [head, tail] = splitName(name);
   return (
-    <span className="flex flex-1 min-w-0">
+    <span className="flex flex-1 min-w-0 overflow-hidden">
       <span className="truncate" style={{ flexShrink: 1, minWidth: 0 }}>{head}</span>
       {tail && <span className="shrink-0 whitespace-pre">{tail}</span>}
     </span>

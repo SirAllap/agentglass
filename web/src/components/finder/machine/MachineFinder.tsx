@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../../lib/api.ts";
 import { FolderStore, type FolderState } from "../../../lib/finderFolders.ts";
-import { columnWidth, previewFits, revealScroll, stripPad, previewWidth, sidebarWidth } from "../../../lib/finderColumns.ts";
+import { columnWidth, previewFits, stripLayout, previewWidth, sidebarWidth } from "../../../lib/finderColumns.ts";
 import { back as histBack, canBack, canForward, forward as histForward, here as histHere, startHistory, visit, type History } from "../../../lib/finderHistory.ts";
 import { readMachineSnap, writeMachineSnap } from "../../../lib/finderMachineState.ts";
 import { finderKey } from "../../../lib/finderKeys.ts";
@@ -402,7 +402,8 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
         {sideOn && <Sidebar places={placesFor(home, places)} here={trail[0]!} mode={compact || sideMode === "hidden" ? "full" : sideMode} width={sidebarWidth(compact || sideMode === "hidden" ? "full" : sideMode === "rail" ? "rail" : "full", prefs.sideW, box.w)} onResize={(w) => setPrefs({ sideW: sidebarWidth("full", w, box.w) })} onGo={go} onRecent={onRecent} />}
         {!(compact && sidePage) && (
           <>
-            <div ref={main} className="flex-1 min-w-0 min-h-0 flex">
+            {/* With the preview beside the columns and nothing dragged, the columns take what their names ask for and the preview takes all that is left, as Strata's does; a gap between the two was the free room with nowhere to go. */}
+            <div ref={main} className="min-w-0 min-h-0 flex" style={{ flex: previewInline && prefs.view === "columns" && prevDrag === undefined ? "0 1 auto" : "1 1 0%" }}>
               {previewOnly ? (
                 <div className="flex-1 min-w-0 min-h-0 flex flex-col">
                   <button className="agx-btn text-left px-3 text-[11px] shrink-0" style={{ minHeight: HIT, color: "var(--text3)", borderBottom: LINE }} onClick={() => setPeek(false)}>← Back to the folder (Space)</button>
@@ -427,7 +428,7 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
               ) : null}
             </div>
             {previewInline && (
-              <div className="relative shrink-0 min-h-0 flex" style={{ width: previewWidth(box.w, prevDrag), borderLeft: LINE, background: "var(--surface-card)" }}>
+              <div className="relative min-h-0 flex" style={{ flex: `${prevDrag === undefined && prefs.view === "columns" ? 1 : 0} 0 ${previewWidth(box.w, prevDrag)}px`, minWidth: 0, borderLeft: LINE, background: "var(--surface-card)" }}>
                 <div role="separator" aria-orientation="vertical" aria-label="Resize the preview" tabIndex={0} title="Drag to resize, double-click to reset"
                   className="absolute top-0 bottom-0" style={{ left: 0, width: 6, cursor: "col-resize", zIndex: 3, touchAction: "none" }}
                   onDoubleClick={() => setPrevDrag(undefined)}
@@ -465,21 +466,23 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
 /** The columns, scrolled so the active one is whole in view and the leftmost visible column is not sliced (see finderColumns.revealScroll). */
 function ColumnsRow({ children, widths, active }: { children: React.ReactNode; widths: number[]; active: number }) {
   const el = useRef<HTMLDivElement>(null);
-  const [pad, setPad] = useState(0);
+  const pad = useRef<HTMLDivElement>(null);
   const key = widths.join(",");
+  /* The room after the last column is written straight onto its element, not
+     kept in state: a state that the same effect reads and sets looped (React
+     error 185) when a column was dragged — see finderColumns.stripLayout. */
   useLayoutEffect(() => {
-    const e = el.current; if (!e) return;
-    const t = revealScroll({ widths, active, page: e.clientWidth, current: e.scrollLeft });
-    const need = stripPad(widths, t, e.clientWidth);
-    if (need !== pad) { setPad(need); return; } // the strip grows first; this effect runs again with the room in place
-    e.scrollLeft = t;
+    const e = el.current, p = pad.current; if (!e || !p) return;
+    const t = stripLayout(widths, active, e.clientWidth, e.scrollLeft);
+    p.style.width = `${t.pad}px`;
+    e.scrollLeft = t.scroll;
     // `key` is the widths themselves.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, active, pad]);
+  }, [key, active]);
   return (
     <div ref={el} className="agx-scroll flex-1 min-w-0 min-h-0 flex overflow-x-auto overflow-y-hidden" style={{ scrollSnapType: "x proximity" }}>
       {children}
-      {pad > 0 && <div aria-hidden className="shrink-0" style={{ width: pad }} />}
+      <div ref={pad} aria-hidden className="shrink-0" style={{ width: 0 }} />
     </div>
   );
 }
