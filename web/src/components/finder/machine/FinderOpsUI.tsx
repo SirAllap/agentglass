@@ -2,13 +2,15 @@
 // lib/finderOps.menuFor), the prompt that asks for a name, and the confirmation
 // that comes before a permanent delete. Nothing here decides anything: the
 // model is lib/finderOps.ts, the doing is the server's (/fs/op).
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Portal } from "../../Portal.tsx";
 import { HIT, ICON } from "../../../lib/iconSize.ts";
 import { LAYER } from "../../../lib/layers.ts";
 import { nameProblem, stemEnd, type Item, type OpId } from "../../../lib/finderOps.ts";
 import { EDGE, LINE } from "../../workspace/Chrome.tsx";
 import { StrataIcon } from "./StrataIcon.tsx";
+import { MENU_ROW } from "../../../lib/finderMenu.ts";
+import { useMenuKeys } from "./useMenuKeys.ts";
 
 /** Strata's icon for each item (its file menu reference, shot 42). */
 const ICON_OF: Record<OpId, string> = {
@@ -35,6 +37,11 @@ export function ContextMenu({ at, head, groups, onPick, onClose }: {
   const el = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const [sub, setSub] = useState<{ items: Item[]; rect: DOMRect } | null>(null);
+  const subEl = useRef<HTMLDivElement>(null);
+  const closeSub = useCallback(() => setSub(null), []);
+  // The main list has the keys until a submenu is open; then the submenu has them and Left hands them back.
+  useMenuKeys(el, { enabled: !sub });
+  useMenuKeys(subEl, { enabled: !!sub, onLeft: closeSub });
   // Opens at the pointer and is pulled back inside the window, so a click near an edge opens inward.
   // Placed again whenever the menu changes size: the icons arrive after the first measure, and a menu measured short hangs off the bottom.
   useLayoutEffect(() => {
@@ -69,7 +76,7 @@ export function ContextMenu({ at, head, groups, onPick, onClose }: {
               <button key={i.id + (i.action ?? "")} role="menuitem" aria-haspopup={i.sub ? "menu" : undefined} aria-expanded={i.sub ? sub?.items === i.sub : undefined} disabled={i.disabled} title={i.later ? `${i.later} is not built yet` : undefined}
                 onMouseEnter={(e) => { if (i.sub) setSub({ items: i.sub, rect: e.currentTarget.getBoundingClientRect() }); else setSub(null); }}
                 onClick={(e) => { if (i.sub) setSub({ items: i.sub, rect: e.currentTarget.getBoundingClientRect() }); else onPick(i); }}
-                className="agx-btn w-full flex items-center gap-2.5 px-3.5 text-left disabled:opacity-40" style={{ minHeight: 28, color: i.danger ? "var(--error-ink)" : "var(--text)" }}>
+                className={`${MENU_ROW} flex items-center gap-2.5 px-3 text-left disabled:opacity-40`} style={{ minHeight: 28, color: i.danger ? "var(--error-ink)" : "var(--text)" }}>
                 <span className="shrink-0 flex" style={{ color: i.danger ? "var(--error-ink)" : "var(--primary-ink)" }}><StrataIcon set="act" name={ICON_OF[i.id]} size={ICON.sm} /></span>
                 <span className="flex-1 min-w-0 truncate">{i.label}</span>
                 {i.keys && <span className="text-[10.5px]" style={{ color: "var(--text4)" }}>{i.keys}</span>}
@@ -80,11 +87,11 @@ export function ContextMenu({ at, head, groups, onPick, onClose }: {
         ))}
       </div>
       {sub && (
-        <div role="menu" data-finder-menu aria-label="Actions" className="fixed rounded-lg text-[12px] shadow-2xl py-1.5"
+        <div ref={subEl} role="menu" data-finder-menu aria-label="Actions" className="fixed rounded-lg text-[12px] shadow-2xl py-1.5"
           style={{ width: 260, ...subPlace(sub.rect, 260, sub.items.length * 28 + 12), background: "var(--surface-card)", border: EDGE, color: "var(--text)", maxHeight: "calc(100vh - 16px)", overflowY: "auto" }}>
           {sub.items.map((i) => (
             <button key={i.action ?? i.id} role="menuitem" disabled={i.disabled} title={i.disabled ? i.label : undefined} onClick={() => onPick(i)}
-              className="agx-btn w-full flex items-center gap-2.5 px-3.5 text-left disabled:opacity-40" style={{ minHeight: 28 }}>
+              className={`${MENU_ROW} flex items-center gap-2.5 px-3 text-left disabled:opacity-40`} style={{ minHeight: 28 }}>
               <span className="shrink-0 flex" style={{ color: "var(--primary-ink)" }}><StrataIcon set="act" name="play" size={ICON.sm} /></span>
               <span className="flex-1 min-w-0 truncate">{i.label}</span>
             </button>

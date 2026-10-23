@@ -12,6 +12,8 @@ import { LAYER } from "../../../lib/layers.ts";
 import { DoneIcon } from "../../../lib/glyphIcons.tsx";
 import { StrataIcon } from "./StrataIcon.tsx";
 import { EDGE, LINE } from "../../workspace/Chrome.tsx";
+import { MENU_ROW } from "../../../lib/finderMenu.ts";
+import { useMenuKeys } from "./useMenuKeys.ts";
 
 export function Popover({ anchor, onClose, width = 220, children, label }: { anchor: DOMRect; onClose: () => void; width?: number; children: ReactNode; label: string }) {
   const el = useRef<HTMLDivElement>(null);
@@ -29,6 +31,7 @@ export function Popover({ anchor, onClose, width = 220, children, label }: { anc
     window.addEventListener("keydown", on, true);
     return () => window.removeEventListener("keydown", on, true);
   }, [onClose]);
+  useMenuKeys(el);
   return (
     <Portal z={LAYER.menu}>
       <div className="fixed inset-0" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
@@ -49,7 +52,7 @@ export function MenuCap({ children }: { children: ReactNode }) {
 export function MenuItem({ children, onClick, on, hint, disabled, icon }: { children: ReactNode; onClick: () => void; on?: boolean; hint?: string; disabled?: boolean; icon?: string }) {
   return (
     <button role="menuitemcheckbox" aria-checked={on} disabled={disabled} onClick={onClick}
-      className="agx-btn w-full flex items-center gap-2 px-3.5 text-left disabled:opacity-40" style={{ minHeight: 34, color: "var(--text)" }}>
+      className={`${MENU_ROW} flex items-center gap-2 px-3 text-left disabled:opacity-40`} style={{ minHeight: 34, color: "var(--text)" }}>
       {icon && <span style={{ color: "var(--primary-ink)" }}><StrataIcon set="act" name={icon} size={ICON.sm} /></span>}
       <span className="flex-1 min-w-0 truncate">{children}</span>
       {hint && <span className="text-[10.5px]" style={{ color: "var(--text4)" }}>{hint}</span>}

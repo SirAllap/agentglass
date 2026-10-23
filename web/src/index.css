@@ -712,6 +712,11 @@
 /* Pressed, for every Button: hover already darkens through `hover:brightness-125`,
    and a control with no pressed answer reads as one that did not hear the click. */
 .agx-btn:active:not(:disabled) { filter: brightness(0.86); }
+/* A row of a finder menu, as Strata's popovers draw it: inset, rounded, and one quiet fill for the row under the pointer and the row the keys are on. */
+.agx-menu-row { display: flex; width: calc(100% - 12px); margin: 1px 6px; border-radius: 6px; background: transparent; cursor: pointer; transition: background-color 90ms; }
+.agx-menu-row:hover:not(:disabled), .agx-menu-row[data-active]:not(:disabled) { background: color-mix(in srgb, var(--text) 10%, transparent); }
+.agx-menu-row:active:not(:disabled) { background: color-mix(in srgb, var(--text) 16%, transparent); }
+.agx-menu-row:disabled { cursor: default; }
 /* A folding section's header (the ClickUp page's cards): the whole bar is the target. */
 .agx-fold { cursor: pointer; transition: background-color 120ms; }
 .agx-fold:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
