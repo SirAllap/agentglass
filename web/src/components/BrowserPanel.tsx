@@ -1103,8 +1103,8 @@ export function BrowserView({ active: viewOn, scope }: {
         dispatchAct({ type: "begin", tab: owner.id, agent, op: ask.op });
         if (owner.agent !== agent) patch(owner.id, { agent });
         serveBrowserAsk(wv, ask).then(
-          (ok) => dispatchAct({ type: "end", tab: owner.id, action: actionOf(ask, ok, Date.now()) }),
-          () => dispatchAct({ type: "end", tab: owner.id, action: actionOf(ask, false, Date.now()) }),
+          (ok) => dispatchAct({ type: "end", tab: owner.id, action: actionOf(ask, ok, Date.now()), at: Date.now() }),
+          () => dispatchAct({ type: "end", tab: owner.id, action: actionOf(ask, false, Date.now()), at: Date.now() }),
         );
       };
       /* §8: the answer says which tab it came from and whose container that is.

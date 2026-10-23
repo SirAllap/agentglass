@@ -15,9 +15,9 @@
  * Ceiling: the pointer arrives AFTER the act (the landing is reported when the
  * act is done), and page zoom other than 100 % puts it off by the zoom factor.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { AgentStateKey, TabAgent } from "../../lib/browserAgentActivity.ts";
-import { PRESENCE_LINGER_MS, agentState, isActVerb, lapKeyframes, pointerAt, presenceLabel, travelMs } from "../../lib/browserAgentActivity.ts";
+import { PRESENCE_LINGER_MS, STATE_HOLD_MS, agentState, isActVerb, lapKeyframes, pointerAt, presenceLabel, travelMs } from "../../lib/browserAgentActivity.ts";
 import type { ActLanding } from "../../lib/browserDrive.ts";
 import { LivingMark } from "../Logo.tsx";
 
@@ -56,7 +56,17 @@ export function AgentPresence({ agent, landing, url = "", onToggle, quiet = fals
   const lap = useRef<Animation | null>(null);
   const last = useRef({ x: 48, y: 40 });
   const live = useAgentLive(agent);
-  const state = agentState(agent);
+  /* Held like the overview's: between back-to-back asks the dock keeps the
+     last word for STATE_HOLD_MS, then one re-render lets it say Thinking. */
+  const [held, setHeld] = useState(false);
+  // Layout effect: set before paint, or the frame between shows Thinking.
+  useLayoutEffect(() => {
+    if (agent.working > 0 || agent.paused) { setHeld(false); return; }
+    setHeld(true);
+    const t = setTimeout(() => setHeld(false), STATE_HOLD_MS);
+    return () => clearTimeout(t);
+  }, [agent.working, agent.paused]);
+  const state = agentState(held ? { ...agent, working: 1 } : agent);
   /* The glass is for a page an agent is changing: one that only reads it
      (a look, a screenshot) leaves the person's hand on it. Up from the first
      act, down with the rest of the presence. */

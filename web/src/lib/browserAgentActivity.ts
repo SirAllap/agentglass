@@ -24,13 +24,13 @@ const ACT_VERBS = new Set([
 const FLASH_VERBS = new Set(["click", "dblclick", "rightclick", "check", "fill", "type", "press", "select"]);
 
 export interface AgentAction { verb: string; target: string; ok: boolean; at: number }
-export interface TabAgent { agent: string; working: number; paused: boolean; log: AgentAction[]; /** The agent said it is finished, until its next ask. */ done?: boolean; /** The verb of the last ask begun. */ op?: string }
+export interface TabAgent { agent: string; working: number; paused: boolean; log: AgentAction[]; /** The agent said it is finished, until its next ask. */ done?: boolean; /** The verb of the last ask begun. */ op?: string; /** When the last ask ended, read or act: reads leave no log entry. */ lastAt?: number }
 export type Activity = Record<string, TabAgent>;
 
 export type ActivityEvent =
   | { type: "begin"; tab: string; agent: string; op?: string }
   | { type: "done"; tab: string }
-  | { type: "end"; tab: string; action: AgentAction | null }
+  | { type: "end"; tab: string; action: AgentAction | null; at?: number }
   | { type: "pause"; tab: string; paused: boolean }
   | { type: "forget"; tab: string };
 
@@ -44,7 +44,7 @@ export function activityReducer(state: Activity, ev: ActivityEvent): Activity {
     case "end": {
       if (!cur) return state;
       const log = ev.action ? [...cur.log, ev.action].slice(-LOG_MAX) : cur.log;
-      return { ...state, [ev.tab]: { ...cur, working: Math.max(0, cur.working - 1), log } };
+      return { ...state, [ev.tab]: { ...cur, working: Math.max(0, cur.working - 1), log, lastAt: ev.at ?? ev.action?.at ?? cur.lastAt } };
     }
     case "pause": {
       // A tab no agent has touched has nothing to pause: the person's own tab stays unmarked.
@@ -181,10 +181,15 @@ export function pointerAt(l: { x: number; y: number; w: number; h: number; vw: n
  * Done only when the agent said so with the `done` verb. A name kept from a
  * restart with no live activity has no state.
  */
+export const STATE_HOLD_MS = 2000;
 export function tabState(a: TabAgent | undefined, kept: string | undefined, now: number): { key: AgentStateKey; word: string } | null {
   if (a && (a.paused || a.working > 0)) return agentState(a);
-  const last = a?.log[a.log.length - 1]?.at ?? 0;
+  /* The last ask of any kind, not the last act: an agent reading between clicks
+     flipped Reading/Waiting several times a second when only acts counted. */
+  const last = a?.lastAt ?? a?.log[a.log.length - 1]?.at ?? 0;
   if (a?.done) return { key: "done", word: STATE_WORD.done };
+  // Back-to-back asks keep their word; a state that changes faster than it can be read is noise.
+  if (a && now - last < STATE_HOLD_MS) return agentState({ working: 1, paused: false, op: a.op });
   if (a && now - last < PRESENCE_LINGER_MS) return { key: "thinking", word: STATE_WORD.thinking };
   return a ? { key: "waiting", word: STATE_WORD.waiting } : null;
 }

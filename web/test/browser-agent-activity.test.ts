@@ -234,9 +234,21 @@ describe("the overview's states", () => {
   test("an act in flight, then Thinking, then Waiting", () => {
     const now = 1_000_000;
     expect(tabState(a(1), undefined, now)?.word).toBe("Clicking");
-    expect(tabState(a(0, now - 1000), undefined, now)?.word).toBe("Thinking");
+    expect(tabState(a(0, now - 1000), undefined, now)?.word).toBe("Clicking");
+    expect(tabState(a(0, now - 5000), undefined, now)?.word).toBe("Thinking");
     expect(tabState(a(0, now - 60_000), undefined, now)?.word).toBe("Waiting");
     expect(tabState(undefined, undefined, now)).toBeNull();
+  });
+  test("a read that just ended keeps its word, though the last act is old", () => {
+    const now = 1_000_000;
+    let s: Activity = {};
+    s = activityReducer(s, { type: "begin", tab: "t1", agent: "orbit-ci", op: "click" });
+    s = activityReducer(s, { type: "end", tab: "t1", action: { verb: "click", target: "", ok: true, at: now - 60_000 }, at: now - 60_000 });
+    s = activityReducer(s, { type: "begin", tab: "t1", agent: "orbit-ci", op: "read" });
+    expect(tabState(s.t1, undefined, now)?.word).toBe("Reading");
+    s = activityReducer(s, { type: "end", tab: "t1", action: null, at: now - 500 });
+    expect(tabState(s.t1, undefined, now)?.word).toBe("Reading");
+    expect(tabState(s.t1, undefined, now + 3000)?.word).toBe("Thinking");
   });
   test("quiet without `done` is Waiting, `done` is Done, a restored name alone is nothing", () => {
     const now = 1_000_000;
