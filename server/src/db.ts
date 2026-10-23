@@ -1849,6 +1849,12 @@ try { db.exec("ALTER TABLE seat ADD COLUMN adopted_pane TEXT NOT NULL DEFAULT ''
  * window somebody opened is not this app's to kill.
  */
 try { db.exec("ALTER TABLE named_agent ADD COLUMN adopted INTEGER NOT NULL DEFAULT 0"); } catch { /* already present */ }
+/* Who started a worker and how it ended: the seat that owns it, the model it
+   runs, the policy decision as JSON, the engine's session to resume, and the
+   exit status and last stderr line of its latest turn (agents/workerstart.ts). */
+for (const col of ["seat_root TEXT", "model TEXT", "started_by TEXT", "resume_id TEXT", "exit_code INTEGER", "exit_line TEXT"]) {
+  try { db.exec(`ALTER TABLE named_agent ADD COLUMN ${col}`); } catch { /* already present */ }
+}
 
 /* What a run's branch pointed at when something last looked at it.
  *

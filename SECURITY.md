@@ -875,7 +875,19 @@ A **worker role** (`start --role`) adds a lock: a deny list of publishing,
 history-rewriting and network commands, handed to the CLI in its own rule
 syntax. On OpenCode the lock is merged with the directory's config, so each
 start asks OpenCode for the merged rules and refuses when a project rule wins
-over the lock. The lock is a list of command prefixes, not a sandbox. A project
+over the lock. The lock is a list of command prefixes, not a sandbox, and no
+engine's lock is reported as more than **partly** enforced. On Claude Code a
+rule matches the start of a command line, so `git push` is refused and
+`git -C . push` or `/usr/bin/git push` is not; on OpenCode the rules are globs
+over the line, and a line a shell builds around a command is not read by them.
+A worker also runs as the same user as this app: it can read the app's token
+file, and a request made with that token and without the worker's name is, to
+the server, the person's. The check that turns a worker away from starting
+agents or touching a seat stops a worker using the CLI as it is, not one that
+means to get past it. A worker is as contained as its engine's permission
+system and the trust placed in what it is asked to read; where that is not
+enough, the answer is a container or another account, which this app does not
+provide. A project
 **OpenCode plugin** (`.opencode/plugin/`, or one named in the project's
 opencode.json) is arbitrary code that OpenCode runs inside the worker, and the
 lock does not cover it: a plugin can run any command itself without asking the

@@ -477,6 +477,13 @@ export function resolve(policy: Policy, facts: RuleFacts, readiness: readonly En
   return { orchestrator, workers };
 }
 
+/** The chain a role's start may pick from right now: the first rule that is on
+ *  and names the role, else the base. What `--engine` is checked against. */
+export function chainFor(policy: Policy, facts: RuleFacts, role: RoleId): Chain {
+  const hit = policy.rules.find((r) => r.enabled && facts.on(r.id) && r.workers?.[role]);
+  return hit ? hit.workers![role]! : policy.base.workers[role].value;
+}
+
 // ── words ────────────────────────────────────────────────────────────────
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];

@@ -93,6 +93,7 @@ describe("probeEngines against the fakes", () => {
   });
 
   test("a ready Claude can work and orchestrate, and has not answered yet", async () => {
+    db.run("DELETE FROM engine_test WHERE engine = ?", ["claude"]);
     const f = fleet({ claude: {} });
     const e = await byId(f, "claude");
     expect(e.version).toBe("2.1.296");
@@ -102,7 +103,19 @@ describe("probeEngines against the fakes", () => {
     expect(e.roles.worker.ok).toBe(true);
     expect(e.roles.orchestrator.ok).toBe(true);
     expect(e.answers.state).toBe("never");
-    expect(e.envelope.enforced).toBe("yes");
+    expect(e.envelope.enforced).toBe("partly");
+  });
+
+  test("no engine's lock is called enforced: each is a list of rules over a command line, not a wall", () => {
+    const facts = { found: true, version: null, status: null };
+    const said = AGENT_PROVIDERS.flatMap((p) => [null, { out: "", err: "", code: p.envelope?.check?.exit ?? 0, timedOut: false }]
+      .map((check) => [p.id, deriveReadiness(p, { ...facts, path: `/x/${p.bin}`, check }).envelope.enforced]));
+    expect(said.filter(([, enforced]) => enforced === "yes")).toEqual([]);
+    // The locks this app writes or passes itself are each there, and each "partly".
+    for (const via of ["settings-flag", "config-env", "sandbox-flags"]) {
+      const p = AGENT_PROVIDERS.find((x) => x.envelope?.via === via);
+      expect([via, p && deriveReadiness(p, { ...facts, path: `/x/${p.bin}`, check: null }).envelope.enforced]).toEqual([via, "partly"]);
+    }
   });
 
   test("a ready Hermes can work, cannot orchestrate, and its deny list is checked live", async () => {

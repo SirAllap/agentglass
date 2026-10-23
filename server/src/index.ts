@@ -221,6 +221,7 @@ import { hostname, tmpdir } from "node:os";
 import { privateHost, resolvePeer, originOf, guardedFetch, hostsOnly } from "./net.ts";
 import { DESK_HEADER, claimDesk, deskHeld } from "./desk.ts";
 import { readPolicy, writePolicy } from "./orchestration.ts";
+import { policyEngaged, startThroughPolicy, promptHeadless, startedByOf, settled, seatMayUse } from "./agents/policystart.ts";
 import { armedWakeups, evaluate as evaluatePolicy, ruleStates, startPolicyEvaluator } from "./orchpolicy.ts";
 import { resolveToken, healthProof, tokenOk, isIntake, isAuthExempt, callerFor, allowed, mayReadForeignRoot, scopeNeeded, pluginOfRequest, answersFromADevice, deskKeyOk, understudyRequiresToken, UNDERSTUDY_NO_TOKEN_ERROR, mintUnderstudyToken, revokeUnderstudyToken, tokenlessWarning, type Caller, type Origin } from "./auth.ts";
 import {
@@ -1816,7 +1817,42 @@ const attachmentHostError = hostsOnly(["clickup.com", "clickup-attachments.com"]
  */
 function asActor(c: Caller | null | undefined): ActorSource | null {
   if (!c) return null;
+  if (c.principal === "seat" && c.seat) return { kind: "machine", seat: basename(c.seat.root) };
   return c.kind === "plugin" ? { kind: "device" } : { kind: c.kind, device: c.device };
+}
+
+/** The name a request presents as its own (`X-Agentglass-Agent`, set by the
+ *  CLI from AGENTGLASS_AGENT_NAME), when it is a policy-started worker's. Such a
+ *  caller may not start workers or touch the seat (a role's TUI worker from
+ *  before the policy still reports to its seat, so it is not counted here). This stops a worker that uses the CLI
+ *  as it is; it does not stop one that means to get past it. The header is the
+ *  worker's to send or leave out, the token file is readable by anything that
+ *  runs as this user, and an engine's command rules are prefixes, so a request
+ *  without the header is the person's as far as this server can tell
+ *  (SECURITY.md, "A worker role"). */
+function presentedWorker(req: Request): string | null {
+  const n = req.headers.get("x-agentglass-agent");
+  const w = n ? AgentOps.agentNamed(n) : null;
+  return w && startedByOf(w) ? w.name : null;
+}
+
+/** A seat's own chair: the row it sits in, the pane it was adopted in, or a
+ *  name only a chair carries. No seat owns one, its own included: a seat that
+ *  could would prompt, key or kill another project's orchestrator, which runs
+ *  with permissions skipped. */
+function isChair(a: { name: string; paneId: string }): boolean {
+  return Seat.isSeatName(a.name) || Seat.everySeat().some((s) => s.name === a.name || (!!s.adoptedPane && s.adoptedPane === a.paneId));
+}
+
+/** A seat reaches only the agents it owns. One nobody owns (an enlisted tab,
+ *  one the person started, one from before owners existed) waits for a seat to
+ *  say `own` on purpose; one another project's seat owns is not its to read,
+ *  prompt, key or stop. */
+function notYours(c: Caller | null | undefined, a: AgentOps.NamedAgent): string | null {
+  if (c?.principal !== "seat" || !c.seat) return null;
+  if (!a.seatRoot) return `${a.name} has no owner yet; adopt it first: agentglass-agent own ${a.name}`;
+  if (a.seatRoot === c.seat.root) return null;
+  return `${a.name} belongs to the seat of ${basename(a.seatRoot)}, not to yours (${basename(c.seat.root)}). Ask that seat, or the person.`;
 }
 
 /**
@@ -8328,6 +8364,8 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname === "/seat/wake" && req.method === "GET") return json({ ok: true, hours: seatWakeHours() });
     if (pathname === "/seat/wake" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
+      const worker = presentedWorker(req);
+      if (worker) return json({ ok: false, error: `${worker} is a worker, and a worker has no say over the seat: it reports in its own window.` }, 403);
       let b: { hours?: unknown }; try { b = (await req.json()) as typeof b; } catch { b = {}; }
       const r = writeSeatSettings({ seatWakeHours: Number(b.hours) });
       return json({ ...r, hours: seatWakeHours() }, r.ok ? 200 : 400);
@@ -8389,8 +8427,15 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (!trustedCaller(req, from)) return csrfBlocked();
       let b: Record<string, unknown>;
       try { b = (await req.json()) as Record<string, unknown>; } catch { return json({ ok: false, error: "invalid json" }, 400); }
-      const gate = Seat.seatable(typeof b.root === "string" && b.root ? b.root : workspaceRoot());
-      if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
+      const worker = presentedWorker(req);
+      if (worker) return json({ ok: false, error: `${worker} is a worker, and a worker has no say over the seat: it reports in its own window.` }, 403);
+      /* Whose project: the person says, a seat does not. A seat's is the one
+         its credential was minted for, whatever root the body carries. */
+      const asSeat = caller?.principal === "seat";
+      const own = asSeat ? caller?.seat?.root : undefined;
+      if (asSeat && !own) return json({ ok: false, error: "this seat's project is not known, so it speaks for none" }, 403);
+      const gate = own ? Seat.seatSpeaksFor(own, b.root) : Seat.seatable(typeof b.root === "string" && b.root ? b.root : workspaceRoot());
+      if ("error" in gate) return json({ ok: false, error: gate.error }, own ? 403 : 400);
       const root = gate.root;
       const verb = pathname.slice("/seat/".length);
 
@@ -8628,7 +8673,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     }
     if (pathname === "/agents/named" && req.method === "GET") {
       const all = url.searchParams.get("all") === "1";
-      return json({ ok: true, result: { agents: await AgentOps.listAgents(all) } });
+      return json({ ok: true, result: { agents: (await AgentOps.listAgents(all)).map(settled) } });
     }
     if (pathname.startsWith("/agents/named/") && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
@@ -8636,6 +8681,20 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const verb = pathname.slice("/agents/named/".length);
       let b: Record<string, unknown>;
       try { b = (await req.json()) as Record<string, unknown>; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      /* One row in the Activity log per act, with the seat's project as the
+         actor, and a refusal is an act: what was turned away is the part worth
+         reading later. */
+      const say = (r: Record<string, unknown>, status = 200): Response => {
+        if (["start", "prompt", "keys", "stop", "broadcast", "own", "enlist"].includes(verb)) {
+          noteAction(clientIp, `/agents/named/${verb}`, { name: typeof b.name === "string" ? b.name : "" },
+            r.ok === true ? { ok: true } : { ok: false, error: String(r.error ?? "") }, asActor(caller));
+        }
+        return json(r, status);
+      };
+      const worker = presentedWorker(req);
+      if (worker) {
+        return say({ ok: false, error: `${worker} is a worker, and a worker does not start, prompt or stop agents: it reports its result in its own window, and the seat that started it reads that.` }, 403);
+      }
       const timeoutMs0 = Math.min(600_000, Math.max(0, Number(b.timeout ?? 0) || 0));
       /*
        * BROADCAST — one message, N agents.
@@ -8650,7 +8709,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         const names = Array.isArray(b.names) ? b.names.filter((n): n is string => typeof n === "string") : [];
         const text = typeof b.text === "string" ? b.text : "";
         if (!text.trim()) return json({ ok: false, error: "nothing to send" }, 400);
-        const live = (await AgentOps.listAgents()).filter((a) => a.endedAt === null);
+        const live = (await AgentOps.listAgents()).filter((a) => a.endedAt === null && !notYours(caller, a));
         const want = names.length ? live.filter((a) => names.includes(a.name)) : live;
         const missing = names.filter((n) => !live.some((a) => a.name === n));
         const sent: { name: string; outcome: string }[] = [];
@@ -8658,17 +8717,38 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
           const outcome = await AgentOps.promptAgent(a.paneId, text, timeoutMs0 || 10_000).catch(() => "gone");
           sent.push({ name: a.name, outcome: String(outcome) });
         }
-        return json({
+        return say({
           ok: sent.some((x) => x.outcome === "sent" || x.outcome === "queued"),
           result: { sent, missing, asked: want.length },
         });
       }
-      if (!AgentOps.validName(b.name)) return json({ ok: false, error: "name: letters, digits, dot, dash or underscore, 64 at most" }, 400);
+      if (!AgentOps.validName(b.name)) return say({ ok: false, error: "name: letters, digits, dot, dash or underscore, 64 at most" }, 400);
       const name = b.name;
       const timeoutMs = Math.min(600_000, Math.max(0, Number(b.timeout ?? 0) || 0));
 
       if (verb === "start") {
         const cwd = gitSafeAbs(b.cwd);
+        const seatRoot = caller?.principal === "seat" ? caller.seat?.root ?? null : null;
+        /* A seat starts workers with a role, in its own project. The role is
+           where the envelope comes from, so a start without one would be the
+           policy as advice; and a worker in another project would answer to
+           this project's policy. Both are refused before anything else is read. */
+        if (seatRoot) {
+          /* Nor under a name a chair carries: `seated` knows an orchestrator
+             by its name, so the worker would be one. Measured: with the other
+             chair down, the start answered 200. */
+          if (isChair({ name, paneId: "" })) {
+            return say({ ok: false, error: `${name} is a seat's name, and no worker is started under one` }, 403);
+          }
+          if (b.role === undefined) {
+            return say({ ok: false, error: "a seat starts workers with --role (scout, builder or verifier): the role's envelope is what keeps a worker inside the policy, so a start without one is refused" }, 400);
+          }
+          if (!cwd || !seatMayUse(seatRoot, cwd)) {
+            return say({ ok: false, error: `that directory is not inside ${basename(seatRoot)}'s own tree or worktrees, and a seat starts workers only there` }, 400);
+          }
+        }
+        // What the window opens in is the directory that was checked, links followed.
+        const runIn = (seatRoot && cwd ? seatMayUse(seatRoot, cwd) : null) ?? cwd;
         /*
          * A SIBLING WORKTREE IS THE SAME PROJECT.
          *
@@ -8688,7 +8768,20 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
          */
         const sameProject = !!cwd && workspaceRoots().includes(projectRootOf(cwd) ?? "");
         if (!cwd || (!inScope(cwd) && !sameProject) || !fsExists(cwd)) {
-          return json({ ok: false, error: "that directory is not in the open project, nor a worktree of it" }, 400);
+          return say({ ok: false, error: "that directory is not in the open project, nor a worktree of it" }, 400);
+        }
+        /* A name another seat's worker answers to, live or finished, is not
+           this seat's to take over: taking it would erase the other's answer.
+           One nobody owns is refused only while it is running. */
+        const had = AgentOps.agentNamed(name);
+        const clash = had ? notYours(caller, had) : null;
+        if (clash && (had!.seatRoot || await AgentOps.paneAlive(had!.paneId))) return say({ ok: false, error: clash }, 403);
+        const policyRoot = seatRoot ?? projectRootOf(cwd) ?? workspaceRoot() ?? cwd;
+        if (policyEngaged(policyRoot, b)) {
+          const r = await startThroughPolicy({
+            root: workspaceRoot() || cwd, policyRoot, name, cwd: runIn!, prompt: typeof b.prompt === "string" ? b.prompt : "", body: b, seatRoot,
+          });
+          return say(r.body, r.status);
         }
         /* A worker ROLE picks the CLI itself — Settings says which one each
            role runs on — and brings that CLI's lock and model with it. The
@@ -8697,21 +8790,22 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
            caller cannot ask for a role and quietly get another CLI unlocked. */
         const role = b.role === undefined ? null : AgentOps.roleStart(b.role);
         if (role && !role.ok) {
-          return json({ ok: false, error: role.error === "no-role" ? "no such role" : "the CLI this role is set to has no lock this app can apply" }, 400);
+          return say({ ok: false, error: role.error === "no-role" ? "no such role" : "the CLI this role is set to has no lock this app can apply" }, 400);
         }
         const wanted = role?.ok ? role.kind : typeof b.kind === "string" ? b.kind : "claude";
         if (role?.ok && typeof b.kind === "string" && b.kind !== role.kind) {
-          return json({ ok: false, error: `this role runs on ${role.kind} (Settings ▸ Worker roles), not ${b.kind}` }, 400);
+          return say({ ok: false, error: `this role runs on ${role.kind} (Settings ▸ Worker roles), not ${b.kind}` }, 400);
         }
-        if (!agentKind(wanted)) return json({ ok: false, error: "no such agent" }, 400);
+        if (!agentKind(wanted)) return say({ ok: false, error: "no such agent" }, 400);
         const args = Array.isArray(b.args) ? b.args.filter((a): a is string => typeof a === "string") : [];
         const r = await AgentOps.startAgent({
-          root: workspaceRoot() || cwd, name, cwd, kind: wanted,
+          root: workspaceRoot() || cwd, name, cwd: runIn!, kind: wanted,
           prompt: typeof b.prompt === "string" ? b.prompt : "",
           yolo: b.yolo === true, yoloAllowed: chatBypassAllowed(), args,
           remoteControl: typeof b.remoteControl === "string" ? b.remoteControl : undefined,
           keep: b.keep === true,
           ...(role?.ok ? { serverArgs: role.args, env: role.env, lockedRole: true } : {}),
+          owner: { seatRoot, model: "", startedBy: null, resumeId: null },
         });
         if (!r.ok) {
           /* `arg-refused` and `lock-loosened` are answered below, with their detail in them. */
@@ -8731,18 +8825,18 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
              an agent is allowed to do is decided in Settings (yolo) or by this
              server, never by a flag riding in `args` — see refusedArg. */
           if (r.error === "lock-loosened") {
-            return json({ ok: false, error: `this directory's OpenCode config loosens the role's lock, so it was not started: ${r.detail}` }, 400);
+            return say({ ok: false, error: `this directory's OpenCode config loosens the role's lock, so it was not started: ${r.detail}` }, 400);
           }
           if (r.error === "arg-refused") {
-            return json({ ok: false, error: `${r.flag} is not an arg a start may carry: it changes what the agent is allowed to do, and that is decided in Settings, not in args` }, 400);
+            return say({ ok: false, error: `${r.flag} is not an arg a start may carry: it changes what the agent is allowed to do, and that is decided in Settings, not in args` }, 400);
           }
-          return json({ ok: false, error: why[r.error], result: r.error === "exists" ? { agent: r.agent } : undefined }, r.error === "exists" ? 409 : 400);
+          return say({ ok: false, error: why[r.error], result: r.error === "exists" ? { agent: r.agent } : undefined }, r.error === "exists" ? 409 : 400);
         }
         /* `--timeout` on start is Herdr's "wait until the CLI is up": the
            worker's next verb is a prompt, and a paste into a pane whose CLI has
            not drawn its box yet is a paste into a shell. */
         const wait = timeoutMs > 0 ? await AgentOps.waitFor(r.agent.paneId, ["ready", "working", "needs-you"], timeoutMs) : null;
-        return json({ ok: true, result: { agent: r.agent, state: wait?.state ?? "starting", ready: wait?.reached ?? false } });
+        return say({ ok: true, result: { agent: r.agent, state: wait?.state ?? "starting", ready: wait?.reached ?? false } });
       }
 
       /*
@@ -8753,22 +8847,67 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
        * hand, and the registry held only what this app had started.
        */
       if (verb === "enlist") {
+        /* From a seat, only a tab inside its own project, never a seat's
+           chair, and never under a name that is another seat's or a chair's:
+           enlisting decides what the seat's other verbs can reach, and the
+           name's old row is replaced by the new one. */
+        const seat = caller?.principal === "seat" ? caller.seat?.root ?? null : null;
+        const had = AgentOps.agentNamed(name);
+        if (seat && isChair({ name, paneId: had?.paneId ?? "" })) {
+          return say({ ok: false, error: `${name} is a seat's name, and a seat is nobody's to enlist` }, 403);
+        }
+        if (seat && had?.seatRoot) {
+          const why = notYours(caller, had);
+          if (why) return say({ ok: false, error: why }, 403);
+        }
         const r = await AgentOps.enlistAgent({
           name, pane: typeof b.pane === "string" ? b.pane : undefined,
           window: typeof b.window === "string" ? b.window : undefined,
+          refuse: seat ? (p) => isChair({ name, paneId: p.paneId }) ? "that pane is a seat, and a seat is nobody's to enlist"
+            : seatMayUse(seat, p.cwd) ? null
+            : `that tab is not inside ${basename(seat)}'s own tree or worktrees, and a seat enlists only there` : undefined,
         });
-        if (r.ok) return json({ ok: true, result: { agent: r.agent } });
+        if (r.ok) return say({ ok: true, result: { agent: r.agent } });
         const why: Record<string, string> = {
           "bad-name": "name: letters, digits, dot, dash or underscore, 64 at most",
           exists: `an agent by that name is already live in pane ${r.detail}`,
           "no-pane": "no pane by that id or window name on the engine",
           "many-panes": `more than one window is called that (${r.detail}) — say which pane`,
           "not-an-agent": `that pane is running ${r.detail}, not an agent — prompting it would type into a shell`,
+          taken: `that pane is already agent ${r.detail}: it answers to that name and its owner`,
+          refused: r.detail ?? "",
         };
-        return json({ ok: false, error: why[r.error] }, r.error === "exists" ? 409 : 400);
+        return say({ ok: false, error: why[r.error] }, r.error === "exists" ? 409 : 400);
       }
 
       const a = AgentOps.agentNamed(name);
+      /* OWN — a seat takes an agent nobody owns, on purpose. Only a seat: the
+         person's own token and a worker are refused, and an agent already
+         owned, by anyone, is not taken. */
+      if (verb === "own") {
+        if (caller?.principal !== "seat" || !caller.seat) return say({ ok: false, error: "only a seat can own an agent: ask from the orchestrator's own session" }, 403);
+        if (!a) return say({ ok: false, error: "no agent by that name" }, 404);
+        if (a.seatRoot && a.seatRoot !== caller.seat.root) return say({ ok: false, error: `${a.name} belongs to the seat of ${basename(a.seatRoot)}, not to yours (${basename(caller.seat.root)}). Ask that seat, or the person.` }, 403);
+        if (a.endedAt !== null) return say({ ok: false, error: "no agent by that name" }, 404);
+        /* Having no owner is not enough: a seat's own row has none either, and
+           so does every tab the person works in, in any project. */
+        if (isChair(a)) return say({ ok: false, error: `${a.name} is a seat, and a seat is nobody's to own` }, 403);
+        if (!seatMayUse(caller.seat.root, a.cwd)) {
+          return say({ ok: false, error: `${a.name} is not inside ${basename(caller.seat.root)}'s own tree or worktrees, and a seat owns agents only there` }, 403);
+        }
+        AgentOps.ownAgent(a.name, caller.seat.root);
+        return say({ ok: true, result: { name, owner: caller.seat.root } });
+      }
+      const theirs = a ? notYours(caller, a) : null;
+      if (theirs) return say({ ok: false, error: theirs }, 403);
+      /* A policy-started worker is a one-shot that has usually finished by the
+         time it is told something: that is a resumed turn, not keys in a pane. */
+      if (verb === "prompt" && a && startedByOf(a)) {
+        const text = typeof b.text === "string" ? b.text : "";
+        if (!text.trim()) return say({ ok: false, error: "nothing to send" }, 400);
+        const r = await promptHeadless(a, text);
+        return say(r.body, r.status);
+      }
       /* An ended agent can still be READ while its own tab is on screen: a
          `--keep` one-shot's answer is what it was kept for. And STOPPED, which
          closes that tab: otherwise it stays for the wrapper's day — only a
@@ -8783,7 +8922,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         const text = typeof b.text === "string" ? b.text : "";
         if (!text.trim()) return json({ ok: false, error: "nothing to send" }, 400);
         const outcome = await AgentOps.promptAgent(a.paneId, text, timeoutMs || 10_000);
-        return json({ ok: outcome === "sent" || outcome === "queued", result: { name, outcome } }, outcome === "gone" ? 410 : 200);
+        return say({ ok: outcome === "sent" || outcome === "queued", result: { name, outcome } }, outcome === "gone" ? 410 : 200);
       }
       if (verb === "wait") {
         const raw = typeof b.until === "string" ? b.until.split(",") : [];
@@ -8799,20 +8938,21 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         /* The bottom of a pane is blank rows, not content: trimmed before the
            tail is cut, or "the last 3 lines" of a 50-row pane are three blanks. */
         const text = lines > 0 ? screen.trimEnd().split("\n").slice(-lines).join("\n") : screen;
-        return json({ ok: true, result: { name, state: readable ? "gone" : AgentOps.stateOfScreen(screen), text } });
+        const turn = settled(a);
+        return json({ ok: true, result: { name, state: readable ? "gone" : AgentOps.stateOfScreen(screen), text, ...(turn.exitCode !== undefined ? { exitCode: turn.exitCode, exitLine: turn.exitLine } : {}) } });
       }
       if (verb === "keys") {
         const key = AgentOps.keyNamed(b.key);
         if (!key) return json({ ok: false, error: "key: enter, escape, up, down, left, right, tab, space, backspace or ctrl-c" }, 400);
         const ok = await AgentOps.pressKey(a.paneId, key);
-        return json({ ok, result: { name, key } }, ok ? 200 : 410);
+        return say({ ok, result: { name, key } }, ok ? 200 : 410);
       }
       if (verb === "stop") {
         /* An enlisted tab is let go, not killed: it is somebody's own window
            with their work in it. `kill: true` says the caller meant the window
            and not the registration. The answer says which happened. */
         const r = await AgentOps.stopAgent(a, Date.now(), b.kill === true || !a.adopted);
-        return json({ ok: r.ok, result: { name, killed: r.killed, letGo: !r.killed } });
+        return say({ ok: r.ok, result: { name, killed: r.killed, letGo: !r.killed } });
       }
       return json({ ok: false, error: "no such verb" }, 404);
     }

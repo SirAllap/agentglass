@@ -29,6 +29,7 @@
  * and enforced where the verb is served — the same lesson `refusedArg` in
  * agentops.ts learned about permission flags arriving as parameters.
  */
+import { basename } from "node:path";
 import * as AgentOps from "./agentops.ts";
 import type * as AgentBoard from "./agentboard.ts";
 import { mintSeatToken, revokeSeatTokens } from "./auth.ts";
@@ -148,8 +149,37 @@ const recentLines = db.query<{ line: string; at: number }, [string, number]>(
  * fight over one `named_agent` row — and it has to survive `NAME_RE`, so the
  * path's hash rides along rather than the path.
  */
+const SEAT_PREFIX = "orchestrator-";
 export function seatName(root: string): string {
-  return `orchestrator-${doctrineSlug(root).slice(0, 40)}`;
+  return `${SEAT_PREFIX}${doctrineSlug(root).slice(0, 40)}`;
+}
+
+/**
+ * A name only a chair carries, seated or not.
+ *
+ * Whoever answers to a project's `seatName` IS its orchestrator as far as
+ * `seated` can tell: it gets the wake text, it blocks the seating, and closing
+ * the seat kills it. The name follows from the path, so a row in `seat` is not
+ * what reserves it: a project nobody has seated yet has one too. The whole
+ * prefix is kept back rather than the names computed so far.
+ */
+export function isSeatName(name: string): boolean {
+  return name.startsWith(SEAT_PREFIX);
+}
+
+/**
+ * The project a seat's own request is about: its own, from its credential.
+ *
+ * The root in a request is for the person, who has every project. A seat that
+ * could name another one would drain that project's tray, say its line, file
+ * its decisions and wake its orchestrator with a sentence of its own. Its own
+ * root, a directory under it or a worktree of it is accepted, because its CLI
+ * sends the directory it was run in.
+ */
+export function seatSpeaksFor(own: string, asked: unknown): { root: string } | { error: string } {
+  const root = typeof asked === "string" ? asked.trim() : "";
+  if (!root || root === own || root.startsWith(`${own}/`) || projectRootOf(root) === own) return { root: own };
+  return { error: `a seat speaks for its own project (${basename(own)}), not for another one` };
 }
 
 /** The row for a project, whether or not it is seated. */

@@ -73,7 +73,7 @@ function EngineCard({ p, e, now, reporting, reportingLoaded, busy, note, onReche
         status={e ? <StatusBadge tone={roleBadge(e.roles.orchestrator).tone}>{roleBadge(e.roles.orchestrator).text}</StatusBadge> : <StatusBadge tone="checking">Checking</StatusBadge>}
         hint={e && !e.roles.orchestrator.ok ? e.roles.orchestrator.why : undefined} />
       <SettingRow label="What it is held to as a worker"
-        hint={e ? <>Its own worktree; push, pull requests and merges are always refused. {withCode(e.envelope.note)}</> : "…"} />
+        hint={e ? <>Its own worktree, with push, pull requests and merges on its deny list. That list is rules over a command line, not a sandbox. {withCode(e.envelope.note)}</> : "…"} />
       <SettingRow label="How agentglass runs it"
         hint={p.headless ? "One turn at a time, with no terminal. This is derived from the provider table, so it is read here and not typed."
           : `agentglass does not know how to run ${p.title} without a terminal yet.`}

@@ -20,6 +20,8 @@ import { basename } from "node:path";
 export interface ActorSource {
   kind: "machine" | "device";
   device?: { id: string; label: string };
+  /** A seat's credential: the project it sits for, named in the log as `seat:<project>`. */
+  seat?: string;
   /**
    * Whether this request came from one of the app's own pages — the desktop
    * shell's renderer or the dashboard in a browser — as opposed to a bare
@@ -129,6 +131,7 @@ export function deviceActor(d: { id: string; label: string }): string {
  * say how it arrived.
  */
 export function actorOf(ip: string | null | undefined, caller?: ActorSource | null): string {
+  if (caller?.seat) return `seat:${caller.seat}`;
   const dev = caller?.kind === "device" ? caller.device : null;
   if (dev) return deviceActor(dev);
   const where = !ip || isLoopback(ip) ? "local" : ip.replace(/^::ffff:/, "");

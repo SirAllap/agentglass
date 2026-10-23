@@ -387,9 +387,13 @@ export function deriveReadiness(
   if (!e) {
     envelope = { via: null, enforced: "no", note: `agentglass cannot yet hold ${p.title}'s permissions before a turn starts.` };
   } else if (e.via === "settings-flag") {
-    envelope = { via: e.via, enforced: "yes", note: "A settings file passed on the command line; agentglass writes the lock." };
+    /* Never "yes": its command rules match the start of a line, so the same
+       command behind a flag or a path (`git -C . push`) is not refused, and
+       nothing here keeps a process that runs as this user from this app's
+       own token file. */
+    envelope = { via: e.via, enforced: "partly", note: "A settings file passed on the command line; agentglass writes the lock. Its command rules match the start of a line, so the same command spelled another way can slip past it." };
   } else if (e.via === "config-env") {
-    envelope = { via: e.via, enforced: "yes", note: "A config merged over yours through an environment variable; agentglass writes the lock." };
+    envelope = { via: e.via, enforced: "partly", note: "A config merged over yours through an environment variable; agentglass writes the lock. Its shell is allowed unless a rule matches the line, so a command rebuilt by a shell can slip past it." };
   } else if (e.via === "sandbox-flags") {
     envelope = { via: e.via, enforced: "partly", note: "A sandbox and an approval policy, with no per-command list: what the sandbox allows, it allows." };
   } else if (f.check && !f.check.timedOut && e.check && f.check.code === e.check.exit) {

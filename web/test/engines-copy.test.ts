@@ -150,6 +150,13 @@ describe("the component", () => {
     expect(code).toContain("fold={{ open: absentOpen ?? present.length === 0, onToggle: setAbsentOpen }}");
   });
 
+  test("what a worker is held to is not promised as a wall: the lock is rules over a command line", () => {
+    const row = pane.slice(pane.indexOf('label="What it is held to as a worker"'));
+    const hint = row.slice(0, row.indexOf("/>"));
+    expect(hint).toContain("not a sandbox");
+    expect(hint).not.toMatch(/always|never|cannot/);
+  });
+
   test("the old Agents list is a link to this page, not a second list", () => {
     const modal = readFileSync(new URL("../src/components/SettingsModal.tsx", import.meta.url), "utf8");
     const section = modal.slice(modal.indexOf("function AgentsSection("), modal.indexOf("function AgentsSection(") + 700);
