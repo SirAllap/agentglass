@@ -12,7 +12,7 @@ import type { BrowseEntry } from "../../shared/types.ts";
 const entry = (name: string, kind: "dir" | "file" = "file"): BrowseEntry => ({ name, kind, bytes: kind === "file" ? 10 : null, items: kind === "dir" ? 2 : null, mtime: 0, hidden: name.startsWith(".") });
 
 describe("the numbers", () => {
-  test("256 wide, 500 ms in, eight entries; 150 ms out so the pointer can cross the gap to the card", () => expect(PEEK).toMatchObject({ width: 256, open: 500, close: 150, limit: 8 }));
+  test("256 wide, 500 ms in, eight entries; 80 ms out, the gap to the card is crossed on that delay", () => expect(PEEK).toMatchObject({ width: 256, open: 500, close: 80, limit: 8 }));
 });
 
 describe("what the card lists", () => {
@@ -84,8 +84,9 @@ describe("the views draw it", () => {
     expect(s).toContain("onPick(");
     expect(s).toContain("peekKeep(");
   });
-  test("a folder tile gives up its native title while peeking, or the browser's tooltip covers the card", async () => {
+  test("a tile carries no native title, or the browser's tooltip would cover the card; the caption has its own rest tooltip", async () => {
     const s = await read("FolderViews.tsx");
-    expect(s.match(/title=\{peek && isFolder\(r\) \? undefined : r\.name\}/g)?.length).toBe(1);
+    expect(s).not.toMatch(/role="option"[^\n]*title=/);
+    expect(s).toContain("{...tip.bind(r.name)}");
   });
 });

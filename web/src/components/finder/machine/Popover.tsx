@@ -15,7 +15,7 @@ import { EDGE } from "../../workspace/Chrome.tsx";
 import { MENU_ROW, MENU_ROW_H, MENU_ROW_TALL, MENU_RULE } from "../../../lib/finderMenu.ts";
 import { useMenuKeys } from "./useMenuKeys.ts";
 
-export function Popover({ anchor, onClose, width = 220, children, label }: { anchor: DOMRect; onClose: () => void; width?: number; children: ReactNode; label: string }) {
+export function Popover({ anchor, onClose, width = 220, children, label, column }: { anchor: DOMRect; onClose: () => void; width?: number; children: ReactNode; label: string; /** A column's sort popover: h j k l and Backspace (see useMenuKeys). */ column?: boolean }) {
   const el = useRef<HTMLDivElement>(null);
   const [at, setAt] = useState<{ left: number; top: number } | null>(null);
   useLayoutEffect(() => {
@@ -34,7 +34,7 @@ export function Popover({ anchor, onClose, width = 220, children, label }: { anc
     window.addEventListener("keydown", on, true);
     return () => window.removeEventListener("keydown", on, true);
   }, [onClose]);
-  useMenuKeys(el, { first: "ring" });
+  useMenuKeys(el, { first: "ring", column, onBackspace: onClose });
   return (
     <Portal z={LAYER.menu}>
       <div className="fixed inset-0" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />

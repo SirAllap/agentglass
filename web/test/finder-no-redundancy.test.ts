@@ -23,13 +23,12 @@ describe("the header", () => {
 
 describe("the column header", () => {
   const header = code(column.slice(column.indexOf("<header"), column.indexOf("</header>")));
-  test("is the title and Strata's four buttons: refresh, direction, sort options, filter", () => {
-    expect((header.match(/<button /g) ?? []).length).toBe(4);
+  test("is the title and Strata's four buttons: refresh, direction, sort options, filter, and a close button past the first pane", () => {
+    expect((header.match(/<button /g) ?? []).length).toBe(5);
     for (const label of ["Refresh", "Ascending — click to reverse", "Sort options", "Filter this pane"]) expect(header).toContain(label);
   });
-  test("has no count badge, no options menu and no close-pane button", () => {
+  test("has no count badge and no options menu", () => {
     expect(header).not.toContain("toLocaleString");
     expect(column).not.toContain("Column options");
-    expect(column).not.toContain("Close this pane");
   });
 });

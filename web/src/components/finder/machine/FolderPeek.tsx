@@ -23,7 +23,8 @@ export interface PeekBinder { bind: (path: string, name: string) => { onMouseEnt
 const rect = (el: HTMLElement): Open["box"] => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom }; };
 const zoneKey = (z: PeekZone) => (z.kind === "card" ? `card:${z.level}` : `row:${z.level}:${z.path}`);
 
-export function useFolderPeek(enabled: boolean, hidden: boolean, onPick: (t: HitTarget) => void): { peek: PeekBinder | null; node: ReactNode } {
+/** `byPointer` says whether the last way the person moved was the pointer: Strata peeks only then, so a folder the keyboard just reached does not open a card under a resting mouse. */
+export function useFolderPeek(enabled: boolean, hidden: boolean, onPick: (t: HitTarget) => void, byPointer: () => boolean = () => true): { peek: PeekBinder | null; node: ReactNode } {
   const [stack, setStackNow] = useState<Open[]>([]);
   const stackRef = useRef<Open[]>([]);
   const setStack = useCallback((s: Open[]) => { stackRef.current = s; setStackNow(s); }, []);
@@ -60,12 +61,12 @@ export function useFolderPeek(enabled: boolean, hidden: boolean, onPick: (t: Hit
     onMouseEnter: (e: React.MouseEvent<HTMLElement>) => {
       const el = e.currentTarget;
       enter({ kind: "row", level: 0, path });
-      if (stackRef.current[0]?.path === path) return;
+      if (!byPointer() || stackRef.current[0]?.path === path) return;
       if (opening.current) clearTimeout(opening.current);
       opening.current = setTimeout(() => { opening.current = null; if (el.isConnected) setStack([{ path, name, box: rect(el) }]); }, PEEK.open);
     },
     onMouseLeave: () => leave({ kind: "row", level: 0, path }),
-  }), [enter, leave, setStack]);
+  }), [enter, leave, setStack, byPointer]);
   const pick = useCallback((t: HitTarget) => { close(); onPick(t); }, [close, onPick]);
   return {
     peek: enabled ? { bind } : null,

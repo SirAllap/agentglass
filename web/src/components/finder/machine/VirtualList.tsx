@@ -10,7 +10,7 @@ import { useBox } from "./useBox.ts";
 
 const OVERSCAN = 6;
 
-export function VirtualList({ count, rowH, render, keepInView, label, className, onFocus, initialTop, onTop, ready = true }: {
+export function VirtualList({ count, rowH, render, keepInView, label, className, onFocus, initialTop, onTop, ready = true, tabStop = true }: {
   count: number;
   rowH: number;
   render: (i: number) => ReactNode;
@@ -25,6 +25,8 @@ export function VirtualList({ count, rowH, render, keepInView, label, className,
   onTop?: (top: number) => void;
   /** False while the box is not measured yet: the restore waits, or it is clamped by a layout that is about to change. */
   ready?: boolean;
+  /** Tab stops here (Strata: each listing is one stop, and the Columns strip is one). False for a column that is not the active one. */
+  tabStop?: boolean;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const { h } = useBox(box);
@@ -54,7 +56,7 @@ export function VirtualList({ count, rowH, render, keepInView, label, className,
   }, [keepInView, rowH, h]);
 
   return (
-    <div ref={box} role="listbox" aria-label={label} aria-rowcount={count} tabIndex={-1} onFocus={onFocus}
+    <div ref={box} role="listbox" aria-label={label} aria-rowcount={count} tabIndex={tabStop ? 0 : -1} onFocus={onFocus}
       onScroll={(e) => { setTop(e.currentTarget.scrollTop); if (restored.current || e.currentTarget.scrollTop > 0) { restored.current = true; onTop?.(e.currentTarget.scrollTop); } }}
       className={`agx-scroll overflow-y-auto overflow-x-hidden min-h-0 ${className ?? ""}`}>
       <div style={{ paddingTop: w.padTop, paddingBottom: w.padBottom }}>

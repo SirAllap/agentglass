@@ -1,5 +1,5 @@
 // The two dialogs a device asks for: the passphrase of a locked volume, and
-// what went wrong. Strata's wording (browser/location.rs, window.rs).
+// what went wrong. The passphrase and connection prompts close on their buttons and Esc only, never on the backdrop (Strata). Strata's wording (browser/location.rs, window.rs).
 //
 // The passphrase lives in this component's state and nowhere else: not in a
 // ref a parent holds, not in storage, not in the URL, not in a log line. It is
@@ -13,6 +13,7 @@ import { EDGE, INPUT, INPUT_STYLE } from "../../workspace/Chrome.tsx";
 import type { RemoteStep } from "../../../../../shared/types.ts";
 import { StrataIcon } from "./StrataIcon.tsx";
 import { useDialogEscape } from "./useDialogEscape.ts";
+import { spatialKey } from "./FinderOpsUI.tsx";
 
 const SCRIM = { background: "color-mix(in srgb, var(--bg) 70%, transparent)", zIndex: 9 } as const;
 const CARD = { background: "var(--surface-card)", border: EDGE, width: 400, maxWidth: "100%" } as const;
@@ -26,7 +27,7 @@ export function PassphraseDialog({ name, wrong, busy, onSubmit, onCancel }: { na
   useDialogEscape(onCancel);
   return (
     <div role="dialog" aria-modal="true" aria-label="Passphrase required" className="absolute inset-0 grid place-items-center p-4" style={SCRIM}
-      onClick={onCancel} onKeyDown={(e) => { if (!isAppChord(e)) e.stopPropagation(); if (e.key === "Escape") onCancel(); }}>
+      onKeyDown={(e) => { if (!isAppChord(e)) e.stopPropagation(); if (e.key === "Escape") onCancel(); else spatialKey(e); }}>
       <div className="rounded-xl p-4 text-[12px]" style={CARD} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-2 mb-1">
           <StrataIcon set="act" name="key" />
@@ -58,7 +59,7 @@ export function ErrorDialog({ title, message, onClose }: { title: string; messag
   useDialogEscape(onClose);
   return (
     <div role="alertdialog" aria-modal="true" aria-label={title} className="absolute inset-0 grid place-items-center p-4" style={SCRIM}
-      onClick={onClose} onKeyDown={(e) => { if (!isAppChord(e)) e.stopPropagation(); if (e.key === "Escape" || e.key === "Enter") onClose(); }}>
+      onClick={onClose} onKeyDown={(e) => { if (!isAppChord(e)) e.stopPropagation(); if (e.key === "Escape" || e.key === "Enter") onClose(); else spatialKey(e); }}>
       <div className="rounded-xl p-4 text-[12px]" style={CARD} onClick={(e) => e.stopPropagation()}>
         <b className="block text-[13px] mb-1">{title}</b>
         <p className="m-0 mb-3" style={{ color: "var(--text3)" }}>{message}</p>
@@ -74,7 +75,7 @@ export function NetworkDialog({ entries, error, onPick, onClose }: { entries: { 
   useDialogEscape(onClose);
   return (
     <div role="dialog" aria-modal="true" aria-label="Network" className="absolute inset-0 grid place-items-center p-4" style={SCRIM}
-      onClick={onClose} onKeyDown={(e) => { if (!isAppChord(e)) e.stopPropagation(); if (e.key === "Escape") onClose(); }}>
+      onClick={onClose} onKeyDown={(e) => { if (!isAppChord(e)) e.stopPropagation(); if (e.key === "Escape") onClose(); else spatialKey(e); }}>
       <div className="rounded-xl p-4 text-[12px] flex flex-col min-h-0 max-h-full" style={CARD} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-2 mb-2"><StrataIcon set="act" name="network" /><b className="flex-1 text-[13px]">Network</b>
           <button type="button" aria-label="Close" className="agx-btn rounded-md flex items-center justify-center" style={{ width: HIT, height: HIT }} onClick={onClose}><StrataIcon set="act" name="x" /></button></div>
@@ -106,7 +107,7 @@ export function ConnectDialog({ step, busy, onAnswer, onCancel }: { step: Extrac
   useDialogEscape(onCancel);
   return (
     <div role="dialog" aria-modal="true" aria-label={q ? "Verify the server" : "Authentication required"} className="absolute inset-0 grid place-items-center p-4" style={SCRIM}
-      onClick={onCancel} onKeyDown={(e) => { if (!isAppChord(e)) e.stopPropagation(); if (e.key === "Escape") onCancel(); }}>
+      onKeyDown={(e) => { if (!isAppChord(e)) e.stopPropagation(); if (e.key === "Escape") onCancel(); else spatialKey(e); }}>
       <div className="rounded-xl p-4 text-[12px]" style={CARD} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-2 mb-1"><StrataIcon set="act" name="key" /><b className="flex-1 text-[13px]">{q ? "Verify the server" : "Authentication required"}</b></div>
         <p className="m-0 mb-3 whitespace-pre-wrap break-words" style={{ color: "var(--text3)" }}>{step.message}</p>

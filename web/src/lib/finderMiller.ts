@@ -176,6 +176,29 @@ export function completePath(input: string, home: string, dirs: readonly string[
   return { dir, picks: dirs.filter((d) => d.toLowerCase().startsWith(part)) };
 }
 
+/** The path bar's Page Up / Page Down move the completion selection this far (Strata's step). */
+export const COMPLETE_PAGE = 5;
+/** The completion selection after a key: one step or a page, clamped to the list. */
+export function stepPick(hot: number, n: number, by: number): number {
+  return n === 0 ? 0 : Math.min(n - 1, Math.max(0, hot + by));
+}
+
+/**
+ * Tab in the path bar, as Strata's: the selected candidate, else the only one, else the longest prefix
+ * they share (when it says more than what is typed), else the selection moves down, wrapping.
+ * `fill` is what the text after the last slash becomes; a whole folder gets its slash, a shared prefix does not.
+ */
+export function tabComplete(part: string, picks: readonly string[], hot: number, moved: boolean): { fill: string | null; hot: number } {
+  if (picks.length === 0) return { fill: null, hot };
+  if (moved && picks[hot] !== undefined) return { fill: `${picks[hot]}/`, hot };
+  if (picks.length === 1) return { fill: `${picks[0]}/`, hot: 0 };
+  const first = picks[0]!;
+  let n = first.length;
+  for (const p of picks) { let i = 0; while (i < n && i < p.length && p[i]!.toLowerCase() === first[i]!.toLowerCase()) i++; n = i; }
+  if (n > part.length) return { fill: first.slice(0, n), hot: 0 };
+  return { fill: null, hot: (hot + 1) % picks.length };
+}
+
 /** What a folder row's badge says. The server stops counting at 9999. */
 export function itemsLabel(n: number | null): string {
   if (n === null) return "";

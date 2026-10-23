@@ -103,7 +103,7 @@ describe("the edge stays inside its column", () => {
 describe("names and badges in a row", () => {
   test("a long name ends in an ellipsis: one truncating span, no clipped tail", async () => {
     const t = await Bun.file(new URL("../src/components/finder/machine/Column.tsx", import.meta.url)).text();
-    expect(t).toContain('<span data-name className="flex-1 min-w-0 truncate">{name}</span>');
+    expect(t).toContain('<span data-name className="min-w-0 truncate">{name}</span>');
     expect(t).not.toContain("splitName");
   });
   test("the item count shows on the selected folder of the active column only", async () => {

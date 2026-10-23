@@ -96,3 +96,66 @@ export const wheelTextStep = (deltaY: number): 1 | -1 | 0 => (deltaY < 0 ? 1 : d
 
 /** Buttons 4 and 5 are history only when the history can go that way; otherwise the press is not the finder's (Strata does not claim it). */
 export const historyClaims = (a: PointerAction, can: { back: boolean; forward: boolean }): boolean => (a === "back" && can.back) || (a === "forward" && can.forward);
+
+/**
+ * Where a press on a ROW may start a file drag (Strata's rows.rs, pointer.rs,
+ * browser_modes.rs): a selected row drags from anywhere on it; an unselected one
+ * only from its icon or its name text. The rest of an unselected row is empty
+ * space, so the press there starts a rubber band instead.
+ */
+export const dragStarts = (selected: boolean, onContent: boolean): boolean => selected || onContent;
+/** A press starts a rubber band on the empty space of a view, on the blank part of an unselected row, or anywhere with Alt held (Strata's force-marquee); the primary button only. `row` is null off any row. */
+export const startsMarqueeAt = (button: number, row: { selected: boolean; onContent: boolean } | null, alt: boolean): boolean =>
+  button === 0 && (alt || row === null || !dragStarts(row.selected, row.onContent));
+
+/** Strata's marquee autoscroll (marquee.rs): within 28 px of the list's edge, up to 24 px every 16 ms. */
+export const EDGE_PX = 28;
+export const EDGE_MAX = 24;
+export const EDGE_TICK_MS = 16;
+/** How far to scroll this tick: negative above `lo`, positive below `hi`, faster the further past the edge line, zero in the middle. */
+export function edgeStep(pos: number, lo: number, hi: number): number {
+  if (pos < lo + EDGE_PX) return -Math.min(EDGE_MAX, Math.round((EDGE_MAX * (lo + EDGE_PX - pos)) / EDGE_PX));
+  if (pos > hi - EDGE_PX) return Math.min(EDGE_MAX, Math.round((EDGE_MAX * (pos - (hi - EDGE_PX))) / EDGE_PX));
+  return 0;
+}
+
+/**
+ * The rows a rubber band touches, worked out from the layout and not from the
+ * DOM: the list draws only what is on screen, so a band that has scrolled past
+ * rows would otherwise forget them. `box` is in the list's own coordinates
+ * (x from its left edge, y from the top of its content). A list or a column
+ * stacks rows `rowH` apart, `slotOf` giving a row's slot when group headers
+ * take some; tiles sit `per` to a line, `tileW` wide from `padX`, `hitH` tall.
+ */
+export interface BandLayout { rowH: number; slotOf?: readonly number[]; per?: number; tileW?: number; padX?: number; hitH?: number }
+export function bandRows(l: BandLayout, count: number, box: { left: number; right: number; top: number; bottom: number }): number[] {
+  const out: number[] = [];
+  const tiles = l.per !== undefined && l.tileW !== undefined;
+  for (let i = 0; i < count; i++) {
+    const slot = tiles ? Math.floor(i / l.per!) : (l.slotOf?.[i] ?? i);
+    const top = slot * l.rowH;
+    if (top >= box.bottom) break;
+    if (top + (l.hitH ?? l.rowH) <= box.top) continue;
+    if (tiles) {
+      const left = (l.padX ?? 0) + (i % l.per!) * l.tileW!;
+      if (left >= box.right || left + l.tileW! <= box.left) continue;
+    }
+    out.push(i);
+  }
+  return out;
+}
+
+/** A click on empty space of a column the keyboard was not in puts the cursor on its first row, unless a filter is narrowing it (Strata's columns.rs). */
+export const emptyClickSelectsFirst = (returning: boolean, filtered: boolean): boolean => returning && !filtered;
+
+/** A filter is narrowing the view: a click on a row acts at once, folders navigate and files open (Strata's rows.rs); in the Trash only folders, and never with Ctrl or Shift held. */
+export const releaseActivates = (s: { filtered: boolean; isDir: boolean; trash: boolean; mods: boolean }): boolean => s.filtered && !s.mods && (s.isDir || !s.trash);
+export const inTrash = (dir: string): boolean => dir.includes("/.local/share/Trash/");
+
+/** Strata's name tooltip (icons_cell/name_tooltip.rs): the pointer rests 900 ms, within 4 px, on a caption that is cut. */
+export const TIP_REST_MS = 900;
+export const TIP_SLOP = 4;
+export const tipMoved = (a: { x: number; y: number }, b: { x: number; y: number }): boolean => Math.hypot(a.x - b.x, a.y - b.y) > TIP_SLOP;
+
+/** What a drag of files offers other programs: a uri-list of file:// links (Strata offers it too, with a file list a page cannot make). */
+export const fileUris = (paths: readonly string[]): string => paths.map((p) => `file://${p.split("/").map(encodeURIComponent).join("/")}`).join("\r\n");

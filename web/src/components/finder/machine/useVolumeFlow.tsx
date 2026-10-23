@@ -45,9 +45,9 @@ export function useVolumeFlow({ here, home, go, on = true }: { here: string; hom
     if (c === "open") { if (v.mountPoint) go(v.mountPoint); return; }
     const r = await work(v, "mount");
     if (!r) return;
-    if (r.ok && r.mountPoint) go(r.mountPoint);
-    else if (!r.ok) setFailed({ title: FAILED.mount, message: r.error ?? "" });
-  }, [work, go]);
+    // Strata mounts it and stays where it was: the row then shows the mount, and the next click opens it.
+    if (!r.ok) setFailed({ title: FAILED.mount, message: r.error ?? "" });
+  }, [work]);
 
   const onVolumeAct = useCallback((v: Volume, a: VolumeAsk) => { if (a === "unlock") setAsk({ v, wrong: false }); else void act(v, a); }, [act]);
 

@@ -3,11 +3,12 @@
 // awaited. The decisions are lib/finderOps.ts (tested); the work is /fs/op.
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { api } from "../../../lib/api.ts";
-import { clipPaths, deleteWords, doneNote, dropPlan, menuFor, menuHead, pasteOp, withActions, type Clip, type Item, type Target } from "../../../lib/finderOps.ts";
+import { clipPaths, deleteWords, doneNote, dropAsks, dropPlan, freeName, menuFor, menuHead, pasteOp, withActions, type Clip, type Item, type Target } from "../../../lib/finderOps.ts";
 import { actionGroup, confirmWords } from "../../../lib/finderActions.ts";
 import { isFolder, isRecent, joinPath, type Row } from "../../../lib/finderMiller.ts";
+import { inTrash } from "../../../lib/finderPointer.ts";
 import type { FinderAction, FsBody, FsJob } from "../../../../../shared/types.ts";
-import { ConfirmDialog, ContextMenu, InlineName, Sheet, type InlineEdit } from "./FinderOpsUI.tsx";
+import { ConfirmDialog, ContextMenu, InlineName, Sheet, TransferDialog, type InlineEdit } from "./FinderOpsUI.tsx";
 import { printable, printUrl } from "../../../lib/finderPrint.ts";
 import { JobsPanel } from "./FinderJobs.tsx";
 import { clearStage, peekStage, subscribeStage } from "../../../lib/stageIntent.ts";
@@ -48,9 +49,14 @@ export interface OpsEnv {
   terminal: (dir: string) => void;
   /** A folder in a new tab. */
   openTab: (path: string) => void;
+  /** The folder of the column under the pointer, when the pointer was the last thing used; where Ctrl+V pastes then. */
+  pasteDir: () => string | null;
+  /** Empty a folder's name filter, so a folder made there is on screen. */
+  clearFilter: (dir: string) => void;
 }
 
 type Ask =
+  | { k: "transfer"; n: number; go: (op: "copy" | "move") => void }
   | { k: "delete"; names: string[]; run: () => void }
   | { k: "compress"; c: Chosen }
   | { k: "props"; path: string; dir: string; name: string }
@@ -127,6 +133,8 @@ export function useFinderOps(env: OpsEnv) {
     });
   }, []);
 
+  /** A folder just made by the key: its row is put in rename once the listing shows it. */
+  const [justMade, setJustMade] = useState<{ dir: string; name: string; at: number } | null>(null);
   const startName = (a: Omit<InlineEdit, "end">) => setEdit({ ...a, end: () => setEdit(null) });
 
   /** Run one menu item or one key on a target. `into` is the folder a new thing lands in. */
@@ -153,12 +161,21 @@ export function useFinderOps(env: OpsEnv) {
         startName({ dir: t.dir, was, isDir: isFolder(t.rows[0]!), initial: was, taken: e.rowsIn(t.dir).map((r) => r.name), run: (n) => { void run({ op: "rename", path: joinPath(t.dir, was), name: n }, [t.dir], n, 1); } });
         return;
       }
-      case "new-folder": case "new-file": {
-        const isDir = id === "new-folder";
+      case "new-folder": {
+        // Strata makes the folder at once, clears the filter, and puts the new row in rename. Its ceiling: a name taken by a row the filter hid is the server's to refuse.
+        const name = freeName("new folder", e.rowsIn(into).map((r) => r.name));
+        e.clearFilter(into);
+        void run({ op: "mkdir", parent: into, name }, [into], name, 1).then((ok) => { if (ok) setJustMade({ dir: into, name, at: Date.now() }); });
+        return;
+      }
+      case "new-file": {
+        const isDir = false;
         startName({ dir: into, was: null, isDir, initial: isDir ? "New Folder" : "New File", taken: e.rowsIn(into).map((r) => r.name), run: (n) => { void run({ op: isDir ? "mkdir" : "newfile", parent: into, name: n }, [into], n, 1); } });
         return;
       }
       case "folder-with": {
+        // With nothing chosen it is a plain new folder (Strata's Ctrl+Alt+N).
+        if (!c || !c.rows.length) { doItem("new-folder", null, into); return; }
         const t = need(); if (!t) return;
         startName({ dir: t.dir, was: null, isDir: true, initial: "New Folder", taken: e.rowsIn(t.dir).map((r) => r.name), run: (n) => { void run({ op: "folder-with", paths: paths(t), name: n }, [t.dir], n, 1); } });
         return;
@@ -210,6 +227,16 @@ export function useFinderOps(env: OpsEnv) {
     }
   }, [paste, run]);
 
+  /* The folder the key just made goes into rename as soon as its row is listed; a listing that never shows it is given up on after 5 s. */
+  useEffect(() => {
+    if (!justMade) return;
+    const e = envRef.current;
+    const row = e.rowsIn(justMade.dir).find((r) => r.name === justMade.name);
+    if (row) { setJustMade(null); e.choose(justMade.dir, row.name); doItem("rename", { dir: justMade.dir, rows: [row] }, justMade.dir); return; }
+    const t = setTimeout(() => setJustMade(null), Math.max(0, 5000 - (Date.now() - justMade.at)));
+    return () => clearTimeout(t);
+  });
+
   /** What is being dragged: the chosen rows when the one picked up is among them, else just it. */
   const drag = useRef<{ dir: string; names: string[] } | null>(null);
   const dragStart = useCallback((dir: string, name: string) => {
@@ -235,7 +262,9 @@ export function useFinderOps(env: OpsEnv) {
     const p = dropPlan(d.dir, d.names, dest, ctrl, more);
     if (p === "inside") { envRef.current.say("A folder cannot go into itself"); return; }
     if (p === "nothing") return;
-    void run({ op: p.op, paths: ps, dest, conflict: p.conflict }, [d.dir, dest], one, d.names.length);
+    const go = (op: "copy" | "move") => void run({ op, paths: ps, dest, conflict: p.conflict }, [d.dir, dest], one, d.names.length);
+    if (dropAsks(d.dir, dest, ctrl, more)) { setAsk({ k: "transfer", n: d.names.length, go }); return; }
+    go(p.op);
   }, [run]);
 
   /** A Strata key, on whatever is chosen. */
@@ -244,10 +273,13 @@ export function useFinderOps(env: OpsEnv) {
     const c = e.chosen();
     const into = c ? c.dir : e.here();
     const map: Record<string, Item["id"] | undefined> = { cut: "cut", copyfiles: "copy", paste: "paste", duplicate: "duplicate", rename: "rename", trash: "trash", delete: "delete", newfolder: "new-folder", folderwith: "folder-with", props: "props", pin: "pin", opentab: "open-in" };
+    if (t === "paste") { const dir = e.pasteDir() ?? e.here(); doItem("paste", c, dir); return true; }
     if (t === "redo") { void run({ op: "redo" }, [e.here()], "", 1).then(() => { for (const d of [into, e.here()]) e.reload(d); }); return true; }
     if (t === "undo") { void run({ op: "undo" }, [e.here()], "", 1).then(() => { for (const d of [into, e.here()]) e.reload(d); }); return true; }
     const id = map[t];
     if (!id) return false;
+    // Delete in the Trash is permanent, so it asks; anywhere else it goes to the Trash at once.
+    if (id === "trash" && c && inTrash(c.dir)) { doItem("delete", c, into); return true; }
     doItem(id, c, id === "paste" || id === "new-folder" ? (c && c.rows.length === 1 && isFolder(c.rows[0]!) && id === "paste" ? joinPath(c.dir, c.rows[0]!.name) : e.here()) : into);
     return true;
   }, [doItem, run]);
@@ -309,6 +341,7 @@ export function useFinderOps(env: OpsEnv) {
         onConfirm={() => { const r = stageRun(a.a); setAsk(null); void run(r.body, r.dirs, r.name, 1); }} />; })()}
       {ask?.k === "customize" && <CustomizeDialog paths={ask.paths} names={ask.names} isDir={ask.isDir} onClose={() => setAsk(null)} />}
       {ask?.k === "trash" && <TrashPanel home={env.home} onClose={() => setAsk(null)} onRestored={(dirs, said) => { for (const d of dirs) envRef.current.reload(d); envRef.current.say(said); }} />}
+      {ask?.k === "transfer" && (() => { const a = ask; return <TransferDialog n={a.n} onClose={() => setAsk(null)} onPick={(op) => { setAsk(null); a.go(op); }} />; })()}
       {ask?.k === "delete" && (() => { const w = deleteWords(ask.names); return <ConfirmDialog title={w.title} body={w.body} confirm="Permanently delete" onClose={() => setAsk(null)} onConfirm={() => { const f = ask.run; setAsk(null); f(); }} />; })()}
     </>
   );

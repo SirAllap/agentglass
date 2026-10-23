@@ -56,7 +56,7 @@ export function QuickLook({ path, row, rows, root, savedTab, onTab, onEditing, o
   /* Strata gives a folder no preview: its contents are the next column, and the panel says so. */
   if (!path || !row || isFolder(row)) {
     return (
-      <div className="flex-1 min-w-0 min-h-0 flex flex-col" aria-label="Preview">
+      <div className="flex-1 min-w-0 min-h-0 flex flex-col" aria-label="Preview" data-finder-preview>
         <PreviewBar lead={folder && row && path ? <PathIcon path={path} name={row.name} isDir size={20} /> : <StrataIcon set="act" name="eye" size={20} />} name={folder && row ? row.name : "Preview"} meta={folder && row ? previewMetaLine({ folder, bytes: null, items: row.items, ago: strataWhen(row.mtime), mime: "", name: row.name }) : ""} onClose={onClose}
           tools={folder && row && !row.locked && path ? <BarButton icon="terminal" label="Terminal here" onClick={() => onBench(path, "terminal")} /> : undefined} />
         <div className="flex-1 flex items-center justify-center p-6 text-center text-[12px]" style={{ color: "var(--text3)" }}>
@@ -72,7 +72,7 @@ export function QuickLook({ path, row, rows, root, savedTab, onTab, onEditing, o
     onNvim: canEditRow(row) && !row.locked ? () => onBench(path, "edit") : undefined,
   };
   return (
-    <div className="flex-1 min-w-0 min-h-0 flex flex-col" aria-label={`Preview of ${row.name}`}>
+    <div className="flex-1 min-w-0 min-h-0 flex flex-col" aria-label={`Preview of ${row.name}`} data-finder-preview>
       {row.locked ? (
         <>
           <PreviewBar lead={bar.lead} name={bar.name} meta={bar.meta} title={path} onClose={onClose} />
@@ -80,7 +80,7 @@ export function QuickLook({ path, row, rows, root, savedTab, onTab, onEditing, o
         </>
       ) : gated ? (
         <>
-          <PreviewBar lead={bar.lead} name={bar.name} meta={bar.meta} title={path} onClose={onClose} />
+          <PreviewBar lead={bar.lead} name={bar.name} meta={bar.meta} title={path} dragPath={path} onClose={onClose} />
           <div className="flex-1 min-h-0 agx-scroll overflow-y-auto px-4 py-3 text-[12px] flex items-start gap-2" style={{ color: "var(--text3)" }}>
             <span>May hold a secret —</span>
             <button className="agx-btn rounded px-1.5" style={{ color: "var(--text)" }} onClick={() => setShown(path)}>Show</button>
@@ -88,7 +88,7 @@ export function QuickLook({ path, row, rows, root, savedTab, onTab, onEditing, o
         </>
       ) : failed || !facts ? (
         <>
-          <PreviewBar lead={bar.lead} name={bar.name} meta={bar.meta} title={path} onOpen={bar.onOpen} onClose={onClose} />
+          <PreviewBar lead={bar.lead} name={bar.name} meta={bar.meta} title={path} dragPath={path} onOpen={bar.onOpen} onClose={onClose} />
           <div className="flex-1 min-h-0 agx-scroll overflow-y-auto px-4 py-3 text-[12px]">
             {failed ? <p role="alert" style={{ color: "var(--warning-ink)" }}>Not shown: {failed}.</p> : <p style={{ color: "var(--text3)" }}>Reading…</p>}
           </div>

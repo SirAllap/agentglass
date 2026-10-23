@@ -80,7 +80,7 @@ describe("the wiring", () => {
     const fn = code(column!).slice(code(column!).indexOf("export const rowPointer"));
     expect(fn).toMatch(/h\.onSlow\?\.\(r, e\); h\.onPick\(r, modOf\(e\)\);/);
     expect(fn).toMatch(/onDoubleClick: \(e: React\.MouseEvent\) => \{\s*h\.onSlowCancel\?\.\(\);/);
-    expect(code(machine!)).toMatch(/cancelSlowRef\.current\(\);[^\n]*\n\s*const k = \{ key: e\.key/);
+    expect(code(machine!)).toMatch(/cancelSlowRef\.current\(\);[^\n]*\n\s*const k = win;/);
     expect(code(column!)).toContain("<span data-name ");
     expect(code(views!).match(/<span data-name /g)?.length).toBe(2);
   });

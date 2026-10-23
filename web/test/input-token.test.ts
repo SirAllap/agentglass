@@ -117,6 +117,15 @@ const ALLOWED: { file: string; marker: string; why: string }[] = [
   { file: "plugins/PluginTree.tsx", marker: 'className="agx-input t-mono w-full"',
     why: "same `.agx-input` family; a borderless search row inside a popover list" },
 
+  { file: "FinderChrome.tsx", marker: 'aria-label="Search settings"',
+    why: "icon and the field share the Settings sheet's one pill border, as in the Strata reference; the input itself is transparent" },
+  { file: "FinderSearch.tsx", marker: 'aria-label="Search files and folders"',
+    why: "the Ctrl+K overlay draws its own bar (icon, field, mode chips) with one border; the field inside it is transparent" },
+  { file: "FinderOpsUI.tsx", marker: "aria-invalid={!!problem}",
+    why: "inline rename sits inside the listing row at the row's own height; INPUT's 32px box would resize the row" },
+  { file: "FinderCustomize.tsx", marker: 'aria-label="Pick a color"',
+    why: "sr-only native colour input opened from a swatch button; it is never seen, so there is no look to share" },
+
   { file: "understudy/Ask.tsx", marker: 'className="agx-input flex-1 min-w-0"',
     why: "shares `.agx-input` with this screen's other fields" },
   { file: "understudy/Work.tsx", marker: "ref={taskBox}",

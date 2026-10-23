@@ -24,7 +24,7 @@ export function FinderTabs({ tabs, home, onSelect, onClose, onNew }: { tabs: Tab
       {tabs.paths.map((p, i) => {
         const on = i === tabs.active;
         return (
-          <div key={i} role="tab" aria-selected={on} title={p} data-drop-path={p} data-drop-kind="tab" className="flex items-center gap-1 pl-2.5 pr-1 text-[12px] shrink-0 cursor-pointer"
+          <div key={i} role="tab" aria-selected={on} data-drop-path={p} data-drop-kind="tab" className="flex items-center gap-1 pl-2.5 pr-1 text-[12px] shrink-0 cursor-pointer"
             style={{ minHeight: HIT, color: on ? "var(--primary-ink)" : "var(--text3)", boxShadow: on ? "inset 0 -2px 0 var(--primary)" : undefined, maxWidth: 200 }}
             onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }} onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); onClose(i); } }} onClick={(e) => { if (activates(e.button, "click")) onSelect(i); }}>
             <span className="truncate">{tabLabel(p, home)}</span>

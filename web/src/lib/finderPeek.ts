@@ -12,7 +12,7 @@
 import type { BrowseEntry } from "../../../shared/types.ts";
 import { folderPreview, type FolderRow } from "./finderFolder.ts";
 
-export const PEEK = { width: 256, gap: 8, open: 500, close: 150, limit: 8 } as const;
+export const PEEK = { width: 256, gap: 8, open: 500, close: 80, limit: 8 } as const;
 
 export interface Peek { rows: FolderRow[]; more: number; empty: boolean; count: string }
 

@@ -93,11 +93,27 @@ export function PreviewBody({ path, facts, canEdit, root, onEditing, savedTab, o
   }, [needle, findOpen, tab, path, facts.text, wrap]);
   useEffect(() => { if (findOpen) paintFind(ranges.current, hit); }, [hit, hits, findOpen]);
   useEffect(() => () => clearFind(), []);
+  // The finder's keys reach the find bar through the pane that holds the preview (see "pfind" in lib/finderKeys.ts).
+  const findOps = useRef({ open: () => {}, next: () => {}, prev: () => {}, close: () => {} });
+  useEffect(() => {
+    const pane = bodyRef.current?.closest("[data-finder-preview]");
+    if (!pane) return;
+    pane.setAttribute("data-find-open", findOpen ? "1" : "0");
+    const on = (e: Event) => { const d = (e as CustomEvent<"open" | "next" | "prev" | "close">).detail; findOps.current[d](); };
+    pane.addEventListener("agx-preview-find", on);
+    return () => { pane.removeEventListener("agx-preview-find", on); pane.removeAttribute("data-find-open"); };
+  }, [findOpen]);
   const goHit = useCallback((dir: 1 | -1) => {
     const n = ranges.current.length;
     if (!n) return;
     setHit((i) => { const next = stepFind(i, n, dir); revealFind(ranges.current[next]); return next; });
   }, []);
+
+  findOps.current = {
+    open: () => { if (!texty || editing) return; setFindOpen(true); setTimeout(() => { findRef.current?.focus(); findRef.current?.select(); }, 0); },
+    next: () => goHit(1), prev: () => goHit(-1),
+    close: () => { setFindOpen(false); setNeedle(""); clearFind(); },
+  };
 
   /* Two ways to see a file (rendered / source) are one toggle in the bar, as in Strata; JSON's three stay a row. */
   const toggles = plan.tabs.length === 2;
@@ -150,7 +166,7 @@ export function PreviewBody({ path, facts, canEdit, root, onEditing, savedTab, o
   }
   return (
     <>
-      <PreviewBar lead={bar.lead} name={bar.name} meta={bar.meta} title={bar.title} tools={tools} afterPrint={afterTools} onOpen={bar.onOpen} onPrint={texty ? () => printPane(bodyRef.current, bar.name) : undefined} onClose={bar.onClose} />
+      <PreviewBar lead={bar.lead} name={bar.name} meta={bar.meta} title={bar.title} dragPath={bar.title} tools={tools} afterPrint={afterTools} onOpen={bar.onOpen} onPrint={texty ? () => printPane(bodyRef.current, bar.name) : undefined} onClose={bar.onClose} />
       {tabs}
       {findOpen && (
         <div className="mt-2">

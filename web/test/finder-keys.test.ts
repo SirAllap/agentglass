@@ -16,7 +16,7 @@ describe("which keys the finder takes", () => {
   });
   test("the chords: hidden, sidebar, path, copy — with Ctrl or Cmd, never with Shift or Alt", () => {
     expect(finderKey(k("h", { ctrl: true }), free)).toEqual({ t: "hidden" });
-    expect(finderKey(k("B", { meta: true }), free)).toEqual({ t: "sidebar" });
+    expect(finderKey(k("B", { meta: true }), { ...free, mac: true })).toEqual({ t: "sidebar" });
     expect(finderKey(k("l", { ctrl: true }), free)).toEqual({ t: "path" });
     expect(finderKey(k("c", { ctrl: true }), free)).toEqual({ t: "copyfiles" });
     expect(finderKey(k("h", { ctrl: true, shift: true }), free)).toBeNull();
@@ -47,7 +47,7 @@ describe("which keys the finder takes", () => {
     expect(finderKey(k("ArrowLeft", { shift: true }), free)).toEqual({ t: "shiftside", by: -1 });
     expect(finderKey(k("ArrowRight", { shift: true }), free)).toEqual({ t: "shiftside", by: 1 });
     expect(finderKey(k("ArrowLeft", { alt: true, shift: true }), free)).toEqual({ t: "back" });
-    expect(finderKey(k("ArrowUp", { alt: true, shift: true }), free)).toBeNull();
+    expect(finderKey(k("ArrowUp", { alt: true, shift: true }), free)).toEqual({ t: "extend", by: "up" });
     expect(finderKey(k("F5"), free)).toEqual({ t: "refresh" });
     expect(finderKey(k("F5", { ctrl: true }), free)).toBeNull();
     expect(finderKey(k("F5", { shift: true }), free)).toBeNull();

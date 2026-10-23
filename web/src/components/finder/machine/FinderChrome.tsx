@@ -176,31 +176,53 @@ export function HelpSheet({ onClose }: { onClose: () => void }) {
   const cats = [{ title: "All", n: total }, ...found.map((sec) => ({ title: sec.title, n: sec.rows.length }))];
   const open = cats.some((c) => c.title === cat) ? cat : "All";
   const shown = open === "All" ? found : found.filter((sec) => sec.title === open);
-  const step = (d: 1 | -1) => { const i = cats.findIndex((c) => c.title === open); setCat(cats[(i + d + cats.length) % cats.length]!.title); };
+  const nav = useRef<HTMLElement>(null);
+  const results = useRef<HTMLDivElement>(null);
+  const focusCat = () => setTimeout(() => nav.current?.querySelector<HTMLElement>("[aria-current=true]")?.focus(), 0);
+  const pick = (title: string) => { setCat(title); focusCat(); };
+  const step = (d: 1 | -1) => { const i = cats.findIndex((c) => c.title === open); pick(cats[(i + d + cats.length) % cats.length]!.title); };
+  /* Strata's three zones, in its order: Tab and Shift+Tab walk Search, Categories, Results; Ctrl+F, Ctrl+B and Ctrl+L go to one. */
+  const zones = [() => search.current?.focus(), focusCat, () => results.current?.focus()];
+  const zoneKey = (e: React.KeyboardEvent): boolean => {
+    const c = e.ctrlKey || e.metaKey;
+    const low = e.key.toLowerCase();
+    if (c && !e.altKey && !e.shiftKey && (low === "f" || low === "b" || low === "l")) { zones[low === "f" ? 0 : low === "b" ? 1 : 2]!(); return true; }
+    if (e.key === "Tab" && !c && !e.altKey) {
+      const at = search.current === document.activeElement ? 0 : nav.current?.contains(document.activeElement) ? 1 : 2;
+      zones[(at + (e.shiftKey ? 2 : 1)) % 3]!();
+      return true;
+    }
+    return false;
+  };
   return (
     <div role="dialog" aria-label="Keyboard shortcuts" className="absolute inset-0 grid place-items-center p-4" style={{ background: "color-mix(in srgb, var(--bg) 70%, transparent)", zIndex: 8 }}
       onClick={onClose} onKeyDown={(e) => {
         if (e.key === "Escape" || e.key === "F1") { e.stopPropagation(); onClose(); }
-        else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") { e.preventDefault(); e.stopPropagation(); search.current?.focus(); }
+        else if (zoneKey(e)) { e.preventDefault(); e.stopPropagation(); }
       }}>
       <div ref={card} className="rounded-xl text-[12px] max-w-full max-h-full flex flex-col min-h-0" style={{ background: "var(--surface-card)", border: EDGE, width: "min(1080px, 100%)", height: "min(640px, 100%)" }} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-4 px-5 shrink-0 flex-wrap" style={{ minHeight: 56, borderBottom: LINE }}>
           <b className="text-[13px]">Keyboard shortcuts</b>
           <input ref={search} autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search actions or keys…" aria-label="Search actions or keys" spellCheck={false}
-            onKeyDown={(e) => { if (e.key !== "Escape" && e.key !== "F1" && !((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f")) e.stopPropagation(); }}
+            onKeyDown={(e) => { if (e.key !== "Escape" && e.key !== "F1" && e.key !== "Tab" && !((e.ctrlKey || e.metaKey) && "fbl".includes(e.key.toLowerCase()))) e.stopPropagation(); }}
             className={`${INPUT} flex-1 min-w-[180px]`} style={INPUT_STYLE} />
         </div>
         <div className={`flex-1 min-h-0 flex ${narrow ? "flex-col" : ""}`}>
-          <nav aria-label="Categories" className={`shrink-0 ${narrow ? "flex flex-wrap gap-1.5 p-2.5" : "py-2"}`} style={narrow ? { borderBottom: LINE } : { width: 210, borderRight: LINE }}
-            onKeyDown={(e) => { if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); step(1); } else if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); step(-1); } }}>
+          <nav ref={nav} aria-label="Categories" className={`shrink-0 ${narrow ? "flex flex-wrap gap-1.5 p-2.5" : "py-2"}`} style={narrow ? { borderBottom: LINE } : { width: 210, borderRight: LINE }}
+            onKeyDown={(e) => {
+              if (e.ctrlKey || e.metaKey || e.altKey) return;
+              const go = e.key === "ArrowDown" || e.key === "ArrowRight" || e.key === "j" || e.key === "l" ? 1 : e.key === "ArrowUp" || e.key === "ArrowLeft" || e.key === "k" || e.key === "h" ? -1 : 0;
+              if (go) { e.preventDefault(); e.stopPropagation(); step(go); }
+              else if (e.key === "Home" || e.key === "End") { e.preventDefault(); e.stopPropagation(); pick(cats[e.key === "Home" ? 0 : cats.length - 1]!.title); }
+            }}>
             {cats.map((c) => (
-              <button key={c.title} aria-current={open === c.title ? "true" : undefined} onClick={() => setCat(c.title)} className={`agx-btn flex items-center text-left ${narrow ? "gap-2 px-3 rounded-full" : "w-full px-4"}`}
+              <button key={c.title} aria-current={open === c.title ? "true" : undefined} tabIndex={open === c.title ? 0 : -1} onClick={() => setCat(c.title)} className={`agx-btn flex items-center text-left ${narrow ? "gap-2 px-3 rounded-full" : "w-full px-4"}`}
                 style={{ minHeight: narrow ? 30 : 40, color: open === c.title ? "var(--text)" : "var(--text3)", outline: open === c.title ? "1px solid var(--primary)" : undefined, outlineOffset: -1, background: open === c.title ? "color-mix(in srgb, var(--primary) 10%, transparent)" : undefined }}>
                 <span className="flex-1 min-w-0 truncate">{c.title}</span><span className="tabular-nums text-[11px]">{c.n}</span>
               </button>
             ))}
           </nav>
-          <div className={`agx-scroll flex-1 min-w-0 min-h-0 overflow-y-auto ${narrow ? "px-4" : "px-6"} py-4`}>
+          <div ref={results} tabIndex={0} aria-label="Results" className={`agx-scroll flex-1 min-w-0 min-h-0 overflow-y-auto outline-none ${narrow ? "px-4" : "px-6"} py-4`}>
             {shown.length === 0 ? <p className="m-0 py-3" style={{ color: "var(--text3)" }}>No matching shortcuts</p> : shown.map((sec) => (
               <section key={sec.title} aria-label={sec.title} className="mb-5">
                 <h4 className="m-0 mb-3 flex items-center gap-2 text-[11px] uppercase tracking-[0.1em]" style={{ color: "var(--primary-ink)", fontWeight: 600 }}>
@@ -218,7 +240,7 @@ export function HelpSheet({ onClose }: { onClose: () => void }) {
             ))}
           </div>
         </div>
-        <div className="px-5 shrink-0 flex items-center text-[11px]" style={{ minHeight: 40, borderTop: LINE, color: "var(--text3)" }}>Ctrl+F search · ↑ / ↓ category · Esc close</div>
+        <div className="px-5 shrink-0 flex items-center text-[11px]" style={{ minHeight: 40, borderTop: LINE, color: "var(--text3)" }}>Ctrl+F search · Ctrl+B categories · Ctrl+L results · Tab next · Esc close</div>
       </div>
     </div>
   );

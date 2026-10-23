@@ -6,7 +6,8 @@
 // by NAME, not by index: the rows arrive in pages and are re-sorted, so an index
 // would point at a different file a moment later.
 import { useEffect, useRef, useState } from "react";
-import { activates, pointerAction } from "../../../lib/finderPointer.ts";
+import { activates, inTrash, pointerAction, releaseActivates } from "../../../lib/finderPointer.ts";
+import { filterKey, filterKeptBy } from "../../../lib/finderKeys.ts";
 import { CaretIcon } from "../../../lib/glyphIcons.tsx";
 import { FileTypeIcon, PathIcon, StrataIcon } from "./StrataIcon.tsx";
 import { HIT, ICON } from "../../../lib/iconSize.ts";
@@ -28,11 +29,14 @@ export interface Mod { ctrl: boolean; shift: boolean }
 export const modOf = (e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): Mod => ({ ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey });
 /** A Shift-click would also select the text between the two rows. */
 /** What a row does with each button, one place for Columns, Icons and List: the primary button picks and opens, the middle one opens a folder in a tab, the right one does neither (its menu is the finder's own). */
-export const rowPointer = (view: "columns" | "icons" | "list", r: Row, h: { onPick: (r: Row, mod?: Mod) => void; onOpen: (r: Row) => void; onTab?: (r: Row) => void; onReveal?: (r: Row) => void; onFocusChild?: () => void; onSlow?: (r: Row, e: React.MouseEvent) => void; onSlowCancel?: () => void }) => {
+export const rowPointer = (view: "columns" | "icons" | "list", r: Row, h: { onPick: (r: Row, mod?: Mod) => void; onOpen: (r: Row) => void; onTab?: (r: Row) => void; onReveal?: (r: Row) => void; onFocusChild?: () => void; onSlow?: (r: Row, e: React.MouseEvent) => void; onSlowCancel?: () => void; /** A filter is narrowing this view, and the folder is the Trash's or not. */ filtered?: boolean; trash?: boolean }) => {
   const item = isFolder(r) && !r.locked ? "folder" : "file";
   return {
     // The slow-click rename is decided before the pick, on what was selected when the click came.
-    onClick: (e: React.MouseEvent) => { if (activates(e.button, "click")) { h.onSlow?.(r, e); h.onPick(r, modOf(e)); } },
+    onClick: (e: React.MouseEvent) => { if (!activates(e.button, "click")) return;
+      if (!r.locked && releaseActivates({ filtered: !!h.filtered, isDir: isFolder(r), trash: !!h.trash, mods: e.ctrlKey || e.metaKey || e.shiftKey || e.altKey })) { h.onSlowCancel?.(); h.onOpen(r); return; }
+      h.onSlow?.(r, e); h.onPick(r, modOf(e));
+    },
     onDoubleClick: (e: React.MouseEvent) => {
       h.onSlowCancel?.();
       if (!activates(e.button, "click") || e.ctrlKey || e.metaKey || e.shiftKey) return;
@@ -52,7 +56,7 @@ export function RowIcon({ row, size = ICON.sm, dir }: { row: Row; size?: number;
   return <PathIcon path={dir ? joinPath(dir, row.name) : undefined} name={row.name} isDir={isFolder(row)} broken={row.broken === true} size={size} />;
 }
 
-export function Column({ fill, dir: folderPath, title, filterSignal, width, onResize, onFit, state, display, selName, chosen, focused, prefs, rowH, filter, onFilter, onPick, onOpen, onTab, onReveal, onFocusChild, onSlow, onSlowCancel, onFocusCol, onRefresh, onSort, recent, onPref, scrollTop, onScrollTop, edit }: {
+export function Column({ fill, dir: folderPath, title, filterSignal, width, onResize, onFit, state, display, selName, chosen, focused, prefs, rowH, filter, onFilter, onPick, onOpen, onTab, onReveal, onFocusChild, onSlow, onSlowCancel, onFocusCol, onRefresh, onSort, recent, onPref, scrollTop, onScrollTop, edit, finding, onFinding, onClosePane, onSpace }: {
   /** The folder this column lists: a right click in it says where it landed. */
   dir: string;
   title: string;
@@ -97,25 +101,32 @@ export function Column({ fill, dir: folderPath, title, filterSignal, width, onRe
   onScrollTop?: (top: number) => void;
   /** A name being typed in this column: a new row on top, or the chosen row renamed in place. */
   edit?: InlineEdit | null;
+  /** Whether this pane's filter is open; opening it turns every other pane's off (the finder keeps the one). */
+  finding: boolean;
+  onFinding: (on: boolean) => void;
+  /** Set on every pane but the first: the header's close button. */
+  onClosePane?: () => void;
+  /** Space in the filter with a result selected: what Space does in the listing. */
+  onSpace: () => void;
 }) {
   const [menu, setMenu] = useState<DOMRect | null>(null);
-  const [finding, setFinding] = useState(filter !== "");
+  const [hover, setHover] = useState(false);
   const input = useRef<HTMLInputElement>(null);
-  useEffect(() => { if (filterSignal > 0) { setFinding(true); setTimeout(() => focusEnd(input.current), 0); } }, [filterSignal]);
+  useEffect(() => { if (filterSignal > 0) { onFinding(true); setTimeout(() => focusEnd(input.current), 0); } }, [filterSignal]); // eslint-disable-line react-hooks/exhaustive-deps
   const selItem = (() => { const i = display.rows.findIndex((r) => r.name === selName); return i < 0 ? null : display.itemOfRow[i]!; })();
   const loading = !state || !state.done;
   const btn = "agx-btn rounded-md grid place-items-center shrink-0";
   // Under this a row has no room for a count or a size beside the name, and the name comes first.
   const tight = width < TIGHT_W;
-  const toggleFilter = () => { const on = !finding; setFinding(on); if (!on) onFilter(""); else setTimeout(() => input.current?.focus(), 0); };
+  const toggleFilter = () => { const on = !finding; onFinding(on); if (!on) onFilter(""); else setTimeout(() => input.current?.focus(), 0); };
   const open = (e: React.MouseEvent<HTMLButtonElement>) => setMenu(e.currentTarget.getBoundingClientRect());
 
   return (
-    <section aria-label={`Folder ${title}`} data-dir={folderPath} onMouseDown={onFocusCol} className="relative flex flex-col min-h-0 shrink-0"
+    <section aria-label={`Folder ${title}`} data-dir={folderPath} onMouseDown={onFocusCol} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} data-hovered={hover ? "" : undefined} className="relative flex flex-col min-h-0 shrink-0"
       style={{ width, ...(fill ? { flexGrow: 1 } : null), borderRight: LINE, scrollSnapAlign: "start", background: COLUMNS_SURFACE }}>
       {/* The column that has the keyboard wears a bar on top; a colour alone would not survive a theme that has no accent to spare. */}
       <div aria-hidden className="absolute left-0 right-0 top-0" style={{ height: 3, background: focused ? "var(--primary)" : "transparent", zIndex: 2 }} />
-      <div role="separator" aria-orientation="vertical" aria-label={`Resize ${title}`} aria-valuenow={Math.round(width)} tabIndex={0}
+      <div role="separator" aria-orientation="vertical" aria-label={`Resize ${title}`} aria-valuenow={Math.round(width)} tabIndex={-1}
         title="Drag to resize, double-click to fit"
         className="absolute top-0 bottom-0 agx-col-edge" style={{ right: 0, width: 6, cursor: "col-resize", zIndex: 3, touchAction: "none" }}
         onDoubleClick={onFit}
@@ -132,7 +143,7 @@ export function Column({ fill, dir: folderPath, title, filterSignal, width, onRe
           if (e.key === "ArrowLeft" || e.key === "ArrowRight") { e.preventDefault(); e.stopPropagation(); onResize(dragWidth(width, e.key === "ArrowLeft" ? -16 : 16)); }
           else if (e.key === "Enter" || e.key === "0") { e.preventDefault(); e.stopPropagation(); onFit(); }
         }} />
-      <header className="flex items-center gap-1 px-2.5 pt-2 pb-1.5 shrink-0" style={{ borderBottom: LINE }}>
+      <header className="flex items-center gap-1 px-2.5 pt-2 pb-1.5 shrink-0" style={{ borderBottom: LINE, background: hover ? "color-mix(in srgb, var(--primary) 7%, transparent)" : undefined }}>
         <b className="flex-1 min-w-0 truncate text-[12px]" title={title} style={{ color: titleColor(focused) }}>{title}</b>
         <button className={btn} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Refresh (F5)" aria-label="Refresh" onClick={onRefresh}><StrataIcon set="act" name="refresh" size={ICON.md} /></button>
         <button className={btn} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} aria-label={(recent?.dir ?? prefs.sortDir) === "asc" ? "Ascending — click to reverse" : "Descending — click to reverse"}
@@ -142,8 +153,10 @@ export function Column({ fill, dir: folderPath, title, filterSignal, width, onRe
         <button className={btn} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Sort options" aria-label="Sort options" aria-haspopup="menu" onClick={open}><StrataIcon set="act" name="sliders-horizontal" size={ICON.md} /></button>
         <button className={btn} aria-pressed={finding} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", background: finding ? "color-mix(in srgb, var(--primary) 16%, transparent)" : undefined }} title="Filter this pane (Ctrl+F)" aria-label="Filter this pane"
           onClick={toggleFilter}><StrataIcon set="act" name="funnel" size={ICON.md} /></button>
+        {onClosePane && <button className={btn} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Close this pane" aria-label="Close this pane" onClick={onClosePane}><StrataIcon set="act" name="x" size={ICON.md} /></button>}
       </header>
-      {finding && <FilterField inputRef={input} value={filter} total={state?.total ?? display.rows.length} title={title} onChange={onFilter} onDone={() => { onFilter(""); setFinding(false); }} />}
+      {finding && <FilterField inputRef={input} value={filter} total={state?.total ?? display.rows.length} title={title} onChange={onFilter} onDone={() => { onFilter(""); onFinding(false); }}
+        nav={{ results: display.rows.length, selected: selItem !== null, onSpace, onDown: () => { const r = display.rows.find((x) => x.name === selName) ?? display.rows[0]; if (r && r.name !== selName) onPick(r); }, onActivate: () => { const r = display.rows.find((x) => x.name === selName) ?? display.rows[0]; if (r) onOpen(r); } }} />}
 
       {state?.error ? (
         <div className="flex-1 min-h-0 grid place-items-center p-6 text-center text-[12px]" role="alert">
@@ -154,13 +167,13 @@ export function Column({ fill, dir: folderPath, title, filterSignal, width, onRe
           </div>
         </div>
       ) : display.items.length === 0 && !(edit && edit.was === null) ? (
-        <div className="flex-1 min-h-0 grid place-items-center p-6 text-center text-[12px]" style={{ color: "var(--text3)" }}>
+        <div data-surface tabIndex={focused ? 0 : -1} className="flex-1 min-h-0 grid place-items-center p-6 text-center text-[12px] outline-none" style={{ color: "var(--text3)" }}>
           {loading ? "Reading…" : filter ? `Nothing here is called “${filter}”.` : state && state.hiddenSkipped ? `This directory is empty. ${state.hiddenSkipped} hidden ${state.hiddenSkipped === 1 ? "item" : "items"} left out.` : "This directory is empty"}
         </div>
       ) : (
         <>
         {edit && edit.was === null && <div className="shrink-0 pt-1"><InlineName key="new" edit={edit} rowH={rowH} icon={<FileTypeIcon name={edit.initial} isDir={edit.isDir} broken={false} size={ICON.sm} />} /></div>}
-        <VirtualList count={display.items.length} rowH={rowH} label={`Entries of ${title}`} className="flex-1" keepInView={selItem} initialTop={scrollTop} onTop={onScrollTop}
+        <VirtualList count={display.items.length} rowH={rowH} label={`Entries of ${title}`} className="flex-1" tabStop={focused} keepInView={selItem} initialTop={scrollTop} onTop={onScrollTop}
           render={(i) => {
             const it = display.items[i]!;
             if (it.header) {
@@ -172,10 +185,10 @@ export function Column({ fill, dir: folderPath, title, filterSignal, width, onRe
             const badge = r.name === selName && showsBadge(true, focused);
             return (
               <div key={r.name} role="option" data-row={r.name} data-folder={dir && !r.locked ? "" : undefined} draggable={!r.locked && !(edit && edit.was === r.name)} aria-selected={sel} aria-disabled={r.locked || undefined} title={r.why ?? r.name}
-                onMouseDown={noRange} {...rowPointer("columns", r, { onPick, onOpen, onTab, onReveal, onFocusChild, onSlow, onSlowCancel })}
+                onMouseDown={noRange} {...rowPointer("columns", r, { onPick, onOpen, onTab, onReveal, onFocusChild, onSlow, onSlowCancel, filtered: filter !== "", trash: inTrash(folderPath) })}
                 className="agx-fm-row flex items-center gap-2 px-2.5 mx-1 rounded-md cursor-pointer"
                 style={{ height: rowH, color: r.locked ? "var(--text4)" : "var(--text)", ...rowPaint(rowTone(sel, focused)) }}>
-                <span className="shrink-0 flex">{!r.locked && !dir && isThumbable(r.name) ? <Thumb path={joinPath(folderPath, r.name)} size={ROW_THUMB} radius={3} fallback={<RowIcon row={r} dir={folderPath} />} /> : <RowIcon row={r} dir={folderPath} />}</span>
+                <span data-icon className="shrink-0 flex">{!r.locked && !dir && isThumbable(r.name) ? <Thumb path={joinPath(folderPath, r.name)} size={ROW_THUMB} radius={3} fallback={<RowIcon row={r} dir={folderPath} />} /> : <RowIcon row={r} dir={folderPath} />}</span>
                 {edit && edit.was === r.name ? <InlineName key="ren" edit={edit} rowH={rowH - 4} icon={null} /> : <NameCell name={rowLabel(r.name)} />}
                 {dir ? (
                   <>
@@ -192,7 +205,7 @@ export function Column({ fill, dir: folderPath, title, filterSignal, width, onRe
       )}
 
       {menu && (
-        <Popover anchor={menu} onClose={() => setMenu(null)} width={280} label="Sort">
+        <Popover anchor={menu} onClose={() => setMenu(null)} width={280} label="Sort" column>
           <MenuCap>Sort by</MenuCap>
           {(recent ? ["recency", "name", "size", "modified", "type"] as const : ["name", "size", "modified", "type"] as const).map((k) => (
             <MenuItem tall key={k} on={(recent?.key ?? prefs.sortKey) === k} onClick={() => { onSort(k); setMenu(null); }}>
@@ -214,21 +227,39 @@ export function Column({ fill, dir: folderPath, title, filterSignal, width, onRe
 export const focusEnd = (i: HTMLInputElement | null) => { if (!i) return; i.focus(); i.setSelectionRange(i.value.length, i.value.length); };
 
 /**
- * A pane's filter field (Strata's): Esc, or Backspace with nothing in it, closes
- * it and the keyboard goes back to the rows; Down goes to the rows and leaves it open.
+ * A pane's filter field (Strata's, rules in lib/finderKeys filterKey): Esc, or Backspace with nothing in it, closes
+ * it and the keyboard goes back to the rows; Down goes to the selected result (or the first) and leaves it open; Space with a
+ * result selected acts on it; Enter and Right open the current result. A press outside the pane's field, funnel and rows closes it.
  */
-export function FilterField({ inputRef, value, total, title, onChange, onDone }: {
+export function FilterField({ inputRef, value, total, title, onChange, onDone, nav }: {
   inputRef: React.RefObject<HTMLInputElement>; value: string; total: number; title: string; onChange: (v: string) => void; onDone: () => void;
+  nav: { results: number; selected: boolean; onSpace: () => void; onDown: () => void; onActivate: () => void };
 }) {
-  const toRows = (el: HTMLElement) => el.closest("[data-dir]")?.querySelector<HTMLElement>("[role=listbox]")?.focus();
+  const toRows = (el: HTMLElement) => el.closest("[data-dir]")?.querySelector<HTMLElement>("[role=listbox], [data-surface]")?.focus();
+  const wrap = useRef<HTMLDivElement>(null);
+  const done = useRef(onDone); done.current = onDone;
+  useEffect(() => {
+    const on = (e: PointerEvent) => {
+      const t = e.target as HTMLElement | null; const w = wrap.current; if (!t || !w) return;
+      const kept = filterKeptBy({ inField: w.contains(t), inToggle: !!t.closest('button[aria-label="Filter this pane"]'), inResults: !!t.closest("[role=listbox]") && !!w.closest("[data-dir]")?.contains(t) });
+      if (!kept) done.current();
+    };
+    document.addEventListener("pointerdown", on, true);
+    return () => document.removeEventListener("pointerdown", on, true);
+  }, []);
   return (
-    <div className="px-2.5 py-1.5 shrink-0" style={{ borderBottom: LINE }}>
+    <div ref={wrap} className="px-2.5 py-1.5 shrink-0" style={{ borderBottom: LINE }}>
       <input ref={inputRef} value={value} onChange={(e) => onChange(e.target.value)} placeholder={filterPlaceholder(total)} spellCheck={false} aria-label={`Filter ${title}`}
         onKeyDown={(e) => {
           e.stopPropagation();
           const el = e.currentTarget;
-          if (e.key === "Escape" || (e.key === "Backspace" && el.value === "")) { e.preventDefault(); toRows(el); onDone(); }
-          else if (e.key === "ArrowDown") { e.preventDefault(); toRows(el); }
+          const a = filterKey(e, { value: el.value, results: nav.results, selected: nav.selected });
+          if (a === "type") return;
+          e.preventDefault();
+          if (a === "done") { toRows(el); onDone(); }
+          else if (a === "space") nav.onSpace();
+          else if (a === "down") { nav.onDown(); toRows(el); }
+          else if (a === "activate") nav.onActivate();
         }}
         className={`${INPUT} w-full`} style={INPUT_STYLE} />
     </div>
@@ -237,5 +268,6 @@ export function FilterField({ inputRef, value, total, title, onChange, onDone }:
 
 /** The name, ending in an ellipsis when the column is narrower than it, as Strata's does. */
 function NameCell({ name }: { name: string }) {
-  return <span data-name className="flex-1 min-w-0 truncate">{name}</span>;
+  // The name is as wide as its text, so a press beside it is empty space (Strata drags an unselected row by its text only).
+  return <><span data-name className="min-w-0 truncate">{name}</span><span className="flex-1" /></>;
 }

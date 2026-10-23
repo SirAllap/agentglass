@@ -2863,3 +2863,5 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 [data-machine-finder], [data-finder-menu] { user-select: none; -webkit-user-select: none; }
 [data-machine-finder] :is(input, textarea, [contenteditable], [data-selectable], [data-selectable] *, .xterm, .xterm *) { user-select: text; -webkit-user-select: text; }
 [data-machine-finder] .agx-strata-md th { user-select: none; -webkit-user-select: none; }
+/* An Icons tile answers the pointer only over its picture and its name, as Strata's does; the blank of the card does not light up. */
+.agx-tile-part:hover { background: color-mix(in srgb, var(--primary) 8%, transparent); }

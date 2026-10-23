@@ -116,8 +116,8 @@ describe("the views act on what the table says", () => {
     expect(code(machine!)).toContain("data-machine-finder onAuxClick={onHistoryButton}");
   });
   test("the middle button on a file reveals it, in all three views", () => {
-    expect(code(column!)).toContain("onReveal, onFocusChild, onSlow, onSlowCancel })");
-    expect(code(views!).match(/onPick, onOpen, onTab, onReveal, onSlow, onSlowCancel \}\)/g)?.length).toBe(2);
+    expect(code(column!)).toContain("onReveal, onFocusChild, onSlow, onSlowCancel, filtered:");
+    expect(code(views!).match(/onPick, onOpen, onTab, onReveal, onSlow, onSlowCancel, filtered, trash: inTrash\(dir\) \}\)/g)?.length).toBe(2);
   });
 });
 

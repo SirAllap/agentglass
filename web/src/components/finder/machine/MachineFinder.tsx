@@ -16,14 +16,14 @@ import { FolderStore, type FolderState } from "../../../lib/finderFolders.ts";
 import { columnWidth, fitWidth, previewFits, stripLayout, stripRoom, previewWidth, dragPreviewWidth, sidebarWidth, sidePageWidth, wholeColumnsWidth } from "../../../lib/finderColumns.ts";
 import { back as histBack, canBack, canForward, forward as histForward, here as histHere, startHistory, visit, type History } from "../../../lib/finderHistory.ts";
 import { readMachineSnap, openingOf, scrollWithout, writeMachineSnap } from "../../../lib/finderMachineState.ts";
-import { backspaceAct, escapeAct, finderKey, finderOwnsChord, leftAct, upFromFirst } from "../../../lib/finderKeys.ts";
-import { boxOf, marqueeChoice, touches, type Box } from "../../../lib/finderSelect.ts";
+import { backspaceAct, escapeAct, finderKey, finderOwnsChord, leftAct, upFromFirst, windowChord } from "../../../lib/finderKeys.ts";
+import { boxOf, dismissChoice, marqueeChoice, type Box } from "../../../lib/finderSelect.ts";
 import { clickSelect, extendBy, extendSelect, selectAll, selectedFooter, single, toggleCursor, type Choice } from "../../../lib/finderSelect.ts";
 import {
   DEFAULT_PREFS, TEXT_MAX, TEXT_MIN, tileSize, canEditRow, footerTotal, selectsHidden, displayRows, opensOnPick, footerCount, gridStep, indexOfName, isFolder, joinPath, keyStep, nextSidebar, parentOf, readPrefs, rowHeight, sidebarMode, sidebarPrefs, sidebarTip, writePrefs,
   type ColShape, type Display, type Prefs, type Row, type SortKey,
 } from "../../../lib/finderMiller.ts";
-import { activates, historyClaims, MARQUEE_SLOP, pointerAction, SLOW_CLICK_MS, slowClickRenames, springMs, startsMarquee, wheelTextStep, type DropKind } from "../../../lib/finderPointer.ts";
+import { activates, bandRows, EDGE_TICK_MS, edgeStep, emptyClickSelectsFirst, fileUris, historyClaims, inTrash, MARQUEE_SLOP, pointerAction, SLOW_CLICK_MS, slowClickRenames, springMs, startsMarqueeAt, wheelTextStep, type BandLayout, type DropKind } from "../../../lib/finderPointer.ts";
 import { HIT } from "../../../lib/iconSize.ts";
 import { isAppChord } from "../../../lib/keybindings.ts";
 import type { DiskPlace } from "../../../../../shared/types.ts";
@@ -34,6 +34,7 @@ import { AppearanceMenu, FinderSettings, HelpSheet } from "./FinderChrome.tsx";
 import { externalPlace, folderTargetMove, isRecent, nextRecentSort, recentDisplay, RECENT, RECENT_SORT, type RecentSort } from "../../../lib/finderMiller.ts";
 import { exitDecision, type Exit } from "../../../lib/finderEdit.ts";
 import { FinderPathBar } from "./FinderPathBar.tsx";
+import { ErrorDialog } from "./VolumeDialogs.tsx";
 import { FinderTabs } from "./FinderTabs.tsx";
 import { closeTab, moveTab, openTab, selectTab, showHere, stepTab, tabsOf } from "../../../lib/finderTabs.ts";
 import { useFinderOps, type Chosen } from "./useFinderOps.tsx";
@@ -50,6 +51,8 @@ import { useBookmarks } from "./useBookmarks.ts";
 import { withHidden, type SideAct, type SideTarget } from "../../../lib/finderSidebarMenu.ts";
 import { useBox } from "./useBox.ts";
 
+/** Cmd stands in for Ctrl only on a Mac; on Linux and Windows Super is a modifier of its own (lib/finderKeys). */
+const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 const PREFS_KEY = "agentglass.finder.machine.prefs";
 const loadPrefs = (): Prefs => { try { return readPrefs(localStorage.getItem(PREFS_KEY)); } catch { return DEFAULT_PREFS; } };
 const savePrefs = (p: Prefs) => { try { localStorage.setItem(PREFS_KEY, writePrefs(p)); } catch { /* a private window forgets; the finder still works */ } };
@@ -131,10 +134,17 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   const [tabs, setTabs] = useState(() => tabsOf(back?.trail[back.trail.length - 1] ?? (start || home || "/")));
   /* Strata folds the sidebar to its icon rail while the path is typed. */
   const [pathEditing, setPathEditing] = useState(false);
+  const [pathFailed, setPathFailed] = useState<string | null>(null);
   const selRef = useRef(sel); selRef.current = sel;
   const trailRef = useRef(trail); trailRef.current = trail;
   const [focusCol, setFocusCol] = useState(() => back?.focusCol ?? 0);
   const [filters, setFilters] = useState<Record<string, string>>({});
+  /** The one pane whose filter is open (Strata: opening one turns the others off, and so does leaving the folder). */
+  const [findAt, setFindAt] = useState<string | null>(null);
+  const openFind = useCallback((path: string, on: boolean) => {
+    setFindAt((a) => (on ? path : a === path ? null : a));
+    if (on) setFilters((f) => (Object.keys(f).every((k) => k === path || f[k] === "") ? f : { [path]: f[path] ?? "" }));
+  }, []);
   const [peek, setPeek] = useState(() => back?.peek ?? false);
   /* Which view (Rendered, Source...) the preview was on, for the file it was on: remembered with the rest of where the finder was. */
   const [previewTab, setPreviewTab] = useState(() => back?.previewTab);
@@ -150,6 +160,13 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   const [paneFind, setPaneFind] = useState(false);
   const paneInput = useRef<HTMLInputElement>(null);
   useEffect(() => { if (filterTick.n > 0 && prefs.view !== "columns") { setPaneFind(true); setTimeout(() => focusEnd(paneInput.current), 0); } }, [filterTick]); // eslint-disable-line react-hooks/exhaustive-deps
+  /* A filter is off once its folder leaves the trail. */
+  const trailKey = trail.join("\0");
+  useEffect(() => {
+    setFilters((f) => (Object.keys(f).every((k) => trail.includes(k)) ? f : Object.fromEntries(Object.entries(f).filter(([k]) => trail.includes(k)))));
+    setFindAt((a) => (a && !trail.includes(a) ? null : a));
+    setPaneFind(false);
+  }, [trailKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const [hist, setHist] = useState<History>(() => startHistory(start || home || "/"));
   const [menu, setMenu] = useState<DOMRect | null>(null);
   const [settings, setSettings] = useState<DOMRect | null>(null);
@@ -265,7 +282,10 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
     return () => { live = false; clearTimeout(t); };
   }, [target, guarded, forgetScroll]);
 
+  /** A sidebar row opened by the keyboard selects the first entry of the place once it has rows (Strata); a click selects none. */
+  const keyGoTo = useRef<string | null>(null), firstAt = useRef<string | null>(null);
   const goRaw = useCallback((path: string) => {
+    firstAt.current = keyGoTo.current === path ? path : null; keyGoTo.current = null;
     seen.current = path; setHist((h) => visit(h, path));
     setTrail([path]); setSel([null]); setFocusCol(0); setPeek(false); setSidePage(false);
     /* Recent is a list, not a place the palette can start from: it is not remembered as one. */
@@ -283,7 +303,11 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   }, [onPlace]);
   const reveal = useMemo(() => guarded("search-hit", revealRaw), [guarded, revealRaw]);
   /* Folder peeking is an Icons and List thing: Columns already shows what is inside a folder. */
-  const folderPeek = useFolderPeek(prefs.peek && prefs.view !== "columns", prefs.hidden, reveal);
+  /* Strata peeks a folder only after the pointer was the last thing that moved the person: any press sets it, any key clears it. */
+  const pointerNav = useRef(true);
+  /* The folder of the column the pointer is over: where Ctrl+V pastes while the pointer was the last thing used (Strata's "indicated directory"). */
+  const pointerDir = useRef<string | null>(null);
+  const folderPeek = useFolderPeek(prefs.peek && prefs.view !== "columns", prefs.hidden, reveal, () => pointerNav.current);
 
   const goUpRaw = useCallback(() => {
     const p = parentOf(trail[0]!);
@@ -335,6 +359,12 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   const pick = useCallback((col: number, row: Row): void => ((selRef.current[col] ?? null) === row.name ? pickRaw(col, row) : pickHeld(col, row)), [pickRaw, pickHeld]);
   /* Choosing a row without showing it as a column: a key in Icons and List, and Enter with nothing chosen there. */
   const selectOnly = useCallback((col: number, row: Row): void => ((selRef.current[col] ?? null) === row.name ? pickRaw(col, row, false) : pickHeld(col, row, false)), [pickRaw, pickHeld]);
+  useEffect(() => {
+    const at = firstAt.current, c = columns[0];
+    if (!at || !c || c.path !== at) return;
+    const r = c.display.rows[0];
+    if (r) { firstAt.current = null; selectOnly(0, r); } else if (c.state?.done) firstAt.current = null;
+  });
 
   const last = trail.length - 1;
   const here = trail[last] ?? trail[0]!;
@@ -435,9 +465,12 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
     const nav = root.current?.querySelector("[data-finder-sidebar]");
     (nav?.querySelector<HTMLElement>('[data-side-row][aria-current="true"]') ?? nav?.querySelector<HTMLElement>("[data-side-row]:not(:disabled)"))?.focus();
   };
+  /** The top bar's own buttons, left to right; the path bar's crumbs are not among them. */
+  const topBarButtons = () => [...(root.current?.querySelectorAll<HTMLButtonElement>("[data-finder-topbar] button:not(:disabled)") ?? [])].filter((b) => !b.closest('[role="navigation"]'));
+  const topFromSide = useRef(false);
   const focusFiles = () => {
     const path = trail[prefs.view === "columns" ? focusCol : last] ?? "";
-    [...(root.current?.querySelectorAll<HTMLElement>("[data-dir]") ?? [])].find((d) => d.dataset.dir === path)?.querySelector<HTMLElement>("[role=listbox]")?.focus();
+    [...(root.current?.querySelectorAll<HTMLElement>("[data-dir]") ?? [])].find((d) => d.dataset.dir === path)?.querySelector<HTMLElement>("[role=listbox], [data-surface]")?.focus();
   };
   /* Up on the first row leaves the rows (lib/finderKeys upFromFirst): for the pane's open filter, or its header's first button. */
   const upFrom = (col: number): boolean => {
@@ -525,12 +558,17 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
     copyText: (text, said) => { void navigator.clipboard?.writeText(text).then(() => setNote(said)).catch(() => setNote("Could not copy")); },
     terminal: (dir) => onBench(dir, "terminal"),
     openTab: (path) => newTab(path),
+    pasteDir: () => (pointerNav.current ? pointerDir.current : null),
+    clearFilter: (dir) => setFilters((f) => (f[dir] ? { ...f, [dir]: "" } : f)),
   });
   const opsOpen = useRef(false); opsOpen.current = ops.hasMenu;
+  const renaming = useRef(false); renaming.current = !!ops.edit;
 
+  /** Closes column `i` and every one beyond it (Strata's close_column); the keyboard goes to the one before. */
+  const closeColumn = useCallback((i: number) => { setTrail((t) => t.slice(0, i)); setSel((x) => x.slice(0, i)); setFocusCol(i - 1); setMulti(null); }, []);
   const act = useCallback((a: NonNullable<ReturnType<typeof finderKey>>) => {
-    // Ctrl+Enter on a file is Enter (Strata); only a folder opens in a tab.
-    if (a.t === "opentab" && deepest && !isFolder(deepest.row) && !liveMulti) { if (!deepest.row.locked) openDefault(deepest.path); return; }
+    // Ctrl+Enter and Ctrl+Shift+Enter: the cursor row's folder in a new tab, a file as Enter (Strata), whatever else is chosen with it.
+    if (a.t === "opentab" && deepest) { if (!deepest.row.locked) { if (isFolder(deepest.row)) newTab(deepest.path); else openDefault(deepest.path); } return; }
     if (ops.key(a.t)) return;
     switch (a.t) {
       case "move": move(a.key); break;
@@ -542,7 +580,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
         break;
       }
       case "up": {
-        if (backspaceAct(prefs.view, focusCol) === "close-column") { setTrail((t) => t.slice(0, focusCol)); setSel((x) => x.slice(0, focusCol)); setFocusCol(focusCol - 1); setMulti(null); }
+        if (backspaceAct(prefs.view, focusCol) === "close-column") closeColumn(focusCol);
         else goUp();
         break;
       }
@@ -554,7 +592,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
       case "escape": {
         switch (escRef.current()) {
           case "preview-page": setPeek(false); break;
-          case "multi": setMulti(null); break;
+          case "multi": setMulti((m) => (m ? { ...m, choice: dismissChoice(m.choice) } : m)); break;
         }
         break;
       }
@@ -594,6 +632,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
       case "forward": if (canForward(hist)) goHist(histForward(hist)); break;
       case "home": go(home); break;
       case "refresh": store.current?.load(trail[focusCol] ?? trail[0]!, prefs.hidden, true); break;
+      case "pfind": root.current?.querySelector("[data-finder-preview]")?.dispatchEvent(new CustomEvent("agx-preview-find", { detail: a.do })); break;
       case "filter": setFilterTick((t) => ({ col: prefs.view === "columns" ? focusCol : last, n: t.n + 1 })); break;
       case "view": setPrefs({ view: a.view }); break;
       case "preview": if (wide) setPrefs({ preview: !prefs.preview }); else setPeek((p) => !p); break;
@@ -617,23 +656,31 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
       case "all": { const col = prefs.view === "columns" ? focusCol : last; choose(col, selectAll(columns[col]?.display.rows ?? [], chosenOf(col))); break; }
       case "toggle": { const col = prefs.view === "columns" ? focusCol : last; choose(col, toggleCursor(columns[col]?.display.rows ?? [], chosenOf(col))); break; }
     }
-  }, [move, choose, columns, multi, sel, mainBox.w, mainBox.h, last, deepest, prefs, enterFolder, go, goUp, hist, goHist, home, trail, focusCol, onBench, wide, toggleSide, setPrefs, copy, currentPath, ops]);
+  }, [closeColumn, move, choose, columns, multi, sel, mainBox.w, mainBox.h, last, deepest, prefs, enterFolder, go, goUp, hist, goHist, home, trail, focusCol, onBench, wide, toggleSide, setPrefs, copy, currentPath, ops]);
 
   // On the window, capture phase: the palette keeps focus in its own search box, and ↓ there must still move the list.
   const actRef = useRef(act); actRef.current = act;
   const helpRef = useRef(help); helpRef.current = help;
   const focusFilesRef = useRef(focusFiles); focusFilesRef.current = focusFiles;
+  const focusSidebarRef = useRef(focusSidebar); focusSidebarRef.current = focusSidebar;
   const escRef = useRef(() => escapeAct({ previewPage: false, multi: false }));
   useEffect(() => {
     const on = (e: KeyboardEvent) => {
-      if (searchingRef.current || opsOpen.current) return; // the search overlay, a menu or a question has the keys while it is up
+      if (searchingRef.current) return; // the search overlay has the keys while it is up
       if ((e.target as HTMLElement | null)?.closest?.("[data-finder-nvim]")) return; // nvim has every key typed into its own pane
+      const mine = !!root.current && (root.current.contains(e.target as Node) || e.target === document.body || (e.target as HTMLElement | null)?.closest?.('[role="dialog"]') === root.current.closest('[role="dialog"]'));
+      const win = { key: e.key, ctrl: e.ctrlKey, meta: e.metaKey, shift: e.shiftKey, alt: e.altKey, code: e.code };
+      // A name being typed, a menu, a question or a dialog of the finder's own: F5, Ctrl+K and the rest of the window's chords do nothing, here or in the app behind (Strata's).
+      const modal = opsOpen.current || !!root.current?.querySelector('[role="dialog"], [role="alertdialog"]');
+      if (modal && mine && windowChord(win)) { e.preventDefault(); e.stopPropagation(); return; }
+      if (opsOpen.current) return; // a menu or a question has the keys while it is up
       // Ctrl+K is the app's command palette everywhere else; inside the finder it is Strata's search.
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k" && root.current && (root.current.contains(e.target as Node) || e.target === document.body || (e.target as HTMLElement | null)?.closest?.('[role="dialog"]') === root.current.closest('[role="dialog"]'))) {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k" && mine) {
         e.preventDefault(); e.stopPropagation(); openSearch(); return;
       }
+      if (!["Shift", "Control", "Alt", "Meta"].includes(e.key)) pointerNav.current = false;
       cancelSlowRef.current(); // any key cancels a pending slow-click rename, as in Strata
-      const k = { key: e.key, ctrl: e.ctrlKey, meta: e.metaKey, shift: e.shiftKey, alt: e.altKey, code: e.code };
+      const k = win;
       if (isAppChord(e) && !finderOwnsChord(k)) return;
       // A dialog or a sheet of the finder's own has the keys while it is up; F1 still closes the shortcuts sheet.
       if (root.current?.querySelector('[role="dialog"], [role="alertdialog"]') && !(e.key === "F1" && helpRef.current)) return;
@@ -642,9 +689,20 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
       if (t?.closest?.("[data-finder-sidebar]") && !e.ctrlKey && !e.metaKey && !e.altKey) {
         const rows = [...(root.current?.querySelectorAll<HTMLButtonElement>("[data-finder-sidebar] [data-side-row]:not(:disabled)") ?? [])];
         const at = rows.indexOf(t.closest("[data-side-row]") as HTMLButtonElement);
+        // Up from the first row goes to the top bar (Strata's focus order); Down from the last stays.
+        if (e.key === "ArrowUp" && at <= 0) { e.preventDefault(); e.stopPropagation(); topFromSide.current = true; topBarButtons()[0]?.focus(); return; }
         if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); e.stopPropagation(); rows[Math.min(rows.length - 1, Math.max(0, at + (e.key === "ArrowDown" ? 1 : -1)))]?.focus(); return; }
         if (e.key === "ArrowRight") { e.preventDefault(); e.stopPropagation(); focusFilesRef.current(); return; }
         if (e.key === "Enter" || e.key === " " || e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) return; // the row's own button and menu
+      }
+      // The top bar, once the keyboard is in it: Left and Right walk its buttons, Down goes back to the sidebar it came from or to the files. Ceiling: the crumbs are not stops, Ctrl+L types a path.
+      if (t instanceof HTMLButtonElement && t.closest("[data-finder-topbar]") && !t.closest('[role="navigation"]') && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
+        e.preventDefault(); e.stopPropagation();
+        if (e.key === "ArrowDown") { const side = topFromSide.current && sideOnRef.current; topFromSide.current = false; if (side) focusSidebarRef.current(); else focusFilesRef.current(); return; }
+        if (e.key === "ArrowUp") return;
+        const bs = topBarButtons(); const i = bs.indexOf(t);
+        bs[Math.min(bs.length - 1, Math.max(0, i + (e.key === "ArrowRight" ? 1 : -1)))]?.focus();
+        return;
       }
       const field = !!t && (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t.isContentEditable);
       const own = !!t?.closest?.("[data-finder-box]");
@@ -665,7 +723,11 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
         bs[Math.min(bs.length - 1, Math.max(0, bs.indexOf(t as HTMLElement) + (e.key === "ArrowRight" ? 1 : -1)))]?.focus();
         return;
       }
-      const a = finderKey(k, { inField, hasSelection: !!window.getSelection()?.toString() });
+      // A preview document has the focus when the press is inside the preview and not on one of its buttons, or when the text selected is the preview's.
+      const previewEl = root.current?.querySelector("[data-finder-preview]") ?? null;
+      const selNode = window.getSelection()?.anchorNode ?? null;
+      const inPreview = !!previewEl && (t?.closest?.("[data-finder-preview]") ? !t.closest("button, a, input, select, [role=tab], [role=menuitem]") : (t === document.body || t === root.current) && !!selNode && previewEl.contains(selNode));
+      const a = finderKey(k, { inField, inFilter: !!t?.matches?.('input[aria-label^="Filter"]'), inPreview, previewFind: previewEl?.getAttribute("data-find-open") === "1", mac: MAC, hasSelection: !!window.getSelection()?.toString() });
       if (!a) return;
       // Esc with nothing left to take away is the app's: it closes the finder.
       if (a.t === "escape" && escRef.current() === "none") return;
@@ -701,46 +763,76 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
 
   /* The middle button on a file: its own folder, with it selected (in Recent the name is the whole path). */
   const revealRow = (dir: string, r: Row) => { const p = joinPath(dir, r.name); reveal({ kind: "select", dir: parentOf(p) ?? "/", name: basename(p) }); };
-  /* A primary click on the empty space of a folder's view (lib/finderPointer "clear"): no selection, and nothing open to its right. */
+  /* The column a press landed in: its own, or, on the blank strip after the last column, the last one (Strata's marquee origin is shared there). */
+  const dirOf = (t: HTMLElement): HTMLElement | null => {
+    const own = t.closest<HTMLElement>("[data-dir]"); if (own) return own;
+    const all = t.closest("[data-strip]")?.querySelectorAll<HTMLElement>("[data-dir]");
+    return all && all.length ? all[all.length - 1]! : null;
+  };
+  /* Where the keyboard was when the press began: the press itself moves it to the column pressed. */
+  const pressFocus = useRef(0);
+  /* A primary click on the empty space of a folder's view (lib/finderPointer "clear"): no selection, and nothing open to its right.
+     Coming back to a column from another, with nothing filtered, the cursor goes to its first row. Strata keeps the columns
+     beyond that child open; a trail here is one chain from the selection, so there is nowhere to keep them. */
   const onEmpty = (e: React.MouseEvent) => {
     if (bandEnded.current) { bandEnded.current = false; return; } // the click that ends a rubber band clears nothing
     const t = e.target as HTMLElement;
     if (t.closest("[data-row], header, input, button, [role=\"separator\"]")) return;
-    const dir = t.closest<HTMLElement>("[data-dir]")?.dataset.dir;
+    const dir = dirOf(t)?.dataset.dir;
     const col = dir === undefined ? -1 : trail.indexOf(dir);
     if (col < 0 || pointerAction(prefs.view, "empty", e.button, e.detail || 1) !== "clear" || e.ctrlKey || e.metaKey || e.shiftKey) return;
-    setMulti(null); setSel((s) => [...s.slice(0, col), null]); setTrail((tr) => tr.slice(0, col + 1)); setFocusCol(col);
+    const first = emptyClickSelectsFirst(pressFocus.current !== col, (filters[dir!] ?? "") !== "") ? columns[col]?.display.rows[0] : undefined;
+    setMulti(null); setSel((s) => [...s.slice(0, col), first?.name ?? null]); setTrail((tr) => tr.slice(0, col + 1)); setFocusCol(col);
   };
-  /* Strata's rubber band (lib/finderSelect marqueeChoice): a drag from the empty space of a view, or from anywhere with Alt, selects the rows it touches.
-     Its ceiling: rows the list has not drawn (scrolled far out of view) are not touched, as there is no autoscroll while dragging. */
+  /* Strata's rubber band (lib/finderSelect marqueeChoice): a drag from the empty space of a view, the blank of an unselected row,
+     a column's header or the strip after the last column, or from anywhere with Alt, selects the rows it touches. It scrolls the
+     list within 28 px of its edge, and finds the rows from the layout, not the DOM, so rows scrolled out of the window still count.
+     Its ceiling: one column's rows; a band does not carry sideways into the next column. */
   const [band, setBand] = useState<Box | null>(null);
   const bandEnded = useRef(false);
   const onBandDown = (e: React.MouseEvent) => {
     cancelSlow();
+    pointerNav.current = true; pressFocus.current = focusCol;
     const t = e.target as HTMLElement;
-    if (t.closest("header, input, button, [role=\"separator\"]")) return;
-    const dirEl = t.closest<HTMLElement>("[data-dir]"); if (!dirEl) return;
-    if (!startsMarquee(e.button, !!t.closest("[data-row]"), e.altKey)) return;
-    if (e.altKey) e.preventDefault(); // Alt on a row: a band, not a drag of the row
+    if (t.closest("input, button, [role=\"separator\"]")) return;
+    const dirEl = dirOf(t); if (!dirEl) return;
+    const rowEl = t.closest<HTMLElement>("[data-row]");
+    const onRow = rowEl ? { selected: rowEl.getAttribute("aria-selected") === "true", onContent: !!t.closest("[data-name], [data-icon]") } : null;
+    if (!startsMarqueeAt(e.button, onRow, e.altKey)) return;
     const col = trail.indexOf(dirEl.dataset.dir!); if (col < 0) return;
+    const scroller = dirEl.querySelector<HTMLElement>("[role=listbox]"); if (!scroller) return;
+    // A band, not a drag of the row, and no text selected on the way; the list still gets the keyboard.
+    if (rowEl || t.closest("header")) { e.preventDefault(); if (rowEl) scroller.focus({ preventScroll: true }); }
     const rows = columns[col]?.display.rows ?? [];
+    const tile = tileSize(prefs.thumb);
+    const lay: BandLayout = prefs.view === "icons"
+      ? { rowH: tile.h, hitH: tile.h - 4, per: tilesPerRow(mainBox.w, prefs.thumb), tileW: tile.w, padX: 8 }
+      : { rowH, slotOf: columns[col]?.display.itemOfRow };
     const initial = chosenOf(col);
     const mod = { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey };
-    const a = { x: e.clientX, y: e.clientY };
-    let live = false;
-    const move = (ev: MouseEvent) => {
-      const b = { x: ev.clientX, y: ev.clientY };
-      if (!live && Math.hypot(b.x - a.x, b.y - a.y) < MARQUEE_SLOP) return;
-      live = true;
-      window.getSelection()?.removeAllRanges();
-      const box = boxOf(a, b); setBand(box);
-      const hit = new Set<string>();
-      dirEl.querySelectorAll<HTMLElement>("[data-row]").forEach((r) => { if (touches(r.getBoundingClientRect(), box)) hit.add(r.dataset.row!); });
+    const r0 = scroller.getBoundingClientRect();
+    const anchor = { x: e.clientX - r0.left, y: e.clientY - r0.top + scroller.scrollTop };
+    let px = e.clientX, py = e.clientY, live = false, tick: ReturnType<typeof setInterval> | null = null;
+    const apply = () => {
+      const r = scroller.getBoundingClientRect(), top = scroller.scrollTop;
+      setBand(boxOf({ x: anchor.x + r.left, y: anchor.y - top + r.top }, { x: px, y: py }));
+      const box = boxOf(anchor, { x: px - r.left, y: py - r.top + top });
+      const hit = new Set(bandRows(lay, rows.length, box).map((i) => rows[i]!.name));
       const c = marqueeChoice(rows, hit, initial, mod);
       if (c.names.size > 1) choose(col, c);
-      else { const one = rows.find((r) => c.names.has(r.name)); if (one) selectOnly(col, one); else { setMulti(null); setSel((x) => [...x.slice(0, col), null]); setTrail((tr) => tr.slice(0, col + 1)); } }
+      else { const one = rows.find((x) => c.names.has(x.name)); if (one) selectOnly(col, one); else { setMulti(null); setSel((x) => [...x.slice(0, col), null]); setTrail((tr) => tr.slice(0, col + 1)); } }
     };
-    const up = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); if (live) { bandEnded.current = true; setBand(null); } };
+    const move = (ev: MouseEvent) => {
+      px = ev.clientX; py = ev.clientY;
+      if (!live && Math.hypot(px - e.clientX, py - e.clientY) < MARQUEE_SLOP) return;
+      if (!live) {
+        live = true;
+        tick = setInterval(() => { const r = scroller.getBoundingClientRect(), d = edgeStep(py, r.top, r.bottom); if (d) { scroller.scrollTop += d; apply(); } }, EDGE_TICK_MS);
+      }
+      window.getSelection()?.removeAllRanges();
+      apply();
+    };
+    const up = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); if (tick) clearInterval(tick); if (live) { bandEnded.current = true; setBand(null); } };
     window.addEventListener("mousemove", move); window.addEventListener("mouseup", up);
   };
 
@@ -751,7 +843,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   const onSlowClick = (col: number, r: Row, e: React.MouseEvent) => {
     cancelSlow();
     const dir = trail[col] ?? "";
-    const place = isRecent(dir) ? "recent" : dir.includes("/.local/share/Trash/") ? "trash" : "folder";
+    const place = isRecent(dir) ? "recent" : inTrash(dir) ? "trash" : "folder";
     if (slowClickRenames({ soleSelected: !liveMulti && sel[col] === r.name && !r.locked, onName: !!(e.target as HTMLElement).closest("[data-name]"), clicks: e.detail, mods: e.ctrlKey || e.metaKey || e.shiftKey || e.altKey, place }))
       slow.current = setTimeout(() => { slow.current = null; ops.key("rename"); }, SLOW_CLICK_MS);
   };
@@ -771,7 +863,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   const onContext = (e: React.MouseEvent) => {
     const t = e.target as HTMLElement;
     const dirEl = t.closest<HTMLElement>("[data-dir]");
-    if (!dirEl || t.closest("header, input, [role=\"separator\"]")) return;
+    if (!dirEl || t.closest("header, input, [data-heading], [role=\"separator\"]")) return; // Strata gives a list's headings no menu
     e.preventDefault();
     ops.contextAt(e.clientX, e.clientY, dirEl.dataset.dir!, t.closest<HTMLElement>("[data-row]")?.dataset.row ?? null);
   };
@@ -803,9 +895,15 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   const dnd = {
     onDragStart: (e: React.DragEvent) => {
       const t = e.target as HTMLElement, row = t.closest<HTMLElement>("[data-row]"), dirEl = t.closest<HTMLElement>("[data-dir]");
-      if (!row || !dirEl) return;
+      const file = t.closest<HTMLElement>("[data-preview-drag]")?.dataset.previewDrag; // the preview's header drags the file it shows
+      const src = file ? { dir: parentOf(file) ?? "/", name: basename(file) } : row && dirEl ? { dir: dirEl.dataset.dir!, name: row.dataset.row! } : null;
+      if (!src) return;
+      const names = ops.dragStart(src.dir, src.name);
+      const paths = names.map((n) => (isRecent(src.dir) ? n : joinPath(src.dir, n)));
       e.dataTransfer.effectAllowed = "copyMove";
-      e.dataTransfer.setData("text/plain", ops.dragStart(dirEl.dataset.dir!, row.dataset.row!).join("\n"));
+      // Other programs take the uri-list; the plain list is kept for a text field. Ceiling: no FileList, which a page cannot make.
+      e.dataTransfer.setData("text/uri-list", fileUris(paths));
+      e.dataTransfer.setData("text/plain", paths.join("\n"));
     },
     onDragOver: (e: React.DragEvent) => {
       const d = dropTarget(e.target as HTMLElement);
@@ -859,9 +957,9 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
     else if (t.kind === "device" && act !== "customize" && act !== "properties") devices.onVolumeAct(t.volume, act);
   };
   return (
-    <div ref={root} data-machine-finder onAuxClick={onHistoryButton} onContextMenu={noNativeMenu} {...dnd} onMouseUp={(e) => { if (historyClaims(pointerAction(prefs.view, "empty", e.button, 1), { back: canBack(hist), forward: canForward(hist) })) e.preventDefault(); }} className="relative flex-1 min-h-0 min-w-0 flex flex-col" style={{ fontSize: prefs.textSize, color: "var(--text)" }}>
+    <div ref={root} data-machine-finder onAuxClick={onHistoryButton} onContextMenu={noNativeMenu} {...dnd} onMouseMove={(e) => { pointerDir.current = (e.target as HTMLElement).closest<HTMLElement>("[data-dir]")?.dataset.dir ?? null; }} onMouseUp={(e) => { if (historyClaims(pointerAction(prefs.view, "empty", e.button, 1), { back: canBack(hist), forward: canForward(hist) })) e.preventDefault(); }} className="relative flex-1 min-h-0 min-w-0 flex flex-col" style={{ fontSize: prefs.textSize, color: "var(--text)" }}>
       <FinderTabs tabs={tabs} home={home} onNew={() => newTab()} onSelect={(i) => toTab(selectTab(tabs, i))} onClose={(i) => toTab(closeTab(tabs, i))} />
-      <div className="flex items-center gap-1.5 px-2.5 py-1.5 shrink-0" style={{ borderBottom: LINE }}>
+      <div data-finder-topbar className="flex items-center gap-1.5 px-2.5 py-1.5 shrink-0" style={{ borderBottom: LINE }}>
         <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", opacity: sideOn ? 1 : 0.7 }} aria-pressed={sideOn} title={sidebarTip(compact ? (sidePage ? "full" : "hidden") : sideMode, "Ctrl+B")} aria-label="Toggle sidebar (Ctrl+B)"
           onClick={toggleSide}><StrataIcon set="act" name="panel-left-symbolic" size={17} /></button>
         {prefs.view !== "columns" && <>
@@ -869,7 +967,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
           <button className={tool} disabled={!canForward(hist)} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", opacity: canForward(hist) ? 1 : 0.4 }} title="Forward (Alt+Right)" aria-label="Forward" onClick={() => goHist(histForward(hist))}><StrataIcon set="act" name="arrow-right" size={17} /></button>
           <button className={tool} disabled={!parentOf(trail[0]!)} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", opacity: parentOf(trail[0]!) ? 1 : 0.4 }} title="Parent folder (Alt+Up)" aria-label="Parent folder" onClick={goUp}><StrataIcon set="act" name="arrow-up" size={17} /></button>
         </>}
-        <FinderPathBar path={trail[last] ?? trail[0]!} home={home} onGo={go} signalEdit={pathSignal} onEditing={setPathEditing} volumes={devices.volumes} onRemote={devices.openAddress} />
+        <FinderPathBar path={trail[last] ?? trail[0]!} home={home} onGo={go} signalEdit={pathSignal} onEditing={setPathEditing} volumes={devices.volumes} onRemote={devices.openAddress} onFail={setPathFailed} />
         <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="New tab (Ctrl+T)" aria-label="New tab" onClick={() => newTab()}><StrataIcon set="act" name="plus" size={17} /></button>
         <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Search (Ctrl+K)" aria-label="Search" onClick={openSearch}><StrataIcon set="act" name="search" size={17} /></button>
         <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Appearance" aria-label="Appearance" aria-haspopup="menu" onClick={(e) => setMenu(e.currentTarget.getBoundingClientRect())}><StrataIcon set="act" name={prefs.view} size={17} /></button>
@@ -880,7 +978,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
       </div>
 
       <div className="flex-1 min-h-0 flex" style={{ background: COLUMNS_SURFACE }}>
-        {sideOn && <Sidebar places={placesFor(home, places)} pins={pinned} onRemote={devices.openAddress} here={trail[0]!} mode={compact || sideMode === "hidden" ? "full" : pathEditing ? "rail" : sideMode} width={sideW} onResize={(w) => setPrefs({ sideW: sidebarWidth("full", w, box.w) })} onGo={go} onRecent={() => go(RECENT)} onTrash={ops.openTrash} onNetwork={devices.openNetwork} volumes={devices.volumes} busy={devices.busy} onVolume={devices.onVolume} onVolumeAct={devices.onVolumeAct} hidden={prefs.hiddenPlaces} onSideAct={onSideAct} dnd={dnd} />}
+        {sideOn && <Sidebar places={placesFor(home, places)} pins={pinned} onRemote={devices.openAddress} here={trail[0]!} mode={compact || sideMode === "hidden" ? "full" : pathEditing ? "rail" : sideMode} width={sideW} onResize={(w) => setPrefs({ sideW: sidebarWidth("full", w, box.w) })} onGo={(p, byKey) => { keyGoTo.current = byKey ? p : null; go(p); }} onRecent={() => go(RECENT)} onTrash={ops.openTrash} onNetwork={devices.openNetwork} volumes={devices.volumes} busy={devices.busy} onVolume={devices.onVolume} onVolumeAct={devices.onVolumeAct} hidden={prefs.hiddenPlaces} onSideAct={onSideAct} dnd={dnd} />}
         {!(compact && sidePage) && (
           <>
             {/* With the preview beside the columns and nothing dragged, the columns take what their names ask for and the preview takes all that is left, as Strata's does; a gap between the two was the free room with nowhere to go. */}
@@ -895,17 +993,19 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
                   {columns.map((c, i) => (
                     <Column key={c.path} fill={!previewInline && i === columns.length - 1} dir={c.path} title={isRecent(c.path) ? "Recent" : basename(c.path)} filterSignal={filterTick.col === i ? filterTick.n : 0} width={widths[i]!} onResize={(w) => setDragged((d) => ({ ...d, [c.path]: w }))} onFit={() => setDragged((d) => ({ ...d, [c.path]: fitWidth(c.state?.rows.map((r) => r.name) ?? [], measure, columnRoom) }))} state={c.state} display={c.display} selName={sel[i] ?? null} chosen={liveMulti?.col === i ? liveMulti.choice.names : null} focused={i === focusCol} prefs={prefs} rowH={rowH}
                       filter={filters[c.path] ?? ""} onFilter={(v) => setFilters((f) => ({ ...f, [c.path]: v }))}
-                      scrollTop={scrolls.current[c.path]} onScrollTop={(t) => onScrollTop(c.path, t)} onPick={(r, m) => onPickMod(i, r, m)} onTab={(r) => newTab(joinPath(c.path, r.name))} onReveal={(r) => revealRow(c.path, r)} onSlow={(r, e) => onSlowClick(i, r, e)} onSlowCancel={cancelSlow} onFocusChild={() => { if (trail.length > i + 1) setFocusCol(i + 1); }} onOpen={(r) => { if (!r.locked) openDefault(joinPath(c.path, r.name)); }}
+                      scrollTop={scrolls.current[c.path]} onScrollTop={(t) => onScrollTop(c.path, t)} onPick={(r, m) => onPickMod(i, r, m)} onTab={(r) => newTab(joinPath(c.path, r.name))} onReveal={(r) => revealRow(c.path, r)} onSlow={(r, e) => onSlowClick(i, r, e)} onSlowCancel={cancelSlow} onFocusChild={() => { if (trail.length > i + 1) setFocusCol(i + 1); }} onOpen={(r) => { if (!r.locked) { if (isFolder(r)) go(joinPath(c.path, r.name)); else openDefault(joinPath(c.path, r.name)); } }}
+                      finding={findAt === c.path} onFinding={(on) => openFind(c.path, on)} onClosePane={i > 0 ? () => closeColumn(i) : undefined} onSpace={() => act({ t: "space" })}
                       onFocusCol={() => setFocusCol(i)} onRefresh={() => refresh(c.path)} recent={isRecent(c.path) ? recentSort : undefined} onSort={(k) => (isRecent(c.path) ? onRecentSort(k) : k !== "recency" && onSort(k))} onPref={setPrefs} edit={ops.edit?.dir === c.path ? ops.edit : null} />
                   ))}
                 </ColumnsRow>
               ) : lastCol ? (
                 <div className="flex-1 min-w-0 min-h-0 flex flex-col" data-dir={lastCol.path}>
-                  {paneFind && <FilterField inputRef={paneInput} value={filters[lastCol.path] ?? ""} total={lastCol.state?.total ?? lastCol.display.rows.length} title={basename(lastCol.path)} onChange={(v) => setFilters((f) => ({ ...f, [lastCol.path]: v }))} onDone={() => { setFilters((f) => ({ ...f, [lastCol.path]: "" })); setPaneFind(false); }} />}
+                  {paneFind && <FilterField inputRef={paneInput} value={filters[lastCol.path] ?? ""} total={lastCol.state?.total ?? lastCol.display.rows.length} title={basename(lastCol.path)} onChange={(v) => setFilters((f) => ({ ...f, [lastCol.path]: v }))} onDone={() => { setFilters((f) => ({ ...f, [lastCol.path]: "" })); setPaneFind(false); }}
+                    nav={{ results: lastCol.display.rows.length, selected: !!deepest, onSpace: () => act({ t: "space" }), onDown: () => { const r = lastCol.display.rows[0]; if (r && !deepest) selectOnly(last, r); }, onActivate: () => { const r = deepest?.row ?? lastCol.display.rows[0]; if (!r || r.locked) return; const p = joinPath(lastCol.path, r.name); if (isFolder(r)) go(p); else openDefault(p); } }} />}
                   {lastCol.state?.error ? <div className="p-3 text-[12px]" role="alert" style={{ color: "var(--warning-ink)" }}>{lastCol.state.error}</div>
                     : prefs.view === "icons"
-                      ? <IconsView firstItem={iconsFirst.current[lastCol.path]} onFirstItem={(i) => onIconsFirst(lastCol.path, i)} peek={folderPeek.peek} display={lastCol.display} dir={lastCol.path} thumb={prefs.thumb} selName={sel[last] ?? null} chosen={liveMulti?.col === last ? liveMulti.choice.names : null} width={mainBox.w} label={`Entries of ${basename(lastCol.path)}`} onPick={(r, m) => onPickMod(last, r, m)} onTab={(r) => newTab(joinPath(lastCol.path, r.name))} onReveal={(r) => revealRow(lastCol.path, r)} onSlow={(r, e) => onSlowClick(last, r, e)} onSlowCancel={cancelSlow} onOpen={(r) => (isFolder(r) && !r.locked ? go(joinPath(lastCol.path, r.name)) : !r.locked && openDefault(joinPath(lastCol.path, r.name)))} />
-                      : <ListView scrollTop={scrolls.current[lastCol.path]} onScrollTop={(t) => onScrollTop(lastCol.path, t)} peek={folderPeek.peek} dir={lastCol.path} display={lastCol.display} selName={sel[last] ?? null} chosen={liveMulti?.col === last ? liveMulti.choice.names : null} rowH={rowH} prefs={prefs} label={`Entries of ${basename(lastCol.path)}`} recent={isRecent(lastCol.path) ? recentSort : undefined} onSort={(k) => (isRecent(lastCol.path) ? onRecentSort(k) : k !== "recency" && onSort(k))} onPick={(r, m) => onPickMod(last, r, m)} onTab={(r) => newTab(joinPath(lastCol.path, r.name))} onReveal={(r) => revealRow(lastCol.path, r)} onSlow={(r, e) => onSlowClick(last, r, e)} onSlowCancel={cancelSlow} onOpen={(r) => (isFolder(r) && !r.locked ? go(joinPath(lastCol.path, r.name)) : !r.locked && openDefault(joinPath(lastCol.path, r.name)))} />}
+                      ? <IconsView firstItem={iconsFirst.current[lastCol.path]} onFirstItem={(i) => onIconsFirst(lastCol.path, i)} filtered={(filters[lastCol.path] ?? "") !== ""} peek={folderPeek.peek} display={lastCol.display} dir={lastCol.path} thumb={prefs.thumb} selName={sel[last] ?? null} chosen={liveMulti?.col === last ? liveMulti.choice.names : null} width={mainBox.w} label={`Entries of ${basename(lastCol.path)}`} onPick={(r, m) => onPickMod(last, r, m)} onTab={(r) => newTab(joinPath(lastCol.path, r.name))} onReveal={(r) => revealRow(lastCol.path, r)} onSlow={(r, e) => onSlowClick(last, r, e)} onSlowCancel={cancelSlow} onOpen={(r) => (isFolder(r) && !r.locked ? go(joinPath(lastCol.path, r.name)) : !r.locked && openDefault(joinPath(lastCol.path, r.name)))} />
+                      : <ListView scrollTop={scrolls.current[lastCol.path]} onScrollTop={(t) => onScrollTop(lastCol.path, t)} filtered={(filters[lastCol.path] ?? "") !== ""} peek={folderPeek.peek} dir={lastCol.path} display={lastCol.display} selName={sel[last] ?? null} chosen={liveMulti?.col === last ? liveMulti.choice.names : null} rowH={rowH} prefs={prefs} label={`Entries of ${basename(lastCol.path)}`} recent={isRecent(lastCol.path) ? recentSort : undefined} onSort={(k) => (isRecent(lastCol.path) ? onRecentSort(k) : k !== "recency" && onSort(k))} onPick={(r, m) => onPickMod(last, r, m)} onTab={(r) => newTab(joinPath(lastCol.path, r.name))} onReveal={(r) => revealRow(lastCol.path, r)} onSlow={(r, e) => onSlowClick(last, r, e)} onSlowCancel={cancelSlow} onOpen={(r) => (isFolder(r) && !r.locked ? go(joinPath(lastCol.path, r.name)) : !r.locked && openDefault(joinPath(lastCol.path, r.name)))} />}
                 </div>
               ) : null}
             </div>
@@ -957,6 +1057,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
         </div>
       )}
       {devices.dialogs}
+      {pathFailed !== null && <ErrorDialog title="Cannot open that path" message={pathFailed} onClose={() => setPathFailed(null)} />}
       {ops.nodes}
       {folderPeek.node}
       {help && <HelpSheet onClose={() => setHelp(false)} />}
@@ -986,7 +1087,7 @@ function ColumnsRow({ children, widths, active }: { children: React.ReactNode; w
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, active, page]);
   return (
-    <div ref={el} className="agx-scroll flex-1 min-w-0 min-h-0 flex overflow-x-auto overflow-y-hidden" style={{ scrollSnapType: "x mandatory" }}>
+    <div ref={el} data-strip className="agx-scroll flex-1 min-w-0 min-h-0 flex overflow-x-auto overflow-y-hidden" style={{ scrollSnapType: "x mandatory" }}>
       {children}
       <div ref={pad} aria-hidden className="shrink-0" style={{ width: 0 }} />
     </div>

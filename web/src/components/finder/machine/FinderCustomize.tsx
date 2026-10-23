@@ -47,7 +47,7 @@ export function CustomizeDialog({ paths, names, isDir, onClose }: { paths: reado
       {emojiAt && <EmojiPicker anchor={emojiAt} recent={[]} below onClose={() => setEmojiAt(null)} onPick={(ch, keep) => { apply(pick(style, { emoji: ch })); if (!keep) setEmojiAt(null); }} />}
       <div className="flex justify-end gap-2 mt-4 pt-3" style={{ borderTop: LINE }}>
         <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE }} disabled={none} onClick={() => apply({})}>Clear</button>
-        <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE, borderColor: "var(--primary)", color: "var(--primary-ink)" }} onClick={onClose}>Done</button>
+        <button autoFocus className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE, borderColor: "var(--primary)", color: "var(--primary-ink)" }} onClick={onClose}>Done</button>
       </div>
     </Sheet>
   );

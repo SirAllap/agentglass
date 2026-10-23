@@ -17,8 +17,10 @@ export function BarButton({ icon, label, onClick, on, disabled }: { icon: string
   );
 }
 
-export function PreviewBar({ lead, name, meta, title, tools, afterPrint, onOpen, onPrint, onClose }: {
+export function PreviewBar({ lead, name, meta, title, dragPath, tools, afterPrint, onOpen, onPrint, onClose }: {
   lead: ReactNode; name: string; meta: string; title?: string;
+  /** The previewed file: the header drags it out as a file, as Strata's does. */
+  dragPath?: string;
   /** What this view adds before the common tools. */
   tools?: ReactNode;
   /** Strata puts the wrap switch after print. */
@@ -26,7 +28,7 @@ export function PreviewBar({ lead, name, meta, title, tools, afterPrint, onOpen,
   onOpen?: () => void; onPrint?: () => void; onClose?: () => void;
 }) {
   return (
-    <div className="px-3 flex items-center gap-2 shrink-0" style={{ minHeight: 44, borderBottom: LINE }}>
+    <div className="px-3 flex items-center gap-2 shrink-0" style={{ minHeight: 44, borderBottom: LINE }} data-preview-drag={dragPath} draggable={dragPath ? true : undefined}>
       <span className="shrink-0 flex">{lead}</span>
       <div className="flex-1 min-w-0">
         <h3 className="m-0 text-[13px] font-semibold truncate" title={title ?? name}>{name}</h3>

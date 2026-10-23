@@ -47,6 +47,15 @@ export function extendSelect(rows: readonly Row[], from: Choice, by: number): Ch
   return { names: new Set(span(rows, at(rows, anchor), to)), anchor, cursor: rows[to]!.name };
 }
 
+/**
+ * Esc on several rows (Strata): the fill goes, the cursor and the anchor stay, so the next Shift+arrow
+ * starts from the cursor. Its ceiling: a row is always chosen here (the preview follows it), so the
+ * cursor row stays filled where Strata leaves none.
+ */
+export function dismissChoice(from: Choice): Choice {
+  return { names: new Set(from.cursor === null ? [] : [from.cursor]), anchor: from.anchor, cursor: from.cursor };
+}
+
 /** Ctrl+Space: the cursor row in or out of the set. */
 export function toggleCursor(rows: readonly Row[], from: Choice): Choice {
   return from.cursor === null ? from : clickSelect(rows, from, from.cursor, { ctrl: true, shift: false });

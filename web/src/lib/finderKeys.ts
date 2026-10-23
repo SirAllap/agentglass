@@ -9,6 +9,8 @@
  * never taken, and the search box is shared only while it is empty — the moment
  * there is text in it the finder is gone and the palette is searching.
  */
+import { inTrash } from "./finderPointer.ts";
+
 export type Act =
   | { t: "move"; key: string }
   | { t: "enter" }
@@ -63,38 +65,102 @@ export type Act =
   /** Ctrl+Shift+Page Up / Page Down: the active tab one place left or right. */
   | { t: "tabmove"; by: 1 | -1 }
   /** Shift+Left / Shift+Right, which Strata leaves to each view: Columns treats it as Left, Icons extends, List swallows. */
-  | { t: "shiftside"; by: 1 | -1 };
+  | { t: "shiftside"; by: 1 | -1 }
+  /** The preview's own find (Strata's find bar): Ctrl+F opens it, Enter / Shift+Enter step through the hits, Esc closes it. */
+  | { t: "pfind"; do: "open" | "next" | "prev" | "close" };
 
 export interface KeyIn { key: string; ctrl: boolean; meta: boolean; shift: boolean; alt: boolean; code?: string }
 export interface Ctx {
   /** Focus is in a text field that is not the palette's own search box. */
   inField: boolean;
+  /** That field is a pane's filter: Strata lets Ctrl+1/2/3, F2 and Ctrl+R through it. */
+  inFilter?: boolean;
+  /** Focus is in a preview document (text, a page, a player): Ctrl+A/C/X/V and the arrows are its own. */
+  inPreview?: boolean;
+  /** The preview's find bar is open: with the preview focused, Enter and Esc are its. */
+  previewFind?: boolean;
+  /** A Mac, where Cmd stands in for Ctrl; anywhere else Super is a modifier of its own and no chord of the finder's. */
+  mac?: boolean;
   /** Some text is selected on the page, so Ctrl+C means copy that. */
   hasSelection: boolean;
 }
 
 const MOVES = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"]);
 
-export function finderKey(k: KeyIn, ctx: Ctx): Act | null {
+/**
+ * The letter a key stands for. On a Cyrillic or Greek layout the key is "с", and Strata
+ * (docs/keyboard-shortcuts) reads the Latin letter of the same physical key so Ctrl+C
+ * still copies; a Latin layout keeps what it typed (Dvorak's own letters stay its own).
+ */
+export function latin(k: Pick<KeyIn, "key" | "code">): string {
+  if (/^[a-z]$/i.test(k.key)) return k.key.toLowerCase();
+  const m = /^Key([A-Z])$/.exec(k.code ?? "");
+  return m && k.key.length === 1 ? m[1]!.toLowerCase() : k.key.toLowerCase();
+}
+/** The digit of Ctrl+1/2/3: positional (Strata's), so AZERTY's "&" on the 1 key is still a 1. */
+const digitOf = (k: Pick<KeyIn, "key" | "code">): string => /^(?:Digit|Numpad)([0-9])$/.exec(k.code ?? "")?.[1] ?? k.key;
+const VIEWS = { "1": "columns", "2": "icons", "3": "list" } as const;
+
+/**
+ * Chords of the app's window that Strata does nothing with while a name is being typed or a dialog is up
+ * (F5, Ctrl+K, Ctrl+Shift+K, Ctrl+Alt+T, Ctrl+\): the finder swallows them so the app's own handler does not act either.
+ */
+export function windowChord(k: KeyIn): boolean {
+  const c = k.ctrl || k.meta;
+  const low = latin(k);
+  if (k.key === "F5") return !c && !k.alt && !k.shift;
+  if (!c) return false;
+  if (low === "k") return !k.alt;
+  if (low === "t") return k.alt && !k.shift;
+  return k.key === "\\" && !k.alt && !k.shift;
+}
+
+/** Delete in a folder: the Trash empties for good (a confirmation), anywhere else it goes to the Trash at once. A volume with no Trash is the server's to say. */
+export const deleteAct = (dir: string, shift: boolean): "trash" | "delete" => (shift || inTrash(dir) ? "delete" : "trash");
+
+export function finderKey(raw: KeyIn, ctx: Ctx): Act | null {
+  // Exact match over Ctrl/Alt/Shift/Super: Super held with anything is no chord of ours.
+  if (raw.meta && (raw.ctrl || !ctx.mac)) return null;
+  const k = raw.meta ? { ...raw, ctrl: true, meta: false } : raw;
+  const low = latin(k);
   if (k.key === "F1") return { t: "help" };
   // F5 alone: Strata's exact match, so Ctrl+F5 and Shift+F5 do nothing here.
-  if (k.key === "F5") return !k.ctrl && !k.meta && !k.alt && !k.shift ? { t: "refresh" } : null;
-  if (ctx.inField) return null;
+  if (k.key === "F5") return !k.ctrl && !k.alt && !k.shift ? { t: "refresh" } : null;
+  if (ctx.inField) {
+    // The pane's filter hands these on (Strata's text_has_focus): the view keys keep the focus in the filter, rename takes the cursor row.
+    if (!ctx.inFilter) return null;
+    if (k.ctrl && !k.alt && !k.shift && VIEWS[digitOf(k) as "1"]) return { t: "view", view: VIEWS[digitOf(k) as "1"] };
+    if (k.key === "F2" && !k.ctrl && !k.alt && !k.shift) return { t: "rename" };
+    if (k.ctrl && !k.alt && !k.shift && low === "r") return { t: "rename" };
+    return null;
+  }
+  // A preview document keeps its own select-all, copy, cut, paste and arrows.
+  if (ctx.inPreview) {
+    if (k.ctrl && !k.alt && !k.shift && low === "f") return { t: "pfind", do: "open" };
+    if (ctx.previewFind && !k.ctrl && !k.alt) {
+      if (k.key === "Enter") return { t: "pfind", do: k.shift ? "prev" : "next" };
+      if (k.key === "Escape" && !k.shift) return { t: "pfind", do: "close" };
+    }
+    if (k.ctrl && !k.alt && !k.shift && (low === "a" || low === "c" || low === "x" || low === "v")) return null;
+    if (!k.ctrl && !k.alt && MOVES.has(k.key)) return null;
+  }
   // Strata's Ctrl+Alt+T: a terminal in the folder the finder is looking at.
-  if (k.key.toLowerCase() === "t" && k.ctrl && k.alt && !k.shift && !k.meta) return { t: "terminal" };
+  if (low === "t" && k.ctrl && k.alt && !k.shift) return { t: "terminal" };
+  // Shift+Up / Shift+Down extend the range, with Ctrl or Alt held as well (Strata's extend_selection ignores them).
+  if (k.shift && (k.key === "ArrowUp" || k.key === "ArrowDown")) return { t: "extend", by: k.key === "ArrowUp" ? "up" : "down" };
   // The file operations (Strata's keys). Ctrl+C copies the FILES. Strata's bare y and p are its 10xer mode's, off by default: there a letter is the filter's.
-  if (k.key === "F2" && !k.ctrl && !k.meta && !k.alt && !k.shift) return { t: "rename" };
-  if (k.key === "Delete" && !k.ctrl && !k.meta && !k.alt) return k.shift ? { t: "delete" } : { t: "trash" };
-  if ((k.ctrl || k.meta) && k.alt && !k.shift && k.key.toLowerCase() === "n") return { t: "folderwith" };
-  if ((k.ctrl || k.meta) && k.shift && !k.alt && k.key.toLowerCase() === "n") return { t: "newfolder" };
+  if (k.key === "F2" && !k.ctrl && !k.alt && !k.shift) return { t: "rename" };
+  if (k.key === "Delete" && !k.ctrl && !k.alt) return k.shift ? { t: "delete" } : { t: "trash" };
+  if (k.ctrl && k.alt && !k.shift && low === "n") return { t: "folderwith" };
+  if (k.ctrl && k.shift && !k.alt && low === "n") return { t: "newfolder" };
   // Folder tabs (Strata's): Ctrl+T new, Ctrl+W close, Ctrl+Tab / Ctrl+Shift+Tab / Ctrl+PageDown / Ctrl+PageUp step, Ctrl+Enter opens the chosen folder in a new one.
-  if ((k.ctrl || k.meta) && !k.alt) {
-    const low = k.key.toLowerCase();
+  if (k.ctrl && !k.alt) {
     if (!k.shift && low === "t") return { t: "newtab" };
     if (!k.shift && low === "w") return { t: "closetab" };
     if (k.key === "Tab") return { t: "tab", by: k.shift ? -1 : 1 };
     if (!k.shift && (k.key === "PageDown" || k.key === "PageUp")) return { t: "tab", by: k.key === "PageDown" ? 1 : -1 };
-    if (!k.shift && k.key === "Enter") return { t: "opentab" };
+    // Ctrl+Shift+Enter is a tab too ("Ctrl wins", Strata's keyboard/items.rs).
+    if (k.key === "Enter") return { t: "opentab" };
     if (k.shift && low === "b") return { t: "sidefocus" };
     if (!k.shift && k.key === ",") return { t: "settings" };
     if (k.shift && (k.key === "PageUp" || k.key === "PageDown")) return { t: "tabmove", by: k.key === "PageDown" ? 1 : -1 };
@@ -117,7 +183,7 @@ export function finderKey(k: KeyIn, ctx: Ctx): Act | null {
       default: return null;
     }
   }
-  if (!k.ctrl && !k.meta && k.shift && !k.alt) {
+  if (!k.ctrl && k.shift && !k.alt) {
     switch (k.key) {
       case "ArrowUp": return { t: "extend", by: "up" };
       case "ArrowDown": return { t: "extend", by: "down" };
@@ -134,20 +200,18 @@ export function finderKey(k: KeyIn, ctx: Ctx): Act | null {
       default: return [...k.key].length === 1 ? { t: "find", ch: k.key } : null;
     }
   }
-  if ((k.ctrl || k.meta) && !k.alt) {
-    const low = k.key.toLowerCase();
+  if (k.ctrl && !k.alt) {
     // Strata's redo: Ctrl+Shift+Z or Ctrl+Y.
     if ((k.shift && low === "z") || (!k.shift && low === "y")) return { t: "redo" };
   }
-  if (k.ctrl || k.meta) {
+  if (k.ctrl) {
     if (k.shift) return null;
     if (k.key === " ") return { t: "toggle" };
-    switch (k.key.toLowerCase()) {
+    const view = VIEWS[digitOf(k) as "1"];
+    if (view) return { t: "view", view };
+    switch (low) {
       case "h": case ".": return { t: "hidden" };
       case "f": return { t: "filter" };
-      case "1": return { t: "view", view: "columns" };
-      case "2": return { t: "view", view: "icons" };
-      case "3": return { t: "view", view: "list" };
       case "arrowup": return { t: "move", key: "Home" };
       case "arrowdown": return { t: "move", key: "End" };
       case "a": return { t: "all" };
@@ -177,9 +241,9 @@ export function finderKey(k: KeyIn, ctx: Ctx): Act | null {
 /** The app's own chords the finder takes while it has the keys, because they are Strata's there: the three views and the text size. */
 export function finderOwnsChord(k: KeyIn): boolean {
   if (!(k.ctrl || k.meta) || k.alt) return false;
-  // Ctrl+Shift+digit and Ctrl+Shift+Page Up / Down are Strata's tab keys.
-  if (k.shift) return /^Digit[0-9]$/.test(k.code ?? "") || k.key === "PageUp" || k.key === "PageDown";
-  return ["1", "2", "3", "=", "+", "-", "0", ","].includes(k.key);
+  // Ctrl+Shift+digit, Ctrl+Shift+Page Up / Down and Ctrl+Shift+Enter are Strata's tab keys.
+  if (k.shift) return /^Digit[0-9]$/.test(k.code ?? "") || k.key === "PageUp" || k.key === "PageDown" || k.key === "Enter";
+  return ["1", "2", "3", "=", "+", "-", "0", ","].includes(k.key) || /^(?:Digit|Numpad)[123]$/.test(k.code ?? "");
 }
 
 /**
@@ -224,3 +288,24 @@ export const upFromFirst = (s: { filterOpen: boolean; header: boolean }): "filte
  * these through: stopping every key at the dialog made the Trash list swallow the shortcut that closes it.
  */
 export const isAppChord = (e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): boolean => (e.ctrlKey || e.metaKey) && e.shiftKey;
+
+/**
+ * A pane's open filter field (Strata's): what a key does with the query and the results it narrowed to.
+ * "type" is the field's own; "stay" is swallowed (Up, and Down with no match); the rest are done by the finder.
+ * Shift+Space always types a space; Space with a result selected acts as the listing's Space; Enter and Right with a query activate the current result.
+ */
+export type FilterAct = "type" | "stay" | "done" | "space" | "down" | "activate";
+export function filterKey(k: { key: string; ctrl?: boolean; meta?: boolean; shift?: boolean; alt?: boolean }, s: { value: string; results: number; selected: boolean }): FilterAct {
+  const mod = !!(k.ctrl || k.meta || k.alt);
+  if (k.key === "Escape") return "done";
+  if (k.key === "Backspace" && s.value === "" && !mod) return "done";
+  if (mod) return "type";
+  if (k.key === " ") return s.selected && !k.shift ? "space" : "type";
+  if (k.key === "ArrowDown") return s.results > 0 && !k.shift ? "down" : "stay";
+  if (k.key === "ArrowUp" && !k.shift) return "stay";
+  if ((k.key === "Enter" || k.key === "ArrowRight") && !k.shift) return s.value !== "" && s.results > 0 ? "activate" : k.key === "Enter" ? "stay" : "type";
+  return "type";
+}
+
+/** A press while a pane's filter is open: the field itself, the funnel that toggles it, and the pane's own rows (the results it narrowed to) keep it; anywhere else dismisses it. */
+export const filterKeptBy = (t: { inField: boolean; inToggle: boolean; inResults: boolean }): boolean => t.inField || t.inToggle || t.inResults;

@@ -64,7 +64,7 @@ export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, o
   /** The place ids hidden with Unpin, and what a row's menu does. */
   hidden?: readonly string[]; onSideAct?: (act: SideAct, t: SideTarget) => void;
   width: number; onResize: (w: number) => void;
-  onGo: (path: string) => void; onRecent: () => void; onTrash: () => void; onNetwork?: () => void;
+  onGo: (path: string, byKey?: boolean) => void; onRecent: () => void; onTrash: () => void; onNetwork?: () => void;
   /** The finder's drag handlers: a place with data-drop-path takes what is dropped on it, and Trash takes it to the trash. */
   dnd?: React.HTMLAttributes<HTMLElement>;
 }) {
@@ -75,7 +75,8 @@ export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, o
   const menuOf = (t: SideTarget) => ({
     onContextMenu: (e: React.MouseEvent) => { e.preventDefault(); if (sideMenu(t).length) setMenu({ t, at: new DOMRect(e.clientX, e.clientY, 1, 1) }); },
     onKeyDown: (e: React.KeyboardEvent<HTMLElement>) => {
-      if (e.key !== "ContextMenu" && !(e.key === "F10" && e.shiftKey)) return;
+      // The Menu key and Shift+F10 only: Shift+Menu and Ctrl+Menu open nothing (Strata).
+      if (e.ctrlKey || e.altKey || e.metaKey || (e.key === "ContextMenu" ? e.shiftKey : !(e.key === "F10" && e.shiftKey))) return;
       e.preventDefault(); e.stopPropagation();
       const r = e.currentTarget.getBoundingClientRect();
       if (sideMenu(t).length) setMenu({ t, at: new DOMRect(r.left + 24, r.bottom - 4, 1, 1) });
@@ -87,7 +88,7 @@ export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, o
     return (
       <button key={p.id} data-side-row data-drop-path={p.path && !off && p.id !== "recent" && p.id !== "trash" ? p.path : undefined} data-drop-trash={p.id === "trash" ? "" : undefined} disabled={off} aria-current={on ? "true" : undefined} aria-label={rail ? p.label : undefined} title={p.off ?? (rail ? p.label : undefined)}
         {...menuOf(pin ? { kind: "pin", uri: pin.uri, path: pin.path } : { kind: "place", id: p.id, path: p.id === "trash" || p.id === "network" ? undefined : p.path })}
-        onClick={(e) => activates(e.button, "click") && (p.id === "recent" ? onRecent() : p.id === "trash" ? onTrash() : p.id === "network" ? onNetwork?.() : p.path && onGo(p.path))}
+        onClick={(e) => activates(e.button, "click") && (p.id === "recent" ? onRecent() : p.id === "trash" ? onTrash() : p.id === "network" ? onNetwork?.() : p.path && onGo(p.path, e.detail === 0))}
         className={`agx-btn w-full flex items-center ${rail ? "justify-center" : "gap-2 px-2.5"} rounded-md text-left disabled:cursor-not-allowed`}
         style={{ minHeight: rail ? 28 : 26, color: off ? "var(--text4)" : on ? "var(--text)" : "var(--text2)", fontWeight: on ? 600 : 400, background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : undefined }}>
         <span className="shrink-0 flex" style={{ color: "var(--primary-ink)" }}><PlaceIcon p={p} /></span>
@@ -115,7 +116,7 @@ export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, o
     );
     return (
       <div key={v.id} data-device={v.id} aria-disabled={inert || undefined} className="flex items-center rounded-md" style={{ opacity: inert ? 0.4 : undefined, cursor: inert ? "not-allowed" : undefined, background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : undefined, paddingRight: rail ? 0 : 2 }}>
-        <button type="button" data-side-row aria-current={on ? "true" : undefined} aria-label={rail ? v.name : undefined} title={rail ? v.name : v.mountPoint ?? undefined} aria-busy={(working && !inert) || undefined} disabled={inert} onClick={(e) => { if (activates(e.button, "click")) onVolume?.(v); }}
+        <button type="button" data-side-row data-drop-path={!inert && v.mountPoint ? v.mountPoint : undefined} aria-current={on ? "true" : undefined} aria-label={rail ? v.name : undefined} title={rail ? v.name : v.mountPoint ?? undefined} aria-busy={(working && !inert) || undefined} disabled={inert} onClick={(e) => { if (activates(e.button, "click")) onVolume?.(v); }}
           {...(inert ? { onContextMenu: (e: React.MouseEvent) => e.preventDefault() } : menuOf({ kind: "device", volume: v }))}
           className={`agx-btn flex-1 min-w-0 flex items-center ${rail ? "justify-center" : "gap-2 px-2.5"} rounded-md text-left`}
           style={{ minHeight: rail ? 28 : 26, color: on ? "var(--text)" : "var(--text2)", fontWeight: on ? 600 : 400 }}>

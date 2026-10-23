@@ -34,7 +34,8 @@ describe("the keys", () => {
     expect(a.indexOf("if (ops.key(a.t)) return;")).toBeLessThan(a.indexOf("switch (a.t)"));
   });
   test("while a menu or a question is open the window handler leaves the keys alone", () => {
-    expect(code(fm)).toContain("searchingRef.current || opsOpen.current");
+    expect(code(fm)).toContain("if (searchingRef.current) return;");
+    expect(code(fm)).toContain("if (opsOpen.current) return;");
   });
 });
 
@@ -49,7 +50,8 @@ describe("a name is typed in place, as Strata does", () => {
   });
   test("a click elsewhere keeps a good name and drops a bad one; Escape always drops", () => {
     const f = code(ui).slice(code(ui).indexOf("export function InlineName("));
-    expect(f).toContain("onBlur={() => finish(!problem)}");
+    expect(f).toContain("onBlur={() => finish(inRow && !problem)}");
+    expect(f).toContain("outsidePress(inRow)");
     expect(f).toContain('e.key === "Escape"');
     expect(f).toContain("if (done.current) return;");
   });
@@ -94,7 +96,7 @@ describe("the context menu stays inside the window", () => {
   test("it is placed again when its size changes, not only when it opens", () => {
     const f = code(ui).slice(code(ui).indexOf("export function ContextMenu("), code(ui).indexOf("export function Sheet("));
     expect(f).toContain("new ResizeObserver(place)");
-    expect(f).toContain("window.innerHeight - h - 8");
+    expect(f).toContain("window.innerHeight - h - MENU_EDGE");
   });
 });
 

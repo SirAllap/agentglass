@@ -133,7 +133,7 @@ export function volumeOf(path: string, mounts: readonly string[]): string {
  * What a drop does (Strata's services/transfer_action.rs): Ctrl copies, Shift
  * moves, and with neither it moves on the same volume and copies across
  * volumes. Strata asks first across volumes (copy is its default answer); that
- * question is not here, its default is. A drop in the folder it came from does
+ * question is asked by the caller (dropAsks); the plan is its default. A drop in the folder it came from does
  * nothing unless it is a copy.
  */
 export function dropPlan(srcDir: string, names: readonly string[], dest: string, ctrl: boolean, more: { shift?: boolean; mounts?: readonly string[] } = {}): { op: "move" | "copy"; conflict: "keep-both" } | "nothing" | "inside" {
@@ -147,6 +147,14 @@ export function dropPlan(srcDir: string, names: readonly string[], dest: string,
   return { op: ctrl ? "copy" : more.shift ? "move" : across ? "copy" : "move", conflict: "keep-both" };
 }
 
+/** Strata's default transfer strategy is Ask: a drop with no modifier across volumes asks before it copies (copy is the default answer). */
+export function dropAsks(srcDir: string, dest: string, ctrl: boolean, more: { shift?: boolean; mounts?: readonly string[] } = {}): boolean {
+  return !ctrl && !more.shift && !!more.mounts && volumeOf(srcDir, more.mounts) !== volumeOf(dest, more.mounts);
+}
+
+/** A press outside the name being typed: a rename keeps what was typed, a new entry is dropped (Strata's editor). */
+export const outsidePress = (renaming: boolean): "submit" | "cancel" => (renaming ? "submit" : "cancel");
+
 /** A name somebody typed for a rename or a new folder: the same rule the server holds, said before the round trip. */
 export function nameProblem(raw: string, taken: readonly string[], was?: string): string | null {
   const n = raw.trim();
@@ -159,6 +167,13 @@ export function nameProblem(raw: string, taken: readonly string[], was?: string)
 }
 
 /** The part of a name a rename selects first: the stem, not the extension, as Strata's editor does. */
+/** Strata's name for a folder made by the key: "new folder", then "new folder (1)", "new folder (2)"… against what is already there (case aside, as the server's rule is). */
+export function freeName(base: string, taken: readonly string[]): string {
+  const have = new Set(taken.map((n) => n.toLowerCase()));
+  if (!have.has(base)) return base;
+  for (let i = 1; ; i++) if (!have.has(`${base} (${i})`)) return `${base} (${i})`;
+}
+
 export function stemEnd(name: string): number {
   const dot = name.lastIndexOf(".");
   return dot > 0 ? dot : name.length;
