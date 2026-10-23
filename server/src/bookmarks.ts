@@ -77,3 +77,21 @@ export function toggleBookmark(path: unknown): { ok: boolean; error?: string; bo
   } catch (e) { return { ok: false, error: e instanceof Error ? e.message : "could not write the bookmarks" }; }
   return { ok: true, bookmarks: readBookmarks() };
 }
+
+/** Unpin one line by its address: the way a remote (sftp, smb) goes, which has no folder here to toggle. Nothing else is touched. */
+export function removeBookmarkUri(uri: unknown): { ok: boolean; error?: string; bookmarks?: Bookmark[] } {
+  if (typeof uri !== "string" || !/^[a-z][a-z0-9+.-]*:\/\//i.test(uri) || uri.includes("\n")) return { ok: false, error: "a place address is needed" };
+  const file = bookmarksFile();
+  let text = "";
+  try { text = readFileSync(file, "utf8"); } catch { return { ok: true, bookmarks: [] }; }
+  const lines = text.split("\n");
+  const at = lines.findIndex((l) => l.trim().split(/\s/)[0] === uri);
+  if (at < 0) return { ok: true, bookmarks: readBookmarks() };
+  lines.splice(at, 1);
+  try {
+    const tmp = file + ".agx-tmp";
+    writeFileSync(tmp, lines.join("\n"));
+    renameSync(tmp, file);
+  } catch (e) { return { ok: false, error: e instanceof Error ? e.message : "could not write the bookmarks" }; }
+  return { ok: true, bookmarks: readBookmarks() };
+}

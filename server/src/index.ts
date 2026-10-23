@@ -149,7 +149,7 @@ import { fileText, fileToTemp, fileTree, findFiles, grepFiles, listRefs, filesEx
 import { diskEnabled, diskFind, diskGrep, diskPlaces } from "./disk.ts";
 import { homeIndex } from "./homeindex.ts";
 import { browseBatch } from "./browselist.ts";
-import { readBookmarks, toggleBookmark } from "./bookmarks.ts";
+import { readBookmarks, removeBookmarkUri, toggleBookmark } from "./bookmarks.ts";
 import { actOnDevice, devicePolicy, ensureDeviceWatch, listDevices, type DeviceAct } from "./volumes.ts";
 import { Sessions, discoverNetwork, gvfsDir, remotePolicy, remotesFromMounts } from "./remotes.ts";
 import { runTool } from "./volumes.ts";
@@ -7602,9 +7602,9 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         if (!trustedCaller(req, from)) return csrfBlocked();
         if (!fsWantsJson(req.headers.get("content-type"))) return json({ ok: false, error: "send application/json" }, 415);
         if (!(deskHeld() && deskKeyOk(req))) return json({ ok: false, error: "only the desktop app pins a place for a person" }, 403);
-        let b: { path?: unknown } = {};
-        try { b = (await req.json()) as { path?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
-        const r = toggleBookmark(b?.path);
+        let b: { path?: unknown; uri?: unknown } = {};
+        try { b = (await req.json()) as { path?: unknown; uri?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+        const r = b?.uri !== undefined ? removeBookmarkUri(b.uri) : toggleBookmark(b?.path);
         return json(r, r.ok ? 200 : 400);
       }
       if (pathname === "/preview/reveal" && req.method === "POST") {

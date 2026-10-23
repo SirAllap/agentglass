@@ -3,7 +3,9 @@
 // with a sentence that says "only the desktop app", whoever is asking.
 
 /** Routes that take the desk key. A prefix ends in a slash or is a whole path. */
-export const DESK_GATED: readonly string[] = ["/finder/bookmarks"];
+export const DESK_GATED: readonly string[] = [
+  "/finder/bookmarks", "/finder/remotes/", "/finder/devices/", "/finder/actions/", "/finder/openwith/launch", "/fs/op",
+];
 
 export function deskGated(path: string): boolean {
   const p = path.split("?")[0]!;

@@ -20,7 +20,9 @@ export function Popover({ anchor, onClose, width = 220, children, label }: { anc
   const [at, setAt] = useState<{ left: number; top: number } | null>(null);
   useLayoutEffect(() => {
     const h = el.current?.offsetHeight ?? 0;
-    const left = Math.max(8, Math.min(anchor.right - width, window.innerWidth - width - 8));
+    // A button's menu hangs from its right edge; a point (a right-click) opens to the right of the pointer, as Strata's does.
+    const from = anchor.width <= 1 ? anchor.left : anchor.right - width;
+    const left = Math.max(8, Math.min(from, window.innerWidth - width - 8));
     const below = anchor.bottom + 8;
     const top = below + h > window.innerHeight - 8 ? Math.max(8, anchor.top - 4 - h) : below;
     setAt({ left, top });
@@ -50,11 +52,11 @@ export function MenuCap({ children }: { children: ReactNode }) {
 }
 
 /** `icon`: the name of one of Strata's action icons, drawn in the accent before the label, as Strata's menus do. */
-export function MenuItem({ children, onClick, on, hint, disabled, icon }: { children: ReactNode; onClick: () => void; on?: boolean; hint?: string; disabled?: boolean; icon?: string }) {
+export function MenuItem({ children, onClick, on, hint, disabled, icon, danger }: { children: ReactNode; onClick: () => void; on?: boolean; hint?: string; disabled?: boolean; icon?: string; danger?: boolean }) {
   return (
     <button role="menuitemcheckbox" aria-checked={on} disabled={disabled} onClick={onClick}
-      className={`${MENU_ROW} flex items-center gap-2 px-3 text-left disabled:opacity-40`} style={{ minHeight: 34, color: "var(--text)" }}>
-      {icon && <span style={{ color: "var(--primary-ink)" }}><StrataIcon set="act" name={icon} size={ICON.sm} /></span>}
+      className={`${MENU_ROW} flex items-center gap-2 px-3 text-left disabled:opacity-40`} style={{ minHeight: 34, color: danger ? "var(--error-ink)" : "var(--text)" }}>
+      {icon && <span style={{ color: danger ? "var(--error-ink)" : "var(--primary-ink)" }}><StrataIcon set="act" name={icon} size={ICON.sm} /></span>}
       <span className="flex-1 min-w-0 truncate">{children}</span>
       {hint && <span className="text-[10.5px]" style={{ color: "var(--text4)" }}>{hint}</span>}
       <span aria-hidden className="w-3 flex justify-center" style={{ color: "var(--primary-ink)" }}>{on ? <DoneIcon size={ICON.xs} /> : null}</span>

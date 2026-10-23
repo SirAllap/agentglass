@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import { SECTIONS, filterShortcuts, keyLabel } from "../../../lib/finderShortcuts.ts";
 import { TEXT_MAX, TEXT_MIN, THUMB_DEFAULT, THUMB_MAX, THUMB_MIN, resetSort, type Prefs, type SortDir, type SortKey } from "../../../lib/finderMiller.ts";
+import { withHidden } from "../../../lib/finderSidebarMenu.ts";
 import { PAGES, ROWS, filterRows, pagesWith, toggleValue, type PageId, type Row } from "../../../lib/finderSettingsModel.ts";
 import { StrataIcon } from "./StrataIcon.tsx";
 import { useBox } from "./useBox.ts";
@@ -72,6 +73,7 @@ export function FinderSettings({ prefs, onPref, onReset, onForget, onClose, say 
     switch (r.kind) {
       case "manager": return null;
       case "toggle": return <Switch on={toggleValue(prefs, r.id)} label={r.title} onClick={() => onPref({ [r.id]: !prefs[r.id] } as Partial<Prefs>)} />;
+      case "place": { const id = r.id.slice(6); const off = prefs.hiddenPlaces.includes(id); return <Switch on={!off} label={r.title} onClick={() => onPref({ hiddenPlaces: withHidden(prefs.hiddenPlaces, id, !off) })} />; }
       case "button": return <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE }} onClick={r.id === "reset" ? onReset : onForget}>{r.action}</button>;
       case "sort": return (
         <span className="flex items-center gap-1.5">

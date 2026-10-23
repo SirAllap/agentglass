@@ -68,4 +68,13 @@ describe("who may pin a place", () => {
     expect((await pin("/home/ann/orbit", person())).status).toBe(200);
     expect(await list()).toEqual([]);
   });
+  test("a pinned remote is unpinned by its address, and every other line stays", async () => {
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(file(), "# mine\nfile:///home/ann/orbit orbit\nsftp://ann@10.0.0.7/home/ann Workstation\n");
+    const gone = (uri: string, headers: Record<string, string>) => fetch(`${base}/finder/bookmarks`, { method: "POST", headers: { "content-type": "application/json", ...AUTH, ...headers }, body: JSON.stringify({ uri }) });
+    expect((await gone("sftp://ann@10.0.0.7/home/ann", {})).status).toBe(403);
+    expect((await gone("sftp://ann@10.0.0.7/home/ann", person())).status).toBe(200);
+    expect(readFileSync(file(), "utf8")).toBe("# mine\nfile:///home/ann/orbit orbit\n");
+    expect((await gone("not a uri", person())).status).toBe(400);
+  });
 });

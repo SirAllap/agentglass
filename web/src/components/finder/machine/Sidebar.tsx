@@ -11,8 +11,9 @@ import { joinPath, RECENT, type SidebarMode } from "../../../lib/finderMiller.ts
 import type { DiskPlace, PinnedPlace, Volume } from "../../../../../shared/types.ts";
 import { useState } from "react";
 import { Popover, MenuItem } from "./Popover.tsx";
-import { deviceIcon, disconnectItem, lockButton, releaseButton, type LockButton, type ReleaseButton } from "../../../lib/finderVolumes.ts";
+import { deviceIcon, lockButton, releaseButton, type LockButton, type ReleaseButton } from "../../../lib/finderVolumes.ts";
 import { LINE } from "../../workspace/Chrome.tsx";
+import { sideMenu, visiblePlaces, type SideAct, type SideTarget } from "../../../lib/finderSidebarMenu.ts";
 
 /** Strata's default order: home, trash, network, recent, desktop, documents, downloads, music, pictures, videos. */
 const XDG = ["Desktop", "Documents", "Downloads", "Music", "Pictures", "Videos"] as const;
@@ -41,13 +42,15 @@ export function pinnedOnly(pins: readonly PinnedPlace[], places: readonly Place[
 }
 
 /** What a button at the end of a DEVICES row asks for. */
-export type VolumeAsk = LockButton["act"] | ReleaseButton["act"];
+export type VolumeAsk = LockButton["act"] | ReleaseButton["act"] | "mount";
 
-export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, onGo, onRecent, onNetwork, onTrash, dnd, volumes = [], busy, onVolume, onVolumeAct }: {
+export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, onGo, onRecent, onNetwork, onTrash, dnd, volumes = [], busy, onVolume, onVolumeAct, hidden = [], onSideAct }: {
   places: Place[]; pins: readonly PinnedPlace[]; onRemote?: (uri: string) => void; here: string; mode: Exclude<SidebarMode, "hidden">;
   /** The DEVICES section: drawn only when there is a volume, as in Strata. `busy` is the ids with an action under way. */
   volumes?: readonly Volume[]; busy?: ReadonlySet<string>; onVolume?: (v: Volume) => void; onVolumeAct?: (v: Volume, ask: VolumeAsk) => void;
   /** Pixels, from lib/finderColumns `sidebarWidth`: the rail's fixed width or what was dragged. */
+  /** The place ids hidden with Unpin, and what a row's menu does. */
+  hidden?: readonly string[]; onSideAct?: (act: SideAct, t: SideTarget) => void;
   width: number; onResize: (w: number) => void;
   onGo: (path: string) => void; onRecent: () => void; onTrash: () => void; onNetwork?: () => void;
   /** The finder's drag handlers: a place with data-drop-path takes what is dropped on it, and Trash takes it to the trash. */
@@ -55,12 +58,23 @@ export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, o
 }) {
   const rail = mode === "rail";
   const shownPins = pinnedOnly(pins, places);
-  const [menu, setMenu] = useState<{ v: Volume; at: DOMRect } | null>(null);
-  const row = (p: Place) => {
+  const [menu, setMenu] = useState<{ t: SideTarget; at: DOMRect } | null>(null);
+  /** The row's own menu: the right button opens it at the pointer, the Menu key and Shift+F10 at the row. A row with nothing to offer opens none, and the browser's menu never shows. */
+  const menuOf = (t: SideTarget) => ({
+    onContextMenu: (e: React.MouseEvent) => { e.preventDefault(); if (sideMenu(t).length) setMenu({ t, at: new DOMRect(e.clientX, e.clientY, 1, 1) }); },
+    onKeyDown: (e: React.KeyboardEvent<HTMLElement>) => {
+      if (e.key !== "ContextMenu" && !(e.key === "F10" && e.shiftKey)) return;
+      e.preventDefault(); e.stopPropagation();
+      const r = e.currentTarget.getBoundingClientRect();
+      if (sideMenu(t).length) setMenu({ t, at: new DOMRect(r.left + 24, r.bottom - 4, 1, 1) });
+    },
+  });
+  const row = (p: Place, pin?: PinnedPlace) => {
     const on = !!p.path && (here === p.path);
     const off = !!p.off;
     return (
       <button key={p.id} data-drop-path={p.path && !off && p.id !== "recent" && p.id !== "trash" ? p.path : undefined} data-drop-trash={p.id === "trash" ? "" : undefined} disabled={off} aria-current={on ? "true" : undefined} aria-label={rail ? p.label : undefined} title={p.off ?? (rail ? p.label : undefined)}
+        {...menuOf(pin ? { kind: "pin", uri: pin.uri, path: pin.path } : { kind: "place", id: p.id, path: p.id === "trash" || p.id === "network" ? undefined : p.path })}
         onClick={() => (p.id === "recent" ? onRecent() : p.id === "trash" ? onTrash() : p.id === "network" ? onNetwork?.() : p.path && onGo(p.path))}
         className={`agx-btn w-full flex items-center ${rail ? "justify-center" : "gap-2 px-2.5"} rounded-md text-left disabled:cursor-not-allowed`}
         style={{ minHeight: rail ? 28 : 26, color: off ? "var(--text4)" : on ? "var(--text)" : "var(--text2)", fontWeight: on ? 600 : 400, background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : undefined }}>
@@ -71,7 +85,7 @@ export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, o
   };
   /** A pinned remote (sftp, smb): it has no folder here until it is connected, so the row asks the address flow to open it. */
   const remote = (b: PinnedPlace) => (
-    <button key={`pin:${b.uri}`} type="button" aria-label={rail ? b.label : undefined} title={b.uri} onClick={() => onRemote?.(b.uri)}
+    <button key={`pin:${b.uri}`} type="button" aria-label={rail ? b.label : undefined} title={b.uri} onClick={() => onRemote?.(b.uri)} {...menuOf({ kind: "pin", uri: b.uri })}
       className={`agx-btn w-full flex items-center ${rail ? "justify-center" : "gap-2 px-2.5"} rounded-md text-left`} style={{ minHeight: rail ? 28 : 26, color: "var(--text2)" }}>
       <span className="shrink-0 flex" style={{ color: "var(--primary-ink)" }}><StrataIcon set="act" name="folder" size={ICON.md} /></span>
       {!rail && <span className="truncate">{b.label}</span>}
@@ -90,7 +104,7 @@ export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, o
     return (
       <div key={v.id} data-device={v.id} className="flex items-center rounded-md" style={{ background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : undefined, paddingRight: rail ? 0 : 2 }}>
         <button type="button" aria-current={on ? "true" : undefined} aria-label={rail ? v.name : undefined} title={rail ? v.name : v.mountPoint ?? undefined} aria-busy={working || undefined} onClick={() => onVolume?.(v)}
-          onContextMenu={(e) => { if (!disconnectItem(v)) return; e.preventDefault(); setMenu({ v, at: new DOMRect(e.clientX, e.clientY, 1, 1) }); }}
+          {...menuOf({ kind: "device", volume: v })}
           className={`agx-btn flex-1 min-w-0 flex items-center ${rail ? "justify-center" : "gap-2 px-2.5"} rounded-md text-left`}
           style={{ minHeight: rail ? 28 : 26, color: on ? "var(--text)" : "var(--text2)", fontWeight: on ? 600 : 400 }}>
           <span className="shrink-0 flex" style={{ color: "var(--primary-ink)" }}><StrataIcon set="act" name={deviceIcon(v)} size={ICON.md} /></span>
@@ -105,10 +119,10 @@ export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, o
     <div className="relative shrink-0 flex min-h-0" style={{ width }}>
       <nav aria-label="Places" data-mode={mode} {...dnd} className="agx-scroll overflow-y-auto overflow-x-hidden flex-1 min-w-0 py-1.5 px-1 text-[12px] flex flex-col gap-0.5"
         style={{ borderRight: LINE, background: "var(--surface-nav)" }}>
-        {places.map(row)}
+        {visiblePlaces(places, hidden).map((p) => row(p))}
         {shownPins.length > 0 && !rail && <div className="px-2.5 pt-2 pb-0.5 text-[10px] uppercase" style={{ color: "var(--text4)" }}>Pinned</div>}
         {shownPins.length > 0 && rail && <div role="separator" className="mx-1 my-1" style={{ borderTop: LINE }} />}
-        {shownPins.map((b) => (b.path ? row({ id: `pin:${b.path}`, label: b.path.slice(b.path.lastIndexOf("/") + 1) || b.path, path: b.path }) : remote(b)))}
+        {shownPins.map((b) => (b.path ? row({ id: `pin:${b.path}`, label: b.path.slice(b.path.lastIndexOf("/") + 1) || b.path, path: b.path }, b) : remote(b)))}
         {volumes.length > 0 && (
           <>
             <div role="separator" style={{ borderTop: LINE, margin: rail ? "6px 2px" : "6px 0" }} />
@@ -118,8 +132,10 @@ export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, o
         )}
       </nav>
       {menu && (
-        <Popover anchor={menu.at} onClose={() => setMenu(null)} width={180} label="Device">
-          <MenuItem onClick={() => { const v = menu.v; setMenu(null); onVolumeAct?.(v, "unmount"); }}>{disconnectItem(menu.v)?.label}</MenuItem>
+        <Popover anchor={menu.at} onClose={() => setMenu(null)} width={190} label="Sidebar item">
+          {sideMenu(menu.t).map((i) => (
+            <MenuItem key={i.act} icon={i.icon} danger={i.danger} onClick={() => { const t = menu.t; setMenu(null); onSideAct?.(i.act, t); }}>{i.label}</MenuItem>
+          ))}
         </Popover>
       )}
       {!rail && (

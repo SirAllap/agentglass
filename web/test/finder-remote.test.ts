@@ -44,3 +44,28 @@ describe("typing an address", () => {
     expect(resolveAddress("smb://files.example.org/other", all)).toEqual({ kind: "connect", uri: "smb://files.example.org/other" });
   });
 });
+
+// The pinned "Workstation" (sftp://ann@10.0.0.7/home/ann) asked for a new connection, and the desktop app refused it,
+// while the same machine was already mounted under DEVICES under a shorter address.
+describe("a pinned address whose server is already mounted", () => {
+  const MP = "/run/user/1000/gvfs/sftp:host=10.0.0.7";
+  const bare = mk({ id: "sftp://10.0.0.7/", mountPoint: MP, remote: "sftp" });
+  test("a mount that names no user is the server for an address that does", () => {
+    expect(resolveAddress("sftp://ann@10.0.0.7/home/ann", [bare])).toEqual({ kind: "open", path: MP + "/home/ann" });
+  });
+  test("a mount that names another user is not", () => {
+    const bob = mk({ id: "sftp://bob@10.0.0.7/", mountPoint: MP + ",user=bob", remote: "sftp" });
+    expect(resolveAddress("sftp://ann@10.0.0.7/home/ann", [bob])).toEqual({ kind: "connect", uri: "sftp://ann@10.0.0.7/home/ann" });
+  });
+  test("the default port is the same server, another port is not", () => {
+    expect(resolveAddress("sftp://10.0.0.7:22/srv", [bare])).toEqual({ kind: "open", path: MP + "/srv" });
+    expect(resolveAddress("sftp://10.0.0.7:2222/srv", [bare]).kind).toBe("connect");
+  });
+  test("ssh:// and a different case are the same address", () => {
+    expect(resolveAddress("ssh://ann@10.0.0.7", [bare])).toEqual({ kind: "open", path: MP });
+    expect(resolveAddress("SFTP://Ann@10.0.0.7/x", [mk({ id: "sftp://ann@10.0.0.7/", mountPoint: MP, remote: "sftp" })])).toEqual({ kind: "open", path: MP + "/x" });
+  });
+  test("a mount with no folder of its own cannot be opened, so it is connected", () => {
+    expect(resolveAddress("sftp://10.0.0.7/", [mk({ id: "sftp://10.0.0.7/", remote: "sftp" })]).kind).toBe("connect");
+  });
+});

@@ -312,5 +312,9 @@ export function useFinderOps(env: OpsEnv) {
     </>
   );
 
-  return { clip, openTrash: () => setAsk({ k: "trash" }), contextAt, key, nodes, edit, dragStart, dragEnd, dropAllows, dropOn, hasMenu: !!menu || !!ask || !!edit };
+  /** A sidebar row's Properties and Customize…: the folder, named by its path. */
+  const openProps = (path: string) => { const at = path.lastIndexOf("/"); setAsk({ k: "props", path, dir: at > 0 ? path.slice(0, at) : "/", name: path.slice(at + 1) }); };
+  const openCustomize = (path: string) => setAsk({ k: "customize", paths: [path], names: [path.slice(path.lastIndexOf("/") + 1) || path], isDir: true });
+
+  return { clip, openProps, openCustomize, openTrash: () => setAsk({ k: "trash" }), contextAt, key, nodes, edit, dragStart, dragEnd, dropAllows, dropOn, hasMenu: !!menu || !!ask || !!edit };
 }

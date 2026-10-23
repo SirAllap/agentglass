@@ -45,6 +45,7 @@ import { Sidebar, placesFor } from "./Sidebar.tsx";
 import { useVolumeFlow } from "./useVolumeFlow.tsx";
 import { reopensPreview } from "../../../lib/finderPreview.ts";
 import { useBookmarks } from "./useBookmarks.ts";
+import { withHidden, type SideAct, type SideTarget } from "../../../lib/finderSidebarMenu.ts";
 import { useBox } from "./useBox.ts";
 
 const PREFS_KEY = "agentglass.finder.machine.prefs";
@@ -146,7 +147,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   const [note, setNote] = useState<string | null>(null);
   /* Enter and double-click on a file do what Strata does: hand it to the application the desktop has for its type. The bench opens only from the preview's "Open in nvim". */
   const openDefault = useCallback((path: string) => { void api.previewOpen(path).then((r) => { if (!r.ok) setNote(r.error || "Could not open that file"); }).catch(() => setNote("Could not open that file")); }, []);
-  const { places: pinned, pins, toggle: togglePinned } = useBookmarks(setNote);
+  const { places: pinned, pins, toggle: togglePinned, remove: removePinned } = useBookmarks(setNote);
   const [pathSignal, setPathSignal] = useState(0);
   const [version, setVersion] = useState(0);
   /** Columns somebody dragged, by folder: their width wins over the names' until they double-click the edge. */
@@ -591,6 +592,18 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   })();
 
   const tool = "agx-btn rounded-md grid place-items-center shrink-0";
+  /** What a sidebar row's menu does: hiding a place is Strata's Unpin on it, and Settings turns it back on. */
+  const onSideAct = (act: SideAct, t: SideTarget) => {
+    if (act === "unpin") {
+      if (t.kind === "place") { setPrefs({ hiddenPlaces: withHidden(prefs.hiddenPlaces, t.id, true) }); setNote(`Hid ${t.id[0]!.toUpperCase() + t.id.slice(1)} from the sidebar (Settings turns it back on)`); }
+      else if (t.kind === "pin") { if (t.path) togglePinned(t.path); else removePinned(t.uri); }
+      return;
+    }
+    const path = t.kind === "device" ? t.volume.mountPoint : t.path;
+    if (act === "customize" && path) ops.openCustomize(path);
+    else if (act === "properties" && path) ops.openProps(path);
+    else if (t.kind === "device" && act !== "customize" && act !== "properties") devices.onVolumeAct(t.volume, act);
+  };
   return (
     <div ref={root} data-machine-finder className="relative flex-1 min-h-0 min-w-0 flex flex-col" style={{ fontSize: prefs.textSize, color: "var(--text)" }}>
       <FinderTabs tabs={tabs} home={home} onNew={() => newTab()} onSelect={(i) => toTab(selectTab(tabs, i))} onClose={(i) => toTab(closeTab(tabs, i))} />
@@ -613,7 +626,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
       </div>
 
       <div className="flex-1 min-h-0 flex" style={{ background: COLUMNS_SURFACE }}>
-        {sideOn && <Sidebar places={placesFor(home, places)} pins={pinned} onRemote={devices.openAddress} here={trail[0]!} mode={compact || sideMode === "hidden" ? "full" : pathEditing ? "rail" : sideMode} width={sidebarWidth(compact || sideMode === "hidden" ? "full" : pathEditing || sideMode === "rail" ? "rail" : "full", prefs.sideW, box.w)} onResize={(w) => setPrefs({ sideW: sidebarWidth("full", w, box.w) })} onGo={go} onRecent={() => go(RECENT)} onTrash={ops.openTrash} onNetwork={devices.openNetwork} volumes={devices.volumes} busy={devices.busy} onVolume={devices.onVolume} onVolumeAct={devices.onVolumeAct} dnd={dnd} />}
+        {sideOn && <Sidebar places={placesFor(home, places)} pins={pinned} onRemote={devices.openAddress} here={trail[0]!} mode={compact || sideMode === "hidden" ? "full" : pathEditing ? "rail" : sideMode} width={sidebarWidth(compact || sideMode === "hidden" ? "full" : pathEditing || sideMode === "rail" ? "rail" : "full", prefs.sideW, box.w)} onResize={(w) => setPrefs({ sideW: sidebarWidth("full", w, box.w) })} onGo={go} onRecent={() => go(RECENT)} onTrash={ops.openTrash} onNetwork={devices.openNetwork} volumes={devices.volumes} busy={devices.busy} onVolume={devices.onVolume} onVolumeAct={devices.onVolumeAct} hidden={prefs.hiddenPlaces} onSideAct={onSideAct} dnd={dnd} />}
         {!(compact && sidePage) && (
           <>
             {/* With the preview beside the columns and nothing dragged, the columns take what their names ask for and the preview takes all that is left, as Strata's does; a gap between the two was the free room with nowhere to go. */}

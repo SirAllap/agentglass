@@ -20,10 +20,18 @@ export const PAGES: readonly { id: PageId; title: string; hint: string; icon: st
 export type Toggle = "peek" | "autoplay" | "renderDocs" | "preview" | "sizes" | "mirror" | "f1" | "hidden";
 export type Row =
   | { page: PageId; section: string; id: Toggle; kind: "toggle"; title: string; desc: string }
+  | { page: PageId; section: string; id: `place:${string}`; kind: "place"; title: string; desc: string }
   | { page: PageId; section: string; id: "defaultSort"; kind: "sort"; title: string; desc: string }
   | { page: PageId; section: string; id: "forget" | "reset"; kind: "button"; title: string; desc: string; action: string }
   | { page: PageId; section: string; id: "manager"; kind: "manager"; title: string; desc: string }
   | { page: PageId; section: string; id: "textSize" | "thumb" | "density"; kind: "stepper" | "slider" | "density"; title: string; desc: string };
+
+/** Strata's "Items shown in sidebar": the place id, its name, and Strata's own sentence. */
+const SHOWN: readonly (readonly [string, string, string])[] = [
+  ["home", "Home", "Show the Home folder in the sidebar."], ["trash", "Trash", "Show Trash in the sidebar."], ["network", "Network", "Show Network in the sidebar."], ["recent", "Recent", "Show Recent files in the sidebar."],
+  ["Desktop", "Desktop", "Show the Desktop folder in the sidebar."], ["Documents", "Documents", "Show the Documents folder in the sidebar."], ["Downloads", "Downloads", "Show the Downloads folder in the sidebar."],
+  ["Music", "Music", "Show the Music folder in the sidebar."], ["Pictures", "Pictures", "Show the Pictures folder in the sidebar."], ["Videos", "Videos", "Show the Videos folder in the sidebar."],
+];
 
 export const ROWS: readonly Row[] = [
   { page: "general", section: "Browsing", id: "peek", kind: "toggle", title: "Folder peeking", desc: "Preview folders on hover in Icons and List views." },
@@ -35,6 +43,7 @@ export const ROWS: readonly Row[] = [
   { page: "general", section: "Browsing", id: "hidden", kind: "toggle", title: "Show hidden files", desc: "List entries whose name starts with a dot. Ctrl+H toggles it." },
   { page: "general", section: "Browsing", id: "f1", kind: "toggle", title: "Show F1 Shortcuts button", desc: "The button in the footer. The key works either way." },
   { page: "general", section: "Browsing", id: "defaultSort", kind: "sort", title: "Default sort", desc: "What Reset to default sort in the column menu returns to." },
+  ...SHOWN.map(([id, name, desc]): Row => ({ page: "general", section: "Items shown in sidebar", id: `place:${id}`, kind: "place", title: `Show ${name} in sidebar`, desc })),
   { page: "general", section: "Reset", id: "forget", kind: "button", title: "Forget all folder settings", desc: "Clear where the finder was left: the folder, selection, scroll and dragged widths.", action: "Clear" },
   { page: "general", section: "Reset", id: "reset", kind: "button", title: "Reset finder settings", desc: "Put every finder setting back to what it was on first run.", action: "Reset" },
   { page: "appearance", section: "Text", id: "textSize", kind: "stepper", title: "Text size", desc: "Logical pixels." },

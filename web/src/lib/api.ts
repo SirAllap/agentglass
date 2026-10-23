@@ -1315,6 +1315,7 @@ const realApi = {
   /** The sidebar's pinned places: GTK's bookmarks file, read freely, changed with the desk key (server/src/bookmarks.ts). */
   bookmarks: () => get<{ ok: boolean; bookmarks: PinnedPlace[] }>("/finder/bookmarks").catch(() => ({ ok: false, bookmarks: [] as PinnedPlace[] })),
   bookmarkToggle: (path: string) => post<{ ok: boolean; error?: string; bookmarks?: PinnedPlace[] }>("/finder/bookmarks", { path }).catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) } as { ok: boolean; error?: string; bookmarks?: PinnedPlace[] })),
+  bookmarkRemove: (uri: string) => post<{ ok: boolean; error?: string; bookmarks?: PinnedPlace[] }>("/finder/bookmarks", { uri }).catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) } as { ok: boolean; error?: string; bookmarks?: PinnedPlace[] })),
   /** The person's own finder actions: matching and listing are reads; saving, deleting and running are the desk key's (server/src/finderactions.ts). */
   actionsMatch: (paths: string[], source: "selection" | "background") => get<{ ok: boolean; actions: FinderAction[] }>(`/finder/actions/match?source=${source}&${paths.map((p) => `path=${encodeURIComponent(p)}`).join("&")}`).catch(() => ({ ok: false, actions: [] as FinderAction[] })),
   actionsList: () => get<FinderActionList>("/finder/actions").catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e), actions: [], problems: [] } as FinderActionList)),
@@ -2757,6 +2758,7 @@ const demoApi: typeof realApi = {
   actionSave: () => D({ ok: false, error: "the demo has no filesystem" }),
   bookmarks: () => D({ ok: true, bookmarks: [] as PinnedPlace[] }),
   bookmarkToggle: () => D({ ok: false, error: "the demo has no filesystem" }),
+  bookmarkRemove: () => D({ ok: false, error: "the demo has no filesystem" }),
   actionDelete: () => D({ ok: false, error: "the demo has no filesystem" }),
   actionRun: () => D({ ok: false, error: "the demo has no filesystem" }),
   fsTrash: () => D({ ok: true, entries: [] }),

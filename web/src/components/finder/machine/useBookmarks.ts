@@ -35,5 +35,10 @@ export function useBookmarks(say: (note: string) => void) {
     setPlaces(toggledPlaces(before, path));
     void api.bookmarkToggle(path).then((r) => { if (r.ok && r.bookmarks) setPlaces(r.bookmarks); else { setPlaces(before); say(r.error || "Could not change the pinned places"); } });
   }, [say]);
-  return { places, pins: places.flatMap((b) => (b.path ? [b.path] : [])), toggle };
+  const remove = useCallback((uri: string) => {
+    const before = held.current;
+    setPlaces(before.filter((b) => b.uri !== uri));
+    void api.bookmarkRemove(uri).then((r) => { if (r.ok && r.bookmarks) setPlaces(r.bookmarks); else { setPlaces(before); say(r.error || "Could not change the pinned places"); } });
+  }, [say]);
+  return { remove, places, pins: places.flatMap((b) => (b.path ? [b.path] : [])), toggle };
 }

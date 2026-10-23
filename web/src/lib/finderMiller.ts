@@ -208,6 +208,8 @@ export interface Prefs {
   autoplay: boolean;
   /** Strata's "Render documents by default": Markdown and HTML open on the rendered view, not the source. */
   renderDocs: boolean;
+  /** The sidebar places the person hid with Unpin (Strata's "show in sidebar" switches), by id. */
+  hiddenPlaces: string[];
 }
 
 export interface SortChoice { sortKey: SortKey; sortDir: SortDir; foldersFirst: boolean }
@@ -230,7 +232,7 @@ export const TEXT_MAX = 18;
 
 export const DEFAULT_PREFS: Prefs = {
   view: "columns", preview: true, density: "compact", textSize: 13, hidden: false, group: false, sizes: true, sidebar: true, rail: false,
-  sortKey: "name", sortDir: "asc", foldersFirst: true, thumb: THUMB_DEFAULT, sideW: 201, readW: READ_WIDTH_DEFAULT, mirror: true, f1: true, peek: false, autoplay: false, renderDocs: true,
+  sortKey: "name", sortDir: "asc", foldersFirst: true, thumb: THUMB_DEFAULT, sideW: 201, readW: READ_WIDTH_DEFAULT, mirror: true, f1: true, peek: false, autoplay: false, renderDocs: true, hiddenPlaces: [],
 };
 
 function readSortChoice(v: unknown): SortChoice | null {
@@ -271,6 +273,7 @@ export function readPrefs(raw: string | null): Prefs {
     peek: flag(o.peek, d.peek),
     autoplay: flag(o.autoplay, d.autoplay),
     renderDocs: flag(o.renderDocs, d.renderDocs),
+    hiddenPlaces: Array.isArray(o.hiddenPlaces) ? o.hiddenPlaces.filter((x): x is string => typeof x === "string").slice(0, 40) : [],
   };
 }
 
