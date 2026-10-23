@@ -152,6 +152,9 @@ describe("the presence drawn over a driven tab", () => {
     const own = sel.slice(sel.indexOf("Where it landed"));
     expect(own).toContain('e.getAttribute("placeholder")');
     expect(own).not.toContain(".value");
+    // a rich-text editor's visible text IS what was typed: an editor is named by its label or nothing
+    expect(own).toMatch(/const editor = e\.isContentEditable[^;]*role[^;]*textbox/);
+    expect(own).toContain('(editor ? "" : e.innerText)');
   });
   test("travel grows with distance and stays inside its clamp", () => {
     expect(travelMs(0, 0)).toBe(260);

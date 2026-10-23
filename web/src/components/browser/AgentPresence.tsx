@@ -36,6 +36,8 @@ export function AgentPresence({ agent, landing, onToggle, quiet = false }: {
   const lap = useRef<Animation | null>(null);
   const last = useRef({ x: 48, y: 40 });
   const [live, setLive] = useState(agent.working > 0 && !agent.paused);
+  const liveRef = useRef(live);
+  liveRef.current = live;
   const [ghost, setGhost] = useState<{ x: number; y: number; label: string; travel: number; seq: number } | null>(null);
 
   /* Up while the agent works, and for a beat after: an agent works in bursts
@@ -57,7 +59,7 @@ export function AgentPresence({ agent, landing, onToggle, quiet = false }: {
       const kf = lapKeyframes(el.clientWidth, el.clientHeight);
       if (!kf.length || typeof s.animate !== "function") return;
       lap.current = s.animate(kf, { duration: LAP_MS, iterations: Infinity, easing: "linear" });
-      if (!live || calmNow()) lap.current.pause();
+      if (!liveRef.current || calmNow()) lap.current.pause();
     };
     const ro = new ResizeObserver(build);
     ro.observe(el);

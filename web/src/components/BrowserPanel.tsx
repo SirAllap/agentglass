@@ -202,6 +202,32 @@ export function __wakeFirstTab(on: boolean): void { wakeFirst = on; }
  */
 const CLOSE_CELL = 20;
 
+/**
+ * A small picture of an awake tab for the island's overview: at most 1.5 s
+ * (a hidden guest can take its time or never answer), an empty capture is no
+ * picture, and it is scaled to 480 px wide as a JPEG so five tabs are not five
+ * full-resolution PNGs held in memory.
+ */
+async function pictureOf(w: { capturePage(): Promise<{ toDataURL(): string }> } | undefined): Promise<string | null> {
+  if (!w) return null;
+  const shot = await Promise.race([
+    w.capturePage().then((i) => i.toDataURL()).catch(() => ""),
+    new Promise<string>((r) => setTimeout(() => r(""), 1500)),
+  ]);
+  if (!shot || shot.length < 64) return null;
+  try {
+    const img = new Image();
+    img.src = shot;
+    await img.decode();
+    if (!img.width) return null;
+    const k = Math.min(1, 480 / img.width);
+    const c = document.createElement("canvas");
+    c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+    c.getContext("2d")?.drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL("image/jpeg", 0.82);
+  } catch { return shot; }
+}
+
 export function BrowserView({ active: viewOn, scope }: {
   active: boolean;
   /**
@@ -581,10 +607,8 @@ export function BrowserView({ active: viewOn, scope }: {
   /* Where each tab's last act landed, for the drawn pointer. One slot in
      browserDrive, filled while this panel is up. */
   const [landings, setLandings] = useState<Record<string, ActLanding>>({});
-  useEffect(() => {
-    onActLanded((l) => setLandings((m) => ({ ...m, [l.tab]: l })));
-    return () => onActLanded(null);
-  }, []);
+  useEffect(() => onActLanded((l) => setLandings((m) => ({ ...m, [l.tab]: l }))), []);
+  const spaceName = useCallback((id: string) => profileName(profilesRef.current, id), []);
   const actsRef = useRef<Activity>(acts);
   actsRef.current = acts;
   /** §12: did the ask now being served say `--show`? Written by the ask handler
@@ -3016,15 +3040,15 @@ export function BrowserView({ active: viewOn, scope }: {
           */}
         {!classic && !IS_DEMO && (
           <BrowserIsland tabs={tabs} activeId={activeId} acts={acts}
-            spaceName={(id) => profileName(profilesRef.current, id)}
+            spaceName={spaceName}
             doing={active && landings[active.id] ? presenceLabel(landings[active.id]!.verb, landings[active.id]!.name, landings[active.id]!.key) : ""}
             address={active?.url && active.url !== BLANK ? displayUrl(active.url) : ""}
             canBack={!!active?.canBack} canForward={!!active?.canForward} loading={!!active?.loading}
-            onShow={show} onClose={close} onNew={() => setOmni("new")} onAddress={() => setOmni("edit")}
+            onShow={show} onClose={(id) => { close(id); setLandings((m) => { const { [id]: _gone, ...rest } = m; return rest; }); }} onNew={() => setOmni("new")} onAddress={() => setOmni("edit")}
             onBack={() => el()?.goBack()} onForward={() => el()?.goForward()} onReload={() => el()?.reload()} onStop={() => el()?.stop()}
             onMenu={(r) => { setMenuAtXY({ top: r.bottom + 6, right: Math.max(6, window.innerWidth - r.right) }); setMenuOpen(true); }}
             onToggle={(id) => { const a = actsRef.current[id]; if (a) dispatchAct({ type: "pause", tab: id, paused: !a.paused }); }}
-            picture={async (id) => { const w = els.current.get(id); if (!w) return null; try { return (await w.capturePage()).toDataURL(); } catch { return null; } }}
+            picture={(id) => pictureOf(els.current.get(id))}
             onTucked={setIslandTucked} />
         )}
         {hover && (

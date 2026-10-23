@@ -2091,8 +2091,12 @@ export function flashScript(plan: Exclude<FlashPlan, null>, ms = FLASH_MS): stri
     /* Where it landed and what the thing is CALLED, for the panel's pointer:
        a label, a placeholder or a short visible text, never a value, so what
        was typed into a field cannot ride out this way. */
+    /* Visible text only for what is not an editor: a contenteditable or a
+       role=textbox holds what the agent just typed, and a select holds every
+       option. Those are named by their label or nothing. */
+    const editor = e.isContentEditable || e.tagName === "INPUT" || e.tagName === "TEXTAREA" || e.tagName === "SELECT" || e.getAttribute("role") === "textbox";
     const name = (e.getAttribute("aria-label") || e.getAttribute("placeholder") || (e.labels && e.labels[0] && e.labels[0].innerText)
-      || (e.tagName === "INPUT" || e.tagName === "TEXTAREA" ? "" : e.innerText) || "").trim().replace(/\\s+/g, " ").slice(0, 40);
+      || (editor ? "" : e.innerText) || "").trim().replace(/\\s+/g, " ").slice(0, 40);
     return { kind: "ok", x: r.left, y: r.top, w: r.width, h: r.height, name };`;
   return plan.kind === "focus"
     ? `(() => { const e = document.activeElement; if (!e || e === document.body) return { kind: "none" }; ${body} })()`
@@ -2105,7 +2109,11 @@ export interface ActLanding { tab: string; verb: string; key: string; x: number;
 /* One slot, the idiom the bus uses: the panel draws the pointer, and this file
    must not import the panel. Nobody listening is the normal case off-desktop. */
 let landed: ((l: ActLanding) => void) | null = null;
-export function onActLanded(fn: ((l: ActLanding) => void) | null): void { landed = fn; }
+export function onActLanded(fn: (l: ActLanding) => void): () => void {
+  landed = fn;
+  // A second panel taking the slot is not undone by the first one leaving.
+  return () => { if (landed === fn) landed = null; };
+}
 
 function flashWhereActed(el: DrivableWebview, ask: BrowserAskFrame): void {
   const plan = flashPlan(ask);

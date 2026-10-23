@@ -93,7 +93,7 @@ export function BrowserIsland(p: IslandProps) {
       const state = list.some((t) => acts[t.id]?.paused) ? "yours" : list.some((t) => (acts[t.id]?.working ?? 0) > 0) ? "working" : held.length ? "idle" : "";
       return { profile, name: p.spaceName(profile), list, held: held.length, state };
     });
-  }, [tabs, acts, p]);
+  }, [tabs, acts, p.spaceName]); // eslint-disable-line react-hooks/exhaustive-deps
   const agents = useMemo(() => [...new Set(tabs.map((t) => acts[t.id]?.agent || t.agent).filter(Boolean) as string[])], [tabs, acts]);
   const heldTabs = tabs.filter((t) => acts[t.id]?.agent || t.agent).length;
   const heldBoxes = groups.filter((g) => g.held).length;
@@ -112,11 +112,15 @@ export function BrowserIsland(p: IslandProps) {
     void a.finished.catch(() => {}).finally(() => { img.remove(); c.classList.remove("is-hold"); });
   }, []);
 
+  const busy = useRef(false);
   const show = useCallback(async () => {
+    if (busy.current) return;
+    busy.current = true;
     const awake = tabs.filter((t) => !t.asleep);
     const got = await Promise.all(awake.map(async (t) => [t.id, await p.picture(t.id).catch(() => null)] as const));
     const next: Record<string, string> = {};
     for (const [id, src] of got) if (src) next[id] = src;
+    busy.current = false;
     setPics(next);
     setOpen(true);
     if (activeId && next[activeId]) requestAnimationFrame(() => fly(next[activeId]!, box.current?.querySelector(`[data-tab="${activeId}"]`) ?? null, true));
@@ -125,16 +129,23 @@ export function BrowserIsland(p: IslandProps) {
     const id = pick ?? activeId;
     if (id && pics[id]) fly(pics[id]!, box.current?.querySelector(`[data-tab="${id}"]`) ?? null, false);
     setOpen(false);
+    // the pictures go with the overview; they are taken fresh the next time
+    setTimeout(() => setPics({}), 600);
     if (pick && pick !== activeId) p.onShow(pick);
   }, [activeId, pics, fly, p]);
 
+  /* Escape is the overview's alone while it is up: other window handlers
+     (the address box, the panel) must not close something else on the same key. */
+  const hideRef = useRef(hide);
+  hideRef.current = hide;
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); hide(); } };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); hideRef.current(); } };
     window.addEventListener("keydown", onKey, true);
-    box.current?.querySelector<HTMLElement>(".agx-isl-card.is-on")?.focus({ preventScroll: true });
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [open, hide]);
+  }, [open]);
+  // focus lands on the page you were on once, when it opens, never again on a re-render
+  useEffect(() => { if (open) box.current?.querySelector<HTMLElement>(".agx-isl-card.is-on")?.focus({ preventScroll: true }); }, [open]);
 
   const cls = "agx-isl" + (open ? " is-open" : "") + (tucked ? " is-tucked" : "") + (yours ? " is-yours" : "") + (act?.paused ? " is-taken" : "");
   const dot = act?.paused ? "is-taken" : working ? "is-working" : "";
@@ -200,7 +211,7 @@ export function BrowserIsland(p: IslandProps) {
                       return (
                         <div key={t.id} data-tab={t.id} role="button" tabIndex={0}
                           className={"agx-isl-card" + (t.id === activeId ? " is-on" : "")}
-                          onClick={() => hide(t.id)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); hide(t.id); } }}>
+                          onClick={() => hide(t.id)} onKeyDown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); hide(t.id); } }}>
                           <div className={"agx-isl-thumb" + ((acts[t.id]?.working ?? 0) > 0 && !acts[t.id]!.paused ? " is-driven" : "")}>
                             {pics[t.id] ? <img src={pics[t.id]} alt="" /> : <span className="agx-isl-mono">{(t.title || host(t.url) || "?").slice(0, 1).toUpperCase()}{t.asleep && <small>Asleep</small>}</span>}
                             <button type="button" className="agx-isl-x" aria-label={`Close ${t.title || "tab"}`} onClick={(e) => { e.stopPropagation(); p.onClose(t.id); }}><CloseIcon size={12} /></button>
