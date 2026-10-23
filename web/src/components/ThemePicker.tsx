@@ -1,5 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { SettingRow, Toggle } from "./SettingRow.tsx";
+import { markReadsAtLabelSize } from "../lib/markSize.ts";
 import {
   THEMES, isDarkTheme, EXPERIMENTAL_THEME_IDS,
   themeMode, desktopPaletteName, onDesktopPalette,
@@ -110,7 +111,7 @@ function DesktopMark({ source }: { source: string }) {
     let live = true;
     fetch(`${SERVER}/desktop/logo`, { headers: authHeaders() })
       .then((r) => (r.ok ? r.text() : ""))
-      .then((t) => { if (live && t.startsWith("<svg")) setSvg(t); })
+      .then((t) => { if (live && t.startsWith("<svg") && markReadsAtLabelSize(t)) setSvg(t); })
       .catch(() => {});
     return () => { live = false; };
   }, []);
