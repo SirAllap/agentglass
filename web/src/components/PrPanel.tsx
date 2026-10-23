@@ -98,6 +98,8 @@ import { PeoplePick } from "./PeoplePick.tsx";
 import { listMembers } from "../lib/listMembers.ts";
 import { orderMembers } from "../lib/peopleOrder.ts";
 import { SCROLLBAR_CSS, LINEBTN_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, LineMenuCtx, type LinePick, type LineSel } from "./diff/DiffLines.tsx";
+import { GapRow } from "./diff/GapRow.tsx";
+import { expandHunks, reveal, type Reveals } from "../../../shared/diffGaps.ts";
 import { Toggle } from "./diff/DiffControls.tsx";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { Select } from "./Select.tsx";
@@ -1124,43 +1126,24 @@ function toFileChange(f: ParsedFile, i: number): FileChange {
   };
 }
 
-/**
- * The lines around a hunk, fetched on demand.
- *
- * A diff only carries what GitHub chose to send — three lines of context — so
- * the code just above a change is not in the payload at all and there is
- * nothing to reveal locally. Each expansion asks the server for that slice of
- * the file at this side of the pull request, twenty lines at a time, the way
- * GitHub's own chevrons work.
+/*
+ * The head side of a file, fetched once per file and commit and kept: every
+ * expander click after the first is arithmetic on these lines, not a request.
+ * The server reads it from the local checkout when it has the commit and from
+ * GitHub (one contents call, cached by sha) when it does not.
  */
-function ExpandContext({ root, number, path, from, to, side = "RIGHT" }: {
-  root: string; number: number; path: string; from: number; to: number; side?: "LEFT" | "RIGHT";
-}) {
-  const [lines, setLines] = useState<string[] | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  if (from > to) return null;
-  const load = async () => {
-    setBusy(true); setErr(null);
-    const r = await api.prFileSlice(root, number, path, side, from, to).catch(() => null);
-    setBusy(false);
-    if (!r?.ok || !r.lines) { setErr(r?.error || "Could not read that part of the file"); return; }
-    setLines(r.lines);
-  };
-  if (lines) {
-    return (
-      <div className="whitespace-pre px-3 py-0.5 text-[12px]" style={{ ...CODE_FONT_STYLE, color: "var(--text3)", background: "color-mix(in srgb, var(--border) 8%, transparent)" }}>
-        {lines.join("\n")}
-      </div>
-    );
+const headFiles = new Map<string, Promise<string[] | null>>();
+function headFile(root: string, number: number, path: string, sha: string): Promise<string[] | null> {
+  const key = `${root}\0${number}\0${sha}\0${path}`;
+  let p = headFiles.get(key);
+  if (!p) {
+    p = api.prFileSlice(root, number, path, "RIGHT").then((r) => (r?.ok && r.lines && !r.binary ? r.lines : null)).catch(() => null);
+    headFiles.set(key, p);
+    if (headFiles.size > 24) headFiles.delete(headFiles.keys().next().value as string);
+    // A failure is not worth keeping: the next click should try again.
+    void p.then((v) => { if (!v) headFiles.delete(key); });
   }
-  return (
-    <button onClick={load} disabled={busy} title={`Show lines ${from}-${to}`}
-      className="agx-btn w-full text-left px-3 py-0.5 text-[10.5px]"
-      style={{ color: err ? "var(--error)" : "var(--text3)", background: "color-mix(in srgb, var(--border) 10%, transparent)" }}>
-      {err ?? (busy ? "…" : `⌃⌄ Expand ${to - from + 1} line${to - from ? "s" : ""}`)}
-    </button>
-  );
+  return p;
 }
 
 /**
@@ -1218,12 +1201,13 @@ function ImageDiff({ root, number, path, status }: {
   );
 }
 
-function DiffPane({ file, split, wrap, onPick, sel, expand, rowAfter, permalink }: {
+function DiffPane({ file, split, wrap, onPick, sel, expandFrom, rowAfter, permalink }: {
   file: FileChange; split: boolean; wrap: boolean;
   onPick?: (p: LinePick) => void; sel?: LineSel;
-  /** Renders the "expand" strip above each hunk, when the file is one we can
-   *  fetch more of. Absent for a commit diff, which is not a pull request. */
-  expand?: (hunkIndex: number) => React.ReactNode;
+  /** Where to read the rest of the file from, when it is one that can be
+   *  expanded. Absent for a commit diff (not a pull request) and for a file
+   *  with no unchanged text to show: added, removed, renamed, binary. */
+  expandFrom?: { root: string; number: number; path: string; sha: string };
   /** Renders a review-comment thread inline, under the line it is anchored to.
    *  Called per row with the new/old line numbers; return null for lines with
    *  no comment. Absent for a commit diff, which carries no review threads. */
@@ -1238,13 +1222,34 @@ function DiffPane({ file, split, wrap, onPick, sel, expand, rowAfter, permalink 
   // out coloured. A very long diff drops the theme (not the parse) so a
   // thousand-line file does not spend its time colouring.
   const { hilite } = useDiffHighlight(file.file_path);
+  // The lines the diff leaves out: what has been asked for, and the file to
+  // take them from. Revealed lines are spliced into the hunks as context, so
+  // both views draw, number and colour them like any other line.
+  const [rv, setRv] = useState<Reveals>({});
+  const [text, setText] = useState<string[] | null>(null);
+  const [fetching, setFetching] = useState<{ busy: boolean; err: string | null }>({ busy: false, err: null });
+  const can = !!expandFrom;
+  const view = useMemo(() => (can ? expandHunks(file.hunks, text, rv) : { hunks: file.hunks, open: [] }), [can, file.hunks, text, rv]);
+  const onExpand = async (key: number, dir: "up" | "down" | "all") => {
+    if (!expandFrom) return;
+    setRv((r) => reveal(r, key, dir));
+    if (text) return;
+    setFetching({ busy: true, err: null });
+    const lines = await headFile(expandFrom.root, expandFrom.number, expandFrom.path, expandFrom.sha);
+    if (lines) setText(lines);
+    setFetching({ busy: false, err: lines ? null : "Could not read the rest of this file" });
+  };
+  const gapRow = view.open.length ? (at: number) => {
+    const g = view.open.find((o) => o.at === at);
+    return g ? <GapRow gap={g} busy={fetching.busy} error={fetching.err} onExpand={(dir) => void onExpand(g.key, dir)} /> : null;
+  } : undefined;
   const heavy = file.hunks.reduce((n, h) => n + h.lines.length, 0) > 3000;
   return (
     <HiliteCtx.Provider value={heavy ? { ...hilite, theme: null } : hilite}>
       <LineMenuCtx.Provider value={onPick ? { permalink } : null}>
         {split
-          ? <SplitDiff c={file} wrap={wrap} onPick={onPick} sel={sel} rowAfter={rowAfter} />
-          : <UnifiedDiff c={file} wrap={wrap} onPick={onPick} sel={sel} hunkAction={expand} rowAfter={rowAfter} />}
+          ? <SplitDiff c={file} hunks={view.hunks} wrap={wrap} onPick={onPick} sel={sel} rowAfter={rowAfter} gapRow={gapRow} />
+          : <UnifiedDiff c={file} hunks={view.hunks} wrap={wrap} onPick={onPick} sel={sel} rowAfter={rowAfter} gapRow={gapRow} />}
       </LineMenuCtx.Provider>
     </HiliteCtx.Provider>
   );
@@ -11050,18 +11055,9 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
                             </div>
                           );
                         } : undefined}
-                        expand={(hi) => {
-                          // The gap between the end of the previous hunk and the
-                          // start of this one — the lines GitHub did not send.
-                          const h = change.hunks[hi];
-                          if (!h) return null;
-                          const prev = hi > 0 ? change.hunks[hi - 1] : null;
-                          const prevEnd = prev ? prev.newStart + prev.newLines - 1 : 0;
-                          const from = Math.max(prevEnd + 1, h.newStart - 20);
-                          const to = h.newStart - 1;
-                          if (to < from) return null;
-                          return <ExpandContext root={root} number={d.number} path={f.path} from={from} to={to} />;
-                        }}
+                        key={`${f.path}@${headSha}`}
+                        expandFrom={headSha && (f.status === "modified" || f.status === "changed")
+                          ? { root, number: d.number, path: f.path, sha: headSha } : undefined}
                       />
                     )
                     /* Two different nothings, and saying the wrong one is how a

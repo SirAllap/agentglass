@@ -25,6 +25,7 @@ import { failed } from "./refused.ts";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { gitAsync, safeAbs, repoRootOf } from "./git.ts";
+import { splitFileLines } from "../../shared/diffGaps.ts";
 import { makeViewTempDir } from "./viewtemp.ts";
 import { inScopeReal, staysIn } from "./config.ts";
 import { recipePromptText } from "./reviewPrompts.ts";
@@ -5091,6 +5092,11 @@ export async function fileSlice(rootIn: unknown, numberIn: unknown, args: {
   const ref = left ? pr?.base?.sha : pr?.head?.sha;
   const from = left ? repo.nameWithOwner : (pr?.head?.repo?.full_name ?? repo.nameWithOwner);
   if (!ref) return { ok: false, error: "could not read the pull request's commits" };
+  // The checkout usually has both commits already, and a blob read from it is
+  // no request at all. Only a commit it does not have (a fork's head that was
+  // never fetched) goes to GitHub.
+  const local = await localText(rootIn, ref, path);
+  if (local != null) return sliceOf(local, args);
   const file = await contentAt(from, path, ref);
   if (!file) return { ok: false, error: `${path} is not on that side` };
   // A file GitHub will not inline is a big one or a binary one; either way the
@@ -5101,10 +5107,34 @@ export async function fileSlice(rootIn: unknown, numberIn: unknown, args: {
   const buf = Buffer.from(String(file.content).replace(/\n/g, ""), "base64");
   // A NUL in the first few KB is the usual "this is not text" tell.
   if (buf.subarray(0, 8000).includes(0)) return { ok: true, binary: true, url: file.download_url ?? "" };
-  const all = buf.toString("utf8").split("\n");
+  return sliceOf(buf.toString("utf8"), args);
+}
+
+function sliceOf(text: string, args: { from?: unknown; to?: unknown }) {
+  const all = splitFileLines(text);
   const start = Math.max(1, Number(args.from) || 1);
   const to = Math.min(all.length, Number(args.to) || all.length);
   return { ok: true, lines: all.slice(start - 1, to), start, total: all.length };
+}
+
+/* Past this a file is not worth sending whole to expand a few lines of it. */
+const LOCAL_BLOB_CAP = 2 * 1024 * 1024;
+
+/** A file at a commit, read from the local checkout; null when the checkout
+ *  cannot say (no such commit or path, binary, too big), so the caller asks
+ *  GitHub. `ref` is a 40-hex sha from GitHub, never a user string, and the
+ *  path may not climb out of the tree. */
+export async function localText(rootIn: unknown, ref: string, path: string): Promise<string | null> {
+  if (!/^[0-9a-f]{40}$/.test(ref) || path.split("/").includes("..") || /[\0\n]/.test(path)) return null;
+  const abs = safeAbs(rootIn);
+  const root = abs ? repoRootOf(abs) : null;
+  if (!root) return null;
+  const obj = `${ref}:${path}`;
+  const size = await gitAsync(root, ["cat-file", "-s", obj]);
+  if (size.code !== 0 || !(Number(size.stdout) <= LOCAL_BLOB_CAP)) return null;
+  const r = await gitAsync(root, ["cat-file", "blob", obj]);
+  if (r.code !== 0 || r.stdout.slice(0, 8000).includes("\0")) return null;
+  return r.stdout;
 }
 
 /**

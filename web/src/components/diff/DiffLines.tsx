@@ -326,6 +326,10 @@ type DiffProps = {
   rowAfter?: (newN: number | null | undefined, oldN: number | null | undefined) => ReactNode;
   onPick?: (p: LinePick) => void;
   sel?: LineSel;
+  /** The strip for the lines the diff leaves out, drawn before hunk `at` (and
+   *  after the last one when `at` is the hunk count). Null when that gap has
+   *  nothing hidden. See `expandHunks`. */
+  gapRow?: (at: number) => ReactNode;
 };
 
 // --- the sideways scrollbar, kept where the eyes are -------------------------
@@ -442,7 +446,7 @@ function HRailRow({ rails, children }: { rails: Rail[]; children: ReactNode }) {
  * caller — the pull request's file column, the Diff view and the preset viewer
  * all scroll vertically themselves, and this pane grows inside them.
  */
-export function UnifiedDiff({ c, hunks, wrap, hunkAction, rowAfter, onPick, sel }: DiffProps & { hunkAction?: (hunkIndex: number) => ReactNode }) {
+export function UnifiedDiff({ c, hunks, wrap, hunkAction, rowAfter, onPick, sel, gapRow }: DiffProps & { hunkAction?: (hunkIndex: number) => ReactNode }) {
   const wrapCls = wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre";
   const source = hunks ?? c?.hunks ?? NO_HUNKS;
   const built = useMemo(() => source.map((h) => ({ h, rows: unifiedRows(h) })), [source]);
@@ -471,6 +475,7 @@ export function UnifiedDiff({ c, hunks, wrap, hunkAction, rowAfter, onPick, sel 
       <div style={{ width: "max-content", minWidth: "100%" }}>
       {built.map(({ h, rows }, hi) => (
         <div key={hi}>
+          {gapRow?.(hi)}
           <div data-hunk className="z-10 py-0.5 t-dim2" style={{ position: "var(--agx-hunk-pos, sticky)" as CSSProperties["position"], top: "var(--agx-hunk-top, 0px)", background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
             <span className="sticky left-0 inline-flex items-center gap-3 px-3">
               <span className="whitespace-pre">@@ -{h.oldStart},{h.oldLines} +{h.newStart},{h.newLines} @@</span>
@@ -528,6 +533,7 @@ export function UnifiedDiff({ c, hunks, wrap, hunkAction, rowAfter, onPick, sel 
           </div>
         </div>
       ))}
+      {gapRow?.(built.length)}
       </div>
     </div>
       <HRailRow rails={[rail]}>
@@ -548,7 +554,7 @@ export function UnifiedDiff({ c, hunks, wrap, hunkAction, rowAfter, onPick, sel 
 /* The scrolling panes below are size containers (`container-type: inline-size`)
    so a card under a line can be as wide as the pane you SEE rather than as wide
    as the code, which is wider whenever one line is long: `100cqw` is the pane. */
-export function SplitDiff({ c, hunks, wrap, rowAfter, onPick, sel }: DiffProps) {
+export function SplitDiff({ c, hunks, wrap, rowAfter, onPick, sel, gapRow }: DiffProps) {
   const source = hunks ?? c?.hunks ?? NO_HUNKS;
   const built = useMemo(() => source.map((h) => ({ h, rows: splitRows(h) })), [source]);
   const gw = useMemo(() => gutterWidth(source.reduce((n, h) => Math.max(n, h.oldStart + h.oldLines, h.newStart + h.newLines), 0)), [source]);
@@ -575,6 +581,12 @@ export function SplitDiff({ c, hunks, wrap, rowAfter, onPick, sel }: DiffProps) 
     // left has no vertical scrollbar — forward vertical wheel to the right side
     if (rightRef.current && e.deltaY) { rightRef.current.scrollTop += e.deltaY; e.preventDefault(); }
   };
+  // The two columns are separate scrollers, so the strip is drawn in both to
+  // keep their rows level; only the right one is operable, as with `rowAfter`.
+  const gapAt = (which: "l" | "r", at: number) => {
+    const g = gapRow?.(at);
+    return g && (which === "l" ? <div aria-hidden style={{ visibility: "hidden" }}>{g}</div> : g);
+  };
   const side = (which: "l" | "r") => (
     /* Same rule as the unified pane: one width for the column, taken from the
        widest line in it, so a short hunk does not stop painting halfway across
@@ -582,6 +594,7 @@ export function SplitDiff({ c, hunks, wrap, rowAfter, onPick, sel }: DiffProps) 
     <div style={{ width: "max-content", minWidth: "100%" }}>
     {built.map(({ h, rows }, hi) => (
       <div key={hi}>
+        {gapAt(which, hi)}
         <div data-hunk className="z-10 py-0.5 t-dim2 whitespace-pre" style={{ position: "var(--agx-hunk-pos, sticky)" as CSSProperties["position"], top: "var(--agx-hunk-top, 0px)", background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
           <span className="sticky left-0 inline-block px-3">@@ -{h.oldStart},{h.oldLines} +{h.newStart},{h.newLines} @@</span>
         </div>
@@ -609,6 +622,7 @@ export function SplitDiff({ c, hunks, wrap, rowAfter, onPick, sel }: DiffProps) 
         })}
       </div>
     ))}
+    {gapAt(which, built.length)}
     </div>
   );
 
@@ -621,6 +635,7 @@ export function SplitDiff({ c, hunks, wrap, rowAfter, onPick, sel }: DiffProps) 
         <style>{SPLIT_SEL_CSS}</style>
         {built.map(({ h, rows }, hi) => (
           <div key={hi}>
+            {gapRow?.(hi)}
             <div data-hunk className="z-10 px-3 py-0.5 t-dim2 whitespace-pre" style={{ position: "var(--agx-hunk-pos, sticky)" as CSSProperties["position"], top: "var(--agx-hunk-top, 0px)", background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
               @@ -{h.oldStart},{h.oldLines} +{h.newStart},{h.newLines} @@
             </div>
@@ -640,6 +655,7 @@ export function SplitDiff({ c, hunks, wrap, rowAfter, onPick, sel }: DiffProps) 
             </div>
           </div>
         ))}
+        {gapRow?.(built.length)}
       </div>
     );
   }
