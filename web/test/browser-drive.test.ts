@@ -607,6 +607,31 @@ describe("driving a page", () => {
     expect((r.value as Record<string, unknown>)?.applied).toBe("edit");
   });
 
+  /*
+   * A field that adds a row on Enter, written the way many pages still are:
+   * `if (event.keyCode !== 13) return`. A KeyboardEvent built from `key` alone
+   * has keyCode 0, so `press Enter` answered applied:"none" and the row never
+   * appeared; `type --submit` then sat out a 20 s wait for a navigation that
+   * Enter in such a field never causes.
+   */
+  test("Enter carries the legacy keyCode a page may still test for", async () => {
+    const el = fakeGuest(() => ({ kind: "ok", applied: "none", prevented: false, on: "input" }));
+    await runBrowserAsk(el, ask("press", { key: "Enter" }));
+    const src = el.ran[0] ?? "";
+    expect(src).toContain("keyCode: LEGACY[name]");
+    expect(src).toContain("init.which = init.keyCode");
+    expect(src).toMatch(/Enter":\s*13/);
+  });
+
+  test("type --submit answers without waiting for a navigation", async () => {
+    const el = fakeGuest(() => ({ kind: "ok", secret: false }));
+    const t0 = Date.now();
+    const r = await runBrowserAsk(el, ask("type", { selector: "#q", text: "x", submit: true }));
+    expect(r.ok).toBe(true);
+    expect(Date.now() - t0, "settled() would wait 20 s").toBeLessThan(5000);
+    expect(el.ran.join(" ")).toContain("keyCode: 13");
+  });
+
   test("an empty capture is a failure, not a zero-byte screenshot", async () => {
     // Measured twice against the real app: a pane hidden behind another view
     // produces no frames, both captures come back blank, and this used to

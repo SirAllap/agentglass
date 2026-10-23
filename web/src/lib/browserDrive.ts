@@ -1199,6 +1199,18 @@ export function callerKey(name: string): string {
   return "k" + h.toString(36);
 }
 
+/** The legacy `keyCode` of the keys a page is likely to test for. A
+ *  KeyboardEvent built from `key` alone has keyCode 0, and a page written
+ *  against `event.keyCode === 13` (React TodoMVC's new-todo field, measured)
+ *  reads that as "some other key" and does nothing. */
+const LEGACY_KEY_CODES: Record<string, number> = {
+  Backspace: 8, Tab: 9, Enter: 13, Escape: 27, Space: 32, PageUp: 33, PageDown: 34,
+  End: 35, Home: 36, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Delete: 46,
+};
+
+/** Enter as a page that tests `keyCode` or `which` still sees it. */
+const ENTER_KEYDOWN = `new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true })`;
+
 /** Wait for the guest to finish a navigation it has just been given. Resolves
  *  either way — "it loaded" and "it failed" are both answers, and the failure
  *  text is more useful to an agent than a timeout would be. */
@@ -2747,6 +2759,8 @@ async function runVerb(
         return await withFocus(el, cdp, async () => {
           const text = jsLit(String(ask.args.text ?? ""));
           const submit = ask.args.submit === true;
+          const before = el.getURL();
+          const watch = watchNavigation(el);
           const hit = await untilFound(() => el.executeJavaScript(resolveOne(sel,
             `e.focus();
                /* A rich-text editor (contenteditable, no value property) has no
@@ -2761,7 +2775,7 @@ async function runVerb(
                if (sel && e.textContent) sel.selectAllChildren(e);
                const did = document.execCommand("insertText", false, ${text});
                if (!did) return { kind: "blocked", reason: "the editor refused the text" };
-               ${submit ? `e.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));` : ""}
+               ${submit ? `e.dispatchEvent(${ENTER_KEYDOWN});` : ""}
                return { kind: "ok", secret: false, rich: true };
              }
              // The native setter, then an input event: React and every other
@@ -2774,7 +2788,7 @@ async function runVerb(
                e.dispatchEvent(new Event("input", { bubbles: true }));
                e.dispatchEvent(new Event("change", { bubbles: true }));
                ${submit ? `if (e.form) e.form.requestSubmit ? e.form.requestSubmit() : e.form.submit();
-                            else e.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));` : ""}
+                            else e.dispatchEvent(${ENTER_KEYDOWN});` : ""}
                /* Whether what was just typed is a secret, decided HERE because
                   this is the only side that can see the node. The relay only
                   ever sees the selector, so typing a real password into a field
@@ -2787,11 +2801,16 @@ async function runVerb(
                const secret = e.type === "password"
                  || /(^|\\s)(current|new)-password|one-time-code/.test(e.autocomplete || "");
                return { kind: "ok", secret };`, false, true,
-          ))) as { kind: string; secret?: boolean } | boolean;
+          )).catch((err: unknown) => { watch.dispose(); throw err; })) as { kind: string; secret?: boolean } | boolean;
           if (!hit || (hit as { kind: string }).kind !== "ok") {
+            watch.dispose();
             return { ok: false, error: selectorError(String(ask.args.selector ?? ""), hit as never) };
           }
-          if (submit && !(hit as { rich?: boolean }).rich) await settled(el, 20_000);
+          /* The wait a click and a press use. This was settled(el, 20_000), which
+             resolves on a navigation and on nothing else: Enter in a field that
+             adds a row to the page navigates nowhere, so it sat out its 20 s and
+             the relay gave up at 15 with "the browser did not answer". */
+          if (submit) await settleAfterAct(el, watch, before, Date.now()); else watch.dispose();
           return {
             ok: true,
             value: {
@@ -4535,13 +4554,16 @@ async function runVerb(
           const mods = parts.map((m) => m.toLowerCase());
           const has = (m) => mods.includes(m);
           const one = name.length === 1;
+          const LEGACY = ${jsLit(LEGACY_KEY_CODES)};
           const init = {
             key: name === "Space" ? " " : name,
             code: one ? "Key" + name.toUpperCase() : name,
+            keyCode: LEGACY[name] || (one ? name.toUpperCase().charCodeAt(0) : 0),
             bubbles: true, cancelable: true, composed: true,
             ctrlKey: has("control") || has("ctrl"), shiftKey: has("shift"),
             altKey: has("alt"), metaKey: has("meta") || has("cmd"),
           };
+          init.which = init.keyCode;
           const target = document.activeElement || document.body;
           const send = (type) => target.dispatchEvent(new KeyboardEvent(type, init));
           const wentThrough = send("keydown");
