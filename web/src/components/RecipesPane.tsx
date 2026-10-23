@@ -19,6 +19,8 @@ import type { Recipe, RecipeParam, GitRepoRef } from "../../../shared/types.ts";
 import { consoleRoot, runInConsole } from "./TerminalPanel.tsx";
 import { Field, SettingsCard, SettingsForm, helpIdFor } from "./SettingsKit.tsx";
 import { EditorFoot, EditorPanel, ListBar, ListEditorSplit, ListPanel, NewButton, NothingSelected, differs } from "./SettingsListEditor.tsx";
+import { CommandIcon } from "./settingsNavIcons.tsx";
+import { useReportSaving } from "./SettingsPageState.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { IconLabel, PlusIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
@@ -39,6 +41,8 @@ export function RecipesPane({ open }: { open: boolean }) {
   const [editing, setEditing] = useState<Recipe | null>(null);
   const [running, setRunning] = useState<Recipe | null>(null);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  useReportSaving("recipes", busy);
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [q, setQ] = useState("");
   const firstShown = useRef(false);
@@ -56,12 +60,15 @@ export function RecipesPane({ open }: { open: boolean }) {
   useEffect(() => { if (list?.length && !editing && !firstShown.current) { firstShown.current = true; setEditing(list[0]!); } }, [list, editing]);
 
   const save = async (r: Recipe) => {
-    const res = await api.recipeSave(r);
-    if (!res.ok) { setNote({ ok: false, text: res.error ?? "That did not save" }); return; }
-    setNote({ ok: true, text: `${r.name} saved` });
-    const fresh = await load();
-    // Saved: the same one stays open (a new one gets its id from the server, so it is found by name).
-    setEditing(fresh.find((x) => x.id === (r.id || res.recipe?.id)) ?? fresh.find((x) => x.name === r.name) ?? null);
+    setBusy(true);
+    try {
+      const res = await api.recipeSave(r);
+      if (!res.ok) { setNote({ ok: false, text: res.error ?? "That did not save" }); return; }
+      setNote({ ok: true, text: `${r.name} saved` });
+      const fresh = await load();
+      // Saved: the same one stays open (a new one gets its id from the server, so it is found by name).
+      setEditing(fresh.find((x) => x.id === (r.id || res.recipe?.id)) ?? fresh.find((x) => x.name === r.name) ?? null);
+    } finally { setBusy(false); }
   };
   const drop = async (r: Recipe) => {
     await api.recipeRemove(r.id).catch(() => {});
@@ -110,9 +117,14 @@ export function RecipesPane({ open }: { open: boolean }) {
       <ListEditorSplit
         list={<ListPanel sections={sections} selected={editing?.id || null}
           onSelect={(id) => { const r = list?.find((x) => x.id === id); if (r) { setEditing(r); setRunning(null); } }}
-          nothing={!list ? "Reading your recipes…" : list.length ? "Nothing matches." : "Nothing saved yet. The first one is usually a thing you have typed three times this week."} />}
+          nothing={!list ? "Reading your recipes…" : "Nothing matches."}
+          blank={list?.length === 0 ? {
+            icon: <CommandIcon size={ICON.xl} />, title: "No commands yet",
+            text: "A command is a thing you have typed three times this week, kept with the parts that change asked for when you run it.",
+            action: <NewButton onClick={() => setEditing(blank())}>New recipe</NewButton>,
+          } : undefined} />}
         editor={editing
-          ? <Editor r={editing} saved={saved} repos={repos} onChange={setEditing} onSave={save} onDrop={drop}
+          ? <Editor r={editing} saved={saved} repos={repos} busy={busy} onChange={setEditing} onSave={save} onDrop={drop}
               onRun={editing.id ? () => setRunning(editing) : undefined}
               onCancel={() => setEditing(saved ?? null)} />
           : <NothingSelected noun="recipe" label="Command" onNew={() => setEditing(blank())} />} />
@@ -129,8 +141,8 @@ const FIELD = `w-full ${INPUT}`;
  * fields, one primary Save, and Delete up in the card's header where a Save
  * press cannot land on it.
  */
-function Editor({ r, saved, repos, onChange, onSave, onDrop, onRun, onCancel }: {
-  r: Recipe; saved?: Recipe; repos: GitRepoRef[];
+function Editor({ r, saved, repos, busy, onChange, onSave, onDrop, onRun, onCancel }: {
+  r: Recipe; saved?: Recipe; repos: GitRepoRef[]; busy: boolean;
   onChange: (r: Recipe) => void; onSave: (r: Recipe) => void; onDrop: (r: Recipe) => void; onRun?: () => void; onCancel: () => void;
 }) {
   const uid = useId();
@@ -269,7 +281,7 @@ function Editor({ r, saved, repos, onChange, onSave, onDrop, onRun, onCancel }: 
             </div>
 
             </div>
-            <EditorFoot dirty={!r.id || differs(r, saved)} canSave noun="recipe" onCancel={onCancel} />
+            <EditorFoot dirty={!r.id || differs(r, saved)} canSave noun="recipe" onCancel={onCancel} busy={busy} />
           </SettingsForm>
     </EditorPanel>
   );

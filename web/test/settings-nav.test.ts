@@ -271,7 +271,7 @@ describe("the components wire these decisions and nothing else", () => {
 
   test("the modal draws marks and chips from navMarks, with no mark invented in the component", () => {
     expect(modal).toContain("navMarks({");
-    expect(modal).toContain("headerChips(navTab.id, marks[navTab.id] ?? NO_MARK)");
+    expect(modal).toContain("headerChips(navTab.id, marks[navTab.id] ?? NO_MARK, saving.has(navTab.id))");
     expect(nav).not.toMatch(/state: "on"|state: "needs"/);
   });
 

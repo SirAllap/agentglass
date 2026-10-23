@@ -460,6 +460,25 @@ still sits beside it. A page still on the old `Section` box spans every column
 until it moves. The rows of a card answer to the card's width, not the
 window's.
 
+From 2200px the page is zoomed 1.107 (the mockup's 14 to 15.5px root), the nav
+is not. Below 1100px the nav is a 68px icon rail: labels, counts and legend go,
+and the one mark kept is a red dot (`data-keep`) on a page that failed, because
+nothing else says so there. Two pages must not share a glyph for the same reason.
+
+The three states a page has besides "fine" (`lib/settingsStates.ts`):
+
+- **Saving**: `SaveChip` in the card header (`useSavePhase`: Saving, then Saved
+  for 2.5s; a write that failed is never Saved) and a "Saving" chip beside the
+  page header's verdict (`useReportSaving`). Never a silent write.
+- **Could not read**: the page reports its own failed fetch with
+  `useReportProblem(pageId, { chip, title }, retry)`; the shell turns the nav
+  dot red and the header chip red and puts Try again in the header. In the page
+  the failure is a `tone="error"` card holding a `ProblemNote` with its retry.
+  A state a page cannot really be in gets no report.
+- **Empty list**: `ListPanel blank={...}` (a list with nothing in it, not a
+  filter that matched nothing): an icon, one sentence, and the action that
+  fills it.
+
 One divider: `.agx-scard-body > .agx-settings-row + .agx-settings-row`, edge to
 edge, which is also what draws the line under a card's header. Spacing is
 4 · 8 · 12 · 18 · 24; buttons 28px (`CTRL_H.regular`), inputs 32px (`INPUT`).

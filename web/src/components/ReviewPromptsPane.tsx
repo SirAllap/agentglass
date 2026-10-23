@@ -27,6 +27,9 @@ import type { ReviewRecipe, ReviewRecipeGroup, ReviewRecipeWhen, SkillInfo } fro
 import { SettingRow } from "./SettingRow.tsx";
 import { EmptyState, Field, SettingsCard, SettingsForm, helpIdFor } from "./SettingsKit.tsx";
 import { EditorFoot, EditorPanel, ListBar, ListEditorSplit, ListPanel, NewButton, NothingSelected, differs } from "./SettingsListEditor.tsx";
+import { ReviewIcon } from "./settingsNavIcons.tsx";
+import { useReportSaving } from "./SettingsPageState.tsx";
+import { ICON } from "../lib/iconSize.ts";
 import { bumpReviewRecipes } from "./PrPanel.tsx";
 import { Button, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 import { Select } from "./Select.tsx";
@@ -107,6 +110,8 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [projects, setProjects] = useState<{ root: string; name: string }[]>([]);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  useReportSaving("review-prompts", busy);
   /* The note on the card is written to a ClickUp card, so it is offered only
      where there is one. Unknown counts as connected: taskConnected fails open. */
   const [hasCards, setHasCards] = useState(true);
@@ -153,9 +158,12 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
   };
 
   const save = async (r: ReviewRecipe) => {
-    const res = await api.prPromptSave(r);
-    if (!res.ok) { setNote({ ok: false, text: res.error ?? "That did not save" }); return; }
-    await after(`${r.title} saved`, true, r.id || undefined);
+    setBusy(true);
+    try {
+      const res = await api.prPromptSave(r);
+      if (!res.ok) { setNote({ ok: false, text: res.error ?? "That did not save" }); return; }
+      await after(`${r.title} saved`, true, r.id || undefined);
+    } finally { setBusy(false); }
   };
   const drop = async (r: ReviewRecipe) => {
     await api.prPromptRemove(r.id).catch(() => {});
@@ -176,7 +184,7 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
     && (!ql || `${r.title} ${r.body} ${r.skill ?? ""}`.toLowerCase().includes(ql));
   const count = list.filter(offered).length;
   const saved = editing?.id ? list.find((x) => x.id === editing.id) : undefined;
-  const common = { skills, projects, onChange: setEditing, onSave: save, onCancel: () => setEditing(saved ?? null) };
+  const common = { skills, projects, busy, onChange: setEditing, onSave: save, onCancel: () => setEditing(saved ?? null) };
 
   return (
     <>
@@ -205,6 +213,11 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
         list={<ListPanel selected={editing ? editing.id || null : null}
           onSelect={(id) => { const r = list.find((x) => x.id === id); if (r) setEditing(r); }}
           nothing="Nothing matches."
+          blank={count === 0 ? {
+            icon: <ReviewIcon size={ICON.xl} />, title: "No review prompts",
+            text: "Every built-in was hidden and none of yours is saved, so the Review with Claude button has nothing to offer. Make one.",
+            action: <NewButton onClick={() => setEditing(blank("reviewing"))}>New prompt</NewButton>,
+          } : undefined}
           sections={GROUPS.map((g) => ({
             id: g.id, title: g.label, onAdd: () => setEditing(blank(g.id)), addLabel: `New prompt in ${g.label}`,
             entries: list.filter((r) => r.group === g.id && visible(r)).map((r) => ({
@@ -266,8 +279,8 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
  * fields, one primary Save, and what undoes the prompt (Reset, Hide or
  * Delete) at the far end of the same line, apart from Save and Cancel.
  */
-function Editor({ r, saved, skills, projects, presets, onChange, onSave, onCancel, onReset, onDrop }: {
-  r: ReviewRecipe; saved?: ReviewRecipe; skills: SkillInfo[]; projects: { root: string; name: string }[]; presets: ReviewRecipe[];
+function Editor({ r, saved, skills, projects, presets, busy, onChange, onSave, onCancel, onReset, onDrop }: {
+  r: ReviewRecipe; saved?: ReviewRecipe; skills: SkillInfo[]; projects: { root: string; name: string }[]; presets: ReviewRecipe[]; busy: boolean;
   onChange: (r: ReviewRecipe) => void; onSave: (r: ReviewRecipe) => void; onCancel: () => void;
   onReset?: () => void; onDrop?: () => void;
 }) {
@@ -412,7 +425,7 @@ function Editor({ r, saved, skills, projects, presets, onChange, onSave, onCance
           )}
 
           </div>
-          <EditorFoot dirty={!r.id || differs(r, saved)} canSave noun="prompt" onCancel={onCancel} />
+          <EditorFoot dirty={!r.id || differs(r, saved)} canSave noun="prompt" onCancel={onCancel} busy={busy} />
         </SettingsForm>
     </EditorPanel>
   );

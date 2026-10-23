@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SettingRow, Switch } from "./SettingRow.tsx";
-import { CommandLine, SELECT_BOX, EmptyState, SettingsCard, StatusBadge } from "./SettingsKit.tsx";
+import { CommandLine, SELECT_BOX, EmptyState, ProblemNote, SettingsCard, StatusBadge } from "./SettingsKit.tsx";
+import { useReportProblem, useReportSaving } from "./SettingsPageState.tsx";
+import { problemChip } from "../lib/settingsStates.ts";
 import { Select } from "./Select.tsx";
 import { api } from "../lib/api.ts";
 import { IS_DESKTOP, remoteAccessEnabled, setRemoteAccess, revokeRemoteAccess } from "../lib/desktop.ts";
@@ -49,6 +51,8 @@ import { ICON } from "../lib/iconSize.ts";
  */
 export function RemoteAccessPane({ open }: { open: boolean }) {
   const [st, setSt] = useState<RemoteStatus | null>(null);
+  /** The last read of the network state failed (the server did not answer), as against one that has not come back yet. */
+  const [failed, setFailed] = useState(false);
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
@@ -88,8 +92,9 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
     if (fresh) { setChosen(fresh); writePick(fresh); }
   }, []);
   const load = useCallback(() => {
-    api.remoteStatus(wantFresh.current).then(apply).catch(() => setSt(null));
+    api.remoteStatus(wantFresh.current).then((s) => { setFailed(false); apply(s); }).catch(() => { setSt(null); setFailed(true); });
   }, [apply]);
+  useReportProblem("remote", failed ? { chip: problemChip(), title: "Could not read the network state." } : null, load);
 
   useEffect(() => {
     if (!open) return;
@@ -106,6 +111,7 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
     return () => clearTimeout(t);
   }, [open]);
 
+  useReportSaving("remote", busy);
   const toggle = async () => {
     setBusy(true);
     // The shell restarts the sidecar and hands the page its new origin and
@@ -140,8 +146,10 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
   };
 
   if (!st) return (
-    <SettingsCard title="Remote access" icon={<PhoneIcon size={ICON.sm} />} desc="Reaching this machine from a phone, and what that phone is allowed to do.">
-      <SettingRow label="Reading network state…" status={<StatusBadge tone="checking">Checking</StatusBadge>} />
+    <SettingsCard title="Remote access" icon={<PhoneIcon size={ICON.sm} />} tone={failed ? "error" : "default"} desc="Reaching this machine from a phone, and what that phone is allowed to do.">
+      {failed
+        ? <ProblemNote title="Could not read the network state" action={<Button onClick={load}>Try again</Button>}>The local server did not answer. Whatever was paired stays paired; nothing here was changed.</ProblemNote>
+        : <SettingRow label="Reading network state…" status={<StatusBadge tone="checking">Checking</StatusBadge>} />}
     </SettingsCard>
   );
 

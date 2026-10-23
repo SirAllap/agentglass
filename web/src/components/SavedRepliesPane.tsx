@@ -15,12 +15,16 @@ import { bumpSavedReplies } from "./PrPanel.tsx";
 import { Button, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 import { Field, SettingsForm, helpIdFor } from "./SettingsKit.tsx";
 import { EditorFoot, EditorPanel, ListBar, ListEditorSplit, ListPanel, NewButton, NothingSelected, differs } from "./SettingsListEditor.tsx";
+import { QuoteIcon } from "./settingsNavIcons.tsx";
+import { useReportSaving } from "./SettingsPageState.tsx";
+import { ICON } from "../lib/iconSize.ts";
 
 interface Reply { id: string; title: string; text: string }
 
 export function SavedRepliesPane({ open }: { open: boolean }) {
   const [replies, setReplies] = useState<Reply[] | null>(null);
   const [busy, setBusy] = useState(false);
+  useReportSaving("saved-replies", busy);
   const [err, setErr] = useState("");
   /** The one being edited, by id — or `""` for the new one being written; null until one is picked. */
   const [editing, setEditing] = useState<string | null>(null);
@@ -85,7 +89,12 @@ export function SavedRepliesPane({ open }: { open: boolean }) {
       </ListBar>
       <ListEditorSplit
         list={<ListPanel selected={editing || null} onSelect={(id) => { const r = replies?.find((x) => x.id === id); if (r) editRow(r); }}
-          nothing={replies === null ? "Reading…" : replies.length ? "Nothing matches." : "Nothing saved yet. Nothing ships in this list — these go out under your name."}
+          nothing={replies === null ? "Reading…" : "Nothing matches."}
+          blank={replies?.length === 0 ? {
+            icon: <QuoteIcon size={ICON.xl} />, title: "No saved replies yet",
+            text: "A saved reply is a sentence you type often, one click away in every composer. Nothing ships in this list: these go out under your name, so every one is yours.",
+            action: <NewButton onClick={newOne} disabled={busy}>New reply</NewButton>,
+          } : undefined}
           sections={[{
             id: "replies", title: "Replies", onAdd: newOne, addLabel: "New reply",
             entries: shown.map((r) => ({

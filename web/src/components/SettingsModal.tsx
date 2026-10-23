@@ -57,14 +57,15 @@ import { TerminalIcon, DiffIcon, BrowserIcon, UnderstudyIcon, LanternIcon } from
 import {
   SlidersIcon, ThemeIcon, BellIcon, SidebarIcon, KeyboardIcon, BudgetIcon, PulseIcon,
   CommandIcon, ReviewIcon, QuoteIcon, PanesIcon, PlugIcon, ServerIcon, PhoneIcon,
-  PuzzleIcon, ShieldIcon, InfoIcon, ChecklistIcon, DownloadIcon, ColumnsIcon,
-} from "./settingsNavIcons.tsx";
+  PuzzleIcon, ShieldIcon, InfoIcon, ChecklistIcon, DownloadIcon, ColumnsIcon, ChipIcon, DiamondIcon, FlowIcon, LayersIcon } from "./settingsNavIcons.tsx";
 import { resolvePane, openSettings, paneWhenClickupKnown } from "../lib/openSettings.ts";
 import { SettingsNav } from "./SettingsNav.tsx";
 import { SettingsSearchPanel } from "./SettingsSearchPanel.tsx";
 import { SettingsPageHeader } from "./SettingsPageHeader.tsx";
 import { SettingsToc } from "./SettingsToc.tsx";
-import { NO_FACTS, NO_MARK, groupByName, groupSearch, headerChips, hueVar, navMarks, type MatchIn, type NavFacts } from "../lib/settingsNav.ts";
+import { NO_FACTS, NO_MARK, groupByName, groupSearch, headerChips, hueVar, navMarks, withProblems, type MatchIn, type NavFacts, type PageProblem } from "../lib/settingsNav.ts";
+import { applyProblem } from "../lib/settingsStates.ts";
+import { PageState, useReportProblem, useReportSaving, useSavePhase, type PageStateSink } from "./SettingsPageState.tsx";
 import { RunningPanes } from "./RunningPanes.tsx";
 import { THEMES } from "../lib/highlight.ts";
 import { BudgetsPane } from "./BudgetsPane.tsx";
@@ -139,7 +140,7 @@ import { MuteGlyph } from "./TopBarNotes.tsx";
 import { Button, RefreshButton, INPUT, INPUT_STYLE, EDGE, LINE, Segmented } from "./workspace/Chrome.tsx";
 import { LAUNCH_MODES, LAUNCH_MODE_LABEL, isLaunchMode, parseDenyRules, type LaunchMode } from "../../../shared/launchModes.ts";
 import { setLaunchPermissions } from "../lib/launchMode.ts";
-import { SELECT_BOX, EmptyState, Field, LinkButton, SettingsCard, SettingsForm, StatusBadge, helpIdFor, type StatusTone } from "./SettingsKit.tsx";
+import { SELECT_BOX, EmptyState, Field, LinkButton, ProblemNote, SaveChip, SettingsCard, SettingsForm, StatusBadge, helpIdFor, type StatusTone } from "./SettingsKit.tsx";
 import { PreviewCard, WithPreview } from "./settings/PreviewCard.tsx";
 import { WindowPreview, SidebarPreview, DiffPreview, LanternPreview, BrowserPreview } from "./settings/previews/index.ts";
 import { railItems } from "./settings/previews/MiniApp.tsx";
@@ -472,8 +473,8 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
   ...(HAS_BROWSER ? [{ id: "browser" as const, label: "Browser", group: "Workspace" as const, kw: "browser web page zoom login cookies import chrome firefox zen profile home search engine", what: "The built-in browser: how it opens, and the logins it borrows.", icon: BrowserIcon }] : []),
   { id: "tasks", label: "Tasks", group: "Workspace", kw: "tasks sources github issues local taskwarrior clickup hide show providers view opens on", what: "Which sources the Tasks view offers you.", icon: ChecklistIcon },
   { id: "hooks", label: "Agents", group: "Agents", kw: "agents hooks claude code install setup worker roles scout builder verifier lock model opencode qwen how new chats run warm panes browser agent skill drive", what: "Wire Claude Code into this app, how new chats run, whether an agent can drive the browser, what else is installed, and which CLI each worker role runs on.", icon: PlugIcon },
-  { id: "engines", label: "Agent engines", group: "Agents", kw: "engine engines provider hermes opencode codex gemini antigravity claude model version minimum signed in sign-in login orchestrator worker role ready test recheck installed update reporting connect events", what: "Which agent CLIs this computer has, whether each is recent enough and signed in, and what each can do here.", icon: PlugIcon },
-  { id: "orchestration", label: "Orchestration", group: "Agents", kw: "orchestration orchestrator main agent chair policy rule rules worker workers scout builder verifier engine model fallback chain ask when it runs usage weekly 5h plan hours budget ceiling envelope network commit write limits retries minutes per turn project override", what: "Which engine runs a project's main agent and does its work, the rules that change that for a while, and what a worker may do.", icon: PlugIcon },
+  { id: "engines", label: "Agent engines", group: "Agents", kw: "engine engines provider hermes opencode codex gemini antigravity claude model version minimum signed in sign-in login orchestrator worker role ready test recheck installed update reporting connect events", what: "Which agent CLIs this computer has, whether each is recent enough and signed in, and what each can do here.", icon: ChipIcon },
+  { id: "orchestration", label: "Orchestration", group: "Agents", kw: "orchestration orchestrator main agent chair policy rule rules worker workers scout builder verifier engine model fallback chain ask when it runs usage weekly 5h plan hours budget ceiling envelope network commit write limits retries minutes per turn project override", what: "Which engine runs a project's main agent and does its work, the rules that change that for a while, and what a worker may do.", icon: FlowIcon },
   { id: "lantern", label: "Lantern", group: "Agents", kw: "lantern reminder status what doing needs you ask sessions working on interval orchestrator seat wake floor chair post", what: "What the Lantern may ask of a session, and how often it looks.", icon: LanternIcon },
   /* Filed beside Agents rather than under System, and the two readings are
      both defensible: it is a store of what you did, and it is a thing that
@@ -510,9 +511,9 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
   { id: "connections", label: "Tools & services", group: "Connections", kw: "requirements dependencies deps tmux git docker install integrations providers connect github gitlab clickup taskwarrior token api credentials account rate limit budget quota", what: "The tools and services this app leans on, and whether they are ready.", status: true, icon: ServerIcon },
   /* Only while ClickUp is connected (see `tabs` in the modal): before that there is no
      workspace for a status to mean anything in, and a page for it would be a dead end. */
-  { id: "clickup", label: "ClickUp", group: "Connections", kw: "clickup workflow map steps statuses cards tracker hand off qa review menu merge dialog note assigned people sprint swatch spaces subtasks pull request link", what: "How agentglass uses your ClickUp: the steps you add, tied to your own statuses.", icon: ChecklistIcon },
+  { id: "clickup", label: "ClickUp", group: "Connections", kw: "clickup workflow map steps statuses cards tracker hand off qa review menu merge dialog note assigned people sprint swatch spaces subtasks pull request link", what: "How agentglass uses your ClickUp: the steps you add, tied to your own statuses.", icon: LayersIcon },
   /* Always there, unlike ClickUp's: the form that connects Jira lives on this page. */
-  { id: "jira", label: "Jira", group: "Connections", kw: "jira atlassian cloud data center site token email personal access token writes changes projects keys prefixes hand off qa assignee status saved views folders board filter tracker connect disconnect", what: "Your Jira site, what agentglass may change there, and the steps a pull request can run on a card.", icon: ChecklistIcon },
+  { id: "jira", label: "Jira", group: "Connections", kw: "jira atlassian cloud data center site token email personal access token writes changes projects keys prefixes hand off qa assignee status saved views folders board filter tracker connect disconnect", what: "Your Jira site, what agentglass may change there, and the steps a pull request can run on a card.", icon: DiamondIcon },
   { id: "remote", label: "Remote", group: "Connections", kw: "remote access pair phone tailscale token device", what: "Reach this machine from your phone.", icon: PhoneIcon },
   { id: "privacy", label: "Data & privacy", group: "System", kw: "export download data json csv daily totals markdown events skills catalog take out privacy telemetry data local storage retention database credentials tokens tracking analytics who sees", what: "Where your data is, what leaves this machine, and how to take it out.", icon: ShieldIcon },
   { id: "about", label: "About", group: "System", kw: "about version update release notes changelog credit attribution licence license portrait art", what: "Version, release notes, updates and the third-party licences this build carries.", icon: InfoIcon },
@@ -1657,6 +1658,7 @@ function CookieImport() {
   const [pick, setPick] = useState<string>("");
   const [chosen, setChosen] = useState<ReadonlySet<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  useReportSaving("browser", busy);
   const [filter, setFilter] = useState("");
   // What rides along with the cookies. Read from the stored prefs so a choice
   // sticks between imports; default ON, so leaving them alone brings everything
@@ -1852,6 +1854,7 @@ const MAC_BUNDLE_BIN = "/Applications/agentglass.app/Contents/Resources/bin";
 function AgentBrowserPane({ open }: { open: boolean }) {
   const [st, setSt] = useState<BrowserUseStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  useReportSaving("hooks", busy);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
@@ -1949,6 +1952,7 @@ function AgentsPage({ open, chats, panes, browser, skills }: {
   const [resetNote, setResetNote] = useState<string | null>(null);
   const [st, setSt] = useState<HookSetupStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  useReportSaving("hooks", busy);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
@@ -2817,6 +2821,7 @@ function IntegrationsPane({ open }: { open: boolean }) {
   }, []);
 
   useEffect(() => { if (open) void load(); }, [open, load]);
+  useReportProblem("connections", err ? { chip: "Not read", title: err } : null, load);
 
   /*
    * Come back for the slow half.
@@ -2856,7 +2861,11 @@ function IntegrationsPane({ open }: { open: boolean }) {
         <span className="text-[12px] flex-1 min-w-0" style={{ color: "var(--text3)" }}>Pull requests, checks and review state, and where the things you owe come from. Each task provider you connect becomes a tab in Tasks.</span>
         <Button pending={busy} onClick={() => void load()}>Recheck</Button>
       </div>
-      {err && <SettingsCard title="Services" icon={<PlugIcon size={ICON.sm} />}><SettingRow agentExempt label={err} hint="Recheck to try again." /></SettingsCard>}
+      {err && (
+        <SettingsCard title="Services" icon={<PlugIcon size={ICON.sm} />} tone="error" wide>
+          <ProblemNote title={err} action={<Button pending={busy} onClick={() => void load()}>Try again</Button>}>The local server did not answer, so no service could be checked.</ProblemNote>
+        </SettingsCard>
+      )}
       {PROVIDERS.map((p) => (
         <ProviderCard key={p.id} spec={p} status={statusOf(p.id)} checking={!status && !err} onChanged={load} />
       ))}
@@ -3137,6 +3146,7 @@ function RequirementsPane({ open }: { open: boolean }) {
   // Probed on open rather than at startup: it costs a handful of PATH lookups
   // plus two cached subprocess answers, and nothing outside this pane wants it.
   useEffect(() => { if (open) void load(false); }, [open]);
+  useReportProblem("connections", err ? { chip: "Not checked", title: err } : null, () => void load(true));
 
   const recheck = <Button pending={busy} onClick={() => void load(true)}>Recheck</Button>;
   const desc = <>
@@ -3149,10 +3159,12 @@ function RequirementsPane({ open }: { open: boolean }) {
      the button is always where it was. */
   if (err || !deps) {
     return (
-      <SettingsCard title="On this machine" icon={<ServerIcon size={ICON.sm} />} desc={desc}
+      <SettingsCard title="On this machine" icon={<ServerIcon size={ICON.sm} />} desc={desc} tone={err ? "error" : "default"}
         status={<StatusBadge tone={err ? "err" : "checking"}>{err ? "Not checked" : "Checking"}</StatusBadge>}
         actions={recheck}>
-        <SettingRow label={err ? err : "Checking this machine…"} hint={err ? "Recheck to try again." : undefined} />
+        {err
+          ? <ProblemNote title="Nothing could be checked">{err} Recheck to try again.</ProblemNote>
+          : <EmptyState>Checking this machine…</EmptyState>}
       </SettingsCard>
     );
   }
@@ -3252,6 +3264,7 @@ function LaunchPermissionsCard({ open }: { open: boolean }) {
       setLaunchPermissions({ mode: r.mode, deny: r.deny });
     }).catch(() => setErr("Could not reach the server — this setting is unavailable."));
   }, [open]);
+  const phase = useSavePhase("terminal", busy, !!err);
   const save = (p: { mode?: LaunchMode; deny?: string }) => {
     setBusy(true); setNote(null); setErr(null);
     api.launchPermissionsSave(p)
@@ -3266,7 +3279,7 @@ function LaunchPermissionsCard({ open }: { open: boolean }) {
   };
   const bad = parseDenyRules(deny).bad;
   return (
-    <SettingsCard title="Launch permissions" icon={<ShieldIcon size={ICON.sm} />} desc="How every terminal agentglass opens starts its agent: Review with Claude, a hand-off, an issue, a resumed session, a Command that runs claude.">
+    <SettingsCard title="Launch permissions" icon={<ShieldIcon size={ICON.sm} />} status={<SaveChip phase={phase} />} desc="How every terminal agentglass opens starts its agent: Review with Claude, a hand-off, an issue, a resumed session, a Command that runs claude.">
       <SettingRow
         agentNever="the permission mode every agent the app starts runs in: loosening it is an escalation, so only the owner changes it"
         label="Permission mode for terminals agentglass opens"
@@ -3308,6 +3321,7 @@ function TerminalRunsOn({ open }: { open: boolean }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const phase = useSavePhase("terminal", busy, !!err);
   const load = () => api.tmuxStatus().then((r) => { setTerminal(r.terminal || "engine"); setErr(null); })
     .catch(() => setErr("Could not reach the server — this setting is unavailable."));
   useEffect(() => { if (open) void load(); }, [open]);
@@ -3327,7 +3341,7 @@ function TerminalRunsOn({ open }: { open: boolean }) {
   };
 
   return (
-    <SettingsCard title="Terminal runs on" icon={<TerminalIcon size={ICON.sm} />} desc="The shell a Terminal view starts.">
+    <SettingsCard title="Terminal runs on" icon={<TerminalIcon size={ICON.sm} />} status={<SaveChip phase={phase} />} desc="The shell a Terminal view starts.">
       <SettingRow
         agentNever="which tmux a shell runs in, held by the server: it changes what runs a shell, so the owner chooses it"
         label="Terminal runs on"
@@ -3369,6 +3383,7 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
   /** The card the last action belongs to, so its answer appears under it and not at the foot of the page. */
   const [noteAt, setNoteAt] = useState<"engine" | "prefix" | "config" | "restore">("engine");
   const [busy, setBusy] = useState(false);
+  useReportSaving("tmux", busy);
   /** A failed Restore / Resume save. Not `err`: that one replaces the whole page. */
   const [saveFail, setSaveFail] = useState<string | null>(null);
 
@@ -4258,13 +4273,31 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
   const navTab = TABS.find((x) => x.id === navPane);
   const colRef = useRef<HTMLDivElement | null>(null);
   const tabIcons = useMemo(() => new Map(tabs.map((t) => [t.id as string, t.icon])), [tabs]);
-  const marks = useMemo(() => navMarks({
+  /* What a page says about itself after it opened: it failed to read what it shows, or a write is out.
+     The facts above are one read per open; these are the pages' own, so they turn the nav dot and the
+     header chip without the shell knowing a thing about Jira or an engine scan. */
+  const [problems, setProblems] = useState<Record<string, PageProblem>>({});
+  const [saving, setSaving] = useState<ReadonlySet<string>>(() => new Set());
+  const retries = useRef<Record<string, () => void>>({});
+  const pageState = useMemo<PageStateSink>(() => ({
+    problem: (page, p, retry) => {
+      if (p && retry) retries.current[page] = retry;
+      setProblems((cur) => applyProblem(cur, page, p));
+    },
+    saving: (page, on) => setSaving((cur) => {
+      if (cur.has(page) === on) return cur;
+      const next = new Set(cur);
+      if (on) next.add(page); else next.delete(page);
+      return next;
+    }),
+  }), []);
+  const marks = useMemo(() => withProblems(navMarks({
     ...NO_FACTS, ...facts,
     connectionsNeed: badges.connections ?? null,
     remoteLive: badges.remote ? badges.remote === "live" : null,
     logNeed: logDigest === null || logDigest === "failed" ? null : logDigest.quiet ? 0 : logDigest.crashLoops.length + logDigest.spikes.length,
     clickupConnected: cuConnected,
-  }), [facts, badges, logDigest, cuConnected]);
+  }), problems), [facts, badges, logDigest, cuConnected, problems]);
 
   return (
     /* Everything this dialog opens — a confirm, a menu, a picker — is a portal
@@ -4337,7 +4370,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
               {navTab && (
                 <SettingsPageHeader
                   label={navTab.label} group={groupByName(navTab.group) ?? null} icon={navTab.icon} what={navTab.what}
-                  chips={headerChips(navTab.id, marks[navTab.id] ?? NO_MARK)}
+                  chips={headerChips(navTab.id, marks[navTab.id] ?? NO_MARK, saving.has(navTab.id))}
+                  primary={problems[navTab.id] ? <Button tone="primary" onClick={() => retries.current[navTab.id]?.()}>Try again</Button> : undefined}
                   reset={pageModified(navTab.id) ? <Button onClick={() => resetPage(navTab.id)}>Reset page</Button> : undefined} />
               )}
               {/* The page's hue (its group's) tints every card's icon chip; a board's width
@@ -4359,6 +4393,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                     custom property inherits downward only.
                   */}
                   <div ref={colRef} className="agx-settings-col" data-flow={WIDE_PANES.has(pane) ? "single" : undefined}>
+                  <PageState.Provider value={pageState}>
                   <Filter.Provider value={filterCtx}>
                   {ql && show("appearance") && <PageMatchHeading id="appearance" onOpen={() => { setPane("appearance" as Pane); setQ(""); }} />}
                   {show("appearance") && (
@@ -5004,6 +5039,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   {ql && show("about") && <PageMatchHeading id="about" onOpen={() => { setPane("about" as Pane); setQ(""); }} />}
                   {show("about") && <><AboutPane open={open} /><LogDigestSection d={logDigest} /></>}
                   </Filter.Provider>
+                  </PageState.Provider>
                   </div>
                 </div>
               </div>

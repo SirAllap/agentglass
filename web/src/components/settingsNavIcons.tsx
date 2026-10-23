@@ -146,6 +146,43 @@ export function PlugIcon({ size = ICON.md }: P) {
   );
 }
 
+/* The next four are the mockup's own: two pages sharing a glyph (three plugs, two checklists) are
+   indistinguishable on the 68px icon rail, where the label is gone. */
+export function ChipIcon({ size = ICON.md }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <rect x="7" y="7" width="10" height="10" rx="2" />
+      <path d="M10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4" />
+    </svg>
+  );
+}
+
+export function FlowIcon({ size = ICON.md }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <rect x="4" y="4" width="6" height="5" rx="1.5" />
+      <rect x="14" y="15" width="6" height="5" rx="1.5" />
+      <path d="M10 6.5h4a2 2 0 0 1 2 2V15" />
+    </svg>
+  );
+}
+
+export function LayersIcon({ size = ICON.md }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <path d="M12 4l8.5 4.5L12 13 3.5 8.5zM3.5 12.5L12 17l8.5-4.5M3.5 16.5L12 21l8.5-4.5" />
+    </svg>
+  );
+}
+
+export function DiamondIcon({ size = ICON.md }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <path d="M12 3l9 9-9 9-9-9zM12 8l4 4-4 4-4-4z" />
+    </svg>
+  );
+}
+
 export function ServerIcon({ size = ICON.md }: P) {
   return (
     <svg {...svg} width={size} height={size}>

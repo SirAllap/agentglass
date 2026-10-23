@@ -69,12 +69,34 @@ export function ListEditorSplit({ list, editor }: { list: ReactNode; editor: Rea
   return <div className="agx-le">{list}{editor}</div>;
 }
 
-export function ListPanel({ sections, selected, onSelect, nothing }: {
+/** A list with nothing in it at all, as opposed to a filter that matched nothing. */
+export interface ListBlank {
+  icon: ReactNode;
+  title: string;
+  /** One sentence: what an entry is, and where it ends up. */
+  text: ReactNode;
+  /** What fills the list, the same action as the bar's. */
+  action: ReactNode;
+}
+
+export function ListPanel({ sections, selected, onSelect, nothing, blank }: {
   sections: ListSection[]; selected: string | null; onSelect: (id: string) => void;
   /** Shown when the filter leaves nothing in any section. */
   nothing?: ReactNode;
+  /** Shown instead of the sections when there is nothing to filter: one sentence and the action that fills it. */
+  blank?: ListBlank;
 }) {
   const none = sections.every((s) => !s.entries.length);
+  if (blank) {
+    return (
+      <div className="agx-le-list agx-le-blank">
+        <span aria-hidden className="agx-le-art">{blank.icon}</span>
+        <h3>{blank.title}</h3>
+        <p>{blank.text}</p>
+        {blank.action}
+      </div>
+    );
+  }
   return (
     <div className="agx-le-list">
       {sections.map((s) => (
@@ -125,17 +147,17 @@ export function EditorPanel({ title, chips, actions, children, label }: {
   );
 }
 
-/** What the form's foot says. `dirty` is the draft differing from what is saved. */
+/** What the form's foot says. `dirty` is the draft differing from what is saved; `busy` is the write being out. */
 export function EditorFoot({ dirty, canSave, noun, onCancel, busy }: {
   dirty: boolean; canSave: boolean; noun: string; onCancel: () => void; busy?: boolean;
 }) {
   return (
-    <div className="agx-le-foot" data-dirty={dirty ? "true" : undefined}>
-      <i aria-hidden />
-      <span role="status">{dirty ? "Unsaved changes" : "All changes saved"}</span>
+    <div className="agx-le-foot" data-dirty={dirty ? "true" : undefined} data-busy={busy ? "true" : undefined}>
+      {busy ? <span className="agx-spin" aria-hidden /> : <i aria-hidden />}
+      <span role="status">{busy ? `Saving ${noun}…` : dirty ? "Unsaved changes" : "All changes saved"}</span>
       <span className="flex-1" />
-      {dirty && <Button onClick={onCancel} disabled={busy}>Cancel</Button>}
-      {dirty && <Button type="submit" tone="primary" disabled={!canSave || busy}>Save {noun}</Button>}
+      {(dirty || busy) && <Button onClick={onCancel} disabled={busy}>Cancel</Button>}
+      {(dirty || busy) && <Button type="submit" tone="primary" pending={busy} disabled={!canSave || busy}>{busy ? "Saving…" : `Save ${noun}`}</Button>}
     </div>
   );
 }

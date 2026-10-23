@@ -16,7 +16,8 @@
  * the old box until they do.
  */
 import { useId, useState, type ReactNode } from "react";
-import { CaretIcon } from "../lib/glyphIcons.tsx";
+import { CaretIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import type { SavePhase } from "../lib/settingsStates.ts";
 import { ICON } from "../lib/iconSize.ts";
 import { Button, CHIP_SURFACE, CHIP_SURFACE_CLS, CTRL_H } from "./workspace/Chrome.tsx";
 
@@ -26,8 +27,10 @@ import { Button, CHIP_SURFACE, CHIP_SURFACE_CLS, CTRL_H } from "./workspace/Chro
  * an amber edge along its top, so a page of cards says which one to read first.
  * `danger` is the separate red-tinted "Danger zone" card: its actions are
  * outline buttons, never filled, and what they do can be undone.
+ * `error` is the card whose service failed (Jira's token was refused): the
+ * same red tint, but its buttons stay filled, because "Try again" is the way out.
  */
-export type CardTone = "default" | "decision" | "danger";
+export type CardTone = "default" | "decision" | "danger" | "error";
 
 /**
  * A group of settings: an optional icon chip, a title, one sentence under it,
@@ -113,15 +116,52 @@ export function SettingsCard({ title, desc, status, actions, children, label, fo
  *   info      worth knowing, nothing to do: info ink
  *   off       not connected, not installed: a hollow dot, neutral
  *   checking  no answer yet: neutral, and says so
+ *   saving    a write is out: info, with a spinner where the dot is
  *
  * Text is always the `--*-ink` of its hue, never the bare hue: the bare
  * warning yellow measured about 1.6:1 on the light card. The look is in
  * index.css (`.agx-badge`), drawn from the theme's own tokens.
  */
-export type StatusTone = "ok" | "warn" | "err" | "info" | "off" | "checking";
+export type StatusTone = "ok" | "warn" | "err" | "info" | "off" | "checking" | "saving";
 
 export function StatusBadge({ tone, children }: { tone: StatusTone; children: ReactNode }) {
-  return <span className="agx-badge" data-tone={tone}><i aria-hidden />{children}</span>;
+  // The spinner is the house `.agx-spin`; it breathes instead of turning under reduced motion.
+  return tone === "saving"
+    ? <span className="agx-badge" data-tone="info"><span className="agx-spin" aria-hidden />{children}</span>
+    : <span className="agx-badge" data-tone={tone}><i aria-hidden />{children}</span>;
+}
+
+/**
+ * What a write says about itself, for a card header or a row: "Saving" while it
+ * is out, "Saved" for a moment after, nothing otherwise. Polite, so a screen
+ * reader hears that a write happened without being pulled off what it is on.
+ */
+export function SaveChip({ phase }: { phase: SavePhase }) {
+  return (
+    <span role="status" aria-live="polite" className="agx-save">
+      {phase === "saving" && <StatusBadge tone="saving">Saving</StatusBadge>}
+      {phase === "saved" && <StatusBadge tone="ok">Saved</StatusBadge>}
+    </span>
+  );
+}
+
+/**
+ * A service that did not answer, said where the cards would be: what failed in
+ * one bold line, why under it, and the way out at the end. Red ground, so it
+ * is the first thing read on the page; the same words are in the page header's
+ * chip and behind the nav's red dot, which the page reports (SettingsPageState).
+ */
+export function ProblemNote({ title, children, action }: { title: string; children?: ReactNode; action?: ReactNode }) {
+  return (
+    <div className="agx-settings-row agx-problem" role="alert">
+      <span aria-hidden className="agx-problem-ic"><WarningIcon size={ICON.md} /></span>
+      <div className="agx-problem-b">
+        <b>{title}</b>
+        {children && <span>{children}</span>}
+      </div>
+      {action && <div className="agx-slot">{action}</div>}
+    </div>
+  );
 }
 
 /**

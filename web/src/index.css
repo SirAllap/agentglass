@@ -2110,6 +2110,10 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
 @media (max-width: 1100px) { .agx-settings-shell { --nav-w: 68px; } }
 .agx-settings-nav { width: var(--nav-w); }
 .agx-settings-main { padding-inline: 0; }
+/* The mockup scales its root font 14 to 15.5px from 2200px; the settings are px, so the page (not the nav, whose
+   search popover is positioned by the viewport) takes the same ratio as a zoom. Chromium 128+ reports boxes in
+   the zoomed space, so a popover placed from a trigger's rect still lands on it. */
+@media (min-width: 2200px) { .agx-settings-main { zoom: 1.107; } }
 
 .agx-sn-top { padding: 0 12px 10px; border-bottom: 1px solid var(--surface-line); }
 .agx-sp-box {
@@ -3648,21 +3652,21 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
   background: var(--surface-card); border: 1px solid var(--surface-line); border-radius: 0.75rem;
   box-shadow: var(--surface-lift); overflow: hidden; min-width: 0;
 }
-.agx-le-lg { display: flex; align-items: center; gap: 8px; padding: 10px 14px 7px; border-top: 1px solid var(--surface-line); }
+.agx-le-lg { display: flex; align-items: center; gap: 8px; padding: 10px 14px 8px; border-top: 1px solid var(--surface-line); }
 .agx-le-list > :first-child > .agx-le-lg { border-top: 0; }
 .agx-le-lg b { flex: 1; font-size: 11px; font-weight: 650; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text2); }
 .agx-le-n { font-size: 11px; color: var(--text3); }
 .agx-le-add { display: grid; place-items: center; width: 24px; height: 24px; border: 0; border-radius: 6px; background: none; color: var(--text3); cursor: pointer; }
 .agx-le-add:hover { color: var(--text); background: color-mix(in srgb, var(--text) 8%, transparent); }
 .agx-le-li {
-  display: flex; flex-direction: column; gap: 1px; width: 100%; padding: 9px 14px 9px 16px; position: relative;
+  display: flex; flex-direction: column; gap: 1px; width: 100%; padding: 8px 14px 8px 16px; position: relative;
   border: 0; border-top: 1px solid color-mix(in srgb, var(--surface-line) 70%, transparent); background: none;
   text-align: left; color: var(--text); cursor: pointer;
 }
 .agx-le-li:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
 .agx-le-li[aria-current="true"] { background: color-mix(in srgb, var(--hue, var(--primary)) 14%, transparent); }
 .agx-le-li[aria-current="true"]::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--hue, var(--primary)); }
-.agx-le-t { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 650; min-width: 0; }
+.agx-le-t { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 650; min-width: 0; }
 .agx-le-s { font-size: 11.5px; color: var(--text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agx-le-tag { font-size: 10px; font-weight: 500; padding: 0 6px; border-radius: 5px; color: var(--text3); box-shadow: inset 0 0 0 1px var(--surface-line); }
 .agx-le-empty { padding: 10px 16px 14px; font-size: 12px; color: var(--text3); }
@@ -3678,3 +3682,37 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-le-foot[data-dirty] > i { background: var(--warning); }
 .agx-le-none { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 40px 20px; text-align: center; color: var(--text3); }
 .agx-le-none b { color: var(--text); }
+
+/*
+ * The states a page has besides "fine" (decisions in lib/settingsStates.ts).
+ * error: a service that did not answer, in a card (tone "error") or a row
+ * (ProblemNote); saving: the chip's spinner is the house `.agx-spin`; blank:
+ * a list with nothing in it, one sentence and the action that fills it.
+ */
+.agx-scard[data-tone="error"] {
+  background: color-mix(in srgb, var(--error) 5%, var(--surface-card));
+  border-color: color-mix(in srgb, var(--error) 40%, var(--surface-line));
+}
+.agx-scard[data-tone="error"] .agx-settings-head-t { color: var(--error-ink); }
+.agx-scard[data-tone="error"] .agx-scard-ic { background: color-mix(in srgb, var(--error) 16%, transparent); color: var(--error-ink); }
+.agx-problem { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 10px 12px; background: color-mix(in srgb, var(--error) 9%, transparent); }
+.agx-problem-ic { display: flex; flex: none; margin-top: 1px; color: var(--error-ink); }
+.agx-problem-b { flex: 1 1 14rem; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.agx-problem-b b { font-size: 13.5px; font-weight: 650; color: var(--error-ink); }
+.agx-problem-b span { font-size: 12px; line-height: 1.45; color: var(--text2); overflow-wrap: anywhere; }
+.agx-save:empty { display: none; }
+.agx-badge > .agx-spin { flex: none; }
+.agx-le-foot > .agx-spin { flex: none; }
+.agx-le-blank { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 34px 26px; text-align: center; }
+.agx-le-art {
+  display: grid; place-items: center; width: 64px; height: 64px; border-radius: 20px;
+  background: color-mix(in srgb, var(--hue, var(--primary)) 16%, transparent);
+  color: color-mix(in srgb, var(--hue, var(--primary)) 80%, var(--text));
+}
+.agx-le-blank h3 { margin: 0; font-size: 15px; font-weight: 650; color: var(--text); }
+.agx-le-blank p { margin: 0; max-width: 46ch; font-size: 12.5px; line-height: 1.5; color: var(--text3); }
+/* The nav dot of a page that failed (red) stays on the icon rail, where every other mark is folded away. */
+.agx-sn-dot[data-state="err"] { background: var(--error); }
+@media (max-width: 1100px) {
+  .agx-sn-meta[data-keep] { display: flex; position: absolute; top: 4px; right: 6px; }
+}

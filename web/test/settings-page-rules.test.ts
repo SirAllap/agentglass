@@ -268,7 +268,7 @@ describe("the shared blocks", () => {
       expect(rule, tone).toContain(`color: var(--${hue}-ink)`);
       expect(rule, tone).toContain(`color-mix(in srgb, var(--${hue})`);
     }
-    expect(kit).toContain('export type StatusTone = "ok" | "warn" | "err" | "info" | "off" | "checking";');
+    expect(kit).toContain('export type StatusTone = "ok" | "warn" | "err" | "info" | "off" | "checking" | "saving";');
     // The page header's chips are this badge, not a second one.
     expect(read(join(COMPONENTS, "SettingsPageHeader.tsx"))).toContain("<StatusBadge");
     expect(css).not.toContain(".agx-hchip");

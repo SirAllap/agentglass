@@ -348,7 +348,7 @@ export function Offer({ entry, owner, onInstalled, mode, was = null, onSettings 
     <article className="flex flex-col min-w-0 rounded-xl overflow-hidden"
       style={{ background: "var(--surface-card)", border: LINE, boxShadow: "var(--surface-lift)" }}>
       <PluginPreview src={entry.preview} name={title} tint={tint}>
-        <span aria-hidden className="grid place-items-center rounded-2xl text-[28px] font-semibold" style={{
+        <span aria-hidden className="grid place-items-center rounded-xl text-[28px] font-semibold" style={{
           width: 72, height: 72, color: tint,
           background: `color-mix(in srgb, ${tint} 15%, transparent)`,
           border: `1px solid color-mix(in srgb, ${tint} 32%, transparent)`,

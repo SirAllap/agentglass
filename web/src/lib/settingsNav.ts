@@ -68,12 +68,14 @@ export function openGroupOf(shut: ReadonlySet<NavGroupId>, pageGroup: NavGroupId
 
 /* ── marks ── */
 
-export type MarkState = "on" | "off" | "needs" | "update" | "none";
+export type MarkState = "on" | "off" | "needs" | "update" | "err" | "none";
 export interface PageMark {
   state: MarkState;
   /** A needs-you count (or a short word such as "82%"). */
   count?: number | string;
   title?: string;
+  /** `err` only: the words of the page header's red chip. */
+  chip?: string;
 }
 export const NO_MARK: PageMark = { state: "none" };
 
@@ -133,8 +135,23 @@ export function navMarks(f: NavFacts): Record<string, PageMark> {
   return out;
 }
 
-/** How many of a group's pages want a person: the number on a collapsed group. */
-export const rollup = (marks: readonly PageMark[]): number => marks.filter((m) => m.state === "needs").length;
+/** How many of a group's pages want a person: the number on a collapsed group. A page that failed to read wants one too. */
+export const rollup = (marks: readonly PageMark[]): number => marks.filter((m) => m.state === "needs" || m.state === "err").length;
+
+/**
+ * What a page reports about itself when it could not read or reach what it
+ * shows: the words of its red header chip, and the sentence under the nav dot.
+ * The page owns the state (its own fetch failed); the shell only draws it.
+ */
+export interface PageProblem { chip: string; title: string }
+
+/** A page that reported a problem turns its nav mark red, over whatever the open-time facts said:
+ *  the fact is a guess from one read, the report is what the page itself just failed at. */
+export function withProblems(marks: Readonly<Record<string, PageMark>>, problems: Readonly<Record<string, PageProblem>>): Record<string, PageMark> {
+  const out: Record<string, PageMark> = { ...marks };
+  for (const [id, p] of Object.entries(problems)) out[id] = { state: "err", title: p.title, chip: p.chip };
+  return out;
+}
 
 export interface NavPageIn { id: string; label: string; group: string }
 export interface NavPage extends NavPageIn { mark: PageMark }
@@ -161,7 +178,7 @@ export function buildNav(pages: readonly NavPageIn[], marks: Readonly<Record<str
 
 /* ── page header chips ── */
 
-export type ChipTone = "ok" | "warn" | "err" | "info" | "off";
+export type ChipTone = "ok" | "warn" | "err" | "info" | "off" | "saving";
 export interface HeaderChip { tone: ChipTone; text: string }
 
 /** The words a page's own on and off mean. A page not listed says nothing for them. */
@@ -176,8 +193,15 @@ const STATE_WORDS: Record<string, { on?: string; off?: string }> = {
 };
 
 /** Chips for a page header, from the page's mark and nothing else: the header
- *  can never say something the nav does not. */
-export function headerChips(id: string, mark: PageMark): HeaderChip[] {
+ *  can never say something the nav does not. A write that is out adds "Saving"
+ *  after the verdict: the page keeps saying what it was while it saves. */
+export function headerChips(id: string, mark: PageMark, saving = false): HeaderChip[] {
+  const chips = markChips(id, mark);
+  return saving ? [...chips, { tone: "saving", text: "Saving" }] : chips;
+}
+
+function markChips(id: string, mark: PageMark): HeaderChip[] {
+  if (mark.state === "err") return [{ tone: "err", text: mark.chip ?? "Not reachable" }];
   const w = STATE_WORDS[id] ?? {};
   if (id === "plugins" && mark.state === "on") return [{ tone: "ok", text: `${mark.count} running` }];
   if (mark.state === "on" && w.on) return [{ tone: "ok", text: w.on }];

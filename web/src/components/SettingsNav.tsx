@@ -11,6 +11,8 @@ type Page = NavPageIn & { icon: (p: { size?: number }) => ReactElement };
 /** What the nav says at the right of a page: a count that wants you, a dot that is on or off, a word for an update. */
 function Mark({ m }: { m: PageMark }) {
   if (m.state === "none") return null;
+  // Red, and kept on the icon rail (data-keep): a page that could not read what it shows is the one mark worth a glance at 900px.
+  if (m.state === "err") return <span className="agx-sn-meta" data-keep><i className="agx-sn-dot" data-state="err" role="img" aria-label="problem" title={m.title} /></span>;
   if (m.state === "needs") return <span className="agx-sn-meta"><span className="agx-sn-cnt" title={m.title}>{m.count}</span></span>;
   if (m.state === "update") return <span className="agx-sn-meta"><span className="agx-sn-cnt" data-tone="info" title={m.title}>update</span></span>;
   return (

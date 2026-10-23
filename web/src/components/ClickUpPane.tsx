@@ -17,6 +17,8 @@ import { DEFAULT_SPRINT_LIST_PATTERN, DEFAULT_READ_ONLY_FIELD_PATTERN, type Clic
 import { DEFAULT_CARD_SKILL_PATTERN } from "../../../shared/cardSkills.ts";
 import { SettingRow, Switch, Toggle } from "./SettingRow.tsx";
 import { EmptyState, Field, SettingsCard, SettingsForm, StatusBadge, helpIdFor } from "./SettingsKit.tsx";
+import { useReportProblem } from "./SettingsPageState.tsx";
+import { problemChip } from "../lib/settingsStates.ts";
 import { Button, INPUT, INPUT_STYLE, Segmented } from "./workspace/Chrome.tsx";
 import { Dot, StatusPopover, type PanelView } from "./StatusPanel.tsx";
 import { ListEye, WorkflowMap } from "./WorkflowMap.tsx";
@@ -155,6 +157,10 @@ export function ClickUpPane() {
     : state.kind === "empty" ? { kind: "empty" }
     : { kind: "error", text: state.throttled ? `${n.name} asked us to wait (rate limit).` : state.error };
   const frozen = state.kind === "error" && state.unauthorised === true;
+  /* A connected workspace whose cards could not be read: the card above says "As of" or "Not read"; the shell
+     turns the nav dot and the header chip red with the same words, and its button reads again. */
+  useReportProblem("clickup",
+    connected && state.kind === "error" ? { chip: problemChip(state), title: state.error } : null, reread);
 
   /* What each step points at, with the built-in default filled in for a step that names none:
      what the map shows has to be what the app runs. Memoised, so the map's lines are not redrawn

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SettingRow } from "../SettingRow.tsx";
-import { CommandLine, SettingsCard, StatusBadge } from "../SettingsKit.tsx";
+import { CommandLine, ProblemNote, SettingsCard, StatusBadge } from "../SettingsKit.tsx";
+import { useReportProblem } from "../SettingsPageState.tsx";
 import { Button, Segmented } from "../workspace/Chrome.tsx";
 import { api } from "../../lib/api.ts";
 import { engineProviders, type Provider } from "../../../../shared/agentKinds.ts";
@@ -117,14 +118,17 @@ export function EnginesPane() {
   // null: not chosen yet, so the card is open when nothing at all is installed.
   const [absentOpen, setAbsentOpen] = useState<boolean | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  /** The last scan did not come back. What is on screen is the one before (or nothing yet). */
+  const [failed, setFailed] = useState(false);
   const alive = useRef(true);
   useEffect(() => () => { alive.current = false; }, []);
 
   const load = useCallback((fresh: boolean | string = false) => {
-    void api.engines(fresh).then((r) => { if (alive.current) { setReport(r); setNow(Date.now()); } }).catch(() => { /* a failed read keeps what is on screen */ });
+    void api.engines(fresh).then((r) => { if (alive.current) { setReport(r); setNow(Date.now()); setFailed(false); } }).catch(() => { if (alive.current) setFailed(true); });
     void api.agents().then((r) => { if (alive.current) setAgents(r.agents); }).catch(() => { if (alive.current) setAgents([]); });
   }, []);
   useEffect(() => { load(); }, [load]);
+  useReportProblem("engines", failed ? { chip: "Not scanned", title: "Could not scan this machine for agent CLIs." } : null, () => load(true));
 
   const test = async (id: string) => {
     setTesting((s) => new Set(s).add(id));
@@ -168,6 +172,13 @@ export function EnginesPane() {
       {/* The tiles are one per engine, so the bar says how many are in each
           state and cuts the list to one of them; the counts are read from the
           same answers the tiles are drawn from. */}
+      {failed && (
+        <SettingsCard title="This machine" tone="error" wide>
+          <ProblemNote title="Could not scan for agent CLIs" action={<Button onClick={() => load(true)}>Try again</Button>}>
+            The local server did not answer{report ? ", so the tiles below are from the last scan that did" : ""}. Nothing was changed.
+          </ProblemNote>
+        </SettingsCard>
+      )}
       <div className="flex flex-wrap items-center gap-3 mb-4">
         <Segmented label="Show engines" value={view} onChange={setView}
           options={[
