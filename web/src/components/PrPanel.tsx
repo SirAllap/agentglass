@@ -9087,6 +9087,7 @@ function Masthead({ root, repo, d, busy, local, stackUi, onOpenPr, onShowLocal, 
         <Field label="Changes">
           <span className="tabular-nums" style={{ color: "var(--success-ink)" }}>+{d.additions}</span>
           <span className="tabular-nums" style={{ color: "var(--error-ink)" }}>−{d.deletions}</span>
+          <DiffBlocks additions={d.additions} deletions={d.deletions} />
           <span style={{ color: "var(--text3)" }}>· {d.changedFiles} file{d.changedFiles === 1 ? "" : "s"}</span>
         </Field>
         <Field label="Assignee" max={190}>
@@ -11778,6 +11779,21 @@ function TimelineEvent({ e }: { e: PrEvent }) {
 /** Commits pushed back to back, as GitHub prints them: who, how many, and the
  *  subjects. The Commits tab has the rest. */
 /** A GitHub user named in running text: face and name in a quiet pill, so a person stands out from the words around them. */
+/** GitHub's five-square diffstat: the share of added and deleted lines at a glance, grey for what is left over by rounding. */
+function DiffBlocks({ additions, deletions }: { additions: number; deletions: number }) {
+  const total = additions + deletions;
+  if (!total) return null;
+  const add = Math.round((5 * additions) / total);
+  const del = Math.min(5 - add, Math.round((5 * deletions) / total));
+  return (
+    <span className="inline-flex items-center gap-0.5 align-middle" aria-label={`${additions} added, ${deletions} deleted`}>
+      {Array.from({ length: 5 }, (_, i) => (
+        <span key={i} className="rounded-sm" style={{ width: 8, height: 8, background: i < add ? "var(--success-ink)" : i < add + del ? "var(--error-ink)" : "var(--surface-line)" }} />
+      ))}
+    </span>
+  );
+}
+
 function UserPill({ name }: { name: string }) {
   return (
     <span className="inline-flex items-center gap-1 align-middle rounded-full pl-0.5 pr-1.5" style={{ background: "var(--surface-inset)", border: LINE, color: "var(--text)", fontWeight: 600 }}>
