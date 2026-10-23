@@ -3943,6 +3943,9 @@ export interface PrMergeGate {
 }
 
 export interface PrDetail extends PrSummary {
+  /** The base branch's tip the pull request was last compared against (40 hex).
+   *  `headSha` is inherited from the row and is the head's. */
+  baseSha?: string;
   /** The author's profile name and public email, when GitHub has them: what a
    *  tracker member is matched against. Absent for a bot or a private profile. */
   authorName?: string;

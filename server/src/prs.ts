@@ -3009,14 +3009,35 @@ async function headBranch(root: string): Promise<string> {
  * old — so the poll never waits on the network, and the age is shown rather
  * than hidden behind a spinner that lies.
  */
-export async function listPrs(rootIn: unknown, filterIn: unknown, stateIn: unknown, force = false, afterIn?: unknown, queryIn?: unknown): Promise<PrListResponse> {
+/**
+ * `label=` values as search qualifiers. Each one is `label:"name"`, and GitHub
+ * ANDs repeated qualifiers, so the rows that come back carry every label given
+ * — and the page, the total and the cursor are the filtered list's own, which a
+ * pass over the unfiltered page could not give. The qualifier rides the `q` path,
+ * so it is in the cache key without a second key. Cost: one search on a cold
+ * label set, none warm; GitHub matches a label name case-insensitively.
+ */
+export function labelQuery(labelsIn: unknown): string {
+  const raw = Array.isArray(labelsIn) ? labelsIn : typeof labelsIn === "string" ? [labelsIn] : [];
+  const seen = new Set<string>();
+  for (const l of raw) {
+    // A quote or a line break would end the qualifier early; GitHub label names carry neither.
+    const name = typeof l === "string" ? l.replace(/["\r\n]/g, " ").trim().slice(0, 100) : "";
+    if (name) seen.add(name);
+    if (seen.size >= 10) break;
+  }
+  return [...seen].map((n) => `label:"${n}"`).join(" ");
+}
+
+export async function listPrs(rootIn: unknown, filterIn: unknown, stateIn: unknown, force = false, afterIn?: unknown, queryIn?: unknown, labelsIn?: unknown): Promise<PrListResponse> {
   const filter: PrFilter = filterIn === "review" || filterIn === "all" ? filterIn : "mine";
   const state: PrState = stateIn === "closed" || stateIn === "all" ? stateIn : "open";
   // A cursor is opaque base64 from GitHub; anything else is not ours to send on.
   const after = typeof afterIn === "string" && /^[A-Za-z0-9+/=_-]{1,200}$/.test(afterIn) ? afterIn : undefined;
   // The panel's filter text, kept whole: searchExpr decides what of it is a
   // qualifier and what is somebody's words.
-  const query = typeof queryIn === "string" ? queryIn.slice(0, 400) : undefined;
+  const typed = typeof queryIn === "string" ? queryIn.slice(0, 400) : "";
+  const query = [typed, labelQuery(labelsIn)].filter(Boolean).join(" ") || undefined;
   const repo = await repoIdFor(rootIn);
   if (!repo) {
     const cap = await ghCapability();
@@ -3486,7 +3507,7 @@ export const DETAIL_QUERY = `query($owner:String!,$name:String!,$number:Int!){
     pullRequest(number:$number){
     id number title url state isDraft createdAt updatedAt closedAt mergedAt
     additions deletions changedFiles totalCommentsCount
-    baseRefName headRefName body
+    baseRefName headRefName headRefOid baseRefOid body
     headRepositoryOwner{login}
     mergeable mergeStateStatus reviewDecision viewerDidAuthor viewerCanUpdate
     author{login ... on User{name email}}
@@ -4098,6 +4119,10 @@ async function readDetail(rootIn: unknown, number: number, repo: PrRepoId, key: 
     isDraft: !!p.isDraft,
     headRefName: p.headRefName || "",
     baseRefName: p.baseRefName || "",
+    // Full oids, off the same node: the last entry of `commits` is not the head
+    // once GitHub cuts the connection at 100.
+    ...(typeof p.headRefOid === "string" && p.headRefOid ? { headSha: p.headRefOid } : null),
+    ...(typeof p.baseRefOid === "string" && p.baseRefOid ? { baseSha: p.baseRefOid } : null),
     url: p.url || "",
     updatedAt: p.updatedAt || "",
     reviewDecision: p.reviewDecision || null,
@@ -6116,6 +6141,58 @@ export async function filesSince(rootIn: unknown, fromIn: unknown, toIn: unknown
   // `-z`, because a path with a newline in it is legal and a line-split parser turns
   // one file into two — one of which does not exist.
   return { ok: true, paths: r.stdout.split("\0").filter(Boolean) };
+}
+
+/**
+ * The unified diff between two commits of a pull request's head history, for a
+ * second pass that wants what moved and not only which files (`filesSince`).
+ *
+ * ASKED OF THE LOCAL CLONE for the reason `filesSince` gives: GitHub's compare
+ * endpoint answers 404 on an SSO organisation. The same consequences follow. A
+ * checkout is required, so a `gh:` root is refused upstream and a commit the
+ * clone does not hold (a fork's head that was never fetched) comes back as
+ * `missing` rather than being fetched here: this route writes nothing.
+ *
+ * Both ends must be ancestors of the head `prDetail` holds for this number, so
+ * it cannot be pointed at an unrelated commit of the repository. Binary files
+ * come out as git's own "Binary files differ" line, the way `gh pr diff` has
+ * them, and a diff past the one-entry cap of the diff cache is refused whole
+ * rather than cut at a line that is not a hunk boundary.
+ *
+ * Requests: none of its own. The head sha is the detail's, so a warm detail
+ * costs nothing and a cold one is the one read it would have cost anyway.
+ */
+export async function compareDiff(rootIn: unknown, numberIn: unknown, fromIn: unknown, toIn: unknown): Promise<{
+  ok: boolean; text?: string; missing?: string; error?: string;
+}> {
+  const number = Number(numberIn);
+  if (!Number.isInteger(number) || number <= 0) return { ok: false, error: "invalid pull request number" };
+  const from = String(fromIn || "").trim();
+  const to = String(toIn || "").trim();
+  if (!/^[0-9a-f]{7,40}$/i.test(from) || !/^[0-9a-f]{7,40}$/i.test(to)) return { ok: false, error: "invalid commit" };
+  const asked = safeAbs(rootIn);
+  const root = asked ? repoRootOf(asked) : null;
+  if (!root) return { ok: false, error: "not a git checkout" };
+  const got = await prDetail(rootIn, number);
+  if (!got.ok || !got.detail) return { ok: false, error: got.error || "could not read the pull request" };
+  const head = got.detail.headSha;
+  if (!head) return { ok: false, error: "could not read the head commit" };
+  const full: string[] = [];
+  for (const sha of [from, to, head]) {
+    const r = await gitAsync(root, ["rev-parse", "--verify", "--quiet", `${sha}^{commit}`]);
+    const oid = r.stdout.trim();
+    if (r.code !== 0 || !/^[0-9a-f]{40}$/.test(oid)) return { ok: true, missing: sha, error: "that commit is not in this checkout" };
+    full.push(oid);
+  }
+  for (const [i, sha] of [from, to].entries()) {
+    const anc = await gitAsync(root, ["merge-base", "--is-ancestor", full[i], full[2]]);
+    if (anc.code === 1) return { ok: false, error: `${sha} is not part of this pull request` };
+    if (anc.code !== 0) return { ok: false, error: (anc.stderr || "").trim().split("\n")[0] || "could not check that commit" };
+  }
+  const d = await gitAsync(root, ["diff", "--no-color", "--no-ext-diff", "--no-textconv", full[0], full[1]]);
+  if (d.code !== 0) return { ok: false, error: (d.stderr || "").trim().split("\n")[0] || "could not compare those commits" };
+  if (d.stdout.length > DIFF_MAX_ONE) return { ok: false, error: "that diff is larger than 6 MB; compare fewer commits" };
+  return { ok: true, text: d.stdout };
 }
 
 export async function commitDiff(rootIn: unknown, shaIn: unknown): Promise<{ ok: boolean; text?: string; error?: string }> {

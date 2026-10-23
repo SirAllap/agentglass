@@ -181,7 +181,7 @@ import {
   listPrs, prDetail, prDiff, prAsset, ghCapability, submitReview, addComment, replyToThread,
   editComment, deleteComment, hideComment, unhideComment, setFileViewed, setAssignees, setMilestone, viewCounts, jobLog, checkJobs, checkFailures, cachedCheckFailures, failingTestsFor, rerunJobs, addLineComment, mentionables, facetOptions, applySuggestion, fileSlice,
   setThreadResolved, react, editPr, setLabels, setReviewers, setDraft, updateBranch,
-  rerunFailedChecks, mergePr, closePr, unstickLook, unstickClose, unstickReopen, filesSince, codeowners, prepareReviewPrompt, pendingReviewFor, branchUrl, subscribeCi, subscribeTalk, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
+  rerunFailedChecks, mergePr, closePr, unstickLook, unstickClose, unstickReopen, filesSince, compareDiff, codeowners, prepareReviewPrompt, pendingReviewFor, branchUrl, subscribeCi, subscribeTalk, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
   prBaseOf,
   ghRateLimit,
   branchBehind, localHead, prRollup, prRowDetails, personBoard, refBranchRows, repoIdFor as prRepoIdFor, subscribeTalkSeen,
@@ -8202,9 +8202,10 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         url.searchParams.get("force") === "1",
         url.searchParams.get("after") || undefined,
         url.searchParams.get("q") || undefined,
+        url.searchParams.getAll("label"),
       );
       // Only an unpaged, unfiltered read is the whole list: a later page's PRs are old, not new.
-      if (!url.searchParams.get("after") && !url.searchParams.get("q")) noteMine(root, filter, state, listed);
+      if (!url.searchParams.get("after") && !url.searchParams.get("q") && !url.searchParams.getAll("label").length) noteMine(root, filter, state, listed);
       return json(listed);
     }
     /* Which files moved between two commits of this pull request — see filesSince.
@@ -8364,6 +8365,15 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     // Images in a PR body. Not JSON — it streams the bytes back, because
     // GitHub's own attachment URLs 404 without the token this attaches.
     if (pathname === "/prs/asset") return prAsset(url.searchParams.get("url") || "", !!caller && caller.scope !== "full");
+    /* The diff between two commits of this pull request, from the local clone — see compareDiff. */
+    if (pathname === "/prs/compare-diff") {
+      return json(await compareDiff(
+        url.searchParams.get("root") || "",
+        url.searchParams.get("number") || "",
+        url.searchParams.get("from") || "",
+        url.searchParams.get("to") || "",
+      ));
+    }
     if (pathname === "/prs/commit-diff") {
       return json(await prCommitDiff(url.searchParams.get("root") || "", url.searchParams.get("sha") || ""));
     }
