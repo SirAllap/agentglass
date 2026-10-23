@@ -25,6 +25,7 @@ import { dirname, join, normalize } from "node:path";
 import type { TmuxWindow, TmuxPane, AgentPane } from "../../shared/types.ts";
 import { parsePanes, PANE_FORMAT } from "./paneloc.ts";
 import { validSessionName } from "./tmuxpane.ts";
+import { PLACE_FORMAT, parsePlaceWindows, placeArgs } from "./tmuxplace.ts";
 import { isLocked } from "./tmuxlock.ts";
 import { findTmuxBelow } from "./procchildren.ts";
 import { recall } from "./tmuxmemory.ts";
@@ -1220,7 +1221,9 @@ export function runAction(
       closePopup(t.socket, clientTty ?? outerClientTty(t.socket));
       return tmux(t.socket, ["select-window", "-t", id]) !== null;
     case "new":
-      // At the end, which is tmux's default and where the button is.
+      // Next to its group (tmuxplace.ts), else at the end, which is tmux's
+      // default and where the button is. The paragraph below is why it is not
+      // simply "next to the current window".
       //
       // This used to pass `-a` to match `^b c`, on the grounds that the two
       // should agree. They should not: they are different gestures. `^b c` is
@@ -1262,7 +1265,8 @@ export function runAction(
         const names = (tmux(t.socket, ["list-windows", "-t", t.id, "-F", "#{window_name}"]) ?? "")
           .split("\n").map((l) => l.trim()).filter(Boolean);
         const mine = nextAgentName(names);
-        const made = tmux(t.socket, ["new-window", "-P", "-F", "#{window_id}", "-n", mine, "-t", t.id, ...(cwd ? ["-c", cwd] : [])]);
+        const where = placeArgs(parsePlaceWindows(tmux(t.socket, ["list-windows", "-t", t.id, "-F", PLACE_FORMAT]) ?? ""), mine, t.id, id ?? undefined);
+        const made = tmux(t.socket, ["new-window", "-P", "-F", "#{window_id}", "-n", mine, ...where, ...(cwd ? ["-c", cwd] : [])]);
         if (made === null) return false;
         const born = made.trim().split("\n").find((l) => WINDOW_ID.test(l.trim()))?.trim();
         if (born) tmux(t.socket, ["set-window-option", "-t", born, "automatic-rename", "off"]);
@@ -1555,8 +1559,9 @@ export function newWindowRunning(
   const clean = sanitizeWindowName(name);
   // Tab-separated, like every other format string here: a window name can
   // contain spaces, and neither of these two fields can contain a tab.
+  const where = placeArgs(parsePlaceWindows(tmux(t.socket, ["list-windows", "-t", t.id, "-F", PLACE_FORMAT]) ?? ""), clean || name, t.id);
   const out = tmux(t.socket, [
-    "new-window", "-P", "-F", "#{pane_id}\t#{window_id}", "-t", t.id, "-c", cwd,
+    "new-window", "-P", "-F", "#{pane_id}\t#{window_id}", ...where, "-c", cwd,
     ...(clean ? ["-n", clean] : []),
     ...argv,
   ]);

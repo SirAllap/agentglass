@@ -12,6 +12,7 @@
 // from browser requests, and tmux treats `:` and `.` as separators it would
 // happily resolve onto a target we did not mean.
 import { tmux, validSessionName, type TmuxResult } from "./tmuxpane.ts";
+import { PLACE_FORMAT, parsePlaceWindows, placeArgs } from "./tmuxplace.ts";
 import type { TmuxWindow } from "../../shared/types.ts";
 
 /** A pane row, as the UI needs it. */
@@ -169,8 +170,10 @@ export function paneCommand(argv: string[]): string {
 /** A new window (tab) in the session, running `argv` in `cwd` when given. */
 export async function newWindow(name: string, cwd: string, argv: string[] = [], title?: string): Promise<TmuxResult> {
   if (!validSessionName(name)) return { ok: false, stdout: "", stderr: "invalid pane name" };
-  const args = ["new-window", "-d", "-t", `=${name}`, "-c", cwd];
-  if (title && /^[\w ._/-]{1,40}$/.test(title)) args.push("-n", title);
+  const named = title && /^[\w ._/-]{1,40}$/.test(title) ? title : "";
+  const listed = await tmux(["list-windows", "-t", `=${name}:`, "-F", PLACE_FORMAT]);
+  const args = ["new-window", "-d", ...placeArgs(parsePlaceWindows(listed.stdout), named, `=${name}`), "-c", cwd];
+  if (named) args.push("-n", named);
   if (argv.length) args.push(...["sh", "-c", paneCommand(argv)]);
   return tmux(args);
 }
