@@ -2172,6 +2172,12 @@ const realApi = {
    *  the checkout, needed only when the reply is also posted on GitHub. */
   pluginNoteReply: (plugin: string, id: string, body: { status?: NoteStatus; reply: { text: string; postToGitHub: boolean }; root?: string }) =>
     post<{ ok: boolean; error?: string; status?: NoteStatus; replies?: NoteReply[]; posted?: boolean; postError?: string }>("/plugins/pr-notes/status", { plugin, id, ...body }),
+  /** Approve run / Skip on a run that waits for the person's OK. */
+  pluginRunDecision: (plugin: string, id: string, decision: "approve" | "skip") =>
+    post<{ ok: boolean; error?: string }>("/plugins/pr-run-decision", { plugin, id, decision }),
+  /** A button the plugin declared on its findings. */
+  pluginNoteAction: (plugin: string, id: string, noteId: string) =>
+    post<{ ok: boolean; error?: string }>("/plugins/pr-note-action", { plugin, id, noteId }),
   pluginPrOpen: (repo: string, number: number) =>
     post<{ ok: boolean }>("/plugins/pr-open", { repo, number }),
   pluginPrAction: (plugin: string, id: string, repo: string, number: number) =>
@@ -2835,6 +2841,8 @@ const demoApi: typeof realApi = {
   pluginPrNotes: (_repo: string, _n: number) => D({ ok: true, runs: [], notes: [], publishers: {} } as PluginPrNotes),
   pluginNoteStatus: (_p: string, _id: string, _s: NoteStatus) => D({ ok: false, error: "not available in the demo" }),
   pluginNoteReply: (_p: string, _id: string, _b: { status?: NoteStatus; reply: { text: string; postToGitHub: boolean }; root?: string }) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string; status?: NoteStatus; replies?: NoteReply[]; posted?: boolean; postError?: string }),
+  pluginRunDecision: (_p: string, _id: string, _d: "approve" | "skip") => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string }),
+  pluginNoteAction: (_p: string, _id: string, _n: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string }),
   pluginPrOpen: (_repo: string, _n: number) => D({ ok: true }),
   pluginPrAction: (_p: string, _id: string, _repo: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
   pluginUpdate: (_name: string) => D({ ok: false, error: "not available in the demo" } as { ok: false; error: string } | { ok: true; plugin: PublicPlugin; update: PluginUpdateReport }),

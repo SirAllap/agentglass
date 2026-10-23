@@ -282,6 +282,10 @@ A plugin declares where it draws, in its manifest, next to its scope:
       { "id": "review", "label": "Local review" },
       { "id": "review-full", "label": "Review from scratch" }
     ],
+    "noteActions": [
+      { "id": "fix", "label": "Fix" },
+      { "id": "ask", "label": "Ask the agent" }
+    ],
     "settings": [
       { "key": "repos", "type": "list", "label": "Repositories" },
       { "key": "model", "type": "select", "label": "Model", "options": ["opus", "sonnet"] }
@@ -296,13 +300,14 @@ into the manifest hash, so a plugin that starts drawing somewhere new is asked
 about again. A manifest with no `contributes` hashes exactly as it did before
 drawing existed, so upgrading the app clears no approval.
 
-Five places a plugin can appear:
+Six places a plugin can appear:
 
 | Contribution | Where it shows | What the plugin sends |
 |---|---|---|
 | `panels` | A tab in the **Plugins** view, in the rail's bottom drawer | A tree of nodes (below), redrawn whenever it likes; or, with `"canvas": true`, a live scene changed by operations (see *A live panel*). At most 8, each with an `id`, a `title` of at most 40 characters, and optionally one `icon` from `puzzle`, `review`, `check`, `chart`, `list`, `bell`, `bug`, `book`, `bolt`, `eye` — a word the app maps to its own set, so a plugin ships no image for it |
 | `settings` | A page of its own in **Settings**, under Connections | Nothing: the app draws the fields and stores the values |
 | `prNotes` | Inside a pull request: one entry per pass in the conversation's **Local** lane, and each note under its line in the Files tab | Runs and notes, with a severity, a path and a line |
+| `noteActions` | Extra buttons on each finding **of that plugin**, after Reply, Resolve, Dismiss and Copy. At most 4, a label of at most 24 characters | Nothing to draw: a press is the `note-action` event |
 | `prActions` | A button in every pull request's header, in the plugin's own colour, with the rest of its actions under a caret | Nothing to draw: the button's state is read from the plugin's runs on that pull request |
 | `inboxAnnotations` | A small badge on Inbox rows, and a "Sort: <plugin>" choice in the Inbox's toolbar | A badge, a tip and a number per row (below). It cannot hide a row |
 
@@ -328,6 +333,7 @@ value is the exception: it is in `secrets.json`, below) — which is why a
 prompt written in a settings box never travels with the plugin.
 | `POST /plugin/self/pr/run` | Start or finish a pass over a pull request |
 | `POST /plugin/self/pr/notes` `{notes}` | Add or update notes |
+| `POST /plugin/self/pr/notes/reply` `{id, text}` | Answer a finding's thread as the plugin (below) |
 
 **A button in a pull request** (`prActions`, at most five) is not a trigger
 with a spinner. The first one declared is the button and the rest hang off its
@@ -667,6 +673,132 @@ A worked plugin that uses all four is
 [local-review](https://github.com/SirAllap/agentglass-local-review): it reviews
 your labelled pull requests with the agent you choose, inside a sandbox, and
 keeps the findings in the pull request view.
+
+### Review plugin contract
+
+A plugin that reviews pull requests talks to the app through the routes and
+events below. The contract has a version, `2`, which the app reports as
+`contract` in `GET /plugin/self`; an app from before it reports none, which a
+plugin reads as `1`. Every addition in 2 is optional and tolerant in both
+directions: an old plugin works against a new app unchanged, a new plugin
+against an old app loses only what the old app does not draw, and a field an
+app does not know is ignored, never refused. A plugin that wants to be careful
+asks once (`contract >= 2`) or probes the route: the reply route answers `404`
+on an app without it.
+
+| Item | Direction | Status | The other side must tolerate |
+|---|---|---|---|
+| `POST /plugin/self/pr/run` `{id, repo, number, sha, state, title, summary, meta, startedAt, finishedAt}` | plugin to app | existing | |
+| &nbsp;&nbsp;`state: "needs-ok"`, `costUsd` | plugin to app | **new (2)** | An old app refuses `needs-ok` (400, names the states it knows) and drops `costUsd` |
+| `POST /plugin/self/pr/notes` `{notes: [{id, severity, title, body, path, line, sha, runId}]}` | plugin to app | existing | |
+| &nbsp;&nbsp;`agreement {k, n}`, `by[]` | plugin to app | **new (2)** | An old app drops them |
+| `note-status` event `{repo, number, id, status, at}` | app to plugin | existing | |
+| &nbsp;&nbsp;`reply`, `replies[]` | app to plugin | existing (*Replies under a finding*) | Absent when there are none |
+| `pr-action`, `pr-open` events | app to plugin | existing | |
+| `note-action` event `{id, noteId, repo, number, at}` | app to plugin | **new (2)** | Only sent for an action the manifest declared |
+| `run-approve`, `run-skip` events `{id, repo, number, at}` | app to plugin | **new (2)** | Only sent for a run in `needs-ok` |
+| `POST /plugin/self/pr/notes/reply` `{id, text}` | plugin to app | **new (2)** | `404` on an older app: skip thread answers |
+| `GET /plugins/pr-notes/cost?plugin=&days=` (read scope) | reader to app | **new (2)** | Absent on an older app |
+| Manifest `contributes.noteActions` `[{id, label}]` | plugin to app | **new (2)** | An older app ignores the key and draws no buttons. Declare it under `contributes`, never beside it, so the approval hash covers it |
+| `GET /prs/detail`, `/prs/diff`, `/prs/compare-diff`, `/prs/tree-at`, `/prs/list?label=`, `/prs/rollup`, `/prs/check-failures-cached`, `/prs/failing-tests`, `/prs/check-metrics`, `/prs/codeowners`, `/prs/locate` | plugin to app | existing | `{ok: true, missing}` and `gh:` root refusals handled; fall back to `gh` on an older app |
+| `GET /clickup/task?id=`, `/jira/task` | plugin to app | existing | An absent card is no section, never an error |
+| `GET /prs/sessions?root&number` (manifest `reads: ["sessions"]`) | plugin to app | planned, not in 2 | |
+
+Nothing in this table can post to GitHub. The plugin never holds a write path
+there: the one way a finding's words leave the machine is still the person's
+reply with its box ticked (*Replies under a finding*).
+
+**A run waiting for the person's OK.** A plugin that estimates a run's cost can
+hold it back when the estimate is over what the person set:
+
+```json
+POST /plugin/self/pr/run
+{ "id": "run-7", "repo": "acme/orbit", "number": 1042, "sha": "3f9a2c1",
+  "state": "needs-ok", "title": "Local review",
+  "summary": "Estimated $2.40, over your $1.00 limit.",
+  "costUsd": 2.4, "startedAt": 1792190000000 }
+```
+
+`costUsd` is a number from 0 to 1000, kept to four decimals; anything else is
+`400` with `run.costUsd must be a number` or `run.costUsd must be between 0 and
+1000`. The run header shows it as a chip (`$2.40`; `<$0.01` for a fraction of a
+cent). A `needs-ok` run shows **Needs your OK** with **Approve run** and
+**Skip**, and a press tells the plugin once:
+
+```json
+{ "type": "run-approve", "id": "run-7", "repo": "acme/orbit", "number": 1042, "at": 1792190100000 }
+{ "type": "run-skip",    "id": "run-7", "repo": "acme/orbit", "number": 1042, "at": 1792190100000 }
+```
+
+The app changes nothing else: moving the run to `running`, `cancelled` or
+`done` is the plugin's, and it does so by posting the run again. The press is
+remembered while the run stays in `needs-ok` (a second press is refused, so no
+second event), and forgotten when the run moves on. A plugin cannot send that
+memory itself.
+
+The cost of every run that carries one is also summed per plugin per UTC day,
+the day the run started, counting a run once however often its cost is
+repeated. It is kept for 90 days, and read-only:
+
+```
+GET /plugins/pr-notes/cost?plugin=acme-review&days=7
+→ { "ok": true, "days": [ { "plugin": "acme-review", "day": "2026-10-17", "usd": 3.1835, "runs": 6 } ] }
+```
+
+`plugin` is optional (all plugins), `days` is 1 to 90 (default 30), newest day
+first. The Usage screen will read it; the route is all there is for now.
+
+**Agreement and authors on a finding.** A reviewer that asks others to confirm
+a finding says how many did, and which agents raised it:
+
+```json
+{ "notes": [ { "id": "f-df05fe5d61f441", "severity": "high",
+  "repo": "acme/orbit", "number": 1042, "path": "src/a.ts", "line": 10,
+  "title": "Guard runs after the loop",
+  "agreement": { "k": 2, "n": 3 }, "by": ["agent-a", "agent-b"] } ] }
+```
+
+The finding shows **2/3 agree** and one small chip per agent. `agreement` takes
+whole numbers with `0 <= k <= n` and `1 <= n <= 20`; `by` takes at most 5
+names of 1 to 40 characters, cleaned like other note text (tags and control
+characters gone, repeats dropped). Anything else is `400` naming the field:
+`note.agreement needs 0 <= k <= n and 1 <= n <= 20`, `note.by holds at most 5
+names`. One bad note refuses the whole request, and none of it is stored.
+
+**A plugin answering a finding.** So that *Ask the agent* can answer the
+person:
+
+```json
+POST /plugin/self/pr/notes/reply
+{ "id": "f-df05fe5d61f441", "text": "The guard now runs before the loop in 3f9a2c1." }
+→ { "ok": true, "replies": [ { "id": "r_lq3x9k2a1b4c", "text": "…", "at": 1792190000000,
+                                "by": "agent:acme-review", "postedOnGitHub": false } ] }
+```
+
+It is stored in the finding's thread with `by` set to `agent:<plugin name>`,
+shown like any reply, and never sent to GitHub or anywhere else (a
+`postToGitHub` in the body is ignored). The plugin is not told about its own
+reply, so a plugin that answers every `note-status` cannot feed itself. Same
+caps as a person's: 4000 characters, 50 per finding. On top, 30 replies an hour
+per plugin: past it the answer is `429` with `at most 30 replies an hour per
+plugin; try again later`. An unknown finding is `404`, a body that is not
+`{id, text}` is `400`.
+
+**Buttons on a plugin's findings.** `contributes.noteActions` (at most 4, a
+`label` of at most 24 characters, ids as for `prActions`) adds a button per
+action to each finding the plugin wrote, after Reply, Resolve, Dismiss and
+Copy. The approval screen says it ("Buttons on its findings: Fix, Ask the
+agent"), and since it is under `contributes` the manifest hash covers it: a
+plugin that adds a button is asked about again. A press arrives as
+
+```json
+{ "type": "note-action", "id": "fix", "noteId": "f-df05fe5d61f441",
+  "repo": "acme/orbit", "number": 1042, "at": 1792190200000 }
+```
+
+What it does is the plugin's: an action that writes code should be a person's
+press on the plugin's side too, and the app only ever sends this event for a
+declared action on one of that plugin's own findings, while it runs.
 
 ## From the terminal
 

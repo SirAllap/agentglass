@@ -10870,7 +10870,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
                               width: split ? "min(560px, calc(100cqw - 16px))" : "min(900px, calc(100cqw - 16px))",
                             }}>
                               {ts?.map((t) => <Thread key={t.id} t={t} inline onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy} />)}
-                              {ln.map((n) => <NoteCard key={`${n.plugin}/${n.id}`} n={n} compact md={localMd} onStatus={(st) => { void local?.setStatus(n, st); }} onReply={local && ((d, st) => local.reply(n, d, st))} />)}
+                              {ln.map((n) => <NoteCard key={`${n.plugin}/${n.id}`} n={n} compact md={localMd} onStatus={(st) => { void local?.setStatus(n, st); }} onReply={local && ((d, st) => local.reply(n, d, st))} actions={local?.noteActions[n.plugin]} onAction={local && ((id) => { void local.pressAction(n, id); })} />)}
                               {pend.map((dc, i) => (
                                 <div key={`p${i}`} className="rounded-lg overflow-hidden text-[11.5px]" style={{
                                   background: "var(--surface-card)",
@@ -11049,7 +11049,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
                 <div className="flex items-center gap-2 text-[9.5px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>
                   <LocalMark />Notes on lines this diff does not show
                 </div>
-                {belowNotes.map((n) => <NoteCard key={`${n.plugin}/${n.id}`} n={n} compact md={localMd} onStatus={(st) => { void local?.setStatus(n, st); }} onReply={local && ((d, st) => local.reply(n, d, st))} />)}
+                {belowNotes.map((n) => <NoteCard key={`${n.plugin}/${n.id}`} n={n} compact md={localMd} onStatus={(st) => { void local?.setStatus(n, st); }} onReply={local && ((d, st) => local.reply(n, d, st))} actions={local?.noteActions[n.plugin]} onAction={local && ((id) => { void local.pressAction(n, id); })} />)}
               </div>
             )}
             {open && belowThreads.length > 0 && (
@@ -12066,8 +12066,8 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
         ms: g.ms, key: g.key, lane: "local",
         node: <span style={{ color: "var(--primary-ink)" }}><EyeIcon size={ICON.xs} /></span>,
         body: <div className="agx-note">{g.run
-          ? <RunCard run={g.run} notes={g.notes} publisher={local.publishers[g.run.plugin]} onStatus={local.setStatus} onReply={local.reply} onOpenFile={onOpenFile} md={localMd} />
-          : <div className="flex flex-col gap-1.5">{g.notes.map((n) => <NoteCard key={`${n.plugin}/${n.id}`} n={n} md={localMd} onStatus={(st) => local.setStatus(n, st)} onReply={(d, st) => local.reply(n, d, st)} onOpenFile={onOpenFile} />)}</div>}</div>,
+          ? <RunCard run={g.run} notes={g.notes} publisher={local.publishers[g.run.plugin]} onStatus={local.setStatus} onReply={local.reply} onOpenFile={onOpenFile} md={localMd} noteActions={local.noteActions} onAction={(n, id) => { void local.pressAction(n, id); }} onDecide={(r, d) => { void local.decideRun(r, d); }} />
+          : <div className="flex flex-col gap-1.5">{g.notes.map((n) => <NoteCard key={`${n.plugin}/${n.id}`} n={n} md={localMd} onStatus={(st) => local.setStatus(n, st)} onReply={(d, st) => local.reply(n, d, st)} onOpenFile={onOpenFile} actions={local.noteActions[n.plugin]} onAction={(id) => { void local.pressAction(n, id); }} />)}</div>}</div>,
       });
     }
   }

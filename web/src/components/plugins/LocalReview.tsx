@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../lib/api.ts";
-import type { NoteStatus, PluginPrNotes, PrNote, PrRun } from "../../lib/pluginTypes.ts";
+import type { NoteActionContribution, NoteStatus, PluginPrNotes, PrNote, PrRun } from "../../lib/pluginTypes.ts";
+import { agreementLabel, agreementTitle, agreementTone, costLabel, runHeaderState } from "../../lib/noteChips.ts";
 import { subscribePluginFrame } from "../../lib/pluginBus.ts";
 import { Markdown } from "../../lib/markdown.tsx";
 import { ago } from "../../lib/fileRecents.ts";
@@ -34,6 +35,12 @@ export interface LocalNotes {
   setStatus: (n: LocalNote, s: NoteStatus) => Promise<void>;
   /** Answer a finding, optionally closing it in the same request. */
   reply: (n: LocalNote, draft: ReplyDraft, status?: NoteStatus) => Promise<ReplyResult>;
+  /** The buttons each running plugin declared on its own findings. */
+  noteActions: Record<string, NoteActionContribution[]>;
+  /** A finding button was pressed: the plugin is told which finding. */
+  pressAction: (n: LocalNote, actionId: string) => Promise<void>;
+  /** Approve run / Skip on a run waiting for the person's OK. */
+  decideRun: (run: LocalRun, decision: "approve" | "skip") => Promise<void>;
 }
 
 /** `cancelled`: the person said no to the GitHub question, which is not an error. */
@@ -97,7 +104,17 @@ export function useLocalNotes(
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
   }, []);
-  return { runs: data.runs, notes: data.notes, publishers: data.publishers, setStatus, reply };
+  const pressAction = useCallback(async (n: LocalNote, actionId: string) => {
+    await api.pluginNoteAction(n.plugin, actionId, n.id).catch(() => {});
+  }, []);
+  const decideRun = useCallback(async (run: LocalRun, decision: "approve" | "skip") => {
+    // Shown at once, so the buttons go away on the press; the frame that
+    // follows the plugin's next write replaces it.
+    setData((d) => ({ ...d, runs: d.runs.map((x) => (x.plugin === run.plugin && x.id === run.id ? { ...x, decision } : x)) }));
+    const r = await api.pluginRunDecision(run.plugin, run.id, decision).catch(() => null);
+    if (!r?.ok) void load();
+  }, [load]);
+  return { runs: data.runs, notes: data.notes, publishers: data.publishers, noteActions: data.noteActions ?? {}, setStatus, reply, pressAction, decideRun };
 }
 
 const SEV: Record<PrNote["severity"], { label: string; color: string; rank: number }> = {
@@ -112,6 +129,27 @@ const SEV: Record<PrNote["severity"], { label: string; color: string; rank: numb
 export function sortNotes(ns: LocalNote[]): LocalNote[] {
   const open = (n: LocalNote) => (n.status === "open" ? 0 : 1);
   return [...ns].sort((a, b) => open(a) - open(b) || SEV[a.severity].rank - SEV[b.severity].rank || (a.path ?? "").localeCompare(b.path ?? "") || (a.line ?? 0) - (b.line ?? 0));
+}
+
+const TONE_INK: Record<"success" | "warning" | "muted", string> = { success: "var(--success-ink)", warning: "var(--warning-ink)", muted: "var(--text3)" };
+
+/** Small marks after the severity: how many second opinions agreed, and which
+ *  agents raised the finding. Same size as the severity chip, so a row of them
+ *  reads as one. */
+function NoteMarks({ n, dim }: { n: LocalNote; dim?: boolean }) {
+  if (!n.agreement && !n.by?.length) return null;
+  const chip = (key: string, text: string, color: string, title?: string) => (
+    <span key={key} title={title} className="shrink-0 text-[9.5px] font-medium px-1.5 py-px rounded tracking-wide"
+      style={{ color, background: `color-mix(in srgb, ${color} 10%, transparent)`, opacity: dim ? 0.7 : 1 }}>
+      {text}
+    </span>
+  );
+  return (
+    <>
+      {n.agreement && chip("agree", agreementLabel(n.agreement), TONE_INK[agreementTone(n.agreement)], agreementTitle(n.agreement))}
+      {n.by?.map((b) => chip(`by-${b}`, b, "var(--text3)", `Raised by ${b}`))}
+    </>
+  );
 }
 
 function SevChip({ s, dim }: { s: PrNote["severity"]; dim?: boolean }) {
@@ -151,8 +189,9 @@ function copyNote(n: LocalNote): void {
   void navigator.clipboard?.writeText(text).catch(() => {});
 }
 
-function StatusActions({ n, onStatus, onReply, replying }: {
+function StatusActions({ n, onStatus, onReply, replying, actions, onAction }: {
   n: LocalNote; onStatus: (s: NoteStatus) => void; onReply?: () => void; replying?: boolean;
+  actions?: NoteActionContribution[]; onAction?: (id: string) => void;
 }) {
   return (
     <div className="flex items-center gap-1 shrink-0">
@@ -166,6 +205,10 @@ function StatusActions({ n, onStatus, onReply, replying }: {
         <Button size="compact" onClick={() => onStatus("open")}>Reopen</Button>
       )}
       <Button size="compact" onClick={() => copyNote(n)} title="Copy as markdown, to post it yourself if you choose to">Copy</Button>
+      {/* The plugin's own, after the app's so those never move. */}
+      {onAction && actions?.map((a) => (
+        <Button key={a.id} size="compact" onClick={() => onAction(a.id)} title={`${a.label} — asks ${n.plugin}; nothing is sent to GitHub`}>{a.label}</Button>
+      ))}
     </div>
   );
 }
@@ -178,8 +221,10 @@ function StatusActions({ n, onStatus, onReply, replying }: {
 export type MdFn = (text: string) => React.ReactNode;
 const plainMd: MdFn = (text) => <div className="agx-prose text-[12px]"><Markdown text={text} /></div>;
 
-export function NoteCard({ n, onStatus, onReply, onOpenFile, compact, md = plainMd }: {
+export function NoteCard({ n, onStatus, onReply, onOpenFile, compact, md = plainMd, actions, onAction }: {
   n: LocalNote; onStatus: (s: NoteStatus) => void;
+  /** The plugin's own buttons for this finding, and what pressing one does. */
+  actions?: NoteActionContribution[]; onAction?: (id: string) => void;
   /** Absent: no Reply button (a card drawn where nothing can be saved). */
   onReply?: (draft: ReplyDraft, status?: NoteStatus) => Promise<ReplyResult>;
   onOpenFile?: (path: string, line?: number) => void; compact?: boolean; md?: MdFn;
@@ -201,8 +246,9 @@ export function NoteCard({ n, onStatus, onReply, onOpenFile, compact, md = plain
           buttons go to the next line instead of off the edge. */}
       <div className="flex items-center gap-x-2 gap-y-1 px-2.5 py-1.5 min-w-0 flex-wrap">
         <SevChip s={n.severity} dim={closed} />
+        <NoteMarks n={n} dim={closed} />
         <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}
-          className="text-left text-[12px] font-medium min-w-[16ch] flex-1 truncate"
+          className="text-left text-[12px] font-medium min-w-[24ch] flex-1 truncate"
           style={{ color: closed ? "var(--text3)" : "var(--text)", textDecoration: n.status === "dismissed" ? "line-through" : undefined, background: "transparent", border: 0, padding: 0 }}>
           {n.title}
         </button>
@@ -214,7 +260,8 @@ export function NoteCard({ n, onStatus, onReply, onOpenFile, compact, md = plain
           </button>
         )}
         {closed && <span className="text-[10px] uppercase tracking-wide" style={{ color: "var(--text4)" }}>{n.status}</span>}
-        <StatusActions n={n} onStatus={onStatus} onReply={onReply ? () => setComposing((v) => !v) : undefined} replying={composing} />
+        <StatusActions n={n} onStatus={onStatus} onReply={onReply ? () => setComposing((v) => !v) : undefined} replying={composing}
+          actions={actions} onAction={onAction} />
       </div>
       {open && n.body && (
         <div className="px-3 pb-2.5 pt-0.5 min-w-0">{md(n.body)}</div>
@@ -346,8 +393,12 @@ export function ReplyComposer({ status, onSend, onClose }: {
  * first. The notes stay in this card rather than scattering through the
  * conversation, because they were said together and are read together.
  */
-export function RunCard({ run, notes, publisher, onStatus, onReply, onOpenFile, md = plainMd }: {
+export function RunCard({ run, notes, publisher, onStatus, onReply, onOpenFile, md = plainMd, noteActions, onAction, onDecide }: {
   run: LocalRun; notes: LocalNote[]; publisher?: string;
+  /** Finding buttons by plugin, and a press on one. */
+  noteActions?: Record<string, NoteActionContribution[]>; onAction?: (n: LocalNote, actionId: string) => void;
+  /** Approve run / Skip. Absent: a run waiting for an OK is drawn without the buttons. */
+  onDecide?: (run: LocalRun, decision: "approve" | "skip") => void;
   onStatus: (n: LocalNote, s: NoteStatus) => void;
   onReply?: (n: LocalNote, draft: ReplyDraft, status?: NoteStatus) => Promise<ReplyResult>;
   onOpenFile?: (path: string, line?: number) => void;
@@ -364,7 +415,8 @@ export function RunCard({ run, notes, publisher, onStatus, onReply, onOpenFile, 
   const shown = showClosed ? sorted : sorted.filter((n) => n.status === "open");
   const closedN = notes.length - openN;
   const state = run.state;
-  const stateColor = state === "failed" ? "var(--error)" : state === "done" ? "var(--success)" : state === "cancelled" ? "var(--text3)" : "var(--primary)";
+  const head = runHeaderState(run);
+  const stateColor = state === "failed" ? "var(--error)" : state === "needs-ok" ? "var(--warning-ink)" : state === "done" ? "var(--success)" : state === "cancelled" ? "var(--text3)" : "var(--primary)";
   return (
     <div className="rounded-lg min-w-0" style={{
       background: "var(--surface-card)",
@@ -376,8 +428,20 @@ export function RunCard({ run, notes, publisher, onStatus, onReply, onOpenFile, 
         <span className="text-[12.5px] font-semibold truncate" style={{ color: "var(--text)" }}>{run.title}</span>
         <span className="inline-flex items-center gap-1 text-[10.5px]" style={{ color: stateColor }}>
           {(state === "running" || state === "queued") && <Spinner />}
-          {state}
+          {head.label}
         </span>
+        {run.costUsd !== undefined && (
+          <span className="shrink-0 text-[10px] font-medium tabular-nums px-1.5 py-px rounded" title="What this run cost"
+            style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--text3) 12%, transparent)" }}>
+            {costLabel(run.costUsd)}
+          </span>
+        )}
+        {head.kind === "waiting" && onDecide && (
+          <span className="inline-flex items-center gap-1">
+            <Button size="compact" tone="primary" onClick={() => onDecide(run, "approve")} title="Let this run spend what it estimated">Approve run</Button>
+            <Button size="compact" onClick={() => onDecide(run, "skip")} title="Do not run it">Skip</Button>
+          </span>
+        )}
         <span className="flex-1" />
         {run.sha && <span className="t-mono text-[10.5px]" style={{ color: "var(--text3)" }} title={run.sha}>{run.sha.slice(0, 7)}</span>}
         <span className="text-[10.5px]" style={{ color: "var(--text4)" }} title={new Date(run.finishedAt ?? run.startedAt).toLocaleString()}>
@@ -398,7 +462,8 @@ export function RunCard({ run, notes, publisher, onStatus, onReply, onOpenFile, 
       )}
       {notes.length > 0 && (
         <div className="px-2.5 pb-2.5 flex flex-col gap-1.5 min-w-0">
-          {shown.map((n) => <NoteCard key={`${n.plugin}/${n.id}`} n={n} md={md} onStatus={(s) => onStatus(n, s)} onReply={onReply && ((d, st) => onReply(n, d, st))} onOpenFile={onOpenFile} />)}
+          {shown.map((n) => <NoteCard key={`${n.plugin}/${n.id}`} n={n} md={md} onStatus={(s) => onStatus(n, s)} onReply={onReply && ((d, st) => onReply(n, d, st))} onOpenFile={onOpenFile}
+            actions={noteActions?.[n.plugin]} onAction={onAction && ((id) => onAction(n, id))} />)}
           {closedN > 0 && (
             <button type="button" onClick={() => setShowClosed((v) => !v)}
               className="text-[10.5px] self-start px-1 hover:underline" style={{ color: "var(--text3)", background: "transparent", border: 0 }}>
@@ -482,6 +547,9 @@ export function LocalStrip({ local, onShow }: { local: LocalNotes; onShow: () =>
             <LocalMark />
             <span className="text-[12px] truncate min-w-0" style={{ color: "var(--text)" }}>{run.title}</span>
             {running && <Spinner className="px-0 py-0" />}
+            {run.state === "needs-ok" && (
+              <span className="text-[9.5px] uppercase tracking-wide shrink-0" style={{ color: "var(--warning-ink)" }}>{runHeaderState(run).label}</span>
+            )}
             {run.state === "done" && open.length === 0 && (
               <span className="text-[9.5px] uppercase tracking-wide shrink-0" style={{ color: "var(--success-ink)" }}>nothing to fix</span>
             )}

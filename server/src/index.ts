@@ -248,9 +248,9 @@ import {
 import { setPluginSocketHandler, viaPluginSocket } from "./plugin-socket.ts";
 import { CanvasHandle, handleCanvasOps, isCanvasPanel, readBoundedJson, setCanvasResolver } from "./plugin-canvas.ts";
 import {
-  setPluginUiHook, setPanel, panelState, setOptions, pushEvent, takeEvents, upsertRun, upsertNotes, notesFor, answerNote, type GitHubPoster, flushPluginNotes,
+  setPluginUiHook, setPanel, panelState, setOptions, pushEvent, takeEvents, upsertRun, upsertNotes, notesFor, answerNote, replyAsPlugin, costByDay, decideRun, pressNoteAction, type GitHubPoster, flushPluginNotes,
 } from "./plugin-ui.ts";
-import { PANEL_ID_RE, validPrRef } from "../../shared/pluginUi.ts";
+import { PANEL_ID_RE, PLUGIN_CONTRACT, validPrRef } from "../../shared/pluginUi.ts";
 import { readNotifyPrefs, writeNotifyPrefs } from "./notifyPrefs.ts";
 import { fetchCatalogue } from "./plugin-catalogue.ts";
 import { annotate, setAnnotations } from "./inbox-annotations.ts";
@@ -5482,7 +5482,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const body = async <T,>(): Promise<T | null> => { const r = await readBoundedJson(req, 4 * 1024 * 1024); return r.ok ? (r.value as T) : null; };
 
       if (pathname === "/plugin/self" && req.method === "GET") {
-        return json({ ok: true, name: self, contributes: c, settings: pluginOwnSettings(self) });
+        return json({ ok: true, name: self, contract: PLUGIN_CONTRACT, contributes: c, settings: pluginOwnSettings(self) });
       }
       if (pathname === "/plugin/self/events" && req.method === "GET") {
         const wait = Math.max(0, Math.min(30_000, Number(url.searchParams.get("wait") ?? 25_000) || 0));
@@ -5544,6 +5544,12 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         const b = await body<{ notes?: unknown }>();
         const r = upsertNotes(self, c, b?.notes);
         return json(r, r.ok ? 200 : 400);
+      }
+      if (pathname === "/plugin/self/pr/notes/reply") {
+        // The plugin answering a finding's thread. Stored with the finding,
+        // never sent to GitHub; a 404 here means an app from before this route.
+        const r = await replyAsPlugin(self, c, await body<unknown>());
+        return json(r, r.ok ? 200 : r.status);
       }
       return json({ ok: false, error: "not found" }, 404);
     }
@@ -5655,7 +5661,10 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const r = notesFor(url.searchParams.get("repo"), url.searchParams.get("number"));
       if (!r) return json({ ok: false, error: "repo (owner/name) and number are required" }, 400);
       const names = new Map(listPlugins().map((p) => [p.name, p.publisher] as const));
-      return json({ ok: true, ...r, publishers: Object.fromEntries(names) });
+      // The finding buttons of each running plugin ride along, so the window
+      // needs no second request to know what to draw.
+      const noteActions = Object.fromEntries(listPlugins().filter((p) => p.running && p.contributes.noteActions?.length).map((p) => [p.name, p.contributes.noteActions!] as const));
+      return json({ ok: true, ...r, publishers: Object.fromEntries(names), noteActions });
     }
     if (pathname === "/plugins/pr-notes/status" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
@@ -5679,6 +5688,32 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         status: b.status, reply: b.reply, repo: b.repo, number: b.number, by,
         mayPost: (caller?.scope ?? "full") === "full",
       }, poster);
+      return json(r, r.ok ? 200 : 400);
+    }
+    if (pathname === "/plugins/pr-notes/cost" && req.method === "GET") {
+      // Read-only: what a plugin's runs cost, per day, for the Usage screen.
+      const r = costByDay(url.searchParams.get("plugin") ?? undefined, url.searchParams.get("days") ?? undefined);
+      return json(r, r.ok ? 200 : 400);
+    }
+    if (pathname === "/plugins/pr-run-decision" && req.method === "POST") {
+      // Approve run / Skip on a run waiting for the person's OK. The plugin is
+      // told; whether and how it goes on is the plugin's.
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { plugin?: unknown; id?: unknown; decision?: unknown };
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      if (typeof b.plugin !== "string") return json({ ok: false, error: "plugin and id are required" }, 400);
+      if (!isRunning(b.plugin)) return json({ ok: false, error: "that plugin is not running" }, 409);
+      const r = decideRun(b.plugin, b.id, b.decision);
+      return json(r, r.ok ? 200 : 400);
+    }
+    if (pathname === "/plugins/pr-note-action" && req.method === "POST") {
+      // A button a plugin declared on its findings was pressed.
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { plugin?: unknown; id?: unknown; noteId?: unknown };
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      if (typeof b.plugin !== "string") return json({ ok: false, error: "plugin, id and noteId are required" }, 400);
+      if (!isRunning(b.plugin)) return json({ ok: false, error: "that plugin is not running" }, 409);
+      const r = pressNoteAction(b.plugin, contributesOf(b.plugin), b.id, b.noteId);
       return json(r, r.ok ? 200 : 400);
     }
     if (pathname === "/plugins/pr-action" && req.method === "POST") {

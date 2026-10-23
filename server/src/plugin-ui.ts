@@ -119,7 +119,9 @@ export type PluginEvent =
   | { type: "settings"; settings: Record<string, unknown>; at: number }
   | { type: "note-status"; repo: string; number: number; id: string; status: NoteStatus; at: number; reply?: NoteReply; replies?: NoteReply[] }
   | { type: "pr-open"; repo: string; number: number; at: number }
-  | { type: "pr-action"; id: string; repo: string; number: number; at: number };
+  | { type: "pr-action"; id: string; repo: string; number: number; at: number }
+  | { type: "note-action"; id: string; noteId: string; repo: string; number: number; at: number }
+  | { type: "run-approve" | "run-skip"; id: string; repo: string; number: number; at: number };
 
 const MAX_QUEUE = 200;
 const queues = new Map<string, PluginEvent[]>();
@@ -172,7 +174,13 @@ export function forgetPlugin(plugin: string): void {
 
 // ---------------------------------------------------- notes on pull requests
 
-interface NotesStore { runs: (PrRun & { plugin: string })[]; notes: (PrNote & { plugin: string })[] }
+/** What one run cost, by the UTC day it started. Kept apart from the run: the
+ *  run list is capped per pull request, a day's total is not. Set, never added,
+ *  so a plugin repeating a run's cost as it grows does not count it twice. */
+interface CostRow { plugin: string; id: string; day: string; usd: number }
+interface NotesStore { runs: (PrRun & { plugin: string })[]; notes: (PrNote & { plugin: string })[]; costs?: CostRow[] }
+/** The ledger keeps this many days; the route answers at most as many. */
+export const COST_DAYS_KEPT = 90;
 
 let pathOverride: string | null = null;
 /** Test seam, the `__setSavedRepliesPath` shape. */
@@ -200,6 +208,7 @@ function load(): NotesStore {
     cache = {
       runs: Array.isArray(parsed.runs) ? parsed.runs : [],
       notes: Array.isArray(parsed.notes) ? parsed.notes : [],
+      costs: Array.isArray(parsed.costs) ? parsed.costs : [],
     };
   } catch {
     // A corrupt file loses the notes, not the server.
@@ -240,6 +249,7 @@ function bytesOf(plugin: string, s: NotesStore): number {
   let n = 0;
   for (const x of s.notes) if (x.plugin === plugin) n += (x.body?.length ?? 0) + x.title.length + 200 + (x.replies?.reduce((m, r) => m + r.text.length + 100, 0) ?? 0);
   for (const x of s.runs) if (x.plugin === plugin) n += (x.summary?.length ?? 0) + x.title.length + 200;
+  for (const x of s.costs ?? []) if (x.plugin === plugin) n += 80;
   return n;
 }
 
@@ -248,8 +258,12 @@ export function upsertRun(plugin: string, c: Contributes, raw: unknown): { ok: t
   const r = validateRun(raw);
   if (!r.ok) return r;
   const s = load();
-  const run = { ...r.value, plugin };
+  const run: PrRun & { plugin: string } = { ...r.value, plugin };
   const i = s.runs.findIndex((x) => x.plugin === plugin && x.id === run.id);
+  // The person's answer to a needs-ok run stands until the plugin moves the
+  // run on; a plugin repeating needs-ok while it waits does not unsay it.
+  if (i >= 0 && s.runs[i]!.state === "needs-ok" && run.state === "needs-ok" && s.runs[i]!.decision) run.decision = s.runs[i]!.decision;
+  if (run.costUsd !== undefined && !recordCost(s, plugin, run)) return { ok: false, error: "this plugin's notes are over their size limit" };
   if (i < 0 && s.runs.filter((x) => x.plugin === plugin).length >= MAX_RUNS_PER_PLUGIN) {
     return { ok: false, error: `this plugin already keeps ${MAX_RUNS_PER_PLUGIN} runs` };
   }
@@ -266,6 +280,113 @@ export function upsertRun(plugin: string, c: Contributes, raw: unknown): { ok: t
   save();
   onChange({ kind: "pr", repo: run.repo, number: run.number });
   return { ok: true };
+}
+
+function utcDay(ms: number): string { return new Date(ms).toISOString().slice(0, 10); }
+
+function recordCost(s: NotesStore, plugin: string, run: PrRun): boolean {
+  const costs = (s.costs ??= []);
+  const day = utcDay(run.startedAt);
+  const row = costs.find((x) => x.plugin === plugin && x.id === run.id);
+  if (row) { row.usd = run.costUsd!; row.day = day; }
+  else {
+    if (bytesOf(plugin, s) + 80 > MAX_BYTES_PER_PLUGIN) return false;
+    costs.push({ plugin, id: run.id, day, usd: run.costUsd! });
+  }
+  const oldest = utcDay(Date.now() - COST_DAYS_KEPT * 86_400_000);
+  if (costs.some((x) => x.day < oldest)) s.costs = costs.filter((x) => x.day >= oldest);
+  return true;
+}
+
+/**
+ * What runs cost, per plugin per UTC day, newest day first. Read-only: the
+ * Usage screen reads it later. `plugin` narrows it to one; `days` (1-90,
+ * default 30) is how far back.
+ */
+export function costByDay(plugin?: unknown, days?: unknown): { ok: true; days: { plugin: string; day: string; usd: number; runs: number }[] } | { ok: false; error: string } {
+  if (plugin !== undefined && plugin !== null && plugin !== "" && (typeof plugin !== "string" || !validReplyBy(`agent:${plugin}`))) return { ok: false, error: "plugin is not a plugin name" };
+  let back = 30;
+  if (days !== undefined && days !== null && days !== "") {
+    const n = Number(days);
+    if (!Number.isInteger(n) || n < 1 || n > COST_DAYS_KEPT) return { ok: false, error: `days must be a whole number from 1 to ${COST_DAYS_KEPT}` };
+    back = n;
+  }
+  const since = utcDay(Date.now() - (back - 1) * 86_400_000);
+  const by = new Map<string, { plugin: string; day: string; usd: number; runs: number }>();
+  for (const c of load().costs ?? []) {
+    if ((plugin && c.plugin !== plugin) || c.day < since) continue;
+    const key = `${c.plugin}\u0000${c.day}`;
+    const row = by.get(key) ?? { plugin: c.plugin, day: c.day, usd: 0, runs: 0 };
+    row.usd = Math.round((row.usd + c.usd) * 1e4) / 1e4;
+    row.runs++;
+    by.set(key, row);
+  }
+  return { ok: true, days: [...by.values()].sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : a.plugin.localeCompare(b.plugin))) };
+}
+
+/** The person pressed Approve run or Skip on a run waiting for their OK. Told
+ *  to the plugin that wrote the run, and remembered so a second press does
+ *  not send a second event. Nothing else changes: the plugin moves the run on. */
+export function decideRun(plugin: string, id: unknown, decision: unknown): { ok: true } | { ok: false; error: string } {
+  if (decision !== "approve" && decision !== "skip") return { ok: false, error: "decision must be approve or skip" };
+  if (typeof id !== "string") return { ok: false, error: "id is required" };
+  const run = load().runs.find((x) => x.plugin === plugin && x.id === id);
+  if (!run) return { ok: false, error: "no such run" };
+  if (run.state !== "needs-ok") return { ok: false, error: "that run is not waiting for an OK" };
+  if (run.decision) return { ok: false, error: `already answered: ${run.decision}` };
+  run.decision = decision;
+  save();
+  pushEvent(plugin, { type: decision === "approve" ? "run-approve" : "run-skip", id, repo: run.repo, number: run.number, at: Date.now() });
+  onChange({ kind: "pr", repo: run.repo, number: run.number });
+  return { ok: true };
+}
+
+/** A declared finding button was pressed. Only the plugin that wrote the
+ *  finding, only an action it declared; the plugin is told which finding. */
+export function pressNoteAction(plugin: string, c: Contributes, actionId: unknown, noteId: unknown): { ok: true } | { ok: false; error: string } {
+  if (typeof actionId !== "string" || !c.noteActions?.some((a) => a.id === actionId)) return { ok: false, error: "that plugin declares no such finding action" };
+  if (typeof noteId !== "string") return { ok: false, error: "noteId is required" };
+  const n = load().notes.find((x) => x.plugin === plugin && x.id === noteId);
+  if (!n) return { ok: false, error: "no such note" };
+  pushEvent(plugin, { type: "note-action", id: actionId, noteId, repo: n.repo, number: n.number, at: Date.now() });
+  return { ok: true };
+}
+
+/** A plugin answering a finding's thread: "Ask the agent" answered. */
+export const PLUGIN_REPLIES_PER_HOUR = 30;
+const replyLog = new Map<string, number[]>();
+
+export type PluginReplied = { ok: true; replies: NoteReply[] } | { ok: false; error: string; status: 400 | 404 | 429 };
+
+/**
+ * Stored like a person's reply but never sent anywhere: `by` is
+ * `agent:<plugin name>`, GitHub is not an option, and the plugin is not told
+ * (it knows what it said, and an echo would feed a plugin that answers every
+ * event). Same caps as a person's, plus a per-plugin hourly cap, because a
+ * loop here would fill every finding's thread.
+ */
+export async function replyAsPlugin(plugin: string, c: Contributes, raw: unknown, now = Date.now()): Promise<PluginReplied> {
+  if (!c.prNotes) return { ok: false, status: 400, error: "this plugin's manifest does not declare prNotes" };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, status: 400, error: "send {id, text}" };
+  const b = raw as Record<string, unknown>;
+  if (typeof b.id !== "string") return { ok: false, status: 400, error: "id is required" };
+  const v = validateReplyInput({ text: b.text });
+  if (!v.ok) return { ok: false, status: 400, error: v.error.replace("reply.text", "text") };
+  const n = load().notes.find((x) => x.plugin === plugin && x.id === b.id);
+  if (!n) return { ok: false, status: 404, error: "no such note" };
+  if ((n.replies?.length ?? 0) >= REPLIES_PER_NOTE) return { ok: false, status: 400, error: `a finding keeps at most ${REPLIES_PER_NOTE} replies` };
+  const recent = (replyLog.get(plugin) ?? []).filter((t) => now - t < 3_600_000);
+  if (recent.length >= PLUGIN_REPLIES_PER_HOUR) {
+    replyLog.set(plugin, recent);
+    return { ok: false, status: 429, error: `at most ${PLUGIN_REPLIES_PER_HOUR} replies an hour per plugin; try again later` };
+  }
+  recent.push(now);
+  replyLog.set(plugin, recent);
+  n.replies = [...(n.replies ?? []), { id: replyId(), text: v.value.text, at: now, by: `agent:${plugin}`, postedOnGitHub: false }];
+  n.updatedAt = now;
+  save();
+  onChange({ kind: "pr", repo: n.repo, number: n.number });
+  return { ok: true, replies: n.replies };
 }
 
 /**
@@ -469,7 +590,10 @@ export function dropNotesOf(plugin: string): void {
   const before = s.runs.length + s.notes.length;
   s.runs = s.runs.filter((r) => r.plugin !== plugin);
   s.notes = s.notes.filter((n) => n.plugin !== plugin);
-  if (s.runs.length + s.notes.length !== before) save();
+  const costs = s.costs?.length ?? 0;
+  s.costs = (s.costs ?? []).filter((x) => x.plugin !== plugin);
+  replyLog.delete(plugin);
+  if (s.runs.length + s.notes.length !== before || s.costs.length !== costs) save();
 }
 
 /** Flush a pending coalesced write — on shutdown, and for tests. */
@@ -483,5 +607,6 @@ export function __resetPluginUi(): void {
   options.clear();
   queues.clear();
   waiters.clear();
-  cache = { runs: [], notes: [] };
+  cache = { runs: [], notes: [], costs: [] };
+  replyLog.clear();
 }

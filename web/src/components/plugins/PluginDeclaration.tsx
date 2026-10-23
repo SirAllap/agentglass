@@ -81,6 +81,14 @@ export function surfaces(p: PublicPlugin): Surface[] {
       where: actions.length === 1 ? "a button in every pull request" : "buttons in every pull request",
     });
   }
+  const noteActions = c.noteActions ?? [];
+  if (noteActions.length) {
+    out.push({
+      icon: <HandIcon size={ICON.sm} />,
+      what: `Buttons on its findings: ${noteActions.map((a) => a.label).join(", ")}`,
+      where: "next to Reply and Resolve on each finding it wrote; pressing one tells the plugin, never GitHub",
+    });
+  }
   return out;
 }
 

@@ -234,6 +234,23 @@ def check_contributes(c):
             label = a.get("label")
             if not isinstance(label, str) or not label.strip() or len(label) > 28:
                 return "action label must be 1-28 characters"
+    if "noteActions" in c:
+        actions = c["noteActions"]
+        if not isinstance(actions, list) or len(actions) > 4:
+            return "contributes.noteActions must be a list of at most 4"
+        seen = set()
+        for a in actions:
+            if not isinstance(a, dict):
+                return "a finding action must be an object"
+            aid = a.get("id")
+            if not isinstance(aid, str) or not ID_RE.fullmatch(aid):
+                return "finding action id must be 1-40 of a-z, 0-9, - and start with a letter"
+            if aid in seen:
+                return f'finding action id "{aid}" appears twice'
+            seen.add(aid)
+            label = a.get("label")
+            if not isinstance(label, str) or not label.strip() or len(label.strip()) > 24:
+                return "finding action label must be 1-24 characters"
     return None
 
 
@@ -569,6 +586,8 @@ def declaration(plugin):
         draws.append("notes inside pull requests, never sent to GitHub")
     for a in c.get("prActions") or []:
         draws.append(f'a button, "{a.get("label")}", in every pull request')
+    if c.get("noteActions"):
+        draws.append("buttons on its findings: " + ", ".join(a.get("label", "") for a in c["noteActions"]))
     return {"scope": plugin.get("scope"), "runs": plugin.get("entrypoint"), "draws": draws}
 
 
