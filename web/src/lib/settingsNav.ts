@@ -296,10 +296,14 @@ export function tocItems(cards: readonly CardInfo[]): TocItem[] {
   return items.length < 2 ? [] : items;
 }
 
-/** The entry that is current: the last card whose top has reached `line`
- *  (a sticky header's bottom edge, plus a little). Before any has, the first. */
+/** The entry that is current: of the cards whose top has reached `line` (a
+ *  sticky header's bottom edge, plus a little), the one that got there most
+ *  recently, which is the one whose top is nearest the line. In one column that is the
+ *  last in order; in two or three it is not, because the second column's first
+ *  card sits above the first column's third. Equal tops go to the earlier card.
+ *  Before any has reached the line, the first. */
 export function currentToc(tops: readonly number[], line: number): number {
-  let cur = 0;
-  tops.forEach((t, i) => { if (t <= line) cur = i; });
+  let cur = 0, best = -Infinity;
+  tops.forEach((t, i) => { if (t <= line && t > best) { cur = i; best = t; } });
   return cur;
 }

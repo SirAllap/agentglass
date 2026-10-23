@@ -14,7 +14,7 @@ import { RecipesPane } from "./RecipesPane.tsx";
 import { ReviewPromptsPane } from "./ReviewPromptsPane.tsx";
 import { SavedRepliesPane } from "./SavedRepliesPane.tsx";
 import { lastTerminalRoot } from "./TerminalPanel.tsx";
-import { Filter, Fold, SettingRow, Toggle, Switch } from "./SettingRow.tsx";
+import { Filter, Fold, SettingRow, choiceIsWide, Toggle, Switch } from "./SettingRow.tsx";
 import { resetShown } from "../lib/settingsModified.ts";
 import { pageScore, absentFor, rowId, type SettingsPage } from "../lib/settingsIndex.ts";
 import { motion, AnimatePresence } from "motion/react";
@@ -64,7 +64,7 @@ import { SettingsNav } from "./SettingsNav.tsx";
 import { SettingsSearchPanel } from "./SettingsSearchPanel.tsx";
 import { SettingsPageHeader } from "./SettingsPageHeader.tsx";
 import { SettingsToc } from "./SettingsToc.tsx";
-import { NO_FACTS, NO_MARK, groupByName, groupSearch, headerChips, navMarks, type MatchIn, type NavFacts } from "../lib/settingsNav.ts";
+import { NO_FACTS, NO_MARK, groupByName, groupSearch, headerChips, hueVar, navMarks, type MatchIn, type NavFacts } from "../lib/settingsNav.ts";
 import { RunningPanes } from "./RunningPanes.tsx";
 import { THEMES } from "../lib/highlight.ts";
 import { BudgetsPane } from "./BudgetsPane.tsx";
@@ -294,16 +294,13 @@ function Choice<T extends string>({ label, hint, value, options, onPick, disable
 }) {
   return (
     <SettingRow label={label} hint={disabled ? disabledHint ?? hint : hint} disabled={disabled} modified={modified} settingId={settingId}
+      wide={choiceIsWide(options.map((o) => o.label))}
       control={
-        <span className="flex flex-wrap items-center gap-1 rounded-lg p-0.5 justify-self-end max-w-full"
-          style={{ background: "color-mix(in srgb, var(--border) 28%, transparent)" }}>
+        <span className="agx-seg">
           {options.map((o) => (
             <button key={o.v} onClick={() => onPick(o.v)} disabled={disabled}
               aria-pressed={value === o.v}
-              className="text-[12px] px-2 h-6 inline-flex items-center rounded-md transition-colors disabled:cursor-not-allowed whitespace-nowrap"
-              style={value === o.v
-                ? { background: "var(--primary)", color: "var(--on-primary)" }
-                : { color: "var(--text3)" }}>
+              className="agx-seg-b disabled:cursor-not-allowed">
               {o.label}
             </button>
           ))}
@@ -772,7 +769,7 @@ function MiniBtn({ label, disabled, onClick, children }: { settingId?: string; a
  * The title is optional, because a page whose only group repeats the page name
  * says "Terminal" twice before the first setting.
  */
-/** Panes whose content is a grid of cards, not a column of rows. */
+/** Panes whose content is a grid or a map of its own: one column of the page, at this width. */
 const WIDE_PANES = new Map<string, string>([
   ["plugins", "1180px"],
   /* The workflow map is a column of step cards beside a column of statuses, with the lines running between them; this is the width that keeps a card's header on two lines. */
@@ -2035,7 +2032,8 @@ function HooksPane({ open }: { open: boolean }) {
 
       {/* The gate. Its own card, below the forwarder, because it is the
           stronger thing and read second for the same reason. */}
-      <SettingsCard title="Gate" desc="Holds an outward action until somebody decides. A separate switch from the hooks above.">
+      <SettingsCard title="Gate" tone={st.gateBundled && !st.gate ? "decision" : "default"}
+        desc="Holds an outward action until somebody decides. A separate switch from the hooks above.">
         <SettingRow label="Hold what leaves this machine"
           hint={<>
             A push, a pull request, a comment, a review, a merge, a ticket or a message in a channel
@@ -2189,7 +2187,7 @@ function WorkerRolesSection({ open }: { open: boolean }) {
             hint={`${r.what}${r.readOnly ? " File edits are refused too." : ""} Default: ${r.default.provider}, ${r.default.model}.`}
             control={
               <Select value={c.provider} align="right"
-                className="rounded-lg px-2 py-1 text-[11px] outline-none w-[128px] justify-between"
+                className="agx-select outline-none w-[128px] justify-between"
                 options={clis.map((p) => ({ value: p.id, label: p.installed ? p.title : `${p.title} (not installed)` }))}
                 onChange={(v) => save(r.id, { provider: v, model: "" })} />}
             /* The model is a text field, so it stacks under the description
@@ -4261,24 +4259,25 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   chips={headerChips(navTab.id, marks[navTab.id] ?? NO_MARK)}
                   reset={pageModified(navTab.id) ? <Button onClick={() => resetPage(navTab.id)}>Reset page</Button> : undefined} />
               )}
-              <div className="agx-settings-page">
+              {/* The page's hue (its group's) tints every card's icon chip; a board's width
+                  is set here, on the ancestor of both the grid that reads it and the
+                  column, because a property inherits downward only. */}
+              <div className="agx-settings-page"
+                style={{
+                  "--hue": hueVar(groupByName(navTab?.group ?? "")?.id ?? "system"),
+                  ...(WIDE_PANES.has(pane) ? { "--agx-settings-col": WIDE_PANES.get(pane) } : null),
+                } as React.CSSProperties}>
                 {!ql && <SettingsToc scope={colRef} scroller={contentRef} page={navPane} />}
                 <div className="agx-settings-content">
                   {/*
-                    A WIDER COLUMN on the panes that are BOARDS rather than
-                    reading.
-                  *
-                    760px is the measure for rows of prose and it is the wrong
-                    number for a grid of cards: two cards inside it come out at
-                    365px each, which is exactly the width that produced the
-                    359x596 letterbox nobody could look at. Set HERE and not on
-                    the pane, because a custom property inherits downward —
-                    declared by a child of this element it can never reach the
-                    `max-width` that reads it, which is why the first attempt
-                    changed nothing at all.
+                    A BOARD (WIDE_PANES) is one column at the width it chose,
+                    not the card flow: its content is a grid or a map of its
+                    own, and two flow columns would cut it to 365px cards, the
+                    width that produced the 359x596 letterbox nobody could
+                    look at. The width is set on the page above, because a
+                    custom property inherits downward only.
                   */}
-                  <div ref={colRef} className="agx-settings-col"
-                    style={WIDE_PANES.has(pane) ? ({ "--agx-settings-col": WIDE_PANES.get(pane) } as React.CSSProperties) : undefined}>
+                  <div ref={colRef} className="agx-settings-col" data-flow={WIDE_PANES.has(pane) ? "single" : undefined}>
                   <Filter.Provider value={filterCtx}>
                   {ql && show("appearance") && <PageMatchHeading id="appearance" onOpen={() => { setPane("appearance" as Pane); setQ(""); }} />}
                   {show("appearance") && (

@@ -271,29 +271,33 @@
   }
 
   /*
-   * The measure, on the COLUMN — which is the whole of why the last attempt
-   * failed.
+   * The page's flow: the cards go down one column, two from 1180px, three from
+   * 2300px, in DOM order, and a card never splits across columns.
    *
-   * Capping the ROW left the pane title and every section eyebrow reaching to
-   * the full width while the rules stopped short, and a rule that ends where
-   * nothing else does reads as severed rather than as an edge. Cap the
-   * container and the title, the eyebrows, the dividers and the rows all end
-   * at the same x — which is what a page margin is.
+   * CSS columns and not a grid because the cards are of every height: a grid
+   * leaves a hole under each short card in a row, columns pack them. The cost
+   * is that order runs down each column before the next one, which for a page
+   * read top to bottom is the order its index (On this page) lists them in.
+   * A card that is a list, an editor or a table says `wide` and spans every
+   * column (`.agx-scard-wide`); so does anything that is not a card yet.
    *
-   * LEFT, on the nav's reading edge, and capped at 1120px. It was centred in a
-   * 760px column: on a 2560px window that left a 1040px band of dead screen to
-   * the left of the title and as much again to the right, with every form a
-   * 480px strip inside it. Left is the edge the title, every eyebrow and every
-   * label share, so the whole column moves together; the cap is where a row of
-   * label, hint and control stops being readable at a glance, not a taste.
-   * A wider window leaves the slack on the right, where nothing reads it.
+   * The column used to be capped at 1120px and sit against the nav, which was
+   * right for one column of rows and left a hole between it and the index rail
+   * on a 2560px window. The cap is now only for the boards (WIDE_PANES in
+   * SettingsModal): their own width, set on the page, so the rail still sits
+   * beside what it indexes.
    */
   .agx-settings-col {
-    max-width: var(--agx-settings-col, 1120px);
-    margin-inline: 0;
+    columns: 1;
+    column-gap: 18px;
+    max-width: var(--agx-settings-col, none);
     container-type: inline-size;
     container-name: agx-settings;
   }
+  @media (min-width: 1180px) { .agx-settings-col { columns: 2; } }
+  @media (min-width: 2300px) { .agx-settings-col { columns: 3; } }
+  /* A board lays out its own cards: one flow column, at the width it chose. */
+  .agx-settings-col[data-flow="single"] { columns: 1; }
 
 
   /*
@@ -305,33 +309,31 @@
    * is not the fix either: measured, it opens a 311px gap between a short label
    * and its control.
    *
-   * The control track was a FIXED 210px and that was a bug you could see: a
-   * control wider than its track — Chat's three-way engine picker is 330px —
-   * overflowed to the LEFT, because the track is right-aligned, and printed
-   * itself straight over the hint text. `minmax(track, max-content)` keeps the
-   * shared column for the ordinary rows and lets the wide ones take the room
-   * they need out of the words instead of out of legibility. The right edge is
-   * still shared, because column 2 ends where the row ends either way.
-   *
-   * The floor makes every label wrap at the same width, so hints line up page
-   * to page.
+   * The control track is its content's width and nothing more. It was a floor
+   * of 220px, and that was right for one 1120px column and wrong for the card
+   * flow: a card is about 500px wide at 1440, and a floor left a toggle's row
+   * 250px of words, with 180px of nothing beside the switch. The right edge is
+   * still shared, because column 2 ends where the row ends. The words keep
+   * 14rem at least: a control wider than the rest (a three-way choice, a badge
+   * and a button) wraps inside its own track instead of squeezing the name to
+   * a word a line, which is what the first version of the flow did. Below the
+   * stack width (see the container query) the control drops under the words.
    */
   .agx-settings-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(var(--settings-control-w), max-content);
-    column-gap: 32px;
-    row-gap: 8px;
+    grid-template-columns: minmax(14rem, 1fr) auto;
+    column-gap: 22px;
+    row-gap: 6px;
     align-items: center;
     width: 100%;
-    /* 14/18, up from 12/16. Two lines of hint at 12px are 32px of text, so a
-       12px gap between rows was a smaller space than the one INSIDE a row
-       between its label and its hint — which is the arrangement that makes a
-       list of settings read as one paragraph. The horizontal 18 matches the
-       card's heading, so a label and the heading above it share an edge. */
-    padding: 14px 18px;
+    /* 12/18: a row's own space has to be larger than the one INSIDE it between
+       its name and its help, or a list of settings reads as one paragraph, and
+       two lines of help at 12px are 32px of text. The horizontal 18 matches the
+       card's heading, so a name and the heading above it share an edge. */
+    padding: 12px 18px;
     text-align: left;
   }
-  /* The edge a row's label sits on (14/18 above): a block that is not a row but sits
+  /* The edge a row's label sits on (12/18 above): a block that is not a row but sits
      in the same card, like the workflow map's steps, shares it. */
   .agx-settings-x { padding-inline: 18px; }
   .agx-settings-row > :last-child { justify-self: end; }
@@ -366,10 +368,12 @@
 
   /*
    * Below this the control column costs more than it earns, so the control
-   * drops under the words. 588px is the floor of the readable band (45
-   * characters) plus the padding, the gap and the track.
+   * drops under the words. The container is the CARD (a column of the flow is
+   * about 400px at the narrowest, 1180px wide): 440px is 36px of padding, 22px
+   * of gap and a track of 140px, which leaves the words 240px, the least a
+   * name and a line of help can be read in.
    */
-  @container agx-settings (max-width: 588px) {
+  @container agx-settings (max-width: 440px) {
     .agx-settings-row { grid-template-columns: 1fr; }
     .agx-settings-row > :last-child { justify-self: start; }
   }
@@ -421,9 +425,6 @@
   --surface-inset: color-mix(in srgb, var(--bg3) 78%, var(--bg2));
   --surface-line: color-mix(in srgb, var(--border) 60%, transparent);
   --surface-lift: 0 1px 2px rgba(0, 0, 0, 0.18), 0 10px 26px -18px var(--shadow);
-  /* The floor of a settings row's control column. On the root, not the column,
-     so a row drawn outside .agx-settings-col still has a grid. */
-  --settings-control-w: 220px;
 }
 
 /*
@@ -453,7 +454,10 @@
   /* Rows paint their hover to square edges; without this the first and last
      of them spill over the corner they are meant to sit inside. */
   overflow: hidden;
-  margin-bottom: 24px;
+  margin: 0 0 18px;
+  /* Not a card of the flow yet: the old box spans the page until its page moves
+     onto SettingsCard, which is where it stops being full width. */
+  column-span: all;
 }
 
 /*
@@ -717,7 +721,64 @@
 .agx-fold { cursor: pointer; transition: background-color 120ms; }
 .agx-fold:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
 .agx-fold:active { background: color-mix(in srgb, var(--text) 11%, transparent); }
-/* A switch is 19px tall; its button is padded to the house hit size and answers
+/* The chip, one family for a row, a card header and the page header: a dot and
+   a few words on a tint of the verdict's hue, in that hue's ink. `off` and
+   `checking` have no hue: a hollow dot on a hairline. */
+.agx-badge {
+  display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 10px; border-radius: 99px;
+  font-size: 11.5px; font-weight: 600; line-height: 1; white-space: nowrap; flex: none;
+}
+.agx-badge > i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
+.agx-badge[data-tone="ok"] { background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--success-ink); }
+.agx-badge[data-tone="warn"] { background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning-ink); }
+.agx-badge[data-tone="err"] { background: color-mix(in srgb, var(--error) 14%, transparent); color: var(--error-ink); }
+.agx-badge[data-tone="info"] { background: color-mix(in srgb, var(--info) 14%, transparent); color: var(--info-ink); }
+.agx-badge[data-tone="off"], .agx-badge[data-tone="checking"] { box-shadow: inset 0 0 0 1px var(--surface-line); color: var(--text3); }
+.agx-badge[data-tone="off"] > i { background: transparent; box-shadow: inset 0 0 0 1.5px currentColor; }
+
+/* A row's name and its help: the name is the heavier of the two and in the
+   full ink, the help one muted line under it. */
+.agx-row-name { display: block; font-size: 13.5px; font-weight: 650; color: var(--text); }
+.agx-row-help { display: block; margin-top: 4px; font-size: 12px; line-height: 1.42; color: var(--text3); max-width: 64ch; }
+
+/* The switch: on is the success colour, off a tint of the text on the page, the
+   knob the page's own ground (white on a light theme, dark on a dark one, which
+   is what keeps it readable on the bright green a dark theme has). */
+.agx-switch {
+  display: inline-block; flex: none; position: relative; width: 35px; height: 20px; border-radius: 99px;
+  background: color-mix(in srgb, var(--text) 24%, var(--bg)); transition: background-color 150ms;
+}
+.agx-switch[data-on] { background: var(--success); }
+.agx-switch-knob {
+  position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--bg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); transition: transform 150ms;
+}
+.agx-switch[data-on] .agx-switch-knob { transform: translateX(15px); }
+/* A wide control (a segmented choice with long options) drops under the words in
+   a card under 560px: the card flow's two columns are about 500px at 1440, and a
+   control of 300px beside a name leaves it 140px. */
+@container agx-settings (max-width: 560px) {
+  .agx-settings-row.agx-row-wide { grid-template-columns: 1fr; }
+  .agx-settings-row.agx-row-wide > :last-child { justify-self: start; }
+}
+/* A select on a settings page: the page's own ground, an edge and the large
+   control height, whichever way the page wrote it. The edge is a border (not a
+   shadow) because an open select recolours its border. */
+.agx-settings-col .agx-select {
+  min-height: 32px; padding: 0 10px; font-size: 12px; border-radius: 8px; color: var(--text);
+  background: var(--bg); border: 1px solid var(--border);
+}
+.agx-settings-col .agx-select:hover:not(:disabled) { border-color: var(--text3); }
+/* The segmented choice: an inset track, the chosen one raised on the page's ground. */
+.agx-seg { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 2px; border-radius: 9px; background: var(--surface-inset); max-width: 100%; }
+.agx-seg-b {
+  display: inline-flex; align-items: center; height: 24px; padding: 0 12px; border: 0; border-radius: 7px; background: none;
+  font-size: 12px; color: var(--text3); white-space: nowrap; cursor: pointer; transition: background-color 120ms, color 120ms;
+}
+.agx-seg-b:hover:not(:disabled):not([aria-pressed="true"]) { color: var(--text); }
+.agx-seg-b[aria-pressed="true"] { background: var(--bg); color: var(--text); font-weight: 650; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18); }
+@media (prefers-reduced-motion: reduce) { .agx-switch, .agx-switch-knob, .agx-seg-b { transition: none; } }
+/* A switch is 20px tall; its button is padded to the house hit size and answers
    hover and press on its own track, not on the padding around it. */
 .agx-switch-hit { cursor: pointer; }
 .agx-switch-hit:disabled { cursor: default; }
@@ -1853,35 +1914,76 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
   border-radius: 0.75rem;
   box-shadow: var(--surface-lift);
   overflow: hidden;
-  margin-bottom: 24px;
+  position: relative;
+  /* A card is one piece of the flow: it never splits across two columns, and
+     the gap under it is the one between columns. It is a container so its rows
+     answer to its own width (see the row's container query), not the page's. */
+  break-inside: avoid;
+  margin: 0 0 18px;
+  container: agx-settings / inline-size;
 }
+/* A list, an editor or a table: the whole width of the page. */
+.agx-settings-col .agx-scard-wide { column-span: all; }
+/* Anything standing in the column that is not a card (a page's own wrapper, a
+   search result's page heading, a banner): the whole width as well. Cut into
+   columns, a wrapper that lays out its own cards came out 91px tall with its
+   content clipped. A page that still wraps its cards leaves the flow until it
+   hands them to the column directly. */
+.agx-settings-col > :not(.agx-scard) { column-span: all; }
+/* A card that needs the person to decide: amber along its top edge, and a
+   warm edge all round. The danger zone is the opposite end: a red-tinted card
+   of its own, with outline buttons only. */
+.agx-scard[data-tone="decision"] { border-color: color-mix(in srgb, var(--warning) 40%, var(--surface-line)); }
+.agx-scard[data-tone="decision"]::before {
+  content: ""; position: absolute; inset: 0 0 auto 0; height: 3px; background: var(--warning);
+}
+.agx-scard[data-tone="danger"] {
+  background: color-mix(in srgb, var(--error) 4%, var(--surface-card));
+  border-color: color-mix(in srgb, var(--error) 35%, var(--surface-line));
+}
+.agx-scard[data-tone="danger"] .agx-settings-head-t { color: var(--error-ink); }
+.agx-scard[data-tone="danger"] .agx-scard-ic { background: color-mix(in srgb, var(--error) 16%, transparent); color: var(--error-ink); }
+/* Outline, never filled: whatever Button sits in this card, its fill goes and
+   its edge and ink are the error's. `!important` because Button writes its
+   fill and edge as inline style. */
+.agx-scard[data-tone="danger"] .agx-btn {
+  background: transparent !important;
+  color: var(--error-ink) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--error) 45%, transparent) !important;
+  border-color: transparent !important;
+}
+.agx-scard[data-tone="danger"] .agx-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--error) 10%, transparent) !important; }
 .agx-scard:has(> .agx-scard-body:empty) { display: none; }
 /* The Orchestration page keeps its project bar stuck to the top (ScopeBar writes its height here); a card or row scrolled to stops under it. */
 .agx-orch .agx-scard, .agx-orch [data-row] { scroll-margin-top: calc(var(--orch-stick, 0px) + 8px); }
-.agx-scard-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px 16px;
-  padding: 16px 18px 4px;
+/* The header: an icon chip, the title, the verdict and the one action on a
+   line, and the sentence under it. The line below the header is the first
+   row's divider (further down), not a border of the header. */
+.agx-scard-head { padding: 14px 18px 10px; }
+.agx-scard-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.agx-scard-top > .agx-settings-head-t { flex: 1 1 10rem; min-width: 0; }
+.agx-scard-ic {
+  width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; flex: none;
+  background: color-mix(in srgb, var(--hue, var(--text3)) 17%, transparent);
+  color: color-mix(in srgb, var(--hue, var(--text3)) 78%, var(--text));
 }
-.agx-scard-desc { font-size: 12px; margin-top: 4px; color: var(--text3); }
-/* The title keeps a reading width; when the status and the action do not fit
-   beside it, they wrap under it rather than squeezing it to a word a line. */
-.agx-scard-head > :first-child { flex: 1 1 240px; }
-.agx-scard-body { padding-bottom: 4px; }
+.agx-scard-desc { font-size: 12px; margin-top: 6px; color: var(--text3); }
+.agx-scard-body { padding-bottom: 0; }
 .agx-scard-body > .agx-settings-row { position: relative; }
+.agx-settings-row:hover { background: color-mix(in srgb, var(--text) 3%, transparent); }
 /* Fold's opened body is a sibling of its header row: it takes the gutter the
    old box gave every child, and the row after it still gets its divider. */
 .agx-scard-body > .agx-fold-body { padding-inline: 18px; }
+/* The row divider, edge to edge: between two rows, and between a card's
+   header and its first row. */
 .agx-scard-body > .agx-settings-row + .agx-settings-row::before,
-.agx-scard-body > .agx-fold-body + .agx-settings-row::before {
+.agx-scard-body > .agx-fold-body + .agx-settings-row::before,
+.agx-scard-head + .agx-scard-body > .agx-settings-row:first-child::before {
   content: "";
   position: absolute;
   top: 0;
-  left: 18px;
-  right: 18px;
+  left: 0;
+  right: 0;
   border-top: 1px solid var(--surface-line);
 }
 
@@ -1904,19 +2006,21 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
   justify-self: stretch;
   margin-top: 4px;
 }
-@container agx-settings (max-width: 588px) {
+@container agx-settings (max-width: 440px) {
   .agx-settings-row > .agx-slot { justify-self: start; justify-content: flex-start; }
 }
 
-/* A disclosure named for what it holds. */
-.agx-disclosure { margin-top: 8px; font-size: 12px; }
+/* A disclosure named for what it holds: a quiet line with a caret, and what
+   it holds in an inset panel when it is open. */
+.agx-disclosure { margin-top: 6px; font-size: 12px; }
 .agx-disclosure-s {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   cursor: pointer;
   list-style: none;
-  color: var(--text2);
+  color: var(--text4);
+  font-size: 11.5px;
   border-radius: 4px;
 }
 .agx-disclosure-s::-webkit-details-marker { display: none; }
@@ -1924,7 +2028,10 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 .agx-disclosure-s:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .agx-disclosure-caret { display: inline-flex; color: var(--text3); transform: rotate(-90deg); transition: transform 120ms ease; }
 .agx-disclosure[open] > .agx-disclosure-s .agx-disclosure-caret { transform: none; }
-.agx-disclosure-b { margin-top: 4px; padding-left: 16px; color: var(--text3); line-height: 1.5; max-width: 64ch; }
+.agx-disclosure-b {
+  margin-top: 8px; padding: 8px 12px; border-radius: 8px; background: var(--surface-inset);
+  color: var(--text2); line-height: 1.5; max-width: 64ch;
+}
 .agx-disclosure-b.agx-wide { max-width: none; }
 @media (prefers-reduced-motion: reduce) { .agx-disclosure-caret { transition: none; } }
 
@@ -2128,17 +2235,6 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
 .agx-ph-chips { display: flex; gap: 6px; align-items: center; }
 .agx-ph-sp { flex: 1; }
 .agx-ph-sum { margin: 4px 0 0; color: var(--text3); font-size: 13px; max-width: 90ch; }
-.agx-hchip {
-  display: inline-flex; align-items: center; gap: 6px; padding: 1px 10px; border-radius: 99px; font-size: 11.5px; font-weight: 600;
-  white-space: nowrap; border: 1px solid transparent;
-}
-.agx-hchip i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.agx-hchip[data-tone="ok"] { background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--success-ink); }
-.agx-hchip[data-tone="warn"] { background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning-ink); }
-.agx-hchip[data-tone="err"] { background: color-mix(in srgb, var(--error) 14%, transparent); color: var(--error-ink); }
-.agx-hchip[data-tone="info"] { background: color-mix(in srgb, var(--info) 14%, transparent); color: var(--info-ink); }
-.agx-hchip[data-tone="off"] { border-color: var(--border); color: var(--text3); }
-.agx-hchip[data-tone="off"] i { background: transparent; box-shadow: inset 0 0 0 1.5px currentColor; }
 
 /* the page under the header: its cards, and the index beside or above them */
 .agx-settings-page { padding: 22px 40px 56px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-items: start; }
@@ -2155,7 +2251,11 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
 .agx-toc-dot[data-tone="warn"] { background: var(--warning); }
 .agx-toc-dot[data-tone="err"] { background: var(--error); }
 @media (min-width: 1760px) {
-  .agx-settings-page { grid-template-columns: minmax(0, 1fr) 224px; }
+  /* The content track is the page's own width where a board set one
+     (--agx-settings-col, on the page), else what is left; and the rail sits
+     against it, so on a 2560px window it is beside the cards, not at the far
+     edge of a capped column. */
+  .agx-settings-page { grid-template-columns: minmax(0, var(--agx-settings-col, 1fr)) 224px; justify-content: start; }
   .agx-settings-page:not(:has(.agx-toc)) { grid-template-columns: minmax(0, 1fr); }
   .agx-settings-page > .agx-toc {
     grid-column: 2; grid-row: 1 / span 20; flex-direction: column; flex-wrap: nowrap; gap: 0; top: calc(var(--agx-ph-h, 112px) + 16px);

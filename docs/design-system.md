@@ -389,22 +389,42 @@ inside can come to overlap text at another width.
 Every settings page is built from the blocks in
 `web/src/components/SettingsKit.tsx` and `SettingRow`:
 
-- `SettingsCard` — one group: a title, one sentence, and its rows. Its
-  `status` (a `StatusBadge`) and its one action (`actions`: Recheck, Add) sit
-  at the header's top right in every state, loading included. No line under
-  the header. `fold` makes the header a disclosure. Groups inside a card
-  become cards of their own, 24px apart; no eyebrow headings inside a card.
-- `SettingRow` — label 13.5px, description 12px in `--text3`, shown whole
-  (never clamped, no More/Less). The control column is `status` first, then
-  `control` or `actions`. Inline in that column: one switch, segmented set,
-  select, stepper, badge, or at most two buttons. Everything else — a text
-  field, a form, a list, a preview — goes in `below`, which spans the row.
-  `detail` is secondary text behind a `Disclosure`.
-- `StatusBadge` — 22px (`CTRL_H.compact`), a dot and a few words, in a hue's
-  `--*-ink`: `ok`, `warn` (only when the person is needed), `err`, `off`
-  (hollow: not connected, not installed), `checking`.
+- `SettingsCard` — one group: an optional icon chip (`icon`, tinted with the
+  page's group hue), a title, one sentence under it, and its rows. Its `status`
+  (a `StatusBadge`) and its one action (`actions`: Recheck, Add) sit at the
+  header's top right in every state, loading included. The line under the
+  header is the first row's divider, so a card with no header has none. `fold`
+  makes the header a disclosure. Groups inside a card become cards of their
+  own; no eyebrow headings inside a card.
+  - `tone="decision"` is a card that needs the person to decide something (the
+    gate is off, a step is theirs): an amber edge along its top. Use it for the
+    one card on a page to read first, not as decoration.
+  - `tone="danger"` is the separate red-tinted "Danger zone" card. Whatever
+    `Button` sits in it is an outline in the error colour, never filled, and
+    what it does is reversible, said in the wording ("Disable hooks", not
+    "Delete").
+  - `wide` is for a card that is a list, an editor or a table: it spans every
+    column of the page flow.
+- `SettingRow` — the name 13.5px semibold in `--text`, the help one muted line
+  in 12px `--text3` under it, shown whole (never clamped, no More/Less). Long
+  text goes in `detail`, a `Disclosure` under the help. The control column is
+  `status` first, then `control` or `actions`, as wide as its content and no
+  wider; the words keep 14rem, so a control wider than the rest (a three-way
+  choice) wraps inside its own track. Inline in that column: one switch,
+  segmented set, select, stepper, badge, or at most two buttons. Everything
+  else — a text field, a form, a list, a preview — goes in `below`, which
+  spans the row. In a card narrower than 440px the control drops under the
+  words. The switch is green when on, the segmented choice raises the chosen
+  one on the page's ground, and every select on a settings page is the page's
+  ground with an edge, 32px tall.
+- `StatusBadge` — one chip family for a row, a card header and the page
+  header: 22px (`CTRL_H.compact`), a dot and a few words, on a tint of the
+  hue, in that hue's `--*-ink`: `ok`, `warn` (only when the person is needed),
+  `err`, `info` (worth knowing, nothing to do), `off` (hollow: not connected,
+  not installed), `checking`.
 - `Disclosure` — a `<details>` whose summary names what it holds ("Where the
-  token is stored"), never "More" or "About this one".
+  token is stored"), never "More" or "About this one". Closed it is one quiet
+  line with a caret; open, what it holds sits in an inset panel.
 - `SettingsForm` and `Field` — stacked fields, label above, one line of help
   under, 480px at most, one primary submit at the end with the error under
   it. A segmented choice that changes which fields exist comes first. "How
@@ -430,10 +450,21 @@ Every settings page is built from the blocks in
   12px sentence (`SafetyHead`), then the rows; every row's hint is one
   sentence and an `Example:` in invented names.
 
-One divider: `.agx-scard-body > .agx-settings-row + .agx-settings-row`, inset
-to the 18px gutter. Spacing is 4 · 8 · 12 · 18 · 24; buttons 28px
-(`CTRL_H.regular`), inputs 32px (`INPUT`). Below 800px the settings nav is
-216px and the page gutter 16px, so the 640px window still has a column.
+The page flow: cards go down one column, two from 1180px, three from 2300px,
+in document order, and a card never splits across columns (CSS columns on
+`.agx-settings-col`, not a grid, so short cards pack under each other). A page
+does not choose its column count; it orders its cards and marks the wide ones.
+A board (`WIDE_PANES` in `SettingsModal.tsx`: a grid or a map of its own) is
+one column at the width it names, set on the page so the "On this page" rail
+still sits beside it. A page still on the old `Section` box spans every column
+until it moves. The rows of a card answer to the card's width, not the
+window's.
+
+One divider: `.agx-scard-body > .agx-settings-row + .agx-settings-row`, edge to
+edge, which is also what draws the line under a card's header. Spacing is
+4 · 8 · 12 · 18 · 24; buttons 28px (`CTRL_H.regular`), inputs 32px (`INPUT`).
+Below 1100px the settings nav is a 68px icon rail and the page gutter 18px, so
+the 640px window still has a column.
 
 Pages still on the old `Section` box are listed with their counts in
 `web/test/settings-ratchet.txt`; a page that moves keeps its card titles (the

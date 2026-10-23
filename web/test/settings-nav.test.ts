@@ -245,6 +245,11 @@ describe("On this page", () => {
     expect(currentToc([-50, 400, 900], 120)).toBe(0);
     expect(currentToc([-800, -20, 900], 120)).toBe(1);
     expect(currentToc([-800, -700, -20], 120)).toBe(2);
+    // Two columns: the second column's first card (-90) is nearer the line than the
+    // first column's second (-100), though it comes later in the DOM than the third (600).
+    expect(currentToc([-100, 200, 600, -90, 300], 120)).toBe(3);
+    // Equal tops: the earlier card.
+    expect(currentToc([40, 40], 120)).toBe(0);
   });
 });
 

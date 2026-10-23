@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactElement, type ReactNode } from "react";
 import { ICON } from "../lib/iconSize.ts";
 import { hueVar, type HeaderChip, type NavGroup } from "../lib/settingsNav.ts";
+import { StatusBadge } from "./SettingsKit.tsx";
 
 /**
  * The top of a page: where you are (group, then page), what it is, how it
@@ -45,7 +46,7 @@ export function SettingsPageHeader({ label, group, icon: Icon, what, chips, prim
         <h2 className="agx-ph-title">{label}</h2>
         {chips.length > 0 && (
           <span className="agx-ph-chips">
-            {chips.map((c) => <span key={c.text} className="agx-hchip" data-tone={c.tone}><i aria-hidden />{c.text}</span>)}
+            {chips.map((c) => <StatusBadge key={c.text} tone={c.tone}>{c.text}</StatusBadge>)}
           </span>
         )}
         <span className="agx-ph-sp" />

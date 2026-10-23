@@ -1,6 +1,9 @@
 import { useEffect, useState, type RefObject } from "react";
 import { currentToc, tocItems, type TocItem } from "../lib/settingsNav.ts";
 
+/** A card that needs a decision, or is the danger zone, marks its index entry the way its edge marks it. */
+const CARD_DOT: Record<string, string> = { decision: "warn", danger: "err" };
+
 /**
  * "On this page": the cards of the page you are on, each a link that scrolls
  * to it. A sticky rail at the right from 1760px, a row of chips above the
@@ -28,7 +31,7 @@ export function SettingsToc({ scope, scroller, page }: {
     let raf = 0;
     const read = () => {
       const cards = [...root.querySelectorAll<HTMLElement>("section.agx-scard")]
-        .map((el) => ({ el, title: el.querySelector(".agx-settings-head-t")?.textContent ?? "", tone: el.querySelector(".agx-badge")?.getAttribute("data-tone") ?? null }))
+        .map((el) => ({ el, title: el.querySelector(".agx-settings-head-t")?.textContent ?? "", tone: CARD_DOT[el.dataset.tone ?? ""] ?? el.querySelector(".agx-badge")?.getAttribute("data-tone") ?? null }))
         .filter((c) => c.title.trim());
       const next = tocItems(cards);
       // Anchors go on the cards themselves, so a link is a plain scroll to an id.

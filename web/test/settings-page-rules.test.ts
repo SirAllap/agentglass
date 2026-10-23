@@ -213,9 +213,11 @@ describe("the one divider", () => {
     const kitRules = rules.filter((r) => /agx-scard|agx-slot|agx-row-below|agx-disclosure|agx-sform|agx-field/.test(r.sel));
     expect(kitRules.length).toBeGreaterThan(5);
     const bordered = kitRules.filter((r) => /border(-top|-bottom|-left|-right)?\s*:/.test(r.body)).map((r) => r.sel);
+    // The header's line is the first row's divider: still one divider rule, now
+    // also between a card's header and its first row, edge to edge as drawn.
     expect(bordered).toEqual([
       ".agx-settings-col .agx-scard",
-      ".agx-scard-body > .agx-settings-row + .agx-settings-row::before,\n.agx-scard-body > .agx-fold-body + .agx-settings-row::before",
+      ".agx-scard-body > .agx-settings-row + .agx-settings-row::before,\n.agx-scard-body > .agx-fold-body + .agx-settings-row::before,\n.agx-scard-head + .agx-scard-body > .agx-settings-row:first-child::before",
     ]);
   });
   test("no new sibling-of-anything border rule", () => {
@@ -260,7 +262,16 @@ describe("the shared blocks", () => {
     expect(bad).toEqual([]);
   });
   test("status badges use ink, and the badge comes first in the control column", () => {
-    expect(kit).toContain('ok: "var(--success-ink)", warn: "var(--warning-ink)", err: "var(--error-ink)"');
+    // One family, drawn in index.css from the theme's tokens: ink for the text, a tint for the fill.
+    for (const [tone, hue] of [["ok", "success"], ["warn", "warning"], ["err", "error"], ["info", "info"]]) {
+      const rule = css.match(new RegExp(`\\.agx-badge\\[data-tone="${tone}"\\] \\{[^}]*\\}`))?.[0] ?? "";
+      expect(rule, tone).toContain(`color: var(--${hue}-ink)`);
+      expect(rule, tone).toContain(`color-mix(in srgb, var(--${hue})`);
+    }
+    expect(kit).toContain('export type StatusTone = "ok" | "warn" | "err" | "info" | "off" | "checking";');
+    // The page header's chips are this badge, not a second one.
+    expect(read(join(COMPONENTS, "SettingsPageHeader.tsx"))).toContain("<StatusBadge");
+    expect(css).not.toContain(".agx-hchip");
     const row = rowSrc.slice(rowSrc.indexOf("export function SettingRow("));
     expect(row).toContain('<span className="agx-slot">{status}{control}{actions}</span>');
     expect(kit).toContain('<div className="agx-slot">{status}{actions}</div>');
@@ -275,11 +286,14 @@ describe("the shared blocks", () => {
     expect(field.indexOf("<label")).toBeLessThan(field.indexOf("{children}"));
     expect(field.indexOf("{children}")).toBeLessThan(field.indexOf("agx-field-h"));
   });
-  test("the column hugs the nav and is wide, instead of a 760px strip floating in the middle", () => {
+  test("the column is a flow that fills the page; only a board is capped, and by the page", () => {
+    // It was capped at 1120px against the nav, which left the index rail a
+    // 1000px hole away from the cards on a 2560px window. Now the flow fills the
+    // page and the rail sits against it; a board (WIDE_PANES) chooses its own width.
     const col = css.slice(css.indexOf(".agx-settings-col {"), css.indexOf("}", css.indexOf(".agx-settings-col {")));
-    expect(col).toContain("var(--agx-settings-col, 1120px)");
-    expect(col).toContain("margin-inline: 0");
-    expect(col).not.toContain("margin-inline: auto");
+    expect(col).toContain("max-width: var(--agx-settings-col, none)");
+    expect(col).not.toMatch(/margin-inline: auto|1120px/);
+    expect(css).toMatch(/\.agx-settings-page \{ grid-template-columns: minmax\(0, var\(--agx-settings-col, 1fr\)\) 224px; justify-content: start; \}/);
   });
   test("no control in a settings pane is capped at 480px inside a wider card", () => {
     expect(read(join(SRC, "components", "SettingsModal.tsx"))).not.toContain("max-w-[480px]");
