@@ -22,7 +22,8 @@ export const SPRINTS = "@sprints";
 
 const CAPTION = "text-[8.5px] uppercase tracking-[0.18em] px-3 pt-3 pb-1";
 const row = (on: boolean) => ({
-  height: HIT, marginInline: 4, paddingLeft: 12, paddingRight: 8, borderRadius: 6, cursor: "pointer",
+  // minHeight, never height: an epic title wraps to two lines and a fixed row lets the second line print over the next row.
+  minHeight: HIT, height: "auto", paddingBlock: 4, marginInline: 4, paddingLeft: 12, paddingRight: 8, borderRadius: 6, cursor: "pointer",
   fontSize: 12, fontWeight: on ? 600 : 400, color: on ? "var(--text)" : "var(--text2)",
   background: on ? "color-mix(in srgb, var(--primary) 10%, transparent)" : undefined,
 } as const);
