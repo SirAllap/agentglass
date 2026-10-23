@@ -16,7 +16,7 @@ import type { PeekBinder } from "./FolderPeek.tsx";
 export { tilesPerRow };
 
 const selStyle = (sel: boolean) => sel
-  ? { background: "color-mix(in srgb, var(--primary) 16%, transparent)", boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--primary) 38%, transparent)" }
+  ? { background: "color-mix(in srgb, var(--primary) 22%, transparent)" }
   : {};
 
 export function IconsView({ display, dir, thumb, selName, chosen, width, onPick, onOpen, onTab, label, peek }: {
@@ -65,7 +65,7 @@ export function ListView({ dir, display, selName, chosen, rowH, prefs, onPick, o
       <VirtualList count={display.items.length} rowH={rowH} label={label} className="flex-1" keepInView={at < 0 ? null : display.itemOfRow[at]}
         render={(i) => {
           const it = display.items[i]!;
-          if (it.header) return <div key={`h:${it.header}`} className="flex items-end px-3.5 pb-1 text-[9.5px] uppercase tracking-[0.14em]" style={{ height: rowH, color: "var(--text4)", fontWeight: 600 }}>{it.header}</div>;
+          if (it.header) return <div key={`h:${it.header}`} className="flex items-end px-3.5 pb-1 text-[12px]" style={{ height: rowH, color: "var(--text3)", fontWeight: 700, borderBottom: LINE }}>{it.header}</div>;
           const r = it.row!;
           return (
             <div key={r.name} role="option" {...(isFolder(r) && !r.locked ? peek?.bind(joinPath(dir, r.name), r.name) : undefined)} data-row={r.name} data-folder={isFolder(r) && !r.locked ? "" : undefined} draggable={!r.locked} aria-selected={r.name === selName || !!chosen?.has(r.name)} onMouseDown={noRange} {...rowPointer("list", r, { onPick, onOpen, onTab })}

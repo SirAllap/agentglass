@@ -147,7 +147,7 @@ export function Column({ dir: folderPath, title, filterSignal, width, onResize, 
           render={(i) => {
             const it = display.items[i]!;
             if (it.header) {
-              return <div key={`h:${it.header}`} className="flex items-end px-3 pb-1 text-[9.5px] uppercase tracking-[0.14em]" style={{ height: rowH, color: "var(--text4)", fontWeight: 600 }}>{it.header}</div>;
+              return <div key={`h:${it.header}`} className="flex items-end px-3 pb-1 text-[12px]" style={{ height: rowH, color: "var(--text3)", fontWeight: 700, borderBottom: LINE }}>{it.header}</div>;
             }
             const r = it.row!;
             const sel = r.name === selName || !!chosen?.has(r.name);

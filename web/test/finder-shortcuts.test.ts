@@ -8,7 +8,7 @@ describe("the shortcut reference", () => {
   });
   test("a query matches keys and words, case-insensitively, and drops empty sections", () => {
     const f = filterShortcuts(SECTIONS, "ALT+");
-    expect(f.map((s) => s.title)).toEqual(["Columns navigation", "Files and selection"]);
+    expect(f.map((s) => s.title)).toEqual(["Columns navigation", "Files and selection", "Search and tools"]);
     expect(f.every((s) => s.rows.every((r) => r.keys.includes("Alt")))).toBe(true);
     expect(filterShortcuts(SECTIONS, "hidden").flatMap((s) => s.rows).map((r) => r.keys)).toEqual(["Ctrl+H"]);
     expect(filterShortcuts(SECTIONS, "zzzz")).toEqual([]);

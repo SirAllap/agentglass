@@ -57,7 +57,7 @@ export function FinderPathBar({ path, home, onGo, signalEdit, onEditing, volumes
     return () => { clearTimeout(t); ctl.abort(); };
   }, [asked]);
 
-  const shown = text !== null && dir === asked && asked ? completePath(text, home, picks).picks.slice(0, 8) : [];
+  const shown = text !== null && dir === asked && asked ? completePath(text, home, picks).picks.slice(0, 50) : [];
   useEffect(() => setHot(0), [text]);
 
   const commit = (value: string) => {
@@ -72,7 +72,7 @@ export function FinderPathBar({ path, home, onGo, signalEdit, onEditing, volumes
   if (text !== null) {
     return (
       <div className="relative flex-1 min-w-0 flex items-center gap-1">
-        <input ref={input} autoFocus value={text} spellCheck={false} aria-label="Path" aria-autocomplete="list" aria-expanded={shown.length > 0}
+        <input ref={input} autoFocus value={text} placeholder="Enter a path or URI…" spellCheck={false} aria-label="Path" aria-autocomplete="list" aria-expanded={shown.length > 0}
           onChange={(e) => setText(e.target.value)} onBlur={() => setTimeout(() => setText(null), 120)}
           onKeyDown={(e) => {
             e.stopPropagation();
@@ -96,7 +96,7 @@ export function FinderPathBar({ path, home, onGo, signalEdit, onEditing, volumes
               </div>
             ))}
             <div className="px-3 pt-2 pb-1 mt-1 flex gap-4 text-[11px]" style={{ borderTop: LINE, color: "var(--text3)" }}>
-              <span><b style={{ color: "var(--text2)" }}>Tab</b> Complete</span><span><b style={{ color: "var(--text2)" }}>↑ / ↓</b> Choose</span><span><b style={{ color: "var(--text2)" }}>Enter</b> Open</span>
+              <span><b style={{ color: "var(--text2)" }}>Tab</b> Complete</span><span><b style={{ color: "var(--text2)" }}>↑ / ↓</b> Choose</span><span><b style={{ color: "var(--text2)" }}>Enter</b> Open</span><span><b style={{ color: "var(--text2)" }}>Esc</b> Cancel</span>
             </div>
           </div>
         )}
