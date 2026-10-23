@@ -977,6 +977,57 @@ lock does not cover it: a plugin can run any command itself without asking the
 permission system. A role on OpenCode is only as locked as the plugins in that
 checkout are trusted.
 
+## Orchestration: what is held, and what is not
+
+An orchestrator is an agent seated in a project's chair, and it starts workers
+under a policy the person wrote (docs/CONFIG.md, *The orchestration policy*).
+What the server holds, and what a test asserts, in the order it matters:
+
+- **Only the person changes the policy.** `POST /orchestration` is refused
+  with a `403` to the machine token on its own (every agent shell holds it), to
+  a seat's credential at every power level, to an understudy's and to a
+  plugin's. A refusal of the machine token is a line in the action log; a
+  seat's and an understudy's go to the fence record. A seat may read the policy
+  and may not edit what it is held to. The limit: on a server started by hand,
+  with no desk key held, the machine token plus a loopback `Origin` header is
+  taken for the person's own window, and `Origin` is not a boundary against a
+  process of the same user that holds the token. That is the same limit as the
+  engine locks being partial, and a test pins it.
+- **A worker belongs to the seat that started it.** A seat can prompt, read,
+  press keys on and stop only the agents it owns, in its own project: the ones
+  it started, and others only after it takes them explicitly. Another
+  project's seat is refused, and so is an agent with no owner until one is
+  taken. A seat's directory has to be inside its project or one of its
+  worktrees.
+- **Narrow by default, and widened only inside the ceiling.** A worker starts
+  with its own worktree, no network and no commit. A seat can widen by one
+  thing (`--allow network` or `--allow commit`) and never past the project's
+  ceiling, and the ceiling is checked again when a worker is resumed, so
+  narrowing it later stops a worker that was started under the old one.
+- **No envelope can hold a remote effect.** There is no field for a push, a
+  pull request, a merge, a release or spend, and the compiled-in deny list of
+  such commands cannot be emptied from a policy. Those stay the person's.
+- **A worker is turned away from the chair.** The CLI sends the worker's
+  name with every request, and the server refuses a caller that presents a
+  worker's name when it tries to start agents or seat anything. Its wrapper unsets the token and seat variables before the engine starts.
+- **The person can always take over.** A worker is a tmux window the person can
+  open, a chair can be adopted or stood down, and the Lantern shows both.
+- **Everything is logged.** Every start, prompt, key press, stop, refusal,
+  policy change and chair change is a line in the action log, under the
+  seat's name and with the reason.
+
+**What this does not do.** Every engine runs as the same user as this app, and
+the machine token is a file that user can read. The envelope stops an engine
+that respects its own permission system; it is not a sandbox. The properties
+above hold against a worker that does what its engine allows, and they are
+audited. They are not a security boundary against a model that means to get
+past them: such a worker can read the token file and make a request without its
+name, which the server takes for the person's. A turn limit has the same
+reach, since it stops a process tree it can find (see *A policy-started
+worker's turn limit* above). A real boundary, a container or another account
+per worker, is not provided by this app. Until then, do not give a worker text
+or a project you would not trust with your own shell.
+
 ## The browser, driven by an agent
 
 `bin/agentglass-browser` and `bin/agentglass-browser-mcp` drive the app's own

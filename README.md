@@ -33,6 +33,13 @@ interface running in your browser on sample data.
   can start them: a task or a GitHub issue becomes a worktree, a branch and an
   agent working in it, several at once without colliding. Chat with Claude,
   Codex or Antigravity from a panel, or hand a conversation from one to another.
+- **Seat an orchestrator.** One agent per project keeps the field in view and
+  hands work to workers under a policy you set in Settings: which engine sits
+  in the chair, which ones do the work, what a worker may touch, and the rules
+  that change that when a plan's quota runs low. Workers start narrow, a push
+  or a merge is never in their reach, and only you can change the policy. They
+  run as you, so it is a lock and not a sandbox: [SECURITY.md](SECURITY.md) says
+  where it stops.
 - **Work in real terminals.** Real tmux panes, your tmux windows as tabs, the
   project's `make` targets and `package.json` scripts one click away.
 - **Answer what is waiting on you.** The **Lantern** leads with who needs you:

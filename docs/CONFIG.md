@@ -366,6 +366,8 @@ Every route is behind the token and the origin/Host gates described in [Security
 | `GET /hooks/status` · `POST /hooks/{install,uninstall}` · `POST /agents/connect` | Whether the Claude Code hooks are wired into `~/.claude/settings.json`, and wiring or removing them; connect one agent from the roster (hooks or OTel, with a scrubbed env). What **Settings ▸ Hooks** calls. |
 | `GET /dependencies?force=1` · `GET /browser-use/status` · `POST /browser-use/install` | Every outside tool probed for the Requirements pane; whether an agent could drive the built-in browser and what is missing; install that skill. |
 | `GET /agents/board` | The **Lantern**: every hooked session — name, worktree, branch, whether it is **stopped on you** and why, what it said it is on, `facts` and `git` for the cards, and `watch`. A worker an orchestrator started carries `under` (the project whose chair it answers to), `startedBy` (the engine, model and rule that put it there) or `orphaned` when that chair is empty; the chair's own row carries `chairOf`. `chairs` lists each occupied chair with `next`, the engine the policy would seat instead, and `handedOff`, whether its brief or doctrine was written since it sat down. Read-only; the Lantern's own chat is `role: "lantern"` and never "needs you". |
+| `GET /orchestration?root=` · `POST /orchestration` | The **orchestration policy** in force for a project: its own, or the global one (`scope`), the roots that carry their own (`overrides`), and the whole `policy`. `POST {root?, policy}` stores a whole policy (no `root` writes the global one), checks it against a closed schema, and answers with the one now in force. **Only the person can write it**: the machine token (the one every agent shell holds), a seat's, an understudy's and a plugin's are refused with a `403`, and the refusal is a line in the action log. See [The orchestration policy](#the-orchestration-policy). |
+| `GET /orchestration/state` | Read-only: which rules are on and why a reading did not change one (`holding: the last usage reading is 47 min old`), and the wake-ups armed. Nothing here asks anybody for a reading. |
 | `POST /seat/change` | "Change now": stands the chair down and seats the engine named by `next`. Refused with the reason while there is no `next` or the hand-off is not written, and never open to a seat's own credential. |
 | `POST /agents/status` | A session saying what it is on — `{name, doing, worktree?, branch?, left?, session?}`; `{name, done: true}` clears it, from the same session only. Fields capped (512 / 4096). Tokenless on loopback: a hook carries it. |
 | `GET` · `POST /lantern/settings` · `POST /lantern/ticket` | The status reminder (`{nudge, minutes}`) and the server-side **watch** (`{watch, watchMinutes}`) that notifies when somebody is still stopped on you; a ticket opening a chat with the board as its first message. |
@@ -394,6 +396,50 @@ Every route is behind the token and the origin/Host gates described in [Security
 | `POST /control/result` | **Not agent-facing.** A window answering a command `/control` is holding open (`{rid, ok, applied, value?, error?}`). Same `trustedCaller` gate as `POST /browser/result`; `rid` is server-minted and goes only to windows that said `hello`; first answer wins, anything else is `{known:false}`. |
 | `GET /export?format=csv\|json` · `?kind=daily` | Download all events (bounded by retention), or the daily totals with the rollup included. |
 | `WS /stream` | Live frames — `initial` · `openTools` · `event` · `session` · `git` · `ci` · `alert` · `control`. Read-only: the socket never accepts commands. |
+
+### The orchestration policy
+
+Which engine and model sits in a project's chair, which ones do the work it
+hands out, what a worker may do, and when that changes. It is stored as the
+`orchestration` key of `config.json` (`{global, projects: {<root>: …}}`), edited
+in **Settings ▸ Orchestration** or through `POST /orchestration`, and it has no
+environment variable of its own. A project's policy replaces the global one
+whole; with neither stored, the defaults below apply. An entry that does not
+validate is ignored with one line in the log, and reads as absent.
+
+| Field | What it holds | Default |
+| --- | --- | --- |
+| `base` | Read, not stored: the chair's engine and model, and each role's (`scout`, `builder`, `verifier`), as the app runs them today. One copy, so Settings and the policy cannot disagree. | what the seat and `workerRoles` say |
+| `ask` | Per role and for the chair: `true` is "ask when it runs", so the person picks at the moment and the default is preselected. A role set to ask is never moved to another engine on its own. | all `false` |
+| `rules` | Up to 20, each `{id, name, when, orchestrator?, workers?, enabled}`. `when` is 1 to 4 triggers, all of which must hold: `always`, `usage` (a provider's `5h`, `weekly` or `either` window with at most N % left), `limit` (a provider is rate-limited), `hours` (days and a `HH:MM` span) and `budget`. A chain is 1 to 4 `{engine, model}` entries, tried in order. The first enabled rule whose triggers hold wins, per field. | none |
+| `ceiling` | The widest envelope an orchestrator may ask for in this project. | `write: worktree`, `network: false`, `commit: true` |
+| `workerDefault` | The envelope a worker gets when the orchestrator says nothing. | `write: worktree`, `network: false`, `commit: false` |
+| `limits` | `maxWorkers` (1–12), `turnMinutes` (1–240), `maxRetries` (0–5). | `3`, `30`, `1` |
+
+An envelope is `{write: none|worktree, network, commit, deny}`. It has no field
+for a push, a pull request, a merge, a release or spend, so none can be
+granted: those stay the person's, whatever is stored. `deny` only adds command
+prefixes on top of the ones compiled in. No string field can hold a credential:
+every one is an engine id from the table, a model name, a label or a command
+prefix, and each is also refused when it is shaped like a key.
+
+**Resolution happens when a worker starts.** A running worker is never killed,
+moved or re-pointed by a rule changing, and a resume keeps the engine the worker
+was started with. An engine this machine cannot run (not installed, signed out,
+older than its minimum) is skipped, the next in the chain is taken, and the
+row's `because` says why. A chain that runs out refuses the start with that
+sentence, and the chair gets it as a need for the person: there is no silent
+fallback to an engine nobody listed. The chair is the exception: a rule that
+names another engine for it never swaps a running one. The chair's row carries
+`next`, the Lantern offers **Change now**, and `POST /seat/change` writes it to
+the action log.
+
+A seat starts a worker with `agentglass-agent start <name> --role <role> --cwd
+<dir>`, plus optionally `--engine` and `--model` (an entry of the role's chain),
+`--allow network|commit` (each within `ceiling`) and `--prompt`. Anything else
+is refused with a sentence, not dropped. A turn that is still running when the
+server restarts is marked `ceiling lost: restarted` on its row and is not
+stopped at its limit afterwards; see SECURITY.md.
 
 ### The CLIs in front of the API
 

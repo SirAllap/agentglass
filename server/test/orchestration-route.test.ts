@@ -85,6 +85,16 @@ describe("/orchestration", () => {
     expect((await current()).policy.rules).toEqual([]);
   });
 
+  // The stated limit in SECURITY.md: with no desk key held, the Origin header
+  // is all that separates the person's window from a process holding the token.
+  test("with no desk key, the machine token plus a loopback Origin is taken for the person", async () => {
+    const before = await current();
+    const res = await save({ ...before.policy, rules: [rule("forged-origin")] }, undefined, { ...fromAgent, Origin: base });
+    expect(res.status).toBe(200);
+    expect((await current()).policy.rules.map((r) => r.id)).toContain("forged-origin");
+    await save({ ...before.policy, rules: [] });
+  });
+
   test("a refusal is logged, with the caller", async () => {
     const { actions } = await get<{ actions: { action: string; ok: boolean }[] }>("/actions?limit=50");
     expect(actions.some((a) => a.action === "/orchestration" && !a.ok)).toBe(true);

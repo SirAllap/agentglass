@@ -129,6 +129,10 @@ exit code. The result says `{engine, model, because, envelope}`; read `because`.
   was rate-limited or signed out before it did anything, and never for a role the
   person set to ask. `because` then says which engine it moved off. A failure on a
   later turn, or after work began, is never moved: you get a report and decide.
+- **The chair can change engine, and not by itself.** When the policy names another
+  engine for your chair, the row gets a `next` and the Lantern offers **Change now**
+  to the person. A running chair is never swapped by a rule: the person chooses the
+  moment, you write your hand-off first, and the new seat is woken on it.
 - **Yours only.** You can prompt, read, key and stop the agents you own: the workers
   you started, and any other agent after `agentglass-agent own <name>`. An agent with
   no owner is refused until you do; one another project's seat owns, never. `enlist` and

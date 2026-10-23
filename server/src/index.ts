@@ -8410,8 +8410,8 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     /**
      * The orchestration policy (shared/orchestration.ts). GET answers the
      * policy in force for `?root=` (its own, or the global one); POST stores a
-     * whole policy and answers with the one now in force. Nothing runs from it
-     * yet: it is stored, checked and resolvable.
+     * whole policy and answers with the one now in force. Workers and
+     * orchestrators resolve their engine from it when they start.
      */
     if (pathname === "/orchestration" && req.method === "GET") {
       const root = policyRoot(url.searchParams.get("root"));
