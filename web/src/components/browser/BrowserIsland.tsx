@@ -23,7 +23,7 @@
  * picture is as old as the last time it was in front. Ceiling: folders and the
  * shelf live in the classic list, not here.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { BrowserTab } from "../../lib/browserTabs.ts";
 import type { Activity } from "../../lib/browserAgentActivity.ts";
 import { boxState, tabState } from "../../lib/browserAgentActivity.ts";
@@ -66,6 +66,9 @@ export interface IslandProps {
   onTucked: (tucked: boolean) => void;
 }
 
+/* Islands drift a few px off one line so the archipelago does not read as a table. */
+const DRIFT = [6, -12, 8, -6, 10, -8];
+const PlusIcon = () => <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M6 1.5v9M1.5 6h9" /></svg>;
 const host = (url: string) => { try { return new URL(url).host; } catch { return url; } };
 
 export function BrowserIsland(p: IslandProps) {
@@ -157,6 +160,18 @@ export function BrowserIsland(p: IslandProps) {
   }, [open, activeId, p, finish]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => { if (closer.current) clearTimeout(closer.current); }, []);
 
+  /* Each island springs out of the pill: its offset from the pill's centre is
+     measured once, before the first paint of the overview, and the CSS carries it. */
+  useLayoutEffect(() => {
+    const el = box.current; if (!open || !el) return;
+    const r = el.getBoundingClientRect(), px = r.left + r.width / 2, py = r.top + PILL.h / 2;
+    for (const b of el.querySelectorAll<HTMLElement>(".agx-isl-box")) {
+      const c = b.getBoundingClientRect();
+      b.style.setProperty("--fx", `${px - (c.left + c.width / 2)}px`);
+      b.style.setProperty("--fy", `${py - (c.top + c.height / 2)}px`);
+    }
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+
   /* Escape is the overview's alone while it is up: other window handlers
      (the address box, the panel) must not close something else on the same key. */
   const hideRef = useRef(hide);
@@ -239,29 +254,29 @@ export function BrowserIsland(p: IslandProps) {
         {open && (
           <div className="agx-isl-mc">
             <div className="agx-isl-head">
-              <p className="agx-isl-sum">
-                {agents.length === 0 ? <>No agent is using a tab right now</>
-                  : <><strong>{agents.length === 1 ? agents[0] : `${agents.length} agents`}</strong> {agents.length === 1 ? "is" : "are"} using <strong>{heldBoxes} {heldBoxes === 1 ? "container" : "containers"}</strong> and <strong>{heldTabs} {heldTabs === 1 ? "tab" : "tabs"}</strong></>}
-                {tabs.length - heldTabs > 0 && <span className="agx-isl-mine">you have {tabs.length - heldTabs} of your own</span>}
+              <p className="agx-isl-sum" title={agents.join(", ") || undefined}>
+                <strong>{agents.length}</strong> {agents.length === 1 ? "agent" : "agents"} <i>·</i> <strong>{groups.length}</strong> {groups.length === 1 ? "container" : "containers"} <i>·</i> <strong>{tabs.length}</strong> {tabs.length === 1 ? "tab" : "tabs"}
               </p>
-              <button type="button" className="agx-isl-ib" aria-label="Close" onClick={() => hide()}><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="m4 4 8 8M12 4l-8 8" /></svg></button>
+              <button type="button" className="agx-isl-ib agx-isl-away" aria-label="Close" onClick={() => hide()}><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="m4 4 8 8M12 4l-8 8" /></svg></button>
             </div>
             <div className="agx-isl-boxes">
               {groups.length === 0 && (
-                <section className="agx-isl-box" style={{ "--n": 1 } as React.CSSProperties}>
+                <section className="agx-isl-box">
                   <div className="agx-isl-row">
-                    <button type="button" className="agx-isl-card agx-isl-new" onClick={() => { setOpen(false); p.onNew(); }}>
-                      <svg width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><path d="M8 3v10M3 8h10" /></svg>
-                      <span>New tab</span>
-                    </button>
+                    <button type="button" className="agx-isl-add" aria-label="New tab" title="New tab" onClick={() => { setOpen(false); p.onNew(); }}><PlusIcon /></button>
                   </div>
                 </section>
               )}
-              {groups.map((g) => (
-                <section key={g.profile} className={"agx-isl-box" + (g.held ? " is-agent" : "") + (g.state && g.state.key !== "done" && g.state.key !== "waiting" ? " is-live" : "")} style={{ "--n": g.list.length + 1 } as React.CSSProperties}>
+              {groups.map((g, i) => {
+                /* Only an agent at work lights its island; Done, Waiting and Yours are quiet. */
+                const work = !!g.state && g.state.key !== "done" && g.state.key !== "waiting" && g.state.key !== "yours";
+                return (
+                <section key={g.profile} data-box={g.profile} className={"agx-isl-box" + (g.held ? " is-agent" : "") + (g.state ? " is-s-" + g.state.key : "") + (work ? " is-live" : "")}
+                  style={{ "--i": Math.min(i, 3), "--dy": `${DRIFT[i % DRIFT.length]}px`, "--ph": (i * 3.7) % 12 } as React.CSSProperties}>
+                  {work && <><span className="agx-isl-halo" aria-hidden /><i className="agx-isl-sat t2" aria-hidden /><i className="agx-isl-sat t1" aria-hidden /><i className="agx-isl-sat" aria-hidden /></>}
                   <header>
                     <span className="agx-isl-bn">{g.name}</span>
-                    <span className="agx-isl-bc">{g.list.length} {g.list.length === 1 ? "tab" : "tabs"}{g.held ? ` · agent on ${g.held}` : ""}</span>
+                    <span className="agx-isl-bc" title={g.held ? `agent on ${g.held}` : undefined}>{g.list.length} {g.list.length === 1 ? "tab" : "tabs"}</span>
                     {g.state && <span key={g.state.key} className={"agx-isl-state is-" + g.state.key}><StateIcon k={g.state.key} />{g.state.word}</span>}
                   </header>
                   <div className="agx-isl-row">
@@ -272,30 +287,26 @@ export function BrowserIsland(p: IslandProps) {
                         <div key={t.id} data-tab={t.id} role="button" tabIndex={0}
                           className={"agx-isl-card" + (t.id === activeId ? " is-on" : "")}
                           onClick={() => hide(t.id)} onKeyDown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); hide(t.id); } }}>
-                          {/* The halo and the satellite ride outside the picture, which clips. */}
-                          <div className={"agx-isl-shot" + (st ? " is-" + (st.key === "waiting" ? "done" : st.key === "done" || st.key === "thinking" || st.key === "yours" ? st.key : "active") : "")}>
-                          {st && st.key !== "done" && st.key !== "waiting" && <><span className="agx-isl-halo" aria-hidden /><span className="agx-isl-sat" aria-hidden /></>}
-                          {st?.key === "done" && <span className="agx-isl-done" aria-hidden><StateIcon k="done" /></span>}
-                          <div className="agx-isl-thumb">
-                            {pics[t.id] ? <img src={pics[t.id]} alt="" /> : <span className="agx-isl-mono">{(t.title || host(t.url) || "?").slice(0, 1).toUpperCase()}{t.asleep && <small>Asleep</small>}</span>}
-                            <button type="button" className="agx-isl-x" aria-label={`Close ${t.title || "tab"}`} onClick={(e) => { e.stopPropagation(); p.onClose(t.id); }}><CloseIcon size={12} /></button>
+                          <div className="agx-isl-shot">
+                            <div className="agx-isl-thumb">
+                              {pics[t.id] ? <img src={pics[t.id]} alt="" /> : <span className="agx-isl-mono">{(t.title || host(t.url) || "?").slice(0, 1).toUpperCase()}{t.asleep && <small>Asleep</small>}</span>}
+                              <button type="button" className="agx-isl-x" aria-label={`Close ${t.title || "tab"}`} onClick={(e) => { e.stopPropagation(); p.onClose(t.id); }}><CloseIcon size={12} /></button>
+                            </div>
                           </div>
-                          </div>
-                          <div className="agx-isl-cap">
+                          <div className="agx-isl-cap" title={st ? `${who ?? "You"} · ${st.word}` : who ?? "You"}>
+                            <span className={"agx-isl-who" + (who ? " is-agent" : "")} aria-hidden />
                             <span className="agx-isl-name">{t.title || host(t.url)}</span>
-                            <span className={"agx-isl-who" + (who ? " is-agent" : "")} title={st ? st.word : undefined}>{who ?? "You"}</span>
                           </div>
                         </div>
                       );
                     })}
-                    <button type="button" className="agx-isl-card agx-isl-new" onClick={() => { setOpen(false); p.onNew(); }}>
-                      <svg width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><path d="M8 3v10M3 8h10" /></svg>
-                      <span>New tab</span>
-                    </button>
+                    <button type="button" className="agx-isl-add" aria-label="New tab" title="New tab" onClick={() => { setOpen(false); p.onNew(); }}><PlusIcon /></button>
                   </div>
                 </section>
-              ))}
+                );
+              })}
             </div>
+            <p className="agx-isl-hint" aria-hidden>esc to close</p>
           </div>
         )}
       </div>

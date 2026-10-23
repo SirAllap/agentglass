@@ -3102,6 +3102,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-isl-glass.is-shown { opacity: 1; transition: opacity 0s 380ms; animation: agx-glass-blur 0s 380ms forwards; }
 @media (prefers-reduced-transparency: reduce) {
   .agx-isl-glass, .agx-isl-glass.is-shown { background: var(--bg); animation: none; }
+  .agx-isl-box, .agx-isl-sum, .agx-isl-away { background: var(--bg); }
   .agx-isl.is-shown .agx-isl-morph { animation: none; background: var(--bg); }
 }
 /* while it is open the collapsed content stays mounted but out of the way; closing,
@@ -3158,102 +3159,92 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
   transition: opacity 240ms ease-in 120ms, transform 3120ms cubic-bezier(0.32, 0.72, 0, 1) 120ms, clip-path 3120ms cubic-bezier(0.32, 0.72, 0, 1) 120ms; }
 .agx-isl.is-shown .agx-isl-mc { opacity: 1; transform: none; clip-path: inset(0px 0px 0px 0px round 20px);
   transition: opacity 200ms cubic-bezier(0.23, 1, 0.32, 1) 40ms, transform 380ms cubic-bezier(0.32, 0.72, 0, 1), clip-path 380ms cubic-bezier(0.32, 0.72, 0, 1); }
-/* the containers come in after the shape, one after another, rising 8px */
-.agx-isl-box { opacity: 0; transform: translateY(8px); transition: opacity 120ms ease-out, transform 120ms ease-out; }
-.agx-isl.is-shown .agx-isl-box { opacity: 1; transform: none; transition: opacity 260ms cubic-bezier(0.23, 1, 0.32, 1), transform 320ms cubic-bezier(0.23, 1, 0.32, 1); }
-.agx-isl.is-shown .agx-isl-box:nth-child(1) { transition-delay: 100ms; } .agx-isl.is-shown .agx-isl-box:nth-child(2) { transition-delay: 130ms; }
-.agx-isl.is-shown .agx-isl-box:nth-child(3) { transition-delay: 160ms; } .agx-isl.is-shown .agx-isl-box:nth-child(n+4) { transition-delay: 190ms; }
-.agx-isl-head { display: flex; align-items: center; gap: 10px; padding: 18px 22px 6px; }
-.agx-isl-sum { flex: 1; margin: 0; font-size: 15px; color: #b9b3c6; }
-.agx-isl-sum strong { color: #fff; font-weight: 600; }
-.agx-isl-mine { margin-left: 10px; font-size: 13px; color: #8f889e; }
-/* boxes share the width by how many tabs they hold (--n, set per box), and wrap */
-.agx-isl-boxes { flex: 1; overflow: auto; padding: 12px 22px 22px; display: flex; flex-wrap: wrap; gap: 16px; align-content: flex-start; }
-/* Never narrower than two cards side by side: at 260 px five containers shared one row and every box stacked its tabs in a single column. Past that the boxes wrap to a new row. */
-.agx-isl-boxes > .agx-isl-box { flex: var(--n, 1) 1 440px; }
-.agx-isl-box { border-radius: 16px; padding: 12px 14px 16px; background: rgba(255, 255, 255, .035); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .06); min-width: 0; }
-.agx-isl-box.is-agent { background: linear-gradient(180deg, rgba(139, 92, 246, .10), rgba(139, 92, 246, .03)); box-shadow: inset 0 0 0 1px rgba(167, 139, 250, .22); }
-.agx-isl-box header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
-.agx-isl-bn { font-weight: 600; color: #f2f0f7; }
-.agx-isl-bc { color: #8f889e; font-variant-numeric: tabular-nums; }
-.agx-isl-state { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 11px; color: #8f889e; }
-/* A box's state: the act's word while an agent acts, Thinking between, Done once it went quiet. */
-.agx-isl-state { height: 20px; padding: 0 8px 0 6px; border-radius: 10px; color: #c4b5fd; background: rgba(139, 92, 246, .16); animation: agx-state-in 200ms var(--agx-ease); }
-.agx-isl-state.is-thinking { color: rgba(242, 240, 247, .72); background: rgba(255, 255, 255, .07); }
-.agx-isl-state.is-waiting { color: rgba(242, 240, 247, .72); background: rgba(255, 255, 255, .07); }
-.agx-isl-state.is-done { color: #6ee7b7; background: rgba(16, 185, 129, .14); }
-.agx-isl-state.is-yours { color: #fbbf24; background: rgba(251, 191, 36, .14); }
-.agx-isl-state svg { flex: none; overflow: visible; }
-.agx-isl-box.is-live { box-shadow: inset 0 0 0 1px rgba(167, 139, 250, .34), 0 0 32px -12px rgba(139, 92, 246, .55); }
-
-/* The card an agent is on wears the mark's orbit: a violet halo round the
-   picture and the green contact travelling its edge, the same pair the page
-   wears while it is driven. Thinking slows it; Done leaves a tick. */
-.agx-isl-shot { position: relative; border-radius: 12px; }
-.agx-isl-halo { position: absolute; inset: -3px; border-radius: 15px; pointer-events: none; box-shadow: 0 0 0 1.5px rgba(167, 139, 250, .7), 0 0 22px -4px rgba(139, 92, 246, .7); animation: agx-halo 2.4s ease-in-out infinite; }
-@keyframes agx-halo { 50% { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--ring, #a78bfa) 62%, transparent), 0 0 30px -2px rgba(139, 92, 246, .45); } }
-.agx-isl-sat { position: absolute; inset: -3px; pointer-events: none; z-index: 2; }
-.agx-isl-sat::before, .agx-isl-sat::after { content: ""; position: absolute; left: 0; top: 0; border-radius: 50%; offset-path: inset(0 round 15px); offset-rotate: 0deg; animation: agx-orbit 2.4s linear infinite; }
-.agx-isl-sat::before { width: 8px; height: 8px; background: #34d399; box-shadow: 0 0 10px 2px rgba(52, 211, 153, .75); animation-delay: -.12s; }
-.agx-isl-sat::after { width: 5px; height: 5px; background: rgba(52, 211, 153, .45); box-shadow: 0 0 6px 1px rgba(52, 211, 153, .35); }
+/* The containers are islands: each hugs its tabs and floats over the glass. On
+   opening they spring out of the pill (--fx/--fy, measured in the component),
+   staggered by --i, critically damped so nothing overshoots, transform and
+   opacity only, under 400 ms in all. The blur is the glass's own; an island
+   sits in the clipped overview, which is a backdrop root, so a blur of its own
+   would blur nothing and cost a layer. */
+.agx-isl-mc { --agx-spring: linear(0, .11, .31, .503, .657, .771, .85, .904, .939, .962, .976, .985, .991, .994, .997, .998, 1); }
+.agx-isl-box { opacity: 0; transform: translate(var(--fx, 0px), var(--fy, 0px)) scale(.4); transition: opacity 100ms ease-out, transform 120ms ease-out, translate 260ms cubic-bezier(0.23, 1, 0.32, 1); }
+.agx-isl.is-shown .agx-isl-box { opacity: 1; transform: none; transition: opacity 160ms ease-out calc(10ms + var(--i, 0) * 28ms), transform 290ms var(--agx-spring) calc(10ms + var(--i, 0) * 28ms), translate 260ms cubic-bezier(0.23, 1, 0.32, 1); }
+.agx-isl-head { position: absolute; left: 0; right: 0; top: 18px; z-index: 2; display: flex; justify-content: center; pointer-events: none; }
+.agx-isl-sum, .agx-isl-away { pointer-events: auto; background: color-mix(in srgb, var(--bg) 62%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent), 0 1px 2px rgba(30, 20, 60, .08), 0 8px 20px -8px rgba(30, 20, 60, .18); }
+.agx-isl-sum { margin: 0; height: 32px; padding: 0 16px; display: flex; align-items: center; gap: 8px; white-space: nowrap; border-radius: 16px; font-size: 12px; color: var(--text2); }
+.agx-isl-sum strong { color: var(--text); font-weight: 600; }
+.agx-isl-sum i { color: color-mix(in srgb, var(--text2) 55%, transparent); font-style: normal; }
+.agx-isl-away { position: absolute; right: 18px; top: 0; width: 32px; height: 32px; border-radius: 16px; }
+.agx-isl-mc .agx-isl-away:hover:not(:disabled) { background: color-mix(in srgb, var(--bg) 90%, transparent); }
+.agx-isl-hint { position: absolute; left: 0; right: 0; bottom: 20px; margin: 0; text-align: center; font-size: 11px; color: color-mix(in srgb, var(--text2) 55%, transparent); pointer-events: none; }
+/* the archipelago: islands wrap and sit centred, vertically too while they are few */
+.agx-isl-boxes { flex: 1; overflow: auto; padding: 76px 90px 44px; display: flex; flex-wrap: wrap; justify-content: center; align-content: center; align-content: safe center; gap: 30px 34px; }
+.agx-isl-box { position: relative; top: var(--dy, 0px); min-width: 236px; padding: 12px 14px 14px; border-radius: 24px; box-sizing: border-box;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg) 78%, transparent), color-mix(in srgb, var(--bg) 54%, transparent));
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 8%, transparent), 0 1px 1px rgba(30, 20, 60, .06), 0 8px 16px -4px rgba(30, 20, 60, .10), 0 26px 50px -14px rgba(30, 20, 60, .22); }
+.agx-isl-box:hover { translate: 0 -3px; }
+.agx-isl-box header { display: flex; align-items: center; gap: 8px; margin-bottom: 11px; }
+.agx-isl-bn { font-weight: 600; font-size: 12.5px; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agx-isl-bc { font-size: 11px; margin-right: 6px; color: color-mix(in srgb, var(--text2) 70%, transparent); font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* A box's state chip: the act's word while an agent acts, Thinking between, Done once it went quiet. */
+.agx-isl-state { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px 0 7px; border-radius: 11px; font-size: 11px; font-weight: 600; white-space: nowrap; color: var(--ink-agent); background: rgba(139, 92, 246, .14); animation: agx-state-in 200ms var(--agx-ease); }
+.agx-isl-state svg { flex: none; overflow: visible; width: 12px; height: 12px; }
+.agx-isl-state.is-waiting { color: var(--text2); background: color-mix(in srgb, var(--text) 8%, transparent); }
+.agx-isl-state.is-done { color: var(--ink-ok); background: rgba(16, 185, 129, .16); }
+.agx-isl-state.is-yours { color: var(--ink-you); background: rgba(245, 158, 11, .16); }
+/* The working island wears the mark's orbit: a violet halo that breathes round
+   its edge and the green contact travelling it (a lead dot and two fading
+   behind), the same pair the page wears while it is driven. Only these animate. */
+.agx-isl-halo { position: absolute; inset: -1px; border-radius: 25px; pointer-events: none; box-shadow: 0 0 0 1px color-mix(in srgb, var(--ring) 55%, transparent), 0 0 22px rgba(139, 92, 246, .30), 0 0 64px rgba(139, 92, 246, .16); animation: agx-isl-breathe 3.6s ease-in-out infinite alternate; }
+@keyframes agx-isl-breathe { from { opacity: .55; } to { opacity: 1; } }
+.agx-isl-sat { position: absolute; left: 0; top: 0; width: 7px; height: 7px; border-radius: 50%; background: #10b981; pointer-events: none; z-index: 2;
+  offset-path: inset(-8px round 32px); offset-rotate: 0deg; offset-anchor: 50% 50%; box-shadow: 0 0 0 3px rgba(16, 185, 129, .18), 0 0 10px 2px rgba(16, 185, 129, .55);
+  animation: agx-orbit 12s linear infinite; animation-delay: calc(var(--ph, 0) * -1s); }
+.agx-isl-sat.t1 { width: 5px; height: 5px; opacity: .5; box-shadow: 0 0 6px 1px rgba(16, 185, 129, .4); animation-delay: calc(var(--ph, 0) * -1s + .2s); }
+.agx-isl-sat.t2 { width: 3px; height: 3px; opacity: .28; box-shadow: none; animation-delay: calc(var(--ph, 0) * -1s + .4s); }
 @keyframes agx-orbit { from { offset-distance: 0%; } to { offset-distance: 100%; } }
-.agx-isl-shot.is-thinking .agx-isl-halo { animation: none; box-shadow: 0 0 0 1.5px rgba(167, 139, 250, .38), 0 0 16px -6px rgba(139, 92, 246, .45); }
-.agx-isl-shot.is-thinking .agx-isl-sat::before, .agx-isl-shot.is-thinking .agx-isl-sat::after { animation-duration: 7s; opacity: .7; }
-.agx-isl-shot.is-yours .agx-isl-halo { animation: none; box-shadow: 0 0 0 1.5px rgba(251, 191, 36, .7), 0 0 18px -6px rgba(251, 191, 36, .5); }
-.agx-isl-shot.is-yours .agx-isl-sat { display: none; }
-.agx-isl-done { position: absolute; left: 6px; top: 6px; z-index: 2; width: 22px; height: 22px; border-radius: 11px; display: grid; place-items: center; color: #6ee7b7; background: rgba(22, 19, 31, .78); box-shadow: 0 0 0 1px rgba(110, 231, 183, .35); }
+.agx-isl-box.is-s-thinking .agx-isl-halo { animation: none; }
+.agx-isl-box.is-s-thinking .agx-isl-sat { animation-duration: 24s; }
 .agx-st-tick { stroke-dasharray: 9; stroke-dashoffset: 9; animation: agx-st-tick 360ms var(--agx-ease) 120ms forwards; }
 @keyframes agx-st-tick { to { stroke-dashoffset: 0; } }
 @media (prefers-reduced-motion: reduce) {
   .agx-isl-halo, .agx-isl-state, .agx-st-tick { animation: none; stroke-dashoffset: 0; }
-  .agx-isl-sat { display: none; }
+  .agx-isl-sat, .agx-isl-sat.t1, .agx-isl-sat.t2 { animation: none; offset-distance: 12%; }
+  .agx-isl-sat.t1 { offset-distance: 10.5%; } .agx-isl-sat.t2 { offset-distance: 9%; }
 }
-/* minmax(170px, 220px) counted its columns from the 220: a 400 px box held one card a row though two fit. */
-.agx-isl-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 14px; }
-.agx-isl-card { position: relative; display: flex; flex-direction: column; gap: 8px; min-width: 0; cursor: pointer; outline: none; border: 0; padding: 0; background: none; color: inherit; font: inherit; text-align: left; }
-.agx-isl-thumb { position: relative; aspect-ratio: 16 / 10; border-radius: 12px; overflow: hidden; background: #221e2c; box-shadow: 0 0 0 1px rgba(255, 255, 255, .08), 0 8px 20px -10px rgba(0, 0, 0, .6); transition: transform 160ms cubic-bezier(0.23, 1, 0.32, 1); }
+/* tabs: smaller pictures, the title under them, a round + after the last */
+.agx-isl-row { display: flex; align-items: flex-start; gap: 10px; }
+.agx-isl-card { position: relative; flex: none; width: 132px; display: flex; flex-direction: column; gap: 6px; min-width: 0; cursor: pointer; outline: none; border: 0; padding: 0; background: none; color: inherit; font: inherit; text-align: left; }
+.agx-isl-shot { position: relative; border-radius: 10px; }
+.agx-isl-thumb { position: relative; width: 132px; height: 82px; border-radius: 10px; overflow: hidden; background: var(--bg3); box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent), 0 2px 6px -2px rgba(30, 20, 60, .22); transition: box-shadow 160ms, transform 160ms cubic-bezier(0.23, 1, 0.32, 1); }
 .agx-isl-thumb img { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; background: #fff; }
-.agx-isl-card.is-on .agx-isl-thumb { box-shadow: 0 0 0 2px #a78bfa, 0 8px 20px -10px rgba(0, 0, 0, .6); }
-.agx-isl-card:focus-visible .agx-isl-thumb { outline: 2px solid #a78bfa; outline-offset: 3px; }
-@media (hover: hover) and (pointer: fine) { .agx-isl-card:hover .agx-isl-thumb { transform: translateY(-2px); } }
-.agx-isl-mono { position: absolute; inset: 0; display: grid; place-items: center; align-content: center; gap: 6px; font-size: 16px; font-weight: 600; color: #cfcad9; }
-.agx-isl-mono small { font-size: 11px; font-weight: 400; color: #8f889e; }
-.agx-isl-x { position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; border-radius: 11px; border: 0; display: grid; place-items: center; font-size: 14px; font-weight: 600; line-height: 1; color: #fff; background: rgba(22, 19, 31, .72); opacity: 0; cursor: pointer; transition: opacity 120ms ease-out; }
-.agx-isl-card:hover .agx-isl-x, .agx-isl-card:focus-visible .agx-isl-x, .agx-isl-x:focus-visible { opacity: 1; }
+.agx-isl-card.is-on .agx-isl-thumb { box-shadow: 0 0 0 2px var(--ring), 0 2px 6px -2px rgba(30, 20, 60, .22); }
+.agx-isl-card:focus-visible .agx-isl-thumb { outline: 2px solid var(--ring); outline-offset: 3px; }
+@media (hover: hover) and (pointer: fine) { .agx-isl-card:hover .agx-isl-thumb { transform: translateY(-1px); box-shadow: 0 0 0 1.5px color-mix(in srgb, #8b5cf6 60%, transparent), 0 6px 14px -4px rgba(30, 20, 60, .25); } }
+.agx-isl-mono { position: absolute; inset: 0; display: grid; place-items: center; align-content: center; gap: 6px; font-size: 16px; font-weight: 600; color: var(--text2); }
+.agx-isl-mono small { font-size: 11px; font-weight: 400; color: color-mix(in srgb, var(--text2) 85%, transparent); }
+.agx-isl-x { position: absolute; top: 5px; right: 5px; width: 20px; height: 20px; padding: 0; border-radius: 10px; border: 0; display: grid; place-items: center; line-height: 1; color: #fff; background: rgba(29, 26, 39, .72); opacity: 0; transform: scale(.9); cursor: pointer; transition: opacity 140ms cubic-bezier(0.23, 1, 0.32, 1), transform 140ms cubic-bezier(0.23, 1, 0.32, 1); }
+.agx-isl-x svg { width: 9px; height: 9px; }
+.agx-isl-card:hover .agx-isl-x, .agx-isl-card:focus-visible .agx-isl-x, .agx-isl-x:focus-visible { opacity: 1; transform: none; }
 .agx-isl-x:hover { background: #e5484d; }
-.agx-isl-cap { display: flex; align-items: center; gap: 8px; padding: 0 2px; min-width: 0; }
-.agx-isl-name { flex: 1; min-width: 0; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agx-isl-who { font-size: 11px; color: #8f889e; white-space: nowrap; }
-.agx-isl-who.is-agent { color: #c4b5fd; }
-.agx-isl-new { aspect-ratio: 16 / 10; align-items: center; justify-content: center; gap: 6px; border-radius: 12px; border: 1px dashed rgba(255, 255, 255, .18); color: #8f889e; font-size: 11.5px; }
-.agx-isl-new:hover { border-color: rgba(167, 139, 250, .5); color: #d8ccff; }
+.agx-isl-cap { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: 10.5px; color: color-mix(in srgb, var(--text2) 85%, transparent); }
+.agx-isl-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* the owner: violet for a tab an agent holds, amber for one that is yours */
+.agx-isl-who { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--ink-you); }
+.agx-isl-who.is-agent { background: var(--ink-agent); }
+.agx-isl-add { flex: none; width: 26px; height: 26px; margin-top: 28px; padding: 0; border: 0; border-radius: 13px; display: grid; place-items: center; cursor: pointer; color: color-mix(in srgb, var(--text2) 60%, transparent); background: color-mix(in srgb, var(--text) 6%, transparent); transition: background 140ms, color 140ms, transform 140ms cubic-bezier(0.23, 1, 0.32, 1); }
+.agx-isl-add:hover { background: rgba(139, 92, 246, .16); color: var(--ink-agent); }
+.agx-isl-add:active { transform: scale(.92); }
+.agx-isl-add:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.agx-isl-row > .agx-isl-add:only-child { margin-top: 0; }
 .agx-isl-mc { --ring: color-mix(in srgb, #a78bfa 72%, var(--text)); --ink-agent: color-mix(in srgb, #8b5cf6 62%, var(--text)); --ink-ok: color-mix(in srgb, #10b981 58%, var(--text)); --ink-you: color-mix(in srgb, #f59e0b 62%, var(--text)); color: var(--text); }
-.agx-isl-mc .agx-isl-sum { color: var(--text2); }
-.agx-isl-mc .agx-isl-sum strong, .agx-isl-mc .agx-isl-bn { color: var(--text); }
-.agx-isl-mc :is(.agx-isl-mine, .agx-isl-bc, .agx-isl-who, .agx-isl-mono small, .agx-isl-new) { color: color-mix(in srgb, var(--text2) 85%, transparent); }
-.agx-isl-mc .agx-isl-mono, .agx-isl-mc .agx-isl-ib { color: var(--text2); }
+.agx-isl-mc .agx-isl-ib { color: var(--text2); }
 .agx-isl-mc .agx-isl-ib:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 10%, transparent); }
-.agx-isl-mc .agx-isl-box { background: color-mix(in srgb, var(--text) 5%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent); }
-.agx-isl-mc .agx-isl-box.is-agent { background: linear-gradient(180deg, rgba(139, 92, 246, .13), rgba(139, 92, 246, .04)); box-shadow: inset 0 0 0 1px color-mix(in srgb, #8b5cf6 38%, transparent); }
-.agx-isl-mc .agx-isl-box.is-live { box-shadow: inset 0 0 0 1px color-mix(in srgb, #8b5cf6 50%, transparent), 0 0 32px -12px rgba(139, 92, 246, .55); }
-.agx-isl-mc .agx-isl-state { color: var(--ink-agent); background: rgba(139, 92, 246, .16); }
-.agx-isl-mc .agx-isl-state:is(.is-thinking, .is-waiting) { color: var(--text2); background: color-mix(in srgb, var(--text) 8%, transparent); }
-.agx-isl-mc .agx-isl-state.is-done { color: var(--ink-ok); background: rgba(16, 185, 129, .16); }
-.agx-isl-mc .agx-isl-state.is-yours { color: var(--ink-you); background: rgba(245, 158, 11, .16); }
-.agx-isl-mc .agx-isl-who.is-agent { color: var(--ink-agent); }
-.agx-isl-mc .agx-isl-halo { box-shadow: 0 0 0 1.5px var(--ring), 0 0 22px -4px rgba(139, 92, 246, .7); }
-.agx-isl-mc .agx-isl-shot.is-thinking .agx-isl-halo { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--ring) 55%, transparent), 0 0 16px -6px rgba(139, 92, 246, .45); }
-.agx-isl-mc .agx-isl-shot.is-yours .agx-isl-halo { box-shadow: 0 0 0 1.5px var(--ink-you), 0 0 18px -6px rgba(245, 158, 11, .5); }
-.agx-isl-mc .agx-isl-done { color: var(--ink-ok); background: color-mix(in srgb, var(--bg) 85%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, #10b981 40%, transparent); }
-.agx-isl-mc .agx-isl-thumb { background: var(--bg3); box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent), 0 8px 20px -10px rgba(0, 0, 0, .45); }
-.agx-isl-mc .agx-isl-card.is-on .agx-isl-thumb { box-shadow: 0 0 0 2px var(--ring), 0 8px 20px -10px rgba(0, 0, 0, .45); }
-.agx-isl-mc .agx-isl-x { color: var(--text); background: color-mix(in srgb, var(--bg) 82%, transparent); }
-.agx-isl-mc .agx-isl-x:hover { color: #fff; background: #e5484d; }
-.agx-isl-mc .agx-isl-new { border-color: color-mix(in srgb, var(--text) 24%, transparent); }
-.agx-isl-mc .agx-isl-new:hover { border-color: color-mix(in srgb, #8b5cf6 55%, transparent); color: var(--ink-agent); }
 @media (prefers-reduced-motion: reduce) {
   .agx-isl { transition: background 150ms ease; }
-  .agx-isl-mc, .agx-isl.is-shown .agx-isl-mc, .agx-isl-box { transform: none; }
+  .agx-isl-mc, .agx-isl.is-shown .agx-isl-mc { transform: none; }
+  .agx-isl-box, .agx-isl.is-shown .agx-isl-box { opacity: 1; transform: none; transition: none; }
+  .agx-isl-thumb, .agx-isl-x, .agx-isl-add { transition: none; }
   .agx-isl-morph, .agx-isl.is-shown .agx-isl-morph { transition: none; animation: none; clip-path: inset(0px 0px 0px 0px round 20px); }
   .agx-isl-glass.is-shown { transition: none; animation-delay: 0s; }
 }
