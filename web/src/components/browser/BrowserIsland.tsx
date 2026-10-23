@@ -48,7 +48,8 @@ export interface IslandProps {
   loading: boolean;
   onShow: (id: string) => void;
   onClose: (id: string) => void;
-  onNew: () => void;
+  /** A new tab, in the given container when the "+" belongs to one. */
+  onNew: (profile?: string) => void;
   onAddress: () => void;
   onBack: () => void;
   onForward: () => void;
@@ -300,7 +301,7 @@ export function BrowserIsland(p: IslandProps) {
                         </div>
                       );
                     })}
-                    <button type="button" className="agx-isl-add" aria-label="New tab" title="New tab" onClick={() => { setOpen(false); p.onNew(); }}><PlusIcon /></button>
+                    <button type="button" className="agx-isl-add" aria-label="New tab" title="New tab" onClick={() => { setOpen(false); p.onNew(g.profile); }}><PlusIcon /></button>
                   </div>
                 </section>
                 );

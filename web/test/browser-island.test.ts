@@ -157,3 +157,12 @@ describe("the overview as islands", () => {
     expect(rule(css, ".agx-isl-sum, .agx-isl-away")[0]).toContain("var(--bg)");
   });
 });
+
+describe("an island's +", () => {
+  test("opens the new tab in that island's container", async () => {
+    const isl = await Bun.file(new URL("../src/components/browser/BrowserIsland.tsx", import.meta.url)).text();
+    expect(isl).toContain("p.onNew(g.profile)");
+    const panel = await Bun.file(new URL("../src/components/BrowserPanel.tsx", import.meta.url)).text();
+    expect(panel).toMatch(/onNew=\{\(space\) => \{ if \(space !== undefined\) switchTo\(space\); setOmni\("new"\); \}\}/);
+  });
+});

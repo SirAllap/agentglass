@@ -3149,7 +3149,7 @@ export function BrowserView({ active: viewOn, scope }: {
             spaceName={spaceName}
             address={active?.url && active.url !== BLANK ? displayUrl(active.url) : ""}
             canBack={!!active?.canBack} canForward={!!active?.canForward} loading={!!active?.loading}
-            onShow={show} onClose={(id) => { close(id); shots.current.delete(id); setLandings((m) => { const { [id]: _gone, ...rest } = m; return rest; }); }} onNew={() => setOmni("new")} onAddress={() => setOmni("edit")}
+            onShow={show} onClose={(id) => { close(id); shots.current.delete(id); setLandings((m) => { const { [id]: _gone, ...rest } = m; return rest; }); }} onNew={(space) => { if (space !== undefined) switchTo(space); setOmni("new"); }} onAddress={() => setOmni("edit")}
             onBack={() => el()?.goBack()} onForward={() => el()?.goForward()} onReload={() => el()?.reload()} onStop={() => el()?.stop()}
             onMenu={(r, byKey) => { setMenuAtXY({ top: r.bottom + 6, right: Math.max(6, window.innerWidth - r.right) }); setMenuByKey(byKey); setMenuOpen(true); }} menuOpen={menuOpen}
             onToggle={(id) => { const a = actsRef.current[id]; if (a) dispatchAct({ type: "pause", tab: id, paused: !a.paused }); }}
