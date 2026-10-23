@@ -783,6 +783,14 @@ function viewerTz(): string | null {
 const D = <T,>(v: T) => Promise.resolve(v); // demo helper
 const demoPrAction = (): PrActionResult => ({ ok: false, error: "the demo is read-only" });
 
+/** One rule's switch as the evaluator stored it (GET /orchestration/state). */
+export interface PolicyRuleState {
+  scope: string; ruleId: string; name: string; active: boolean; since: number;
+  reading: string; readingAt: number;
+  /** "holding: the last usage reading is 47 min old", or empty. */
+  holding: string;
+}
+
 /** What `/seat` answers: the chair for one project, and what is in it. */
 export interface SeatAnswer {
   ok: boolean;
@@ -1531,6 +1539,9 @@ const realApi = {
   orchestrationSave: (policy: Policy | null, root?: string) =>
     post<{ ok: boolean; error?: string; scope?: "project" | "global"; root?: string; overrides?: string[]; policy?: Policy }>(
       "/orchestration", { root, policy }),
+  /** Which rules are on and why a reading did not change one. Read when the
+   *  page opens and after a save: the server settles it on events, not on a clock. */
+  orchestrationState: () => get<{ ok: boolean; rules: PolicyRuleState[] }>("/orchestration/state"),
   /** Whether hooked sessions get asked what they are working on, and how
    *  often — the Lantern's one setting. */
   lanternSettings: () => get<{ ok: boolean; nudge: boolean; minutes: number; watch: boolean; watchMinutes: number; cacheTtlMinutes: number; min: number; max: number }>("/lantern/settings"),
@@ -2908,6 +2919,7 @@ const demoApi: typeof realApi = {
     } as Policy,
   }),
   orchestrationSave: (_p: Policy | null, _root?: string) => D({ ok: false, error: "not available in the demo" }),
+  orchestrationState: () => D({ ok: true, rules: [] as PolicyRuleState[] }),
   lanternSettings: () => D({ ok: true, nudge: true, minutes: 20, watch: true, watchMinutes: 15, cacheTtlMinutes: 5, min: 5, max: 180 }),
   lanternSettingsSave: (_f: object) => D({ ok: false, error: "not available in the demo" }),
   lanternTicket: (_c?: string) => D({ ok: false, error: "not available in the demo" }),

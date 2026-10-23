@@ -46,7 +46,7 @@ export const VIEW_IDS = ["dash", "git", "diff", "pr", "tasks", "docker", "term",
 /** The pages Settings can be opened on. `plugin:<name>` pages come and go with
  *  the installed plugins and are not a closed set, so they are not here. */
 export const SETTINGS_PAGE_IDS = [
-  "prefs", "appearance", "notifications", "rail", "keys", "terminal", "diff", "browser", "tasks", "hooks", "engines", "lantern",
+  "prefs", "appearance", "notifications", "rail", "keys", "terminal", "diff", "browser", "tasks", "hooks", "engines", "orchestration", "lantern",
   "understudy", "budgets", "recipes", "review-prompts", "saved-replies", "connections", "clickup", "jira", "remote", "plugins",
   "tmux", "privacy", "about", "log", "onboarding",
 ] as const;
@@ -314,6 +314,7 @@ export const UI_READ_NOT_COVERED: Readonly<Record<string, string>> = {
   "settings.clickup": "credential pane: values are never read through this channel (settings.privacy says only whether it is set)",
   "settings.jira": "credential pane: the token, the site and the write switch are never read through this channel (the one setting on it is a def, and the steps have their own door, GET /jira/steps)",
   "settings.onboarding": "not a setting",
+  "settings.orchestration": "no setting of its own: the page shows the policy GET /orchestration answers, and only a person writes it (the route refuses an agent), so there is nothing here for an agent to read or change",
   "settings.engines": "no setting of its own: the page shows what GET /engines measures on this machine, and an agent reads that route (the tests there are a real turn and are not an agent's to start)",
 };
 

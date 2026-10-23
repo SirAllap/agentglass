@@ -506,7 +506,7 @@ export const MIGRATED: Readonly<Record<string, "all" | readonly string[]>> = {
  *  the two lists, so adding a page forces a decision rather than a silent gap. */
 export const NOT_YET_MIGRATED = [
   "prefs", "hooks", "lantern", "understudy", "budgets", "recipes",
-  "review-prompts", "saved-replies", "connections", "engines", "remote", "plugins", "tmux", "privacy", "about", "log", "onboarding",
+  "review-prompts", "saved-replies", "connections", "engines", "orchestration", "remote", "plugins", "tmux", "privacy", "about", "log", "onboarding",
 ] as const;
 
 /**
