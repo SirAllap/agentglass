@@ -100,7 +100,7 @@ describe("the overview as islands", () => {
   // The big dashed New tab tile is gone; the round + keeps the same click.
   test("a round + after the tabs opens a new tab, and no New tab tile is left", async () => {
     const css = await cssP;
-    expect(overview.match(/className="agx-isl-add" aria-label="New tab" title="New tab" onClick=\{\(\) => \{ setOpen\(false\); p\.onNew\(\); \}\}/g)!.length).toBe(2);
+    expect(overview.match(/className="agx-isl-add" aria-label="New tab" title="New tab" onClick=\{\(\) => \{ setOpen\(false\); p\.onNew\((g\.profile)?\); \}\}/g)!.length).toBe(2);
     expect(island).not.toContain("agx-isl-new");
     expect(css).not.toContain("agx-isl-new");
   });
