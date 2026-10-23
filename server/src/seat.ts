@@ -48,6 +48,8 @@ import { readPolicy } from "./orchestration.ts";
 import { ruleStates } from "./orchpolicy.ts";
 import { probeEngines } from "./agentprobe.ts";
 import { seatRoots } from "./seatpanes.ts";
+import { screenReaderFor } from "./chatpane.ts";
+import { agentProvider } from "../../shared/agentKinds.ts";
 import { SEAT_PROMPT_MARK } from "./seatmark.ts";
 import { queueReadout } from "./seatqueue.ts";
 import { inboxReadout, recentReports, unreadCount, type SeatReport } from "./seatreport.ts";
@@ -79,6 +81,28 @@ export function defaultSeatModel(offered = claudeModels().map((m) => m.id)): str
   }
   return offered[0] ?? "";
 }
+
+/** Why an engine cannot take the chair, as a sentence, or null when it can.
+ *  The chair is woken by a paste, so it needs a tab to paste into and a reading
+ *  of that tab's screen; an engine without both is refused here rather than
+ *  opened and typed into blind. */
+export function chairRefusal(kind: string): string | null {
+  const p = agentProvider(kind);
+  if (!p) return `"${kind}" is not an agent engine.`;
+  if (!p.tab) return `${p.title} cannot take the chair yet: it does not open in a terminal tab.`;
+  if (!screenReaderFor(kind)) return `${p.title} cannot take the chair yet: agentglass has not captured its screen, so it could not tell when it is ready to be woken.`;
+  return null;
+}
+
+/** The model a chair on this engine starts with when nobody chose one. */
+export const seatDefaultModelFor = (kind: string): string =>
+  kind === "claude" ? defaultSeatModel() : agentProvider(kind)?.seatModel ?? "";
+
+/** The model on the engine's own flag; none for an engine that has no flag. */
+export const seatModelArgs = (kind: string, model: string): string[] => {
+  const flag = agentProvider(kind)?.modelFlag;
+  return model && flag ? [flag, model] : [];
+};
 
 export const POWERS = ["speak", "nudge", "assign"] as const;
 export type Power = (typeof POWERS)[number];
@@ -132,13 +156,14 @@ const settings = db.query<never, [string, string, string, string]>(`
   VALUES (?, ?, ?, ?, 0, 0)
   ON CONFLICT(root) DO UPDATE SET model = excluded.model, powers = excluded.powers
 `);
+const settingKind = db.query<never, [string, string]>(`UPDATE seat SET kind = ? WHERE root = ?`);
 const closeRow = db.query<never, [number, string]>(`UPDATE seat SET ended_at = ? WHERE root = ?`);
 const adoptRow = db.query<never, [string, string, string, string, string, number]>(`
   INSERT INTO seat (root, name, powers, adopted_session, adopted_pane, started_at, ended_at)
   VALUES (?, ?, ?, ?, ?, ?, NULL)
   ON CONFLICT(root) DO UPDATE SET
     adopted_session = excluded.adopted_session, adopted_pane = excluded.adopted_pane,
-    started_at = excluded.started_at, ended_at = NULL
+    kind = 'claude', started_at = excluded.started_at, ended_at = NULL
 `);
 const unadopt = db.query<never, [string]>(`UPDATE seat SET adopted_session = '', adopted_pane = '' WHERE root = ?`);
 const saidRow = db.query<never, [string, number, string]>(`UPDATE seat SET last_line = ?, last_turn_at = ? WHERE root = ?`);
@@ -266,10 +291,17 @@ export async function seated(root: string): Promise<AgentOps.NamedAgent | null> 
     return null;
   }
   return {
-    name: row.name || "orchestrator", kind: row.kind || "claude", cwd: root,
+    name: row.name || "orchestrator", kind: occupantKind(row), cwd: root,
     paneId: row.adoptedPane, windowId: "", startedAt: row.startedAt, endedAt: null,
   };
 }
+
+/** What sits in the chair now. A session this app adopted is a Claude Code
+ *  one (adoption knows no other), whatever the row's `kind` holds: that column
+ *  is also the next seating's choice, and reading it for the occupant made a
+ *  wake type into a Claude pane with another engine's reader. */
+const occupantKind = (row: Seat | null): string =>
+  row?.adoptedPane || row?.adoptedSession ? "claude" : row?.kind || "claude";
 
 /**
  * Adopt a session that is already orchestrating this project.
@@ -433,8 +465,18 @@ export async function openSeat(p: {
   const gate = seatable(p.root);
   if ("error" in gate) return { ok: false, error: gate.error };
   const root = gate.root;
+  /* Before the occupant is looked at: a chair that is taken answers with its
+     occupant, and an engine that could never sit there should not be told
+     "already" as though it might. */
+  const asked = p.kind ? chairRefusal(p.kind) : null;
+  if (asked) return { ok: false, error: asked };
   const there = await seated(root);
   const row = seatRow(root);
+  /* The engine asked for is not the one sitting: answering "already" would
+     read as success and drop it. Only a person changes who sits (/seat/change). */
+  if (there && p.kind && p.kind !== there.kind) {
+    return { ok: false, error: `${there.name} (${there.kind}) already sits in this chair; stand it down or change the chair before seating ${p.kind}` };
+  }
   if (there) return { ok: true, seat: row ?? toSeat({ root, name: there.name, kind: there.kind, model: "", powers: "speak", started_at: there.startedAt, ended_at: null, last_line: "", last_turn_at: 0, adopted_session: "", adopted_pane: "" }), agent: there, already: true };
 
   const powers: Power = p.powers ?? row?.powers ?? "speak";
@@ -446,8 +488,13 @@ export async function openSeat(p: {
      chosen", and an empty string is not nullish — with `??` the default below
      would be skipped and the CLI would fall back to the most expensive model
      on the machine. */
-  const model = p.model || row?.model || defaultSeatModel();
-  const kind = p.kind ?? row?.kind ?? "claude";
+  const kind = p.kind || row?.kind || "claude";
+  /* A saved row can name an engine that has since lost its facet. */
+  const refusal = chairRefusal(kind);
+  if (refusal) return { ok: false, error: refusal };
+  /* A saved model belongs to the engine it was saved for: a Claude row's id on
+     another engine's flag is a model that engine does not have. */
+  const model = p.model || (row?.kind === kind ? row.model : "") || seatDefaultModelFor(kind);
   const { prompt } = await seatPrompt(root, powers, p.wakeHours ?? 4);
   const name = seatName(root);
   /*
@@ -465,8 +512,8 @@ export async function openSeat(p: {
   const r = await AgentOps.startAgent({
     root, name, cwd: root, kind, prompt,
     yolo: true, yoloAllowed: chatBypassAllowed(),
-    args: model ? ["--model", model] : [],
-    env: { AGENTGLASS_TOKEN: token, AGENTGLASS_SEAT: root },
+    args: seatModelArgs(kind, model),
+    env: { ...AgentOps.chairLock(kind), AGENTGLASS_TOKEN: token, AGENTGLASS_SEAT: root },
     now: p.now,
   });
   if (!r.ok) {
@@ -528,8 +575,9 @@ export function seatLines(root: string, limit = 8): { line: string; at: number }
 /** Change what a seat is worth paying for and what it may do, seated or not.
  *  Takes effect on the NEXT seating: a prompt already handed to a running CLI
  *  cannot be edited, and pretending otherwise would be a setting that lies. */
-export function setSeatSettings(root: string, model: string, powers: Power): void {
+export function setSeatSettings(root: string, model: string, powers: Power, kind?: string): void {
   settings.run(root, seatName(root), model, powers);
+  if (kind) settingKind.run(kind, root);
 }
 
 /**
@@ -739,7 +787,7 @@ export async function nextFor(root: string, sitting: { kind: string; model: stri
 
 /** One chair as the board draws it. */
 async function chairView(root: string, seat: Seat | null, fresh = false): Promise<ChairView> {
-  const sitting = { kind: seat?.kind || "claude", model: seat?.model ?? "" };
+  const sitting = { kind: occupantKind(seat), model: seat?.model ?? "" };
   const adopted = !!(seat?.adoptedSession || seat?.adoptedPane);
   return {
     root, name: seat?.name || seatName(root), ...sitting, adopted,

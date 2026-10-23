@@ -1010,6 +1010,16 @@ What the server holds, and what a test asserts, in the order it matters:
 - **A worker is turned away from the chair.** The CLI sends the worker's
   name with every request, and the server refuses a caller that presents a
   worker's name when it tries to start agents or seat anything. Its wrapper unsets the token and seat variables before the engine starts.
+- **An engine in the chair is held to what its workers are.** Claude Code's
+  chair goes through the gate hook; OpenCode has none, so its chair starts
+  under the deny list an OpenCode worker gets (no push, pull request, merge,
+  release or spend), checked against OpenCode's merged rules before it opens,
+  and a project config that loosens it refuses the seating. The limit is the
+  workers' own: command prefixes, not a sandbox (`sh -c 'git push'` is not a
+  command named `git push`), and an OpenCode agent switched to by hand in the
+  TUI runs under the project's rules for that agent. Only the person picks the
+  engine; a seat's credential is refused at `/seat/settings`, `/seat/change`
+  and `/seat/open`.
 - **The person can always take over.** A worker is a tmux window the person can
   open, a chair can be adopted or stood down, and the Lantern shows both.
 - **Everything is logged.** Every start, prompt, key press, stop, refusal,

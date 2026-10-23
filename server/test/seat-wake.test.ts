@@ -306,3 +306,28 @@ describe("which findings are worth a turn", () => {
     expect(await wakeSeats([waiting("db-fix")], { seats, prompt, now: 60_000 })).toEqual([ROOT]);
   });
 });
+
+describe("a chair whose screen cannot be read", () => {
+  const root = "/home/orbit/work/unreadable";
+  const sitting = (kind: string) => async () => ({ name: "orchestrator", kind, cwd: root, paneId: "%9", windowId: "", startedAt: 1, endedAt: null });
+
+  test("is never typed into, and says so once as a need rather than losing every wake", async () => {
+    const { promptSeat } = await import("../src/seatwake.ts");
+    const { openNeeds } = await import("../src/seatneed.ts");
+    const typed: string[] = [];
+    const prompt = (async (pane: string) => { typed.push(pane); return "sent"; }) as never;
+    for (let i = 0; i < 3; i++) await promptSeat(root, "wake", { seated: sitting("codex") as never, prompt });
+    expect(typed).toEqual([]);
+    const needs = openNeeds(root).filter((n) => n.text.includes("cannot be woken"));
+    expect(needs.length).toBe(1);
+    expect(needs[0]!.text).toContain("codex session");
+  });
+
+  test("a readable engine is still woken", async () => {
+    const { promptSeat } = await import("../src/seatwake.ts");
+    const typed: string[] = [];
+    const prompt = (async (pane: string) => { typed.push(pane); return "sent"; }) as never;
+    await promptSeat("/home/orbit/work/readable", "wake", { seated: sitting("opencode") as never, prompt });
+    expect(typed).toEqual(["%9"]);
+  });
+});

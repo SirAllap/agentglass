@@ -8542,7 +8542,8 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
         const powers = Seat.isPower(b.powers) ? b.powers : undefined;
         const model = typeof b.model === "string" ? b.model : undefined;
-        const r = await Seat.openSeat({ root, powers, model, wakeHours: seatWakeHours() });
+        const kind = typeof b.kind === "string" && b.kind ? b.kind : undefined;
+        const r = await Seat.openSeat({ root, powers, model, kind, wakeHours: seatWakeHours() });
         return json(r, r.ok ? 200 : 400);
       }
       if (verb === "close") return json(await Seat.closeSeat(root));
@@ -8558,10 +8559,20 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       /* The seat's own report. Not `/agents/status`: that is the board, and
          the seat is deliberately not on it. */
       if (verb === "say") return json(Seat.seatSays(root, typeof b.line === "string" ? b.line : ""), 200);
+      /* The engine and the powers are the person's. A seat's credential is
+         turned away at the wall first (auth.ts has no /seat/settings for any
+         power); this is the same sentence for the day that list grows. */
       if (verb === "settings") {
+        if (asSeat) return json({ ok: false, error: "only a person changes the chair" }, 403);
         if (b.powers !== undefined && !Seat.isPower(b.powers)) return json({ ok: false, error: "powers: speak, nudge or assign" }, 400);
         const row = Seat.seatRow(root);
-        Seat.setSeatSettings(root, typeof b.model === "string" ? b.model : row?.model ?? "", Seat.isPower(b.powers) ? b.powers : row?.powers ?? "speak");
+        const kind = typeof b.kind === "string" && b.kind ? b.kind : undefined;
+        const refused = kind ? Seat.chairRefusal(kind) : null;
+        if (refused) return json({ ok: false, error: refused }, 400);
+        /* A model is one engine's: moving the chair to another engine without
+           naming a model leaves the choice to that engine's default. */
+        const swapped = !!kind && kind !== (row?.kind || "claude");
+        Seat.setSeatSettings(root, typeof b.model === "string" ? b.model : swapped ? "" : row?.model ?? "", Seat.isPower(b.powers) ? b.powers : row?.powers ?? "speak", kind);
         return json({ ok: true, seat: Seat.seatRow(root) });
       }
       /*
@@ -8694,8 +8705,9 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
         const powers = Seat.isPower(b.powers) ? b.powers : undefined;
         const model = typeof b.model === "string" ? b.model : undefined;
+        const kind = typeof b.kind === "string" && b.kind ? b.kind : undefined;
         const seeded = { doctrine: readDoctrine(root), brief: readBrief(root) };
-        const r = await Seat.openSeat({ root, powers, model, wakeHours: seatWakeHours() });
+        const r = await Seat.openSeat({ root, powers, model, kind, wakeHours: seatWakeHours() });
         if (!r.ok) return json(r, 400);
         return json({
           ok: true, already: r.already, seat: r.seat, agent: r.agent,
@@ -8822,7 +8834,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         const missing = names.filter((n) => !live.some((a) => a.name === n));
         const sent: { name: string; outcome: string }[] = [];
         for (const a of want) {
-          const outcome = await AgentOps.promptAgent(a.paneId, text, timeoutMs0 || 10_000).catch(() => "gone");
+          const outcome = await AgentOps.promptAgent(a.paneId, text, timeoutMs0 || 10_000, a.kind).catch(() => "gone");
           sent.push({ name: a.name, outcome: String(outcome) });
         }
         return say({
@@ -8943,7 +8955,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         /* `--timeout` on start is Herdr's "wait until the CLI is up": the
            worker's next verb is a prompt, and a paste into a pane whose CLI has
            not drawn its box yet is a paste into a shell. */
-        const wait = timeoutMs > 0 ? await AgentOps.waitFor(r.agent.paneId, ["ready", "working", "needs-you"], timeoutMs) : null;
+        const wait = timeoutMs > 0 ? await AgentOps.waitFor(r.agent.paneId, ["ready", "working", "needs-you"], timeoutMs, 250, r.agent.kind) : null;
         return say({ ok: true, result: { agent: r.agent, state: wait?.state ?? "starting", ready: wait?.reached ?? false } });
       }
 
@@ -9029,14 +9041,14 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (verb === "prompt") {
         const text = typeof b.text === "string" ? b.text : "";
         if (!text.trim()) return json({ ok: false, error: "nothing to send" }, 400);
-        const outcome = await AgentOps.promptAgent(a.paneId, text, timeoutMs || 10_000);
+        const outcome = await AgentOps.promptAgent(a.paneId, text, timeoutMs || 10_000, a.kind);
         return say({ ok: outcome === "sent" || outcome === "queued", result: { name, outcome } }, outcome === "gone" ? 410 : 200);
       }
       if (verb === "wait") {
         const raw = typeof b.until === "string" ? b.until.split(",") : [];
         const until = raw.map((s) => s.trim()).filter((s): s is AgentOps.AgentState => ["starting", "ready", "working", "needs-you", "gone"].includes(s));
         if (!until.length) return json({ ok: false, error: "until: ready, working, needs-you or gone" }, 400);
-        const w = await AgentOps.waitFor(a.paneId, until, timeoutMs || 90_000);
+        const w = await AgentOps.waitFor(a.paneId, until, timeoutMs || 90_000, 250, a.kind);
         return json({ ok: w.reached, result: { name, state: w.state, reached: w.reached } });
       }
       if (verb === "read") {
@@ -9047,7 +9059,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
            tail is cut, or "the last 3 lines" of a 50-row pane are three blanks. */
         const text = lines > 0 ? screen.trimEnd().split("\n").slice(-lines).join("\n") : screen;
         const turn = settled(a);
-        return json({ ok: true, result: { name, state: readable ? "gone" : AgentOps.stateOfScreen(screen), text, ...(turn.exitCode !== undefined ? { exitCode: turn.exitCode, exitLine: turn.exitLine } : {}) } });
+        return json({ ok: true, result: { name, state: readable ? "gone" : AgentOps.stateOfScreen(screen, a.kind), text, ...(turn.exitCode !== undefined ? { exitCode: turn.exitCode, exitLine: turn.exitLine } : {}) } });
       }
       if (verb === "keys") {
         const key = AgentOps.keyNamed(b.key);

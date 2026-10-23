@@ -87,6 +87,12 @@ echo x >> "${logs}/ran-opencode"
   work) sleep 1; printf '%s\\n' '{"type":"tool_use","timestamp":3,"sessionID":"ses_fake0001","part":{"type":"tool","tool":"edit","state":{"status":"completed"}}}'; printf '%s\\n' 'Error: rate limit reached, try again later' >&2; exit 1 ;;
 esac
 fi
+if [ "$1" != run ]; then for a in "$@"; do case "$a" in --model|--prompt)
+printf '%s\\0' "$@" > "${logs}/tui-opencode-$$.argv"
+[ -n "$AGENTGLASS_SEAT" ] && printf '%s' "$AGENTGLASS_TOKEN" > "${logs}/seat-opencode.token"
+[ -n "$AGENTGLASS_SEAT" ] && printf '%s' "$OPENCODE_CONFIG_CONTENT" > "${logs}/seat-opencode.lock"
+printf '\\033[2J\\033[H\\n  ┃\\n  ┃\\n  ┃\\n  ┃  Build · Fake OpenCode Zen\\n  ╹▀▀▀▀\\n   tab agents  ctrl+p commands\\n'
+sleep 300;; esac; done; fi
 exec "${join(engines, "opencode")}" "$@"
 `, { mode: 0o755 });
   writeFileSync(join(fakes, "claude"), `#!/bin/sh

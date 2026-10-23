@@ -428,7 +428,7 @@ function rolesOf(
   else worker = { ok: true };
   let orchestrator: EngineVerdict;
   if (!worker.ok) orchestrator = worker;
-  else if (!p.screen) orchestrator = no(`Cannot orchestrate yet: agentglass does not know how to read ${p.title}'s screen.`);
+  else if (!p.screen || (p.id !== "claude" && !p.screen.inputBox)) orchestrator = no(`Cannot orchestrate yet: agentglass does not know how to read ${p.title}'s screen.`);
   else if (!p.tab) orchestrator = no(`Cannot orchestrate yet: ${p.title} does not open in a tab.`);
   else if (!p.modelFlag) orchestrator = no(`Cannot orchestrate yet: agentglass does not know which flag picks ${p.title}'s model.`);
   else orchestrator = { ok: true };

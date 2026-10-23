@@ -23,6 +23,8 @@ import * as AgentOps from "./agentops.ts";
 import { inScope, seatWakeHours } from "./config.ts";
 import type { Finding } from "./lanternwatch.ts";
 import { everySeat, seatSays, seated } from "./seat.ts";
+import { screenReaderFor } from "./chatpane.ts";
+import { addNeed, openNeeds } from "./seatneed.ts";
 import { releaseVanished } from "./seatqueue.ts";
 import { unreadWorthWaking } from "./seatreport.ts";
 import { noteWoken, wokenFor, __resetWoken } from "./seatwoken.ts";
@@ -235,12 +237,22 @@ function aliveNames(): string[] {
  * ways of being in the chair: a named agent this app opened, or the pane an
  * adopted session is running in.
  */
-async function promptSeat(root: string, text: string): Promise<void> {
-  const a = await seated(root);
+export async function promptSeat(root: string, text: string, deps: {
+  seated?: typeof seated; prompt?: typeof AgentOps.promptAgent;
+} = {}): Promise<void> {
+  const a = await (deps.seated ?? seated)(root);
   /* Gone means the person closed the chair or the machine restarted; the row
      is closed by `reconcile` and the view says so. Nothing to shout about. */
   if (!a) return;
-  await AgentOps.promptAgent(a.paneId, text, 10_000);
+  /* An occupant this app cannot read is never typed into: `promptAgent` would
+     fall back to Claude's reader and wait on a box that is not there, and the
+     wake would be lost with nobody told. One need, not one per wake. */
+  if (!screenReaderFor(a.kind)) {
+    const text = `The chair's ${a.kind} session cannot be woken: agentglass has not captured its screen. Stand it down and seat an engine that can sit there.`;
+    if (!openNeeds(root).some((n) => n.text === text)) addNeed({ root, text, cost: "one click" });
+    return;
+  }
+  await (deps.prompt ?? AgentOps.promptAgent)(a.paneId, text, 10_000, a.kind);
 }
 
 export function __resetSeatWake(): void { __resetWoken(); }

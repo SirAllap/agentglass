@@ -1,0 +1,30 @@
+
+  ┃
+  ┃  Use the bash tool to run: sleep 25 ; then say done
+  ┃
+
+     I'll run the sleep command.
+
+  ┃
+  ┃  ⠴ sleep 25
+  ┃
+
+     ▣  Build · Big Pickle
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · Big Pickle OpenCode Zen
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   ⬝⬝⬝⬝⬝⬝⬝⬝  esc interrupt                                                       tab agents  ctrl+p commands
+

@@ -232,10 +232,34 @@ export interface EnvelopeFacet {
 }
 
 /** What a TUI's pane says when it is waiting for a person or working. Regex
- *  sources, matched against the captured screen. */
+ *  sources, matched against the captured screen.
+ *
+ *  `needsYou` and `running` are all Claude Code's reading needs: its input box
+ *  is read by code in chatpane.ts that was written against it. Another engine
+ *  names its box too, because "a box is on screen" is the one fact a wake
+ *  types on, and it is drawn differently in every TUI:
+ *
+ *    inputBox  one regex, flags `gm`, whose first group is what sits in the
+ *              box's row (undefined when the row is empty). It matches the row
+ *              AND what is drawn under it, so a prompt left in the scrollback
+ *              (the same glyph, higher up) is not the live box. The last match
+ *              on the screen is the live one. One row of typed text is what it
+ *              reads; a longer paste is drawn collapsed, which is what a wake
+ *              is.
+ *    hint      text the TUI draws inside an EMPTY box, which is not typed.
+ *    starting  a dialog or banner drawn in front of the box. The box behind it
+ *              is not takeable, and a paste into it is swallowed, so a screen
+ *              that matches is never ready.
+ *
+ *  A facet is added for an engine only from screens captured by hand from its
+ *  real TUI (server/test/fixtures/screens/<engine>/): idle, working, asking,
+ *  and one it does not know. */
 export interface ScreenFacet {
   needsYou: string;
   running: string;
+  inputBox?: string;
+  hint?: string;
+  starting?: string;
 }
 
 export interface Provider extends AgentKind {
@@ -243,6 +267,8 @@ export interface Provider extends AgentKind {
   tab: boolean;
   /** The flag that picks a model, where a worker role may set one. */
   modelFlag?: string;
+  /** The model a chair on this engine starts with when nobody chose one. */
+  seatModel?: string;
   lock?: LockSpelling;
   probe?: ProbeFacet;
   run?: RunSpelling;
@@ -294,8 +320,7 @@ export const AGENT_PROVIDERS: Provider[] = [
     account: { args: ["auth", "status"], signedIn: '"loggedIn":\\s*true' },
     headless: { argv: "claude", form: '-p "<prompt>" --output-format stream-json --model <model> --settings <lock>', resume: "--resume", ceilings: { usd: "--max-budget-usd" } },
     envelope: { via: "settings-flag" },
-    // Keep in step with NEEDS_YOU_RE and RUNNING_RE in server/src/chatpane.ts;
-    // a test holds the two to the same screens.
+    // chatpane.ts builds Claude's NEEDS_YOU_RE and RUNNING_RE from these two.
     screen: { needsYou: "Esc to cancel|Enter to confirm|to use this session only", running: "esc to interrupt" },
     chat: {
       label: "Claude",
@@ -451,6 +476,19 @@ export const AGENT_PROVIDERS: Provider[] = [
     mode: "flag",
     tab: true,
     modelFlag: "--model",
+    seatModel: "opencode/big-pickle",
+    // Captured from 1.18.32 (server/test/fixtures/screens/opencode/). The
+    // working line says `esc interrupt`, not Claude's `esc to interrupt`; the
+    // box is rows of `┃` over a mode line (`Build · <model>`); and a release
+    // notice opens a dialog on EVERY start until it is skipped, drawn with its
+    // own box and its own footer.
+    screen: {
+      needsYou: "Permission required|Allow once",
+      running: "esc interrupt",
+      inputBox: "^[ ]*┃(?:[ ]{2}([^\\n]*))?\\n[ ]*┃\\n[ ]*┃[ ]{2}[A-Za-z][A-Za-z0-9_-]* · ",
+      hint: "^Ask anything",
+      starting: "Update Available|Skip\\s+Confirm",
+    },
     version: { args: ["--version"], pattern: "^(\\d+\\.\\d+\\.\\d+)" },
     // Its free catalogue answers with no credential (measured on 1.18.32), so
     // an empty list of providers is not "signed out".

@@ -142,7 +142,7 @@ describe("screen", () => {
     expect(running.test("Esc to interrupt")).toBe(true);
   });
 
-  test("no other engine has one: nobody has read their screen", () => {
-    expect(AGENT_PROVIDERS.filter((p) => p.screen).map((p) => p.id)).toEqual(["claude"]);
+  test("only engines whose screens were captured have one (seat-engine.test.ts holds the fixtures)", () => {
+    expect(AGENT_PROVIDERS.filter((p) => p.screen).map((p) => p.id)).toEqual(["claude", "opencode"]);
   });
 });

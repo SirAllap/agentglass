@@ -38,7 +38,7 @@ import { roleLaunch, workerRole } from "../../shared/workerRoles.ts";
 import { workerRoles } from "./config.ts";
 import { claudeCode, supportsSessionName } from "./agents/claudecode.ts";
 import { SPELLINGS } from "./agents/launch.ts";
-import { inputBox, __submitVerdict, __needsYou, __running } from "./chatpane.ts";
+import { screenReaderFor } from "./chatpane.ts";
 import { boardNow } from "./lantern.ts";
 import type { BoardRow } from "./agentboard.ts";
 
@@ -389,6 +389,27 @@ export function roleStart(
  * where the person's global config lives, are not pinned: they are the same
  * user's on both sides.
  */
+/**
+ * The lock a chair runs under when its engine has no gate hook: the deny list a
+ * worker of that engine gets, rendered the same way, so a chair cannot push,
+ * open a pull request or spend any more than a worker can. Empty for an engine
+ * with a hook of its own (Claude Code's goes through the gate) or with no lock
+ * this app can apply.
+ *
+ * It is a list of command prefixes, not a sandbox: `sh -c 'git push'` is not a
+ * command named `git push`, and the chair's own server-side powers are a
+ * separate wall.
+ */
+export function chairLock(kind: string): Record<string, string> {
+  const p = agentProvider(kind);
+  if (!p || p.lock?.via !== "env") return {};
+  const launch = roleLaunch(p, workerRole("builder")!, "");
+  if (!launch?.env.OPENCODE_CONFIG_CONTENT) return {};
+  const env = { ...launch.env };
+  for (const k of OPENCODE_ENV_LAYERS) env[k] = process.env[k] ?? "";
+  return env;
+}
+
 const OPENCODE_ENV_LAYERS = ["OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_PERMISSION", "OPENCODE_DISABLE_PROJECT_CONFIG"];
 
 type OpenCodeRule = { permission: string; pattern: string; action: string };
@@ -614,7 +635,7 @@ export async function startAgent(p: {
   /* OpenCode's lock is merged into the configs around it rather than laid over
      them, so whether it holds depends on the directory: asked of OpenCode, in
      that directory, before anything opens. */
-  if (p.lockedRole && kind.id === "opencode") {
+  if ((p.lockedRole || p.env?.OPENCODE_CONFIG_CONTENT) && kind.id === "opencode") {
     const bin = agentBinFor(kind.id);
     const why = bin ? await openCodeLockLoosened(bin, p.cwd, p.env ?? {}) : null;
     if (why) return { ok: false, error: "lock-loosened", detail: why };
@@ -702,22 +723,29 @@ export async function screenOf(paneId: string, lines = 0): Promise<string | null
 export type AgentState = "starting" | "ready" | "working" | "needs-you" | "gone";
 
 /** What one screen says, in the words the worker waits on. */
-export function stateOfScreen(screen: string | null): AgentState {
+export function stateOfScreen(screen: string | null, kind?: string): AgentState {
   if (screen === null) return "gone";
-  if (__needsYou(screen)) return "needs-you";
-  if (__running(screen)) return "working";
-  if (inputBox(screen) !== null) return "ready";
+  /* An engine nobody has captured is read as Claude's, which is what every
+     caller did before a kind was passed; the chair does not take such an
+     engine (seat.ts), so the one place that types on this answer never does. */
+  const r = screenReaderFor(kind) ?? screenReaderFor()!;
+  if (r.needsYou(screen)) return "needs-you";
+  if (r.running(screen)) return "working";
+  /* A denylist of dialogs is only as long as the dialogs seen: a banner worded
+     differently draws its own text into the box row. "Ready" is the one screen
+     that is known — a box with nothing in it — and anything else is starting. */
+  if (r.blank ? r.blank(screen) : r.inputBox(screen) !== null) return "ready";
   return "starting";
 }
 
 /** Wait until the agent is in one of the states asked for, or the deadline
  *  passes. `gone` always ends the wait: nothing later is coming. */
-export async function waitFor(paneId: string, until: AgentState[], timeoutMs: number, tick = 250): Promise<{ state: AgentState; reached: boolean }> {
+export async function waitFor(paneId: string, until: AgentState[], timeoutMs: number, tick = 250, kind?: string): Promise<{ state: AgentState; reached: boolean }> {
   const deadline = Date.now() + Math.max(0, timeoutMs);
   for (;;) {
     /* A kept tab is still on screen after its CLI has exited; the agent in
        it is gone all the same. */
-    const state = (await panesAlive()).has(paneId) ? stateOfScreen(await screenOf(paneId)) : "gone";
+    const state = (await panesAlive()).has(paneId) ? stateOfScreen(await screenOf(paneId), kind) : "gone";
     if (until.includes(state) || state === "gone") return { state, reached: until.includes(state) };
     if (Date.now() >= deadline) return { state, reached: false };
     await Bun.sleep(tick);
@@ -734,11 +762,23 @@ export type PromptOutcome = "sent" | "queued" | "diverted" | "stuck" | "gone";
  * prompt on screen is `diverted`: the text is in the box, unsent, and the
  * worker's own recovery (`send-keys enter` after a look) applies.
  */
-export async function promptAgent(paneId: string, text: string, timeoutMs = 10_000): Promise<PromptOutcome> {
+export async function promptAgent(paneId: string, text: string, timeoutMs = 10_000, kind?: string): Promise<PromptOutcome> {
+  const r = screenReaderFor(kind) ?? screenReaderFor()!;
   /* A kept tab whose CLI has exited: a paste would land in a `sleep`. */
   if (!(await panesAlive()).has(paneId)) return "gone";
+  /* Another engine's box is only typed into once it reads empty: a dialog this
+     app has no screen for would take the paste and the Enter. Claude's reading
+     is unchanged. */
+  if (r.blank) {
+    const first = await screenOf(paneId);
+    if (first === null) return "gone";
+    if (r.needsYou(first) || !r.blank(first)) return "stuck";
+  }
   const buf = `agx-agent-${paneId.replace("%", "")}`;
-  const load = await tmux(["load-buffer", "-b", buf, "-"], text);
+  /* A paste ends at ESC [ 2 0 1 ~ and tmux does not strip one inside it: what
+     follows would be typed raw, and CR submits. Control bytes other than a
+     newline and a tab are not part of a message. */
+  const load = await tmux(["load-buffer", "-b", buf, "-"], text.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, ""));
   if (!load.ok) return "gone";
   if (!(await tmux(["paste-buffer", "-b", buf, "-t", paneId, "-d", "-p"])).ok) return "gone";
   const deadline = Date.now() + timeoutMs;
@@ -746,7 +786,7 @@ export async function promptAgent(paneId: string, text: string, timeoutMs = 10_0
   for (;;) {
     const screen = await screenOf(paneId);
     if (screen === null) return "gone";
-    const box = inputBox(screen);
+    const box = r.inputBox(screen);
     if (box?.trim()) { pasted = box; break; }
     if (Date.now() > deadline) return "stuck";
     await Bun.sleep(60);
@@ -756,7 +796,7 @@ export async function promptAgent(paneId: string, text: string, timeoutMs = 10_0
     await Bun.sleep(600);
     const screen = await screenOf(paneId);
     if (screen === null) return "gone";
-    const verdict = __submitVerdict(screen, pasted);
+    const verdict = r.submitVerdict(screen, pasted);
     if (verdict !== "retry") return verdict;
     if (Date.now() > deadline) return "stuck";
   }

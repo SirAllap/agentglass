@@ -144,6 +144,19 @@ describe("probeEngines against the fakes", () => {
     expect(e.roles.orchestrator.why).toBe("Cannot orchestrate yet: agentglass does not know how to read Hermes's screen.");
   });
 
+  test("OpenCode can orchestrate once its worker lock holds: its screen was captured; Codex's was not", () => {
+    const facts = (bin: string, version: string) => ({
+      found: true, path: `/x/${bin}`, check: null,
+      version: { out: version, err: "", code: 0, timedOut: false },
+      status: { out: "1 credentials", err: "", code: 0, timedOut: false },
+    });
+    const oc = deriveReadiness(provider("opencode"), facts("opencode", "1.18.32"));
+    expect(oc.roles.worker.ok).toBe(true);
+    expect(oc.roles.orchestrator).toEqual({ ok: true });
+    const cx = deriveReadiness(provider("codex"), facts("codex", "codex-cli 0.157.1"));
+    expect(cx.roles.orchestrator.ok).toBe(false);
+  });
+
   test("OpenCode with no credential is still a worker: its catalogue is free", async () => {
     const f = fleet({ opencode: { status: { out: "0 credentials" } } });
     const e = await byId(f, "opencode");
