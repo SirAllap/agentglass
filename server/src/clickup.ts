@@ -593,6 +593,16 @@ export async function fetchTasks(
     page: String(page),
     order_by: "due_date",
     include_closed: "false",
+    /*
+     * Measured against a real workspace, 2026-10-14: ClickUp's own "Assigned
+     * to me" showed 27 cards and this query 26. The missing one was homed in
+     * one list and also placed in a sprint list, and the filtered team
+     * endpoint leaves a card out unless `include_timl` (tasks in multiple
+     * lists) is on; with it, the same query returned all 27 and no duplicate.
+     * It is not tied to any status or list, so it holds for any workspace that
+     * files one card in two places.
+     */
+    include_timl: "true",
   });
   /* Off by default, for the measurement above. On, for a team whose work lives
      in subtasks: ClickUp's filtered task endpoint leaves them out unless asked,
@@ -680,6 +690,9 @@ export async function changedForMe(sinceMs: number): Promise<CallResult<{ tasks:
     date_updated_gt: String(Math.floor(sinceMs)),
     include_closed: "true",
     order_by: "updated",
+    /* Same rule as `fetchTasks`: a card also placed in a second list is
+       otherwise invisible to this question. */
+    include_timl: "true",
   });
   return changedPages(me.workspaceId, token, me.accountId, q, [["assignees[]", me.accountId]]);
 }

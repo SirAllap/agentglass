@@ -142,6 +142,17 @@ describe("reading tasks", () => {
     expect(q).toContain("include_closed=false");
   });
 
+  it("asks for cards filed in more than one list, or a card placed in a sprint list goes missing", async () => {
+    // Measured: the filtered team endpoint returned 26 of the 27 cards ClickUp's
+    // own "Assigned to me" shows. The 27th is in a custom status and also in a
+    // sprint list; it only comes back with include_timl=true.
+    const multi = { ...TASK, id: "timl1", status: { status: "in review", type: "custom", color: "#f5da9a" } };
+    reply = (req) => json({ tasks: req.url.includes("include_timl=true") ? [TASK, multi] : [TASK] });
+    const r = await CU.fetchTasks("pk_1_X", "9001", "7");
+    expect(seen[0]!.path).toContain("include_timl=true");
+    expect(r.data!.tasks.map((t) => t.id)).toContain("timl1");
+  });
+
   it("does not ask for subtasks, which doubled the time and returned nothing", async () => {
     // Measured on a real workspace: 25.0s with `subtasks=true` against 12.5s
     // without, for the same thirteen rows. Asserted so that a future tidy-up
