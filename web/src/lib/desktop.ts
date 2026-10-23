@@ -734,11 +734,6 @@ export async function toggleFullscreen(): Promise<boolean> {
   }
 }
 
-/** Scale the whole window the way a browser's own zoom does: the webview
- *  relays out at a smaller CSS viewport, so the UI reflows at the new size
- *  instead of just being drawn bigger. Resolves to the factor applied, or null
- *  in a browser tab — there the browser's zoom already covers this, and the
- *  shell has no say. See lib/uiScale.ts for why this beats a font-size knob. */
 /** True where the shell can let the desktop show through the window: only the desktop app, only a shell new enough. */
 export const translucentSupported = (): boolean => typeof bridge()?.setTranslucent === "function";
 
@@ -749,6 +744,11 @@ export async function setWindowTranslucent(on: boolean): Promise<{ ok: boolean; 
   try { return await b.setTranslucent(on); } catch { return null; }
 }
 
+/** Scale the whole window the way a browser's own zoom does: the webview
+ *  relays out at a smaller CSS viewport, so the UI reflows at the new size
+ *  instead of just being drawn bigger. Resolves to the factor applied, or null
+ *  in a browser tab — there the browser's zoom already covers this, and the
+ *  shell has no say. See lib/uiScale.ts for why this beats a font-size knob. */
 export async function setWindowZoom(factor: number): Promise<number | null> {
   const b = bridge();
   if (!b) return null;

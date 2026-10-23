@@ -99,7 +99,7 @@ export const SETTING_CLASSES: Readonly<Record<string, ClassRow>> = {
   "terminal.wordSeparators": LOW(),
   "rail.place.*": LOW(), "rail.badge.*": LOW(), "tasks.source.*": LOW(), "keys.binding.*": LOW(),
   "notifications.quiet": LOW("only quiets what is not stopped: an agent blocked on the person still interrupts"),
-  "notifications.volume": LOW("only quiets what is not stopped: an agent blocked on the person still interrupts"),
+  "notifications.volume": LOW("how loud the app's own sounds and banners are, from silent to loud: it never hides an agent blocked on the person and widens nothing an agent may do"),
   "notifications.ciOnlyApproved": LOW(), "notifications.talk": LOW(),
   "browser.searchEngine": LOW(), "tasks.landing": LOW(),
   "about.autoCheck": LOW("only whether this window asks the release feed on a timer"), "clickup.statusSpaces.counted": LOW(), "jira.statusUnits.counted": LOW(),
