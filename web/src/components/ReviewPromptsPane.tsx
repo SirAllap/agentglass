@@ -367,7 +367,7 @@ function Editor({ r, skills, projects, presets, onChange, onSave, onCancel, onRe
           <Field label="The prompt" htmlFor={f("body")} help={r.skill ? "Sent after the skill line, as context." : undefined}>
             <textarea id={f("body")} value={r.body} onChange={(e) => set({ body: e.target.value })}
               aria-describedby={r.skill ? helpIdFor(f("body")) : undefined}
-              rows={Math.min(24, Math.max(8, r.body.split("\n").length + 1))} spellCheck={false}
+              rows={Math.min(40, Math.max(20, r.body.split("\n").length + 1))} spellCheck={false}
               placeholder={"Pull request #{number} of {repo}.\n\nRead-only: change nothing…"}
               className="w-full text-[12px] px-2.5 py-2 rounded-lg outline-none t-mono bg-[var(--surface-inset)] text-[var(--text)]"
               style={{ ...INPUT_STYLE, resize: "vertical" }} />

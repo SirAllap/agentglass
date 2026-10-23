@@ -558,7 +558,7 @@ function BrowserPane() {
         label="Home page"
         hint="Where the view opens, and where Home goes. Leave it empty for a blank page."
         below={<>
-          <div className="flex items-center gap-2 max-w-[480px]">
+          <div className="flex items-center gap-2">
             <input
               value={home}
               onChange={(e) => { setHome(e.target.value); setBad(false); setSaved(false); }}
@@ -1770,7 +1770,7 @@ function CookieImport() {
           below={
             <div className="flex flex-col gap-2">
               <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter sites…" aria-label="Filter sites"
-                className={`w-full max-w-[480px] ${INPUT}`}
+                className={`w-full ${INPUT}`}
                 style={INPUT_STYLE} />
               {!!filter.trim() && (
                 <div className="flex gap-2">
@@ -4329,7 +4329,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       out. See .agx-settings-col. */}
                   {/* The reading edge sits well clear of the nav. In the dialog this was
                 px-5 because there were only 780px to spend and every one of
-                them was measure; on a page the column is capped at 760 anyway,
+                them was measure; on a page the column is capped at 1120 and sits on the nav side,
                 so the slack is free and the gap is what stops the title reading
                 as an extension of the nav it sits beside. */}
             <div ref={contentRef} className="agx-settings-main agx-scroll flex-1 min-w-0 overflow-y-auto pt-8 pb-10">
@@ -4585,7 +4585,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                           onBlur={() => { setting("terminal.tabGroupRules").set(groupRules); }}
                           onKeyDown={(e) => { if (e.key === "Enter") setting("terminal.tabGroupRules").set(groupRules); }}
                           placeholder="agx=agentglass" spellCheck={false} aria-label="Group-by-name rules"
-                          className={`t-mono w-full max-w-[480px] ${INPUT}`}
+                          className={`t-mono w-full ${INPUT}`}
                           style={INPUT_STYLE} />
                       } />
                   </SettingsCard>
@@ -4622,7 +4622,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       below={
                         <input value={wordSep} spellCheck={false} maxLength={200} aria-label="Word separators"
                           onChange={(e) => { setWordSepState(e.target.value); setting("terminal.wordSeparators").set(e.target.value); }}
-                          className={`w-full max-w-[480px] ${INPUT}`}
+                          className={`w-full ${INPUT}`}
                           style={{ ...INPUT_STYLE, fontFamily: "ui-monospace, monospace" }} />
                       } />
                   </SettingsCard>

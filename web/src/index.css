@@ -280,23 +280,17 @@
    * container and the title, the eyebrows, the dividers and the rows all end
    * at the same x — which is what a page margin is.
    *
-   * CENTRED, and it used to be left — the reasoning changed because the
-   * surface did.
-   *
-   * Left was right for a 1010px dialog: centring inside it left 127px of
-   * channel each side, two thirds of the nav's own width, which turned the nav
-   * into a detached island. Settings is a page now and takes the window, so
-   * the slack is no longer 127px of awkward gutter, it is several hundred
-   * pixels of dead screen hanging off one side while the column hugs the nav.
-   *
-   * What made left worth defending is kept: the title, every eyebrow and every
-   * label still share ONE vertical line, because the whole column moves
-   * together. It is simply a line the page centres rather than one glued to
-   * the nav's border.
+   * LEFT, on the nav's reading edge, and capped at 1120px. It was centred in a
+   * 760px column: on a 2560px window that left a 1040px band of dead screen to
+   * the left of the title and as much again to the right, with every form a
+   * 480px strip inside it. Left is the edge the title, every eyebrow and every
+   * label share, so the whole column moves together; the cap is where a row of
+   * label, hint and control stops being readable at a glance, not a taste.
+   * A wider window leaves the slack on the right, where nothing reads it.
    */
   .agx-settings-col {
-    max-width: var(--agx-settings-col, 760px);
-    margin-inline: auto;
+    max-width: var(--agx-settings-col, 1120px);
+    margin-inline: 0;
     container-type: inline-size;
     container-name: agx-settings;
   }
@@ -1952,9 +1946,15 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
   .agx-decl-label { padding-top: 4px; }
 }
 
-/* A stacked form: label above, help below, 12px between fields, 480px at
-   most — a token field as wide as the card asks for a paragraph. */
-.agx-sform { display: flex; flex-direction: column; gap: 12px; max-width: 480px; }
+/* A stacked form: label above, help below, 12px between fields. It takes the
+   card's width: the 480px cap it had left a form narrower than the card around
+   it, with the buttons stopping short of the edge the rows end at. */
+.agx-sform { display: flex; flex-direction: column; gap: 12px; }
+/* A control fills its field, which fills its card. In the components layer, so a
+   field that wants a short box (a port, a count) still says so with `w-[96px]`. */
+@layer components {
+  .agx-field > :where(input:not([type=checkbox], [type=radio], [type=range], [type=color]), select, textarea) { width: 100%; }
+}
 .agx-field { display: flex; flex-direction: column; gap: 6px; }
 .agx-field-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .agx-field-l { font-size: 12px; font-weight: 500; color: var(--text2); }
