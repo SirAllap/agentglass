@@ -1719,7 +1719,7 @@ function PaneBarFor({ foot, near, blocked, flash, at, pr, onDown, onGit, onDiff,
       pr={pr ? { number: pr.pr.number, title: pr.pr.title, changes: pr.pr.reviewDecision === "CHANGES_REQUESTED" } : null}
       onPr={pr ? onPr : undefined}
       card={ref && go ? { label: ref.label, prio: prio ? prio.toLowerCase() : null, inApp: go.in === "tasks" } : null}
-      onCard={ref && go ? () => { if (go.in === "tasks") openCard(ref.query, ref.label); else openExternal(go.url); } : undefined}
+      onCard={ref && go ? () => { if (go.in === "tasks") openCard(ref.query, ref.label, go.tracker); else openExternal(go.url); } : undefined}
     />
   );
 }
@@ -2150,7 +2150,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     const ref = chipWt?.branch ? cardRef({ headRefName: chipWt.branch }) : null;
     const go = ref ? chipAction(ref, cuSetup) : null;
     cardGoRef.current = ref && go
-      ? () => { if (go.in === "tasks") openCard(ref.query, ref.label); else openExternal(go.url); }
+      ? () => { if (go.in === "tasks") openCard(ref.query, ref.label, go.tracker); else openExternal(go.url); }
       : null;
   }, [chipWt?.branch, cuSetup]);
   /**

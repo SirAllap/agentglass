@@ -451,11 +451,11 @@ function PrCardChip({ pr, card }: {
       priority={card?.priority ?? null}
       status={card?.status}
       external={!inApp}
-      onClick={() => { if (go.in === "tasks") openCard(ref.query, ref.label); else openExternal(go.url); }}
+      onClick={() => { if (go.in === "tasks") openCard(ref.query, ref.label, go.tracker); else openExternal(go.url); }}
       /* The tracker is named only when its own address said which one it is.
          Guessing here is how a Jira ticket gets offered as a ClickUp card. */
       title={inApp
-        ? `Open ${ref.label} in Tasks — the ClickUp card this pull request came from`
+        ? `Open ${ref.label} in Tasks — the ${go.tracker === "jira" ? "Jira" : "ClickUp"} card this pull request came from`
         : `Open ${ref.label}${trackerName(ref.tracker) ? ` in ${trackerName(ref.tracker)}` : ""}`} />
   );
 }

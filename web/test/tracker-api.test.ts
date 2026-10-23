@@ -141,7 +141,7 @@ describe("the chip and the merge form follow the owner", () => {
   const r = branch("feat/ORBIT-1042-x");
   const pr = { headRefName: "feat/ORBIT-1042-x", title: "x", body: "" };
   const view = (setup: TrackerSetup, choice: "auto" | "clickup" | "jira" = "auto") => ({ setup, choice });
-  const withOwner = <S extends { connected: boolean; prefix?: string }>(s: S, owner: "clickup" | "jira" | null, jiraSite?: string) =>
+  const withOwner = <S extends { connected: boolean; prefix?: string; jira?: ReturnType<typeof jira> }>(s: S, owner: "clickup" | "jira" | null, jiraSite?: string) =>
     ({ ...s, ownerOf: () => ({ owner, jiraSite }) });
 
   it("without Jira the setup is handed back untouched, the same object", () => {
@@ -163,6 +163,14 @@ describe("the chip and the merge form follow the owner", () => {
     expect(chipAction(JIRA_URL, withOwner({ connected: false }, "jira")))
       .toEqual({ in: "away", url: "https://acme.atlassian.net/browse/ORBIT-1042" });
     expect(chipAction(r, withOwner({ connected: true }, "jira"))).toBeNull();
+  });
+  it("a Jira card opens in the Jira tab once a Jira site is connected, and on its site otherwise", () => {
+    expect(chipAction(r, withOwner({ connected: false, jira: jira("ORBIT") }, "jira", "acme.atlassian.net")))
+      .toEqual({ in: "tasks", tracker: "jira" });
+    expect(chipAction(JIRA_URL, withOwner({ connected: true, jira: jira("ORBIT") }, "jira")))
+      .toEqual({ in: "tasks", tracker: "jira" });
+    expect(chipAction(r, withOwner({ connected: true }, "jira", "acme.atlassian.net")))
+      .toEqual({ in: "away", url: "https://acme.atlassian.net/browse/ORBIT-1042" });
   });
   it("a ClickUp card opens in the board, and only with a token", () => {
     expect(chipAction(r, withOwner({ connected: true }, "clickup"))).toEqual({ in: "tasks" });
@@ -186,9 +194,9 @@ describe("the chip and the merge form follow the owner", () => {
     // ClickUp's prefix is unknown and Jira does not claim ORBIT: nobody's, in both readers
     expect(chipAction(r, s)).toBeNull();
     expect(mergeCardRef(pr, s)).toBeNull();
-    // Jira claims it: a chip to the site, and the merge form is given its card
+    // Jira claims it: a chip into the Jira tab, and the merge form is given its card
     const mine = ownerSetup({ connected: true }, view({ clickup: cu(), jira: jira("ORBIT") }))!;
-    expect(chipAction(r, mine)).toEqual({ in: "away", url: "https://acme.atlassian.net/browse/ORBIT-1042" });
+    expect(chipAction(r, mine)).toEqual({ in: "tasks", tracker: "jira" });
     expect(mergeCardRef(pr, mine)).toEqual({ label: "ORBIT-1042", query: "ORBIT-1042", tracker: "jira" });
     // ClickUp's prefix is read and Jira's list lacks it: the board, and a move
     const board = ownerSetup({ connected: true, prefix: "ORBIT-" }, view({ clickup: cu("ORBIT-"), jira: jira("PLAT") }))!;
@@ -199,11 +207,11 @@ describe("the chip and the merge form follow the owner", () => {
     expect(chipAction(r, noIds)).toBeNull();
     // Jira alone with a site that reported no projects: the chip says yes (it only picks where a tap goes)
     const alone = ownerSetup({ connected: false }, view({ jira: jira() }))!;
-    expect(chipAction(r, alone)).toEqual({ in: "away", url: "https://acme.atlassian.net/browse/ORBIT-1042" });
+    expect(chipAction(r, alone)).toEqual({ in: "tasks", tracker: "jira" });
     // and the repository's choice settles what both claim
     const claimed = { clickup: cu("ORBIT-"), jira: jira("ORBIT") };
     expect(chipAction(r, ownerSetup({ connected: true, prefix: "ORBIT-" }, view(claimed)))).toBeNull();
     expect(chipAction(r, ownerSetup({ connected: true, prefix: "ORBIT-" }, view(claimed, "clickup")))).toEqual({ in: "tasks" });
-    expect(chipAction(r, ownerSetup({ connected: true, prefix: "ORBIT-" }, view(claimed, "jira")))?.in).toBe("away");
+    expect(chipAction(r, ownerSetup({ connected: true, prefix: "ORBIT-" }, view(claimed, "jira")))).toEqual({ in: "tasks", tracker: "jira" });
   });
 });
