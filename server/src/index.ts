@@ -149,9 +149,9 @@ import { fileText, fileToTemp, fileTree, findFiles, grepFiles, listRefs, filesEx
 import { diskEnabled, diskFind, diskGrep, diskPlaces } from "./disk.ts";
 import { homeIndex } from "./homeindex.ts";
 import { browseBatch } from "./browselist.ts";
-import { browseDir, fileBytes, fileFacts, previewSlice, openInDesktop, pagePolicy, revealInFileManager, saveText } from "./browse.ts";
+import { browseDir, fileBytes, fileFacts, previewSlice, openInDesktop, pagePolicy, revealInFileManager } from "./browse.ts";
 import { fileGitFacts } from "./fileGit.ts";
-import { benchEdit, benchEnd, benchLive, readNote, writeNote } from "./bench.ts";
+import { benchEdit, benchEnd, benchLive, finderEditEnd, finderEditSave, finderEditState, readNote, writeNote } from "./bench.ts";
 import {
   overview as dockerOverview, stats as dockerStats, logs as dockerLogs, inspect as dockerInspect, top as dockerTop,
   disk as dockerDisk, volumeDetail as dockerVolumeDetail, volumePeek as dockerVolumePeek, DOCKER_WRITE_ENABLED,
@@ -7382,6 +7382,20 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       return json(readNote(url.searchParams.get("root") || ""));
     }
     if (pathname === "/bench/live") return json(await benchLive(url.searchParams.get("root") || ""));
+    /* The Finder's own editor (bench slot FINDER_EDIT_SLOT): is it running, has it unsaved buffers, and write them. Constants only reach nvim. */
+    if (pathname === "/bench/finder-edit") return json(await finderEditState(url.searchParams.get("root") || ""));
+    if (pathname === "/bench/finder-edit/end" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { root?: unknown } = {};
+      try { b = (await req.json()) as { root?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      return json(await finderEditEnd(b?.root));
+    }
+    if (pathname === "/bench/finder-edit/save" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { root?: unknown } = {};
+      try { b = (await req.json()) as { root?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      return json(await finderEditSave(b?.root));
+    }
     if (pathname === "/bench/end" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       let b: { root?: unknown; slot?: unknown };
@@ -7454,14 +7468,6 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         try { b = (await req.json()) as { path?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
         const r = openInDesktop(b?.path, localBrowse);
         return json(r, r.ok ? 200 : 400);
-      }
-      /* Saving the editor's text is a write on the same surface: same gate, same boundary as the read, plus the mtime guard (see saveText). */
-      if (pathname === "/preview/save" && req.method === "POST") {
-        if (!trustedCaller(req, from)) return csrfBlocked();
-        let b: { path?: unknown; text?: unknown; mtime?: unknown } = {};
-        try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
-        const r = saveText(b?.path, b?.text, b?.mtime, localBrowse);
-        return json(r, r.ok ? 200 : r.conflict ? 409 : 400);
       }
       if (pathname === "/preview/reveal" && req.method === "POST") {
         if (!trustedCaller(req, from)) return csrfBlocked();

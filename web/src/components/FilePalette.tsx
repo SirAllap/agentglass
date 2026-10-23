@@ -1124,7 +1124,7 @@ export function FilePalette({
 
             {/* the drawer, the reader and the rail */}
             {finderOn ? (
-              <MachineFinder home={homeDir} start={place || homeDir} places={places} target={finderTo} onClose={onClose}
+              <MachineFinder home={homeDir} workspace={root} start={place || homeDir} places={places} target={finderTo} onClose={onClose}
                 onPlace={(p) => { setPlaceRecents(rememberPlace(p)); setPlace(p); setBrowsePath(null); }}
                 onBench={(p, mode) => { onBench(benchOpen(mode, p, root)); onClose(); }}
                 onRecent={() => goTab("recent")} />

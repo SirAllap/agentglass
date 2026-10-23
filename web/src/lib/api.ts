@@ -1347,7 +1347,9 @@ const realApi = {
   /** Hand a file to the desktop's own viewer — a picture belongs to the picture
    *  viewer, not to the editor the text files open in. */
   previewOpen: (path: string) => post<{ ok: boolean; with?: string; error?: string }>("/preview/open", { path }),
-  previewSave: (path: string, text: string, mtime: number) => post<{ ok: boolean; mtime?: number; bytes?: number; error?: string; conflict?: boolean }>("/preview/save", { path, text, mtime }),
+  finderEditState: (root: string) => get<{ ok: boolean; live: boolean; modified: boolean; error?: string }>(`/bench/finder-edit?root=${encodeURIComponent(root)}`),
+  finderEditEnd: (root: string) => post<{ ok: boolean; ended?: boolean; error?: string }>("/bench/finder-edit/end", { root }),
+  finderEditSave: (root: string) => post<{ ok: boolean; live: boolean; modified: boolean; error?: string }>("/bench/finder-edit/save", { root }),
   previewReveal: (path: string) => post<{ ok: boolean; with?: string; error?: string }>("/preview/reveal", { path }),
   /** Fuzzy names across Home from the server's incremental index. */
   diskIndexSearch: (q: string, signal?: AbortSignal) =>
@@ -2721,7 +2723,9 @@ const demoApi: typeof realApi = {
   previewText: async () => ({ ok: false as const, error: "the demo has no filesystem" }),
   previewUrl: () => "",
   previewOpen: () => D({ ok: false, error: "the demo has no filesystem" }),
-  previewSave: () => D({ ok: false, error: "the demo has no filesystem" }),
+  finderEditState: () => D({ ok: true, live: false, modified: false }),
+  finderEditEnd: () => D({ ok: true, ended: false }),
+  finderEditSave: () => D({ ok: false, live: false, modified: false, error: "not available in the demo" }),
   previewReveal: () => D({ ok: false, error: "the demo has no filesystem" }),
   diskGrep: () => D({ ok: false, hits: [], files: 0, truncated: false, via: "", error: "the demo has no filesystem" } as GrepReport),
   dockerLogs: (id: string, _tail?: number) => D(demo.dockerLogs(id)),

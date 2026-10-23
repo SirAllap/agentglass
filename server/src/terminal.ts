@@ -30,7 +30,7 @@ import { inScope, workspaceRoot, terminalDisabledSource, tmuxTerminal, tmuxPrefi
 import { noteNvimArgv } from "./bench.ts";
 import { engineAttachArgv, engineBenchArgv, engineConsoleArgv, engineWindowRunning, engineSplitRunning, engineSessionName } from "./tmuxpane.ts";
 import { confHealth, ensureConf } from "./tmuxconf.ts";
-import { readerSocketPath, readerSessionState, endReaderSession, BENCH_READER_SLOT } from "./bench.ts";
+import { readerSocketPath, readerSessionState, endReaderSession, finderEditSocketPath, BENCH_READER_SLOT, FINDER_EDIT_SLOT } from "./bench.ts";
 import { browseReal } from "./browse.ts";
 import { SKIP_DIRS } from "./gitwork.ts";
 
@@ -828,7 +828,7 @@ export function ptyOpen(ws: PtyWs) {
   const editorSock = editor && /\bnvim$/.test(bin)
     /* `cwd`, not `startIn`: the checkout the client named and this server
        validated, which is the same key /bench/edit derives the path from. */
-    ? (d.bench ? { id: null as string | null, path: readerSocketPath(cwd) } : newEditorSocket())
+    ? (d.bench === FINDER_EDIT_SLOT ? { id: null as string | null, path: finderEditSocketPath(cwd) } : d.bench ? { id: null as string | null, path: readerSocketPath(cwd) } : newEditorSocket())
     : null;
   const readOnly = !d.edit || tempCopy;
   const readonlyFlags = readOnly && /\b(nvim|vim|view)$/.test(bin) ? ["-R", "-M"] : [];

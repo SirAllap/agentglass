@@ -22,11 +22,14 @@ export function folderSummary(rows: readonly Row[]): string[] {
   return TYPE_GROUPS.filter((g) => n.has(g)).map((g) => `${g.toLowerCase()} ${n.get(g)}`);
 }
 
-export function QuickLook({ path, row, rows, onBench, onCopy, onClose }: {
+export function QuickLook({ path, row, rows, root, onEditing, onBench, onCopy, onClose }: {
   path: string | null;
   row: Row | null;
   /** The rows of the folder, when `row` is one: what the summary counts. */
   rows: readonly Row[] | null;
+  /** The workspace the Editing tab's nvim session hangs off. */
+  root: string;
+  onEditing: (path: string | null) => void;
   onBench: (path: string, mode: "edit" | "terminal") => void;
   onCopy: (path: string) => void;
   /** The panel's own close button: the same as Space, which is how Strata's reads. */
@@ -48,8 +51,15 @@ export function QuickLook({ path, row, rows, onBench, onCopy, onClose }: {
 
   if (!path || !row) {
     return (
-      <div className="flex-1 min-w-0 flex items-center justify-center p-6 text-center text-[12px]" style={{ color: "var(--text3)" }}>
-        Pick something in the columns. Space shows or hides this panel.
+      <div className="flex-1 min-w-0 min-h-0 flex flex-col" aria-label="Preview">
+        <div className="px-4 flex items-center gap-2 shrink-0" style={{ minHeight: 36, borderBottom: LINE }}>
+          <h3 className="m-0 flex-1 min-w-0 text-[12px] font-semibold">Preview</h3>
+          <span className="grid place-items-center shrink-0 opacity-40" style={{ width: HIT - 4, height: HIT - 4, color: "var(--text3)" }} aria-hidden><StrataIcon set="act" name="external-link" size={ICON.sm} /></span>
+          {onClose && (
+            <button className="agx-btn rounded-md grid place-items-center shrink-0" style={{ width: HIT - 4, height: HIT - 4, color: "var(--text3)" }} title="Close preview (Space)" aria-label="Close the preview" onClick={onClose}><CrossIcon size={ICON.sm} /></button>
+          )}
+        </div>
+        <div className="flex-1 flex items-center justify-center p-6 text-center text-[12px]" style={{ color: "var(--text3)" }}>No preview for this selection</div>
       </div>
     );
   }
@@ -86,7 +96,7 @@ export function QuickLook({ path, row, rows, onBench, onCopy, onClose }: {
           <RevealButton path={path} what={folder ? "folder" : "file"} />
         </div>
       </div>
-      <div className="flex-1 min-h-0 agx-scroll overflow-y-auto overflow-x-hidden px-4 py-3 text-[12px]">
+      <div className="flex-1 min-h-0 flex flex-col agx-scroll overflow-y-auto overflow-x-hidden px-4 py-3 text-[12px]">
         {row.locked ? (
           <p style={{ color: "var(--text3)" }}>{row.why ?? "Hidden entries are listed by name only; this one is not opened here."}</p>
         ) : folder ? (
@@ -98,7 +108,7 @@ export function QuickLook({ path, row, rows, onBench, onCopy, onClose }: {
         ) : !facts ? (
           <p style={{ color: "var(--text3)" }}>Reading…</p>
         ) : (
-          <PreviewBody path={path} facts={facts} canEdit={canEditRow(row)} onBench={() => onBench(path, "edit")} />
+          <PreviewBody path={path} facts={facts} canEdit={canEditRow(row)} root={root} onEditing={onEditing} />
         )}
       </div>
     </div>

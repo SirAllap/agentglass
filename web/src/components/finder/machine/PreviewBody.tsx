@@ -2,7 +2,7 @@
 // for any text (line numbers, colour, long lines wrap inside the pane), markdown
 // rendered, a page in an isolated frame, JSON as text / tree / graph, pictures,
 // PDF, audio and video in their own viewers, and a plain message for a binary.
-// The "Editing" tab edits a small text file in place (FileEditor); "Open in nvim" is the bench, for the rest.
+// The "Editing" tab is nvim running in this pane (FinderNvim); the header's "Open in nvim" is the bench.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../../lib/api.ts";
 import { Markdown } from "../../../lib/markdown.tsx";
@@ -17,8 +17,8 @@ import type { FileFacts } from "../../../../../shared/types.ts";
 import { EDGE } from "../../workspace/Chrome.tsx";
 import { CODE_FONT_STYLE } from "../../diff/DiffLines.tsx";
 import { JsonGraph, JsonTree } from "./JsonViews.tsx";
-import { FileEditor } from "./FileEditor.tsx";
-import { editability, getDraft } from "../../../lib/finderEdit.ts";
+import { FinderNvim } from "./FinderNvim.tsx";
+import { editability } from "../../../lib/finderEdit.ts";
 import { FindBar } from "../../PeekFile.tsx";
 import { clear as clearFind, findRanges, paint as paintFind, reveal as revealFind, step as stepFind } from "../../../lib/mdFind.ts";
 import { SearchIcon } from "../../../lib/glyphIcons.tsx";
@@ -28,19 +28,23 @@ const note = (children: React.ReactNode, warn = false) => (
   <p className="m-0 mb-2 text-[11px]" style={{ color: warn ? "var(--warning-ink)" : "var(--text3)" }}>{children}</p>
 );
 
-export function PreviewBody({ path, facts, canEdit, onBench }: {
+export function PreviewBody({ path, facts, canEdit, root, onEditing }: {
   path: string;
+  /** The workspace the editor session hangs off (the bench's own key). */
+  root: string;
+  /** Which file nvim is on while Editing is the open tab, null otherwise: the Finder guards its exits by it. */
+  onEditing: (path: string | null) => void;
   facts: FileFacts;
   canEdit: boolean;
-  onBench: () => void;
 }) {
   const plan = useMemo(() => previewPlan(facts), [facts]);
   const [tab, setTab] = useState<PreviewTab>(plan.tabs[0] ?? "Reading");
   useEffect(() => setTab(plan.tabs[0] ?? "Reading"), [path, plan]);
-  /* A file with an unsaved edit comes back in the editor. */
-  const [editing, setEditing] = useState(() => !!getDraft(path));
-  useEffect(() => setEditing(!!getDraft(path)), [path]);
+  const [editing, setEditing] = useState(false);
+  useEffect(() => setEditing(false), [path]);
   const mayEdit = canEdit && editability(facts);
+  const editorOn = editing && !!mayEdit && mayEdit.ok;
+  useEffect(() => { onEditing(editorOn ? path : null); return () => onEditing(null); }, [editorOn, path]);
   const graphOk = graphAllowed(facts.bytes);
   const texty = plan.viewer === "code" || plan.viewer === "markdown" || plan.viewer === "html" || plan.viewer === "json";
 
@@ -80,13 +84,9 @@ export function PreviewBody({ path, facts, canEdit, onBench }: {
         );
       })}
       {canEdit && (
-        <>
-          <button role="tab" aria-selected={editing} disabled={!mayEdit || !mayEdit.ok} className="agx-btn px-2.5 rounded-md text-[11px] disabled:opacity-40"
-            style={{ minHeight: HIT - 6, border: EDGE, ...(editing ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)", color: "var(--text)" } : { color: "var(--text3)" }) }}
-            title={mayEdit && !mayEdit.ok ? mayEdit.why : "Edit this file here; Ctrl+S saves"} onClick={() => setEditing(true)}>Editing</button>
-          <button className="agx-btn px-2.5 rounded-md text-[11px]" style={{ minHeight: HIT - 6, border: EDGE, color: "var(--text3)" }}
-            onClick={onBench} title="Open the file in nvim on the bench">Open in nvim</button>
-        </>
+        <button role="tab" aria-selected={editing} disabled={!mayEdit || !mayEdit.ok} className="agx-btn px-2.5 rounded-md text-[11px] disabled:opacity-40"
+          style={{ minHeight: HIT - 6, border: EDGE, ...(editing ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)", color: "var(--text)" } : { color: "var(--text3)" }) }}
+          title={mayEdit && !mayEdit.ok ? mayEdit.why : "Edit this file with nvim, here"} onClick={() => setEditing(true)}>Editing</button>
       )}
       {texty && !editing && (
         <span className="ml-auto flex items-center gap-1">
@@ -101,7 +101,7 @@ export function PreviewBody({ path, facts, canEdit, onBench }: {
   );
 
   let body: React.ReactNode;
-  if (editing && mayEdit && mayEdit.ok) body = <FileEditor path={path} facts={facts} onDone={() => setEditing(false)} />;
+  if (editorOn) body = <FinderNvim root={root} path={path} onEnd={() => setEditing(false)} />;
   else switch (plan.viewer) {
     case "markdown": body = tab === "Source" ? <Reading facts={facts} name={facts.name} wrap={wrap} /> : <MarkdownView facts={facts} />; break;
     case "html": body = tab === "Rendered" ? <HtmlFrame path={path} bytes={facts.bytes} /> : <Reading facts={facts} name={facts.name} wrap={wrap} />; break;

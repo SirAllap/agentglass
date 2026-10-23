@@ -28,7 +28,7 @@ import type { DiskPlace } from "../../../../../shared/types.ts";
 import { EDGE, LINE } from "../../workspace/Chrome.tsx";
 import { Column, type Mod } from "./Column.tsx";
 import { AppearanceMenu, FinderSettings, HelpSheet } from "./FinderChrome.tsx";
-import { clearDraft, dirtyPaths, exitDecision, saveDrafts, type Exit } from "../../../lib/finderEdit.ts";
+import { exitDecision, type Exit } from "../../../lib/finderEdit.ts";
 import { FinderPathBar } from "./FinderPathBar.tsx";
 import { FinderSearch } from "./FinderSearch.tsx";
 import type { HitTarget } from "../../../lib/finderSearch.ts";
@@ -55,7 +55,7 @@ const BIG = 2000;
 
 const basename = (p: string) => p.slice(p.lastIndexOf("/") + 1) || "/";
 
-export function MachineFinder({ home, start, places, target, onPlace, onBench, onRecent, onClose: closeNow }: {
+export function MachineFinder({ home, workspace, start, places, target, onPlace, onBench, onRecent, onClose: closeNow }: {
   home: string;
   /** Where to open, and where to go when the palette's own place changes. */
   start: string;
@@ -64,34 +64,42 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
   places: readonly DiskPlace[];
   /** The finder went somewhere on purpose (sidebar, path bar, up): the palette remembers it as the place. */
   onPlace: (path: string) => void;
+  /** The workspace root: the key of the Editing tab's nvim session. */
+  workspace: string;
   onBench: (path: string, mode: "edit" | "terminal") => void;
   onRecent: () => void;
   /** The way out of the finder: it lives at the end of the path-bar row, where Strata has its close. */
   onClose: () => void;
 }) {
   const [prefs, setPrefsState] = useState<Prefs>(loadPrefs);
-  /* Every way out of an edit that was never saved asks first (lib/finderEdit.EXITS): the move is held in `held`
-     and runs once the person has said Save or Discard. */
+  /* Every way out of the Editing tab asks first when nvim holds unsaved changes (lib/finderEdit.EXITS). The move is
+     held in `held` and runs once the person has said Save or Discard; leaving ends the editor's session either way. */
+  const editing = useRef<string | null>(null);
   const [held, setHeld] = useState<{ exit: Exit; run: () => void } | null>(null);
   const [heldErr, setHeldErr] = useState<string | null>(null);
   const guarded = useCallback(<A extends unknown[]>(exit: Exit, fn: (...a: A) => void) => (...a: A) => {
-    if (exitDecision(dirtyPaths().length, exit) === "go") fn(...a); else { setHeldErr(null); setHeld({ exit, run: () => fn(...a) }); }
-  }, []);
+    if (!editing.current) { fn(...a); return; }
+    void api.finderEditState(workspace).then((st) => {
+      if (exitDecision(st.ok && st.live ? st.modified : null, exit) === "go") fn(...a); else { setHeldErr(null); setHeld({ exit, run: () => fn(...a) }); }
+    }).catch(() => fn(...a));
+  }, [workspace]);
   const onClose = useMemo(() => guarded("finder-close", closeNow), [guarded, closeNow]);
   useEffect(() => {
     const esc = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || exitDecision(dirtyPaths().length, "finder-close") === "go" || (e.target as HTMLElement | null)?.tagName === "TEXTAREA") return;
-      e.preventDefault(); e.stopImmediatePropagation(); setHeldErr(null); setHeld({ exit: "finder-close", run: closeNow });
+      if (e.key !== "Escape" || !editing.current || (e.target as HTMLElement | null)?.closest?.("[data-finder-nvim]")) return;
+      e.preventDefault(); e.stopImmediatePropagation(); onClose();
     };
     window.addEventListener("keydown", esc, true);
     return () => window.removeEventListener("keydown", esc, true);
-  }, [closeNow]);
+  }, [onClose]);
   const setPrefs = useCallback((p: Partial<Prefs>) => setPrefsState((cur) => { const n = { ...cur, ...p }; savePrefs(n); return n; }), []);
 
   /* Where it was left, if that is still where the palette says it is: a chip or a link that moved the place wins over the memory. */
   const [back] = useState(() => { const s = loadSnap(); return s && s.trail[0] === (start || home || "/") ? s : null; });
   const [trail, setTrail] = useState<string[]>(() => back?.trail ?? [start || home || "/"]);
   const [sel, setSel] = useState<(string | null)[]>(() => back?.sel ?? [null]);
+  /* Strata folds the sidebar to its icon rail while the path is typed. */
+  const [pathEditing, setPathEditing] = useState(false);
   const selRef = useRef(sel); selRef.current = sel;
   const [focusCol, setFocusCol] = useState(() => back?.focusCol ?? 0);
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -153,9 +161,9 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
   const seen = useRef(start);
   useEffect(() => {
     if (!start || start === seen.current) return;
-    seen.current = start; setHist((h) => visit(h, start));
-    setTrail([start]); setSel([null]); setFocusCol(0);
-  }, [start]);
+    seen.current = start;
+    guarded("external", () => { setHist((h) => visit(h, start)); setTrail([start]); setSel([null]); setFocusCol(0); })();
+  }, [start, guarded]);
 
   /* A typed path goes where the path bar goes, and a file also gets selected so
      its preview shows. It asks what the path is before moving: a half-typed name
@@ -168,12 +176,12 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
         if (!live || !f.ok) return;
         const at = f.kind === "dir" ? target : parentOf(target);
         if (!at) return;
-        seen.current = at; setHist((h) => visit(h, at));
-        setTrail([at]); setSel([f.kind === "dir" ? null : basename(target)]); setFocusCol(0); setPeek(false); setSidePage(false);
+        seen.current = at;
+        guarded("external", () => { setHist((h) => visit(h, at)); setTrail([at]); setSel([f.kind === "dir" ? null : basename(target)]); setFocusCol(0); setPeek(false); setSidePage(false); })();
       }).catch(() => { /* not a place yet */ });
     }, 150);
     return () => { live = false; clearTimeout(t); };
-  }, [target]);
+  }, [target, guarded]);
 
   const goRaw = useCallback((path: string) => {
     seen.current = path; setHist((h) => visit(h, path));
@@ -386,6 +394,7 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
   useEffect(() => {
     const on = (e: KeyboardEvent) => {
       if (searchingRef.current) return; // the search overlay has the keys while it is up
+      if ((e.target as HTMLElement | null)?.closest?.("[data-finder-nvim]")) return; // nvim has every key typed into its own pane
       // Ctrl+K is the app's command palette everywhere else; inside the finder it is Strata's search.
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k" && root.current && (root.current.contains(e.target as Node) || e.target === document.body || (e.target as HTMLElement | null)?.closest?.('[role="dialog"]') === root.current.closest('[role="dialog"]'))) {
         e.preventDefault(); e.stopPropagation(); openSearch(); return;
@@ -420,7 +429,7 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
   const previewOnly = !previewInline && peek;
   const lastCol = columns[last];
   const preview = (
-    <QuickLook path={deepest?.path ?? null} row={deepest?.row ?? null}
+    <QuickLook root={workspace} onEditing={(p) => { editing.current = p; }} path={deepest?.path ?? null} row={deepest?.row ?? null}
       rows={deepest && isFolder(deepest.row) ? (columns[deepest.col + 1]?.state?.rows ?? null) : null}
       onBench={onBench} onCopy={copy} onClose={guarded("preview-close", () => (wide ? setPrefs({ preview: false }) : setPeek(false)))} />
   );
@@ -444,15 +453,15 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
           <button className={tool} disabled={!canForward(hist)} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", opacity: canForward(hist) ? 1 : 0.4 }} title="Forward (Alt+Right)" aria-label="Forward" onClick={() => goHist(histForward(hist))}><StrataIcon set="act" name="arrow-right" size={17} /></button>
           <button className={tool} disabled={!parentOf(trail[0]!)} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", opacity: parentOf(trail[0]!) ? 1 : 0.4 }} title="Parent folder (Alt+Up)" aria-label="Parent folder" onClick={goUp}><StrataIcon set="act" name="arrow-up" size={17} /></button>
         </>}
-        <FinderPathBar path={trail[last] ?? trail[0]!} home={home} onGo={go} signalEdit={pathSignal} />
+        <FinderPathBar path={trail[last] ?? trail[0]!} home={home} onGo={go} signalEdit={pathSignal} onEditing={setPathEditing} />
         <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Search (Ctrl+K)" aria-label="Search" onClick={openSearch}><StrataIcon set="act" name="search" size={17} /></button>
         <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Appearance" aria-label="Appearance" aria-haspopup="menu" onClick={(e) => setMenu(e.currentTarget.getBoundingClientRect())}><StrataIcon set="act" name={prefs.view} size={17} /></button>
         <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Settings" aria-label="Settings" aria-haspopup="menu" onClick={(e) => setSettings(e.currentTarget.getBoundingClientRect())}><StrataIcon set="act" name="settings" size={17} /></button>
-        <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Close (Esc)" aria-label="Close the finder" onClick={onClose}><StrataIcon set="act" name="x" size={17} /></button>
+        <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Close window" aria-label="Close the finder" onClick={onClose}><StrataIcon set="act" name="x" size={17} /></button>
       </div>
 
       <div className="flex-1 min-h-0 flex">
-        {sideOn && <Sidebar places={placesFor(home, places)} here={trail[0]!} mode={compact || sideMode === "hidden" ? "full" : sideMode} width={sidebarWidth(compact || sideMode === "hidden" ? "full" : sideMode === "rail" ? "rail" : "full", prefs.sideW, box.w)} onResize={(w) => setPrefs({ sideW: sidebarWidth("full", w, box.w) })} onGo={go} onRecent={onRecent} />}
+        {sideOn && <Sidebar places={placesFor(home, places)} here={trail[0]!} mode={compact || sideMode === "hidden" ? "full" : pathEditing ? "rail" : sideMode} width={sidebarWidth(compact || sideMode === "hidden" ? "full" : pathEditing || sideMode === "rail" ? "rail" : "full", prefs.sideW, box.w)} onResize={(w) => setPrefs({ sideW: sidebarWidth("full", w, box.w) })} onGo={go} onRecent={onRecent} />}
         {!(compact && sidePage) && (
           <>
             {/* With the preview beside the columns and nothing dragged, the columns take what their names ask for and the preview takes all that is left, as Strata's does; a gap between the two was the free room with nowhere to go. */}
@@ -514,13 +523,13 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
           onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setHeld(null); } }}>
           <div className="rounded-xl p-4 text-[12px]" style={{ background: "var(--surface-card)", border: EDGE, width: 380, maxWidth: "100%" }}>
             <b className="block text-[13px] mb-1">Unsaved changes</b>
-            <p className="m-0 mb-3" style={{ color: "var(--text3)" }}>{dirtyPaths().map(basename).join(", ")} {dirtyPaths().length === 1 ? "has" : "have"} edits that were not saved.</p>
+            <p className="m-0 mb-3" style={{ color: "var(--text3)" }}>{basename(editing.current ?? "")} has changes in nvim that were not written.</p>
             {heldErr && <p role="alert" className="m-0 mb-3" style={{ color: "var(--warning-ink)" }}>Not saved: {heldErr}.</p>}
             <div className="flex justify-end gap-2">
               <button autoFocus className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE }} onClick={() => setHeld(null)}>Cancel</button>
-              <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE, color: "var(--warning-ink)" }} onClick={() => { const h = held; for (const p of dirtyPaths()) clearDraft(p); setHeld(null); h.run(); }}>Discard</button>
+              <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE, color: "var(--warning-ink)" }} onClick={() => { const h = held; setHeld(null); h.run(); }}>Discard</button>
               <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, background: "var(--text)", color: "var(--bg)" }}
-                onClick={() => { const h = held; void saveDrafts(api.previewSave).then((r) => { if (r.ok) { setHeld(null); h.run(); } else setHeldErr(`${basename(r.path)}: ${r.error}`); }); }}>Save</button>
+                onClick={() => { const h = held; void api.finderEditSave(workspace).then((r) => { if (r.ok && !r.modified) { setHeld(null); h.run(); } else setHeldErr(r.error ?? "nvim still has unwritten changes"); }).catch(() => setHeldErr("the server did not answer")); }}>Save</button>
             </div>
           </div>
         </div>
