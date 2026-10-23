@@ -9,6 +9,7 @@ import { useBox } from "./useBox.ts";
 import { HIT, ICON } from "../../../lib/iconSize.ts";
 import { EDGE, INPUT, INPUT_STYLE, LINE } from "../../workspace/Chrome.tsx";
 import { MenuCap, MenuItem, MenuRule, Popover } from "./Popover.tsx";
+import { ActionsManager } from "./FinderActions.tsx";
 
 export function AppearanceMenu({ anchor, prefs, onPref, onClose }: { anchor: DOMRect; prefs: Prefs; onPref: (p: Partial<Prefs>) => void; onClose: () => void }) {
   return (
@@ -47,7 +48,7 @@ export function AppearanceMenu({ anchor, prefs, onPref, onClose }: { anchor: DOM
  * with its title, its one-line description and its control. A change is made the
  * moment it is clicked and clicked again to undo (lib/finderSettingsModel).
  */
-export function FinderSettings({ prefs, onPref, onReset, onForget, onClose }: { prefs: Prefs; onPref: (p: Partial<Prefs>) => void; onReset: () => void; onForget: () => void; onClose: () => void }) {
+export function FinderSettings({ prefs, onPref, onReset, onForget, onClose, say }: { prefs: Prefs; onPref: (p: Partial<Prefs>) => void; onReset: () => void; onForget: () => void; onClose: () => void; say: (s: string) => void }) {
   const [q, setQ] = useState("");
   const [page, setPage] = useState<PageId>("general");
   const frame = useRef<HTMLDivElement>(null);
@@ -68,6 +69,7 @@ export function FinderSettings({ prefs, onPref, onReset, onForget, onClose }: { 
   );
   const control = (r: Row) => {
     switch (r.kind) {
+      case "manager": return null;
       case "toggle": return <Switch on={toggleValue(prefs, r.id)} label={r.title} onClick={() => onPref({ [r.id]: !prefs[r.id] } as Partial<Prefs>)} />;
       case "button": return <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE }} onClick={onForget}>{r.action}</button>;
       case "sort": return (
@@ -129,7 +131,12 @@ export function FinderSettings({ prefs, onPref, onReset, onForget, onClose }: { 
           {sections.map((sec) => (
             <section key={sec} aria-label={sec} className="mb-5">
               <h4 className="m-0 mb-1 text-[10.5px] uppercase tracking-[0.1em]" style={{ color: "var(--text3)", fontWeight: 600 }}>{sec}</h4>
-              {rows.filter((r) => r.section === sec).map((r) => (
+              {rows.filter((r) => r.section === sec).map((r) => r.kind === "manager" ? (
+                <div key={r.id}>
+                  <p className="m-0 mb-3 text-[11.5px]" style={{ color: "var(--text3)" }}>{r.desc}</p>
+                  <ActionsManager narrow={narrow} say={say} />
+                </div>
+              ) : (
                 <div key={r.id} className={`flex gap-4 py-2.5 ${narrow ? "flex-col items-start gap-2" : "items-center"}`} style={{ borderTop: LINE }}>
                   <div className="flex-1 min-w-0">
                     <div className="text-[12.5px]">{r.title}</div>

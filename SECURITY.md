@@ -1271,11 +1271,17 @@ value; only an unset variable is the default. What each level means:
   agent prepare something and never perform it, with one exception outside
   `/control`: the Jira card door's `step`, `link`, `edit`, `comment`, `comment-edit`, `comment-delete`, `move`, `subtask`, `relate`, `unrelate`, `weblink`, `unweblink`, `worklog`, `worklog-edit`, `worklog-delete`, `watch`, `vote`, `rank`, `attach` and `unattach`, which perform at level 3
   when the Jira write switch is also on (see "Jira, and the agent door to a
-  card"). Five doors ship, all on one pull
-  request: `pr.merge.stage` (method, commit subject and body), `pr.comment.stage`
+  card"). Six doors ship, five on one pull
+  request and one in the Finder: `pr.merge.stage` (method, commit subject and body), `pr.comment.stage`
   (the text), `pr.review.stage` (verdict and text), `card.move.stage` (the new
   status of the card the pull request carries) and `pr.unstick` (opens the Unstick
-  dialog and does not run it). Each opens the dialog the screen already has,
+  dialog and does not run it) and `finder.op.stage` (one reversible file operation
+  on one path: trash, move, copy, rename, new folder or duplicate, with the
+  destination or name it needs; `delete` and `empty-trash` cannot be spelled, so
+  they are refused, and a name with a `/` is refused too). The Finder opens on the
+  folder with the path chosen and draws a confirmation that names the caller and
+  every path, with nothing to edit; the person's press runs it through the same
+  call as the context menu. Each opens the dialog the screen already has,
   filled in, and nothing more: the merge, the comment, the review, the move and
   the unstick happen when the person presses that dialog's own button. What arrived
   is shown as written by the caller (`as` is a label the caller picks, so it is

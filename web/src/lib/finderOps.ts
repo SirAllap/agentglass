@@ -14,7 +14,9 @@ export type OpId =
   | "folder-with" | "open" | "open-with" | "preview" | "print" | "terminal" | "open-in"
   | "cut" | "copy" | "duplicate" | "rename" | "move-to" | "copy-to" | "compress"
   | "pin" | "customize" | "copy-path" | "copy-name" | "props" | "trash" | "delete"
-  | "new-folder" | "new-file" | "paste" | "select-all" | "refresh" | "hidden";
+  | "new-folder" | "new-file" | "paste" | "select-all" | "refresh" | "hidden"
+  /** One of the person's own actions (Item.action says which) and the entry that holds the ones that go in a submenu. */
+  | "action" | "actions";
 
 export interface Item {
   id: OpId;
@@ -26,6 +28,10 @@ export interface Item {
   disabled?: boolean;
   /** Not built yet: the item is there (the menu is Strata's) and says so instead of doing nothing. */
   later?: string;
+  /** The id of the person's own action this item runs (id "action"). */
+  action?: string;
+  /** What the entry opens to the side (id "actions"). */
+  sub?: Item[];
 }
 
 export interface MenuCtx {
@@ -47,7 +53,7 @@ export function menuFor(target: Target, c: MenuCtx): Item[][] {
       [{ id: "new-folder", label: "New Folder", keys: "Ctrl+Shift+N" }, { id: "new-file", label: "New File" }, { id: "paste", label: "Paste", keys: "Ctrl+V", disabled: !c.canPaste }],
       [{ id: "open-with", label: "Open With…" }, { id: "terminal", label: "Open in Terminal", keys: "Ctrl+Alt+T" }],
       [{ id: "select-all", label: "Select All", keys: "Ctrl+A" }, { id: "refresh", label: "Refresh", keys: "F5" }, { id: "hidden", label: c.hidden ? "Hide Hidden Files" : "Show Hidden Files", keys: "Ctrl+H" }],
-      [{ id: "customize", label: "Customize…", later: "Customize" }, { id: "props", label: "Properties" }],
+      [{ id: "customize", label: "Customize…" }, { id: "props", label: "Properties" }],
     ];
   }
   const folder = target === "folder";
@@ -69,11 +75,22 @@ export function menuFor(target: Target, c: MenuCtx): Item[][] {
     [{ id: "compress", label: "Compress…" }],
     [
       ...(folder ? [{ id: "pin" as const, label: c.pinned ? "Unpin from sidebar" : "Pin to sidebar" }] : []),
-      { id: "customize", label: "Customize…", later: "Customize" }, { id: "copy-path", label: "Copy path" }, { id: "copy-name", label: "Copy name" },
+      { id: "customize", label: "Customize…" }, { id: "copy-path", label: "Copy path" }, { id: "copy-name", label: "Copy name" },
       { id: "props", label: "Properties", keys: "Alt+Enter", disabled: c.count > 1 },
     ],
     [{ id: "trash", label: "Move to Trash", keys: "Delete" }, { id: "delete", label: "Permanently delete", keys: "Shift+Delete", danger: true }],
   ];
+}
+
+/**
+ * The menu with the person's own actions in it: before Cut/Copy in the file and folder menus
+ * (after the opening commands), after Open With in the empty-space menu.
+ */
+export function withActions(groups: Item[][], actions: Item[] | null): Item[][] {
+  if (!actions || !actions.length) return groups;
+  const at = groups.findIndex((g) => g.some((i) => i.id === "cut"));
+  const i = at >= 0 ? at : Math.min(2, groups.length);
+  return [...groups.slice(0, i), actions, ...groups.slice(i)];
 }
 
 /** A path as Strata shortens it in the menu header: home as "~", the middle given up when it is long, the end (what matters) kept. */

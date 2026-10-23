@@ -1,14 +1,19 @@
 // The finder's file operations, wired: what is chosen, what the menu offers, what
 // each item asks the server for, and what is drawn while a name or a yes is
 // awaited. The decisions are lib/finderOps.ts (tested); the work is /fs/op.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { api } from "../../../lib/api.ts";
-import { clipPaths, deleteWords, doneNote, dropPlan, menuFor, menuHead, pasteOp, type Clip, type Item, type Target } from "../../../lib/finderOps.ts";
+import { clipPaths, deleteWords, doneNote, dropPlan, menuFor, menuHead, pasteOp, withActions, type Clip, type Item, type Target } from "../../../lib/finderOps.ts";
+import { actionGroup, confirmWords } from "../../../lib/finderActions.ts";
 import { isFolder, joinPath, type Row } from "../../../lib/finderMiller.ts";
-import type { FsBody, FsJob } from "../../../../../shared/types.ts";
+import type { FinderAction, FsBody, FsJob } from "../../../../../shared/types.ts";
 import { ConfirmDialog, ContextMenu, InlineName, Sheet, type InlineEdit } from "./FinderOpsUI.tsx";
 import { printable, printUrl } from "../../../lib/finderPrint.ts";
 import { JobsPanel } from "./FinderJobs.tsx";
+import { clearStage, peekStage, subscribeStage } from "../../../lib/stageIntent.ts";
+import { stageRun, type FinderStageArgs } from "../../../lib/finderStage.ts";
+import { StageDialog } from "./FinderStage.tsx";
+import { CustomizeDialog } from "./FinderCustomize.tsx";
 import { CompressDialog, OpenWithDialog, FolderPicker, PropsDialog, TrashPanel } from "./FinderDialogs.tsx";
 
 /** What the next step builds; until then the item says so instead of doing nothing. */
@@ -51,11 +56,14 @@ type Ask =
   | { k: "props"; path: string; dir: string; name: string }
   | { k: "trash" }
   | { k: "openwith"; paths: string[] }
-  | { k: "pick"; op: "move" | "copy"; c: Chosen };
+  | { k: "customize"; paths: string[]; names: string[]; isDir: boolean }
+  | { k: "action"; action: FinderAction; paths: string[]; source: "selection" | "background" }
+  | { k: "pick"; op: "move" | "copy"; c: Chosen }
+  | { k: "stage"; a: FinderStageArgs; by: string; n: number };
 
 export function useFinderOps(env: OpsEnv) {
   const [clip, setClip] = useState<Clip | null>(null);
-  const [menu, setMenu] = useState<{ at: { x: number; y: number }; target: Target; dir: string; rows: Row[] } | null>(null);
+  const [menu, setMenu] = useState<{ at: { x: number; y: number }; target: Target; dir: string; rows: Row[]; actions: FinderAction[] } | null>(null);
   const [ask, setAsk] = useState<Ask | null>(null);
   /** The name being typed in place, in the column it belongs to (Strata edits in the row, not in a box). */
   const [edit, setEdit] = useState<InlineEdit | null>(null);
@@ -89,6 +97,14 @@ export function useFinderOps(env: OpsEnv) {
     return true;
   }, []);
 
+  /* A file operation an agent prepared (finder.op.stage): taken off the mailbox and drawn as a confirmation. Nothing runs here; `run` is called from the dialog's button only. */
+  const staged = useSyncExternalStore(subscribeStage, peekStage, () => null);
+  useEffect(() => {
+    if (!staged || staged.id !== "finder.op.stage") return;
+    clearStage();
+    setAsk({ k: "stage", a: staged.a, by: staged.by, n: staged.n });
+  }, [staged]);
+
   const paths = (c: Chosen) => c.rows.map((r) => joinPath(c.dir, r.name));
   const names = (c: Chosen) => c.rows.map((r) => r.name);
 
@@ -101,6 +117,16 @@ export function useFinderOps(env: OpsEnv) {
     void run({ op: p.op, paths: clipPaths(c!), dest: into, conflict: p.conflict }, [c!.dir, into], n === 1 ? c!.names[0]! : "", n).then((ok) => { if (ok && c!.mode === "cut") setClip(null); });
   }, [run]);
 
+  /** Start one of the person's own actions; one that asks for a yes is confirmed first (the server asks again if it was skipped). */
+  const startAction = useCallback((a: FinderAction, ps: string[], source: "selection" | "background", confirmed = false) => {
+    const e = envRef.current;
+    if (a.run.confirm && !confirmed) { setAsk({ k: "action", action: a, paths: ps, source }); return; }
+    void api.actionRun(a.id, ps, source, confirmed || undefined).then((r) => {
+      if (!r.ok) { e.say(r.error ?? `${a.name} did not start`); return; }
+      e.say(`${a.name}…`); setPolling(true);
+    });
+  }, []);
+
   const startName = (a: Omit<InlineEdit, "end">) => setEdit({ ...a, end: () => setEdit(null) });
 
   /** Run one menu item or one key on a target. `into` is the folder a new thing lands in. */
@@ -111,6 +137,12 @@ export function useFinderOps(env: OpsEnv) {
     switch (id) {
       case "cut": case "copy": { const t = need(); if (!t) return; setClip({ mode: id === "cut" ? "cut" : "copy", dir: t.dir, names: names(t) }); e.say(`${id === "cut" ? "Cut" : "Copied"} ${t.rows.length === 1 ? t.rows[0]!.name : `${t.rows.length} items`}`); return; }
       case "paste": paste(into); return;
+      case "customize": {
+        // Nothing chosen (the empty-space menu) customizes the folder itself.
+        if (c && c.rows.length) setAsk({ k: "customize", paths: paths(c), names: names(c), isDir: c.rows.every(isFolder) });
+        else setAsk({ k: "customize", paths: [into], names: [into.slice(into.lastIndexOf("/") + 1) || into], isDir: true });
+        return;
+      }
       case "duplicate": { const t = need(); if (t) void run({ op: "duplicate", paths: paths(t) }, [t.dir], t.rows[0]!.name, t.rows.length); return; }
       case "rename": {
         const t = need(); if (!t) return;
@@ -229,20 +261,29 @@ export function useFinderOps(env: OpsEnv) {
       if (cur && cur.dir === dir && cur.rows.length > 1 && cur.rows.some((r) => r.name === name)) rows = cur.rows;
       else { rows = [row]; e.choose(dir, name); }
     }
-    setMenu({ at: { x, y }, target: !name ? "empty" : rows.length === 1 && isFolder(rows[0]!) ? "folder" : "file", dir, rows });
+    const target: Target = !name ? "empty" : rows.length === 1 && isFolder(rows[0]!) ? "folder" : "file";
+    const ps = rows.length ? rows.map((r) => joinPath(dir, r.name)) : [dir];
+    // The person's own actions are a read, asked before the menu opens so it never grows under the pointer; a slow answer is given up on after 400 ms.
+    void Promise.race([api.actionsMatch(ps, rows.length ? "selection" : "background"), new Promise<null>((res) => setTimeout(() => res(null), 400))])
+      .then((r) => setMenu({ at: { x, y }, target, dir, rows, actions: r?.actions ?? [] }));
   }, []);
 
   const nodes = (
     <>
       {menu && (() => {
         const e = env;
-        const groups = menuFor(menu.target, { count: menu.rows.length, canPaste: !!clip, hidden: e.hidden, pinned: menu.rows.length === 1 && e.pins.includes(joinPath(menu.dir, menu.rows[0]!.name)), previewable: menu.rows.length === 1 && !isFolder(menu.rows[0]!) });
+        const groups = withActions(menuFor(menu.target, { count: menu.rows.length, canPaste: !!clip, hidden: e.hidden, pinned: menu.rows.length === 1 && e.pins.includes(joinPath(menu.dir, menu.rows[0]!.name)), previewable: menu.rows.length === 1 && !isFolder(menu.rows[0]!) }), actionGroup(menu.actions));
         const head = menu.rows.length ? menuHead(menu.rows.map((r) => r.name), menu.dir, e.home) : null;
         return (
           <ContextMenu at={menu.at} head={head} groups={groups} onClose={() => setMenu(null)}
             onPick={(i) => {
               setMenu(null);
               if (i.later) { e.say(`${i.later} is not built yet`); return; }
+              if (i.id === "action") {
+                const a = menu.actions.find((x) => x.id === i.action);
+                if (a) startAction(a, menu.rows.length ? menu.rows.map((r) => joinPath(menu.dir, r.name)) : [menu.dir], menu.rows.length ? "selection" : "background");
+                return;
+              }
               const into = menu.target === "folder" ? joinPath(menu.dir, menu.rows[0]!.name) : menu.dir;
               doItem(i.id, menu.rows.length ? { dir: menu.dir, rows: menu.rows } : null, i.id === "paste" || i.id === "new-folder" || i.id === "new-file" || i.id === "refresh" ? into : menu.dir);
             }} />
@@ -260,6 +301,10 @@ export function useFinderOps(env: OpsEnv) {
         onPick={(dest) => { const op = ask.op; setAsk(null); void run({ op, paths: paths(c), dest, conflict: "keep-both" }, [c.dir, dest], c.rows[0]!.name, c.rows.length); }} />; })()}
       {ask?.k === "openwith" && (() => { const ps = ask.paths; return <OpenWithDialog paths={ps} onClose={() => setAsk(null)}
         onLaunch={(id, always) => { setAsk(null); void api.openWithLaunch(id, ps, always ?? undefined).then((r) => envRef.current.say(r.ok ? (r.note ?? "Opened") : (r.error ?? "That did not open"))); }} />; })()}
+      {ask?.k === "action" && (() => { const a = ask; const w = confirmWords(a.action, a.paths.length); return <ConfirmDialog title={w.title} body={w.body} confirm="Run" onClose={() => setAsk(null)} onConfirm={() => { setAsk(null); startAction(a.action, a.paths, a.source, true); }} />; })()}
+      {ask?.k === "stage" && (() => { const a = ask; return <StageDialog a={a.a} by={a.by} n={a.n} onClose={() => setAsk(null)}
+        onConfirm={() => { const r = stageRun(a.a); setAsk(null); void run(r.body, r.dirs, r.name, 1); }} />; })()}
+      {ask?.k === "customize" && <CustomizeDialog paths={ask.paths} names={ask.names} isDir={ask.isDir} onClose={() => setAsk(null)} />}
       {ask?.k === "trash" && <TrashPanel home={env.home} onClose={() => setAsk(null)} onRestored={(dirs, said) => { for (const d of dirs) envRef.current.reload(d); envRef.current.say(said); }} />}
       {ask?.k === "delete" && (() => { const w = deleteWords(ask.names); return <ConfirmDialog title={w.title} body={w.body} confirm="Permanently delete" onClose={() => setAsk(null)} onConfirm={() => { const f = ask.run; setAsk(null); f(); }} />; })()}
     </>

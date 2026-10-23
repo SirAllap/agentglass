@@ -18,6 +18,7 @@ export type Act =
   | { t: "home" }
   | { t: "preview" }
   | { t: "hidden" }
+  | { t: "terminal" }
   | { t: "sidebar" }
   | { t: "path" }
   | { t: "copy" }
@@ -60,6 +61,8 @@ export function finderKey(k: KeyIn, ctx: Ctx): Act | null {
   if (k.key === "F1") return { t: "help" };
   if (k.key === "F5") return { t: "refresh" };
   if (ctx.inField) return null;
+  // Strata's Ctrl+Alt+T: a terminal in the folder the finder is looking at.
+  if (k.key.toLowerCase() === "t" && k.ctrl && k.alt && !k.shift && !k.meta) return { t: "terminal" };
   // The file operations (Strata's keys). Ctrl+C copies the FILES; `y` copies the path.
   if (k.key === "F2" && !k.ctrl && !k.meta && !k.alt && !k.shift) return { t: "rename" };
   if (k.key === "Delete" && !k.ctrl && !k.meta && !k.alt) return k.shift ? { t: "delete" } : { t: "trash" };

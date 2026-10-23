@@ -455,6 +455,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
       case "view": setPrefs({ view: a.view }); break;
       case "preview": if (wide) setPrefs({ preview: !prefs.preview }); else setPeek((p) => !p); break;
       case "hidden": setPrefs({ hidden: !prefs.hidden }); break;
+      case "terminal": onBench(trail[focusCol] ?? trail[0]!, "terminal"); break;
       case "sidebar": toggleSide(); break;
       case "path": setPathSignal((n) => n + 1); break;
       case "copy": copyChosen(); break;
@@ -615,7 +616,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
                   {lastCol.state?.error ? <div className="p-3 text-[12px]" role="alert" style={{ color: "var(--warning-ink)" }}>{lastCol.state.error}</div>
                     : prefs.view === "icons"
                       ? <IconsView display={lastCol.display} dir={lastCol.path} thumb={prefs.thumb} selName={sel[last] ?? null} chosen={liveMulti?.col === last ? liveMulti.choice.names : null} width={mainBox.w} label={`Entries of ${basename(lastCol.path)}`} onPick={(r, m) => onPickMod(last, r, m)} onOpen={(r) => (isFolder(r) && !r.locked ? go(joinPath(lastCol.path, r.name)) : canEditRow(r) && onBench(joinPath(lastCol.path, r.name), "edit"))} />
-                      : <ListView display={lastCol.display} selName={sel[last] ?? null} chosen={liveMulti?.col === last ? liveMulti.choice.names : null} rowH={rowH} prefs={prefs} label={`Entries of ${basename(lastCol.path)}`} onSort={onSort} onPick={(r, m) => onPickMod(last, r, m)} onOpen={(r) => (isFolder(r) && !r.locked ? go(joinPath(lastCol.path, r.name)) : canEditRow(r) && onBench(joinPath(lastCol.path, r.name), "edit"))} />}
+                      : <ListView dir={lastCol.path} display={lastCol.display} selName={sel[last] ?? null} chosen={liveMulti?.col === last ? liveMulti.choice.names : null} rowH={rowH} prefs={prefs} label={`Entries of ${basename(lastCol.path)}`} onSort={onSort} onPick={(r, m) => onPickMod(last, r, m)} onOpen={(r) => (isFolder(r) && !r.locked ? go(joinPath(lastCol.path, r.name)) : canEditRow(r) && onBench(joinPath(lastCol.path, r.name), "edit"))} />}
                 </div>
               ) : null}
             </div>
@@ -668,7 +669,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
       {ops.nodes}
       {help && <HelpSheet onClose={() => setHelp(false)} />}
       {searching && <FinderSearch home={home} onTarget={reveal} onClose={() => setSearching(false)} />}
-      {settings && <FinderSettings prefs={prefs} onPref={setPrefs} onReset={() => { setPrefsState(DEFAULT_PREFS); savePrefs(DEFAULT_PREFS); setNote("Finder settings reset"); }} onForget={() => { try { localStorage.removeItem(SNAP_KEY); } catch { /* nothing kept */ } setDragged({}); scrolls.current = {}; setNote("Remembered places cleared"); }} onClose={() => setSettings(null)} />}
+      {settings && <FinderSettings say={setNote} prefs={prefs} onPref={setPrefs} onReset={() => { setPrefsState(DEFAULT_PREFS); savePrefs(DEFAULT_PREFS); setNote("Finder settings reset"); }} onForget={() => { try { localStorage.removeItem(SNAP_KEY); } catch { /* nothing kept */ } setDragged({}); scrolls.current = {}; setNote("Remembered places cleared"); }} onClose={() => setSettings(null)} />}
       {menu && <AppearanceMenu anchor={menu} prefs={prefs} onPref={setPrefs} onClose={() => setMenu(null)} />}
     </div>
   );

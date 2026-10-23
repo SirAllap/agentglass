@@ -16,13 +16,25 @@ const ICON_OF: Record<OpId, string> = {
   cut: "scissors", copy: "copy", duplicate: "copy-plus", rename: "pencil", "move-to": "folder-input", "copy-to": "folder-output", compress: "package-plus",
   pin: "pin", customize: "palette", "copy-path": "route", "copy-name": "file-type", props: "info", trash: "trash", delete: "circle-x",
   "new-folder": "folder-plus", "new-file": "file-plus", paste: "clipboard-paste", "select-all": "list-checks", refresh: "refresh", hidden: "eye-off",
+  action: "play", actions: "play",
 };
+
+/** Where a submenu opens: to the right of its entry, or to the left when the window ends there, and pulled up so it does not hang off the bottom. */
+export function subPlace(r: DOMRect, w: number, h: number): { left: number; top: number } {
+  const right = r.right + 4, left = r.left - w - 4, room = window.innerWidth - 8;
+  const down = Math.max(8, Math.min(r.top - 6, window.innerHeight - h - 8));
+  if (right + w <= room) return { left: right, top: down };
+  if (left >= 8) return { left, top: down };
+  // Neither side has room (a narrow window): it opens just below its own entry, so it never covers it.
+  return { left: Math.max(8, room - w), top: Math.max(8, Math.min(r.bottom + 4, window.innerHeight - h - 8)) };
+}
 
 export function ContextMenu({ at, head, groups, onPick, onClose }: {
   at: { x: number; y: number }; head: { title: string; sub: string } | null; groups: Item[][]; onPick: (i: Item) => void; onClose: () => void;
 }) {
   const el = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const [sub, setSub] = useState<{ items: Item[]; rect: DOMRect } | null>(null);
   // Opens at the pointer and is pulled back inside the window, so a click near an edge opens inward.
   // Placed again whenever the menu changes size: the icons arrive after the first measure, and a menu measured short hangs off the bottom.
   useLayoutEffect(() => {
@@ -54,16 +66,31 @@ export function ContextMenu({ at, head, groups, onPick, onClose }: {
         {groups.map((g, gi) => (
           <div key={gi} className="py-1" style={gi > 0 ? { borderTop: LINE } : undefined}>
             {g.map((i) => (
-              <button key={i.id} role="menuitem" disabled={i.disabled} title={i.later ? `${i.later} is not built yet` : undefined} onClick={() => { onPick(i); }}
+              <button key={i.id + (i.action ?? "")} role="menuitem" aria-haspopup={i.sub ? "menu" : undefined} aria-expanded={i.sub ? sub?.items === i.sub : undefined} disabled={i.disabled} title={i.later ? `${i.later} is not built yet` : undefined}
+                onMouseEnter={(e) => { if (i.sub) setSub({ items: i.sub, rect: e.currentTarget.getBoundingClientRect() }); else setSub(null); }}
+                onClick={(e) => { if (i.sub) setSub({ items: i.sub, rect: e.currentTarget.getBoundingClientRect() }); else onPick(i); }}
                 className="agx-btn w-full flex items-center gap-2.5 px-3.5 text-left disabled:opacity-40" style={{ minHeight: 28, color: i.danger ? "var(--error-ink)" : "var(--text)" }}>
                 <span className="shrink-0 flex" style={{ color: i.danger ? "var(--error-ink)" : "var(--primary-ink)" }}><StrataIcon set="act" name={ICON_OF[i.id]} size={ICON.sm} /></span>
                 <span className="flex-1 min-w-0 truncate">{i.label}</span>
                 {i.keys && <span className="text-[10.5px]" style={{ color: "var(--text4)" }}>{i.keys}</span>}
+                {i.sub && <StrataIcon set="act" name="chevron-right" size={ICON.sm} />}
               </button>
             ))}
           </div>
         ))}
       </div>
+      {sub && (
+        <div role="menu" aria-label="Actions" className="fixed rounded-lg text-[12px] shadow-2xl py-1.5"
+          style={{ width: 260, ...subPlace(sub.rect, 260, sub.items.length * 28 + 12), background: "var(--surface-card)", border: EDGE, color: "var(--text)", maxHeight: "calc(100vh - 16px)", overflowY: "auto" }}>
+          {sub.items.map((i) => (
+            <button key={i.action ?? i.id} role="menuitem" disabled={i.disabled} title={i.disabled ? i.label : undefined} onClick={() => onPick(i)}
+              className="agx-btn w-full flex items-center gap-2.5 px-3.5 text-left disabled:opacity-40" style={{ minHeight: 28 }}>
+              <span className="shrink-0 flex" style={{ color: "var(--primary-ink)" }}><StrataIcon set="act" name="play" size={ICON.sm} /></span>
+              <span className="flex-1 min-w-0 truncate">{i.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
     </Portal>
   );
 }

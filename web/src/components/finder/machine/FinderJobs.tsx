@@ -10,6 +10,7 @@ import { EDGE } from "../../workspace/Chrome.tsx";
 
 export function JobsPanel({ jobs, onCancel, onDone }: { jobs: readonly FsJob[]; onCancel: (id: string) => void; onDone: (j: FsJob) => void }) {
   const [now, setNow] = useState(() => Date.now());
+  const [open, setOpen] = useState<string | null>(null);
   const seen = useRef(new Set<string>());
   useEffect(() => {
     for (const j of jobs) if (j.state !== "running" && !seen.current.has(j.id)) { seen.current.add(j.id); onDone(j); }
@@ -25,8 +26,10 @@ export function JobsPanel({ jobs, onCancel, onDone }: { jobs: readonly FsJob[]; 
           <div key={j.id} className="rounded-lg px-3 py-2 text-[12px] shadow-xl" style={{ background: "var(--surface-card)", border: EDGE }}>
             <div className="flex items-center gap-2">
               <span className="flex-1 min-w-0 truncate">{j.state === "running" ? j.label : j.state === "done" ? `${j.label} — done` : j.state === "cancelled" ? "Cancelled" : j.error ?? "Failed"}</span>
+              {j.output && <button className="agx-btn rounded-md px-2" style={{ minHeight: HIT - 6, border: EDGE }} aria-expanded={open === j.id} onClick={() => setOpen(open === j.id ? null : j.id)}>Details</button>}
               {j.state === "running" && <button className="agx-btn rounded-md px-2" style={{ minHeight: HIT - 6, border: EDGE }} onClick={() => onCancel(j.id)}>Cancel</button>}
             </div>
+            {j.output && open === j.id && <pre className="agx-scroll mt-1.5 mb-0 overflow-auto text-[10.5px] whitespace-pre-wrap" style={{ maxHeight: 160, color: "var(--text2)" }}>{j.output}</pre>}
             <div className="mt-1.5 h-1 rounded-full overflow-hidden" style={{ background: "color-mix(in srgb, var(--text) 12%, transparent)" }} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={f === null ? undefined : Math.round(f * 100)}>
               <div style={{ width: f === null ? "40%" : `${Math.round(f * 100)}%`, height: "100%", background: j.state === "error" ? "var(--error-ink)" : "var(--primary)" }} />
             </div>

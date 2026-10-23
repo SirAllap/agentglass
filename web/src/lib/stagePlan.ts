@@ -13,15 +13,15 @@ import { allowedMethods } from "../../../shared/mergeMethod.ts";
 import { githubWillMerge } from "../../../shared/mergeReason.ts";
 import { mergeBlockers, mergeRefusal } from "../../../shared/mergeBlockers.ts";
 import type { PrDetail } from "../../../shared/types.ts";
-import type { StageRequest } from "./stageIntent.ts";
+import type { PrStageRequest } from "./stageIntent.ts";
 
 export type StagePlan =
-  | { ok: true; request: StageRequest }
+  | { ok: true; request: PrStageRequest }
   | { ok: false; why: string };
 
 const no = (why: string): StagePlan => ({ ok: false, why });
 
-export function planStage(req: StageRequest, d: PrDetail): StagePlan {
+export function planStage(req: PrStageRequest, d: PrDetail): StagePlan {
   const n = req.a.number;
   if (d.state !== "OPEN") return no(`#${n} is not open, so there is nothing to ${verbOf(req)}`);
   switch (req.id) {
@@ -46,6 +46,6 @@ export function planStage(req: StageRequest, d: PrDetail): StagePlan {
   }
 }
 
-function verbOf(req: StageRequest): string {
+function verbOf(req: PrStageRequest): string {
   return req.id === "pr.merge.stage" ? "merge" : req.id === "pr.review.stage" ? "review" : req.id === "pr.comment.stage" ? "comment on" : "move";
 }

@@ -164,7 +164,7 @@ describe("every prepared dialog says who wrote it and holds its confirm back", (
 });
 
 describe("the modules a staged request travels through reach no network", () => {
-  for (const f of ["lib/stageIntent.ts", "lib/stagePlan.ts", "lib/stageHold.ts", "lib/prJump.ts"]) {
+  for (const f of ["lib/stageIntent.ts", "lib/stagePlan.ts", "lib/stageHold.ts", "lib/prJump.ts", "lib/finderStage.ts"]) {
     it(`${f} does not fetch, post or import the api`, () => {
       const s = code(read(f));
       expect(s).not.toMatch(/\bfetch\s*\(|\bpost\s*[<(]|XMLHttpRequest|sendBeacon|new WebSocket|from "\.\/api\.ts"|\bapi\./);
@@ -181,5 +181,56 @@ describe("the merge guard comes before the merge dialog", () => {
     expect(code(run)).toContain("return;");
     const auto = slice(panel, "const doAutoMerge = async", "api.prMerge(");
     expect(code(auto)).toContain("if (!(await confirmMergeGuard(detail, ask))) return;");
+  });
+});
+
+describe("the Finder's staged file operation runs only from the dialog's own button", () => {
+  const ops = read("components/finder/machine/useFinderOps.tsx");
+  const dialog = read("components/finder/machine/FinderStage.tsx");
+
+  /** What is wrong with the Finder's half, as sentences. Empty is clean. */
+  function finderViolations(opsSrc: string, dialogSrc: string): string[] {
+    const bad: string[] = [];
+    const o = code(opsSrc);
+    const at = o.indexOf("const staged = useSyncExternalStore");
+    const end = o.indexOf("const paths = ", at);
+    if (at < 0 || end < 0) return ["the Finder no longer has its staged-request block where this guard looks"];
+    const effect = o.slice(at, end);
+    // The block takes the request off the mailbox and draws the dialog; it runs nothing.
+    if (/\brun\s*\(|\bapi\.|\bfetch\s*\(|\bstageRun\s*\(/.test(effect)) bad.push("the staged-request block runs or fetches before the person has answered");
+    if (!effect.includes('k: "stage"')) bad.push("the staged-request block no longer asks through the stage dialog");
+    // The one place the staged operation runs is the dialog's confirm callback.
+    const use = o.slice(o.indexOf('ask?.k === "stage"'));
+    const confirm = use.slice(0, use.indexOf('ask?.k === "trash"'));
+    if (!/onConfirm=\{\(\) => \{[^}]*stageRun\([^}]*void run\(/.test(confirm)) bad.push("the staged operation no longer runs from the dialog's onConfirm");
+    if ((o.match(/stageRun\(/g) ?? []).length !== 1) bad.push("stageRun is called somewhere other than the dialog's onConfirm");
+    const d = code(dialogSrc);
+    if (!/useStageHold\(/.test(d) || !/disabled=\{held\}/.test(d) || !/if \(!held\) onConfirm\(\)/.test(d)) bad.push("the stage dialog does not hold its button back");
+    if (!/preparedLine\(by\)/.test(d)) bad.push("the stage dialog does not say who prepared it");
+    if (/<input|<textarea|contentEditable/.test(d)) bad.push("the stage dialog has something to edit");
+    if (/dangerouslySetInnerHTML|\bapi\./.test(d)) bad.push("the stage dialog renders HTML or calls the api");
+    return bad;
+  }
+
+  it("is clean as written", () => expect(finderViolations(ops, dialog)).toEqual([]));
+  it("goes red when the block runs the operation on arrival", () => {
+    expect(finderViolations(ops.replace("clearStage();\n    setAsk(", "clearStage();\n    void run({ op: \"trash\" }, [], \"\", 1);\n    setAsk("), dialog)).toContain("the staged-request block runs or fetches before the person has answered");
+  });
+  it("goes red when the dialog's button is not held", () => {
+    expect(finderViolations(ops, dialog.replace("disabled={held} ", ""))).toContain("the stage dialog does not hold its button back");
+    expect(finderViolations(ops, dialog.replace("if (!held) onConfirm();", "onConfirm();"))).toContain("the stage dialog does not hold its button back");
+  });
+  it("goes red when the dialog can be edited or does not name the sender", () => {
+    expect(finderViolations(ops, dialog.replace("<b ", "<input /><b "))).toContain("the stage dialog has something to edit");
+    expect(finderViolations(ops, dialog.replace("preparedLine(by)", "\"\""))).toContain("the stage dialog does not say who prepared it");
+  });
+  it("goes red when the operation runs from anywhere but the confirm button", () => {
+    expect(finderViolations(ops.replace("onConfirm={() => { const r = stageRun(a.a); setAsk(null); void run(", "onConfirm={() => { setAsk(null); void run("), dialog)).toContain("the staged operation no longer runs from the dialog's onConfirm");
+  });
+  it("the window's handler for the door names no writer", () => {
+    // ui-level-guards.test.ts reads every level 3 handler; this pins the Finder's one by name.
+    const h = code(slice(read("lib/uiActions.ts"), '"finder.op.stage":', "\n  // Stage:"));
+    expect(h).toContain("latchStage(");
+    expect(h).not.toMatch(/\bapi\.|\brun\(|\bfsOp\b/);
   });
 });

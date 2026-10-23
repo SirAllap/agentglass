@@ -51,8 +51,8 @@ describe("the menus are Strata's", () => {
     expect(all.find((i) => i.id === "props")!.disabled).toBe(true);
     expect(all.find((i) => i.id === "trash")!.disabled).toBeUndefined();
   });
-  test("an item that is not built says what it is instead of doing nothing", () => {
-    expect(menuFor("file", ctx).flat().filter((i) => i.later).map((i) => i.id).sort()).toEqual(["customize"]);
+  test("every item of the menus is built: none is left saying it is not", () => {
+    for (const t of ["file", "folder", "empty"] as const) expect(menuFor(t, ctx).flat().filter((i) => i.later)).toEqual([]);
   });
   test("the header names one entry with its path, several by count", () => {
     expect(menuHead(["a.md"], "/home/x/")).toEqual({ title: "a.md", sub: "/home/x/a.md" });
@@ -164,5 +164,13 @@ describe("the jobs panel", () => {
   test("a finished job stays a few seconds, a running one stays", () => {
     const js = [{ state: "running", id: 1 }, { state: "done", ended: 9_000, id: 2 }, { state: "done", ended: 1_000, id: 3 }, { state: "error", id: 4 }];
     expect(jobsShown(js, 10_000).map((j) => j.id)).toEqual([1, 2]);
+  });
+});
+
+describe("Ctrl+Alt+T", () => {
+  test("opens a terminal in the folder, and is left alone in a text field", () => {
+    expect(finderKey(k("t", { ctrl: true, alt: true }), free)).toEqual({ t: "terminal" });
+    expect(finderKey(k("t", { ctrl: true, alt: true }), { inField: true, hasSelection: false })).toBeNull();
+    expect(finderKey(k("t", { ctrl: true }), free)).not.toEqual({ t: "terminal" });
   });
 });

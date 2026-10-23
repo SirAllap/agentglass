@@ -299,9 +299,11 @@ owner's (it does not say how to move it).
 The levels: 1 looks or opens (kinds `open`, `read`), 2 changes a local setting
 (kind `change`) and 3 **stages** (kind `stage`): a level 3 entry opens a dialog
 with its fields filled in and never calls a route that writes, so the person's
-click is the effect. Four ship, all on one pull request (`pr.merge.stage`,
-`pr.comment.stage`, `pr.review.stage`, `card.move.stage`): each opens the screen's
-own dialog filled in, marked as written by the caller and editable, with its
+click is the effect. Five ship that take a pull request or a file (`pr.merge.stage`,
+`pr.comment.stage`, `pr.review.stage`, `card.move.stage`, and `finder.op.stage`, a
+Finder confirmation for one reversible file operation: the irreversible `delete`
+and `empty-trash` are not in its `op` enum and stay with the person's own hands):
+each opens the screen's own dialog filled in, marked as written by the caller, with its
 confirm held back for a second (`agentglass-ui stage <id> --arg k=v`, or the
 `ui_pr_merge_stage`-style MCP tools). Text arguments are the `text` spec:
 bounded, no hidden or control characters, no HTML comment. No kind performs an external effect, and no setting, door

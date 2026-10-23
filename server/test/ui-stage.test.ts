@@ -20,12 +20,14 @@ const parse = (id: string, args: unknown, level: 1 | 2 | 3 = 3) => parseUi(UI_AC
 
 /** The fifth level 3 door has its own arguments and its own tests (unstick-door.test.ts). */
 const UNSTICK = "pr.unstick" as const;
+/** The sixth is the Finder's own: no pull request in its arguments, so it has its own describe below. */
+const FINDER = "finder.op.stage" as const;
 
 describe("the stage doors", () => {
-  test("exactly these four, and pr.unstick (own file), are level 3, every one a stage, and nothing else is level 3", () => {
+  test("exactly these four, pr.unstick (own file) and finder.op.stage (below), are level 3, every one a stage, and nothing else is level 3", () => {
     const l3 = Object.entries(UI_ACTIONS).filter(([, d]) => d.level === 3).map(([id]) => id).sort();
-    expect(l3).toEqual([...STAGES, UNSTICK].sort());
-    for (const id of [...STAGES, UNSTICK]) expect((UI_ACTIONS[id] as UiActionDef).kind, id).toBe("stage");
+    expect(l3).toEqual([...STAGES, UNSTICK, FINDER].sort());
+    for (const id of [...STAGES, UNSTICK, FINDER]) expect((UI_ACTIONS[id] as UiActionDef).kind, id).toBe("stage");
   });
 
   for (const id of STAGES) {
@@ -62,7 +64,7 @@ describe("the stage doors", () => {
 
   test("the listing at level 2 has no stage door and at level 3 has all four, and Unstick", () => {
     expect(describeUiActions(UI_ACTIONS, 2).filter((d) => d.kind === "stage")).toEqual([]);
-    expect(describeUiActions(UI_ACTIONS, 3).filter((d) => d.kind === "stage").map((d) => d.id).sort()).toEqual([...STAGES, UNSTICK].sort());
+    expect(describeUiActions(UI_ACTIONS, 3).filter((d) => d.kind === "stage").map((d) => d.id).sort()).toEqual([...STAGES, UNSTICK, FINDER].sort());
   });
 
   test("merge: only the three methods; subject is one line", () => {
@@ -152,5 +154,56 @@ describe("how a stage is shown", () => {
     expect(presentOf(undefined, null)).toBe("now");
     expect(presentOf("now", null, "stage")).toBe("now");
     expect(presentOf("soon", "bot", "stage")).toBeNull();
+  });
+});
+
+describe("finder.op.stage", () => {
+  const f = (args: unknown, level: 1 | 2 | 3 = 3) => parse(FINDER, args, level);
+  const good = { op: "trash", path: "/home/acme/notes.txt" };
+
+  test("is level 3 and refused below it", () => {
+    expect(f(good, 1)).toBeNull();
+    expect(f(good, 2)).toBeNull();
+    expect(f(good)).toMatchObject({ cmd: "ui", do: FINDER, args: good });
+    expect(levelRefusal(FINDER, UI_ACTIONS[FINDER] as UiActionDef, 2)).toContain("level 3");
+  });
+  test("the enum holds the reversible operations and neither irreversible one", () => {
+    const d = UI_ACTIONS[FINDER] as UiActionDef;
+    const values = (d.args.op as { values: readonly string[] }).values;
+    expect([...values].sort()).toEqual(["copy", "duplicate", "move", "new-folder", "rename", "trash"]);
+    // server/src/fsroute.ts FS_IRREVERSIBLE, spelled out: shared cannot import it.
+    for (const op of ["delete", "empty-trash"]) {
+      expect(values, op).not.toContain(op);
+      expect(f({ op, path: "/home/acme/notes.txt" }), op).toBeNull();
+    }
+  });
+  test("move and copy need a destination, rename and new-folder need a name", () => {
+    for (const op of ["move", "copy"]) {
+      expect(f({ op, path: "/a/b" }), op).toBeNull();
+      expect(f({ op, path: "/a/b", dest: "/a/c" }), op).toMatchObject({ args: { op, path: "/a/b", dest: "/a/c" } });
+    }
+    for (const op of ["rename", "new-folder"]) {
+      expect(f({ op, path: "/a/b" }), op).toBeNull();
+      expect(f({ op, path: "/a/b", name: "x" }), op).toMatchObject({ args: { op, path: "/a/b", name: "x" } });
+    }
+    for (const op of ["trash", "duplicate"]) expect(f({ op, path: "/a/b" }), op).not.toBeNull();
+  });
+  test("a name with a slash, a long one, and a multi-line one are refused", () => {
+    expect(f({ op: "rename", path: "/a/b", name: "x/y" })).toBeNull();
+    expect(f({ op: "rename", path: "/a/b", name: "x".repeat(256) })).toBeNull();
+    expect(f({ op: "rename", path: "/a/b", name: "x".repeat(255) })).not.toBeNull();
+    expect(f({ op: "rename", path: "/a/b", name: "a\nb" })).toBeNull();
+  });
+  test("paths are absolute spellings without dot segments, and what the operation does not use is dropped", () => {
+    expect(f({ op: "trash", path: "notes.txt" })).toBeNull();
+    expect(f({ op: "trash", path: "/a/../b" })).toBeNull();
+    expect(f({ op: "move", path: "/a/b", dest: "rel" })).toBeNull();
+    expect(f({ op: "rename", path: "/a/b", name: "x", dest: "/a/c" })?.args).not.toHaveProperty("dest");
+    expect(f({ ...good, token: "x" })?.args).not.toHaveProperty("token");
+  });
+  test("describes itself as a stage that runs nothing", () => {
+    const row = describeUiActions(UI_ACTIONS, 3).find((x) => x.id === FINDER)!;
+    expect(row.kind).toBe("stage");
+    expect(row.surface).toContain("nothing runs until the person presses");
   });
 });

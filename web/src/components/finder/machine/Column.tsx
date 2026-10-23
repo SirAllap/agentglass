@@ -7,7 +7,8 @@
 // would point at a different file a moment later.
 import { useEffect, useRef, useState } from "react";
 import { CaretIcon } from "../../../lib/glyphIcons.tsx";
-import { FileTypeIcon, StrataIcon } from "./StrataIcon.tsx";
+import { FileTypeIcon, StrataIcon, StyledIcon } from "./StrataIcon.tsx";
+import { useItemStyle } from "../../../lib/finderStyleStore.ts";
 import { HIT, ICON } from "../../../lib/iconSize.ts";
 import { formatSize, isDefaultSort, isFolder, isThumbable, joinPath, itemsLabel, makeDefaultSort, resetSort, type Display, type Prefs, type Row, type SortKey } from "../../../lib/finderMiller.ts";
 import type { FolderState } from "../../../lib/finderFolders.ts";
@@ -28,7 +29,9 @@ export const modOf = (e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean
 export const noRange = (e: React.MouseEvent) => { if (e.shiftKey || e.ctrlKey || e.metaKey) e.preventDefault(); };
 
 /** Strata's drawing for the row: a folder, a broken link (a cross) or what the name says it is. A folder that cannot be read is still a folder; the row itself says it is disabled. */
-export function RowIcon({ row, size = ICON.sm }: { row: Row; size?: number }) {
+export function RowIcon({ row, size = ICON.sm, dir }: { row: Row; size?: number; dir?: string }) {
+  const own = useItemStyle(dir ? joinPath(dir, row.name) : undefined);
+  if (own) return <StyledIcon style={own} name={row.name} isDir={isFolder(row)} size={size} />;
   return <FileTypeIcon name={row.name} isDir={isFolder(row)} broken={row.broken === true} size={size} />;
 }
 
@@ -150,7 +153,7 @@ export function Column({ dir: folderPath, title, filterSignal, width, onResize, 
                   background: sel ? "color-mix(in srgb, var(--primary) 16%, transparent)" : undefined,
                   boxShadow: sel ? "inset 0 0 0 1px color-mix(in srgb, var(--primary) 38%, transparent)" : undefined,
                 }}>
-                <span className="shrink-0 flex">{!r.locked && !dir && isThumbable(r.name) ? <Thumb path={joinPath(folderPath, r.name)} size={ROW_THUMB} radius={3} fallback={<RowIcon row={r} />} /> : <RowIcon row={r} />}</span>
+                <span className="shrink-0 flex">{!r.locked && !dir && isThumbable(r.name) ? <Thumb path={joinPath(folderPath, r.name)} size={ROW_THUMB} radius={3} fallback={<RowIcon row={r} dir={folderPath} />} /> : <RowIcon row={r} />}</span>
                 {edit && edit.was === r.name ? <InlineName key="ren" edit={edit} rowH={rowH - 4} icon={null} /> : <NameCell name={r.name} />}
                 {dir ? (
                   <>

@@ -1,15 +1,16 @@
 // What Strata's Settings window holds that this finder can honour, as data: the
 // pages, their rows with Strata's own wording, and the filter behind its
 // "Search settings" field. Strata's other settings (language, the theme
-// library, updates, custom actions, 10xer mode, folder peeking, autoplay) are
+// library, updates, 10xer mode, folder peeking, autoplay) are
 // either the app's own business or a feature this finder does not have, and a
 // switch that does nothing is worse than no switch; docs/ keeps that list.
 import type { Prefs } from "./finderMiller.ts";
 
-export type PageId = "general" | "appearance";
+export type PageId = "general" | "appearance" | "actions";
 export const PAGES: readonly { id: PageId; title: string; hint: string }[] = [
   { id: "general", title: "General", hint: "Browsing, search, files" },
   { id: "appearance", title: "Appearance", hint: "Text, density, thumbnails" },
+  { id: "actions", title: "Actions", hint: "Custom actions" },
 ];
 
 export type Toggle = "preview" | "sizes" | "mirror" | "f1" | "hidden";
@@ -17,6 +18,7 @@ export type Row =
   | { page: PageId; section: string; id: Toggle; kind: "toggle"; title: string; desc: string }
   | { page: PageId; section: string; id: "defaultSort"; kind: "sort"; title: string; desc: string }
   | { page: PageId; section: string; id: "forget"; kind: "button"; title: string; desc: string; action: string }
+  | { page: PageId; section: string; id: "manager"; kind: "manager"; title: string; desc: string }
   | { page: PageId; section: string; id: "textSize" | "thumb" | "density"; kind: "stepper" | "slider" | "density"; title: string; desc: string };
 
 export const ROWS: readonly Row[] = [
@@ -27,8 +29,9 @@ export const ROWS: readonly Row[] = [
   { page: "general", section: "Browsing", id: "f1", kind: "toggle", title: "Show F1 Shortcuts button", desc: "The button in the footer. The key works either way." },
   { page: "general", section: "Browsing", id: "defaultSort", kind: "sort", title: "Default sort", desc: "What Reset to default sort in the column menu returns to." },
   { page: "general", section: "Browsing", id: "forget", kind: "button", title: "Forget all folder settings", desc: "Clear where the finder was left: the folder, selection, scroll and dragged widths.", action: "Clear" },
-  { page: "appearance", section: "Text", id: "textSize", kind: "stepper", title: "Text size", desc: "Logical pixels. Ctrl + / - / 0 change it from the keyboard." },
+  { page: "appearance", section: "Text", id: "textSize", kind: "stepper", title: "Text size", desc: "Logical pixels." },
   { page: "appearance", section: "Density", id: "density", kind: "density", title: "Density", desc: "Compact rows, or Airy rows with more room." },
+  { page: "actions", section: "Custom actions", id: "manager", kind: "manager", title: "Custom actions", desc: "Add your own scripts to the file and folder context menus. Actions run with your permissions, so only enable scripts you trust." },
   { page: "appearance", section: "Icons view", id: "thumb", kind: "slider", title: "Thumbnail size", desc: "The side of an image's thumbnail in Icons view." },
 ];
 

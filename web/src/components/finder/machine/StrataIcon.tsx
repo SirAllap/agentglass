@@ -42,3 +42,13 @@ export function FileTypeIcon({ name, isDir, broken, size = ICON.sm }: { name: st
   const tint = i.set === "act" ? (isDir || broken ? "var(--primary)" : "var(--text3)") : undefined;
   return <span className="flex shrink-0" style={{ color: tint }}><StrataIcon set={i.set} name={i.name} size={size} /></span>;
 }
+
+/** An item the person gave a look of their own (Customize…): their colour on its icon, or their icon, or an emoji in its place. */
+export function StyledIcon({ style, name, isDir, size = ICON.sm }: { style: { color?: string; icon?: string; emoji?: string }; name: string; isDir: boolean; size?: number }) {
+  if (style.emoji) return <span className="flex shrink-0 items-center justify-center leading-none" style={{ width: size, height: size, fontSize: Math.round(size * 0.82) }} aria-hidden>{style.emoji}</span>;
+  // Strata's own file-type drawings carry their colours; a colour the person chose is painted on a plain icon instead.
+  const base = style.color ? { set: "act" as const, name: isDir ? "folder" : "file-text" } : strataIconFor(name, isDir, false);
+  const set = style.icon ? "act" : base.set, icon = style.icon ?? base.name;
+  const tint = style.color ?? (set === "act" ? (isDir ? "var(--primary)" : "var(--text3)") : undefined);
+  return <span className="flex shrink-0" style={{ color: tint }}><StrataIcon set={set} name={icon} size={size} /></span>;
+}

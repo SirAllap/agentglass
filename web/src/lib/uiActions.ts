@@ -154,6 +154,10 @@ export const UI_HANDLERS: { [Id in UiActionId]: Handler<Id> } = {
   "pr.comment.stage": (a, c) => { latchStage({ id: "pr.comment.stage", a }, c.as); requestPrJump(a.repo, a.number); c.goView("pr"); },
   "pr.review.stage": (a, c) => { latchStage({ id: "pr.review.stage", a }, c.as); requestPrJump(a.repo, a.number); c.goView("pr"); },
   "card.move.stage": (a, c) => { latchStage({ id: "card.move.stage", a }, c.as); requestPrJump(a.repo, a.number); c.goView("pr"); },
+  // The Finder's own stage: the folder opens with the path chosen, and the
+  // Finder draws the confirmation. A new folder is made in `path`, so that one
+  // opens the folder itself; every other operation is on the thing at `path`.
+  "finder.op.stage": (a, c) => { latchStage({ id: "finder.op.stage", a }, c.as); openFinderAt(a.path, a.op === "new-folder" ? "dir" : "file"); },
   // Stage: selects the pull request and opens the dialog. The dialog decides for
   // itself whether it qualifies and runs nothing until the owner confirms.
   "pr.unstick": (a, c) => { latchUnstick({ root: a.root, number: a.number }); c.goView("pr"); },
