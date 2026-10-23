@@ -1646,7 +1646,13 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
           {unread && <UnreadBadge u={unread} />}
           {/* No author name: the author is the first face bottom right, and a
               name here said the same thing in more width. */}
-          <span className="tabular-nums shrink-0">{ago(p.updatedAt)}</span>
+          {/* Not the age of the pull request: GitHub's "last touched by anything" (a
+              push, a comment, a label, a check). The title says so, because
+              "6m" read as "opened 6 minutes ago". */}
+          <span className="tabular-nums shrink-0"
+            title={`Last activity ${ago(p.updatedAt)} ago — a push, a comment, a label or a check (${new Date(p.updatedAt).toString()}). Not the time since it was opened.`}>
+            {ago(p.updatedAt)}
+          </span>
           {/* Everything that is only sometimes true, after what is always true. */}
           {(p.isCurrentBranch || p.isDraft) && (
             <span className="flex items-center gap-1 text-[9.5px]">
