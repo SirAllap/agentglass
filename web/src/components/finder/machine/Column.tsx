@@ -18,6 +18,7 @@ import { InlineName, type InlineEdit } from "./FinderOpsUI.tsx";
 import { Thumb } from "./Thumb.tsx";
 import { VirtualList } from "./VirtualList.tsx";
 import { TIGHT_W, dragWidth } from "../../../lib/finderColumns.ts";
+import { COLUMNS_SURFACE, rowPaint, rowTone, showsBadge, titleColor } from "../../../lib/finderContrast.ts";
 
 /** Strata draws an image in its row as a 17 px square in place of the file icon. */
 const ROW_THUMB = 17;
@@ -82,7 +83,7 @@ export function Column({ dir: folderPath, title, filterSignal, width, onResize, 
 
   return (
     <section aria-label={`Folder ${title}`} data-dir={folderPath} onMouseDown={onFocusCol} className="relative flex flex-col min-h-0 shrink-0"
-      style={{ width, borderRight: LINE, scrollSnapAlign: "start" }}>
+      style={{ width, borderRight: LINE, scrollSnapAlign: "start", background: COLUMNS_SURFACE }}>
       {/* The column that has the keyboard wears a bar on top; a colour alone would not survive a theme that has no accent to spare. */}
       <div aria-hidden className="absolute left-0 right-0 top-0" style={{ height: 3, background: focused ? "var(--primary)" : "transparent", zIndex: 2 }} />
       <div role="separator" aria-orientation="vertical" aria-label={`Resize ${title}`} aria-valuenow={Math.round(width)} tabIndex={0}
@@ -102,7 +103,7 @@ export function Column({ dir: folderPath, title, filterSignal, width, onResize, 
           else if (e.key === "Enter" || e.key === "0") { e.preventDefault(); e.stopPropagation(); onFit(); }
         }} />
       <header className="flex items-center gap-1 px-2.5 pt-2 pb-1.5 shrink-0" style={{ borderBottom: LINE }}>
-        <b className="flex-1 min-w-0 truncate text-[12px]" title={title}>{title}</b>
+        <b className="flex-1 min-w-0 truncate text-[12px]" title={title} style={{ color: titleColor(focused) }}>{title}</b>
         <button className={btn} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Refresh (F5)" aria-label="Refresh" onClick={onRefresh}><StrataIcon set="act" name="refresh" size={ICON.md} /></button>
         <button className={btn} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} aria-label={prefs.sortDir === "asc" ? "Ascending — click to reverse" : "Descending — click to reverse"}
           title={prefs.sortDir === "asc" ? "Ascending — click to reverse" : "Descending — click to reverse"} onClick={() => onSort(prefs.sortKey)}>
@@ -144,23 +145,20 @@ export function Column({ dir: folderPath, title, filterSignal, width, onResize, 
             const r = it.row!;
             const sel = r.name === selName || !!chosen?.has(r.name);
             const dir = isFolder(r);
+            const badge = r.name === selName && showsBadge(true, focused);
             return (
               <div key={r.name} role="option" data-row={r.name} data-folder={dir && !r.locked ? "" : undefined} draggable={!r.locked && !(edit && edit.was === r.name)} aria-selected={sel} aria-disabled={r.locked || undefined} title={r.why ?? r.name}
                 onMouseDown={noRange} onClick={(e) => onPick(r, modOf(e))} onDoubleClick={() => onOpen(r)}
                 className="agx-fm-row flex items-center gap-2 px-2.5 mx-1 rounded-md cursor-pointer"
-                style={{
-                  height: rowH, color: r.locked ? "var(--text4)" : "var(--text)", fontWeight: sel ? 600 : 400,
-                  background: sel ? "color-mix(in srgb, var(--primary) 16%, transparent)" : undefined,
-                  boxShadow: sel ? "inset 0 0 0 1px color-mix(in srgb, var(--primary) 38%, transparent)" : undefined,
-                }}>
+                style={{ height: rowH, color: r.locked ? "var(--text4)" : "var(--text)", ...rowPaint(rowTone(sel, focused)) }}>
                 <span className="shrink-0 flex">{!r.locked && !dir && isThumbable(r.name) ? <Thumb path={joinPath(folderPath, r.name)} size={ROW_THUMB} radius={3} fallback={<RowIcon row={r} dir={folderPath} />} /> : <RowIcon row={r} />}</span>
                 {edit && edit.was === r.name ? <InlineName key="ren" edit={edit} rowH={rowH - 4} icon={null} /> : <NameCell name={rowLabel(r.name)} />}
                 {dir ? (
                   <>
-                    {r.items !== null && !tight && r.name === selName && <span className="shrink-0 tabular-nums text-[10px] px-1.5 rounded-md" style={{ background: "color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text3)", fontWeight: 400 }}>{itemsLabel(r.items)}</span>}
+                    {r.items !== null && !tight && badge && <span className="shrink-0 tabular-nums text-[10px] px-1.5 rounded-md" style={{ background: "color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text3)", fontWeight: 400 }}>{itemsLabel(r.items)}</span>}
                     <span className="shrink-0 flex" style={{ color: "var(--text4)", transform: "rotate(-90deg)" }}><CaretIcon size={ICON.xs} /></span>
                   </>
-                ) : prefs.sizes && r.bytes !== null && !tight && r.name === selName ? (
+                ) : prefs.sizes && r.bytes !== null && !tight && badge ? (
                   <span className="shrink-0 tabular-nums text-[10px] px-1.5 rounded-md" style={{ background: "color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text3)", fontWeight: 400 }}>{formatSize(r.bytes)}</span>
                 ) : null}
               </div>

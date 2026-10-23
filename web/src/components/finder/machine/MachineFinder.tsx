@@ -27,6 +27,7 @@ import { isAppChord } from "../../../lib/keybindings.ts";
 import type { DiskPlace } from "../../../../../shared/types.ts";
 import { EDGE, LINE } from "../../workspace/Chrome.tsx";
 import { Column, type Mod } from "./Column.tsx";
+import { COLUMNS_SURFACE, PREVIEW_SURFACE } from "../../../lib/finderContrast.ts";
 import { AppearanceMenu, FinderSettings, HelpSheet } from "./FinderChrome.tsx";
 import { externalPlace, folderTargetMove, isRecent, RECENT } from "../../../lib/finderMiller.ts";
 import { exitDecision, type Exit } from "../../../lib/finderEdit.ts";
@@ -596,7 +597,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
         <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Close window" aria-label="Close the finder" onClick={onClose}><StrataIcon set="act" name="x" size={17} /></button>
       </div>
 
-      <div className="flex-1 min-h-0 flex">
+      <div className="flex-1 min-h-0 flex" style={{ background: COLUMNS_SURFACE }}>
         {sideOn && <Sidebar places={placesFor(home, places)} pins={pinned} onRemote={devices.openAddress} here={trail[0]!} mode={compact || sideMode === "hidden" ? "full" : pathEditing ? "rail" : sideMode} width={sidebarWidth(compact || sideMode === "hidden" ? "full" : pathEditing || sideMode === "rail" ? "rail" : "full", prefs.sideW, box.w)} onResize={(w) => setPrefs({ sideW: sidebarWidth("full", w, box.w) })} onGo={go} onRecent={() => go(RECENT)} onTrash={ops.openTrash} onNetwork={devices.openNetwork} volumes={devices.volumes} busy={devices.busy} onVolume={devices.onVolume} onVolumeAct={devices.onVolumeAct} dnd={dnd} />}
         {!(compact && sidePage) && (
           <>
@@ -626,7 +627,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
               ) : null}
             </div>
             {previewInline && (
-              <div className="relative min-h-0 flex" style={{ flex: `${prevDrag === undefined && prefs.view === "columns" ? 1 : 0} 0 ${previewWidth(box.w, prevDrag)}px`, minWidth: 0, borderLeft: LINE, background: "var(--surface-card)" }}>
+              <div className="relative min-h-0 flex" style={{ flex: `${prevDrag === undefined && prefs.view === "columns" ? 1 : 0} 0 ${previewWidth(box.w, prevDrag)}px`, minWidth: 0, borderLeft: LINE, background: PREVIEW_SURFACE }}>
                 <div role="separator" aria-orientation="vertical" aria-label="Resize the preview" tabIndex={0} title="Drag to resize, double-click to reset"
                   className="absolute top-0 bottom-0" style={{ left: 0, width: 6, cursor: "col-resize", zIndex: 3, touchAction: "none" }}
                   onDoubleClick={() => setPrevDrag(undefined)}
