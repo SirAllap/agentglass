@@ -9,7 +9,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { globalStubs } from "./stubGlobal";
-import { epicTone, groupByParent, groupModeOf, guessOrder, rankOf, rankable, sortedByOrder, sprintLine } from "../src/lib/jiraBoardContext.ts";
+import { epicTone, groupByParent, groupModeOf, guessOrder, rankOf, rankable, sortedByOrder, splitSprint, sprintLine, sprintTotals } from "../src/lib/jiraBoardContext.ts";
 import type { ProviderTask } from "../../shared/providers.ts";
 
 const stubGlobal = globalStubs();
@@ -172,5 +172,31 @@ describe("the source and the screen", () => {
     expect(rowFn).toContain("draggable={!!drag}");
     expect(rowFn).toMatch(/absolute left-0 right-0 pointer-events-none/);
     expect(rowFn).not.toMatch(/drag\?\.edge[^\n]*paddingTop|drag\?\.edge[^\n]*marginTop/);
+  });
+});
+
+describe("a board in a sprint", () => {
+  const card = (id: string, status: string, statusKind: "open" | "done" | "other", points: number | null, sprint: string | null) => ({ id, status, statusKind, points, sprint });
+  const statuses = [{ status: "To Do", type: "open" }, { status: "In Progress", type: "custom" }, { status: "Done", type: "done" }];
+  const rows = [
+    card("a", "To Do", "open", 5, "Sprint 4"), card("b", "In Progress", "open", 3, "Sprint 4"), card("c", "Done", "done", 8, "Sprint 4"),
+    card("d", "To Do", "open", 2, null), card("e", "To Do", "open", 13, "Sprint 3"), card("f", "To Do", "open", null, "Sprint 4"),
+  ];
+  test("the sprint's cards are the ones carrying its name; the rest are the backlog, in the order they came", () => {
+    const { inSprint, backlog } = splitSprint(rows, "Sprint 4");
+    expect(inSprint.map((t) => t.id)).toEqual(["a", "b", "c", "f"]);
+    expect(backlog.map((t) => t.id)).toEqual(["d", "e"]);
+  });
+  test("the three totals are to do, in progress and done points, and a card with no points counts none", () => {
+    expect(sprintTotals(splitSprint(rows, "Sprint 4").inSprint, statuses)).toEqual({ todo: 5, doing: 3, done: 8 });
+    expect(sprintTotals([], statuses)).toEqual({ todo: 0, doing: 0, done: 0 });
+  });
+  test("in progress comes from the board's status type: a card whose kind says open is still in progress there", () => {
+    expect(sprintTotals([card("b", "In Progress", "open", 3, "Sprint 4")], statuses).doing).toBe(3);
+    // A status the board does not list falls back to the card's own kind.
+    expect(sprintTotals([card("g", "Odd", "done", 4, "Sprint 4")], statuses).done).toBe(4);
+  });
+  test("a card of a past sprint is not in this one", () => {
+    expect(sprintTotals(splitSprint(rows, "Sprint 4").backlog, statuses)).toEqual({ todo: 15, doing: 0, done: 0 });
   });
 });

@@ -101,7 +101,10 @@ describe("the board routes", () => {
     const all = await call("GET", "/jira/view?id=board:3&force=1");
     const bugs = await call("GET", "/jira/view?id=board:3&filters=1");
     expect(bugs.body.ok).toBe(true);
-    expect(bugs.body.tasks.length).toBeLessThan(all.body.tasks.length);
+    // The board is in a sprint, so its done cards outside the sprint are not read: the narrowed board is narrower by kind, not always by count.
+    expect(bugs.body.tasks.length).toBeLessThanOrEqual(all.body.tasks.length);
+    expect(bugs.body.tasks.every((t: { issueType?: string }) => t.issueType === "Bug")).toBe(true);
+    expect(all.body.tasks.some((t: { issueType?: string }) => t.issueType !== "Bug")).toBe(true);
     // A query smuggled in as an id is no id.
     fake.requests.length = 0;
     const evil = await call("GET", "/jira/view?id=board:3&filters=" + encodeURIComponent("1) OR (project = X"));

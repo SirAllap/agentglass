@@ -682,7 +682,10 @@ function runJql(jql: string, issues: Record<string, FakeIssue>, dc: boolean): Fa
         const hit = [k.key, k.name.toLowerCase()].includes(q(m![2]).toLowerCase());
         return hit === (m![1] === "=");
       });
-    } else if ((m = /^key\s*=\s*(.+)$/i.exec(c))) rows = rows.filter((i) => i.key === q(m![1]).toUpperCase());
+    } else if ((m = /^sprint\s*=\s*(\d+)$/i.exec(c))) rows = rows.filter((i) => i.sprints.some((x) => String(x.id) === m![1]));
+    // What a board asks for the cards that are not in its sprint. As on the site, `!=` alone leaves out a card with no sprint.
+    else if ((m = /^\(?sprint\s+is\s+empty\s+or\s+sprint\s*!=\s*(\d+)\)?$/i.exec(c))) rows = rows.filter((i) => !i.sprints.some((x) => String(x.id) === m![1]));
+    else if ((m = /^key\s*=\s*(.+)$/i.exec(c))) rows = rows.filter((i) => i.key === q(m![1]).toUpperCase());
     else return { error: `Error in the JQL Query: the fake does not understand "${c}".` };
   }
   // `Rank` is the board order: the stored rank, which starts out as key order.

@@ -37,7 +37,7 @@ import {
   CATEGORY_COLOR, apiOf, jiraCall, jiraGeneration, orderByAt, memoOk, memoHas, mine, projects, searchJql, withStored,
   type JiraCreds, type JiraResult, type JiraTasks, type SeenStatus,
 } from "./jira.ts";
-import { quickFilterRows } from "./jiraBoardContext.ts";
+import { activeSprint, quickFilterRows } from "./jiraBoardContext.ts";
 import {
   addFolder, addView, cachedFor, currentView, isFolderBoard, putCache, removeFolder, removeView, replaceFolder, savedFolders, savedViews, setCurrent,
 } from "./jiraviews.ts";
@@ -307,6 +307,45 @@ async function quickClauses(creds: JiraCreds, board: string, ids: readonly strin
   return { ok: true, data: out };
 }
 
+/**
+ * A board with an active sprint is read as two searches, not one. The board's own query is the whole project ranked, and
+ * a project with a long history ranks its done cards ahead of the sprint: measured on a project of 1120 cards where the
+ * sprint held 98, the first 150 ranked cards were all done and not one of them was in the sprint. So the sprint is asked
+ * for by its id first (its cards, done and open), and what comes after it is the open cards that are not in it, which is
+ * the backlog a person opens a board to see.
+ *
+ * `sprint is EMPTY OR sprint != id` and not `NOT sprint = id`: on the site measured the second leaves out every card
+ * that has no sprint, which is the backlog. Ceiling: the backlog is one page of the open cards not in the sprint, and a
+ * board with more says so through `truncated`; its done history is not read here.
+ */
+export function sprintQueries(where: readonly string[], order: string, sprintId: string): { sprint: string; rest: string } {
+  const tail = order ? ` ${order}` : "";
+  return {
+    sprint: [...where, `sprint = ${sprintId}`].join(" AND ") + tail,
+    rest: [...where, `(sprint is EMPTY OR sprint != ${sprintId})`, "statusCategory != Done"].join(" AND ") + tail,
+  };
+}
+
+const BACKLOG_PAGES = 1;
+
+async function searchSprintAndRest(creds: JiraCreds, q: { sprint: string; rest: string }, ask: { board: { points?: string } }): Promise<JiraResult<JiraTasks>> {
+  const inSprint = await searchJql(creds, q.sprint, ask);
+  if (!inSprint.ok || !inSprint.data) return inSprint;
+  const rest = await searchJql(creds, q.rest, { ...ask, pages: BACKLOG_PAGES });
+  if (!rest.ok || !rest.data) return rest;
+  const seen = new Map((inSprint.data.seen ?? []).map((x) => [x.id, x]));
+  for (const x of rest.data.seen ?? []) if (!seen.has(x.id)) seen.set(x.id, x);
+  const ids = new Set(inSprint.data.tasks.map((t) => t.id));
+  return {
+    ok: true,
+    data: {
+      tasks: [...inSprint.data.tasks, ...rest.data.tasks.filter((t) => !ids.has(t.id))],
+      truncated: inSprint.data.truncated || rest.data.truncated,
+      seen: [...seen.values()],
+    },
+  };
+}
+
 export async function readBoard(creds: JiraCreds, id: string, quick: readonly string[] = []): Promise<JiraResult<ViewRows>> {
   const cfg = await boardConfig(creds, id);
   if (!cfg.ok || !cfg.data) return { ...cfg, data: undefined };
@@ -319,13 +358,17 @@ export async function readBoard(creds: JiraCreds, id: string, quick: readonly st
   const { restriction, order } = splitOrder(f.data.jql);
   const clauses = await quickClauses(creds, id, quick);
   if (!clauses.ok || !clauses.data) return { ...clauses, data: undefined };
-  const jql = [
+  const where = [
     ...(restriction ? [`(${restriction})`] : []),
     `status in (${ids.join(", ")})`,
     ...(cfg.data.subQuery ? [`(${cfg.data.subQuery})`] : []),
     ...clauses.data,
-  ].join(" AND ") + (order ? ` ${order}` : "");
-  const r = await searchJql(creds, jql, { board: { points: cfg.data.estimationField } });
+  ];
+  // Free where the board's header already asked: the sprint is remembered under the same key as its context.
+  const sprint = await activeSprint(creds, id);
+  const ask = { board: { points: cfg.data.estimationField } };
+  const plan = sprint.ok && sprint.data ? sprintQueries(where, order, sprint.data.id) : null;
+  const r = plan ? await searchSprintAndRest(creds, plan, ask) : await searchJql(creds, where.join(" AND ") + (order ? ` ${order}` : ""), ask);
   if (!r.ok || !r.data) return { ...r, data: undefined };
   const { seen: _seen, ...rows } = r.data;
   return { ok: true, data: { ...rows, columns, statuses: await boardStatuses(creds, cfg.data, r.data) } };

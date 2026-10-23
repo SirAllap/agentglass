@@ -66,6 +66,36 @@ export function sprintLine(s: JiraBoardSprint, now: number): { range: string; le
   return { range: `${dayOf(s.start)} – ${dayOf(s.end)}`, left, late: days < 0 };
 }
 
+/**
+ * A board with an active sprint draws that sprint's cards first and the rest as the backlog. A card is in the sprint when
+ * the sprint it carries (the active one, else the newest) is the active one's name. Ceiling: two sprints of one name are
+ * one sprint here.
+ */
+export function splitSprint<T extends { sprint?: string | null }>(rows: readonly T[], sprintName: string): { inSprint: T[]; backlog: T[] } {
+  const inSprint: T[] = [];
+  const backlog: T[] = [];
+  for (const t of rows) (t.sprint === sprintName ? inSprint : backlog).push(t);
+  return { inSprint, backlog };
+}
+
+/**
+ * The three numbers Jira shows beside a sprint: points to do, in progress, done. In progress is the board's own
+ * status type (`custom`), which the card's `statusKind` cannot say: it folds in progress into open. A card with no
+ * points counts as none, and a status the board does not list falls back to its `statusKind`.
+ */
+export function sprintTotals(
+  rows: readonly { status: string; statusKind: "open" | "done" | "other"; points?: number | null }[],
+  statuses: readonly { status: string; type: string }[],
+): { todo: number; doing: number; done: number } {
+  const type = new Map(statuses.map((s) => [s.status.toLowerCase(), s.type]));
+  const out = { todo: 0, doing: 0, done: 0 };
+  for (const t of rows) {
+    const k = type.get(t.status.toLowerCase()) ?? (t.statusKind === "done" ? "done" : t.statusKind === "open" ? "open" : "custom");
+    out[k === "done" ? "done" : k === "open" ? "todo" : "doing"] += t.points ?? 0;
+  }
+  return out;
+}
+
 export interface RankAsk { before?: string; after?: string }
 
 /**

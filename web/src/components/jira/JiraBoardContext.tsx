@@ -19,7 +19,7 @@ const CHIP = "text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap";
 const idle = { border: EDGE, color: "var(--text2)" } as const;
 
 /** One line over the board: the sprint, its dates, how long is left, and its goal. */
-export function JiraSprintHeader({ sprint, now }: { sprint: JiraBoardSprint; now: number }) {
+export function JiraSprintHeader({ sprint, now, totals }: { sprint: JiraBoardSprint; now: number; totals?: { todo: number; doing: number; done: number } }) {
   const line = sprintLine(sprint, now);
   return (
     <div className="flex items-center gap-2.5 px-4 py-1.5 min-w-0 text-[11px]" data-testid="jira-sprint">
@@ -27,6 +27,12 @@ export function JiraSprintHeader({ sprint, now }: { sprint: JiraBoardSprint; now
       <span className="shrink-0 font-semibold" style={{ color: "var(--text)" }}>{sprint.name}</span>
       {line.range && <span className="shrink-0 tabular-nums" style={{ color: "var(--text3)" }}>{line.range}</span>}
       {line.left && <span className="shrink-0 tabular-nums" style={{ color: line.late ? "var(--warning-ink)" : "var(--text3)" }}>{line.left}</span>}
+      {totals && (
+        <span className="shrink-0 tabular-nums" style={{ color: "var(--text3)" }} data-testid="jira-sprint-points"
+          title={`${totals.todo} points to do, ${totals.doing} in progress, ${totals.done} done`}>
+          {totals.todo} / {totals.doing} / {totals.done} pts
+        </span>
+      )}
       {sprint.goal && <span className="truncate min-w-0" style={{ color: "var(--text4)" }} title={sprint.goal}>{sprint.goal}</span>}
     </div>
   );

@@ -88,6 +88,8 @@ for (const flavor of ["cloud", "datacenter"] as const) {
     afterAll(async () => { await fake.stop(); });
 
     describe("the row", () => {
+      // These read a board as a column list; the sprint's own read is test/jira-board-sprint.test.ts.
+      beforeEach(() => { fake.state.sprints[3] = []; });
       test("kind, parent and flag come in the one search, and nothing is asked per card", async () => {
         fake.state.issues["ORBIT-1042"]!.flagged = "Impediment";
         await addBoard("3");
@@ -98,7 +100,8 @@ for (const flavor of ["cloud", "datacenter"] as const) {
         const sent = (searches()[0]!.body as { fields: string[] }).fields;
         expect(sent).toEqual(expect.arrayContaining(["issuetype", "parent"]));
         expect(count(/^\/issue\//)).toBe(0);
-        expect(count(/\/agile\/|quickfilter|sprint|epic/)).toBe(0);
+        // The one agile read a board makes is its sprint, which the header's context shares.
+        expect(count(/\/agile\/|quickfilter|sprint|epic/)).toBe(1);
       });
 
       test("60 cards are two search pages and the same handful of memoised reads, not a request per card", async () => {
@@ -171,6 +174,8 @@ for (const flavor of ["cloud", "datacenter"] as const) {
     });
 
     describe("a toggled quick filter", () => {
+      // These read a board as a column list; the sprint's own read is test/jira-board-sprint.test.ts.
+      beforeEach(() => { fake.state.sprints[3] = []; });
       test("ANDs the board's own query into the one search, and the first toggle adds the one filter read", async () => {
         await addBoard("3");
         const whole = await B.viewRead("board:3");

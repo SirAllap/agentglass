@@ -68,6 +68,8 @@ for (const flavor of ["cloud", "datacenter"] as const) {
     beforeAll(() => { fake = startFakeJira({ flavor }); });
     beforeEach(async () => {
       fake.reset();
+      // These read a board as a column list; the sprint's own read is test/jira-board-sprint.test.ts.
+      fake.state.sprints[3] = [];
       C.__setCredentialsPath(credFile);
       V.__setJiraViewsPath(viewsFile);
       V.__clear();
@@ -164,7 +166,7 @@ for (const flavor of ["cloud", "datacenter"] as const) {
         await B.viewRead("board:1");
         expect(jqls()[0]).toBe("(project = ORBIT) AND status in (1, 2, 3, 4, 5) AND (issuetype != Epic) ORDER BY Rank ASC");
         expect(fake.requests.some((q) => /\/board\/\d+\/issue/.test(q.path))).toBe(false);
-        expect(fake.requests.some((q) => q.method === "GET" && q.path.startsWith("/rest/agile/") && !/board(\/\d+\/configuration)?$/.test(q.path))).toBe(false);
+        expect(fake.requests.some((q) => q.method === "GET" && q.path.startsWith("/rest/agile/") && !/board(\/\d+\/(configuration|sprint))?$/.test(q.path))).toBe(false);
       });
 
       test("a board without a sub-query is only the filter and its statuses", async () => {

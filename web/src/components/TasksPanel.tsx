@@ -35,7 +35,7 @@ import { compareOrder } from "../../../shared/orderIndex.ts";
 import { ON_CHIP, ON_CHIP_OK } from "./tasks/chipStyle.ts";
 import { JiraGroupBy, JiraQuickChips, JiraSprintHeader, ParentLabel } from "./jira/JiraBoardContext.tsx";
 import { TypeMark } from "./jira/JiraSections.tsx";
-import { groupByParent, groupModeOf, guessOrder, rankOf, rankable, sortedByOrder, type GroupMode } from "../lib/jiraBoardContext.ts";
+import { groupByParent, groupModeOf, guessOrder, rankOf, rankable, sortedByOrder, splitSprint, sprintTotals, type GroupMode } from "../lib/jiraBoardContext.ts";
 import { blockersOf, foldCard, groupByStatus, looksLikeCardId, readyCount, tableColumns } from "../lib/boardGroups.ts";
 import { CardWrites } from "../lib/cardWrites.ts";
 import { activityRows } from "../lib/cardActivity.ts";
@@ -2350,6 +2350,14 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
     return [...by.entries()].map(([place, rows]) => ({ place, rows }));
   }, [looked, q]);
 
+  /* A board in a sprint: the sprint's cards in their status groups, and the rest below as one folded Backlog. */
+  const sprintName = !onLooked ? ctx?.sprint?.name : undefined;
+  const sprintSplit = useMemo(() => (sprintName ? splitSprint(rows, sprintName) : null), [rows, sprintName]);
+  const sprintPoints = useMemo(() => (sprintName ? sprintTotals(splitSprint(tasks, sprintName).inSprint, data?.statuses ?? []) : undefined), [tasks, sprintName, data?.statuses]);
+  // The person opens a sprint to see all of it, like Jira's own backlog view: done cards included, one press to hide them.
+  const sprintId = ctx?.sprint?.id;
+  useEffect(() => { if (sprintId) setShowDone(true); }, [sprintId]);
+
   /* One group per status that HAS something, ordered by the board's own
      workflow rather than alphabetically or by count — a board is read in the
      order work moves through it. */
@@ -2371,8 +2379,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
       .map((t, i) => ({ t, i }))
       .sort((a, b) => compareOrder(a.t.order, b.t.order) || a.i - b.i)
       .map((x) => x.t);
-    return groupByStatus(rows, data?.statuses ?? [], byOrder);
-  }, [rows, data?.statuses]);
+    return groupByStatus(sprintSplit ? sprintSplit.inSprint : rows, data?.statuses ?? [], byOrder);
+  }, [rows, sprintSplit, data?.statuses]);
 
   /*
    * A Jira board's context and what is done with it (lib/jiraBoardContext.ts, components/jira/JiraBoardContext.tsx).
@@ -2906,7 +2914,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
             busy={busy} editing={editing?.listName || editing?.name || null}
             folders={boards?.folders ?? []} onAddFolder={addFolder} onAddList={addList} />)}
 
-      {!onLooked && ctx?.sprint && <JiraSprintHeader sprint={ctx.sprint} now={Date.now()} />}
+      {!onLooked && ctx?.sprint && <JiraSprintHeader sprint={ctx.sprint} now={Date.now()} totals={sprintPoints} />}
       <div className="flex items-center gap-1.5 px-4 pb-1.5 flex-wrap shrink-0">
         {/* The box, with `overflow-hidden` so anything attached to its right
             end is clipped to the same corner the field has — see the clear
@@ -3365,6 +3373,19 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
                 ))}
               </div>
             ))}
+            {!onLooked && !byParent && !!sprintSplit?.backlog.length && (
+              <div style={{ marginTop: 18 }}>
+                <GroupHead first={false} folded={folded.backlog !== false} count={sprintSplit.backlog.length}
+                  points={sprintSplit.backlog.reduce((n, t) => n + (t.points ?? 0), 0)}
+                  onToggle={() => setFolded((f) => ({ ...f, backlog: f.backlog === false }))}
+                  label={<span className={EYEBROW} style={{ color: "var(--text3)" }}>Backlog</span>} />
+                {folded.backlog === false && sprintSplit.backlog.map((t) => (
+                  <ClickUpRow key={t.id} t={t} today={today} on={t.id === sel} onPick={() => setSel(t.id)} showStatus
+                    grid={grid} showWho={anyWho} showSquad={!!squadLabel} showSprint={anySprint} showEst={anyEst} showPts={anyPts} showCmts={anyCmts} blocked={blockedBy(t)} onHand={handCard}
+                    repos={repos} here={here} source={source} />
+                ))}
+              </div>
+            )}
           </div>
           {veiled && (
             <div className="agx-veil absolute inset-0 flex items-center justify-center px-8"

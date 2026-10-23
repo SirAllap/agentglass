@@ -88,6 +88,8 @@ for (const flavor of ["cloud", "datacenter"] as const) {
     });
     beforeEach(async () => {
       fake.reset();
+      // These read a board as a column list; the sprint's own read is test/jira-board-sprint.test.ts.
+      fake.state.sprints[3] = [];
       shuffled.reset();
       C.__setCredentialsPath(credFile);
       V.__setJiraViewsPath(viewsFile);
@@ -228,7 +230,7 @@ for (const flavor of ["cloud", "datacenter"] as const) {
         // Before this: the filter, two search pages and the priorities (the board's configuration was read when it was added). Now the field list as well.
         expect(count("/field")).toBe(1);
         expect(count(/\/statuses$/)).toBe(0);
-        expect(fake.requests.length).toBe(1 /* filter */ + 2 /* search */ + prior(fake) + 1 /* /field */);
+        expect(fake.requests.length).toBe(1 /* filter */ + 2 /* search */ + prior(fake) + 1 /* /field */ + 1 /* the active sprint, kept ten minutes and shared with the header */);
 
         fake.requests.length = 0;
         await B.viewRead("board:1");
