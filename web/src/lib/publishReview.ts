@@ -1,4 +1,5 @@
 import { DEFAULT_PUBLISH_OPTIONS, PUBLISH_MAX_CHARS, type PublishOptions } from "../../../shared/reviewPublish.ts";
+import { reviewStale, type HeadRead } from "../../../shared/headCompare.ts";
 import type { PrNote, PrRun } from "./pluginTypes.ts";
 
 /**
@@ -25,12 +26,23 @@ export interface PublishButtonState {
   tooltip: string;
   /** The amber chip when the head moved since the review. */
   staleChip: boolean;
+  /** The neutral chip on a run a newer finished review of the same plugin replaced. */
+  supersededChip: boolean;
   /** The "published to GitHub" chip, with where it points. */
   published: { at: number; url: string } | null;
 }
 
 const isInfo = (n: Pick<PrNote, "severity">) => n.severity === "idea" || n.severity === "info";
-const sameCommit = (a?: string, b?: string) => !!a && !!b && (a.startsWith(b) || b.startsWith(a));
+
+/** The run a plugin's review stands on: its latest FINISHED run, by when it
+ *  finished. A run still going shows instead, so the button says so. */
+export function latestRun<R extends Pick<PrRun, "state" | "startedAt" | "finishedAt"> & { plugin: string }>(runs: readonly R[], plugin: string): R | undefined {
+  const mine = runs.filter((r) => r.plugin === plugin);
+  const going = mine.filter((r) => r.state === "running" || r.state === "queued" || r.state === "needs-ok").sort((x, y) => y.startedAt - x.startedAt)[0];
+  if (going) return going;
+  const done = mine.filter((r) => r.state === "done").sort((x, y) => (x.finishedAt ?? x.startedAt) - (y.finishedAt ?? y.startedAt));
+  return done[done.length - 1] ?? mine.sort((x, y) => x.startedAt - y.startedAt).pop();
+}
 
 /** How many findings the verdict counts: open, and not info-level. */
 export function openCount(notes: readonly Pick<PrNote, "status" | "severity">[]): number {
@@ -43,15 +55,18 @@ export function openCount(notes: readonly Pick<PrNote, "status" | "severity">[])
  * and the button then reads "Update published review…".
  */
 export function publishButtonState(
-  run: Pick<PrRun, "state" | "sha" | "published"> | undefined,
+  run: Pick<PrRun, "state" | "sha" | "published" | "startedAt" | "finishedAt"> | undefined,
   notes: readonly Pick<PrNote, "status" | "severity">[],
-  headSha: string | undefined,
+  head: HeadRead | string | undefined,
+  superseded = false,
 ): PublishButtonState {
-  if (!run) return { kind: "none", label: "Publish review…", disabled: true, tooltip: NO_REVIEW_TIP, staleChip: false, published: null };
+  if (!run) return { kind: "none", label: "Publish review…", disabled: true, tooltip: NO_REVIEW_TIP, staleChip: false, supersededChip: false, published: null };
   if (run.state !== "done") {
-    return { kind: "none", label: "Publish review…", disabled: true, tooltip: run.state === "failed" || run.state === "cancelled" ? NO_REVIEW_TIP : "The review is still running", staleChip: false, published: null };
+    return { kind: "none", label: "Publish review…", disabled: true, tooltip: run.state === "failed" || run.state === "cancelled" ? NO_REVIEW_TIP : "The review is still running", staleChip: false, supersededChip: false, published: null };
   }
-  const stale = !!headSha && !!run.sha && !sameCommit(headSha, run.sha);
+  // Stale is one thing: the LATEST finished review's commit differs from a head read after it ended
+  // (reviewStale). An older run is "superseded", never stale: a newer review covers the head.
+  const stale = !superseded && reviewStale(run.sha, run.finishedAt ?? run.startedAt, head) === true;
   const published = run.published ? { at: run.published.at, url: run.published.url } : null;
   const open = openCount(notes);
   const kind: PublishButtonKind = published ? "published" : stale ? "stale" : open === 0 ? "nothing-open" : "ready";
@@ -63,6 +78,7 @@ export function publishButtonState(
       : stale ? "The pull request has new commits since this review"
         : open === 0 ? `Publish: ${NOTHING_OPEN_WARNING}` : "Post this review as one comment on the pull request",
     staleChip: stale,
+    supersededChip: superseded,
     published,
   };
 }

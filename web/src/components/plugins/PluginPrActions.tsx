@@ -12,6 +12,8 @@ import { ICON } from "../../lib/iconSize.ts";
 import { notReadyChip } from "../../lib/prNotesChip.ts";
 import { loadNotesSummary, notesSummaryVersion, onNotesSummary, refreshOnNotes, summariesOf } from "../../lib/prNotesSummaryStore.ts";
 import { PublishReview } from "./PublishReview.tsx";
+import { latestRun } from "../../lib/publishReview.ts";
+import type { HeadRead } from "../../../../shared/headCompare.ts";
 
 /**
  * What a plugin can do to the pull request you are reading, in its header.
@@ -49,12 +51,12 @@ const STALE_MS = 24 * 60 * 60_000;
 
 let cache: { at: number; plugins: PublicPlugin[] } | null = null;
 
-export function PluginPrActions({ number, local, onShowLocal, root, headSha }: {
+export function PluginPrActions({ number, local, onShowLocal, root, head }: {
   number: number;
   /** The checkout, and the pull request's head: what Publish review… posts from and compares with,
    *  and what a review has to have covered before it can say the pull request is not ready. */
   root: string;
-  headSha?: string;
+  head?: HeadRead;
   /** What plugins have written here — the runs are what the button reads. */
   local: LocalNotes;
   /** Take the person to the findings: the Conversation, filtered to Local. */
@@ -135,20 +137,18 @@ export function PluginPrActions({ number, local, onShowLocal, root, headSha }: {
   useSyncExternalStore(onNotesSummary, notesSummaryVersion, notesSummaryVersion);
   useEffect(() => {
     if (!repo) return;
+    const headSha = head?.sha;
     const heads = () => (headSha && headSha.length >= 7 ? { [number]: headSha.slice(0, 12) } : {});
     void loadNotesSummary(repo, heads());
     return refreshOnNotes(repo, heads);
-  }, [repo, number, headSha]);
+  }, [repo, number, head?.sha]);
   const notReady = repo ? notReadyChip(summariesOf(repo).get(number)) : null;
   if (!repo) return null;
   // A review can be published whether or not its plugin is running now.
   const latest = new Map<string, LocalRun>();
-  for (const r of local.runs) {
-    const cur = latest.get(r.plugin);
-    if (!cur || r.startedAt > cur.startedAt) latest.set(r.plugin, r);
-  }
+  for (const p of new Set(local.runs.map((r) => r.plugin))) latest.set(p, latestRun(local.runs, p)!);
   const publish = [...latest.values()].map((run) => (
-    <PublishReview key={`publish-${run.plugin}`} run={run} notes={local.notes} root={root} headSha={headSha} />
+    <PublishReview key={`publish-${run.plugin}`} run={run} notes={local.notes} root={root} head={head} />
   ));
   const rows = plugins
     .filter((p) => p.enabled && p.running && (p.contributes?.prActions?.length ?? 0) > 0)

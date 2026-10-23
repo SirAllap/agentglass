@@ -7,6 +7,7 @@
  * a test sees exactly what was asked of it. The route that calls them is a
  * person's click: see `mayPublishReview` in index.ts.
  */
+import { reviewStale } from "../../shared/headCompare.ts";
 import { stripSecrets } from "../../shared/scrub.ts";
 import { DEFAULT_PUBLISH_OPTIONS, PUBLISH_MAX_CHARS, cleanPublishOptions, type PublishOptions } from "../../shared/reviewPublish.ts";
 import { NOTE_SEVERITIES, type NoteReply, type NoteSeverity, type NoteStatus, type PrNote, type PrRun } from "../../shared/pluginUi.ts";
@@ -25,7 +26,24 @@ export interface BuildInput {
   options: PublishOptions;
   /** The signed-in GitHub login, to name the person's own replies. */
   viewer?: string;
+  /** How many finished reviews this plugin has on the pull request; the header says so past one. */
+  reviews?: number;
 }
+
+/** The run the comment's header speaks for: the plugin's latest FINISHED run, by when it finished. */
+export function headerRun<R extends PrRun & { plugin: string }>(runs: readonly R[], plugin: string): { run: R | undefined; reviews: number } {
+  const mine = runs.filter((r) => r.plugin === plugin);
+  const done = mine.filter((r) => r.state === "done").sort((x, y) => (x.finishedAt ?? x.startedAt) - (y.finishedAt ?? y.startedAt));
+  return { run: done[done.length - 1] ?? mine[mine.length - 1], reviews: done.length };
+}
+
+/** The findings the comment draws from: every one this plugin has on the pull
+ *  request, whichever of its runs touched it last (the store holds one note per
+ *  finding id, so there is nothing to dedupe). A finding belongs to the pull
+ *  request. A latest run that found nothing must not hide what earlier ones
+ *  found and the person closed. */
+export const publishNotes = <N extends PrNote & { plugin: string }>(notes: readonly N[], plugin: string, repo: string, number: number): N[] =>
+  notes.filter((n) => n.plugin === plugin && n.repo === repo && n.number === number);
 
 export type Built =
   | { ok: true; markdown: string; chars: number; openCount: number; omitted: number }
@@ -124,7 +142,9 @@ function findingBlock(n: PrNote, o: PublishOptions, viewer?: string): string {
   return lines.join("\n");
 }
 
-/** The comment for one run of one plugin on one pull request. */
+/** The comment for one plugin on one pull request: the header is its latest
+ *  finished run's, the findings are the pull request's (a finding belongs to
+ *  the pull request, not to the run that last touched it). */
 export function buildReviewComment(input: BuildInput): Built {
   const { plugin, repo, number, run, notes, viewer } = input;
   const o = input.options;
@@ -145,7 +165,8 @@ export function buildReviewComment(input: BuildInput): Built {
   const head: string[] = [];
   const sha = run.sha ? run.sha.slice(0, 7) : undefined;
   if (o.includeHeader) {
-    head.push(`### 🔍 Local review${run.agent ? ` · ${safeInline(run.agent)}` : ""} · ${safeInline(plugin)}`, "");
+    const reviews = input.reviews && input.reviews > 1 ? ` · ${input.reviews} reviews` : "";
+    head.push(`### 🔍 Local review${run.agent ? ` · ${safeInline(run.agent)}` : ""} · ${safeInline(plugin)}${reviews}`, "");
     head.push("| Agent | Model | Commit | Cost | Date |", "|---|---|---|---|---|");
     head.push(`| ${cell(run.agent)} | ${cell(run.model)} | ${sha ? code(sha) : "-"} | ${money(run.costUsd)} | ${dateOf(run.finishedAt ?? run.startedAt)} |`, "");
     head.push(`**Verdict: ${v.line}** — ${countLine(mine, o)}. Reviewed locally on the author's machine; not a GitHub review (no approval, no change request).`, "");
@@ -186,7 +207,7 @@ export interface PrCommentRef { nodeId: string; author: string; body: string; ur
 
 /** What the two entry points ask of GitHub. A test hands in a spy. */
 export interface PublishDeps {
-  read(): Promise<{ ok: true; comments: PrCommentRef[]; viewer: string; headSha?: string } | { ok: false; error: string }>;
+  read(): Promise<{ ok: true; comments: PrCommentRef[]; viewer: string; headSha?: string; headReadAt?: number } | { ok: false; error: string }>;
   create(body: string): Promise<{ ok: boolean; url?: string; error?: string }>;
   edit(nodeId: string, body: string): Promise<{ ok: boolean; error?: string }>;
 }
@@ -200,8 +221,6 @@ export function findPublished(comments: readonly PrCommentRef[], plugin: string,
   const mineHere = comments.filter((c) => c.author.toLowerCase() === viewer.toLowerCase() && c.body.includes(mark));
   return mineHere[mineHere.length - 1] ?? null;
 }
-
-const sameCommit = (a?: string, b?: string) => !!a && !!b && (a.startsWith(b) || b.startsWith(a));
 
 export type Previewed =
   | { ok: true; markdown: string; chars: number; existing: { commentId: string; url: string } | null; stale: boolean; openCount: number; omitted: number }
@@ -217,7 +236,7 @@ export async function previewReview(req: PublishRequest, deps: PublishDeps): Pro
   return {
     ok: true, markdown: built.markdown, chars: built.chars, openCount: built.openCount, omitted: built.omitted,
     existing: ex ? { commentId: ex.nodeId, url: ex.url } : null,
-    stale: !!seen.headSha && !!req.run.sha && !sameCommit(seen.headSha, req.run.sha),
+    stale: reviewStale(req.run.sha, req.run.finishedAt ?? req.run.startedAt, { sha: seen.headSha, at: seen.headReadAt }) === true,
   };
 }
 

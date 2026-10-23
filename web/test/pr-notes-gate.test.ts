@@ -201,7 +201,7 @@ describe("the board's source", async () => {
 
   it("the header reads the same summary and passes the head it is on", () => {
     // The two header mounts of PluginPrActions; the run header's PublishReview takes the head too.
-    expect(panel.match(/<PluginPrActions[^>]*headSha=\{d\.headSha\}/g)).toHaveLength(2);
+    expect(panel.match(/<PluginPrActions[^>]*head=\{\{ sha: d\.headSha, at: d\.readAt \}\}/g)).toHaveLength(2);
     expect(noComments(actions)).toContain("notReadyChip(summariesOf(repo).get(number))");
   });
 

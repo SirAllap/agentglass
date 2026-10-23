@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isRunning } from "../src/plugins.ts"; // imported first: the cycle plugins.ts <-> plugin-ui.ts resolves only from this side
-import { __setPluginNotesPath, dropNotesOf, setLivenessCheck, setNoteStatus, summaryFor, upsertNotes, upsertRun } from "../src/plugin-ui.ts";
+import { __setPluginNotesPath, dropNotesOf, headsToRead, setLivenessCheck, setNoteStatus, summaryFor, upsertNotes, upsertRun } from "../src/plugin-ui.ts";
 import type { Contributes } from "../../shared/pluginUi.ts";
 
 const C = { prNotes: true } as Contributes;
@@ -126,5 +126,53 @@ describe("the route", async () => {
     expect(body).toContain('req.method === "GET"');
     expect(body).toContain("summaryFor(");
     expect(body).not.toMatch(/fetch\(|gh\(|addComment|prRepoIdFor/);
+  });
+});
+
+// A head the app read BEFORE the review ended says nothing about it: the review
+// may have run on a push the app had not seen. Measured on a real pull request:
+// every fresh review read "stale · head moved" while the cached head was one
+// push behind.
+describe("a head read before the review ended", () => {
+  const A = "aaaaaaa1111111111111111111111111111111aa";
+  const B = "bbbbbbb2222222222222222222222222222222bb";
+  const C3 = "ccccccc3333333333333333333333333333333cc";
+  const reviewedOnB = () => run("r1", { sha: B, startedAt: 9_000, finishedAt: 10_000 });
+  const at = (sha: string, ms: number) => ({ 1042: { sha, at: ms } });
+  const row = (heads: Record<number, string | { sha: string; at: number }>) => summaryFor(REPO, 1042, heads)!.prs[0]!;
+
+  test("cached head A older than a review of B is unknown, never stale", () => {
+    reviewedOnB();
+    expect(row(at(A, 5_000))).toMatchObject({ stale: null, reviewedSha: B, headSha: A });
+  });
+
+  test("it asks for one fresh read of that head, and only then", () => {
+    reviewedOnB();
+    expect(headsToRead(REPO, at(A, 5_000))).toEqual([1042]);
+    expect(headsToRead(REPO, at(B, 5_000))).toEqual([]);   // same commit: nothing to ask
+    expect(headsToRead(REPO, at(A, 11_000))).toEqual([]);  // read after the review: the answer stands
+  });
+
+  test("fresh head C after the review: stale", () => {
+    reviewedOnB();
+    expect(row(at(C3, 11_000)).stale).toBe(true);
+  });
+
+  test("fresh head B after the review: not stale", () => {
+    reviewedOnB();
+    expect(row(at(B, 11_000)).stale).toBe(false);
+  });
+
+  test("upper case and a 7-char prefix still match; under 7 is unknown", () => {
+    reviewedOnB();
+    expect(row(at(B.toUpperCase(), 11_000)).stale).toBe(false);
+    expect(row(at(B.slice(0, 7), 11_000)).stale).toBe(false);
+    expect(row(at(B.slice(0, 5), 11_000)).stale).toBeNull();
+  });
+
+  test("the newest FINISHED run speaks, whichever started last", () => {
+    run("r1", { sha: A, startedAt: 1_000, finishedAt: 20_000 });
+    run("r2", { sha: B, startedAt: 2_000, finishedAt: 10_000 });
+    expect(row(at(A, 30_000))).toMatchObject({ stale: false, reviewedSha: A });
   });
 });

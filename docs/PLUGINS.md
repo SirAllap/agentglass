@@ -692,6 +692,11 @@ finished run (a plugin that writes no runs is read from its notes). `heads`, or
 it; with it `stale` says whether the review covered an older commit, without it
 `headSha` and `stale` are `null`. **Send `sha` on your runs**: a review whose
 head is unknown is never called stale and never holds a pull request.
+A caller's `heads` are hints: the app compares with the newest head IT read
+(and when), and a head read before the review finished says nothing, so `stale`
+is `null` until one fresh read of that pull request (at most one every 3
+seconds) shows a different commit. Same commit means a 7 to 40 hex prefix, case
+ignored.
 
 What the app does with it:
 
@@ -778,6 +783,7 @@ on an app without it.
 | `note-action` event `{id, noteId, repo, number, at}` | app to plugin | **new (2)** | Only sent for an action the manifest declared |
 | `run-approve`, `run-skip` events `{id, repo, number, at}` | app to plugin | **new (2)** | Only sent for a run in `needs-ok` |
 | `POST /plugin/self/pr/notes/reply` `{id, text}` | plugin to app | **new (2)** | `404` on an older app: skip thread answers |
+| `POST /plugin/self/pr/notes/status` `{id, status: "resolved"}` | plugin to app | **new (2)** | `404` on an older app: leave the finding open. `409` when the person set the status, `429` past 60 an hour |
 | `GET /plugins/pr-notes/cost?plugin=&days=` (read scope) | reader to app | **new (2)** | Absent on an older app |
 | Manifest `contributes.noteActions` `[{id, label}]` | plugin to app | **new (2)** | An older app ignores the key and draws no buttons. Declare it under `contributes`, never beside it, so the approval hash covers it |
 | `GET /prs/detail`, `/prs/diff`, `/prs/compare-diff`, `/prs/tree-at`, `/prs/list?label=`, `/prs/rollup`, `/prs/check-failures-cached`, `/prs/failing-tests`, `/prs/check-metrics`, `/prs/codeowners`, `/prs/locate` | plugin to app | existing | `{ok: true, missing}` and `gh:` root refusals handled; fall back to `gh` on an older app |
@@ -923,6 +929,26 @@ caps as a person's: 4000 characters, 50 per finding. On top, 30 replies an hour
 per plugin: past it the answer is `429` with `at most 30 replies an hour per
 plugin; try again later`. An unknown finding is `404`, a body that is not
 `{id, text}` is `400`.
+
+**A plugin closing its own finding.** When its Re-check finds the bug fixed:
+
+```json
+POST /plugin/self/pr/notes/status
+{ "id": "f-df05fe5d61f441", "status": "resolved" }
+→ { "ok": true, "status": "resolved" }
+```
+
+Only `open` to `resolved`. The finding is stored as resolved by
+`agent:<plugin name>` with the time, and the card says "resolved by acme-review".
+The person outranks the plugin: a finding whose status the person set (including
+one they reopened) answers `409`, and so does one that is already closed, so
+this can never reopen or overwrite anything. Another plugin's finding is a
+`404`, `dismissed` or `open` as the status is a `400`. Asking again for a
+finding this plugin already resolved is `ok` and changes nothing. The plugin is
+**not** sent a `note-status` event for its own change (a Re-check that runs on
+every status event would feed itself); the window updates at once. 60 changes an
+hour per plugin, past it `429` with `at most 60 status changes an hour per
+plugin; try again later`. The person reopening a finding clears the mark.
 
 **Buttons on a plugin's findings.** `contributes.noteActions` (at most 4, a
 `label` of at most 24 characters, ids as for `prActions`) adds a button per

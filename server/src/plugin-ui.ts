@@ -28,6 +28,7 @@ import {
 } from "../../shared/pluginUi.ts";
 import { pluginsConfigDir } from "./plugins.ts";
 import type { PrChangedEvent } from "./prChanged.ts";
+import { headNeedsRead, reviewStale, type HeadRead } from "../../shared/headCompare.ts";
 import { forgetAnnotations } from "./inbox-annotations.ts";
 import { dropCanvases } from "./plugin-canvas.ts";
 
@@ -396,6 +397,51 @@ export async function replyAsPlugin(plugin: string, c: Contributes, raw: unknown
   return { ok: true, replies: n.replies };
 }
 
+/** A plugin closing its OWN finding: its Re-check found the bug fixed. */
+export const PLUGIN_STATUS_PER_HOUR = 60;
+const statusLog = new Map<string, number[]>();
+
+export type PluginResolved = { ok: true; status: "resolved"; unchanged?: true } | { ok: false; error: string; status: 400 | 404 | 409 | 429 };
+
+/**
+ * `open -> resolved`, nothing else. The person outranks the plugin: a finding
+ * whose status the person set (even one they reopened) is refused with 409, as
+ * is anything already closed, so this can never reopen or overwrite. Another
+ * plugin's finding is a 404, as if it did not exist. The plugin is NOT told
+ * (no `note-status` event: a plugin that re-checks on every status event would
+ * feed itself); the window learns at once through `onChange`. Stored with who
+ * and when, so the card can say "resolved by acme-review".
+ */
+export function resolveOwnNote(plugin: string, c: Contributes, raw: unknown, now = Date.now()): PluginResolved {
+  if (!c.prNotes) return { ok: false, status: 400, error: "this plugin's manifest does not declare prNotes" };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, status: 400, error: "send {id, status: \"resolved\"}" };
+  const b = raw as Record<string, unknown>;
+  if (typeof b.id !== "string") return { ok: false, status: 400, error: "id is required" };
+  if (b.status !== "resolved") return { ok: false, status: 400, error: "a plugin can only mark its own finding resolved; dismissing and reopening are the person's" };
+  const n = load().notes.find((x) => x.plugin === plugin && x.id === b.id);
+  if (!n) return { ok: false, status: 404, error: "no such note" };
+  if (n.statusBy === "person") return { ok: false, status: 409, error: "the person set this finding's status; a plugin cannot change it" };
+  if (n.status !== "open") {
+    if (n.status === "resolved" && n.statusAgent === `agent:${plugin}`) return { ok: true, status: "resolved", unchanged: true };
+    return { ok: false, status: 409, error: `this finding is already ${n.status}; a plugin only closes an open one` };
+  }
+  const recent = (statusLog.get(plugin) ?? []).filter((t) => now - t < 3_600_000);
+  if (recent.length >= PLUGIN_STATUS_PER_HOUR) {
+    statusLog.set(plugin, recent);
+    return { ok: false, status: 429, error: `at most ${PLUGIN_STATUS_PER_HOUR} status changes an hour per plugin; try again later` };
+  }
+  recent.push(now);
+  statusLog.set(plugin, recent);
+  n.status = "resolved";
+  n.statusBy = "plugin";
+  n.statusAgent = `agent:${plugin}`;
+  n.statusAt = now;
+  n.updatedAt = now;
+  save();
+  onChange({ kind: "pr", repo: n.repo, number: n.number });
+  return { ok: true, status: "resolved" };
+}
+
 /**
  * Add or update notes. A note the person already marked resolved or
  * dismissed keeps that status when the plugin sends it again — the person's
@@ -430,6 +476,7 @@ export function upsertNotes(plugin: string, c: Contributes, raw: unknown): { ok:
       plugin,
       status: personSaid ? prev!.status : v.status ?? "open",
       statusBy: personSaid ? "person" : "plugin",
+      ...(personSaid && prev?.statusAgent ? { statusAgent: prev.statusAgent, statusAt: prev.statusAt } : {}),
       // A plugin sending the finding again does not send the answers to it.
       ...(prev?.replies?.length ? { replies: prev.replies } : {}),
       createdAt: prev?.createdAt ?? now,
@@ -490,6 +537,8 @@ interface SummaryBase {
   lastReviewAt: number | null;
   plugins: string[];
   reviewedSha: string | null;
+  /** When that review finished: a head read before this cannot call it stale. */
+  reviewedAt: number | null;
 }
 let summaryCache: Map<string, SummaryBase> | null = null;
 
@@ -501,7 +550,7 @@ function summaryBases(): Map<string, SummaryBase> {
     const k = `${repo}#${number}`;
     let b = out.get(k);
     if (!b) {
-      b = { repo, number, open: { critical: 0, high: 0, medium: 0, low: 0, info: 0 }, resolved: 0, dismissed: 0, lastReviewAt: null, plugins: [], reviewedSha: null };
+      b = { repo, number, open: { critical: 0, high: 0, medium: 0, low: 0, info: 0 }, resolved: 0, dismissed: 0, lastReviewAt: null, plugins: [], reviewedSha: null, reviewedAt: null };
       out.set(k, b);
     }
     return b;
@@ -515,7 +564,7 @@ function summaryBases(): Map<string, SummaryBase> {
     const key = `${r.repo}#${r.number}`;
     const t = r.finishedAt ?? r.startedAt;
     if (b.lastReviewAt === null || t > b.lastReviewAt) b.lastReviewAt = t;
-    if (r.sha && t >= (runAt.get(key) ?? 0)) { b.reviewedSha = r.sha; runAt.set(key, t); }
+    if (r.sha && t >= (runAt.get(key) ?? 0)) { b.reviewedSha = r.sha; b.reviewedAt = t; runAt.set(key, t); }
     if (!b.plugins.includes(r.plugin)) b.plugins.push(r.plugin);
   }
   const noteAt = new Map<string, number>();
@@ -527,21 +576,18 @@ function summaryBases(): Map<string, SummaryBase> {
     else b.dismissed++;
     if (!b.plugins.includes(n.plugin)) b.plugins.push(n.plugin);
     if (runAt.has(key)) continue;
-    if (n.sha && n.updatedAt >= (noteAt.get(key) ?? 0)) { b.reviewedSha = n.sha; noteAt.set(key, n.updatedAt); }
+    if (n.sha && n.updatedAt >= (noteAt.get(key) ?? 0)) { b.reviewedSha = n.sha; b.reviewedAt = n.updatedAt; noteAt.set(key, n.updatedAt); }
     if (b.lastReviewAt === null || n.updatedAt > b.lastReviewAt) b.lastReviewAt = n.updatedAt;
   }
   summaryCache = out;
   return out;
 }
 
-const sameSha = (a: string, b: string) => {
-  const x = a.toLowerCase(), y = b.toLowerCase();
-  return x === y || (Math.min(x.length, y.length) >= 7 && (x.startsWith(y) || y.startsWith(x)));
-};
-
-/** `heads` maps a pull request number to its current head sha, when the
- *  caller knows it; without one `headSha` and `stale` are null. */
-export function summaryFor(repo: unknown, number: unknown, heads: Record<number, string> = {}): { prs: PrNotesSummary[] } | null {
+/** `heads` maps a pull request number to its current head, when the caller
+ *  knows it; without one `headSha` and `stale` are null. A bare sha is vouched
+ *  for by the caller; `{sha, at}` says when it was read, and a head read before
+ *  the review finished never calls it stale (see reviewStale). */
+export function summaryFor(repo: unknown, number: unknown, heads: Record<number, string | HeadRead> = {}): { prs: PrNotesSummary[] } | null {
   if (typeof repo !== "string" || !/^[\w.-]+\/[\w.-]+$/.test(repo)) return null;
   let only: number | null = null;
   if (number !== null && number !== undefined && number !== "") {
@@ -552,15 +598,28 @@ export function summaryFor(repo: unknown, number: unknown, heads: Record<number,
   const prs: PrNotesSummary[] = [];
   for (const b of summaryBases().values()) {
     if (b.repo !== repo || (only !== null && b.number !== only)) continue;
-    const head = heads[b.number] ?? null;
+    const h = heads[b.number];
+    const head = (typeof h === "string" ? h : h?.sha) ?? null;
+    const { reviewedAt: _at, ...base } = b;
     prs.push({
-      ...b, open: { ...b.open }, plugins: [...b.plugins],
+      ...base, open: { ...b.open }, plugins: [...b.plugins],
       headSha: head,
-      stale: head && b.reviewedSha ? !sameSha(head, b.reviewedSha) : null,
+      stale: reviewStale(b.reviewedSha, b.reviewedAt, h),
     });
   }
   prs.sort((a, b) => a.number - b.number);
   return { prs };
+}
+
+/** Pull requests whose verdict waits on a fresher head: the review is newer
+ *  than the head the app holds, or the app holds none. One targeted read of
+ *  each answers it. */
+export function headsToRead(repo: string, heads: Record<number, string | HeadRead>): number[] {
+  const out: number[] = [];
+  for (const b of summaryBases().values()) {
+    if (b.repo === repo && headNeedsRead(b.reviewedSha, b.reviewedAt, heads[b.number])) out.push(b.number);
+  }
+  return out;
 }
 
 /** The person marked a note. Stored, and told to the plugin that wrote it. */
@@ -573,6 +632,7 @@ export function setNoteStatus(plugin: string, id: string, status: unknown): { ok
   if (!n) return { ok: false, error: "no such note" };
   n.status = status as NoteStatus;
   n.statusBy = "person";
+  delete n.statusAgent; delete n.statusAt;
   n.updatedAt = Date.now();
   save();
   pushEvent(plugin, { type: "note-status", repo: n.repo, number: n.number, id, status: n.status, at: n.updatedAt, ...(n.replies?.length ? { replies: n.replies } : {}) });
@@ -642,6 +702,7 @@ export function answerNote(plugin: string, id: string, a: NoteAnswer): NoteAnswe
   if (status) {
     cur.status = status;
     cur.statusBy = "person";
+    delete cur.statusAgent; delete cur.statusAt;
   }
   cur.updatedAt = now;
   save();
@@ -675,6 +736,7 @@ export function dropNotesOf(plugin: string): void {
   const costs = s.costs?.length ?? 0;
   s.costs = (s.costs ?? []).filter((x) => x.plugin !== plugin);
   replyLog.delete(plugin);
+  statusLog.delete(plugin);
   if (s.runs.length + s.notes.length !== before || s.costs.length !== costs) save();
 }
 
@@ -691,4 +753,5 @@ export function __resetPluginUi(): void {
   waiters.clear();
   cache = { runs: [], notes: [], costs: [] };
   replyLog.clear();
+  statusLog.clear();
 }

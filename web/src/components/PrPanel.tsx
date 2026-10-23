@@ -24,6 +24,7 @@ import { dataInk } from "../lib/contrast.ts";
 import { onScreen } from "../lib/findScope.ts";
 import { PluginPrActions } from "./plugins/PluginPrActions.tsx";
 import { PublishReview } from "./plugins/PublishReview.tsx";
+import { latestRun } from "../lib/publishReview.ts";
 import { useLocalNotes, groupByRun, RunCard, NoteCard, LocalMark, LocalStrip, sortNotes, type LocalNotes, type LocalNote } from "./plugins/LocalReview.tsx";
 import { createContext, Fragment, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { handoffTo } from "../lib/handoffTo.ts";
@@ -6312,7 +6313,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
             them. */}
         <ReviewMenu d={d} canTerm={!!onReviewInTerminal}
           onPick={(recipe, where) => (where === "term" ? onReviewInTerminal?.(recipe) : onLocalReview(recipe))} />
-        <PluginPrActions number={d.number} local={local} onShowLocal={onShowLocal} root={root} headSha={d.headSha} />
+        <PluginPrActions number={d.number} local={local} onShowLocal={onShowLocal} root={root} head={{ sha: d.headSha, at: d.readAt }} />
         {/* The panel's own Btn, like its neighbour. A hand-rolled anchor with
             its own padding beside a Btn is two heights in a row of two. */}
         {/* `small`, like the Menu it stands beside. Without it this was the
@@ -8851,7 +8852,7 @@ function Masthead({ root, repo, d, busy, local, stackUi, onOpenPr, onShowLocal, 
             read, not because it is the better place to send somebody. */}
         <ReviewMenu d={d} canTerm={!!onReviewInTerminal}
           onPick={(recipe, where) => (where === "term" ? onReviewInTerminal?.(recipe) : onLocalReview(recipe))} />
-        <PluginPrActions number={d.number} local={local} onShowLocal={onShowLocal} root={root} headSha={d.headSha} />
+        <PluginPrActions number={d.number} local={local} onShowLocal={onShowLocal} root={root} head={{ sha: d.headSha, at: d.readAt }} />
         {/* Out of the overflow, because it is the most-pressed thing in it.
             "Open on GitHub" is what you reach for whenever this panel does not
             do the thing — and burying the escape hatch two clicks deep is the
@@ -12065,7 +12066,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
         node: <span style={{ color: "var(--primary-ink)" }}><EyeIcon size={ICON.xs} /></span>,
         body: <div className="agx-note">{g.run
           ? <RunCard run={g.run} notes={g.notes} publisher={local.publishers[g.run.plugin]} onStatus={local.setStatus} onReply={local.reply} onOpenFile={onOpenFile} md={localMd} noteActions={local.noteActions} onAction={(n, id) => { void local.pressAction(n, id); }} onDecide={(r, d) => { void local.decideRun(r, d); }}
-            publish={<PublishReview run={g.run} notes={local.notes} root={root} headSha={d.headSha} />} />
+            publish={<PublishReview run={g.run} notes={local.notes} root={root} head={{ sha: d.headSha, at: d.readAt }} superseded={latestRun(local.runs, g.run.plugin)?.id !== g.run.id} />} />
           : <div className="flex flex-col gap-1.5">{g.notes.map((n) => <NoteCard key={`${n.plugin}/${n.id}`} n={n} md={localMd} onStatus={(st) => local.setStatus(n, st)} onReply={(d, st) => local.reply(n, d, st)} onOpenFile={onOpenFile} actions={local.noteActions[n.plugin]} onAction={(id) => { void local.pressAction(n, id); }} />)}</div>}</div>,
       });
     }

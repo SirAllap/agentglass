@@ -7,6 +7,7 @@ import {
   NOTHING_LEAVES_WARNING, NOTHING_OPEN_WARNING, allTicked, canPost, charCounter, freshOptions, optionRows, postLabel, publishAllOptions, publishButtonState,
   type PublishButtonState,
 } from "../../lib/publishReview.ts";
+import type { HeadRead } from "../../../../shared/headCompare.ts";
 import type { PublishOptions } from "../../../../shared/reviewPublish.ts";
 import { Portal } from "../Portal.tsx";
 import { Button, CTRL_H, EDGE, LINE, tintEdge } from "../workspace/Chrome.tsx";
@@ -23,16 +24,20 @@ import type { LocalNote, LocalRun } from "./LocalReview.tsx";
 const AMBER = "var(--warning-ink)";
 
 /** The button and its chips, for one plugin's run. Same bar height as its neighbours. */
-export function PublishReview({ run, notes, root, headSha }: {
+export function PublishReview({ run, notes, root, head, superseded = false }: {
   run?: LocalRun;
   /** Every note of this plugin on this pull request, closed ones too. */
   notes: LocalNote[];
   root: string;
-  headSha?: string;
+  /** The pull request's head and when the app read it; a head read before the review ended cannot call it stale. */
+  head?: HeadRead;
+  /** A newer finished review of the same plugin covers the head. */
+  superseded?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const mine = useMemo(() => notes.filter((n) => run && n.plugin === run.plugin && (!n.runId || n.runId === run.id)), [notes, run]);
-  const st: PublishButtonState = publishButtonState(run, mine, headSha);
+  // A finding belongs to the pull request, not to the run that last touched it.
+  const mine = useMemo(() => notes.filter((n) => run && n.plugin === run.plugin), [notes, run]);
+  const st: PublishButtonState = publishButtonState(run, mine, head, superseded);
   return (
     <>
       <div className="shrink-0 inline-flex items-center gap-1.5" style={{ height: CTRL_H.compact }}>
@@ -40,6 +45,10 @@ export function PublishReview({ run, notes, root, headSha }: {
         {st.staleChip && (
           <span className="rounded px-1.5 text-[10px] leading-none inline-flex items-center whitespace-nowrap" style={{ height: CTRL_H.compact, color: AMBER, border: tintEdge(AMBER, 45) }}
             title="The pull request has new commits since this review. Publishing posts it as it is.">stale review · head moved</span>
+        )}
+        {st.supersededChip && (
+          <span className="rounded px-1.5 text-[10px] leading-none inline-flex items-center whitespace-nowrap" style={{ height: CTRL_H.compact, color: "var(--text3)", border: EDGE }}
+            title="A newer review covers the current head">superseded by a newer review</span>
         )}
         {st.published && (
           <button type="button" onClick={() => openExternal(st.published!.url)} title="Open the published comment on GitHub"

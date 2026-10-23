@@ -249,7 +249,7 @@ export function NoteCard({ n, onStatus, onReply, onOpenFile, compact, md = plain
             {n.path.split("/").pop()}{n.line ? `:${n.line}` : ""}
           </button>
         )}
-        {closed && <span className="text-[10px] uppercase tracking-wide" style={{ color: "var(--text4)" }}>{n.status}</span>}
+        {closed && <span className="text-[10px] uppercase tracking-wide" style={{ color: "var(--text4)" }} title={n.statusAgent && n.statusAt ? new Date(n.statusAt).toLocaleString() : undefined}>{n.status}{n.status === "resolved" && n.statusAgent ? ` by ${n.statusAgent.replace(/^agent:/, "")}` : ""}</span>}
         {localOnly && (
           <span className="text-[10px] uppercase tracking-wide" style={{ color: "var(--text4)" }}
             title="Not in the comment published on GitHub: it stays on this machine">local only</span>

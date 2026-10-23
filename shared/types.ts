@@ -3943,6 +3943,8 @@ export interface PrMergeGate {
 }
 
 export interface PrDetail extends PrSummary {
+  /** When the server read this from GitHub (ms). A cached copy keeps its own, so a head on it can be compared with the moment a review finished. */
+  readAt?: number;
   /** The base branch's tip the pull request was last compared against (40 hex).
    *  `headSha` is inherited from the row and is the head's. */
   baseSha?: string;

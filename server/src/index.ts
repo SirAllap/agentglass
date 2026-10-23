@@ -157,7 +157,7 @@ import { appsForAll, launchApp, mimeOf, setDefaultApp } from "./openwith.ts";
 import { actionsFor, deleteAction, listActions, readAction, runAction, saveAction } from "./finderactions.ts";
 import { fsRun, fsReadOp, fsJobs, fsPathsOf, fsGate, fsWantsJson } from "./fsroute.ts";
 import { mediaFacts, posterFrame } from "./mediafacts.ts";
-import { previewReview, publishReview, cleanPublishOptions, type PublishDeps, type PublishRequest } from "./review-publish.ts";
+import { previewReview, publishReview, headerRun, publishNotes, cleanPublishOptions, type PublishDeps, type PublishRequest } from "./review-publish.ts";
 import { browseDir, browseReal, fileBytes, fileFacts, previewSlice, openInDesktop, pagePolicy, revealInFileManager } from "./browse.ts";
 import { fileGitFacts } from "./fileGit.ts";
 import { benchEdit, benchEnd, benchLive, finderEditEnd, finderEditSave, finderEditState, readNote, writeNote } from "./bench.ts";
@@ -188,7 +188,8 @@ import {
   prBaseOf,
   ghRateLimit,
   branchBehind, localHead, prRollup, prRowDetails, personBoard, refBranchRows, repoIdFor as prRepoIdFor, subscribeTalkSeen,
-  prBranches, githubStatusCached, prsForBranch, prForHead, nodeIdOk, locateRepo, isForeignRoot } from "./prs.ts";
+  prBranches, githubStatusCached, prsForBranch, prForHead, nodeIdOk, locateRepo, isForeignRoot, headRead, freshHead } from "./prs.ts";
+import type { HeadRead } from "../../shared/headCompare.ts";
 import { treeAtTar } from "./treeAt.ts";
 import { planCheckOnBase, startCheckOnBase, checkOnBaseStatus, cancelCheckOnBase } from "./checkOnBasePr.ts";
 import { checkoutBranches, repoSpend, spendRows } from "./spend.ts";
@@ -250,7 +251,7 @@ import {
 import { setPluginSocketHandler, viaPluginSocket } from "./plugin-socket.ts";
 import { CanvasHandle, handleCanvasOps, isCanvasPanel, readBoundedJson, setCanvasResolver } from "./plugin-canvas.ts";
 import {
-  setPluginUiHook, setPanel, panelState, setOptions, pushEvent, takeEvents, upsertRun, upsertNotes, notesFor, answerNote, replyAsPlugin, costByDay, decideRun, pressNoteAction, flushPluginNotes, summaryFor, markRunPublished,
+  setPluginUiHook, setPanel, panelState, setOptions, pushEvent, takeEvents, upsertRun, upsertNotes, notesFor, answerNote, replyAsPlugin, resolveOwnNote, costByDay, decideRun, pressNoteAction, flushPluginNotes, summaryFor, headsToRead, markRunPublished,
 } from "./plugin-ui.ts";
 import { PANEL_ID_RE, PLUGIN_CONTRACT, validPrRef } from "../../shared/pluginUi.ts";
 import { readNotifyPrefs, writeNotifyPrefs } from "./notifyPrefs.ts";
@@ -5597,6 +5598,12 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         const r = await replyAsPlugin(self, c, await body<unknown>());
         return json(r, r.ok ? 200 : r.status);
       }
+      if (pathname === "/plugin/self/pr/notes/status") {
+        // The plugin closing its own finding (open -> resolved only). The
+        // person's word outranks it; see resolveOwnNote.
+        const r = resolveOwnNote(self, c, await body<unknown>());
+        return json(r, r.ok ? 200 : r.status);
+      }
       return json({ ok: false, error: "not found" }, 404);
     }
 
@@ -5743,7 +5750,20 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const one = url.searchParams.get("head");
       const num = url.searchParams.get("number");
       if (one && num && /^[0-9a-fA-F]{7,64}$/.test(one)) heads[Number(num)] = one;
-      const r = summaryFor(url.searchParams.get("repo"), num, heads);
+      const slug = url.searchParams.get("repo");
+      // The caller's heads come from a cache that may be a push behind. The
+      // server's own newest read of each head (with its time) replaces them; a
+      // caller's head with no read behind it is unknown-age (at 0), and a review
+      // newer than the head we hold earns ONE targeted read before it is called
+      // stale (reviewStale: a head read before the review ended says nothing).
+      const reads: Record<number, HeadRead> = {};
+      if (slug) for (const [n, sha] of Object.entries(heads)) reads[Number(n)] = headRead(slug, Number(n)) ?? { sha, at: 0 };
+      if (slug && /^[\w.-]+\/[\w.-]+$/.test(slug)) {
+        const only = num ? Number(num) : null;
+        const want = headsToRead(slug, reads).filter((n) => only === n || n in reads).slice(0, 5);
+        await Promise.all(want.map(async (n) => { const f = await freshHead(slug, n); if (f) reads[n] = f; }));
+      }
+      const r = summaryFor(slug, num, reads);
       if (!r) return json({ ok: false, error: "repo (owner/name) is required, and number must be a pull request number" }, 400);
       return json({ ok: true, ...r });
     }
@@ -5774,23 +5794,26 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const ref = typeof b.plugin === "string" ? notesFor(b.repo, b.number) : null;
       if (typeof b.plugin !== "string" || !ref) return json({ ok: false, error: "plugin, repo (owner/name) and number are required" }, 400);
       const runs = ref.runs.filter((r) => r.plugin === b.plugin);
-      const run = (typeof b.runId === "string" ? runs.find((r) => r.id === b.runId) : [...runs].reverse().find((r) => r.state === "done") ?? runs[runs.length - 1]);
+      const hdr = headerRun(runs, b.plugin);
+      const run = typeof b.runId === "string" ? runs.find((r) => r.id === b.runId) : hdr.run;
       if (!run) return json({ ok: false, error: "that plugin has no review on this pull request" }, 404);
       const rid = await prRepoIdFor(b.root);
       if (!rid || rid.nameWithOwner.toLowerCase() !== run.repo.toLowerCase()) return json({ ok: false, error: `that project is not a checkout of ${run.repo}` }, 400);
       const pr: PublishRequest = {
         plugin: b.plugin, repo: run.repo, number: run.number, run,
-        notes: ref.notes.filter((n) => n.plugin === b.plugin && (!n.runId || n.runId === run.id)),
+        // Every finding of this plugin on this pull request, whichever run last touched it.
+        notes: publishNotes(ref.notes, b.plugin, run.repo, run.number),
+        reviews: hdr.reviews,
         options: cleanPublishOptions(b.options),
       };
       const deps: PublishDeps = {
         read: async () => {
           const cap = await ghCapability();
           if (!cap.available || !cap.authed) return { ok: false, error: cap.reason ?? "GitHub is not available" };
-          const d = await prDetail(b.root, run.number);
+          const d = await prDetail(b.root, run.number, true);
           if (!d.ok || !d.detail) return { ok: false, error: d.error ?? "could not read the pull request" };
-          const det = d.detail as { headSha?: string; comments?: { nodeId: string; author: string; body: string; url: string }[] };
-          return { ok: true, viewer: cap.login ?? "", headSha: det.headSha, comments: det.comments ?? [] };
+          const det = d.detail as { headSha?: string; readAt?: number; comments?: { nodeId: string; author: string; body: string; url: string }[] };
+          return { ok: true, viewer: cap.login ?? "", headSha: det.headSha, headReadAt: det.readAt, comments: det.comments ?? [] };
         },
         create: async (body) => {
           const r = await addComment(b.root, run.number, body);

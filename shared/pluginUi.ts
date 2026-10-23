@@ -664,6 +664,12 @@ export interface PrNote {
    *  the plugin's: a finding the reviewer itself marked resolved can be
    *  reopened by it when the bug comes back. */
   statusBy?: "person" | "plugin";
+  /** Set when the plugin itself closed the finding through
+   *  `POST /plugin/self/pr/notes/status`: `agent:<plugin>`. The card says
+   *  "resolved by acme-review". Cleared by anything the person does. */
+  statusAgent?: string;
+  /** When `statusAgent` closed it (ms). */
+  statusAt?: number;
   /** What was answered to this finding, oldest first. Written by the person
    *  (or an agent acting for them), never by the plugin's own upserts, and
    *  kept across them. Stored with the note, so removing the plugin removes it. */

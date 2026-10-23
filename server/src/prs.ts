@@ -253,6 +253,39 @@ function knownHeadSha(repoKey: string, number: number): string {
   return "";
 }
 
+/**
+ * The head of a pull request as the app last READ it, and when. Of the cached
+ * detail and the list rows, the newer read wins: the detail is persisted across
+ * restarts, so on its own it can be a push behind the list. `null` when the app
+ * has read neither.
+ */
+export function headRead(slug: string, number: number): { sha: string; at: number } | null {
+  const want = `github.com/${slug}`.toLowerCase();
+  let best: { sha: string; at: number } | null = null;
+  const d = [...detailCache].find(([k]) => k.toLowerCase() === `${want}#${number}`)?.[1];
+  if (d?.detail.headSha) best = { sha: d.detail.headSha, at: d.detail.readAt ?? d.at };
+  for (const [k, e] of listCache) {
+    if (!k.toLowerCase().startsWith(`${want}\u0000`)) continue;
+    const p = e.prs.find((r) => r.number === number);
+    const at = e.okAt ?? e.at;
+    if (p?.headSha && (!best || at > best.at)) best = { sha: p.headSha, at };
+  }
+  return best;
+}
+
+const freshHeadAt = new Map<string, number>();
+/** One targeted read of a pull request's head, at most one per 3 s per pull
+ *  request however many cards ask. Null when GitHub cannot be reached. */
+export async function freshHead(slug: string, number: number): Promise<{ sha: string; at: number } | null> {
+  const k = `${slug.toLowerCase()}#${number}`;
+  const last = freshHeadAt.get(k) ?? 0;
+  if (Date.now() - last >= 3_000) {
+    freshHeadAt.set(k, Date.now());
+    try { await prDetail(`gh:${slug}`, number, true); } catch { /* the cached read stands */ }
+  }
+  return headRead(slug, number);
+}
+
 function knownBranches(repoKey: string, number: number): { base: string; head: string } | null {
   const d = detailCache.get(`${repoKey}#${number}`)?.detail;
   if (d?.baseRefName && d.headRefName) return { base: d.baseRefName, head: d.headRefName };
@@ -4251,7 +4284,8 @@ async function readDetail(rootIn: unknown, number: number, repo: PrRepoId, key: 
     },
   };
 
-  detailCache.set(key, { at: Date.now(), detail });
+  detail.readAt = Date.now();
+  detailCache.set(key, { at: detail.readAt, detail });
   saveDetailCache();
   projectDetail(repo, detail);
   watchRows(repo, [detail]);
