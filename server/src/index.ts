@@ -3815,16 +3815,17 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         ? [outwardLine(out), out.text ? `“${out.text.replace(/\s+/g, " ").trim().slice(0, 240)}”` : ""].filter(Boolean).join(" · ")
         : budgetHoldFor(greq.session_id, gateFailClosed(), cwd);
       /* "Who answers" and "If nobody answers" (Settings ▸ Agents ▸ Gate). The chair is TOLD, never
-         asked to decide: a held call is released by the person alone. Only for a hold worth a line
-         (an outward action, or a budget passed), not for every tool call the gate sees. */
-      const tell = !!hold && gateAnswerer() === "orchestrator";
-      if (tell) void tellChair(cwd, greq.tool_name, hold);
+         asked to decide: a held call is released by the person alone. Only an OUTWARD hold, once:
+         a budget hold is every call of every session, the chair's own included, and each line
+         would start a chair turn (gatechair.ts). The ask-again rounds go to the person only. */
+      const tell = !!out && gateAnswerer() === "orchestrator";
+      if (tell) void tellChair(cwd, greq.session_id, greq.tool_name, outwardLine({ ...out!, target: undefined }), [out!.target, out!.text].filter(Boolean).join(" · "));
       const decision = await submitGate(
         greq,
         Math.min(GATE_MAX_MS, Number(b.timeout_ms) || 60_000),
         hold,
         out ? true : undefined,
-        out && gateOnTimeout() === "ask" ? (n) => { if (tell) void tellChair(cwd, greq.tool_name, hold!, n); } : undefined,
+        out && gateOnTimeout() === "ask" ? () => {} : undefined,
       );
       return json(decision);
     }
