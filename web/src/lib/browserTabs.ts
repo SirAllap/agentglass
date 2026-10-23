@@ -155,19 +155,17 @@ export function tabLabel(t: BrowserTab): string {
  * end of the strip. Moving to index 0, or to the last tab, means closing three
  * tabs in a row throws you somewhere different each time.
  *
- * Closing the last tab leaves one blank tab rather than an empty strip: a
- * browser view with no page in it has nothing to show and no way back.
+ * Closing the last tab leaves NOTHING open. The panel used to put a blank tab
+ * in its place because an empty view had no way back; the island's overview
+ * has a "New tab" card and the person's bar takes an address, so it has one
+ * now. The replacement also showed as a white card in the container of the
+ * tab just closed, which read as a page that would not close.
  */
 export function closeTab(tabs: BrowserTab[], id: string): { tabs: BrowserTab[]; activeId: string } {
   const i = tabs.findIndex((t) => t.id === id);
   if (i < 0) return { tabs, activeId: tabs[0]?.id ?? "" };
   const rest = tabs.filter((t) => t.id !== id);
-  if (!rest.length) {
-    // The replacement stays in the profile the closed tab was in: closing your
-    // last work tab should not quietly drop you back into the default identity.
-    const fresh = newTab(BLANK, tabs[i]!.profile);
-    return { tabs: [fresh], activeId: fresh.id };
-  }
+  if (!rest.length) return { tabs: [], activeId: "" };
   const next = rest[Math.min(i, rest.length - 1)]!;
   return { tabs: rest, activeId: next.id };
 }

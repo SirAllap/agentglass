@@ -149,6 +149,15 @@ describe("round trip", () => {
     expect(setFor(readSession(), "")!.active).toBe(0);
   });
 
+  it("an empty strip is remembered as empty, not as a missing file", () => {
+    // Otherwise the next launch finds no session and invents a home-page tab.
+    saveSession("", [], "");
+    const s = readSession();
+    expect(s).not.toBeNull();
+    expect(s!.byProfile).toEqual({});
+    expect(setFor(s, "")).toBeNull();
+  });
+
   it("writes nothing at all when there was nothing to keep", () => {
     saveSession("", [tab("about:blank")], "");
     expect(store.get(SESSION_KEY)).toBeUndefined();

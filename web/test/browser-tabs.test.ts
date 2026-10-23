@@ -67,14 +67,11 @@ describe("closing", () => {
     expect(two.activeId).toBe(c.id);
   });
 
-  it("leaves a blank tab rather than an empty strip", () => {
-    // A browser view with no page in it has nothing to show and no way back.
-    const only = newTab("https://a.test/");
-    const r = closeTab([only], only.id);
-    expect(r.tabs).toHaveLength(1);
-    expect(r.tabs[0]!.url).toBe("about:blank");
-    expect(r.activeId).toBe(r.tabs[0]!.id);
-    expect(r.tabs[0]!.id).not.toBe(only.id);
+  it("closing the last tab leaves nothing open", () => {
+    // The island's overview and the person's bar are the way back, so no blank
+    // tab is put in the closed one's place (it showed as a white card there).
+    const only = newTab("https://a.test/", "work");
+    expect(closeTab([only], only.id)).toEqual({ tabs: [], activeId: "" });
   });
 
   it("ignores a tab that is not there", () => {
@@ -207,16 +204,6 @@ describe("profiles", () => {
     const r = addTab([newTab("https://a.test/", "work")], "https://b.test/");
     if ("error" in r) throw new Error("should have opened");
     expect(r.tab.profile).toBe("");
-  });
-
-  it("closing the last tab leaves a blank one in the same profile", () => {
-    // Closing your last work tab should not quietly drop you back into the
-    // default identity — the strip would look the same and the next page you
-    // opened would be signed in as somebody else.
-    const only = newTab("https://a.test/", "work");
-    const r = closeTab([only], only.id);
-    expect(r.tabs.length).toBe(1);
-    expect(r.tabs[0]!.profile).toBe("work");
   });
 });
 

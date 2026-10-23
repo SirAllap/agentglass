@@ -160,6 +160,12 @@ export function saveSession(profileId: string, tabs: BrowserTab[], activeId: str
      `groups` at all, so the loop above cannot clear it. Only the one being
      written from — another profile's set is somebody else's and stays. */
   if (!groups.has(cur)) delete byProfile[cur];
+  /* Nothing open is a fact worth keeping, unlike a blank tab: without the
+     marker the next launch finds no file and invents a home-page tab. */
+  if (!tabs.length && !Object.keys(byProfile).length) {
+    try { localStorage.setItem(keyFor(scope), JSON.stringify({ v: 2, current: cur, byProfile: {} })); } catch { /* as in write */ }
+    return;
+  }
   write({ v: 2, current: cur, byProfile }, scope);
 }
 
@@ -216,7 +222,9 @@ export function readSession(scope?: string): SavedSession | null {
     const set = cleanSet(raw2);
     if (set) byProfile[id] = set;
   }
-  if (!Object.keys(byProfile).length) return null;
+  // An empty strip written on purpose (see saveSession) restores as empty; one
+  // that only LOOKS empty because every set was garbage is still "no session".
+  if (!Object.keys(byProfile).length && Object.keys(v.byProfile as object).length) return null;
   const current = typeof v.current === "string" && isProfileId(v.current) ? v.current : "";
   return { v: 2, current, byProfile };
 }

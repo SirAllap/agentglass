@@ -213,7 +213,7 @@ export function BrowserIsland(p: IslandProps) {
               <div className="agx-isl-bar">
                 <button type="button" className="agx-isl-ib" aria-label="Back" disabled={!p.canBack} onClick={p.onBack}><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M10 3 5 8l5 5" /></svg></button>
                 <button type="button" className="agx-isl-ib" aria-label="Forward" disabled={!p.canForward} onClick={p.onForward}><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="m6 3 5 5-5 5" /></svg></button>
-                <button type="button" className="agx-isl-ib" aria-label={p.loading ? "Stop" : "Reload"} onClick={p.loading ? p.onStop : p.onReload}>
+                <button type="button" className="agx-isl-ib" aria-label={p.loading ? "Stop" : "Reload"} disabled={!active} onClick={p.loading ? p.onStop : p.onReload}>
                   {p.loading
                     ? <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="m4 4 8 8M12 4l-8 8" /></svg>
                     : <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 2.5v3h-3" /></svg>}
@@ -244,6 +244,16 @@ export function BrowserIsland(p: IslandProps) {
               <button type="button" className="agx-isl-ib" aria-label="Close" onClick={() => hide()}><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="m4 4 8 8M12 4l-8 8" /></svg></button>
             </div>
             <div className="agx-isl-boxes">
+              {groups.length === 0 && (
+                <section className="agx-isl-box" style={{ "--n": 1 } as React.CSSProperties}>
+                  <div className="agx-isl-row">
+                    <button type="button" className="agx-isl-card agx-isl-new" onClick={() => { setOpen(false); p.onNew(); }}>
+                      <svg width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><path d="M8 3v10M3 8h10" /></svg>
+                      <span>New tab</span>
+                    </button>
+                  </div>
+                </section>
+              )}
               {groups.map((g) => (
                 <section key={g.profile} className={"agx-isl-box" + (g.held ? " is-agent" : "") + (g.state && g.state.key !== "done" && g.state.key !== "waiting" ? " is-live" : "")} style={{ "--n": g.list.length + 1 } as React.CSSProperties}>
                   <header>

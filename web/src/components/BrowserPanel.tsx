@@ -293,6 +293,8 @@ export function BrowserView({ active: viewOn, scope }: {
      * fine; it read as about:blank because the guest that measured it had no
      * network route out.
      */
+    // Everything was closed on purpose last time: restore nothing, invent nothing.
+    if (saved && !Object.keys(saved.byProfile).length) return [];
     if (!set) {
       const t = sleepingTab(homePage(), "", null, saved?.current ?? "");
       return [wakeFirst ? { ...t, asleep: false } : t];
@@ -1115,7 +1117,21 @@ export function BrowserView({ active: viewOn, scope }: {
         ask.args.atTab = owner.id;
         ask.args.atProfile = owner.profile ? profileName(profilesRef.current, owner.profile) : "default";
       }
-      if (!targetId) { void serveBrowserAsk(null, ask); return; }
+      if (!targetId) {
+        /* Nothing is open (the person closed the last tab). `open` mints one;
+           `newtab`/`tabs` are served without a page; anything that needs a page
+           says so, rather than the misleading "view is not open". */
+        if (ask.op === "open" && typeof ask.args.profile !== "string") ask.args.profile = profile;
+        else if (ask.args.pageBound !== false && ask.op !== "health" && ask.op !== "open") {
+          void api.browserResult({
+            id: ask.id, ok: false, client: clientId(),
+            error: "no tab is open — the person closed them all. Open one with `open <url>` or `newtab <url>` first.",
+          }).catch(() => { /* already timed out */ });
+          return;
+        }
+        void serveBrowserAsk(null, ask);
+        return;
+      }
       const target = els.current.get(targetId);
       /* An agent asking IS a reason to wake up. Without this the first ask of a
          session is answered "there is no browser view in this window" while the
@@ -2131,7 +2147,8 @@ export function BrowserView({ active: viewOn, scope }: {
   const runOmni = (raw: string) => {
     const next = raw === BLANK ? BLANK : normalizeNavigationUrl(raw, searchEngine());
     if (!next) return;
-    if (omni === "new") open(next, activeId, profile);
+    // With no tab open there is nothing to navigate, so an address typed in the bar mints one.
+    if (omni === "new" || !active) open(next, activeId, profile);
     else go(next);
     setOmni(null); setTyped(null); setHint(-1);
   };
@@ -3216,7 +3233,17 @@ export function BrowserView({ active: viewOn, scope }: {
         {/* Somewhere to start. A blank guest paints a black rectangle the size
             of the window, which is what made this view read as broken rather
             than as empty. */}
-        {blank && !active?.failed && (
+        {!active && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3" data-agx-empty="1"
+            style={{ background: "var(--bg)" }}>
+            <span style={{ color: "var(--text3)", opacity: 0.3 }}><BlankPageIcon size={40} /></span>
+            <span className="text-[11.5px]" style={{ color: "var(--text3)" }}>Nothing is open</span>
+            <button type="button" onClick={() => setOmni("new")}
+              className="text-[11.5px] px-3 py-1.5 rounded-md"
+              style={{ background: "var(--surface-card)", color: "var(--text2)", border: LINE }}>New tab</button>
+          </div>
+        )}
+        {active && blank && !active.failed && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 pointer-events-none"
             style={{ background: "var(--bg)" }}>
             <span style={{ color: "var(--text3)", opacity: 0.3 }}><BlankPageIcon size={40} /></span>

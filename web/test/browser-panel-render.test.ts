@@ -81,6 +81,30 @@ beforeEach(() => {
   store.set("__t", String(Math.random()));
 });
 
+describe("nothing open", () => {
+  const emptied = () => store.set("agentglass.browser.session", JSON.stringify({ v: 2, current: "", byProfile: {} }));
+
+  test("an emptied browser restores empty and says so, with a way to start", async () => {
+    emptied();
+    const html = await draw();
+    expect(html).toContain("Nothing is open");
+    expect(html).toContain("New tab");
+  });
+
+  test("a browser with a page does not show the empty state", async () => {
+    seedSession("https://orbit.example/", "Orbit");
+    expect(await draw()).not.toContain("Nothing is open");
+  });
+
+  test("the island still draws with no tab, its count at 0 and the reload disabled", async () => {
+    emptied();
+    store.delete("agentglass.browser.chrome");
+    const html = await draw();
+    expect(html).toContain("agx-isl-num");
+    expect(html).toMatch(/aria-label="Reload"[^>]*disabled/);
+  });
+});
+
 describe("the bar draws what it is for", () => {
   test("the panel is not empty on its first paint", async () => {
     expect((await draw()).length).toBeGreaterThan(400);
