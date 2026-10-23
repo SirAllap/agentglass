@@ -1969,7 +1969,8 @@ describe("stale ids say why, and say to observe again", () => {
     tagName: string; dataset: Record<string, string>; innerText: string; id: string; className: string;
     disabled: boolean; parentElement: null; outerHTML: string; textContent: string;
     getAttribute(n: string): string | null; getBoundingClientRect(): { x: number; y: number; width: number; height: number; top: number; left: number };
-    contains(o: unknown): boolean; scrollIntoView(): void; click(): void; querySelectorAll(sel: string): Node[];
+    contains(o: unknown): boolean; scrollIntoView(): void; click?(): void; querySelectorAll(sel: string): Node[];
+    dispatchEvent?(ev: { type: string }): boolean; closest?(sel: string): Node | null;
   };
 
   /** A document with one button per label, a window of its own (so `__agxSeq`
