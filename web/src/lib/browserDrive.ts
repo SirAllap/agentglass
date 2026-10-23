@@ -2100,6 +2100,11 @@ export async function runBrowserAsk(...a: Parameters<typeof runVerb>): ReturnTyp
   aimAt(a[0], ask);
   const reply = await runVerb(...a);
   if (reply.ok) flashWhereActed(a[0], ask);
+  /* Again on the page the ask left behind: a navigation brings a document the
+     check has not seen, and its first act (GitHub's menu opens on a frame)
+     fell inside the 50 ms the check needs. Measured: Resources stayed shut on
+     a tab off screen until a later ask installed the fallback. */
+  guardFrames(a[0]);
   return stampWhere(reply, { tab: ask.args.atTab, container: ask.args.atProfile });
 }
 

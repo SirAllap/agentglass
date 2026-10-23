@@ -168,12 +168,32 @@ export function BrowserIsland(p: IslandProps) {
   // focus lands on the page you were on once, when it opens, never again on a re-render
   useEffect(() => { if (open) box.current?.querySelector<HTMLElement>(".agx-isl-card.is-on")?.focus({ preventScroll: true }); }, [open]);
 
-  const cls = "agx-isl" + (open ? " is-open" : "") + (shown ? " is-shown" : "") + (snap ? " is-snap" : "") + (tucked ? " is-tucked" : "") + (yours ? " is-yours" : "") + (act?.paused ? " is-taken" : "");
+  /* Opened from the tucked arrow, the pill comes down 12 px, out from under a
+     pointer resting on the edge: hover alone then closed it and reopened it in
+     a loop. While peeking it stays open as long as the pointer is over the
+     pill or the gap above it, and closes on the island's usual grace after. */
+  const [peek, setPeek] = useState(false);
+  useEffect(() => {
+    if (!peek) return;
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const move = (e: PointerEvent) => {
+      const el = box.current; if (!el) return;
+      const r = el.getBoundingClientRect(), half = (yours ? 300 : 210) + 16, mid = r.left + r.width / 2;
+      const inside = e.clientX > mid - half && e.clientX < mid + half && e.clientY < r.top + (yours ? 40 : 36) + 12;
+      if (inside) { clearTimeout(t); t = undefined; } else if (!t) t = setTimeout(() => setPeek(false), 700);
+    };
+    document.addEventListener("pointermove", move);
+    return () => { document.removeEventListener("pointermove", move); clearTimeout(t); };
+  }, [peek, yours]);
+  useEffect(() => { if (!tucked || open) setPeek(false); }, [tucked, open]);
+
+  const cls = "agx-isl" + (open ? " is-open" : "") + (shown ? " is-shown" : "") + (snap ? " is-snap" : "") + (tucked ? " is-tucked" : "") + (peek ? " is-peek" : "") + (yours ? " is-yours" : "") + (act?.paused ? " is-taken" : "");
   const dot = act?.paused ? "is-taken" : working ? "is-working" : "";
   return (
     <>
       {open && <div className={"agx-isl-scrim" + (shown ? " is-shown" : "")} onClick={() => hide()} />}
       <div ref={box} className={cls} role={open ? "dialog" : undefined} aria-label={open ? "Every tab" : undefined}
+        onPointerEnter={() => { if (tucked && !open) setPeek(true); }}
         style={{ "--pw": `${morph.w}px`, "--ph": `${morph.h}px`, "--pr": `${morph.r}px` } as React.CSSProperties}>
         {/* under the collapsed content, so the capsule's icons are on top of it as it lands */}
         {open && <div className="agx-isl-morph" aria-hidden
