@@ -14,6 +14,12 @@ kept in one place.
 
 ## Released
 
+- **v0.24.0** — **The browser shows its agents at work, the Machine tab becomes a file manager, and Settings is rebuilt on one kit.**
+  - **Browser.** The built-in browser draws what an agent is doing on the page, and the island opens into a map of containers and tabs.
+  - **Machine tab.** A file manager with Miller columns, multiple selection, an icons view with thumbnails, history and a preview that reads most kinds of file.
+  - **Settings.** Rebuilt on one kit, and an agent can change nearly every setting through the same door the screen uses; what widens its powers waits for the person.
+  - **Orchestration and pull requests.** An orchestrator has a page of its own, the pull request panel is a board, and Jira is a source for Tasks.
+  - **Phone.** The companion app talks to several paired computers.
 - **v0.23.2** — **Release tags are signed again, so the in-app update accepts them.**
   - **In-app update.** The updater only installs a tag signed by the pinned release key. The tags from v0.20.0 to v0.23.1 were annotated but not signed, so every install that updates from source refused them. v0.23.2 is signed. The release workflow now checks the signature before it publishes, so an unsigned tag fails there and not on an installed app.
 - **v0.23.1** — **Fixes from testing v0.23.0 by hand.**
