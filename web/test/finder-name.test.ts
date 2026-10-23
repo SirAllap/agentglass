@@ -10,7 +10,8 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const root = new URL("../../", import.meta.url).pathname;
-const SKIP = new Set(["node_modules", "dist", ".git", "mobile", "test", "CHANGELOG.md"]);
+// dist-app is what `make desktop-install` leaves behind: a bundle built from an older tree, not prose anyone reads.
+const SKIP = new Set(["node_modules", "dist", "dist-app", ".git", "mobile", "test", "CHANGELOG.md"]);
 const walk = (dir: string, out: string[] = []): string[] => {
   for (const f of readdirSync(dir)) {
     if (SKIP.has(f)) continue;
