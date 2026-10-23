@@ -297,15 +297,15 @@ export function ClickUpPane() {
       <style>{WFM_CSS}</style>
       {/* The connection, and the one switch that decides whether anything
           here can write. The switch is a row like any other: its state is a
-          badge first in the control column, the switch after it, and the
-          warning ink only while changes are on, because that is the state
-          the person has to keep in mind. */}
+          badge first in the control column, the switch after it, in
+          green while changes are on: amber is for what the person has to do,
+          and a switch they chose is not that. */}
       <SettingsCard title={n.name} icon={<PlugIcon size={ICON.sm} />} desc={provider?.detail ?? undefined}
         status={<StatusBadge tone="ok">Connected</StatusBadge>}
         actions={<Button onClick={() => openSettings("connections")}>Manage connection</Button>}>
         <SettingRow label={<span id="cu-changes-l">{`Changes in ${n.name}`}</span>}
           hint={changesOn ? `Only the steps below can change a ${n.item}, one at a time, when you press their button.` : steps.length ? "agentglass only reads. Turn this on to let the steps below act." : "agentglass only reads. Adding your first step turns this on."}
-          status={<span data-guard={changesOn ? "on" : "off"}><StatusBadge tone={changesOn ? "warn" : "off"}>{changesOn ? "On" : "Read-only"}</StatusBadge></span>}
+          status={<span data-guard={changesOn ? "on" : "off"}><StatusBadge tone={changesOn ? "ok" : "off"}>{changesOn ? "On" : "Read-only"}</StatusBadge></span>}
           control={<button type="button" role="switch" aria-checked={changesOn} aria-labelledby="cu-changes-l" disabled={writes === null}
             onClick={() => void setChanges(!changesOn)} className="agx-switch-hit inline-flex items-center rounded-full" style={{ minHeight: HIT }}><Switch on={changesOn} /></button>} />
         <DisconnectBar onDone={() => { setEpoch((e) => e + 1); reread(); }} />
@@ -313,7 +313,7 @@ export function ClickUpPane() {
 
       <Card id="cu-found" icon={<SearchIcon size={ICON.sm} />} title="What we found" open={foundOpen ?? steps.length === 0} onToggle={setFoundOpen}
         desc={reading ? undefined : `${part.counted.length} ${n.lists} count · ${distinct} statuses${part.folded.length ? ` · ${part.folded.length} ignored` : ""}${prefs.prLinkField ? ` · PR link ${prefs.prLinkField}` : ""}${prefs.swatchField ? ` · swatch ${prefs.swatchField}` : ""}`}
-        status={<StatusBadge tone={state.kind === "error" ? "warn" : state.kind === "loading" ? "checking" : "ok"}>{reading ? "Reading your cards" : state.kind === "loading" ? "Reading" : state.kind === "error" ? (asOf ? `As of ${ago(asOf)}` : "Not read") : "Read-only"}</StatusBadge>}>
+        status={<StatusBadge tone={state.kind === "error" ? (asOf ? "off" : "warn") : state.kind === "loading" ? "checking" : "ok"}>{reading ? "Reading your cards" : state.kind === "loading" ? "Reading" : state.kind === "error" ? (asOf ? `As of ${ago(asOf)}` : "Not read") : "Read-only"}</StatusBadge>}>
         <SettingRow label={`${n.lists[0]!.toUpperCase()}${n.lists.slice(1)} that count`}
           hint={<>{countWord(part)}<span className="block mt-1">{chosen ? "You chose these. The rest are ignored, not deleted." : state.kind === "ok" && state.note ? state.note : `Where your ${n.items} live, until you choose.`}</span></>}
           actions={<Button aria-haspopup="listbox" aria-expanded={!!countAt} disabled={!units.length} onClick={(e) => setCountAt(countAt ? null : e.currentTarget)}>Change</Button>} />

@@ -118,7 +118,7 @@ export function JiraSettingsView(p: JiraViewProps) {
         {/* The one switch that decides whether anything here can write; the kinds under it narrow it. */}
         <SettingRow agentExempt label={<span id="jira-changes-l">{`Changes in ${n.name}`}</span>}
           hint={changesOn ? `Only the steps below can change a ${n.item}, one at a time, when you press their button.` : steps.length ? "agentglass only reads. Turn this on to let the steps below act." : "agentglass only reads. Add a step below, then turn this on to let it act."}
-          status={<span data-guard={changesOn ? "on" : "off"}><StatusBadge tone={changesOn ? "warn" : "off"}>{changesOn ? "On" : "Read-only"}</StatusBadge></span>}
+          status={<span data-guard={changesOn ? "on" : "off"}><StatusBadge tone={changesOn ? "ok" : "off"}>{changesOn ? "On" : "Read-only"}</StatusBadge></span>}
           control={<button type="button" role="switch" aria-checked={changesOn} aria-labelledby="jira-changes-l" disabled={p.writesBusy}
             onClick={() => p.onWrites(!changesOn)} className="agx-switch-hit inline-flex items-center rounded-full" style={{ minHeight: HIT }}><Switch on={changesOn} busy={p.writesBusy} /></button>} />
         {p.note && <SettingRow agentExempt label="That did not work" hint={<span role="alert" style={{ color: "var(--error-ink)" }}>{p.note}</span>} />}
