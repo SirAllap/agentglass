@@ -324,7 +324,7 @@ plugin cannot draw into another's panel.
 | Route | What it does |
 |---|---|
 | `GET /plugin/self` | Its name, its declared contributions and its settings |
-| `GET /plugin/self/events?wait=25000` | Long poll: clicks, submitted forms, settings changes, a note marked resolved or answered, a pull request opened |
+| `GET /plugin/self/events?wait=25000` | Long poll: clicks, submitted forms, settings changes, a note marked resolved or answered, a pull request opened, a pull request's head or labels changed |
 | `POST /plugin/self/panel` `{id, tree}` | Draw a declared panel |
 | `POST /plugin/self/panel/<id>/ops` `{seq?, ops}` | Change a declared live panel (`canvas: true`) |
 | `POST /plugin/self/options` `{key, options}` | Choices for a `select` it could only find at run time |
@@ -774,6 +774,7 @@ on an app without it.
 | `note-status` event `{repo, number, id, status, at}` | app to plugin | existing | |
 | &nbsp;&nbsp;`reply`, `replies[]` | app to plugin | existing (*Replies under a finding*) | Absent when there are none |
 | `pr-action`, `pr-open` events | app to plugin | existing | |
+| `pr-changed` event `{type, repo, number, head, labels, added, removed, headChanged, at}` | app to plugin | **new (2)** | Only sent to a running plugin that declares `prNotes`. An older app never sends it: keep the poll you have, and stop only when the event has been seen once. Rules in *When a pull request changes* below |
 | `note-action` event `{id, noteId, repo, number, at}` | app to plugin | **new (2)** | Only sent for an action the manifest declared |
 | `run-approve`, `run-skip` events `{id, repo, number, at}` | app to plugin | **new (2)** | Only sent for a run in `needs-ok` |
 | `POST /plugin/self/pr/notes/reply` `{id, text}` | plugin to app | **new (2)** | `404` on an older app: skip thread answers |
@@ -784,6 +785,49 @@ on an app without it.
 | Manifest `contributes.reads` `["sessions"]` | plugin to app | **new (2)** | At most 2 values, today only `sessions`; an unknown one is refused. An older app ignores the key and `/prs/sessions` does not exist (404). Under `contributes`, so the approval hash covers it |
 | `GET /prs/sessions?root=&number=` (read scope) | plugin to app | **new (2)** | Off twice over, see *The session that wrote a pull request*. `{sessions: []}` when nothing matches; `403`, `422` and `429` below |
 | `GET /plugins/session-reads` (read scope) | plugin to app | **new (2)** | `{repos: [...]}`, the repositories the person allowed, so a settings screen can say "not allowed here" |
+
+#### When a pull request changes
+
+`pr-changed` tells a plugin that a pull request's head or labels moved, so a
+review that starts on a label does not wait for a poll.
+
+```json
+{ "type": "pr-changed", "repo": "acme/orbit", "number": 1042,
+  "head": "0123456789abcdef0123456789abcdef01234567",
+  "labels": ["agentglass-review", "bug"],
+  "added": ["agentglass-review"], "removed": [],
+  "headChanged": true, "at": 1767225600000 }
+```
+
+`head` is the 40-hex commit the pull request points at now, `labels` is the
+whole set after the change, sorted, and `added` / `removed` are the difference
+from what the plugin was last told. The title and body are never in it: ask
+`/prs/detail` for what you need.
+
+How it is delivered, each rule from something measured:
+
+- **Nothing is polled for it.** The app compares what its own reads already
+  carry: the list refresh, the open pull request, and the re-read that follows
+  a label change made in the app. A pull request nobody has loaded is not
+  watched, and a repository the app does not show produces no events.
+- **The first time the app sees a pull request is a baseline, not an event.**
+  Boot reads every open pull request; announcing all of them would wake a
+  reviewer once per card for nothing that happened. After a restart each pull
+  request is a first sight again, so a change made while the app was down is
+  not announced: a plugin that must not miss one still lists on start.
+- **A burst is one event.** Changes within 2 seconds of the first one are sent
+  once, with the final state compared with what the plugin was last told. A
+  change undone inside the window is no event. Labels in a different order are
+  no change.
+- **Bounds.** At most 50 labels, each cut at 100 characters. The event queue
+  is the one every event shares: 200 per plugin, the oldest dropped.
+- **A label changed from the app is heard at once.** Adding or removing a label
+  in the app reads that one pull request back (one detail read, no list read)
+  and the event follows within the coalescing window, not at the next 120 s
+  tick. At most one such read per pull request every 3 seconds.
+- **Forcing a refresh yourself** is `GET /prs/list?force=1`, open to a `read`
+  plugin like the other pull request reads. It costs one list read of GitHub
+  per call, so it is for a plugin's start, not for a loop.
 
 Nothing in this table can post to GitHub. The plugin never holds a write path
 there: the one way a finding's words leave the machine is the person

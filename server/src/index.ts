@@ -172,6 +172,7 @@ import { capBuildCache, removeImages } from "./dockerprune.ts";
 import { inbox, markRead, markRepoRead, unsubscribe } from "./ghinbox.ts";
 import { applyMarks, listMarks, parseMarkOps, talkAlreadyRead, MARK_KINDS } from "./marks.ts";
 import { noteAsk as noteWatchAsk, startPrWatch } from "./prWatch.ts";
+import { onPrChanged, deliverPrChanged } from "./prChanged.ts";
 import {
   listWatches, addWatch, removeWatch, setPreset, applyPreset, sawMine, onTalkSeen as watchOnTalkSeen, pendingFires, ackFire,
   subscribeWatchChange, subscribeWatchFire, subscribeWatchChecks, startPrNotifyWatch,
@@ -267,6 +268,10 @@ import {
   bankByPartition, refileBank,
 } from "./understudy.ts";
 import { listSources } from "./understudy-sources.ts";
+
+// A head or label change seen by any read the app already makes reaches the
+// running plugins that write notes, as `pr-open` does. See prChanged.ts.
+onPrChanged((ev) => deliverPrChanged(ev, listPlugins().map((p) => ({ name: p.name, running: p.running, prNotes: !!p.contributes.prNotes })), pushEvent));
 /** The last ingest run, so the panel can say what it learned without re-reading
  *  a single file. Deliberately in memory and not on disk: it is a receipt for
  *  something that just happened, and a stale one after a restart would claim
@@ -516,6 +521,7 @@ reading, editing, or stuck on the same file for ten minutes.
 import json
 import re
 import sys
+
 
 
 def tail(path: str, keep: int = 60) -> str:

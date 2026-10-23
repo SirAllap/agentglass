@@ -27,6 +27,7 @@ import {
   NOTE_STATUSES, REPLIES_PER_NOTE, coerceValue, validateReplyInput, validReplyBy, resolveSettings, validateNote, validateRun, validateTree, validPrRef,
 } from "../../shared/pluginUi.ts";
 import { pluginsConfigDir } from "./plugins.ts";
+import type { PrChangedEvent } from "./prChanged.ts";
 import { forgetAnnotations } from "./inbox-annotations.ts";
 import { dropCanvases } from "./plugin-canvas.ts";
 
@@ -119,6 +120,7 @@ export type PluginEvent =
   | { type: "settings"; settings: Record<string, unknown>; at: number }
   | { type: "note-status"; repo: string; number: number; id: string; status: NoteStatus; at: number; reply?: NoteReply; replies?: NoteReply[] }
   | { type: "pr-open"; repo: string; number: number; at: number }
+  | PrChangedEvent
   | { type: "pr-action"; id: string; repo: string; number: number; at: number }
   | { type: "note-action"; id: string; noteId: string; repo: string; number: number; at: number }
   | { type: "run-approve" | "run-skip"; id: string; repo: string; number: number; at: number };
