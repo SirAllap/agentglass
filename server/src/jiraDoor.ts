@@ -25,20 +25,23 @@
  */
 import type { CardDev, ProviderTask, TaskDetail } from "../../shared/providers.ts";
 import { UNTRUSTED_MAX_BYTES } from "../../shared/uiActions.ts";
-import { ISSUE_KEY, linkPullRequestStored, moveStored, movesStored, jiraWriteEnabled, remoteLinksAllStored } from "./jira.ts";
+import { ISSUE_KEY, withStored, linkPullRequestStored, moveStored, movesStored, jiraWriteEnabled, remoteLinksAllStored } from "./jira.ts";
 import { ACTIVITY_KINDS, activityStored, type ActivityKind } from "./jiraActivity.ts";
 import { deleteCommentStored, detailStored, editCommentStored, commentStored } from "./jiraComments.ts";
 import { editStored, type EditAsk } from "./jiraEdit.ts";
 import { addWebLinkStored, createSubtaskStored, linkKindsStored, relateCardsStored, removeWebLinkStored, unrelateCardsStored } from "./jiraRelate.ts";
 import { devStored } from "./jiraDev.ts";
 import { rankStored } from "./jiraRank.ts";
+import { readBoardAreas } from "./jiraboards.ts";
+import { boardEpics, activeSprint } from "./jiraBoardContext.ts";
+import { areaRows } from "../../shared/jiraAreas.ts";
 import { attachFileStored, removeFileStored, UPLOAD_MAX } from "./jiraFiles.ts";
 import { jiraSteps, runStepBody, STEP_KEYS } from "./jiraSteps.ts";
 import { setVoteStored, setWatchStored } from "./jiraFollow.ts";
 import { deleteWorkStored, editWorkStored, logWorkStored } from "./jiraWorklog.ts";
 import { rememberOwnMove } from "./jirawatch.ts";
 
-export const DOOR_VERBS = ["card", "moves", "links", "linktypes", "activity", "steps", "step", "link", "edit", "comment", "comment-edit", "comment-delete", "move", "subtask", "relate", "unrelate", "weblink", "unweblink", "worklog", "worklog-edit", "worklog-delete", "watch", "vote", "rank", "attach", "unattach"] as const;
+export const DOOR_VERBS = ["card", "moves", "links", "linktypes", "areas", "activity", "steps", "step", "link", "edit", "comment", "comment-edit", "comment-delete", "move", "subtask", "relate", "unrelate", "weblink", "unweblink", "worklog", "worklog-edit", "worklog-delete", "watch", "vote", "rank", "attach", "unattach"] as const;
 export type DoorVerb = (typeof DOOR_VERBS)[number];
 /** The verbs that change the site. The rest read. */
 export const DOOR_ACTING: readonly DoorVerb[] = ["step", "link", "edit", "comment", "comment-edit", "comment-delete", "move", "subtask", "relate", "unrelate", "weblink", "unweblink", "worklog", "worklog-edit", "worklog-delete", "watch", "vote", "rank", "attach", "unattach"];
@@ -319,6 +322,25 @@ async function readLinkTypes(): Promise<DoorAnswer> {
   };
 }
 
+/**
+ * A board's areas (its epics named "Area: …") with how many cards each holds, in the sprint and in all: the same numbers
+ * the Areas tree draws, from the same kept read. The names are the team's, so they ride under `untrusted`.
+ */
+async function readAreas(board: unknown): Promise<DoorAnswer> {
+  const id = typeof board === "string" ? board.replace(/^board:/, "").trim() : "";
+  if (!/^\d{1,12}$/.test(id)) return refuse("`board` is a board id such as 3 or board:3");
+  const r = await withStored(async (c) => {
+    const [epics, held, sprint] = await Promise.all([boardEpics(c, id), readBoardAreas(c, id), activeSprint(c, id)]);
+    if (!epics.ok || !held.ok || !held.data) return { ok: false as const, error: held.error ?? epics.error ?? "Jira did not answer", throttled: held.throttled };
+    return { ok: true as const, data: { rows: areaRows(epics.data ?? [], held.data.tasks, sprint.data?.name), truncated: held.data.truncated, sprint: sprint.data?.name ?? "" } };
+  });
+  if (!r.ok || !r.data) return { status: 200, body: { ok: false, error: r.error ?? "Jira did not answer", ...(r.throttled ? { throttled: true } : null) } };
+  return {
+    status: 200,
+    body: { ok: true, state: { count: r.data.rows.length, truncated: r.data.truncated }, untrusted: { sprint: clip(r.data.sprint, 80), areas: r.data.rows.map((a) => ({ key: a.key, name: clip(a.name, 80), total: a.total, inSprint: a.inSprint, done: a.done })) } },
+  };
+}
+
 /** The three steps as the owner configured them, by whether they are on; their blocks name statuses a team chose. */
 function readSteps(): DoorAnswer {
   const { steps } = jiraSteps();
@@ -363,6 +385,8 @@ export async function runDoor(verb: string, b: Record<string, unknown>): Promise
       return ISSUE_KEY.test(key) ? readLinks(key) : refuse("That is not a Jira card id");
     case "linktypes":
       return readLinkTypes();
+    case "areas":
+      return readAreas(b.board);
     case "activity":
       return ISSUE_KEY.test(key) ? readActivity(key, b.kind, b.start) : refuse("That is not a Jira card id");
     case "steps":

@@ -126,6 +126,7 @@ export const JIRA_BOARD: BoardSource = {
   views,
   read,
   boardContext: (viewId) => api.jiraBoardContext(viewId),
+  boardAreas: (viewId) => api.jiraBoardAreas(viewId),
   rank: (key, ask) => api.jiraRank(key, ask),
   list: async () => NOT_HERE,
   listViews: async () => ({ ok: true, views: [], links: [] }),

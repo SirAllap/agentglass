@@ -132,7 +132,7 @@ import { countedProjects, setCountedProjects, statusUnitsStored as jiraStatusUni
 import {
   jiraViews, viewRead as jiraViewRead, viewChoices as jiraViewChoices, projectChoices as jiraProjectChoices,
   addViewByUrl as jiraAddViewByUrl, addViewByChoice as jiraAddViewByChoice, addFolderByKey as jiraAddFolder,
-  removeViewById as jiraRemoveView, removeFolderById as jiraRemoveFolder, refreshJiraFoldersIfStale,
+  removeViewById as jiraRemoveView, removeFolderById as jiraRemoveFolder, refreshJiraFoldersIfStale, readBoardAreas as jiraBoardAreas,
 } from "./jiraboards.ts";
 import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, addClickupFolder, refreshFoldersIfStale, replaceViewUrl, readView } from "./providers.ts";
 import { clickupPrefs, setClickupPrefs, settleFirstRun } from "./clickupPrefs.ts";
@@ -6642,6 +6642,11 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (req.method === "GET" && pathname === "/jira/board-context") {
       const r = await withJira(async (c) => ({ ok: true, data: await jiraBoardContext(c, url.searchParams.get("id") ?? "") }));
       return json(r.ok && r.data ? r.data : { ok: false, error: r.error, filters: [], epics: [], ...(r.throttled ? { throttled: true } : null) });
+    }
+    /* The cards under the board's epics, one kept read for the Areas tree and an Area's page (jiraboards.ts `readBoardAreas`). */
+    if (req.method === "GET" && pathname === "/jira/board-areas") {
+      const r = await withJira((c) => jiraBoardAreas(c, (url.searchParams.get("id") ?? "").replace(/^board:/, "")));
+      return json(r.ok && r.data ? { ok: true, ...r.data } : { ok: false, error: r.error, tasks: [], ...(r.throttled ? { throttled: true } : null) });
     }
     if (pathname === "/jira/rank" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();

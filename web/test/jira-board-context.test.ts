@@ -9,7 +9,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { globalStubs } from "./stubGlobal";
-import { epicTone, groupByParent, groupModeOf, guessOrder, rankOf, rankable, sortedByOrder, splitSprint, sprintLine, sprintTotals } from "../src/lib/jiraBoardContext.ts";
+import { epicTone, groupByParent, guessOrder, rankOf, rankable, sortedByOrder, splitSprint, sprintLine, sprintTotals } from "../src/lib/jiraBoardContext.ts";
 import type { ProviderTask } from "../../shared/providers.ts";
 
 const stubGlobal = globalStubs();
@@ -44,12 +44,6 @@ describe("grouping by parent", () => {
   test("no cards with no parent is no empty group, and no cards at all is no groups", () => {
     expect(groupByParent([card("1", under("ORBIT-100"))]).map((x) => x.key)).toEqual(["ORBIT-100"]);
     expect(groupByParent([])).toEqual([]);
-  });
-  test("the saved choice is honoured only where there is a parent to group by", () => {
-    expect(groupModeOf("parent", true)).toBe("parent");
-    expect(groupModeOf("parent", false)).toBe("status");
-    expect(groupModeOf(null, true)).toBe("status");
-    expect(groupModeOf("nonsense", true)).toBe("status");
   });
   test("an epic's colour is a house tone by its number, and no colour is a quiet one", () => {
     expect(epicTone("color_1")).toBe("--primary");
@@ -139,7 +133,7 @@ describe("the source and the screen", () => {
 
   test("the context is drawn only where the source has it", () => {
     expect(body).toContain("source.caps.context && ctx && <JiraQuickChips");
-    expect(body).toContain("source.caps.context && <JiraGroupBy");
+    expect(body).toContain("source.caps.context && <JiraGroupControl");
     expect(body).toContain("!onLooked && ctx?.sprint &&");
     expect(rowFn).toContain("source.caps.context && t.issueType");
   });
@@ -158,14 +152,14 @@ describe("the source and the screen", () => {
   });
 
   test("a drop is a rank only inside one status group, with the write switch on, on a board, never grouped by parent", () => {
-    expect(body).toContain("const canRank = !!source.rank && !!boards?.writeEnabled && !!boardViewId?.startsWith(\"board:\") && !byParent && !onLooked;");
+    expect(body).toContain("const canRank = !!source.rank && !!boards?.writeEnabled && !!boardViewId?.startsWith(\"board:\") && !keyed && !onLooked;");
     expect(body).toContain("if (!canRank || !rankable(g.rows)) return undefined;");
     // Both halves of a drag ask: the line is only drawn inside the group, and a drop outside it sends nothing.
     expect(body.split("from.group !== g.status").length - 1).toBe(2);
     // The parent groups' rows are never given a drag.
-    const parentBlock = body.slice(body.indexOf("{byParent && parentGroups.map"), body.indexOf("{!onLooked && !byParent && groups.map"));
+    const parentBlock = body.slice(body.indexOf("{keyed && keyedGroups.map"), body.indexOf("{!onLooked && !keyed && groups.map"));
     expect(parentBlock).not.toContain("drag=");
-    expect(parentBlock).toContain("showStatus");
+    expect(parentBlock).toContain("cardRow(t, true)");
   });
 
   test("a row is draggable only when it was handed a drag, and the drop line is out of the layout", () => {

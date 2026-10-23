@@ -12,11 +12,6 @@
 import type { JiraBoardSprint, ProviderTask } from "../../../shared/providers.ts";
 import { compareOrder } from "../../../shared/orderIndex.ts";
 
-export type GroupMode = "status" | "parent";
-
-/** A board is grouped by status unless the person chose otherwise and the source has parents to group by. */
-export const groupModeOf = (saved: string | null | undefined, available: boolean): GroupMode => (available && saved === "parent" ? "parent" : "status");
-
 export interface ParentGroup {
   /** The parent's card key; "" for the cards that have none. */
   key: string;

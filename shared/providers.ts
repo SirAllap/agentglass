@@ -264,6 +264,13 @@ export interface JiraBoardContext {
   epics: JiraBoardEpic[];
 }
 
+/**
+ * `GET /jira/board-areas`: the cards that sit under an epic on a board (done and open), in one read the server keeps
+ * ten minutes. The Areas tree counts from it and an Area's page is filtered from it. `truncated`: more than the read
+ * holds, so the counts are "at least".
+ */
+export interface JiraBoardAreas { ok: boolean; error?: string; tasks: ProviderTask[]; truncated?: boolean; throttled?: boolean }
+
 /** Something the add-a-view list offers. */
 export interface JiraViewChoice {
   kind: "board" | "filter";

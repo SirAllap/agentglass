@@ -37,7 +37,7 @@ import type { ComponentType, ReactNode } from "react";
 import { api } from "./api.ts";
 import { __forgetClickupSetup } from "./clickupSetup.ts";
 import type { TrackerId } from "./trackerApi.ts";
-import type { ClickUpBoards, JiraBoardContext, ProviderTask, ViewTasksResponse } from "../../../shared/providers.ts";
+import type { ClickUpBoards, JiraBoardAreas, JiraBoardContext, ProviderTask, ViewTasksResponse } from "../../../shared/providers.ts";
 
 /** What the card pane may offer. A source that cannot do a thing says so here
  *  and the control is left out, not disabled. */
@@ -122,6 +122,8 @@ export interface BoardSource {
   read: (id?: string, force?: boolean, quick?: readonly string[]) => Read<"clickupView">;
   /** A board's quick filters, sprint and epics. Only a source whose `caps.context` is set has it. */
   boardContext?: (viewId: string) => Promise<JiraBoardContext>;
+  /** The cards under a board's epics, in one read (Jira). The Areas tree counts from it and an Area's page is filtered from it. */
+  boardAreas?: (viewId: string) => Promise<JiraBoardAreas>;
   /** Put a card before or after another on its board (the order the board is read in). Behind the tracker's write switch. */
   rank?: (key: string, ask: { before?: string; after?: string }) => Promise<{ ok: boolean; error?: string }>;
   /** One list's own statuses and fields, for a card that lives elsewhere. */

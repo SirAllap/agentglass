@@ -30,14 +30,14 @@
  */
 import { ASSIGNED_VIEW_ID } from "../../shared/providers.ts";
 import type {
-  JiraColumn, JiraProjectChoice, JiraViewChoice, JiraViewRead, JiraViews, ListStatus, SavedFolder, SavedView,
+  JiraColumn, JiraProjectChoice, ProviderTask, JiraViewChoice, JiraViewRead, JiraViews, ListStatus, SavedFolder, SavedView,
 } from "../../shared/providers.ts";
 import { redacted } from "./credentials.ts";
 import {
   CATEGORY_COLOR, apiOf, jiraCall, jiraGeneration, orderByAt, memoOk, memoHas, mine, projects, searchJql, withStored,
   type JiraCreds, type JiraResult, type JiraTasks, type SeenStatus,
 } from "./jira.ts";
-import { activeSprint, quickFilterRows } from "./jiraBoardContext.ts";
+import { activeSprint, boardEpics, quickFilterRows } from "./jiraBoardContext.ts";
 import {
   addFolder, addView, cachedFor, currentView, isFolderBoard, putCache, removeFolder, removeView, replaceFolder, savedFolders, savedViews, setCurrent,
 } from "./jiraviews.ts";
@@ -346,32 +346,65 @@ async function searchSprintAndRest(creds: JiraCreds, q: { sprint: string; rest: 
   };
 }
 
-export async function readBoard(creds: JiraCreds, id: string, quick: readonly string[] = []): Promise<JiraResult<ViewRows>> {
+/** The board's own restriction, as clauses a search can AND together, and the order its filter asks for. */
+async function boardWhere(creds: JiraCreds, id: string, quick: readonly string[]): Promise<JiraResult<{ where: string[]; order: string; cfg: BoardConfig; empty: boolean; columns: JiraColumn[] }>> {
   const cfg = await boardConfig(creds, id);
   if (!cfg.ok || !cfg.data) return { ...cfg, data: undefined };
   const f = await filterJql(creds, cfg.data.filterId);
   if (!f.ok || !f.data) return { ...f, data: undefined };
   const columns = cfg.data.columns;
   const ids = [...new Set(columns.flatMap((c) => c.statusIds))];
-  // A board whose columns map no status shows its columns and no cards.
-  if (!ids.length) return { ok: true, data: { tasks: [], truncated: false, columns, statuses: [] } };
   const { restriction, order } = splitOrder(f.data.jql);
   const clauses = await quickClauses(creds, id, quick);
   if (!clauses.ok || !clauses.data) return { ...clauses, data: undefined };
   const where = [
     ...(restriction ? [`(${restriction})`] : []),
-    `status in (${ids.join(", ")})`,
+    ...(ids.length ? [`status in (${ids.join(", ")})`] : []),
     ...(cfg.data.subQuery ? [`(${cfg.data.subQuery})`] : []),
     ...clauses.data,
   ];
+  // A board whose columns map no status shows its columns and no cards.
+  return { ok: true, data: { where, order, cfg: cfg.data, empty: !ids.length, columns } };
+}
+
+export async function readBoard(creds: JiraCreds, id: string, quick: readonly string[] = []): Promise<JiraResult<ViewRows>> {
+  const w = await boardWhere(creds, id, quick);
+  if (!w.ok || !w.data) return { ...w, data: undefined };
+  const { where, order, cfg, columns } = w.data;
+  if (w.data.empty) return { ok: true, data: { tasks: [], truncated: false, columns, statuses: [] } };
   // Free where the board's header already asked: the sprint is remembered under the same key as its context.
   const sprint = await activeSprint(creds, id);
-  const ask = { board: { points: cfg.data.estimationField } };
+  const ask = { board: { points: cfg.estimationField } };
   const plan = sprint.ok && sprint.data ? sprintQueries(where, order, sprint.data.id) : null;
   const r = plan ? await searchSprintAndRest(creds, plan, ask) : await searchJql(creds, where.join(" AND ") + (order ? ` ${order}` : ""), ask);
   if (!r.ok || !r.data) return { ...r, data: undefined };
   const { seen: _seen, ...rows } = r.data;
-  return { ok: true, data: { ...rows, columns, statuses: await boardStatuses(creds, cfg.data, r.data) } };
+  return { ok: true, data: { ...rows, columns, statuses: await boardStatuses(creds, cfg, r.data) } };
+}
+
+/**
+ * The cards that sit under an epic on a board, done and open, in ONE kept read. The Areas tree draws its counts from it
+ * and an Area's page is filtered from it, so opening a board costs this one search (a few pages) per ten minutes and
+ * nothing per area. Sub-tasks are left out (their parent is a story, not an area). Ceiling: AREA_PAGES pages of 50
+ * cards, newest first; a project with more says so through `truncated` and the counts are then "at least".
+ */
+const AREA_PAGES = 6;
+export function readBoardAreas(creds: JiraCreds, id: string): Promise<JiraResult<{ tasks: ProviderTask[]; truncated: boolean }>> {
+  if (!NUM.test(id)) return Promise.resolve({ ok: false, error: BOARD_GONE });
+  return memoOk<{ tasks: ProviderTask[]; truncated: boolean }>(creds, `areas:${id}`, async () => {
+    const w = await boardWhere(creds, id, []);
+    if (!w.ok || !w.data) return { ...w, data: undefined };
+    if (w.data.empty) return { ok: true, data: { tasks: [], truncated: false } };
+    // The epics named "Area: …" are the areas: ask for their cards only, so a QA epic holding a hundred runs does not
+    // use up the pages. Where none is named so, every card under any epic (the tree then draws the epics that hold one).
+    const epics = await boardEpics(creds, id);
+    const areas = (epics.data ?? []).filter((e) => /^area\s*:/i.test(e.name)).map((e) => e.key).filter((k) => /^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(k));
+    const under = areas.length ? `parent in (${areas.join(", ")})` : "parent is not EMPTY";
+    const jql = [...w.data.where, under, "issuetype not in subTaskIssueTypes()"].join(" AND ") + " ORDER BY updated DESC";
+    const r = await searchJql(creds, jql, { board: { points: w.data.cfg.estimationField }, pages: AREA_PAGES });
+    if (!r.ok || !r.data) return { ...r, data: undefined };
+    return { ok: true, data: { tasks: r.data.tasks, truncated: r.data.truncated } };
+  });
 }
 
 async function plainView(creds: JiraCreds, jql: string): Promise<JiraResult<ViewRows>> {

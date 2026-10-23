@@ -1,6 +1,6 @@
 /*
  * What a Jira board draws around its cards: the sprint it is in, the board's
- * own quick filters, the choice of grouping, and the heading of a parent's
+ * own quick filters, and the heading of a parent's
  * group. The decisions (grouping, dates, colour) are in lib/jiraBoardContext.ts;
  * these are only the pictures of them, drawn from what the server sent.
  *
@@ -10,7 +10,7 @@
  * empty one, and a board with no sprint draws no header.
  */
 import type { JiraBoardSprint, JiraQuickFilter } from "../../../../shared/providers.ts";
-import { epicTone, sprintLine, type GroupMode, type ParentGroup } from "../../lib/jiraBoardContext.ts";
+import { epicTone, sprintLine, type ParentGroup } from "../../lib/jiraBoardContext.ts";
 import { EDGE } from "../workspace/Chrome.tsx";
 import { ON_CHIP } from "../tasks/chipStyle.ts";
 import { TypeMark } from "./JiraSections.tsx";
@@ -50,18 +50,6 @@ export function JiraQuickChips({ filters, picked, onToggle }: { filters: readonl
         );
       })}
     </>
-  );
-}
-
-/** Group the cards by status (the workflow) or by what they sit under. Both are always drawn. */
-export function JiraGroupBy({ mode, onMode }: { mode: GroupMode; onMode: (m: GroupMode) => void }) {
-  return (
-    <span className="inline-flex items-center gap-1" role="group" aria-label="Group cards by">
-      {(["status", "parent"] as const).map((m) => (
-        <button key={m} onClick={() => onMode(m)} aria-pressed={mode === m} className={CHIP} style={mode === m ? ON_CHIP : idle}
-          title={m === "status" ? "Group the cards by status" : "Group the cards by their parent (epic or story)"}>by {m}</button>
-      ))}
-    </span>
   );
 }
 

@@ -30,12 +30,14 @@ import { Optimistic, commentResolvedPatch } from "../lib/taskOptimistic.ts";
 import { FilterBuilder } from "./tasks/FilterBuilder.tsx";
 import { EMPTY, apply as applyFilters, fieldsOf, liveCount as builtCount, type FilterSet } from "./tasks/filters.ts";
 import type { GitRepoRef, IssueDetail, IssuePr, IssueRow, IssueWork, StartMode, LocalTask, TaskCapability, TasksListResponse, SkillInfo } from "../../../shared/types.ts";
-import type { JiraBoardContext, ProviderTask, ProviderTasksResponse, SavedView, SavedFolder, ViewTasksResponse, ListStatus, ListField, ListPlace, ListMember, TaskDetail, CardEvent, CardField as CardFieldValue } from "../../../shared/providers.ts";
+import type { JiraBoardAreas, JiraBoardContext, ProviderTask, ProviderTasksResponse, SavedView, SavedFolder, ViewTasksResponse, ListStatus, ListField, ListPlace, ListMember, TaskDetail, CardEvent, CardField as CardFieldValue } from "../../../shared/providers.ts";
 import { compareOrder } from "../../../shared/orderIndex.ts";
 import { ON_CHIP, ON_CHIP_OK } from "./tasks/chipStyle.ts";
-import { JiraGroupBy, JiraQuickChips, JiraSprintHeader, ParentLabel } from "./jira/JiraBoardContext.tsx";
+import { JiraQuickChips, JiraSprintHeader, ParentLabel } from "./jira/JiraBoardContext.tsx";
+import { JiraAreaHead, JiraAreaRail, JiraGroupControl, JiraScope, SPRINTS } from "./jira/JiraAreas.tsx";
+import { areaCards, areaLine, areaRows, defaultPref, groupAreas, groupKeyed, parsePref, prefText, type GroupPref, type KeyGroup } from "../lib/jiraAreas.ts";
 import { TypeMark } from "./jira/JiraSections.tsx";
-import { groupByParent, groupModeOf, guessOrder, rankOf, rankable, sortedByOrder, splitSprint, sprintTotals, type GroupMode } from "../lib/jiraBoardContext.ts";
+import { guessOrder, rankOf, rankable, sortedByOrder, splitSprint, sprintTotals, type ParentGroup } from "../lib/jiraBoardContext.ts";
 import { blockersOf, foldCard, groupByStatus, looksLikeCardId, readyCount, tableColumns } from "../lib/boardGroups.ts";
 import { CardWrites } from "../lib/cardWrites.ts";
 import { activityRows } from "../lib/cardActivity.ts";
@@ -957,7 +959,12 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
   const [ctx, setCtx] = useState<JiraBoardContext | null>(null);
   const [quickBy, setQuickBy] = useState<Record<string, string[]>>({});
   const quickRef = useRef<Record<string, string[]>>({});
-  const [groupSaved, setGroupSaved] = useState<string | null>(() => { try { return localStorage.getItem(source.storageKey("group")); } catch { return null; } });
+  /* The Areas tree's one read of the cards under the board's epics, which area or the sprint is open (an epic's key, or SPRINTS),
+     whether an Area shows only the sprint's cards, and the grouping the person last chose for THIS board (kept as text, read by `parsePref`). */
+  const [areas, setAreas] = useState<{ state: "loading" | "ready" | "error"; read: JiraBoardAreas | null }>({ state: "loading", read: null });
+  const [areaSel, setAreaSel] = useState<string | null>(null);
+  const [scopeOnly, setScopeOnly] = useState(false);
+  const [prefRaw, setPrefRaw] = useState<string | null>(null);
   /** The built filter — field, is/is not, values — see tasks/filters.ts. */
   const [built, setBuilt] = useState<FilterSet>(EMPTY);
   const [confirmWrite, setConfirmWrite] = useState(false);
@@ -1785,9 +1792,15 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
    * a status applied on the press has to move the row, the group heading and the
    * pill in the card at the same moment, or the panel looks like it half-worked.
    */
+  const inAreaPage = !!areaSel && areaSel !== SPRINTS;
+  const areaHeld = useMemo(() => (inAreaPage && areas.read?.ok ? areaCards(areas.read.tasks, areaSel!) : []), [inAreaPage, areaSel, areas.read]);
+  const areaSprint = ctx?.sprint?.name;
   const tasks = useMemo(
-    () => (data?.tasks ?? []).map((t) => over[t.id] ?? t),
-    [data, over],
+    () => (inAreaPage
+      // An Area's page: its cards in any sprint, or only the sprint's when the switch says so.
+      ? (scopeOnly && areaSprint ? areaHeld.filter((t) => t.sprint === areaSprint) : areaHeld)
+      : (data?.tasks ?? [])).map((t) => over[t.id] ?? t),
+    [data, over, inAreaPage, areaHeld, scopeOnly, areaSprint],
   );
 
   /* Worked out here rather than inside the builder, so the same builder can
@@ -2351,9 +2364,9 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
   }, [looked, q]);
 
   /* A board in a sprint: the sprint's cards in their status groups, and the rest below as one folded Backlog. */
-  const sprintName = !onLooked ? ctx?.sprint?.name : undefined;
+  const sprintName = !onLooked && !inAreaPage ? ctx?.sprint?.name : undefined;
   const sprintSplit = useMemo(() => (sprintName ? splitSprint(rows, sprintName) : null), [rows, sprintName]);
-  const sprintPoints = useMemo(() => (sprintName ? sprintTotals(splitSprint(tasks, sprintName).inSprint, data?.statuses ?? []) : undefined), [tasks, sprintName, data?.statuses]);
+  const sprintPoints = useMemo(() => (ctx?.sprint?.name ? sprintTotals(splitSprint((data?.tasks ?? []).map((t) => over[t.id] ?? t), ctx.sprint.name).inSprint, data?.statuses ?? []) : undefined), [data, over, ctx?.sprint?.name]);
   // The person opens a sprint to see all of it, like Jira's own backlog view: done cards included, one press to hide them.
   const sprintId = ctx?.sprint?.id;
   useEffect(() => { if (sprintId) setShowDone(true); }, [sprintId]);
@@ -2398,6 +2411,21 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
     void source.boardContext(boardViewId).then((c) => { if (live) setCtx(c); }).catch(() => {});
     return () => { live = false; };
   }, [source, boardViewId]);
+  /* The Areas tree's read: once per board visit (the server keeps it ten minutes, so a revisit is free), and the last
+     grouping this board was left in. An open Area belongs to its board, so it is closed with it. */
+  useEffect(() => {
+    setAreaSel(null); setScopeOnly(false);
+    try { setPrefRaw(boardViewId ? (localStorage.getItem(source.storageKey(`group:${boardViewId}`)) ?? localStorage.getItem(source.storageKey("group"))) : null); } catch { setPrefRaw(null); }
+    setAreas({ state: "loading", read: null });
+    if (!source.boardAreas || !boardViewId?.startsWith("board:")) return;
+    let live = true;
+    void source.boardAreas(boardViewId)
+      .then((r) => { if (live) setAreas({ state: r.ok ? "ready" : "error", read: r }); })
+      .catch(() => { if (live) setAreas({ state: "error", read: null }); });
+    return () => { live = false; };
+  }, [source, boardViewId]);
+  // Opening an Area or the sprint shows all of it, done cards included, as the sprint's own page does.
+  useEffect(() => { if (areaSel) setShowDone(true); }, [areaSel]);
   const quick = (boardViewId && quickBy[boardViewId]) || [];
   const toggleQuick = (qid: string) => {
     if (!boardViewId) return;
@@ -2407,13 +2435,23 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
     setQuickBy(quickRef.current);
     void load(boardViewId, false);
   };
-  const groupMode: GroupMode = groupModeOf(groupSaved, !!source.caps.context);
-  const pickGroup = (m: GroupMode) => {
-    setGroupSaved(m);
-    try { localStorage.setItem(source.storageKey("group"), m); } catch { /* a private window keeps it for this visit only */ }
+  /* The Areas tree: the board's epics counted over the one read the server keeps. An Area is open when its key is in `areaSel`. */
+  const areaList = useMemo(() => areaRows(ctx?.epics ?? [], areas.read?.tasks ?? [], ctx?.sprint?.name), [ctx, areas.read]);
+  const hasAreas = !!source.caps.context && areaList.length > 0;
+  const sprintView = areaSel === SPRINTS;
+  const pref: GroupPref = parsePref(prefRaw, hasAreas, defaultPref(sprintView));
+  const pickGroup = (p: GroupPref) => {
+    setPrefRaw(prefText(p));
+    try { localStorage.setItem(source.storageKey(`group:${boardViewId ?? ""}`), prefText(p)); } catch { /* a private window keeps it for this visit only */ }
   };
-  const byParent = !onLooked && groupMode === "parent";
-  const parentGroups = useMemo(() => (byParent ? groupByParent(sortedByOrder(rows)) : []), [byParent, rows]);
+  const keyed = !onLooked && pref.by !== "status";
+  /* The cards the groups are made of: the sprint's alone in the sprint view, whatever the board holds otherwise. */
+  const groupRows = sprintView && sprintSplit ? sprintSplit.inSprint : rows;
+  const keyedGroups = useMemo<(ParentGroup | KeyGroup)[]>(() => {
+    if (!keyed) return [];
+    const ordered = sortedByOrder(groupRows);
+    return pref.by === "area" ? groupAreas(ordered, ctx?.epics ?? []) : groupKeyed(ordered, pref.by as "sprint" | "priority" | "person");
+  }, [keyed, groupRows, pref.by, ctx?.epics]);
   const epicColors = useMemo(() => new Map((ctx?.epics ?? []).map((e) => [e.key, e.color])), [ctx]);
 
   /* Ranking by a drop. Only inside one status group (a rank is a place among its neighbours, and a card dropped into
@@ -2422,7 +2460,34 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
      order, see guessOrder) and goes back to where the board read it if Jira refuses. */
   const rankPick = useRef<{ key: string; group: string } | null>(null);
   const [rankMark, setRankMark] = useState<{ id: string; half: "top" | "bottom" } | null>(null);
-  const canRank = !!source.rank && !!boards?.writeEnabled && !!boardViewId?.startsWith("board:") && !byParent && !onLooked;
+  /* One card's row. `showStatus` where the group is not a status. */
+  const cardRow = (t: ProviderTask, showStatus: boolean, drag?: ReturnType<typeof dragFor>) => (
+    <ClickUpRow key={t.id} t={t} today={today} on={t.id === sel} onPick={() => setSel(t.id)} {...(showStatus ? { showStatus: true } : null)}
+      grid={grid} showWho={anyWho} showSquad={!!squadLabel} showSprint={anySprint} showEst={anyEst} showPts={anyPts} showCmts={anyCmts} blocked={blockedBy(t)} onHand={handCard}
+      repos={repos} here={here} source={source} {...(drag ? { drag } : null)} />
+  );
+  /* The second level of the outline, one step in under its group: status under any grouping, area under status. */
+  const renderSub = (parent: string, list: ProviderTask[]) => {
+    const byArea = pref.by === "status";
+    const subs: { key: string; label: React.ReactNode; rows: ProviderTask[] }[] = byArea
+      ? groupAreas(list, ctx?.epics ?? []).map((g) => ({ key: g.key || "none", label: <ParentLabel g={g} tone={epicColors.get(g.key)} />, rows: g.rows }))
+      : groupByStatus(list, data?.statuses ?? []).map((g) => ({ key: g.status, label: <StatusPill status={g.status} color={g.color} dim={g.done} />, rows: g.rows }));
+    return (
+      <div style={{ marginLeft: 18, borderLeft: LINE }} data-testid="jira-subgroups">
+        {subs.map((g, gi) => {
+          const k = `${parent}/${g.key}`;
+          return (
+            <div key={g.key} style={{ marginTop: gi ? 8 : 0 }}>
+              <GroupHead first={!gi} folded={!!folded[k]} count={g.rows.length} points={g.rows.reduce((n, t) => n + (t.points ?? 0), 0)}
+                onToggle={() => setFolded((f) => ({ ...f, [k]: !f[k] }))} label={g.label} />
+              {!folded[k] && g.rows.map((t) => cardRow(t, false))}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+  const canRank = !!source.rank && !!boards?.writeEnabled && !!boardViewId?.startsWith("board:") && !keyed && !onLooked;
   const dragFor = (g: { status: string; rows: ProviderTask[] }, t: ProviderTask) => {
     if (!canRank || !rankable(g.rows)) return undefined;
     const keys = g.rows.map((r) => r.customId ?? r.id);
@@ -2462,8 +2527,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
      walks — so "next" means the row under the one you opened, and nothing has to
      re-derive that order a second way. */
   const cardOrder = useMemo(
-    () => (onLooked ? lookedGroups : byParent ? parentGroups : groups).flatMap((g) => g.rows),
-    [onLooked, lookedGroups, byParent, parentGroups, groups],
+    () => (onLooked ? lookedGroups : keyed ? keyedGroups : groups).flatMap((g) => g.rows),
+    [onLooked, lookedGroups, keyed, keyedGroups, groups],
   );
 
   if (!boards) return <div className="p-5"><Spinner label="Reading your boards…" className="" /></div>;
@@ -2914,7 +2979,14 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
             busy={busy} editing={editing?.listName || editing?.name || null}
             folders={boards?.folders ?? []} onAddFolder={addFolder} onAddList={addList} />)}
 
-      {!onLooked && ctx?.sprint && <JiraSprintHeader sprint={ctx.sprint} now={Date.now()} totals={sprintPoints} />}
+      {!onLooked && ctx?.sprint && !inAreaPage && <JiraSprintHeader sprint={ctx.sprint} now={Date.now()} totals={sprintPoints} />}
+      {!onLooked && inAreaPage && (() => {
+        const a = areaList.find((x) => x.key === areaSel);
+        return a ? (
+          <JiraAreaHead title={a.name} sub={`${a.key} · ${areas.read?.truncated ? "at least " : ""}${a.total} cards`} done={a.done} total={a.total}
+            line={areaLine(a.total, a.inSprint, ctx?.sprint?.name, !!areas.read?.truncated)} />
+        ) : null;
+      })()}
       <div className="flex items-center gap-1.5 px-4 pb-1.5 flex-wrap shrink-0">
         {/* The box, with `overflow-hidden` so anything attached to its right
             end is clipped to the same corner the field has — see the clear
@@ -2985,7 +3057,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
             Only where the source has a context to draw (Jira), and the filters only where the board defines some. */}
         {source.caps.context && ctx && <JiraQuickChips filters={ctx.filters} picked={quick} onToggle={toggleQuick} />}
         <span className="flex-1" />
-        {source.caps.context && <JiraGroupBy mode={groupMode} onMode={pickGroup} />}
+        {source.caps.context && <JiraGroupControl pref={pref} onPref={pickGroup} hasAreas={hasAreas} />}
+        {inAreaPage && ctx?.sprint && <JiraScope only={scopeOnly} onOnly={setScopeOnly} sprintName={ctx.sprint.name} total={areaList.find((x) => x.key === areaSel)?.total ?? 0} />}
         {/* Named by what pressing it DOES, not by what is true.
             "6 done hidden" is a caption, and it was read as one: six statuses
             looked like they had gone missing from the board rather than like
@@ -3196,6 +3269,10 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
                 {...(source.id === "clickup" ? null : { "aria-label": `${source.nouns.tracker} ${source.nouns.list}s` })}>
                 {railRows.map(railItem)}
               </div>
+              {source.caps.context && !railFiltering && (areas.state !== "ready" || areaList.length > 0 || ctx?.sprint) && (
+                <JiraAreaRail project={data?.view?.folderName || "Project"} areas={areaList} sprint={ctx?.sprint} now={Date.now()} points={sprintPoints}
+                  sel={areaSel} onPick={setAreaSel} state={areas.state} truncated={!!areas.read?.truncated} />
+              )}
             </div>
           )}
           {railOpen && (
@@ -3348,32 +3425,26 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
             {/* Grouped by status, in the board's own workflow order, each group
                 foldable with its count — the shape ClickUp itself uses, and the
                 one that answers "what is in review" without a filter. */}
-            {byParent && parentGroups.map((g, gi) => (
+            {keyed && keyedGroups.map((g, gi) => (
               <div key={g.key || "none"} style={{ marginTop: gi ? 18 : 4 }}>
                 <GroupHead first={!gi} folded={!!folded[`parent:${g.key}`]} count={g.rows.length}
                   points={g.rows.reduce((n, t) => n + (t.points ?? 0), 0)}
                   onToggle={() => setFolded((f) => ({ ...f, [`parent:${g.key}`]: !f[`parent:${g.key}`] }))}
-                  label={<ParentLabel g={g} tone={epicColors.get(g.key)} />} />
-                {!folded[`parent:${g.key}`] && g.rows.map((t) => (
-                  <ClickUpRow key={t.id} t={t} today={today} on={t.id === sel} onPick={() => setSel(t.id)} showStatus
-                    grid={grid} showWho={anyWho} showSquad={!!squadLabel} showSprint={anySprint} showEst={anyEst} showPts={anyPts} showCmts={anyCmts} blocked={blockedBy(t)} onHand={handCard}
-                    repos={repos} here={here} source={source} />
-                ))}
+                  label={pref.by === "area"
+                    ? <ParentLabel g={g as ParentGroup} tone={epicColors.get(g.key)} />
+                    : <span className="text-[11.5px]" style={{ color: "var(--text)" }}>{g.title}</span>} />
+                {!folded[`parent:${g.key}`] && (pref.split === "status" ? renderSub(`parent:${g.key}`, g.rows) : g.rows.map((t) => cardRow(t, true)))}
               </div>
             ))}
-            {!onLooked && !byParent && groups.map((g, gi) => (
+            {!onLooked && !keyed && groups.map((g, gi) => (
               <div key={g.status} style={{ marginTop: gi ? 18 : 4 }}>
                 <GroupHead first={!gi} folded={!!folded[g.status]} count={g.rows.length} points={g.points}
                   onToggle={() => setFolded((f) => ({ ...f, [g.status]: !f[g.status] }))}
                   label={<StatusPill status={g.status} color={g.color} dim={g.done} />} />
-                {!folded[g.status] && g.rows.map((t) => (
-                  <ClickUpRow key={t.id} t={t} today={today} on={t.id === sel} onPick={() => setSel(t.id)}
-                    grid={grid} showWho={anyWho} showSquad={!!squadLabel} showSprint={anySprint} showEst={anyEst} showPts={anyPts} showCmts={anyCmts} blocked={blockedBy(t)} onHand={handCard}
-                    repos={repos} here={here} source={source} drag={dragFor(g, t)} />
-                ))}
+                {!folded[g.status] && (pref.split === "area" ? renderSub(g.status, g.rows) : g.rows.map((t) => cardRow(t, false, dragFor(g, t))))}
               </div>
             ))}
-            {!onLooked && !byParent && !!sprintSplit?.backlog.length && (
+            {!onLooked && !keyed && !sprintView && !!sprintSplit?.backlog.length && (
               <div style={{ marginTop: 18 }}>
                 <GroupHead first={false} folded={folded.backlog !== false} count={sprintSplit.backlog.length}
                   points={sprintSplit.backlog.reduce((n, t) => n + (t.points ?? 0), 0)}

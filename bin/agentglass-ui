@@ -383,6 +383,8 @@ JIRA_VERBS = {
               "args": {"key": ("a card id such as ORBIT-1042", True)}},
     "linktypes": {"acting": False, "surface": "the link types the site has: each one's id, its name, and the phrase for each side (`out` is what the card that holds it says, `in` what the other says); what `relate` takes as `type`",
                   "args": {}},
+    "areas": {"acting": False, "surface": "a board's areas (its epics named `Area: ...`): how many cards each holds in the sprint, done, and in all; the names are the team's, so they are in `untrusted`",
+              "args": {"board": ("a board id such as 3 or board:3", True)}},
     "activity": {"acting": False, "surface": "one page of what happened on a Jira card: its history (the default), its work log, or its comments past the card read; `state.next` is where the next page starts",
                  "args": {"key": ("a card id such as ORBIT-1042", True), "kind": ("history, worklog or comments (history by default)", False),
                           "start": ("where the page starts, from `state.next` of the last answer", False)}},
