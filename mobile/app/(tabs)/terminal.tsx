@@ -336,7 +336,11 @@ function TerminalPane(): React.ReactNode {
      new strip would otherwise match it by accident. */
   const paneOwner = useRef(host?.id);
   useEffect(() => {
-    if (paneOwner.current !== host?.id) { paneOwner.current = host?.id; setActive(null); return; }
+    if (paneOwner.current !== host?.id) {
+      // The strip is the old computer's too: a tapped alert's pane id would
+      // match it by accident before the new one is read.
+      paneOwner.current = host?.id; setActive(null); setStrip(null); return;
+    }
     rememberPane(host?.id, active);
   }, [host?.id, active]);
   /*

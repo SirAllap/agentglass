@@ -13,7 +13,7 @@ import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { useAgentglass } from "../state/host-context.tsx";
 import { useComputer } from "../state/use-computer.ts";
-import { displayName, statusOf } from "../model/computers.ts";
+import { displayName, statusOf, waitingElsewhere } from "../model/computers.ts";
 import { C, SPACE, T, type Palette } from "../theme.ts";
 import { Glyph } from "./glyphs.tsx";
 import { ComputerSheet } from "./ComputerSheet.tsx";
@@ -21,12 +21,13 @@ import { statusColor } from "./computer-dot.ts";
 
 export function ComputerChip({ colors = C, compact }: { colors?: Palette; compact?: boolean }): React.ReactNode {
   const K = colors;
-  const { host, live } = useAgentglass();
+  const { host, hosts, live, waiting, states } = useAgentglass();
   const said = useComputer(host);
   const [open, setOpen] = useState(false);
   if (!host) return null;
   const name = displayName(host, said);
   const status = statusOf(host, true, live);
+  const elsewhere = waitingElsewhere({ active: host.id, hosts }, waiting, states);
   return (
     <>
       <Pressable
@@ -45,6 +46,14 @@ export function ComputerChip({ colors = C, compact }: { colors?: Palette; compac
           {name}
         </Text>
         <Glyph name="down" color={K.text3} size={18} />
+        {elsewhere > 0 ? (
+          <View
+            accessibilityLabel={`${elsewhere} waiting on your other computers`}
+            style={{ minWidth: 20, height: 20, borderRadius: 10, paddingHorizontal: 6, alignItems: "center", justifyContent: "center", backgroundColor: K.warning }}
+          >
+            <Text style={{ color: K.bg, fontSize: 12, fontWeight: "700" }}>{elsewhere}</Text>
+          </View>
+        ) : null}
       </Pressable>
       <ComputerSheet open={open} onClose={() => setOpen(false)} />
     </>

@@ -20,6 +20,15 @@ export interface AlertRoute {
 /** tmux pane ids are `%` and digits. Anything else is not one. */
 const PANE = /^%\d{1,9}$/;
 
+/** The computer an alert came from, when its data names one in the shape an id
+ *  has. Anything else is ignored rather than switched to: the data comes back
+ *  from the OS, and an id is only ever looked up in the phone's own list. */
+export function alertHost(data: unknown): string | null {
+  if (typeof data !== "object" || data === null) return null;
+  const id = (data as Record<string, unknown>).hostId;
+  return typeof id === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(id) ? id : null;
+}
+
 export function alertRoute(data: unknown): AlertRoute | null {
   if (typeof data !== "object" || data === null) return null;
   const d = data as Record<string, unknown>;

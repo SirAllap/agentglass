@@ -19,12 +19,12 @@ import { useDeskTheme, usePaletteTick } from "../src/state/use-palette.ts";
 import { UsageProvider } from "../src/state/use-usage.ts";
 import { C, T, currentLook } from "../src/theme.ts";
 import { watchAlertTaps } from "../src/notifications/notify.ts";
-import { alertRoute } from "../src/notifications/target.ts";
+import { alertHost, alertRoute } from "../src/notifications/target.ts";
 
 void SplashScreen.preventAutoHideAsync();
 
 function Gate(): React.ReactNode {
-  const { host, ready } = useAgentglass();
+  const { host, hosts, switchTo, ready } = useAgentglass();
   const segments = useSegments();
   const router = useRouter();
 
@@ -50,9 +50,16 @@ function Gate(): React.ReactNode {
     if (!ready || !host) return;
     return watchAlertTaps((data) => {
       const to = alertRoute(data);
-      if (to) router.navigate(to);
+      const hostId = alertHost(data);
+      void (async () => {
+        // The computer the alert is about, before the pane on it: a pane id is
+        // only a name on one tmux server. An id not on this phone's list is
+        // dropped, never switched to.
+        if (hostId && hostId !== host.id && hosts.some((h) => h.id === hostId)) await switchTo(hostId);
+        if (to) router.navigate(to);
+      })();
     });
-  }, [ready, host, router]);
+  }, [ready, host, hosts, switchTo, router]);
 
   if (!ready) {
     return (

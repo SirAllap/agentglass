@@ -47,6 +47,12 @@ export function statusWord(status: ComputerStatus): string {
   }
 }
 
+/** The notification title. The computer is named only when there is more than
+ *  one, so a phone with a single computer reads exactly as it always did. */
+export function alertTitle(title: string, computer: string, paired: number): string {
+  return paired >= 2 ? `${computer}: ${title}` : title;
+}
+
 /** The line under a computer's name in the switcher. */
 export function switcherSub(status: ComputerStatus, waiting: number): string {
   if (status !== "online") return statusWord(status);
@@ -68,6 +74,20 @@ export function forgetNote(list: HostList, id: string, nameOf: (h: HostEntry) =>
 export function needsAddress(text: string): boolean {
   const read = readPairingCode(text);
   return !!read && !read.origin;
+}
+
+/** The badge on the name: agents waiting on a person on the OTHER computers. */
+export function waitingElsewhere(
+  list: HostList,
+  waiting: Record<string, number>,
+  states: Record<string, LiveState>,
+): number {
+  let sum = 0;
+  for (const h of list.hosts) {
+    if (h.id === list.active || h.revoked || states[h.id] !== "open") continue;
+    sum += waiting[h.id] ?? 0;
+  }
+  return sum;
 }
 
 export const capReached = (list: HostList): boolean => list.hosts.length >= MAX_HOSTS;

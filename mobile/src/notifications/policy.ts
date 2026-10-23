@@ -39,6 +39,9 @@ export interface NotifyContext {
   /** When an alert with this exact text last raised a notification. */
   lastSeen: Map<string, number>;
   now: number;
+  /** Which computer it came from. The same words from two computers are two
+   *  alerts, so the window is per computer; absent means "the only one". */
+  hostId?: string;
 }
 
 /** What makes two alerts the same one. Title and body, because urgency can be
@@ -46,7 +49,8 @@ export interface NotifyContext {
  *  rather than the full shape: `shouldNotifyTalk` below builds one of these
  *  just to compute this key, from a note that carries no urgency, pane or
  *  reminder id. */
-export const alertKey = (alert: Pick<AlertNote, "title" | "body">): string => `${alert.title}\0${alert.body}`;
+export const alertKey = (alert: Pick<AlertNote, "title" | "body">, hostId = ""): string =>
+  `${hostId}\0${alert.title}\0${alert.body}`;
 
 export type Verdict =
   | { notify: true }
@@ -77,7 +81,7 @@ export function shouldNotify(alert: AlertNote, ctx: NotifyContext): Verdict {
   if (ctx.foreground) return { notify: false, because: "foreground" };
   if ((alert.urgency ?? 1) < 1) return { notify: false, because: "low" };
 
-  const seen = ctx.lastSeen.get(alertKey(alert));
+  const seen = ctx.lastSeen.get(alertKey(alert, ctx.hostId));
   if (seen !== undefined && ctx.now - seen < SAME_ALERT_MS) return { notify: false, because: "repeat" };
 
   return { notify: true };
@@ -112,13 +116,13 @@ export type TalkVerdict =
  */
 export function shouldNotifyTalk(
   note: PrTalkNote,
-  ctx: { pref: TalkPref; foreground: boolean; lastSeen: Map<string, number>; now: number },
+  ctx: { pref: TalkPref; foreground: boolean; lastSeen: Map<string, number>; now: number; hostId?: string },
 ): TalkVerdict {
   if (ctx.pref === "off") return { notify: false, because: "off" };
   if (ctx.pref === "reviews" && note.kind !== "review") return { notify: false, because: "pref-mismatch" };
   if (ctx.foreground) return { notify: false, because: "foreground" };
 
-  const key = alertKey({ title: talkSummary(note), body: talkBody(note) });
+  const key = alertKey({ title: talkSummary(note), body: talkBody(note) }, ctx.hostId);
   const seen = ctx.lastSeen.get(key);
   if (seen !== undefined && ctx.now - seen < SAME_ALERT_MS) return { notify: false, because: "repeat" };
 
@@ -157,8 +161,8 @@ export function importanceOf(urgency: 0 | 1 | 2 | undefined): "max" | "high" | "
  * delivery of the same alert has its own live window, and deleting would let
  * that one buzz again.
  */
-export function remember(alert: Pick<AlertNote, "title" | "body">, ctx: Pick<NotifyContext, "lastSeen" | "now">): () => void {
-  const key = alertKey(alert);
+export function remember(alert: Pick<AlertNote, "title" | "body">, ctx: Pick<NotifyContext, "lastSeen" | "now" | "hostId">): () => void {
+  const key = alertKey(alert, ctx.hostId);
   const before = ctx.lastSeen.get(key);
   ctx.lastSeen.set(key, ctx.now);
   for (const [k, at] of ctx.lastSeen) {

@@ -38,7 +38,10 @@ import {
 import { openLive, type LiveHandle, type LiveState } from "../lib/live.ts";
 import { remember, shouldNotify, shouldNotifyTalk } from "../notifications/policy.ts";
 import { alertsDeliverable, raise } from "../notifications/notify.ts";
-import { loadKeepAlivePref, syncKeepAlive, wantKeepAlive } from "../notifications/keepAlive.ts";
+import { alertTitle, displayName } from "../model/computers.ts";
+import { saidName } from "./use-computer.ts";
+import { watchHost } from "./watch-host.ts";
+import { keepAliveRunning, loadKeepAlivePref, syncKeepAlive, wantKeepAlive } from "../notifications/keepAlive.ts";
 import { noteChecks, noteTalk } from "./pr-talk.ts";
 import { talkPref } from "../notifications/talkPref.ts";
 import { applyMarks, loadPrMarks, resetMarks } from "./read-marks.ts";
@@ -92,6 +95,11 @@ interface Ctx {
   ready: boolean;
   live: LiveState;
   fleet: Fleet;
+  /** Agents waiting on a person, per computer: the one in front from its fleet,
+   *  the others from the socket kept for each (watch-host.ts). */
+  waiting: Record<string, number>;
+  /** Whether each computer's socket is up, the one in front included. */
+  states: Record<string, LiveState>;
   refresh: () => void;
   /** Pair a computer and make it the one in use. `name` is the owner's alias. */
   pair: (host: Host, name?: string) => Promise<void>;
@@ -120,6 +128,13 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
   const [ready, setReady] = useState(false);
   const [live, setLive] = useState<LiveState>("offline");
   const [fleet, setFleet] = useState<Fleet>(EMPTY);
+  const [others, setOthers] = useState<{ waiting: Record<string, number>; states: Record<string, LiveState> }>(
+    { waiting: {}, states: {} },
+  );
+  /** Sockets for the computers not in front are kept while the app is on screen
+   *  or the foreground service is running, and not otherwise: a socket nothing
+   *  can act on is battery for nothing. */
+  const [watching, setWatching] = useState(() => AppState.currentState === "active");
 
   // A load in flight when another is asked for, so the newer one wins and the
   // older one cannot land on top of it.
@@ -144,6 +159,61 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [active?.id, active?.origin, active?.token, active?.revoked],
   );
+
+  /** Read from socket callbacks that outlive a render, so a rename or a new
+   *  computer reaches the next alert without rebuilding the sockets. */
+  const hostsRef = useRef(list.hosts);
+  hostsRef.current = list.hosts;
+  /** The alert as the notification will say it: the computer named only when
+   *  there are two or more on the phone. */
+  const titled = (from: HostEntry, alert: AlertNote): AlertNote => ({
+    ...alert,
+    title: alertTitle(alert.title, displayName(from, saidName(from.origin)), hostsRef.current.length),
+  });
+
+  /*
+   * The computers not in front, each with the one socket watch-host.ts keeps.
+   * Opened while the app is on screen or the foreground service is running;
+   * re-made only when the set of them (or a key) changes, not on a rename.
+   */
+  const rest = list.hosts.filter((h) => h.id !== list.active && !h.revoked);
+  const restKey = rest.map((h) => `${h.id}\0${h.origin}\0${h.token}`).join("\n");
+  useEffect(() => {
+    if (!watching) return;
+    const stops = rest.map((h) => watchHost(h, {
+      onState: (state) => setOthers((p) => ({ ...p, states: { ...p.states, [h.id]: state } })),
+      onWaiting: (n) => setOthers((p) => ({ ...p, waiting: { ...p.waiting, [h.id]: n } })),
+      onAlert: (alert) => {
+        // Never "foreground": the person is looking at another computer, which
+        // is the case this socket exists for.
+        const now = Date.now();
+        const verdict = shouldNotify(alert, { foreground: false, lastSeen: seen.current, now, hostId: h.id });
+        if (!verdict.notify) return;
+        const undo = remember(alert, { lastSeen: seen.current, now, hostId: h.id });
+        void raise(titled(h, alert), h.id).then((d) => { if (!d.ok) undo(); });
+      },
+      onRevoked: () => {
+        void markRevoked(h.id).then((next) => {
+          setList(next);
+          if (!next.hosts.some((x) => !x.revoked)) syncKeepAlive(false);
+        });
+      },
+    }));
+    return () => {
+      for (const stop of stops) stop();
+      // A count or a dot from a socket that is gone is a claim with nothing
+      // behind it; the new sockets say it again when they open.
+      setOthers({ waiting: {}, states: {} });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restKey, watching]);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      setWatching(state === "active" || keepAliveRunning());
+    });
+    return () => sub.remove();
+  }, []);
 
   useEffect(() => {
     void (async () => {
@@ -348,6 +418,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
             foreground: AppState.currentState === "active",
             lastSeen: seen.current,
             now,
+            hostId: host.id,
           });
           if (verdict.notify) {
             /*
@@ -377,8 +448,8 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
              * window is about how recently the user was told about this text,
              * and an await in between would drift it.
              */
-            const undo = remember(alert, { lastSeen: seen.current, now });
-            void raise(alert).then((d) => { if (!d.ok) undo(); });
+            const undo = remember(alert, { lastSeen: seen.current, now, hostId: host.id });
+            void raise(titled(host, alert), host.id).then((d) => { if (!d.ok) undo(); });
           }
         }
         /*
@@ -398,14 +469,15 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
             foreground: AppState.currentState === "active",
             lastSeen: seen.current,
             now,
+            hostId: host.id,
           });
           if (verdict.notify) {
             const alert: AlertNote = { title: talkSummary(note), body: talkBody(note), urgency: talkUrgency(note) };
             // Same remember/undo shape as the alert branch above: opened
             // before the await so two notes arriving inside it cannot both
             // pass, rolled back if the OS never actually drew it.
-            const undo = remember(alert, { lastSeen: seen.current, now });
-            void raise(alert).then((d) => { if (!d.ok) undo(); });
+            const undo = remember(alert, { lastSeen: seen.current, now, hostId: host.id });
+            void raise(titled(host, alert), host.id).then((d) => { if (!d.ok) undo(); });
           }
         }
         // The checks of a pull request moved: an open detail re-reads.
@@ -504,6 +576,8 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
     ready,
     live,
     fleet,
+    waiting: host ? { ...others.waiting, [host.id]: fleet.gates.length } : others.waiting,
+    states: host ? { ...others.states, [host.id]: live } : others.states,
     refresh,
     pair: async (next: Host, name?: string): Promise<void> => {
       const after = await saveHost(next, name);
@@ -534,7 +608,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
       if (!after.hosts.some((h) => !h.revoked)) syncKeepAlive(false);
       setList(after);
     },
-  }), [host, list, ready, live, fleet, refresh]);
+  }), [host, list, ready, live, fleet, others, refresh]);
 
   return <HostContext.Provider value={value}>{children}</HostContext.Provider>;
 }

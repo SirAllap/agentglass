@@ -5,7 +5,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
-  capReached, displayName, forgetNote, needsAddress, statusOf, statusWord, switcherSub,
+  capReached, displayName, forgetNote, needsAddress, statusOf, statusWord, switcherSub, waitingElsewhere,
 } from "../src/model/computers.ts";
 import type { HostEntry, HostList } from "../src/lib/hosts.ts";
 
@@ -100,6 +100,26 @@ describe("whether the Add form has to ask for an address", () => {
     expect(needsAddress("")).toBe(false);
     expect(needsAddress("  ")).toBe(false);
     expect(needsAddress("not a ticket!")).toBe(false);
+  });
+});
+
+describe("the badge on the name", () => {
+  const l = list(["a", "b", "c"], "a");
+  test("sums what waits on the computers you are not in", () => {
+    expect(waitingElsewhere(l, { a: 4, b: 2, c: 1 }, { b: "open", c: "open" })).toBe(3);
+  });
+  test("a computer that is not answering cannot be waiting on you", () => {
+    // Broken on purpose: a stale count from a socket that dropped is a badge
+    // for an alert that will never arrive.
+    expect(waitingElsewhere(l, { b: 2, c: 1 }, { b: "offline", c: "open" })).toBe(1);
+    expect(waitingElsewhere(l, { b: 2 }, {})).toBe(0);
+  });
+  test("a removed computer is not counted", () => {
+    const removed: HostList = { active: "a", hosts: l.hosts.map((h) => (h.id === "b" ? { ...h, revoked: 9 } : h)) };
+    expect(waitingElsewhere(removed, { b: 5 }, { b: "open" })).toBe(0);
+  });
+  test("the computer in use is never counted, whatever its own count says", () => {
+    expect(waitingElsewhere(l, { a: 9 }, { a: "open" })).toBe(0);
   });
 });
 

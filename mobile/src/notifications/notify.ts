@@ -389,7 +389,7 @@ export function watchAlertTaps(onTap: (data: unknown) => void): () => void {
  * here, and nothing on the platform can see it. The three states this used to
  * confuse with success are all covered.
  */
-export async function raise(alert: AlertNote): Promise<Delivery> {
+export async function raise(alert: AlertNote, hostId?: string): Promise<Delivery> {
   const can = await alertsDeliverable();
   if (!can.ok) return can;
   const N = load();
@@ -399,7 +399,9 @@ export async function raise(alert: AlertNote): Promise<Delivery> {
       content: {
         title: alert.title,
         body: alert.body,
-        data: alert.pane ? { kind: "alert", pane: alert.pane } : { kind: "alert" },
+        // `hostId` is what lets a tap open the computer the alert is about
+        // before it opens the pane, which is only a name on that computer.
+        data: { kind: "alert", ...(alert.pane ? { pane: alert.pane } : {}), ...(hostId ? { hostId } : {}) },
         priority: importanceOf(alert.urgency) === "max"
           ? N.AndroidNotificationPriority.MAX
           : N.AndroidNotificationPriority.HIGH,

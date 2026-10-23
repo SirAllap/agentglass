@@ -24,7 +24,7 @@ import { statusColor } from "./computer-dot.ts";
 type Menu = { id: string; mode: "menu" | "rename" | "forget" } | null;
 
 export function ComputerSheet({ open, onClose }: { open: boolean; onClose: () => void }): React.ReactNode {
-  const { host, hosts, live, switchTo, rename, forgetComputer } = useAgentglass();
+  const { host, hosts, live, states, waiting, switchTo, rename, forgetComputer } = useAgentglass();
   const router = useRouter();
   const [menu, setMenu] = useState<Menu>(null);
   const [draft, setDraft] = useState("");
@@ -53,7 +53,8 @@ export function ComputerSheet({ open, onClose }: { open: boolean; onClose: () =>
     >
       <View style={{ gap: SPACE.sm }}>
         {hosts.map((h) => {
-          const status = statusOf(h, h.id === host?.id, live);
+          const status = statusOf(h, h.id === host?.id, live, states[h.id]);
+          const waits = waiting[h.id] ?? 0;
           const mine = menu?.id === h.id ? menu.mode : null;
           return (
             <View key={h.id} style={{ borderRadius: RADIUS.md, backgroundColor: C.bg2, borderWidth: 1, borderColor: C.border }}>
@@ -61,7 +62,7 @@ export function ComputerSheet({ open, onClose }: { open: boolean; onClose: () =>
                 <Pressable
                   accessibilityRole="button"
                   accessibilityState={{ selected: h.id === host?.id }}
-                  accessibilityLabel={`${nameOf(h)}, ${switcherSub(status, 0)}`}
+                  accessibilityLabel={`${nameOf(h)}, ${switcherSub(status, waits)}`}
                   onPress={() => { void switchTo(h.id); close(); }}
                   onLongPress={() => setMenu(mine ? null : { id: h.id, mode: "menu" })}
                   style={({ pressed }) => ({
@@ -74,9 +75,14 @@ export function ComputerSheet({ open, onClose }: { open: boolean; onClose: () =>
                   <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
                     <Text numberOfLines={1} style={{ color: C.text, fontSize: T.body, fontWeight: "600" }}>{nameOf(h)}</Text>
                     <Text numberOfLines={1} style={{ color: status === "removed" ? C.error : C.text3, fontSize: T.small }}>
-                      {switcherSub(status, 0)}
+                      {switcherSub(status, waits)}
                     </Text>
                   </View>
+                  {h.id !== host?.id && status === "online" && waits > 0 ? (
+                    <View style={{ minWidth: 22, height: 22, borderRadius: 11, paddingHorizontal: 6, alignItems: "center", justifyContent: "center", backgroundColor: C.warning }}>
+                      <Text style={{ color: C.bg, fontSize: 12, fontWeight: "700" }}>{waits}</Text>
+                    </View>
+                  ) : null}
                   {h.id === host?.id ? <Glyph name="check" color={C.primary} size={22} /> : null}
                 </Pressable>
                 <Pressable
