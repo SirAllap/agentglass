@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
-import { LANE_MIN_PX, resultColumn, SEARCH_HINT, knownLogins, matchedAs, normalizeFree, personIn, resultsHeading, searchPool, stillReading, toServerQuery } from "../src/lib/prSearch.ts";
+import { LANE_MIN_PX, RESULT_COLUMNS, resultColumn, SEARCH_HINT, knownLogins, matchedAs, normalizeFree, personIn, resultsHeading, searchPool, stillReading, toServerQuery } from "../src/lib/prSearch.ts";
 import { DETAIL_BATCH, DETAIL_REACH, nextDetailBatch } from "../src/lib/useRowDetails.ts";
 
 describe("the heading over a search", () => {
@@ -144,11 +144,12 @@ describe("a search has rules of its own", () => {
 describe("a result is the board's card, at the board's width", () => {
   it("a column is a lane's share of the panel, never below a lane's floor", () => {
     expect(resultColumn(3)).toBe(`minmax(max(${LANE_MIN_PX}px, calc((100% - 20px) / 3)), 1fr)`);
+    expect(RESULT_COLUMNS).toBe(3);
     expect(resultColumn(1)).toContain("calc((100% - 0px) / 1)");
   });
   it("the board and its results are drawn from the same floor", () => {
     const board = readFileSync(new URL("../src/components/TriageBoard.tsx", import.meta.url), "utf8");
     expect(board).not.toContain("minmax(268px");
-    expect(board).toContain("resultColumn(LANES.length)");
+    expect(board).toContain("resultColumn(RESULT_COLUMNS)");
   });
 });

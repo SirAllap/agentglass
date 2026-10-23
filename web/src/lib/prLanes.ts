@@ -464,16 +464,24 @@ export const ACTION_LABEL: Record<Suggested, string> = {
  * what is wrong and what can land. The stake is judged AFTER filing, which is
  * the point: a pull request that is yours and asked of you keeps the lane it
  * would have everywhere else instead of moving when a pill is pressed.
- * `failing`, `ready` and `all` also take in the rest of the repository, a page
- * at a time, and `review` and `mine` stay the viewer's two queues (see
- * `viewIsWide`). Ceiling: "wide" is the page the list holds, not every open
- * pull request in one go; the pager under the board walks the rest.
+ * Every view is a filter over the viewer's two queues, and the default one
+ * (no pill) is those queues whole: what wants something from them. Somebody
+ * else's pull request reaches the board only through a search.
  */
 export type BoardView = "all" | "review" | "mine" | "failing" | "ready";
 
-/** Whether a view reaches past the viewer's own two queues, to the repository. */
-export function viewIsWide(view: BoardView): boolean {
-  return view === "failing" || view === "ready" || view === "all";
+/**
+ * Whether a view reaches past the viewer's own two queues, to the repository.
+ *
+ * None does. The default board once took in a page of the repository, which put
+ * other people's pull requests under "Waiting on someone else" and a "Load
+ * more" under the board. The question stays a function so a board for another
+ * person can say yes without the callers changing; "failing" and "ready" are
+ * stake-only until a view needs a page of the repository badly enough to pay
+ * for its request.
+ */
+export function viewIsWide(_view: BoardView): boolean {
+  return false;
 }
 
 /**

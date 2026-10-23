@@ -2408,6 +2408,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settleDelay = useRef(SETTLE_MS);
   const loadListRef = useRef<((force?: boolean) => void) | null>(null);
+  const queuesOnlyRef = useRef(true);
   /** When each pull request was last edited from the detail, and the row as the
    *  detail then drew it — so a list read before the edit cannot undo it. */
   const editedAt = useRef(new Map<number, number>());
@@ -2430,7 +2431,12 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     if (!root) return;
     const req = ++listReq.current;
     const want = filter;
-    return api.prList(root, filter, stateSel, force, cursor, serverQuery).then((r) => {
+    /* The board asks for no page of the repository: while it is the surface,
+       the list is the scope it already holds (`review`, answered from the same
+       server read as the board's own), so opening the panel costs no
+       repo-wide request. Search and the other states ask `filter` as before. */
+    const scope = queuesOnlyRef.current ? "review" : filter;
+    return api.prList(root, scope, stateSel, force, cursor, serverQuery).then((r) => {
       if (req !== listReq.current) return; // a newer request already won
       setRepo(r.repo);
       // `{ prs: [], loading: true }` after a write is not an answer: the rows stay (as on the board, lib/boardFace.ts) and the settle timer below collects the real list.
@@ -3006,6 +3012,14 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
      nobody is looking at. Everything else on the board is a page of the list. */
   const queuesOnly = boardShown && !viewIsWide(boardView);
   useEffect(() => { if (queuesOnly) setPages([]); }, [queuesOnly]);
+  queuesOnlyRef.current = queuesOnly;
+  /* Leaving the board for a search or the closed ones: the list held the
+     queue, so the repository's page is asked for now, once. */
+  const wasQueuesOnly = useRef(queuesOnly);
+  useEffect(() => {
+    if (wasQueuesOnly.current && !queuesOnly) loadListRef.current?.();
+    wasQueuesOnly.current = queuesOnly;
+  }, [queuesOnly]);
 
   /*
    * The two scopes the board is built from — and it costs no new request.
@@ -4979,7 +4993,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 viewer={personLogin ?? undefined}
                 person={personLogin ? { onBack: () => setPersonLogin(null), more: person.state.kind === "ready" && person.state.more } : undefined}
                 others={boardWide && !personLogin ? boardOthersShown : undefined}
-                more={!personLogin && listState.hasNext && listState.cursor 
+                more={!personLogin && resultsShown && listState.hasNext && listState.cursor 
                   ? { loading: listState.loading, onMore: () => { if (listState.cursor) setPages((p) => [...p, listState.cursor!]); } }
                   : undefined}
                 results={resultsShown && !personLogin ? {

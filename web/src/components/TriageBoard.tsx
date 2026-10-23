@@ -30,7 +30,7 @@ import { taskLink } from "../lib/taskLink.ts";
 import { onCard, cardVersion, withCard } from "../lib/prCardStore.ts";
 import { CHIP_H } from "../lib/priority.tsx";
 import { CardTracker } from "./CardTracker.tsx";
-import { LANE_MIN_PX, resultColumn, resultsHeading, stillReading } from "../lib/prSearch.ts";
+import { LANE_MIN_PX, RESULT_COLUMNS, resultColumn, resultsHeading, stillReading } from "../lib/prSearch.ts";
 import { repoUsesTracker, trackerBlock } from "../lib/prCardBlock.ts";
 import { CTRL_H, EDGE, LINE } from "./workspace/Chrome.tsx";
 import { CODE_FONT_STYLE } from "./diff/DiffLines.tsx";
@@ -669,7 +669,7 @@ export function TriageBoard({
           {...(results.loading && results.rows.length > 0 ? { role: "progressbar" } : {})} />
         <div className="flex-1 min-h-0 overflow-y-auto agx-scroll px-4 pb-3" data-results>
           {results.loading && results.rows.length === 0 ? (
-            <div aria-hidden className="grid gap-2.5" style={{ gridTemplateColumns: `repeat(auto-fill, ${resultColumn(LANES.length)})` }}>
+            <div aria-hidden className="grid gap-2.5" style={{ gridTemplateColumns: `repeat(auto-fill, ${resultColumn(RESULT_COLUMNS)})` }}>
               {[0, 1, 2, 3].map((k) => (
                 <div key={k} className="rounded-lg animate-pulse"
                   style={{ height: 74, background: "var(--surface-card)", border: EDGE, animationDelay: `${k * 0.08}s` }} />
@@ -682,7 +682,7 @@ export function TriageBoard({
                request, and the board has one way to draw those. Dimmed while
                the next page loads, so what is there is still readable. */
             <div className="grid gap-x-2.5 items-start"
-              style={{ gridTemplateColumns: `repeat(auto-fill, ${resultColumn(LANES.length)})`, opacity: results.loading ? 0.7 : 1, transition: "opacity .15s" }}>
+              style={{ gridTemplateColumns: `repeat(auto-fill, ${resultColumn(RESULT_COLUMNS)})`, opacity: results.loading ? 0.7 : 1, transition: "opacity .15s" }}>
               {results.rows.map((r) => {
                 const p = trueChecks(r);
                 const base: Filed = p.state === "MERGED" ? { lane: "others", reason: "Merged." }

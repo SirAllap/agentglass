@@ -140,6 +140,13 @@ export function matchedAs(
 export const LANE_MIN_PX = 268;
 export const LANE_GAP_PX = 10;
 /**
+ * How many result columns a wide panel gets. Not the board's lane count: a
+ * board of five lanes put results at a fifth of a 2576 px panel, about 475 px,
+ * narrower than the same card reads on the board when it has three lanes in
+ * view (~760 px). Three keeps the card at the width the board gives it.
+ */
+export const RESULT_COLUMNS = 3;
+/**
  * A column of search results: exactly as wide as a lane is when the board shows
  * `lanes` of them side by side in this panel, and never narrower than a lane's
  * floor. The card is the board's card, so it gets the board's width — squeezed

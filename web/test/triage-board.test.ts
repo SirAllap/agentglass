@@ -814,11 +814,10 @@ describe("the identity line of a board card", () => {
 describe("the repository on the board, and results as cards", () => {
   const theirs = (n: number, o: Parameters<typeof pr>[1] = {}) => pr(n, { author: "other", ...o });
 
-  it("failing keeps somebody else's red pull request, which files under 'others'", () => {
+  it("failing is stake-only: the repository's red pull request is not drawn", () => {
     const html = render({ view: "failing", mine: [], review: [], others: [theirs(10, { fail: 2 }), theirs(11)], total: -1 });
-    expect(drawn(html, "others")).toBe(1);
-    expect(html).toContain('data-pr="10"');
-    expect(html).not.toContain('data-pr="11"');
+    expect(drawn(html, "others")).toBe(0);
+    expect(html).not.toContain('data-pr="10"');
   });
 
   it("the two queues ignore the repository's page", () => {
@@ -827,11 +826,14 @@ describe("the repository on the board, and results as cards", () => {
     expect(html).not.toContain('data-pr="10"');
   });
 
-  it("all draws the page of the repository with a sentence that does not claim it wants something from you", () => {
+  it("the default view holds only the viewer's stake: no repository page, no lane for others, no pager", () => {
     const html = render({ view: "all", mine: [pr(1)], review: [], others: [theirs(10)], total: -1 });
-    expect(html).toContain('data-pr="10"');
-    expect(html).toContain("on this page of the repository");
-    expect(html).not.toContain("want something from you");
+    expect(html).toContain('data-pr="1"');
+    expect(html).not.toContain('data-pr="10"');
+    expect(html).not.toContain("on this page of the repository");
+    expect(html).not.toContain('data-lane="others"');
+    expect(html).not.toContain("Load more pull requests");
+    expect(html).toContain("want something from you");
   });
 
   it("results are cards, merged ones included, never rows and never filed under Blocked", () => {

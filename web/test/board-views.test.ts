@@ -40,10 +40,14 @@ describe("viewKeeps", () => {
 });
 
 describe("the wide views", () => {
-  it("only failing, ready and all reach past the viewer's two queues", async () => {
+  it("no view reaches past the viewer's two queues, so the default board holds only their stake", async () => {
     const { viewIsWide } = await import("../src/lib/prLanes.ts");
-    expect(["all", "failing", "ready"].every((v) => viewIsWide(v as never))).toBe(true);
-    expect(["review", "mine"].some((v) => viewIsWide(v as never))).toBe(false);
+    expect(["all", "review", "mine", "failing", "ready"].some((v) => viewIsWide(v as never))).toBe(false);
+  });
+  it("opening the board asks the list for the queue scope, never the repository's", async () => {
+    const panel = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
+    expect(panel).toContain('const scope = queuesOnlyRef.current ? "review" : filter;');
+    expect(panel).toContain("api.prList(root, scope, stateSel, force, cursor, serverQuery)");
   });
   it("failing also keeps a red or conflicting pull request that is nobody's stake", () => {
     const none: Stake = { mine: false, asked: false };
