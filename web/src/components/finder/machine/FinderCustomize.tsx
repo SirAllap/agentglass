@@ -8,7 +8,7 @@ import { STYLE_COLORS, STYLE_ICONS, pick, type ItemStyle } from "../../../lib/fi
 import { itemStyleOf, setItemStyle } from "../../../lib/finderStyleStore.ts";
 import { EDGE, LINE } from "../../workspace/Chrome.tsx";
 import { EmojiPicker } from "../../tasks/EmojiPicker.tsx";
-import { Sheet } from "./FinderOpsUI.tsx";
+import { DialogHead, Sheet } from "./FinderOpsUI.tsx";
 import { StrataIcon, StyledIcon } from "./StrataIcon.tsx";
 
 export function CustomizeDialog({ paths, names, isDir, onClose }: { paths: readonly string[]; names: readonly string[]; isDir: boolean; onClose: () => void }) {
@@ -22,11 +22,7 @@ export function CustomizeDialog({ paths, names, isDir, onClose }: { paths: reado
   const swatch = (on: boolean) => ({ width: 26, height: 26, border: EDGE, boxShadow: on ? "0 0 0 2px var(--primary)" : undefined });
   return (
     <Sheet label={`Customize ${kind}`} onClose={onClose} width={480}>
-      <div className="flex items-center gap-3 pb-3" style={{ borderBottom: LINE }}>
-        <span className="grid place-items-center rounded-lg shrink-0" style={{ width: 40, height: 40, background: "color-mix(in srgb, var(--primary) 22%, transparent)", color: "var(--primary-ink)" }}><StrataIcon set="act" name="palette" size={ICON.md} /></span>
-        <div className="min-w-0 flex-1"><b className="block text-[13px]">Customize {kind}</b><span className="block truncate text-[11px]" style={{ color: "var(--text3)" }}>{one}</span></div>
-        <button type="button" aria-label="Close" title="Close" className="agx-btn rounded-md grid place-items-center shrink-0" style={{ width: HIT - 6, height: HIT - 6, color: "var(--text3)" }} onClick={onClose}><StrataIcon set="act" name="x" size={ICON.sm} /></button>
-      </div>
+      <DialogHead icon={<StrataIcon set="act" name="palette" size={ICON.md} />} title={`Customize ${kind}`} sub={one} onClose={onClose} />
       <div className="grid place-items-center gap-1.5 py-4">
         <StyledIcon style={style} name={names[0] ?? ""} isDir={isDir} size={44} />
         <span className="max-w-full truncate text-[12px] font-mono">{one}</span>
@@ -43,12 +39,12 @@ export function CustomizeDialog({ paths, names, isDir, onClose }: { paths: reado
       <div className="text-[10px] uppercase tracking-[0.1em] mt-3 mb-1.5" style={{ color: "var(--text3)" }}>Icon</div>
       <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(8, minmax(0, 1fr))" }}>
         {STYLE_ICONS.map((n) => (
-          <button key={n} aria-label={n} aria-pressed={style.icon === n} className="agx-btn rounded-lg grid place-items-center" style={{ minHeight: HIT + 6, border: EDGE, boxShadow: style.icon === n ? "0 0 0 2px var(--primary)" : undefined, color: style.color ?? "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 10%, transparent)" }}
+          <button key={n} aria-label={n} aria-pressed={style.icon === n} className="agx-btn rounded-lg grid place-items-center" style={{ minHeight: HIT + 6, border: EDGE, boxShadow: style.icon === n ? "0 0 0 2px var(--primary)" : undefined, color: "var(--text3)" }}
             onClick={() => apply(pick(style, { icon: n }))}><StrataIcon set="act" name={n} size={ICON.md} /></button>
         ))}
       </div>
       <button className="agx-btn rounded-lg w-full mt-2" aria-haspopup="dialog" aria-expanded={!!emojiAt} style={{ minHeight: HIT, border: EDGE, background: "color-mix(in srgb, var(--primary) 14%, transparent)" }} onClick={(e) => setEmojiAt(emojiAt ? null : e.currentTarget)}>Choose Emoji…</button>
-      {emojiAt && <EmojiPicker anchor={emojiAt} recent={[]} onClose={() => setEmojiAt(null)} onPick={(ch, keep) => { apply(pick(style, { emoji: ch })); if (!keep) setEmojiAt(null); }} />}
+      {emojiAt && <EmojiPicker anchor={emojiAt} recent={[]} below onClose={() => setEmojiAt(null)} onPick={(ch, keep) => { apply(pick(style, { emoji: ch })); if (!keep) setEmojiAt(null); }} />}
       <div className="flex justify-end gap-2 mt-4 pt-3" style={{ borderTop: LINE }}>
         <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE }} disabled={none} onClick={() => apply({})}>Clear</button>
         <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE, borderColor: "var(--primary)", color: "var(--primary-ink)" }} onClick={onClose}>Done</button>

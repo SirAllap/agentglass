@@ -47,6 +47,16 @@ export function FileTypeIcon({ name, isDir, broken, size = ICON.sm }: { name: st
 /** An item the person gave a look of their own (Customize…): their colour on its icon, or their icon, or an emoji in its place. */
 export function StyledIcon({ style, name, isDir, size = ICON.sm }: { style: { color?: string; icon?: string; emoji?: string }; name: string; isDir: boolean; size?: number }) {
   if (style.emoji) return <span className="flex shrink-0 items-center justify-center leading-none" style={{ width: size, height: size, fontSize: Math.round(size * 0.82) }} aria-hidden>{style.emoji}</span>;
+  // Strata draws a coloured folder as a filled one with the chosen icon in white on it (its shots 48 and 49).
+  if (isDir && (style.color || style.icon)) {
+    const fill = style.color ?? "var(--primary)";
+    return (
+      <span className="relative flex shrink-0" style={{ width: size, height: size }} aria-hidden>
+        <svg viewBox="0 0 24 24" width={size} height={size} fill={fill}><path d="M2 6.5A2.5 2.5 0 0 1 4.5 4H9l2.2 2.4H19.5A2.5 2.5 0 0 1 22 8.9v9.6a2.5 2.5 0 0 1-2.5 2.5h-15A2.5 2.5 0 0 1 2 18.5z" /></svg>
+        {style.icon && <span className="absolute flex" style={{ left: "50%", top: "58%", transform: "translate(-50%, -50%)", color: "#fff" }}><StrataIcon set="act" name={style.icon} size={Math.round(size * 0.52)} /></span>}
+      </span>
+    );
+  }
   // Strata's own file-type drawings carry their colours; a colour the person chose is painted on a plain icon instead.
   const base = style.color ? { set: "act" as const, name: isDir ? "folder" : "file-text" } : strataIconFor(name, isDir, false);
   const set = style.icon ? "act" : base.set, icon = style.icon ?? base.name;

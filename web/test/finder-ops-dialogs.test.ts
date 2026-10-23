@@ -4,7 +4,7 @@
  * as the nine toggles, and which folders a destination picker may offer.
  */
 import { describe, expect, test } from "bun:test";
-import { archiveName, compressSub, formatTakesPassword, modeBits, modeSymbolic, toggleMode, destProblem, trashDeleteWords } from "../src/lib/finderOps.ts";
+import { archiveName, compressSub, formatTakesPassword, modeBits, modeSymbolic, toggleMode, destProblem, trashDeleteWords, canExec, toggleExec, kindWords } from "../src/lib/finderOps.ts";
 
 describe("compress", () => {
   test("one item keeps its name, several are called Archive", () => {
@@ -66,5 +66,27 @@ describe("the trash", () => {
     expect(w.body).toContain("cannot be undone");
     expect(trashDeleteWords(["a"], true).body).toContain("1 item ");
     expect(trashDeleteWords(["a"]).confirm).toBe("Delete for good");
+  });
+});
+
+describe("Properties, as Strata words it", () => {
+  test("the line under the name says what the entry is", () => {
+    expect(kindWords("acme-notes.md", "file")).toBe("Markdown document");
+    expect(kindWords("orbit", "dir")).toBe("Folder");
+    expect(kindWords("x.weird", "file")).toBe("WEIRD file");
+    expect(kindWords("Makefile", "file")).toBe("File");
+  });
+  test("the +x box is on when any execute bit is, and flips all three together", () => {
+    expect(canExec(0o644)).toBe(false);
+    expect(canExec(0o744)).toBe(true);
+    expect(toggleExec(0o644)).toBe(0o755);
+    expect(toggleExec(0o755)).toBe(0o644);
+    expect(toggleExec(0o100)).toBe(0o000);
+  });
+  test("every dialog opens with the same header: tile, title, close button", async () => {
+    const src = (p: string) => Bun.file(new URL(`../src/${p}`, import.meta.url)).text();
+    const d = await src("components/finder/machine/FinderDialogs.tsx");
+    expect((d.match(/<DialogHead /g) ?? []).length).toBeGreaterThanOrEqual(5);
+    expect(await src("components/finder/machine/FinderCustomize.tsx")).toContain("<DialogHead ");
   });
 });

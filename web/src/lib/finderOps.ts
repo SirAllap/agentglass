@@ -216,6 +216,24 @@ export function modeSymbolic(mode: number, kind: "dir" | "file" | "link"): strin
   return (kind === "dir" ? "d" : kind === "link" ? "l" : "-") + rwx(b.owner) + rwx(b.group) + rwx(b.others);
 }
 
+/** "Allow executing file as a program": on when any execute bit is set; flipping it sets or clears all three, as chmod +x and -x do. */
+export const canExec = (mode: number): boolean => (mode & 0o111) !== 0;
+export const toggleExec = (mode: number): number => (canExec(mode) ? mode & ~0o111 : mode | 0o111);
+
+/** The line under the name in Properties: what the entry is, in words, as Strata's type description. */
+const KIND_WORDS: Record<string, string> = {
+  md: "Markdown document", txt: "Plain text document", json: "JSON document", html: "HTML document", css: "CSS stylesheet", js: "JavaScript source", ts: "TypeScript source",
+  py: "Python script", sh: "Shell script", pdf: "PDF document", png: "PNG image", jpg: "JPEG image", jpeg: "JPEG image", gif: "GIF image", svg: "SVG image", webp: "WebP image",
+  mp3: "MP3 audio", mp4: "MPEG-4 video", zip: "ZIP archive", gz: "Gzip archive", tar: "TAR archive", "7z": "7-Zip archive",
+};
+export function kindWords(name: string, kind: "dir" | "file" | "link"): string {
+  if (kind === "dir") return "Folder";
+  if (kind === "link") return "Link";
+  const dot = name.lastIndexOf(".");
+  const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
+  return KIND_WORDS[ext] ?? (ext ? `${ext.toUpperCase()} file` : "File");
+}
+
 /** Why a folder cannot take these: into itself or below itself, or a move to where it already is. Null when it can. */
 export function destProblem(paths: readonly string[], dest: string, op: "move" | "copy" = "move"): string | null {
   const d = dest.replace(/\/$/, "");

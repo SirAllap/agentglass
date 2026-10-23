@@ -7,7 +7,7 @@ import { Portal } from "../../Portal.tsx";
 import { HIT, ICON } from "../../../lib/iconSize.ts";
 import { LAYER } from "../../../lib/layers.ts";
 import { nameProblem, stemEnd, type Item, type OpId } from "../../../lib/finderOps.ts";
-import { EDGE } from "../../workspace/Chrome.tsx";
+import { EDGE, LINE } from "../../workspace/Chrome.tsx";
 import { StrataIcon } from "./StrataIcon.tsx";
 import { MENU_ROW, MENU_ROW_H, MENU_RULE } from "../../../lib/finderMenu.ts";
 import { useMenuKeys } from "./useMenuKeys.ts";
@@ -115,6 +115,17 @@ export function Sheet({ label, children, onClose, width = 380 }: { label: string
     <div role="dialog" aria-label={label} aria-modal="true" className="absolute inset-0 grid place-items-center p-4" style={{ background: "color-mix(in srgb, var(--bg) 70%, transparent)", zIndex: 9, gridTemplateColumns: "minmax(0, 1fr)" }}
       onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Escape") onClose(); }}>
       <div className="rounded-xl p-4 text-[12px]" style={{ background: "var(--surface-card)", border: EDGE, width, maxWidth: "100%" }}>{children}</div>
+    </div>
+  );
+}
+
+/** Strata's header on every dialog: a tinted tile with the icon, the title over a quieter line, and a close button on the right, over a rule. */
+export function DialogHead({ icon, title, sub, onClose }: { icon: React.ReactNode; title: string; sub?: string; onClose: () => void }) {
+  return (
+    <div className="flex items-center gap-3 pb-3 mb-3" style={{ borderBottom: LINE }}>
+      <span className="grid place-items-center rounded-lg shrink-0" style={{ width: 40, height: 40, background: "color-mix(in srgb, var(--primary) 22%, transparent)", color: "var(--primary-ink)" }}>{icon}</span>
+      <div className="min-w-0 flex-1"><b className="block text-[13px] truncate" title={title}>{title}</b>{sub && <span className="block truncate text-[11px]" style={{ color: "var(--text3)" }}>{sub}</span>}</div>
+      <button type="button" aria-label="Close" title="Close" className="agx-btn rounded-md grid place-items-center shrink-0" style={{ width: HIT - 6, height: HIT - 6, color: "var(--text3)" }} onClick={onClose}><StrataIcon set="act" name="x" size={ICON.sm} /></button>
     </div>
   );
 }

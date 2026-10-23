@@ -26,11 +26,13 @@ const HEIGHT = 330;
 
 interface Section { key: string; label: string; chars: string[] }
 
-export function EmojiPicker({ anchor, recent, onPick, onClose }: {
+export function EmojiPicker({ anchor, recent, below, onPick, onClose }: {
   /** The button that opened it: the popover is placed against it, and a press
    *  on it is the button's to handle rather than an "outside click". */
   anchor: HTMLElement;
   recent: string[];
+  /** Open under the button when it fits (Customize…), instead of above. */
+  below?: boolean;
   /** `keep` is Shift held: add another instead of closing. */
   onPick: (char: string, keep: boolean) => void;
   onClose: () => void;
@@ -64,7 +66,7 @@ export function EmojiPicker({ anchor, recent, onPick, onClose }: {
     const put = () => {
       const r = anchor.getBoundingClientRect();
       const a: Anchor = { left: r.left, top: r.top, bottom: r.bottom, right: r.right };
-      setPlace(popoverPlace(a, { width: WIDTH, height: HEIGHT }, { width: window.innerWidth, height: window.innerHeight }));
+      setPlace(popoverPlace(a, { width: WIDTH, height: HEIGHT }, { width: window.innerWidth, height: window.innerHeight }, 6, 8, below));
     };
     put();
     window.addEventListener("resize", put);

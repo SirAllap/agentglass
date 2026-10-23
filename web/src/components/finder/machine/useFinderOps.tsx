@@ -297,6 +297,7 @@ export function useFinderOps(env: OpsEnv) {
         onSubmit={(o) => { setAsk(null); void run({ op: "compress", paths: paths(c), name: o.name, format: o.format, password: o.password }, [c.dir], o.name, c.rows.length); }} />; })()}
       {ask?.k === "props" && (() => { const a = ask; return <PropsDialog path={a.path} home={env.home} pinned={env.pins.includes(a.path)} onClose={() => setAsk(null)}
         onChmod={(mode) => run({ op: "chmod", path: a.path, mode }, [a.dir], a.name, 1)}
+        onOpen={() => { setAsk(null); doItem("open", { dir: a.dir, rows: envRef.current.rowsIn(a.dir).filter((r) => r.name === a.name) }, a.dir); }}
         onRename={() => { setAsk(null); doItem("rename", { dir: a.dir, rows: envRef.current.rowsIn(a.dir).filter((r) => r.name === a.name) }, a.dir); }}
         onCopyPath={() => envRef.current.copyText(a.path, `Copied ${a.path}`)} />; })()}
       {ask?.k === "pick" && (() => { const c = ask.c; return <FolderPicker op={ask.op} paths={paths(c)} start={c.dir} home={env.home} onClose={() => setAsk(null)}

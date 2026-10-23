@@ -11,7 +11,7 @@ const src = (p: string) => Bun.file(new URL(`../src/${p}`, import.meta.url)).tex
 describe("Customize…", () => {
   test("it has a close button and opens the shared emoji picker, not a text box", async () => {
     const t = await src("components/finder/machine/FinderCustomize.tsx");
-    expect(t).toContain('aria-label="Close"');
+    expect(t).toContain("<DialogHead "); // which carries the close button
     expect(t).toContain("<EmojiPicker");
     expect(t).not.toContain("Type or paste");
   });
@@ -44,5 +44,14 @@ describe("one reader for the chosen look", () => {
     expect(col).not.toMatch(/<RowIcon row=\{r\} \/>/);
     const views = await src("components/finder/machine/FolderViews.tsx");
     expect(views).not.toMatch(/<RowIcon row=\{r\} \/>/);
+  });
+});
+
+describe("as Strata draws it", () => {
+  test("a coloured or iconed folder is a filled folder with the icon in white on it, and the dialog asks the picker to open below", async () => {
+    const icon = await src("components/finder/machine/StrataIcon.tsx");
+    expect(icon).toContain("isDir && (style.color || style.icon)");
+    expect(icon).toContain('color: "#fff"');
+    expect(await src("components/finder/machine/FinderCustomize.tsx")).toMatch(/<EmojiPicker [^>]*\bbelow\b/);
   });
 });

@@ -5,11 +5,11 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../../lib/api.ts";
 import { HIT, ICON } from "../../../lib/iconSize.ts";
-import { FileTypeIcon } from "./StrataIcon.tsx";
-import { archiveName, compressSub, destProblem, trashDeleteWords, formatTakesPassword, modeBits, modeSymbolic, filterApps, nameProblem, shortPath, toggleMode, type Who } from "../../../lib/finderOps.ts";
+import { FileTypeIcon, StrataIcon } from "./StrataIcon.tsx";
+import { archiveName, compressSub, destProblem, trashDeleteWords, formatTakesPassword, canExec, kindWords, toggleExec, modeBits, modeSymbolic, filterApps, nameProblem, shortPath, toggleMode, type Who } from "../../../lib/finderOps.ts";
 import type { FsProps, FsTrashRow, OpenWithApp, OpenWithList } from "../../../../../shared/types.ts";
 import { EDGE, INPUT, INPUT_STYLE, LINE } from "../../workspace/Chrome.tsx";
-import { Sheet } from "./FinderOpsUI.tsx";
+import { DialogHead, Sheet } from "./FinderOpsUI.tsx";
 
 type Fmt = "zip" | "7z" | "tar.gz" | "tar";
 const FORMATS: Fmt[] = ["zip", "7z", "tar.gz", "tar"];
@@ -41,8 +41,7 @@ export function CompressDialog({ names, dirs, onSubmit, onClose }: {
   const go = () => { if (!problem) onSubmit({ name: name.trim(), format, password: using ? pw : undefined }); };
   return (
     <Sheet label="Compress" onClose={onClose}>
-      <b className="block text-[13px]">Compress {names.length === 1 ? "1 item" : `${names.length} items`}</b>
-      <p className="m-0 mb-3" style={{ color: "var(--text3)" }}>{compressSub(dirs.map((d) => ({ dir: d })))}</p>
+      <DialogHead icon={<StrataIcon set="act" name="package-plus" size={ICON.md} />} title={`Compress ${names.length === 1 ? "1 item" : `${names.length} items`}`} sub={compressSub(dirs.map((d) => ({ dir: d })))} onClose={onClose} />
       <label className="block text-[11px] mb-1" style={{ color: "var(--text3)" }}>Archive name</label>
       <input ref={input} value={name} onChange={(e) => setName(e.target.value)} spellCheck={false} aria-label="Archive name" onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); go(); } }} className={`${INPUT} w-full mb-3`} style={INPUT_STYLE} />
       <label className="block text-[11px] mb-1" style={{ color: "var(--text3)" }}>Format</label>
@@ -68,8 +67,8 @@ function when(ms: number) { return new Date(ms).toLocaleString(undefined, { date
 function size(b: number | null) { return b == null ? "—" : b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : b < 1073741824 ? `${(b / 1048576).toFixed(1)} MB` : `${(b / 1073741824).toFixed(1)} GB`; }
 
 /** Properties: what the server knows about one entry, and the nine permission bits when it is the owner's. */
-export function PropsDialog({ path, home, pinned, onChmod, onRename, onCopyPath, onClose }: {
-  path: string; home: string; pinned: boolean; onChmod: (mode: number) => Promise<boolean>; onRename: () => void; onCopyPath: () => void; onClose: () => void;
+export function PropsDialog({ path, home, pinned, onChmod, onOpen, onRename, onCopyPath, onClose }: {
+  path: string; home: string; pinned: boolean; onChmod: (mode: number) => Promise<boolean>; onOpen: () => void; onRename: () => void; onCopyPath: () => void; onClose: () => void;
 }) {
   const [p, setP] = useState<FsProps | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -81,15 +80,14 @@ export function PropsDialog({ path, home, pinned, onChmod, onRename, onCopyPath,
       {err && <p role="alert" className="m-0" style={{ color: "var(--error-ink)" }}>{err}</p>}
       {p && (
         <>
-          <b className="block text-[13px] truncate">{p.name}</b>
-          <p className="m-0 mb-2" style={{ color: "var(--text3)" }}>{p.kind === "dir" ? "Folder" : p.kind === "link" ? "Link" : "File"}</p>
+          <DialogHead icon={<FileTypeIcon name={p.name} isDir={p.kind === "dir"} size={ICON.md} />} title={p.name} sub={kindWords(p.name, p.kind)} onClose={onClose} />
           {row("Location", shortPath(p.path, home, 44))}
           {row("Size", size(p.bytes))}
           {row("Modified", when(p.mtime))}
           {p.link && row("Points to", p.link)}
           {row("Hidden", p.hidden ? "Yes" : "No")}
           {row("Pinned", pinned ? "Yes" : "No")}
-          <div className="flex items-baseline justify-between mt-3 mb-1 text-[10.5px] uppercase" style={{ color: "var(--text3)" }}><span>Permissions</span><span>{modeSymbolic(p.mode, p.kind)} {(p.mode & 0o777).toString(8).padStart(3, "0")}</span></div>
+          <div className="flex items-baseline justify-between mt-3 mb-1 text-[10.5px] uppercase" style={{ color: "var(--text3)" }}><span>Permissions</span><span className="normal-case">{modeSymbolic(p.mode, p.kind)} {(p.mode & 0o777).toString(8).padStart(3, "0")}</span></div>
           {WHO.map(({ who, label, of }) => (
             <div key={who} className="flex items-center gap-2 py-0.5">
               <span className="w-14">{label}</span><span className="flex-1 truncate text-[10.5px]" style={{ color: "var(--text3)" }}>{of(p)}</span>
@@ -100,13 +98,14 @@ export function PropsDialog({ path, home, pinned, onChmod, onRename, onCopyPath,
               })}
             </div>
           ))}
+          {p.kind === "file" && <label className="flex items-center gap-2 mt-2 cursor-pointer"><input type="checkbox" checked={canExec(p.mode)} disabled={!p.mine} onChange={() => void (async () => { const mode = toggleExec(p.mode); if (await onChmod(mode)) setP({ ...p, mode }); })()} />Allow executing file as a program (+x)</label>}
           {!p.mine && <p className="m-0 mt-1" style={{ color: "var(--text3)" }}>Only the owner can change these.</p>}
         </>
       )}
-      <div className="flex justify-end gap-2 mt-3">
-        <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE }} onClick={onRename} disabled={!p}>Rename</button>
-        <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE }} onClick={onCopyPath} disabled={!p}>Copy path</button>
-        <button autoFocus className="agx-btn rounded-md px-3" style={{ minHeight: HIT, background: "var(--text)", color: "var(--bg)" }} onClick={onClose}>Close</button>
+      <div className="grid grid-cols-3 gap-2 mt-3 pt-3" style={{ borderTop: LINE }}>
+        {([["Open", "external-link", onOpen], ["Rename", "pencil", onRename], ["Copy path", "copy", onCopyPath]] as const).map(([label, ic, fn]) => (
+          <button key={label} autoFocus={label === "Open"} className="agx-btn rounded-md px-3 flex items-center justify-center gap-1.5" style={{ minHeight: HIT, border: EDGE }} onClick={fn} disabled={!p}><StrataIcon set="act" name={ic} size={ICON.xs} />{label}</button>
+        ))}
       </div>
     </Sheet>
   );
@@ -128,8 +127,7 @@ export function FolderPicker({ op, paths, start, home, onPick, onClose }: { op: 
   const verb = op === "move" ? "Move" : "Copy";
   return (
     <Sheet label={`${verb} to`} onClose={onClose}>
-      <b className="block text-[13px]">{verb} {paths.length === 1 ? "1 item" : `${paths.length} items`} to…</b>
-      <p className="m-0 mb-2 truncate" style={{ color: "var(--text3)" }} title={at}>{shortPath(at, home, 44)}</p>
+      <DialogHead icon={<StrataIcon set="act" name={op === "move" ? "folder-input" : "copy-plus"} size={ICON.md} />} title={`${verb} ${paths.length === 1 ? "1 item" : `${paths.length} items`} to…`} sub={shortPath(at, home, 44)} onClose={onClose} />
       <div role="listbox" aria-label="Folders" className="rounded-md overflow-y-auto" style={{ border: EDGE, height: 220 }}>
         {at !== "/" && <button role="option" aria-selected={false} className="agx-btn w-full text-left px-3" style={{ minHeight: HIT - 4, color: "var(--text3)" }} onClick={() => setAt(up)}>..</button>}
         {dirs?.map((n) => <button key={n} role="option" aria-selected={false} className="agx-btn w-full text-left px-3 truncate" style={{ minHeight: HIT - 4 }} onClick={() => setAt(join(n))}><span className="flex items-center gap-2"><FileTypeIcon name={n} isDir broken={false} size={ICON.sm} /><span className="truncate">{n}</span></span></button>)}
@@ -167,7 +165,7 @@ export function TrashPanel({ home, onRestored, onClose }: { home: string; onRest
   return (
     <Sheet label="Trash" onClose={onClose} width={460}>
       <div>
-        <b className="block text-[13px] mb-2">Trash</b>
+        <DialogHead icon={<StrataIcon set="act" name="trash" size={ICON.md} />} title="Trash" sub={rows ? `${rows.length} ${rows.length === 1 ? "item" : "items"}` : undefined} onClose={onClose} />
         <div role="list" aria-label="Trashed items" className="rounded-md overflow-y-auto" style={{ border: EDGE, maxHeight: 280, minHeight: 60 }}>
           {rows?.map((r) => (
             <div key={r.id} role="listitem" className="flex items-center gap-2 px-3 py-1.5" style={{ borderBottom: LINE }}>
@@ -219,8 +217,7 @@ export function OpenWithDialog({ paths, onLaunch, onClose }: {
   const empty = list && !rows.length ? (q ? "No applications match" : list.error ?? list.empty ?? "No compatible applications were found") : null;
   return (
     <Sheet label="Open With" onClose={onClose} width={420}>
-      <b className="block text-[13px]">Open With</b>
-      <p className="m-0 mb-3" style={{ color: "var(--text3)" }}>Choose an application to open {paths.length === 1 ? "this item" : "these items"}</p>
+      <DialogHead icon={<StrataIcon set="act" name="external-link" size={ICON.md} />} title="Open With" sub={`Choose an application to open ${paths.length === 1 ? "this item" : "these items"}`} onClose={onClose} />
       <input ref={input} value={q} onChange={(e) => { setQ(e.target.value); setAt(0); }} spellCheck={false} placeholder="Search applications…" aria-label="Search applications"
         onKeyDown={(e) => {
           if (e.key === "Enter") { e.preventDefault(); go(); }
