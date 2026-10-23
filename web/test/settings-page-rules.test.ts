@@ -217,7 +217,7 @@ describe("the one divider", () => {
     // also between a card's header and its first row, edge to edge as drawn.
     expect(bordered).toEqual([
       ".agx-settings-col .agx-scard",
-      ".agx-scard-body > .agx-settings-row + .agx-settings-row::before,\n.agx-scard-body > .agx-fold-body + .agx-settings-row::before,\n.agx-scard-head + .agx-scard-body > .agx-settings-row:first-child::before",
+      ".agx-scard-body > .agx-settings-row + .agx-settings-row::before,\n.agx-scard-body > .agx-fold-body + .agx-settings-row::before,\n.agx-scard-body > .agx-row-more + .agx-settings-row::before,\n.agx-scard-head + .agx-scard-body > .agx-settings-row:first-child::before",
     ]);
   });
   test("no new sibling-of-anything border rule", () => {

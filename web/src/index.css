@@ -757,8 +757,8 @@
 
 /* A row's name and its help: the name is the heavier of the two and in the
    full ink, the help one muted line under it. */
-.agx-row-name { display: block; font-size: 13.5px; font-weight: 650; color: var(--text); }
-.agx-row-help { display: block; margin-top: 4px; font-size: 12px; line-height: 1.42; color: var(--text3); max-width: 64ch; }
+.agx-row-name { display: block; font-size: 13.86px; font-weight: 750; color: var(--text); }
+.agx-row-help { display: block; margin-top: 1px; font-size: 11.76px; line-height: 1.42; color: var(--text3); max-width: 64ch; }
 
 /* The switch: on is the success colour, off a tint of the text on the page, the
    knob the page's own ground (white on a light theme, dark on a dark one, which
@@ -788,6 +788,21 @@
   background: var(--bg); border: 1px solid var(--border);
 }
 .agx-settings-col .agx-select:hover:not(:disabled) { border-color: var(--text3); }
+/* Text fields and native selects on a settings page: the page's ground inside a
+   visible edge, and the primary as a ring on focus. The kit's INPUT paints an inset
+   fill and a 14% edge (right for a toolbar, too faint on a card), and sets them
+   inline, so only !important reaches them. A select drops the OS arrow for one chevron. */
+.agx-settings-col :is(select, textarea, input:not([type]), input:is([type="text"], [type="search"], [type="url"], [type="number"], [type="password"], [type="email"])) {
+  background-color: var(--bg) !important; border: 1px solid var(--border2) !important; border-radius: 8px;
+}
+.agx-settings-col :is(select, textarea, input:not([type]), input:is([type="text"], [type="search"], [type="url"], [type="number"], [type="password"], [type="email"])):focus-visible {
+  border-color: var(--primary) !important; box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 22%, transparent);
+}
+.agx-settings-col select:not([multiple]) {
+  appearance: none; padding-right: 28px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none' stroke='%23888' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 10px center;
+}
 /* The segmented choice: an inset track, the chosen one raised on the page's ground. */
 .agx-seg { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 2px; border-radius: 9px; background: var(--surface-inset); max-width: 100%; }
 .agx-seg-b {
@@ -1930,8 +1945,8 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 .agx-settings-col .agx-scard {
   background: var(--surface-card);
   border: 1px solid var(--surface-line);
-  border-radius: 0.75rem;
-  box-shadow: var(--surface-lift);
+  border-radius: 13px;
+  box-shadow: 0 1px 2px rgba(60, 40, 30, 0.05), 0 12px 26px -20px var(--shadow);
   overflow: hidden;
   position: relative;
   /* A card is one piece of the flow: it never splits across two columns, and
@@ -1978,15 +1993,15 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 /* The header: an icon chip, the title, the verdict and the one action on a
    line, and the sentence under it. The line below the header is the first
    row's divider (further down), not a border of the header. */
-.agx-scard-head { padding: 14px 18px 10px; }
+.agx-scard-head { padding: 14px 18px 6px; }
 .agx-scard-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
-.agx-scard-top > .agx-settings-head-t { flex: 1 1 10rem; min-width: 0; }
+.agx-scard-top > .agx-settings-head-t { flex: 1 1 10rem; min-width: 0; font-size: 15.96px; font-weight: 800; letter-spacing: -0.005em; }
 .agx-scard-ic {
-  width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; flex: none;
+  width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center; flex: none;
   background: color-mix(in srgb, var(--hue, var(--text3)) 17%, transparent);
   color: color-mix(in srgb, var(--hue, var(--text3)) 78%, var(--text));
 }
-.agx-scard-desc { font-size: 12px; margin-top: 6px; color: var(--text3); }
+.agx-scard-desc { font-size: 12.04px; margin-top: 2px; color: var(--text3); }
 .agx-scard-body { padding-bottom: 0; }
 .agx-scard-body > .agx-settings-row { position: relative; }
 .agx-settings-row:hover { background: color-mix(in srgb, var(--text) 3%, transparent); }
@@ -1997,6 +2012,7 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
    header and its first row. */
 .agx-scard-body > .agx-settings-row + .agx-settings-row::before,
 .agx-scard-body > .agx-fold-body + .agx-settings-row::before,
+.agx-scard-body > .agx-row-more + .agx-settings-row::before,
 .agx-scard-head + .agx-scard-body > .agx-settings-row:first-child::before {
   content: "";
   position: absolute;
@@ -2031,7 +2047,20 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 
 /* A disclosure named for what it holds: a quiet line with a caret, and what
    it holds in an inset panel when it is open. */
-.agx-disclosure { margin-top: 6px; font-size: 12px; }
+/* The numbered steps of a list: a 22px inset circle and the step in bold; the rows
+   sit in a wrapper, so the card's between-rows rule never reaches them. */
+.agx-steps { padding: 2px 0 8px; }
+.agx-step { display: inline-flex; align-items: center; gap: 10px; }
+.agx-step > i {
+  width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; flex: none;
+  background: var(--surface-inset); font-style: normal; font-size: 12px; font-weight: 700; color: var(--text2);
+}
+.agx-steps .agx-row-help { margin-left: 32px; }
+.agx-steps .agx-settings-row { padding-block: 8px; }
+/* The Details of a row that is a button: under it, on the row's own edge, hugging its help. */
+.agx-row-more { padding: 0 18px 10px; margin-top: -6px; }
+.agx-row-more > .agx-disclosure { margin-top: 0; }
+.agx-disclosure { margin-top: 4px; font-size: 11.76px; }
 .agx-disclosure-s {
   display: inline-flex;
   align-items: center;
@@ -2039,7 +2068,7 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
   cursor: pointer;
   list-style: none;
   color: var(--text4);
-  font-size: 11.5px;
+  font-size: 11.2px;
   border-radius: 4px;
 }
 .agx-disclosure-s::-webkit-details-marker { display: none; }
@@ -2114,15 +2143,15 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
  */
 .agx-settings-shell {
   --nav-w: 292px;
-  /* One hue per nav group, tinted with color-mix wherever it is used. Derived
-     from the theme's own status colours, never fixed hex: every theme (the
-     Omarchy-synced one included) tunes those to read on its own background, so
-     the hues do too. */
-  --g-general: var(--info);
-  --g-workspace: var(--success);
-  --g-agents: color-mix(in srgb, var(--error) 55%, var(--warning));
-  --g-library: var(--warning);
-  --g-connections: color-mix(in srgb, var(--info) 60%, var(--error));
+  /* One hue per nav group, tinted with color-mix wherever it is used. The five
+     are fixed mid-tones (the approved mockup's), the same in every theme: they
+     only ever appear as a 17% tint, a 3px bar and a chip glyph mixed with the
+     text colour, which reads on a light ground and a dark one alike. */
+  --g-general: #6b7bb8;
+  --g-workspace: #3f9a93;
+  --g-agents: #d98a6c;
+  --g-library: #c4982f;
+  --g-connections: #5c8fc4;
   --g-system: var(--text4);
 }
 @media (min-width: 2200px) { .agx-settings-shell { --nav-w: 320px; } }
@@ -2176,6 +2205,8 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
 }
 .agx-sn-it:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
 .agx-sn-it[data-on] { background: color-mix(in srgb, var(--hue) 16%, transparent); color: var(--text); font-weight: 600; }
+/* The 3px hue bar sits on the group's rule, 7px left of the row (6 of padding + the 1px rule). */
+.agx-sn-it[data-on]::before { content: ""; position: absolute; left: -7px; top: 6px; bottom: 6px; width: 3px; border-radius: 3px; background: var(--hue); }
 .agx-sn-ic { display: flex; flex: none; color: color-mix(in srgb, var(--hue) 70%, var(--text)); }
 .agx-sn-it[data-on] .agx-sn-ic { color: color-mix(in srgb, var(--hue) 92%, var(--text)); }
 .agx-sn-lbl { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -2247,17 +2278,17 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
   position: sticky; top: 0; z-index: 5; padding: 18px 40px 14px; border-bottom: 1px solid var(--surface-line);
   background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(8px);
 }
-.agx-ph-crumb { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text3); }
+.agx-ph-crumb { display: flex; align-items: center; gap: 6px; font-size: 11.48px; color: var(--text3); }
 .agx-ph-crumb i { width: 8px; height: 8px; border-radius: 3px; background: var(--hue); display: inline-block; }
 .agx-ph-row { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; margin-top: 6px; }
 .agx-ph-pic {
-  width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; flex: none;
+  width: 32px; height: 32px; border-radius: 11px; display: grid; place-items: center; flex: none;
   background: color-mix(in srgb, var(--hue) 18%, transparent); color: color-mix(in srgb, var(--hue) 78%, var(--text));
 }
-.agx-ph-title { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.015em; color: var(--text); }
+.agx-ph-title { margin: 0; font-size: 23.1px; font-weight: 700; letter-spacing: -0.01em; color: var(--text); }
 .agx-ph-chips { display: flex; gap: 6px; align-items: center; }
 .agx-ph-sp { flex: 1; }
-.agx-ph-sum { margin: 4px 0 0; color: var(--text3); font-size: 13px; max-width: 90ch; }
+.agx-ph-sum { margin: 4px 0 0; color: var(--text3); font-size: 14px; max-width: 90ch; }
 
 /* the page under the header: its cards, and the index beside or above them */
 .agx-settings-page { padding: 22px 40px 28px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-items: start; }
