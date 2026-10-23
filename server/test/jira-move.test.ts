@@ -90,8 +90,8 @@ function suite(flavor: FakeFlavor) {
         expect(r.ok).toBe(true);
         expect(r.data!.cannot).toBeUndefined();
         expect(r.data!.options).toEqual([
-          { id: "21", name: "Request review", label: "In Review", toStatus: "In Review", toKind: "open", color: "#ffab00" },
-          { id: "22", name: "Back to To Do", label: "To Do", toStatus: "To Do", toKind: "open", color: "#42526e" },
+          { id: "21", name: "Request review", label: "In Review", toStatus: "In Review", toId: "3", toKind: "open", color: "#ffab00" },
+          { id: "22", name: "Back to To Do", label: "To Do", toStatus: "To Do", toId: "1", toKind: "open", color: "#42526e" },
         ]);
         expect(wire()).toEqual(["GET /issue/ORBIT-1042/transitions"]);
         expect(fake.requests[0]!.query.expand).toBe("transitions.fields");

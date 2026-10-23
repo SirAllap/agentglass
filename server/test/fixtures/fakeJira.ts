@@ -536,6 +536,15 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
       return json(200, { startAt: start, maxResults: max, total: all.length, isLast: start + max >= all.length, values });
     }
 
+    // A project's statuses, grouped by issue type (the same on both flavors).
+    // One workflow serves every project here, so every type lists all of them.
+    if (m === "GET" && (r = /^\/project\/([^/]+)\/statuses$/.exec(path))) {
+      const p = projects.find((x) => x.key === decodeURIComponent(r![1]!) || x.id === decodeURIComponent(r![1]!));
+      if (!p) return json(404, { errorMessages: [`No project could be found with key '${decodeURIComponent(r[1]!)}'.`], errors: {} });
+      const statuses = live.workflow.statuses.map((s) => ({ ...statusObject(s.id), self: `${PREFIX}/status/${s.id}`, description: "" }));
+      return json(200, ["Task", "Bug"].map((name, i) => ({ id: String(10001 + i), name, subtask: false, self: `${PREFIX}/issuetype/${10001 + i}`, statuses })));
+    }
+
     // Jira Software, outside the platform prefix and the same on both flavors.
     if (m === "GET" && path.startsWith("/rest/agile/1.0/")) {
       const boards = boardFixture.boards;

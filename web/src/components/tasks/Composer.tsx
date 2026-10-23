@@ -84,7 +84,7 @@ const GROUPS: Tool[][] = [
  *  grows with what is typed, up to `max` px, then scrolls inside. */
 export const COMPOSER_MIN = 56;
 
-export function Composer({ value, onChange, onSend, onCancel, busy, placeholder, sendLabel, autoFocus, people, onNeedPeople, growTo }: {
+export function Composer({ value, onChange, onSend, onCancel, busy, placeholder, sendLabel, autoFocus, people, onNeedPeople, onPeopleQuery, growTo }: {
   value: string;
   onChange: (v: string) => void;
   onSend: () => void;
@@ -100,6 +100,9 @@ export function Composer({ value, onChange, onSend, onCancel, busy, placeholder,
   /** Asked the first time somebody types `@` — a card is read far more often
    *  than it is commented on, and the roster is a call. */
   onNeedPeople?: () => void;
+  /** Told what is typed after `@`, each time it changes, for a tracker whose
+   *  people are found by a search rather than read as one list. */
+  onPeopleQuery?: (query: string) => void;
   /** The box grows with its text up to this many px, and scrolls after. Absent
    *  for the reply and edit boxes, which keep their fixed, resizable height. */
   growTo?: number;
@@ -161,6 +164,7 @@ export function Composer({ value, onChange, onSend, onCancel, busy, placeholder,
     setAt(q);
     setPick(0);
     if (q && !people && onNeedPeople) onNeedPeople();
+    if (q && onPeopleQuery) onPeopleQuery(q.query);
   };
 
   /*

@@ -5,7 +5,7 @@ import type { PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/typ
 import type { AskedAlert } from "../../../shared/notifyPayload.ts";
 import type { CheckOnBasePlan, CheckOnBaseStatus } from "../../../shared/checkOnBase.ts";
 import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest } from "../../../shared/types.ts";
-import type { ProvidersResponse, JiraConnectResult, JiraMoves, JiraStatus, JiraViews, JiraViewRead, JiraViewChoice, JiraProjectChoice, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, TrackerChoice } from "../../../shared/providers.ts";
+import type { ProvidersResponse, JiraConnectResult, JiraHandoffRule, JiraMoves, JiraPerson, JiraSettings, JiraStatus, JiraViews, JiraViewRead, JiraViewChoice, JiraProjectChoice, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, TrackerChoice } from "../../../shared/providers.ts";
 import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from "../../../shared/notifyPrefs.ts";
 import type { CheckMetric } from "../../../shared/checkBaseline.ts";
 import type { UiReply } from "../../../shared/uiActions.ts";
@@ -21,6 +21,8 @@ type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? Partial<T[K]> : T
    because this provider answers 401 for a card that does not exist and a code
    pretending to know which it was would be wrong on the common case. */
 type ClickUpWrite = { ok: boolean; error?: string; conflict?: boolean; unauthorised?: boolean; task?: ProviderTask };
+/** A Jira write's answer: ClickUp's shape, plus `partial` when only some of it landed (a warning, never plain success). */
+type JiraWrite = ClickUpWrite & { partial?: string };
 
 /** Local agent spend, attributed to the work objects it happened in — see
  *  server/src/spend.ts, which is where the rule and its limits are written.
@@ -1408,6 +1410,21 @@ const realApi = {
   /** One move, with the `updated` the person saw; the server refuses it as a conflict if the card has moved since. */
   jiraTransition: (key: string, transitionId: string, updated: number) =>
     post<ClickUpWrite>("/jira/transition", { key, transitionId, updated }),
+  /** Who the card can be given to, by what was typed. A short answer is not "that is everybody": Jira scans part of its directory. */
+  jiraAssignable: (key: string, q: string, transition = "") =>
+    get<{ ok: boolean; error?: string; throttled?: boolean; people?: JiraPerson[] }>(`/jira/assignable?${new URLSearchParams({ key, q, ...(transition ? { transition } : {}) })}`),
+  /** Give the card to `to` (a person's `key`), or to nobody with null. */
+  jiraSetAssignee: (key: string, to: string | null, updated: number) =>
+    post<JiraWrite>("/jira/assignee", { key, to, updated }),
+  /** The hand-off, in one request; `to`/`clear` absent is the project's setting. */
+  jiraHandOff: (key: string, updated: number, choice: { to?: string; clear?: boolean } = {}) =>
+    post<JiraWrite>("/jira/handoff", { key, updated, ...choice }),
+  jiraSettings: () => get<{ ok: boolean } & JiraSettings>("/jira/settings"),
+  /** One project's hand-off, or null to drop it. */
+  setJiraHandoff: (project: string, rule: JiraHandoffRule | null) =>
+    post<{ ok: boolean; error?: string } & Partial<JiraSettings>>("/jira/settings", { project, rule }),
+  jiraProjectStatuses: (project: string) =>
+    get<{ ok: boolean; error?: string; statuses?: { id: string; name: string; kind: "open" | "done" | "other" }[] }>(`/jira/project-statuses?project=${encodeURIComponent(project)}`),
   /** The saved Jira views and folders: local, no request to Jira. */
   jiraViews: () => get<JiraViews>("/jira/views"),
   /** One saved view's cards. `cached` answers from disk only; `force` skips the server's held answer. */
@@ -1422,6 +1439,15 @@ const realApi = {
   jiraRemoveView: (id: string) => post<{ ok: boolean }>("/jira/views/remove", { id }),
   jiraAddFolder: (key: string) => post<{ ok: boolean; error?: string; folder?: SavedFolder }>("/jira/folders/add", { key }),
   jiraRemoveFolder: (id: string) => post<{ ok: boolean }>("/jira/folders/remove", { id }),
+  /** A Jira card with its description and comments as Markdown; `more` is how many comments the read left out. */
+  jiraDetail: (key: string) =>
+    get<{ ok: boolean; error?: string; throttled?: boolean; detail?: TaskDetail; more?: number }>(`/jira/detail?key=${encodeURIComponent(key)}`),
+  /** Who a comment on this card may mention, for what was typed after `@`. `key` is the id a mention carries. */
+  jiraPeople: (key: string, q: string) =>
+    get<{ ok: boolean; error?: string; throttled?: boolean; people?: { key: string; name: string; initials: string; avatar?: string }[] }>(`/jira/people?${new URLSearchParams({ key, q })}`),
+  /** One comment, Markdown; `mentions` are the people named in it, by the id `jiraPeople` gave. */
+  jiraComment: (key: string, text: string, mentions: { id: string; name: string }[] = []) =>
+    post<ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string }>("/jira/comment", { key, text, mentions }),
   providerTasks: (force = false) =>
     get<ProviderTasksResponse>(`/tasks/provider${force ? "?force=1" : ""}`),
 
@@ -2764,6 +2790,12 @@ const demoApi: typeof realApi = {
   jiraSearch: (_q: string) => D({ ok: false, error: "not available in the demo" }),
   jiraTransitions: (_k: string) => D({ ok: false, error: "not available in the demo" }),
   jiraTransition: (_k: string, _t: string, _u: number) => D({ ok: false, error: "not available in the demo" }),
+  jiraAssignable: (_k: string, _q: string, _t?: string) => D({ ok: true, people: [] as JiraPerson[] }),
+  jiraSetAssignee: (_k: string, _to: string | null, _u: number) => D({ ok: false, error: "not available in the demo" }),
+  jiraHandOff: (_k: string, _u: number, _c?: { to?: string; clear?: boolean }) => D({ ok: false, error: "not available in the demo" }),
+  jiraSettings: () => D({ ok: true, writes: false, handoff: {} as Record<string, JiraHandoffRule> }),
+  setJiraHandoff: (_p: string, _r: JiraHandoffRule | null) => D({ ok: false, error: "not available in the demo" }),
+  jiraProjectStatuses: (_p: string) => D({ ok: true, statuses: [] as { id: string; name: string; kind: "open" | "done" | "other" }[] }),
   jiraViews: () => D<JiraViews>({
     connected: true, site: "acme.example", current: "board:1",
     views: [{ id: "board:1", name: "ORBIT board", url: "", addedAt: 0 }], folders: [],
@@ -2787,6 +2819,9 @@ const demoApi: typeof realApi = {
   jiraRemoveView: (_i: string) => D({ ok: false }),
   jiraAddFolder: (_k: string) => D({ ok: false, error: "not available in the demo" }),
   jiraRemoveFolder: (_i: string) => D({ ok: false }),
+  jiraDetail: (_k: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraPeople: (_k: string, _q: string) => D({ ok: true, people: [] as { key: string; name: string; initials: string; avatar?: string }[] }),
+  jiraComment: (_k: string, _t: string, _m?: { id: string; name: string }[]) => D({ ok: false, error: "not available in the demo" }),
   providerTasks: (_f?: boolean) => D({ tasks: [], more: false, at: 0 }),
   recipes: (_r?: string) => D({ recipes: [] }),
   recipeSave: (_r: Recipe) => D({ ok: false, error: "not available in the demo" }),

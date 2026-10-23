@@ -103,6 +103,23 @@ export function rememberOwnMove(task: ProviderTask, to: string, now = Date.now()
   save(s);
 }
 
+/*
+ * Who is on a card changed by this app, the status did not. Given to me: it is
+ * not news, so it is seen, as after a move. Given to somebody else (or nobody):
+ * it is no longer seen, so if it comes back to me later that IS news, and for
+ * the next few minutes an answer still showing it (the search lagging the
+ * write) is skipped rather than announced as assigned.
+ * Ceiling: a real hand-back to me inside those minutes, at the same status, is
+ * skipped too.
+ */
+export function rememberOwnAssign(task: ProviderTask, now = Date.now()): void {
+  if (task.mine) { rememberOwnMove(task, task.status, now); return; }
+  const s = load();
+  own.set(task.id, { from: task.status, to: task.status, at: now });
+  delete s.seen[task.id];
+  save(s);
+}
+
 // ---------------------------------------------------------------------------
 // the watch is failing, and somebody has to be told
 // ---------------------------------------------------------------------------

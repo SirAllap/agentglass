@@ -3,9 +3,8 @@
  *
  * The seam between the card screens and the trackers behind them. This slice
  * holds the question every later one starts from: given an id read out of a
- * branch or a body, WHOSE is it? Moving a card, putting someone on it and
- * commenting come after, as methods on what `trackerFor` returns, and none of
- * them is here yet.
+ * branch or a body, WHOSE is it? Moving a card and putting someone on it are
+ * methods on what `trackerFor` returns; commenting comes after.
  *
  * Why the question needs an owner at all. `ORBIT-1042` is the same string in
  * both trackers, and with one connected nothing was ever ambiguous: the id was
@@ -47,6 +46,9 @@ import {
   type StatusOption, type StatusOptionsResult, type StatusWriteResult,
 } from "./trackerStatus.ts";
 
+import { jiraHandOff, jiraPeople, jiraSetPeople, type CardWriteResult, type PeopleResult } from "./trackerPeople.ts";
+import { clickupComment, jiraComment, type CommentMention, type CommentResult } from "./trackerComment.ts";
+
 export type { StatusOption } from "./trackerStatus.ts";
 
 export type TrackerId = "clickup" | "jira";
@@ -72,6 +74,21 @@ export interface Tracker {
   statusOptions(task: ProviderTask): Promise<StatusOptionsResult>;
   /** One move, with the stamp the person saw (`task.updated`). The answer carries the card as it is afterwards. */
   setStatus(task: ProviderTask, opt: StatusOption): Promise<StatusWriteResult>;
+  /*
+   * People and the hand-off, for a tracker with one assignee. ClickUp has
+   * neither here: its multi-person picker and its hand-off button keep the
+   * bodies they always sent, in the pull request panel. Ceiling: one seam for
+   * one shape, not one for both.
+   */
+  /** Who the card can be given to, by what was typed; `transition` asks for during that move. */
+  people?(task: ProviderTask, query: string, transition?: string): Promise<PeopleResult>;
+  /** One person on (`set: key`) or nobody (`set: null`), with the stamp the person saw. */
+  setPeople?(task: ProviderTask, change: { set: string | null }): Promise<CardWriteResult>;
+  /** The hand-off, as one request; a choice left out is the project's setting. */
+  handOff?(task: ProviderTask, choice?: { to?: string; clear?: boolean }): Promise<CardWriteResult>;
+  /** One comment, Markdown. `mentions` are the people named in it by the id the
+   *  tracker's people search gave; ClickUp finds them itself and ignores it. */
+  comment(task: ProviderTask, markdown: string, mentions?: CommentMention[]): Promise<CommentResult>;
 }
 
 const CLICKUP: Tracker = {
@@ -79,15 +96,20 @@ const CLICKUP: Tracker = {
   caps: { multiAssignee: true, statusByTransition: false, checklists: true, boards: true, idMinDigits: 3 },
   statusOptions: clickupStatusOptions,
   setStatus: clickupSetStatus,
+  comment: (task, markdown) => clickupComment(task, markdown),
 };
 const JIRA: Tracker = {
   id: "jira",
   caps: { multiAssignee: false, statusByTransition: true, checklists: false, boards: false, idMinDigits: 1 },
   statusOptions: jiraStatusOptions,
   setStatus: jiraSetStatus,
+  people: jiraPeople,
+  setPeople: jiraSetPeople,
+  handOff: jiraHandOff,
+  comment: jiraComment,
 };
 
-/** Test-only handle on the two descriptors, so a test compares by identity. */
+/** The two descriptors by id: for a screen that already knows its tracker (the Jira tab), and for a test that compares by identity. */
 export const TRACKERS = { clickup: CLICKUP, jira: JIRA } as const;
 
 export interface OwnerOptions {

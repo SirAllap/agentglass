@@ -131,6 +131,8 @@ export interface JiraMove {
   name: string;
   label: string;
   toStatus: string;
+  /** The status it leads to, by the site's own id: what the hand-off setting names. */
+  toId?: string;
   toKind: "open" | "done" | "other";
   color?: string;
   needs?: string[];
@@ -138,6 +140,32 @@ export interface JiraMove {
 
 /** The answer to `GET /jira/transitions`. An empty list always carries `cannot`. */
 export interface JiraMoves { options: JiraMove[]; cannot?: string }
+
+/** Somebody a Jira card can be given to. */
+export interface JiraPerson {
+  /** What a write sends: the account id on Cloud, the login name on Data Center. */
+  key: string;
+  /** The same id a card's `people[].key` carries, to tell who is on it now. */
+  id: string;
+  name: string;
+  avatar?: string;
+}
+
+/**
+ * What the hand-off button does for one Jira project. Each value is a default:
+ * with its `ask` set, the dialog asks when it runs and starts from it.
+ * `to` is a status by the site's own id, with its name for the label.
+ */
+export interface JiraHandoffRule {
+  to: { id: string; name: string } | null;
+  askTo: boolean;
+  /** Take the assignee off on the way. */
+  clear: boolean;
+  askClear: boolean;
+}
+
+/** `GET /jira/settings`: the write switch and the hand-off, by project key. */
+export interface JiraSettings { writes: boolean; handoff: Record<string, JiraHandoffRule> }
 
 /*
  * Saved Jira views. They reuse `SavedView` and `SavedFolder`: a view's id says

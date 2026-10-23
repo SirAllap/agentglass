@@ -55,6 +55,10 @@ export interface PeoplePickProps {
   /** Below this many names the filter box is noise. */
   filterOver?: number;
   empty?: string;
+  /** The people are asked of the tracker by what is typed (it has no roster to
+   *  hand over): the box is always there, its text goes to the caller, and the
+   *  rows are drawn as given, not filtered here. */
+  onQuery?: (q: string) => void;
 }
 
 export function PeoplePick(p: PeoplePickProps) {
@@ -76,7 +80,7 @@ export function PeoplePick(p: PeoplePickProps) {
   }, [p.anchor]);
 
   const all = p.members ?? [];
-  const shown = q.trim()
+  const shown = q.trim() && !p.onQuery
     ? all.filter((m) => m.name.toLowerCase().includes(q.trim().toLowerCase()))
     : all;
 
@@ -86,9 +90,9 @@ export function PeoplePick(p: PeoplePickProps) {
       <div ref={box} data-menu-layer data-people-pick
         className="agx-scroll fixed rounded-lg shadow-2xl flex flex-col overflow-y-auto py-1"
         style={{ ...pos, zIndex: 9999, background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--text) 28%, transparent)", width: PICK_W, maxHeight: Math.min(PICK_H, window.innerHeight - 16) }}>
-        {!p.busy && all.length > (p.filterOver ?? 12) && (
-          <input value={q} onChange={(e) => setQ(e.target.value)} autoFocus
-            placeholder="Filter people…" spellCheck={false}
+        {(p.onQuery || (!p.busy && all.length > (p.filterOver ?? 12))) && (
+          <input value={q} onChange={(e) => { setQ(e.target.value); p.onQuery?.(e.target.value); }} autoFocus
+            placeholder={p.onQuery ? "Find somebody…" : "Filter people…"} spellCheck={false}
             className={`mx-1 mb-1 shrink-0 ${INPUT}`}
             style={INPUT_STYLE} />
         )}

@@ -441,6 +441,17 @@ describe("priorities and people", () => {
     expect("emailAddress" in r.json[1]).toBe(false);
   });
 
+  it("a project's statuses come grouped by issue type, on both flavors; an unknown project is a 404", async () => {
+    for (const on of [fake, dc]) {
+      const r = await call("GET", "/project/ORBIT/statuses", { on });
+      expect(r.status).toBe(200);
+      expect(r.json.map((t: { name: string }) => t.name)).toEqual(["Task", "Bug"]);
+      expect(r.json[0].statuses.map((s: { id: string; name: string; statusCategory: { key: string } }) => [s.id, s.name, s.statusCategory.key]))
+        .toEqual([["1", "To Do", "new"], ["2", "In Progress", "indeterminate"], ["3", "In Review", "indeterminate"], ["4", "QA", "indeterminate"], ["5", "Done", "done"]]);
+      expect((await call("GET", "/project/NOPE/statuses", { on })).status).toBe(404);
+    }
+  });
+
   it("the scan cap is configurable", async () => {
     const wide = startFakeJira({ assignableScanCap: 100 });
     try {

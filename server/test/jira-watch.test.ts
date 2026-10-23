@@ -108,6 +108,26 @@ describe("what is said", () => {
   });
 });
 
+describe("a card this app gave to somebody", () => {
+  test("given to me: not announced as assigned", async () => {
+    queue = [say([card("8", "To Do", T0)])];
+    await W.pollJira(T0);
+    W.rememberOwnAssign(card("9", "To Do", T0 + MIN, { mine: true }), T0 + MIN);
+    queue = [say([card("9", "To Do", T0 + MIN)])];
+    expect(await W.pollJira(T0 + 6 * MIN)).toEqual([]);
+  });
+
+  test("given away: a lagging answer is skipped, and the card coming back to me later is news", async () => {
+    queue = [say([card("7", "In Progress", T0)])];
+    await W.pollJira(T0);
+    W.rememberOwnAssign(card("7", "In Progress", T0 + MIN, { mine: false }), T0 + MIN);
+    queue = [say([card("7", "In Progress", T0)])];
+    expect(await W.pollJira(T0 + 6 * MIN)).toEqual([]);
+    queue = [say([card("7", "In Progress", T0 + 30 * MIN)])];
+    expect((await W.pollJira(T0 + 36 * MIN)).map((n) => n.kind)).toEqual(["assigned"]);
+  });
+});
+
 describe("a card this app moved itself", () => {
   const seed = async () => {
     queue = [say([card("7", "In Progress", T0)])];

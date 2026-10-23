@@ -120,6 +120,10 @@ import { trackerProjects, setTrackerChoice } from "./trackerProjects.ts";
 import { connectJira, jiraStatus, setJiraWrites, jiraWriteEnabled, readIssue, findIssue, mine as jiraMine, searchText as jiraSearchText, withStored as withJira } from "./jira.ts";
 import { movesStored as jiraMoves, moveStored as jiraMove } from "./jira.ts";
 import {
+  assignableStored as jiraAssignable, setAssigneeStored as jiraSetAssignee, handOffStored as jiraHandOff,
+  jiraSettings, setHandoffRule as jiraSetHandoff, projectStatusesStored as jiraProjectStatuses,
+} from "./jira.ts";
+import {
   jiraViews, viewRead as jiraViewRead, viewChoices as jiraViewChoices, projectChoices as jiraProjectChoices,
   addViewByUrl as jiraAddViewByUrl, addViewByChoice as jiraAddViewByChoice, addFolderByKey as jiraAddFolder,
   removeViewById as jiraRemoveView, removeFolderById as jiraRemoveFolder, refreshJiraFoldersIfStale,
@@ -6372,6 +6376,47 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       return json(r, r.ok ? 200 : r.conflict ? 409 : 400);
     }
     /*
+     * Who is on a card, and the hand-off. People are a read (200 with a
+     * sentence); the two writes answer like the move, and like it tell the watch
+     * the change was ours. The hand-off is ONE route on purpose: the server
+     * orders its writes, so no client can race its own stamp (see handOff).
+     * `/jira/settings` is local: the write switch and the hand-off per project.
+     */
+    if (req.method === "GET" && pathname === "/jira/assignable") {
+      const r = await jiraAssignable(url.searchParams.get("key") ?? "", url.searchParams.get("q") ?? "", url.searchParams.get("transition") ?? "");
+      return json(r.ok ? { ok: true, people: r.data ?? [] } : { ok: false, error: r.error, ...(r.throttled ? { throttled: true } : null) });
+    }
+    if (pathname === "/jira/assignee" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      // Anything but a person key or null is refused inside, before a request.
+      const r = await jiraSetAssignee(String(b.key ?? ""), b.to as string | null, typeof b.updated === "number" ? b.updated : 0);
+      if (r.ok && r.task) jiraRememberOwnAssign(r.task);
+      return json(r, r.ok ? 200 : r.conflict ? 409 : 400);
+    }
+    if (pathname === "/jira/handoff" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = await jiraHandOff(String(b.key ?? ""), typeof b.updated === "number" ? b.updated : 0, {
+        ...(typeof b.to === "string" ? { to: b.to } : null),
+        ...(typeof b.clear === "boolean" ? { clear: b.clear } : null),
+      });
+      // A card that moved but could not be read back is still our move (`moved` carries it).
+      if (r.ok && r.was !== undefined && (r.task || r.moved)) jiraRememberOwnMove({ ...(r.task ?? r.moved!), status: r.was }, r.task?.status ?? r.moved!.status);
+      return json(r, r.ok ? 200 : r.conflict ? 409 : 400);
+    }
+    if (req.method === "GET" && pathname === "/jira/settings") return json({ ok: true, ...jiraSettings() });
+    if (pathname === "/jira/settings" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = jiraSetHandoff(b.project, b.rule === undefined ? undefined : b.rule);
+      return json(r.ok ? { ok: true, ...r.settings } : r, r.ok ? 200 : 400);
+    }
+    if (req.method === "GET" && pathname === "/jira/project-statuses") {
+      const r = await jiraProjectStatuses(url.searchParams.get("project") ?? "");
+      return json(r.ok ? { ok: true, statuses: r.data ?? [] } : { ok: false, error: r.error, ...(r.throttled ? { throttled: true } : null) });
+    }
+    /*
      * Saved Jira views: boards, saved filters and searches, and projects as
      * folders. Nothing here writes to Jira (so no write gate); the POSTs change
      * only the local address book, behind the same CSRF check as the other
@@ -6418,6 +6463,29 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
       jiraRemoveFolder(String(b.id ?? ""));
       return json({ ok: true });
+    }
+    /*
+     * A Jira card's words. `/jira/detail` is the card with its description and
+     * comments as Markdown (one issue read); `/jira/people` is who a comment
+     * may mention, for what was typed after `@`. Both answer 200 with `ok:
+     * false` and a sentence, like the other Jira reads. `/jira/comment` is a
+     * write behind the write switch: 400 with a sentence when refused. The
+     * format on the wire (ADF or wiki markup) is the connection's, decided in
+     * jiraComments.ts.
+     */
+    if (req.method === "GET" && pathname === "/jira/detail") {
+      const r = await jiraDetailRead(url.searchParams.get("key") ?? "");
+      return json(r.ok && r.data ? { ok: true, detail: r.data.detail, more: r.data.more } : { ok: false, error: r.error, ...(r.throttled ? { throttled: true } : null) });
+    }
+    if (req.method === "GET" && pathname === "/jira/people") {
+      const r = await jiraMentionable(url.searchParams.get("key") ?? "", url.searchParams.get("q") ?? "");
+      return json(r.ok ? { ok: true, people: r.data ?? [] } : { ok: false, error: r.error, ...(r.throttled ? { throttled: true } : null) });
+    }
+    if (pathname === "/jira/comment" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = await jiraCommentOn(String(b.key ?? ""), typeof b.text === "string" ? b.text : "", b.mentions);
+      return json(r, r.ok ? 200 : 400);
     }
     /* Boards, saved by pasting their address. Reads and one write path, and
        the write path refuses unless AGENTGLASS_CLICKUP_WRITE=1 — see
@@ -10131,7 +10199,8 @@ settleFirstRun(hasCredential("clickup"));
 startCardWatch((n) => broadcast({ type: "card", data: n }));
 /* The same bell for a connected Jira: one search every six minutes, nothing
    at all while Jira is not connected. See jirawatch.ts. */
-import { startJiraWatch, rememberOwnMove as jiraRememberOwnMove } from "./jirawatch.ts";
+import { startJiraWatch, rememberOwnMove as jiraRememberOwnMove, rememberOwnAssign as jiraRememberOwnAssign } from "./jirawatch.ts";
+import { detailStored as jiraDetailRead, mentionableStored as jiraMentionable, commentStored as jiraCommentOn } from "./jiraComments.ts";
 startJiraWatch((n) => broadcast({ type: "card", data: n }));
 /* Re-asks the open pull request lists a real client has looked at, on a timer,
    so a comment posted while nobody is on the PRs tab still reaches `noteTalk`

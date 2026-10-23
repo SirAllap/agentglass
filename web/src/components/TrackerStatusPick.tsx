@@ -22,8 +22,10 @@ const WHY_NOT = "\u0000why";
  * empty one. `updated` rides along with the write, so a card that changed while
  * this was open comes back as a conflict.
  */
-export function TrackerStatusPick({ tracker, task, query, onSaid }: {
+export function TrackerStatusPick({ tracker, task, query, onSaid, onTask }: {
   tracker: Tracker; task: ProviderTask; query: string; onSaid: (s: string) => void;
+  /** The card after a move, for a list that holds its own copy (its new stamp rides the next write). */
+  onTask?: (t: ProviderTask) => void;
 }) {
   const [opts, setOpts] = useState<StatusOptionsResult | null>(null);
   const [busy, setBusy] = useState(false);
@@ -55,6 +57,7 @@ export function TrackerStatusPick({ tracker, task, query, onSaid }: {
     setBusy(false);
     onSaid(r.ok ? `now ${opt.toStatus}` : `!${r.conflict ? "somebody changed this card while you had it open" : r.error || "the tracker refused that"}`);
     if (r.ok) putCard(query, r.task);
+    if (r.ok && r.task) onTask?.(r.task);
   };
 
   return (

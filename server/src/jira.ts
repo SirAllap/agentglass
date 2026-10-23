@@ -40,7 +40,7 @@
  *   4. A secret is read through `secretFor` for the one call and never kept
  *      here. What is kept (memo keys, the dedupe map) holds a hash of it.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { guardedFetch, privateAddress, type GuardedFetchOptions } from "./net.ts";
@@ -48,7 +48,10 @@ import { isIP } from "node:net";
 import { forgetCached } from "./jiraviews.ts";
 import { clearCredential, redacted, secretFor, setCredential } from "./credentials.ts";
 import type { CallResult, WriteOutcome } from "./trackerTypes.ts";
-import type { JiraAuth, JiraConnectResult, JiraDeployment, JiraKind, JiraMove, JiraMoves, JiraStatus, ProviderTask } from "../../shared/providers.ts";
+import type {
+  JiraAuth, JiraConnectResult, JiraDeployment, JiraHandoffRule, JiraKind, JiraMove, JiraMoves, JiraPerson, JiraSettings, JiraStatus, ProviderTask,
+} from "../../shared/providers.ts";
+import { hasUrlCredentials } from "../../shared/urlCredentials.ts";
 
 const TIMEOUT_MS = 8_000;
 const MEMO_TTL_MS = 10 * 60_000;
@@ -122,7 +125,7 @@ export function parseSite(input: unknown): ParsedSite {
   let u: URL;
   try { u = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(t) ? t : `https://${t}`); } catch { return bad; }
   if (u.protocol !== "https:") return { ok: false, error: "A Jira site is reached over https only" };
-  if (u.username || Reflect.get(u, "pass" + "word") || u.search || u.hash) return bad;
+  if (hasUrlCredentials(u) || u.search || u.hash) return bad;
   const host = u.hostname.toLowerCase();
   if (!host || isIP(host.replace(/^\[|\]$/g, "")) || host.startsWith("[")) return { ok: false, error: "Use the site's name, not its address" };
   if (host === "localhost" || host.endsWith(".localhost") || !DNS_NAME.test(host)) return bad;
@@ -485,7 +488,7 @@ const str = (v: unknown): string => (typeof v === "string" ? v : "");
 const idText = (v: unknown): string => (typeof v === "string" ? v : typeof v === "number" ? String(v) : "");
 
 /** Asked by name, so a site with hundreds of custom fields does not send them. */
-const CARD_FIELDS = ["summary", "status", "assignee", "priority", "duedate", "labels", "project", "updated", "created"];
+export const CARD_FIELDS = ["summary", "status", "assignee", "priority", "duedate", "labels", "project", "updated", "created"];
 const SEARCH_PAGE = 50;
 const SEARCH_PAGES = 3;
 /** A bare number is tried against each project in turn; past this many it is ambiguous enough to refuse. */
@@ -605,7 +608,7 @@ export function toTask(issue: unknown, cx: TaskContext): ProviderTask | null {
   return task;
 }
 
-const taskContext = async (creds: JiraCreds): Promise<TaskContext> => {
+export const taskContext = async (creds: JiraCreds): Promise<TaskContext> => {
   // Best effort: a priority list that cannot be read costs the priority chip,
   // never the card.
   const p = await priorities(creds);
@@ -894,11 +897,28 @@ let settingsOverride: string | null = null;
 export function __setJiraSettingsPath(p: string | null): void { settingsOverride = p; }
 const settingsPath = (): string => settingsOverride ?? SETTINGS;
 
-function storedWrites(): boolean {
+/** The settings file as it is on disk; unreadable is empty, never an error. */
+function readSettingsFile(): Record<string, unknown> {
   try {
     const p = settingsPath();
-    return existsSync(p) && (JSON.parse(readFileSync(p, "utf8")) as { writes?: unknown }).writes === true;
-  } catch { return false; }
+    if (!existsSync(p)) return {};
+    const v = JSON.parse(readFileSync(p, "utf8")) as unknown;
+    return isObj(v) ? v : {};
+  } catch { return {}; }
+}
+
+/** One key changed, the others kept: the write switch and the hand-off share the file. */
+function writeSettingsKey(key: string, value: unknown): void {
+  const p = settingsPath();
+  mkdirSync(dirname(p), { recursive: true });
+  // Written aside and renamed: a half-written file would read as empty and lose every rule.
+  const tmp = `${p}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify({ ...readSettingsFile(), [key]: value }, null, 2) + "\n");
+  renameSync(tmp, p);
+}
+
+function storedWrites(): boolean {
+  return readSettingsFile().writes === true;
 }
 
 /**
@@ -913,9 +933,7 @@ export function jiraWriteEnabled(): boolean {
 }
 
 export function setJiraWrites(on: boolean): void {
-  const p = settingsPath();
-  mkdirSync(dirname(p), { recursive: true });
-  writeFileSync(p, JSON.stringify({ writes: on }, null, 2) + "\n");
+  writeSettingsKey("writes", on);
 }
 
 // ---------------------------------------------------------------------------
@@ -961,6 +979,7 @@ export function toMoves(raw: unknown): JiraMove[] {
       name: str(t.name),
       label: toStatus,
       toStatus,
+      ...(idText(to.id) ? { toId: idText(to.id) } : null),
       toKind: catKey === "done" ? "done" : catKey === "new" || catKey === "indeterminate" ? "open" : "other",
       ...(color ? { color } : null),
       ...(needs.length ? { needs } : null),
@@ -1073,4 +1092,333 @@ export const movesStored = (key: string): Promise<JiraResult<JiraMoves>> => with
 export async function moveStored(key: string, transitionId: string, updated: number): Promise<WriteOutcome> {
   const c = storedCreds();
   return c ? moveIssue(c, key, transitionId, updated) : { ok: false, error: NOT_CONNECTED };
+}
+
+// ---------------------------------------------------------------------------
+// who is on a card, and the hand-off
+// ---------------------------------------------------------------------------
+
+/*
+ * A Jira card has one assignee. Cloud names a person by `accountId`, Data
+ * Center by login `name` (its `key` is not what an assignee write takes), so a
+ * person handed to the picker carries both what a write sends (`key`) and the
+ * id a card's `people[].key` holds (`id`), and nothing has to guess which.
+ *
+ * `"-1"` is Jira's word for "the project's default assignee": it is refused
+ * here, never sent. `null` is "nobody".
+ */
+
+const PEOPLE_MAX = 20;
+const QUERY_MAX = 100;
+/** A Cloud account id or a Data Center login: no spaces, no control characters. */
+const PERSON_KEY = /^[^\s\u0000-\u001f\u007f]{1,255}$/;
+
+/** The id a card's people carry, from a raw user object: the order `toTask` and `whoAmI` use. */
+const personId = (u: unknown): string => (isObj(u) ? str(u.accountId) || str(u.key) || str(u.name) : "");
+const personName = (u: unknown): string => (isObj(u) ? str(u.displayName) || str(u.name) || personId(u) : "");
+
+function toPerson(u: unknown, v: 2 | 3): JiraPerson | null {
+  if (!isObj(u) || u.active === false) return null;
+  const key = v === 3 ? str(u.accountId) : str(u.name);
+  if (!key || !PERSON_KEY.test(key)) return null;
+  const avatar = isObj(u.avatarUrls) ? str(u.avatarUrls["48x48"]) : "";
+  return { key, id: personId(u), name: personName(u), ...(avatar.startsWith("https://") ? { avatar } : null) };
+}
+
+/**
+ * Who the card can be given to, matching what was typed.
+ *
+ * Jira looks through the first thousand people of the directory and filters
+ * those, so an answer shorter than asked is NOT "that is everybody": the
+ * caller must never read it as the end of the list. `transitionId` asks who
+ * can be given the card during that move (the hand-off's own question).
+ * Remembered per card, move and text for ten minutes, so typing back over a
+ * name costs nothing.
+ */
+export function assignable(creds: JiraCreds, key: string, query: string, transitionId = ""): Promise<JiraResult<JiraPerson[]>> {
+  if (!ISSUE_KEY.test(key)) return Promise.resolve({ ok: false, error: "That is not a Jira card id" });
+  if (transitionId && !/^\d{1,10}$/.test(transitionId)) return Promise.resolve({ ok: false, error: "That is not one of this card's moves" });
+  const q = query.trim().slice(0, QUERY_MAX);
+  const v = apiOf(creds);
+  const params = new URLSearchParams({ issueKey: key.toUpperCase(), [v === 3 ? "query" : "username"]: q, maxResults: String(PEOPLE_MAX) });
+  if (transitionId) params.set("actionDescriptorId", transitionId);
+  return memoOk<JiraPerson[]>(creds, `assignable|${key.toUpperCase()}|${transitionId}|${q.toLowerCase()}`, async () => {
+    const r = await jiraCall<unknown>(creds, `/rest/api/${v}/user/assignable/search?${params}`);
+    if (!r.ok) return { ...r, data: undefined };
+    const list = Array.isArray(r.data) ? r.data : [];
+    return { ok: true, data: list.map((u) => toPerson(u, v)).filter((p): p is JiraPerson => !!p) };
+  });
+}
+
+export const assignableStored = (key: string, query: string, transitionId = ""): Promise<JiraResult<JiraPerson[]>> =>
+  withStored((c) => assignable(c, key, query, transitionId));
+
+const assigneeBody = (creds: JiraCreds, who: string | null) => (apiOf(creds) === 3 ? { accountId: who } : { name: who });
+
+/** A person key a write may carry: never the default-assignee word. */
+function badPerson(to: unknown): string | null {
+  if (to === null) return null;
+  if (typeof to !== "string" || !PERSON_KEY.test(to)) return "That is not somebody Jira knows";
+  if (to.trim() === "-1") return "That is not somebody Jira knows";
+  return null;
+}
+
+/** The card's stamp and people before a write, or the sentence that stops it. */
+async function readBefore(creds: JiraCreds, key: string, fields: string): Promise<{ f: Record<string, unknown>; id: string } | { stop: WriteOutcome }> {
+  const seen = await jiraCall<unknown>(creds, `/rest/api/${apiOf(creds)}/issue/${encodeURIComponent(key)}?fields=${fields}`, { fresh: true });
+  if (!seen.ok) {
+    return { stop: { ok: false, unauthorised: seen.unauthorised, error: `Nothing was changed: could not check the card first. ${seen.error ?? "Jira did not answer"}` } };
+  }
+  return { f: isObj(seen.data) && isObj(seen.data.fields) ? seen.data.fields : {}, id: isObj(seen.data) ? idText(seen.data.id) : "" };
+}
+
+const stale = (): WriteOutcome => ({ ok: false, conflict: true, error: "Somebody changed this card while you had it open, reloaded" });
+
+/** Why Jira refused an assignee write, in our words. */
+function assignRefusal(r: JiraResult<unknown>): WriteOutcome {
+  if (r.status === 400) return { ok: false, error: "Jira did not take that person: they may not be assignable to this card" };
+  if (r.status === 403) return { ok: false, error: "Your Jira account cannot assign this card" };
+  return { ok: false, unauthorised: r.unauthorised, error: r.error };
+}
+
+/**
+ * Give the card to somebody, or to nobody (`to: null`).
+ *
+ * The same shape as a move: the write switch, the inputs, a read of `updated`
+ * (a conflict when it is not the one the person saw), the PUT, a read back.
+ * Three requests. Jira documents no conditional assignee write, so the window
+ * between the check and the PUT is one round trip; that is the ceiling.
+ */
+export async function setAssignee(creds: JiraCreds, key: string, to: string | null, updated: number): Promise<WriteOutcome> {
+  if (!jiraWriteEnabled()) return { ok: false, error: WRITE_OFF };
+  if (!ISSUE_KEY.test(key)) return { ok: false, error: "That is not a Jira card id" };
+  const bad = badPerson(to);
+  if (bad) return { ok: false, error: bad };
+  if (!Number.isFinite(updated) || updated <= 0) return { ok: false, error: "Nothing was changed: reload the card and try again" };
+  const before = await readBefore(creds, key, "updated,status,assignee");
+  if ("stop" in before) return before.stop;
+  const now = epoch(before.f.updated);
+  if (now && now !== updated) return stale();
+
+  const put = await jiraCall<unknown>(creds, `/rest/api/${apiOf(creds)}/issue/${encodeURIComponent(key)}/assignee`, {
+    method: "PUT",
+    body: assigneeBody(creds, to),
+  });
+  if (!put.ok) return assignRefusal(put);
+  const back = await readIssue(creds, key, { fresh: true });
+  if (!back.ok || !back.data) return { ok: false, error: `The card was changed, but could not be read back. Reload it. ${back.error ?? ""}`.trim() };
+  return { ok: true, task: back.data };
+}
+
+export async function setAssigneeStored(key: string, to: string | null, updated: number): Promise<WriteOutcome> {
+  const c = storedCreds();
+  return c ? setAssignee(c, key, to, updated) : { ok: false, error: NOT_CONNECTED };
+}
+
+// --- the hand-off's settings ------------------------------------------------
+
+const STATUS_ID = /^\d{1,12}$/;
+
+/** A stored rule, or null for anything that is not one: a hand-edited file is not trusted. */
+function toRule(v: unknown): JiraHandoffRule | null {
+  if (!isObj(v)) return null;
+  const to = isObj(v.to) && STATUS_ID.test(str(v.to.id)) && str(v.to.name)
+    ? { id: str(v.to.id), name: str(v.to.name).slice(0, 120) }
+    : null;
+  return { to, askTo: v.askTo === true, clear: v.clear === true, askClear: v.askClear === true };
+}
+
+export function handoffRules(): Record<string, JiraHandoffRule> {
+  const raw = readSettingsFile().handoff;
+  const out: Record<string, JiraHandoffRule> = {};
+  if (!isObj(raw)) return out;
+  for (const [k, v] of Object.entries(raw)) {
+    const r = projectKey(k) ? toRule(v) : null;
+    if (r) out[k] = r;
+  }
+  return out;
+}
+
+export function jiraSettings(): JiraSettings {
+  return { writes: jiraWriteEnabled(), handoff: handoffRules() };
+}
+
+/** One project's rule, or `null` to drop it. Nothing here talks to Jira. */
+export function setHandoffRule(project: unknown, rule: unknown): { ok: boolean; error?: string; settings?: JiraSettings } {
+  if (!projectKey(project)) return { ok: false, error: "That is not a Jira project key" };
+  const all = handoffRules();
+  if (rule === null) delete all[project];
+  else {
+    const r = toRule(rule);
+    if (!r) return { ok: false, error: "That is not a hand-off" };
+    if (isObj(rule) && rule.to != null && !r.to) return { ok: false, error: "That is not one of the project's statuses" };
+    all[project] = r;
+  }
+  writeSettingsKey("handoff", all);
+  return { ok: true, settings: jiraSettings() };
+}
+
+/** A project's statuses, for the settings row: one list across its issue types, by id. Remembered ten minutes. */
+export function projectStatuses(creds: JiraCreds, project: string): Promise<JiraResult<{ id: string; name: string; kind: "open" | "done" | "other" }[]>> {
+  if (!projectKey(project)) return Promise.resolve({ ok: false, error: "That is not a Jira project key" });
+  return memoOk(creds, `statuses|${project}`, async () => {
+    const r = await jiraCall<unknown>(creds, `/rest/api/${apiOf(creds)}/project/${encodeURIComponent(project)}/statuses`);
+    if (!r.ok) return { ...r, data: undefined };
+    const seen = new Map<string, { id: string; name: string; kind: "open" | "done" | "other" }>();
+    for (const type of Array.isArray(r.data) ? r.data : []) {
+      for (const s of isObj(type) && Array.isArray(type.statuses) ? type.statuses : []) {
+        const id = isObj(s) ? idText(s.id) : "";
+        if (!id || !str(s.name)) continue;
+        const cat = isObj(s.statusCategory) ? str(s.statusCategory.key) : "";
+        seen.set(id, { id, name: str(s.name), kind: cat === "done" ? "done" : cat === "new" || cat === "indeterminate" ? "open" : "other" });
+      }
+    }
+    return { ok: true, data: [...seen.values()] };
+  });
+}
+
+export const projectStatusesStored = (project: string) => withStored((c) => projectStatuses(c, project));
+
+// --- the hand-off itself ----------------------------------------------------
+
+/** A move as the hand-off needs it: where it leads, and whether its screen has the assignee on it. */
+interface HandoffMove { id: string; toId: string; toName: string; needs: string[]; takesAssignee: boolean }
+
+function handoffMoves(raw: unknown): HandoffMove[] {
+  const list = isObj(raw) && Array.isArray(raw.transitions) ? raw.transitions : [];
+  const out: HandoffMove[] = [];
+  for (const t of list) {
+    if (!isObj(t) || t.isAvailable === false) continue;
+    const to = isObj(t.to) ? t.to : {};
+    const id = idText(t.id);
+    const toId = idText(to.id);
+    if (!id || !toId) continue;
+    const fields = isObj(t.fields) ? t.fields : {};
+    const needs = Object.entries(fields).filter(([k, v]) => isObj(v) && v.required === true && FIELD_KEY.test(k)).map(([k]) => k);
+    out.push({ id, toId, toName: str(to.name), needs, takesAssignee: "assignee" in fields });
+  }
+  return out;
+}
+
+export interface HandoffChoice {
+  /** The status to end in, by id; absent is the project's setting. */
+  to?: string;
+  /** Take the assignee off; absent is the project's setting. */
+  clear?: boolean;
+}
+
+/**
+ * Move the card to the hand-off status and, when asked, take its assignee off,
+ * as ONE request from the client: the server orders the writes, never the UI.
+ *
+ * The trap this is built around: two writes guarded by one `updated` stamp.
+ * The move changes `updated`, so a second write that checks the stamp the
+ * person saw is refused (or, unchecked, overwrites somebody). So the stamp is
+ * checked once, before anything is written, and the second write's
+ * precondition is "the assignee is still who it was", read after the move.
+ *
+ *   1. Read `updated`, status, assignee. A stamp that moved is a conflict, no write.
+ *   2. Find the move into the destination from where the card is. None, or one
+ *      whose screen asks for a field, is refused with no write.
+ *   3. Clearing, and the move's screen has the assignee: one POST carrying
+ *      `assignee: null`. Atomic.
+ *   4. Otherwise the move first (moving is the point: a card moved and still
+ *      assigned is visible and fixable, one unassigned and not moved has lost
+ *      its owner quietly), then a read of the assignee, then a PUT of nobody
+ *      only if it is still the person from step 1. Somebody else on it (a
+ *      workflow step, or a person) is left on it, and said.
+ *
+ * What lands short of the whole is `ok` with `partial`, a sentence the UI shows
+ * as a warning. Ceiling: between the read in step 4 and the PUT is one round
+ * trip in which somebody could be put on the card; Jira has no conditional
+ * assignee write to close it.
+ */
+/** A hand-off's answer. `moved`: the card moved but could not be read back, as much of it as the watch needs. */
+export type HandoffOutcome = WriteOutcome & { moved?: ProviderTask };
+
+export async function handOff(creds: JiraCreds, key: string, updated: number, choice: HandoffChoice = {}): Promise<HandoffOutcome> {
+  if (!jiraWriteEnabled()) return { ok: false, error: WRITE_OFF };
+  if (!ISSUE_KEY.test(key)) return { ok: false, error: "That is not a Jira card id" };
+  if (!Number.isFinite(updated) || updated <= 0) return { ok: false, error: "Nothing was changed: reload the card and try again" };
+  if (choice.to !== undefined && !STATUS_ID.test(choice.to)) return { ok: false, error: "That is not one of the project's statuses" };
+  const v = apiOf(creds);
+  const K = key.toUpperCase();
+
+  // 1.
+  const before = await readBefore(creds, key, "updated,status,assignee,project");
+  if ("stop" in before) return before.stop;
+  const f = before.f;
+  const now = epoch(f.updated);
+  if (now && now !== updated) return stale();
+  const status = isObj(f.status) ? f.status : {};
+  const statusName = str(status.name);
+  const project = isObj(f.project) ? str(f.project.key) : K.slice(0, K.lastIndexOf("-"));
+  const rule = handoffRules()[project];
+  const toId = choice.to ?? rule?.to?.id;
+  const clear = choice.clear ?? rule?.clear ?? false;
+  if (!toId) return { ok: false, error: `No hand-off is set for ${project}: choose where it goes in Settings` };
+  const was = personId(f.assignee);
+  const wasName = personName(f.assignee);
+
+  if (idText(status.id) === toId) return { ok: false, error: `${K} is already in ${statusName || rule?.to?.name || "that status"}` };
+
+  // 2.
+  const listed = await jiraCall<unknown>(creds, movesPath(creds, key), { fresh: true });
+  if (!listed.ok) return { ok: false, unauthorised: listed.unauthorised, error: `Nothing was changed: could not read the card's moves. ${listed.error ?? "Jira did not answer"}` };
+  const into = handoffMoves(listed.data).filter((m) => m.toId === toId);
+  const destName = into[0]?.toName || (rule?.to?.id === toId ? rule.to.name : "") || "that status";
+  if (!into.length) return { ok: false, error: `${K} cannot go to ${destName} from ${statusName || "where it is"}` };
+  // Of two moves into one status, one with no form, and with the assignee on its screen when it is to come off.
+  const free = into.filter((m) => !m.needs.length);
+  if (!free.length) return { ok: false, error: `That move needs ${into[0]!.needs.join(", ")}, which cannot be filled in here yet` };
+  const move = (clear && was ? free.find((m) => m.takesAssignee) : undefined) ?? free[0]!;
+
+  const transitionsAt = `/rest/api/${v}/issue/${encodeURIComponent(key)}/transitions`;
+  const moveFailed = (r: JiraResult<unknown>): WriteOutcome =>
+    r.status === 409 ? { ok: false, conflict: true, error: "Somebody changed this card while you were moving it, reloaded" }
+      : r.status === 400 ? { ok: false, error: NOT_ACCEPTED }
+        : { ok: false, unauthorised: r.unauthorised, error: r.error };
+  const readBack = async (partial?: string): Promise<HandoffOutcome> => {
+    const back = await readIssue(creds, key, { fresh: true });
+    if (!back.ok || !back.data) {
+      // Enough of the card for the watch to know the move was ours.
+      const moved = { id: before.id || K, customId: K, title: "", status: destName } as ProviderTask;
+      return { ok: true, was: statusName, moved, partial: `${partial ? `${partial}. ` : ""}Moved to ${destName}, but the card could not be read back: reload it` };
+    }
+    return { ok: true, task: back.data, was: statusName, ...(partial ? { partial } : null) };
+  };
+
+  // 3.
+  if (clear && was && move.takesAssignee) {
+    const post = await jiraCall<unknown>(creds, transitionsAt, { method: "POST", body: { transition: { id: move.id }, fields: { assignee: null } } });
+    if (!post.ok) return moveFailed(post);
+    const out = await readBack();
+    // A workflow step that puts somebody on the card on the way in runs after the screen.
+    const on = out.task?.people?.[0];
+    // The same person still on it: Jira kept the field as it was, nothing took them off.
+    if (on && on.key === was) return { ...out, partial: `Moved to ${destName}, but ${on.name} is still assigned: Jira did not take them off` };
+    if (on) return { ...out, partial: `Moved to ${destName}; ${on.name} was put on it by the workflow` };
+    return out;
+  }
+
+  // 4.
+  const post = await jiraCall<unknown>(creds, transitionsAt, { method: "POST", body: { transition: { id: move.id } } });
+  if (!post.ok) return moveFailed(post);
+  if (!clear || !was) return readBack();
+  const after = await jiraCall<unknown>(creds, `/rest/api/${v}/issue/${encodeURIComponent(key)}?fields=assignee,updated`, { fresh: true });
+  if (!after.ok) return readBack(`Moved to ${destName}, but who is on it could not be checked, so ${wasName} was left on it`);
+  const af = isObj(after.data) && isObj(after.data.fields) ? after.data.fields : {};
+  const nowOn = personId(af.assignee);
+  // NOT `updated`: the move just changed it, and comparing it is the trap above.
+  if (nowOn !== was) {
+    return readBack(nowOn ? `Moved to ${destName}; ${personName(af.assignee)} was put on it meanwhile, so nobody was taken off` : undefined);
+  }
+  const put = await jiraCall<unknown>(creds, `/rest/api/${v}/issue/${encodeURIComponent(key)}/assignee`, { method: "PUT", body: assigneeBody(creds, null) });
+  if (!put.ok) return readBack(`Moved to ${destName}, but ${wasName} is still assigned: ${assignRefusal(put).error ?? "Jira refused"}`);
+  return readBack();
+}
+
+export async function handOffStored(key: string, updated: number, choice: HandoffChoice = {}): Promise<HandoffOutcome> {
+  const c = storedCreds();
+  return c ? handOff(c, key, updated, choice) : { ok: false, error: NOT_CONNECTED };
 }

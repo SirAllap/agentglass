@@ -24,6 +24,8 @@ export interface StatusOption {
   label: string;
   /** The status the card ends up in. */
   toStatus: string;
+  /** Jira: that status's own id, for the hand-off's choice. */
+  toId?: string;
   toKind: "open" | "done" | "other";
   color?: string;
   /** Screen fields the move cannot be made without; set means shown, not offered. */
@@ -74,6 +76,7 @@ export async function jiraStatusOptions(task: ProviderTask): Promise<StatusOptio
       key: m.id,
       label: m.label,
       toStatus: m.toStatus,
+      ...(m.toId ? { toId: m.toId } : null),
       toKind: m.toKind,
       ...(m.color ? { color: m.color } : null),
       ...(m.needs?.length ? { needs: m.needs } : null),

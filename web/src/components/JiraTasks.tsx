@@ -25,6 +25,12 @@ import { Spinner } from "./Spinner.tsx";
 import { GroupHead } from "./tasks/GroupHead.tsx";
 import { ViewRail } from "./jira/ViewRail.tsx";
 import { AddBar } from "./jira/AddBar.tsx";
+import { TrackerStatusPick } from "./TrackerStatusPick.tsx";
+import { TrackerPeoplePick } from "./TrackerPeoplePick.tsx";
+import { TrackerHandOffButton } from "./TrackerHandOffButton.tsx";
+import { TRACKERS } from "../lib/trackerApi.ts";
+import { replaceTask } from "../lib/jiraMine.ts";
+import { JiraCard } from "./jira/JiraCard.tsx";
 
 const DONE_INK = "var(--text3)";
 
@@ -74,13 +80,16 @@ function Row({ t, on, onPick }: { t: ProviderTask; on: boolean; onPick: () => vo
   );
 }
 
-function Facts({ t }: { t: ProviderTask }) {
+/** The card's facts, and the three things that change it here: its status, its person, the hand-off. */
+function Facts({ t, onTask }: { t: ProviderTask; onTask: (t: ProviderTask) => void }) {
   const url = externalUrl(t.url);
+  const [said, setSaid] = useState("");
+  const query = t.customId ?? t.id;
+  // A said line belongs to the card it was said about.
+  useEffect(() => { setSaid(""); }, [t.id]);
   const rows: [string, string | null][] = [
-    ["Status", t.status || null],
     ["Priority", t.priority],
     ["Project", t.list],
-    ["Assignee", t.assignees[0] ?? "Unassigned"],
     ["Due", t.due],
     ["Updated", t.updated ? `${fmtAgo(t.updated)} ago` : null],
     ["Labels", t.tags.length ? t.tags.join(", ") : null],
@@ -89,7 +98,11 @@ function Facts({ t }: { t: ProviderTask }) {
     <div className="p-5 flex flex-col gap-3 min-w-0">
       <div className="text-[10.5px] tabular-nums" style={{ color: "var(--text3)" }}>{t.customId ?? t.id}</div>
       <div className="text-[13px]" style={{ color: "var(--text)" }}>{t.title}</div>
-      <dl className="grid gap-x-4 gap-y-1.5 text-[11px]" style={{ gridTemplateColumns: "max-content 1fr" }}>
+      <dl className="grid gap-x-4 gap-y-1.5 text-[11px] items-center" style={{ gridTemplateColumns: "max-content 1fr" }}>
+        <dt style={{ color: "var(--text3)" }}>Status</dt>
+        <dd className="min-w-0"><TrackerStatusPick tracker={TRACKERS.jira} task={t} query={query} onSaid={setSaid} onTask={onTask} /></dd>
+        <dt style={{ color: "var(--text3)" }}>Assignee</dt>
+        <dd className="min-w-0"><TrackerPeoplePick tracker={TRACKERS.jira} task={t} query={query} onSaid={setSaid} onTask={onTask} /></dd>
         {rows.filter(([, v]) => v).map(([k, v]) => (
           <div key={k} className="contents">
             <dt style={{ color: "var(--text3)" }}>{k}</dt>
@@ -97,11 +110,15 @@ function Facts({ t }: { t: ProviderTask }) {
           </div>
         ))}
       </dl>
-      {url && (
-        <button onClick={() => openExternal(url)} className="self-start text-[10.5px] px-2.5 py-1 rounded-lg" style={{ border: EDGE, color: "var(--text2)" }}>
-          Open in Jira ↗
-        </button>
-      )}
+      <div className="flex items-center gap-2 flex-wrap">
+        <TrackerHandOffButton tracker={TRACKERS.jira} task={t} query={query} onSaid={setSaid} onTask={onTask} />
+        {url && (
+          <button onClick={() => openExternal(url)} className="self-start text-[10.5px] px-2.5 py-1 rounded-lg" style={{ border: EDGE, color: "var(--text2)" }}>
+            Open in Jira ↗
+          </button>
+        )}
+      </div>
+      {said && <div className="text-[10.5px]" role="status" style={{ color: said.startsWith("!") ? "var(--warning-ink)" : "var(--success-ink)" }}>{said.replace(/^!/, "")}</div>}
     </div>
   );
 }
@@ -134,6 +151,12 @@ export function JiraBody({ active, jump }: { active: boolean; jump?: CardJump | 
   const saved = viewId !== ASSIGNED_VIEW_ID;
   const idRef = useRef(viewId);
   idRef.current = viewId;
+  /** Whether writing to Jira is on, asked once when the tab is first shown (a local read). */
+  const [writes, setWrites] = useState(false);
+  useEffect(() => {
+    if (!active) return;
+    void api.jiraStatus().then((s) => setWrites(!!s.writes)).catch(() => {});
+  }, [active]);
 
   const loadViews = useCallback(async (land: boolean) => {
     const v = await api.jiraViews().catch(() => null);
@@ -218,6 +241,12 @@ export function JiraBody({ active, jump }: { active: boolean; jump?: CardJump | 
     return () => { live = false; };
   }, [jump?.n, rows === null, saved]);
 
+  /* A card a write changed: every list holding it shows the answer, with no read. */
+  const changed = (t: ProviderTask) => {
+    setRows((r) => (r ? replaceTask(r, t) : r));
+    setLooked((l) => (l && l.id === t.id ? t : l));
+    setReads((m) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, { ...v, tasks: replaceTask(v.tasks, t) }])));
+  };
   const pickView = (id: string) => {
     if (id === viewId) return;
     chosen.current = true;
@@ -301,9 +330,9 @@ export function JiraBody({ active, jump }: { active: boolean; jump?: CardJump | 
                 : shown.map((t) => <Row key={t.id} t={t} on={t.id === sel} onPick={() => setSel(t.id)} />)}
             </div>
           </div>
-          <div className="flex-1 min-w-0 overflow-y-auto agx-scroll">
+          <div className="flex-1 min-w-0 min-h-0 flex flex-col">
             {picked
-              ? <Facts t={picked} />
+              ? <JiraCard key={picked.id} t={picked} header={<Facts t={picked} onTask={changed} />} writes={writes} onTask={changed} />
               : <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>Pick a card.</div>}
           </div>
         </div>

@@ -30,3 +30,17 @@ export function rowFor(rows: ProviderTask[], query: string): ProviderTask | unde
   const q = norm(query);
   return q ? rows.find((t) => norm(t.customId ?? "") === q || norm(t.id) === q) : undefined;
 }
+
+/**
+ * The list with one card replaced by what a write answered. Same array when
+ * the card is not in it, so a list that does not hold it does not redraw. A
+ * card that no longer belongs (handed off, given away) stays until the next
+ * read: a row vanishing under the pointer that just pressed it reads as lost.
+ */
+export function replaceTask(rows: ProviderTask[], t: ProviderTask): ProviderTask[] {
+  const i = rows.findIndex((r) => r.id === t.id);
+  if (i < 0) return rows;
+  const next = rows.slice();
+  next[i] = t;
+  return next;
+}

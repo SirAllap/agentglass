@@ -89,6 +89,12 @@ const MUTATING = [
   `pathname === "/jira/writes"`,
   `pathname === "/tracker/projects" && req.method === "POST"`,
   `pathname === "/jira/transition"`,
+  // The assignee and the hand-off write the card; the settings choose what the hand-off writes.
+  `pathname === "/jira/assignee"`,
+  `pathname === "/jira/handoff"`,
+  `pathname === "/jira/settings" && req.method === "POST"`,
+  // A comment lands on a shared card and notifies whoever it names.
+  `pathname === "/jira/comment"`,
   // Saved Jira views change the local address book only.
   `pathname === "/jira/views/add"`,
   `pathname === "/jira/views/remove"`,
