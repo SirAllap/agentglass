@@ -301,6 +301,16 @@ describe("how often the policy is asked", () => {
     await engineReport({ now: 401_000, probe, fresh: true });
     expect(spawned).toBe(3);
   });
+  test("a probe that merely timed out is asked again within seconds, not five minutes", async () => {
+    __forgetNext();
+    let spawned = 0;
+    const probe = async () => { spawned++; return { host: "h", engines: [{ id: "claude", found: true, versionOk: null, slow: true }] } as never; };
+    await engineReport({ now: 1_000, probe });
+    await engineReport({ now: 3_000, probe });
+    expect(spawned).toBe(1);
+    await engineReport({ now: 8_000, probe });
+    expect(spawned).toBe(2);
+  });
   test("a healthy probe is kept for half a minute only", async () => {
     __forgetNext();
     let spawned = 0;

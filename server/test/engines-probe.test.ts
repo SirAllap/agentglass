@@ -11,7 +11,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AGENT_PROVIDERS } from "../../shared/agentKinds.ts";
-import { deriveReadiness, probeEngines, redact, testEngine } from "../src/agentprobe.ts";
+import { deriveReadiness, probeEngines, PROBE_TIMEOUT_MS, redact, testEngine, VERSION_TIMEOUT_MS } from "../src/agentprobe.ts";
 import { db } from "../src/db.ts";
 import { installFakeEngines, readCalls, type FakeFleet } from "./fixtures/fakeEngines.ts";
 
@@ -79,8 +79,25 @@ describe("probeEngines against the fakes", () => {
     expect(e.versionOk).toBeNull();
     expect(e.missing[0].kind).toBe("manual");
     expect(e.missing[0].what).toContain("did not answer");
-    expect(e.missing[0].what).toContain("5 s");
+    expect(e.missing[0].what).toContain("15 s");
     expect(e.missing[0].what).not.toContain("not installed");
+  });
+
+  test("a timed-out version is slow (checking), a version that exits 1 is not", () => {
+    const base = { found: true, path: "/x/claude", status: null, check: null } as const;
+    const slow = deriveReadiness(provider("claude"), { ...base, version: { out: "", err: "", code: null, timedOut: true } });
+    expect(slow.slow).toBe(true);
+    expect(slow.versionOk).toBeNull();
+    expect(slow.roles.worker.why).toContain("still being checked");
+    expect(slow.roles.worker.why).not.toContain("could not be read");
+    const broken = deriveReadiness(provider("claude"), { ...base, version: { out: "", err: "boom", code: 1, timedOut: false } });
+    expect(broken.slow).toBeUndefined();
+    expect(broken.roles.worker.why).toContain("could not be read");
+  });
+
+  test("the version probe waits longer than the other probes", () => {
+    expect(VERSION_TIMEOUT_MS).toBeGreaterThanOrEqual(15_000);
+    expect(VERSION_TIMEOUT_MS).toBeGreaterThan(PROBE_TIMEOUT_MS);
   });
 
   test("signed out Codex has a login fix and cannot work", async () => {
@@ -208,7 +225,7 @@ describe("the cache", () => {
     expect(count()).toBe(1);
     await probeEngines({ which: f.which, fresh: true });
     expect(count()).toBe(2);
-  }, 30_000);
+  }, 45_000);
 
   test("fresh skips the cache", async () => {
     const f = fleet({ claude: {} });

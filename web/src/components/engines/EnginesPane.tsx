@@ -10,6 +10,7 @@ import { ReportingRow } from "./ReportingRow.tsx";
 import {
   accountText, actionOf, badgeOf, credentialNote, engineState, firstRow, roleBadge, versionText,
 } from "./enginesCopy.ts";
+import { readEngines } from "./readEngines.ts";
 
 /**
  * Which engines this machine has, and what each one can do here.
@@ -124,7 +125,7 @@ export function EnginesPane() {
   useEffect(() => () => { alive.current = false; }, []);
 
   const load = useCallback((fresh: boolean | string = false) => {
-    void api.engines(fresh).then((r) => { if (alive.current) { setReport(r); setNow(Date.now()); setFailed(false); } }).catch(() => { if (alive.current) setFailed(true); });
+    void readEngines((again) => api.engines(again ? true : fresh), (r) => { setReport(r); setNow(Date.now()); setFailed(false); }, { alive: () => alive.current }).catch(() => { if (alive.current) setFailed(true); });
     void api.agents().then((r) => { if (alive.current) setAgents(r.agents); }).catch(() => { if (alive.current) setAgents([]); });
   }, []);
   useEffect(() => { load(); }, [load]);

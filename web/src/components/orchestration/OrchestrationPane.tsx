@@ -12,6 +12,7 @@ import { openSettings } from "../../lib/openSettings.ts";
 import { agentProvider } from "../../../../shared/agentKinds.ts";
 import { resolve, type EngineChoice, type Envelope, type Policy, type PolicyRule } from "../../../../shared/orchestration.ts";
 import type { EngineReadiness, EnginesReport } from "../../../../shared/types.ts";
+import { readEngines } from "../engines/readEngines.ts";
 import { RuleSheet } from "./RuleForm.tsx";
 import { RuleStrip } from "./RuleStrips.tsx";
 import { QuickSetup } from "./QuickSetup.tsx";
@@ -461,7 +462,7 @@ export function OrchestrationPane() {
   }, [loadStates]);
 
   useEffect(() => {
-    void api.engines().then((r) => { if (alive.current) setReport(r); }).catch(() => { /* the rows say "checking" until it answers */ });
+    void readEngines((fresh) => api.engines(fresh), setReport, { alive: () => alive.current }).catch(() => { /* the rows say "checking" until it answers */ });
     void api.projects().then((r) => {
       if (!alive.current) return;
       const ws = r.workspaces ?? (r.workspace ? [r.workspace] : []);

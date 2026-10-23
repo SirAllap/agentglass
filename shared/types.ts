@@ -4315,6 +4315,8 @@ export interface EngineReadiness {
   min: string | null;
   /** null: it could not be told (the command timed out or failed). */
   versionOk: boolean | null;
+  /** A probe command timed out: the engine is not known to be broken, only not yet answered. */
+  slow?: boolean;
   account: { signedIn: boolean | null; provider?: string; account?: string; model?: string };
   /** The one-line test costs a turn, so it is never run by itself. */
   answers: { state: "ok" | "failed" | "never" | "running"; at?: number; ms?: number; error?: string };

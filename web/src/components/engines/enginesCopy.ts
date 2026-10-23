@@ -20,7 +20,8 @@ export function engineState(e: EngineReadiness | null): EngineState {
   if (e.versionOk === false) return "old";
   // Found, but its version could not be told: it timed out, exited, or printed
   // something that is not a version. Never "not installed".
-  if (e.versionOk === null) return "broken";
+  // A timeout is a question not yet answered, not a broken engine.
+  if (e.versionOk === null) return e.slow ? "checking" : "broken";
   if (e.missing[0]?.kind === "login") return "signin";
   if (e.answers.state === "running") return "testing";
   if (e.answers.state === "failed") return "failed";
@@ -45,7 +46,7 @@ export function actionOf(e: EngineReadiness | null): { label: "Recheck" | "Test"
   const s = engineState(e);
   if (s === "ready" || s === "failed") return { label: "Test", disabled: false };
   if (s === "testing") return { label: "Test", disabled: true };
-  return { label: "Recheck", disabled: s === "checking" };
+  return { label: "Recheck", disabled: s === "checking" && !e?.slow };
 }
 
 /** "3 minutes ago", in words; `now` is a parameter so a test can hold it. */
@@ -65,7 +66,7 @@ export function firstRow(e: EngineReadiness | null, now: number): FirstRow {
   const s = engineState(e);
   const fix = e?.missing[0];
   switch (s) {
-    case "checking": return { text: "Looking for it on this machine." };
+    case "checking": return { text: e?.slow ? "Still checking: the version is slow to answer." : "Looking for it on this machine." };
     case "missing":
       return fix?.kind === "command"
         ? { text: "Not on this machine.", command: fix.command }
@@ -88,7 +89,7 @@ export function firstRow(e: EngineReadiness | null, now: number): FirstRow {
 export function versionText(e: EngineReadiness): string {
   if (e.version && e.versionOk === false && e.min) return `${e.version} · needs ${e.min}`;
   if (e.version) return e.version;
-  return e.found ? "Could not be read" : "Not installed";
+  return e.found ? (e.slow ? "Checking…" : "Could not be read") : "Not installed";
 }
 
 export function accountText(e: EngineReadiness): string {

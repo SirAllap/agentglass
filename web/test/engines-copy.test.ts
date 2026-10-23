@@ -9,6 +9,8 @@ import { readFileSync } from "node:fs";
 import type { EngineReadiness } from "../../shared/types.ts";
 import { accountText, actionOf, agoWords, badgeOf, engineState, firstRow, versionText } from "../src/components/engines/enginesCopy.ts";
 
+import { readEngines } from "../src/components/engines/readEngines.ts";
+
 const NOW = 1_800_000_000_000;
 
 // The shape the server returns for a ready engine; each case changes what it must.
@@ -56,6 +58,11 @@ const CASES: { name: string; e: EngineReadiness | null; badge: [string, string];
     e: ready({ answers: { state: "failed", at: NOW - 60_000, ms: 800, error: "Error: rate limit reached, try again later" } }),
     badge: ["err", "Not answering"], action: ["Test", false], first: "Error: rate limit reached, try again later",
   },
+  {
+    name: "version probe timed out",
+    e: ready({ version: null, versionOk: null, slow: true, missing: [{ kind: "manual", what: "Orbit did not answer `orbit --version` within 15 s." }] }),
+    badge: ["checking", "Checking"], action: ["Recheck", false], first: "Still checking: the version is slow to answer.",
+  },
 ];
 
 describe("the eight states of an engine card", () => {
@@ -82,6 +89,30 @@ describe("the eight states of an engine card", () => {
   test("an optional sign-in that is absent is still Ready", () => {
     // OpenCode's free catalogue needs none: the probe adds no login fix.
     expect(engineState(ready({ account: { signedIn: false } }))).toBe("ready");
+  });
+});
+
+describe("a slow engine is asked about again, once", () => {
+  const rep = (slow: boolean) => ({ host: "h", engines: [ready({ versionOk: slow ? null : true, ...(slow ? { slow } : {}) })] });
+  const run = async (answers: boolean[]) => {
+    const asked: boolean[] = [];
+    const shown: boolean[] = [];
+    const waits: number[] = [];
+    await readEngines(
+      async (fresh) => { asked.push(fresh); return rep(answers[asked.length - 1] ?? true); },
+      (r) => shown.push(!!r.engines[0].slow),
+      { wait: async (ms) => { waits.push(ms); } },
+    );
+    return { asked, shown, waits };
+  };
+  test("slow then fine: one fresh retry after a wait", async () => {
+    expect(await run([true, false])).toEqual({ asked: [false, true], shown: [true, false], waits: [4000] });
+  });
+  test("still slow: no third ask", async () => {
+    expect((await run([true, true])).asked).toEqual([false, true]);
+  });
+  test("not slow: no retry, no wait", async () => {
+    expect(await run([false])).toEqual({ asked: [false], shown: [false], waits: [] });
   });
 });
 

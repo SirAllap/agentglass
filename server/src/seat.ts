@@ -752,6 +752,9 @@ export function __forgetNext(): void { nextSeen.clear(); probed = null; }
    tell a version is left alone for five minutes; "Change now" asks regardless.
    No timer: the answer is looked at when somebody looks. */
 const PROBE_BACKOFF_MS = 5 * 60_000;
+/* A timeout is not a verdict: the CLI was slow, not broken. Looked at again
+   after a few seconds, so the page's one retry meets a fresh answer. */
+const SLOW_RETRY_MS = 5_000;
 let probed: { at: number; wait: number; report: Promise<EnginesReport> } | null = null;
 
 export function engineReport(o: { fresh?: boolean; now?: number; probe?: typeof probeEngines } = {}): Promise<EnginesReport> {
@@ -760,7 +763,10 @@ export function engineReport(o: { fresh?: boolean; now?: number; probe?: typeof 
   const entry = { at: now, wait: NEXT_TTL_MS, report: (o.probe ?? probeEngines)() };
   probed = entry;
   entry.report.then(
-    (r) => { if (r.engines.some((e) => e.found && e.versionOk === null)) entry.wait = PROBE_BACKOFF_MS; },
+    (r) => {
+      if (r.engines.some((e) => e.found && e.versionOk === null && !e.slow)) entry.wait = PROBE_BACKOFF_MS;
+      else if (r.engines.some((e) => e.slow)) entry.wait = SLOW_RETRY_MS;
+    },
     () => { entry.wait = PROBE_BACKOFF_MS; },
   );
   return entry.report;
