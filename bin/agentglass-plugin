@@ -114,7 +114,12 @@ def call(path, body=None, method="POST", timeout=180):
             return json.loads(r.read() or b"{}")
     except urllib.error.HTTPError as e:
         try:
-            return json.loads(e.read() or b"{}")
+            res = json.loads(e.read() or b"{}")
+            # A refusal that names nothing (`{"ok": false}` on a 404) reads as a
+            # silent failure, so it carries the status at least.
+            if isinstance(res, dict) and res.get("ok") is False and "error" not in res:
+                res["error"] = f"server said {e.code}"
+            return res
         except json.JSONDecodeError:
             return {"ok": False, "error": f"server said {e.code}"}
     except urllib.error.URLError as e:
@@ -122,8 +127,12 @@ def call(path, body=None, method="POST", timeout=180):
 
 
 def emit(res):
+    if res.get("ok") and res.get("applied") is False and res.get("pending"):
+        # The settings door: from an agent (no desk key) a switch that widens waits for the person.
+        res = {**res, "note": "not applied yet: it waits as a request the person approves or declines in the app"}
     print(json.dumps(res))
-    return 0 if res.get("ok") else 1
+    # The list answer has no `ok`: a plugins array is the success.
+    return 0 if res.get("ok", "plugins" in res) else 1
 
 
 # ----------------------------------------------------------------- validate

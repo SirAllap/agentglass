@@ -1140,6 +1140,8 @@ export function startAutoFetch(): void {
 export function fetch(rootIn: string): GitActionResult {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
   const g = guard(root); if (g) return g;
+  // With no remote, --atomic answers "can only be used when fetching from one remote".
+  if (!git(root, ["remote"]).stdout.trim()) return { ok: false, error: "no remote is configured for this repository" };
   return run(root, [...FETCH_ARGV]);
 }
 
@@ -4072,12 +4074,21 @@ export function stashList(rootIn: unknown): GitStash[] {
   }
   return out;
 }
+/** The stash on top, or "". A push that changed it made a stash, whatever it exited with. */
+const stashTop = (root: string): string => git(root, ["rev-parse", "-q", "--verify", "refs/stash"]).stdout.trim();
+
 export function stashPush(rootIn: string, message: string): GitActionResult {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
   const g = guard(root); if (g) return g;
   const args = ["stash", "push", "--include-untracked"];
   if (message && message.trim()) args.push("-m", message.trim());
-  return run(root, args);
+  const before = stashTop(root);
+  const r = run(root, args);
+  // `-u` exits non-zero AFTER stashing when it cannot open or empty a directory
+  // (a volume owned by another user): the files are in the stash, and "failed"
+  // would leave them there out of sight.
+  if (!r.ok && stashTop(root) !== before) return { ok: true, output: `Stashed, though git reported a problem: ${r.error ?? "unknown"}` };
+  return r;
 }
 function stashOp(rootIn: string, op: "apply" | "pop" | "drop", index: number): GitActionResult {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
@@ -4313,8 +4324,10 @@ export function deleteSnapshot(rootIn: unknown, shaIn: unknown): GitActionResult
 export function withAutoStash(root: string, op: () => GitActionResult): GitActionResult {
   const dirty = git(root, ["status", "--porcelain"]).stdout.trim();
   if (!dirty) return op();
+  const before = stashTop(root);
   const pushed = git(root, ["stash", "push", "--include-untracked", "-m", "agx: auto-stash before surgery"]);
-  if (pushed.code !== 0) return { ok: false, error: "auto-stash failed — the operation was not started" };
+  // A non-zero exit with a new stash on top still stashed (see stashPush): carry on.
+  if (pushed.code !== 0 && stashTop(root) === before) return { ok: false, error: "auto-stash failed — the operation was not started" };
   const r = op();
   if (!r.ok) return { ...r, error: `${r.error ?? "operation failed"} — your changes are safe in stash@{0} ("agx: auto-stash before surgery")` };
   const popped = git(root, ["stash", "pop", "stash@{0}"]);
@@ -4786,7 +4799,8 @@ export function stoppedRefusal(rootIn: unknown, pathname: string): GitActionResu
   if (state === "clean" || state === "bisecting") return null;
   const n = git(root, ["diff", "--name-only", "--diff-filter=U"]).stdout.trim();
   const left = n ? n.split("\n").length : 0;
-  const doing = state.replace(/ing$/, "");
+  // "merging" -> "merge", "rebasing" -> "rebase"; stripping "ing" gave "merg".
+  const doing = ({ merging: "merge", rebasing: "rebase", reverting: "revert", "cherry-picking": "cherry-pick" } as Record<string, string>)[state] ?? state;
   return {
     ok: false,
     error: left

@@ -77,11 +77,13 @@ describe("/orchestration", () => {
     expect(v.policy.base.orchestrator.value[0]!.engine).toBe("claude");
   });
 
-  test("an agent with the machine token is refused, and nothing is written", async () => {
+  /* The settings door: an agent's policy is a request the person answers
+     (settings-door-route.test.ts has the rest), never a write. */
+  test("an agent with the machine token gets a request, and nothing is written", async () => {
     const before = await current();
     const res = await save({ ...before.policy, rules: [rule("agent-wrote-this")] }, undefined, fromAgent);
-    expect(res.status).toBe(403);
-    expect(((await res.json()) as { error: string }).error).toContain("only the person");
+    expect(res.status).toBe(202);
+    expect(((await res.json()) as { pending: { setting: string } }).pending.setting).toBe("orchestration.policy");
     expect((await current()).policy.rules).toEqual([]);
   });
 

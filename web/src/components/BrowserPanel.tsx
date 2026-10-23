@@ -498,7 +498,7 @@ export function BrowserView({ active: viewOn, scope }: {
   /** Selecting a tab is what opens it: everything that changes the selection
    *  goes through here so a sleeping tab cannot be shown without a guest. */
   const show = useCallback((id: string) => {
-    setTabs((ts) => wake(ts, id));
+    setTabs((ts) => wake(ts, id, recency()));
     setActiveId(id);
     /*
      * THE SPACE FOLLOWS THE PAGE.
@@ -744,7 +744,7 @@ export function BrowserView({ active: viewOn, scope }: {
       setActiveId(t.id);
       /* A tab that was put to sleep has no live view behind it, so selecting
          one has to wake it or the next verb talks to nothing. */
-      setTabs((cur) => wake(cur, t.id));
+      setTabs((cur) => wake(cur, t.id, recency()));
       return true;
     },
     open: async (url, wanted) => {
@@ -972,7 +972,7 @@ export function BrowserView({ active: viewOn, scope }: {
      then this panel is mounted and asleep — a name and an address, no guest. */
   useEffect(() => {
     if (!viewOn || !activeId) return;
-    setTabs((prev) => (prev.find((t) => t.id === activeId)?.asleep ? wake(prev, activeId) : prev));
+    setTabs((prev) => (prev.find((t) => t.id === activeId)?.asleep ? wake(prev, activeId, recency()) : prev));
   }, [viewOn, activeId]);
 
   useEffect(() => {
@@ -1153,7 +1153,7 @@ export function BrowserView({ active: viewOn, scope }: {
          panel sits there mounted and asleep — and the CLI then opens the view,
          which is the app taking the screen off whoever was typing. */
       if (target) { serve(target as unknown as DrivableWebview); return; }
-      setTabs((prev) => (prev.find((t) => t.id === targetId)?.asleep ? wake(prev, targetId) : prev));
+      setTabs((prev) => (prev.find((t) => t.id === targetId)?.asleep ? wake(prev, targetId, recency()) : prev));
       // A beat for the guest to attach. Long enough on this machine, and the
       // ask is answered either way rather than left hanging.
       setTimeout(() => {

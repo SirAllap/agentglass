@@ -6,6 +6,7 @@ import { gitChanged } from "./gitBus.ts";
 import { volumesChanged } from "./finderVolumes.ts";
 import { desktopPaletteMoved } from "./themes.ts";
 import { emitControl } from "./controlBus.ts";
+import { settingsRequestsChanged } from "./settingsRequests.ts";
 import { clientId, emitBrowserAsk } from "./browserBus.ts";
 import { emitUnderstudy } from "./understudyBus.ts";
 import { emitPlugin } from "./pluginBus.ts";
@@ -168,6 +169,8 @@ export function useLive(paused = false): LiveData {
       firstFailAt.current = 0;
       opened.current = true;
       setConn("open");
+      // A request asked for while this socket was down announced itself to nobody.
+      void settingsRequestsChanged();
       // Name this window, so a browser ask is addressed to it and not broadcast.
       try { ws.send(JSON.stringify({ type: "hello", clientId: clientId(), browser: true } satisfies WsClientHello)); } catch { /* closing */ }
       // Marks that moved elsewhere while this socket was down were broadcast to
@@ -229,11 +232,16 @@ export function useLive(paused = false): LiveData {
         emitBrowserAsk(frame.data);
         return;
       }
+      if (frame.type === "settings-requests") {
+        // An agent asked for a setting, or a request was answered or expired: only a pointer.
+        void settingsRequestsChanged();
+        return;
+      }
       if (frame.type === "control") {
         // An external controller (Stream Deck, phone) drove the UI. Imperative,
         // not data — hand it to App, which runs it through the same setters the
         // keyboard does.
-        emitControl(frame.data, frame.rid, { present: frame.present, as: frame.as, level: frame.level });
+        emitControl(frame.data, frame.rid, { present: frame.present, as: frame.as, level: frame.level, ...(frame.grant === true ? { grant: true as const, ...(frame.expect !== undefined ? { expect: frame.expect } : {}) } : {}) });
         return;
       }
       if (frame.type === "notify-prefs") {

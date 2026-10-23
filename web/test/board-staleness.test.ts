@@ -23,6 +23,12 @@ describe("readState", () => {
     expect(readState({ at: NOW, rows: 16, pollMs: FAST, now: NOW })).toBe("fine");
   });
 
+  it("is news at once when the token was refused, however recent the rows", () => {
+    // A revoked token never recovers by itself; "retrying" for twenty minutes was a false promise.
+    expect(readState({ error: "ClickUp refused this token", unauthorised: true, at: NOW - 1_000, rows: 16, pollMs: FAST, now: NOW }))
+      .toBe("stale");
+  });
+
   // The case that was crying wolf.
   it("is a word, not a warning, when the rows are recent", () => {
     expect(readState({ error: "ClickUp did not answer in time", at: NOW - 60_000, rows: 16, pollMs: FAST, now: NOW }))

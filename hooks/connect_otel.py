@@ -64,10 +64,14 @@ def _backup(path: Path) -> None:
 
 
 def _load(path: Path) -> dict:
-    try:
-        return json.loads(path.read_text()) if path.exists() else {}
-    except Exception:
+    if not path.exists():
         return {}
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        # Returning {} here made the caller write the telemetry block over a
+        # person's own settings (a comment in the file is enough to land here).
+        raise ValueError(f"{path} is not valid JSON, leaving it as it is")
 
 
 def _write(path: Path, data: dict) -> None:

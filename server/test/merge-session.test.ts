@@ -235,6 +235,13 @@ describe("what a stopped checkout refuses", () => {
     expect(stoppedRefusal(repo, "/git/push")!.error).toContain("3 files still conflicted");
   });
 
+  it("names the operation with its own word, never a clipped one", () => {
+    // Stripping "ing" turned "merging" into "mid-merg" and "rebasing" into "rebas".
+    const e = stoppedRefusal(repo, "/git/push")!.error;
+    expect(e).toContain("mid-merge");
+    expect(e).toContain("abandon the merge");
+  });
+
   it("still refuses once everything is resolved but nothing is committed", () => {
     // The merge is not over until it is committed, and pushing here publishes
     // the state from BEFORE it — which reads as the merge having vanished.

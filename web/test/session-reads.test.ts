@@ -10,6 +10,7 @@
 import { afterAll, beforeEach, describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { globalStubs } from "./stubGlobal.ts";
+import { NEEDS_APPROVAL } from "../../shared/settingClass.ts";
 
 const stubGlobal = globalStubs();
 const store = new Map<string, string>();
@@ -58,15 +59,26 @@ describe("the def", () => {
     expect(def().secret).toBeUndefined();
   });
 
-  it("an agent can read it and cannot change it", async () => {
+  /* An escalation (shared/settingClass.ts): more repositories wait for the
+     person (the window answers NEEDS_APPROVAL and the server makes a request),
+     fewer apply at once, and a change the server granted applies. */
+  it("an agent widening it is answered NEEDS_APPROVAL and nothing is sent", async () => {
     const s = R.makeSettings(R.SETTING_DEFS);
     server.repos = ["acme/orbit"];
     await reads.loadSessionReads();
     expect(s.get(ID)).toMatchObject({ ok: true, id: ID, value: "acme/orbit" });
     const wrote = s.set(ID, "acme/orbit,acme/helm");
-    expect(wrote.ok).toBe(false);
+    expect(wrote).toEqual({ ok: false, error: NEEDS_APPROVAL });
     expect(server.posts).toEqual([]);
-    expect(s.list().find((x) => x.id === ID)?.writable).toBe(false);
+    expect(s.list().find((x) => x.id === ID)).toMatchObject({ writable: true, class: "escalation" });
+  });
+
+  it("an agent narrowing it applies at once, and a granted widening applies", async () => {
+    const s = R.makeSettings(R.SETTING_DEFS);
+    server.repos = ["acme/orbit", "acme/helm"];
+    await reads.loadSessionReads();
+    expect(s.set(ID, "acme/orbit")).toMatchObject({ ok: true, prev: "acme/orbit,acme/helm", value: "acme/orbit" });
+    expect(s.set(ID, "acme/orbit,acme/wiki", "chair", true)).toMatchObject({ ok: true, value: "acme/orbit,acme/wiki" });
   });
 
   it("it is on the one page that stays otherwise unmigrated, not on the left-out ones", () => {

@@ -97,7 +97,7 @@ beforeAll(async () => {
   for (const name of ["big", "small"]) {
     const inst = (await (await post("/plugins/install", { source: join(dir, `src-${name}`) })).json()) as Json;
     if (!inst.ok) throw new Error("install failed: " + JSON.stringify(inst));
-    const en = (await (await post("/plugins/enable", { name })).json()) as Json;
+    const en = (await (await fetch(base + "/plugins/enable", { method: "POST", headers: { "Content-Type": "application/json", origin: base }, body: JSON.stringify({ name }) })).json()) as Json;
     if (!en.ok) throw new Error("enable failed: " + JSON.stringify(en));
   }
   for (const name of ["big", "small"]) for (let i = 0; i < 100 && !existsSync(join(dir, "agentglass", "plugins", name, "token.txt")); i++) await Bun.sleep(100);
@@ -166,7 +166,7 @@ describe("the window sees what a plugin draws, live", () => {
     await w.next((f) => f.type === "gone" && f.plugin === "small" && w.frames.filter((x) => x.type === "gone").length >= 2);
     expect(JSON.stringify(w.frames)).not.toContain("hello from small\"]");
     w.ws.close();
-    await post("/plugins/enable", { name: "small" });
+    await fetch(base + "/plugins/enable", { method: "POST", headers: { "Content-Type": "application/json", origin: base }, body: JSON.stringify({ name: "small" }) });
     for (let i = 0; i < 100; i++) { const r = await ops(tokenOf("small"), "board", [add("back")]).catch(() => null); if (r?.status === 200) break; await Bun.sleep(100); }
   });
 });
@@ -211,7 +211,7 @@ describe("a plugin that is stopped while it is still sending", () => {
     expect((await inflight).status).toBe(403);
     // The next run: the plugin draws only its own hello.
     rmSync(join(dir, "agentglass", "plugins", "small", "token.txt"), { force: true });
-    await post("/plugins/enable", { name: "small" });
+    await fetch(base + "/plugins/enable", { method: "POST", headers: { "Content-Type": "application/json", origin: base }, body: JSON.stringify({ name: "small" }) });
     for (let i = 0; i < 100 && !existsSync(join(dir, "agentglass", "plugins", "small", "token.txt")); i++) await Bun.sleep(100);
     const w = await openWindow();
     w.ws.send(JSON.stringify({ type: "subscribe", plugin: "small", panel: "board" }));

@@ -18,6 +18,7 @@ import { QuickSetup } from "./QuickSetup.tsx";
 import { ScopeBar } from "./ScopeBar.tsx";
 import { FlowView } from "./FlowView.tsx";
 import { RolePicker } from "./RolePicker.tsx";
+import { AgentTrustRow } from "./AgentTrustRow.tsx";
 import { rowId } from "../../lib/settingsIndex.ts";
 import {
   ASK_HINT, BACK_LABEL, CHAIN_TAIL, choiceWords, baseChoice, fineTuneRow, pickedLine, pickUndoable, roleWord, scopeWords, usageLeft, type Picked, LIMIT_RANGE, NO_WORKER_ENGINE, openingScope, recallScope, SAFETY, safetyIsDefault, rememberScope, chainWords, notReady, exhausted, limitedEngines, OLD_WORDS, pickedHint, readyFor, ruleBadge, ruleHolds, ruleLine,
@@ -387,6 +388,7 @@ export function OrchestrationView(p: OrchestrationViewProps) {
               onStep={(by) => void save(withLimits(policy, { [k]: stepLimit(k, policy.limits[k], by) }), "limits")} />
           ))}
           <Note text={notes.limits} />
+          <AgentTrustRow />
           <p className="m-0 mt-3 px-4 text-[11px]" style={{ color: "var(--text3)" }}>{OLD_WORDS}</p>
         </div>
       </SettingsCard>

@@ -14,7 +14,7 @@ import type {
   PrRepoId, PrSummary, PrDetail, PrThread, PrCheck, PrCheckRollup, PrCheckState, PrListResponse,
   UsageDay, UsageHistory, ActionRecord, ProviderUsage,
   IssueRow, IssueDetail, IssuesReport, IssueWork, FileEntry, TreeReport, FindReport,
-  PortsReport, PortEntry, ResourceReport, ProcEntry, SpaceReport, SpaceDir,
+  PortsReport, PortEntry, ResourceReport, OrphanReport, ProcEntry, SpaceReport, SpaceDir,
 } from "../../../shared/types.ts";
 import { modelLabelOf, providerOf } from "./format.ts";
 import { ctxLimitOf } from "./contextWindow.ts";
@@ -1314,6 +1314,16 @@ export function machineResources(_limit = 40): ResourceReport {
     procs, totalRss: procs.reduce((s, p) => s + p.rss, 0), totalCpu: procs.reduce((s, p) => s + (p.cpu ?? 0), 0),
     oursRss, oursCpu, seen: procs.length, rated: true,
     machine: { cpu: 38.6, cores: 16, memUsed: Math.round(18.4 * GB), memTotal: 32 * GB, swapUsed: Math.round(1.2 * GB), swapTotal: 8 * GB, tempC: 57, load1: 3.7, diskFree: Math.round(411.5 * GB), diskTotal: 1024 * GB },
+  };
+}
+export function machineOrphans(): OrphanReport {
+  return {
+    at: Date.now(), hotCpu: 30,
+    procs: [{
+      pid: 41220, comm: "bun", cmd: "bun test --timeout 5000", cwd: "/home/dev/code/shop-web/web", cwdGone: false,
+      ageSec: 6 * 86400 + 15 * 3600, cpu: 45.2, rss: 310 * MB, hot: true, origin: "worktree shop-web", session: null,
+      reasons: ["its parent is gone and it averages 45% of a core", "a command that should finish (bun) has been running for 6d15h"],
+    }],
   };
 }
 export function machineSpace(root = "/home/dev/code/shop-web"): SpaceReport {

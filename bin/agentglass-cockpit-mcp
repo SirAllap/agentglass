@@ -589,6 +589,16 @@ def t_attention(args):
                ["agents", "gates"], "ask cockpit_agents with state=waiting, or read the gates one at a time")
 
 
+def t_orphans(args):
+    # Processes an agent left behind that are still costing CPU, from the app's
+    # own sample (server/src/orphans.ts): read, never stopped from here. Stopping
+    # is a person's click in the Resources panel.
+    d = _need(get("/machine/orphans"))
+    rows = [{**_scalars(p), "reasons": [r for r in (p.get("reasons") or []) if isinstance(r, str)]}
+            for p in (d.get("procs") or []) if isinstance(p, dict)]
+    return fit({"orphans": rows}, ["orphans"], "ask again after stopping some, or read the panel")
+
+
 def _tool(name, fn, description, properties=None, required=()):
     return {
         "name": name,
@@ -654,6 +664,11 @@ _TOOLS = [
           "back to for an hour) or forgotten (claimed work quiet for an hour). A turn that ended under the hour "
           "is not here, as it is not on the dashboard's line; cockpit_agents with state=waiting lists every one. "
           "Plus the gates held for a decision. Read-only: nothing here answers or approves them."),
+    _tool("cockpit_orphans", t_orphans,
+          "Processes an agent left behind that are still running: re-parented to systemd, in a deleted or "
+          "agent-owned directory, or a test run or build that has gone on for hours. Each says why in plain "
+          "words (`reasons`), where it ran, its age and CPU. Read-only: stopping one is a person's click in "
+          "the Resources panel."),
 ]
 TOOLS = [{k: v for k, v in t.items() if k != "_fn"} for t in _TOOLS]
 _BY_NAME = {t["name"]: t["_fn"] for t in _TOOLS}

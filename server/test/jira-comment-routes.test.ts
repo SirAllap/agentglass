@@ -112,7 +112,7 @@ describe("the comment routes", () => {
   });
 
   step("a page from another origin cannot comment, even with writes on", async () => {
-    expect((await call("POST", "/jira/writes", { on: true })).status).toBe(200);
+    expect((await call("POST", "/jira/writes", { on: true }, { origin: base })).status).toBe(200);
     fake.requests.length = 0;
     const r = await call("POST", "/jira/comment", { key: "ORBIT-1042", text: "hi" }, { origin: "https://evil.example" });
     expect(r.status).toBe(403);

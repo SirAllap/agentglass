@@ -371,6 +371,32 @@ describe.skipIf(!HAVE_PY)("against a running app", () => {
     expect(l.out.actions.find((a: { id: string }) => a.id === "settings.set")).toMatchObject({ level: 2, kind: "change", args: { id: "an id", value: "a value" } });
   });
 
+  /* The settings door from the CLI: the server's settings are listed with their
+     class, an escalation comes back pending and changes nothing, a narrowing
+     applies, the person's switch is refused. The CLI sends no Origin to the door,
+     so on this server (no desk key) it is an agent, as it is everywhere. */
+  test("settings: the server's are listed with their class, and an escalation waits for the person", async () => {
+    const l = await cli("settings", "list");
+    expect(l.code).toBe(0);
+    const row = (id: string) => l.out.value.find((r: { id: string }) => r.id === id);
+    expect(row("orchestration.policy")).toMatchObject({ class: "escalation", where: "server" });
+    expect(row("jira.token")).toMatchObject({ class: "secret" });
+    const s = await cli("--as", "orbit-chair", "settings", "set", "launch.mode", "bypassPermissions");
+    expect(s.code).toBe(0);
+    expect(s.out).toMatchObject({ ok: true, applied: false, pending: { setting: "launch.mode", diff: ["Permission mode agents launch in", 'value: "default" -> "bypassPermissions"'] } });
+    expect(((await (await fetch(base + "/launch-permissions")).json()) as { mode: string }).mode).toBe("default");
+    const q = await cli("settings", "requests");
+    expect(q.out.value.map((r: { who: string }) => r.who)).toEqual(['an agent calling itself "orbit-chair"']);
+    const deny = ((await (await fetch(base + "/launch-permissions")).json()) as { deny: string[] }).deny;
+    const n = await cli("settings", "set", "launch.deny", JSON.stringify([...deny, "Bash(curl:*)"]));
+    expect(n.out).toMatchObject({ ok: true, applied: true });
+    const t = await cli("settings", "set", "agents.changeWithoutAsking", "true");
+    expect(t.code).toBe(1);
+    expect(t.out.error).toContain("cannot change it");
+    const g = await cli("settings", "get", "launch.mode");
+    expect(g.out).toMatchObject({ ok: true, value: "default", class: "escalation" });
+  });
+
   test("no window: one sentence, exit 1", async () => {
     const r = await cli("state");
     expect(r.code).toBe(1);

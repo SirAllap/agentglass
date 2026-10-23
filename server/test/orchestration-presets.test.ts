@@ -142,11 +142,11 @@ describe("a preset, stored", () => {
     expect(stored()).toBe(bytes);
   });
 
-  test("an agent with the machine token cannot apply one, and nothing is stored", async () => {
+  test("an agent with the machine token cannot apply one: it waits for the person, and nothing is stored", async () => {
     const before = await current();
     const bytes = stored();
     const res = await save(applyPreset(before, "all-on-claude"), { ...auth, "Content-Type": "application/json" });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(202);
     expect(stored()).toBe(bytes);
   });
 

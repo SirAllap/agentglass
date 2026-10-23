@@ -29,6 +29,7 @@ import { AgentBackChip, useBackOffer } from "./AgentBackChip.tsx";
 import type { ViewId } from "../../../shared/types.ts";
 import { offers } from "../lib/agentOffers.ts";
 import { changeText, chipLeftMs, CHIP_BOTTOM } from "../lib/quietPresent.ts";
+import { SettingsRequestsList, useSettingsRequests } from "./SettingsRequests.tsx";
 
 export function AgentChangeChip({ onBack }: { onBack: (v: ViewId) => void }) {
   const log = useSyncExternalStore(settings.subscribeChanges, settings.changes, () => []);
@@ -42,7 +43,8 @@ export function AgentChangeChip({ onBack }: { onBack: (v: ViewId) => void }) {
   }, [handle, changedAt]);
   const held = useSyncExternalStore(offers.subscribe, () => offers.list().length, () => 0);
   const backed = useBackOffer();
-  if (!c && !held && !backed) return null;
+  const asked = useSettingsRequests();
+  if (!c && !held && !backed && !asked.length) return null;
   return (
     <Portal z={LAYER.settingsDialog}>
     {/* One corner for everything an agent says: the opens it is waiting to show
@@ -51,7 +53,7 @@ export function AgentChangeChip({ onBack }: { onBack: (v: ViewId) => void }) {
         cards, so a gap between them is not a dead patch of the app. Clear of the
         view rail: an offer waits up to 45 s and must not sit on its icons. */}
     <div className="fixed flex flex-col gap-2" style={{ left: RAIL_W + 12, bottom: CHIP_BOTTOM, width: 360, maxWidth: "calc(100vw - 32px)", pointerEvents: "none" }}>
-    <div className="flex flex-col gap-2" style={{ pointerEvents: "auto" }}><AgentOffersList /><AgentBackChip onBack={onBack} /></div>
+    <div className="flex flex-col gap-2" style={{ pointerEvents: "auto" }}><SettingsRequestsList requests={asked} max={3} /><AgentOffersList /><AgentBackChip onBack={onBack} /></div>
     {c && <div className="relative rounded-xl text-left" data-agent-change={c.id}
       style={{ ...AGENT_CARD, pointerEvents: "auto" }}
       role="status" aria-live="polite">

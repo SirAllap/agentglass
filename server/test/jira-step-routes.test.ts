@@ -120,7 +120,7 @@ describe("the step routes", () => {
   });
 
   step("a page from another origin can neither run a step nor change one", async () => {
-    expect((await call("POST", "/jira/writes", { on: true })).status).toBe(200);
+    expect((await call("POST", "/jira/writes", { on: true }, { origin: base })).status).toBe(200);
     fake.requests.length = 0;
     const evil = { origin: "https://evil.example" };
     expect((await call("POST", "/jira/step", { key: "ORBIT-1042", updated: updated("ORBIT-1042"), trigger: "handoff", pr: PR }, evil)).status).toBe(403);

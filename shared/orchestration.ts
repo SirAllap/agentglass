@@ -473,13 +473,24 @@ function pick(chain: Chain, role: "orchestrator" | "worker", readiness: readonly
   return { why: `no engine in the chain is ready: ${because.join("; ")}`, because };
 }
 
+/**
+ * A rule link with no model names an engine, not a model. Where the base runs
+ * that same engine, it keeps the base's model: read as "the CLI's default" it
+ * made the "all workers on Claude" preset swap the cheap per-role models for
+ * the expensive default on every worker. Ceiling: a rule cannot ask for the
+ * CLI's default on an engine the base pins a model for; it names one instead.
+ */
+function withBaseModels(chain: Chain, base: Chain): Chain {
+  return chain.map((c) => c.model ? c : { ...c, model: base.find((b) => b.engine === c.engine && b.model)?.model ?? "" });
+}
+
 function field(
   baseValue: AskOr<Chain>,
   winner: { rule: PolicyRule; chain: Chain } | null,
   role: "orchestrator" | "worker",
   readiness: readonly EngineReadiness[],
 ): Resolved {
-  const chain = winner ? winner.chain : baseValue.value;
+  const chain = winner ? withBaseModels(winner.chain, baseValue.value) : baseValue.value;
   const from = winner ? "rule" as const : "base" as const;
   const who = winner ? { ruleId: winner.rule.id, ruleName: winner.rule.name } : {};
   const r = pick(chain, role, readiness);
@@ -511,7 +522,7 @@ export function resolve(policy: Policy, facts: RuleFacts, readiness: readonly En
  *  and names the role, else the base. What `--engine` is checked against. */
 export function chainFor(policy: Policy, facts: RuleFacts, role: RoleId): Chain {
   const hit = policy.rules.find((r) => r.enabled && facts.on(r.id) && r.workers?.[role]);
-  return hit ? hit.workers![role]! : policy.base.workers[role].value;
+  return hit ? withBaseModels(hit.workers![role]!, policy.base.workers[role].value) : policy.base.workers[role].value;
 }
 
 // ── words ────────────────────────────────────────────────────────────────

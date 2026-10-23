@@ -117,7 +117,7 @@ describe("the board routes", () => {
     const off = await call("POST", "/jira/rank", { key: "ORBIT-1043", before: "ORBIT-1042" });
     expect(off).toMatchObject({ status: 400, body: { ok: false, error: "Writing to Jira is switched off" } });
     expect(fake.requests.length).toBe(0);
-    expect((await call("POST", "/jira/writes", { on: true })).status).toBe(200);
+    expect((await call("POST", "/jira/writes", { on: true }, { origin: base })).status).toBe(200);
     const evil = await call("POST", "/jira/rank", { key: "ORBIT-1043", before: "ORBIT-1042" }, { origin: "https://evil.example" });
     expect(evil.status).toBe(403);
     expect(fake.requests.length).toBe(0);

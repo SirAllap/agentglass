@@ -24,12 +24,24 @@ const KEY = "desk-key-the-shell-minted-0123456789abcdefgh";
 const APP = "agentglass://app";
 let dir: string, base: string, child: ChildProcess | null = null;
 
-const save = (headers: Record<string, string>, root = "/orbit/app") =>
-  fetch(base + "/orchestration", {
+/* A project policy: the global one with a cap of one worker, so every save is a
+   real change and an agent's lands as a request rather than as "unchanged". */
+let limit = 1;
+const save = async (headers: Record<string, string>, root = "/orbit/app") => {
+  const g = (await (await fetch(base + "/orchestration", { headers: { authorization: `Bearer ${TOKEN}` } })).json()) as { policy: Record<string, any> };
+  return fetch(base + "/orchestration", {
     method: "POST",
     headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json", ...headers },
-    body: JSON.stringify({ root, policy: null }),
+    body: JSON.stringify({ root, policy: { ...g.policy, limits: { ...g.policy.limits, maxWorkers: limit++ } } }),
   });
+};
+const decide = (id: string, headers: Record<string, string>) =>
+  fetch(base + "/settings/requests/decide", {
+    method: "POST",
+    headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json", ...headers },
+    body: JSON.stringify({ id, approve: true }),
+  });
+const waiting = async () => ((await (await fetch(base + "/settings/requests", { headers: { authorization: `Bearer ${TOKEN}` } })).json()) as { requests: { id: string }[] }).requests;
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "agx-orch-desk-"));
@@ -71,14 +83,22 @@ describe("POST /orchestration on a server the desktop app started", () => {
     const r = await save({ origin: APP, "x-agentglass-desk": KEY });
     expect(r.status).toBe(200);
   });
-  test("the machine token with the app's Origin and no key is refused", async () => {
-    expect((await save({ origin: APP })).status).toBe(403);
+  /* Not the person: the change is a request the person answers (the settings
+     door), never a write. 202 and not 200 is the whole assertion. */
+  test("the machine token with the app's Origin and no key is not the person", async () => {
+    expect((await save({ origin: APP })).status).toBe(202);
   });
-  test("the machine token with no Origin and no key is refused", async () => {
-    expect((await save({})).status).toBe(403);
+  test("the machine token with no Origin and no key is not the person", async () => {
+    expect((await save({})).status).toBe(202);
   });
-  test("a wrong key is refused", async () => {
-    expect((await save({ origin: APP, "x-agentglass-desk": KEY + "x" })).status).toBe(403);
+  test("a wrong key is not the person", async () => {
+    expect((await save({ origin: APP, "x-agentglass-desk": KEY + "x" })).status).toBe(202);
+  });
+  test("only the key answers a request: the app's Origin alone cannot approve one", async () => {
+    const [q] = await waiting();
+    expect((await decide(q!.id, { origin: APP })).status).toBe(403);
+    expect((await decide(q!.id, { origin: APP, "x-agentglass-desk": KEY + "x" })).status).toBe(403);
+    expect((await decide(q!.id, { origin: APP, "x-agentglass-desk": KEY })).status).toBe(200);
   });
 });
 

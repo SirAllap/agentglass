@@ -153,17 +153,17 @@ export function buildRoster(i: RosterInput): Roster {
 /** "2 approved · 1 changes · 1 re-requested": the tally, in the order a reader scans it. */
 export function rosterCounts(entries: RosterEntry[]): string {
   const n = (f: (e: RosterEntry) => boolean) => entries.filter(f).length;
+  // Named, not counted: nobody has to open a tooltip to learn who has not decided.
+  const named = (st: string, w: string) => { const l = entries.filter((e) => e.state === st).map((e) => e.login); return l.length ? `${l.join(", ")} ${w}` : ""; };
   const bits: [number, string][] = [
     [n((e) => e.state === "approved" || e.state === "approved-old"), "approved"],
     [n((e) => e.state === "approved-void"), "approval no longer counts"],
     [n((e) => e.state === "changes"), "changes"],
     [n((e) => e.state === "changes-again"), "re-requested"],
-    [n((e) => e.state === "requested"), "not answered"],
     [n((e) => e.state === "team"), "team asked"],
-    [n((e) => e.state === "commented"), "commented"],
     [n((e) => e.state === "dismissed"), "dismissed"],
   ];
-  return bits.filter(([c]) => c > 0).map(([c, w]) => `${c} ${w}`).join(" · ");
+  return [...bits.filter(([c]) => c > 0).map(([c, w]) => `${c} ${w}`), named("commented", "commented"), named("requested", "not answered")].filter(Boolean).join(" · ");
 }
 
 /** "2 of 3 approvals needed"; "approval required" when the branch did not say how many. */

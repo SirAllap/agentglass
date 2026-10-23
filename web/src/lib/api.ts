@@ -3,11 +3,12 @@ import { forgetShared, sharedRead } from "./sharedRead.ts";
 import type { UiAction, Field, NoteReply, NoteStatus, PluginPanel, PluginPrNotes, PrNotesSummary } from "./pluginTypes.ts";
 import type { ImportedPlace } from "./desktop.ts";
 import type { Policy } from "../../../shared/orchestration.ts";
+import type { SettingRequestView } from "../../../shared/settingClass.ts";
 import { DEFAULT_LAUNCH_DENY, type LaunchMode, type LaunchPermissions } from "../../../shared/launchModes.ts";
 import type { PinnedPlace, PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/types.ts";
 import type { AskedAlert } from "../../../shared/notifyPayload.ts";
 import type { CheckOnBasePlan, CheckOnBaseStatus } from "../../../shared/checkOnBase.ts";
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, BrowsePage, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, ServeResult, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, EnginesReport, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, VolumeList, NetworkList, RemoteStep, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, PluginUpdateReport, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest, FsBody, FsAnswer, FsJob, FsTrashRow, FsProps, OpenWithList, FinderAction, FinderActionList, MediaFacts } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, BrowsePage, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, ServeResult, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, EnginesReport, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, OrphanReport, OrphanStopResult, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, VolumeList, NetworkList, RemoteStep, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, PluginUpdateReport, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest, FsBody, FsAnswer, FsJob, FsTrashRow, FsProps, OpenWithList, FinderAction, FinderActionList, MediaFacts } from "../../../shared/types.ts";
 import type { JiraUnits } from "../../../shared/jiraStatusUnits.ts";
 import type { WorkSend } from "./jiraWorklog.ts";
 import type { CardEdit, CardFact, ProvidersResponse, JiraBlockOutcome, JiraConnectResult, JiraHandoffRule, JiraMoves, JiraPerson, JiraSettings, JiraStep, JiraStepChoice, JiraStepKey, JiraStepPr, JiraSteps, JiraStepsRead, JiraStatus, JiraViews, JiraViewRead, JiraBoardAreas, JiraBoardContext, JiraViewChoice, JiraProjectChoice, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, CardDev, CardWebLink, CardEvent, TrackerChoice } from "../../../shared/providers.ts";
@@ -785,7 +786,11 @@ async function post<T>(path: string, body: unknown, headers: Record<string, stri
   if (git) forgetShared();
   try {
     const r = await fetch(SERVER + path, { method: "POST", headers: authHeaders({ "content-type": "application/json", ...(deskGated(path) ? deskHeader() : {}), ...headers }), body: JSON.stringify(body) });
-    return await (r.json() as Promise<T>);
+    const out = await (r.json() as Promise<T>);
+    /* 202 is the settings door taking this save for an agent's (no desk key on
+       this window): nothing changed, so it must not read as saved. */
+    if (r.status === 202) return { ...(out as object), ok: false, error: "not saved: this window is not the desktop app, so the change waits as a request for the app's Approve" } as T;
+    return out;
   } finally {
     if (git) forgetShared();
   }
@@ -2060,6 +2065,11 @@ const realApi = {
   /** Every process this user owns, with the ones descended from this server
    *  marked. `limit` caps only the rest of the machine — ours all come back. */
   machineResources: (limit = 40) => get<ResourceReport>(`/machine/resources?limit=${limit}`),
+  /** Processes an agent left behind. Cached server-side (sampled every few
+   *  minutes); `fresh` lets the open panel ask for a newer sample. */
+  machineOrphans: (fresh = false) => get<OrphanReport>(`/machine/orphans${fresh ? "?fresh=1" : ""}`),
+  /** Stop ONE left-behind pid; refused unless it is flagged right now. */
+  machineOrphanStop: (pid: number) => post<OrphanStopResult>("/machine/orphans/stop", { pid }),
   /** Where a checkout's disk went, one level down. A `du` walk: seconds on a
    *  repository with a node_modules, so it is asked for, never polled. */
   machineSpace: (root: string) => get<SpaceReport>(`/machine/space?root=${encodeURIComponent(root)}`),
@@ -2485,6 +2495,15 @@ const realApi = {
   launchPermissions: () => get<{ ok: boolean } & LaunchPermissions>("/launch-permissions"),
   launchPermissionsSave: (p: { mode?: LaunchMode; deny?: string }) =>
     post<{ ok: boolean; error?: string } & LaunchPermissions>("/launch-permissions", p),
+  /** What agents asked to change and wait for the person on (the settings door). */
+  settingsRequests: () => get<{ ok: boolean; requests: SettingRequestView[] }>("/settings/requests"),
+  /** The person's answer: carries the desk key (deskGate.ts), as only the person may give it. */
+  settingsRequestDecide: (id: string, approve: boolean) =>
+    post<{ ok: boolean; applied?: boolean; error?: string }>("/settings/requests/decide", { id, approve }),
+  /** The person's own switch, written from Settings: an agent cannot set it on any route. */
+  agentsChangeWithoutAsking: () => get<{ ok: boolean; trusted: boolean }>("/settings/door"),
+  agentsChangeWithoutAskingSave: (on: boolean) =>
+    post<{ ok: boolean; error?: string }>("/settings/door", { id: "agents.changeWithoutAsking", value: on }),
   prPrompts: () => get<ReviewRecipesResponse>("/pr-prompts"),
   prPromptSave: (r: ReviewRecipe) =>
     post<{ ok: boolean; recipe?: ReviewRecipe; error?: string }>("/pr-prompts/save", r as unknown as Record<string, unknown>),
@@ -3038,6 +3057,10 @@ const demoApi: typeof realApi = {
   prReviewPrompt: (_r: string, _n: number, _recipe?: string, _card?: string) => D({ ok: false, error: "not available in the demo" }),
   launchPermissions: () => D({ ok: true, mode: "default" as LaunchMode, deny: [...DEFAULT_LAUNCH_DENY] }),
   launchPermissionsSave: (_p: unknown) => D({ ok: false, error: "not available in the demo", mode: "default" as LaunchMode, deny: [...DEFAULT_LAUNCH_DENY] }),
+  settingsRequests: () => D({ ok: true, requests: [] as SettingRequestView[] }),
+  settingsRequestDecide: (_id: string, _approve: boolean) => D({ ok: false, error: "not available in the demo" }),
+  agentsChangeWithoutAsking: () => D({ ok: true, trusted: false }),
+  agentsChangeWithoutAskingSave: (_on: boolean) => D({ ok: false, error: "not available in the demo" }),
   prPrompts: () => D({ ok: true, recipes: [] as ReviewRecipe[] }),
   prPromptSave: (_r: ReviewRecipe) => D({ ok: false, error: "not available in the demo" }),
   prPromptRemove: (_id: string) => D({ ok: false }),
@@ -3310,6 +3333,8 @@ const demoApi: typeof realApi = {
   // this machine — the demo ships to GitHub Pages with no server behind it.
   machinePorts: () => D(demo.machinePorts()),
   machineResources: (l = 40) => D(demo.machineResources(l)),
+  machineOrphans: (_f = false) => D(demo.machineOrphans()),
+  machineOrphanStop: (_p: number) => D({ ok: false, error: "not available in the demo" }),
   machineSpace: (r: string) => D(demo.machineSpace(r)),
   machineKill: (_p: number) => D({ ok: false, error: "not available in the demo" }),
   machineLocks: () => D({ locks: [], scanned: 0, error: "not available in the demo" }),

@@ -137,10 +137,12 @@ describe("the routes", () => {
 
   step("writes are off until asked, and the answer must be a boolean", async () => {
     expect((await post("/jira/writes", { on: "yes" })).status).toBe(400);
-    expect(await (await post("/jira/writes", { on: true })).json()).toEqual({ ok: true, writes: true });
+    // From an agent (no Origin) it would be a request the person approves: the settings door.
+    expect((await post("/jira/writes", { on: true })).status).toBe(202);
+    expect(await (await post("/jira/writes", { on: true }, { origin: base })).json()).toEqual({ ok: true, writes: true });
     expect((await (await fetch(base + "/jira/status", { headers })).json() as { writes: boolean }).writes).toBe(true);
     expect(JSON.parse(readFileSync(join(dir, "agentglass", "jira-settings.json"), "utf8"))).toEqual({ writes: true });
-    expect(await (await post("/jira/writes", { on: false })).json()).toEqual({ ok: true, writes: false });
+    expect(await (await post("/jira/writes", { on: false }, { origin: base })).json()).toEqual({ ok: true, writes: false });
   });
 
   step("a page from another origin cannot connect, change writes or disconnect", async () => {

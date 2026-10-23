@@ -64,6 +64,7 @@ import {
   THEMES, applyTheme, applyThemeMode, chooseTheme, themeMode, desktopPaletteName, type ThemeMode,
 } from "./themes.ts";
 import { VIEWS, RAIL_PLACES, SHIPPED_RAIL, loadRail, railIds, moveView, saveRail, type RailPlace } from "../components/workspace/views.ts";
+import { classOf, NEEDS_APPROVAL, type SettingClass } from "../../../shared/settingClass.ts";
 
 export type SettingValue = string | number | boolean;
 
@@ -608,11 +609,12 @@ const KEPT = 20;
 export const AGENT_CHANGES_KEPT = KEPT;
 
 export interface SettingsApi {
-  list(serverLevel?: number): { id: string; page: string; section: string; label: string; writable: boolean; secret: boolean; type: SettingType; value?: SettingValue; display?: string }[];
+  list(serverLevel?: number): { id: string; page: string; section: string; label: string; writable: boolean; secret: boolean; type: SettingType; class: SettingClass; value?: SettingValue; display?: string }[];
   /** A value of one setting as a person would read it (the chip's words). The id as typed when it is not exposed. */
   display(id: string, v: SettingValue): string;
   get(id: unknown): AgentGetResult;
-  set(id: unknown, value: unknown, as?: string): AgentSetResult;
+  /** `grant`: the server says the person approved this exact change (an escalation). */
+  set(id: unknown, value: unknown, as?: string, grant?: boolean, expect?: SettingValue): AgentSetResult;
   undo(handle: string): boolean;
   dismiss(handle: string): void;
   changes(): readonly AgentChange[];
@@ -639,8 +641,10 @@ export function makeSettings(defs: readonly SettingDef[], now: () => number = Da
       // Secrets are listed, so the agent knows they exist, and never writable.
       // Writable HERE: the lower of what this window caps an agent at and what the
       // server it is attached to holds, so a read-only server lists nothing writable.
-      writable: !d.secret && (d.level ?? 3) <= Math.min(AGENT_MAX_LEVEL, serverLevel ?? AGENT_MAX_LEVEL),
+      // An escalation is writable as a request the person answers (shared/settingClass.ts).
+      writable: !d.secret && (classOf(d.id)?.class === "escalation" ? 2 : d.level ?? 3) <= Math.min(AGENT_MAX_LEVEL, serverLevel ?? AGENT_MAX_LEVEL),
       secret: !!d.secret,
+      class: d.secret ? "secret" : classOf(d.id)?.class ?? "secret",
       type: d.type,
       ...(d.secret ? {} : { value: d.get(), display: d.display(d.get()) }),
     })),
@@ -650,11 +654,22 @@ export function makeSettings(defs: readonly SettingDef[], now: () => number = Da
       if (d.secret) return { ok: true, id: d.id, set: !!d.get() };
       return { ok: true, id: d.id, value: d.get(), display: d.display(d.get()) };
     },
-    set(id, value, as) {
+    set(id, value, as, grant, expect) {
       const d = find(id);
       if (!d) return { ok: false, error: "not exposed" };
       if (d.secret) return { ok: false, error: "secret: not writable through this channel" };
-      if (!((d.level ?? 3) <= AGENT_MAX_LEVEL)) return { ok: false, error: "needs a higher level than this channel grants" };
+      /* The class decides (shared/settingClass.ts; web/test/setting-class.test.ts
+         fails for a def with none): an escalation is applied only when it narrows,
+         judged against the value THIS window holds, or when the server granted it
+         for the person. The level still holds every other def. */
+      const cls = classOf(d.id);
+      if (cls?.class === "secret" || cls?.class === "personOnly") return { ok: false, error: "not exposed" };
+      if (cls?.class === "escalation") {
+        const next = d.validate(value);
+        if (next !== null && !grant && !cls.narrows?.(d.get(), next)) return { ok: false, error: NEEDS_APPROVAL };
+        // A grant is for the change the person saw: from the value it was read against.
+        if (grant && expect !== undefined && d.get() !== expect) return { ok: false, error: "this setting changed since the person approved the change, so nothing was applied" };
+      } else if (!((d.level ?? 3) <= AGENT_MAX_LEVEL)) return { ok: false, error: "needs a higher level than this channel grants" };
       announcing = "agent";
       let r: SetResult;
       try { r = d.set(value); } finally { announcing = "row"; }

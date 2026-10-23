@@ -46,8 +46,12 @@ export function readState(o: {
   now?: number;
   /** The tracker asked us to slow down. A wait is never an alarm, with rows or without. */
   throttled?: boolean;
+  /** The token was refused. Nothing about the next poll is going to change that, so
+   *  "retrying" would be a promise nobody can keep: it is news at once. */
+  unauthorised?: boolean;
 }): ReadState {
   if (!o.error) return "fine";
+  if (o.unauthorised) return "stale";
   if (o.throttled) return "retrying";
   // Nothing on screen: there is no "last answer" to fall back on, so the failure IS
   // the whole state of the panel and it has to say so.

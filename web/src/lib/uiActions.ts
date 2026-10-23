@@ -61,6 +61,11 @@ export interface UiCtx {
   /** The name the caller stamped on the call (`--as`), so a setting change can
    *  say who made it on its chip. */
   as?: string;
+  /** The server granted this change (the person approved it): an escalation-class
+   *  setting is applied instead of answered NEEDS_APPROVAL. */
+  grant?: boolean;
+  /** With `grant`: the value the person's card was read against. */
+  expect?: string | number | boolean;
 }
 
 /** A handler of an `open` entry returns nothing; a handler of a `read` entry
@@ -122,7 +127,7 @@ export const UI_HANDLERS: { [Id in UiActionId]: Handler<Id> } = {
   // instead of an ok whose value says it did not happen.
   "settings.get": (a) => answered(settings.get(a.id)),
   "settings.list": (_a, c) => settings.list(c.serverLevel),
-  "settings.set": (a, c) => answered(settings.set(a.id, a.value, c.as)),
+  "settings.set": (a, c) => answered(settings.set(a.id, a.value, c.as, c.grant === true, c.expect)),
   "machine.open": (a, c) => c.setMachine(a.tab),
   "project.picker": (_a, c) => c.setProjectOpen(true),
   "windows.switcher": (_a, c) => c.setWindowsOpen(true),

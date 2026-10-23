@@ -1978,7 +1978,17 @@ export type WsFrame =
    *  sender is waiting for an answer: the window replies with POST
    *  /control/result carrying the same id. `present` and `as` say how to show
    *  it and who asked (shared/uiActions.ts presentOf). */
-  | { type: "control"; data: ControlCmd; rid?: string; present?: "quiet" | "now"; as?: string; level?: 1 | 2 | 3 }
+  | { type: "control"; data: ControlCmd; rid?: string; present?: "quiet" | "now"; as?: string; level?: 1 | 2 | 3;
+      /** Set by the server alone, on a settings.set the person approved (or one the
+       *  person's own switch lets through): the window then applies an escalation
+       *  class setting it would otherwise answer NEEDS_APPROVAL to. Never read
+       *  from a /control body: the frame is built here, the body is parsed into `data`. */
+      grant?: true;
+      /** With `grant`: the value the person's card was read against. The window
+       *  applies the grant only while it still holds this. */
+      expect?: string | number | boolean }
+  /** The settings requests waiting for the person changed: re-read GET /settings/requests. */
+  | { type: "settings-requests" }
   /** The understudy scorecard, recomputed and pushed whole. It reports what
    *  the understudy WOULD have done and how often that matched; it commands
    *  nothing, which is why it rides the same read-only socket. */
@@ -4663,6 +4673,30 @@ export interface ResourceReport {
   seen: number;
   rated: boolean;
 }
+
+/** A process that was left behind by an agent and is still costing the machine. */
+export interface OrphanProc {
+  pid: number;
+  comm: string;
+  cmd: string;
+  /** Where it was started, without the kernel's " (deleted)" suffix. */
+  cwd: string | null;
+  cwdGone: boolean;
+  ageSec: number | null;
+  /** Percent of one core, averaged over the recent samples; null before two. */
+  cpu: number | null;
+  rss: number;
+  /** Why it was flagged, in plain words. Never empty. */
+  reasons: string[];
+  /** The agent scratchpad or worktree it came from, when the paths say. */
+  origin: string | null;
+  /** The agent session whose scratchpad it ran from, when the path names one. */
+  session: string | null;
+  /** Above the CPU threshold for long enough to ask a person: the badge. */
+  hot: boolean;
+}
+export interface OrphanReport { procs: OrphanProc[]; at: number; hotCpu: number }
+export interface OrphanStopResult { ok: boolean; error?: string; detail?: string }
 
 export interface SpaceDir { path: string; name: string; bytes: number; reclaimable: boolean }
 export interface SpaceReport { root: string; bytes: number; freeable: number; dirs: SpaceDir[]; error?: string }

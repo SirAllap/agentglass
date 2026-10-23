@@ -10,6 +10,13 @@ import { ContextMenu as RailMenu, MenuItem } from "../ContextMenu.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { railActiveColor } from "../../lib/railAccent.ts";
 import { LINE } from "./Chrome.tsx";
+import { usePoll } from "../../lib/usePoll.ts";
+import { api } from "../../lib/api.ts";
+
+/** How often the rail asks whether something left behind is eating the CPU.
+ *  The server answers from a sample it takes every five minutes, so this is
+ *  12 cached reads an hour; nothing here ever walks /proc. */
+const ORPHAN_BADGE_MS = 5 * 60_000;
 
 const EMPTY_CHORDS = {};
 const BY_ID = new Map(VIEWS.map((v) => [v.id, v] as const));
@@ -83,6 +90,13 @@ export function ViewRail({
   onMachine: (tab: "ports" | "resources") => void;
   pips?: Partial<Record<ViewId, RailPip>>;
 }) {
+  // A quiet dot, never a popup or a notification: something left behind is
+  // above the CPU threshold. Opening Resources shows which.
+  const [leftBehind, setLeftBehind] = useState(false);
+  const checkLeftBehind = () => { api.machineOrphans().then((r) => setLeftBehind(r.procs.some((p) => p.hot))).catch(() => {}); };
+  useEffect(checkLeftBehind, []);
+  usePoll(true, checkLeftBehind, ORPHAN_BADGE_MS);
+
   // The rail's layout is the user's. Read through a store so a drag updates
   // every mounted rail at once rather than only the one being dragged.
   const rail = useSyncExternalStore(subscribeRail, loadRail, () => SHIPPED_RAIL);
@@ -444,6 +458,11 @@ export function ViewRail({
           style={{ color: "var(--text4)" }}
         >
           <ResourcesIcon size={ICON.rail} />
+          {leftBehind && (
+            <span aria-label="Something left behind is using the CPU" data-tip="Something left behind is using the CPU"
+              className="absolute top-[7px] right-[9px] w-[7px] h-[7px] rounded-full"
+              style={{ background: "var(--warning)" }} />
+          )}
         </button>
         <button
           onClick={onSettings}

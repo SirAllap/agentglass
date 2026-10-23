@@ -72,7 +72,8 @@ import { lastWoken } from "./seatwoken.ts";
  * An empty answer is allowed and means "let the CLI decide", which is the only
  * honest thing to say when the catalogue is empty.
  */
-const SEAT_MODEL_PREFERENCE = [/fable/i, /haiku/i, /sonnet/i];
+// Fable is not on this list: it draws on a separate, small allowance of its own, so it is never a default.
+const SEAT_MODEL_PREFERENCE = [/haiku/i, /sonnet/i];
 
 export function defaultSeatModel(offered = claudeModels().map((m) => m.id)): string {
   for (const want of SEAT_MODEL_PREFERENCE) {

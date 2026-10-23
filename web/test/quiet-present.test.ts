@@ -212,7 +212,7 @@ describe("the window is wired to it", async () => {
   test("the caller's name reaches the setting it changes, and the chip says it", async () => {
     expect(body).toContain("as: meta?.as");
     const handlers = await Bun.file(new URL("../src/lib/uiActions.ts", import.meta.url)).text();
-    expect(handlers).toContain("settings.set(a.id, a.value, c.as)");
+    expect(handlers).toContain("settings.set(a.id, a.value, c.as,");
     expect(handlers).toMatch(/settings\.set\("appearance\.theme",[^\n]*, c\.as\)/);
     const chip = await Bun.file(new URL("../src/components/AgentChangeChip.tsx", import.meta.url)).text();
     expect(chip).toContain("changeText(c.as, c.label)");

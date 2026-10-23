@@ -24,11 +24,16 @@ const P = await import("../src/providers.ts");
 const W = await import("../src/clickupwatch.ts");
 
 let calls = 0;
+let cards = 0;
 const server = Bun.serve({
   port: 0,
   fetch() {
     calls++;
-    return new Response(JSON.stringify({ tasks: [] }), {
+    const tasks = Array.from({ length: cards }, (_, i) => ({
+      id: `t${i}`, name: `Card ${i}`, status: { status: "open", type: "open", color: "#999" }, url: `https://app.clickup.test/t/t${i}`,
+      date_created: "1700000000000", date_updated: "1700000000000", assignees: [], tags: [], list: { id: "1" }, folder: { id: "2" }, space: { id: "3" },
+    }));
+    return new Response(JSON.stringify({ tasks }), {
       headers: { "content-type": "application/json" },
     });
   },
@@ -36,6 +41,7 @@ const server = Bun.serve({
 
 beforeEach(() => {
   calls = 0;
+  cards = 0;
   C.__setCredentialsPath(join(dir, "creds.json"));
   CU.__setClickUpBase(`http://127.0.0.1:${server.port}`);
   CU.__reset();
@@ -92,6 +98,15 @@ describe("what a status probe is allowed to cost", () => {
 
     expect(cu.pending).toBeFalsy();
     expect(cu.detail).toContain("task");
+  });
+
+  it("does not claim exactly 100 when the first page was full", async () => {
+    // The cached list is one page; a full page means there is more behind it.
+    cards = 100;
+    C.setCredential("clickup", { token: "pk_1_TEST", account: "Ada", workspace: "Orbit", workspaceId: "9001", accountId: "7" });
+    await CU.clickupTasks(true);
+    const cu = (await P.providerStatuses()).find((r) => r.id === "clickup")!;
+    expect(cu.detail).toContain("100+ tasks assigned to you");
   });
 
   it("still answers while the card watch is broken, and says so", async () => {

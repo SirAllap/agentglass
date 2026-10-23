@@ -109,7 +109,7 @@ beforeAll(async () => {
     if (held.set?.[0] !== "apiKey") throw new Error(`${name} holds no key, so the wall test would have nothing to protect: ` + JSON.stringify(held.set));
   }
   for (const [name] of pair) {
-    const en = (await (await post("/plugins/enable", { name })).json()) as Json;
+    const en = (await (await fetch(base + "/plugins/enable", { method: "POST", headers: { "Content-Type": "application/json", origin: base }, body: JSON.stringify({ name }) })).json()) as Json;
     if (!en.ok) throw new Error("enable failed: " + JSON.stringify(en));
   }
 }, SERVER_BOOT_MS);

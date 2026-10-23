@@ -808,6 +808,21 @@ print(json.dumps(out))
     expect(sent.map((s) => s.body.page)).toEqual(["t-A", "t-B"]);
   });
 
+  test("`whoami` carries who is asking and the tab it holds, as the CLI does", async () => {
+    // Without them the relay answered `tab: null, tabLive: false` right after an
+    // open, and the skill reads that as "you hold no tab, open one".
+    sent = [];
+    says = { open: { ok: true, value: { id: "t-me", url: "u", title: "t" } }, whoami: { ok: true, value: {} } };
+    const state = freshState();
+    await client("orbit-who", state, [
+      { name: "browser_open", arguments: { url: "https://orbit.example/who" } },
+      { name: "browser_whoami", arguments: {} },
+    ]);
+    const who = sent.find((x) => x.op === "whoami")!;
+    expect(who.body.identity).toBe("orbit-who");
+    expect(who.body.tab).toBe("t-me");
+  });
+
   test("a second `open` reuses your tab, `closetab` forgets it, and `settings` never carries a page", async () => {
     sent = [];
     says = {

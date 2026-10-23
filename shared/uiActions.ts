@@ -226,14 +226,17 @@ export const UI_ACTIONS = {
     level: 1, kind: "open", surface: "Settings on one page, optionally scrolled to one row (the plugin market is inside page plugins)",
     args: { page: { t: "enum", values: SETTINGS_PAGE_IDS }, row: { t: "slug", max: 80, optional: true } },
   }),
+  /* `root` is for the settings the server holds per project (the chair, a
+     project's policy): the CLI and the MCP server send those to the settings
+     door (GET/POST /settings/door), and a window ignores it. */
   "settings.get": def({
-    level: 1, kind: "read", surface: "the current value of one exposed setting (a secret answers only whether it is set)",
-    args: { id: { t: "slug", max: 80 } },
+    level: 1, kind: "read", surface: "the current value of one setting, the window's or the server's (a secret answers only that it is one)",
+    args: { id: { t: "slug", max: 80 }, root: { t: "abspath", optional: true } },
   }),
-  "settings.list": def({ level: 1, kind: "read", surface: "the settings an agent may read and write, with their levels", args: {} }),
+  "settings.list": def({ level: 1, kind: "read", surface: "every setting, the window's and the server's, each with its class (low applies; escalation waits for the person unless it narrows; personOnly and secret are never an agent's), and the requests waiting", args: {} }),
   "settings.set": def({
-    level: 2, kind: "change", surface: "one exposed setting, through the same setter its Settings row calls",
-    args: { id: { t: "slug", max: 80 }, value: { t: "scalar" } },
+    level: 2, kind: "change", surface: "one setting through the same setter its Settings row calls; an escalation that does not narrow waits for the person's Approve (the answer says pending); a setting whose type is json takes the JSON as text",
+    args: { id: { t: "slug", max: 80 }, value: { t: "scalar" }, root: { t: "abspath", optional: true } },
   }),
   "machine.open": def({ modals: ["MachinePanel.tsx"], level: 1, kind: "open", surface: "the machine panel on ports, resources or locks", args: { tab: { t: "enum", values: MACHINE_TABS } } }),
   "project.picker": def({ modals: ["ProjectPicker.tsx"], level: 1, kind: "open", surface: "the project picker", args: {} }),

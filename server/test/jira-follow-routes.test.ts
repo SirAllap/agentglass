@@ -87,7 +87,7 @@ describe("the watch and vote routes", () => {
   });
 
   step("a page from another origin cannot, even with writes on", async () => {
-    expect((await call("POST", "/jira/writes", { on: true })).status).toBe(200);
+    expect((await call("POST", "/jira/writes", { on: true }, { origin: base })).status).toBe(200);
     fake.requests.length = 0;
     for (const p of ["/jira/watch", "/jira/vote"]) expect((await call("POST", p, { key: "ORBIT-1042", on: true }, { origin: "https://evil.example" })).status).toBe(403);
     expect(fake.requests.length).toBe(0);

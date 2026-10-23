@@ -1817,7 +1817,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
    * getting it wrong, and it was getting it wrong in the direction that costs
    * somebody's attention every week.
    */
-  const reads = readState({ error: data?.error, at: data?.at, rows: tasks.length, pollMs, throttled: data?.throttled });
+  const reads = readState({ error: data?.error, at: data?.at, rows: tasks.length, pollMs, throttled: data?.throttled, unauthorised: data?.unauthorised });
   const softFail = reads === "retrying";
   const alarming = reads === "stale";
   const blockedBy = useCallback((t: ProviderTask) => blockersOf(t, byId), [byId]);
@@ -2419,7 +2419,9 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
     setAreaSel(null); setScopeOnly(false);
     try { setPrefRaw(boardViewId ? (localStorage.getItem(source.storageKey(`group:${boardViewId}`)) ?? localStorage.getItem(source.storageKey("group"))) : null); } catch { setPrefRaw(null); }
     setAreas({ state: "loading", read: null });
-    if (!source.boardAreas || !boardViewId?.startsWith("board:")) return;
+    // Not a board (a saved filter, "assigned to me"): there are no Areas to read,
+    // and "loading" would keep the rail saying "Reading the areas…" for good.
+    if (!source.boardAreas || !boardViewId?.startsWith("board:")) { setAreas({ state: "ready", read: null }); return; }
     let live = true;
     void source.boardAreas(boardViewId)
       .then((r) => { if (live) setAreas({ state: r.ok ? "ready" : "error", read: r }); })

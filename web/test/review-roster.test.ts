@@ -137,7 +137,7 @@ describe("five reviewers, five states", () => {
     expect(r.entries.map((e) => [e.login, e.state])).toEqual([
       ["alice", "approved"], ["bobby", "approved-old"], ["carol", "changes"], ["dave", "changes-again"], ["erin", "commented"],
     ]);
-    expect(rosterCounts(r.entries)).toBe("2 approved · 1 changes · 1 re-requested · 1 commented");
+    expect(rosterCounts(r.entries)).toBe("2 approved · 1 changes · 1 re-requested · erin commented");
     expect(approvalsNeed(r, "CHANGES_REQUESTED")).toBe("2 of 3 approvals needed");
   });
   test("each thread belongs to the person who opened it", () => {

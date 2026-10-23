@@ -197,9 +197,22 @@ def _registry():
     return actions, level, None
 
 
+def _wrap(res):
+    return {"content": [{"type": "text", "text": json.dumps(res)}], **({} if res.get("ok") else {"isError": True})}
+
+
 def run(name, args):
     if isinstance(name, str) and name.startswith("ui_jira_") and name[len("ui_jira_"):] in UI.JIRA_VERBS:
         return run_jira_tool(name, args)
+    given0 = dict(args) if isinstance(args, dict) else {}
+    # The settings verbs reach the server's settings as well as the window's (agentglass-ui does the routing).
+    if name == "ui_settings_list":
+        return _wrap(UI.settings_list(AS))
+    if name in ("ui_settings_get", "ui_settings_set") and isinstance(given0.get("id"), str) and UI._server_row(given0["id"]) is not None:
+        root = given0.get("root") if isinstance(given0.get("root"), str) else None
+        return _wrap(UI.settings_get(given0["id"], AS, root) if name == "ui_settings_get" else UI.settings_set(given0["id"], given0.get("value"), AS, root))
+    given0.pop("root", None)
+    args = given0
     actions, level, why = _registry()
     if why:
         return {"content": [{"type": "text", "text": why}], "isError": True}

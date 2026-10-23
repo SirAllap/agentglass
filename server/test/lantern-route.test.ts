@@ -54,8 +54,9 @@ afterAll(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+// The app's own window: a Settings save is the person's (an agent's goes through the settings door).
 const post = (path: string, body: unknown) =>
-  fetch(base + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  fetch(base + path, { method: "POST", headers: { "content-type": "application/json", origin: base }, body: JSON.stringify(body) });
 const prompt = (session_id: string) =>
   post("/ingest", { source_app: "orbit", session_id, hook_event_type: "UserPromptSubmit", payload: { prompt: "hi" } })
     .then((r) => r.json() as Promise<{ ok: boolean; remind?: string }>);

@@ -112,7 +112,7 @@ describe("the people and hand-off routes", () => {
   });
 
   step("a page from another origin can neither write a card nor change the hand-off", async () => {
-    expect((await call("POST", "/jira/writes", { on: true })).status).toBe(200);
+    expect((await call("POST", "/jira/writes", { on: true }, { origin: base })).status).toBe(200);
     fake.requests.length = 0;
     const evil = { origin: "https://evil.example" };
     expect((await call("POST", "/jira/assignee", { key: "ORBIT-1001", to: "acc-0002", updated: updated("ORBIT-1001") }, evil)).status).toBe(403);

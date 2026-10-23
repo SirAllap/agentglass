@@ -266,11 +266,12 @@ describe("what a seat costs when nobody chose", () => {
     /* A constant naming a model the catalogue has moved past puts "(not in
        this list)" beside the default in the picker. Measured on the first
        build that had a picker. */
-    expect(Seat.defaultSeatModel(["claude-opus-5", "claude-fable-5", "claude-haiku-4-5"])).toBe("claude-fable-5");
     expect(Seat.defaultSeatModel(["claude-opus-5", "claude-haiku-4-5"])).toBe("claude-haiku-4-5");
+    /* Fable runs on its own small allowance: offered, but never picked for the user. */
+    expect(Seat.defaultSeatModel(["claude-fable-5", "claude-opus-5", "claude-haiku-4-5"])).toBe("claude-haiku-4-5");
     /* A long-context variant is the same model with a bigger bill: not the one
        to reach for by default. */
-    expect(Seat.defaultSeatModel(["claude-fable-5[1m]", "claude-fable-5"])).toBe("claude-fable-5");
+    expect(Seat.defaultSeatModel(["claude-sonnet-5[1m]", "claude-sonnet-5"])).toBe("claude-sonnet-5");
     /* Nothing cheap on offer: the first thing rather than a made-up id. */
     expect(Seat.defaultSeatModel(["claude-opus-5"])).toBe("claude-opus-5");
     /* And an empty catalogue means "let the CLI decide", said as an empty
