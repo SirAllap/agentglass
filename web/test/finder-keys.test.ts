@@ -16,7 +16,8 @@ describe("which keys the finder takes", () => {
     expect(finderKey(k("h", { ctrl: true }), free)).toEqual({ t: "hidden" });
     expect(finderKey(k("B", { meta: true }), free)).toEqual({ t: "sidebar" });
     expect(finderKey(k("l", { ctrl: true }), free)).toEqual({ t: "path" });
-    expect(finderKey(k("c", { ctrl: true }), free)).toEqual({ t: "copy" });
+    expect(finderKey(k("c", { ctrl: true }), free)).toEqual({ t: "copyfiles" });
+    expect(finderKey(k("y"), free)).toEqual({ t: "copy" });
     expect(finderKey(k("h", { ctrl: true, shift: true }), free)).toBeNull();
     expect(finderKey(k("ArrowDown", { alt: true }), free)).toBeNull();
   });

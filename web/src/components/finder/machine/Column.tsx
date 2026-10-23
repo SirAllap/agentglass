@@ -27,7 +27,9 @@ export function RowIcon({ row, size = ICON.sm }: { row: Row; size?: number }) {
   return <FileTypeIcon name={row.name} isDir={isFolder(row)} broken={row.broken === true} size={size} />;
 }
 
-export function Column({ title, filterSignal, width, onResize, onFit, state, display, selName, chosen, focused, prefs, rowH, filter, onFilter, onPick, onOpen, onFocusCol, onRefresh, onSort, onPref, scrollTop, onScrollTop }: {
+export function Column({ dir: folderPath, title, filterSignal, width, onResize, onFit, state, display, selName, chosen, focused, prefs, rowH, filter, onFilter, onPick, onOpen, onFocusCol, onRefresh, onSort, onPref, scrollTop, onScrollTop }: {
+  /** The folder this column lists: a right click in it says where it landed. */
+  dir: string;
   title: string;
   /** Bumped by Ctrl+F when this is the column with the keyboard. */
   filterSignal: number;
@@ -69,7 +71,7 @@ export function Column({ title, filterSignal, width, onResize, onFit, state, dis
   const open = (e: React.MouseEvent<HTMLButtonElement>) => setMenu(e.currentTarget.getBoundingClientRect());
 
   return (
-    <section aria-label={`Folder ${title}`} onMouseDown={onFocusCol} className="relative flex flex-col min-h-0 shrink-0"
+    <section aria-label={`Folder ${title}`} data-dir={folderPath} onMouseDown={onFocusCol} className="relative flex flex-col min-h-0 shrink-0"
       style={{ width, borderRight: LINE, scrollSnapAlign: "start" }}>
       {/* The column that has the keyboard wears a bar on top; a colour alone would not survive a theme that has no accent to spare. */}
       <div aria-hidden className="absolute left-0 right-0 top-0" style={{ height: 3, background: focused ? "var(--primary)" : "transparent", zIndex: 2 }} />
@@ -131,7 +133,7 @@ export function Column({ title, filterSignal, width, onResize, onFit, state, dis
             const sel = r.name === selName || !!chosen?.has(r.name);
             const dir = isFolder(r);
             return (
-              <div key={r.name} role="option" aria-selected={sel} aria-disabled={r.locked || undefined} title={r.why ?? r.name}
+              <div key={r.name} role="option" data-row={r.name} aria-selected={sel} aria-disabled={r.locked || undefined} title={r.why ?? r.name}
                 onMouseDown={noRange} onClick={(e) => onPick(r, modOf(e))} onDoubleClick={() => onOpen(r)}
                 className="agx-fm-row flex items-center gap-2 px-2.5 mx-1 rounded-md cursor-pointer"
                 style={{

@@ -21,6 +21,18 @@ export type Act =
   | { t: "sidebar" }
   | { t: "path" }
   | { t: "copy" }
+  | { t: "copyfiles" }
+  | { t: "cut" }
+  | { t: "paste" }
+  | { t: "duplicate" }
+  | { t: "rename" }
+  | { t: "trash" }
+  | { t: "delete" }
+  | { t: "newfolder" }
+  | { t: "folderwith" }
+  | { t: "props" }
+  | { t: "undo" }
+  | { t: "pin" }
   | { t: "help" }
   | { t: "refresh" }
   | { t: "filter" }
@@ -43,9 +55,19 @@ export function finderKey(k: KeyIn, ctx: Ctx): Act | null {
   if (k.key === "F1") return { t: "help" };
   if (k.key === "F5") return { t: "refresh" };
   if (ctx.inField) return null;
+  // The file operations (Strata's keys). Ctrl+C copies the FILES; `y` copies the path.
+  if (k.key === "F2" && !k.ctrl && !k.meta && !k.alt && !k.shift) return { t: "rename" };
+  if (k.key === "Delete" && !k.ctrl && !k.meta && !k.alt) return k.shift ? { t: "delete" } : { t: "trash" };
+  if ((k.ctrl || k.meta) && k.alt && !k.shift && k.key.toLowerCase() === "n") return { t: "folderwith" };
+  if ((k.ctrl || k.meta) && k.shift && !k.alt && k.key.toLowerCase() === "n") return { t: "newfolder" };
+  if (!k.ctrl && !k.meta && !k.shift && !k.alt) {
+    if (k.key === "y") return { t: "copy" };
+    if (k.key === "p") return { t: "pin" };
+  }
   if (k.alt) {
     if (k.ctrl || k.meta || k.shift) return null;
     switch (k.key) {
+      case "Enter": return { t: "props" };
       case "ArrowLeft": return { t: "back" };
       case "ArrowRight": return { t: "forward" };
       case "ArrowUp": return { t: "up" };
@@ -76,7 +98,12 @@ export function finderKey(k: KeyIn, ctx: Ctx): Act | null {
       case "a": return { t: "all" };
       case "b": return { t: "sidebar" };
       case "l": return { t: "path" };
-      case "c": return ctx.hasSelection ? null : { t: "copy" };
+      case "c": return ctx.hasSelection ? null : { t: "copyfiles" };
+      case "x": return { t: "cut" };
+      case "v": return { t: "paste" };
+      case "d": return { t: "duplicate" };
+      case "r": return { t: "rename" };
+      case "z": return { t: "undo" };
       default: return null;
     }
   }

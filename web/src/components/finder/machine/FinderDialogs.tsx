@@ -1,0 +1,145 @@
+// The three boxes of the file operations that ask for more than a name: Compress,
+// Properties and the folder picker behind Move to… and Copy to…. Strata's, field
+// for field (its shots 46 and 49). The decisions are in lib/finderOps.ts; the
+// doing is /fs/op, so a box only collects and hands back.
+import { useEffect, useRef, useState } from "react";
+import { api } from "../../../lib/api.ts";
+import { HIT } from "../../../lib/iconSize.ts";
+import { archiveName, compressSub, destProblem, formatTakesPassword, modeBits, modeSymbolic, nameProblem, shortPath, toggleMode, type Who } from "../../../lib/finderOps.ts";
+import type { FsProps } from "../../../../../shared/types.ts";
+import { EDGE, INPUT, INPUT_STYLE, LINE } from "../../workspace/Chrome.tsx";
+import { Sheet } from "./FinderOpsUI.tsx";
+
+type Fmt = "zip" | "7z" | "tar.gz" | "tar";
+const FORMATS: Fmt[] = ["zip", "7z", "tar.gz", "tar"];
+
+function Seg<T extends string>({ label, value, options, onPick, show }: { label: string; value: T; options: readonly T[]; onPick: (v: T) => void; show: (v: T) => string }) {
+  return (
+    <div role="radiogroup" aria-label={label} className="flex rounded-md p-0.5 gap-0.5" style={{ border: EDGE }}>
+      {options.map((o) => (
+        <button key={o} role="radio" aria-checked={o === value} onClick={() => onPick(o)} className="agx-btn flex-1 rounded px-2"
+          style={{ minHeight: HIT - 6, background: o === value ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent", color: o === value ? "var(--primary-ink)" : "var(--text3)" }}>{show(o)}</button>
+      ))}
+    </div>
+  );
+}
+
+/** Compress…: the archive's name, its format, and whether it is locked. */
+export function CompressDialog({ names, dirs, onSubmit, onClose }: {
+  names: readonly string[]; dirs: readonly boolean[]; onSubmit: (o: { name: string; format: Fmt; password?: string }) => void; onClose: () => void;
+}) {
+  const [name, setName] = useState(archiveName(names));
+  const [format, setFormat] = useState<Fmt>("zip");
+  const [locked, setLocked] = useState(false);
+  const [pw, setPw] = useState("");
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => { input.current?.focus(); input.current?.select(); }, []);
+  const canLock = formatTakesPassword(format);
+  const using = locked && canLock;
+  const problem = nameProblem(name, []) ?? (using && !pw ? "A password is needed" : using && pw.startsWith("-") ? "A password cannot start with a dash" : null);
+  const go = () => { if (!problem) onSubmit({ name: name.trim(), format, password: using ? pw : undefined }); };
+  return (
+    <Sheet label="Compress" onClose={onClose}>
+      <b className="block text-[13px]">Compress {names.length === 1 ? "1 item" : `${names.length} items`}</b>
+      <p className="m-0 mb-3" style={{ color: "var(--text3)" }}>{compressSub(dirs.map((d) => ({ dir: d })))}</p>
+      <label className="block text-[11px] mb-1" style={{ color: "var(--text3)" }}>Archive name</label>
+      <input ref={input} value={name} onChange={(e) => setName(e.target.value)} spellCheck={false} aria-label="Archive name" onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); go(); } }} className={`${INPUT} w-full mb-3`} style={INPUT_STYLE} />
+      <label className="block text-[11px] mb-1" style={{ color: "var(--text3)" }}>Format</label>
+      <div className="mb-3"><Seg label="Format" value={format} options={FORMATS} onPick={(f) => { setFormat(f); if (!formatTakesPassword(f)) setLocked(false); }} show={(f) => f.toUpperCase()} /></div>
+      <label className="block text-[11px] mb-1" style={{ color: "var(--text3)" }}>Protection</label>
+      <Seg label="Protection" value={using ? "pw" : "none"} options={["none", "pw"] as const} onPick={(v) => { if (canLock) setLocked(v === "pw"); }} show={(v) => (v === "none" ? "No password" : "Password protected")} />
+      {!canLock && <p className="m-0 mt-1" style={{ color: "var(--text3)" }}>{format.toUpperCase()} has no password protection.</p>}
+      {using && <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} aria-label="Password" autoComplete="off" placeholder="Password" onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); go(); } }} className={`${INPUT} w-full mt-2`} style={INPUT_STYLE} />}
+      <p role="alert" className="m-0 mt-1.5 min-h-[16px]" style={{ color: "var(--error-ink)" }}>{problem && name.trim() ? problem : null}</p>
+      <div className="flex justify-end gap-2 mt-2">
+        <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE }} onClick={onClose}>Cancel</button>
+        <button className="agx-btn rounded-md px-3" disabled={!!problem} style={{ minHeight: HIT, background: "var(--text)", color: "var(--bg)" }} onClick={go}>Compress</button>
+      </div>
+    </Sheet>
+  );
+}
+
+const WHO: { who: Who; label: string; of: (p: FsProps) => string }[] = [
+  { who: "owner", label: "Owner", of: (p) => p.owner }, { who: "group", label: "Group", of: (p) => p.group }, { who: "others", label: "Others", of: () => "" },
+];
+
+function when(ms: number) { return new Date(ms).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }); }
+function size(b: number | null) { return b == null ? "—" : b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : b < 1073741824 ? `${(b / 1048576).toFixed(1)} MB` : `${(b / 1073741824).toFixed(1)} GB`; }
+
+/** Properties: what the server knows about one entry, and the nine permission bits when it is the owner's. */
+export function PropsDialog({ path, home, pinned, onChmod, onRename, onCopyPath, onClose }: {
+  path: string; home: string; pinned: boolean; onChmod: (mode: number) => Promise<boolean>; onRename: () => void; onCopyPath: () => void; onClose: () => void;
+}) {
+  const [p, setP] = useState<FsProps | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { let live = true; void api.fsProps(path).then((r) => { if (!live) return; if (r.ok && r.props) setP(r.props); else setErr(r.error ?? "Could not read it"); }); return () => { live = false; }; }, [path]);
+  const flip = async (who: Who, bit: 0 | 1 | 2) => { if (!p || !p.mine) return; const mode = toggleMode(p.mode, who, bit); if (await onChmod(mode)) setP({ ...p, mode }); };
+  const row = (k: string, v: string) => <div key={k} className="flex gap-3 py-1.5" style={{ borderBottom: LINE }}><span className="w-24 shrink-0 text-[10.5px] uppercase" style={{ color: "var(--text3)" }}>{k}</span><span className="min-w-0 truncate" title={v}>{v}</span></div>;
+  return (
+    <Sheet label="Properties" onClose={onClose}>
+      {err && <p role="alert" className="m-0" style={{ color: "var(--error-ink)" }}>{err}</p>}
+      {p && (
+        <>
+          <b className="block text-[13px] truncate">{p.name}</b>
+          <p className="m-0 mb-2" style={{ color: "var(--text3)" }}>{p.kind === "dir" ? "Folder" : p.kind === "link" ? "Link" : "File"}</p>
+          {row("Location", shortPath(p.path, home, 44))}
+          {row("Size", size(p.bytes))}
+          {row("Modified", when(p.mtime))}
+          {p.link && row("Points to", p.link)}
+          {row("Hidden", p.hidden ? "Yes" : "No")}
+          {row("Pinned", pinned ? "Yes" : "No")}
+          <div className="flex items-baseline justify-between mt-3 mb-1 text-[10.5px] uppercase" style={{ color: "var(--text3)" }}><span>Permissions</span><span>{modeSymbolic(p.mode, p.kind)} {(p.mode & 0o777).toString(8).padStart(3, "0")}</span></div>
+          {WHO.map(({ who, label, of }) => (
+            <div key={who} className="flex items-center gap-2 py-0.5">
+              <span className="w-14">{label}</span><span className="flex-1 truncate text-[10.5px]" style={{ color: "var(--text3)" }}>{of(p)}</span>
+              {(["r", "w", "x"] as const).map((l, i) => {
+                const on = modeBits(p.mode)[who][i]!;
+                return <button key={l} aria-pressed={on} aria-label={`${label} ${l === "r" ? "read" : l === "w" ? "write" : "execute"}`} disabled={!p.mine || p.kind === "link"} onClick={() => void flip(who, i as 0 | 1 | 2)}
+                  className="agx-btn rounded" style={{ width: HIT, minHeight: HIT - 8, border: EDGE, background: on ? "color-mix(in srgb, var(--primary) 22%, transparent)" : "transparent", color: on ? "var(--primary-ink)" : "var(--text3)" }}>{on ? l : "–"}</button>;
+              })}
+            </div>
+          ))}
+          {!p.mine && <p className="m-0 mt-1" style={{ color: "var(--text3)" }}>Only the owner can change these.</p>}
+        </>
+      )}
+      <div className="flex justify-end gap-2 mt-3">
+        <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE }} onClick={onRename} disabled={!p}>Rename</button>
+        <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE }} onClick={onCopyPath} disabled={!p}>Copy path</button>
+        <button autoFocus className="agx-btn rounded-md px-3" style={{ minHeight: HIT, background: "var(--text)", color: "var(--bg)" }} onClick={onClose}>Close</button>
+      </div>
+    </Sheet>
+  );
+}
+
+/** Move to… / Copy to…: walk the folders and pick one. Only folders are listed; the server judges the rest. */
+export function FolderPicker({ op, paths, start, home, onPick, onClose }: { op: "move" | "copy"; paths: readonly string[]; start: string; home: string; onPick: (dest: string) => void; onClose: () => void }) {
+  const [at, setAt] = useState(start);
+  const [dirs, setDirs] = useState<string[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true; setDirs(null); setErr(null);
+    void api.browseList(at, 0, false, undefined, 500).then((r) => { if (!live) return; if (r.ok) setDirs(r.entries.filter((e) => e.kind === "dir" && !e.locked).map((e) => e.name)); else setErr(r.error ?? "Could not open it"); });
+    return () => { live = false; };
+  }, [at]);
+  const join = (n: string) => `${at.replace(/\/$/, "")}/${n}`;
+  const up = at.slice(0, at.lastIndexOf("/")) || "/";
+  const problem = destProblem(paths, at, op);
+  const verb = op === "move" ? "Move" : "Copy";
+  return (
+    <Sheet label={`${verb} to`} onClose={onClose}>
+      <b className="block text-[13px]">{verb} {paths.length === 1 ? "1 item" : `${paths.length} items`} to…</b>
+      <p className="m-0 mb-2 truncate" style={{ color: "var(--text3)" }} title={at}>{shortPath(at, home, 44)}</p>
+      <div role="listbox" aria-label="Folders" className="rounded-md overflow-y-auto" style={{ border: EDGE, height: 220 }}>
+        {at !== "/" && <button role="option" aria-selected={false} className="agx-btn w-full text-left px-3" style={{ minHeight: HIT - 4, color: "var(--text3)" }} onClick={() => setAt(up)}>..</button>}
+        {dirs?.map((n) => <button key={n} role="option" aria-selected={false} className="agx-btn w-full text-left px-3 truncate" style={{ minHeight: HIT - 4 }} onClick={() => setAt(join(n))}>{n}</button>)}
+        {dirs && !dirs.length && <p className="m-0 p-3" style={{ color: "var(--text3)" }}>No folders here</p>}
+        {err && <p role="alert" className="m-0 p-3" style={{ color: "var(--error-ink)" }}>{err}</p>}
+      </div>
+      <p role="alert" className="m-0 mt-1.5 min-h-[16px]" style={{ color: "var(--error-ink)" }}>{problem}</p>
+      <div className="flex justify-end gap-2 mt-2">
+        <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE }} onClick={onClose}>Cancel</button>
+        <button className="agx-btn rounded-md px-3" disabled={!!problem || !!err} style={{ minHeight: HIT, background: "var(--text)", color: "var(--bg)" }} onClick={() => onPick(at)}>{verb} here</button>
+      </div>
+    </Sheet>
+  );
+}

@@ -31,17 +31,21 @@ import { AppearanceMenu, FinderSettings, HelpSheet } from "./FinderChrome.tsx";
 import { externalPlace, folderTargetMove } from "../../../lib/finderMiller.ts";
 import { exitDecision, type Exit } from "../../../lib/finderEdit.ts";
 import { FinderPathBar } from "./FinderPathBar.tsx";
+import { useFinderOps, type Chosen } from "./useFinderOps.tsx";
 import { FinderSearch } from "./FinderSearch.tsx";
 import type { HitTarget } from "../../../lib/finderSearch.ts";
 import { IconsView, ListView, tilesPerRow } from "./FolderViews.tsx";
 import { StrataIcon } from "./StrataIcon.tsx";
 import { QuickLook } from "./QuickLook.tsx";
 import { Sidebar, placesFor } from "./Sidebar.tsx";
+import { PIN_KEY, readPins, togglePin, writePins } from "../../../lib/finderPins.ts";
 import { useBox } from "./useBox.ts";
 
 const PREFS_KEY = "agentglass.finder.machine.prefs";
 const loadPrefs = (): Prefs => { try { return readPrefs(localStorage.getItem(PREFS_KEY)); } catch { return DEFAULT_PREFS; } };
 const savePrefs = (p: Prefs) => { try { localStorage.setItem(PREFS_KEY, writePrefs(p)); } catch { /* a private window forgets; the finder still works */ } };
+
+const loadPins = () => { try { return readPins(localStorage.getItem(PIN_KEY)); } catch { return []; } };
 
 const SNAP_KEY = "agentglass.finder.machine.state";
 const loadSnap = () => { try { return readMachineSnap(localStorage.getItem(SNAP_KEY)); } catch { return null; } };
@@ -124,6 +128,12 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   const [menu, setMenu] = useState<DOMRect | null>(null);
   const [settings, setSettings] = useState<DOMRect | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [pins, setPinsState] = useState<string[]>(loadPins);
+  const togglePinned = (path: string) => setPinsState((cur) => {
+    const next = togglePin(cur, path);
+    try { localStorage.setItem(PIN_KEY, writePins(next)); } catch { /* a private window forgets; the pins stay for this visit */ }
+    return next;
+  });
   const [pathSignal, setPathSignal] = useState(0);
   const [version, setVersion] = useState(0);
   /** Columns somebody dragged, by folder: their width wins over the names' until they double-click the edge. */
@@ -382,7 +392,36 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   /* One step for the button and Ctrl+B alike, as in Strata: full, the icon rail, hidden, full. */
   const toggleSide = useCallback(() => (compact ? setSidePage((v) => !v) : setPrefs(sidebarPrefs(nextSidebar(sideMode)))), [compact, sideMode, setPrefs]);
 
+  /* The file operations (Strata's menu and keys): what they act on and how the finder answers, here; the doing is /fs/op. */
+  const chosenNow = (): Chosen | null => {
+    if (liveMulti) {
+      const rows = (columns[liveMulti.col]?.display.rows ?? []).filter((r) => liveMulti.choice.names.has(r.name));
+      return rows.length ? { dir: trail[liveMulti.col]!, rows } : null;
+    }
+    return deepest ? { dir: trail[deepest.col]!, rows: [deepest.row] } : null;
+  };
+  const ops = useFinderOps({
+    chosen: chosenNow,
+    rowsIn: (dir) => columns[trail.indexOf(dir)]?.display.rows ?? [],
+    here: () => trail[prefs.view === "columns" ? focusCol : last] ?? trail[0]!,
+    choose: (dir, name) => { const col = trail.indexOf(dir); const row = columns[col]?.display.rows.find((r) => r.name === name); if (row) pick(col, row); },
+    reload: (dir) => store.current?.load(dir, prefs.hidden, true),
+    say: setNote,
+    hidden: prefs.hidden,
+    home,
+    pins,
+    togglePin: togglePinned,
+    toggleHidden: () => setPrefs({ hidden: !prefs.hidden }),
+    selectAll: () => { const col = prefs.view === "columns" ? focusCol : last; choose(col, selectAll(columns[col]?.display.rows ?? [], chosenOf(col))); },
+    open: (dir, row) => { const col = trail.indexOf(dir); if (isFolder(row) && !row.locked) { if (prefs.view === "columns") { pick(col, row); enterFolder(col); } else go(joinPath(dir, row.name)); } else if (canEditRow(row)) onBench(joinPath(dir, row.name), "edit"); },
+    preview: () => { if (wide) setPrefs({ preview: !prefs.preview }); else setPeek((p) => !p); },
+    copyText: (text, said) => { void navigator.clipboard?.writeText(text).then(() => setNote(said)).catch(() => setNote("Could not copy")); },
+    terminal: (dir) => onBench(dir, "terminal"),
+  });
+  const opsOpen = useRef(false); opsOpen.current = ops.hasMenu;
+
   const act = useCallback((a: NonNullable<ReturnType<typeof finderKey>>) => {
+    if (ops.key(a.t)) return;
     switch (a.t) {
       case "move": move(a.key); break;
       case "enter": {
@@ -415,13 +454,13 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
       case "all": { const col = prefs.view === "columns" ? focusCol : last; choose(col, selectAll(columns[col]?.display.rows ?? [], chosenOf(col))); break; }
       case "toggle": { const col = prefs.view === "columns" ? focusCol : last; choose(col, toggleCursor(columns[col]?.display.rows ?? [], chosenOf(col))); break; }
     }
-  }, [move, choose, columns, multi, sel, mainBox.w, mainBox.h, last, deepest, prefs, enterFolder, go, goUp, hist, goHist, home, trail, focusCol, onBench, wide, toggleSide, setPrefs, copy, currentPath]);
+  }, [move, choose, columns, multi, sel, mainBox.w, mainBox.h, last, deepest, prefs, enterFolder, go, goUp, hist, goHist, home, trail, focusCol, onBench, wide, toggleSide, setPrefs, copy, currentPath, ops]);
 
   // On the window, capture phase: the palette keeps focus in its own search box, and ↓ there must still move the list.
   const actRef = useRef(act); actRef.current = act;
   useEffect(() => {
     const on = (e: KeyboardEvent) => {
-      if (searchingRef.current) return; // the search overlay has the keys while it is up
+      if (searchingRef.current || opsOpen.current) return; // the search overlay, a menu or a question has the keys while it is up
       if ((e.target as HTMLElement | null)?.closest?.("[data-finder-nvim]")) return; // nvim has every key typed into its own pane
       // Ctrl+K is the app's command palette everywhere else; inside the finder it is Strata's search.
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k" && root.current && (root.current.contains(e.target as Node) || e.target === document.body || (e.target as HTMLElement | null)?.closest?.('[role="dialog"]') === root.current.closest('[role="dialog"]'))) {
@@ -450,6 +489,15 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   const refresh = (p: string) => store.current?.load(p, prefs.hidden, true);
   const onSort = (k: SortKey) => setPrefs(prefs.sortKey === k ? { sortDir: prefs.sortDir === "asc" ? "desc" : "asc" } : { sortKey: k, sortDir: "asc" });
   const rowH = rowHeight(prefs.density, prefs.textSize);
+
+  /* A right click anywhere in the browser: the row it landed on, or the empty space of its column (rows and columns carry data-row and data-dir). */
+  const onContext = (e: React.MouseEvent) => {
+    const t = e.target as HTMLElement;
+    const dirEl = t.closest<HTMLElement>("[data-dir]");
+    if (!dirEl || t.closest("header, input, [role=\"separator\"]")) return;
+    e.preventDefault();
+    ops.contextAt(e.clientX, e.clientY, dirEl.dataset.dir!, t.closest<HTMLElement>("[data-row]")?.dataset.row ?? null);
+  };
 
   /* ---- layout ---- */
   const sideOn = compact ? sidePage : sideMode !== "hidden";
@@ -489,11 +537,11 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
       </div>
 
       <div className="flex-1 min-h-0 flex">
-        {sideOn && <Sidebar places={placesFor(home, places)} here={trail[0]!} mode={compact || sideMode === "hidden" ? "full" : pathEditing ? "rail" : sideMode} width={sidebarWidth(compact || sideMode === "hidden" ? "full" : pathEditing || sideMode === "rail" ? "rail" : "full", prefs.sideW, box.w)} onResize={(w) => setPrefs({ sideW: sidebarWidth("full", w, box.w) })} onGo={go} onRecent={onRecent} />}
+        {sideOn && <Sidebar places={placesFor(home, places)} pins={pins} here={trail[0]!} mode={compact || sideMode === "hidden" ? "full" : pathEditing ? "rail" : sideMode} width={sidebarWidth(compact || sideMode === "hidden" ? "full" : pathEditing || sideMode === "rail" ? "rail" : "full", prefs.sideW, box.w)} onResize={(w) => setPrefs({ sideW: sidebarWidth("full", w, box.w) })} onGo={go} onRecent={onRecent} />}
         {!(compact && sidePage) && (
           <>
             {/* With the preview beside the columns and nothing dragged, the columns take what their names ask for and the preview takes all that is left, as Strata's does; a gap between the two was the free room with nowhere to go. */}
-            <div ref={main} className="min-w-0 min-h-0 flex" style={{ flex: previewInline && prefs.view === "columns" && prevDrag === undefined ? "0 1 auto" : "1 1 0%" }}>
+            <div ref={main} className="min-w-0 min-h-0 flex" onContextMenu={onContext} style={{ flex: previewInline && prefs.view === "columns" && prevDrag === undefined ? "0 1 auto" : "1 1 0%" }}>
               {previewOnly ? (
                 <div className="flex-1 min-w-0 min-h-0 flex flex-col">
                   <button className="agx-btn text-left px-3 text-[11px] shrink-0" style={{ minHeight: HIT, color: "var(--text3)", borderBottom: LINE }} onClick={() => setPeek(false)}>← Back to the folder (Space)</button>
@@ -502,14 +550,14 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
               ) : prefs.view === "columns" ? (
                 <ColumnsRow widths={widths} active={focusCol}>
                   {columns.map((c, i) => (
-                    <Column key={c.path} title={basename(c.path)} filterSignal={filterTick.col === i ? filterTick.n : 0} width={widths[i]!} onResize={(w) => setDragged((d) => ({ ...d, [c.path]: w }))} onFit={() => setDragged((d) => ({ ...d, [c.path]: fitWidth(c.state?.rows.map((r) => r.name) ?? [], measure, mainBox.w || undefined) }))} state={c.state} display={c.display} selName={sel[i] ?? null} chosen={liveMulti?.col === i ? liveMulti.choice.names : null} focused={i === focusCol} prefs={prefs} rowH={rowH}
+                    <Column key={c.path} dir={c.path} title={basename(c.path)} filterSignal={filterTick.col === i ? filterTick.n : 0} width={widths[i]!} onResize={(w) => setDragged((d) => ({ ...d, [c.path]: w }))} onFit={() => setDragged((d) => ({ ...d, [c.path]: fitWidth(c.state?.rows.map((r) => r.name) ?? [], measure, mainBox.w || undefined) }))} state={c.state} display={c.display} selName={sel[i] ?? null} chosen={liveMulti?.col === i ? liveMulti.choice.names : null} focused={i === focusCol} prefs={prefs} rowH={rowH}
                       filter={filters[c.path] ?? ""} onFilter={(v) => setFilters((f) => ({ ...f, [c.path]: v }))}
                       scrollTop={scrolls.current[c.path]} onScrollTop={(t) => onScrollTop(c.path, t)} onPick={(r, m) => onPickMod(i, r, m)} onOpen={(r) => { if (isFolder(r) && !r.locked) { pick(i, r); enterFolder(i); } else if (canEditRow(r)) onBench(joinPath(c.path, r.name), "edit"); }}
                       onFocusCol={() => setFocusCol(i)} onRefresh={() => refresh(c.path)} onSort={onSort} onPref={setPrefs} />
                   ))}
                 </ColumnsRow>
               ) : lastCol ? (
-                <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+                <div className="flex-1 min-w-0 min-h-0 flex flex-col" data-dir={lastCol.path}>
                   {lastCol.state?.error ? <div className="p-3 text-[12px]" role="alert" style={{ color: "var(--warning-ink)" }}>{lastCol.state.error}</div>
                     : prefs.view === "icons"
                       ? <IconsView display={lastCol.display} dir={lastCol.path} thumb={prefs.thumb} selName={sel[last] ?? null} chosen={liveMulti?.col === last ? liveMulti.choice.names : null} width={mainBox.w} label={`Entries of ${basename(lastCol.path)}`} onPick={(r, m) => onPickMod(last, r, m)} onOpen={(r) => (isFolder(r) && !r.locked ? go(joinPath(lastCol.path, r.name)) : canEditRow(r) && onBench(joinPath(lastCol.path, r.name), "edit"))} />
@@ -562,6 +610,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
           </div>
         </div>
       )}
+      {ops.nodes}
       {help && <HelpSheet onClose={() => setHelp(false)} />}
       {searching && <FinderSearch home={home} onTarget={reveal} onClose={() => setSearching(false)} />}
       {settings && <FinderSettings prefs={prefs} onPref={setPrefs} onReset={() => { setPrefsState(DEFAULT_PREFS); savePrefs(DEFAULT_PREFS); setNote("Finder settings reset"); }} onForget={() => { try { localStorage.removeItem(SNAP_KEY); } catch { /* nothing kept */ } setDragged({}); scrolls.current = {}; setNote("Remembered places cleared"); }} onClose={() => setSettings(null)} />}

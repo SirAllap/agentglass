@@ -31,8 +31,8 @@ export function placesFor(home: string, known: readonly DiskPlace[]): Place[] {
   ];
 }
 
-export function Sidebar({ places, here, mode, width, onResize, onGo, onRecent }: {
-  places: Place[]; here: string; mode: Exclude<SidebarMode, "hidden">;
+export function Sidebar({ places, pins, here, mode, width, onResize, onGo, onRecent }: {
+  places: Place[]; pins: readonly string[]; here: string; mode: Exclude<SidebarMode, "hidden">;
   /** Pixels, from lib/finderColumns `sidebarWidth`: the rail's fixed width or what was dragged. */
   width: number; onResize: (w: number) => void;
   onGo: (path: string) => void; onRecent: () => void;
@@ -56,6 +56,9 @@ export function Sidebar({ places, here, mode, width, onResize, onGo, onRecent }:
       <nav aria-label="Places" data-mode={mode} className="agx-scroll overflow-y-auto overflow-x-hidden flex-1 min-w-0 py-1.5 px-1 text-[12px] flex flex-col gap-0.5"
         style={{ borderRight: LINE, background: "var(--surface-nav)" }}>
         {places.map(row)}
+        {pins.length > 0 && !rail && <div className="px-2.5 pt-2 pb-0.5 text-[10px] uppercase" style={{ color: "var(--text4)" }}>Pinned</div>}
+        {pins.length > 0 && rail && <div role="separator" className="mx-1 my-1" style={{ borderTop: LINE }} />}
+        {pins.map((path) => row({ id: `pin:${path}`, label: path.slice(path.lastIndexOf("/") + 1) || path, path }))}
       </nav>
       {!rail && (
         <div role="separator" aria-orientation="vertical" aria-label="Resize the sidebar" aria-valuenow={Math.round(width)} tabIndex={0}

@@ -20,7 +20,15 @@ export const SECTIONS: Section[] = [
   { title: "Files and selection", rows: [
     { keys: "Enter", does: "Open the current item (a file opens in nvim on the bench)" },
     { keys: "Space", does: "Show or hide the preview" },
-    { keys: "Ctrl+C", does: "Copy the selected path" },
+    { keys: "Ctrl+X / Ctrl+C / Ctrl+V", does: "Cut / copy / paste" },
+    { keys: "Ctrl+D", does: "Duplicate" },
+    { keys: "Delete", does: "Move to Trash" },
+    { keys: "Shift+Delete", does: "Permanently delete" },
+    { keys: "Ctrl+Z", does: "Undo the last move, rename, trash or copy" },
+    { keys: "F2, Ctrl+R", does: "Rename" },
+    { keys: "Ctrl+Shift+N", does: "Create a folder" },
+    { keys: "Ctrl+Alt+N", does: "Create a folder containing the selection" },
+    { keys: "y", does: "Copy path" },
   ] },
   { title: "Search and tools", rows: [
     { keys: "Ctrl+K", does: "Search Home by name or contents" },

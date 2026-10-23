@@ -149,6 +149,7 @@ import { fileText, fileToTemp, fileTree, findFiles, grepFiles, listRefs, filesEx
 import { diskEnabled, diskFind, diskGrep, diskPlaces } from "./disk.ts";
 import { homeIndex } from "./homeindex.ts";
 import { browseBatch } from "./browselist.ts";
+import { fsRun, fsReadOp, fsJobs, fsPathsOf, fsGate, fsWantsJson } from "./fsroute.ts";
 import { browseDir, fileBytes, fileFacts, previewSlice, openInDesktop, pagePolicy, revealInFileManager } from "./browse.ts";
 import { fileGitFacts } from "./fileGit.ts";
 import { benchEdit, benchEnd, benchLive, finderEditEnd, finderEditSave, finderEditState, readNote, writeNote } from "./bench.ts";
@@ -7451,7 +7452,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      *
      * Behind the same switch as directory browsing: turning that off must not
      * leave a second door standing. */
-    if (pathname === "/browse" || pathname === "/browse/list" || pathname.startsWith("/preview/")) {
+    if (pathname === "/browse" || pathname === "/browse/list" || pathname.startsWith("/preview/") || pathname.startsWith("/fs/")) {
       /* "local" opens dotted folders and the agentglass config folder, so it is judged
          like the tokenless sinks: a direct loopback socket AND not another OS
          user on this box (sinkFrom). With a token every route here needs it, but
@@ -7475,6 +7476,26 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         try { b = (await req.json()) as { path?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
         const r = revealInFileManager(b?.path, localBrowse);
         return json(r, r.ok ? 200 : 400);
+      }
+      /* Changing a place. Every write is a POST with the same gate as handing a file
+         to the desktop (trusted caller) and only for a caller on this machine; the
+         operation itself judges where (fsops.ts). */
+      if (pathname.startsWith("/fs/")) {
+        const send = (r: { status: number; body: unknown }) => json(r.body, r.status);
+        if (req.method === "GET") return send(fsReadOp(pathname.slice(4), url.searchParams, localBrowse));
+        if (req.method !== "POST") return json({ ok: false, error: "method not allowed" }, 405);
+        if (!trustedCaller(req, from)) return csrfBlocked();
+        if (!fsWantsJson(req.headers.get("content-type"))) return json({ ok: false, error: "send application/json" }, 415);
+        let b: Record<string, unknown> = {};
+        try { b = (await req.json()) as Record<string, unknown>; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+        if (!b || typeof b !== "object") return json({ ok: false, error: "invalid json" }, 400);
+        if (pathname === "/fs/jobs/cancel") return send(fsJobs("cancel", b.id));
+        if (pathname === "/fs/jobs/clear") return send(fsJobs("clear", null));
+        if (pathname !== "/fs/op") return json({ ok: false, error: "no such route" }, 404);
+        if (heldBackFrom(caller, fsPathsOf(b))) return json(HELD_BACK, 403);
+        const gated = fsGate(String(b.op), deskHeld() && deskKeyOk(req));
+        if (gated) return send(gated);
+        return send(await fsRun(b, localBrowse));
       }
       // A folder a page at a time, for the Machine tab's columns: see browselist.ts.
       if (pathname === "/browse/list") {

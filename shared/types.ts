@@ -5346,3 +5346,18 @@ export interface LogDigest {
   /** Nothing worth a look; the badge is drawn only when this is false. */
   quiet: boolean;
 }
+
+/** One file operation, as POST /fs/op takes it (server/src/fsroute.ts). */
+export interface FsBody {
+  op: "mkdir" | "newfile" | "folder-with" | "rename" | "trash" | "restore" | "empty-trash" | "delete" | "copy" | "move" | "duplicate" | "compress" | "chmod" | "undo";
+  path?: string; paths?: string[]; parent?: string; dest?: string; name?: string; ids?: string[];
+  confirm?: number; conflict?: "fail" | "keep-both"; format?: "zip" | "7z" | "tar.gz" | "tar"; password?: string; mode?: number;
+}
+export interface FsJob { id: string; kind: string; label: string; state: "running" | "done" | "error" | "cancelled"; total: number | null; done: number; items: number; error?: string; started: number; ended?: number }
+/** What every operation answers: ok, or the sentence that says why not, plus what Ctrl+Z would undo now. */
+export interface FsAnswer {
+  ok: boolean; error?: string; path?: string; created?: string[]; job?: FsJob;
+  undo?: { available: boolean; label: string | null };
+}
+export interface FsTrashRow { id: string; name: string; from: string; deleted: string; kind: "dir" | "file" | "link"; bytes: number | null }
+export interface FsProps { path: string; name: string; kind: "dir" | "file" | "link"; bytes: number | null; mtime: number; mode: number; owner: string; group: string; link: string | null; hidden: boolean; mine: boolean }
