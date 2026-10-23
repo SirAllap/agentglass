@@ -248,7 +248,7 @@ import {
 import { setPluginSocketHandler, viaPluginSocket } from "./plugin-socket.ts";
 import { CanvasHandle, handleCanvasOps, isCanvasPanel, readBoundedJson, setCanvasResolver } from "./plugin-canvas.ts";
 import {
-  setPluginUiHook, setPanel, panelState, setOptions, pushEvent, takeEvents, upsertRun, upsertNotes, notesFor, setNoteStatus, flushPluginNotes,
+  setPluginUiHook, setPanel, panelState, setOptions, pushEvent, takeEvents, upsertRun, upsertNotes, notesFor, answerNote, type GitHubPoster, flushPluginNotes,
 } from "./plugin-ui.ts";
 import { PANEL_ID_RE, validPrRef } from "../../shared/pluginUi.ts";
 import { readNotifyPrefs, writeNotifyPrefs } from "./notifyPrefs.ts";
@@ -5659,10 +5659,26 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     }
     if (pathname === "/plugins/pr-notes/status" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
-      let b: { plugin?: unknown; id?: unknown; status?: unknown };
+      let b: { plugin?: unknown; id?: unknown; status?: unknown; reply?: unknown; repo?: unknown; number?: unknown; root?: unknown };
       try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       if (typeof b.plugin !== "string" || typeof b.id !== "string") return json({ ok: false, error: "plugin and id are required" }, 400);
-      const r = setNoteStatus(b.plugin, b.id, b.status);
+      // Who is answering: an agent says so with the header its CLI sends (the
+      // same honesty system as presentedWorker); anything else is the person.
+      const agent = req.headers.get("x-agentglass-agent");
+      const by = agent && /^[A-Za-z0-9_.-]{1,60}$/.test(agent) ? `agent:${agent}` : "user";
+      // The only path from a note to GitHub. It runs when the request asked
+      // for it AND the caller is full scope; `answerNote` enforces both, and
+      // this poster only checks the checkout belongs to the note's repository.
+      const poster: GitHubPoster = async (n, body) => {
+        const id = await prRepoIdFor(b.root);
+        if (!id || id.nameWithOwner.toLowerCase() !== n.repo.toLowerCase()) return { ok: false, error: `that project is not a checkout of ${n.repo}` };
+        const r = await addComment(b.root, n.number, body);
+        return r.ok ? { ok: true } : { ok: false, error: r.error };
+      };
+      const r = await answerNote(b.plugin, b.id, {
+        status: b.status, reply: b.reply, repo: b.repo, number: b.number, by,
+        mayPost: (caller?.scope ?? "full") === "full",
+      }, poster);
       return json(r, r.ok ? 200 : 400);
     }
     if (pathname === "/plugins/pr-action" && req.method === "POST") {

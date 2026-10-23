@@ -1,6 +1,6 @@
 import { deskGated } from "./deskGate.ts";
 import { forgetShared, sharedRead } from "./sharedRead.ts";
-import type { UiAction, Field, NoteStatus, PluginPanel, PluginPrNotes } from "./pluginTypes.ts";
+import type { UiAction, Field, NoteReply, NoteStatus, PluginPanel, PluginPrNotes } from "./pluginTypes.ts";
 import type { ImportedPlace } from "./desktop.ts";
 import type { Policy } from "../../../shared/orchestration.ts";
 import type { PinnedPlace, PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/types.ts";
@@ -2168,6 +2168,10 @@ const realApi = {
     get<PluginPrNotes>(`/plugins/pr-notes?repo=${encodeURIComponent(repo)}&number=${number}`),
   pluginNoteStatus: (plugin: string, id: string, status: NoteStatus) =>
     post<{ ok: boolean; error?: string }>("/plugins/pr-notes/status", { plugin, id, status }),
+  /** Answer a finding: a reply, a status, or both in one request. `root` is
+   *  the checkout, needed only when the reply is also posted on GitHub. */
+  pluginNoteReply: (plugin: string, id: string, body: { status?: NoteStatus; reply: { text: string; postToGitHub: boolean }; root?: string }) =>
+    post<{ ok: boolean; error?: string; status?: NoteStatus; replies?: NoteReply[]; posted?: boolean; postError?: string }>("/plugins/pr-notes/status", { plugin, id, ...body }),
   pluginPrOpen: (repo: string, number: number) =>
     post<{ ok: boolean }>("/plugins/pr-open", { repo, number }),
   pluginPrAction: (plugin: string, id: string, repo: string, number: number) =>
@@ -2830,6 +2834,7 @@ const demoApi: typeof realApi = {
   pluginSettingsSave: (_name: string, _v: Record<string, unknown>) => D({ ok: false, error: "not available in the demo" }),
   pluginPrNotes: (_repo: string, _n: number) => D({ ok: true, runs: [], notes: [], publishers: {} } as PluginPrNotes),
   pluginNoteStatus: (_p: string, _id: string, _s: NoteStatus) => D({ ok: false, error: "not available in the demo" }),
+  pluginNoteReply: (_p: string, _id: string, _b: { status?: NoteStatus; reply: { text: string; postToGitHub: boolean }; root?: string }) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string; status?: NoteStatus; replies?: NoteReply[]; posted?: boolean; postError?: string }),
   pluginPrOpen: (_repo: string, _n: number) => D({ ok: true }),
   pluginPrAction: (_p: string, _id: string, _repo: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
   pluginUpdate: (_name: string) => D({ ok: false, error: "not available in the demo" } as { ok: false; error: string } | { ok: true; plugin: PublicPlugin; update: PluginUpdateReport }),

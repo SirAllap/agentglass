@@ -6,16 +6,22 @@ import { Markdown } from "../../lib/markdown.tsx";
 import { ago } from "../../lib/fileRecents.ts";
 import { Spinner } from "../Spinner.tsx";
 import { ICON } from "../../lib/iconSize.ts";
-import { Button, EDGE } from "../workspace/Chrome.tsx";
+import { Button, EDGE, INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
+import {
+  FRESH_DRAFT, REPLY_MAX_CHARS, authorLabel, composerActions, composerKey, draftState, replyCountLabel, replyTags, threadFolded,
+  type ReplyDraft,
+} from "../../lib/noteReplies.ts";
+import type { NoteReply } from "../../lib/pluginTypes.ts";
 
 /**
  * Notes plugins wrote on a pull request, drawn inside the pull request.
  *
  * They sit beside GitHub's own threads and are never mistaken for them: every
  * one carries a "local" mark, a different edge, and no Reply, because there
- * is nobody on the other end. Nothing here can send anything to GitHub. What
- * the person can do is decide — resolve, dismiss, reopen — and copy a note as
- * markdown if they choose to say it out loud somewhere themselves.
+ * is nobody on the other end. What the person can do is decide — resolve,
+ * dismiss, reopen — answer (a reply is kept with the finding and told to the
+ * plugin), and copy a note as markdown. The one thing that reaches GitHub is a
+ * reply with its box ticked, confirmed each time; nothing else here can.
  */
 
 export type LocalRun = PrRun & { plugin: string };
@@ -26,7 +32,12 @@ export interface LocalNotes {
   notes: LocalNote[];
   publishers: Record<string, string>;
   setStatus: (n: LocalNote, s: NoteStatus) => Promise<void>;
+  /** Answer a finding, optionally closing it in the same request. */
+  reply: (n: LocalNote, draft: ReplyDraft, status?: NoteStatus) => Promise<ReplyResult>;
 }
+
+/** `cancelled`: the person said no to the GitHub question, which is not an error. */
+export type ReplyResult = { ok: true; postError?: string } | { ok: false; error?: string; cancelled?: boolean };
 
 const EMPTY: PluginPrNotes = { ok: true, runs: [], notes: [], publishers: {} };
 
@@ -35,7 +46,11 @@ const EMPTY: PluginPrNotes = { ok: true, runs: [], notes: [], publishers: {} };
  * also told to the plugins that write notes, so a reviewer can offer to look
  * at what the person is reading without polling GitHub for it.
  */
-export function useLocalNotes(repo: string | undefined, number: number | null | undefined): LocalNotes {
+export function useLocalNotes(
+  repo: string | undefined, number: number | null | undefined,
+  /** The checkout, and the question asked before a reply is posted on GitHub. */
+  github?: { root: string; approve: (n: LocalNote, draft: ReplyDraft) => Promise<boolean> },
+): LocalNotes {
   const [data, setData] = useState<PluginPrNotes>(EMPTY);
   // Only the latest request may land: switching pull requests quickly let an
   // earlier answer arrive last and show one pull request's notes on another.
@@ -61,7 +76,28 @@ export function useLocalNotes(repo: string | undefined, number: number | null | 
     setData((d) => ({ ...d, notes: d.notes.map((x) => (x.plugin === n.plugin && x.id === n.id ? { ...x, status: s } : x)) }));
     await api.pluginNoteStatus(n.plugin, n.id, s).catch(() => {});
   }, []);
-  return { runs: data.runs, notes: data.notes, publishers: data.publishers, setStatus };
+  const gh = useRef(github);
+  gh.current = github;
+  const reply = useCallback(async (n: LocalNote, draft: ReplyDraft, status?: NoteStatus): Promise<ReplyResult> => {
+    if (draft.postToGitHub) {
+      if (!gh.current) return { ok: false, error: "There is no checkout of this repository to comment from" };
+      if (!(await gh.current.approve(n, draft))) return { ok: false, cancelled: true };
+    }
+    try {
+      const r = await api.pluginNoteReply(n.plugin, n.id, {
+        ...(status ? { status } : {}),
+        reply: draft,
+        ...(draft.postToGitHub && gh.current ? { root: gh.current.root } : {}),
+      });
+      if (!r.ok) return { ok: false, error: r.error };
+      // The answer is the thread as stored; the frame that follows says the same.
+      setData((d) => ({ ...d, notes: d.notes.map((x) => (x.plugin === n.plugin && x.id === n.id ? { ...x, status: r.status ?? x.status, replies: r.replies ?? x.replies } : x)) }));
+      return { ok: true, postError: r.postError };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }, []);
+  return { runs: data.runs, notes: data.notes, publishers: data.publishers, setStatus, reply };
 }
 
 const SEV: Record<PrNote["severity"], { label: string; color: string; rank: number }> = {
@@ -115,9 +151,12 @@ function copyNote(n: LocalNote): void {
   void navigator.clipboard?.writeText(text).catch(() => {});
 }
 
-function StatusActions({ n, onStatus }: { n: LocalNote; onStatus: (s: NoteStatus) => void }) {
+function StatusActions({ n, onStatus, onReply, replying }: {
+  n: LocalNote; onStatus: (s: NoteStatus) => void; onReply?: () => void; replying?: boolean;
+}) {
   return (
     <div className="flex items-center gap-1 shrink-0">
+      {onReply && <Button size="compact" on={replying || undefined} onClick={onReply} aria-expanded={!!replying} title="Answer this finding — kept here, and told to the plugin">Reply</Button>}
       {n.status === "open" ? (
         <>
           <Button size="compact" tone="ok" onClick={() => onStatus("resolved")} title="Fixed, or handled — keeps it out of the open count">Resolve</Button>
@@ -139,12 +178,18 @@ function StatusActions({ n, onStatus }: { n: LocalNote; onStatus: (s: NoteStatus
 export type MdFn = (text: string) => React.ReactNode;
 const plainMd: MdFn = (text) => <div className="agx-prose text-[12px]"><Markdown text={text} /></div>;
 
-export function NoteCard({ n, onStatus, onOpenFile, compact, md = plainMd }: {
-  n: LocalNote; onStatus: (s: NoteStatus) => void; onOpenFile?: (path: string, line?: number) => void; compact?: boolean; md?: MdFn;
+export function NoteCard({ n, onStatus, onReply, onOpenFile, compact, md = plainMd }: {
+  n: LocalNote; onStatus: (s: NoteStatus) => void;
+  /** Absent: no Reply button (a card drawn where nothing can be saved). */
+  onReply?: (draft: ReplyDraft, status?: NoteStatus) => Promise<ReplyResult>;
+  onOpenFile?: (path: string, line?: number) => void; compact?: boolean; md?: MdFn;
 }) {
   const closed = n.status !== "open";
   const [open, setOpen] = useState(!closed);
   useEffect(() => { if (closed) setOpen(false); }, [closed]);
+  const [composing, setComposing] = useState(false);
+  // What the last reply could not do after it was saved (the GitHub comment).
+  const [postError, setPostError] = useState<string | null>(null);
   const c = SEV[n.severity].color;
   return (
     <div className="rounded-md min-w-0" style={{
@@ -169,11 +214,128 @@ export function NoteCard({ n, onStatus, onOpenFile, compact, md = plainMd }: {
           </button>
         )}
         {closed && <span className="text-[10px] uppercase tracking-wide" style={{ color: "var(--text4)" }}>{n.status}</span>}
-        <StatusActions n={n} onStatus={onStatus} />
+        <StatusActions n={n} onStatus={onStatus} onReply={onReply ? () => setComposing((v) => !v) : undefined} replying={composing} />
       </div>
       {open && n.body && (
         <div className="px-3 pb-2.5 pt-0.5 min-w-0">{md(n.body)}</div>
       )}
+      {!!n.replies?.length && <ReplyThread replies={n.replies} status={n.status} />}
+      {postError && (
+        <div className="px-3 pb-2 text-[10.5px]" role="status" style={{ color: "var(--error-ink)" }}>
+          Saved here, but GitHub did not take the comment: {postError}
+        </div>
+      )}
+      {composing && onReply && (
+        <ReplyComposer status={n.status} onClose={() => setComposing(false)}
+          onSend={async (draft, status) => {
+            setPostError(null);
+            const r = await onReply(draft, status);
+            if (r.ok) { setComposing(false); if (r.postError) setPostError(r.postError); }
+            return r;
+          }} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The answers under a finding, oldest first. A finding somebody closed folds a
+ * long thread behind its count; an open one always shows it, and Reopen keeps
+ * it — the thread is the reason the finding was closed.
+ */
+export function ReplyThread({ replies, status }: { replies: NoteReply[]; status: NoteStatus }) {
+  const [expanded, setExpanded] = useState(false);
+  if (threadFolded(status, replies.length, expanded)) {
+    return (
+      <div className="px-3 pb-2">
+        <button type="button" onClick={() => setExpanded(true)} aria-expanded={false}
+          className="text-[10.5px] hover:underline" style={{ color: "var(--primary-ink)", background: "transparent", border: 0, padding: 0 }}>
+          {replyCountLabel(replies.length)}
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="px-3 pb-2.5 flex flex-col gap-1.5 min-w-0" role="list" aria-label="Replies">
+      {replies.map((r) => {
+        const tags = replyTags(r);
+        return (
+          <div key={r.id} role="listitem" className="min-w-0 rounded-r-md px-2.5 py-1.5"
+            style={{ borderLeft: `3px solid color-mix(in srgb, var(--primary) ${tags.length ? 70 : 30}%, var(--surface-line))`, background: "color-mix(in srgb, var(--primary) 5%, transparent)" }}>
+            <div className="flex items-center gap-x-1.5 flex-wrap text-[10.5px]" style={{ color: "var(--text3)" }}>
+              <span title={r.by} style={{ color: "var(--text2)", fontWeight: 500 }}>{authorLabel(r.by)}</span>
+              <span style={{ color: "var(--text4)" }}>·</span>
+              <span title={new Date(r.at).toLocaleString()}>{ago(r.at)}</span>
+              {tags.map((t) => (
+                <span key={t} className="px-1 rounded" style={{ color: t === "posted on GitHub" ? "var(--warning-ink)" : "var(--primary-ink)", background: "color-mix(in srgb, currentColor 10%, transparent)" }}>{t}</span>
+              ))}
+            </div>
+            <div className="text-[12px] whitespace-pre-wrap break-words min-w-0" style={{ color: "var(--text)" }}>{r.text}</div>
+          </div>
+        );
+      })}
+      {status !== "open" && replies.length > 2 && (
+        <button type="button" onClick={() => setExpanded(false)} className="text-[10.5px] self-start hover:underline"
+          style={{ color: "var(--text3)", background: "transparent", border: 0, padding: 0 }}>
+          Fold {replyCountLabel(replies.length)}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Opens under the finding. Esc closes it, Ctrl+Enter saves. "Also post on the
+ * pull request on GitHub" is off every time it opens and after every use — it
+ * is the one thing here that leaves the machine, so it is chosen each time
+ * (and the person is asked once more before it goes).
+ */
+export function ReplyComposer({ status, onSend, onClose }: {
+  status: NoteStatus;
+  onSend: (draft: ReplyDraft, status?: NoteStatus) => Promise<ReplyResult>;
+  onClose: () => void;
+}) {
+  const [draft, setDraft] = useState<ReplyDraft>(FRESH_DRAFT);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const st = draftState(draft.text);
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => { ref.current?.focus(); }, []);
+  const send = async (to?: NoteStatus) => {
+    if (!st.canSend || busy) return;
+    setBusy(true); setErr(null);
+    const r = await onSend(draft, to);
+    setBusy(false);
+    if (r.ok) setDraft(FRESH_DRAFT);
+    else if (!r.cancelled) setErr(r.error || "The reply was not saved");
+  };
+  const actions = composerActions(status);
+  return (
+    <div className="mx-2.5 mb-2.5 rounded-md p-2 flex flex-col gap-1.5 min-w-0" style={{ border: EDGE, background: "color-mix(in srgb, var(--surface-line) 12%, transparent)" }}>
+      <textarea ref={ref} value={draft.text} rows={3} maxLength={REPLY_MAX_CHARS + 500} aria-label="Reply" placeholder="Answer this finding…"
+        className={`${INPUT} w-full text-[12px] resize-y`} style={{ ...INPUT_STYLE, minHeight: 64 }}
+        onChange={(e) => setDraft((d) => ({ ...d, text: e.target.value }))}
+        onKeyDown={(e) => {
+          const k = composerKey(e);
+          if (k === "close") { e.stopPropagation(); onClose(); }
+          else if (k === "save") { e.preventDefault(); void send(); }
+        }} />
+      <div className="flex items-center gap-x-2 gap-y-1.5 flex-wrap text-[10.5px]" style={{ color: "var(--text3)" }}>
+        <span className="tabular-nums" aria-live="polite" style={{ color: st.over ? "var(--error-ink)" : undefined }}>{st.counter}</span>
+        <span>Saved here with this finding.</span>
+        <span className="flex-1" />
+        <label className="inline-flex items-center gap-1.5 cursor-pointer" style={{ color: draft.postToGitHub ? "var(--warning-ink)" : undefined }}>
+          <input type="checkbox" checked={draft.postToGitHub} onChange={(e) => setDraft((d) => ({ ...d, postToGitHub: e.target.checked }))} />
+          Also post on the pull request on GitHub
+        </label>
+      </div>
+      {err && <div className="text-[10.5px]" role="alert" style={{ color: "var(--error-ink)" }}>{err}</div>}
+      <div className="flex items-center gap-1 flex-wrap justify-end">
+        <Button size="compact" onClick={onClose}>Cancel</Button>
+        {actions.includes("save") && <Button size="compact" disabled={!st.canSend || busy} onClick={() => void send()} title="Ctrl+Enter">Save reply</Button>}
+        {actions.includes("resolve") && <Button size="compact" tone="ok" disabled={!st.canSend || busy} onClick={() => void send("resolved")}>Resolve with reply</Button>}
+        {actions.includes("dismiss") && <Button size="compact" disabled={!st.canSend || busy} onClick={() => void send("dismissed")}>Dismiss with reply</Button>}
+      </div>
     </div>
   );
 }
@@ -184,9 +346,10 @@ export function NoteCard({ n, onStatus, onOpenFile, compact, md = plainMd }: {
  * first. The notes stay in this card rather than scattering through the
  * conversation, because they were said together and are read together.
  */
-export function RunCard({ run, notes, publisher, onStatus, onOpenFile, md = plainMd }: {
+export function RunCard({ run, notes, publisher, onStatus, onReply, onOpenFile, md = plainMd }: {
   run: LocalRun; notes: LocalNote[]; publisher?: string;
   onStatus: (n: LocalNote, s: NoteStatus) => void;
+  onReply?: (n: LocalNote, draft: ReplyDraft, status?: NoteStatus) => Promise<ReplyResult>;
   onOpenFile?: (path: string, line?: number) => void;
   md?: MdFn;
 }) {
@@ -235,7 +398,7 @@ export function RunCard({ run, notes, publisher, onStatus, onOpenFile, md = plai
       )}
       {notes.length > 0 && (
         <div className="px-2.5 pb-2.5 flex flex-col gap-1.5 min-w-0">
-          {shown.map((n) => <NoteCard key={`${n.plugin}/${n.id}`} n={n} md={md} onStatus={(s) => onStatus(n, s)} onOpenFile={onOpenFile} />)}
+          {shown.map((n) => <NoteCard key={`${n.plugin}/${n.id}`} n={n} md={md} onStatus={(s) => onStatus(n, s)} onReply={onReply && ((d, st) => onReply(n, d, st))} onOpenFile={onOpenFile} />)}
           {closedN > 0 && (
             <button type="button" onClick={() => setShowClosed((v) => !v)}
               className="text-[10.5px] self-start px-1 hover:underline" style={{ color: "var(--text3)", background: "transparent", border: 0 }}>
