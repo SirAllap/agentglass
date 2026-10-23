@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { FLASH_MS, flashScript } from "../src/lib/browserDrive.ts";
 import { describe, expect, test } from "bun:test";
 import {
+  glassHeld, pageOf,
   LOG_MAX, steadyStep, STEADY_INIT, CANDIDATE_MS, MIN_SHOW_MS, activityReducer, actionOf, agentLabel, doneMayMark, agentState, boxState, lookAt, pointerAt, tabState, ago, flashPlan, isActVerb, lapKeyframes, pausedRefusal, presenceLabel, travelMs, type Activity,
 } from "../src/lib/browserAgentActivity.ts";
 
@@ -342,5 +343,46 @@ describe("the alien's look at the agent's pointer", () => {
     expect(lookAt(-200, 0).tilt).toBeLessThan(0);
     expect(lookAt(0, -200).ly).toBeLessThan(-1.4);
     expect(lookAt(0.2, 0.2)).toEqual({ lx: 0, ly: 0, tilt: 0 });
+  });
+});
+
+describe("whether the agent is still working on a tab", () => {
+  const a = { live: true, paused: false, working: 0 };
+  // Between two asks of one run the in-flight count is 0; the dot and the glass blinked with it.
+  test("holds through the gap between two asks until the quiet window runs out", () => {
+    expect(glassHeld({ ...a, working: 1 }, false)).toBe(true);
+    expect(glassHeld(a, false)).toBe(true);
+    expect(glassHeld(a, true)).toBe(false);
+  });
+  test("an ask in flight holds even after the quiet window", () => {
+    expect(glassHeld({ ...a, working: 1 }, true)).toBe(true);
+  });
+  test("done, taken over or gone from the tab ends it at once", () => {
+    expect(glassHeld({ ...a, done: true }, false)).toBe(false);
+    expect(glassHeld({ ...a, paused: true }, false)).toBe(false);
+    expect(glassHeld({ ...a, live: false }, false)).toBe(false);
+  });
+});
+
+describe("where the drawn pointer goes", () => {
+  // The dock said Pointing and no pointer was drawn: hover and scroll had no place to land.
+  test("follows a hover and a scroll to an element, but not a scroll with none", () => {
+    expect(flashPlan({ op: "hover", args: { selector: "#menu" } }, true)).toEqual({ kind: "selector", selector: "#menu" });
+    expect(flashPlan({ op: "scroll", args: { selector: "#faq" } }, true)).toEqual({ kind: "selector", selector: "#faq" });
+    expect(flashPlan({ op: "scroll", args: { by: 400 } }, true)).toBeNull();
+  });
+  // They move the eye and change nothing: no outline is drawn in the person's page for them.
+  test("the outline in the page is still only for acts", () => {
+    expect(flashPlan({ op: "hover", args: { selector: "#menu" } })).toBeNull();
+    expect(flashPlan({ op: "click", args: { selector: "#go" } })).not.toBeNull();
+  });
+  test("the aim asks for the pointer's verbs, the flash for the acts'", () => {
+    const drive = readFileSync(new URL("../src/lib/browserDrive.ts", import.meta.url), "utf8");
+    expect(drive).toContain("const plan = landed && flashPlan(ask, true);");
+    expect(drive).toContain("const plan = flashPlan(ask);");
+  });
+  test("a #fragment is the same page; a path is not", () => {
+    expect(pageOf("https://docs.example.test/guide#install")).toBe(pageOf("https://docs.example.test/guide#usage"));
+    expect(pageOf("https://docs.example.test/guide#install")).not.toBe(pageOf("https://docs.example.test/api#install"));
   });
 });

@@ -2293,7 +2293,7 @@ function guardFrames(el: DrivableWebview): void {
 }
 
 function aimAt(el: DrivableWebview, ask: BrowserAskFrame): void {
-  const plan = landed && flashPlan(ask);
+  const plan = landed && flashPlan(ask, true);
   if (!plan) return;
   const tab = typeof ask.args.atTab === "string" ? ask.args.atTab : "";
   try {

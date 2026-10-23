@@ -25,6 +25,14 @@ describe("island pill", () => {
     expect(presence).toContain("const live = useAgentLive(agent);");
   });
 
+  // The dot next to the agent's name went green, grey, green on every call of a
+  // continuous run: it read the raw in-flight count, which is 0 between two asks.
+  test("the dot is lit on the glass's clock, not on the raw in-flight count", () => {
+    expect(island).toContain("const { held } = useGlass(act, live);");
+    expect(island).toMatch(/const working = driving && held;/);
+    expect(island).not.toMatch(/act!?\.working > 0/);
+  });
+
   // The pill named the act and the dock repeated it: the state lives in the dock only.
   test("names the agent and nothing it is doing", () => {
     expect(island).toContain('>{act!.agent}</span>');
@@ -38,11 +46,12 @@ describe("the glass over a driven page", () => {
   test("is up while the agent is mid-ask, not for the linger, and takes the pointer", async () => {
     expect(presence).toContain('{glassUp && <div ref={glass} className="agx-presence-glass"');
     // The glass sat over a tab nobody was acting on for the whole 30 s linger, and ate the wheel.
-    expect(presence).toContain("const glassUp = live && acting && !agent.done && !agent.paused && (agent.working > 0 || !stilled);");
+    expect(presence).toContain("return { held, up: held && acting };");
+    expect(presence).toContain("const held = !!agent && glassHeld({ live, done: agent.done, paused: agent.paused, working }, stilled);");
     expect(presence).toContain("setTimeout(() => setStilled(true), GLASS_QUIET_MS)");
     expect(presence).toMatch(/export const GLASS_QUIET_MS = 10_000;/);
     // An agent that only read the person's tab locked it for thirty seconds.
-    expect(presence).toContain('else if (agent.working > 0 && (isActVerb(agent.op ?? "") || MOVES.has(agent.op ?? ""))) setActing(true);');
+    expect(presence).toContain('else if (working > 0 && (isActVerb(op) || MOVES.has(op))) setActing(true);');
     expect(await css.text()).toMatch(/\.agx-presence-glass \{[^}]*pointer-events: auto/);
   });
 });
@@ -50,7 +59,9 @@ describe("the glass over a driven page", () => {
 describe("the pointer and the keys", () => {
   // After a navigation the pointer kept pointing at the old page's spot, over whatever replaced it.
   test("the pointer leaves with the page and comes back with the next act", () => {
-    expect(presence).toMatch(/if \(url !== seenUrl\.current\) \{ seenUrl\.current = url; setStale\(true\); \}/);
+    expect(presence).toMatch(/if \(p !== seenUrl\.current\) \{ seenUrl\.current = p; setStale\(true\); \}/);
+    // Every click on a same-page #link changed the address and hid the pointer for good.
+    expect(presence).toContain("const seenUrl = useRef(pageOf(url));");
     expect(presence).toContain("setStale(false);");
   });
   test("the glass takes the focus from this tab's page only", () => {

@@ -28,7 +28,7 @@ import type { BrowserTab } from "../../lib/browserTabs.ts";
 import type { Activity } from "../../lib/browserAgentActivity.ts";
 import { boxState, tabState, type AgentStateKey } from "../../lib/browserAgentActivity.ts";
 import { LivingMark } from "../Logo.tsx";
-import { StateIcon, useAgentLive, useSteadyState } from "./AgentPresence.tsx";
+import { StateIcon, useAgentLive, useGlass, useSteadyState } from "./AgentPresence.tsx";
 import { CloseIcon } from "./icons.tsx";
 
 /** How long "You have this tab" stays where the person is looking before the island tucks away. */
@@ -84,11 +84,13 @@ export function BrowserIsland(p: IslandProps) {
   const active = tabs.find((t) => t.id === activeId) ?? null;
   const act = active ? acts[active.id] : undefined;
   const live = useAgentLive(act);
+  const { held } = useGlass(act, live);
   /* An agent that holds the tab but has stopped acting leaves it to the person:
      the pill gives back the address and the arrows instead of naming a driver
      nobody can see. */
   const driving = !!act && !act.paused && live;
-  const working = driving && act!.working > 0;
+  /* The glass's clock, not the raw count: the dot stays lit through the gap between two asks. */
+  const working = driving && held;
   /* The page is the person's when no agent is acting on it, or when they took it. */
   const yours = !driving;
 

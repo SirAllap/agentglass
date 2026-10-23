@@ -22,6 +22,8 @@ const ACT_VERBS = new Set([
 
 /** Verbs that act ON an element, so there is somewhere to draw. */
 const FLASH_VERBS = new Set(["click", "dblclick", "rightclick", "check", "fill", "type", "press", "select"]);
+/** Verbs the drawn pointer follows: the flash's, plus the two that only move the eye (a scroll with no selector has no place to point). */
+const POINT_VERBS = new Set([...FLASH_VERBS, "hover", "scroll"]);
 
 export interface AgentAction { verb: string; target: string; ok: boolean; at: number }
 export interface TabAgent { agent: string; working: number; paused: boolean; log: AgentAction[]; /** The agent said it is finished, until its next ask. */ done?: boolean; /** The verb of the last ask begun. */ op?: string; /** When the last ask ended, read or act: reads leave no log entry. */ lastAt?: number }
@@ -109,8 +111,8 @@ export function actionOf(ask: { op: string; args: Record<string, unknown> }, ok:
 /** Where to draw the flash: a selector, the focused element, or nowhere. */
 export type FlashPlan = { kind: "selector"; selector: string } | { kind: "focus" } | null;
 
-export function flashPlan(ask: { op: string; args: Record<string, unknown> }): FlashPlan {
-  if (!FLASH_VERBS.has(ask.op)) return null;
+export function flashPlan(ask: { op: string; args: Record<string, unknown> }, pointer = false): FlashPlan {
+  if (!(pointer ? POINT_VERBS : FLASH_VERBS).has(ask.op)) return null;
   const a = ask.args;
   if (ask.op === "fill" && a.fields && typeof a.fields === "object") {
     const first = Object.keys(a.fields as object)[0];
@@ -119,6 +121,9 @@ export function flashPlan(ask: { op: string; args: Record<string, unknown> }): F
   if (typeof a.selector === "string" && a.selector) return { kind: "selector", selector: a.selector };
   return ask.op === "press" ? { kind: "focus" } : null;
 }
+
+/** The address without its fragment: a #hash link moves within the document, and the page under the pointer is the same. */
+export const pageOf = (url: string) => url.split("#")[0];
 
 /** "3s", "2m": how long ago, for a row that is read once and not kept up to date. */
 export function ago(now: number, at: number): string {
@@ -138,9 +143,20 @@ export function ago(now: number, at: number): string {
    rim and no Take over, then changed the island's shape on every think. */
 export const PRESENCE_LINGER_MS = 30_000;
 
+/**
+ * Whether the agent is still working on a tab, for everything that shows it:
+ * the glass over the page and the island's dot. Mid-ask, or within the quiet
+ * window after one (`stilled` is that window run out), because an agent works
+ * in bursts with a model call between them. Reading `working > 0` alone
+ * blinked the dot grey between every two calls.
+ */
+export function glassHeld(a: { live: boolean; done?: boolean; paused: boolean; working: number }, stilled: boolean): boolean {
+  return a.live && !a.done && !a.paused && (a.working > 0 || !stilled);
+}
+
 const DOING: Record<string, string> = {
   click: "Clicking", dblclick: "Double-clicking", rightclick: "Right-clicking", check: "Ticking",
-  fill: "Filling", type: "Typing in", select: "Choosing in", press: "Pressing",
+  fill: "Filling", type: "Typing in", select: "Choosing in", press: "Pressing", hover: "Hovering", scroll: "Scrolling to",
 };
 
 /** The few words beside the drawn pointer: what the agent did, to what. A name the page gave the element, never a value. */

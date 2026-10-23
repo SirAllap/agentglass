@@ -17,7 +17,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { AgentStateKey, Steady, TabAgent } from "../../lib/browserAgentActivity.ts";
-import { PRESENCE_LINGER_MS, STATE_HOLD_MS, STEADY_INIT, agentState, isActVerb, stateOf, steadyStep, lapKeyframes, lookAt, pointerAt, presenceLabel, travelMs } from "../../lib/browserAgentActivity.ts";
+import { PRESENCE_LINGER_MS, STATE_HOLD_MS, glassHeld, pageOf, STEADY_INIT, agentState, isActVerb, stateOf, steadyStep, lapKeyframes, lookAt, pointerAt, presenceLabel, travelMs } from "../../lib/browserAgentActivity.ts";
 import type { ActLanding } from "../../lib/browserDrive.ts";
 import { LivingMark } from "../Logo.tsx";
 
@@ -43,6 +43,31 @@ export function useAgentLive(agent: TabAgent | undefined): boolean {
     return () => clearTimeout(t);
   }, [working, paused]);
   return live;
+}
+
+/* The glass's clock, and with it the island's dot: one answer to "is the agent
+   working", held through the model call between two asks. `held` is up while an
+   ask is in flight and for GLASS_QUIET_MS after; `up` is the part of it that
+   puts the pane over the page, which only an agent that changes the page earns
+   (a look, a screenshot) and leaves the person's hand on it. */
+export function useGlass(agent: TabAgent | undefined, live: boolean): { held: boolean; up: boolean } {
+  const working = agent?.working ?? 0, op = agent?.op ?? "";
+  const [acting, setActing] = useState(false);
+  useEffect(() => {
+    if (!live) setActing(false);
+    else if (working > 0 && (isActVerb(op) || MOVES.has(op))) setActing(true);
+  }, [live, working, op]);
+  /* Down on Take over, when it says done, or after GLASS_QUIET_MS without an
+     ask. Never the whole 30 s linger: a tab nobody is acting on is the
+     person's, and a pane over a webview eats its wheel and its clicks. */
+  const [stilled, setStilled] = useState(false);
+  useEffect(() => {
+    if (working > 0) { setStilled(false); return; }
+    const t = setTimeout(() => setStilled(true), GLASS_QUIET_MS);
+    return () => clearTimeout(t);
+  }, [working]);
+  const held = !!agent && glassHeld({ live, done: agent.done, paused: agent.paused, working }, stilled);
+  return { held, up: held && acting };
 }
 
 /* The raw state, held still: see steadyStep. Re-renders itself when a pending change comes due. */
@@ -84,26 +109,7 @@ export function AgentPresence({ agent, landing, url = "", onToggle, quiet = fals
     return () => clearTimeout(t);
   }, [agent.working, agent.paused]);
   const state = useSteadyState(agentState(held ? { ...agent, working: 1 } : agent).key) ?? agentState(agent);
-  /* The glass is for a page an agent is changing: one that only reads it
-     (a look, a screenshot) leaves the person's hand on it. Up from the first
-     act, down with the rest of the presence. */
-  const [acting, setActing] = useState(false);
-  useEffect(() => {
-    if (!live) setActing(false);
-    else if (agent.working > 0 && (isActVerb(agent.op ?? "") || MOVES.has(agent.op ?? ""))) setActing(true);
-  }, [live, agent.working, agent.op]);
-  /* Up while the agent works: through its thinking between acts too (a person's
-     click in that gap lands in the middle of its task), down when it says done,
-     on Take over, or after GLASS_QUIET_MS without an ask. Never the whole 30 s
-     linger: a tab nobody is acting on is the person's, and a pane over a
-     webview eats its wheel and its clicks. */
-  const [stilled, setStilled] = useState(false);
-  useEffect(() => {
-    if (agent.working > 0) { setStilled(false); return; }
-    const t = setTimeout(() => setStilled(true), GLASS_QUIET_MS);
-    return () => clearTimeout(t);
-  }, [agent.working]);
-  const glassUp = live && acting && !agent.done && !agent.paused && (agent.working > 0 || !stilled);
+  const { up: glassUp } = useGlass(agent, live);
   const liveRef = useRef(live);
   liveRef.current = live;
   const [ghost, setGhost] = useState<{ x: number; y: number; label: string; travel: number; seq: number } | null>(null);
@@ -112,8 +118,10 @@ export function AgentPresence({ agent, landing, url = "", onToggle, quiet = fals
      page under it changes it points at whatever took that place, so it leaves
      with the page and comes back with the next act. */
   const [stale, setStale] = useState(false);
-  const seenUrl = useRef(url);
-  useEffect(() => { if (url !== seenUrl.current) { seenUrl.current = url; setStale(true); } }, [url]);
+  /* Not for a #fragment: a same-page link changes the address and not the page, and
+     every click on one hid the pointer the moment it landed. */
+  const seenUrl = useRef(pageOf(url));
+  useEffect(() => { const p = pageOf(url); if (p !== seenUrl.current) { seenUrl.current = p; setStale(true); } }, [url]);
   /* The glass stops the keys too, but a page that already had the focus would
      keep getting them: it takes the focus off this tab's page when it rises,
      and only from this tab's page, never from wherever else the person is typing. */
