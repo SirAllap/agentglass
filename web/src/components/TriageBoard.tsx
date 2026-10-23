@@ -38,6 +38,7 @@ import { CardFaces } from "./CardFaces.tsx";
 import { cardReviewers, facesAria, waitingLine } from "../lib/cardReviewers.ts";
 import { askingBehind, behindOf, onBehind } from "../lib/prBehindStore.ts";
 import { onRollup, rollupOf } from "../lib/prRollupStore.ts";
+import { onKnownBlock, withKnownBlock } from "../lib/prKnownBlock.ts";
 import { failureHint, jobIdOf } from "../lib/prFailureHint.ts";
 import { failureKey, loadCached, summaryOf, useFailureStore } from "../lib/checkFailuresStore.ts";
 import { stamp } from "../lib/whenStamp.ts";
@@ -187,7 +188,12 @@ export function TriageBoard({
    */
   const [rollupTick, bumpRollup] = useState(0);
   useEffect(() => onRollup(() => bumpRollup((n) => n + 1)), []);
-  const trueChecks = useCallback((p: PrSummary): PrSummary => {
+  /* What an opened detail concluded (conflict, required check never reported)
+     moves the card at once, with no request. See prKnownBlock.ts. */
+  const [knownTick, bumpKnown] = useState(0);
+  useEffect(() => onKnownBlock(() => bumpKnown((n) => n + 1)), []);
+  const trueChecks = useCallback((p0: PrSummary): PrSummary => {
+    const p = root ? withKnownBlock(root, p0) : p0;
     if (!root || !p.checks || p.checks.failure === 0) return p;
     /* Keyed by what the list says of it: the answer stands until the head
        commit or the aggregate moves. See SAME_MS in prRollupStore. */
@@ -217,7 +223,7 @@ export function TriageBoard({
     return fileAll([...by.values()], (p) => ({ mine: m.has(p.number), asked: r.has(p.number) }),
       (p) => (root && p.checks?.failing?.length ? failureHint(p.checks.failing, (job) => summaryOf(failureKey(root, job))) : null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mine, review, trueChecks, bumpRollup, root, failureTick]);
+  }, [mine, review, trueChecks, bumpRollup, root, failureTick, knownTick]);
 
   const cards = useMemo(() => [...lanes.values()].flat(), [lanes]);
   /* Per repository: this board IS one repository's, so the answer is read off

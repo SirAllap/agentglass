@@ -70,6 +70,7 @@ import type { UnstickCard } from "./UnstickDialog.tsx";
 import type { UnstickFacts, UnstickGate } from "../../../shared/unstick.ts";
 import { factsOf } from "../../../shared/unstick.ts";
 import { updateStanding, awaitingChecksOf, updateHeld, updateHeldTitle, stalledNote, REQUEST_WINDOW_MS, type UpdateStanding } from "../../../shared/justUpdated.ts";
+import { noteKnownBlock } from "../lib/prKnownBlock.ts";
 import { updateBranchMove, branchNoticeJump, prConflicted, gitSaysClean as cleanMerge, type BranchNotice } from "../lib/updateBranch.ts";
 import { depSpec } from "../../../shared/deps.ts";
 import { CardRef, StatusMove } from "./StepCard.tsx";
@@ -6167,6 +6168,14 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
   const blockers = useMemo(() => mergeBlockers({ ...d, openThreads, conflicted, awaitingChecks, behind, stuckMin: d.mergeState === "UNKNOWN" ? stuckMinutes(unknownSince, Date.now()) ?? (prLagging ? 0 : null) : null, githubProblem, prLagging }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the clock is read inside; `stuck` is what changes it
     [d, openThreads, conflicted, awaitingChecks, behind, unknownSince, githubProblem, stuckNow, prLagging]);
+  /* Hand what this box concluded to the board (prKnownBlock.ts): GitHub's own
+     `mergeable` may still be UNKNOWN and the list cannot see a required check
+     that never reported, so the card would otherwise sit in "ready to land". */
+  const blocksConflict = blockers.some((b) => b.kind === "conflicts");
+  const blocksRequired = blockers.some((b) => b.kind === "required-missing" && b.weight === "blocks");
+  useEffect(() => {
+    if (d.state === "OPEN") noteKnownBlock(root, d.number, d.headSha ?? "", { conflicted: blocksConflict, requiredMissing: blocksRequired });
+  }, [root, d.number, d.state, d.headSha, blocksConflict, blocksRequired]);
   const refusal = mergeRefusal(blockers, d.mergeState);
   const autoRefusal = autoMergeRefusal(blockers);
 

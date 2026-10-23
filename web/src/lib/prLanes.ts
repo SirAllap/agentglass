@@ -217,6 +217,21 @@ export function fileInLane(p: PrSummary, stake: Stake, hint?: FailureHint | null
   }
 
   /*
+   * A required check that never reported is a wall too, and the list cannot
+   * see it: GitHub's rollup only holds the checks that exist, so a required job
+   * a path filter skipped is absent from it and the suite reads green. The
+   * detail's merge box knows (it asks which checks the base requires) and
+   * hands it to the row as `requiredMissing`; until the card has been opened
+   * once it can only say what the list says.
+   */
+  if (p.requiredMissing) {
+    return { lane: stake.mine ? "blocked" : "others",
+      reason: stake.mine
+        ? "A required check never reported — GitHub will not merge until it does."
+        : "A required check never reported, so it cannot land yet." };
+  }
+
+  /*
    * Ready to land. Approved, nothing red, nothing running, no conflict — the
    * only thing missing is somebody pressing a button, which is exactly the case
    * a list buries and a board should shout about.

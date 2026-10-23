@@ -3507,6 +3507,13 @@ export interface PrSummary {
    */
   mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
   /**
+   * A required check that never reported and is not running, as the detail's
+   * merge box read it. Not on any list payload (the list does not know which
+   * checks the base requires), so the board overlays it from what the detail
+   * learned: see `web/src/lib/prKnownBlock.ts`.
+   */
+  requiredMissing?: boolean;
+  /**
    * The commit `checks` describes — and therefore the only commit a merge
    * started from this row is allowed to land.
    *
