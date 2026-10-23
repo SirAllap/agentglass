@@ -24,6 +24,22 @@ import { LivingMark } from "../Logo.tsx";
 const LAP_MS = 18_000;
 const calmNow = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+/* Up while the agent works, and for a beat after: an agent works in bursts
+   with a model call between them, and a rim that blinks between every two
+   clicks reads as nervous, not as held. The island reads the same answer, so
+   the pill never says an agent is driving while the page shows nobody. */
+export function useAgentLive(agent: TabAgent | undefined): boolean {
+  const working = agent?.working ?? 0, paused = !!agent?.paused;
+  const [live, setLive] = useState(working > 0 && !paused);
+  useEffect(() => {
+    if (paused) { setLive(false); return; }
+    if (working > 0) { setLive(true); return; }
+    const t = setTimeout(() => setLive(false), PRESENCE_LINGER_MS);
+    return () => clearTimeout(t);
+  }, [working, paused]);
+  return live;
+}
+
 export function AgentPresence({ agent, landing, onToggle, quiet = false }: {
   agent: TabAgent;
   landing: ActLanding | null;
@@ -35,20 +51,10 @@ export function AgentPresence({ agent, landing, onToggle, quiet = false }: {
   const sat = useRef<HTMLDivElement | null>(null);
   const lap = useRef<Animation | null>(null);
   const last = useRef({ x: 48, y: 40 });
-  const [live, setLive] = useState(agent.working > 0 && !agent.paused);
+  const live = useAgentLive(agent);
   const liveRef = useRef(live);
   liveRef.current = live;
   const [ghost, setGhost] = useState<{ x: number; y: number; label: string; travel: number; seq: number } | null>(null);
-
-  /* Up while the agent works, and for a beat after: an agent works in bursts
-     with a model call between them, and a rim that blinks between every two
-     clicks reads as nervous, not as held. */
-  useEffect(() => {
-    if (agent.paused) { setLive(false); return; }
-    if (agent.working > 0) { setLive(true); return; }
-    const t = setTimeout(() => setLive(false), PRESENCE_LINGER_MS);
-    return () => clearTimeout(t);
-  }, [agent.working, agent.paused]);
 
   /* The lap is rebuilt only when the page changes size. */
   useEffect(() => {

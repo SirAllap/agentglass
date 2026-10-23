@@ -27,6 +27,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { BrowserTab } from "../../lib/browserTabs.ts";
 import type { Activity } from "../../lib/browserAgentActivity.ts";
 import { LivingMark } from "../Logo.tsx";
+import { useAgentLive } from "./AgentPresence.tsx";
 import { CloseIcon } from "./icons.tsx";
 
 /** How long "You have this tab" stays where the person is looking before the island tucks away. */
@@ -64,7 +65,6 @@ export interface IslandProps {
 }
 
 const host = (url: string) => { try { return new URL(url).host; } catch { return url; } };
-const calmNow = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 export function BrowserIsland(p: IslandProps) {
   const { tabs, activeId, acts } = p;
@@ -74,9 +74,13 @@ export function BrowserIsland(p: IslandProps) {
   const [pics, setPics] = useState<Record<string, string>>({});
   const active = tabs.find((t) => t.id === activeId) ?? null;
   const act = active ? acts[active.id] : undefined;
-  const driving = !!act && !act.paused;
+  const live = useAgentLive(act);
+  /* An agent that holds the tab but has stopped acting leaves it to the person:
+     the pill gives back the address and the arrows instead of naming a driver
+     nobody can see. */
+  const driving = !!act && !act.paused && live;
   const working = driving && act!.working > 0;
-  /* The page is the person's when no agent holds it, or when they took it. */
+  /* The page is the person's when no agent is acting on it, or when they took it. */
   const yours = !driving;
 
   useEffect(() => {
@@ -177,7 +181,7 @@ export function BrowserIsland(p: IslandProps) {
             <span className="agx-isl-compact" aria-hidden>
               <LivingMark size={16} style={{ color: "#a78bfa" }} />
               <span className={"agx-isl-dot " + dot} />
-              <span className="agx-isl-num">{tabs.length}</span>
+              <span className="agx-isl-num" title={`${tabs.length} tabs open`}>{tabs.length}</span>
             </span>
             <span className="agx-isl-tuck" aria-hidden>
               <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m4 6 4 4 4-4" /></svg>
@@ -201,7 +205,7 @@ export function BrowserIsland(p: IslandProps) {
                 <LivingMark size={17} style={{ color: "#a78bfa" }} />
                 <span className="agx-isl-title">{active?.title || (active ? host(active.url) : "")}</span>
                 <span className="agx-isl-doing"><span className={"agx-isl-dot " + dot} /><span className="agx-isl-doing-t">{act!.agent} · {p.doing || "working"}</span></span>
-                <span className="agx-isl-num">{tabs.length}</span>
+                <span className="agx-isl-num" title={`${tabs.length} tabs open`}>{tabs.length}</span>
               </button>
             )}
           </>
