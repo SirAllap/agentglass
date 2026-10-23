@@ -21,7 +21,7 @@ import { LocalReviewPreview } from "./LocalReviewPreview.tsx";
 export const PREVIEWS = {
   prefs: { component: WindowPreview, props: ["zoomPct", "fullscreen", "startAtLogin", "launchAnimation", "showClock", "codexQuota", "view", "rail?"] },
   appearance: { component: AppearancePreview, props: ["theme", "accent", "density", "fontPx", "translucent", "view", "rail?"] },
-  rail: { component: SidebarPreview, props: ["items", "selected"] },
+  rail: { component: SidebarPreview, props: ["items", "selected", "view?"] },
   diff: { component: DiffPreview, props: ["split", "wrap", "syntaxTheme?"] },
   lantern: { component: LanternPreview, props: ["watch", "everyMin", "wakeMin"] },
   browser: { component: BrowserPreview, props: ["home", "searchEngine"] },

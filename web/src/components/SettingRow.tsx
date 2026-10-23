@@ -107,9 +107,9 @@ export function SettingRow({ label, hint, control, status, actions, below, detai
    *  waits for an answer, so the page does not jump when the answer lands. */
   rowRef?: React.Ref<HTMLDivElement>;
   /** A plain row only: attributes for the row element itself, for a row that
-   *  is dragged or dropped on. A wrapper div around the row would take it out
+   *  is dragged, dropped on or picked. A wrapper div around the row would take it out
    *  of the card body, where its divider is drawn. */
-  rowProps?: Pick<React.HTMLAttributes<HTMLDivElement>, "draggable" | "onDragStart" | "onDragEnd" | "onDragOver" | "onDrop" | "style">;
+  rowProps?: Pick<React.HTMLAttributes<HTMLDivElement>, "draggable" | "onDragStart" | "onDragEnd" | "onDragOver" | "onDrop" | "style" | "onClick" | "onKeyDown" | "tabIndex" | "role" | "aria-current">;
   minHeight?: number;
   onClick?: () => void;
   href?: string;

@@ -77,6 +77,8 @@ export interface LiveWindowProps {
   zoomPct: number;
   /** The drawers of the rail; the rail the person arranged, else the shipped one. */
   rail?: readonly RailItem[];
+  /** The rail icon drawn as the active one; left out, the view's own. */
+  selected?: string;
   /** The width over the height of the box this fills. */
   aspect: number;
   density?: Density;
@@ -92,7 +94,7 @@ export interface LiveWindowProps {
  * so Display size changes how much of the app fits, as it does on the desktop,
  * and density and type size act on the real rows because they are real rows.
  */
-export function LiveWindow({ view, zoomPct, rail, aspect, density, fontPx, translucent }: LiveWindowProps) {
+export function LiveWindow({ view, zoomPct, rail, selected, aspect, density, fontPx, translucent }: LiveWindowProps) {
   const [ref, box] = useBox();
   const z = zoomScale(zoomPct);
   // The box is a screen. At 100 % its pixels are drawn at `s0` of their size, never larger than a
@@ -113,7 +115,7 @@ export function LiveWindow({ view, zoomPct, rail, aspect, density, fontPx, trans
       <div data-preview-box data-density={density && density !== "comfortable" ? density : undefined} data-ui-font={fontPx && fontPx !== 13 ? String(fontPx) : undefined}
         className="flex" style={{ ...look, width: vw, height: vh, transform: `scale(${k})`, transformOrigin: "0 0", background: "var(--bg)", color: "var(--text)", fontSize: 13, border: BORDER }}>
         <div style={{ background: "var(--surface-nav)", borderRight: BORDER, backdropFilter: translucent ? "blur(8px)" : undefined }}>
-          <MiniRail items={rail ?? DEFAULT_RAIL} selected={view === "settings" ? "plugins" : view === "diff" ? "diff" : "lantern"} />
+          <MiniRail items={rail ?? DEFAULT_RAIL} selected={selected ?? (view === "settings" ? "plugins" : view === "diff" ? "diff" : "lantern")} />
         </div>
         <div className="flex-1 min-w-0 overflow-hidden" style={{ background: "var(--bg)" }}>
           {view === "settings" && <SettingsDemo zoomPct={zoomPct} />}

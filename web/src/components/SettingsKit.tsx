@@ -149,6 +149,35 @@ export function SegControl<T extends string>({ value, options, onPick, label, di
  */
 export type StatusTone = "ok" | "warn" | "err" | "info" | "off" | "checking" | "saving";
 
+/**
+ * The bar at the foot of a card whose edits are held until Save: what state the
+ * draft is in on the left, Cancel and Save on the right. It sits inside the card
+ * body as a band of its own (not a row), so the divider logic ignores it.
+ */
+export function SaveBar({ dirty, canSave = true, busy, onSave, onCancel, note, saveLabel = "Save", extra }: {
+  dirty: boolean; canSave?: boolean; busy?: boolean; onSave: () => void; onCancel: () => void;
+  saveLabel?: string;
+  /** Something that is not part of the draft, kept in the band (a reset). */
+  extra?: ReactNode;
+  /** What to say when there is nothing to save (the last result). */
+  note?: ReactNode;
+}) {
+  // Nothing to save and nothing else to offer: no band (it draws when there is a draft).
+  if (!dirty && !extra) return null;
+  return (
+    <div className="agx-savebar" data-dirty={dirty ? "" : undefined}>
+      {dirty || note
+        ? <span className="agx-savebar-state" role="status"><i aria-hidden />{dirty ? "Not saved yet" : note}</span>
+        : <span />}
+      <span className="flex items-center gap-2">
+        {extra}
+        {dirty && <Button disabled={busy} onClick={onCancel}>Cancel</Button>}
+        {(dirty || !extra) && <Button tone="primary" disabled={busy || !dirty || !canSave} onClick={onSave}>{saveLabel}</Button>}
+      </span>
+    </div>
+  );
+}
+
 export function StatusBadge({ tone, children }: { tone: StatusTone; children: ReactNode }) {
   // The spinner is the house `.agx-spin`; it breathes instead of turning under reduced motion.
   return tone === "saving"

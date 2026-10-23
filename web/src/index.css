@@ -2060,6 +2060,36 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 /* The Details of a row that is a button: under it, on the row's own edge, hugging its help. */
 .agx-row-more { padding: 0 18px 10px; margin-top: -6px; }
 .agx-row-more > .agx-disclosure { margin-top: 0; }
+/* The column heads of a table drawn from rows: small caps over the words and over the control. */
+.agx-table-head {
+  display: flex; justify-content: space-between; padding: 8px 18px 4px; border-top: 1px solid var(--surface-line);
+  font-size: calc(10px * var(--agx-fs, 1)); letter-spacing: 0.08em; text-transform: uppercase; color: var(--text3);
+}
+/* The bar at the foot of a card whose edits wait for Save. */
+.agx-savebar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 10px 18px; background: var(--surface-inset); border-top: 1px solid var(--surface-line);
+  font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3);
+}
+.agx-savebar-state { display: inline-flex; align-items: center; gap: 8px; }
+.agx-savebar-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--text4); }
+.agx-savebar[data-dirty] .agx-savebar-state { color: var(--text2); }
+.agx-savebar[data-dirty] .agx-savebar-state i { background: var(--warning); }
+/* A shortcut as keycaps: one cap per key, joined by a plus. The group is the button that starts recording. */
+.agx-keycaps { display: inline-flex; align-items: center; gap: 4px; background: none; border: 0; padding: 0; cursor: pointer; font: inherit; }
+.agx-keycaps kbd {
+  display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 6px; box-sizing: border-box;
+  border: 1px solid var(--border2); border-radius: 5px; background: var(--surface-card);
+  font: inherit; font-size: calc(11px * var(--agx-fs, 1)); color: var(--text2); font-variant-numeric: tabular-nums;
+}
+.agx-keycaps-plus { font-size: calc(10px * var(--agx-fs, 1)); color: var(--text4); }
+.agx-keycaps:hover kbd { border-color: var(--text3); }
+.agx-keycaps[data-custom] kbd { color: var(--primary-hover); }
+.agx-keycaps[data-faint] { opacity: 0.55; }
+.agx-keycaps[data-active] kbd {
+  color: var(--primary-hover); border-color: color-mix(in srgb, var(--primary) 60%, transparent);
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+}
 .agx-disclosure { margin-top: 4px; font-size: calc(11.76px * var(--agx-fs, 1)); }
 .agx-disclosure-s {
   display: inline-flex;
