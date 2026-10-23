@@ -120,7 +120,7 @@ async function statusOf(id: ProviderId): Promise<ProviderStatus> {
       const who = [known?.account, known?.workspace].filter(Boolean).join(" · ");
       return {
         id, state: "connected", at: snap.at, notice,
-        detail: `${who || "Connected"} · ${snap.tasks.length} task${snap.tasks.length === 1 ? "" : "s"} assigned to you`,
+        detail: `${who || "Connected"} · ${snap.tasks.length}${snap.more ? "+" : ""} task${snap.tasks.length === 1 && !snap.more ? "" : "s"} assigned to you`,
       };
     }
     case "jira": {

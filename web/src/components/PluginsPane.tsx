@@ -7,7 +7,9 @@
 // the process that scope was minted for. Reviewing that from a terminal is
 // not review, which is the whole reason this file exists.
 import { PluginMark } from "./plugins/PluginMark.tsx";
-import { BackIcon } from "./browser/icons.tsx";
+import { PluginPreview } from "./plugins/PluginPreview.tsx";
+import { PageHead } from "./plugins/PageHead.tsx";
+import { BackIcon, PlusIcon } from "./browser/icons.tsx";
 import { emitControl } from "../lib/controlBus.ts";
 import { closeSettings } from "../lib/openSettings.ts";
 import { clearPluginInstall, pluginInstallRequest, subscribePluginInstall } from "../lib/installPlugin.ts";
@@ -134,11 +136,16 @@ export function installedFrom(url: string, plugins: PublicPlugin[]): PublicPlugi
   }) ?? null;
 }
 
-/** The market entry that would replace what a market install has on disk, or null. */
-export function marketUpdate(plugin: PublicPlugin, catalogue: Catalogue | null): Catalogue["plugins"][number] | null {
+/** The market entry for the repository a market install came from, or null. */
+export function marketEntry(plugin: PublicPlugin, catalogue: Catalogue | null): Catalogue["plugins"][number] | null {
   if (!catalogue || plugin.source.kind !== "marketplace") return null;
   const have = plugin.source.plugin.url;
-  const entry = catalogue.plugins.find((e) => sameRepo(e.source.url, have));
+  return catalogue.plugins.find((e) => sameRepo(e.source.url, have)) ?? null;
+}
+
+/** The market entry that would replace what a market install has on disk, or null. */
+export function marketUpdate(plugin: PublicPlugin, catalogue: Catalogue | null): Catalogue["plugins"][number] | null {
+  const entry = marketEntry(plugin, catalogue);
   return entry && offerFor(entry, plugin.source) === "update" ? entry : null;
 }
 
@@ -289,33 +296,45 @@ export function PluginsPane({ open, focus }: {
             <strong>{already} is already installed.</strong> The link you followed asked for this one. It is in the list below; Update re-clones it at the source it came from.
           </p>
         )}
-        {installing && (
-          <div className="mb-4 rounded-xl overflow-hidden" style={{ background: "var(--surface-card)", border: LINE }}>
-            <AddPluginCard onInstalled={load} open={installing} setOpen={setInstalling} prefill={prefill} />
-          </div>
-        )}
         {plugins.length === 0 ? (
           <EmptyState>Nothing installed yet. Install one from a folder or a git URL, or take one from the market below.</EmptyState>
         ) : (
           <div className="agx-plugin-grid">
             {shown.map((p) => (
               <PluginCard key={p.name} plugin={p} masterOn={!!master} envAllowsUnboxed={envAllowsUnboxed} onChanged={load}
-                update={marketUpdate(p, catalogue)} onSettings={() => setShowing(p.name)} />
+                update={marketUpdate(p, catalogue)} preview={marketEntry(p, catalogue)?.preview} onSettings={() => setShowing(p.name)} />
             ))}
           </div>
+        )}
+        {/* The add form takes the tile's place, so "install another" is answered
+            where it was asked rather than at the top of the page. */}
+        {installing ? (
+          <div className="mt-4 rounded-xl overflow-hidden" style={{ background: "var(--surface-card)", border: LINE }}>
+            <AddPluginCard onInstalled={load} open={installing} setOpen={setInstalling} prefill={prefill} />
+          </div>
+        ) : (
+          <button type="button" onClick={() => setInstalling(true)}
+            className="agx-plugin-add mt-4 w-full rounded-xl flex items-center justify-center gap-x-4 gap-y-1 flex-wrap px-4 py-3.5 cursor-pointer">
+            <span className="inline-flex items-center gap-2 text-[13px] font-semibold" style={{ color: "var(--text)" }}>
+              <PlusIcon size={ICON.sm} /> Install another plugin
+            </span>
+            <span className="text-[12px] t-dim">From the market below, a folder, or a git address.</span>
+          </button>
         )}
         {plugins.length > 0 && shown.length === 0 && (
           <p className="m-0 text-[12px] t-dim">Nothing installed matches “{q.trim()}”</p>
         )}
       </section>
 
-      <Market installed={(url) => installedFrom(url, plugins)?.source ?? null} onInstalled={load} onLoaded={setCatalogue} />
+      <Market installed={(url) => installedFrom(url, plugins)} onInstalled={load} onLoaded={setCatalogue} onSettings={setShowing} />
     </div>
   );
 }
 
-function PluginCard({ plugin, masterOn, envAllowsUnboxed, onChanged, onSettings, update: listed }: {
+function PluginCard({ plugin, masterOn, envAllowsUnboxed, onChanged, onSettings, update: listed, preview }: {
   plugin: PublicPlugin; masterOn: boolean; envAllowsUnboxed: boolean; onChanged: () => void;
+  /** The picture its market listing carries; a plugin not from the market has none. */
+  preview?: string;
   /** The market entry that would replace what is installed, if the listing has moved on. */
   update: Catalogue["plugins"][number] | null;
   /** Opens this plugin's own settings inside the Plugins page. */
@@ -414,7 +433,12 @@ function PluginCard({ plugin, masterOn, envAllowsUnboxed, onChanged, onSettings,
         and how it is, what it is, what matters now, what can be done. The
         footer is pinned to the bottom, so cards in a row end on one line. */}
     <article className="flex flex-col min-w-0 rounded-xl overflow-hidden"
-      style={{ background: "var(--surface-card)", border: LINE, boxShadow: "var(--surface-lift)" }}>
+      style={{ background: "var(--surface-card)", border: LINE, boxShadow: "var(--surface-lift)",
+        // The amber top edge of a card waiting on a decision, the same on every theme.
+        ...(band === "approval" ? { borderTopColor: "var(--warning)", borderTopWidth: 2 } : null) }}>
+      <PluginPreview src={preview} name={plugin.name} tint={tint}>
+        <PluginMark name={plugin.name} icon={plugin.icon} color={plugin.color} size={72} stamp={plugin.contentHash} />
+      </PluginPreview>
       {band && (
         <Band band={band}>
           {band === "approval" && (<>
@@ -575,22 +599,10 @@ const SOURCE_WORD: Record<InstallSource["kind"], string> = { "local-path": "loca
  *  kind, never the ordinary card colour, so an ask cannot pass for a plain
  *  disabled plugin. */
 function Band({ band, children }: { band: Exclude<CardBand, null>; children: React.ReactNode }) {
-  const hue = band === "stopped" ? "var(--error)" : band === "update" ? "var(--warning)" : "var(--primary)";
+  const hue = band === "stopped" ? "var(--error)" : band === "update" ? "var(--info)" : "var(--warning)";
   return (
     <div className="flex items-start gap-x-3 gap-y-1 flex-wrap px-4 py-2 text-[12px] min-w-0" data-band={band}
       style={{ background: `color-mix(in srgb, ${hue} 12%, transparent)`, borderBottom: LINE, color: "var(--text)" }}>
-      {children}
-    </div>
-  );
-}
-
-/** A title row for one section of the page: name, a count line, then its controls. */
-export function PageHead({ title, summary, children }: { title: string; summary?: string; children?: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-x-3 gap-y-2 flex-wrap mb-3.5">
-      <h3 className="agx-settings-head-t m-0">{title}</h3>
-      {summary && <span className="text-[12px] t-dim">{summary}</span>}
-      <span className="flex-1" />
       {children}
     </div>
   );

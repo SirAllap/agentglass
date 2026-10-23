@@ -491,17 +491,17 @@ export function machineTotals(): MachineTotals {
 const SAMPLE_STALE_MS = 30_000;
 
 /**
- * Every process this user owns, with what it is costing.
- *
- * One read of `/proc/<pid>/stat` per process answers name, parent, CPU and RSS
- * together — the alternative (`status` for VmRSS) doubles the syscalls for a
- * number that is already in `stat`, in pages.
+ * The one walk over this user's processes: listResources reads it for the
+ * panel, orphans.ts for the left-behind sample. `raw` carries what a second
+ * reader needs and ProcEntry does not (CPU ticks and start time, both in clock
+ * ticks), so that reader keeps its own rate without a second /proc walker.
  */
-export function listResources(limit = 40): ResourceReport {
+export function walkProcs(): { rows: ProcEntry[]; rated: boolean; raw: Map<number, { ticks: number; start: number }>; at: number } | null {
   const now = Date.now();
   const rows: ProcEntry[] = [];
+  const raw = new Map<number, { ticks: number; start: number }>();
   let pids: string[];
-  try { pids = readdirSync("/proc"); } catch { return { procs: [], totalCpu: null, totalRss: 0, oursCpu: null, oursRss: 0, seen: 0, rated: false, machine: machineTotals() }; }
+  try { pids = readdirSync("/proc"); } catch { return null; }
 
   let rated = false;
   for (const name of pids) {
@@ -540,6 +540,7 @@ export function listResources(limit = 40): ResourceReport {
     lastTicks.set(pid, { ticks, at: now, start });
 
     rows.push({ pid, ppid, comm, cmd: "", cpu, rss, cwd: null, ours: false });
+    raw.set(pid, { ticks, start });
   }
 
   // Forget pids that are gone, so a long-running server does not accumulate a
@@ -547,6 +548,20 @@ export function listResources(limit = 40): ResourceReport {
   if (lastTicks.size > 4000) {
     for (const [pid, s] of lastTicks) if (now - s.at > SAMPLE_STALE_MS) lastTicks.delete(pid);
   }
+  return { rows, rated, raw, at: now };
+}
+
+/**
+ * Every process this user owns, with what it is costing.
+ *
+ * One read of `/proc/<pid>/stat` per process answers name, parent, CPU and RSS
+ * together — the alternative (`status` for VmRSS) doubles the syscalls for a
+ * number that is already in `stat`, in pages.
+ */
+export function listResources(limit = 40): ResourceReport {
+  const walked = walkProcs();
+  if (!walked) return { procs: [], totalCpu: null, totalRss: 0, oursCpu: null, oursRss: 0, seen: 0, rated: false, machine: machineTotals() };
+  const { rows, rated } = walked;
 
   markOurs(rows);
 
@@ -856,7 +871,7 @@ function argvOf(pid: number): string[] {
 
 /** Enough of the command line to tell two `node`s apart, and no more: a webpack
  *  invocation can be two kilobytes of flags, and none of it fits in a row. */
-function cmdlineOf(pid: number): string {
+export function cmdlineOf(pid: number): string {
   try {
     const raw = readFileSync(`/proc/${pid}/cmdline`, "utf8");
     return raw.split("\0").filter(Boolean).join(" ").slice(0, 160);

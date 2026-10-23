@@ -30,11 +30,14 @@ function fnBody(code: string, sig: string): string {
 }
 
 describe("control column", () => {
-  test("the row grid reads the token, and the token is declared once", () => {
+  test("two tracks: the words keep a floor, the control is its content's width", () => {
+    // It was a 220px floor on the control (`--settings-control-w`): right for one
+    // 1120px column, and in a ~500px card of the flow it left a toggle's row 250px
+    // of words beside 180px of nothing. The intent held: one shared right edge, and
+    // no control that squeezes the name to a word a line (the words keep 14rem).
     const rule = css.match(/\.agx-settings-row \{[^}]*\}/)?.[0] ?? "";
-    expect(rule).toContain("minmax(var(--settings-control-w), max-content)");
-    expect(css.match(/--settings-control-w:\s*220px/g)?.length).toBe(1);
-    expect(css.match(/--settings-control-w\s*:/g)?.length).toBe(1);
+    expect(rule).toContain("grid-template-columns: minmax(14rem, 1fr) auto;");
+    expect(css).not.toContain("--settings-control-w");
   });
   test("the narrow container query and the only-child rule are untouched", () => {
     expect(css).toContain(".agx-settings-row { grid-template-columns: 1fr; }");
@@ -49,7 +52,11 @@ describe("a description is shown whole", () => {
     expect(rowCode).not.toMatch(/HINT_FOLD_WORDS|hintNeedsFold|HintMore|agx-settings-hint-clamp|agx-settings-more/);
     expect(css).not.toMatch(/agx-settings-hint-clamp|agx-settings-more/);
     const row = fnBody(rowCode, "export function SettingRow(");
-    expect(row).toContain('<span className="block text-[12px] t-dim mt-1">{hint}</span>');
+    expect(row).toContain('<span className="agx-row-help">{hint}</span>');
+    // The help is one muted, unclamped line under the name, drawn by the class.
+    const help = css.match(/\.agx-row-help \{[^}]*\}/)?.[0] ?? "";
+    expect(help).toContain("color: var(--text3)");
+    expect(help).not.toMatch(/line-clamp|overflow|text-overflow|white-space: nowrap/);
   });
   test("the stacked and detail slots are never inside a button or a link", () => {
     const row = fnBody(rowCode, "export function SettingRow(");

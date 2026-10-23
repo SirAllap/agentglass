@@ -9,6 +9,8 @@ import { readFileSync } from "node:fs";
 import type { EngineReadiness } from "../../shared/types.ts";
 import { accountText, actionOf, agoWords, badgeOf, engineState, firstRow, versionText } from "../src/components/engines/enginesCopy.ts";
 
+import { readEngines } from "../src/components/engines/readEngines.ts";
+
 const NOW = 1_800_000_000_000;
 
 // The shape the server returns for a ready engine; each case changes what it must.
@@ -56,6 +58,11 @@ const CASES: { name: string; e: EngineReadiness | null; badge: [string, string];
     e: ready({ answers: { state: "failed", at: NOW - 60_000, ms: 800, error: "Error: rate limit reached, try again later" } }),
     badge: ["err", "Not answering"], action: ["Test", false], first: "Error: rate limit reached, try again later",
   },
+  {
+    name: "version probe timed out",
+    e: ready({ version: null, versionOk: null, slow: true, missing: [{ kind: "manual", what: "Orbit did not answer `orbit --version` within 15 s." }] }),
+    badge: ["checking", "Checking"], action: ["Recheck", false], first: "Still checking: the version is slow to answer.",
+  },
 ];
 
 describe("the eight states of an engine card", () => {
@@ -82,6 +89,30 @@ describe("the eight states of an engine card", () => {
   test("an optional sign-in that is absent is still Ready", () => {
     // OpenCode's free catalogue needs none: the probe adds no login fix.
     expect(engineState(ready({ account: { signedIn: false } }))).toBe("ready");
+  });
+});
+
+describe("a slow engine is asked about again, once", () => {
+  const rep = (slow: boolean) => ({ host: "h", engines: [ready({ versionOk: slow ? null : true, ...(slow ? { slow } : {}) })] });
+  const run = async (answers: boolean[]) => {
+    const asked: boolean[] = [];
+    const shown: boolean[] = [];
+    const waits: number[] = [];
+    await readEngines(
+      async (fresh) => { asked.push(fresh); return rep(answers[asked.length - 1] ?? true); },
+      (r) => shown.push(!!r.engines[0].slow),
+      { wait: async (ms) => { waits.push(ms); } },
+    );
+    return { asked, shown, waits };
+  };
+  test("slow then fine: one fresh retry after a wait", async () => {
+    expect(await run([true, false])).toEqual({ asked: [false, true], shown: [true, false], waits: [4000] });
+  });
+  test("still slow: no third ask", async () => {
+    expect((await run([true, true])).asked).toEqual([false, true]);
+  });
+  test("not slow: no retry, no wait", async () => {
+    expect(await run([false])).toEqual({ asked: [false], shown: [false], waits: [] });
   });
 });
 
@@ -115,7 +146,7 @@ describe("the component", () => {
     // One SettingsCard per engine, built with both slots from the same
     // functions that the table above holds; there is no branch that omits them.
     const card = code.slice(code.indexOf("function EngineCard("), code.indexOf("export function EnginesPane("));
-    expect(card).toMatch(/<SettingsCard title=\{p\.title\} desc=\{p\.what\}\s+status=\{<StatusBadge tone=\{badge\.tone\}>/);
+    expect(card).toMatch(/<SettingsCard title=\{p\.title\} desc=\{p\.what\}\s+icon=\{[^\n]*\}\s+status=\{<StatusBadge tone=\{badge\.tone\}>/);
     expect(card).toMatch(/actions=\{<Button disabled=\{act\.disabled\}/);
     expect(card).toContain("badgeOf(e)");
     expect(card).toContain("actionOf(e)");
@@ -128,7 +159,8 @@ describe("the component", () => {
     expect(card).toContain('e ? versionText(e) : "…"');
     expect(code).toContain("minHeight={56}");
     expect(card).toContain("reportingLoaded");
-    expect(card.match(/<SettingRow label=/g)!.length).toBeGreaterThanOrEqual(6);
+    // Five: what it is held to and how it is run are one disclosure on the roles row now.
+    expect(card.match(/<SettingRow label=/g)!.length).toBeGreaterThanOrEqual(5);
   });
 
   test("no page polls: it loads on open and on Recheck", () => {
@@ -147,12 +179,12 @@ describe("the component", () => {
 
   test("engines that are not installed fold into one card", () => {
     expect(code).toContain("`${absent.length} not installed`");
-    expect(code).toContain("fold={{ open: absentOpen ?? present.length === 0, onToggle: setAbsentOpen }}");
+    expect(code).toContain('fold={{ open: view === "absent" || (absentOpen ?? present.length === 0), onToggle: setAbsentOpen }}');
   });
 
   test("what a worker is held to is not promised as a wall: the lock is rules over a command line", () => {
-    const row = pane.slice(pane.indexOf('label="What it is held to as a worker"'));
-    const hint = row.slice(0, row.indexOf("/>"));
+    const row = pane.slice(pane.indexOf("Held to its own worktree"));
+    const hint = row.slice(0, row.indexOf("</p>"));
     expect(hint).toContain("not a sandbox");
     expect(hint).not.toMatch(/always|never|cannot/);
   });

@@ -161,6 +161,9 @@ interface Config {
   /** Tools denied on every launch, one rule each. Absent means the shipped
    *  pair; an empty list is a person having cleared it. */
   launchDeny?: string[];
+  /** The person's switch: an agent's escalation applies without a request. Off
+   *  unless the person turned it on (shared/settingClass.ts). */
+  agentsChangeWithoutAsking?: boolean;
   /** How long the provider keeps a prompt cache warm after a turn, in minutes
    *  — 5 on most plans, 60 on some. The Lantern's cards count it down, since
    *  it decides whether the next turn is cheap now or cheap in five minutes. */
@@ -1290,6 +1293,15 @@ export function writeSeatSettings(fields: { seatWakeHours?: number }): { ok: boo
     out.seatWakeHours = Math.min(24, Math.max(1, Math.round(n)));
   }
   return mergeConfig(out, "seat settings");
+}
+
+/** Whether agents change escalation settings without asking: only `true` is on. */
+export function agentsChangeWithoutAsking(): boolean {
+  return config().agentsChangeWithoutAsking === true;
+}
+
+export function writeAgentsChangeWithoutAsking(on: boolean): { ok: boolean; persisted: boolean; error?: string } {
+  return mergeConfig({ agentsChangeWithoutAsking: on === true }, "agent settings trust");
 }
 
 /** The launch permissions as stored, with anything unusable dropped. */

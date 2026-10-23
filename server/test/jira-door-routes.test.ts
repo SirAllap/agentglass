@@ -192,7 +192,7 @@ describe("the card door", () => {
   });
 
   step("a page from another origin can use none of it", async () => {
-    expect((await b.call("POST", "/jira/writes", { on: true })).status).toBe(200);
+    expect((await b.call("POST", "/jira/writes", { on: true }, { origin: b.base })).status).toBe(200);
     b.fake.requests.length = 0;
     const evil = { origin: "https://evil.example" };
     for (const verb of ["card", "moves", "links", "activity", "steps", "step", "link"]) expect((await door(b, verb, { key: "ORBIT-1042" }, evil)).status).toBe(403);
@@ -549,7 +549,7 @@ describe.skipIf(!HAVE_PY)("the CLI and the MCP twin against a running app", () =
   });
 
   step("writes on: the CLI runs the step and the link, and the log names orbit-cli", async () => {
-    expect((await b.call("POST", "/jira/writes", { on: true })).status).toBe(200);
+    expect((await b.call("POST", "/jira/writes", { on: true }, { origin: b.base })).status).toBe(200);
     b.fake.requests.length = 0;
     const s = await cli("jira", "step", "ORBIT-1042", "handoff", "--updated", String(stamp(b, "ORBIT-1042")), "--pr-url", PR.url);
     expect(s.code).toBe(0);

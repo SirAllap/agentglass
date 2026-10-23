@@ -50,10 +50,18 @@ export const PRICE_TABLE: ModelPrice[] = [
   // Rates are per-MTok. Opus 4.x is $5/$25 — the old $15/$75 was Opus 3 / 4.0,
   // and since Opus is the default model here it inflated every cost figure ~3x.
   // Cache: write = 1.25x input (5-min), read = 0.1x input.
+  // The 5.5 generation is cheaper than the family rows below (Haiku 5.5 is a
+  // tenth of Haiku 4.5), and the family rows hold the 4.x and 5.0 rates. Left
+  // to them, /stats showed $30 for what cost $24 on Opus and $6 for $0.60 on
+  // Haiku, and budgets fired early. Haiku 5.5 is billed 5x over 100K prompt
+  // tokens; that tier is not modelled here.
+  { match: ["opus-5-5", "opus-5.5"], label: "Opus", input: 4, output: 20, cache_write: 5, cache_read: 0.2 },
+  { match: ["sonnet-5-5", "sonnet-5.5"], label: "Sonnet", input: 2, output: 10, cache_write: 2.5, cache_read: 0.1 },
+  { match: ["haiku-5-5", "haiku-5.5"], label: "Haiku", input: 0.1, output: 0.5, cache_write: 0.125, cache_read: 0.01 },
   { match: ["opus"], label: "Opus", input: 5, output: 25, cache_write: 6.25, cache_read: 0.5 },
   { match: ["sonnet"], label: "Sonnet", input: 3, output: 15, cache_write: 3.75, cache_read: 0.3 },
   { match: ["haiku"], label: "Haiku", input: 1, output: 5, cache_write: 1.25, cache_read: 0.1 },
-  { match: ["fable"], label: "Fable", input: 10, output: 50, cache_write: 12.5, cache_read: 1.0 },
+  { match: ["fable"], label: "Fable", input: 10, output: 50, cache_write: 12.5, cache_read: 0.25 },
   { match: ["mythos"], label: "Mythos", input: 10, output: 50, cache_write: 12.5, cache_read: 1.0 },
 
   // --- OpenAI ---
@@ -155,7 +163,7 @@ export const LITELLM_PRICING_URL =
 /** The host that URL names, trusted for this one read the way the webhook
  *  trusts the two chat services it exists for. Nothing else is. */
 export const PRICING_SERVICE_HOSTS = ["raw.githubusercontent.com"] as const;
-const BUNDLED_UPDATED_AT = "2026-07-28";
+const BUNDLED_UPDATED_AT = "2026-10-23";
 const LITELLM_MAX_BYTES = 5 * 1024 * 1024;
 const LITELLM_MIN_MODELS = 100;
 const REFRESH_MS = 24 * 60 * 60 * 1000;

@@ -5,7 +5,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
-  ROLE_IDS, composePolicy, defaultStored, envelopeWithin, looksLikeSecret, resolve, ruleSentence, storedOf,
+  ROLE_IDS, chainFor, composePolicy, defaultStored, envelopeWithin, looksLikeSecret, resolve, ruleSentence, storedOf,
   validateStored, validatePolicy, DEFAULT_CEILING, DEFAULT_WORKER_ENVELOPE,
   type Policy, type PolicyRule, type RuleFacts,
 } from "../../shared/orchestration.ts";
@@ -260,5 +260,34 @@ describe("ruleSentence", () => {
   test("a usage rule names the percent, the window and the chain", () => {
     const s = ruleSentence(rule("a", { when: [{ kind: "usage", provider: "anthropic", window: "5h", remainingAtMost: 15 }], enabled: false }));
     expect(s).toBe("When Claude has 15% or less left in the 5 h window: builder is OpenCode (opencode/big-pickle). (off)");
+  });
+});
+
+describe("a rule link with no model", () => {
+  // The "all workers on Claude" preset writes `{ engine: "claude", model: "" }`
+  // for every role. Read as "the CLI's default" it replaced the base's haiku /
+  // sonnet / haiku with the expensive default, silently, for every worker.
+  const anyClaude = (): PolicyRule => rule("all", { workers: Object.fromEntries(ROLE_IDS.map((r) => [r, [{ engine: "claude", model: "" }]])) });
+
+  test("keeps the base's model for the same engine, in resolve and in chainFor", () => {
+    const base = todayBase();
+    const p = policy({ rules: [anyClaude()] });
+    const r = resolve(p, on("all"), allReady);
+    for (const id of ROLE_IDS) {
+      const w = r.workers[id];
+      expect(w.ok && w.choice).toEqual(base.workers[id]);
+      expect(w.ok && w.from).toBe("rule");
+      expect(chainFor(p, on("all"), id)).toEqual([base.workers[id]]);
+    }
+  });
+
+  test("an explicit model in the rule still wins, and another engine gets no borrowed model", () => {
+    const p = policy({ rules: [rule("x", { workers: {
+      builder: [{ engine: "claude", model: "opus" }],
+      scout: [{ engine: "opencode", model: "" }],
+    } })] });
+    const r = resolve(p, on("x"), allReady);
+    expect(r.workers.builder.ok && r.workers.builder.choice.model).toBe("opus");
+    expect(r.workers.scout.ok && r.workers.scout.choice).toEqual({ engine: "opencode", model: "" });
   });
 });

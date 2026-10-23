@@ -9,9 +9,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
-import { applyHooks, applyGate, hookStatus, hooksDir, hookCommand, _internal } from "../src/hooksetup.ts";
+import { applyHooks, applyGate, healGateCommand, hookStatus, hooksDir, hookCommand, _internal } from "../src/hooksetup.ts";
 
-const { doInstall, doUninstall, isOurs, EVENTS, MARKER } = _internal;
+const { doInstall, doUninstall, isOurs, EVENTS, MARKER, gateCommand } = _internal;
 
 // Each test gets its own HOME so applyHooks/hookStatus (which resolve
 // ~/.claude via os.homedir()) touch a throwaway tree, never the real one.
@@ -272,15 +272,73 @@ describe("the gate switch", () => {
     expect(hookStatus().gate).toBe(false);
   });
 
-  test("the gate command does NOT swallow its exit status", () => {
-    /* `|| exit 0` is what makes the forwarder advisory. A gate whose refusal
-       is swallowed is not a gate — this is the one line of difference and the
-       whole reason the two are separate. */
+  test("the gate command guards only a missing script and never swallows the script's own exit status", () => {
+    /* A bare `|| exit 0` after the script is what makes the forwarder
+       advisory, and a gate whose refusal is swallowed is not a gate. The one
+       thing allowed to exit 0 is the script not being there at all: python
+       exits 2 for that, which Claude Code reads as "deny every tool call". */
     writeSettings({});
     applyGate("install");
     const cmd = ((readSettings() as any).hooks.PreToolUse as any[])[0].hooks[0].command as string;
     expect(cmd).toContain("gate_event.py");
-    expect(cmd).not.toContain("exit 0");
+    expect(cmd).not.toMatch(/\|\| exit( \/b)? 0\s*$/);
+    expect(cmd).toMatch(/^\[ -f ".*gate_event\.py" \] \|\| exit 0; \S+ ".*gate_event\.py"$/);
+  });
+
+  test.if(process.platform !== "win32")("run through sh: a moved script passes, a real refusal still refuses", () => {
+    const dir = mkdtempSync(join(tmpdir(), "agx-gatecmd-"));
+    const script = join(dir, "gate_event.py");
+    const sh = (src: string | null) => {
+      if (src === null) rmSync(script, { force: true }); else writeFileSync(script, src);
+      return spawnSync("sh", ["-c", gateCommand("python3", script, false)], { encoding: "utf8", input: "{}" });
+    };
+    const moved = sh(null);
+    expect(moved.status).toBe(0);
+    expect(moved.stdout).toBe("");
+    expect(sh("import sys\nsys.exit(2)\n").status, "a script that exits 2 must still deny").toBe(2);
+    const deny = sh('import json\nprint(json.dumps({"hookSpecificOutput": {"permissionDecision": "deny"}}))\n');
+    expect(deny.status).toBe(0);
+    expect(deny.stdout).toContain('"deny"');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("an install from before the guard is rewritten to the guarded command, and nothing else is", () => {
+    const dir = mkdtempSync(join(tmpdir(), "agx-gateheal-"));
+    const script = join(dir, "gate_event.py");
+    const theirs = { matcher: "Bash", hooks: [{ type: "command", command: `python3 "${script}" --other` }] };
+    writeSettings({ hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: `python3 "${script}"` }] }, theirs] } });
+    // Moved script under the bare command: the status says it denies.
+    expect(hookStatus()).toMatchObject({ gateScriptMissing: true, gateDenies: true });
+    expect(healGateCommand()).toBe(true);
+    const pre = (readSettings() as any).hooks.PreToolUse as any[];
+    expect(pre[0].hooks[0].command).toBe(gateCommand("python3", script));
+    expect(hookStatus()).toMatchObject({ gateScriptMissing: true, gateDenies: false });
+    // Already guarded, or not our exact shape: left alone.
+    expect(healGateCommand()).toBe(false);
+    writeSettings({ hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: `python3 "${script}" --timeout 9` }] }] } });
+    expect(healGateCommand()).toBe(false);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("the Windows spelling guards the same way", () => {
+    expect(gateCommand("py", "C:\\x\\gate_event.py", true)).toBe('if exist "C:\\x\\gate_event.py" (py "C:\\x\\gate_event.py") else (exit /b 0)');
+  });
+
+  test("status says when the wired gate script is no longer there", () => {
+    const dir = mkdtempSync(join(tmpdir(), "agx-gatemoved-"));
+    const script = join(dir, "gate_event.py");
+    writeFileSync(script, "");
+    writeSettings({ hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: gateCommand("python3", script, false) }] }] } });
+    expect(hookStatus()).toMatchObject({ gate: true, gateScriptMissing: false });
+    rmSync(script);
+    expect(hookStatus()).toMatchObject({ gate: true, gateScriptMissing: true });
+    // An older install wrote the bare form; its path is found all the same.
+    writeSettings({ hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: `python3 "${script}"` }] }] } });
+    expect(hookStatus().gateScriptMissing).toBe(true);
+    // No gate wired, nothing to warn about.
+    writeSettings({});
+    expect(hookStatus()).toMatchObject({ gate: false, gateScriptMissing: false });
+    rmSync(dir, { recursive: true, force: true });
   });
 
   test("installing the forwarder does not bring the gate with it", () => {

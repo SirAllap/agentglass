@@ -115,7 +115,7 @@ describe("the link routes", () => {
   });
 
   step("a page from another origin cannot link, even with writes on", async () => {
-    expect((await call("POST", "/jira/writes", { on: true })).status).toBe(200);
+    expect((await call("POST", "/jira/writes", { on: true }, { origin: base })).status).toBe(200);
     fake.requests.length = 0;
     const r = await call("POST", "/jira/link", { key: "ORBIT-1042", url: PR }, { origin: "https://evil.example" });
     expect(r.status).toBe(403);

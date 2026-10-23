@@ -7,13 +7,17 @@ import { rememberTaskSource } from "../lib/taskLanding.ts";
 import { __forgetTrackerSetup } from "../lib/trackerSetup.ts";
 import { PROVIDERS, type JiraStatus, type JiraSteps } from "../../../shared/providers.ts";
 import { SettingRow } from "./SettingRow.tsx";
-import { Field, SettingsCard, SettingsForm, StatusBadge, helpIdFor } from "./SettingsKit.tsx";
+import { Field, ProblemNote, SettingsCard, SettingsForm, StatusBadge, helpIdFor } from "./SettingsKit.tsx";
+import { useReportProblem, useReportSaving } from "./SettingsPageState.tsx";
+import { problemChip } from "../lib/settingsStates.ts";
 import { Button, INPUT, INPUT_STYLE, Segmented } from "./workspace/Chrome.tsx";
 import { JiraSettingsView } from "./jira/JiraSettingsView.tsx";
 import { WaitingMap } from "./ClickUpPane.tsx";
 import { __forgetJiraUnits, useJiraUnits } from "../lib/jiraUnits.ts";
 import type { StepsPatch } from "../lib/jiraWorkflow.ts";
 import { noteJiraSteps } from "../lib/jiraStepUi.ts";
+import { PlugIcon } from "./settingsNavIcons.tsx";
+import { ICON } from "../lib/iconSize.ts";
 
 const SPEC = PROVIDERS.find((p) => p.id === "jira")!;
 
@@ -39,7 +43,7 @@ function ConnectCard({ onDone }: { onDone: () => void }) {
     onDone();
   };
   return (
-    <SettingsCard title="Jira" desc="Link it once and a pull request knows its card."
+    <SettingsCard title="Jira" icon={<PlugIcon size={ICON.sm} />} desc="Link it once and a pull request knows its card."
       status={<StatusBadge tone="off">Not connected</StatusBadge>}>
       <SettingRow agentExempt label="Connect with a token" hint={SPEC.what}
         detail={SPEC.note ? { summary: SPEC.noteTitle ?? "Where the token is stored", body: SPEC.note } : undefined}
@@ -108,6 +112,14 @@ export function JiraPane({ tracker }: { tracker?: ReactNode }) {
 
   const connected = !!status?.connected;
   const { state: units, reread } = useJiraUnits(connected);
+  /* Two reads can fail and the page already knew about both: its own state (nothing is drawn without it)
+     and the cards behind the connection (drawn from what was last read, with "As of"). The shell shows both
+     as the same red dot and chip, and a write that is out as "Saving". */
+  useReportProblem("jira",
+    failed ? { chip: problemChip(), title: "Could not read Jira's state." }
+      : units.kind === "error" ? { chip: problemChip(units), title: units.error } : null,
+    failed ? read : reread);
+  useReportSaving("jira", busy);
   const readSteps = useCallback(() => {
     void api.jiraSteps().then((r) => { if (r?.ok && r.steps) { setSteps(r.steps); setOverrides(r.overrides ?? []); } else setSteps((s) => s ?? EMPTY_STEPS); }).catch(() => setSteps((s) => s ?? EMPTY_STEPS));
   }, []);
@@ -120,7 +132,16 @@ export function JiraPane({ tracker }: { tracker?: ReactNode }) {
   }, [connected, readSteps]);
 
   if (!status) {
-    return <div className="py-6 text-[11px]" style={{ color: failed ? "var(--error-ink)" : "var(--text3)" }}>{failed ? "Could not read Jira's state." : "Reading your settings…"}</div>;
+    if (failed) {
+      return (
+        <SettingsCard title="Jira" icon={<PlugIcon size={ICON.sm} />} tone="error" status={<StatusBadge tone="err">Not reachable</StatusBadge>}>
+          <ProblemNote title="Could not read Jira's state" action={<Button onClick={read}>Try again</Button>}>
+            The local server did not answer, so nothing here is known. Nothing was changed.
+          </ProblemNote>
+        </SettingsCard>
+      );
+    }
+    return <div className="py-6 text-[11px]" style={{ color: "var(--text3)" }}>Reading your settings…</div>;
   }
   if (!connected) return <div className="wfm"><ConnectCard onDone={read} /><WaitingMap name="Jira" /></div>;
 

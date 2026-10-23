@@ -509,7 +509,7 @@ describe("merging past a review somebody owes, or past nobody human", () => {
   test("the Review cell counts what GitHub counted and says no human has approved", () => {
     const s = stage(mergePath(botOnly), "review");
     expect(s.need).toBe("1 of 1 approvals · by review-bot (bot)");
-    expect(s.sub).toBe("no human approval yet · 1 not answered");
+    expect(s.sub).toBe("no human approval yet · carol not answered");
     expect(s.need).not.toContain("0 of");
   });
   test("with a human approval the cell is unchanged", () => {

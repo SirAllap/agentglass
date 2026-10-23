@@ -32,35 +32,36 @@ describe("a Group with every row filtered away takes its own heading with it", (
 });
 
 describe("the highlighted search result is marked, not just scrolled", () => {
-  test("the highlight effect adds a class to the row's own DOM node", () => {
-    const at = modal.indexOf("highlightedEl.current?.classList.remove");
+  // The results moved out of the page into the panel beside the nav, so the
+  // mark moved with them: the page underneath sits behind a scrim and a class
+  // on a row there would be invisible.
+  const panel = readFileSync(new URL("../src/components/SettingsSearchPanel.tsx", import.meta.url).pathname, "utf8");
+
+  test("the selected hit carries a data attribute, and the effect scrolls that very node into view", () => {
+    expect(panel).toContain('data-sel={sel === i ? "true" : undefined}');
+    expect(panel).toContain("aria-selected={sel === i}");
+    const at = panel.indexOf("scrollIntoView");
     expect(at).toBeGreaterThan(-1);
-    const block = modal.slice(at, modal.indexOf("}, [highlight, ql, visibleResults]);", at));
-    expect(block).toContain('classList.add("agx-row-current")');
-    expect(block).toContain("querySelector");
-    expect(block).toContain("data-row=");
+    expect(panel.slice(Math.max(0, at - 120), at)).toContain('[data-sel="true"]');
   });
 
-  test("the class is defined, using the same tint the mouse hover already does", () => {
-    const hoverAt = css.indexOf(".agx-hover:hover");
-    expect(hoverAt).toBeGreaterThan(-1);
-    const hoverRule = css.slice(hoverAt, css.indexOf("}", hoverAt) + 1);
-    const [, hoverBg] = hoverRule.match(/background:\s*([^;]+);/) ?? [];
-    expect(hoverBg).toBeTruthy();
-
-    const at = css.indexOf(".agx-row-current");
+  test("the mark is drawn: a tint and an outline, not only a scroll", () => {
+    const at = css.indexOf(".agx-sp-hit[data-sel]");
     expect(at).toBeGreaterThan(-1);
     const rule = css.slice(at, css.indexOf("}", at) + 1);
-    expect(rule).toContain(hoverBg!);
+    expect(rule).toMatch(/background:/);
+    expect(rule).toMatch(/box-shadow:/);
   });
 });
 
 describe("the results header counts what is actually on screen", () => {
-  test("the header's count and plural both read visibleResults, not rowResults", () => {
-    const at = modal.indexOf("absentHit ? absentHit.say");
-    expect(at).toBeGreaterThan(-1);
-    const block = modal.slice(at, modal.indexOf("also: {synonymsUsed", at));
-    expect(block).not.toContain("rowResults.length");
-    expect((block.match(/visibleResults\.length/g) ?? []).length).toBeGreaterThanOrEqual(3);
+  test("the count and the plural come from the same model the rows are drawn from", () => {
+    const panel = readFileSync(new URL("../src/components/SettingsSearchPanel.tsx", import.meta.url).pathname, "utf8");
+    // searchSummary(model, q) reads model.flat, which is also what the panel maps over to draw rows.
+    expect(panel).toContain("{searchSummary(model, q)}");
+    expect(panel).toContain("model.pages.map(");
+    expect(modal).toContain("const searchModel = useMemo(() => groupSearch(ql, tabs, matchIn)");
+    expect(modal).toContain("model={searchModel}");
+    expect(modal).not.toContain("rowResults.length");
   });
 });

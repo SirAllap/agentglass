@@ -5,6 +5,7 @@ import { Portal } from "./Portal.tsx";
 import { PresetDiff } from "./diff/PresetDiff.tsx";
 import { api } from "../lib/api.ts";
 import { friendly } from "../lib/labels.ts";
+import { useModalDialog } from "../lib/focusTrap.ts";
 import { fmtTime, fmtUsd, fmtMs, agentKey } from "../lib/format.ts";
 import { SearchIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
@@ -119,6 +120,7 @@ export function SearchModal({
   provider?: string;
 }) {
   const [q, setQ] = useState("");
+  const modal = useModalDialog(open, "Search");
   const [mode, setMode] = useState<Mode>("fleet");
   const [hits, setHits] = useState<SearchHit[] | null>(null);
   const [commits, setCommits] = useState<FileHistoryEntry[] | null>(null);
@@ -193,7 +195,7 @@ export function SearchModal({
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               className="fixed inset-0 agx-scrim" style={{ zIndex: 10000 }} onClick={onClose} />
             <div className="fixed inset-0 flex justify-center items-start pt-[9vh] px-4 pointer-events-none" style={{ zIndex: 10001 }}>
-              <motion.div
+              <motion.div {...modal}
                 initial={{ opacity: 0, scale: 0.97, y: -10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.98, y: -6 }}
                 transition={{ type: "spring", stiffness: 340, damping: 30 }}
                 className="w-[min(820px,94vw)] max-h-[80vh] rounded-xl flex flex-col overflow-hidden pointer-events-auto"

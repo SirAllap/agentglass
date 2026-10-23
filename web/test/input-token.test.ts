@@ -119,6 +119,8 @@ const ALLOWED: { file: string; marker: string; why: string }[] = [
 
   { file: "FinderChrome.tsx", marker: 'aria-label="Search settings"',
     why: "icon and the field share the Settings sheet's one pill border, as in the Strata reference; the input itself is transparent" },
+  { file: "SettingsSearchPanel.tsx", marker: 'className="bg-transparent" value={q}',
+    why: "the nav's search box (`.agx-sp-box`) draws the one border around icon, field and key hint; the input inside it is transparent" },
   { file: "FinderSearch.tsx", marker: 'placeholder={jump ? "Jump to a folder…"',
     why: "the Ctrl+K overlay draws its own bar (icon, field, mode chips) with one border; the field inside it is transparent" },
   { file: "FinderOpsUI.tsx", marker: "aria-invalid={!!problem}",

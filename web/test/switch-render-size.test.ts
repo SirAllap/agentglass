@@ -15,25 +15,17 @@ import { readFileSync } from "node:fs";
 describe("Switch component sizing", () => {
   const settingRow = readFileSync(new URL("../src/components/SettingRow.tsx", import.meta.url), "utf8");
 
-  test("exported Switch in SettingRow has display: block or inline-block", () => {
-    // The export function Switch must set display context on its outer span.
-    // Pattern: className includes "inline-block" OR style has "display: block"
+  // The track is drawn by `.agx-switch` in index.css now (the look moved to tokens
+  // with the kit); the claim is the same: a display context and a size.
+  const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
+  const track = css.match(/\.agx-switch \{[^}]*\}/)?.[0] ?? "";
+
+  test("exported Switch in SettingRow draws the track class, and the class has display: inline-block", () => {
     expect(settingRow).toContain("export function Switch");
-
-    // Extract the Switch function
-    const switchMatch = settingRow.match(
-      /export function Switch.*?\{[^}]*return\s*\(\s*<span[^>]*>/s
-    );
-    expect(switchMatch).toBeTruthy();
-
-    const switchSpan = switchMatch![0];
-    // Must have inline-block in className OR block in style
-    const hasInlineBlock = switchSpan.includes("inline-block");
-    const hasBlockStyle = switchSpan.includes('style={{') &&
-                         (switchSpan.includes('display: "block"') || switchSpan.includes("display: 'block'"));
-
-    if (!hasInlineBlock && !hasBlockStyle) {
-      throw new Error("Switch outer span lacks display: block or inline-block — track will render 0×0");
+    const sw = settingRow.slice(settingRow.indexOf("export function Switch"));
+    expect(sw.slice(0, sw.indexOf("</span>\n  );"))).toContain('className="agx-switch"');
+    if (!/display:\s*(inline-)?block/.test(track)) {
+      throw new Error("`.agx-switch` lacks display: block or inline-block — track will render 0×0");
     }
   });
 
@@ -58,10 +50,7 @@ describe("Switch component sizing", () => {
   });
 
   test("the track width and height are specified", () => {
-    // Both the working Switch and any alternatives must declare 34×19
-    const switchMatch = settingRow.match(
-      /export function Switch.*?\{[^}]*?width:\s*34.*?height:\s*19/s
-    );
-    expect(switchMatch).toBeTruthy();
+    expect(track).toMatch(/width:\s*35px/);
+    expect(track).toMatch(/height:\s*20px/);
   });
 });

@@ -18,8 +18,8 @@ const pane = await Bun.file(new URL("../src/components/SettingsModal.tsx", impor
 describe("before the answer arrives", () => {
   it("draws the providers it already knows about", () => {
     // Gated on `status &&`, the whole list waited on a fetch it did not need.
-    expect(pane).not.toContain("{status && ([\"review\", \"task\"] as const).map");
-    expect(pane).toContain("([\"review\", \"task\"] as const).map");
+    expect(pane).not.toContain("{status && PROVIDERS.map");
+    expect(pane).toContain("{PROVIDERS.map((p) => (");
   });
 
   it("says Checking rather than guessing a state", () => {

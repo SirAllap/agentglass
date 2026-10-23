@@ -175,6 +175,10 @@ export { ENGINE_IDS };
 /** A probe command is read-only and should answer at once; a CLI that takes
  *  longer than this is reported as not answering, never as not installed. */
 export const PROBE_TIMEOUT_MS = 5000;
+/** `claude --version` measured above 5 s on a cold or loaded machine, and was
+ *  then reported as not working. The version question gets longer than the
+ *  rest; a timeout is still "not answered yet", never "broken". */
+export const VERSION_TIMEOUT_MS = 15_000;
 /** The one-line test is a real turn. */
 export const TEST_TIMEOUT_MS = 60_000;
 const OUTPUT_CAP = 64 * 1024;
@@ -283,7 +287,7 @@ const LOGIN: Record<string, string> = {
 async function runCheap(p: Provider, path: string | null): Promise<EngineFacts> {
   if (!path) return { found: false, path: null, version: null, status: null, check: null };
   const v = p.version;
-  const version = v ? await runCommand([path, ...v.args], PROBE_TIMEOUT_MS) : null;
+  const version = v ? await runCommand([path, ...v.args], VERSION_TIMEOUT_MS) : null;
   const ran = !!version && version.code === 0;
   const status = p.account && ran ? await runCommand([path, ...p.account.args], PROBE_TIMEOUT_MS) : null;
   // The deny-list check needs a CLI that has the subcommand; on an old one the
@@ -331,6 +335,7 @@ export function deriveReadiness(
   p: Provider, f: EngineFacts, answers: EngineReadiness["answers"] = { state: "never" },
 ): EngineReadiness {
   const missing: EngineFix[] = [];
+  const slow = [f.version, f.status].some((r) => r?.timedOut);
   const v = p.version;
   let version: string | null = null;
   let versionOk: boolean | null = null;
@@ -340,7 +345,7 @@ export function deriveReadiness(
   } else if (v && f.version) {
     const raw = f.version;
     if (raw.timedOut) {
-      missing.push({ kind: "manual", what: `${p.title} did not answer \`${p.bin} --version\` within ${PROBE_TIMEOUT_MS / 1000} s. Run it in a terminal to see why.` });
+      missing.push({ kind: "manual", what: `${p.title} did not answer \`${p.bin} --version\` within ${VERSION_TIMEOUT_MS / 1000} s. Run it in a terminal to see why.` });
     } else if (raw.code !== 0) {
       const line = firstLine(raw);
       missing.push({ kind: "manual", what: `${p.title} does not run${line ? `: ${line}` : ` (exit ${raw.code})`}. Try \`${p.bin} --version\` in a terminal.` });
@@ -406,21 +411,22 @@ export function deriveReadiness(
     envelope = { via: e.via, enforced: "no", note: `Not checked: ${p.title} is not ready yet.` };
   }
 
-  const roles = rolesOf(p, f.found, versionOk, version, account, envelope.enforced);
+  const roles = rolesOf(p, f.found, versionOk, version, account, envelope.enforced, !!f.version?.timedOut);
   return {
     id: p.id, title: p.title, found: f.found, path: f.path, version,
-    min: v?.min ?? null, versionOk, account, answers, roles, missing, envelope,
+    min: v?.min ?? null, versionOk, ...(slow ? { slow } : {}), account, answers, roles, missing, envelope,
   };
 }
 
 function rolesOf(
   p: Provider, found: boolean, versionOk: boolean | null, version: string | null,
-  account: EngineReadiness["account"], enforced: "yes" | "partly" | "no",
+  account: EngineReadiness["account"], enforced: "yes" | "partly" | "no", versionSlow = false,
 ): EngineReadiness["roles"] {
   const no = (why: string): EngineVerdict => ({ ok: false, why });
   let worker: EngineVerdict;
   if (!found) worker = no(`${p.title} is not on this machine.`);
   else if (versionOk === false) worker = no(`${version} is older than ${p.version?.min}.`);
+  else if (versionOk === null && versionSlow) worker = no(`${p.title} is still being checked: it has not answered \`${p.bin} --version\` yet.`);
   else if (versionOk === null && p.version) worker = no(`${p.title}'s version could not be read.`);
   else if (account.signedIn === false && !p.account?.optional) worker = no(`Not signed in to ${p.title}.`);
   else if (!p.headless) worker = no(`agentglass does not know how to run ${p.title} without a terminal.`);
@@ -468,12 +474,19 @@ function storedAnswer(id: string): EngineReadiness["answers"] {
 const cacheKey = (id: string, path: string | null): string =>
   path ? [path, mtimeOf(path), ...configDirs(id).map(mtimeOf)].join("|") : "absent";
 
+/* A probe that timed out costs PROBE_TIMEOUT_MS per command, and a page that
+   asks twice a second re-ran it every time. Held here, not in sqlite, so a
+   restart or a Recheck always asks the CLI again. */
+const SLOW_TTL_MS = 30_000;
+const slowSeen = new Map<string, { key: string; facts: EngineFacts; at: number }>();
+
 /**
  * Every engine's readiness on this machine.
  *
  * Cached by (binary path, binary mtime, config directory mtimes): opening the
  * page twice costs nothing and an upgrade or a login is seen at once. A probe
- * that timed out is never cached, so Recheck asks again. Never on an interval.
+ * that timed out is kept in memory for SLOW_TTL_MS only, never in the database,
+ * and `fresh` (Recheck) skips it. Never on an interval.
  */
 export async function probeEngines(
   o: { fresh?: boolean | readonly string[]; which?: (cmd: string) => string | null } = {},
@@ -487,11 +500,15 @@ export async function probeEngines(
     if (!skip) {
       const row = db.query<{ key: string; facts: string }, [string]>("SELECT key, facts FROM engine_probe WHERE engine = ?").get(p.id);
       if (row?.key === key) { try { facts = JSON.parse(row.facts) as EngineFacts; } catch { facts = null; } }
+      const held = slowSeen.get(p.id);
+      if (!facts && held?.key === key && Date.now() - held.at < SLOW_TTL_MS) facts = held.facts;
     }
     if (!facts) {
       facts = await runCheap(p, path);
       const slow = [facts.version, facts.status, facts.check].some((r) => r?.timedOut);
-      if (!slow) {
+      if (slow) slowSeen.set(p.id, { key, facts, at: Date.now() });
+      else {
+        slowSeen.delete(p.id);
         db.run("INSERT OR REPLACE INTO engine_probe (engine, key, facts, at) VALUES (?, ?, ?, ?)",
           [p.id, key, JSON.stringify(facts), Date.now()]);
       }

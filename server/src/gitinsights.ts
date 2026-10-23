@@ -53,6 +53,7 @@ export async function repoStats(rootIn: unknown, daysIn: unknown): Promise<RepoS
   const byDay = new Map<string, { commits: number; added: number; deleted: number }>();
   const shaDate = new Map<string, string>();
   const contrib = new Map<string, RepoInsightContributor>();
+  const shaAuthor = new Map<string, string>();
   for (const line of meta.stdout.split("\n")) {
     const [sha, at, name, email] = line.split(US);
     if (!sha || !at) continue;
@@ -65,11 +66,13 @@ export async function repoStats(rootIn: unknown, daysIn: unknown): Promise<RepoS
     const c = contrib.get(key) ?? { name, email: (email || "").replace(TRAIL_RS, ""), commits: 0, added: 0, deleted: 0 };
     c.commits++;
     contrib.set(key, c);
+    shaAuthor.set(sha, key);
   }
   const hotspots = new Map<string, { commits: number; added: number; deleted: number }>();
   let curSha = "";
+  const seen = new Set<string>();
   for (const line of num.stdout.split("\n")) {
-    if (line.startsWith(":AGX:\x01")) { curSha = line.slice(7); continue; }
+    if (line.startsWith(":AGX:\x01")) { curSha = line.slice(6).replace(TRAIL_RS, ""); seen.clear(); continue; }
     if (!line.trim()) continue;
     // numstat: <added>\t<deleted>\t<path>; a lone "-" means binary.
     const tab1 = line.indexOf("\t");
@@ -86,7 +89,10 @@ export async function repoStats(rootIn: unknown, daysIn: unknown): Promise<RepoS
     const h = hotspots.get(path) ?? { commits: 0, added: 0, deleted: 0 };
     h.added += added;
     h.deleted += deleted;
+    if (!seen.has(path)) { seen.add(path); h.commits++; }
     hotspots.set(path, h);
+    const who = contrib.get(shaAuthor.get(curSha) ?? "");
+    if (who) { who.added += added; who.deleted += deleted; }
     const date = shaDate.get(curSha);
     if (date) {
       const day = byDay.get(date);

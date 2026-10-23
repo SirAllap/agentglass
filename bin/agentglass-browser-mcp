@@ -2085,8 +2085,11 @@ def run(name, args, raw=False):
         # containers and `profiles` makes and drops them; without `identity`
         # every container this surface made had no creator, so the drop guard
         # treated it as unknown and let anybody take it.
-        if verb in ("open", "newtab", "profiles", "scrape"):
+        if verb in ("open", "newtab", "profiles", "scrape", "whoami"):
             body.setdefault("identity", who)
+        # whoami answers "do you hold a tab" from this, as the CLI's does.
+        if verb in ("whoami", "profiles") and mine:
+            body.setdefault("tab", mine)
     if verb == "profiles":
         if args.get("identity"):
             body["identity"] = args["identity"]

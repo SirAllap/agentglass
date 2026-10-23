@@ -240,8 +240,11 @@ describe("the agent's side", () => {
   it("list shows what is exposed and whether an agent may write it", () => {
     const l = api().list();
     expect(l.map((x) => x.id)).toContain("terminal.fontSize");
-    // One def an agent reads and may not change: what a review plugin may see of the owner's work.
-    expect(l.filter((x) => !x.writable).map((x) => x.id)).toEqual(["plugins.sessionReads.repos"]);
+    // Every def is writable by an agent at level 2; what a review plugin may see of the
+    // owner's work is so only as a request the person answers (its class says so).
+    expect(l.filter((x) => !x.writable).map((x) => x.id)).toEqual([]);
+    expect(l.find((x) => x.id === "plugins.sessionReads.repos")?.class).toBe("escalation");
+    expect(l.find((x) => x.id === "diff.wrap")?.class).toBe("low");
     expect(l.find((x) => x.id === "diff.wrap")).toMatchObject({ page: "diff", value: false });
   });
 });

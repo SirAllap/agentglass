@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { resolvePane } from "../src/lib/openSettings.ts";
+import { NAV_GROUPS, SYSTEM_GROUP } from "../src/lib/settingsNav.ts";
 
 const src = await Bun.file(new URL("../src/components/SettingsModal.tsx", import.meta.url)).text();
 const palette = await Bun.file(new URL("../src/components/CommandPalette.tsx", import.meta.url)).text();
@@ -23,11 +24,17 @@ describe("slice 6 nav groups", () => {
   test("each group holds these pages, in this order", () => {
     expect(idsIn("General")).toEqual(["prefs", "appearance", "notifications", "rail", "keys"]);
     // browser is filed only where HAS_BROWSER; the test source has both spellings of one entry
-    expect(idsIn("Workspace")).toEqual(["terminal", "diff", "browser", "tasks"]);
+    // Pane engine sits under Workspace, beside the Terminal that runs on it, and Plugins closes Library:
+    // that is where the approved Settings design files them (see lib/settingsNav.ts).
+    expect(idsIn("Workspace")).toEqual(["terminal", "tmux", "diff", "browser", "tasks"]);
     expect(idsIn("Agents")).toEqual(["hooks", "engines", "orchestration", "lantern", "understudy", "budgets"]);
-    expect(idsIn("Library")).toEqual(["recipes", "review-prompts", "saved-replies"]);
-    expect(idsIn("Connections")).toEqual(["connections", "clickup", "jira", "remote", "plugins"]);
-    expect(idsIn("System")).toEqual(["tmux", "privacy", "about"]);
+    expect(idsIn("Library")).toEqual(["recipes", "review-prompts", "saved-replies", "plugins"]);
+    expect(idsIn("Connections")).toEqual(["connections", "clickup", "jira", "remote"]);
+    expect(idsIn("System")).toEqual(["privacy", "about"]);
+  });
+
+  test("the shell's group metadata is the same six names, in the same order", () => {
+    expect([...NAV_GROUPS.map((g) => g.name as string), SYSTEM_GROUP.name]).toEqual(order);
   });
 
   test("every page is in the nav or declared link-only, never both", () => {

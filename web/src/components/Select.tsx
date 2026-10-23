@@ -173,7 +173,7 @@ export function Select({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={title}
-        className={`${className ?? "rounded-lg px-2 py-1 text-[11px] outline-none max-w-[160px]"} shrink-0 flex items-center gap-1 ${disabled ? "opacity-60 cursor-default" : ""}`}
+        className={`${className ?? "agx-select rounded-lg px-2 py-1 text-[11px] outline-none max-w-[160px]"} shrink-0 flex items-center gap-1 ${disabled ? "opacity-60 cursor-default" : ""}`}
         style={{ ...style, ...(open ? { borderColor: "color-mix(in srgb, var(--primary) 55%, transparent)" } : null) }}
       >
         {trigger ?? (current?.pill

@@ -66,6 +66,11 @@ describe("repo insights", () => {
     expect(s.linesChanged).toBe(4);
     expect(s.filesTouched).toBe(2);
     expect(s.hotspots[0].path).toBe("a.txt");
+    // The numstat marker carried the record separator, so no commit was ever
+    // matched to its day, its author or its file: all three read zero.
+    expect(s.churn.reduce((n, d) => n + d.added + d.deleted, 0)).toBe(4);
+    expect(s.contributors[0].added + s.contributors[0].deleted).toBe(4);
+    expect(s.hotspots.find((h) => h.path === "a.txt")!.commits).toBe(2);
   });
 
   it("honors the days window", async () => {

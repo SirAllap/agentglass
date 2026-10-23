@@ -266,6 +266,20 @@ export function revokeDevice(id: string, now = Date.now()): boolean {
   return true;
 }
 
+/**
+ * Forget every live device at once; returns the ids it revoked.
+ *
+ * Rotating the machine token does not reach a device: each holds a credential
+ * of its own, so a "revoke everything" that only rotated left every phone
+ * paired. The rows stay, like `revokeDevice`'s.
+ */
+export function revokeAllDevices(now = Date.now()): string[] {
+  const f = store();
+  const live = (f.devices ?? []).filter((d) => !d.revokedAt).map((d) => d.id);
+  if (live.length) save({ ...f, devices: (f.devices ?? []).map((d) => (d.revokedAt ? d : { ...d, revokedAt: now })) });
+  return live;
+}
+
 /** Only for tests, which run several servers against one scratch directory. */
 export function __resetDevices(): void {
   save({ devices: [] });

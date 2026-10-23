@@ -117,19 +117,24 @@ describe("desktop themes, as painted", () => {
     }
     expect(bad).toEqual([]);
   });
-  test("a selected segmented option is --on-primary on a solid --primary fill, in every theme", async () => {
-    // The old fill was --primary at 55% over the page with --text on it:
-    // 2.2 to 3.0:1 on the dark themes. A solid primary is the ground
-    // --on-primary is already held to 4.5:1 on, per theme, above.
+  test("a selected segmented option is --text on the page's own --bg, in every theme", async () => {
+    // The old fill was --primary at 55% over the page with --text on it: 2.2 to
+    // 3.0:1 on the dark themes. It was then a solid --primary with --on-primary.
+    // The kit now raises the chosen option on the page's ground (as the approved
+    // design draws it): --text on --bg, which is the page's own reading pair and
+    // so legible wherever the page is. Held here per theme, at the same 4.5:1
+    // floor, so a theme with a thin --bg/--text pair cannot slip through.
+    const css = await Bun.file(new URL("../src/index.css", import.meta.url).pathname).text();
+    const rule = css.match(/\.agx-seg-b\[aria-pressed="true"\] \{[^}]*\}/)?.[0] ?? "";
+    expect(rule).toContain("background: var(--bg)");
+    expect(rule).toContain("color: var(--text)");
     const src = await Bun.file(new URL("../src/components/SettingsModal.tsx", import.meta.url)).text();
-    const selected = src.split("\n").filter((l) => /color-mix\(in srgb, var\(--primary\) 55%/.test(l) && /color:\s*"var\(--text\)"/.test(l));
-    expect(selected).toEqual([]);
-    expect((src.match(/background: "var\(--primary\)", color: "var\(--on-primary\)"/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    expect(src.split("\n").filter((l) => /color-mix\(in srgb, var\(--primary\) 55%/.test(l) && /color:\s*"var\(--text\)"/.test(l))).toEqual([]);
     const bad: string[] = [];
     for (const t of THEMES) {
       const v = inkTints(floorTiers(t.vars as Record<string, string>), t.ansi);
-      const on = parseColor(v["--on-primary"] ?? ""), p = parseColor(v["--primary"] ?? "");
-      if (!on || !p || contrast(on, p) < ON_PRIMARY) bad.push(t.id);
+      const fg = parseColor(v["--text"] ?? ""), bg = parseColor(v["--bg"] ?? "");
+      if (!fg || !bg || contrast(fg, bg) < ON_PRIMARY) bad.push(t.id);
     }
     expect(bad).toEqual([]);
   });

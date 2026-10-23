@@ -56,7 +56,7 @@ type Json = Record<string, any>;
 const jsonOf = (r: Response) => r.json() as Promise<Json>;
 const set = (budgets: unknown) =>
   fetch(base + "/budgets/set", {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ budgets }),
+    method: "POST", headers: { "content-type": "application/json", origin: base }, body: JSON.stringify({ budgets }),
   });
 const get = () => fetch(base + "/budgets").then(jsonOf);
 
@@ -130,7 +130,7 @@ describe("refusing one that is not a budget", () => {
   test("a body that is not a list", async () => {
     for (const body of [{ budgets: "all of them" }, { budgets: 3 }, {}]) {
       const r = await fetch(base + "/budgets/set", {
-        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+        method: "POST", headers: { "content-type": "application/json", origin: base }, body: JSON.stringify(body),
       });
       expect(r.status).toBe(400);
     }
@@ -138,7 +138,7 @@ describe("refusing one that is not a budget", () => {
 
   test("and a body that is not JSON", async () => {
     const r = await fetch(base + "/budgets/set", {
-      method: "POST", headers: { "content-type": "application/json" }, body: "{",
+      method: "POST", headers: { "content-type": "application/json", origin: base }, body: "{",
     });
     expect(r.status).toBe(400);
   });

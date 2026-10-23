@@ -46,7 +46,7 @@ const ROW_TAGS = ["SettingRow", "Row", "Toggle", "Fold", "Select", "Stepper", "C
 type Row = { pane: string; section: string; label: string; hint: string; settingId?: string; agentExempt?: true; agentNever?: string };
 type Page = { id: string; label: string };
 
-/** Every .tsx file under web/src/components, recursively. */
+/** Every .tsx file under web/src/components, recursively, in name order: two files that define the same component must not pick a winner by the order a disk lists them. */
 function walk(dir: string): string[] {
   const out: string[] = [];
   for (const name of readdirSync(dir).sort()) {

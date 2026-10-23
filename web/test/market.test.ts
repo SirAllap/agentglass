@@ -13,7 +13,7 @@
 import { describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Offer, WhatIsCloned, matching, offerFor, tintOf, types } from "../src/components/plugins/Market.tsx";
+import { Offer, WhatIsCloned, matching, offerFor, sorted, tintOf, types } from "../src/components/plugins/Market.tsx";
 import type { Catalogue, InstallSource } from "../../shared/types.ts";
 import { domOf } from "./htmlAttrs.ts";
 
@@ -56,12 +56,17 @@ describe("what the market offers", () => {
     expect(matching([entry({ id: "a" })], "zzz")).toHaveLength(0);
   });
 
-  test("an installed plugin is left out of the list, and said so underneath", () => {
-    // The filter itself is one line in the component; what this holds is that
-    // the page says how many it left out rather than quietly showing less.
-    expect(code(market)).toContain("all.filter((e) => offerFor(e, installed(e.source.url)) !== null)");
-    expect(code(market)).toMatch(/already installed \$\{have === 1 \? "is" : "are"\} left out of this list/);
-    expect(code(market)).toMatch(/Everything in the market is installed/);
+  test("an installed plugin stays on the shelf, marked, and cannot be installed over itself", () => {
+    expect(code(market)).toContain("mode={offer ?? \"installed\"}");
+    expect(code(market)).toContain("{mode === \"installed\" && <StatusBadge tone=\"ok\">Installed</StatusBadge>}");
+    expect(code(market)).toContain("onInstall={mode === \"installed\" ? null : install}");
+    expect(code(market)).not.toMatch(/left out of this list/);
+  });
+
+  test("the shelf sorts by the listing's own date, newest first, and by name on request", () => {
+    const shelf = [entry({ id: "b", added: "2026-09-20" }), entry({ id: "a" }), entry({ id: "c", added: "2026-10-17" })];
+    expect(sorted(shelf, "recent").map((e) => e.id)).toEqual(["c", "b", "a"]);
+    expect(sorted(shelf, "name").map((e) => e.id)).toEqual(["a", "b", "c"]);
   });
 });
 
@@ -92,7 +97,7 @@ describe("finding one in a market that has grown", () => {
 
   test("the search box is always there, not past some length", () => {
     expect(code(market)).not.toContain("SEARCHABLE");
-    expect(code(market)).toContain('placeholder="Search the market"');
+    expect(code(market)).toContain('placeholder="Search plugins, words, publishers"');
   });
 
   test("the filter is by the words the author filed it under", () => {
@@ -201,7 +206,11 @@ describe("a stranger's words stay words", () => {
       entry: entry({ id: "orbit", ...HOSTILE }), owner: "acme", onInstalled: () => {}, mode: "install",
     }));
     const built = await domOf(html);
-    for (const tag of ["img", "script", "a", "b"]) expect(built.tags, `a <${tag}> was built from the entry`).not.toContain(tag);
+    for (const tag of ["img", "script", "b"]) expect(built.tags, `a <${tag}> was built from the entry`).not.toContain(tag);
+    // The one link on the tile is the source, and its address comes from the
+    // entry's git URL through externalUrl, never from its words.
+    expect(built.tags.filter((t) => t === "a")).toHaveLength(1);
+    expect(built.attrs.find((a) => a.tag.toLowerCase() === "a" && a.name === "href")?.value).toBe("https://github.com/acme/orbit");
     expect(built.attrs.map((a) => a.name)).not.toContain("onerror");
     // And the words are still there, for a person to read.
     expect(html).toContain("&lt;img src=x");

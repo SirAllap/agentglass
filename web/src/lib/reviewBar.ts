@@ -46,10 +46,11 @@ export const PERSON_TINT: Record<ReviewerState, string> = {
 };
 
 /** What the small badge on a face says: a tick, a cross, or nothing but its colour. */
-export type BadgeGlyph = "tick" | "cross" | "none";
+export type BadgeGlyph = "tick" | "cross" | "bubble" | "none";
 
 export function badgeGlyph(state: ReviewerState): BadgeGlyph {
   return state === "approved" || state === "approved-old" ? "tick"
     : state === "changes" ? "cross"
+    : state === "commented" ? "bubble"
     : "none";
 }

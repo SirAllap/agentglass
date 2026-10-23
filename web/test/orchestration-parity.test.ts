@@ -40,28 +40,28 @@ const view = (o: Partial<OrchestrationViewProps> = {}) =>
   } as OrchestrationViewProps));
 const count = (html: string, needle: string) => html.split(needle).length - 1;
 
-describe("the four numbered steps", () => {
+describe("the four cards of the editor", () => {
   const html = view();
-  test("1 to 4, in the mock's words and order, after the picture", () => {
-    const heads = ["Start from a ready-made setup", "Fine-tune who does what", "Switch things automatically", "Safety and limits"];
-    let at = html.indexOf('data-flow="right-now"');
+  test("Quick setup, Fine-tune, Switch things automatically, Safety and limits, in that order, beside the flow", () => {
+    const heads = ["Quick setup", "Fine-tune who does what", "Switch things automatically", "Safety and limits"];
+    let at = html.indexOf('class="agx-split-main"');
     expect(at).toBeGreaterThan(-1);
-    heads.forEach((h, i) => {
-      const n = html.indexOf(`data-sec="${i + 1}"`);
-      expect(n, `step ${i + 1}`).toBeGreaterThan(at);
-      expect(html.indexOf(h, n)).toBeGreaterThan(n);
+    for (const h of heads) {
+      const n = html.indexOf(`>${h}<`, at);
+      expect(n, h).toBeGreaterThan(at);
       at = n;
-    });
+    }
+    expect(html.indexOf('data-flow="right-now"')).toBeGreaterThan(html.indexOf('class="agx-split-side"'));
   });
   test("the old unnumbered cards are gone", () => {
-    for (const old of [">Quick setup<", ">Main agent</h3>", ">Workers</h3>", ">Conditions</h3>"]) expect(html).not.toContain(old);
+    for (const old of [">Main agent</h3>", ">Workers</h3>", ">Conditions</h3>"]) expect(html).not.toContain(old);
   });
 });
 
 describe("Fine-tune is one card the picture opens", () => {
   test("closed, it holds one sentence and no per-role fallback rows", () => {
     const html = view();
-    expect(html).toContain("Press “Change” on a role in the picture above. The tiles open right here.");
+    expect(html).toContain("Press “Change” on a role in the flow. The tiles open right here.");
     expect(html).not.toContain("is not available");
     expect(count(html, "Add a fallback rule")).toBe(0);
     expect(count(html, "Ask when it runs")).toBe(0);

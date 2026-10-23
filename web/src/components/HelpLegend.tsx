@@ -2,6 +2,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { MOD_KEY } from "../lib/format.ts";
 import { IS_DESKTOP } from "../lib/desktop.ts";
+import { useModalDialog } from "../lib/focusTrap.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { EDGE } from "./workspace/Chrome.tsx";
 
@@ -21,6 +22,7 @@ const STATUS: [string, string][] = [
 ];
 
 export function HelpLegend({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const modal = useModalDialog(open, "Legend and shortcuts");
   return (
     <Portal find>
       <AnimatePresence>
@@ -31,7 +33,7 @@ export function HelpLegend({ open, onClose }: { open: boolean; onClose: () => vo
             {/* Flex wrapper centers the card — Motion owns `transform` for its
                 scale/y animation, so Tailwind translate centering can't be used. */}
             <div className="fixed inset-0 flex items-center justify-center p-6 pointer-events-none" style={{ zIndex: 10001 }}>
-            <motion.div
+            <motion.div {...modal}
               initial={{ opacity: 0, scale: 0.95, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96 }}
               transition={{ type: "spring", stiffness: 340, damping: 30 }}
               className="w-[min(460px,92vw)] rounded-xl p-5 pointer-events-auto"

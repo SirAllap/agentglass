@@ -36,16 +36,17 @@ describe("slice 4 moves", () => {
   });
 
   test("Agent browser use is on Agents behind HAS_BROWSER; Browser keeps logins", () => {
-    expect(block("hooks")).toContain("{HAS_BROWSER && <AgentBrowserPane");
+    expect(block("hooks")).toContain("browser={HAS_BROWSER ? <AgentBrowserPane");
     expect(block("browser")).not.toContain("AgentBrowserPane");
-    expect(block("browser")).toContain("<BrowserPane />");
+    expect(block("browser")).toContain("<BrowserPane><CookieImport /></BrowserPane>");
     expect(block("browser")).toContain("<CookieImport />");
     expect(fn("AgentBrowserPane")).not.toContain("<CookieImport />");
   });
 
-  test("GitHub API budget is a closed card on Budgets, gone from Tools & services", () => {
+  test("GitHub allowance is an open card on Budgets (the read runs on open either way), gone from Tools & services", () => {
     expect(block("budgets")).toContain("<GhBudget");
-    expect(fn("GhBudget")).toContain("fold={{ open: folded || on || !!flash");
+    expect(fn("GhBudget")).toContain('<SettingsCard title="GitHub allowance"');
+    expect(fn("GhBudget")).not.toContain("fold=");
     expect(block("connections")).not.toContain("GhBudget");
   });
 

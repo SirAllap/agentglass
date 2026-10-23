@@ -7,7 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import { HIT } from "../src/lib/iconSize.ts";
 
-const code = await Bun.file(new URL("../src/components/SettingsModal.tsx", import.meta.url)).text();
+const code = await Bun.file(new URL("../src/components/SettingsNav.tsx", import.meta.url)).text();
 const css = await Bun.file(new URL("../src/index.css", import.meta.url)).text();
 
 const asideAt = code.indexOf('<aside className="agx-settings-nav shrink-0');

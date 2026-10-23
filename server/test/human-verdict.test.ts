@@ -275,11 +275,11 @@ describe("people: every reviewer, one entry each", () => {
     expect(people([r("Okoro", "APPROVED")], { pending: ["okoro"] })).toEqual([{ login: "okoro", state: "again" }]);
   });
 
-  test("somebody who only commented is listed when nobody else is", () => {
+  test("somebody who commented is listed beside the others", () => {
     const v = humanVerdict([r("bjorn", "COMMENTED")], { author: "maintainer" });
     expect(v?.kind).toBe("commented");
     expect(v?.people).toEqual([{ login: "bjorn", state: "comment" }]);
-    expect(people([r("bjorn", "COMMENTED")], { pending: ["okoro"] })).toEqual([{ login: "okoro", state: "await" }]);
+    expect(people([r("bjorn", "COMMENTED")], { pending: ["okoro"] })).toEqual([{ login: "okoro", state: "await" }, { login: "bjorn", state: "comment" }]);
   });
 
   test("additive: kind, who and the flags read the same as before", () => {

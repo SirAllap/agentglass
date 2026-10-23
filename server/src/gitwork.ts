@@ -1140,6 +1140,8 @@ export function startAutoFetch(): void {
 export function fetch(rootIn: string): GitActionResult {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
   const g = guard(root); if (g) return g;
+  // With no remote, --atomic answers "can only be used when fetching from one remote".
+  if (!git(root, ["remote"]).stdout.trim()) return { ok: false, error: "no remote is configured for this repository" };
   return run(root, [...FETCH_ARGV]);
 }
 
@@ -2459,13 +2461,20 @@ export function baseCandidates(rootIn: unknown): { ok: boolean; refs: { name: st
  *  - it has not been pushed. Rewriting local history is free; rewriting
  *    published history is somebody else's problem tomorrow.
  *
- * A dirty tree disqualifies it too: the undo is a hard reset, and there is no
- * version of "discard your uncommitted work as a side effect" worth offering.
+ * A dirty tracked tree disqualifies it too: the undo is a hard reset, and there
+ * is no version of "discard your uncommitted work as a side effect" worth
+ * offering. Untracked files only count when the reset would write over one.
  */
 // Awaited: reached from branchInfo (/git/tree) on every poll, and its two reads
 // were among the synchronous spawns holding the loop there. The write path
 // (undoMerge) awaits it too.
 export async function undoableMerge(root: string, ahead: number, upstream: string | null): Promise<boolean> {
+  if (!await tipIsUnpushedMerge(root, ahead, upstream)) return false;
+  const t = await undoTreeState(root);
+  return !t.dirty && !t.clash.length;
+}
+
+async function tipIsUnpushedMerge(root: string, ahead: number, upstream: string | null): Promise<boolean> {
   // Pushed work is never undone this way. `ahead` is already computed for the
   // header, so this costs nothing for a branch level with its remote.
   //
@@ -2475,8 +2484,36 @@ export async function undoableMerge(root: string, ahead: number, upstream: strin
   // one situation where the undo is unambiguously free.
   if (upstream && ahead < 1) return false;
   const parents = (await gitAsync(root, ["rev-list", "--parents", "-n", "1", "HEAD"])).stdout.trim().split(/\s+/);
-  if (parents.length < 3) return false; // sha + two parents = a merge
-  return !(await gitAsync(root, ["status", "--porcelain"])).stdout.trim();
+  return parents.length >= 3; // sha + two parents = a merge
+}
+
+/**
+ * What stands between the tree and a hard reset to the first parent: tracked
+ * changes (`dirty`), and untracked files at a path the merge changed (`clash`).
+ * Untracked files elsewhere survive `reset --hard`, and refusing over a scratch
+ * note sent people to delete it first.
+ *
+ * A path clashes when it is the same, or one holds the other as a directory;
+ * compared lower-cased because on a case-insensitive disk `Notes.txt` is
+ * `notes.txt`. A diff that cannot be read counts every untracked file. Ignored
+ * files count as untracked: the reset overwrites them just the same.
+ * Only called for a tip that is a merge, so `HEAD^1` exists.
+ */
+async function undoTreeState(root: string): Promise<{ dirty: boolean; clash: string[] }> {
+  const st = await gitAsync(root, ["status", "--porcelain", "-z", "--untracked-files=all", "--ignored=matching"]);
+  const entries = st.stdout.split("\0").filter(Boolean);
+  const loose = (e: string) => e.startsWith("?? ") || e.startsWith("!! ");
+  const untrackedPaths = entries.filter(loose).map((e) => e.slice(3).replace(/\/$/, ""));
+  const dirty = st.code !== 0 || entries.some((e) => !loose(e));
+  if (!untrackedPaths.length) return { dirty, clash: [] };
+  const d = await gitAsync(root, ["diff", "--name-only", "--no-renames", "-z", "HEAD^1", "HEAD"]);
+  if (d.code !== 0) return { dirty, clash: untrackedPaths };
+  const changed = d.stdout.split("\0").filter(Boolean).map((p) => p.toLowerCase());
+  const clash = untrackedPaths.filter((u) => {
+    const l = u.toLowerCase();
+    return changed.some((c) => c === l || c.startsWith(l + "/") || l.startsWith(c + "/"));
+  });
+  return { dirty, clash };
 }
 
 /** Put the branch back exactly as it stood before its last merge. */
@@ -2487,6 +2524,15 @@ export async function undoMerge(rootIn: unknown): Promise<GitActionResult> {
   // these conditions are the only thing making it safe.
   const info = await branchInfo(root);
   if (!await undoableMerge(root, info.ahead, info.upstream)) {
+    // Only an unpushed merge tip has a clash worth naming; anything else is the
+    // plain "nothing to undo" (and a root commit has no HEAD^1 to diff).
+    if (await tipIsUnpushedMerge(root, info.ahead, info.upstream)) {
+      const { dirty, clash } = await undoTreeState(root);
+      if (!dirty && clash.length) {
+        const shown = clash.slice(0, 5).join(", ") + (clash.length > 5 ? `, and ${clash.length - 5} more` : "");
+        return { ok: false, error: `cannot undo — the reset would write over untracked ${clash.length === 1 ? "file" : "files"}: ${shown}. Move ${clash.length === 1 ? "it" : "them"} aside, then undo again` };
+      }
+    }
     return { ok: false, error: "nothing to undo — the tip is not an unpushed merge, or the tree is dirty" };
   }
   return run(root, ["reset", "--hard", "HEAD^1"]);
@@ -4072,12 +4118,21 @@ export function stashList(rootIn: unknown): GitStash[] {
   }
   return out;
 }
+/** The stash on top, or "". A push that changed it made a stash, whatever it exited with. */
+const stashTop = (root: string): string => git(root, ["rev-parse", "-q", "--verify", "refs/stash"]).stdout.trim();
+
 export function stashPush(rootIn: string, message: string): GitActionResult {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
   const g = guard(root); if (g) return g;
   const args = ["stash", "push", "--include-untracked"];
   if (message && message.trim()) args.push("-m", message.trim());
-  return run(root, args);
+  const before = stashTop(root);
+  const r = run(root, args);
+  // `-u` exits non-zero AFTER stashing when it cannot open or empty a directory
+  // (a volume owned by another user): the files are in the stash, and "failed"
+  // would leave them there out of sight.
+  if (!r.ok && stashTop(root) !== before) return { ok: true, output: `Stashed, though git reported a problem: ${r.error ?? "unknown"}` };
+  return r;
 }
 function stashOp(rootIn: string, op: "apply" | "pop" | "drop", index: number): GitActionResult {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
@@ -4313,8 +4368,10 @@ export function deleteSnapshot(rootIn: unknown, shaIn: unknown): GitActionResult
 export function withAutoStash(root: string, op: () => GitActionResult): GitActionResult {
   const dirty = git(root, ["status", "--porcelain"]).stdout.trim();
   if (!dirty) return op();
+  const before = stashTop(root);
   const pushed = git(root, ["stash", "push", "--include-untracked", "-m", "agx: auto-stash before surgery"]);
-  if (pushed.code !== 0) return { ok: false, error: "auto-stash failed — the operation was not started" };
+  // A non-zero exit with a new stash on top still stashed (see stashPush): carry on.
+  if (pushed.code !== 0 && stashTop(root) === before) return { ok: false, error: "auto-stash failed — the operation was not started" };
   const r = op();
   if (!r.ok) return { ...r, error: `${r.error ?? "operation failed"} — your changes are safe in stash@{0} ("agx: auto-stash before surgery")` };
   const popped = git(root, ["stash", "pop", "stash@{0}"]);
@@ -4786,7 +4843,8 @@ export function stoppedRefusal(rootIn: unknown, pathname: string): GitActionResu
   if (state === "clean" || state === "bisecting") return null;
   const n = git(root, ["diff", "--name-only", "--diff-filter=U"]).stdout.trim();
   const left = n ? n.split("\n").length : 0;
-  const doing = state.replace(/ing$/, "");
+  // "merging" -> "merge", "rebasing" -> "rebase"; stripping "ing" gave "merg".
+  const doing = ({ merging: "merge", rebasing: "rebase", reverting: "revert", "cherry-picking": "cherry-pick" } as Record<string, string>)[state] ?? state;
   return {
     ok: false,
     error: left

@@ -3,7 +3,7 @@
 // our own state dir. Nothing reaches the developer's tmux or their resurrect
 // saves, and the whole sandbox is removed afterwards.
 import { test, expect, beforeAll, afterAll } from "bun:test";
-import { mkdirSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { story } from "./story.ts";
@@ -60,7 +60,7 @@ step("captureLayout writes the tree of a live session", async () => {
   const sp = await pane.tmux(["split-window", "-d", "-v", "-t", SESSION, "-c", "/tmp"]);
   expect(sp.ok).toBe(true);
 
-  const state = await restore.captureLayout(123456);
+  const state = await restore.captureLayout(Date.now());
   expect(state).not.toBeNull();
   expect(state!.sessions.some((s) => s.name === SESSION)).toBe(true);
   const s = state!.sessions.find((x) => x.name === SESSION)!;
@@ -105,4 +105,28 @@ step("the captured layout is readable back from disk without tmux", async () => 
   const state = restore.readRestoreState();
   expect(state).not.toBeNull();
   expect(state!.sessions.length).toBeGreaterThan(0);
+});
+
+step("a capture older than the keep horizon is left alone, not restored", async () => {
+  await restore.captureLayout();
+  const dir = join(process.env.AGENTGLASS_STATE_DIR!, "tmux", "restore");
+  const files = ["layout.json", "layout.prev.json"].map((f) => join(dir, f)).filter((f) => existsSync(f));
+  const original = files.map((f) => readFileSync(f, "utf8"));
+  const stamp = (at: number) => files.forEach((f, i) => writeFileSync(f, JSON.stringify({ ...JSON.parse(original[i]), capturedAt: at })));
+
+  await pane.tmux(["kill-session", "-t", `=${SESSION}`]);
+  // A machine left alone for three weeks: the desk it photographed is not today's.
+  stamp(Date.now() - 21 * 24 * 60 * 60 * 1000);
+  const old = await restore.restoreLayout("lazy");
+  expect(old.ok).toBe(false);
+  expect(old.restored).toBe(0);
+  expect(old.error).toContain("too old");
+  expect((await pane.tmux(["has-session", "-t", `=${SESSION}`])).ok).toBe(false);
+  expect(restore.readRestoreState()).not.toBeNull();
+
+  // Same file, a day old: restored, so the age was the only difference.
+  stamp(Date.now() - 24 * 60 * 60 * 1000);
+  const recent = await restore.restoreLayout("lazy");
+  expect(recent.ok).toBe(true);
+  expect((await pane.tmux(["has-session", "-t", `=${SESSION}`])).ok).toBe(true);
 });

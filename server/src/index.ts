@@ -6,7 +6,7 @@ import "./cookieentry.ts";
 // spawn a child that would inherit the descriptor (desk.ts).
 import "./desk.ts";
 import type { ServerWebSocket, Server } from "bun";
-import type { IngestBody, WsFrame, MarkKind, WorkingTree, PanesResponse, AgentSessionRow, GitRepoRef, TreeAuthorsInfo, ChangeRow } from "../../shared/types.ts";
+import type { ControlCmd, IngestBody, WsFrame, MarkKind, WorkingTree, PanesResponse, AgentSessionRow, GitRepoRef, TreeAuthorsInfo, ChangeRow } from "../../shared/types.ts";
 import { slackReachable } from "./slackreach.ts";
 import { normalize, detectError, clampIngestTimestamp, externalIngestError } from "./ingest.ts";
 import { pricingProvenance, startPricingRefresh } from "./pricing.ts";
@@ -109,6 +109,9 @@ import { desktopPalette, desktopLogo, watchDesktopPalette } from "./desktopPalet
 import { existsSync as fsExists, readFileSync as fsRead, writeFileSync as fsWrite, mkdtempSync, readdirSync } from "node:fs";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
 import { listPortsAsync, listResources, spaceFor, killPort } from "./machine.ts";
+import { orphanReport, stopOrphan, startOrphanSampler } from "./orphans.ts";
+/** Where an orphan can say it came from: the checkouts this app already knows. */
+const orphanCtx = () => ({ worktreeRoots: knownProjects().map((p) => p.path) });
 import { gitLocks, removeStaleLock } from "./gitlocks.ts";
 import { procDetail, revealEnv } from "./procdetail.ts";
 import {
@@ -220,7 +223,7 @@ import {
   windowTree, newWindow, splitPane, killWindow, killPane as killLayoutPane, selectWindow, selectPane,
   renameWindow, resizePane,
 } from "./tmuxlayout.ts";
-import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, tmuxTerminal, validTmuxPrefix, writeTmuxSettings, lanternNudge, lanternWatch, lanternWatchMinutes, cacheTtlMinutes, lanternNudgeMinutes, writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, seatWakeHours, writeSeatSettings, launchMode, launchDeny, writeLaunchPermissions, workerRoles, writeWorkerRole, inScopeReal } from "./config.ts";
+import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, tmuxTerminal, validTmuxPrefix, writeTmuxSettings, lanternNudge, lanternWatch, lanternWatchMinutes, cacheTtlMinutes, lanternNudgeMinutes, writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, seatWakeHours, writeSeatSettings, launchMode, launchDeny, writeLaunchPermissions, workerRoles, writeWorkerRole, inScopeReal, agentsChangeWithoutAsking } from "./config.ts";
 import { claudeModels } from "./claudemodels.ts";
 import { codexStream, codexModels, codexTranscript, codexCwd, CODEX_ENABLED, CODEX_BYPASS_ALLOWED } from "./codex.ts";
 import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_BYPASS_ALLOWED } from "./antigravity.ts";
@@ -235,13 +238,16 @@ import { workspaceRoot, workspaceRoots, setWorkspaceRoot, setWorkspaceRoots, inS
 import { cloneProject, createProject } from "./projectadd.ts";
 import { budgetStatus } from "./budget.ts";
 import type { Budget } from "../../shared/types.ts";
-import { hookStatus, applyHooks, applyGate, hooksDir, hookPython } from "./hooksetup.ts";
+import { hookStatus, applyHooks, applyGate, hooksDir, hookPython, healGateCommand } from "./hooksetup.ts";
 import { probeAgents, probeEngines, testEngine, ROSTER } from "./agentprobe.ts";
 import { join as joinPath, resolve as resolvePath, basename } from "node:path";
 import { hostname, tmpdir } from "node:os";
 import { privateHost, resolvePeer, originOf, guardedFetch, hostsOnly } from "./net.ts";
 import { DESK_HEADER, claimDesk, deskHeld } from "./desk.ts";
 import { readPolicy, writePolicy } from "./orchestration.ts";
+import { makeDoor, type DoorAnswer } from "./settingsDoor.ts";
+import { serverSettingDefs, cleanBudgets } from "./serverSettings.ts";
+import { agentVerdict, classOf, NEEDS_APPROVAL } from "../../shared/settingClass.ts";
 import { policyEngaged, startThroughPolicy, promptHeadless, startedByOf, settled, seatMayUse, workersAfterRestart, chairsAgain } from "./agents/policystart.ts";
 import { armedWakeups, evaluate as evaluatePolicy, ruleStates, startPolicyEvaluator } from "./orchpolicy.ts";
 import { resolveToken, healthProof, tokenOk, isIntake, isAuthExempt, callerFor, allowed, mayReadForeignRoot, scopeNeeded, pluginOfRequest, answersFromADevice, deskKeyOk, understudyRequiresToken, UNDERSTUDY_NO_TOKEN_ERROR, mintUnderstudyToken, revokeUnderstudyToken, tokenlessWarning, type Caller, type Origin } from "./auth.ts";
@@ -256,7 +262,7 @@ import {
 } from "./plugin-ui.ts";
 import { PANEL_ID_RE, PLUGIN_CONTRACT, validPrRef } from "../../shared/pluginUi.ts";
 import { readNotifyPrefs, writeNotifyPrefs } from "./notifyPrefs.ts";
-import { answerSessions, normalizeRepo, RATE_PER_HOUR, sessionFacts, sessionReadRepos, sessionsGate, setSessionReadRepos, takeSessionsSlot } from "./prsessions.ts";
+import { answerSessions, coerceRepos, normalizeRepo, RATE_PER_HOUR, sessionFacts, sessionReadRepos, sessionsGate, setSessionReadRepos, takeSessionsSlot } from "./prsessions.ts";
 import { fetchCatalogue } from "./plugin-catalogue.ts";
 import { annotate, setAnnotations } from "./inbox-annotations.ts";
 import {
@@ -1491,7 +1497,7 @@ import { bunBin, NO_BUN } from "./bunbin.ts";
 import { understudyRunEnv } from "./understudy-runenv.ts";
 import { recoverAfterRestart, startUnderstudyWatchdog, stopUnderstudyWatchdog, setResumeHook, setGitHook, setFenceHook, setAliveHook, setBunHook, setBusyHook } from "./understudy-watchdog.ts";
 import { openRequests, helpHistory, markAnswered } from "./understudy-help.ts";
-import { scopeAllows, activeDevices, markSeen, revokeDevice, devices, publicDevice, whenStoreTampered, type Scope } from "./devices.ts";
+import { scopeAllows, activeDevices, markSeen, revokeDevice, revokeAllDevices, devices, publicDevice, whenStoreTampered, type Scope } from "./devices.ts";
 import { credentialsPath, hasCredential } from "./credentials.ts";
 import { startCardWatch, cardForTitle } from "./clickupwatch.ts";
 import * as CardIndex from "./clickupindex.ts";
@@ -1636,6 +1642,42 @@ function sendControl(frame: WsFrame): void {
   const msg = JSON.stringify(frame);
   for (const w of controlWindows()) { try { w.send(msg); } catch { /* the sweep drops a dead socket */ } }
 }
+
+/**
+ * The settings door (settingsDoor.ts): one way for an agent to change any
+ * setting, where the ones that widen what agents may do wait for the person.
+ * A window setting the person approved goes back to the windows as a settings.set
+ * carrying `grant`, a frame field only this server writes.
+ */
+async function grantedWindowSet(id: string, value: unknown, expect?: unknown): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (controlWindows().length === 0) return { ok: false, error: "no window is open to apply it; open the app and ask again" };
+  const rid = nextControlRid();
+  const data = { cmd: "ui", do: "settings.set", args: { id, value } } as unknown as ControlCmd;
+  const reply = await awaitControl(rid, () => sendControl({ type: "control", data, rid, present: "quiet", level: CONTROL.level, grant: true, ...(expect !== undefined ? { expect: expect as string | number | boolean } : {}) }));
+  return reply.ok && reply.applied ? { ok: true } : { ok: false, error: reply.error ?? "the window did not apply it" };
+}
+/** What a window holds for one of its settings, for the card's "from" side. A
+ *  socket posing as a window can lie here; the window that applies a grant checks
+ *  its own value against it, so a lie makes a card that applies nothing. */
+async function windowValue(id: string): Promise<unknown> {
+  const rid = nextControlRid();
+  const data = { cmd: "ui", do: "settings.get", args: { id } } as unknown as ControlCmd;
+  const reply = await awaitControl(rid, () => sendControl({ type: "control", data, rid, present: "quiet", level: CONTROL.level }));
+  const v = reply.ok ? (reply.value as { value?: unknown } | undefined)?.value : undefined;
+  return typeof v === "string" || typeof v === "number" || typeof v === "boolean" ? v : undefined;
+}
+const settingsDoor = makeDoor({
+  defs: () => serverSettingDefs({
+    terminalEnabled: TERMINAL_ENABLED,
+    budgetWrites: BUDGET_WRITE_ENABLED,
+    // Editing the rules is an event too: settle their switches and wake-ups, and
+    // a chain with an engine added is a plan back for a chair that had none.
+    policyChanged: () => { void evaluatePolicy().catch(() => {}); void chairsAgain().catch(() => {}); },
+  }),
+  trusted: agentsChangeWithoutAsking,
+  applyWindow: grantedWindowSet,
+  changed: () => broadcast({ type: "settings-requests" }),
+});
 /** A window's own name for itself (its `hello`) to its latest socket, which is
  *  how a browser ask reaches one window instead of all of them. */
 const browserSockets = new Map<string, ServerWebSocket<WsData>>();
@@ -1777,6 +1819,21 @@ function mayChangePolicy(req: Request, caller: Caller | null): boolean {
 function mayPublishReview(req: Request, caller: Caller | null): boolean {
   if (req.headers.get("x-agentglass-agent")) return false;
   return mayChangePolicy(req, caller);
+}
+
+/**
+ * Who asked for a settings change, as the person's request card says it: a
+ * worker by the name the registry holds for it, a seat by its project, else the
+ * label a CLI stamped (`--as`, the closed charset callerRequestId allows) marked
+ * as the caller's own word for itself. Never a free sentence from the body.
+ */
+function askerOf(req: Request, caller: Caller | null, as: unknown): string {
+  const worker = presentedWorker(req);
+  if (worker) return `worker ${worker}`;
+  if (caller?.principal === "seat" && caller.seat) return `the chair of ${basename(caller.seat.root)}`;
+  if (caller?.kind === "plugin") { const name = pluginOfRequest(req, new URL(req.url)); return name ? `plugin ${name}` : "a plugin"; }
+  const label = callerRequestId(as);
+  return label ? `an agent calling itself "${label}"` : "an unnamed agent";
 }
 
 /** A project root as a policy key: absolute and plain, or nothing. */
@@ -3535,6 +3592,17 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      /* An agent's change goes through the settings door: these spend tokens. */
+      if (!mayPublishReview(req, caller)) {
+        const who = askerOf(req, caller, b?.as);
+        const rs: DoorAnswer[] = [];
+        for (const [k, id] of [["nudge", "lantern.nudge"], ["minutes", "lantern.nudgeMinutes"], ["watch", "lantern.watch"], ["watchMinutes", "lantern.watchMinutes"], ["cacheTtlMinutes", "lantern.cacheTtlMinutes"]] as const) {
+          if (b?.[k] !== undefined) rs.push(await settingsDoor.change(id, b[k], { person: false, who, confined: caller?.principal === "seat" }));
+        }
+        const off = rs.find((r) => !(r.ok && r.applied));
+        noteAction(clientIp, "/lantern/settings", {}, off ? auditOf(off) : { ok: true }, asActor(caller));
+        return doorMany(rs, { nudge: lanternNudge(), minutes: lanternNudgeMinutes(), watch: lanternWatch(), watchMinutes: lanternWatchMinutes(), cacheTtlMinutes: cacheTtlMinutes() });
+      }
       const fields: Parameters<typeof writeLanternSettings>[0] = {};
       if (b.nudge !== undefined) fields.lanternNudge = b.nudge === true;
       if (b.watch !== undefined) fields.lanternWatch = b.watch === true;
@@ -3613,6 +3681,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (!trustedCaller(req, from)) return csrfBlocked();
       let b: Record<string, unknown> = {};
       try { b = (await req.json()) as Record<string, unknown>; } catch { /* no body is "turn it on" */ }
+      if (!mayPublishReview(req, caller)) return viaDoor("/hooks/gate", "hooks.gate", b.on !== false, b.as);
       return json(applyGate(b.on === false ? "uninstall" : "install"));
     }
 
@@ -3629,32 +3698,12 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname === "/budgets/set" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       if (!BUDGET_WRITE_ENABLED) return json({ ok: false, error: "budget writes are disabled (AGENTGLASS_BUDGET_WRITE_DISABLED=1)" }, 403);
-      let b: { budgets?: unknown };
+      let b: { budgets?: unknown; as?: unknown };
       try { b = (await req.json()) as { budgets?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
-      if (!Array.isArray(b.budgets)) return json({ ok: false, error: "expected a list of budgets" }, 400);
-      // Refused on the way in, not silently dropped. readBudgets() skips what it
-      // cannot use, so a bad row accepted here would vanish on the next read and
-      // look exactly like a save that did nothing.
-      const clean: Budget[] = [];
-      for (const raw of b.budgets as Partial<Budget>[]) {
-        if (!raw || typeof raw !== "object") return json({ ok: false, error: "that is not a budget" }, 400);
-        // A *number*, not something Number() can be talked into. `"40"`
-        // coerces to forty and readBudgets() then refuses it on the next read,
-        // so the save would appear to work and silently do nothing — which is
-        // the exact failure the validation on both sides exists to prevent.
-        const limit = raw.limit;
-        if (typeof limit !== "number" || !Number.isFinite(limit) || limit <= 0) {
-          return json({ ok: false, error: "a budget needs a limit above zero" }, 400);
-        }
-        if (raw.period !== "day" && raw.period !== "week" && raw.period !== "month") {
-          return json({ ok: false, error: "a budget needs a period of day, week or month" }, 400);
-        }
-        clean.push({
-          root: typeof raw.root === "string" ? raw.root : "",
-          model: typeof raw.model === "string" ? raw.model : "",
-          limit, period: raw.period,
-        });
-      }
+      if (!mayPublishReview(req, caller)) return viaDoor("/budgets/set", "budgets", b.budgets, b.as);
+      // Checked by the same function the settings door uses (serverSettings.ts).
+      const clean = cleanBudgets(b.budgets);
+      if (typeof clean === "string") return json({ ok: false, error: clean }, 400);
       const r = writeBudgets(clean);
       if (!r.ok) return json(r, 400);
       return json({ ...r, budgets: readBudgets(), status: budgetStatus() });
@@ -4037,6 +4086,27 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       }
       const rid = nextControlRid();
       const reply = await awaitControl(rid, () => sendControl({ type: "control", data: cmd, rid, ...frame }));
+      /*
+       * A window setting of the escalation class the window would not apply on its
+       * own (it narrows nothing): the person's switch sends it back granted, else it
+       * becomes a request. /control is a controller's door whoever holds it (the
+       * person changes a window setting on its row), so it is never the person here. The window decided, from
+       * the value it holds; a socket that only claims to be a window can at most
+       * make a request appear, which the person declines.
+       */
+      if (cmd.cmd === "ui" && cmd.do === "settings.set" && reply.error === NEEDS_APPROVAL) {
+        const a = cmd.args as { id: string; value: unknown };
+        if (classOf(a.id)?.class === "escalation") {
+          if (agentsChangeWithoutAsking()) {
+            const g = await grantedWindowSet(a.id, a.value);
+            audit(g.ok, g.ok ? undefined : g.error);
+            return json(g.ok ? { ok: true, applied: true } : { ok: false, applied: false, error: g.error });
+          }
+          const q = settingsDoor.askForWindow(a.id, a.id, await windowValue(a.id), a.value, askerOf(req, caller, (b as { as?: unknown }).as));
+          audit(false, q.ok ? "waiting for the person" : q.error, q.ok);
+          return q.ok ? json({ ...q, ...(label ? { id: label } : {}) }, 202) : json({ ok: false, applied: false, error: q.error }, q.status);
+        }
+      }
       // Held behind a chip is a verdict too: taken, not yet shown.
       audit(reply.ok && (reply.applied || reply.queued === true), reply.error, reply.queued === true);
       return json({ ...reply, ...(label ? { id: label } : {}) }, reply.error === CONTROL_TIMEOUT_ERROR ? 504 : 200);
@@ -5230,6 +5300,9 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname === "/remote/serve" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       if (!atMachine()) return notHere();
+      // Every agent shell is on loopback and holds the machine token, so that alone
+      // would let one publish the server to the tailnet: it takes the person, as /pair/accept does.
+      if (!mayReleaseAHold(req, caller)) return heldPartyBlocked();
       const r = await enableServe(srv.port ?? PORT);
       return json({ ...r, status: remoteNow() });
     }
@@ -5308,13 +5381,24 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       return json({ ok: rejectTicket(typeof b.ticket === "string" ? b.ticket : "") });
     }
 
+    /** Close the open sockets held by these devices. */
+    const closeDeviceSockets = (ids: Set<string>): number => {
+      // Revoking a credential while the terminal it opened keeps streaming is
+      // the worst of both: the list says gone and the wire says otherwise.
+      let closed = 0;
+      for (const ws of [...sockets]) {
+        if (ws.data?.deviceId && ids.has(ws.data.deviceId)) {
+          try { ws.close(1008, "this device was disconnected from the host machine"); closed++; } catch { /* already gone */ }
+        }
+      }
+      return closed;
+    };
+
     /**
      * Cut one device off, and only that one.
      *
-     * The revoke that already existed rotates the machine's token, which kicks
-     * every device including the desk — the right answer when you have lost
-     * control of the code, and far too big a hammer for "that tablet is in a
-     * drawer". This is the small one.
+     * Rotating the machine's token is the big hammer for "I have lost control
+     * of the code"; this is the small one for "that tablet is in a drawer".
      */
     if (pathname === "/pair/forget" && req.method === "POST") {
       if (!atMachine()) return notHere();
@@ -5322,16 +5406,20 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       try { b = (await req.json()) as { id?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const id = typeof b.id === "string" ? b.id : "";
       if (!revokeDevice(id)) return json({ ok: false, error: "no such device" }, 404);
-      // Its open sockets go with it. Revoking a credential while the terminal
-      // it opened keeps streaming is the worst of both: the list says gone and
-      // the wire says otherwise.
-      let closed = 0;
-      for (const ws of [...sockets]) {
-        if (ws.data?.deviceId === id) {
-          try { ws.close(1008, "this device was disconnected from the host machine"); closed++; } catch { /* already gone */ }
-        }
-      }
-      return json({ ok: true, closed });
+      return json({ ok: true, closed: closeDeviceSockets(new Set([id])) });
+    }
+
+    /**
+     * Cut every device off. The desktop shell calls it before it rotates the
+     * machine token: a device holds its own credential, so rotating alone left
+     * every phone paired.
+     */
+    if (pathname === "/pair/forget-all" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      if (!atMachine()) return notHere();
+      if (!mayReleaseAHold(req, caller)) return heldPartyBlocked();
+      const ids = revokeAllDevices();
+      return json({ ok: true, revoked: ids.length, closed: closeDeviceSockets(new Set(ids)) });
     }
 
     // --- the three the phone calls, before it has anything to authenticate with ---
@@ -5416,9 +5504,11 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
 
     if (pathname === "/plugins/master" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
-      let b: { enabled?: unknown };
+      let b: { enabled?: unknown; as?: unknown };
       try { b = (await req.json()) as { enabled?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       if (typeof b.enabled !== "boolean") return json({ ok: false, error: "enabled must be a boolean" }, 400);
+      // An agent's switch goes through the settings door: off narrows and applies, on waits.
+      if (!mayPublishReview(req, caller)) return viaDoor("/plugins/master", "plugins.master", b.enabled, b.as);
       try {
         await setMaster(b.enabled);
       } catch (e) {
@@ -5471,6 +5561,10 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       let b: { name?: unknown };
       try { b = (await req.json()) as { name?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       if (typeof b.name !== "string" || !b.name) return json({ ok: false, error: "name is required" }, 400);
+      /* An agent's enable is a request whose card shows the declaration from the
+         server's record (serverSettings.ts declaration): the person's Approve is the
+         approval `approved` stands for. */
+      if (!mayPublishReview(req, caller)) return viaDoor("/plugins/enable", `plugin.${b.name}.enabled`, true, (b as { as?: unknown }).as);
       // `approved` is the caller saying it showed the declaration. The window
       // always has; a script has to say so, and the CLI only says it for
       // `--approve`, which prints the declaration first.
@@ -5489,6 +5583,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // because a missing or malformed field defaulting to GRANT is the
       // wrong failure direction for exactly this switch.
       if (typeof b.allow !== "boolean") return json({ ok: false, error: "allow must be true or false" }, 400);
+      if (!mayPublishReview(req, caller)) return viaDoor("/plugins/allow-unboxed", `plugin.${b.name}.unboxed`, b.allow, (b as { as?: unknown }).as);
       try {
         const r = await setPluginUnboxedConsent(b.name, b.allow);
         return json(r, r.ok ? 200 : 400);
@@ -5713,8 +5808,23 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     }
     if (pathname === "/plugins/session-reads" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
-      let b: { repos?: unknown };
+      let b: { repos?: unknown; as?: unknown };
       try { b = (await req.json()) as { repos?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      /* The window holds this setting and posts here to store it; an agent posting
+         here directly is held to the same class: fewer repositories apply, more wait.
+         The request is the window's (the approved change comes back through it). */
+      if (!mayPublishReview(req, caller)) {
+        const prev = sessionReadRepos().join(",");
+        // Judge what setSessionReadRepos will store: it also takes a comma string, which
+        // would otherwise read as an empty list here and apply without a card.
+        const next = coerceRepos(b.repos).join(",");
+        const verdict = agentVerdict("plugins.sessionReads.repos", prev, next, agentsChangeWithoutAsking());
+        if (verdict !== "apply") {
+          const q = settingsDoor.askForWindow("plugins.sessionReads.repos", "plugins.sessionReads.repos", prev, next, askerOf(req, caller, b.as));
+          noteAction(clientIp, "/plugins/session-reads", { setting: "plugins.sessionReads.repos", ...(q.ok ? { queued: true } : {}) }, auditOf(q), asActor(caller));
+          return doorJson(q);
+        }
+      }
       return json({ ok: true, repos: setSessionReadRepos(b.repos) });
     }
     // Read marks, synced between devices — see marks.ts. Reading them is a
@@ -6738,6 +6848,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (!trustedCaller(req, from)) return csrfBlocked();
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
       if (typeof b.on !== "boolean") return json({ ok: false, error: "on must be true or false" }, 400);
+      if (!mayPublishReview(req, caller)) return viaDoor("/jira/writes", "jira.writes", b.on, b.as);
       setJiraWrites(b.on);
       return json({ ok: true, writes: jiraWriteEnabled() });
     }
@@ -7426,7 +7537,10 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (req.method !== "POST") return json({ ok: true, prefs: clickupPrefs() });
       if (!trustedCaller(req, from)) return csrfBlocked();
       const before = clickupPrefs().assigned.includeSubtasks;
-      const r = setClickupPrefs(await req.json().catch(() => null));
+      const body = await req.json().catch(() => null) as { assigned?: { includeSubtasks?: unknown }; as?: unknown } | null;
+      // The heavier read is an escalation for an agent (the settings door); the rest of the prefs are not.
+      if (!mayPublishReview(req, caller) && body?.assigned?.includeSubtasks === true && !before) return viaDoor("/clickup/prefs", "clickup.includeSubtasks", true, body.as);
+      const r = setClickupPrefs(body);
       // The cached board was read without (or with) subtasks; a stale answer
       // under the new setting would look like the switch did nothing.
       if (r.ok && r.prefs.assigned.includeSubtasks !== before) dropAssignedCache();
@@ -7439,6 +7553,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // colleagues can see it and where nothing here can take it back.
       if (!trustedCaller(req, from)) return csrfBlocked();
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      if (pathname === "/clickup/writes" && !mayPublishReview(req, caller)) return viaDoor("/clickup/writes", "clickup.writes", b.on === true, b.as);
       const id = String(b.id ?? "");
       const seen = typeof b.updated === "number" ? b.updated : undefined;
       const r = pathname === "/clickup/folders/add" ? await addClickupFolder(String(b.id ?? ""), String(b.spaceName ?? ""))
@@ -7544,6 +7659,9 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
 
     if (pathname === "/machine/ports") return json(await listPortsAsync());
     if (pathname === "/machine/resources") return json(listResources(Number(url.searchParams.get("limit") || 40)));
+    // Cached: the sampler walks /proc every few minutes. `?fresh=1` (the panel
+    // being open) may walk again, but never faster than every 30 seconds.
+    if (pathname === "/machine/orphans") return json(orphanReport(url.searchParams.get("fresh") === "1", orphanCtx()));
     // On demand only, and never on a poll: `du` over a checkout walks every
     // inode in it, which is seconds on a repository with a node_modules.
     if (pathname === "/machine/space") return json(spaceFor(url.searchParams.get("root") || ""));
@@ -8200,6 +8318,17 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const res = removeStaleLock(b.path, knownProjects().map((p) => p.path));
+      noteAction(clientIp, pathname, b, res, asActor(caller));
+      return json(res, res.ok ? 200 : 400);
+    }
+
+    // One pid, and only while it is flagged as left behind and owned by this
+    // user — /machine/kill's reach is every process of ours, this one is not.
+    if (pathname === "/machine/orphans/stop" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const res = stopOrphan(b.pid, orphanCtx());
       noteAction(clientIp, pathname, b, res, asActor(caller));
       return json(res, res.ok ? 200 : 400);
     }
@@ -9036,7 +9165,8 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     }
     if (pathname === "/agents/roles" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
-      let b: { role?: unknown; provider?: unknown; model?: unknown }; try { b = (await req.json()) as typeof b; } catch { b = {}; }
+      let b: { role?: unknown; provider?: unknown; model?: unknown; as?: unknown }; try { b = (await req.json()) as typeof b; } catch { b = {}; }
+      if (!mayPublishReview(req, caller)) return viaDoor("/agents/roles", `agents.role.${String(b.role)}`, { provider: b.provider, model: b.model }, b.as);
       const r = writeWorkerRole(b.role, { provider: b.provider, model: b.model });
       return json({ ...r, roles: workerRoles() }, r.ok ? 200 : 400);
     }
@@ -9046,6 +9176,96 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      * whole policy and answers with the one now in force. Workers and
      * orchestrators resolve their engine from it when they start.
      */
+    /*
+     * THE SETTINGS DOOR (settingsDoor.ts; the classes are shared/settingClass.ts).
+     *
+     * One route an agent changes any server-held setting through. GET lists every
+     * one with its class and, unless it is a secret or held per project, its value.
+     * POST applies a low-risk change or one that narrows, refuses a secret and the
+     * person's own switches, and turns the rest into a request the person answers
+     * on POST /settings/requests/decide. The person is told apart from an agent by
+     * the test the orchestration policy always used (mayChangePolicy) plus no agent
+     * name on the request (mayPublishReview): nothing weaker. A seat speaks only
+     * for its own project, as on every /seat route.
+     */
+    /** A door answer as HTTP: applied 200, waiting for the person 202, refused its own status. */
+    /* The action log's verdict: applied is ok; a request waiting for the person is not (yet). */
+    /* Function declarations, hoisted: the Settings pages' own routes above this
+       line call them too. */
+    function auditOf(r: DoorAnswer) { return r.ok && r.applied ? { ok: true } : { ok: false, error: r.ok ? "waiting for the person" : r.error }; }
+    function doorJson(r: DoorAnswer): Response {
+      if (!r.ok) return json({ ok: false, error: r.error }, r.status);
+      return json(r, r.applied ? 200 : 202);
+    }
+    /** An agent's write on a Settings page's own route: through the door, logged. */
+    async function viaDoor(route: string, id: string, value: unknown, as?: unknown): Promise<Response> {
+      const r = await settingsDoor.change(id, value, { person: false, who: askerOf(req, caller, as), confined: caller?.principal === "seat" });
+      noteAction(clientIp, route, { setting: id, ...(r.ok && !r.applied ? { queued: true } : {}) }, auditOf(r), asActor(caller));
+      return doorJson(r);
+    }
+
+    /** Several fields of one form, each through the door: the first refusal is the
+     *  answer (fields before it may have applied, and `extra` reads them back), else
+     *  202 with the requests when any waits for the person. */
+    function doorMany(rs: DoorAnswer[], extra: Record<string, unknown>): Response {
+      if (!rs.length) return json({ ok: false, error: "nothing to change" }, 400);
+      const bad = rs.find((r) => !r.ok);
+      if (bad && !bad.ok) return json({ ok: false, error: bad.error, ...extra }, bad.status);
+      const pending = rs.flatMap((r) => (r.ok && !r.applied ? [r.pending] : []));
+      return json({ ok: true, applied: pending.length === 0, ...(pending.length ? { pending } : {}), ...extra }, pending.length ? 202 : 200);
+    }
+    function doorRoot(id: string, raw: unknown): { root?: string } | { error: string; status: number } {
+      const own = caller?.principal === "seat" ? caller.seat?.root : undefined;
+      if (caller?.principal === "seat" && !own) return { error: "this seat's project is not known, so it speaks for none", status: 403 };
+      if (classOf(id) && id.startsWith("seat.") && id !== "seat.wakeHours") {
+        const g = own ? Seat.seatSpeaksFor(own, raw) : Seat.seatable(typeof raw === "string" && raw ? raw : workspaceRoot());
+        return "error" in g ? { error: g.error, status: own ? 403 : 400 } : { root: g.root };
+      }
+      if (id === "orchestration.policy") {
+        if (own) { const g = Seat.seatSpeaksFor(own, raw); return "error" in g ? { error: g.error, status: 403 } : { root: g.root }; }
+        const r = policyRoot(raw);
+        return r === null ? { error: "root: has to be an absolute path", status: 400 } : r ? { root: r } : {};
+      }
+      return {};
+    }
+    if (pathname === "/settings/door" && req.method === "GET") {
+      const one = url.searchParams.get("id");
+      if (one) {
+        const at = doorRoot(one, url.searchParams.get("root"));
+        if ("error" in at) return json({ ok: false, error: at.error }, at.status);
+        const v = settingsDoor.value(one, at.root);
+        return "error" in v ? json({ ok: false, error: v.error }, 404) : json({ ok: true, id: one, ...(at.root ? { root: at.root } : {}), value: v.value });
+      }
+      return json({ ok: true, trusted: agentsChangeWithoutAsking(), settings: settingsDoor.list() });
+    }
+    if (pathname === "/settings/door" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { id?: unknown; value?: unknown; root?: unknown; as?: unknown } = {};
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      if (typeof b.id !== "string" || !b.id || b.id.length > 120) return json({ ok: false, error: "id: a setting id (GET /settings/door lists them)" }, 400);
+      const at = doorRoot(b.id, b.root);
+      if ("error" in at) return json({ ok: false, error: at.error }, at.status);
+      const person = mayPublishReview(req, caller);
+      // An agent's asks are limited like its /control writes: a loop is not an errand.
+      if (!person && !controlWriteLimit.hit(actorOf(clientIp, asActor(caller)))) return json({ ok: false, error: "too many changes from this caller; slow down" }, 429);
+      const r = await settingsDoor.change(b.id, b.value, { root: at.root, person, who: askerOf(req, caller, b.as), confined: caller?.principal === "seat" });
+      noteAction(clientIp, "/settings/door", { setting: b.id, ...(at.root ? { root: at.root } : {}), ...(r.ok && !r.applied ? { queued: true } : {}) }, auditOf(r), asActor(caller));
+      return doorJson(r);
+    }
+    if (pathname === "/settings/requests" && req.method === "GET") {
+      // A seat reads its own project's requests and nobody else's.
+      const own = caller?.principal === "seat" ? caller.seat?.root ?? "\0" : null;
+      return json({ ok: true, requests: settingsDoor.pending().filter((r) => own === null || r.root === own) });
+    }
+    if (pathname === "/settings/requests/decide" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { id?: unknown; approve?: unknown } = {};
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      if (typeof b.approve !== "boolean") return json({ ok: false, error: "approve: true or false" }, 400);
+      const r = await settingsDoor.decide(b.id, b.approve, mayPublishReview(req, caller));
+      noteAction(clientIp, "/settings/requests/decide", { approve: b.approve, ...(r.ok ? { setting: r.setting } : {}) }, r.ok ? { ok: true } : { ok: false, error: r.error }, asActor(caller));
+      return r.ok ? json(r) : json({ ok: false, error: r.error }, r.status);
+    }
     if (pathname === "/orchestration" && req.method === "GET") {
       const root = policyRoot(url.searchParams.get("root"));
       if (root === null) return json({ ok: false, error: "root: has to be an absolute path" }, 400);
@@ -9057,13 +9277,15 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       let b: { root?: unknown; policy?: unknown } = {};
       try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const root = policyRoot(b.root);
-      if (!mayChangePolicy(req, caller)) {
-        const r = { ok: false, error: "only the person can change the orchestration policy: change it in Settings, not from an agent" };
-        noteAction(clientIp, "/orchestration", { ...(root ? { root } : {}) }, r, asActor(caller));
-        return json(r, 403);
-      }
       if (root === null) return json({ ok: false, error: "root: has to be an absolute path" }, 400);
       if (!("policy" in b)) return json({ ok: false, error: "policy: is missing" }, 400);
+      /* An agent's policy is a request the person answers (the settings door):
+         it is the setting that decides which engine runs and what it spends. */
+      if (!mayPublishReview(req, caller)) {
+        const r = await settingsDoor.change("orchestration.policy", b.policy, { root, person: false, who: askerOf(req, caller, (b as { as?: unknown }).as) });
+        noteAction(clientIp, "/orchestration", { ...(root ? { root } : {}), ...(r.ok && !r.applied ? { queued: true } : {}) }, auditOf(r), asActor(caller));
+        return doorJson(r);
+      }
       const r = writePolicy(root, b.policy);
       noteAction(clientIp, "/orchestration", { ...(root ? { root } : {}) }, r.ok ? { ok: true } : r, asActor(caller));
       if (!r.ok) return json({ ok: false, error: r.error }, 400);
@@ -9095,9 +9317,19 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      */
     if (pathname === "/launch-permissions" && req.method === "GET") return json({ ok: true, mode: launchMode(), deny: launchDeny() });
     if (pathname === "/launch-permissions" && req.method === "POST") {
-      if (!req.headers.get("origin") || !trustedCaller(req, from)) return csrfBlocked();
-      if (presentedWorker(req)) return json({ ok: false, error: "a worker does not change the permissions it is launched with" }, 403);
-      let b: { mode?: unknown; deny?: unknown }; try { b = (await req.json()) as typeof b; } catch { b = {}; }
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { mode?: unknown; deny?: unknown; as?: unknown }; try { b = (await req.json()) as typeof b; } catch { b = {}; }
+      /* An agent's change, a worker's included, goes through the settings door:
+         a stricter mode or a longer deny list applies, a looser one waits for the person. */
+      if (!mayPublishReview(req, caller)) {
+        const who = askerOf(req, caller, b.as);
+        const rs: DoorAnswer[] = [];
+        if (b.mode !== undefined) rs.push(await settingsDoor.change("launch.mode", b.mode, { person: false, who }));
+        if (b.deny !== undefined) rs.push(await settingsDoor.change("launch.deny", b.deny, { person: false, who }));
+        const off = rs.find((r) => !(r.ok && r.applied));
+        noteAction(clientIp, "/launch-permissions", {}, off ? auditOf(off) : { ok: true }, asActor(caller));
+        return doorMany(rs, { mode: launchMode(), deny: launchDeny() });
+      }
       const r = writeLaunchPermissions(b);
       return json({ ...r, mode: launchMode(), deny: launchDeny() }, r.ok ? 200 : 400);
     }
@@ -9106,7 +9338,8 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (!trustedCaller(req, from)) return csrfBlocked();
       const worker = presentedWorker(req);
       if (worker) return json({ ok: false, error: `${worker} is a worker, and a worker has no say over the seat: it reports in its own window.` }, 403);
-      let b: { hours?: unknown }; try { b = (await req.json()) as typeof b; } catch { b = {}; }
+      let b: { hours?: unknown; as?: unknown }; try { b = (await req.json()) as typeof b; } catch { b = {}; }
+      if (!mayPublishReview(req, caller)) return viaDoor("/seat/wake", "seat.wakeHours", b.hours, b.as);
       const r = writeSeatSettings({ seatWakeHours: Number(b.hours) });
       return json({ ...r, hours: seatWakeHours() }, r.ok ? 200 : 400);
     }
@@ -9190,6 +9423,23 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if ("error" in gate) return json({ ok: false, error: gate.error }, own ? 403 : 400);
       const root = gate.root;
       const verb = pathname.slice("/seat/".length);
+      /* The chair's engine, model and powers, and re-seating it, are the
+         person's: an agent's change (the seat's own included) goes through the
+         settings door, where a narrowing applies and the rest waits for them. */
+      if ((verb === "settings" || verb === "change") && !mayPublishReview(req, caller)) {
+        const who = askerOf(req, caller, b.as);
+        if (verb === "change") {
+          const r = await settingsDoor.change("seat.change", true, { root, person: false, who });
+          noteAction(clientIp, "/seat/change", { root, ...(r.ok && !r.applied ? { queued: true } : {}) }, auditOf(r), asActor(caller));
+          return doorJson(r);
+        }
+        const rs: DoorAnswer[] = [];
+        // The engine first: moving it clears the model, which is then set on top.
+        for (const [k, id] of [["kind", "seat.kind"], ["model", "seat.model"], ["powers", "seat.powers"]] as const) {
+          if (b[k] !== undefined) rs.push(await settingsDoor.change(id, b[k], { root, person: false, who }));
+        }
+        return doorMany(rs, { seat: Seat.seatRow(root) });
+      }
 
       if (verb === "open") {
         if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
@@ -10846,6 +11096,9 @@ setAliveHook(async (title, paneId) => {
 });
 startUnderstudyWatchdog();
 startPolicyEvaluator();
+// A gate installed before its command tested for the script would deny every
+// tool call once the script moved. Not in tests: they would rewrite the real file.
+if (process.env.NODE_ENV !== "test") { try { healGateCommand(); } catch { /* the Lantern still says what the command does */ } }
 // The turn limits lived in memory and are not put back: a worker still on its
 // turn is marked as having lost its ceiling, never stopped by an id from before.
 void workersAfterRestart().catch(() => {});
@@ -11263,6 +11516,7 @@ startJiraWatch((n) => broadcast({ type: "card", data: n }));
    on a schedule nothing in the test asked for, against whatever pairs an
    earlier test's process-wide map still holds. */
 if (process.env.NODE_ENV !== "test") {
+  startOrphanSampler(orphanCtx);
   /* The desktop switched theme: windows re-read its palette, instead of each
      asking every few seconds whether it had. */
   watchDesktopPalette(() => broadcast({ type: "desktop-palette" }));

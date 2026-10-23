@@ -11,14 +11,14 @@
  *     failure path leaves the stash where the error message says it is.
  */
 import { afterAll, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { identify } from "./gitIdentity.ts";
 
 const dir = realpathSync(mkdtempSync(join(tmpdir(), "agx-snap-")));
 process.env.AGENTGLASS_ROOT = dir;
-const { createSnapshot, listSnapshots, restoreSnapshot, deleteSnapshot, withAutoStash } = await import("../src/gitwork.ts");
+const { createSnapshot, listSnapshots, restoreSnapshot, deleteSnapshot, withAutoStash, stashPush, fetch: fetchRemote } = await import("../src/gitwork.ts");
 
 let repo = "";
 const git = (...args: string[]) =>
@@ -125,5 +125,47 @@ describe("WIP snapshots", () => {
     expect(r.ok).toBe(false);
     expect(r.error).toContain("stash@{0}");
     expect(git("stash", "list").stdout.toString()).toContain("agx: auto-stash");
+  });
+});
+
+/*
+ * `git stash push -u` can exit non-zero AFTER it has made the stash: a directory
+ * it cannot open or empty (a volume owned by another user) makes it warn, fail
+ * to remove it, and exit 128 with every other untracked file already moved into
+ * stash@{0}. Reading that exit as "nothing happened" told the person the
+ * operation had not started while their files sat out of sight in the stash.
+ * A root process opens any directory, so there is nothing to reproduce there.
+ */
+describe.skipIf(process.getuid?.() === 0)("a stash made despite a non-zero exit", () => {
+  beforeEach(() => {
+    build();
+    writeFileSync(join(repo, "notes.txt"), "mine\n");
+    mkdirSync(join(repo, "locked"));
+    writeFileSync(join(repo, "locked", "f"), "x\n");
+    chmodSync(join(repo, "locked"), 0o000);
+  });
+  afterAll(() => { try { chmodSync(join(repo, "locked"), 0o755); } catch { /* gone */ } });
+
+  it("stashPush reports it as pushed, not as a failure", () => {
+    const r = stashPush(repo, "wip");
+    expect(git("stash", "list").stdout.toString()).toContain("wip");
+    expect(r.ok).toBe(true);
+    chmodSync(join(repo, "locked"), 0o755);
+  });
+
+  it("auto-stash carries on and restores, instead of saying the operation did not start", () => {
+    const r = withAutoStash(repo, () => ({ ok: true, output: "ok" }));
+    chmodSync(join(repo, "locked"), 0o755);
+    expect(r.error ?? "").not.toContain("was not started");
+    expect(r.ok).toBe(true);
+  });
+});
+
+describe("fetch", () => {
+  beforeEach(build);
+  it("on a repository with no remote says so, not git's atomic-fetch complaint", () => {
+    const r = fetchRemote(repo);
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe("no remote is configured for this repository");
   });
 });

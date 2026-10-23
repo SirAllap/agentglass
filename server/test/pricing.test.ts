@@ -178,3 +178,17 @@ describe("modelLabel", () => {
     expect(modelLabel(null)).toBe("unknown");
   });
 });
+
+describe("the 5.5 generation", () => {
+  // Measured against the provider catalog: Haiku 5.5 bills a tenth of Haiku
+  // 4.5, and the family substring rows used to price all of them alike.
+  test("is priced at its own rates, the older ids keep theirs", () => {
+    const rate = (id: string) => { const p = priceFor(id)!; return [p.input, p.output, p.cache_write, p.cache_read]; };
+    expect(rate("claude-haiku-5-5")).toEqual([0.1, 0.5, 0.125, 0.01]);
+    expect(rate("claude-sonnet-5-5")).toEqual([2, 10, 2.5, 0.1]);
+    expect(rate("claude-opus-5-5")).toEqual([4, 20, 5, 0.2]);
+    expect(rate("claude-fable-5-1")).toEqual([10, 50, 12.5, 0.25]);
+    expect(rate("claude-haiku-4-5")).toEqual([1, 5, 1.25, 0.1]);
+    expect(rate("claude-opus-5")).toEqual([5, 25, 6.25, 0.5]);
+  });
+});

@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { THEMES, chooseTheme } from "../lib/themes.ts";
 import { IS_DESKTOP } from "../lib/desktop.ts";
+import { useModalDialog } from "../lib/focusTrap.ts";
 import { api } from "../lib/api.ts";
 import { openSettings } from "../lib/openSettings.ts";
 import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
@@ -57,6 +58,7 @@ export function CommandPalette({
   onZoom: (dir: 1 | -1 | 0) => void;
 }) {
   const [q, setQ] = useState("");
+  const modal = useModalDialog(open, "Command palette");
   const [sel, setSel] = useState(0);
 
   const cmds = useMemo<Cmd[]>(() => {
@@ -125,7 +127,7 @@ export function CommandPalette({
                 animation), which clobbers a Tailwind -translate-x-1/2 — so a
                 flex wrapper does the centering instead. */}
             <div className="fixed inset-0 flex justify-center items-start pt-[14vh] px-4 pointer-events-none" style={{ zIndex: 10001 }}>
-            <motion.div
+            <motion.div {...modal}
               initial={{ opacity: 0, scale: 0.96, y: -12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.97, y: -8 }}
               transition={{ type: "spring", stiffness: 360, damping: 30 }}
               className="w-[min(560px,92vw)] rounded-xl overflow-hidden pointer-events-auto"

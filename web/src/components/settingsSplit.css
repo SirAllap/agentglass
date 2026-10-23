@@ -1,0 +1,32 @@
+/* A page whose cards sit beside one picture: the settings on the left, the
+   flow or the preview in a card on the right that stays in view while the
+   left scrolls. Under 1180px they stack, picture first, so it is not lost
+   below a long column. The wrapper spans the page's card flow (see
+   `.agx-settings-col > :not(.agx-scard)`), and lays its own cards out, so the
+   cards' `break-inside` and column rules do not reach them. Not `.agx-split`:
+   that is the diff's own class, and a grid on it blanked every diff once Settings
+   had loaded this file. */
+.agx-split-page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+.agx-split-main { min-width: 0; }
+.agx-split-side { min-width: 0; order: -1; }
+@media (min-width: 1180px) {
+  .agx-split-page { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .agx-split-side { order: 0; position: sticky; top: calc(var(--agx-ph-h, 0px) + 16px); }
+}
+.agx-split-side:empty { display: none; }
+/* The preset cards are three across on a full-width page; in half of one they
+   are one above the next. */
+.agx-split-main .agx-presets { grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 1180px) {
+  .agx-orch .agx-split-side { top: calc(var(--agx-ph-h, 0px) + var(--orch-stick, 0px) + 16px); }
+}
+/* The flow beside the editor has half a page, not a whole one: the main agent
+   sits above its jobs and one wire goes down to them, instead of one across. */
+.agx-split-side .agx-flow { grid-template-columns: minmax(0, 1fr); gap: 28px; }
+.agx-split-side .agx-flow-main::after { top: 100%; right: auto; left: 50%; width: 2px; height: 28px; }
+.agx-split-side .agx-flow-job::before, .agx-split-side .agx-flow-job::after { display: none; }

@@ -163,7 +163,7 @@ describe("the page is only there with ClickUp", () => {
   test("the card skills pattern moved to Agents and shows only with ClickUp", async () => {
     const src = await Bun.file(new URL("../src/components/SettingsModal.tsx", import.meta.url).pathname).text();
     expect(src).toContain("<CardSkillsRow connected />");
-    expect(src).toContain("{cu && (");
+    expect(src).toContain("skills={cu ? (");
     const pane = await Bun.file(new URL("../src/components/ClickUpPane.tsx", import.meta.url).pathname).text();
     expect(pane).toContain("if (!connected || !prefs) return null;");
     expect(pane.slice(pane.indexOf("export function ClickUpPane"))).not.toContain("cardSkillPattern");

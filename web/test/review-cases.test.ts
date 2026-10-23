@@ -44,7 +44,7 @@ const cases: Case[] = [
       reviewers: [{ login: "dave" }], threadAuthors: ["carol", "carol", "carol", "carol", "erin"], askedAt: { dave: ago(20) },
     }),
     say: "carol still wants changes. Answer the 4 threads. dave's re-review is pending.",
-    need: "2 of 3 approvals needed", sub: "2 approved · 1 changes · 1 re-requested · 1 commented", status: "blocked",
+    need: "2 of 3 approvals needed", sub: "2 approved · 1 changes · 1 re-requested · erin commented", status: "blocked",
     tally: ["approved", "approved-old", "changes", "changes-again", "commented"],
     rows: [
       "carol · changes requested → YOU", "erin · commented → YOU", "dave · re-review requested → DAVE",
@@ -65,7 +65,7 @@ const cases: Case[] = [
   {
     name: "one approval where two are needed, the second is asked",
     in: pr({ reviews: [rv("alice", "APPROVED")], reviewers: [{ login: "dave" }] }),
-    say: "Waiting on dave to review.", need: "1 of 2 approvals needed", status: "wait", sub: "1 approved · 1 not answered",
+    say: "Waiting on dave to review.", need: "1 of 2 approvals needed", status: "wait", sub: "1 approved · dave not answered",
     rows: ["dave · review requested → DAVE", "· alice · approved → DONE"],
   },
   {

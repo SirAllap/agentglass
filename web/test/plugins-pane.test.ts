@@ -114,7 +114,9 @@ describe("a plugin that grows does not drag its neighbour with it", () => {
     expect(pane).toContain('className="agx-plugin-grid"');
     expect(pane).toContain('className="mt-auto flex items-center');
     expect(pane).not.toContain("gridTemplateColumns");
-    expect(CSS).toMatch(/\.agx-plugin-grid \{[^}]*minmax\(min\(560px, 100%\), 1fr\)/);
+    // 440 and not wider: every card opens on a 16:9 picture, and in one column
+    // of a 1065px page that picture alone was 600px tall.
+    expect(CSS).toMatch(/\.agx-plugin-grid \{[^}]*minmax\(min\(440px, 100%\), 1fr\)/);
   });
 });
 

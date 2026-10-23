@@ -113,6 +113,7 @@ export function notReady(choice: EngineChoice, role: "orchestrator" | "worker", 
   const r = readiness.find((e) => e.id === choice.engine);
   const v = r?.roles[role];
   if (v?.ok) return null;
+  if (r && engineState(r) === "checking") return null; // slow to answer, not broken
   const why = v?.why ?? (r ? `${agentProvider(choice.engine)?.title ?? choice.engine} cannot take the ${role} role here.` : "This machine has not been checked for it yet.");
   const using = resolved?.ok && resolved.choice.engine !== choice.engine ? `Using ${choiceWords(resolved.choice)} instead.` : undefined;
   return { tone: "err", text: "Not ready", why, ...(using ? { using } : {}) };
@@ -125,7 +126,7 @@ export function exhausted(resolved: Resolved | undefined): { tone: "err"; text: 
 }
 
 const CANNOT: Record<EngineState, string | null> = {
-  checking: null, ready: null, testing: null, failed: null,
+  checking: "is still being checked", ready: null, testing: null, failed: null,
   missing: "is not installed", old: "needs an update", broken: "is not working", signin: "needs sign-in",
 };
 
@@ -672,6 +673,7 @@ export function engineTileState(id: string, role: "orchestrator" | "worker", rea
   if (!r) return { tone: "err", word: "Unchecked", reason: "This machine has not been checked for it yet." };
   const v = r.roles[role];
   const state = engineState(r);
+  if (!v.ok && state === "checking") return { tone: "checking", word: "Checking", reason: `${engineTitle(id)} is slow to answer: checking again.` };
   if (!v.ok) {
     const word = state === "missing" ? "Not installed" : state === "signin" ? "Sign in" : state === "old" ? "Needs update" : "Not ready";
     return { tone: "err", word, reason: v.why ?? `${engineTitle(id)} cannot take the ${role} role here.` };

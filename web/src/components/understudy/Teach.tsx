@@ -26,9 +26,13 @@ import { SERVER, authHeaders } from "../../lib/api.ts";
 import { Button } from "../workspace/Chrome.tsx";
 import { Empty } from "../git/ui.tsx";
 import { SettingRow } from "../SettingRow.tsx";
+import { useReportNeeds } from "../SettingsPageState.tsx";
 import { Field, SettingsCard, SettingsForm, StatusBadge } from "../SettingsKit.tsx";
 import { fmtBytes } from "../../lib/goneCleanup.ts";
 import { HIT, ICON } from "../../lib/iconSize.ts";
+import { ClockIcon, ListIcon, PlayIcon } from "../../lib/glyphIcons.tsx";
+import { ChecklistIcon, FolderIcon, ShieldIcon } from "../settingsNavIcons.tsx";
+import { UnderstudyIcon } from "../workspace/icons.tsx";
 import { INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
 
 interface SourcesBody {
@@ -109,12 +113,16 @@ function TickBox({ on, onClick, disabled, title, plain }: {
   );
 }
 
+/** Precedents are one row per project and a machine can hold hundreds: the page was 9000px tall at 1440. */
+const PRECEDENT_ROWS = 8;
+
 export function Teach({ active }: { active: boolean }) {
   const [data, setData] = useState<SourcesBody | null>(null);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [neverText, setNeverText] = useState("");
   const [addPath, setAddPath] = useState("");
+  const [allPrecedents, setAllPrecedents] = useState(false);
   /* Above the early returns below, and that is the whole point: this sat under
      `if (!data) return` for one build and took the panel down the moment the
      data arrived, because the hook count changed between the loading render
@@ -135,12 +143,15 @@ export function Teach({ active }: { active: boolean }) {
   }, []);
 
   useEffect(() => { if (active) void load(); }, [active, load]);
+  /* The one red thing on this page is the nav mark too; a wizard step that is "your turn" is a next step, not a problem. */
+  useReportNeeds("understudy", data && !data.terms.ok ? { count: 1, title: "The private-terms list is missing, so nothing is read yet" } : null);
 
   if (!active) return null;
   if (!data) return <Empty what="what is on this machine" busy />;
 
   const rules = data.sources.filter((s) => s.kind === "rules");
   const precedents = data.sources.filter((s) => s.kind === "precedents");
+  const shownPrecedents = allPrecedents ? precedents : precedents.slice(0, PRECEDENT_ROWS);
   const allowedCount = data.sources.filter((s) => s.allowed && s.found).length;
 
   const toggle = async (s: UnderstudySource) => {
@@ -272,7 +283,7 @@ export function Teach({ active }: { active: boolean }) {
     );
   };
 
-  const stepTone = (done: boolean, active: boolean) => done ? "ok" as const : active ? "warn" as const : "off" as const;
+  const stepTone = (done: boolean, active: boolean) => done ? "ok" as const : active ? "info" as const : "off" as const;
   const stepWord = (done: boolean, active: boolean, doneText: string) => done ? doneText : active ? "Your turn" : "Later";
   const step1Active = data.never.length === 0;
   const step2Active = data.never.length > 0 && allowedCount === 0;
@@ -307,7 +318,7 @@ export function Teach({ active }: { active: boolean }) {
           by hand afterwards. One sentence, and the proof a click away: the
           reasoning is all correct and all of it answers questions nobody has
           asked yet. */}
-      <SettingsCard title="What the orchestrator learns from"
+      <SettingsCard title="What the orchestrator learns from" icon={<UnderstudyIcon size={ICON.sm} />}
         desc="Three steps: what it must never see, what it may read, and then reading it.">
         <SettingRow label="Set this up for me"
           hint="It reads the repositories on this machine and learns how you decide. Nothing leaves it."
@@ -332,7 +343,7 @@ export function Teach({ active }: { active: boolean }) {
           }} />
       </SettingsCard>
 
-      <SettingsCard title="What it must never see"
+      <SettingsCard title="What it must never see" icon={<ShieldIcon size={ICON.sm} />}
         status={<StatusBadge tone={stepTone(!step1Active, step1Active)}>
           {stepWord(!step1Active, step1Active, `${data.never.length} word${data.never.length === 1 ? "" : "s"}`)}
         </StatusBadge>}
@@ -358,7 +369,7 @@ export function Teach({ active }: { active: boolean }) {
           } />
       </SettingsCard>
 
-      <SettingsCard title="Rules you wrote down"
+      <SettingsCard title="Rules you wrote down" icon={<ChecklistIcon size={ICON.sm} />}
         status={<StatusBadge tone={stepTone(allowedCount > 0, step2Active)}>
           {stepWord(allowedCount > 0, step2Active, `${allowedCount} ticked`)}
         </StatusBadge>}
@@ -366,12 +377,19 @@ export function Teach({ active }: { active: boolean }) {
         {rules.map((s) => <Source key={s.id} s={s} />)}
       </SettingsCard>
 
-      <SettingsCard title="What you actually did"
+      <SettingsCard title="What you actually did" icon={<ClockIcon size={ICON.sm} />}
         desc="Precedents — the record, not the intent. Messier and far larger. A rule says “never main”; a precedent says what you actually did on a Tuesday when the base had moved. Only precedents can make a prediction yours rather than merely sensible. One row per project rather than one switch, because each project is filed separately — and which side of that line a project sits on decides where its rows may ever be used, not whether they may be read.">
-        {precedents.map((s) => <Source key={s.id} s={s} />)}
+        {shownPrecedents.map((s) => <Source key={s.id} s={s} />)}
+        {precedents.length > PRECEDENT_ROWS && (
+          <div className="agx-settings-x py-2">
+            <Button size="compact" onClick={() => setAllPrecedents((v) => !v)}>
+              {allPrecedents ? "Show fewer" : `Show all ${precedents.length}`}
+            </Button>
+          </div>
+        )}
       </SettingsCard>
 
-      <SettingsCard title="Somewhere else">
+      <SettingsCard title="Somewhere else" icon={<FolderIcon size={ICON.sm} />}>
         <SettingRow label="Add a folder"
           hint="A folder of notes, a journal, anything else you keep. Markdown is read as rules; everything else as record."
           below={
@@ -391,7 +409,7 @@ export function Teach({ active }: { active: boolean }) {
         {problem && <div role="alert" className="agx-settings-x pt-2 pb-3 text-[12px]" style={{ color: "var(--error-ink)" }}>{problem}</div>}
       </SettingsCard>
 
-      <SettingsCard title="Let it read them"
+      <SettingsCard title="Let it read them" icon={<PlayIcon size={ICON.sm} />}
         status={<StatusBadge tone={stepTone(!!data.learned, step3Active)}>
           {stepWord(!!data.learned, step3Active, "Done")}
         </StatusBadge>}
@@ -422,7 +440,7 @@ export function Teach({ active }: { active: boolean }) {
       </SettingsCard>
 
       {(data.learned || data.policy) && (
-        <SettingsCard title="What it knows now"
+        <SettingsCard title="What it knows now" icon={<ListIcon size={ICON.sm} />}
           desc="The rules are compiled into files you can open and argue with. What it believes about you should never be something you have to query a database to find out.">
           <SettingRow rowRef={receipt} label="Rules" control={<span className="tabular-nums text-[15px]">{data.policy?.rules ?? 0}</span>} />
           <SettingRow label="Precedents" control={<span className="tabular-nums text-[15px]">{data.banked.toLocaleString()}</span>} />

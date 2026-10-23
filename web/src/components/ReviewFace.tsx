@@ -1,5 +1,5 @@
 import type { ReviewerState } from "../../../shared/reviewRoster.ts";
-import { CrossIcon, DoneIcon } from "../lib/glyphIcons.tsx";
+import { CommentIcon, CrossIcon, DoneIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { PERSON_TINT, badgeGlyph, barLayout, wash } from "../lib/reviewBar.ts";
 import { Avatar } from "./Avatar.tsx";
@@ -35,7 +35,7 @@ export function ReviewFace({ login, state, size = ICON.xl, badge, team }: {
             width: dot, height: dot, right: -dot * 0.3, bottom: -dot * 0.3, background: tint,
             color: "var(--bg)", boxShadow: "0 0 0 1.5px var(--surface-card)",
           }}>
-          {glyph === "tick" ? <DoneIcon size={dot} /> : glyph === "cross" ? <CrossIcon size={dot} /> : null}
+          {glyph === "tick" ? <DoneIcon size={dot} /> : glyph === "cross" ? <CrossIcon size={dot} /> : glyph === "bubble" ? <CommentIcon size={dot} /> : null}
         </span>
       )}
     </span>

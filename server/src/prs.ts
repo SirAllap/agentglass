@@ -1489,8 +1489,8 @@ export function humanVerdict(
    * Asked AND has a standing verdict is `again` (the ball is back with them,
    * whatever they said before); asked with none is `await`. A team has a name
    * and no verdict, so it is only ever `await`. Bots and the author are out,
-   * like everywhere else here. Somebody who only commented is listed only when
-   * nobody else is, because a comment is not something anyone waits on.
+   * like everywhere else here. Somebody who commented is listed after the
+   * others (a comment is not something anyone waits on, so it never ranks first).
    * Ceiling: when they were asked and how many threads each one has open are
    * not in the list's data and stay in the detail.
    */
@@ -1508,7 +1508,7 @@ export function humanVerdict(
     else if (!isBotLogin(l) && l.toLowerCase() !== author) add(l, strongBy.has(l.toLowerCase()) ? "again" : "await");
   }
   for (const [l, v] of strong) add(l, v.state === "APPROVED" ? "approved" : "changes");
-  if (!people.length) for (const l of spoke) add(l, "comment");
+  for (const l of spoke) add(l, "comment");
 
   const build = (
     kind: "approved" | "changes",
@@ -2490,7 +2490,12 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
         // lets the "updated N ago" age climb without bound. A genuinely empty
         // answer is NOT this branch — `rows` is [] there, not null — so a PR that
         // merged or closed outside actually clears instead of lingering for ever.
-        listCache.set(key, keep({ at: Date.now(), loading: false, checksPending: false }));
+        // With nothing cached, though, an empty list is not "what we had": it
+        // reads as a repository with no pull requests, so it says it could not read.
+        listCache.set(key, keep({
+          at: Date.now(), loading: false, checksPending: false,
+          ...(prev?.prs.length ? null : { error: "GitHub did not answer, so this list could not be read. Try again in a moment." }),
+        }));
         return;
       }
       storePage(repo, filter, state, key, prior, page, undefined, readStart);
@@ -3156,7 +3161,8 @@ export async function listPrs(rootIn: unknown, filterIn: unknown, stateIn: unkno
     repo,
     prs,
     fetchedAt: cur?.at ?? 0,
-    dataAt: cur?.okAt ?? cur?.at ?? 0,
+    // Only a read that succeeded is data: a failed one advances `at` to stop the re-polling.
+    dataAt: cur?.okAt ?? 0,
     rate: rateView() ?? undefined,
     startedAt: cur?.began ?? 0,
     stale: !cur?.at || Date.now() - (cur?.at ?? 0) > LIST_TTL_MS,

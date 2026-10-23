@@ -14,7 +14,8 @@ import { ListEye, WorkflowMap } from "../WorkflowMap.tsx";
 import { WFM_CSS } from "../workflowMapStyle.ts";
 import { Card, CardView, CountedPicker, PrView, Tagged, ago, hint } from "../TrackerMapParts.tsx";
 import { setting } from "../../lib/settingsRegistry.ts";
-import { HIT } from "../../lib/iconSize.ts";
+import { HIT, ICON } from "../../lib/iconSize.ts";
+import { ColumnsIcon, PlugIcon, SearchIcon, ServerIcon, ShieldIcon, SlidersIcon } from "../settingsNavIcons.tsx";
 
 const n = JIRA.nouns;
 
@@ -95,7 +96,7 @@ export function JiraSettingsView(p: JiraViewProps) {
     <div className="wfm">
       <style>{WFM_CSS}</style>
       {/* The connection, and the one switch that decides whether anything here can write. */}
-      <SettingsCard title={n.name} desc={p.status.account ? `Signed in as ${p.status.account}. ${p.status.site ?? ""}`.trim() : p.status.site ?? undefined}
+      <SettingsCard title={n.name} icon={<PlugIcon size={ICON.sm} />} desc={p.status.account ? `Signed in as ${p.status.account}. ${p.status.site ?? ""}`.trim() : p.status.site ?? undefined}
         status={<StatusBadge tone="ok">Connected</StatusBadge>}>
         <SettingRow agentExempt label={<span id="jira-changes-l">{`Changes in ${n.name}`}</span>}
           hint={changesOn ? `Only the steps below can change a ${n.item}, one at a time, when you press their button.` : steps.length ? "agentglass only reads. Turn this on to let the steps below act." : "agentglass only reads. Add a step below, then turn this on to let it act."}
@@ -105,7 +106,7 @@ export function JiraSettingsView(p: JiraViewProps) {
         {p.note && <SettingRow agentExempt label="That did not work" hint={<span role="alert" style={{ color: "var(--error-ink)" }}>{p.note}</span>} />}
       </SettingsCard>
 
-      <Card id="jira-found" title="What we found" open={foundOpen ?? steps.length === 0} onToggle={setFoundOpen}
+      <Card id="jira-found" icon={<SearchIcon size={ICON.sm} />} title="What we found" open={foundOpen ?? steps.length === 0} onToggle={setFoundOpen}
         desc={state.kind === "loading" ? undefined : `${part.counted.length} ${n.lists} count · ${distinct} statuses${part.folded.length ? ` · ${part.folded.length} ignored` : ""}`}
         status={<StatusBadge tone={statusTone}>{statusText}</StatusBadge>}>
         <SettingRow settingId="jira.statusUnits.counted" label="Projects that count"
@@ -146,7 +147,7 @@ export function JiraSettingsView(p: JiraViewProps) {
         onCountAgain={(u) => { const ids = withCounted(units, u.id, true); if (ids) count(ids); }}
         onRetry={p.onReread} />
 
-      <Card id="jira-shows" title="Where this shows up" desc="Hover a step above to see which part of this it adds."
+      <Card id="jira-shows" icon={<ColumnsIcon size={ICON.sm} />} title="Where this shows up" desc="Hover a step above to see which part of this it adds."
         actions={<Segmented label={`Does the pull request name a ${n.item}?`} value={linked ? "1" : "0"} onChange={(v) => setLinked(v === "1")}
           options={[{ id: "1", label: "Linked" }, { id: "0", label: "No link" }]} />}>
         <div className="grid gap-4 agx-settings-x pt-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))" }}>
@@ -162,7 +163,7 @@ export function JiraSettingsView(p: JiraViewProps) {
       </Card>
       {p.tracker}
 
-      <SettingsCard title="Saved views and folders"
+      <SettingsCard title="Saved views and folders" icon={<ServerIcon size={ICON.sm} />}
         desc="The boards and filters you saved sit in the Jira tab's sidebar. Add and remove them there.">
         <SettingRow agentExempt label="Views and folders"
           hint={p.views ? `${p.views.views} ${p.views.views === 1 ? "view" : "views"} · ${p.views.folders} ${p.views.folders === 1 ? "folder" : "folders"} saved on this machine.` : "Reading what is saved…"}
@@ -170,7 +171,7 @@ export function JiraSettingsView(p: JiraViewProps) {
       </SettingsCard>
 
       <div ref={advRef}>
-        <Card id="jira-adv" title="Advanced" desc="The site this reads, and the older per-project rules." open={advOpen} onToggle={setAdvOpen}>
+        <Card id="jira-adv" icon={<SlidersIcon size={ICON.sm} />} title="Advanced" desc="The site this reads, and the older per-project rules." open={advOpen} onToggle={setAdvOpen}>
           <SettingRow agentExempt label="Site" control={<Value>{p.status.site}</Value>} />
           <SettingRow agentExempt label="Runs on" control={<Value>{runsOn(p.status)}</Value>} />
           <SettingRow agentExempt label="Signs in with" control={<Value>{signIn(p.status)}</Value>} />
@@ -187,7 +188,7 @@ export function JiraSettingsView(p: JiraViewProps) {
         </Card>
       </div>
 
-      <SettingsCard title="Disconnect">
+      <SettingsCard title="Disconnect" tone="danger" icon={<ShieldIcon size={ICON.sm} />}>
         <SettingRow agentExempt label="Disconnect Jira" hint="Removes the token from this machine. Nothing changes in Jira."
           actions={<Button tone="danger" pending={p.busy} onClick={p.onDisconnect}>Disconnect</Button>} />
       </SettingsCard>

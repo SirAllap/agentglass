@@ -13,7 +13,9 @@ import type { ControlCmd } from "../../../shared/types.ts";
 /** How the sender wants it shown, and the name it stamped itself with. Absent
  *  for a command that did not come off the server's socket (a window's own
  *  button), which is `now`. */
-export interface ControlMeta { present?: "quiet" | "now"; as?: string; level?: 1 | 2 | 3 }
+export interface ControlMeta { present?: "quiet" | "now"; as?: string; level?: 1 | 2 | 3;
+  /** The server granted this settings.set: the person approved it (shared/types.ts, the control frame). */
+  grant?: true; expect?: string | number | boolean }
 /** `rid` is set when the sender is waiting for an answer (POST /control/result). */
 export type ControlListener = (cmd: ControlCmd, rid?: string, meta?: ControlMeta) => void;
 const listeners = new Set<ControlListener>();

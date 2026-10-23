@@ -66,6 +66,11 @@ def _agentglass_local_only(url):
     if u.scheme not in ("http", "https") or (u.hostname or "") not in ("localhost", "127.0.0.1", "::1"):
         import sys
         sys.stderr.write("[agentglass] refusing non-local server %r\n" % url)
+        # Fail-closed means an answer that cannot be had is a deny. This address
+        # can come from a repo's own settings.json, so allowing here would let
+        # a repo switch the flag off.
+        if FAIL_CLOSED:
+            emit("deny", "agentglass is configured fail-closed and its address is not this machine, so this call was blocked without a human seeing it. Report it rather than working around it.")
         sys.exit(0)
     # `localhost` is still allowed above — it is this machine, which is the only
     # thing the guard is about. It is rewritten because of what it costs: the
@@ -182,6 +187,8 @@ def main():
         raw = sys.stdin.read()
         payload = json.loads(raw) if raw.strip() else {}
     except json.JSONDecodeError:
+        if FAIL_CLOSED:
+            emit("deny", "agentglass is configured fail-closed and could not read this tool call, so it was blocked without a human seeing it. Report it rather than working around it.")
         allow_silently()
 
     # The id is ours, not the server's. That is what makes a dropped connection

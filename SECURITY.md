@@ -125,7 +125,15 @@ complement, rather than replace, the private reporting path below.
 - **The control plane is fail-open by default.** A `PreToolUse` gate that times
   out (`AGENTGLASS_GATE_TIMEOUT`, 300s) falls through rather than blocking your
   agents. Set `AGENTGLASS_GATE_FAILCLOSED=1` if you would rather a timeout or an
-  unreachable control plane denied the call.
+  unreachable control plane denied the call. The same goes for a gate script that
+  has moved (a rebuilt or deleted checkout): its command tests that the file
+  exists and lets the call through when it does not, because a missing script
+  makes python exit 2, which Claude Code reads as "deny" for every tool call in
+  every session. The gate is then not holding anything, so the Lantern shows a
+  warning until the hook is installed again from Settings › Agents. A script that
+  is there and refuses still refuses. A gate installed before this check existed
+  is rewritten to the guarded command when the server starts (only our own
+  command, in its exact old shape; a backup of the settings file is kept).
 - **Who receives a browser ask is the app's to say.** Registering a window that
   can drive the built-in browser (`/browser/ready`), or the app window that makes
   lane hosts, decides who is sent every ask, fill text and URLs included, so it
@@ -260,8 +268,12 @@ credential.
 
 **Revoking one device** (Settings › Remote › Paired devices › Forget) revokes
 that credential and closes the sockets it is holding, and leaves every other
-device — and the desk — alone. Rotating the machine's token is still there for
-the case where you have lost the code itself, and still kicks everything.
+device — and the desk — alone. Rotating the machine's token (Settings › Remote ›
+Revoke this link) is still there for the case where you have lost the code
+itself: it revokes every paired device first, closing their sockets, then
+replaces the token, so every phone has to be paired again. It is done by the
+desktop app, which asks the running server to forget the devices before it
+rotates; if the server does not confirm, nothing is rotated.
 
 ## What the gate does not protect against
 
@@ -999,11 +1011,13 @@ An orchestrator is an agent seated in a project's chair, and it starts workers
 under a policy the person wrote (docs/CONFIG.md, *The orchestration policy*).
 What the server holds, and what a test asserts, in the order it matters:
 
-- **Only the person changes the policy.** `POST /orchestration` is refused
-  with a `403` to the machine token on its own (every agent shell holds it), to
-  a seat's credential at every power level, to an understudy's and to a
-  plugin's. A refusal of the machine token is a line in the action log; a
-  seat's and an understudy's go to the fence record. A seat may read the policy
+- **Only the person changes the policy.** From the machine token on its own
+  (every agent shell holds it), a plugin's, or any request naming an agent,
+  `POST /orchestration` writes nothing: it becomes a request the person approves
+  (the settings door, below). A seat's credential reaches the route at no power
+  level and asks through `/settings/door`, for its own project only; an
+  understudy's is refused. Each is a line in the action log; a seat's and an
+  understudy's refusals go to the fence record. A seat may read the policy
   and may not edit what it is held to. The limit: on a server started by hand,
   with no desk key held, the machine token plus a loopback `Origin` header is
   taken for the person's own window, and `Origin` is not a boundary against a
@@ -1062,6 +1076,58 @@ worker's turn limit* above). A real boundary, a container or another account
 per worker, is not provided by this app. Until then, do not give a worker text
 or a project you would not trust with your own shell.
 
+## Agents changing settings: the settings door
+
+An agent may ask to change any setting, by the routes the Settings pages use and
+by `/settings/door` (the `agentglass-ui settings` verbs and their MCP tools).
+Each setting has a class in one table (shared/settingClass.ts), and a test fails
+for a setting without one. What is held:
+
+- **The person is told apart by the policy's own test**, `mayChangePolicy` (the
+  desk key where the app holds one; a vouched `Origin` on a server started by
+  hand, the limit stated above), plus no `X-Agentglass-Agent` on the request.
+  Nothing weaker. The CLI sends no `Origin` to the door, so it is an agent there.
+- **An escalation waits.** Anything that widens what agents may do or what they
+  spend (the policy, the roles' and the chair's engine and model, the chair's
+  powers, the launch mode and deny list, the gate, plugins, budgets, the
+  Lantern's wakes, the Jira and ClickUp write switches) becomes a request. The
+  card shows who asked as the server knows them and a diff the server wrote from
+  the value it validated, as JSON; no sentence the agent wrote reaches it.
+  Approving applies that value once, only while the setting still reads what it
+  read when asked, and grants nothing for next time. Thirty minutes unanswered,
+  or a restart, is a decline.
+- **No agent answers a request**, its own included, on any route: the decide
+  route asks the same question as above and every agent credential fails it.
+- **A narrowing applies at once**: a stricter mode, a longer deny list, the gate
+  on, a plugin off, a smaller budget, fewer powers, a longer interval.
+- **The person's switch**, *Let my agents change settings without asking*, is
+  off by default and turned on only by the person: an agent's attempt is refused
+  on every route and never becomes a request. On, it lets an escalation through
+  and never a secret or itself. An agent may turn it off.
+- **Secrets are never read or written** through the door.
+- **A window setting** of the escalation class is judged by the window against
+  the value it holds; a widening is answered "needs the person's approval" and
+  becomes a request, and the approved change goes back as a `settings.set` frame
+  only the server can mark granted. A socket that only claims to be a window can
+  make a request appear and nothing more.
+
+- **A seat speaks for its own project.** A chair's change to anything held for
+  the whole machine waits for the person whatever its class, even a narrowing,
+  and it reads only its own project's requests.
+- **A card shows everything it applies.** A change whose diff would not fit on
+  the card whole (60 changed values of 300 characters) is refused, not cut.
+
+The Settings pages' own routes hold an agent to the same classes: the policy,
+launch permissions, the chair, its wake, the gate, budgets, the Lantern, the
+worker roles, the plugins' master switch, switching a plugin on and letting it
+run outside its box, the Jira and ClickUp write switches, ClickUp's heavier read
+and what review plugins may read. The person's saves on them carry the desk key.
+Switching a plugin on approves what it declares, so its card adds the server's
+record of the installed manifest (publisher, source, scope, where it draws, its
+box, its fingerprint) as JSON, never the author's description; a declaration
+that changed between the ask and the Approve applies nothing. Switching one off
+narrows and applies at once.
+
 ## The browser, driven by an agent
 
 `bin/agentglass-browser` and `bin/agentglass-browser-mcp` drive the app's own
@@ -1107,13 +1173,16 @@ state, HAR files and page snapshots the CLI writes land as `0600` files.
 
 Where the browser may be sent is held twice. The relay judges the literal host
 of every `open` before the browser sees it — `http(s)` only, and never
-link-local (169.254/16, where a cloud's metadata endpoint lives) or the
+link-local (169.254/16, where a cloud's metadata endpoint lives), the two
+other cloud metadata addresses that sit in ranges left open on purpose
+(100.100.100.200 inside CGNAT, fd00:ec2::254 inside unique-local) or the
 unspecified address; loopback and LAN addresses are allowed on purpose, since a
 dev server on this machine is ordinary use. A hostname cannot be judged there,
 because the browser resolves it again when it connects and a name may answer
 differently the second time. So the desktop app also runs an **egress guard**:
 a proxy on a loopback port that every browsing session is pointed at, which
-resolves each name once per connection, refuses any answer in those ranges,
+resolves each name once per connection, refuses any answer in those ranges
+(and those two addresses),
 opens the socket to the address it judged, reaches a name that answers a public
 and a private address in one set at the public ones only, and refuses a name
 that has ever answered a public address when it later answers a private or

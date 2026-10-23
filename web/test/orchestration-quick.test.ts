@@ -318,12 +318,16 @@ describe("the project bar", () => {
     expect(html.indexOf("data-scope-bar")).toBeGreaterThan(-1);
     expect(html.indexOf("data-scope-bar")).toBeLessThan(html.indexOf("Right now"));
     expect(html).not.toContain("Applies to");
-    expect(BAR).toMatch(/className="sticky -top-8 z-10 /);
+    expect(BAR).toMatch(/className="sticky z-10 /);
     expect(BAR).toContain("--orch-stick");
   });
-  test("-top-8 cancels the settings scroller's pt-8, so no card shows above the bar", () => {
+  test("it sticks under the sticky page header, at the header's own height, so no card shows above the bar", () => {
+    expect(BAR).toContain('top: "var(--agx-ph-h, 0px)"');
+    const header = readFileSync(join(import.meta.dir, "..", "src", "components", "SettingsPageHeader.tsx"), "utf8");
+    expect(header).toContain('setProperty("--agx-ph-h"');
     const modal = readFileSync(join(import.meta.dir, "..", "src", "components", "SettingsModal.tsx"), "utf8");
-    expect(modal).toMatch(/className="agx-settings-main [^"]*\bpt-8\b/);
+    expect(modal).toMatch(/className="agx-settings-main [^"]*overflow-y-auto"/);
+    expect(modal).not.toMatch(/className="agx-settings-main [^"]*\bpt-8\b/);
   });
   test("the bar's own height is what a scrolled-to card keeps clear of", () => {
     const css = readFileSync(join(import.meta.dir, "..", "src", "index.css"), "utf8");

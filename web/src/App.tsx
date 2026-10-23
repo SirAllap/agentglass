@@ -1084,6 +1084,10 @@ export default function App() {
         // Settings is an overlay too: an agent that opened a page must be able to close it.
         setSettingsOpen(false);
         setSettingsJump(null);
+        setMachine(null);
+        setProjectOpen(false);
+        setAwaitingPick(false);
+        setWindowsOpen(false);
       },
       panel: (what) => {
         if (what === "stats") setStatsOpen(true);
@@ -1124,7 +1128,7 @@ export default function App() {
       const run = () => {
         const door = uiOf(cmd as { cmd: string } & Record<string, unknown>)?.do;
         if (door && VIEW_SWITCHERS.includes(door)) back.arm(wsViewRef.current, meta?.as);
-        return controlReplyLater(cmd, { ...ctx, serverLevel: meta?.level, as: meta?.as });
+        return controlReplyLater(cmd, { ...ctx, serverLevel: meta?.level, as: meta?.as, grant: meta?.grant === true, ...(meta?.expect !== undefined ? { expect: meta.expect } : {}) });
       };
       // A command off the server's socket says how to show it; one without
       // (a window's own button) is the person's own doing, so it is now.

@@ -119,7 +119,8 @@ beforeAll(async () => {
   })).json() as any;
   if (!inst.ok) throw new Error("install failed: " + JSON.stringify(inst));
   const en = await (await fetch(`${base}/plugins/enable`, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: MANIFEST.name }),
+    // The app's window: an agent's enable is a request the person approves (the settings door).
+    method: "POST", headers: { "content-type": "application/json", origin: base }, body: JSON.stringify({ name: MANIFEST.name }),
   })).json() as any;
   if (!en.ok) throw new Error("enable failed: " + JSON.stringify(en));
 

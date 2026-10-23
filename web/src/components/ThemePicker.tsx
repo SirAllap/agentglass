@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { SettingRow, Switch } from "./SettingRow.tsx";
 import {
   THEMES, isDarkTheme, EXPERIMENTAL_THEME_IDS,
@@ -12,6 +12,11 @@ import { DoneIcon } from "../lib/glyphIcons.tsx";
 import { HIT, ICON } from "../lib/iconSize.ts";
 import { Button, CTRL_H, EDGE } from "./workspace/Chrome.tsx";
 import { SettingsCard } from "./SettingsKit.tsx";
+import { PreviewCard, WithPreview } from "./settings/PreviewCard.tsx";
+import { AppearancePreview } from "./settings/previews/index.ts";
+import { railItems } from "./settings/previews/MiniApp.tsx";
+import { loadRail, subscribeRail, SHIPPED_RAIL } from "./workspace/views.ts";
+import { ThemeIcon } from "./settingsNavIcons.tsx";
 
 /* Settings → Appearance.
  *
@@ -206,12 +211,16 @@ export function AppearancePane({ current, onChange, onAccent }: {
      read as rows; the palettes are a picker, and a picker is its own card
      rather than an eyebrow inside this one. Both live here because picking a
      palette moves Mode, and the two share that state. */
+  const rail = useSyncExternalStore(subscribeRail, loadRail, () => SHIPPED_RAIL);
   return (
-    <>
-      <SettingsCard title="Theme"
+    <WithPreview preview={<PreviewCard id="appearance" title="The real app">
+      {/* The app has no density, interface-font or translucency setting, so those stay at what it ships with. */}
+      <AppearancePreview theme={current} accent={accent} density="comfortable" fontPx={13} translucent={false} rail={railItems(rail)} /></PreviewCard>}>
+      <SettingsCard title="Theme" icon={<ThemeIcon size={ICON.sm} />}
         desc="One palette for the whole cockpit — chrome, terminal, and (on the desktop) your tmux and nvim follow it.">
         <SettingRow
           settingId="appearance.mode"
+          wide
           label="Mode"
           hint={desk && mode === "desktop"
             ? <>Wearing <b style={{ color: "var(--text3)" }}>{desk.name}</b>, your desktop's theme — it follows when you switch there.</>
@@ -235,7 +244,15 @@ export function AppearancePane({ current, onChange, onAccent }: {
             })}
           </span>}
         />
+      </SettingsCard>
 
+      <SettingsCard title="Palette" icon={<ThemeIcon size={ICON.sm} />}
+        desc="Pick one by name instead of the neutral pair. Choosing one sets Mode to match.">
+        <PaletteRows current={current} onChange={choose} />
+      </SettingsCard>
+
+      <SettingsCard title="Accent" icon={<ThemeIcon size={ICON.sm} />}
+        desc="Laid over the theme's own colour, for the things that read as live.">
         {/* Accent. The switch is the decision — follow the theme, or choose —
             and the circles are only the second half of it, so they sit under
             the description rather than crowding the control column: eight
@@ -279,10 +296,6 @@ export function AppearancePane({ current, onChange, onAccent }: {
         />
       </SettingsCard>
 
-      <SettingsCard title="Palette"
-        desc="Pick one by name instead of the neutral pair. Choosing one sets Mode to match.">
-        <PaletteRows current={current} onChange={choose} />
-      </SettingsCard>
-    </>
+    </WithPreview>
   );
 }

@@ -12,6 +12,9 @@ registry of doors a Stream Deck button does (POST /control).
     agentglass-ui settings list                 # the settings an agent may read and write
     agentglass-ui settings get diff.wrap
     agentglass-ui settings set diff.wrap true   # the answer carries `prev`: set that back to undo
+    agentglass-ui settings set launch.mode bypassPermissions   # an escalation: waits for the person's Approve
+    agentglass-ui settings set seat.powers speak --root /home/me/code/orbit   # narrows: applies at once
+    agentglass-ui settings requests             # what still waits for the person
     agentglass-ui stage pr.comment.stage --arg repo=acme/orbit --arg number=42 --arg body="Looks right."
                                                 # level 3: the comment box opens filled in; the person presses Comment
 
@@ -62,6 +65,7 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -295,6 +299,8 @@ def explain(status, body, id=None):
         # Taken, not shown: the person was typing, so it waits behind a chip.
         return {"ok": True, "applied": False, "queued": True,
                 "note": "the person is typing, so this waits as a chip they click, or runs when they go idle"}
+    if body.get("ok") is True and isinstance(body.get("pending"), dict):
+        return pending_answer(body["pending"])
     applied = body.get("applied")
     if body.get("ok") is False or applied is False:
         # A window answered no: its own sentence is the best one there is
@@ -321,13 +327,15 @@ def token():
         return ""
 
 
-def http(path, body=None, timeout=15):
-    """(status, parsed body); status 0 when nothing answered."""
+def http(path, body=None, timeout=15, origin=True):
+    """(status, parsed body); status 0 when nothing answered. `origin=False` for the
+    settings door: this CLI is an agent's, and on a server with no desk key an
+    Origin is what the server takes for the person's window."""
     req = urllib.request.Request(
         f"{SERVER}{path}",
         data=None if body is None else json.dumps(body).encode(),
         method="GET" if body is None else "POST",
-        headers={"Content-Type": "application/json", "Origin": SERVER},
+        headers={"Content-Type": "application/json", **({"Origin": SERVER} if origin else {})},
     )
     t = token()
     if t:
@@ -367,6 +375,114 @@ def run_door(id, given, as_name=None, listing=None, present=None):
         return {"ok": False, "error": why}
     status, body = http("/control", cmd, timeout=20)
     return explain(status, body, id)
+
+
+# ── settings: the window's and the server's, through one verb ──────────────
+#
+# The window holds the preferences (theme, diff, terminal...); the server holds
+# the rest (orchestration, the chair, launch permissions, plugins, integrations).
+# `settings list` shows both with each one's class (shared/settingClass.ts):
+# low applies at once; escalation applies at once only when it narrows (safer or
+# cheaper), else it waits as a request the person approves or declines on their
+# screen; personOnly and secret are never an agent's.
+
+PENDING_NOTE = ("waits for the person: they see the diff the server computed and press Approve or Decline; "
+                "unanswered for 30 minutes it is declined. Approving applies exactly this change and nothing after it. "
+                "Do not ask again in a loop; `settings requests` shows what is still waiting.")
+
+
+def pending_answer(p):
+    keep = {k: p[k] for k in ("id", "setting", "root", "diff", "expires") if k in p}
+    return {"ok": True, "applied": False, "pending": keep, "note": PENDING_NOTE}
+
+
+def door_rows():
+    """The server's settings as rows, or (None, why)."""
+    status, body = http("/settings/door")
+    if status == 404:
+        return None, "this agentglass is older than the settings door: update the app"
+    if status != 200 or not isinstance(body, dict) or not isinstance(body.get("settings"), list):
+        return None, explain(status, body)["error"]
+    return [dict(r, where="server") for r in body["settings"] if isinstance(r, dict)], None
+
+
+def door_value(row, text):
+    """Text from the command line as the setting stores it: JSON for a json setting."""
+    if not isinstance(text, str):
+        return text
+    t = row.get("type")
+    if t == "json":
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return text  # the server names what it takes
+    if t == "string":
+        return text
+    return coerce({"t": "scalar"}, text)[0]
+
+
+def door_explain(status, body):
+    body = body if isinstance(body, dict) else {}
+    if status == 0:
+        return {"ok": False, "error": body.get("error") or f"no agentglass at {SERVER}"}
+    if status == 202 and isinstance(body.get("pending"), (dict, list)):
+        p = body["pending"]
+        return pending_answer(p) if isinstance(p, dict) else {"ok": True, "applied": False, "pending": [pending_answer(x)["pending"] for x in p], "note": PENDING_NOTE}
+    if body.get("ok") is True:
+        return {k: body[k] for k in ("ok", "applied", "setting", "prev", "value", "unchanged") if k in body}
+    return {"ok": False, "error": body.get("error") or f"server said {status}"}
+
+
+def settings_list(as_name=None):
+    win = run_door("settings.list", {}, as_name)
+    rows, why = door_rows()
+    out = []
+    if win.get("ok") and isinstance(win.get("value"), list):
+        out += [dict(r, where="window") for r in win["value"] if isinstance(r, dict)]
+    out += rows or []
+    if not out:
+        return {"ok": False, "error": why or win.get("error")}
+    status, body = http("/settings/requests")
+    res = {"ok": True, "value": out}
+    if status == 200 and isinstance(body, dict) and body.get("requests"):
+        res["pending"] = [{k: r[k] for k in ("id", "setting", "root", "diff", "expires") if k in r} for r in body["requests"]]
+    if not win.get("ok"):
+        res["note"] = f"the window's own settings are missing: {win.get('error')}"
+    return res
+
+
+def _server_row(id):
+    rows, _ = door_rows()
+    return next((r for r in rows or [] if r.get("id") == id), None)
+
+
+def settings_get(id, as_name=None, root=None):
+    row = _server_row(id)
+    if row is None:
+        return run_door("settings.get", {"id": id}, as_name)
+    if row.get("class") == "secret":
+        return {"ok": True, "id": id, "secret": True, "note": "a secret: never read through this door"}
+    q = f"/settings/door?id={urllib.parse.quote(id)}" + (f"&root={urllib.parse.quote(root)}" if root else "")
+    status, body = http(q)
+    if status == 200 and isinstance(body, dict) and body.get("ok"):
+        return {"ok": True, "id": id, "value": body.get("value"), "class": row.get("class")}
+    return {"ok": False, "error": (body or {}).get("error") or f"server said {status}"}
+
+
+def settings_set(id, value, as_name=None, root=None):
+    row = _server_row(id)
+    if row is None:
+        return run_door("settings.set", {"id": id, "value": setting_value(id, value, as_name)}, as_name)
+    body = {"id": id, "value": door_value(row, value), **({"root": root} if root else {}), **({"as": as_name} if as_name else {})}
+    status, ans = http("/settings/door", body, timeout=30, origin=False)
+    return door_explain(status, ans)
+
+
+def settings_requests():
+    status, body = http("/settings/requests")
+    if status == 200 and isinstance(body, dict) and isinstance(body.get("requests"), list):
+        return {"ok": True, "value": [{k: r[k] for k in ("id", "setting", "root", "diff", "expires", "who") if k in r} for r in body["requests"]]}
+    return {"ok": False, "error": explain(status, body)["error"]}
 
 
 # ── a Jira card: the same routes as the screen, by name ─────────────────────
@@ -603,10 +719,14 @@ def main(argv=None):
                 q.add_argument("--" + k.replace("_", "-"), dest=k, default=None, required=(required and k == "updated"), help=why)
     p = sub.add_parser("settings", help="list, read or change the settings an agent may touch")
     ss = p.add_subparsers(dest="verb", required=True)
-    ss.add_parser("list")
-    ss.add_parser("get").add_argument("id")
+    ss.add_parser("list", help="every setting, the window's and the server's, with its class; and the requests waiting for the person")
+    ss.add_parser("requests", help="the changes you asked for that wait for the person")
+    q = ss.add_parser("get")
+    q.add_argument("id")
+    q.add_argument("--root", default=None, help="the project, for a setting held per project (the chair, a project's policy)")
     q = ss.add_parser("set")
     q.add_argument("id")
+    q.add_argument("--root", default=None, help="the project, for a setting held per project (the chair, a project's policy)")
     q.add_argument("value", help="true/false and numbers are read as such, unless the setting stores text (settings list says which); anything else is text")
     a = ap.parse_args(argv)
 
@@ -649,11 +769,13 @@ def main(argv=None):
         present = "now" if a.now else "quiet" if a.quiet else None
         return emit(run_door(a.id, typed, a.as_name, listing, present))
     if a.verb == "list":
-        return emit(run_door("settings.list", {}, a.as_name))
+        return emit(settings_list(a.as_name))
+    if a.verb == "requests":
+        return emit(settings_requests())
     if a.verb == "get":
-        return emit(run_door("settings.get", {"id": a.id}, a.as_name))
+        return emit(settings_get(a.id, a.as_name, a.root))
     # A value starting with "-" would be read as an option; "--" before it is the way.
-    return emit(run_door("settings.set", {"id": a.id, "value": setting_value(a.id, a.value, a.as_name)}, a.as_name))
+    return emit(settings_set(a.id, a.value, a.as_name, a.root))
 
 
 if __name__ == "__main__":

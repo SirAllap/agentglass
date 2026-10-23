@@ -46,6 +46,19 @@ describe("what an address is", () => {
     ]) expect(guard.blockedAddress(ip), ip).not.toBeNull();
   });
 
+  test("the other clouds' metadata addresses are refused in every spelling, and the ranges around them are not", () => {
+    for (const ip of [
+      "100.100.100.200", "::ffff:100.100.100.200", "::ffff:6464:64c8", "64:ff9b::6464:64c8", "2002:6464:64c8::",
+      "fd00:ec2::254", "FD00:EC2::254", "fd00:ec2:0:0:0:0:0:254", "fd00:0ec2:0000:0000:0000:0000:0000:0254", "fd00:ec2:0::254",
+    ]) expect(guard.blockedAddress(ip), ip).not.toBeNull();
+    for (const ip of ["100.100.100.201", "100.100.100.199", "100.64.0.1", "fd00:ec2::255", "fd00:ec3::254", "fd00::254", "fd12::1"]) {
+      expect(guard.blockedAddress(ip), ip).toBeNull();
+      expect(guard.privateAddress(ip), ip).toBe(true); // still the pinning rule's job
+    }
+    expect(guard.literalRefusal("http://[fd00:ec2::254]/")).not.toBeNull();
+    expect(guard.literalRefusal("http://100.100.100.200/")).not.toBeNull();
+  });
+
   test("loopback, the private ranges and the public internet are not — that is the pinning rule's job", () => {
     for (const ip of ["127.0.0.1", "10.0.0.1", "172.16.5.5", "192.168.1.1", "100.64.0.1", "::1", "fd00::1", "::ffff:127.0.0.1",
       "93.184.216.34", "2001:db8::1", "2001:db8::a9fe:a9fe", "64:ff9b:1::a9fe:a9fe"]) {

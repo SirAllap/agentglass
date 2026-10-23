@@ -205,6 +205,10 @@ describe("the promises SECURITY.md makes about retention", () => {
    */
   const REVIEWED = new Set([
     "/pair/forget",
+    // Revokes every paired device's credential at once (devices.json), the same
+    // act /pair/forget does for one. It records nothing and opens no database;
+    // the check below holds it to that.
+    "/pair/forget-all",
     // Deletes a task in Taskwarrior — the user's own list, in their own store,
     // which agentglass reads and does not record. Nothing of ours is removed,
     // and refusing a task manager the ability to delete a task would be an odd

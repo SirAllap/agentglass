@@ -1370,6 +1370,16 @@ async function restoreOnce(mode: "lazy" | "all"): Promise<{ ok: boolean; restore
 async function restorePass(mode: "lazy" | "all"): Promise<{ ok: boolean; restored: number; error?: string }> {
   const state = readRestoreState();
   if (!state || !state.sessions.length) return { ok: false, restored: 0, error: "nothing captured yet — no restore state" };
+  /* capturedAt is refreshed at least every FRESH_MS while the app runs, so its
+     age is how long the app has been away. Past KEEP_UNSEEN_MS the capture
+     already counts as abandoned (the same horizon the capture side forgets an
+     unseen session at); the desk is not rebuilt from it, and the capture that
+     follows the restore attempt replaces it. */
+  const age = Date.now() - state.capturedAt;
+  if (age > KEEP_UNSEEN_MS) {
+    console.warn(`[tmux/restore] snapshot is ${Math.round(age / 86_400_000)} days old, older than ${KEEP_UNSEEN_MS / 86_400_000}; not restoring it`);
+    return { ok: false, restored: 0, error: "the captured layout is too old to restore" };
+  }
   /* Everything this pass built, so the sweep below can ask what survived. */
   const made: Made[] = [];
   const { engine } = await liveSessions();

@@ -16,22 +16,39 @@
  * the old box until they do.
  */
 import { useId, useState, type ReactNode } from "react";
-import { CaretIcon } from "../lib/glyphIcons.tsx";
+import { CaretIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import type { SavePhase } from "../lib/settingsStates.ts";
 import { ICON } from "../lib/iconSize.ts";
 import { Button, CHIP_SURFACE, CHIP_SURFACE_CLS, CTRL_H } from "./workspace/Chrome.tsx";
 
 /**
- * A group of settings: a title, one sentence under it, and the rows.
+ * What a card is for. `default` is a group of settings. `decision` is a card
+ * that needs the person to decide something (the gate is off, a step is theirs):
+ * an amber edge along its top, so a page of cards says which one to read first.
+ * `danger` is the separate red-tinted "Danger zone" card: its actions are
+ * outline buttons, never filled, and what they do can be undone.
+ * `error` is the card whose service failed (Jira's token was refused): the
+ * same red tint, but its buttons stay filled, because "Try again" is the way out.
+ */
+export type CardTone = "default" | "decision" | "danger" | "error";
+
+/**
+ * A group of settings: an optional icon chip, a title, one sentence under it,
+ * and the rows.
  *
  * `status` is the group's verdict ("2 of 5 connected"), `actions` its one
  * action (Recheck, Add). Both sit at the top right in every state, so a
- * verdict that is still loading does not move the button beside it. There is
- * no line under the header: the space is the break.
+ * verdict that is still loading does not move the button beside it. The
+ * header's line is the first row's divider (see index.css), so a card with no
+ * header has no line above its first row.
+ *
+ * `wide` is for a card that is a list, an editor or a table: it takes the whole
+ * width of the page instead of one column of the card flow.
  *
  * It hides itself when a search has filtered away every row in it (see the
  * `:has(> .agx-scard-body:empty)` rule in index.css).
  */
-export function SettingsCard({ title, desc, status, actions, children, label, fold }: {
+export function SettingsCard({ title, desc, status, actions, children, label, fold, icon, tone = "default", wide }: {
   title?: string;
   desc?: ReactNode;
   status?: ReactNode;
@@ -42,30 +59,37 @@ export function SettingsCard({ title, desc, status, actions, children, label, fo
   /** A card that opens and closes from its header: the whole header is the
    *  target. Status and actions still sit at its right. */
   fold?: { open: boolean; onToggle: (open: boolean) => void };
+  /** The mark in the tinted chip before the title: a nav-style icon element. */
+  icon?: ReactNode;
+  tone?: CardTone;
+  wide?: boolean;
 }) {
   const id = useId();
   const head = (title || status || actions) ? (
     <>
-      <div className="min-w-0 flex items-start gap-2">
+      <div className="agx-scard-top">
         {fold && (
-          <span aria-hidden className="agx-disclosure-caret mt-0.5" style={fold.open ? { transform: "none" } : undefined}>
+          <span aria-hidden className="agx-disclosure-caret" style={fold.open ? { transform: "none" } : undefined}>
             <CaretIcon size={ICON.sm} />
           </span>
         )}
-        <div className="min-w-0">
-          {title && <h3 id={id} className="agx-settings-head-t m-0">{title}</h3>}
-          {desc && <div className="agx-scard-desc">{desc}</div>}
-        </div>
+        {icon && <span aria-hidden className="agx-scard-ic">{icon}</span>}
+        {title && <h3 id={id} className="agx-settings-head-t m-0">{title}</h3>}
+        {(status || actions) && (
+          <div className="agx-slot">{status}{actions}</div>
+        )}
       </div>
-      {(status || actions) && (
-        <div className="agx-slot">{status}{actions}</div>
-      )}
+      {desc && <div className="agx-scard-desc">{desc}</div>}
     </>
   ) : null;
-  const name = { "aria-labelledby": title ? id : undefined, "aria-label": title ? undefined : label };
+  const name = {
+    "aria-labelledby": title ? id : undefined, "aria-label": title ? undefined : label,
+    "data-tone": tone === "default" ? undefined : tone,
+    className: wide ? "agx-scard agx-scard-wide" : "agx-scard",
+  };
   if (fold) {
     return (
-      <section className="agx-scard" {...name}>
+      <section {...name}>
         <details open={fold.open} onToggle={(e) => fold.onToggle((e.currentTarget as HTMLDetailsElement).open)}>
           <summary className="agx-scard-head agx-fold list-none">{head}</summary>
           <div className="agx-scard-body">{children}</div>
@@ -74,7 +98,7 @@ export function SettingsCard({ title, desc, status, actions, children, label, fo
     );
   }
   return (
-    <section className="agx-scard" {...name}>
+    <section {...name}>
       {head && <div className="agx-scard-head">{head}</div>}
       <div className="agx-scard-body">{children}</div>
     </section>
@@ -82,46 +106,61 @@ export function SettingsCard({ title, desc, status, actions, children, label, fo
 }
 
 /**
- * The verdict on one thing: a dot and a few words, at the compact height.
+ * The verdict on one thing, as a chip: a dot and a few words. One family for a
+ * row, a card header and the page header alike.
  *
- *   ok        connected, ready — a filled dot in success ink
- *   warn      the person is needed — warning ink. Only then: "not connected"
+ *   ok        connected, ready: a filled dot, success ink
+ *   warn      the person is needed: warning ink. Only then: "not connected"
  *             on something optional is `off`, not a warning
- *   err       broken — error ink
- *   off       not connected, not installed — a hollow dot, neutral
- *   checking  no answer yet — neutral, and says so
+ *   err       broken: error ink
+ *   info      worth knowing, nothing to do: info ink
+ *   off       not connected, not installed: a hollow dot, neutral
+ *   checking  no answer yet: neutral, and says so
+ *   saving    a write is out: info, with a spinner where the dot is
  *
  * Text is always the `--*-ink` of its hue, never the bare hue: the bare
- * warning yellow measured about 1.6:1 on the light card.
+ * warning yellow measured about 1.6:1 on the light card. The look is in
+ * index.css (`.agx-badge`), drawn from the theme's own tokens.
  */
-export type StatusTone = "ok" | "warn" | "err" | "off" | "checking";
-
-const TONE_HUE: Record<StatusTone, string | null> = {
-  ok: "var(--success)", warn: "var(--warning)", err: "var(--error)", off: null, checking: null,
-};
-const TONE_INK: Record<StatusTone, string> = {
-  ok: "var(--success-ink)", warn: "var(--warning-ink)", err: "var(--error-ink)", off: "var(--text3)", checking: "var(--text3)",
-};
+export type StatusTone = "ok" | "warn" | "err" | "info" | "off" | "checking" | "saving";
 
 export function StatusBadge({ tone, children }: { tone: StatusTone; children: ReactNode }) {
-  const hue = TONE_HUE[tone];
-  const ink = TONE_INK[tone];
-  const hollow = !hue;
+  // The spinner is the house `.agx-spin`; it breathes instead of turning under reduced motion.
+  return tone === "saving"
+    ? <span className="agx-badge" data-tone="info"><span className="agx-spin" aria-hidden />{children}</span>
+    : <span className="agx-badge" data-tone={tone}><i aria-hidden />{children}</span>;
+}
+
+/**
+ * What a write says about itself, for a card header or a row: "Saving" while it
+ * is out, "Saved" for a moment after, nothing otherwise. Polite, so a screen
+ * reader hears that a write happened without being pulled off what it is on.
+ */
+export function SaveChip({ phase }: { phase: SavePhase }) {
   return (
-    <span className="agx-badge inline-flex items-center gap-1.5 whitespace-nowrap rounded-full text-[11px] px-2.5"
-      data-tone={tone}
-      style={{
-        height: CTRL_H.compact, color: ink,
-        background: hue ? `color-mix(in srgb, ${hue} 12%, transparent)` : "transparent",
-        boxShadow: `inset 0 0 0 1px ${hue ? `color-mix(in srgb, ${hue} 40%, transparent)` : "var(--surface-line)"}`,
-      }}>
-      <span aria-hidden className="inline-block rounded-full shrink-0" style={{
-        width: 6, height: 6,
-        background: hollow ? "transparent" : ink,
-        boxShadow: hollow ? `inset 0 0 0 1px ${ink}` : undefined,
-      }} />
-      {children}
+    <span role="status" aria-live="polite" className="agx-save">
+      {phase === "saving" && <StatusBadge tone="saving">Saving</StatusBadge>}
+      {phase === "saved" && <StatusBadge tone="ok">Saved</StatusBadge>}
     </span>
+  );
+}
+
+/**
+ * A service that did not answer, said where the cards would be: what failed in
+ * one bold line, why under it, and the way out at the end. Red ground, so it
+ * is the first thing read on the page; the same words are in the page header's
+ * chip and behind the nav's red dot, which the page reports (SettingsPageState).
+ */
+export function ProblemNote({ title, children, action }: { title: string; children?: ReactNode; action?: ReactNode }) {
+  return (
+    <div className="agx-settings-row agx-problem" role="alert">
+      <span aria-hidden className="agx-problem-ic"><WarningIcon size={ICON.md} /></span>
+      <div className="agx-problem-b">
+        <b>{title}</b>
+        {children && <span>{children}</span>}
+      </div>
+      {action && <div className="agx-slot">{action}</div>}
+    </div>
   );
 }
 
@@ -220,10 +259,11 @@ export function LinkButton({ href, children }: { href: string; children: ReactNo
   );
 }
 
-/** A Select drawn at the house control height with the chip edge, and wide
- *  enough for its longest option: the default trigger is borderless and caps at
- *  160px, which cut "Auto (bundled first)" mid-word. */
-export const SELECT_BOX = { height: CTRL_H.regular, maxWidth: 260, ...CHIP_SURFACE } as const;
+/** A Select wide enough for its longest option: the default trigger caps at
+ *  160px, which cut "Auto (bundled first)" mid-word. Its look, in a settings
+ *  page, is `.agx-settings-col .agx-select` in index.css: the page's own ground
+ *  and an edge, at the large control height, the same for every select there. */
+export const SELECT_BOX = { maxWidth: 260 } as const;
 
 
 

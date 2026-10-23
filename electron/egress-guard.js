@@ -133,6 +133,15 @@ function embeddedV4(h) {
   return null;
 }
 
+/* Two more places a cloud puts its metadata service: Alibaba's 100.100.100.200
+   sits inside CGNAT and AWS's fd00:ec2::254 inside unique-local, both of which
+   stay allowed (Tailscale lives in CGNAT). Named, not a range, and compared as
+   groups so every spelling of the v6 one matches. */
+const isAwsV6Metadata = (h) => {
+  const g = ipv6Groups(h);
+  return g[0] === 0xfd00 && g[1] === 0x0ec2 && g[7] === 0x254 && g.slice(2, 7).every((n) => n === 0);
+};
+
 const strip = (h) => String(h || "").replace(/^\[|\]$/g, "").toLowerCase();
 
 /** Why an address may not be connected to at all, or null. The same rule as
@@ -143,11 +152,13 @@ function blockedAddress(ipRaw) {
   if (v === 4) {
     if (ip === "0.0.0.0") return "the unspecified address";
     const [a, b] = ip.split(".").map(Number);
+    if (ip === "100.100.100.200") return "a cloud metadata endpoint";
     return a === 169 && b === 254 ? "link-local (where cloud metadata lives)" : null;
   }
   if (v === 6) {
     if (ip === "::") return "the unspecified address";
     if (/^fe[89ab]/.test(ip)) return "link-local";
+    if (isAwsV6Metadata(ip)) return "a cloud metadata endpoint";
     const inner = embeddedV4(ip);
     return inner ? blockedAddress(inner) : null;
   }

@@ -146,6 +146,43 @@ export function PlugIcon({ size = ICON.md }: P) {
   );
 }
 
+/* The next four are the mockup's own: two pages sharing a glyph (three plugs, two checklists) are
+   indistinguishable on the 68px icon rail, where the label is gone. */
+export function ChipIcon({ size = ICON.md }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <rect x="7" y="7" width="10" height="10" rx="2" />
+      <path d="M10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4" />
+    </svg>
+  );
+}
+
+export function FlowIcon({ size = ICON.md }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <rect x="4" y="4" width="6" height="5" rx="1.5" />
+      <rect x="14" y="15" width="6" height="5" rx="1.5" />
+      <path d="M10 6.5h4a2 2 0 0 1 2 2V15" />
+    </svg>
+  );
+}
+
+export function LayersIcon({ size = ICON.md }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <path d="M12 4l8.5 4.5L12 13 3.5 8.5zM3.5 12.5L12 17l8.5-4.5M3.5 16.5L12 21l8.5-4.5" />
+    </svg>
+  );
+}
+
+export function DiamondIcon({ size = ICON.md }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <path d="M12 3l9 9-9 9-9-9zM12 8l4 4-4 4-4-4z" />
+    </svg>
+  );
+}
+
 export function ServerIcon({ size = ICON.md }: P) {
   return (
     <svg {...svg} width={size} height={size}>
@@ -217,6 +254,46 @@ export function InboxIcon({ size = ICON.md }: P) {
     <svg {...svg} width={size} height={size}>
       <path d="M3 12.5h4.5l1.5 2.5h6l1.5-2.5H21" />
       <path d="M5.2 5.5h13.6L21 12.5v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4z" />
+    </svg>
+  );
+}
+
+/* The Settings shell's own glyphs: one per nav group, the search box, the
+   group caret. Same 24x24 stroke style as above. */
+export type GroupIconKey = "cog" | "window" | "bot" | "shelf" | "link";
+
+export function GroupIcon({ name, size = ICON.md }: { name: GroupIconKey; size?: number }) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      {name === "cog" && <><circle cx="12" cy="12" r="3.2" /><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" /></>}
+      {name === "window" && <path d="M3 6.5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM3 9.5h18" />}
+      {name === "bot" && <path d="M12 3v3M6 8h12a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2zM9 13h.01M15 13h.01M9 17h6" />}
+      {name === "shelf" && <path d="M5 4v16M10 4v16M15 5.5l4 14.5" />}
+      {name === "link" && <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" />}
+    </svg>
+  );
+}
+
+export function SearchIcon({ size = ICON.md }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <circle cx="11" cy="11" r="6.5" /><path d="M16 16l4.5 4.5" />
+    </svg>
+  );
+}
+
+export function ChevronDownIcon({ size = ICON.md }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  );
+}
+
+export function ChevronRightIcon({ size = ICON.md }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <path d="M9 6l6 6-6 6" />
     </svg>
   );
 }

@@ -9,7 +9,7 @@
  */
 import { beforeEach, describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
-import { addTab, closeTab, pickSleeper, SLEEP_GRACE_MS, type Recency, popupHome, isBlank, listable, MAX_TABS, newTab, patchTab, pruneBlank, stepTab, tabLabel, withInspected, __resetTabIds } from "../src/lib/browserTabs.ts";
+import { addTab, closeTab, pickSleeper, wake, SLEEP_GRACE_MS, type Recency, popupHome, isBlank, listable, MAX_TABS, newTab, patchTab, pruneBlank, stepTab, tabLabel, withInspected, __resetTabIds } from "../src/lib/browserTabs.ts";
 
 beforeEach(__resetTabIds);
 
@@ -176,6 +176,17 @@ describe("a full strip puts the least-used tab to sleep", () => {
     const r = addTab(tabs, "https://thirteen.test/", undefined, undefined, undefined, undefined, rec(tabs, { held: () => true }));
     expect("error" in r).toBe(true);
     if ("error" in r) expect(r.error).toContain("in an agent's hands");
+  });
+
+  it("waking a sleeper at the cap puts the least-used awake tab to sleep, so the cap holds", () => {
+    // 14 pages: 12 awake, 2 asleep. Waking each one used to reach 14 awake.
+    const full12 = full();
+    const tabs = [...full12, { ...newTab("https://a.test/"), asleep: true }, { ...newTab("https://b.test/"), asleep: true }];
+    let now = tabs;
+    for (const id of [tabs[12]!.id, tabs[13]!.id]) now = wake(now, id, rec(now));
+    expect(now.filter((t) => !t.asleep).length).toBe(MAX_TABS);
+    expect(now.find((t) => t.id === tabs[12]!.id)!.asleep).toBeFalsy();
+    expect(now.find((t) => t.id === tabs[13]!.id)!.asleep).toBeFalsy();
   });
 
   it("grace is minutes, so an agent between two verbs keeps its page", () => {

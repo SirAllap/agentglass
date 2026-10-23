@@ -408,7 +408,11 @@ export function seatAllows(powers: "speak" | "nudge" | "assign", method: string,
     /* Asking the person for a decision is the opposite of acting without one:
        a seat with no powers at all must still be able to say "this needs you",
        or the only way it has to escalate is to do the thing itself. */
-    || pathname === "/seat/need" || pathname === "/seat/need/finish" || pathname === "/seat/need/drop") return true;
+    || pathname === "/seat/need" || pathname === "/seat/need/finish" || pathname === "/seat/need/drop"
+    /* Asking for a setting is the same kind of thing: the settings door applies
+       only what is low-risk or narrows, and the rest waits for the person. It
+       holds the seat to its own project; answering a request is never here. */
+    || pathname === "/settings/door") return true;
   if (READ_POST.has(pathname)) return true;
   if (powers === "speak") return false;
   if (SEAT_POST_NUDGE.has(pathname)) return true;

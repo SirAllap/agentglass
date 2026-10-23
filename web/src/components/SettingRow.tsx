@@ -67,7 +67,14 @@ export function textOf(n: React.ReactNode): string {
  * named for what it holds (see SettingsKit's Disclosure).
  */
 
-export function SettingRow({ label, hint, control, status, actions, below, detail, rowRef, rowProps, minHeight, onClick, href, download, disabled, role, ariaChecked, align, modified, settingId }: {
+/** A segmented choice whose options do not fit beside a name in a narrow card:
+ *  about 30 characters of labels, padding counted in (4k 10k 25k 50k is 27 and
+ *  fits; Auto GPU Canvas Compatibility is 42 and does not). */
+export function choiceIsWide(labels: readonly string[]): boolean {
+  return labels.reduce((n, l) => n + l.length + 4, 0) >= 30;
+}
+
+export function SettingRow({ label, hint, control, status, actions, below, detail, rowRef, rowProps, minHeight, onClick, href, download, disabled, role, ariaChecked, align, modified, settingId, wide }: {
   /** The SettingDef this row binds to (web/src/lib/settingsRegistry.ts), written
    *  BEFORE `label` so the settings index generator reads it with the row. Also
    *  `agentExempt`, a row that is not a setting, which is read from source only. */
@@ -113,6 +120,9 @@ export function SettingRow({ label, hint, control, status, actions, below, detai
   align?: "center" | "start";
   /** Differs from the shipped default: a dot before the label. */
   modified?: boolean;
+  /** The control is wider than a narrow card can spare beside the words: under
+   *  560px of card it drops under them, left-aligned. */
+  wide?: boolean;
 }) {
   const { on, q, seen } = useContext(Filter);
   // Counted on every render, filtering or not: the count is what decides
@@ -134,7 +144,7 @@ export function SettingRow({ label, hint, control, status, actions, below, detai
   const body = (
     <>
       <span className="min-w-0">
-        <span className="block text-[13.5px]" style={{ color: "var(--text)" }}>
+        <span className="agx-row-name">
           {modified && (
             <span role="img" aria-label="Changed from default" title="Changed from default"
               className="inline-block rounded-full mr-2 align-middle"
@@ -142,11 +152,11 @@ export function SettingRow({ label, hint, control, status, actions, below, detai
           )}
           {label}
         </span>
-        {/* mt-1, not mt-0.5. A 2px gap under 13.5px type is not a gap — the
-            sweep found this pair "touching" on every settings pane there is.
-            4px is the step for "these two are one thought". */}
+        {/* The help is one muted line under the name, and a 4px gap: a 2px gap
+            under 13.5px type is not a gap (the sweep found this pair "touching"
+            on every settings pane there is). See `.agx-row-help` in index.css. */}
         {hint !== undefined && hint !== "" && (
-          <span className="block text-[12px] t-dim mt-1">{hint}</span>
+          <span className="agx-row-help">{hint}</span>
         )}
         {more && <Disclosure summary={more.summary}>{more.body}</Disclosure>}
       </span>
@@ -162,7 +172,7 @@ export function SettingRow({ label, hint, control, status, actions, below, detai
       {stacked !== undefined && <div className="agx-row-below">{stacked}</div>}
     </>
   );
-  const cls = `agx-settings-row${top ? " items-start" : ""}${onClick || href ? " agx-hover" : ""}`;
+  const cls = `agx-settings-row${top ? " items-start" : ""}${onClick || href ? " agx-hover" : ""}${wide ? " agx-row-wide" : ""}`;
   const style: React.CSSProperties | undefined = disabled || minHeight
     ? { ...(disabled ? { opacity: 0.55 } : null), ...(minHeight && !operable ? { minHeight } : null) }
     : undefined;
@@ -197,24 +207,15 @@ export function SettingRow({ label, hint, control, status, actions, below, detai
  * control column so the control column stays what it is everywhere else: the
  * place where the thing you operate lives.
  */
-/** The on/off pill every toggle row draws. The track is a bare `<span>`,
- *  which defaults to `display: inline` — an inline element ignores its own
- *  `width`/`height`, so without `inline-block` the 34×19 track collapses to
- *  the size of its content (nothing, since the knob is `position: absolute`
- *  and out of flow) and only the 15px knob paints. That read as a plain dot
- *  rather than a switch, which is the whole reason this is a named export
- *  instead of a copy pasted per pane. */
+/** The on/off pill every toggle row draws, drawn by `.agx-switch` in index.css:
+ *  the track is `inline-block` there, because a bare `<span>` ignores its own
+ *  width and height and collapses to a dot. On is the success colour, off a
+ *  tint of the text, the knob the page's ground on both, so position AND colour
+ *  carry the state. A named export rather than a copy per pane. */
 export function Switch({ on, busy }: { on: boolean; busy?: boolean }) {
   return (
-    <span className="inline-block shrink-0 relative rounded-full transition-colors" style={{
-      width: 34, height: 19, opacity: busy ? 0.5 : 1,
-      background: on ? "color-mix(in srgb, var(--primary) 55%, transparent)" : "color-mix(in srgb, var(--border) 55%, transparent)",
-    }}>
-      <span className="absolute rounded-full transition-transform" style={{
-        width: 15, height: 15, top: 2, left: 2,
-        transform: on ? "translateX(15px)" : "translateX(0)",
-        background: on ? "var(--primary-hover)" : "var(--text3)",
-      }} />
+    <span className="agx-switch" data-on={on ? "" : undefined} style={busy ? { opacity: 0.5 } : undefined}>
+      <span className="agx-switch-knob" />
     </span>
   );
 }

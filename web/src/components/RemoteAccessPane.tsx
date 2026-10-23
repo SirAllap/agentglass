@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SettingRow, Switch } from "./SettingRow.tsx";
-import { CommandLine, SELECT_BOX, EmptyState, SettingsCard, StatusBadge } from "./SettingsKit.tsx";
+import { CommandLine, SELECT_BOX, EmptyState, ProblemNote, SettingsCard, StatusBadge } from "./SettingsKit.tsx";
+import { useReportProblem, useReportSaving } from "./SettingsPageState.tsx";
+import { problemChip } from "../lib/settingsStates.ts";
 import { Select } from "./Select.tsx";
 import { api } from "../lib/api.ts";
 import { IS_DESKTOP, remoteAccessEnabled, setRemoteAccess, revokeRemoteAccess } from "../lib/desktop.ts";
@@ -10,6 +12,8 @@ import { PairPanel } from "./PairPanel.tsx";
 import { usePoll } from "../lib/usePoll.ts";
 import type { RemoteStatus, RemoteDevice } from "../../../shared/types.ts";
 import { Button } from "./workspace/Chrome.tsx";
+import { PhoneIcon, ServerIcon, ShieldIcon } from "./settingsNavIcons.tsx";
+import { ICON } from "../lib/iconSize.ts";
 
 /**
  * Open the dashboard on your phone.
@@ -47,6 +51,8 @@ import { Button } from "./workspace/Chrome.tsx";
  */
 export function RemoteAccessPane({ open }: { open: boolean }) {
   const [st, setSt] = useState<RemoteStatus | null>(null);
+  /** The last read of the network state failed (the server did not answer), as against one that has not come back yet. */
+  const [failed, setFailed] = useState(false);
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
@@ -86,8 +92,9 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
     if (fresh) { setChosen(fresh); writePick(fresh); }
   }, []);
   const load = useCallback(() => {
-    api.remoteStatus(wantFresh.current).then(apply).catch(() => setSt(null));
+    api.remoteStatus(wantFresh.current).then((s) => { setFailed(false); apply(s); }).catch(() => { setSt(null); setFailed(true); });
   }, [apply]);
+  useReportProblem("remote", failed ? { chip: problemChip(), title: "Could not read the network state." } : null, load);
 
   useEffect(() => {
     if (!open) return;
@@ -104,6 +111,7 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
     return () => clearTimeout(t);
   }, [open]);
 
+  useReportSaving("remote", busy);
   const toggle = async () => {
     setBusy(true);
     // The shell restarts the sidecar and hands the page its new origin and
@@ -128,7 +136,7 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
     // looking — a shell profile, a tmux server's environment, a launcher. Say
     // what to do instead, and what happens once it is done.
     if (ok === false) setRevokeNote("AGENTGLASS_TOKEN is set in the environment this app was started from, so rotating a file the server does not read would report a revoke that did not happen. Unset it where it is exported (a shell profile, or `tmux setenv -gu AGENTGLASS_TOKEN` if you start the app from tmux), then start agentglass again. The app will keep its own code from then on, and this button will rotate it.");
-    else if (ok === null) setRevokeNote("This shell cannot rotate the access code.");
+    else if (ok === null) setRevokeNote("Nothing was changed: this shell cannot rotate the access code, or the server did not confirm that it had forgotten every paired device.");
   };
 
   const copy = (text: string) => {
@@ -138,8 +146,10 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
   };
 
   if (!st) return (
-    <SettingsCard title="Remote access" desc="Reaching this machine from a phone, and what that phone is allowed to do.">
-      <SettingRow label="Reading network state…" status={<StatusBadge tone="checking">Checking</StatusBadge>} />
+    <SettingsCard title="Remote access" icon={<PhoneIcon size={ICON.sm} />} tone={failed ? "error" : "default"} desc="Reaching this machine from a phone, and what that phone is allowed to do.">
+      {failed
+        ? <ProblemNote title="Could not read the network state" action={<Button onClick={load}>Try again</Button>}>The local server did not answer. Whatever was paired stays paired; nothing here was changed.</ProblemNote>
+        : <SettingRow label="Reading network state…" status={<StatusBadge tone="checking">Checking</StatusBadge>} />}
     </SettingsCard>
   );
 
@@ -181,7 +191,8 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
 
   return (
     <>
-      <SettingsCard title="Remote access" desc="Reaching this machine from a phone, and what that phone is allowed to do.">
+      {/* Amber only for a real decision: the server listens but the gate would refuse every phone. */}
+      <SettingsCard title="Remote access" icon={<PhoneIcon size={ICON.sm} />} tone={st.exposed && !st.trustLan ? "decision" : "default"} desc="Reaching this machine from a phone, and what that phone is allowed to do.">
         {/* Always first, always the same row: what the server is doing, whether
             anything is attached to it at this instant, and the switch. */}
         {enabled === null ? (
@@ -257,7 +268,7 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
           <PairPanel baseUrl={url} variant={firstRun ? "hero" : "row"} onPaired={setPaired}
             canTurnOnHttps={!!st.tailnet?.installed && !st.addresses.some((a) => a.secure)} onStatus={apply} />
 
-          <SettingsCard title="Address">
+          <SettingsCard title="Address" icon={<ServerIcon size={ICON.sm} />}>
             <SettingRow
               label="Address"
               hint="Safe to share — it is an address, not a key. On a device that is not paired it opens a page and nothing else."
@@ -368,12 +379,12 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
           take back the key, and since the desktop app began requiring a token
           on loopback too, the code still guards something with the switch off. */}
       {enabled !== null && st.tokenRequired && (
-        <SettingsCard title="Access code">
+        <SettingsCard title="Access code" icon={<ShieldIcon size={ICON.sm} />} tone="danger">
           <SettingRow
             label={<span style={{ color: "var(--error-ink)" }}>Revoke this link</span>}
             hint={confirming
-              ? "Every device that has this link stops working, including the ones you cannot reach. A new code is generated and the phones you still want will need to scan it again."
-              : "Rotates the access code. This is the revoke that reaches a device you no longer have in your hand."}
+              ? "Every paired device is forgotten, including the ones you cannot reach, and a new code is generated. The phones you still want will need to pair again."
+              : "Forgets every paired device and rotates the access code. This is the revoke that reaches a device you no longer have in your hand."}
             actions={confirming ? (
               <>
                 <Button tone="danger" onClick={revoke} disabled={busy}>{busy ? "Revoking…" : "Revoke"}</Button>
@@ -455,6 +466,7 @@ function Seen({ st, onChanged }: { st: RemoteStatus; onChanged: () => void }) {
 
   return (
     <SettingsCard
+      icon={<PhoneIcon size={ICON.sm} />}
       title="Who has reached this machine"
       desc={clients.liveCount > 0
         ? `${clients.liveCount === 1 ? "One device is" : `${clients.liveCount} devices are`} connected right now`

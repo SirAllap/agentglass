@@ -485,7 +485,7 @@ function startRead(creds: JiraCreds, site: string, view: SavedView, force: boole
     const last = quick.length ? undefined : cachedFor(site, view.id);
     const error = r.error ?? "Could not read that view";
     return {
-      ok: false, error, view, ...(r.throttled ? { throttled: true } : null),
+      ok: false, error, view, ...(r.throttled ? { throttled: true } : null), ...(r.unauthorised ? { unauthorised: true } : null),
       tasks: last?.tasks ?? [], columns: last?.columns ?? [], ...(last?.statuses ? { statuses: last.statuses } : null), at: last?.at ?? 0,
       ...(last?.truncated ? { truncated: true } : null), ...(last ? { cached: true } : null),
     };
@@ -533,7 +533,8 @@ export async function viewRead(id?: string, o: { force?: boolean; cached?: boole
     if (quick.length) trimNarrowed();
     return { ok: true, data: await run };
   });
-  return settled.ok && settled.data ? settled.data : emptyRead(settled.error ?? NOT_CONNECTED, view);
+  if (settled.ok && settled.data) return settled.data;
+  return { ...emptyRead(settled.error ?? NOT_CONNECTED, view), ...(settled.unauthorised ? { unauthorised: true } : null) };
 }
 
 // ---------------------------------------------------------------------------

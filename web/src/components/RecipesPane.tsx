@@ -12,13 +12,15 @@
  * console path a typed command takes. That separation is the whole reason a
  * parameter box is safe to have.
  */
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { api } from "../lib/api.ts";
 import { retryLoad } from "../lib/retryLoad.ts";
 import type { Recipe, RecipeParam, GitRepoRef } from "../../../shared/types.ts";
 import { consoleRoot, runInConsole } from "./TerminalPanel.tsx";
-import { SettingRow } from "./SettingRow.tsx";
-import { EmptyState, Field, SettingsCard, SettingsForm, helpIdFor } from "./SettingsKit.tsx";
+import { Field, SettingsCard, SettingsForm, helpIdFor } from "./SettingsKit.tsx";
+import { EditorFoot, EditorPanel, ListBar, ListEditorSplit, ListPanel, NewButton, NothingSelected, differs } from "./SettingsListEditor.tsx";
+import { CommandIcon } from "./settingsNavIcons.tsx";
+import { useReportSaving } from "./SettingsPageState.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { IconLabel, PlusIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
@@ -39,10 +41,14 @@ export function RecipesPane({ open }: { open: boolean }) {
   const [editing, setEditing] = useState<Recipe | null>(null);
   const [running, setRunning] = useState<Recipe | null>(null);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  useReportSaving("recipes", busy);
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
+  const [q, setQ] = useState("");
+  const firstShown = useRef(false);
 
   const load = useCallback(async () => {
-    try { setList((await api.recipes()).recipes); } catch { setList([]); }
+    try { const l = (await api.recipes()).recipes; setList(l); return l; } catch { setList([]); return []; }
   }, []);
   useEffect(() => {
     if (!open) return;
@@ -50,61 +56,78 @@ export function RecipesPane({ open }: { open: boolean }) {
     api.gitRepos().then(({ repos: r }) => setRepos(r)).catch(() => {});
   }, [open, load]);
 
+  /* The first command is open when the page is: an editor with nothing in it, beside a list, reads as broken. */
+  useEffect(() => { if (list?.length && !editing && !firstShown.current) { firstShown.current = true; setEditing(list[0]!); } }, [list, editing]);
+
   const save = async (r: Recipe) => {
-    const res = await api.recipeSave(r);
-    if (!res.ok) { setNote({ ok: false, text: res.error ?? "That did not save" }); return; }
-    setNote({ ok: true, text: `${r.name} saved` });
-    setEditing(null);
-    await load();
+    setBusy(true);
+    try {
+      const res = await api.recipeSave(r);
+      if (!res.ok) { setNote({ ok: false, text: res.error ?? "That did not save" }); return; }
+      setNote({ ok: true, text: `${r.name} saved` });
+      const fresh = await load();
+      // Saved: the same one stays open (a new one gets its id from the server, so it is found by name).
+      setEditing(fresh.find((x) => x.id === (r.id || res.recipe?.id)) ?? fresh.find((x) => x.name === r.name) ?? null);
+    } finally { setBusy(false); }
   };
   const drop = async (r: Recipe) => {
     await api.recipeRemove(r.id).catch(() => {});
     setNote({ ok: true, text: `${r.name} removed — nothing else was touched` });
     setEditing(null);
+    setRunning(null);
     await load();
   };
 
-  /* One row per command, on the dialog's grid: the Run and Edit buttons of
-     every recipe land on the same two lines, which is the whole reason a list
-     of saved things is faster to use than a stack of cards. The editor and the
-     run form are cards of their own under the list, so the list never moves
-     to make room for them. New is the card's one action, in the same place
-     whether the list is empty or not. */
+  const saved = editing?.id ? list?.find((x) => x.id === editing.id) : undefined;
+  const ql = q.trim().toLowerCase();
+  const match = (r: Recipe) => !ql || `${r.name} ${r.desc} ${r.steps.join(" ")}`.toLowerCase().includes(ql);
+  /* Everywhere first, then one section per repository the saved ones name. */
+  const repoRoots = [...new Set((list ?? []).filter((r) => r.scope !== "global").map((r) => r.repo ?? ""))];
+  const repoName = (root: string) => repos.find((x) => x.root === root)?.name || root.split("/").pop() || "repository";
+  const entry = (r: Recipe) => ({
+    id: r.id, title: r.name,
+    tags: r.boot ? ["at start"] : undefined,
+    badge: startsClaude(r) ? <LaunchModeBadge mode={r.permissionMode} /> : undefined,
+    sub: <span className="t-mono">{r.steps.find((l) => l.trim()) ?? r.desc}</span>,
+  });
+  const sections = [
+    { id: "global", title: "Everywhere", onAdd: () => setEditing(blank()), addLabel: "New recipe, everywhere",
+      entries: (list ?? []).filter((r) => r.scope === "global" && match(r)).map(entry) },
+    ...repoRoots.map((root) => ({
+      id: root, title: `${repoName(root)} only`,
+      onAdd: () => setEditing({ ...blank(), scope: "repo" as const, repo: root }), addLabel: `New recipe in ${repoName(root)}`,
+      entries: (list ?? []).filter((r) => r.scope !== "global" && (r.repo ?? "") === root && match(r)).map(entry),
+    })),
+  ];
+
+  /* A list beside the editor: the commands on the left, the one open on the right. Run… moved
+     into the editor's head, where the one you are looking at is; its form is a card under the
+     split, so the list never moves to make room for it. */
   return (
     <>
-      <SettingsCard title="Project commands"
-        desc="Ready-to-run commands for the project that is open, and the five you pinned."
-        actions={<Button disabled={!!editing} onClick={() => setEditing(blank())}>
-          <IconLabel icon={<PlusIcon size={ICON.xs} />}>New recipe</IconLabel>
-        </Button>}>
-        {!list && <EmptyState>Reading your recipes…</EmptyState>}
-        {list?.map((r) => (
-          <SettingRow key={r.id}
-            label={r.name}
-            hint={<>
-              {r.desc && <span className="block">{r.desc}</span>}
-              {r.scope === "global" ? "global" : (r.repo?.split("/").pop() ?? "repo")} · {r.steps.length} step{r.steps.length === 1 ? "" : "s"}
-              {r.params?.length ? ` · ${r.params.length} param${r.params.length === 1 ? "" : "s"}` : ""}
-              {r.boot ? " · at start" : ""}
-            </>}
-            status={startsClaude(r) ? <LaunchModeBadge mode={r.permissionMode} /> : undefined}
-            actions={<>
-              <Button onClick={() => setRunning(r)}>Run…</Button>
-              <Button onClick={() => setEditing(r)}>Edit</Button>
-            </>} />
-        ))}
-        {list && !list.length && (
-          <EmptyState>Nothing saved yet. The first one is usually a thing you have typed three times this week.</EmptyState>
-        )}
-        {note && (
-          <div role={note.ok ? "status" : "alert"} className="agx-settings-x pt-2 pb-3 text-[12px]"
-            style={{ color: note.ok ? "var(--success-ink)" : "var(--error-ink)" }}>
-            {note.text}
-          </div>
-        )}
-      </SettingsCard>
-
-      {editing && <Editor r={editing} repos={repos} onChange={setEditing} onSave={save} onDrop={drop} onCancel={() => setEditing(null)} />}
+      <ListBar q={q} onQ={setQ} placeholder={`Filter ${list?.length ?? 0} commands`} label="Filter commands">
+        <NewButton onClick={() => setEditing(blank())}>New recipe</NewButton>
+      </ListBar>
+      {note && (
+        <div role={note.ok ? "status" : "alert"} className="agx-le-note text-[12px] pb-3"
+          style={{ color: note.ok ? "var(--success-ink)" : "var(--error-ink)" }}>
+          {note.text}
+        </div>
+      )}
+      <ListEditorSplit
+        list={<ListPanel sections={sections} selected={editing?.id || null}
+          onSelect={(id) => { const r = list?.find((x) => x.id === id); if (r) { setEditing(r); setRunning(null); } }}
+          nothing={!list ? "Reading your recipes…" : "Nothing matches."}
+          blank={list?.length === 0 ? {
+            icon: <CommandIcon size={ICON.xl} />, title: "No commands yet",
+            text: "A command is a thing you have typed three times this week, kept with the parts that change asked for when you run it.",
+            action: <NewButton onClick={() => setEditing(blank())}>New recipe</NewButton>,
+          } : undefined} />}
+        editor={editing
+          ? <Editor r={editing} saved={saved} repos={repos} busy={busy} onChange={setEditing} onSave={save} onDrop={drop}
+              onRun={editing.id ? () => setRunning(editing) : undefined}
+              onCancel={() => setEditing(saved ?? null)} />
+          : <NothingSelected noun="recipe" label="Command" onNew={() => setEditing(blank())} />} />
       {running && <RunForm r={running} repos={repos} onClose={() => setRunning(null)} onNote={setNote} />}
     </>
   );
@@ -118,9 +141,9 @@ const FIELD = `w-full ${INPUT}`;
  * fields, one primary Save, and Delete up in the card's header where a Save
  * press cannot land on it.
  */
-function Editor({ r, repos, onChange, onSave, onDrop, onCancel }: {
-  r: Recipe; repos: GitRepoRef[];
-  onChange: (r: Recipe) => void; onSave: (r: Recipe) => void; onDrop: (r: Recipe) => void; onCancel: () => void;
+function Editor({ r, saved, repos, busy, onChange, onSave, onDrop, onRun, onCancel }: {
+  r: Recipe; saved?: Recipe; repos: GitRepoRef[]; busy: boolean;
+  onChange: (r: Recipe) => void; onSave: (r: Recipe) => void; onDrop: (r: Recipe) => void; onRun?: () => void; onCancel: () => void;
 }) {
   const uid = useId();
   const f = (k: string) => `${uid}-${k}`;
@@ -132,11 +155,14 @@ function Editor({ r, repos, onChange, onSave, onDrop, onCancel }: {
    *  front rather than letting the save be the first to find out. */
   const cannotBoot = !!(r.params?.length) || !!r.confirm;
   return (
-    <SettingsCard title={r.id ? `Edit ${r.name || "recipe"}` : "New recipe"}
-      actions={r.id ? <Button tone="danger" onClick={() => onDrop(r)}>Delete</Button> : undefined}>
-      <div className="agx-settings-row">
-        <div className="agx-row-below">
+    <EditorPanel label="Command" title={r.name || "New recipe"}
+      chips={r.id ? undefined : [{ tone: "info", text: "Draft" }]}
+      actions={r.id ? <>
+        {onRun && <Button onClick={onRun}>Run…</Button>}
+        <Button tone="danger" onClick={() => onDrop(r)}>Delete</Button>
+      </> : undefined}>
           <SettingsForm label={r.id ? "Edit recipe" : "New recipe"} onSubmit={() => onSave(r)}>
+            <div className="agx-le-body">
             <Field label="Name" htmlFor={f("name")} help="How you will call it.">
               <input id={f("name")} value={r.name} onChange={(e) => set({ name: e.target.value })}
                 aria-describedby={helpIdFor(f("name"))} className={FIELD} style={INPUT_STYLE} />
@@ -254,14 +280,10 @@ function Editor({ r, repos, onChange, onSave, onDrop, onCancel }: {
               </div>
             </div>
 
-            <div className="agx-sform-actions">
-              <Button type="submit" tone="primary">Save</Button>
-              <Button onClick={onCancel}>Cancel</Button>
             </div>
+            <EditorFoot dirty={!r.id || differs(r, saved)} canSave noun="recipe" onCancel={onCancel} busy={busy} />
           </SettingsForm>
-        </div>
-      </div>
-    </SettingsCard>
+    </EditorPanel>
   );
 }
 

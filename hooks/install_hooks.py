@@ -50,11 +50,13 @@ GATE_MARKER = "gate_event.py"
 # until a person decides, and an outward one (a push, a pull request, a
 # comment, a review, a merge, a ticket, a message in a channel) is held closed.
 #
-# So it has its own flag here and its own button in the app, and no `|| exit 0`:
-# swallowing the exit status is exactly what would turn a gate back into
-# telemetry. `gate_event.py` already allows on every failure it controls — an
-# unreachable server, a timeout, an answer it cannot read — so the honest
+# So it has its own flag here and its own button in the app, and no trailing
+# `|| exit 0`: swallowing the exit status is exactly what would turn a gate back
+# into telemetry. `gate_event.py` already allows on every failure it controls —
+# an unreachable server, a timeout, an answer it cannot read — so the honest
 # failure mode lives inside the script instead of being bolted on outside it.
+# The one thing outside it is the script not existing, which `gate_command`
+# guards with a file test.
 
 STATUSLINE = os.path.join(HOOKS_DIR, "statusline.sh")
 # Our status line, recognised by SHAPE rather than by a filename substring.
@@ -212,7 +214,16 @@ def _is_gate(entry):
 
 
 def gate_command(python, gate):
-    return '%s "%s"' % (python, gate)
+    """The gate's command line: a guard for a script that is gone, nothing after.
+
+    No trailing `|| exit 0`: a refusal the gate script exits with must reach
+    Claude Code. Only the script not existing passes, because python exits 2 for
+    that and Claude Code reads 2 as "deny" -- every tool call, everywhere.
+    Kept identical to `gateCommand` in server/src/hooksetup.ts.
+    """
+    if os.name == "nt":
+        return 'if exist "%s" (%s "%s") else (exit /b 0)' % (gate, python, gate)
+    return '[ -f "%s" ] || exit 0; %s "%s"' % (gate, python, gate)
 
 
 def install_gate(cfg):

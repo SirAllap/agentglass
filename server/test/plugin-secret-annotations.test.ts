@@ -136,7 +136,7 @@ beforeAll(async () => {
   await boot();
   const inst = (await (await post("/plugins/install", { source: src })).json()) as Json;
   if (!inst.ok) throw new Error("install failed: " + JSON.stringify(inst));
-  const en = (await (await post("/plugins/enable", { name: MANIFEST.name })).json()) as Json;
+  const en = (await (await fetch(base + "/plugins/enable", { method: "POST", headers: { "Content-Type": "application/json", origin: base }, body: JSON.stringify({ name: MANIFEST.name }) })).json()) as Json;
   if (!en.ok) throw new Error("enable failed: " + JSON.stringify(en));
 }, SERVER_BOOT_MS);
 

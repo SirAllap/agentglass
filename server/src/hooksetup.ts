@@ -268,17 +268,63 @@ function readCfg(path: string): { cfg: any } | { error: string } {
  * worked by convention rather than by tooling. The tool existed and there was
  * no switch.
  *
- * One PreToolUse entry, matcher `*`, and NO `|| exit 0`: swallowing the exit
- * status is what makes telemetry advisory, and a gate whose refusal is
+ * One PreToolUse entry, matcher `*`, and NO trailing `|| exit 0`: swallowing
+ * the exit status is what makes telemetry advisory, and a gate whose refusal is
  * swallowed is not a gate. `gate_event.py` allows on every failure it controls
  * — an unreachable server, a timeout, a bad answer — so the honest failure
  * mode is already inside the script rather than bolted on outside it.
+ *
+ * The one failure it does not control is not existing. The path is absolute and
+ * lives in ~/.claude/settings.json, which outlives the clone; python exits 2
+ * for a script it cannot open, and Claude Code reads 2 as "deny", so a moved
+ * build would block every tool call in every session. The command therefore
+ * checks the file first and passes when it is gone (the Lantern says so, see
+ * `gateScriptMissing`); once the script runs, its status is the answer.
  */
 const GATE_MARKER = "gate_event.py";
 const isGate = (e: any): boolean => asArray(e?.hooks).some((h: any) => String(h?.command ?? "").includes(GATE_MARKER));
 
-export function gateCommand(python: string, script: string): string {
-  return `${python} "${script}"`;
+export function gateCommand(python: string, script: string, windows = process.platform === "win32"): string {
+  return windows
+    ? `if exist "${script}" (${python} "${script}") else (exit /b 0)`
+    : `[ -f "${script}" ] || exit 0; ${python} "${script}"`;
+}
+
+/** The gate script a wired gate command names, and whether that command has the missing-file guard. */
+function gateScriptInfo(cfg: any): { path: string; guarded: boolean } | null {
+  for (const e of asArray(cfg?.hooks?.PreToolUse).filter(isGate)) {
+    for (const h of asArray(e?.hooks)) {
+      const cmd = String(h?.command ?? "");
+      const m = /"([^"]*gate_event\.py)"/.exec(cmd);
+      if (m) return { path: m[1]!, guarded: /^(\[ -f |if exist )/.test(cmd) };
+    }
+  }
+  return null;
+}
+
+/**
+ * Give an install from before the guard the guarded command. Only our own
+ * gate command in its exact old shape (`<python> "<...>/gate_event.py"`) is
+ * touched: a moved script under it would otherwise still deny every call.
+ * Returns whether the file was rewritten.
+ */
+export function healGateCommand(): boolean {
+  const path = settingsPath();
+  const r = readCfg(path);
+  if (!("cfg" in r)) return false;
+  let changed = false;
+  for (const e of asArray(r.cfg?.hooks?.PreToolUse).filter(isGate)) {
+    for (const h of asArray(e?.hooks)) {
+      const m = /^([\w.-]+) "([^"]*gate_event\.py)"$/.exec(String(h?.command ?? ""));
+      if (m) { h.command = gateCommand(m[1]!, m[2]!); changed = true; }
+    }
+  }
+  if (!changed) return false;
+  try {
+    copyFileSync(path, `${path}.bak.agentglass.${stamp()}`);
+    writeFileSync(path, JSON.stringify(r.cfg, null, 2) + "\n");
+  } catch { return false; }
+  return true;
 }
 
 export function installGate(cfg: any, script: string, python: string): void {
@@ -341,6 +387,12 @@ export function applyGate(action: "install" | "uninstall"): HookSetupResult {
   return { ok: true, installed, changed: true, backup, settingsPath: path };
 }
 
+function gateScriptState(r: ReturnType<typeof readCfg>): { gateScriptMissing: boolean; gateDenies: boolean } {
+  const g = "cfg" in r ? gateScriptInfo(r.cfg) : null;
+  const missing = g !== null && !existsSync(g.path);
+  return { gateScriptMissing: missing, gateDenies: missing && !g!.guarded };
+}
+
 export function hookStatus(): HookSetupStatus {
   const path = settingsPath();
   const r = readCfg(path);
@@ -354,6 +406,7 @@ export function hookStatus(): HookSetupStatus {
     installed, bundled: dir !== null, settingsPath: path, python: hookPython(),
     gate: "cfg" in r && asArray(((r.cfg?.hooks ?? {}) as any).PreToolUse).some(isGate),
     gateBundled: dir !== null && existsSync(join(dir, GATE_MARKER)),
+    ...gateScriptState(r),
   };
 }
 

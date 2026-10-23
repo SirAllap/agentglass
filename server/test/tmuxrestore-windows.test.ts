@@ -58,7 +58,7 @@ test("every window comes back, with its name and its splits", async () => {
   // A split in the LAST window: the old code only ever populated the first one.
   expect((await pane.tmux(["split-window", "-d", "-v", "-t", `=${SESSION}:logs`, "-c", "/tmp"])).ok).toBe(true);
 
-  const state = await restore.captureLayout(123456);
+  const state = await restore.captureLayout(Date.now());
   const captured = state!.sessions.find((s) => s.name === SESSION)!;
   expect(captured.windows.length).toBe(3);
 

@@ -37,8 +37,10 @@ export const updateState = (): UpdateStatus | null => snapshot;
 /** A release newer than this build, and nothing standing in the way of taking
  *  it. `blocked` covers the honest refusals — no origin recorded, no tags
  *  published — which are not news and must not raise a badge. */
-export const updateAvailable = (): boolean =>
-  !!snapshot && snapshot.ok && snapshot.available && !snapshot.blocked && snapshot.behind > 0;
+export const isUpdateAvailable = (st: UpdateStatus | null): boolean =>
+  !!st && st.ok && st.available && !st.blocked && st.behind > 0;
+
+export const updateAvailable = (): boolean => isUpdateAvailable(snapshot);
 
 export function subscribeUpdate(fn: () => void): () => void {
   subs.add(fn);

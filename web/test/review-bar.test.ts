@@ -36,11 +36,12 @@ describe("barLayout", () => {
 });
 
 describe("the state mark on a face", () => {
-  test("only a decision carries a glyph; waiting and commenting are colour alone", () => {
+  test("only a decision carries a glyph; a comment is a bubble, waiting is colour alone", () => {
     expect(badgeGlyph("approved")).toBe("tick");
     expect(badgeGlyph("approved-old")).toBe("tick");
     expect(badgeGlyph("changes")).toBe("cross");
-    for (const s of ["approved-void", "changes-again", "commented", "requested", "dismissed", "team"] as const) {
+    expect(badgeGlyph("commented")).toBe("bubble");
+    for (const s of ["approved-void", "changes-again", "requested", "dismissed", "team"] as const) {
       expect(badgeGlyph(s)).toBe("none");
     }
   });

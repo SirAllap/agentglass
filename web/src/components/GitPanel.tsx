@@ -2023,9 +2023,42 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const squashPicked = async () => {
     const hashes = pickedHashes();
     if (hashes.length < 2) { flash(false, "Pick two or more consecutive commits ending at the tip to squash"); return; }
+    if (!(await ask({
+      title: `Squash ${hashes.length} commits into one?`,
+      body: "The history is rewritten: the separate commits and their messages are gone from this branch. The files stay exactly as they are. Only git's reflog can bring the old commits back.",
+      danger: true, confirmLabel: "Squash",
+    }))) return;
     const ok = await act(() => api.gitSquash(root, hashes[0], hashes[hashes.length - 1]),
       `squashed ${hashes.length} commits`, "squash");
     if (ok) { setPickSet(new Set()); reloadGraph(); }
+  };
+  /** Abort from the strip. Asks only when files are already resolved (or the
+   *  record cannot be read): those answers are lost, a fresh stop loses nothing. */
+  const aborting = useRef(false);
+  const abortMerge = async () => {
+    // A second click while the session is being read or the question is open
+    // would raise a second question; `busy` is not set until the abort runs.
+    if (busy || aborting.current) return;
+    aborting.current = true;
+    try {
+      const s = await api.gitMergeSession(root).catch(() => null);
+      const resolved = s?.ok ? s.files.length - s.left.length : 1;
+      if (resolved > 0 && !(await ask({
+        title: "Abort and discard your resolutions?",
+        body: "The tree goes back to exactly how it was before this started. Every file you already resolved is thrown away.",
+        danger: true, confirmLabel: "Abort",
+      }))) return;
+    } finally { aborting.current = false; }
+    void act(() => api.gitMergeAbort(root), "merge aborted", "abort");
+  };
+  /** Apply a snapshot over the working tree: same paths take the snapshot's version. */
+  const restoreSnapshot = async (sha: string) => {
+    if (!(await ask({
+      title: "Restore this snapshot over your working tree?",
+      body: "Files you changed at the same paths since the snapshot are replaced by the snapshot's version. Those edits are lost.",
+      danger: true, confirmLabel: "Restore",
+    }))) return;
+    void act(() => api.gitSnapshotRestore(root, sha), "Restored snapshot");
   };
   // base branch
   /** Fetched when a picker opens, not on mount. Depending on the Branches tab
@@ -3083,7 +3116,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       {/* Abort first, and always available: it is the only move
                           that is guaranteed safe, and the one you reach for
                           when you did not mean to start this. */}
-                      <button onClick={() => act(() => api.gitMergeAbort(root), "merge aborted", "abort")} disabled={busy}
+                      <button onClick={abortMerge} disabled={busy}
                         className="text-[10.5px] px-2 py-0.5 rounded-lg whitespace-nowrap"
                         style={{ color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}
                         title="Throw the merge away and put the tree back exactly as it was">abort</button>
@@ -3670,7 +3703,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                                 <span className="shrink-0 text-[9.5px] t-dim2">{s.time}</span>
                                 {writeEnabled && (
                                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
-                                    <button onClick={() => act(() => api.gitSnapshotRestore(root, s.sha), "Restored snapshot")} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--success-ink)", border: "1px solid color-mix(in srgb, var(--success) 30%, transparent)" }} title="Apply the snapshot's tree onto the current one">restore</button>
+                                    <button onClick={() => restoreSnapshot(s.sha)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--success-ink)", border: "1px solid color-mix(in srgb, var(--success) 30%, transparent)" }} title="Apply the snapshot's tree onto the current one">restore</button>
                                     <button onClick={async () => { if (await ask({ title: "Delete this snapshot?", body: "The checkpoint is gone for good.", danger: true, confirmLabel: "Delete" })) act(() => api.gitSnapshotDelete(root, s.sha), "Deleted snapshot"); }} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--error-ink)" }}>delete</button>
                                   </div>
                                 )}

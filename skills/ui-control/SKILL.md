@@ -16,9 +16,11 @@ agentglass-ui state                                  # what is open now; which p
 agentglass-ui read chat                              # one panel's state, shown nowhere
 agentglass-ui open settings.open --arg page=diff --arg row=wrap-long-lines   # quiet: a chip if they are typing
 agentglass-ui open --now settings.open --arg page=diff       # they said "show me": at once
-agentglass-ui settings list                          # what you may read and write
+agentglass-ui settings list                          # every setting, the window's and the server's, with its class
 agentglass-ui settings get diff.wrap
 agentglass-ui settings set diff.wrap true
+agentglass-ui settings set launch.mode auto           # an escalation: comes back pending, waits for the person
+agentglass-ui settings requests                      # what you asked for that still waits
 agentglass-ui --as my-agent read view                # put a name on the call
 ```
 
@@ -52,6 +54,43 @@ Every answer is one JSON object. `ok: true` means a window ran the command;
 off on this server, the setting is not exposed, an argument is outside its set).
 Read the sentence and do what it says; do not retry the same call.
 
+## Changing any setting: the settings door
+
+`settings list` names every setting there is, the window's (`where: "window"`:
+theme, diff, terminal, rail, keys...) and the server's (`where: "server"`: the
+orchestration policy per project, the worker roles' engine and model, the chair's
+model, engine and powers, launch permissions, the gate, plugins, budgets, the
+Lantern, Jira and ClickUp switches). Each row has a `class`, and the class is what
+happens when you change it:
+
+- **low**: applies at once, with a chip that names you (`--as`) and an Undo.
+- **escalation**: anything that gives agents more power or spends more (a looser
+  launch mode, a shorter deny list, the gate off, a plugin on, a bigger budget, a
+  dearer model, the policy). Your change becomes a **request**: the answer says
+  `"applied": false, "pending": {...}` with the diff, and nothing changes yet. The
+  person sees a card in the corner of their window, with who asked and that diff,
+  written by the server from the value it checked, never by you; they press
+  Approve or Decline. Approve applies exactly that diff, once, and gives you no
+  permission for next time. Unanswered for 30 minutes, it is declined. If the
+  setting moved before they approved, nothing applies: ask again. Do not ask in a
+  loop; `settings requests` shows what still waits. A change that **narrows**
+  (stricter mode, longer deny list, gate on, plugin off, smaller budget, longer
+  interval, fewer powers) applies at once, because it makes things safer.
+- **personOnly**: never yours, not even as a request: whether agents are asked at
+  all ("Let my agents change settings without asking", which only the person
+  turns on, in Settings > Orchestration > Safety and limits) and publishing the
+  machine to the tailnet. You may turn that switch off; you cannot turn it on.
+  While the person has it on, an escalation applies at once.
+- **secret**: tokens. Never read, never written, by any route.
+
+A setting held per project takes `--root` (`settings set seat.powers speak --root
+/home/me/code/orbit`); a chair speaks only for its own project. A setting whose
+`type` is `json` takes the JSON as text:
+`settings set launch.deny '["Bash(gh pr merge:*)","Bash(curl:*)"]'`. The routes
+the Settings pages use answer the same way (`POST /orchestration`, `/launch-permissions`,
+`/seat/settings`, `/seat/change`): 202 with the request instead of a 403. No route,
+no CLI and no MCP tool answers a request for the person.
+
 ## The three levels
 
 1. **Look or open.** Opens a panel or reads state. Nothing changes.
@@ -64,8 +103,9 @@ Read the sentence and do what it says; do not retry the same call.
    its value in words), a comma-separated list of
    space ids, empty for "the spaces my cards live in"; the rest are ignored, not
    deleted, and the page lists them to count again; a read before the ClickUp page
-   was ever opened may say empty until the first local read lands). Not notification kinds, channels or voices, the home page, tokens,
-   remote access, the ClickUp token, workspace and write switch, plugin trust or the gate: those are the person's. The
+   was ever opened may say empty until the first local read lands). What gives agents more power (the gate, plugins, the write switches, the
+   policy) goes through the settings door above and waits for the person; notification kinds,
+   channels or voices, the home page, remote pairing and every token are not yours to reach. The
    person gets a "<your --as name> changed X" chip with Undo, on screen for a minute (so
    keep the name: without one it says "An agent"). A refused value says what IS
    accepted ("accepted: one of split, inline"): correct it from that sentence in
@@ -227,6 +267,9 @@ agentglass-ui --as my-agent jira move ORBIT-1042 --id 51 --updated <state.update
 - **Never set a secret, and never go looking for one.** Credential fields answer
   only whether they are set (`{"set": true}`) and are refused on write. A token,
   a key or a password is not a setting you change on the way to something else.
+- **A pending request is the person's to answer.** Tell them what you asked for
+  and why, in one line, and carry on with something else; never try to approve it,
+  and never re-ask the same change to make the card come back.
 - **Show or read in the background?** A read (`state`, `read`, `settings get`,
   `settings list`) shows nothing and moves no focus. If you only need to know,
   read. An `open` is **quiet** by default: it never raises the window or takes

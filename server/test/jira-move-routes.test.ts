@@ -108,7 +108,7 @@ describe("the move routes", () => {
   });
 
   step("a page from another origin cannot move a card, even with writes on", async () => {
-    expect((await call("POST", "/jira/writes", { on: true })).status).toBe(200);
+    expect((await call("POST", "/jira/writes", { on: true }, { origin: base })).status).toBe(200);
     fake.requests.length = 0;
     const r = await call("POST", "/jira/transition", { key: "ORBIT-1042", transitionId: "21", updated: updated("ORBIT-1042") }, { origin: "https://evil.example" });
     expect(r.status).toBe(403);

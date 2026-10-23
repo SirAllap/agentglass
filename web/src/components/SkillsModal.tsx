@@ -4,6 +4,7 @@ import type { SkillInfo } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
 import { LAYER } from "../lib/layers.ts";
 import { api } from "../lib/api.ts";
+import { useModalDialog } from "../lib/focusTrap.ts";
 import { fmtAgo, fmtUsd } from "../lib/format.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { DoneIcon } from "../lib/glyphIcons.tsx";
@@ -128,6 +129,7 @@ function SkillCard({ s, isNew, isTop, expanded, onToggle }: { s: SkillInfo; isNe
 
 export function SkillsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [skills, setSkills] = useState<SkillInfo[] | null>(null);
+  const modal = useModalDialog(open, "Skills explorer");
   // The window the call counts actually cover. They are pruned at
   // AGENTGLASS_RETENTION_DAYS (8 by default), so "used 3x" meant 3x in the
   // last week while reading as a lifetime total — and the understatement is
@@ -219,7 +221,7 @@ export function SkillsModal({ open, onClose }: { open: boolean; onClose: () => v
             {/* Flex wrapper centers the card — Motion owns `transform` for its
                 scale/y animation, so Tailwind translate centering can't be used. */}
             <div className="fixed inset-0 flex items-center justify-center p-6 pointer-events-none" style={{ zIndex: 10001 }}>
-            <motion.div
+            <motion.div {...modal}
               initial={{ opacity: 0, scale: 0.95, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 8 }}
               transition={{ type: "spring", stiffness: 330, damping: 30 }}
               className="w-[min(1320px,96vw)] h-[min(960px,92vh)] rounded-xl flex flex-col pointer-events-auto"

@@ -16,7 +16,7 @@ import { CopyIcon, DiskIcon, IconLabel, RefreshIcon } from "../lib/glyphIcons.ts
 import { RefreshButton, Tabs, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
-import type { GitLock, GitLocksReport, GitRepoRef, ProcDetail, MachineTotals, PortEntry, PortsReport, ProcEntry, ResourceReport, SpaceReport } from "../../../shared/types.ts";
+import type { GitLock, GitLocksReport, GitRepoRef, ProcDetail, MachineTotals, PortEntry, PortsReport, ProcEntry, ResourceReport, OrphanProc, OrphanReport, SpaceReport } from "../../../shared/types.ts";
 import { HAS_BROWSER } from "../lib/desktop.ts";
 import { openExternal } from "../lib/externalUrl.ts";
 import { requestBrowserNav } from "../lib/browserNav.ts";
@@ -607,6 +607,8 @@ function Resources() {
             on the same poll as the process list. */}
         <MachineStrip m={data.machine} />
 
+        <LeftBehind />
+
         <div className="grid px-3.5 py-1 text-[9.5px] uppercase tracking-wider"
           style={{ gridTemplateColumns: COLS, color: "var(--text3)", borderBottom: LINE }}>
           <span>Name</span><span /><span className="text-right">CPU</span><span className="text-right">RSS</span>
@@ -662,6 +664,75 @@ function Resources() {
         already is — this tab lists our subtree and one collapsed line for the
         rest of the machine. */}
     {selected != null && <DetailPane pid={selected} onClose={() => setSelected(null)} />}
+    </div>
+  );
+}
+
+/** How often the open list re-reads the server's cached sample. The server only
+ *  walks /proc every few minutes, so asking faster would re-read the same answer:
+ *  60 requests an hour, and only while this tab is open. */
+const ORPHAN_POLL_MS = 60_000;
+
+/**
+ * Processes an agent left behind: a test run or a script that outlived the
+ * shell that started it, now owned by systemd, still burning CPU. Nothing else
+ * in this panel finds them, because they are nobody's descendant and listen on
+ * nothing. Hidden entirely when there are none.
+ *
+ * Stop asks first, in the row: one click arms it, a second confirms. The server
+ * refuses any pid that is not flagged at that moment.
+ */
+function LeftBehind() {
+  const [rep, setRep] = useState<OrphanReport | null>(null);
+  const [armed, setArmed] = useState<number | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const load = useCallback((fresh = true) => { api.machineOrphans(fresh).then(setRep).catch(() => {}); }, []);
+  useEffect(() => { load(true); }, [load]);
+  usePoll(true, () => load(false), ORPHAN_POLL_MS);
+
+  const stop = async (p: OrphanProc) => {
+    setArmed(null);
+    const r = await api.machineOrphanStop(p.pid);
+    setNote(r.ok ? (r.detail ?? "asked it to stop") : (r.error ?? "could not stop it"));
+    setTimeout(() => load(true), 800);
+  };
+
+  const procs = rep?.procs ?? [];
+  if (!procs.length && !note) return null;
+  return (
+    <div>
+      <Group label="Left behind" count={procs.length} hint="processes an agent started that outlived it" />
+      {procs.map((p) => (
+        <div key={p.pid} className="flex items-center gap-3 px-3.5 py-1.5 text-[11.5px]" style={{ borderBottom: LINE }}>
+          <div className="min-w-0 flex-1" title={`${p.cmd}\npid ${p.pid}\n${p.cwd ?? ""}`}>
+            <div className="flex items-baseline gap-1.5 min-w-0">
+              <span className="truncate" style={{ color: "var(--text)" }}>{p.cmd || p.comm}</span>
+              <span className="shrink-0 text-[9.5px]" style={{ color: "var(--text4)" }}>pid {p.pid}</span>
+              {(p.origin || p.session) && (
+                <span className="shrink-0 truncate text-[9.5px]" style={{ color: "var(--text4)", maxWidth: 220 }}>
+                  {p.origin}{p.session ? ` · session ${p.session.slice(0, 8)}` : ""}
+                </span>
+              )}
+            </div>
+            <div className="text-[10px] truncate" style={{ color: "var(--text3)" }}>{p.reasons.join(" · ")}</div>
+          </div>
+          <span className="w-14 text-right tabular-nums" style={{ color: "var(--text3)" }}>{p.ageSec == null ? "—" : forAge(p.ageSec)}</span>
+          <span className="w-14 text-right tabular-nums" style={{ color: p.hot ? "var(--warning)" : "var(--text2)" }}>
+            {p.cpu == null ? "—" : `${p.cpu.toFixed(1)}%`}
+          </span>
+          <span className="w-[104px] flex justify-end gap-1">
+            {armed === p.pid ? (
+              <>
+                <IconBtn title={`Stop pid ${p.pid}`} tint="var(--error)" onClick={() => void stop(p)}>Stop it</IconBtn>
+                <IconBtn title="Keep it" onClick={() => setArmed(null)}>Keep</IconBtn>
+              </>
+            ) : (
+              <IconBtn title="Ask this process to stop (you confirm next)" tint="var(--error)" onClick={() => setArmed(p.pid)}>Stop</IconBtn>
+            )}
+          </span>
+        </div>
+      ))}
+      {note && <div className="px-3.5 py-1 text-[10px]" style={{ color: "var(--text3)", borderBottom: LINE }}>{note}</div>}
     </div>
   );
 }

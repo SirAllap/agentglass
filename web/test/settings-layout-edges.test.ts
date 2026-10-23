@@ -20,7 +20,7 @@ const src = (p: string) => readFileSync(join(import.meta.dir, "..", "src", p), "
 
 describe("ClickUp header", () => {
   const pane = src("components/ClickUpPane.tsx");
-  const at = pane.indexOf("<SettingsCard title={n.name} desc={provider?.detail");
+  const at = pane.indexOf("<SettingsCard title={n.name} icon={<PlugIcon size={ICON.sm} />} desc={provider?.detail");
   const head = pane.slice(at, pane.indexOf("</SettingsCard>", at));
 
   it("is a settings card, not a two-track grid with an auto column", () => {

@@ -8,15 +8,16 @@
 //
 // Here each kind gets its own section, toggles look like toggles and say what
 // they control, and downloads say what you actually get.
+import { useModalDialog } from "../lib/focusTrap.ts";
 import { PluginSettingsPane } from "./plugins/PluginSettingsPane.tsx";
-import { Fragment, createContext, isValidElement, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Fragment, createContext, isValidElement, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { RecipesPane } from "./RecipesPane.tsx";
 import { ReviewPromptsPane } from "./ReviewPromptsPane.tsx";
 import { SavedRepliesPane } from "./SavedRepliesPane.tsx";
 import { lastTerminalRoot } from "./TerminalPanel.tsx";
-import { Filter, Fold, SettingRow, Toggle, Switch } from "./SettingRow.tsx";
+import { Filter, Fold, SettingRow, choiceIsWide, Toggle, Switch } from "./SettingRow.tsx";
 import { resetShown } from "../lib/settingsModified.ts";
-import { pageScore, searchSettings, absentFor, expandWord, rowId, type SettingsPage } from "../lib/settingsIndex.ts";
+import { pageScore, absentFor, rowId, type SettingsPage } from "../lib/settingsIndex.ts";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal, PortalFloor } from "./Portal.tsx";
 import { LAYER } from "../lib/layers.ts";
@@ -38,7 +39,8 @@ import { checkedLine } from "../lib/providerFreshness.ts";
 import { fmtAgo, minutesAgo } from "../lib/format.ts";
 import type { ActionRecord, GateRecord, UnderstudyClassRow } from "../../../shared/types.ts";
 import { mergeActivity, gateLine, actorLabel, activityDays, filterActivity, type ActivityFilter, type ActivityRow, type ActivityRun } from "../lib/activity.ts";
-import { ingestUpdate } from "../lib/updateStore.ts";
+import { useStableFlow } from "./useStableFlow.ts";
+import { ingestUpdate, isUpdateAvailable } from "../lib/updateStore.ts";
 import { ReleaseNotesModal } from "./ReleaseNotesModal.tsx";
 import { installedNotes, type NotesTarget } from "../lib/whatsNew.ts";
 import { autostartEnabled, setAutostart, isFullscreen, toggleFullscreen, IS_DESKTOP, IS_MAC_DESKTOP, HAS_BROWSER } from "../lib/desktop.ts";
@@ -57,9 +59,15 @@ import { TerminalIcon, DiffIcon, BrowserIcon, UnderstudyIcon, LanternIcon } from
 import {
   SlidersIcon, ThemeIcon, BellIcon, SidebarIcon, KeyboardIcon, BudgetIcon, PulseIcon,
   CommandIcon, ReviewIcon, QuoteIcon, PanesIcon, PlugIcon, ServerIcon, PhoneIcon,
-  PuzzleIcon, ShieldIcon, InfoIcon, ChecklistIcon,
-} from "./settingsNavIcons.tsx";
+  PuzzleIcon, ShieldIcon, InfoIcon, ChecklistIcon, DownloadIcon, ColumnsIcon, ChipIcon, DiamondIcon, FlowIcon, LayersIcon } from "./settingsNavIcons.tsx";
 import { resolvePane, openSettings, paneWhenClickupKnown } from "../lib/openSettings.ts";
+import { SettingsNav } from "./SettingsNav.tsx";
+import { SettingsSearchPanel } from "./SettingsSearchPanel.tsx";
+import { SettingsPageHeader } from "./SettingsPageHeader.tsx";
+import { SettingsToc } from "./SettingsToc.tsx";
+import { NO_FACTS, NO_MARK, groupByName, groupSearch, headerChips, hueVar, connectionsNeeding, navMarks, withNeeds, withProblems, type MatchIn, type NavFacts, type PageNeed, type PageProblem } from "../lib/settingsNav.ts";
+import { applyProblem } from "../lib/settingsStates.ts";
+import { PageState, useReportProblem, useReportSaving, useSavePhase, type PageStateSink } from "./SettingsPageState.tsx";
 import { RunningPanes } from "./RunningPanes.tsx";
 import { THEMES } from "../lib/highlight.ts";
 import { BudgetsPane } from "./BudgetsPane.tsx";
@@ -115,8 +123,9 @@ import {
 import { AppearancePane } from "./ThemePicker.tsx";
 import { ShellConsole } from "./ShellConsole.tsx";
 import { CloseButton } from "./CloseButton.tsx";
+import "./settingsSplit.css";
 import { HIT, ICON } from "../lib/iconSize.ts";
-import { CheckboxIcon, ClockIcon, CrossIcon } from "../lib/glyphIcons.tsx";
+import { AgentIcon, CheckboxIcon, ClockIcon, CrossIcon, EditIcon, LinkIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { ciOnlyApproved } from "../lib/ciNotifyPref.ts";
 import { reviewGateOn, setReviewGate } from "../lib/reviewGatePref.ts";
 import { AskedAlertLog } from "./AskedAlertLog.tsx";
@@ -133,7 +142,10 @@ import { MuteGlyph } from "./TopBarNotes.tsx";
 import { Button, RefreshButton, INPUT, INPUT_STYLE, EDGE, LINE, Segmented } from "./workspace/Chrome.tsx";
 import { LAUNCH_MODES, LAUNCH_MODE_LABEL, isLaunchMode, parseDenyRules, type LaunchMode } from "../../../shared/launchModes.ts";
 import { setLaunchPermissions } from "../lib/launchMode.ts";
-import { SELECT_BOX, EmptyState, Field, LinkButton, SettingsCard, SettingsForm, StatusBadge, helpIdFor, type StatusTone } from "./SettingsKit.tsx";
+import { SELECT_BOX, EmptyState, Field, LinkButton, ProblemNote, SaveChip, SettingsCard, SettingsForm, StatusBadge, helpIdFor, type StatusTone } from "./SettingsKit.tsx";
+import { PreviewCard, WithPreview } from "./settings/PreviewCard.tsx";
+import { WindowPreview, SidebarPreview, DiffPreview, LanternPreview, BrowserPreview } from "./settings/previews/index.ts";
+import { railItems } from "./settings/previews/MiniApp.tsx";
 import { restoredNote } from "../lib/restoredNote.ts";
 
 /** A heading inside a Section, for a pane that answers the same question about
@@ -206,15 +218,15 @@ interface SetupStep {
  * that fixes that step beside the badge, and "N of M done" at the head. Rows
  * that are not steps (a notice, a way back) go in as children.
  */
-function SetupCard({ title, steps, note, error, actions, children }: {
+function SetupCard({ title, steps, note, error, actions, children, icon }: {
   title: string; steps: SetupStep[]; note?: string | null; error?: string | null;
-  actions?: React.ReactNode; children?: React.ReactNode;
+  actions?: React.ReactNode; children?: React.ReactNode; icon?: React.ReactNode;
 }) {
   const known = steps.filter((s) => s.done !== null);
   const done = known.filter((s) => s.done).length;
   const all = known.length > 0 && done === known.length;
   return (
-    <SettingsCard title={title} actions={actions}
+    <SettingsCard title={title} actions={actions} icon={icon}
       status={<StatusBadge tone={all ? "ok" : "off"}>{done} of {known.length} done</StatusBadge>}>
       {steps.map((st) => (
         <SettingRow key={st.title} label={st.title} hint={st.detail} detail={st.more}
@@ -281,24 +293,23 @@ function SourceRow({ id, i, n, onChanged }: {
 /** A row of mutually exclusive choices, for a preference with three answers
  *  rather than two. A toggle would have forced "show me their message" and
  *  "just tell me someone wrote" to be the same decision. */
-function Choice<T extends string>({ label, hint, value, options, onPick, disabled, disabledHint, modified, settingId }: {
+function Choice<T extends string>({ label, hint, value, options, onPick, disabled, disabledHint, modified, settingId, wide }: {
   /** See SettingRow. */
   settingId?: string; agentExempt?: boolean; agentNever?: string;
   label: string; hint: string; value: T; options: { v: T; label: string }[];
   onPick: (v: T) => void; disabled?: boolean; disabledHint?: string; modified?: boolean;
+  /** Under the words in a narrow card even when the labels are short: a long hint beside two options squeezes them into a stack. */
+  wide?: boolean;
 }) {
   return (
     <SettingRow label={label} hint={disabled ? disabledHint ?? hint : hint} disabled={disabled} modified={modified} settingId={settingId}
+      wide={wide ?? choiceIsWide(options.map((o) => o.label))}
       control={
-        <span className="flex flex-wrap items-center gap-1 rounded-lg p-0.5 justify-self-end max-w-full"
-          style={{ background: "color-mix(in srgb, var(--border) 28%, transparent)" }}>
+        <span className="agx-seg">
           {options.map((o) => (
             <button key={o.v} onClick={() => onPick(o.v)} disabled={disabled}
               aria-pressed={value === o.v}
-              className="text-[12px] px-2 h-6 inline-flex items-center rounded-md transition-colors disabled:cursor-not-allowed whitespace-nowrap"
-              style={value === o.v
-                ? { background: "var(--primary)", color: "var(--on-primary)" }
-                : { color: "var(--text3)" }}>
+              className="agx-seg-b disabled:cursor-not-allowed">
               {o.label}
             </button>
           ))}
@@ -360,8 +371,9 @@ type Pane = "recipes" | "review-prompts" | "saved-replies" | "appearance" | "pre
  *  ring instead of filed into one — see the pinned button before the group
  *  loop, which is the only place this literal is read. */
 type TabGroup = "General" | "Workspace" | "Agents" | "Library" | "Connections" | "System" | "Get started" | "";
-// Rendered in this order; a group with no matching tab is dropped, so search
-// collapses to just the sections that still have something in them.
+// The nav's groups in drawing order. lib/settingsNav.ts is what draws them
+// (NAV_GROUPS, then System pinned) and settings-nav-groups.test.ts holds the
+// two lists equal; a group with no page is dropped there.
 /*
  * Six groups, each named for the object its pages configure.
  *
@@ -447,6 +459,11 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
   { id: "rail", label: "Sidebar", group: "General", kw: "rail sidebar views order icons hide show reorder tabs drawer group arrange", what: "Which views are on the sidebar, in which drawer, and in what order.", icon: SidebarIcon },
   { id: "keys", label: "Shortcuts", group: "General", kw: "keyboard keys bindings shortcut chord rebind reset to defaults columns some others", what: "Every binding, rebindable.", icon: KeyboardIcon },
   { id: "terminal", label: "Terminal", group: "Workspace", kw: "terminal launch permissions permission mode ask auto accept edits bypass yolo deny disallowed tools font size cursor typography monospace face renderer gpu focus follows mouse hover pane sloppy scrollback copy on select right-click paste line height tab tabs group groups grouping project name rules prefix runs on engine own tmux shell", what: "Type, renderer, mouse, tab groups, how much scrollback each shell keeps, what a Terminal opens on, and the permissions an agent it opens starts with.", icon: TerminalIcon },
+  /* Its own page, not a block inside Tools & services: it is the engine
+     every pane and every chat runs on, with a binary, a config and a restore of
+     its own — three settings deep is not a row in a list of "is it installed".
+     Filed beside Terminal, the view that runs on it. */
+  { id: "tmux", label: "Pane engine (tmux)", group: "Workspace", kw: "tmux panes engine pane prefix key binary bundled config override restore reboot layout resume socket status bar chat warm cli claude", what: "What a pane runs on — the tmux binary, its config and prefix, and restore.", icon: PanesIcon },
   { id: "diff", label: "Diff", group: "Workspace", kw: "diff split side by side inline unified wrap word wrap changes review default view wrap long lines syntax theme colours", what: "How a diff opens, everywhere the app shows one.", icon: DiffIcon },
   // Only where there is a browser to configure. A settings tab for something
   // that is not there reads as a broken feature rather than one that doesn't apply.
@@ -460,8 +477,8 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
   ...(HAS_BROWSER ? [{ id: "browser" as const, label: "Browser", group: "Workspace" as const, kw: "browser web page zoom login cookies import chrome firefox zen profile home search engine", what: "The built-in browser: how it opens, and the logins it borrows.", icon: BrowserIcon }] : []),
   { id: "tasks", label: "Tasks", group: "Workspace", kw: "tasks sources github issues local taskwarrior clickup hide show providers view opens on", what: "Which sources the Tasks view offers you.", icon: ChecklistIcon },
   { id: "hooks", label: "Agents", group: "Agents", kw: "agents hooks claude code install setup worker roles scout builder verifier lock model opencode qwen how new chats run warm panes browser agent skill drive", what: "Wire Claude Code into this app, how new chats run, whether an agent can drive the browser, what else is installed, and which CLI each worker role runs on.", icon: PlugIcon },
-  { id: "engines", label: "Agent engines", group: "Agents", kw: "engine engines provider hermes opencode codex gemini antigravity claude model version minimum signed in sign-in login orchestrator worker role ready test recheck installed update reporting connect events", what: "Which agent CLIs this computer has, whether each is recent enough and signed in, and what each can do here.", icon: PlugIcon },
-  { id: "orchestration", label: "Orchestration", group: "Agents", kw: "orchestration orchestrator main agent chair policy rule rules worker workers scout builder verifier engine model fallback chain ask when it runs usage weekly 5h plan hours budget ceiling envelope network commit write limits retries minutes per turn project override", what: "Which engine runs a project's main agent and does its work, the rules that change that for a while, and what a worker may do.", icon: PlugIcon },
+  { id: "engines", label: "Agent engines", group: "Agents", kw: "engine engines provider hermes opencode codex gemini antigravity claude model version minimum signed in sign-in login orchestrator worker role ready test recheck installed update reporting connect events", what: "Which agent CLIs this computer has, whether each is recent enough and signed in, and what each can do here.", icon: ChipIcon },
+  { id: "orchestration", label: "Orchestration", group: "Agents", kw: "orchestration orchestrator main agent chair policy rule rules worker workers scout builder verifier engine model fallback chain ask when it runs usage weekly 5h plan hours budget ceiling envelope network commit write limits retries minutes per turn project override", what: "Which engine runs a project's main agent and does its work, the rules that change that for a while, and what a worker may do.", icon: FlowIcon },
   { id: "lantern", label: "Lantern", group: "Agents", kw: "lantern reminder status what doing needs you ask sessions working on interval orchestrator seat wake floor chair post", what: "What the Lantern may ask of a session, and how often it looks.", icon: LanternIcon },
   /* Filed beside Agents rather than under System, and the two readings are
      both defensible: it is a store of what you did, and it is a thing that
@@ -475,6 +492,11 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
      to be. */
   { id: "review-prompts", label: "Review prompts", group: "Library", kw: "review prompts pr pull request claude menu skill re-review reviewer wording edit", what: "What Review with Claude offers, and the words it sends.", icon: ReviewIcon },
   { id: "saved-replies", label: "Saved replies", group: "Library", kw: "saved replies canned comment pr pull request review wording snippet template", what: "The sentences you write over and over on other people's pull requests.", icon: QuoteIcon },
+  /* Filed with what you keep and reuse, last in Library: a plugin is
+     someone else's code holding a scoped credential to this server — install,
+     review what it declares, grant it, take it back. It is not an agent and it
+     renders nothing of its own; see the note at the top of server/src/plugins.ts. */
+  { id: "plugins", label: "Plugins", group: "Library", kw: "plugins install extension manifest scope review approve enable disable remove entrypoint publisher source running pid re-consent reconsent", what: "Install, review and switch on someone else's code — and see whether it is actually running.", icon: PuzzleIcon },
   /*
    * One page for everything outside this app.
    *
@@ -493,20 +515,10 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
   { id: "connections", label: "Tools & services", group: "Connections", kw: "requirements dependencies deps tmux git docker install integrations providers connect github gitlab clickup taskwarrior token api credentials account rate limit budget quota", what: "The tools and services this app leans on, and whether they are ready.", status: true, icon: ServerIcon },
   /* Only while ClickUp is connected (see `tabs` in the modal): before that there is no
      workspace for a status to mean anything in, and a page for it would be a dead end. */
-  { id: "clickup", label: "ClickUp", group: "Connections", kw: "clickup workflow map steps statuses cards tracker hand off qa review menu merge dialog note assigned people sprint swatch spaces subtasks pull request link", what: "How agentglass uses your ClickUp: the steps you add, tied to your own statuses.", icon: ChecklistIcon },
+  { id: "clickup", label: "ClickUp", group: "Connections", kw: "clickup workflow map steps statuses cards tracker hand off qa review menu merge dialog note assigned people sprint swatch spaces subtasks pull request link", what: "How agentglass uses your ClickUp: the steps you add, tied to your own statuses.", icon: LayersIcon },
   /* Always there, unlike ClickUp's: the form that connects Jira lives on this page. */
-  { id: "jira", label: "Jira", group: "Connections", kw: "jira atlassian cloud data center site token email personal access token writes changes projects keys prefixes hand off qa assignee status saved views folders board filter tracker connect disconnect", what: "Your Jira site, what agentglass may change there, and the steps a pull request can run on a card.", icon: ChecklistIcon },
+  { id: "jira", label: "Jira", group: "Connections", kw: "jira atlassian cloud data center site token email personal access token writes changes projects keys prefixes hand off qa assignee status saved views folders board filter tracker connect disconnect", what: "Your Jira site, what agentglass may change there, and the steps a pull request can run on a card.", icon: DiamondIcon },
   { id: "remote", label: "Remote", group: "Connections", kw: "remote access pair phone tailscale token device", what: "Reach this machine from your phone.", icon: PhoneIcon },
-  /* Filed beside Remote rather than under Agents: a plugin is
-     someone else's code holding a scoped credential to this server, the
-     same trust shape a paired device has — install, review what it
-     declares, grant it, take it back. It is not an agent and it renders
-     nothing of its own; see the note at the top of server/src/plugins.ts. */
-  { id: "plugins", label: "Plugins", group: "Connections", kw: "plugins install extension manifest scope review approve enable disable remove entrypoint publisher source running pid re-consent reconsent", what: "Install, review and switch on someone else's code — and see whether it is actually running.", icon: PuzzleIcon },
-  /* Its own section, not a block inside Tools & services: it is the engine
-     every pane and every chat runs on, with a binary, a config and a restore of
-     its own — three settings deep is not a row in a list of "is it installed". */
-  { id: "tmux", label: "Pane engine (tmux)", group: "System", kw: "tmux panes engine pane prefix key binary bundled config override restore reboot layout resume socket status bar chat warm cli claude", what: "What a pane runs on — the tmux binary, its config and prefix, and restore.", icon: PanesIcon },
   { id: "privacy", label: "Data & privacy", group: "System", kw: "export download data json csv daily totals markdown events skills catalog take out privacy telemetry data local storage retention database credentials tokens tracking analytics who sees", what: "Where your data is, what leaves this machine, and how to take it out.", icon: ShieldIcon },
   { id: "about", label: "About", group: "System", kw: "about version update release notes changelog credit attribution licence license portrait art", what: "Version, release notes, updates and the third-party licences this build carries.", icon: InfoIcon },
   { id: "log", label: "Activity", group: "", kw: "activity log history events feed", what: "What the app itself has been doing.", status: true, icon: PulseIcon },
@@ -533,8 +545,10 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
  * State lives in localStorage rather than here, and is read back on mount, so
  * this pane and the view cannot disagree about what was chosen.
  */
-function BrowserPane() {
+function BrowserPane({ children }: { children?: React.ReactNode }) {
   const [home, setHome] = useState(homePageRaw);
+  // What the view opens on is the saved address, not the draft in the box.
+  const [savedHome, setSavedHome] = useState(homePageRaw);
   const [engine, setEngine] = useState<SearchEngine>(searchEngine);
   // An agent's change to the engine lands while this page may be up.
   useEffect(() => subscribeSettings((c) => { if (c.by !== "row" && c.id === "browser.searchEngine") setEngine(searchEngine()); }), []);
@@ -548,12 +562,14 @@ function BrowserPane() {
     // keep saying `example.com` while the browser goes to `https://example.com/`
     // is a small lie about what was saved.
     setHome(homePageRaw());
+    setSavedHome(homePageRaw());
     setBad(false);
     setSaved(true);
   };
 
   return (
-    <SettingsCard title="Where it opens"
+    <WithPreview preview={<PreviewCard id="browser" title="New tab"><BrowserPreview home={savedHome} searchEngine={SEARCH_ENGINE_LABELS[engine]} /></PreviewCard>}>
+    <SettingsCard title="Where it opens" icon={<BrowserIcon size={ICON.sm} />}
       desc="The pages the browser view opens on its own. Everything else — what you have logged into, what you have open — belongs to the page, not to a setting.">
       <SettingRow
         agentNever="a page the browser opens by itself, with the owner's signed-in sessions: not something an agent points elsewhere"
@@ -596,6 +612,8 @@ function BrowserPane() {
         /></span>}
       />
     </SettingsCard>
+    {children}
+    </WithPreview>
   );
 }
 
@@ -621,14 +639,17 @@ function RailPane() {
   /** Which view is being dragged, and where it would land. Held here rather
    *  than per row: a drop target has to know what is coming. */
   const [drag, setDrag] = useState<{ id: ViewId; from: RailPlace } | null>(null);
+  // The view last touched is the one the picture draws as active.
+  const [touched, setTouched] = useState<ViewId | null>(null);
+  const move = (id: ViewId, place: RailPlace, to: number) => { setTouched(id); moveView(id, place, to); };
 
   return (
-    <>
+    <WithPreview preview={<PreviewCard id="rail" title="How the rail looks now"><SidebarPreview items={railItems(rail)} selected={touched ?? rail.work[0]?.id ?? ""} /></PreviewCard>}>
       {/* The page's own words first, then one card per drawer. The drawers were
           eyebrows inside one card, each with a line either side of it; a card
           each gives the three of them a name and an edge, and the divider
           falls only between two views. */}
-      <SettingsCard title="What is on the rail"
+      <SettingsCard title="What is on the rail" icon={<SidebarIcon size={ICON.sm} />}
         desc="Which views get an icon, and whether they sit at the top or the bottom of it.">
         <SettingRow
           agentExempt
@@ -644,7 +665,8 @@ function RailPane() {
           the label — a column of its own for 20px is how this page ended up
           drawing to a different left edge than the rest of the dialog. */}
       {(Object.keys(PLACE_LABEL) as RailPlace[]).map((place) => (
-        <SettingsCard key={place} title={PLACE_LABEL[place]} desc={PLACE_NOTE[place]}>
+        <SettingsCard key={place} title={PLACE_LABEL[place]} desc={PLACE_NOTE[place]}
+          status={<StatusBadge tone="off">{rail[place].length}</StatusBadge>}>
           {rail[place].length === 0 ? (
             <EmptyState>
               {place === "hidden" ? "Nothing put away." : "Empty — drag something here, or use the buttons on the right."}
@@ -676,7 +698,7 @@ function RailPane() {
                     if (!drag || drag.id === v.id) return;
                     // Dropped ONTO a row means "take its place", which is the
                     // only reading that needs no insertion line to explain it.
-                    moveView(drag.id, place, i);
+                    move(drag.id, place, i);
                     setDrag(null);
                   },
                   style: { opacity: drag?.id === v.id ? 0.4 : 1, cursor: "grab" },
@@ -713,15 +735,15 @@ function RailPane() {
                   <span className="agx-reveal flex items-center gap-0.5 w-[54px]">
                     {place !== "hidden" && (
                       <>
-                        <MiniBtn agentExempt label="Move up" disabled={i === 0} onClick={() => moveView(v.id, place, i - 1)}>↑</MiniBtn>
-                        <MiniBtn agentExempt label="Move down" disabled={i === rail[place].length - 1} onClick={() => moveView(v.id, place, i + 1)}>↓</MiniBtn>
+                        <MiniBtn agentExempt label="Move up" disabled={i === 0} onClick={() => move(v.id, place, i - 1)}>↑</MiniBtn>
+                        <MiniBtn agentExempt label="Move down" disabled={i === rail[place].length - 1} onClick={() => move(v.id, place, i + 1)}>↓</MiniBtn>
                       </>
                     )}
                   </span>
                   <Select
                     align="right"
                     value={place}
-                    onChange={(p) => setting(`rail.place.${v.id}`).set(p)}
+                    onChange={(p) => { setTouched(v.id); setting(`rail.place.${v.id}`).set(p); }}
                     options={(Object.keys(PLACE_LABEL) as RailPlace[]).map((p) => ({
                       value: p,
                       label: p === "work" ? "Top" : p === "utility" ? "Bottom" : "Hidden",
@@ -734,7 +756,7 @@ function RailPane() {
           })}
         </SettingsCard>
       ))}
-    </>
+    </WithPreview>
   );
 }
 
@@ -766,7 +788,7 @@ function MiniBtn({ label, disabled, onClick, children }: { settingId?: string; a
  * The title is optional, because a page whose only group repeats the page name
  * says "Terminal" twice before the first setting.
  */
-/** Panes whose content is a grid of cards, not a column of rows. */
+/** Panes whose content is a grid or a map of its own: one column of the page, at this width. */
 const WIDE_PANES = new Map<string, string>([
   ["plugins", "1180px"],
   /* The workflow map is a column of step cards beside a column of statuses, with the lines running between them; this is the width that keeps a card's header on two lines. */
@@ -782,7 +804,8 @@ function PacePane() {
   const cfg = useSyncExternalStore(subscribePaceConfig, paceConfig, paceConfig);
   const working = cfg.spread === "working";
   return (
-    <SettingsCard title="Plan pace">
+    <SettingsCard title="Plan pace" icon={<BudgetIcon size={ICON.sm} />}
+      desc="Spreads the week's budget over the days you work, so “runs out Thursday” means something.">
       <Choice<PaceConfig["spread"]>
         label="Spread the week's budget over"
         hint="Working hours earn the budget, so the pace marker holds still overnight and at weekends. Every hour is a straight line across the week."
@@ -885,6 +908,13 @@ function Section({ title, desc, headerControl, children }: {
   );
 }
 
+/** The chip alone gave no sign that it records: an explicit verb beside it. The
+ *  chip stays a target too. A row with two chips (a view with its chord) has
+ *  no room for a third control, so it keeps labelled chips only. */
+function RebindButton({ capturing, onClick, what }: { capturing: boolean; onClick: () => void; what: string }) {
+  return <Button size="compact" onClick={onClick} aria-label={`${capturing ? "Cancel rebinding" : "Rebind"} ${what}`}>{capturing ? "Cancel" : "Rebind"}</Button>;
+}
+
 /**
  * One rebindable shortcut.
  *
@@ -901,7 +931,7 @@ function KeyRow({ id, keyName, capturing, onCapture, error, chord }: {
 }) {
   const { label, hint } = LABELS[id];
   return (
-    <SettingRow settingId={`keys.binding.${id}`}
+    <SettingRow settingId={`keys.binding.${id}`} wide={!!chord}
       /* Its own track: this row's control is genuinely two controls, each with
          its own label. 300 rather than the shared 210 — and because the row
          still ends at the column's edge, the chips line up with every other
@@ -939,6 +969,7 @@ function KeyRow({ id, keyName, capturing, onCapture, error, chord }: {
         </span>
       )}
       <span className="shrink-0 flex items-center gap-1.5">
+        {!chord && <RebindButton capturing={capturing} onClick={onCapture} what={label} />}
         <span className="text-[11px] t-dim w-[62px] text-right">{chord ? "dashboard" : "press"}</span>
         <button onClick={onCapture} className="chip h-[22px] justify-center text-[11px] tabular-nums min-w-[74px] text-center"
           style={capturing
@@ -1217,22 +1248,16 @@ function UnderstudyPane({ open, onLeave }: { open: boolean; onLeave: () => void 
   const on = !!frame?.enabled;
   return (
     <>
-      {/*
-       * WHAT IT LEARNS FROM, first — because that is what this page is for now.
-       *
-       * This used to be the Clone's settings page, under the Clone's view, and
-       * the consent list lived in the view rather than here. The view is gone
-       * and the bank it filled became the orchestrator's memory, so the thing
-       * that decides what the orchestrator knows about you belongs on a
-       * settings page and not behind a tab in a scoreboard.
-       */}
-      <Teach active={open} />
-      <SettingsCard title="Keeping score">
+      {/* The switch and what it keeps are one card: the second is what the
+          first costs, and it was a card of its own below the portrait pickers. */}
+      <SettingsCard title="Keeping score" icon={<UnderstudyIcon size={ICON.sm} />}
+        desc="A clone learns how you decide and scores itself against your real answers."
+        status={<StatusBadge tone={frame?.halted ? "warn" : on ? "ok" : "off"}>{frame?.halted ? "Halted" : on ? "On" : "Off"}</StatusBadge>}>
         <Toggle
           label="Let the clone watch"
           hint={frame?.halted
             ? "Halted — it is enabled and stopped. Switching it on again is what lowers the fence; there is no timer."
-            : "Separate from the knowledge above, and off is a reasonable answer: this writes down what a stand-in would have done and scores it against what you did. Reading the bank does not depend on it — the orchestrator remembers you either way."}
+            : "Separate from the knowledge below, and off is a reasonable answer: this writes down what a stand-in would have done and scores it against what you did. Reading the bank does not depend on it — the orchestrator remembers you either way."}
           on={on}
           onClick={() => {
             void setUnderstudyEnabled(!on).then((r) => {
@@ -1241,9 +1266,6 @@ function UnderstudyPane({ open, onLeave }: { open: boolean; onLeave: () => void 
             });
           }} />
         {err && <div role="alert" className="agx-settings-x pt-2 pb-3 text-[12px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
-      </SettingsCard>
-      <UnderstudyLook classes={frame?.classes ?? []} />
-      <SettingsCard title="What it keeps">
         <Row label={`Sealed situations — ${RETENTION.snapshotDays} days`}
           hint="The material it read, kept only long enough to check a prediction against it. Swept on a fixed window of its own, deliberately not on the events retention you set: turning that off must not silently turn this off too." />
         <Row label={`The fact of a write — ${RETENTION.stubDays} days`}
@@ -1251,6 +1273,10 @@ function UnderstudyPane({ open, onLeave }: { open: boolean; onLeave: () => void 
         <Row label="The score — kept"
           hint="Decisions and refusals do not expire. They are the score, and a score with holes in it is not a score." />
       </SettingsCard>
+      {/* What it learns from lives on this page, not behind a tab in a
+          scoreboard: it decides what the orchestrator knows about you. */}
+      <Teach active={open} />
+      <UnderstudyLook classes={frame?.classes ?? []} />
     </>
   );
 }
@@ -1334,7 +1360,7 @@ function LogDigestSection({ d }: { d: LogDigest | "failed" | null }) {
   const ago = (t: number) => minutesAgo(t);
   const note = (text: string) => <SettingRow label={text} />;
   return (
-    <SettingsCard title="Server log" desc={desc} fold={{ open, onToggle: setOpen }}>
+    <SettingsCard title="Server log" icon={<ChecklistIcon />} desc={desc} fold={{ open, onToggle: setOpen }}>
       {d === "failed" ? note("Could not read the log digest.")
         : !d ? note("Reading…")
         : (
@@ -1404,7 +1430,7 @@ function AboutPane({ open }: { open: boolean }) {
   };
 
   if (stErr) return (
-    <SettingsCard title="This build"
+    <SettingsCard title="This build" icon={<InfoIcon />}
       desc="Which version is running, and whether a newer one is out.">
       <SettingRow label="Could not read this build's version"
         status={<StatusBadge tone="err">Unavailable</StatusBadge>}
@@ -1412,7 +1438,7 @@ function AboutPane({ open }: { open: boolean }) {
     </SettingsCard>
   );
   if (!st) return (
-    <SettingsCard title="This build" desc="Which version is running, and whether a newer one is out.">
+    <SettingsCard title="This build" icon={<InfoIcon />} desc="Which version is running, and whether a newer one is out.">
       <SettingRow label="Reading version…" status={<StatusBadge tone="checking">Checking</StatusBadge>} />
     </SettingsCard>
   );
@@ -1426,9 +1452,14 @@ function AboutPane({ open }: { open: boolean }) {
   const short = st.info.stamp || (st.info.commit ? st.info.commit.slice(0, 7) : "unknown");
   const dirty = !!st.info.dirty;
   const mine = installedNotes(st.info.baseTag, st.info.distance, st.branch);
+  // The same three-way split the rows below draw: an update is on offer only
+  // when it is not running, not blocked and the build is behind.
+  const offered = !started && !st.blocked && st.behind !== 0;
   return (
     <>
-    <SettingsCard title="This build"
+    <SettingsCard title="This build" icon={<InfoIcon />}
+      tone={offered ? "decision" : "default"}
+      status={offered ? <StatusBadge tone="info">Update available</StatusBadge> : undefined}
       desc="Which version is running, and whether a newer one is out.">
       {/* The build you are running, as a row like any other: what it is on the
           left, and the one thing you can do about it on the right. The notes
@@ -1512,7 +1543,6 @@ function AboutPane({ open }: { open: boolean }) {
         <>
           <SettingRow
             label={`${st.branch} is available`}
-            status={<StatusBadge tone="warn">Update available</StatusBadge>}
             hint={st.behind > 1 ? `${st.behind} releases newer than yours.` : "One release newer than yours."}
             actions={<>
               <Button tone="ok" onClick={run} disabled={busy}>
@@ -1588,7 +1618,7 @@ function AboutPane({ open }: { open: boolean }) {
  */
 function AboutCredits() {
   return (
-    <SettingsCard title="Credits">
+    <SettingsCard title="Credits" icon={<ShieldIcon />}>
       <Row label="Portrait art by Viktor Hahn — CC BY 4.0"
         hint="The pixel-art portrait layers are his work, used under the Creative Commons Attribution 4.0 International licence. They are recoloured at paint time and otherwise unmodified."
         href="https://creativecommons.org/licenses/by/4.0/" />
@@ -1640,6 +1670,7 @@ function CookieImport() {
   const [pick, setPick] = useState<string>("");
   const [chosen, setChosen] = useState<ReadonlySet<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  useReportSaving("browser", busy);
   const [filter, setFilter] = useState("");
   // What rides along with the cookies. Read from the stored prefs so a choice
   // sticks between imports; default ON, so leaving them alone brings everything
@@ -1728,8 +1759,8 @@ function CookieImport() {
       : "The browser profile the logins are read from.";
 
   return (
-    <SettingsCard title="Your logins"
-      desc="Bring the cookies over from another browser, so pages behind a login work here."
+    <SettingsCard title="Bring your logins" icon={<LinkIcon size={ICON.sm} />}
+      desc="Copies the sessions you already have from another browser, so pages behind a login work here. Nothing leaves this machine."
       actions={current?.readable ? (
         <>
           <Button onClick={() => void run("forget")} disabled={busy || !chosen.size}
@@ -1835,6 +1866,7 @@ const MAC_BUNDLE_BIN = "/Applications/agentglass.app/Contents/Resources/bin";
 function AgentBrowserPane({ open }: { open: boolean }) {
   const [st, setSt] = useState<BrowserUseStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  useReportSaving("hooks", busy);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
@@ -1852,7 +1884,7 @@ function AgentBrowserPane({ open }: { open: boolean }) {
     load();
   };
 
-  if (!st) return <SettingsCard title="Agent browser use"><EmptyState>Reading…</EmptyState></SettingsCard>;
+  if (!st) return <SettingsCard title="Browser access" icon={<BrowserIcon size={ICON.sm} />}><EmptyState>Reading…</EmptyState></SettingsCard>;
 
   const mono = { color: "var(--text)" };
   /* A Mac has no installer to reinstall: the .dmg carries the CLI inside the
@@ -1879,7 +1911,7 @@ function AgentBrowserPane({ open }: { open: boolean }) {
        feature is read once, by somebody deciding whether to bother, so it
        comes after the verdict. */
     <SetupCard
-      title="Agent browser use"
+      title="Browser access" icon={<BrowserIcon size={ICON.sm} />}
       error={err}
       note={note}
       actions={<Button onClick={load} disabled={busy}>Check again</Button>}
@@ -1919,9 +1951,20 @@ function AgentBrowserPane({ open }: { open: boolean }) {
   );
 }
 
-function HooksPane({ open }: { open: boolean }) {
+/** The Agents page: the hooks and the gate beside it, the cards the modal hands
+ *  in (new chats, browser, card skills), the worker roles, and one danger zone
+ *  that holds both ways back — which is why the hooks state lives here and not
+ *  in the card, and why the cards come in as slots: the flow fills columns in
+ *  order, so the danger zone has to be drawn after every card it follows. */
+function AgentsPage({ open, chats, panes, browser, skills }: {
+  open: boolean; chats: React.ReactNode; panes: React.ReactNode; browser: React.ReactNode; skills: React.ReactNode;
+}) {
+  const [resetTick, setResetTick] = useState(0);
+  const [armed, setArmed] = useState(false);
+  const [resetNote, setResetNote] = useState<string | null>(null);
   const [st, setSt] = useState<HookSetupStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  useReportSaving("hooks", busy);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
@@ -1973,25 +2016,34 @@ function HooksPane({ open }: { open: boolean }) {
     );
   };
 
-  if (!st) return <SettingsCard title="Claude Code hooks"><EmptyState>Reading hook state…</EmptyState></SettingsCard>;
+  const hooksIcon = <PlugIcon size={ICON.sm} />;
+  /* The pieces that do not depend on the hooks being readable: the cards of the
+     page are the same whatever the hooks say, so a failed read does not blank
+     the page, only the card that read it. */
+  const resetRoles = async () => {
+    if (!armed) { setArmed(true); return; }
+    setArmed(false); setResetNote(null);
+    const rs = await Promise.all(WORKER_ROLES.map((r) =>
+      api.workerRoleSave(r.id, r.default.provider, r.default.model).then((x) => x.ok).catch(() => false)));
+    setResetNote(rs.every(Boolean) ? "Every role is back on its default." : "Could not reset every role.");
+    setResetTick((n) => n + 1);
+  };
 
-  if (!st.bundled) {
-    return (
-      <SettingsCard title="Claude Code hooks">
-        <SettingRow label="The hook scripts are not in this build"
-          hint={<>This build does not carry the hook scripts, so there is nothing to wire. Install from a Release, or run <span className="t-mono">bun run setup</span> in a checkout.</>}
-          status={<StatusBadge tone="warn">Not included</StatusBadge>} />
-      </SettingsCard>
-    );
-  }
-
-  return (
+  const hooksCards = !st ? (
+    <SettingsCard title="Claude Code hooks" icon={hooksIcon}><EmptyState>Reading hook state…</EmptyState></SettingsCard>
+  ) : !st.bundled ? (
+    <SettingsCard title="Claude Code hooks" icon={hooksIcon}>
+      <SettingRow label="The hook scripts are not in this build"
+        hint={<>This build does not carry the hook scripts, so there is nothing to wire. Install from a Release, or run <span className="t-mono">bun run setup</span> in a checkout.</>}
+        status={<StatusBadge tone="warn">Not included</StatusBadge>} />
+    </SettingsCard>
+  ) : (
     <>
       {/* The last step is one only you can take, and there is no way from
           here to see whether you have. It says so and stays out of the count,
           rather than sitting there permanently unticked. */}
       <SetupCard
-        title="Claude Code hooks"
+        title="Claude Code hooks" icon={hooksIcon}
         error={err}
         note={note}
         steps={[
@@ -2012,9 +2064,7 @@ function HooksPane({ open }: { open: boolean }) {
                 backing it up first, and leaves your other hooks untouched.
               </>,
             },
-            action: st.installed
-              ? { label: busy ? "Disabling…" : "Disable hooks", onClick: () => void act("uninstall"), busy, tone: "danger" }
-              : { label: busy ? "Enabling…" : "Enable", onClick: () => void act("install"), busy } },
+            action: st.installed ? undefined : { label: busy ? "Enabling…" : "Enable", onClick: () => void act("install"), busy } },
           { title: "Start a fresh Claude Code session", done: null,
             detail: "Sessions already running keep the hooks they started with." },
         ]}>
@@ -2023,13 +2073,13 @@ function HooksPane({ open }: { open: boolean }) {
             left to a session that streams nothing and no error anywhere. */}
         <SettingRow label="Python on your PATH"
           hint={<>The hooks run under <span className="t-mono">{st.python}</span> — it has to be on your PATH for events to arrive. Takes effect on the next Claude Code session; hooks load at startup.</>} />
-        <SettingRow label="Taking it back out"
-          hint={<>Reversible any time from here, or with <span className="t-mono">python3 hooks/install_hooks.py --uninstall</span> in a checkout. Global (<span className="t-mono">~/.claude</span>), so it covers every project.</>} />
       </SetupCard>
 
       {/* The gate. Its own card, below the forwarder, because it is the
           stronger thing and read second for the same reason. */}
-      <SettingsCard title="Gate" desc="Holds an outward action until somebody decides. A separate switch from the hooks above.">
+      <SettingsCard title="Gate" icon={<ShieldIcon size={ICON.sm} />} tone={st.gateBundled && !st.gate ? "decision" : "default"}
+        desc="Holds an outward action until somebody decides. A separate switch from the hooks above."
+        status={<StatusBadge tone={!st.gateBundled ? "off" : st.gate ? "ok" : "warn"}>{!st.gateBundled ? "Not in this build" : st.gate ? "On" : "Off · needs a decision"}</StatusBadge>}>
         <SettingRow label="Hold what leaves this machine"
           hint={<>
             A push, a pull request, a comment, a review, a merge, a ticket or a message in a channel
@@ -2037,13 +2087,39 @@ function HooksPane({ open }: { open: boolean }) {
             Everything local — writing code, running tests, cutting a worktree — is never held.
             <span className="block mt-1">Until you turn this on, that line is held by each agent remembering it.</span>
           </>}
-          status={<StatusBadge tone={!st.gateBundled ? "off" : st.gate ? "ok" : "off"}>{!st.gateBundled ? "Not in this build" : st.gate ? "On" : "Off"}</StatusBadge>}
           actions={st.gateBundled
             ? <Button tone={st.gate ? "danger" : "primary"} disabled={busy} onClick={() => void gate(!st.gate)}>
                 {busy ? "Working…" : st.gate ? "Turn the gate off" : "Turn the gate on"}
               </Button>
             : undefined} />
       </SettingsCard>
+    </>
+  );
+
+  return (
+    <>
+      {hooksCards}
+      {chats}
+      {panes}
+      {browser}
+      {skills}
+      <WorkerRolesSection open={open} resetTick={resetTick} />
+      <AgentsSection />
+      {/* Both ways back, together and apart from everything that sets
+          something: the hooks come out of the person's own Claude Code
+          settings, the roles go back to the table in shared/workerRoles.ts.
+          Outline buttons, and neither deletes anything that cannot be put back. */}
+      <SettingsCard title="Danger zone" tone="danger" icon={<WarningIcon size={ICON.sm} />}
+          desc="Reversible, but they change what every session does.">
+          {st?.bundled && st.installed && (
+            <SettingRow label="Take the hooks back out"
+              hint={<>Removes the entries above; running sessions keep them until they end. Also <span className="t-mono">python3 hooks/install_hooks.py --uninstall</span> in a checkout. Global (<span className="t-mono">~/.claude</span>), so it covers every project.</>}
+              actions={<Button tone="danger" pending={busy} onClick={() => void act("uninstall")}>{busy ? "Disabling…" : "Disable hooks"}</Button>} />
+          )}
+          <SettingRow label="Forget worker roles"
+            hint={resetNote ?? (armed ? "Press again to put every role back on its default CLI and model." : "Back to the default CLI and model of every role.")}
+            actions={<Button tone="danger" onClick={() => void resetRoles()}>{armed ? "Reset roles?" : "Reset roles"}</Button>} />
+        </SettingsCard>
     </>
   );
 }
@@ -2104,40 +2180,56 @@ function LanternSection({ open }: { open: boolean }) {
   const near = String(STEPS.find((m) => m >= minutes) ?? 90);
   const WATCH_STEPS = [5, 10, 15, 30, 60] as const;
   const nearWatch = String(WATCH_STEPS.find((m) => m >= watchMinutes) ?? 60);
+  const ic = <LanternIcon size={ICON.sm} />;
+  /* Two cards, split by what they act on: the board and what it asks of a
+     session, and the one seat it wakes. The picture of the board is in the
+     side slot, and its watch line and cache clock follow the controls. */
   return (
-    <SettingsCard title="Lantern"
-      desc="What the Lantern (the rail's lantern icon) may ask of a session. It never starts, stops or queues anything; this is the one thing it says to an agent.">
-      {err && <div role="alert" className="agx-settings-x pt-2 pb-3 text-[11px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
-      <Toggle on={nudge} onClick={() => save({ nudge: !nudge })}
-        label="Ask sessions what they are working on"
-        hint="On a prompt, a hooked session may be handed one line asking it to post its task (POST /agents/status). Off, and the Lantern lists sessions by name and pane only." />
-      <Choice label="How often one session may be asked again" value={near}
-        hint="A session that has already answered is left alone for this long, whatever name it chose."
-        options={STEPS.map((m) => ({ v: String(m), label: `${m} min` }))}
-        onPick={(m) => save({ minutes: Number(m) })} disabled={!nudge}
-        disabledHint="Nothing is asked while the reminder is off." />
-      <Toggle on={watch} onClick={() => save({ watch: !watch })}
-        label="Watch the agents and notify me"
-        hint="Every few minutes the agents are re-read and one notification goes out — the app's bell, the phone when paired, the desktop otherwise — if somebody is still stopped on you, a worker's window vanished, or work that was claimed has gone quiet for an hour. The instant alerts stay either way; this is the sweep behind them." />
-      <Choice label="How often it looks" value={nearWatch}
-        hint="One notification per look at most, while something needs you."
-        options={WATCH_STEPS.map((m) => ({ v: String(m), label: `${m} min` }))}
-        onPick={(m) => save({ watchMinutes: Number(m) })} disabled={!watch}
-        disabledHint="Nothing is looked at while the watch is off." />
-      {/* The seat's floor lives here because it rides the same look: the watch
-          re-reads the field, and the orchestrator is prompted only when what
-          it found CHANGED. This is how long a quiet field may stay quiet
-          before it gets a line anyway. */}
-      <Choice label="Wake the orchestrator at least every" value={String(seatWake)}
-        hint="The seat is woken when the field changes. This is the floor under that, so a quiet day still gets a line rather than a silence you cannot tell from a dead agent."
-        options={[1, 2, 4, 8, 12, 24].map((h) => ({ v: String(h), label: h === 1 ? "1 hour" : `${h} hours` }))}
-        onPick={(h) => { void api.seatWakeSave(Number(h)).then(() => setSeatWake(Number(h))); }} />
-      <Choice label="How long the prompt cache stays warm" value={String(cacheTtl === 60 ? 60 : 5)}
-        hint="Each card counts it down from the session's last turn: a turn sent while it is warm is the cheap one. Five minutes on most plans; an hour on some."
-        options={[{ v: "5", label: "5 min" }, { v: "60", label: "1 hour" }]}
-        onPick={(m) => save({ cacheTtlMinutes: Number(m) })} />
-      {note && <div role="status" className="agx-settings-x pt-2 pb-3 text-[11px]" style={{ color: "var(--text3)" }}>{note}</div>}
-    </SettingsCard>
+    <div className="agx-split-page">
+      <div className="agx-split-main">
+        <SettingsCard title="Lantern" icon={ic}
+          desc="The board that watches every agent, and how often it taps you on the shoulder. It never starts, stops or queues anything."
+          status={<StatusBadge tone={watch ? "ok" : "off"}>{watch ? "Watching" : "Not watching"}</StatusBadge>}>
+          {err && <div role="alert" className="agx-settings-x pt-2 pb-3 text-[11px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
+          <Toggle on={watch} onClick={() => save({ watch: !watch })}
+            label="Watch the agents and notify me"
+            hint="Every few minutes the agents are re-read and one notification goes out — the app's bell, the phone when paired, the desktop otherwise — if somebody is still stopped on you, a worker's window vanished, or work that was claimed has gone quiet for an hour. The instant alerts stay either way; this is the sweep behind them." />
+          <Choice label="How often it looks" value={nearWatch}
+            hint="One notification per look at most, while something needs you."
+            options={WATCH_STEPS.map((m) => ({ v: String(m), label: `${m} min` }))}
+            onPick={(m) => save({ watchMinutes: Number(m) })} disabled={!watch}
+            disabledHint="Nothing is looked at while the watch is off." />
+          <Toggle on={nudge} onClick={() => save({ nudge: !nudge })}
+            label="Ask sessions what they are working on"
+            hint="On a prompt, a hooked session may be handed one line asking it to post its task (POST /agents/status). Off, and the Lantern lists sessions by name and pane only." />
+          <Choice label="How often one session may be asked again" value={near}
+            hint="A session that has already answered is left alone for this long, whatever name it chose."
+            options={STEPS.map((m) => ({ v: String(m), label: `${m} min` }))}
+            onPick={(m) => save({ minutes: Number(m) })} disabled={!nudge}
+            disabledHint="Nothing is asked while the reminder is off." />
+        </SettingsCard>
+        <SettingsCard title="The orchestrator" icon={<AgentIcon size={ICON.sm} />}>
+          {/* The seat's floor lives here because it rides the same look: the watch
+              re-reads the field, and the orchestrator is prompted only when what
+              it found CHANGED. This is how long a quiet field may stay quiet
+              before it gets a line anyway. */}
+          <Choice label="Wake the orchestrator at least every" value={String(seatWake)}
+            hint="The seat is woken when the field changes. This is the floor under that, so a quiet day still gets a line rather than a silence you cannot tell from a dead agent."
+            options={[1, 2, 4, 8, 12, 24].map((h) => ({ v: String(h), label: h === 1 ? "1 hour" : `${h} hours` }))}
+            onPick={(h) => { void api.seatWakeSave(Number(h)).then(() => setSeatWake(Number(h))); }} />
+          <Choice label="How long the prompt cache stays warm" value={String(cacheTtl === 60 ? 60 : 5)}
+            hint="Each card counts it down from the session's last turn: a turn sent while it is warm is the cheap one. Five minutes on most plans; an hour on some."
+            options={[{ v: "5", label: "5 min" }, { v: "60", label: "1 hour" }]}
+            onPick={(m) => save({ cacheTtlMinutes: Number(m) })} />
+        </SettingsCard>
+        {note && <div role="status" className="agx-settings-x text-[11px]" style={{ color: "var(--text3)" }}>{note}</div>}
+      </div>
+      <aside className="agx-split-side">
+        <PreviewCard id="lantern" title="The real Lantern card">
+          <LanternPreview watch={watch} everyMin={watchMinutes} wakeMin={cacheTtl} />
+        </PreviewCard>
+      </aside>
+    </div>
   );
 }
 
@@ -2149,7 +2241,7 @@ function LanternSection({ open }: { open: boolean }) {
  * that is offered but not installed says so rather than disappearing, so a
  * choice made on another machine still reads.
  */
-function WorkerRolesSection({ open }: { open: boolean }) {
+function WorkerRolesSection({ open, resetTick = 0 }: { open: boolean; resetTick?: number }) {
   type Choice = { provider: string; model: string };
   const [roles, setRoles] = useState<Record<string, Choice>>({});
   const [clis, setClis] = useState<{ id: string; title: string; installed: boolean }[]>([]);
@@ -2164,7 +2256,7 @@ function WorkerRolesSection({ open }: { open: boolean }) {
     if (!open) return;
     void api.workerRoles().then((r) => { take(r); setClis(r.providers ?? []); })
       .catch(() => setNote("Could not reach the server — the worker roles are unavailable."));
-  }, [open]);
+  }, [open, resetTick]);
   const save = (role: string, c: Choice) => {
     setNote(null);
     void api.workerRoleSave(role, c.provider, c.model)
@@ -2172,7 +2264,7 @@ function WorkerRolesSection({ open }: { open: boolean }) {
       .catch(() => setNote("Could not save."));
   };
   return (
-    <SettingsCard title="Worker roles"
+    <SettingsCard title="Worker roles" icon={<PlugIcon size={ICON.sm} />}
       desc="Which CLI and model a worker started in a role runs on (agentglass-agent start --role). Every role is locked against push, commit, merge and the network clients, in a layer the project's own config cannot loosen (OpenCode's is checked against the project's config at each start, and refused if loosened); a CLI with no such lock is not offered.">
       {WORKER_ROLES.map((r) => {
         const c = roles[r.id];
@@ -2183,7 +2275,7 @@ function WorkerRolesSection({ open }: { open: boolean }) {
             hint={`${r.what}${r.readOnly ? " File edits are refused too." : ""} Default: ${r.default.provider}, ${r.default.model}.`}
             control={
               <Select value={c.provider} align="right"
-                className="rounded-lg px-2 py-1 text-[11px] outline-none w-[128px] justify-between"
+                className="agx-select outline-none w-[128px] justify-between"
                 options={clis.map((p) => ({ value: p.id, label: p.installed ? p.title : `${p.title} (not installed)` }))}
                 onChange={(v) => save(r.id, { provider: v, model: "" })} />}
             /* The model is a text field, so it stacks under the description
@@ -2290,7 +2382,7 @@ function NotificationsSection(p: {
   );
   return (
     <>
-      <SettingsCard title="Interrupt me for"
+      <SettingsCard title="Interrupt me for" icon={<BellIcon size={ICON.sm} />}
         desc="Whatever is off still shows quietly on the fleet card."
         status={err ? <StatusBadge tone="err">{err}</StatusBadge> : undefined}
         actions={<span className="flex items-center gap-2 text-[11px] t-dim">Silence all
@@ -2315,7 +2407,8 @@ function NotificationsSection(p: {
           hint="Chats finishing, branches falling behind, checks going red. With Quiet on, only what is stopped interrupts either way; this switch decides the rest once Quiet is off. Everything keeps landing in the bell." />
       </SettingsCard>
 
-      <SettingsCard title="How it reaches you">
+      <SettingsCard title="How it reaches you" icon={<BellIcon size={ICON.sm} />}
+        status={<StatusBadge tone={prefs.none ? "off" : quiet ? "info" : "ok"}>{prefs.none ? "Silenced" : quiet ? "Quiet" : "Normal"}</StatusBadge>}>
         {NOTIFY_CHANNELS.map((c) => (
           <Fragment key={c}>
             <Toggle on={prefs.channels[c]} disabled={prefs.none}
@@ -2357,7 +2450,7 @@ function NotificationsSection(p: {
         )}
       </SettingsCard>
 
-      <SettingsCard title="Pull requests">
+      <SettingsCard title="Pull requests" icon={<ReviewIcon size={ICON.sm} />}>
         <Toggle on={p.ciApproved} onClick={p.onCiApproved}
           settingId="notifications.ciOnlyApproved" label="Checks: only when the pull request is approved"
           hint={p.ciApproved
@@ -2385,12 +2478,12 @@ function NotificationsSection(p: {
           onPick={p.onTalkMode} />
       </SettingsCard>
 
-      <SettingsCard title="Asked for, and what became of it"
+      <SettingsCard title="Asked for, and what became of it" icon={<ChecklistIcon size={ICON.sm} />}
         desc="The notifications you armed, newest first. Quiet: nothing here interrupts.">
         <AskedAlertLog />
       </SettingsCard>
 
-      <SettingsCard title="From other apps">
+      <SettingsCard title="From other apps" icon={<PhoneIcon size={ICON.sm} />}>
         <Toggle
           agentNever="reads other applications' notifications into this app: what they say is theirs"
          
@@ -2425,7 +2518,7 @@ function NotificationsSection(p: {
 
 function AgentsSection() {
   return (
-    <SettingsCard title="Agent engines">
+    <SettingsCard title="Agent engines" icon={<PlugIcon size={ICON.sm} />}>
       <SettingRow label="Which engines this computer has"
         hint="Version, sign-in, what each can do, and whether it reports to this app: one card per engine, with its Connect button."
         onClick={() => openSettings("engines")} />
@@ -2499,6 +2592,14 @@ function depTone(d: DepReport): StatusTone {
   return "off";
 }
 
+/** The page's two section labels ("On this machine", "Services"): a plain line of type between tiles, not a card. */
+function FlowLabel({ children }: { children: React.ReactNode }) {
+  return <h3 className="m-0 mt-2 mb-3 text-[11px] uppercase tracking-wider" style={{ color: "var(--text3)", columnSpan: "all" }}>{children}</h3>;
+}
+
+/** A tile's mark: the first letter of what it is, in the page's hue. */
+const Initial = ({ name }: { name: string }) => <span aria-hidden className="text-[12px] font-semibold">{name.charAt(0).toUpperCase()}</span>;
+
 function DepRow({ d, home }: { d: DepReport; home: string }) {
   const href = externalUrl(d.url);
   const [console, setConsole] = useState(false);
@@ -2513,28 +2614,17 @@ function DepRow({ d, home }: { d: DepReport; home: string }) {
   // they read this page.
   const canType = !!d.install && d.status !== "ok" && d.status !== "unsupported";
   const guide = !!href && d.status !== "unsupported" && d.status !== "ok";
+  const tone = depTone(d);
   return (
-    /* One action per row. Install opens a shell with the command typed in,
-       which finishes the job; when there is no honest one-liner the guide is
-       the action instead. Where there are both, the guide is a link in the
-       description, so the row never carries two buttons for one job. The
-       console opens under the row, which stays on screen above it. */
-    <SettingRow
-      label={<span className="inline-flex items-baseline gap-2 flex-wrap">
-        <span>{d.title}</span>
-        <code className="text-[11px] t-mono t-dim">{d.bin}</code>
-      </span>}
-      hint={<>
-        {d.what}
-        {d.detail && d.status !== "ok" && <span className="block mt-1">{d.detail}</span>}
-        {d.note && d.status !== "ok" && d.status !== "unsupported" && <span className="block mt-1">{d.note}</span>}
-        {canType && guide && (
-          <span className="block mt-1">
-            <a href={href} target="_blank" rel="noreferrer noopener" className="agx-textlink">Install guide ↗</a>
-          </span>
-        )}
-      </>}
-      status={<StatusBadge tone={depTone(d)}>{d.status === "missing" && d.required ? "Needed, not installed" : STATUS_LABEL[d.status]}</StatusBadge>}
+    /* A tile per tool that wants something. One action in its head: Install opens
+       a shell with the command typed in, which finishes the job; when there is no
+       honest one-liner the guide is the action instead, and where there are both
+       the guide is a link in the row, so a tile never carries two buttons for one
+       job. The console opens under the row. Amber edge only while the person is
+       needed (warn or err), never for a tool that is merely absent. */
+    <SettingsCard icon={<Initial name={d.title} />} title={d.title} desc={d.what}
+      tone={tone === "warn" || tone === "err" ? "decision" : "default"}
+      status={<StatusBadge tone={tone}>{d.status === "missing" && d.required ? "Needed, not installed" : STATUS_LABEL[d.status]}</StatusBadge>}
       actions={canType
         ? <Button aria-expanded={console} onClick={() => setConsole((v) => !v)}
             title="Open a shell here with the command typed in — you press Enter">
@@ -2542,9 +2632,19 @@ function DepRow({ d, home }: { d: DepReport; home: string }) {
           </Button>
         : guide
           ? <LinkButton href={href!}>Install guide</LinkButton>
-          : undefined}
-      below={console && canType ? <ShellConsole command={d.install!} cwd={home} onClose={() => setConsole(false)} /> : undefined}
-    />
+          : undefined}>
+      <SettingRow agentExempt label="Looks for" control={<code className="text-[11px] t-mono t-dim">{d.bin}</code>}
+        hint={<>
+          {d.detail && d.status !== "ok" && <span className="block">{d.detail}</span>}
+          {d.note && d.status !== "ok" && d.status !== "unsupported" && <span className="block mt-1">{d.note}</span>}
+          {canType && guide && (
+            <span className="block mt-1">
+              <a href={href} target="_blank" rel="noreferrer noopener" className="agx-textlink">Install guide ↗</a>
+            </span>
+          )}
+        </>}
+        below={console && canType ? <ShellConsole command={d.install!} cwd={home} onClose={() => setConsole(false)} /> : undefined} />
+    </SettingsCard>
   );
 }
 
@@ -2587,13 +2687,8 @@ function GhBudget({ open }: { open: boolean }) {
   // a subprocess for nothing.
   useEffect(() => { if (open) void load(); }, [open, load]);
 
-  /* Closed until asked for, like the fold it replaces; a search or a deep link
-     opens it, because a result inside a closed card has nothing to land on. */
-  const { on, flash } = useContext(Filter);
-  const [folded, setFolded] = useState(false);
   return (
-    <SettingsCard title="GitHub" desc="The API allowance this app spends, and what is left of it."
-      fold={{ open: folded || on || !!flash, onToggle: setFolded }}>
+    <SettingsCard title="GitHub allowance" icon={<LinkIcon size={ICON.sm} />} desc="The API allowance this app spends, and what is left of it.">
       <SettingRow
         label="How much of your GitHub allowance is left"
         hint="Every pull request, check and search this app shows spends one. GitHub refills them on a rolling window — 5,000 an hour for REST and GraphQL, 30 a minute for Search, which is the one that runs out first because looking up a card's pull requests is a search."
@@ -2679,30 +2774,9 @@ function PrivacyPane({ open }: { open: boolean }) {
 
   return (
     <>
-      <SettingsCard title="Nothing is sent anywhere">
+      <SettingsCard title="Nothing is sent anywhere" icon={<ShieldIcon />} status={<StatusBadge tone="ok">Local only</StatusBadge>}>
         <SettingRow label="No analytics, no crash reporting, no phone-home"
           hint="There is nothing to turn off here. What this app does with your data, it does on this machine." />
-      </SettingsCard>
-      <SettingsCard title="What is on disk">
-        <Path label="History" value={d?.db ?? ""}
-          note="Every event, prompt, tool call and file change, in SQLite. Written owner-only — it holds prompts and command output in cleartext." />
-        <Path label="Settings" value={d?.config ?? ""}
-          note="Your preferences, budgets and the boards you have added." />
-        <Path label="Credentials" value={d?.credentials ?? ""}
-          note="Tokens for the services you connected, mode 0600. They are used by the server and never sent to the browser." />
-        {d && (
-          <SettingRow label="Retention"
-            hint={<>
-              History older than {d.retentionDays === 0 ? "— nothing is pruned" : `${d.retentionDays} days is pruned automatically`}.
-              Deleting the history file deletes all of it.
-            </>} />
-        )}
-      </SettingsCard>
-      <SettingsCard title="Activity">
-        {/* Activity has no nav entry; this row and the palette are its ways in. */}
-        <SettingRow label="Activity log" hint="What the app itself has been doing." onClick={() => openSettings("log")} />
-      </SettingsCard>
-      <SettingsCard title="What does leave this machine">
         {/* The headline answer is one line and stays open, because it is the
             claim this page exists to make. The enumeration behind it is the
             evidence, and evidence is read when it is doubted. */}
@@ -2720,6 +2794,25 @@ function PrivacyPane({ open }: { open: boolean }) {
             </>,
           }}
         />
+      </SettingsCard>
+      <SettingsCard title="What is on disk" icon={<ServerIcon />}>
+        <Path label="History" value={d?.db ?? ""}
+          note="Every event, prompt, tool call and file change, in SQLite. Written owner-only — it holds prompts and command output in cleartext." />
+        <Path label="Settings" value={d?.config ?? ""}
+          note="Your preferences, budgets and the boards you have added." />
+        <Path label="Credentials" value={d?.credentials ?? ""}
+          note="Tokens for the services you connected, mode 0600. They are used by the server and never sent to the browser." />
+        {d && (
+          <SettingRow label="Retention"
+            hint={<>
+              History older than {d.retentionDays === 0 ? "— nothing is pruned" : `${d.retentionDays} days is pruned automatically`}.
+              Deleting the history file deletes all of it.
+            </>} />
+        )}
+      </SettingsCard>
+      <SettingsCard title="Activity" icon={<ChecklistIcon />}>
+        {/* Activity has no nav entry; this row and the palette are its ways in. */}
+        <SettingRow label="Activity log" hint="What the app itself has been doing." onClick={() => openSettings("log")} />
       </SettingsCard>
     </>
   );
@@ -2740,6 +2833,7 @@ function IntegrationsPane({ open }: { open: boolean }) {
   }, []);
 
   useEffect(() => { if (open) void load(); }, [open, load]);
+  useReportProblem("connections", err ? { chip: "Not read", title: err } : null, load);
 
   /*
    * Come back for the slow half.
@@ -2760,39 +2854,33 @@ function IntegrationsPane({ open }: { open: boolean }) {
 
   const statusOf = (id: string) => status?.find((x) => x.id === id) ?? null;
 
-  /* One card per kind, and each carries its own verdict and the recheck at
-     its top right. It was one "Services" card with two eyebrow headings
-     inside it, which is a group heading drawn as a line of small caps with
-     rules above and below — the shape the settings sweep counted on every
-     page. The provider list is a constant (shared/providers.ts), so both
-     cards draw at once and only the badges wait for the answer. */
+  /* One tile per provider under one verdict and one recheck. The provider list
+     is a constant (shared/providers.ts), so every tile draws at once and only
+     the badges wait for the answer. */
+  const all = status?.filter((x) => PROVIDERS.some((p) => p.id === x.id)) ?? null;
+  const ok = all?.filter((x) => x.state === "connected").length ?? 0;
+  const bad = all?.filter((x) => x.state === "error").length ?? 0;
+  const verdict = !all
+    ? <StatusBadge tone={err ? "err" : "checking"}>{err ? "Not read" : "Checking"}</StatusBadge>
+    : bad
+      ? <StatusBadge tone="err">{bad} {bad === 1 ? "needs" : "need"} attention</StatusBadge>
+      : <StatusBadge tone={ok === all.length && ok > 0 ? "ok" : "off"}>{ok} of {all.length} connected</StatusBadge>;
   return (
     <>
-      {(["review", "task"] as const).map((kind) => {
-        const specs = PROVIDERS.filter((p) => p.kind === kind);
-        const mine = status?.filter((x) => specs.some((p) => p.id === x.id)) ?? null;
-        const ok = mine?.filter((x) => x.state === "connected").length ?? 0;
-        const bad = mine?.filter((x) => x.state === "error").length ?? 0;
-        const verdict = !mine
-          ? <StatusBadge tone={err ? "err" : "checking"}>{err ? "Not read" : "Checking"}</StatusBadge>
-          : bad
-            ? <StatusBadge tone="err">{bad} {bad === 1 ? "needs" : "need"} attention</StatusBadge>
-            : <StatusBadge tone={ok === mine.length && ok > 0 ? "ok" : "off"}>{ok} of {mine.length} connected</StatusBadge>;
-        return (
-          <SettingsCard key={kind}
-            title={kind === "review" ? "Review providers" : "Task providers"}
-            desc={kind === "review"
-              ? "Pull requests, checks and review state."
-              : "Where the things you owe come from. Each one you connect becomes a tab in Tasks."}
-            status={verdict}
-            actions={<Button pending={busy} onClick={() => void load()}>Recheck</Button>}>
-            {err && <SettingRow label={err} hint="Recheck to try again." />}
-            {specs.map((p) => (
-              <ProviderCard key={p.id} spec={p} status={statusOf(p.id)} checking={!status && !err} onChanged={load} />
-            ))}
-          </SettingsCard>
-        );
-      })}
+      <FlowLabel>Services</FlowLabel>
+      <div className="flex items-center gap-3 flex-wrap mb-1" style={{ columnSpan: "all" }}>
+        {verdict}
+        <span className="text-[12px] flex-1 min-w-0" style={{ color: "var(--text3)" }}>Pull requests, checks and review state, and where the things you owe come from. Each task provider you connect becomes a tab in Tasks.</span>
+        <Button pending={busy} onClick={() => void load()}>Recheck</Button>
+      </div>
+      {err && (
+        <SettingsCard title="Services" icon={<PlugIcon size={ICON.sm} />} tone="error" wide>
+          <ProblemNote title={err} action={<Button pending={busy} onClick={() => void load()}>Try again</Button>}>The local server did not answer, so no service could be checked.</ProblemNote>
+        </SettingsCard>
+      )}
+      {PROVIDERS.map((p) => (
+        <ProviderCard key={p.id} spec={p} status={statusOf(p.id)} checking={!status && !err} onChanged={load} />
+      ))}
     </>
   );
 }
@@ -2970,48 +3058,15 @@ function ProviderCard({ spec, status, checking, onChanged }: {
 
   return (
     /*
-     * One row per provider, in one card per kind: the badges form a column you
-     * can read down in one movement. Everything conditional — the form, the
-     * confirmation, the workspace list — is the row's stacked slot, so a row
-     * with nothing to add is one line of name and one of description, and a
-     * row that grows does it under itself.
-     *
-     * The badge stays first in the control column in every state, and
-     * Disconnect after it; the confirmation that replaces Disconnect opens
-     * under the row, where the question is asked.
+     * One tile per provider. The badge is in the head in every state and so is
+     * the one action (Manage, or Disconnect once connected); everything
+     * conditional (the form, the confirmation, the workspace list) is the
+     * body's stacked slot, so a tile with nothing to add is one row, and one
+     * that grows does it under itself. Amber edge only while the person is
+     * needed: a refused token, never an optional service nobody connected.
      */
-    <SettingRow
-      rowRef={box}
-      /* Still remembered, still for the same reason: the row grows a detail
-         line and, when it is not connected, a form under it. Measured after
-         the card became a row, the page still moved 145px without this. */
-      minHeight={waiting ? rememberedHeights()[spec.id] ?? 56 : undefined}
-      label={spec.title}
-      hint={<>
-        <span className="block">{spec.what}</span>
-        {status?.detail && <span className="block mt-1">{status.detail}</span>}
-        {/* When that verdict was actually taken. The row above is read from a
-            cache — deliberately, because asking ClickUp live costs ten
-            seconds of its latency for a question the token answers — and a
-            cached verdict drawn with no date claims to be a live one. */}
-        {checked && <span className="block mt-1">{checked}</span>}
-        {/* Half of a provider can be down while the other half looks fine —
-            the ClickUp card bell fails on its own six-minute timer. Warning
-            ink and UNDER the detail, because it qualifies the verdict instead
-            of being it: a connected row with a broken bell is still connected. */}
-        {status?.notice && <span className="block mt-1" style={{ color: "var(--warning-ink)" }}>{status.notice}</span>}
-        {connected && spec.id === "clickup" && (
-          <span className="block mt-1">
-            <button type="button" className="agx-textlink" onClick={() => void changeWorkspace()}>Change workspace</button>
-            {" · "}
-            <button type="button" className="agx-textlink" onClick={() => openSettings("clickup")}>Workflow and boards</button>
-          </span>
-        )}
-        {waiting && <span className="agx-skeleton block mt-1 rounded" style={{ height: 13, maxWidth: 240 }} aria-hidden />}
-      </>}
-      /* The standing caveat about a provider — true whether or not you ever
-         connect it, and read once — behind a summary that says what it is. */
-      detail={spec.note && !connected && !waiting && !isJira ? { summary: spec.noteTitle ?? "About the credential", body: spec.note } : undefined}
+    <SettingsCard icon={<Initial name={spec.title} />} title={spec.title} desc={spec.what}
+      tone={look.tone === "err" ? "decision" : "default"}
       status={<StatusBadge tone={look.tone}>{look.label}</StatusBadge>}
       actions={isJira && !waiting
         ? <Button onClick={() => openSettings("jira")}>{connected ? "Manage" : "Set up"}</Button>
@@ -3024,9 +3079,42 @@ function ProviderCard({ spec, status, checking, onChanged }: {
             }}>
             Disconnect
           </Button>
-        : undefined}
-      below={below}
-    />
+        : undefined}>
+      <SettingRow
+        agentExempt
+        rowRef={box}
+        /* Still remembered, still for the same reason: the tile grows a detail
+           line and, when it is not connected, a form under it. Measured when it
+           was one row, the page still moved 145px without this. */
+        minHeight={waiting ? rememberedHeights()[spec.id] ?? 56 : undefined}
+        label={waiting ? "Checking…" : look.label}
+        hint={<>
+          {status?.detail && <span className="block">{status.detail}</span>}
+          {/* When that verdict was actually taken. The row above is read from a
+              cache — deliberately, because asking ClickUp live costs ten
+              seconds of its latency for a question the token answers — and a
+              cached verdict drawn with no date claims to be a live one. */}
+          {checked && <span className="block mt-1">{checked}</span>}
+          {/* Half of a provider can be down while the other half looks fine —
+              the ClickUp card bell fails on its own six-minute timer. Warning
+              ink and UNDER the detail, because it qualifies the verdict instead
+              of being it: a connected row with a broken bell is still connected. */}
+          {status?.notice && <span className="block mt-1" style={{ color: "var(--warning-ink)" }}>{status.notice}</span>}
+          {connected && spec.id === "clickup" && (
+            <span className="block mt-1">
+              <button type="button" className="agx-textlink" onClick={() => void changeWorkspace()}>Change workspace</button>
+              {" · "}
+              <button type="button" className="agx-textlink" onClick={() => openSettings("clickup")}>Workflow and boards</button>
+            </span>
+          )}
+          {waiting && <span className="agx-skeleton block mt-1 rounded" style={{ height: 13, maxWidth: 240 }} aria-hidden />}
+        </>}
+        /* The standing caveat about a provider — true whether or not you ever
+           connect it, and read once — behind a summary that says what it is. */
+        detail={spec.note && !connected && !waiting && !isJira ? { summary: spec.noteTitle ?? "About the credential", body: spec.note } : undefined}
+        below={below}
+      />
+    </SettingsCard>
   );
 }
 
@@ -3070,6 +3158,7 @@ function RequirementsPane({ open }: { open: boolean }) {
   // Probed on open rather than at startup: it costs a handful of PATH lookups
   // plus two cached subprocess answers, and nothing outside this pane wants it.
   useEffect(() => { if (open) void load(false); }, [open]);
+  useReportProblem("connections", err ? { chip: "Not checked", title: err } : null, () => void load(true));
 
   const recheck = <Button pending={busy} onClick={() => void load(true)}>Recheck</Button>;
   const desc = <>
@@ -3082,10 +3171,12 @@ function RequirementsPane({ open }: { open: boolean }) {
      the button is always where it was. */
   if (err || !deps) {
     return (
-      <SettingsCard title="On this machine" desc={desc}
+      <SettingsCard title="On this machine" icon={<ServerIcon size={ICON.sm} />} desc={desc} tone={err ? "error" : "default"}
         status={<StatusBadge tone={err ? "err" : "checking"}>{err ? "Not checked" : "Checking"}</StatusBadge>}
         actions={recheck}>
-        <SettingRow label={err ? err : "Checking this machine…"} hint={err ? "Recheck to try again." : undefined} />
+        {err
+          ? <ProblemNote title="Nothing could be checked">{err} Recheck to try again.</ProblemNote>
+          : <EmptyState>Checking this machine…</EmptyState>}
       </SettingsCard>
     );
   }
@@ -3101,33 +3192,41 @@ function RequirementsPane({ open }: { open: boolean }) {
   const wanting = live.filter((d) => d.status === "attention" || (d.status === "missing" && !d.required)).length;
 
   return (
-    /* The verdict is the card's badge and the recheck is its one action, at
-       the top right. Only what wants something gets a row — the status, the
-       detail, the install — and the ones that are ready collapse behind one
-       line, where a name and a dot are enough. */
-    <SettingsCard title="On this machine" desc={desc}
-      status={broken
-        ? <StatusBadge tone="err">{broken} needed {broken === 1 ? "tool" : "tools"} missing</StatusBadge>
-        : wanting
-          ? <StatusBadge tone="warn">{wanting} optional {wanting === 1 ? "feature" : "features"} off</StatusBadge>
-          : <StatusBadge tone="ok">Everything is here</StatusBadge>}
-      actions={recheck}>
+    /* The verdict and the recheck sit in one bar above the tiles. Only what wants
+       something gets a tile (the status, the detail, the install); the ones that
+       are ready collapse into one card, where a name and a dot are enough. */
+    <>
+      <div className="flex items-center gap-3 flex-wrap mb-1" style={{ columnSpan: "all" }}>
+        {broken
+          ? <StatusBadge tone="err">{broken} needed {broken === 1 ? "tool" : "tools"} missing</StatusBadge>
+          : wanting
+            ? <StatusBadge tone={live.some((d) => d.status === "attention") ? "warn" : "off"}>{wanting} optional {wanting === 1 ? "feature" : "features"} off</StatusBadge>
+            : <StatusBadge tone="ok">Everything is here</StatusBadge>}
+        <span className="text-[12px] flex-1 min-w-0" style={{ color: "var(--text3)" }}>{desc}</span>
+        {recheck}
+      </div>
+      <FlowLabel>On this machine</FlowLabel>
       {wants.map((d) => <DepRow key={d.id} d={d} home={shellRoot} />)}
 
-      {ready.length > 0 && (
-        <Fold label={wants.length ? `${ready.length} more ready` : `${ready.length} ready`}
-          hint="Everything else agentglass looks for, and found.">
-          <DepGrid deps={ready} />
-        </Fold>
-      )}
+      {(ready.length > 0 || idle.length > 0) && (
+        <SettingsCard title={wants.length ? "Ready" : "Everything found"} icon={<ServerIcon size={ICON.sm} />}
+          status={<StatusBadge tone="ok">{ready.length} ready</StatusBadge>}>
+          {ready.length > 0 && (
+            <Fold label={wants.length ? `${ready.length} more ready` : `${ready.length} ready`}
+              hint="Everything else agentglass looks for, and found.">
+              <DepGrid deps={ready} />
+            </Fold>
+          )}
 
-      {idle.length > 0 && (
-        <Fold label={`${idle.length} not used on ${platform}`}
-          hint="This platform never asks for these, so there is nothing to install.">
-          <DepGrid deps={idle} muted />
-        </Fold>
+          {idle.length > 0 && (
+            <Fold label={`${idle.length} not used on ${platform}`}
+              hint="This platform never asks for these, so there is nothing to install.">
+              <DepGrid deps={idle} muted />
+            </Fold>
+          )}
+        </SettingsCard>
       )}
-    </SettingsCard>
+    </>
   );
 }
 
@@ -3177,6 +3276,7 @@ function LaunchPermissionsCard({ open }: { open: boolean }) {
       setLaunchPermissions({ mode: r.mode, deny: r.deny });
     }).catch(() => setErr("Could not reach the server — this setting is unavailable."));
   }, [open]);
+  const phase = useSavePhase("terminal", busy, !!err);
   const save = (p: { mode?: LaunchMode; deny?: string }) => {
     setBusy(true); setNote(null); setErr(null);
     api.launchPermissionsSave(p)
@@ -3191,7 +3291,7 @@ function LaunchPermissionsCard({ open }: { open: boolean }) {
   };
   const bad = parseDenyRules(deny).bad;
   return (
-    <SettingsCard title="Launch permissions" desc="How every terminal agentglass opens starts its agent: Review with Claude, a hand-off, an issue, a resumed session, a Command that runs claude.">
+    <SettingsCard title="Launch permissions" icon={<ShieldIcon size={ICON.sm} />} status={<SaveChip phase={phase} />} desc="How every terminal agentglass opens starts its agent: Review with Claude, a hand-off, an issue, a resumed session, a Command that runs claude.">
       <SettingRow
         agentNever="the permission mode every agent the app starts runs in: loosening it is an escalation, so only the owner changes it"
         label="Permission mode for terminals agentglass opens"
@@ -3233,6 +3333,7 @@ function TerminalRunsOn({ open }: { open: boolean }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const phase = useSavePhase("terminal", busy, !!err);
   const load = () => api.tmuxStatus().then((r) => { setTerminal(r.terminal || "engine"); setErr(null); })
     .catch(() => setErr("Could not reach the server — this setting is unavailable."));
   useEffect(() => { if (open) void load(); }, [open]);
@@ -3252,7 +3353,7 @@ function TerminalRunsOn({ open }: { open: boolean }) {
   };
 
   return (
-    <SettingsCard title="Terminal runs on" desc="The shell a Terminal view starts.">
+    <SettingsCard title="Terminal runs on" icon={<TerminalIcon size={ICON.sm} />} status={<SaveChip phase={phase} />} desc="The shell a Terminal view starts.">
       <SettingRow
         agentNever="which tmux a shell runs in, held by the server: it changes what runs a shell, so the owner chooses it"
         label="Terminal runs on"
@@ -3292,8 +3393,9 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   /** The card the last action belongs to, so its answer appears under it and not at the foot of the page. */
-  const [noteAt, setNoteAt] = useState<"engine" | "config" | "restore">("engine");
+  const [noteAt, setNoteAt] = useState<"engine" | "prefix" | "config" | "restore">("engine");
   const [busy, setBusy] = useState(false);
+  useReportSaving("tmux", busy);
   /** A failed Restore / Resume save. Not `err`: that one replaces the whole page. */
   const [saveFail, setSaveFail] = useState<string | null>(null);
 
@@ -3339,7 +3441,7 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
   };
 
   const savePrefix = () => {
-    setBusy(true); setNote(null); setErr(null); setNoteAt("engine");
+    setBusy(true); setNote(null); setErr(null); setNoteAt("prefix");
     api.tmuxSettingsSave({ prefix })
       .then((r) => {
         if (r.ok) setNote(r.appliedNow
@@ -3371,7 +3473,7 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
       confirmLabel: "Reset engine",
       danger: true,
     }))) return;
-    setBusy(true); setNote(null); setNoteAt("engine");
+    setBusy(true); setNote(null); setNoteAt("config");
     api.tmuxReset()
       .then((r) => { setNote(r.ok ? "Reset to defaults." : r.error ?? "Reset failed."); void load(); })
       .catch(() => setErr("Could not reset — server unreachable."))
@@ -3405,14 +3507,14 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
     : null;
   return (
     <>
-    <SettingsCard title="Pane engine"
+    <SettingsCard title="Pane engine" icon={<PanesIcon size={ICON.sm} />}
       desc="The engine runs its own tmux server — its own socket, its own config. Your ~/.tmux.conf is never loaded, and neither is your tmux touched."
       status={!st
         ? <StatusBadge tone="checking">Checking</StatusBadge>
         : cap?.available
           ? <StatusBadge tone="ok">Pane engine ready</StatusBadge>
           : <StatusBadge tone="err">Pane engine unavailable</StatusBadge>}
-      actions={st ? <Button onClick={resetAll} disabled={busy}>Reset tmux to defaults</Button> : undefined}>
+      >
       <SettingRow
         label="tmux binary"
         hint={<>
@@ -3454,10 +3556,14 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
         actions={<Button onClick={onGoTerminal}>Open Terminal settings</Button>}
       />
 
-      {/* The one binding everybody changes, as a choice rather than as three
-          lines of tmux to remember: `set -g prefix` alone leaves C-b working,
-          and without `send-prefix` the new key cannot be typed through to a
-          program inside the pane. The generator writes all three. */}
+      {saidHere("engine")}
+    </SettingsCard>
+
+    {/* The one binding everybody changes, as a choice rather than as three
+        lines of tmux to remember: `set -g prefix` alone leaves C-b working,
+        and without `send-prefix` the new key cannot be typed through to a
+        program inside the pane. The generator writes all three. */}
+    <SettingsCard title="Prefix key" icon={<KeyboardIcon size={ICON.sm} />}>
       <SettingRow
         label="Prefix key"
         hint={<>The chord that starts every tmux command in these panes — the engine's own, not your tmux's. tmux's default is <span className="t-mono text-[11px]">C-b</span>; pick another if that is taken by something you use. "Custom" takes tmux's spelling: <span className="t-mono text-[11px]">C-a</span>, <span className="t-mono text-[11px]">M-Space</span>, <span className="t-mono text-[11px]">F5</span>. Saving hands it to the running engine, so it applies to the panes already open — no restart.</>}
@@ -3477,10 +3583,11 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
           </SettingsForm>
         ) : undefined}
       />
-      {saidHere("engine")}
+      {saidHere("prefix")}
     </SettingsCard>
 
-    <SettingsCard title="Engine config"
+    <SettingsCard title="Engine config" icon={<SlidersIcon size={ICON.sm} />}
+      actions={st ? <Button onClick={resetAll} disabled={busy}>Reset tmux to defaults</Button> : undefined}
       desc="Extra config lines for the engine's own server, validated by tmux before they apply. A rejected config leaves the engine off and chat unaffected, and Reset brings it back.">
       <SettingRow
         label="Mode"
@@ -3509,7 +3616,8 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
       {saidHere("config")}
     </SettingsCard>
 
-    <SettingsCard title="Restore after reboot">
+    <SettingsCard title="Restore after reboot" icon={<PanesIcon size={ICON.sm} />}
+      status={st ? <StatusBadge tone={restore ? "ok" : "off"}>{restore ? "On" : "Off"}</StatusBadge> : undefined}>
       <SettingRow
         label="Restore the layout"
         role="switch" ariaChecked={restore}
@@ -3589,7 +3697,7 @@ function CardTrackerSection() {
     setRows((cur) => cur && { ...cur, chosen: r.projects ?? {} });
   };
   return (
-    <SettingsCard title="Card tracker"
+    <SettingsCard title="Card tracker" icon={<ChecklistIcon size={ICON.sm} />}
       desc={<>Which tracker a repository's cards live in. Auto reads the id's prefix.
         {note && <span className="block mt-1" role="alert" style={{ color: "var(--error-ink)" }}>{note}</span>}</>}>
       {!rows?.repos.length && <EmptyState>No repositories to choose for yet.</EmptyState>}
@@ -3637,7 +3745,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
   // The Shortcuts page reads chordFor, which now answers out of the rail: move
   // a view between groups on the Rail page and every number on this one shifts.
   // Without this the two pages sit side by side disagreeing.
-  useSyncExternalStore(subscribeRail, loadRail, () => SHIPPED_RAIL);
+  const railLayout = useSyncExternalStore(subscribeRail, loadRail, () => SHIPPED_RAIL);
   /**
    * Which page is showing — remembered across opens.
    *
@@ -3699,7 +3807,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
    * slow answer cost the whole page ten seconds. The three go out together for
    * the same reason.
    */
-  const [badges, setBadges] = useState<{ connections?: number; remote?: "live" | null }>({});
+  const [badges, setBadges] = useState<{ connections?: number; remote?: "live" | "idle" | null }>({});
   const [logDigest, setLogDigest] = useState<LogDigest | "failed" | null>(null);
   /** The three onboarding steps, read from the same state Connections and
    *  Agents already show — this owns no state of its own, so it cannot say
@@ -3707,27 +3815,45 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
    *  the reads land, which keeps the pinned row off the nav rather than
    *  flashing it and pulling it back a second later. */
   const [onboarding, setOnboarding] = useState<{ hook: boolean; provider: boolean; paneEngine: boolean } | null>(null);
+  /** Facts only the nav's marks and the page header's chips read. `null` is a
+   *  read that has not landed or that failed: it draws no mark rather than a
+   *  guess. Read with the batch above, once per open. */
+  const [facts, setFacts] = useState<Pick<NavFacts, "hooksWired" | "tmuxOk" | "jiraConnected" | "lanternWatching" | "updateAvailable" | "notificationsOn" | "pluginsRunning" | "pluginsNeed">>({
+    hooksWired: null, tmuxOk: null, jiraConnected: null, lanternWatching: null, updateAvailable: null, notificationsOn: null,
+    pluginsRunning: null, pluginsNeed: null,
+  });
   useEffect(() => {
     if (!open) return;
     let live = true;
     void Promise.all([
-      api.dependencies().then((r) => r.deps).catch(() => [] as DepReport[]),
-      api.providers().then((r) => r.providers).catch(() => [] as ProviderStatus[]),
-      api.remoteStatus().then((r) => (r.clients.liveCount > 0 ? ("live" as const) : null)).catch(() => null),
-      api.hooksStatus().then((r) => r.installed).catch(() => false),
+      api.dependencies().then((r) => r.deps).catch(() => null),
+      api.providers().then((r) => r.providers).catch(() => null),
+      api.remoteStatus().then((r) => (r.clients.liveCount > 0 ? ("live" as const) : ("idle" as const))).catch(() => null),
+      api.hooksStatus().then((r) => r.installed).catch(() => null),
       api.logDigest().catch(() => "failed" as const),
-    ]).then(([deps, provs, remote, hookInstalled, digest]) => {
+      api.jiraStatus().then((r) => r.connected).catch(() => null),
+      api.lanternSettings().then((r) => (r.ok && typeof r.watch === "boolean" ? r.watch : null)).catch(() => null),
+      api.updateStatus().then((r) => isUpdateAvailable(r)).catch(() => null),
+      api.notifyPrefs().then((r) => (r.ok ? !r.prefs.none : null)).catch(() => null),
+      api.plugins().then((r) => r.plugins).catch(() => null),
+    ]).then(([deps, provs, remote, hookInstalled, digest, jira, lanternWatching, updateAvailable, notificationsOn, plugs]) => {
       if (!live) return;
       setBadges({
-        connections: deps.filter((d) => d.status !== "ok" && d.status !== "unsupported").length
-          + provs.filter((p) => p.state === "error" || p.state === "needs-auth").length,
+        connections: connectionsNeeding(deps ?? [], provs ?? []),
         remote,
       });
       setLogDigest(digest);
       setOnboarding({
-        hook: hookInstalled,
-        provider: provs.some((p) => p.state === "connected"),
-        paneEngine: deps.some((d) => d.id === "tmux" && d.status === "ok"),
+        hook: hookInstalled === true,
+        provider: (provs ?? []).some((p) => p.state === "connected"),
+        paneEngine: (deps ?? []).some((d) => d.id === "tmux" && d.status === "ok"),
+      });
+      setFacts({
+        hooksWired: hookInstalled,
+        tmuxOk: deps === null ? null : deps.some((d) => d.id === "tmux" && d.status === "ok"),
+        jiraConnected: jira, lanternWatching, updateAvailable, notificationsOn,
+        pluginsRunning: plugs === null ? null : plugs.filter((x) => x.running).length,
+        pluginsNeed: plugs === null ? null : plugs.filter((x) => x.approvedFingerprint !== x.fingerprint).length,
       });
     });
     return () => { live = false; };
@@ -3797,27 +3923,11 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
    *  block used to test; every one of those becomes `{show("x") && …}`. */
   const show = useCallback((id: string): boolean => (ql ? matchIds.has(id) : pane === id), [ql, matchIds, pane]);
   const absentHit = ql ? absentFor(ql) : null;
-  const rowResults = useMemo(() => (ql ? searchSettings(ql, tabs as SettingsPage[]) : []), [ql, tabs]);
-  /** The rows actually on screen — the ones on a page that made the cap-5
-   *  cut — in the same rank order the header counts. This, not `rowResults`
-   *  itself, is what up/down cycles through: a result you cannot see is not
-   *  one you can land on with Enter. */
-  const visibleResults = useMemo(() => rowResults.filter((r) => matchIds.has(r.pane)), [rowResults, matchIds]);
-  /** Words a hit above only reached through a synonym — shown once, in the
-   *  "· also: …" clause, so typing "chime" is told it found "sound" rather
-   *  than silently substituting one word for the other. */
-  const synonymsUsed = useMemo(() => {
-    if (!ql) return [] as string[];
-    const words = ql.split(/\s+/).filter(Boolean);
-    const hitTexts = visibleResults.map((r) => (r.label + " " + r.section).toLowerCase());
-    const used = new Set<string>();
-    for (const w of words) for (const e of expandWord(w)) {
-      if (e.synonym && hitTexts.some((t) => t.includes(e.word))) used.add(e.word);
-    }
-    return [...used];
-  }, [ql, visibleResults]);
-  const [highlight, setHighlight] = useState(0);
-  useEffect(() => { setHighlight(0); }, [ql]);
+  /** "Names + help" reads hints and sections as well as a row's own name. */
+  const [matchIn, setMatchIn] = useState<MatchIn>("help");
+  /** The search panel's model: pages, each with the rows that answered, in
+   *  rank order. It is the settings index's own ranking, only grouped. */
+  const searchModel = useMemo(() => groupSearch(ql, tabs, matchIn), [ql, tabs, matchIn]);
   /*
    * The row to land on, once the page above has actually mounted.
    *
@@ -3846,7 +3956,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
     });
     return () => cancelAnimationFrame(raf);
   }, [flashRow, ql, pane]);
-  /** Enter on a highlighted result, or a click on one: land on it. Clearing
+  /** Enter on the selected result, or a click on one: land on it. Clearing
    *  the query first is what makes `flashRow`'s effect (above) wait for the
    *  single settled page to mount before it goes looking for the row. */
   const landOnResult = useCallback((r: { pane: string; row: string }) => {
@@ -3854,37 +3964,6 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
     setQ("");
     if (r.row) setFlashRow(r.row);
   }, []);
-  /*
-   * Marks and keeps on screen the highlighted result as the arrow keys move
-   * it — a class on the row's own DOM node (a `data-row` lookup, the same
-   * one the flash uses), not the flash class itself: the flash means "this
-   * is the one you picked", and every row up/down passes through on the way
-   * there would light up the same way a landing does.
-   *
-   * `highlightedEl` is a ref, not state — the element the LAST render marked,
-   * so this can remove the class from it before adding it to (or nowhere,
-   * once the query clears) the next one, without re-scanning every row in
-   * the DOM to find whichever one happens to be wearing it.
-   */
-  const highlightedEl = useRef<HTMLElement | null>(null);
-  useEffect(() => {
-    highlightedEl.current?.classList.remove("agx-row-current");
-    highlightedEl.current = null;
-    if (!ql || !visibleResults.length) return;
-    const r = visibleResults[Math.min(highlight, visibleResults.length - 1)];
-    if (!r?.row) return;
-    const el = contentRef.current?.querySelector<HTMLElement>(`[data-row="${CSS.escape(r.row)}"]`);
-    if (!el) return;
-    el.classList.add("agx-row-current");
-    el.scrollIntoView({ block: "nearest" });
-    highlightedEl.current = el;
-  }, [highlight, ql, visibleResults]);
-  const onSearchKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (!ql || !visibleResults.length) return;
-    if (e.key === "ArrowDown") { e.preventDefault(); setHighlight((h) => Math.min(h + 1, visibleResults.length - 1)); }
-    else if (e.key === "ArrowUp") { e.preventDefault(); setHighlight((h) => Math.max(h - 1, 0)); }
-    else if (e.key === "Enter") { e.preventDefault(); landOnResult(visibleResults[Math.min(highlight, visibleResults.length - 1)]!); }
-  }, [ql, visibleResults, highlight, landOnResult]);
   const [termFont, setTermFontState] = useState(() => currentTermFont());
   const [termSize, setTermSizeState] = useState(() => currentTermSize());
   const [termLine, setTermLineState] = useState(() => currentTermLineHeight());
@@ -4139,6 +4218,11 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
    * loaded trigger behind for a keystroke a minute later.
    */
   const [escArmed, setEscArmed] = useState(false);
+  /* The handler reads the armed state from a ref: two presses closer than a render reached it with the
+     first press's closure and re-armed instead of leaving (measured from the empty search box). */
+  const escRef = useRef(false);
+  escRef.current = escArmed;
+  const dialog = useModalDialog(open, "Settings");
   useEffect(() => { if (!open) setEscArmed(false); }, [open]);
 
   /*
@@ -4163,6 +4247,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
   const searchRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
     if (!open) return;
+    // Not in the icon-rail layout: focus there opens the field over the page, which nobody asked for on open.
+    if (window.matchMedia?.("(max-width: 1100px)").matches) return;
     const id = requestAnimationFrame(() => searchRef.current?.focus({ preventScroll: true }));
     return () => cancelAnimationFrame(id);
   }, [open]);
@@ -4191,12 +4277,51 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      if (escArmed) { setEscArmed(false); onClose(); return; }
+      if (escRef.current) { escRef.current = false; setEscArmed(false); onClose(); return; }
+      escRef.current = true;
       setEscArmed(true);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose, escArmed]);
+  }, [open, onClose]);
+
+  /** The page on screen as the nav knows it: a plugin's own page is the Plugins page. */
+  const navPane = pane.startsWith("plugin:") ? "plugins" : pane;
+  const navTab = TABS.find((x) => x.id === navPane);
+  const colRef = useRef<HTMLDivElement | null>(null);
+  useStableFlow(colRef, [open, pane, q]);
+  const tabIcons = useMemo(() => new Map(tabs.map((t) => [t.id as string, t.icon])), [tabs]);
+  /* What a page says about itself after it opened: it failed to read what it shows, or a write is out.
+     The facts above are one read per open; these are the pages' own, so they turn the nav dot and the
+     header chip without the shell knowing a thing about Jira or an engine scan. */
+  const [problems, setProblems] = useState<Record<string, PageProblem>>({});
+  const [needsBy, setNeedsBy] = useState<Record<string, PageNeed>>({});
+  const [saving, setSaving] = useState<ReadonlySet<string>>(() => new Set());
+  const retries = useRef<Record<string, () => void>>({});
+  const pageState = useMemo<PageStateSink>(() => ({
+    problem: (page, p, retry) => {
+      if (p && retry) retries.current[page] = retry;
+      setProblems((cur) => applyProblem(cur, page, p));
+    },
+    needs: (page, n) => setNeedsBy((cur) => {
+      if (n ? cur[page]?.count === n.count && cur[page]?.title === n.title : !(page in cur)) return cur;
+      const next = { ...cur };
+      if (n) next[page] = n; else delete next[page];
+      return next;
+    }),
+    saving: (page, on) => setSaving((cur) => {
+      if (cur.has(page) === on) return cur;
+      const next = new Set(cur);
+      if (on) next.add(page); else next.delete(page);
+      return next;
+    }),
+  }), []);
+  const marks = useMemo(() => withProblems(withNeeds(navMarks({
+    ...NO_FACTS, ...facts,
+    connectionsNeed: badges.connections ?? null,
+    remoteLive: badges.remote ? badges.remote === "live" : null,
+    clickupConnected: cuConnected,
+  }), needsBy), problems), [facts, badges, logDigest, cuConnected, problems, needsBy]);
 
   return (
     /* Everything this dialog opens — a confirm, a menu, a picker — is a portal
@@ -4223,170 +4348,28 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
            * it.
            */
           <motion.div
+            {...dialog}
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             transition={{ duration: 0.14 }}
-            className="fixed inset-0 flex pointer-events-auto"
+            className="agx-settings-shell fixed inset-0 flex pointer-events-auto"
             style={{ zIndex: 10000, background: "var(--bg)" }}>
 
-            {/* Three strips and a scroller, and the order is the point: the two
-                things you always want — the way out, and the way to find a
-                setting by name — sit OUTSIDE the scroll container, so neither
-                can be pushed off the top by a long nav. */}
-            {/* The nav paints its OWN tone. It shared --bg with the page, so
-                two regions that do entirely different jobs — twenty-four
-                places you can go, and the one you are in — were the same
-                surface with a 25%-alpha hairline between them, and the
-                complaint that "the sidebar and the view look like the same
-                thing" was a literal description of the colour values. The
-                border is at full --surface-line now for the same reason: a
-                seam this important is not a suggestion. */}
-            <aside className="agx-settings-nav shrink-0 flex flex-col border-r"
-              style={{ background: "var(--surface-nav)", borderColor: "var(--surface-line)" }}>
-              {/* Leaving is a button you press, not an x you hunt for in a
-                  corner — and it says where it takes you, because after ten
-                  minutes in here that is the thing you have to be told.
-                *
-                  The row IS the button. It was a button the size of its text
-                  inside a padded bar, so the bar looked like the control and
-                  only the arrow and the words answered the pointer; a press on
-                  the rest of the row landed on nothing. Full width, no padding
-                  around it, and the only things that change on hover and press
-                  are its fill and its ink, so nothing under the pointer moves. */}
-              <button onClick={onClose} type="button"
-                className="agx-navback shrink-0 w-full flex items-center gap-2 px-5 border-b text-[13px] text-left"
-                style={{ color: "var(--text3)", borderColor: "var(--surface-line)", minHeight: 56 }}>
-                <svg width={ICON.sm} height={ICON.sm} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
-                  <path d="M19 12H5" /><path d="m12 19-7-7 7-7" />
-                </svg>
-                <span>Back to app</span>
-              </button>
-
-              <div className="shrink-0 px-3 py-3 border-b" style={{ borderColor: "var(--surface-line)" }}>
-                {/* --bg, not --bg2. The box used the raised tone, which was
-                    right when the nav under it was --bg and inverts now that
-                    the nav leans toward --bg2 itself: a field has to sit IN
-                    its surface, and painted at the surface's own tone it was
-                    a rectangle of border with nothing behind it.
-                  *
-                    Focused on open and on Ctrl+F, and the shortcut is printed
-                    on the box. Typing is what you came here to do — twenty-four
-                    pages is past the count where hunting the nav beats naming
-                    the thing — and a shortcut nobody is told about is one
-                    nobody uses. */}
-                <div className="relative">
-                  <input ref={searchRef} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onSearchKeyDown} placeholder="Search settings"
-                    aria-keyshortcuts="Control+F"
-                    className={`w-full pr-14 ${INPUT}`}
-                    style={INPUT_STYLE} />
-                  <span className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-[10.5px] tabular-nums"
-                    style={{ color: "var(--text4)" }}>Ctrl F</span>
-                </div>
-              </div>
-
-              {/* px-2.5, not px-2, and the 2px is the point: every nav item is a
-                  button with its own px-2.5, so the container's padding plus
-                  the button's decides where the TEXT lands. */}
-              <div className="min-h-0 flex-1 agx-scroll overflow-y-auto overflow-x-hidden py-2 px-2.5 flex flex-col gap-0.5">
-                {/* Pinned above every ring, not filed into one, and gone the
-                    moment `onboardingDone` — no "you're all set" row left
-                    behind for it to become. Held back on a search too: it
-                    answers "what's left", not "what's Terminal", so it has
-                    no business in a query for the latter. */}
-                {onboarding && !onboardingDone && !ql && (
-                  <button onClick={() => setPane("onboarding")}
-                    aria-current={pane === "onboarding" ? "page" : undefined}
-                    className="w-full text-left px-2.5 py-1.5 mb-1.5 rounded-lg text-[13px] flex items-center gap-2"
-                    style={pane === "onboarding"
-                      ? { background: "color-mix(in srgb, var(--primary) 15%, transparent)", color: "var(--text)" }
-                      : { color: "var(--text2)", border: EDGE }}>
-                    <span className="min-w-0 truncate">Get started</span>
-                    <span className="ml-auto shrink-0 text-[10.5px] tabular-nums" style={{ color: "var(--text4)" }}>
-                      {[onboarding.hook, onboarding.provider, onboarding.paneEngine].filter(Boolean).length}/3
-                    </span>
-                  </button>
-                )}
-                {(() => {
-                  const hit = (t: typeof TABS[number]) => !ql || pageScore(t as SettingsPage, ql) > 0;
-                  const groups = TAB_GROUPS
-                    .map((g) => ({ g, tabs: tabs.filter((t) => t.group === g && hit(t)) }))
-                    .filter((x) => x.tabs.length);
-                  if (!groups.length) return <div className="px-2.5 py-3 text-[12.5px]" style={{ color: "var(--text4)" }}>No settings match “{q.trim()}”.</div>;
-                  return groups.map(({ g, tabs }) => (
-                    <div key={g} className="flex flex-col gap-0.5">
-                      {/* A group heading gets more room ABOVE it than its
-                          items get between them — measured at 42px either
-                          side before this, which is why "Agents"
-                          read as belonging to the row above rather than to
-                          the rows below. The rule is in tailwind.config.js
-                          beside the scale, because it is about meaning
-                          rather than size: a heading hugs what it names. */}
-                      <div className="px-2.5 pt-4 pb-1 text-[11px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>{g}</div>
-                      {tabs.map((t) => (
-                        <button key={t.id} onClick={() => setPane(t.id)}
-                          aria-current={pane === t.id ? "page" : undefined}
-                          className="w-full text-left px-2.5 py-2 rounded-lg text-[13px] flex items-center gap-2.5"
-                          style={pane === t.id
-                            ? { background: "color-mix(in srgb, var(--primary) 15%, transparent)", color: "var(--text)" }
-                            : { color: "var(--text3)" }}>
-                          {/* The icon is what turns a page of prose into a
-                              shape you can scan — a nav of twenty-four
-                              identical text rows was the thing that read as
-                              "nothing invites you in". Dimmed to `--text4`
-                              when the row isn't active so the active row's
-                              full-color icon is still the one your eye lands
-                              on first, the same job the highlight pill does. */}
-                          <span className="shrink-0 flex" style={{ color: pane === t.id ? "var(--text)" : "var(--text4)" }}>
-                            <t.icon size={ICON.md} />
-                          </span>
-                          <span className="min-w-0 truncate">{t.label}</span>
-                          {/* A count when something wants you, a dot when
-                              something is simply happening. Different marks
-                              because they are different facts: one is a
-                              chore, the other is a phone on the sofa. */}
-                          {t.id === "connections" && !!badges.connections && (
-                            <span className="ml-auto shrink-0 text-[10.5px] tabular-nums px-1.5 rounded-full"
-                              style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 16%, transparent)" }}
-                              title={`${badges.connections} ${badges.connections === 1 ? "thing wants" : "things want"} something`}>
-                              {badges.connections}
-                            </span>
-                          )}
-                          {t.id === "about" && logDigest && logDigest !== "failed" && !logDigest.quiet && (
-                            <span className="ml-auto shrink-0 text-[10.5px] tabular-nums px-1.5 rounded-full"
-                              style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 16%, transparent)" }}
-                              title="The server log has a crash loop or a spike worth a look">
-                              log {logDigest.crashLoops.length + logDigest.spikes.length}
-                            </span>
-                          )}
-                          {t.id === "remote" && badges.remote === "live" && (
-                            <span className="ml-auto shrink-0 rounded-full" aria-label="a device is connected"
-                              title="A device is connected right now"
-                              style={{ width: 6, height: 6, background: "var(--success)" }} />
-                          )}
-                          {/* A word, not a 6px ring — the ring was the first
-                              draft here, and it failed its own house rule the
-                              moment it was screenshotted: a dot that needs a
-                              tooltip to explain itself is exactly the "icon
-                              too small to read" complaint this pass exists to
-                              fix. "State" says outright that the page reports
-                              rather than sets, at a size a mouse can actually
-                              land on. Held back when the page already carries
-                              its own live mark above (Tools & services' count)
-                              so nobody reads two unrelated marks on one row. */}
-                          {t.status && !(t.id === "connections" && !!badges.connections) && (
-                            <span className="ml-auto shrink-0 text-[10px] uppercase tracking-[0.08em] px-1.5 py-0.5 rounded-full"
-                              aria-label="reports state, not a setting"
-                              title="Reports what is already happening — not a switch."
-                              style={{ color: "var(--text4)", border: "1px solid color-mix(in srgb, var(--text4) 55%, transparent)" }}>
-                              State
-                            </span>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  ));
-                })()}
-              </div>
-            </aside>
+            {/* Back to app and the search box sit OUTSIDE the scrolling list, so a
+                long nav can never push either off the top. The nav paints its
+                OWN tone (--surface-nav) at a full-strength seam: it shared --bg
+                with the page, so two regions that do entirely different jobs —
+                twenty-four places you can go, and the one you are in — were the
+                same surface with a 25%-alpha hairline between them. */}
+            <SettingsNav
+              pages={tabs} marks={marks} current={navPane}
+              onGo={(id) => setPane(id as Pane)} onClose={onClose}
+              pinned={onboarding && !onboardingDone && !ql
+                ? { done: [onboarding.hook, onboarding.provider, onboarding.paneEngine].filter(Boolean).length, total: 3, active: pane === "onboarding" }
+                : null}
+              search={
+                <SettingsSearchPanel q={q} onQ={setQ} mode={matchIn} onMode={setMatchIn} model={searchModel}
+                  absent={absentHit?.say ?? null} onLand={landOnResult} inputRef={searchRef} icons={tabIcons} />
+              } />
 
                   {/* The COLUMN is capped, and everything in it ends together.
                       Capping the ROW was the first attempt and it left every
@@ -4405,102 +4388,53 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                 them was measure; on a page the column is capped at 1120 and sits on the nav side,
                 so the slack is free and the gap is what stops the title reading
                 as an extension of the nav it sits beside. */}
-            <div ref={contentRef} className="agx-settings-main agx-scroll flex-1 min-w-0 overflow-y-auto pt-8 pb-10">
+            <div ref={contentRef} className="agx-settings-main agx-scroll flex-1 min-w-0 overflow-y-auto">
+              {/* The header stays while the cards scroll under it. It names the
+                  page on screen even while a query is stacking other pages
+                  below it: those carry their own heading (PageMatchHeading). */}
+              {navTab && (
+                <SettingsPageHeader
+                  label={navTab.label} group={groupByName(navTab.group) ?? null} icon={navTab.icon} what={navTab.what}
+                  chips={headerChips(navTab.id, marks[navTab.id] ?? NO_MARK, saving.has(navTab.id))}
+                  primary={problems[navTab.id] ? <Button tone="primary" onClick={() => retries.current[navTab.id]?.()}>Try again</Button> : undefined}
+                  reset={pageModified(navTab.id) ? <Button onClick={() => resetPage(navTab.id)}>Reset page</Button> : undefined} />
+              )}
+              {/* The page's hue (its group's) tints every card's icon chip; a board's width
+                  is set here, on the ancestor of both the grid that reads it and the
+                  column, because a property inherits downward only. */}
+              <div className="agx-settings-page"
+                style={{
+                  "--hue": hueVar(groupByName(navTab?.group ?? "")?.id ?? "system"),
+                  ...(WIDE_PANES.has(pane) ? { "--agx-settings-col": WIDE_PANES.get(pane) } : null),
+                } as React.CSSProperties}>
+                {!ql && <SettingsToc scope={colRef} scroller={contentRef} page={navPane} />}
+                <div className="agx-settings-content">
                   {/*
-                    A WIDER COLUMN on the panes that are BOARDS rather than
-                    reading.
-                  *
-                    760px is the measure for rows of prose and it is the wrong
-                    number for a grid of cards: two cards inside it come out at
-                    365px each, which is exactly the width that produced the
-                    359x596 letterbox nobody could look at. Set HERE and not on
-                    the pane, because a custom property inherits downward —
-                    declared by a child of this element it can never reach the
-                    `max-width` that reads it, which is why the first attempt
-                    changed nothing at all.
+                    A BOARD (WIDE_PANES) is one column at the width it chose,
+                    not the card flow: its content is a grid or a map of its
+                    own, and two flow columns would cut it to 365px cards, the
+                    width that produced the 359x596 letterbox nobody could
+                    look at. The width is set on the page above, because a
+                    custom property inherits downward only.
                   */}
-                  <div className="agx-settings-col"
-                    style={WIDE_PANES.has(pane) ? ({ "--agx-settings-col": WIDE_PANES.get(pane) } as React.CSSProperties) : undefined}>
+                  <div ref={colRef} className="agx-settings-col" data-flow={WIDE_PANES.has(pane) ? "single" : undefined}>
+                  <PageState.Provider value={pageState}>
                   <Filter.Provider value={filterCtx}>
-                  {/*
-                   * The results header.
-                   *
-                   * Replaces the old "Showing the N settings on this page
-                   * that match…" banner, which named ONE page because there
-                   * was only ever one page on screen at a time. Now that a
-                   * query can put more than one page's content on screen at
-                   * once (see `matches`/`show` above), the count has to be
-                   * the total across all of them, and "also:" has to say
-                   * which typed word found a hit only because a synonym
-                   * carried it there — a search that quietly substitutes a
-                   * word is a search that lies about what you asked for.
-                   */}
-                  {ql && (
-                    <div className="agx-settings-row mb-3 rounded-lg" style={{ background: "color-mix(in srgb, var(--primary) 9%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 25%, transparent)" }}>
-                      <span className="text-[12.5px]" style={{ color: "var(--text2)" }}>
-                        {/* visibleResults, not rowResults: the count on this line has to be
-                            the count of rows actually rendered below. rowResults holds every
-                            page's matches before the cap-5 truncation, so on a query wide
-                            enough to reach a 6th page it said "14 settings match" over a
-                            screen that showed 9 of them — a number nothing on screen backed. */}
-                        {absentHit ? absentHit.say : visibleResults.length === 0
-                          ? `No setting matches “${q.trim()}”.`
-                          : (
-                            <>
-                              <span className="tabular-nums" style={{ color: "var(--text)" }}>{visibleResults.length}</span>
-                              {" "}setting{visibleResults.length === 1 ? "" : "s"} match “{q.trim()}”
-                              {synonymsUsed.length > 0 && (
-                                <span style={{ color: "var(--text4)" }}> · also: {synonymsUsed.join(", ")}</span>
-                              )}
-                            </>
-                          )}
-                      </span>
-                      <Button className="justify-self-end" onClick={() => setQ("")}>Show all</Button>
-                    </div>
-                  )}
-                  {!ql && (() => {
-                    const t = TABS.find((x) => x.id === pane);
-                    return t ? (
-                      /* px-1 rather than px-4: the cards below carry their
-                         own 18px of inner padding, so a title indented to the
-                         old row padding sat a clear step to the RIGHT of every
-                         heading it governs. It leads the column now.
-                       *
-                       * 22px, and no rule under it: the 24px of space before
-                       * the first card is the chapter break. The rule that was
-                       * here was one more line beside a heading, counted on
-                       * every page by the settings sweep. Reset page sits on
-                       * the title's line, at the right, on the pages that can
-                       * have it — a plain button, because it changes nothing
-                       * until it is pressed and what it resets is named. */
-                      <div className="mb-6 px-1">
-                        <div className="flex items-center justify-between gap-4">
-                          <h2 className="m-0 text-[22px] font-semibold tracking-[-0.015em]" style={{ color: "var(--text)" }}>{t.label}</h2>
-                          {pageModified(t.id) && (
-                            <Button onClick={() => resetPage(t.id)}>Reset page</Button>
-                          )}
-                        </div>
-                        {/* No measure cap of its own — the column is the cap. At 62ch this broke
-                            to two lines with a single word on the second while 300px of the
-                            card below it sat empty, which reads as a layout fault rather
-                            than as a sentence. */}
-                        {t.what && <div className="text-[13px] mt-2" style={{ color: "var(--text3)" }}>{t.what}</div>}
-                      </div>
-                    ) : null;
-                  })()}
                   {ql && show("appearance") && <PageMatchHeading id="appearance" onOpen={() => { setPane("appearance" as Pane); setQ(""); }} />}
                   {show("appearance") && (
                   <AppearancePane key={appearanceNonce} current={theme} onChange={onTheme} onAccent={setAccentState} />
                   )}
                   {ql && show("terminal") && <PageMatchHeading id="terminal" onOpen={() => { setPane("terminal" as Pane); setQ(""); }} />}
                   {show("terminal") && (<>
+                  <TerminalRunsOn open={open} />
+                  <LaunchPermissionsCard open={open} />
                   {/* THREE groups, and it was one. Eleven rows in a single
                       unnamed box is a page you have to read end to end to find
                       out whether the thing you came for is on it — the renderer
                       and the word separators are not the same subject and were
                       drawn as though they were. Named groups turn "read the
                       page" into "read three headings". */}
-                  <SettingsCard title="How it draws"
+                  <SettingsCard title="How it draws" icon={<SlidersIcon size={ICON.sm} />}
                     desc="The renderer, the face, and the size of a cell.">
                     {/* GPU (WebGL) is fastest but blanks white on some Linux
                         GPU/compositor stacks; Canvas is the same drawing minus
@@ -4601,7 +4535,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       options={CURSORS} />
                   </SettingsCard>
 
-                  <SettingsCard title="Mouse and clipboard"
+                  <SettingsCard title="Mouse and clipboard" icon={<TerminalIcon size={ICON.sm} />}
                     desc="What pointing at a pane does, and what a selection does.">
                     {/* Off by default: focus that moves on its own is the one
                         terminal habit people either keep for life or cannot
@@ -4632,14 +4566,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       hint="Right-click pastes the clipboard into the shell instead of opening the menu. Ctrl+right-click still opens it." />
                   </SettingsCard>
 
-                  <SettingsCard title="Bench note"
-                    desc="The note tab of the floating bench.">
-                    <Choice<NoteEditor> settingId="terminal.noteEditor" label="Note editor" value={noteEd} modified={noteEd !== "builtin"}
-                      hint="Neovim opens the same note file in a terminal on the bench. Without nvim installed the built-in editor is used."
-                      options={NOTE_EDITORS} onPick={(v) => { setting("terminal.noteEditor").set(v); setNoteEd(v); }} />
-                  </SettingsCard>
-
-                  <SettingsCard title="Tab groups"
+                  <SettingsCard title="Tab groups" icon={<ColumnsIcon size={ICON.sm} />}
                     desc="With tmux, the tabs are grouped by the project each window is working in. The group you are in is open; the others fold into a chip that still shows what their agents are doing.">
                     <Toggle on={groupsOn} modified={!groupsOn} onClick={() => { const v = !groupsOn; setting("terminal.tabGroups").set(v); setGroupsOn(v); }}
                       settingId="terminal.tabGroups" label="Group tabs by project"
@@ -4663,7 +4590,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       } />
                   </SettingsCard>
 
-                  <SettingsCard title="History and selection"
+                  <SettingsCard title="History and selection" icon={<ClockIcon size={ICON.sm} />}
                     desc="How far back a shell remembers, and what a double-click takes.">
                     {/* Sizes rather than a number box: the cost is memory PER
                         SHELL and this app holds several open at once, so the
@@ -4699,18 +4626,24 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                           style={{ ...INPUT_STYLE, fontFamily: "ui-monospace, monospace" }} />
                       } />
                   </SettingsCard>
-                  <TerminalRunsOn open={open} />
-                  <LaunchPermissionsCard open={open} />
+
+                  <SettingsCard title="Bench note" icon={<EditIcon size={ICON.sm} />}
+                    desc="The note tab of the floating bench.">
+                    <Choice<NoteEditor> settingId="terminal.noteEditor" label="Note editor" value={noteEd} modified={noteEd !== "builtin"}
+                      hint="Neovim opens the same note file in a terminal on the bench. Without nvim installed the built-in editor is used."
+                      options={NOTE_EDITORS} onPick={(v) => { setting("terminal.noteEditor").set(v); setNoteEd(v); }} />
+                  </SettingsCard>
                   </>)}
                   {ql && show("diff") && <PageMatchHeading id="diff" onOpen={() => { setPane("diff" as Pane); setQ(""); }} />}
                   {show("diff") && (
-                  <SettingsCard title="How a diff opens"
+                  <WithPreview preview={<PreviewCard id="diff" title="The real Diff view"><DiffPreview split={dSplit} wrap={dWrap} syntaxTheme={dTheme} /></PreviewCard>}>
+                  <SettingsCard title="How a diff opens" icon={<DiffIcon size={ICON.sm} />}
                     desc="The view you land on, and what happens to a long line.">
                     {/* Defaults, not the live state: the toggle in each panel
                         still wins while you are looking at that diff. Changing
                         your mind about one file is not a preference. */}
                     <Choice<"split" | "inline">
-                      settingId="diff.split"
+                      settingId="diff.split" wide
                       label="Default view"
                       hint="How file changes, source control and pull requests open a diff. The toggle in each panel still overrides it for that diff."
                       value={dSplit ? "split" : "inline"} modified={dSplit !== DEFAULT_SPLIT}
@@ -4731,11 +4664,12 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                           ...THEMES.map((t) => ({ value: t.id, label: t.label, hint: t.dark ? "Dark" : "Light" })),
                         ]} /></span>} />
                   </SettingsCard>
+                  </WithPreview>
                   )}
                   {ql && show("tasks") && <PageMatchHeading id="tasks" onOpen={() => { setPane("tasks" as Pane); setQ(""); }} />}
                   {show("tasks") && (
                   <>
-                  <SettingsCard title="Opens on" desc="Where the Tasks view starts.">
+                  <SettingsCard title="Opens on" icon={<ChecklistIcon size={ICON.sm} />} desc="Where the Tasks view starts.">
                     {/* There was no setting here before and no default either:
                         the tab was component state initialised to "all", so
                         every visit started over — on the one view that does not
@@ -4751,7 +4685,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                           ...TASK_SOURCES.map((s) => ({ value: s.id, label: s.label })),
                         ]} /></span>} />
                   </SettingsCard>
-                  <SettingsCard title="Task sources"
+                  <SettingsCard title="Task sources" icon={<ColumnsIcon size={ICON.sm} />}
                     desc="Which sources the bar offers, and in what order. One has to stay on, and a source you have not set up is left off by itself — until none is set up, when all of them show, because the bar is then the only place to find them. Connect them under Tools & services."
                     actions={<Button onClick={() => { resetTaskSourceOrder(); setSourceTick((n) => n + 1); }}>Reset order</Button>}>
                     {/* Order is the row's own, and the arrows move a source
@@ -4770,7 +4704,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   {ql && show("privacy") && <PageMatchHeading id="privacy" onOpen={() => { setPane("privacy" as Pane); setQ(""); }} />}
                   {show("privacy") && <PrivacyPane open={open} />}
                   {show("privacy") && (
-                  <SettingsCard title="Take your data out"
+                  <SettingsCard title="Take your data out" icon={<DownloadIcon />}
                     desc="Everything this app has recorded, in a format something else can read.">
                     {/* Scoped like everything else: with a project open these
                         carry that project's rows, not the whole machine's. */}
@@ -4797,7 +4731,11 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   {show("saved-replies") && <SavedRepliesPane open={open} />}
                   {ql && show("prefs") && <PageMatchHeading id="prefs" onOpen={() => { setPane("prefs" as Pane); setQ(""); }} />}
                   {show("prefs") && (
-                  <SettingsCard title="Size and startup"
+                  <WithPreview preview={<PreviewCard id="prefs" title="This window on your desktop">
+                    {/* No on/off for the clock: the top bar shows it in fullscreen whatever the 12h/24h choice. */}
+                    <WindowPreview zoomPct={Math.round(scale * 100)} fullscreen={fullscreen} startAtLogin={autostart === true} launchAnimation={splash}
+                      showClock codexQuota={usageRefresh} rail={railItems(railLayout)} /></PreviewCard>}>
+                  <SettingsCard title="Size and startup" icon={<PanesIcon size={ICON.sm} />}
                     desc="How big the window is, and what it does when the machine boots.">
                     {/* Desktop only, like launch-at-login: in a browser tab the
                         browser's own zoom already does this, and better. */}
@@ -4830,6 +4768,9 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                         D-Bus monitor at all. On a machine that cannot do this
                         the row stays but says why, rather than vanishing and
                         leaving you wondering whether you imagined it. */}
+                  </SettingsCard>
+
+                  <SettingsCard title="Top bar" icon={<SlidersIcon size={ICON.sm} />}>
                     <Choice<"12" | "24">
                       label="Clock"
                       hint="The top bar shows the time in fullscreen, where the desktop's own clock is hidden"
@@ -4837,6 +4778,21 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       onPick={(v) => { setClock24(v === "24"); setH24(v === "24"); }}
                       options={[{ v: "12", label: "12h" }, { v: "24", label: "24h" }]} />
                   </SettingsCard>
+
+                  {/* Only steps that are true: the cover is listed when it is
+                      on, the login step when the app starts with the machine. */}
+                  <SettingsCard title="What happens at login" icon={<ChecklistIcon size={ICON.sm} />}
+                    desc="In this order, and only the steps you left on.">
+                    {[
+                      ...(autostart ? [["agentglass starts", "when you log in to this machine"]] : []),
+                      ...(splash ? [["The launch cover plays", "while the terminal, sessions and git load"]] : []),
+                      ["agentglass opens", IS_DESKTOP ? `at the size you picked: ${fmtScale(scale)}` : "in its window"],
+                      ["Your panes come back", "where they were, from the last layout capture"],
+                    ].map(([name, what], i) => (
+                      <SettingRow key={name} agentExempt label={`${i + 1}. ${name}`} hint={what} />
+                    ))}
+                  </SettingsCard>
+                  </WithPreview>
                   )}
 
                   {/* The engine and the memory it costs, together. Both used to
@@ -4846,17 +4802,17 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   {ql && show("budgets") && <PageMatchHeading id="budgets" onOpen={() => { setPane("budgets" as Pane); setQ(""); }} />}
                   {show("budgets") && (
                   <>
+                    <PacePane />
                     {/* A limit you chose, so the spend insights stop firing on
                         constants — which are noise on a project that genuinely
                         costs that and silence on one where a tenth would be
                         alarming. */}
                     <BudgetsPane open={open} />
-                    <PacePane />
                   </>
                   )}
                   {show("budgets") && <GhBudget open={open} />}
                   {show("budgets") && (
-                  <SettingsCard title="Codex quota">
+                  <SettingsCard title="Codex" icon={<PlugIcon size={ICON.sm} />}>
                     {/* Says what it costs, because it costs something: this
                         spends a little of the quota it is measuring. */}
                     <Toggle on={usageRefresh}
@@ -4882,7 +4838,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
 
                   {ql && show("browser") && <PageMatchHeading id="browser" onOpen={() => { setPane("browser" as Pane); setQ(""); }} />}
 
-                  {show("browser") && <><BrowserPane /><CookieImport /></>}
+                  {show("browser") && <BrowserPane><CookieImport /></BrowserPane>}
 
                   {ql && show("rail") && <PageMatchHeading id="rail" onOpen={() => { setPane("rail" as Pane); setQ(""); }} />}
 
@@ -4933,7 +4889,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                             * collide with something you already use, and so the
                             * one that most needs to be movable.
                             */}
-                          <SettingsCard title="Even inside a shell"
+                          <SettingsCard title="Even inside a shell" icon={<KeyboardIcon size={ICON.sm} />}
                             desc={<>The terminal gives this one up so it reaches the app. Pick something your
                             shell does not want — the shipped {chordLabel(APP_CHORD_DEFAULTS["files.palette"])} is
                             free in bash, tmux and vim; plain Ctrl+P is not.</>}>
@@ -4946,6 +4902,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                                 {appKeyError?.id === id ? appKeyError.msg : APP_CHORD_LABELS[id].hint}
                               </span>}
                               control={<span className="flex items-center gap-1.5 justify-self-end">
+                                <RebindButton capturing={capturingApp === id} what={APP_CHORD_LABELS[id].label}
+                                  onClick={() => { setKeyError(null); setCapturing(null); setCapturingChord(null); setCapturingApp((c) => (c === id ? null : id)); }} />
                                 <button onClick={() => { setKeyError(null); setCapturing(null); setCapturingChord(null); setCapturingApp((c) => (c === id ? null : id)); }}
                                   title={hasCustomAppChord(id)
                                     ? `${chordLabel(appChordFor(id))} opens this — click to record another`
@@ -4960,13 +4918,13 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                           ))}
                           </SettingsCard>
                           {rest.length > 0 && (
-                            <SettingsCard title="Anywhere"
+                            <SettingsCard title="Anywhere" icon={<KeyboardIcon size={ICON.sm} />}
                               desc="A held combination, so it cannot be swallowed by whatever has focus.">
                               {rest.map(row)}
                             </SettingsCard>
                           )}
                           {viewIds.length > 0 && (
-                            <SettingsCard title="Only on the dashboard"
+                            <SettingsCard title="Only on the dashboard" icon={<KeyboardIcon size={ICON.sm} />}
                               desc="A single key each — inside the workspace every keystroke belongs to a shell. The second column is the chord that reaches them from in there.">
                               {viewIds.map(row)}
                               {/* Says why the rest of the keyboard is not on this list.
@@ -4995,7 +4953,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       );
                     })()}
                     {(isCustomised() || chordsCustomised() || appChordsCustomised()) && (
-                      <SettingsCard title="Defaults">
+                      <SettingsCard title="Defaults" icon={<SlidersIcon size={ICON.sm} />}>
                         <SettingRow
                           agentExempt label="Reset to defaults"
                           hint="Puts every key and every chord back to the shipped one."
@@ -5016,14 +4974,10 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   {show("orchestration") && <OrchestrationPane />}
                   {ql && show("hooks") && <PageMatchHeading id="hooks" onOpen={() => { setPane("hooks" as Pane); setQ(""); }} />}
 
-                  {show("hooks") && <>
-                    <HooksPane open={open} />
-                    {cu && (
-                      <SettingsCard title="Cards" desc="How agent skills relate to the cards of your tracker.">
-                        <CardSkillsRow connected />
-                      </SettingsCard>
-                    )}
-                    <SettingsCard title="New chats"
+                  {show("hooks") && (
+                  <AgentsPage open={open}
+                    chats={
+                    <SettingsCard title="New chats" icon={<PanesIcon size={ICON.sm} />}
                       desc="What a chat gets when it starts.">
                       {/* Merged from a separate "Chat" page: this and the tmux
                           binary above answer the same question — what a pane
@@ -5051,10 +5005,15 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                           { v: "tmux", label: "tmux panes" },
                         ]} />
                     </SettingsCard>
-                    {tmuxEngine?.available && <RunningPanes open={open} />}
-                    {HAS_BROWSER && <AgentBrowserPane open={open} />}
-                    <AgentsSection /><WorkerRolesSection open={open} />
-                  </>}
+                    }
+                    panes={tmuxEngine?.available ? <RunningPanes open={open} /> : null}
+                    browser={HAS_BROWSER ? <AgentBrowserPane open={open} /> : null}
+                    skills={cu ? (
+                      <SettingsCard title="Card skills" icon={<ChecklistIcon size={ICON.sm} />} desc="How agent skills relate to the cards of your tracker.">
+                        <CardSkillsRow connected />
+                      </SettingsCard>
+                    ) : null} />
+                  )}
 
                   {ql && show("tmux") && <PageMatchHeading id="tmux" onOpen={() => { setPane("tmux" as Pane); setQ(""); }} />}
 
@@ -5107,8 +5066,11 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   {ql && show("about") && <PageMatchHeading id="about" onOpen={() => { setPane("about" as Pane); setQ(""); }} />}
                   {show("about") && <><AboutPane open={open} /><LogDigestSection d={logDigest} /></>}
                   </Filter.Provider>
+                  </PageState.Provider>
                   </div>
-                  </div>
+                </div>
+              </div>
+            </div>
           {escArmed && (
             /* The hint IS the mechanism. One Escape used to throw the page
                away, which is fine for a popover and wrong for somewhere you

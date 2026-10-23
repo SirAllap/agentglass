@@ -53,8 +53,8 @@ const flowOf = (html: string): string => {
 
 describe("right now, the default", () => {
   const f = flowOf(view());
-  test("it leads the page and uses the plain role words", () => {
-    expect(view().indexOf("Right now")).toBeLessThan(view().indexOf("Start from a ready-made setup"));
+  test("it is the picture beside the editor, and uses the plain role words", () => {
+    expect(view().indexOf("Right now")).toBeGreaterThan(view().indexOf('class="agx-split-side"'));
     for (const w of ["Main agent", "Scouts", "Builders", "Verifiers"]) expect(f).toContain(w);
   });
   test("every job is a card with one Change button, each tile a state word", () => {

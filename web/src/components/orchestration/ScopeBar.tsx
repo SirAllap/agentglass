@@ -10,12 +10,12 @@ const baseName = (root: string) => root.split("/").filter(Boolean).pop() ?? root
  * means, and the one action that changes it (give a project a setting of its
  * own, or send it back to the general one).
  *
- * It stays at the top of the page while the rest scrolls. `-top-8` cancels
- * the `pt-8` of the settings scroller: a sticky box holds its offset from
- * that scroller's content edge, not its top, so with `top-0` the cards
- * scrolled through a 32px strip above the bar (measured). The page's source
- * keeps the two numbers together under test. because every card
- * below is read for the project it names. It writes its own height onto the
+ * It stays at the top of the page while the rest scrolls, directly under the
+ * page header: the header is sticky too and publishes its height as
+ * `--agx-ph-h` on the settings scroller, which is the bar's `top`. With
+ * `top-0` the bar slid under the header and the cards scrolled through the gap
+ * (measured). It stays because every card below is read for the project it
+ * names. It writes its own height onto the
  * page's wrapper as `--orch-stick`, so a card scrolled to from a link stops
  * under the bar and not behind it; the height is measured when the bar
  * changes size, never on a timer.
@@ -53,8 +53,8 @@ export function ScopeBar({ root, projects, overrides, inherited, busy, note, onR
   const sentence = scopeSentence(root, inherited, baseName(root));
   if (searching) return null;
   return (
-    <div ref={bar} data-scope-bar className="sticky -top-8 z-10 grid gap-1.5 pt-2 pb-2.5 mb-4 agx-settings-x"
-      style={{ background: "var(--bg)", borderBottom: LINE }}>
+    <div ref={bar} data-scope-bar className="sticky z-10 grid gap-1.5 pt-2 pb-2.5 mb-4 agx-settings-x"
+      style={{ top: "var(--agx-ph-h, 0px)", background: "var(--bg)", borderBottom: LINE }}>
       {/* Segmented's chips, but allowed to run onto a second line: the list grows with the person's projects. */}
       <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Settings for">
         <span className="text-[10px]" style={{ color: "var(--text3)" }}>Settings for</span>

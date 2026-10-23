@@ -32,6 +32,19 @@ const count = (html: string, s: string) => html.split(s).length - 1;
 const src = readFileSync(join(import.meta.dir, "..", "src", "components", "orchestration", "EngineTile.tsx"), "utf8");
 const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
+describe("an engine whose version probe timed out", () => {
+  const SLOW = engine("claude", {
+    version: null, versionOk: null, slow: true,
+    roles: { worker: { ok: false, why: "Claude Code is still being checked." }, orchestrator: { ok: false, why: "Claude Code is still being checked." } },
+  });
+  test("the tile says Checking, never Not ready", () => {
+    const s = engineTileState("claude", "orchestrator", [SLOW], false);
+    expect(s.tone).toBe("checking");
+    expect(s.word).toBe("Checking");
+    expect(engineTileState("claude", "orchestrator", [{ ...SLOW, slow: false }], false).word).toBe("Not ready");
+  });
+});
+
 describe("the engine tile", () => {
   test("the letter is the first one of the provider's title, never typed", () => {
     expect(engineLetter("claude")).toBe(title("claude").charAt(0).toUpperCase());

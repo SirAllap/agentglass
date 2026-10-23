@@ -163,9 +163,17 @@ export function sleepingTab(url: string, title: string, icon: string | null, pro
  * Returns the same array when there is nothing to do, so selecting an already
  * awake tab does not re-render every guest in the strip.
  */
-export function wake(tabs: BrowserTab[], id: string): BrowserTab[] {
+export function wake(tabs: BrowserTab[], id: string, recency?: Recency): BrowserTab[] {
   if (!tabs.some((t) => t.id === id && t.asleep)) return tabs;
-  return tabs.map((t) => (t.id === id ? { ...t, asleep: false } : t));
+  /* The cap counts awake pages, and waking adds one exactly as a new tab does:
+     with the strip full the least-used awake tab goes to sleep in the same
+     update. Waking used to skip the count, so a strip past 12 climbed back to
+     all of it one click at a time. Ceiling: when every awake tab is in front or
+     held, it wakes over the cap rather than refuse; refusing an agent's ask, as
+     addTab does, needs the caller. */
+  const over = recency && tabs.filter((t) => !t.asleep).length >= MAX_TABS;
+  const slept = over ? pickSleeper(tabs, recency) : null;
+  return tabs.map((t) => (t.id === id ? { ...t, asleep: false } : t.id === slept ? { ...t, asleep: true } : t));
 }
 
 /**
