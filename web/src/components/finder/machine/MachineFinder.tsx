@@ -25,9 +25,10 @@ import {
 import { HIT } from "../../../lib/iconSize.ts";
 import { isAppChord } from "../../../lib/keybindings.ts";
 import type { DiskPlace } from "../../../../../shared/types.ts";
-import { LINE } from "../../workspace/Chrome.tsx";
+import { EDGE, LINE } from "../../workspace/Chrome.tsx";
 import { Column, type Mod } from "./Column.tsx";
 import { AppearanceMenu, FinderSettings, HelpSheet } from "./FinderChrome.tsx";
+import { clearDraft, dirtyPaths, exitDecision, saveDrafts, type Exit } from "../../../lib/finderEdit.ts";
 import { FinderPathBar } from "./FinderPathBar.tsx";
 import { FinderSearch } from "./FinderSearch.tsx";
 import type { HitTarget } from "../../../lib/finderSearch.ts";
@@ -54,7 +55,7 @@ const BIG = 2000;
 
 const basename = (p: string) => p.slice(p.lastIndexOf("/") + 1) || "/";
 
-export function MachineFinder({ home, start, places, target, onPlace, onBench, onRecent, onClose }: {
+export function MachineFinder({ home, start, places, target, onPlace, onBench, onRecent, onClose: closeNow }: {
   home: string;
   /** Where to open, and where to go when the palette's own place changes. */
   start: string;
@@ -69,18 +70,36 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
   onClose: () => void;
 }) {
   const [prefs, setPrefsState] = useState<Prefs>(loadPrefs);
+  /* Every way out of an edit that was never saved asks first (lib/finderEdit.EXITS): the move is held in `held`
+     and runs once the person has said Save or Discard. */
+  const [held, setHeld] = useState<{ exit: Exit; run: () => void } | null>(null);
+  const [heldErr, setHeldErr] = useState<string | null>(null);
+  const guarded = useCallback(<A extends unknown[]>(exit: Exit, fn: (...a: A) => void) => (...a: A) => {
+    if (exitDecision(dirtyPaths().length, exit) === "go") fn(...a); else { setHeldErr(null); setHeld({ exit, run: () => fn(...a) }); }
+  }, []);
+  const onClose = useMemo(() => guarded("finder-close", closeNow), [guarded, closeNow]);
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || exitDecision(dirtyPaths().length, "finder-close") === "go" || (e.target as HTMLElement | null)?.tagName === "TEXTAREA") return;
+      e.preventDefault(); e.stopImmediatePropagation(); setHeldErr(null); setHeld({ exit: "finder-close", run: closeNow });
+    };
+    window.addEventListener("keydown", esc, true);
+    return () => window.removeEventListener("keydown", esc, true);
+  }, [closeNow]);
   const setPrefs = useCallback((p: Partial<Prefs>) => setPrefsState((cur) => { const n = { ...cur, ...p }; savePrefs(n); return n; }), []);
 
   /* Where it was left, if that is still where the palette says it is: a chip or a link that moved the place wins over the memory. */
   const [back] = useState(() => { const s = loadSnap(); return s && s.trail[0] === (start || home || "/") ? s : null; });
   const [trail, setTrail] = useState<string[]>(() => back?.trail ?? [start || home || "/"]);
   const [sel, setSel] = useState<(string | null)[]>(() => back?.sel ?? [null]);
+  const selRef = useRef(sel); selRef.current = sel;
   const [focusCol, setFocusCol] = useState(() => back?.focusCol ?? 0);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [peek, setPeek] = useState(() => back?.peek ?? false);
   const [sidePage, setSidePage] = useState(false);
   const [help, setHelp] = useState(false);
   const [searching, setSearching] = useState(false);
+  const openSearch = useMemo(() => guarded("search-open", () => setSearching(true)), [guarded]);
   const searchingRef = useRef(false); searchingRef.current = searching;
   /** The panel's own width once somebody has dragged its edge. */
   const [prevDrag, setPrevDrag] = useState<number | undefined>(() => back?.prevDrag);
@@ -156,35 +175,39 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
     return () => { live = false; clearTimeout(t); };
   }, [target]);
 
-  const go = useCallback((path: string) => {
+  const goRaw = useCallback((path: string) => {
     seen.current = path; setHist((h) => visit(h, path));
     setTrail([path]); setSel([null]); setFocusCol(0); setPeek(false); setSidePage(false);
     onPlace(path);
   }, [onPlace]);
+  const go = useMemo(() => guarded("folder", goRaw), [guarded, goRaw]);
 
   /* A search hit: a folder becomes the place; a file selects itself inside its own folder, so its preview shows. */
-  const reveal = useCallback((t: HitTarget) => {
+  const revealRaw = useCallback((t: HitTarget) => {
     const at = t.kind === "open-folder" ? t.path : t.dir;
     seen.current = at; setHist((h) => visit(h, at));
     setTrail([at]); setSel([t.kind === "select" ? t.name : null]); setFocusCol(0); setPeek(false); setSidePage(false);
     onPlace(at);
   }, [onPlace]);
+  const reveal = useMemo(() => guarded("search-hit", revealRaw), [guarded, revealRaw]);
 
-  const goUp = useCallback(() => {
+  const goUpRaw = useCallback(() => {
     const p = parentOf(trail[0]!);
     if (!p) return;
     seen.current = p; setHist((h) => visit(h, p));
     setTrail((t) => [p, ...t]); setSel((s) => [basename(trail[0]!), ...s]); setFocusCol(0);
     onPlace(p);
   }, [trail, onPlace]);
+  const goUp = useMemo(() => guarded("up", goUpRaw), [guarded, goUpRaw]);
 
   /* Back and forward land on a place already in the history without adding to it. */
-  const goHist = useCallback((h: History) => {
+  const goHistRaw = useCallback((h: History) => {
     const p = histHere(h);
     seen.current = p; setHist(h);
     setTrail([p]); setSel([null]); setFocusCol(0); setPeek(false); setSidePage(false);
     onPlace(p);
   }, [onPlace]);
+  const goHist = useMemo(() => guarded("history", goHistRaw), [guarded, goHistRaw]);
 
   /* ---- what each column draws ---- */
   const cache = useRef(new Map<string, { rows: Row[]; sig: string; display: Display }>());
@@ -202,19 +225,22 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
   }), [trail, version, ready, filters, prefs.hidden, prefs.group, prefs.sortKey, prefs.sortDir, prefs.foldersFirst]);
 
   /* ---- selection ---- */
-  const pick = useCallback((col: number, row: Row) => {
+  const pickRaw = useCallback((col: number, row: Row) => {
     setMulti(null);
     setSel((s) => [...s.slice(0, col), row.name]);
     setTrail((t) => (opensOnPick(row, prefs.mirror) ? [...t.slice(0, col + 1), joinPath(t[col]!, row.name)] : t.slice(0, col + 1)));
     setFocusCol(col);
   }, [prefs.mirror]);
+  const pickHeld = useMemo(() => guarded("row", pickRaw), [guarded, pickRaw]);
+  /* Choosing the row that is already chosen is not leaving it. */
+  const pick = useCallback((col: number, row: Row): void => ((selRef.current[col] ?? null) === row.name ? pickRaw(col, row) : pickHeld(col, row)), [pickRaw, pickHeld]);
 
   const last = trail.length - 1;
   const chosenOf = (col: number): Choice => (multi && multi.col === col && trail[col] === multi.path ? multi.choice : single(sel[col] ?? null));
   const liveMulti = multi && trail[multi.col] === multi.path && multi.choice.names.size > 1 ? multi : null;
 
   /* A choice of several rows has no child column: the preview follows the cursor row alone. */
-  const choose = useCallback((col: number, c: Choice) => {
+  const chooseRaw = useCallback((col: number, c: Choice) => {
     const rows = columns[col]?.display.rows ?? [];
     setFocusCol(col);
     if (c.names.size <= 1) { const row = rows.find((r) => r.name === c.cursor); if (row) pick(col, row); return; }
@@ -222,6 +248,9 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
     setSel((s) => [...s.slice(0, col), c.cursor]);
     setTrail((t) => t.slice(0, col + 1));
   }, [columns, trail, pick]);
+  const chooseHeld = useMemo(() => guarded("row", chooseRaw), [guarded, chooseRaw]);
+  /* Choosing the row that is already chosen is not leaving it. */
+  const choose = useCallback((col: number, c: Choice): void => ((selRef.current[col] ?? null) === c.cursor ? chooseRaw(col, c) : chooseHeld(col, c)), [chooseRaw, chooseHeld]);
   const onPickMod = useCallback((col: number, row: Row, mod?: Mod) => {
     if (!mod || (!mod.ctrl && !mod.shift)) { pick(col, row); return; }
     choose(col, clickSelect(columns[col]?.display.rows ?? [], chosenOf(col), row.name, mod));
@@ -250,7 +279,7 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
     return null;
   })();
 
-  const enterFolder = useCallback((col: number) => {
+  const enterFolderRaw = useCallback((col: number) => {
     const name = sel[col];
     const row = name ? columns[col]?.display.rows.find((r) => r.name === name) : null;
     if (!row || !isFolder(row) || row.locked) return;
@@ -259,6 +288,7 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
     setTrail((t) => [...t.slice(0, col + 1), joinPath(t[col]!, row.name)]);
     setSel((s) => [...s.slice(0, col + 1), null]);
   }, [sel, columns]);
+  const enterFolder = useMemo(() => guarded("folder", enterFolderRaw), [guarded, enterFolderRaw]);
 
   // The folder just entered has no rows until its first page lands; select its first row then.
   useEffect(() => {
@@ -358,7 +388,7 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
       if (searchingRef.current) return; // the search overlay has the keys while it is up
       // Ctrl+K is the app's command palette everywhere else; inside the finder it is Strata's search.
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k" && root.current && (root.current.contains(e.target as Node) || e.target === document.body || (e.target as HTMLElement | null)?.closest?.('[role="dialog"]') === root.current.closest('[role="dialog"]'))) {
-        e.preventDefault(); e.stopPropagation(); setSearching(true); return;
+        e.preventDefault(); e.stopPropagation(); openSearch(); return;
       }
       if (isAppChord(e)) return;
       const t = e.target as HTMLElement | null;
@@ -392,7 +422,7 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
   const preview = (
     <QuickLook path={deepest?.path ?? null} row={deepest?.row ?? null}
       rows={deepest && isFolder(deepest.row) ? (columns[deepest.col + 1]?.state?.rows ?? null) : null}
-      onBench={onBench} onCopy={copy} onClose={() => (wide ? setPrefs({ preview: false }) : setPeek(false))} />
+      onBench={onBench} onCopy={copy} onClose={guarded("preview-close", () => (wide ? setPrefs({ preview: false }) : setPeek(false)))} />
   );
 
   /* Strata's footer: the shortcuts button on the left, what is here or selected on the right. */
@@ -415,7 +445,7 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
           <button className={tool} disabled={!parentOf(trail[0]!)} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", opacity: parentOf(trail[0]!) ? 1 : 0.4 }} title="Parent folder (Alt+Up)" aria-label="Parent folder" onClick={goUp}><StrataIcon set="act" name="arrow-up" size={17} /></button>
         </>}
         <FinderPathBar path={trail[last] ?? trail[0]!} home={home} onGo={go} signalEdit={pathSignal} />
-        <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Search (Ctrl+K)" aria-label="Search" onClick={() => setSearching(true)}><StrataIcon set="act" name="search" size={17} /></button>
+        <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Search (Ctrl+K)" aria-label="Search" onClick={openSearch}><StrataIcon set="act" name="search" size={17} /></button>
         <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Appearance" aria-label="Appearance" aria-haspopup="menu" onClick={(e) => setMenu(e.currentTarget.getBoundingClientRect())}><StrataIcon set="act" name={prefs.view} size={17} /></button>
         <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Settings" aria-label="Settings" aria-haspopup="menu" onClick={(e) => setSettings(e.currentTarget.getBoundingClientRect())}><StrataIcon set="act" name="settings" size={17} /></button>
         <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Close (Esc)" aria-label="Close the finder" onClick={onClose}><StrataIcon set="act" name="x" size={17} /></button>
@@ -479,6 +509,22 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
         <span className="flex-1" />
         <span className="truncate" aria-live="polite">{note ?? count}</span>
       </footer>
+      {held && (
+        <div role="alertdialog" aria-label="Unsaved changes" className="absolute inset-0 grid place-items-center p-4" style={{ background: "color-mix(in srgb, var(--bg) 70%, transparent)", zIndex: 9 }}
+          onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setHeld(null); } }}>
+          <div className="rounded-xl p-4 text-[12px]" style={{ background: "var(--surface-card)", border: EDGE, width: 380, maxWidth: "100%" }}>
+            <b className="block text-[13px] mb-1">Unsaved changes</b>
+            <p className="m-0 mb-3" style={{ color: "var(--text3)" }}>{dirtyPaths().map(basename).join(", ")} {dirtyPaths().length === 1 ? "has" : "have"} edits that were not saved.</p>
+            {heldErr && <p role="alert" className="m-0 mb-3" style={{ color: "var(--warning-ink)" }}>Not saved: {heldErr}.</p>}
+            <div className="flex justify-end gap-2">
+              <button autoFocus className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE }} onClick={() => setHeld(null)}>Cancel</button>
+              <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE, color: "var(--warning-ink)" }} onClick={() => { const h = held; for (const p of dirtyPaths()) clearDraft(p); setHeld(null); h.run(); }}>Discard</button>
+              <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, background: "var(--text)", color: "var(--bg)" }}
+                onClick={() => { const h = held; void saveDrafts(api.previewSave).then((r) => { if (r.ok) { setHeld(null); h.run(); } else setHeldErr(`${basename(r.path)}: ${r.error}`); }); }}>Save</button>
+            </div>
+          </div>
+        </div>
+      )}
       {help && <HelpSheet onClose={() => setHelp(false)} />}
       {searching && <FinderSearch home={home} onTarget={reveal} onClose={() => setSearching(false)} />}
       {settings && <FinderSettings anchor={settings} prefs={prefs} onPref={setPrefs} onReset={() => { setPrefsState(DEFAULT_PREFS); savePrefs(DEFAULT_PREFS); setNote("Finder settings reset"); }} onClose={() => setSettings(null)} />}

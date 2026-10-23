@@ -149,7 +149,7 @@ import { fileText, fileToTemp, fileTree, findFiles, grepFiles, listRefs, filesEx
 import { diskEnabled, diskFind, diskGrep, diskPlaces } from "./disk.ts";
 import { homeIndex } from "./homeindex.ts";
 import { browseBatch } from "./browselist.ts";
-import { browseDir, fileBytes, fileFacts, previewSlice, openInDesktop, pagePolicy, revealInFileManager } from "./browse.ts";
+import { browseDir, fileBytes, fileFacts, previewSlice, openInDesktop, pagePolicy, revealInFileManager, saveText } from "./browse.ts";
 import { fileGitFacts } from "./fileGit.ts";
 import { benchEdit, benchEnd, benchLive, readNote, writeNote } from "./bench.ts";
 import {
@@ -7454,6 +7454,14 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         try { b = (await req.json()) as { path?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
         const r = openInDesktop(b?.path, localBrowse);
         return json(r, r.ok ? 200 : 400);
+      }
+      /* Saving the editor's text is a write on the same surface: same gate, same boundary as the read, plus the mtime guard (see saveText). */
+      if (pathname === "/preview/save" && req.method === "POST") {
+        if (!trustedCaller(req, from)) return csrfBlocked();
+        let b: { path?: unknown; text?: unknown; mtime?: unknown } = {};
+        try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+        const r = saveText(b?.path, b?.text, b?.mtime, localBrowse);
+        return json(r, r.ok ? 200 : r.conflict ? 409 : 400);
       }
       if (pathname === "/preview/reveal" && req.method === "POST") {
         if (!trustedCaller(req, from)) return csrfBlocked();

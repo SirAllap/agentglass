@@ -2,7 +2,7 @@
 // for any text (line numbers, colour, long lines wrap inside the pane), markdown
 // rendered, a page in an isolated frame, JSON as text / tree / graph, pictures,
 // PDF, audio and video in their own viewers, and a plain message for a binary.
-// Nothing here edits: the "Editing" tab is the bench, which is where nvim lives.
+// The "Editing" tab edits a small text file in place (FileEditor); "Open in nvim" is the bench, for the rest.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../../lib/api.ts";
 import { Markdown } from "../../../lib/markdown.tsx";
@@ -17,6 +17,8 @@ import type { FileFacts } from "../../../../../shared/types.ts";
 import { EDGE } from "../../workspace/Chrome.tsx";
 import { CODE_FONT_STYLE } from "../../diff/DiffLines.tsx";
 import { JsonGraph, JsonTree } from "./JsonViews.tsx";
+import { FileEditor } from "./FileEditor.tsx";
+import { editability, getDraft } from "../../../lib/finderEdit.ts";
 import { FindBar } from "../../PeekFile.tsx";
 import { clear as clearFind, findRanges, paint as paintFind, reveal as revealFind, step as stepFind } from "../../../lib/mdFind.ts";
 import { SearchIcon } from "../../../lib/glyphIcons.tsx";
@@ -35,6 +37,10 @@ export function PreviewBody({ path, facts, canEdit, onBench }: {
   const plan = useMemo(() => previewPlan(facts), [facts]);
   const [tab, setTab] = useState<PreviewTab>(plan.tabs[0] ?? "Reading");
   useEffect(() => setTab(plan.tabs[0] ?? "Reading"), [path, plan]);
+  /* A file with an unsaved edit comes back in the editor. */
+  const [editing, setEditing] = useState(() => !!getDraft(path));
+  useEffect(() => setEditing(!!getDraft(path)), [path]);
+  const mayEdit = canEdit && editability(facts);
   const graphOk = graphAllowed(facts.bytes);
   const texty = plan.viewer === "code" || plan.viewer === "markdown" || plan.viewer === "html" || plan.viewer === "json";
 
@@ -67,17 +73,22 @@ export function PreviewBody({ path, facts, canEdit, onBench }: {
       {plan.tabs.map((t) => {
         const off = t === "Graph" && !graphOk;
         return (
-          <button key={t} role="tab" aria-selected={tab === t} disabled={off} className="agx-btn px-2.5 rounded-md text-[11px] disabled:opacity-40"
+          <button key={t} role="tab" aria-selected={!editing && tab === t} disabled={off} className="agx-btn px-2.5 rounded-md text-[11px] disabled:opacity-40"
             title={off ? `Graph is for JSON under ${humanBytes(GRAPH_MAX_BYTES)}` : undefined}
-            style={{ minHeight: HIT - 6, border: EDGE, ...(tab === t ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)", color: "var(--text)" } : { color: "var(--text3)" }) }}
-            onClick={() => setTab(t)}>{t}</button>
+            style={{ minHeight: HIT - 6, border: EDGE, ...(!editing && tab === t ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)", color: "var(--text)" } : { color: "var(--text3)" }) }}
+            onClick={() => { setEditing(false); setTab(t); }}>{t}</button>
         );
       })}
       {canEdit && (
-        <button className="agx-btn px-2.5 rounded-md text-[11px]" style={{ minHeight: HIT - 6, border: EDGE, color: "var(--text3)" }}
-          onClick={onBench} title="Edit in nvim on the bench — the finder does not edit">Editing</button>
+        <>
+          <button role="tab" aria-selected={editing} disabled={!mayEdit || !mayEdit.ok} className="agx-btn px-2.5 rounded-md text-[11px] disabled:opacity-40"
+            style={{ minHeight: HIT - 6, border: EDGE, ...(editing ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)", color: "var(--text)" } : { color: "var(--text3)" }) }}
+            title={mayEdit && !mayEdit.ok ? mayEdit.why : "Edit this file here; Ctrl+S saves"} onClick={() => setEditing(true)}>Editing</button>
+          <button className="agx-btn px-2.5 rounded-md text-[11px]" style={{ minHeight: HIT - 6, border: EDGE, color: "var(--text3)" }}
+            onClick={onBench} title="Open the file in nvim on the bench">Open in nvim</button>
+        </>
       )}
-      {texty && (
+      {texty && !editing && (
         <span className="ml-auto flex items-center gap-1">
           <button className="agx-btn px-2 rounded-md text-[11px] inline-flex items-center gap-1" aria-pressed={findOpen} title="Find in preview"
             style={{ minHeight: HIT - 6, border: EDGE, color: findOpen ? "var(--primary-ink)" : "var(--text3)" }}
@@ -90,7 +101,8 @@ export function PreviewBody({ path, facts, canEdit, onBench }: {
   );
 
   let body: React.ReactNode;
-  switch (plan.viewer) {
+  if (editing && mayEdit && mayEdit.ok) body = <FileEditor path={path} facts={facts} onDone={() => setEditing(false)} />;
+  else switch (plan.viewer) {
     case "markdown": body = tab === "Source" ? <Reading facts={facts} name={facts.name} wrap={wrap} /> : <MarkdownView facts={facts} />; break;
     case "html": body = tab === "Rendered" ? <HtmlFrame path={path} bytes={facts.bytes} /> : <Reading facts={facts} name={facts.name} wrap={wrap} />; break;
     case "json": body = tab === "Reading" ? <Reading facts={facts} name={facts.name} wrap={wrap} /> : <JsonData path={path} bytes={facts.bytes} graph={tab === "Graph"} />; break;

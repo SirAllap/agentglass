@@ -1347,6 +1347,7 @@ const realApi = {
   /** Hand a file to the desktop's own viewer — a picture belongs to the picture
    *  viewer, not to the editor the text files open in. */
   previewOpen: (path: string) => post<{ ok: boolean; with?: string; error?: string }>("/preview/open", { path }),
+  previewSave: (path: string, text: string, mtime: number) => post<{ ok: boolean; mtime?: number; bytes?: number; error?: string; conflict?: boolean }>("/preview/save", { path, text, mtime }),
   previewReveal: (path: string) => post<{ ok: boolean; with?: string; error?: string }>("/preview/reveal", { path }),
   /** Fuzzy names across Home from the server's incremental index. */
   diskIndexSearch: (q: string, signal?: AbortSignal) =>
@@ -2720,6 +2721,7 @@ const demoApi: typeof realApi = {
   previewText: async () => ({ ok: false as const, error: "the demo has no filesystem" }),
   previewUrl: () => "",
   previewOpen: () => D({ ok: false, error: "the demo has no filesystem" }),
+  previewSave: () => D({ ok: false, error: "the demo has no filesystem" }),
   previewReveal: () => D({ ok: false, error: "the demo has no filesystem" }),
   diskGrep: () => D({ ok: false, hits: [], files: 0, truncated: false, via: "", error: "the demo has no filesystem" } as GrepReport),
   dockerLogs: (id: string, _tail?: number) => D(demo.dockerLogs(id)),

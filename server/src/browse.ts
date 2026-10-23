@@ -19,7 +19,7 @@
  * rule is loosened here — this is a third door into the same two rooms, not a
  * new room.
  */
-import { opendirSync, readdirSync, statSync, lstatSync, openSync, readSync, closeSync } from "node:fs";
+import { opendirSync, readdirSync, statSync, lstatSync, openSync, readSync, closeSync, writeFileSync } from "node:fs";
 import { failed } from "./refused.ts";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { diskAllows, diskEnabled, diskRoots } from "./disk.ts";
@@ -770,4 +770,45 @@ export function pagePolicy(pathIn: string): { mime: string; csp: string } | null
   return /\.html?$/i.test(pathIn)
     ? { mime: "text/html; charset=utf-8", csp: "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:" }
     : null;
+}
+
+/** The most a file may hold and still be edited in the finder: what the preview already reads whole (TEXT_HEAD), so what is edited is all of the file. */
+export const EDIT_CAP = TEXT_HEAD;
+
+export type SaveResult = { ok: true; mtime: number; bytes: number } | { ok: false; error: string; conflict?: boolean };
+
+/**
+ * Write a text file the finder showed, in place.
+ *
+ * Same boundary as the read route (`browseReal`, symlinks resolved, and the
+ * resolved path is what is written), minus agentglass's own folders: those are
+ * readable for a local caller, never writable from a preview. `mtime` is what
+ * the editor saw when it opened the file; if the file has moved on since, the
+ * save is refused rather than overwriting somebody else's change. A file that
+ * is not valid UTF-8 is refused too: decoding it for a text box and encoding
+ * it back would rewrite bytes the person never touched.
+ */
+export function saveText(pathIn: unknown, text: unknown, seenMtime: unknown, local = false): SaveResult {
+  if (typeof text !== "string") return { ok: false, error: "no text to save" };
+  if (typeof seenMtime !== "number" || !Number.isFinite(seenMtime)) return { ok: false, error: "the editor did not say which version it opened" };
+  const abs = browseReal(pathIn, local);
+  if (!abs) return { ok: false, error: refusal(safeAbs(pathIn) ?? "") };
+  if (agentglassPrivate(abs)) return { ok: false, error: "closed: agentglass's own folders are read-only here" };
+  let st;
+  try { st = statSync(abs); } catch { return { ok: false, error: "no such file" }; }
+  if (!st.isFile()) return { ok: false, error: "that is not a regular file" };
+  const body = Buffer.from(text, "utf8");
+  if (body.length > EDIT_CAP || st.size > EDIT_CAP) return { ok: false, error: `over the ${EDIT_CAP / 1024} KB the finder edits; use Open in nvim` };
+  const head = readHead(abs, EDIT_CAP) ?? Buffer.alloc(0);
+  if (kindOf(abs, head.subarray(0, 64 * 1024)).kind !== "text") return { ok: false, error: "not a text file" };
+  if (!Buffer.from(head.toString("utf8"), "utf8").equals(head)) return { ok: false, error: "not valid UTF-8; the finder would change bytes you did not touch" };
+  if (st.mtimeMs !== seenMtime) return { ok: false, conflict: true, error: "the file changed on disk since it was opened; reload it before saving" };
+  try {
+    // In place, not through a temp file: the owner, mode, hard links and the link a symlink points to all stay what they were.
+    writeFileSync(abs, body);
+    const after = statSync(abs);
+    return { ok: true, mtime: after.mtimeMs, bytes: after.size };
+  } catch (e) {
+    return { ok: false, error: failed("preview/save", e, (e as NodeJS.ErrnoException)?.code === "EACCES" ? "no permission to write this file" : "the file could not be written") };
+  }
 }
