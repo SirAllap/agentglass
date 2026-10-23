@@ -169,7 +169,7 @@ describe("parseUnifiedDiff", () => {
     expect(f!.hunks[0]!.lines).toEqual([" one", " ", "+two"]);
   });
 
-  test("the diff\'s final newline is not a context row under the last hunk", () => {
+  test("the diff's final newline is not a context row under the last hunk", () => {
     const text = ["diff --git a/a.txt b/a.txt", "@@ -1,2 +1,2 @@", " one", "-two", "+three", ""].join("\n");
     expect(parseUnifiedDiff(text)[0]!.hunks[0]!.lines).toEqual([" one", "-two", "+three"]);
     // a blank context row that really is last still counts
