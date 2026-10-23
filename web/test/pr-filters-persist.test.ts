@@ -128,7 +128,10 @@ describe("the panel actually reads and writes the rules it builds", () => {
     // `FilterBuilder`'s "Clear all" calls this same `onChange` with the empty
     // set — if it reached `setRulesRaw` directly, a cleared board would look
     // clear and come back full after a restart.
-    expect(code).toContain("onChange={setRules}");
+    // While a global search runs the builder edits the search's own rules (the
+    // board's filters stay untouched); otherwise it is the persisting setter.
+    expect(code).toContain("onChange={setActiveRules}");
+    expect(code).toContain("const setActiveRules = searchingNow ? setSearchRules : setRules;");
     expect(code).not.toContain("onChange={setRulesRaw}");
   });
 });
