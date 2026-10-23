@@ -4,7 +4,7 @@
  * finder draws takes its rows through it.
  */
 import { describe, expect, test } from "bun:test";
-import { MENU_ROW, stepActive } from "../src/lib/finderMenu.ts";
+import { MENU_ROW, MENU_ROW_H, MENU_RULE, stepActive } from "../src/lib/finderMenu.ts";
 
 const read = async (p: string) => await Bun.file(new URL(p, import.meta.url)).text();
 const popover = await read("../src/components/finder/machine/Popover.tsx");
@@ -36,6 +36,7 @@ describe("every menu row wears the highlight", () => {
   test("the stylesheet gives a row a fill for the pointer and for the key", () => {
     expect(css).toMatch(new RegExp(`\\.${MENU_ROW}:hover:not\\(:disabled\\)`));
     expect(css).toContain(`.${MENU_ROW}[data-active]`);
+    expect(css).toContain(`.${MENU_ROW}[data-active="ring"]`);
   });
   test("the shared item and both of the context menu's lists use the row class", () => {
     expect(popover.match(/className=\{`\$\{MENU_ROW\} /g)?.length).toBe(1);
@@ -46,10 +47,30 @@ describe("every menu row wears the highlight", () => {
     expect(code(popover)).not.toMatch(/role="menuitemcheckbox"[^>]*className="agx-btn/);
     expect(code(ops)).not.toMatch(/role="menuitem"[\s\S]{0,400}className="agx-btn w-full/);
   });
+  test("a menu opens with its first row lit: a ring for a button's popover, a fill for the context menu", () => {
+    expect(popover).toContain('first: "ring"');
+    expect(ops).toContain('first: "fill"');
+    expect(ops).not.toMatch(/useMenuKeys\(subEl[^)]*first/);
+  });
   test("every menu takes the arrow keys", () => {
     expect(popover).toContain("useMenuKeys(");
     expect(ops).toContain("useMenuKeys(");
     expect(keys).toContain("stepActive(");
     expect(keys).toContain('"Enter"');
+  });
+});
+
+describe("the context menu is drawn at Strata's measures", () => {
+  test("a row is 24 px plus margins, so rows sit 26 px apart", () => {
+    expect(MENU_ROW_H).toBe(24);
+    expect(ops).not.toMatch(/minHeight: 28/);
+    expect(ops.match(/minHeight: MENU_ROW_H/g)?.length).toBe(2);
+    expect(ops).toContain("(MENU_ROW_H + 2)");
+  });
+  test("the groups are divided by the faint rule and the header has no line under it", () => {
+    expect(MENU_RULE).toContain("40%");
+    expect(ops).toContain("borderTop: MENU_RULE");
+    const head = ops.slice(ops.indexOf("{head && ("), ops.indexOf("{groups.map"));
+    expect(head).not.toContain("borderBottom");
   });
 });

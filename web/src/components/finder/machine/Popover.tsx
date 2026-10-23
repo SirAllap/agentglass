@@ -32,7 +32,7 @@ export function Popover({ anchor, onClose, width = 220, children, label }: { anc
     window.addEventListener("keydown", on, true);
     return () => window.removeEventListener("keydown", on, true);
   }, [onClose]);
-  useMenuKeys(el);
+  useMenuKeys(el, { first: "ring" });
   return (
     <Portal z={LAYER.menu}>
       <div className="fixed inset-0" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />

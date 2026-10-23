@@ -16,3 +16,8 @@ export function stepActive(count: number, cur: number, key: MenuKey): number {
   if (cur < 0 || cur >= count) return key === "ArrowDown" ? 0 : count - 1;
   return key === "ArrowDown" ? (cur + 1) % count : (cur - 1 + count) % count;
 }
+
+/** Strata's menu dividers are a hint, not a line: fainter than the finder's own hairline. */
+export const MENU_RULE = "1px solid color-mix(in srgb, var(--border) 40%, transparent)";
+/** A row is 24 px tall plus its 1 px margins: the 26 px pitch Strata's menus keep. */
+export const MENU_ROW_H = 24;

@@ -3,13 +3,15 @@ import { useEffect, type RefObject } from "react";
 import { MENU_ROW, stepActive, type MenuKey } from "../../../lib/finderMenu.ts";
 
 const rowsOf = (root: HTMLElement) => [...root.querySelectorAll<HTMLButtonElement>(`.${MENU_ROW}:not(:disabled)`)];
-const markOf = (rows: HTMLElement[], at: number) => rows.forEach((r, i) => { if (i === at) r.setAttribute("data-active", ""); else r.removeAttribute("data-active"); });
+/** "ring": the keyboard's row, outlined; "fill": a row lit without an outline, as a context menu lights its first one. */
+const markOf = (rows: HTMLElement[], at: number, how: "ring" | "fill" = "ring") => rows.forEach((r, i) => { if (i === at) r.setAttribute("data-active", how); else r.removeAttribute("data-active"); });
 
-/** `onLeft`: what ArrowLeft does in a submenu (close it). `enabled`: false while another menu on top has the keys. */
-export function useMenuKeys(root: RefObject<HTMLElement | null>, { enabled = true, onLeft }: { enabled?: boolean; onLeft?: () => void } = {}) {
+/** `onLeft`: what ArrowLeft does in a submenu (close it). `enabled`: false while another menu on top has the keys. `first`: how the first row is lit when the menu opens (Strata lights it: a button's popover with a ring, a context menu with a fill); a submenu opens with none. */
+export function useMenuKeys(root: RefObject<HTMLElement | null>, { enabled = true, onLeft, first }: { enabled?: boolean; onLeft?: () => void; first?: "ring" | "fill" } = {}) {
   useEffect(() => {
     if (!enabled) return;
     const el = root.current; if (!el) return;
+    if (first) markOf(rowsOf(el), 0, first);
     const on = (e: KeyboardEvent) => {
       if (e.altKey || e.ctrlKey || e.metaKey) return;
       const rows = rowsOf(el);
@@ -23,10 +25,12 @@ export function useMenuKeys(root: RefObject<HTMLElement | null>, { enabled = tru
         e.preventDefault(); e.stopPropagation(); rows[cur]!.click();
       } else if (e.key === "ArrowLeft" && onLeft) { e.preventDefault(); e.stopPropagation(); onLeft(); }
     };
-    // The pointer takes the highlight with it, so two rows are never lit at once.
-    const over = (e: MouseEvent) => { const row = (e.target as HTMLElement).closest?.(`.${MENU_ROW}`); if (row && !row.hasAttribute("disabled")) markOf(rowsOf(el), rowsOf(el).indexOf(row as HTMLButtonElement)); };
+    // The pointer takes the highlight over from the keys, so two rows are never lit at once; the keys start again from where it is.
+    const over = (e: MouseEvent) => { const row = (e.target as HTMLElement).closest?.(`.${MENU_ROW}`); if (row && !row.hasAttribute("disabled")) markOf(rowsOf(el), -1); };
     window.addEventListener("keydown", on, true);
     el.addEventListener("mouseover", over);
     return () => { window.removeEventListener("keydown", on, true); el.removeEventListener("mouseover", over); };
+    // `first` is read once, when the menu opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [root, enabled, onLeft]);
 }
