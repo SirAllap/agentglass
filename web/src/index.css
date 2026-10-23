@@ -2986,7 +2986,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
   background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--agx-contact) 55%, transparent)); }
 .agx-presence-sat::after { content: ""; position: absolute; right: -4px; top: -2px; width: 12px; height: 12px; border-radius: 50%;
   background: radial-gradient(circle, var(--agx-contact) 0 2.6px, color-mix(in srgb, var(--agx-contact) 20%, transparent) 3.4px, transparent 6px); }
-.agx-presence-ghost { position: absolute; left: 0; top: 0; opacity: 0; transition-property: transform, opacity; transition-timing-function: var(--agx-move), ease-out; will-change: transform; }
+.agx-presence-ghost { position: absolute; left: 0; top: 0; z-index: 1; opacity: 0; transition-property: transform, opacity; transition-timing-function: var(--agx-move), ease-out; will-change: transform; }
 .agx-presence-on .agx-presence-ghost { opacity: 1; }
 .agx-presence-on .agx-presence-ghost.is-stale { opacity: 0; }
 .agx-presence-arrow { display: block; width: 20px; height: 20px; filter: drop-shadow(0 1px 1.5px rgba(40, 20, 90, .28)); }
@@ -2998,7 +2998,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-presence-dock { pointer-events: auto; position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; align-items: center; gap: 10px;
   max-width: calc(100% - 32px); padding: 6px; border-radius: 22px; color: #f2f0f7; --agx-dock-mark: #a78bfa; --agx-dock-yours: #fbbf24; --agx-dock-take: #f59e0b;
   transition: box-shadow 300ms var(--agx-out);
-  background: rgba(22, 19, 31, .94); -webkit-backdrop-filter: blur(18px) saturate(170%); backdrop-filter: blur(18px) saturate(170%);
+  z-index: 2; background: rgba(22, 19, 31, .97);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 0 0 1px color-mix(in srgb, var(--agx-mark) 34%, transparent), 0 18px 40px -18px rgba(40, 20, 90, .55);
   animation: agx-dock-in 360ms var(--agx-ease); }
 @keyframes agx-dock-in { from { opacity: 0; transform: translate(-50%, 8px) scale(.98); filter: blur(2px); } }
@@ -3076,7 +3076,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
   .agx-sw-lay.is-out { opacity: 0; }
   .agx-al-head, .agx-al-eyes { transform: none; transition: none; }
 }
-@media (prefers-reduced-transparency: reduce) { .agx-presence-dock { background: #16131f; -webkit-backdrop-filter: none; backdrop-filter: none; } }
+@media (prefers-reduced-transparency: reduce) { .agx-presence-dock { background: #16131f; } }
 
 /*
  * THE ISLAND (components/browser/BrowserIsland.tsx). A box that is always the
@@ -3257,6 +3257,16 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-isl-thumb { position: relative; width: 132px; height: 82px; border-radius: 10px; overflow: hidden; background: var(--bg3); box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent), 0 2px 6px -2px rgba(30, 20, 60, .22); transition: box-shadow 160ms, transform 160ms cubic-bezier(0.23, 1, 0.32, 1); }
 .agx-isl-thumb img { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; background: #fff; }
 .agx-isl-card.is-on .agx-isl-thumb { box-shadow: 0 0 0 2px var(--ring), 0 2px 6px -2px rgba(30, 20, 60, .22); }
+/* the agent's tab: a thick accent ring that breathes, its state on the picture and in words under it; the person's own tab is amber, the rest of a live box steps back */
+.agx-isl-card.is-driven .agx-isl-thumb { box-shadow: 0 0 0 3px var(--ink-agent), 0 0 18px 2px rgba(139, 92, 246, .45); animation: agx-isl-drv 1.8s ease-in-out infinite alternate; }
+@keyframes agx-isl-drv { to { box-shadow: 0 0 0 3px var(--ink-agent), 0 0 26px 5px rgba(139, 92, 246, .7); } }
+.agx-isl-card.is-on:not(.is-driven) .agx-isl-thumb { box-shadow: 0 0 0 2px var(--ink-you), 0 2px 6px -2px rgba(30, 20, 60, .22); }
+.agx-isl-card.is-dim .agx-isl-thumb, .agx-isl-card.is-dim .agx-isl-cap { opacity: .55; }
+.agx-isl-drv { position: absolute; left: 5px; top: 5px; z-index: 1; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 11px; color: #fff; background: var(--ink-agent); box-shadow: 0 1px 4px rgba(30, 20, 60, .4); }
+.agx-isl-tag { align-self: flex-start; padding: 2px 8px; border-radius: 8px; font-size: 10.5px; font-weight: 700; line-height: 1.4; }
+.agx-isl-tag.is-agent { color: #fff; background: var(--ink-agent); }
+.agx-isl-tag.is-you { color: var(--text); background: color-mix(in srgb, var(--ink-you) 28%, transparent); }
+@media (prefers-reduced-motion: reduce) { .agx-isl-card.is-driven .agx-isl-thumb { animation: none; } }
 .agx-isl-card:focus-visible .agx-isl-thumb { outline: 2px solid var(--ring); outline-offset: 3px; }
 @media (hover: hover) and (pointer: fine) { .agx-isl-card:hover .agx-isl-thumb { transform: translateY(-1px); box-shadow: 0 0 0 1.5px color-mix(in srgb, #8b5cf6 60%, transparent), 0 6px 14px -4px rgba(30, 20, 60, .25); } }
 .agx-isl-mono { position: absolute; inset: 0; display: grid; place-items: center; align-content: center; gap: 6px; font-size: 16px; font-weight: 600; color: var(--text2); }

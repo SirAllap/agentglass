@@ -293,12 +293,16 @@ export function BrowserIsland(p: IslandProps) {
                     {g.list.map((t) => {
                       const who = acts[t.id]?.agent || t.agent;
                       const st = g.states[t.id];
+                      /* The tab the agent is working in, at a glance: the others in its box step back. */
+                      const driven = !!st && st.key !== "done" && st.key !== "waiting" && st.key !== "yours";
+                      const mine = !driven && t.id === activeId;
                       return (
                         <div key={t.id} data-tab={t.id} role="button" tabIndex={0}
-                          className={"agx-isl-card" + (t.id === activeId ? " is-on" : "")}
+                          className={"agx-isl-card" + (t.id === activeId ? " is-on" : "") + (driven ? " is-driven" : "") + (work && !driven ? " is-dim" : "")}
                           onClick={() => hide(t.id)} onKeyDown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); hide(t.id); } }}>
                           <div className="agx-isl-shot">
                             <div className="agx-isl-thumb">
+                              {driven && st && <span className="agx-isl-drv" aria-hidden><StateIcon k={st.key} /></span>}
                               {pics[t.id] ? <img src={pics[t.id]} alt="" /> : <span className="agx-isl-mono">{(t.title || host(t.url) || "?").slice(0, 1).toUpperCase()}{t.asleep && <small>Asleep</small>}</span>}
                               <button type="button" className="agx-isl-x" aria-label={`Close ${t.title || "tab"}`} onClick={(e) => { e.stopPropagation(); p.onClose(t.id); }}><CloseIcon size={12} /></button>
                             </div>
@@ -307,6 +311,7 @@ export function BrowserIsland(p: IslandProps) {
                             <span className={"agx-isl-who" + (who ? " is-agent" : "")} aria-hidden />
                             <span className="agx-isl-name">{t.title || host(t.url)}</span>
                           </div>
+                          {driven && st ? <div className="agx-isl-tag is-agent">{`Agent · ${st.word}`}</div> : mine ? <div className="agx-isl-tag is-you">You are here</div> : null}
                         </div>
                       );
                     })}

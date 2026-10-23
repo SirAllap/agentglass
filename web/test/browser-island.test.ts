@@ -214,3 +214,32 @@ describe("the dock keeps one footprint", () => {
     expect(body).toContain(".agx-sw-lay.is-out { opacity: 0; }");
   });
 });
+
+describe("dock blots", () => {
+  // Grey translucent blocks and circles sat over "Clicking" and "Take over": a
+  // backdrop-filter dock whose children animate forever (the click ring, the swap
+  // layers) is a stale-compositor-tile risk, and a pointer label drawn above the
+  // dock washes the button. The dock is opaque enough without the blur, and it
+  // stacks above the pointer by number, not by DOM order.
+  test("the dock has no backdrop-filter and stacks above the ghost pointer", async () => {
+    const css = await Bun.file(new URL("../src/index.css", import.meta.url)).text();
+    const dock = css.slice(css.indexOf(".agx-presence-dock {"), css.indexOf("@keyframes agx-dock-in"));
+    expect(dock).not.toContain("backdrop-filter");
+    const z = (sel: string) => Number(new RegExp(`${sel.replace(/\./g, "\\.")} \\{[^}]*z-index: (\\d+)`).exec(css)?.[1]);
+    expect(z(".agx-presence-dock")).toBeGreaterThan(z(".agx-presence-ghost"));
+  });
+});
+
+describe("mission control: which tab the agent is in", () => {
+  // The agent's tab was a faint violet ring in a row of identical pictures. It now
+  // carries a thick ring, its state on the picture and in words, and the rest of
+  // a live box steps back; the person's own tab is a different colour.
+  test("the agent's tab is marked, named and set apart from the person's", async () => {
+    const css = await Bun.file(new URL("../src/index.css", import.meta.url)).text();
+    expect(island).toContain('(driven ? " is-driven" : "")');
+    expect(island).toContain("`Agent · ${st.word}`");
+    expect(island).toContain('(work && !driven ? " is-dim" : "")');
+    expect(css).toMatch(/\.agx-isl-card\.is-driven \.agx-isl-thumb \{[^}]*0 0 0 3px var\(--ink-agent\)/);
+    expect(css).toMatch(/\.agx-isl-card\.is-on:not\(\.is-driven\) \.agx-isl-thumb \{[^}]*var\(--ink-you\)/);
+  });
+});

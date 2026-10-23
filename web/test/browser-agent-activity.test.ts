@@ -386,3 +386,23 @@ describe("where the drawn pointer goes", () => {
     expect(pageOf("https://docs.example.test/guide#install")).not.toBe(pageOf("https://docs.example.test/api#install"));
   });
 });
+
+describe("the pointer's label stays on the page", () => {
+  // A control inside a hover-only toolbar sits at the page's right edge, and its
+  // label ("Clicking Edit message …") ran off the window and was cut.
+  test("labelFit flips left of the arrow and above it at an edge, and leaves the middle alone", async () => {
+    const { labelFit } = await import("../src/lib/browserAgentActivity.ts");
+    expect(labelFit(100, 100, 120, 20, 900, 600)).toEqual({ left: 18, top: 20 });
+    expect(labelFit(850, 100, 120, 20, 900, 600).left).toBe(900 - 4 - 120 - 850);
+    expect(labelFit(850, 100, 120, 20, 900, 600).left + 850 + 120).toBeLessThanOrEqual(896);
+    expect(labelFit(100, 590, 120, 20, 900, 600).top).toBe(-26);
+    expect(labelFit(10, 100, 2000, 20, 900, 600).left).toBe(-6);
+  });
+  // The pointer went where the element was BEFORE the act; a control that only
+  // exists while its row is hovered has no place until then.
+  test("the pointer re-lands where the element is after the act", async () => {
+    const src = await Bun.file(new URL("../src/lib/browserDrive.ts", import.meta.url)).text();
+    const fn = src.slice(src.indexOf("function flashWhereActed("), src.indexOf("function flashWhereActed(") + 700);
+    expect(fn).toContain("land(ask, r)");
+  });
+});

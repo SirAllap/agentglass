@@ -17,7 +17,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { AgentStateKey, Steady, TabAgent } from "../../lib/browserAgentActivity.ts";
-import { PRESENCE_LINGER_MS, STATE_HOLD_MS, glassHeld, pageOf, STEADY_INIT, agentState, isActVerb, stateOf, steadyStep, lapKeyframes, lookAt, pointerAt, presenceLabel, travelMs } from "../../lib/browserAgentActivity.ts";
+import { PRESENCE_LINGER_MS, STATE_HOLD_MS, glassHeld, pageOf, STEADY_INIT, agentState, isActVerb, stateOf, steadyStep, lapKeyframes, lookAt, pointerAt, presenceLabel, travelMs, labelFit } from "../../lib/browserAgentActivity.ts";
 import type { ActLanding } from "../../lib/browserDrive.ts";
 import { LivingMark } from "../Logo.tsx";
 
@@ -161,6 +161,15 @@ export function AgentPresence({ agent, landing, url = "", onToggle, quiet = fals
     setGhost((g) => ({ x, y, travel, label: presenceLabel(landing.verb, landing.name, landing.key), seq: (g?.seq ?? 0) + 1 }));
   }, [landing]);
 
+  /* The label stays inside the page: beside the arrow, or on its other side near an edge. */
+  const label = useRef<HTMLSpanElement | null>(null);
+  useLayoutEffect(() => {
+    const l = label.current, r = root.current;
+    if (!l || !r || !ghost) return;
+    const { left, top } = labelFit(ghost.x, ghost.y, l.offsetWidth, l.offsetHeight, r.clientWidth, r.clientHeight);
+    l.style.left = `${left}px`; l.style.top = `${top}px`;
+  }, [ghost]);
+
   /* The alien on Take over looks at where the agent's pointer lands: pupils <=1.5px,
      head <=6deg, from the same ghost state the arrow is drawn from. It looks at the
      landing, not along the glide (the glide is <=240ms and the eyes ease 200ms).
@@ -194,7 +203,7 @@ export function AgentPresence({ agent, landing, url = "", onToggle, quiet = fals
             <path d="M3 2 16.5 9.6l-6.1 1.3-2.9 6.1z" fill="var(--agx-mark)" stroke="#fff" strokeWidth="1.5" strokeLinejoin="round" />
             <circle cx="7.6" cy="16.4" r="2.4" fill="var(--agx-contact)" stroke="#fff" strokeWidth="1.2" />
           </svg>
-          <span className="agx-presence-label">{ghost.label}</span>
+          <span ref={label} className="agx-presence-label">{ghost.label}</span>
         </div>
       )}
       {(live || agent.paused) && !quiet && (

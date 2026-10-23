@@ -202,6 +202,19 @@ export function pointerAt(l: { x: number; y: number; w: number; h: number; vw: n
 }
 
 /**
+ * Where the pointer's label sits so it never leaves the page: to the right of and below the
+ * arrow by default, flipped to its left or above it when that would run past an edge.
+ * `x`,`y` are the arrow's place, `w`,`h` the label's size, `pw`,`ph` the panel's. A label wider
+ * than the panel stays at its left edge and is cut by the panel, the one case nothing can fit.
+ */
+export function labelFit(x: number, y: number, w: number, h: number, pw: number, ph: number): { left: number; top: number } {
+  let left = 18, top = 20;
+  if (pw > 0 && x + left + w > pw - 4) left = Math.max(-x + 4, pw - 4 - w - x);
+  if (ph > 0 && y + top + h > ph - 4) top = -h - 6;
+  return { left, top };
+}
+
+/**
  * A tab's state for the overview, where there is no clock per tab: an ask in
  * flight is its act's word, a last act inside the presence's linger is
  * Thinking, a tab that has gone quiet is Waiting (silence proves nothing), and

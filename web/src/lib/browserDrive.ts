@@ -2215,10 +2215,24 @@ export function onActLanded(fn: (l: ActLanding) => void): () => void {
   return () => { if (landed === fn) landed = null; };
 }
 
+/* The pointer's landing from what the page answered: shared by the aim before an act and
+   the measure after it. */
+function land(ask: BrowserAskFrame, r: unknown): void {
+  const h = r as { kind?: string; x?: number; y?: number; w?: number; h?: number; vw?: number; name?: string } | null;
+  const tab = typeof ask.args.atTab === "string" ? ask.args.atTab : "";
+  if (!tab || !landed || h?.kind !== "ok" || typeof h.x !== "number") return;
+  landed({ tab, verb: ask.op, key: typeof ask.args.key === "string" ? ask.args.key : "",
+    x: h.x, y: h.y ?? 0, w: h.w ?? 0, h: h.h ?? 0, vw: h.vw ?? 0, name: h.name ?? "" });
+}
+
+/* The outline is drawn after the act, and the pointer moves to where the element is NOW:
+   a control that only exists while its row is hovered (a message's toolbar) had no place
+   before the act, and the aim put the pointer wherever it was last drawn. An element the
+   act removed answers none, and the aim's landing stays. */
 function flashWhereActed(el: DrivableWebview, ask: BrowserAskFrame): void {
   const plan = flashPlan(ask);
   if (!plan) return;
-  try { void Promise.resolve(el.executeJavaScript(flashScript(plan))).catch(() => { /* the page moved on */ }); } catch { /* not attached */ }
+  try { void Promise.resolve(el.executeJavaScript(flashScript(plan))).then((r) => land(ask, r)).catch(() => { /* the page moved on */ }); } catch { /* not attached */ }
 }
 
 /**
@@ -2295,14 +2309,8 @@ function guardFrames(el: DrivableWebview): void {
 function aimAt(el: DrivableWebview, ask: BrowserAskFrame): void {
   const plan = landed && flashPlan(ask, true);
   if (!plan) return;
-  const tab = typeof ask.args.atTab === "string" ? ask.args.atTab : "";
   try {
-    void Promise.resolve(el.executeJavaScript(flashScript(plan, FLASH_MS, false))).then((r) => {
-      const h = r as { kind?: string; x?: number; y?: number; w?: number; h?: number; vw?: number; name?: string } | null;
-      if (!tab || !landed || h?.kind !== "ok" || typeof h.x !== "number") return;
-      landed({ tab, verb: ask.op, key: typeof ask.args.key === "string" ? ask.args.key : "",
-        x: h.x, y: h.y ?? 0, w: h.w ?? 0, h: h.h ?? 0, vw: h.vw ?? 0, name: h.name ?? "" });
-    }).catch(() => { /* the page moved on */ });
+    void Promise.resolve(el.executeJavaScript(flashScript(plan, FLASH_MS, false))).then((r) => land(ask, r)).catch(() => { /* the page moved on */ });
   } catch { /* not attached */ }
 }
 
