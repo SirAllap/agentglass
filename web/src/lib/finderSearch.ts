@@ -28,8 +28,11 @@ export function whereText(path: string, home: string): string {
 }
 
 /** What the empty and the unanswered states say. */
+/** Strata's footer warning: shown while the index is still being built, since what is listed may be missing entries. */
+export const partialResults = (status: "idle" | "building" | "ready", found: number): boolean => status === "building" && found > 0;
+
 export function emptyText(q: string, status: "idle" | "building" | "ready", found: number): string {
-  if (!q.trim()) return "Type to search Home";
+  if (!q.trim()) return "Type to search Home and mounted local drives";
   if (found > 0) return "";
-  return status === "building" ? "Still indexing Home. Results appear as it goes." : "Nothing matches";
+  return status === "building" ? "Still indexing Home. Results appear as it goes." : "No matching files or folders";
 }

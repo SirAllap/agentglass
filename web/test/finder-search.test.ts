@@ -4,7 +4,7 @@
  * Strata has it. The index behind it is tested on the server (homeindex.test.ts).
  */
 import { describe, expect, test } from "bun:test";
-import { emptyText, hitTarget, stepHot, whereText } from "../src/lib/finderSearch.ts";
+import { emptyText, partialResults, hitTarget, stepHot, whereText } from "../src/lib/finderSearch.ts";
 
 const src = (p: string) => Bun.file(new URL(`../src/${p}`, import.meta.url)).text();
 
@@ -33,9 +33,9 @@ describe("the list", () => {
     expect(whereText("/mnt/disk/x.txt", "/home/ann")).toBe("/mnt/disk");
   });
   test("empty states", () => {
-    expect(emptyText("", "idle", 0)).toBe("Type to search Home");
+    expect(emptyText("", "idle", 0)).toBe("Type to search Home and mounted local drives");
     expect(emptyText("pl", "ready", 3)).toBe("");
-    expect(emptyText("pl", "ready", 0)).toBe("Nothing matches");
+    expect(emptyText("pl", "ready", 0)).toBe("No matching files or folders");
     expect(emptyText("pl", "building", 0)).toContain("indexing");
   });
 });
@@ -59,5 +59,13 @@ describe("wired where Strata has it", () => {
   });
   test("the shortcut sheet lists it", async () => {
     expect(await src("lib/finderShortcuts.ts")).toContain('keys: "Ctrl+K"');
+  });
+});
+
+describe("Partial results", () => {
+  test("only while the index is building and there is something listed", () => {
+    expect(partialResults("building", 3)).toBe(true);
+    expect(partialResults("building", 0)).toBe(false);
+    expect(partialResults("ready", 3)).toBe(false);
   });
 });

@@ -39,3 +39,7 @@ export function filterShortcuts(sections: readonly Section[], query: string): Se
     .map((s) => ({ title: s.title, rows: s.rows.filter((r) => r.keys.toLowerCase().includes(q) || r.does.toLowerCase().includes(q)) }))
     .filter((s) => s.rows.length > 0);
 }
+
+/** How a key is drawn on the sheet, as Strata draws it: arrows for the arrow keys, " / " between alternatives. The data keeps the plain names so the search still finds "Up". */
+export const keyLabel = (keys: string): string =>
+  keys.replace(/\bUp\b/g, "↑").replace(/\bDown\b/g, "↓").replace(/\bLeft\b/g, "←").replace(/\bRight\b/g, "→").replace(/, /g, " / ");

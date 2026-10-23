@@ -5,12 +5,12 @@
 // the finder behind it does not move while somebody types.
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../../lib/api.ts";
-import { hitTarget, emptyText, stepHot, whereText, type HitTarget, type SearchHit } from "../../../lib/finderSearch.ts";
+import { hitTarget, emptyText, partialResults, stepHot, whereText, type HitTarget, type SearchHit } from "../../../lib/finderSearch.ts";
 import { ICON } from "../../../lib/iconSize.ts";
-import { FolderIcon, FileIcon, SearchIcon } from "../../../lib/glyphIcons.tsx";
+import { SearchIcon } from "../../../lib/glyphIcons.tsx";
 import { EDGE, LINE } from "../../workspace/Chrome.tsx";
 import { MenuCap, MenuItem, Popover } from "./Popover.tsx";
-import { StrataIcon } from "./StrataIcon.tsx";
+import { FileTypeIcon, StrataIcon } from "./StrataIcon.tsx";
 
 interface Row extends SearchHit { text?: string; line?: number }
 
@@ -45,11 +45,11 @@ export function FinderSearch({ home, onTarget, onClose }: { home: string; onTarg
 
   return (
     <div role="dialog" aria-label="Search" className="absolute inset-0 flex justify-center items-start p-4" style={{ zIndex: 9, background: "color-mix(in srgb, var(--bg) 55%, transparent)", backdropFilter: "blur(3px)" }} onMouseDown={onClose}>
-      <div className="flex flex-col rounded-xl overflow-hidden w-full min-h-0" style={{ maxWidth: 640, maxHeight: "min(70%, 560px)", marginTop: "8%", background: "var(--surface-card)", border: EDGE, boxShadow: "0 24px 60px -20px #000" }} onMouseDown={(e) => e.stopPropagation()}>
-        <div className="flex items-center gap-2.5 px-3.5 shrink-0" style={{ minHeight: 44, borderBottom: LINE }}>
-          <span className="flex" style={{ color: "var(--text3)" }}><SearchIcon size={ICON.sm} /></span>
+      <div className="flex flex-col rounded-xl overflow-hidden w-full min-h-0" style={{ maxWidth: 760, maxHeight: "min(70%, 560px)", marginTop: "12%", background: "var(--surface-card)", border: EDGE, boxShadow: "0 24px 60px -20px #000" }} onMouseDown={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-2.5 px-3.5 shrink-0" style={{ minHeight: 58, borderBottom: LINE }}>
+          <span className="flex" style={{ color: "var(--primary-ink)" }}><SearchIcon size={ICON.sm} /></span>
           <input ref={input} value={q} onChange={(e) => setQ(e.target.value)} spellCheck={false} autoComplete="off" aria-label="Search files and folders"
-            placeholder={contents ? "Search inside files…" : "Search files and folders…"} className="flex-1 min-w-0 bg-transparent outline-none text-[13px]" style={{ color: "var(--text)" }}
+            placeholder={contents ? "Search inside files..." : "Search files and folders..."} className="flex-1 min-w-0 bg-transparent outline-none text-[14px]" style={{ color: "var(--text)" }}
             onKeyDown={(e) => {
               e.stopPropagation();
               if (e.key === "Escape") { e.preventDefault(); onClose(); }
@@ -64,17 +64,19 @@ export function FinderSearch({ home, onTarget, onClose }: { home: string; onTarg
         <div ref={list} role="listbox" aria-label="Results" className="agx-scroll flex-1 min-h-0 overflow-y-auto" style={{ minHeight: 200 }}>
           {note ? <div className="h-full grid place-items-center text-[12px] p-6 text-center" style={{ color: "var(--text3)", minHeight: 200 }}>{note}</div> : rows.map((r, i) => (
             <div key={`${r.path}:${r.line ?? ""}`} role="option" aria-selected={i === hot} onMouseMove={() => setHot(i)} onClick={() => choose(i, false)}
-              className="flex items-center gap-2.5 px-3.5 cursor-pointer" style={{ minHeight: 34, background: i === hot ? "color-mix(in srgb, var(--primary) 14%, transparent)" : undefined }}>
-              <span className="shrink-0 flex" style={{ color: "var(--text3)" }}>{r.dir ? <FolderIcon size={ICON.sm} /> : <FileIcon size={ICON.sm} />}</span>
+              className="flex items-center gap-3 px-3.5 cursor-pointer" style={{ minHeight: 56, borderBottom: LINE, background: i === hot ? "color-mix(in srgb, var(--primary) 38%, var(--surface-card))" : undefined }}>
+              <FileTypeIcon name={r.path.slice(r.path.lastIndexOf("/") + 1)} isDir={r.dir} size={30} />
               <span className="min-w-0 flex-1 flex flex-col py-1">
-                <span className="truncate text-[12.5px]" style={{ fontWeight: 500 }}>{r.path.slice(r.path.lastIndexOf("/") + 1)}{r.line ? <span style={{ color: "var(--text4)", fontWeight: 400 }}> : {r.line}</span> : null}</span>
-                <span className="truncate text-[10.5px]" style={{ color: "var(--text3)" }}>{r.text ?? whereText(r.path, home)}</span>
+                <span className="truncate text-[12.5px]" style={{ fontWeight: 700 }}>{r.path.slice(r.path.lastIndexOf("/") + 1)}{r.line ? <span style={{ color: "var(--text4)", fontWeight: 400 }}> : {r.line}</span> : null}</span>
+                <span className="truncate text-[10.5px]" style={{ color: "var(--text3)" }}>{r.text ?? (r.path.slice(0, r.path.lastIndexOf("/")) || "/")}</span>
               </span>
             </div>
           ))}
         </div>
         <div className="flex items-center gap-4 px-3.5 shrink-0 text-[10.5px]" style={{ minHeight: 30, borderTop: LINE, color: "var(--text3)" }}>
-          <span><kbd>↑</kbd> <kbd>↓</kbd> navigate</span><span><kbd>↵</kbd> open</span><span><kbd>Alt</kbd>+<kbd>↵</kbd> open containing folder</span>
+          <span>↑ / ↓ navigate</span><span>↵ open</span><span className="flex items-center gap-1.5"><StrataIcon set="act" name="folder-open" size={ICON.xs} />Alt+Enter open containing folder</span>
+          <span className="flex-1" />
+          {partialResults(status, rows.length) && <span className="flex items-center gap-1.5" style={{ color: "var(--warning-ink)" }}><StrataIcon set="act" name="triangle-alert" size={ICON.xs} />Partial results</span>}
         </div>
       </div>
       {menu && (

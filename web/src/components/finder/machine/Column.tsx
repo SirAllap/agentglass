@@ -9,9 +9,9 @@ import { useEffect, useRef, useState } from "react";
 import { CaretIcon } from "../../../lib/glyphIcons.tsx";
 import { FileTypeIcon, StrataIcon } from "./StrataIcon.tsx";
 import { HIT, ICON } from "../../../lib/iconSize.ts";
-import { formatSize, isFolder, itemsLabel, type Display, type Prefs, type Row, type SortKey } from "../../../lib/finderMiller.ts";
+import { formatSize, isDefaultSort, isFolder, itemsLabel, makeDefaultSort, resetSort, type Display, type Prefs, type Row, type SortKey } from "../../../lib/finderMiller.ts";
 import type { FolderState } from "../../../lib/finderFolders.ts";
-import { INPUT, INPUT_STYLE, LINE } from "../../workspace/Chrome.tsx";
+import { EDGE, INPUT, INPUT_STYLE, LINE } from "../../workspace/Chrome.tsx";
 import { MenuCap, MenuItem, MenuRule, Popover } from "./Popover.tsx";
 import { VirtualList } from "./VirtualList.tsx";
 import { TIGHT_W, dragWidth } from "../../../lib/finderColumns.ts";
@@ -109,9 +109,15 @@ export function Column({ title, filterSignal, width, onResize, onFit, state, dis
       )}
 
       {state?.error ? (
-        <div className="p-3 text-[12px]" role="alert" style={{ color: "var(--warning-ink)" }}>{state.error}</div>
+        <div className="flex-1 min-h-0 grid place-items-center p-6 text-center text-[12px]" role="alert">
+          <div className="flex flex-col items-center gap-2">
+            <b style={{ fontWeight: 600 }}>Unable to read this directory</b>
+            <span style={{ color: "var(--text3)" }}>{state.error}</span>
+            <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE }} onClick={onRefresh}>Retry</button>
+          </div>
+        </div>
       ) : display.items.length === 0 ? (
-        <div className="p-3 text-[12px]" style={{ color: "var(--text3)" }}>
+        <div className="flex-1 min-h-0 grid place-items-center p-6 text-center text-[12px]" style={{ color: "var(--text3)" }}>
           {loading ? "Reading…" : filter ? `Nothing here is called “${filter}”.` : state && state.hiddenSkipped ? `This directory is empty. ${state.hiddenSkipped} hidden ${state.hiddenSkipped === 1 ? "item" : "items"} left out.` : "This directory is empty"}
         </div>
       ) : (
@@ -149,15 +155,18 @@ export function Column({ title, filterSignal, width, onResize, onFit, state, dis
       )}
 
       {menu && (
-        <Popover anchor={menu} onClose={() => setMenu(null)} width={200} label="Sort">
+        <Popover anchor={menu} onClose={() => setMenu(null)} width={240} label="Sort">
           <MenuCap>Sort by</MenuCap>
           {(["name", "size", "modified", "type"] as const).map((k) => (
-            <MenuItem key={k} on={prefs.sortKey === k} hint={prefs.sortKey === k ? (prefs.sortDir === "asc" ? "↑" : "↓") : undefined} onClick={() => { onSort(k); setMenu(null); }}>
+            <MenuItem key={k} on={prefs.sortKey === k} onClick={() => { onSort(k); setMenu(null); }}>
               {k === "name" ? "Name" : k === "size" ? "Size" : k === "modified" ? "Modified" : "Type"}
             </MenuItem>
           ))}
           <MenuRule />
           <MenuItem on={prefs.foldersFirst} onClick={() => onPref({ foldersFirst: !prefs.foldersFirst })}>Folders first</MenuItem>
+          <MenuRule />
+          <MenuItem disabled={isDefaultSort(prefs) && !!prefs.defSort} onClick={() => { onPref(makeDefaultSort(prefs)); setMenu(null); }}>Make this the default sort</MenuItem>
+          <MenuItem disabled={isDefaultSort(prefs)} onClick={() => { onPref(resetSort(prefs)); setMenu(null); }}>Reset to default sort</MenuItem>
         </Popover>
       )}
     </section>

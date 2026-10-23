@@ -6,9 +6,9 @@
 import { useEffect, useState } from "react";
 import { api } from "../../../lib/api.ts";
 import { ago } from "../../../lib/fileRecents.ts";
-import { TYPE_GROUPS, canEditRow, formatSize, itemsLabel, isFolder, typeGroup, typeLabel, type Row } from "../../../lib/finderMiller.ts";
+import { TYPE_GROUPS, canEditRow, itemsLabel, isFolder, previewMetaLine, typeGroup, type Row } from "../../../lib/finderMiller.ts";
 import { CopyIcon, CrossIcon, TerminalIcon } from "../../../lib/glyphIcons.tsx";
-import { StrataIcon } from "./StrataIcon.tsx";
+import { FileTypeIcon, StrataIcon } from "./StrataIcon.tsx";
 import { HIT, ICON } from "../../../lib/iconSize.ts";
 import type { FileFacts } from "../../../../../shared/types.ts";
 import { EDGE, LINE } from "../../workspace/Chrome.tsx";
@@ -51,7 +51,8 @@ export function QuickLook({ path, row, rows, root, savedTab, onTab, onEditing, o
     return () => { live = false; };
   }, [path, row?.name, folder, row?.locked]);
 
-  if (!path || !row) {
+  /* Strata gives a folder no preview: its contents are the next column, and the panel says so. */
+  if (!path || !row || isFolder(row)) {
     return (
       <div className="flex-1 min-w-0 min-h-0 flex flex-col" aria-label="Preview">
         <div className="px-4 flex items-center gap-2 shrink-0" style={{ minHeight: 36, borderBottom: LINE }}>
@@ -65,12 +66,13 @@ export function QuickLook({ path, row, rows, root, savedTab, onTab, onEditing, o
       </div>
     );
   }
-  const meta = [folder ? itemsLabel(row.items) : row.bytes !== null ? formatSize(row.bytes) : "", `modified ${ago(row.mtime)}`, facts || folder ? typeLabel(folder ? "dir" : facts!.kind, facts?.mime ?? "", row.name) : ""].filter(Boolean).join(" · ");
+  const meta = previewMetaLine({ folder, bytes: row.bytes, items: row.items, ago: ago(row.mtime), mime: facts?.mime ?? "", name: row.name });
   return (
     <div className="flex-1 min-w-0 min-h-0 flex flex-col" aria-label={`Preview of ${row.name}`}>
       <div className="px-4 pt-3 pb-2.5 shrink-0" style={{ borderBottom: LINE }}>
         <div className="flex items-start gap-2">
-          <h3 className="m-0 flex-1 min-w-0 text-[13px] font-semibold break-all">{row.name}</h3>
+          <span className="shrink-0 mt-0.5"><FileTypeIcon name={row.name} isDir={folder} size={20} /></span>
+          <h3 className="m-0 flex-1 min-w-0 text-[13px] font-semibold break-all" title={path}>{row.name}</h3>
           {!row.locked && !folder && (
             <button className="agx-btn rounded-md grid place-items-center shrink-0" style={{ width: HIT - 4, height: HIT - 4, color: "var(--text3)" }} title="Open in the default application" aria-label="Open in the default application"
               onClick={() => { void api.previewOpen(path); }}><StrataIcon set="act" name="external-link" size={ICON.sm} /></button>
@@ -80,7 +82,7 @@ export function QuickLook({ path, row, rows, root, savedTab, onTab, onEditing, o
           )}
         </div>
         <div className="text-[11px] mt-0.5 break-all" style={{ color: "var(--text3)" }}>
-          <span title={new Date(row.mtime).toLocaleString()}>{meta}</span> · {path}
+          <span title={`${new Date(row.mtime).toLocaleString()} · ${path}`}>{meta}</span>
         </div>
         <div className="flex flex-wrap items-center gap-1.5 mt-2">
           {row.locked ? null : folder ? (

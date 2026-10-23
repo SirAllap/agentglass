@@ -188,6 +188,8 @@ export interface Prefs {
   sortDir: SortDir;
   /** Strata's "Folders first" in the sort menu. */
   foldersFirst: boolean;
+  /** Strata's "Make this the default sort": what "Reset to default sort" goes back to. */
+  defSort?: SortChoice;
   /** Icons view: the side of an image's thumbnail in pixels. */
   thumb: number;
   /** The full sidebar's width in pixels, as dragged. */
@@ -197,6 +199,17 @@ export interface Prefs {
   /** The footer's "F1 Shortcuts" button. The key works either way. */
   f1: boolean;
 }
+
+export interface SortChoice { sortKey: SortKey; sortDir: SortDir; foldersFirst: boolean }
+export const BUILTIN_SORT: SortChoice = { sortKey: "name", sortDir: "asc", foldersFirst: true };
+/** "Make this the default sort": the sort in force is remembered as the one to reset to. */
+export const makeDefaultSort = (p: Pick<Prefs, "sortKey" | "sortDir" | "foldersFirst">): Pick<Prefs, "defSort"> => ({ defSort: { sortKey: p.sortKey, sortDir: p.sortDir, foldersFirst: p.foldersFirst } });
+/** "Reset to default sort": the remembered default, or name ascending with folders first. */
+export const resetSort = (p: Pick<Prefs, "defSort">): SortChoice => p.defSort ?? BUILTIN_SORT;
+/** Is the sort in force the default one? (The menu offers neither action when it is.) */
+export const isDefaultSort = (p: Pick<Prefs, "sortKey" | "sortDir" | "foldersFirst" | "defSort">): boolean => {
+  const d = resetSort(p); return d.sortKey === p.sortKey && d.sortDir === p.sortDir && d.foldersFirst === p.foldersFirst;
+};
 
 export const THUMB_MIN = 32;
 export const THUMB_MAX = 256;
@@ -209,6 +222,14 @@ export const DEFAULT_PREFS: Prefs = {
   view: "columns", preview: true, density: "compact", textSize: 13, hidden: false, group: false, sizes: true, sidebar: true, rail: false,
   sortKey: "name", sortDir: "asc", foldersFirst: true, thumb: THUMB_DEFAULT, sideW: 201, mirror: true, f1: true,
 };
+
+function readSortChoice(v: unknown): SortChoice | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  const key = (["name", "size", "modified", "type"] as const).find((k) => k === o.sortKey);
+  const dir = (["asc", "desc"] as const).find((k) => k === o.sortDir);
+  return key && dir && typeof o.foldersFirst === "boolean" ? { sortKey: key, sortDir: dir, foldersFirst: o.foldersFirst } : null;
+}
 
 /** Stored preferences, field by field: one that is missing or the wrong type falls back alone. */
 export function readPrefs(raw: string | null): Prefs {
@@ -231,6 +252,7 @@ export function readPrefs(raw: string | null): Prefs {
     sortKey: pick(o.sortKey, ["name", "size", "modified", "type"], d.sortKey),
     sortDir: pick(o.sortDir, ["asc", "desc"], d.sortDir),
     foldersFirst: flag(o.foldersFirst, d.foldersFirst),
+    ...(readSortChoice(o.defSort) ? { defSort: readSortChoice(o.defSort)! } : {}),
     thumb: typeof o.thumb === "number" && Number.isFinite(o.thumb) ? Math.min(THUMB_MAX, Math.max(THUMB_MIN, Math.round(o.thumb))) : d.thumb,
     sideW: typeof o.sideW === "number" && Number.isFinite(o.sideW) ? Math.min(360, Math.max(169, Math.round(o.sideW))) : d.sideW,
     mirror: flag(o.mirror, d.mirror),
@@ -394,4 +416,18 @@ export function externalPlace(start: string, want: { dir: string; name: string }
 export function folderTargetMove(current: string, at: string, file: string | null): "stay" | { dir: string; name: string | null } {
   const same = current.replace(/\/+$/, "") === at.replace(/\/+$/, "");
   return same && !file ? "stay" : { dir: at, name: file };
+}
+
+/** Strata's line under the preview's file name: "43 B · Just now · text/markdown". A folder says its item count and has no type. */
+const TEXT_MIME: Record<string, string> = {
+  md: "text/markdown", markdown: "text/markdown", py: "text/x-python", json: "application/json", html: "text/html", htm: "text/html", css: "text/css", js: "text/javascript", mjs: "text/javascript",
+  ts: "text/typescript", tsx: "text/typescript", rs: "text/rust", sh: "text/x-shellscript", yml: "application/yaml", yaml: "application/yaml", toml: "application/toml", txt: "text/plain",
+};
+/** The server calls every text file text/plain; Strata names the kind. A name this table does not know keeps what the server said. */
+export const mimeFor = (name: string, mime: string): string => (mime.startsWith("text/plain") ? TEXT_MIME[name.slice(name.lastIndexOf(".") + 1).toLowerCase()] ?? mime : mime);
+
+export function previewMetaLine(o: { folder: boolean; bytes: number | null; items: number | null; ago: string; mime: string; name?: string }): string {
+  const when = o.ago ? o.ago[0]!.toUpperCase() + o.ago.slice(1) : "";
+  const size = o.folder ? itemsLabel(o.items) : o.bytes !== null ? formatSize(o.bytes) : "";
+  return [size, when, o.folder ? "" : mimeFor(o.name ?? "", o.mime).split(";")[0] ?? ""].filter(Boolean).join(" · ");
 }

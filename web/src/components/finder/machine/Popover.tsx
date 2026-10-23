@@ -10,6 +10,7 @@ import { Portal } from "../../Portal.tsx";
 import { ICON } from "../../../lib/iconSize.ts";
 import { LAYER } from "../../../lib/layers.ts";
 import { DoneIcon } from "../../../lib/glyphIcons.tsx";
+import { StrataIcon } from "./StrataIcon.tsx";
 import { EDGE, LINE } from "../../workspace/Chrome.tsx";
 
 export function Popover({ anchor, onClose, width = 220, children, label }: { anchor: DOMRect; onClose: () => void; width?: number; children: ReactNode; label: string }) {
@@ -18,7 +19,7 @@ export function Popover({ anchor, onClose, width = 220, children, label }: { anc
   useLayoutEffect(() => {
     const h = el.current?.offsetHeight ?? 0;
     const left = Math.max(8, Math.min(anchor.right - width, window.innerWidth - width - 8));
-    const below = anchor.bottom + 4;
+    const below = anchor.bottom + 8;
     const top = below + h > window.innerHeight - 8 ? Math.max(8, anchor.top - 4 - h) : below;
     setAt({ left, top });
   }, [anchor, width]);
@@ -41,13 +42,15 @@ export function Popover({ anchor, onClose, width = 220, children, label }: { anc
 }
 
 export function MenuCap({ children }: { children: ReactNode }) {
-  return <div className="px-3.5 pt-2 pb-1 text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)", fontWeight: 600 }}>{children}</div>;
+  return <div className="px-3.5 pt-2 pb-1 text-[10.5px] uppercase tracking-[0.1em]" style={{ color: "var(--text3)", fontWeight: 600 }}>{children}</div>;
 }
 
-export function MenuItem({ children, onClick, on, hint, disabled }: { children: ReactNode; onClick: () => void; on?: boolean; hint?: string; disabled?: boolean }) {
+/** `icon`: the name of one of Strata's action icons, drawn in the accent before the label, as Strata's menus do. */
+export function MenuItem({ children, onClick, on, hint, disabled, icon }: { children: ReactNode; onClick: () => void; on?: boolean; hint?: string; disabled?: boolean; icon?: string }) {
   return (
     <button role="menuitemcheckbox" aria-checked={on} disabled={disabled} onClick={onClick}
-      className="agx-btn w-full flex items-center gap-2 px-3.5 text-left disabled:opacity-40" style={{ minHeight: 28, color: "var(--text)" }}>
+      className="agx-btn w-full flex items-center gap-2 px-3.5 text-left disabled:opacity-40" style={{ minHeight: 34, color: "var(--text)" }}>
+      {icon && <span style={{ color: "var(--primary-ink)" }}><StrataIcon set="act" name={icon} size={ICON.sm} /></span>}
       <span className="flex-1 min-w-0 truncate">{children}</span>
       {hint && <span className="text-[10.5px]" style={{ color: "var(--text4)" }}>{hint}</span>}
       <span aria-hidden className="w-3 flex justify-center" style={{ color: "var(--primary-ink)" }}>{on ? <DoneIcon size={ICON.xs} /> : null}</span>
