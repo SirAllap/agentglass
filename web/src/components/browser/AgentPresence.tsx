@@ -22,6 +22,9 @@ import type { ActLanding } from "../../lib/browserDrive.ts";
 import { LivingMark } from "../Logo.tsx";
 
 const LAP_MS = 18_000;
+/** How long the glass waits for the next ask: longer than an agent thinks between two clicks. */
+export const GLASS_QUIET_MS = 10_000;
+
 /** Verbs that move the page without being acts in the log's sense, and so raise the glass too. */
 const MOVES = new Set(["open", "scroll", "hover"]);
 const calmNow = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -75,10 +78,18 @@ export function AgentPresence({ agent, landing, url = "", onToggle, quiet = fals
     if (!live) setActing(false);
     else if (agent.working > 0 && (isActVerb(agent.op ?? "") || MOVES.has(agent.op ?? ""))) setActing(true);
   }, [live, agent.working, agent.op]);
-  /* Up while the agent is mid-ask and for the dock's hold after, never for the
-     rest of the 30 s linger: a tab nobody is acting on is the person's, and a
-     pane over a webview eats its wheel and its clicks. */
-  const glassUp = live && acting && (agent.working > 0 || held);
+  /* Up while the agent works: through its thinking between acts too (a person's
+     click in that gap lands in the middle of its task), down when it says done,
+     on Take over, or after GLASS_QUIET_MS without an ask. Never the whole 30 s
+     linger: a tab nobody is acting on is the person's, and a pane over a
+     webview eats its wheel and its clicks. */
+  const [stilled, setStilled] = useState(false);
+  useEffect(() => {
+    if (agent.working > 0) { setStilled(false); return; }
+    const t = setTimeout(() => setStilled(true), GLASS_QUIET_MS);
+    return () => clearTimeout(t);
+  }, [agent.working]);
+  const glassUp = live && acting && !agent.done && !agent.paused && (agent.working > 0 || !stilled);
   const liveRef = useRef(live);
   liveRef.current = live;
   const [ghost, setGhost] = useState<{ x: number; y: number; label: string; travel: number; seq: number } | null>(null);

@@ -26,7 +26,9 @@ describe("the glass over a driven page", () => {
   test("is up while the agent is mid-ask, not for the linger, and takes the pointer", async () => {
     expect(presence).toContain('{glassUp && <div ref={glass} className="agx-presence-glass"');
     // The glass sat over a tab nobody was acting on for the whole 30 s linger, and ate the wheel.
-    expect(presence).toContain("const glassUp = live && acting && (agent.working > 0 || held);");
+    expect(presence).toContain("const glassUp = live && acting && !agent.done && !agent.paused && (agent.working > 0 || !stilled);");
+    expect(presence).toContain("setTimeout(() => setStilled(true), GLASS_QUIET_MS)");
+    expect(presence).toMatch(/export const GLASS_QUIET_MS = 10_000;/);
     // An agent that only read the person's tab locked it for thirty seconds.
     expect(presence).toContain('else if (agent.working > 0 && (isActVerb(agent.op ?? "") || MOVES.has(agent.op ?? ""))) setActing(true);');
     expect(await css.text()).toMatch(/\.agx-presence-glass \{[^}]*pointer-events: auto/);
