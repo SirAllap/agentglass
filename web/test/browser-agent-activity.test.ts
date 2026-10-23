@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { FLASH_MS, flashScript } from "../src/lib/browserDrive.ts";
 import { describe, expect, test } from "bun:test";
 import {
-  LOG_MAX, activityReducer, actionOf, agentLabel, agentState, pointerAt, ago, flashPlan, isActVerb, lapKeyframes, pausedRefusal, presenceLabel, travelMs, type Activity,
+  LOG_MAX, activityReducer, actionOf, agentLabel, agentState, boxState, pointerAt, tabState, ago, flashPlan, isActVerb, lapKeyframes, pausedRefusal, presenceLabel, travelMs, type Activity,
 } from "../src/lib/browserAgentActivity.ts";
 
 const begin = (s: Activity, tab = "t1", agent = "orbit-ci") => activityReducer(s, { type: "begin", tab, agent });
@@ -219,5 +219,23 @@ describe("where the pointer lands", () => {
   });
   test("an unzoomed guest is taken as it is", () => {
     expect(pointerAt({ x: 10, y: 20, w: 40, h: 10, vw: 800 }, 800)).toEqual({ x: 27, y: 23 });
+  });
+});
+
+describe("the overview's states", () => {
+  const a = (working: number, at = 0, paused = false) => ({ agent: "orbit-ci", working, paused, log: at ? [{ verb: "click", target: "", ok: true, at }] : [], op: "click" });
+  // "idle" told nobody the agent had finished.
+  test("an act in flight, then Thinking, then Done", () => {
+    const now = 1_000_000;
+    expect(tabState(a(1), undefined, now)?.word).toBe("Clicking");
+    expect(tabState(a(0, now - 1000), undefined, now)?.word).toBe("Thinking");
+    expect(tabState(a(0, now - 60_000), undefined, now)?.word).toBe("Done");
+    expect(tabState(undefined, "orbit-ci", now)?.word).toBe("Done");
+    expect(tabState(undefined, undefined, now)).toBeNull();
+  });
+  test("the busiest tab speaks for its box", () => {
+    const now = 1_000_000;
+    expect(boxState([tabState(a(0, 1), undefined, now), tabState(a(1), undefined, now), null])?.word).toBe("Clicking");
+    expect(boxState([tabState(a(1), undefined, now), tabState(a(1, 0, true), undefined, now)])?.word).toBe("You have it");
   });
 });

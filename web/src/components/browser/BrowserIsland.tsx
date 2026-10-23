@@ -26,8 +26,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { BrowserTab } from "../../lib/browserTabs.ts";
 import type { Activity } from "../../lib/browserAgentActivity.ts";
+import { boxState, tabState } from "../../lib/browserAgentActivity.ts";
 import { LivingMark } from "../Logo.tsx";
-import { useAgentLive } from "./AgentPresence.tsx";
+import { StateIcon, useAgentLive } from "./AgentPresence.tsx";
 import { CloseIcon } from "./icons.tsx";
 
 /** How long "You have this tab" stays where the person is looking before the island tucks away. */
@@ -91,15 +92,18 @@ export function BrowserIsland(p: IslandProps) {
 
   /* One box per container, in the order the tabs are in; who holds each tab is
      the live ask if there is one, else the name the tab kept across a restart. */
+  /* The overview's states age (Thinking turns Done), and nothing else re-renders it while it is open. */
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => { if (!open) return; setNow(Date.now()); const t = setInterval(() => setNow(Date.now()), 5000); return () => clearInterval(t); }, [open]);
   const groups = useMemo(() => {
     const by = new Map<string, BrowserTab[]>();
     for (const t of tabs) { const k = t.profile || ""; if (!by.has(k)) by.set(k, []); by.get(k)!.push(t); }
     return [...by.entries()].map(([profile, list]) => {
       const held = list.filter((t) => acts[t.id]?.agent || t.agent);
-      const state = list.some((t) => acts[t.id]?.paused) ? "yours" : list.some((t) => (acts[t.id]?.working ?? 0) > 0) ? "working" : held.length ? "idle" : "";
-      return { profile, name: p.spaceName(profile), list, held: held.length, state };
+      const states = Object.fromEntries(list.map((t) => [t.id, tabState(acts[t.id], t.agent, now)]));
+      return { profile, name: p.spaceName(profile), list, held: held.length, states, state: boxState(Object.values(states)) };
     });
-  }, [tabs, acts, p.spaceName]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tabs, acts, p.spaceName, now]); // eslint-disable-line react-hooks/exhaustive-deps
   const agents = useMemo(() => [...new Set(tabs.map((t) => acts[t.id]?.agent || t.agent).filter(Boolean) as string[])], [tabs, acts]);
   const heldTabs = tabs.filter((t) => acts[t.id]?.agent || t.agent).length;
   const heldBoxes = groups.filter((g) => g.held).length;
@@ -221,26 +225,32 @@ export function BrowserIsland(p: IslandProps) {
             </div>
             <div className="agx-isl-boxes">
               {groups.map((g) => (
-                <section key={g.profile} className={"agx-isl-box" + (g.held ? " is-agent" : "")} style={{ "--n": g.list.length + 1 } as React.CSSProperties}>
+                <section key={g.profile} className={"agx-isl-box" + (g.held ? " is-agent" : "") + (g.state && g.state.key !== "done" ? " is-live" : "")} style={{ "--n": g.list.length + 1 } as React.CSSProperties}>
                   <header>
                     <span className="agx-isl-bn">{g.name}</span>
                     <span className="agx-isl-bc">{g.list.length} {g.list.length === 1 ? "tab" : "tabs"}{g.held ? ` · agent on ${g.held}` : ""}</span>
-                    {g.state && <span className={"agx-isl-state is-" + g.state}><span className="agx-isl-dot" />{g.state === "yours" ? "you have it" : g.state}</span>}
+                    {g.state && <span key={g.state.key} className={"agx-isl-state is-" + g.state.key}><StateIcon k={g.state.key} />{g.state.word}</span>}
                   </header>
                   <div className="agx-isl-row">
                     {g.list.map((t) => {
                       const who = acts[t.id]?.agent || t.agent;
+                      const st = g.states[t.id];
                       return (
                         <div key={t.id} data-tab={t.id} role="button" tabIndex={0}
                           className={"agx-isl-card" + (t.id === activeId ? " is-on" : "")}
                           onClick={() => hide(t.id)} onKeyDown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); hide(t.id); } }}>
-                          <div className={"agx-isl-thumb" + ((acts[t.id]?.working ?? 0) > 0 && !acts[t.id]!.paused ? " is-driven" : "")}>
+                          {/* The halo and the satellite ride outside the picture, which clips. */}
+                          <div className={"agx-isl-shot" + (st ? " is-" + (st.key === "done" || st.key === "thinking" || st.key === "yours" ? st.key : "active") : "")}>
+                          {st && st.key !== "done" && <><span className="agx-isl-halo" aria-hidden /><span className="agx-isl-sat" aria-hidden /></>}
+                          {st?.key === "done" && <span className="agx-isl-done" aria-hidden><StateIcon k="done" /></span>}
+                          <div className="agx-isl-thumb">
                             {pics[t.id] ? <img src={pics[t.id]} alt="" /> : <span className="agx-isl-mono">{(t.title || host(t.url) || "?").slice(0, 1).toUpperCase()}{t.asleep && <small>Asleep</small>}</span>}
                             <button type="button" className="agx-isl-x" aria-label={`Close ${t.title || "tab"}`} onClick={(e) => { e.stopPropagation(); p.onClose(t.id); }}><CloseIcon size={12} /></button>
                           </div>
+                          </div>
                           <div className="agx-isl-cap">
                             <span className="agx-isl-name">{t.title || host(t.url)}</span>
-                            <span className={"agx-isl-who" + (who ? " is-agent" : "")}>{who ?? "You"}</span>
+                            <span className={"agx-isl-who" + (who ? " is-agent" : "")} title={st ? st.word : undefined}>{who ?? "You"}</span>
                           </div>
                         </div>
                       );

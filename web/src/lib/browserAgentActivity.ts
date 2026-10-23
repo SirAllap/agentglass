@@ -139,7 +139,7 @@ export function presenceLabel(verb: string, name: string, key = ""): string {
   return n ? `${doing} ${clip(n, 32)}` : doing;
 }
 
-export type AgentStateKey = "clicking" | "typing" | "navigating" | "scrolling" | "pointing" | "reading" | "thinking" | "yours";
+export type AgentStateKey = "clicking" | "typing" | "navigating" | "scrolling" | "pointing" | "reading" | "thinking" | "yours" | "done";
 
 const STATE_OF: Record<string, AgentStateKey> = {
   click: "clicking", dblclick: "clicking", rightclick: "clicking", check: "clicking", drag: "clicking", upload: "clicking",
@@ -149,7 +149,7 @@ const STATE_OF: Record<string, AgentStateKey> = {
 };
 const STATE_WORD: Record<AgentStateKey, string> = {
   clicking: "Clicking", typing: "Typing", navigating: "Navigating", scrolling: "Scrolling",
-  pointing: "Pointing", reading: "Reading", thinking: "Thinking", yours: "You have it",
+  pointing: "Pointing", reading: "Reading", thinking: "Thinking", yours: "You have it", done: "Done",
 };
 
 /** One word for what the agent is doing now: a state, not an account of it. Anything that is not an act is a read. */
@@ -169,6 +169,25 @@ export function agentState(a: Pick<TabAgent, "working" | "paused" | "op">): { ke
 export function pointerAt(l: { x: number; y: number; w: number; h: number; vw: number }, panelWidth: number): { x: number; y: number } {
   const k = l.vw > 0 && panelWidth > 0 ? panelWidth / l.vw : 1;
   return { x: Math.round((l.x + Math.min(34, l.w / 2)) * k) - 3, y: Math.round((l.y + l.h / 2) * k) - 2 };
+}
+
+/**
+ * A tab's state for the overview, where there is no clock per tab: an ask in
+ * flight is its act's word, a last act inside the presence's linger is
+ * Thinking, and a tab an agent held that has gone quiet since is Done, the
+ * word the overview said "idle" for, which told nobody the agent had finished.
+ */
+export function tabState(a: TabAgent | undefined, kept: string | undefined, now: number): { key: AgentStateKey; word: string } | null {
+  if (a && (a.paused || a.working > 0)) return agentState(a);
+  const last = a?.log[a.log.length - 1]?.at ?? 0;
+  if (a && now - last < PRESENCE_LINGER_MS) return { key: "thinking", word: STATE_WORD.thinking };
+  return a || kept ? { key: "done", word: STATE_WORD.done } : null;
+}
+
+/** The busiest of a container's tabs speaks for the box. */
+const RANK: Record<AgentStateKey, number> = { yours: 5, clicking: 4, typing: 4, navigating: 4, scrolling: 4, pointing: 4, reading: 4, thinking: 2, done: 1 };
+export function boxState(states: Array<{ key: AgentStateKey; word: string } | null>): { key: AgentStateKey; word: string } | null {
+  return states.reduce<{ key: AgentStateKey; word: string } | null>((best, s) => (s && (!best || RANK[s.key] > RANK[best.key]) ? s : best), null);
 }
 
 /** The pointer's travel time: grows with the distance, clamped so a short hop stays quick and a long one never drags. */
