@@ -34,6 +34,7 @@ import { ClockIcon, ListIcon, PlayIcon } from "../../lib/glyphIcons.tsx";
 import { ChecklistIcon, FolderIcon, ShieldIcon } from "../settingsNavIcons.tsx";
 import { UnderstudyIcon } from "../workspace/icons.tsx";
 import { INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
+import { fileCount } from "../../lib/fileCount.ts";
 
 interface SourcesBody {
   sources: UnderstudySource[];
@@ -242,7 +243,7 @@ export function Teach({ active }: { active: boolean }) {
     );
     const hint = s.found ? (
       <>
-        <span className="block tabular-nums">{s.files.toLocaleString()} files · {fmtBytes(s.bytes)}</span>
+        <span className="block tabular-nums">{fileCount(s.files)} · {fmtBytes(s.bytes)}</span>
         {s.bytes > 0 && (
           <span aria-hidden className="block mt-1.5"
             style={{
@@ -426,7 +427,7 @@ export function Teach({ active }: { active: boolean }) {
             ? "Nothing is allowed yet, so there is nothing to read."
             : read
               ? <>{data.learned
-                    ? `Read ${data.learned.filesRead.toLocaleString()} files at ${when(data.learned.at)}`
+                    ? `Read ${fileCount(data.learned.filesRead)} at ${when(data.learned.at)}`
                     : `Last read ${when(data.policy!.at)}`} —{" "}
                   <b style={{ fontWeight: 400, color: "var(--text)" }}>{(data.policy?.rules ?? 0).toLocaleString()} rules</b>,{" "}
                   <b style={{ fontWeight: 400, color: "var(--text)" }}>{data.banked.toLocaleString()} precedents</b>
@@ -476,7 +477,7 @@ export function Teach({ active }: { active: boolean }) {
                column was reading as "this source gave almost nothing". */
             <SettingRow label="What each source added this time"
               hint={<>
-                Read {data.learned.filesRead.toLocaleString()} files. Counts are what each source added{" "}
+                Read {fileCount(data.learned.filesRead)}. Counts are what each source added{" "}
                 <em>this time</em> — a passage already banked is recognised, not stored twice, so a second
                 run over unchanged files reports little and is not doing less.{" "}
                 {data.learned.quarantined > 0
