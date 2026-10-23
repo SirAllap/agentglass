@@ -5,7 +5,7 @@
 // the finder behind it does not move while somebody types.
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../../lib/api.ts";
-import { hitTarget, emptyText, partialResults, stepHot, whereText, type HitTarget, type SearchHit } from "../../../lib/finderSearch.ts";
+import { hitTarget, emptyText, partialResults, stepHot, hitPath, type HitTarget, type SearchHit } from "../../../lib/finderSearch.ts";
 import { ICON } from "../../../lib/iconSize.ts";
 import { SearchIcon } from "../../../lib/glyphIcons.tsx";
 import { EDGE, LINE } from "../../workspace/Chrome.tsx";
@@ -68,7 +68,7 @@ export function FinderSearch({ home, onTarget, onClose }: { home: string; onTarg
               <FileTypeIcon name={r.path.slice(r.path.lastIndexOf("/") + 1)} isDir={r.dir} size={30} />
               <span className="min-w-0 flex-1 flex flex-col py-1">
                 <span className="truncate text-[12.5px]" style={{ fontWeight: 700 }}>{r.path.slice(r.path.lastIndexOf("/") + 1)}{r.line ? <span style={{ color: "var(--text4)", fontWeight: 400 }}> : {r.line}</span> : null}</span>
-                <span className="truncate text-[10.5px]" style={{ color: "var(--text3)" }}>{r.text ?? (r.path.slice(0, r.path.lastIndexOf("/")) || "/")}</span>
+                <span className="truncate text-[10.5px]" style={{ color: "var(--text3)" }}>{r.text ?? hitPath(r.path)}</span>
               </span>
             </div>
           ))}

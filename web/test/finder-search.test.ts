@@ -4,7 +4,7 @@
  * Strata has it. The index behind it is tested on the server (homeindex.test.ts).
  */
 import { describe, expect, test } from "bun:test";
-import { emptyText, partialResults, hitTarget, stepHot, whereText } from "../src/lib/finderSearch.ts";
+import { emptyText, partialResults, hitPath, hitTarget, stepHot } from "../src/lib/finderSearch.ts";
 
 const src = (p: string) => Bun.file(new URL(`../src/${p}`, import.meta.url)).text();
 
@@ -27,16 +27,20 @@ describe("the list", () => {
     expect(stepHot(2, 1, 5)).toBe(3);
     expect(stepHot(0, 1, 0)).toBe(0);
   });
-  test("a row says where it is, with home as ~", () => {
-    expect(whereText("/home/ann/orbit/plan.md", "/home/ann")).toBe("~/orbit");
-    expect(whereText("/home/ann/plan.md", "/home/ann/")).toBe("~");
-    expect(whereText("/mnt/disk/x.txt", "/home/ann")).toBe("/mnt/disk");
+  test("a row shows the whole path, as Strata does, and keeps both ends when it is long", () => {
+    expect(hitPath("/home/ann/orbit/plan.md")).toBe("/home/ann/orbit/plan.md");
+    const long = `/home/ann/${"deep-folder/".repeat(14)}plan.md`;
+    const cut = hitPath(long);
+    expect(cut.length).toBeLessThanOrEqual(118);
+    expect(cut).toContain("…");
+    expect(cut.startsWith("/home/ann/deep")).toBe(true);
+    expect(cut.endsWith("/plan.md")).toBe(true);
   });
   test("empty states", () => {
     expect(emptyText("", "idle", 0)).toBe("Type to search Home and mounted local drives");
     expect(emptyText("pl", "ready", 3)).toBe("");
     expect(emptyText("pl", "ready", 0)).toBe("No matching files or folders");
-    expect(emptyText("pl", "building", 0)).toContain("indexing");
+    expect(emptyText("pl", "building", 0)).toBe("No matching files or folders");
   });
 });
 
@@ -63,9 +67,10 @@ describe("wired where Strata has it", () => {
 });
 
 describe("Partial results", () => {
-  test("only while the index is building and there is something listed", () => {
+  test("while the index is building, whether or not anything matched yet (Strata shows it beside \"No matching files or folders\")", () => {
     expect(partialResults("building", 3)).toBe(true);
-    expect(partialResults("building", 0)).toBe(false);
+    expect(partialResults("building", 0)).toBe(true);
     expect(partialResults("ready", 3)).toBe(false);
+    expect(partialResults("idle", 0)).toBe(false);
   });
 });

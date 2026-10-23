@@ -20,19 +20,19 @@ export function hitTarget(hit: SearchHit, alt: boolean): HitTarget {
 /** The highlighted row after an arrow key: it stops at both ends, as a list does. */
 export const stepHot = (hot: number, dir: 1 | -1, count: number): number => (count === 0 ? 0 : Math.max(0, Math.min(count - 1, hot + dir)));
 
-/** A path as the person writes it: home as ~, and the name left out because the row shows it on its own. */
-export function whereText(path: string, home: string): string {
-  const [dir] = split(path);
-  const h = home.replace(/\/+$/, "");
-  return dir === h ? "~" : dir.startsWith(h + "/") ? `~${dir.slice(h.length)}` : dir;
+/** The second line of a row: the whole path, middle-cut when long so the start and the end both stay readable. */
+export function hitPath(path: string, max = 118): string {
+  if (path.length <= max) return path;
+  const tail = Math.floor((max - 1) * 0.56);
+  return `${path.slice(0, max - 1 - tail)}…${path.slice(path.length - tail)}`;
 }
 
-/** What the empty and the unanswered states say. */
 /** Strata's footer warning: shown while the index is still being built, since what is listed may be missing entries. */
-export const partialResults = (status: "idle" | "building" | "ready", found: number): boolean => status === "building" && found > 0;
+export const partialResults = (status: "idle" | "building" | "ready", _found: number): boolean => status === "building";
 
-export function emptyText(q: string, status: "idle" | "building" | "ready", found: number): string {
+/** What the empty and the unanswered states say. */
+export function emptyText(q: string, _status: "idle" | "building" | "ready", found: number): string {
   if (!q.trim()) return "Type to search Home and mounted local drives";
   if (found > 0) return "";
-  return status === "building" ? "Still indexing Home. Results appear as it goes." : "No matching files or folders";
+  return "No matching files or folders";
 }

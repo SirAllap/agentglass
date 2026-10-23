@@ -58,4 +58,13 @@ describe("the trash", () => {
     expect(w.body).toContain("and 2 more");
     expect(w.body).toContain("cannot be undone");
   });
+  test("emptying the whole trash is asked as Strata asks it, with a button that says so", () => {
+    const w = trashDeleteWords(["a", "b"], true);
+    expect(w.title).toBe("Empty Trash?");
+    expect(w.confirm).toBe("Empty Trash");
+    expect(w.body).toContain("2 items");
+    expect(w.body).toContain("cannot be undone");
+    expect(trashDeleteWords(["a"], true).body).toContain("1 item ");
+    expect(trashDeleteWords(["a"]).confirm).toBe("Delete for good");
+  });
 });

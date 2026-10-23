@@ -85,6 +85,10 @@ describe("the folder tab keys", () => {
     expect(finderKey(k("Tab", { ctrl: true, shift: true }), free)).toEqual({ t: "tab", by: -1 });
     expect(finderKey(k("Enter", { ctrl: true }), free)).toEqual({ t: "opentab" });
   });
+  test("Ctrl+PageDown and Ctrl+PageUp step the tabs too, as Strata's second pair", () => {
+    expect(finderKey(k("PageDown", { ctrl: true }), free)).toEqual({ t: "tab", by: 1 });
+    expect(finderKey(k("PageUp", { ctrl: true }), free)).toEqual({ t: "tab", by: -1 });
+  });
   test("a text field keeps them, and Alt does not take them", () => {
     expect(finderKey(k("t", { ctrl: true }), { inField: true, hasSelection: false })).toBeNull();
     expect(finderKey(k("t", { ctrl: true, alt: true }), free)).not.toEqual({ t: "newtab" });

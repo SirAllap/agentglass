@@ -226,13 +226,19 @@ export function destProblem(paths: readonly string[], dest: string, op: "move" |
   return null;
 }
 
-/** The question before the trash is emptied, or one entry in it is deleted: the count and the names, up to a few. */
-export function trashDeleteWords(names: readonly string[]): { title: string; body: string } {
+/** The question before the trash is emptied (`all`), or one entry in it is deleted: the count and the names, up to a few. */
+export function trashDeleteWords(names: readonly string[], all = false): { title: string; body: string; confirm: string } {
+  if (all) return {
+    title: "Empty Trash?",
+    body: `${names.length === 1 ? "1 item" : `${names.length} items`} will be gone from the trash for good. This cannot be undone.`,
+    confirm: "Empty Trash",
+  };
   const shown = names.slice(0, 5).map((n) => `“${n}”`).join(", ");
   const more = names.length > 5 ? ` and ${names.length - 5} more` : "";
   return {
     title: names.length === 1 ? `Delete “${names[0]}” for good?` : `Delete ${names.length} items for good?`,
     body: `${shown}${more} will be gone from the trash for good. This cannot be undone.`,
+    confirm: "Delete for good",
   };
 }
 

@@ -72,12 +72,13 @@ export function finderKey(k: KeyIn, ctx: Ctx): Act | null {
     if (k.key === "y") return { t: "copy" };
     if (k.key === "p") return { t: "pin" };
   }
-  // Folder tabs (Strata's): Ctrl+T new, Ctrl+W close, Ctrl+Tab / Ctrl+Shift+Tab step, Ctrl+Enter opens the chosen folder in a new one.
+  // Folder tabs (Strata's): Ctrl+T new, Ctrl+W close, Ctrl+Tab / Ctrl+Shift+Tab / Ctrl+PageDown / Ctrl+PageUp step, Ctrl+Enter opens the chosen folder in a new one.
   if ((k.ctrl || k.meta) && !k.alt) {
     const low = k.key.toLowerCase();
     if (!k.shift && low === "t") return { t: "newtab" };
     if (!k.shift && low === "w") return { t: "closetab" };
     if (k.key === "Tab") return { t: "tab", by: k.shift ? -1 : 1 };
+    if (!k.shift && (k.key === "PageDown" || k.key === "PageUp")) return { t: "tab", by: k.key === "PageDown" ? 1 : -1 };
     if (!k.shift && k.key === "Enter") return { t: "opentab" };
   }
   if (k.alt) {

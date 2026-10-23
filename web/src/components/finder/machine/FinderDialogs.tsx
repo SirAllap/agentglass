@@ -149,7 +149,7 @@ export function FolderPicker({ op, paths, start, home, onPick, onClose }: { op: 
 export function TrashPanel({ home, onRestored, onClose }: { home: string; onRestored: (dirs: string[], said: string) => void; onClose: () => void }) {
   const [rows, setRows] = useState<FsTrashRow[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [sure, setSure] = useState<{ ids: string[]; words: { title: string; body: string } } | null>(null);
+  const [sure, setSure] = useState<{ ids: string[]; words: { title: string; body: string; confirm: string } } | null>(null);
   const load = () => { void api.fsTrash().then((r) => { if (r.ok) setRows(r.entries); else setErr("Could not read the trash"); }); };
   useEffect(load, []);
   const restore = async (r: FsTrashRow) => {
@@ -163,7 +163,7 @@ export function TrashPanel({ home, onRestored, onClose }: { home: string; onRest
     if (!a.ok) { setErr(a.error ?? "That did not work"); return; }
     setErr(null); load();
   };
-  const ask = (ids: string[], names: string[]) => setSure({ ids, words: trashDeleteWords(names) });
+  const ask = (ids: string[], names: string[], all = false) => setSure({ ids, words: trashDeleteWords(names, all) });
   return (
     <Sheet label="Trash" onClose={onClose} width={460}>
       <div>
@@ -184,7 +184,7 @@ export function TrashPanel({ home, onRestored, onClose }: { home: string; onRest
         </div>
         <p role="alert" className="m-0 mt-1.5 min-h-[16px]" style={{ color: "var(--error-ink)" }}>{err}</p>
         <div className="flex justify-end gap-2 mt-2">
-          <button className="agx-btn rounded-md px-3" disabled={!rows?.length} style={{ minHeight: HIT, border: EDGE, color: "var(--error-ink)" }} onClick={() => rows && ask(rows.map((r) => r.id), rows.map((r) => r.name))}>Empty trash</button>
+          <button className="agx-btn rounded-md px-3" disabled={!rows?.length} style={{ minHeight: HIT, border: EDGE, color: "var(--error-ink)" }} onClick={() => rows && ask(rows.map((r) => r.id), rows.map((r) => r.name), true)}>Empty Trash</button>
           <button autoFocus className="agx-btn rounded-md px-3" style={{ minHeight: HIT, background: "var(--text)", color: "var(--bg)" }} onClick={onClose}>Close</button>
         </div>
       </div>
@@ -193,7 +193,7 @@ export function TrashPanel({ home, onRestored, onClose }: { home: string; onRest
         <p className="m-0 mb-3" style={{ color: "var(--text3)" }}>{sure.words.body}</p>
         <div className="flex justify-end gap-2">
           <button autoFocus className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE }} onClick={() => setSure(null)}>Cancel</button>
-          <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE, color: "var(--error-ink)" }} onClick={() => void remove(sure.ids)}>Delete for good</button>
+          <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE, color: "var(--error-ink)" }} onClick={() => void remove(sure.ids)}>{sure.words.confirm}</button>
         </div>
       </Sheet>}
     </Sheet>
