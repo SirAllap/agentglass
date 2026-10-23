@@ -52,6 +52,20 @@ const AXIS = String.raw`(?:p|px|py|pt|pb|pl|pr|m|mx|my|mt|mb|ml|mr|gap|gap-x|gap
  */
 const ALLOWED_ARBITRARY = new Set(["pl-[18px]", "pl-[30px]", "ml-[60px]"]);
 
+/**
+ * Off-grid inline spacing that stays, each because the Finder must be
+ * pixel-identical to Strata and these are Strata's measured values (Icons
+ * card padding 5 7 with 3 between tiles, a column header padded 5 5 4 12).
+ * Keyed by file and the exact matched text, so any OTHER odd value still
+ * fails, and the file's own pin test (finder-parA-cheap) holds the number.
+ */
+const STRATA_EXACT = new Set([
+  "web/src/components/finder/machine/FolderViews.tsx: margin: 3",
+  'web/src/components/finder/machine/FolderViews.tsx: padding: "5px 7px"',
+  'web/src/components/finder/machine/Column.tsx: padding: "5px 5px 4px 12px"',
+]);
+const strayOf = (f: string, text: string) => `${f.replace(SRC, "web/src")}: ${text}`;
+
 describe("spacing goes through the scale", () => {
   test("no arbitrary pixel spacing except the indents that align to a glyph", () => {
     const strays: string[] = [];
@@ -63,6 +77,15 @@ describe("spacing goes through the scale", () => {
     // Named rather than counted: the failure has to tell whoever added one
     // where it is, or the next person just adds it to a number.
     expect(strays.join("\n") || null).toBeNull();
+  });
+
+  test("every Strata-exact exemption is still written", () => {
+    const all = FILES.map((x) => `${x.f.replace(SRC, "web/src")}\n${x.s}`);
+    const stale = [...STRATA_EXACT].filter((k) => {
+      const [file, text] = [k.slice(0, k.indexOf(": ")), k.slice(k.indexOf(": ") + 2)];
+      return !all.some((a) => a.startsWith(file + "\n") && a.includes(text));
+    });
+    expect(stale.join(", ") || null).toBeNull();
   });
 
   test("every allowed indent is still used", () => {
@@ -93,7 +116,8 @@ describe("spacing goes through the scale", () => {
       for (const m of s.matchAll(/(padding|margin|gap)(?:Top|Bottom|Left|Right)?:\s*([0-9]+)(?![.0-9a-z%])/g)) {
         const v = Number(m[2]);
         if (v === 0 || v % 2 === 0) continue;
-        strays.push(`${f.replace(SRC, "web/src")}: ${m[0]} — odd pixels are off the 2px grid`);
+        if (STRATA_EXACT.has(strayOf(f, m[0]))) continue;
+        strays.push(`${strayOf(f, m[0])} — odd pixels are off the 2px grid`);
       }
     }
     expect(strays.join("\n") || null).toBeNull();
@@ -143,7 +167,8 @@ describe("spacing goes through the scale", () => {
           const v = Number(px[1]);
           // See above: 1px is a hairline.
           if (v === 0 || v === 1 || v % 2 === 0) continue;
-          strays.push(`${f.replace(SRC, "web/src")}: ${m[0]} — ${v}px is off the 2px grid`);
+          if (STRATA_EXACT.has(strayOf(f, m[0]))) continue;
+          strays.push(`${strayOf(f, m[0])} — ${v}px is off the 2px grid`);
         }
       }
     }

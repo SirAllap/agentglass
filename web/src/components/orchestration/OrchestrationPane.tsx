@@ -4,7 +4,7 @@ import { StatusBadge } from "../SettingsKit.tsx";
 import { CARD, Card, Sec } from "./OrchKit.tsx";
 import { CloseIcon } from "../CloseButton.tsx";
 import { ICON } from "../../lib/iconSize.ts";
-import { Button, Chip, INPUT, INPUT_STYLE, Segmented } from "../workspace/Chrome.tsx";
+import { Button, Chip, INPUT, LINE, INPUT_STYLE, Segmented } from "../workspace/Chrome.tsx";
 import { api, type PolicyRuleState, type SeatAnswer } from "../../lib/api.ts";
 import { openSettings } from "../../lib/openSettings.ts";
 import { agentProvider } from "../../../../shared/agentKinds.ts";
@@ -308,7 +308,7 @@ export function OrchestrationView(p: OrchestrationViewProps) {
     const pictured = rule.when.some((t) => t.kind === "hours" || t.kind === "usage");
     return (
       <div key={rule.id} data-row={rowId(rule.name)} data-rule={rule.id} className="grid items-center gap-4 p-4"
-        style={{ gridTemplateColumns: "auto minmax(0, 1fr) auto", borderBottom: "1px solid var(--surface-line)", opacity: inherited ? 0.6 : 1 }}>
+        style={{ gridTemplateColumns: "auto minmax(0, 1fr) auto", borderBottom: LINE, opacity: inherited ? 0.6 : 1 }}>
         <button type="button" role="switch" aria-checked={rule.enabled} aria-label={`${rule.name}: on or off`} disabled={locked}
           onClick={() => void save(withRuleEnabled(policy, rule.id, !rule.enabled), "rules")} className="flex">
           <Switch on={rule.enabled} />
@@ -368,7 +368,7 @@ export function OrchestrationView(p: OrchestrationViewProps) {
       <Note text={notes.rules} />
 
       <Sec n={4} title={SAFETY.title} sub={`${SAFETY.summary} Every change here saves as you make it.`} />
-      <section data-safety className="rounded-xl p-4" style={{ background: "var(--surface-card)", border: "1px solid var(--surface-line)", boxShadow: "var(--surface-lift)" }}>
+      <section data-safety className="rounded-xl p-4" style={{ background: "var(--surface-card)", border: LINE, boxShadow: "var(--surface-lift)" }}>
         <button type="button" aria-expanded={safetyOpen} onClick={() => setSafetyOpen(!safetyOpen)}
           className="flex items-center gap-2 text-[13px] font-semibold bg-transparent border-0 p-0 cursor-pointer" style={{ color: "var(--text)", minHeight: 26 }}>
           <span aria-hidden className="text-[10px]" style={{ color: "var(--text3)" }}>{safetyOpen ? "\u25be" : "\u25b8"}</span>

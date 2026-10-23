@@ -89,7 +89,7 @@ export function FlowView(p: FlowViewProps) {
       <Eyebrow>Right now for {scopeWords(p.root)}</Eyebrow>
       <Card>
         <div className="agx-flow">
-          <div className="agx-flow-main rounded-xl p-3 grid content-center justify-items-start gap-2" style={{ border: "2px solid var(--primary)", background: "var(--bg2)" }}>
+          <div className="agx-flow-main rounded-xl p-3 grid content-center justify-items-start gap-2" style={{ border: "2px solid var(--primary)", background: "var(--surface-card)" }}>
             <div className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>Main agent</div>
             <div className="text-[13px] font-semibold" style={{ color: "var(--text)" }}>{roleBlurb("orchestrator")}</div>
             <ChainTiles node={main} readiness={p.readiness} liveModel={p.liveModel} limited={p.limited} />
@@ -98,7 +98,7 @@ export function FlowView(p: FlowViewProps) {
           <div className="agx-flow-roles">
             {jobs.map((n) => (
               <div key={n.field} className="agx-flow-job rounded-xl p-3 flex flex-wrap items-center gap-x-4 gap-y-2"
-                style={{ background: "var(--bg)", border: n.ruleId ? "1px solid var(--success)" : "1px solid var(--border)", boxShadow: n.ruleId ? "0 0 0 1px var(--success)" : undefined }}>
+                style={{ background: "var(--bg)", borderWidth: 1, borderStyle: "solid", borderColor: n.ruleId ? "var(--success)" : "var(--border)", boxShadow: n.ruleId ? "0 0 0 1px var(--success)" : undefined }}>
                 <div className="w-[120px] shrink-0">
                   <div className="text-[13px] font-semibold" style={{ color: "var(--text)" }}>{n.word.charAt(0).toUpperCase() + n.word.slice(1)}</div>
                   <div className="text-[10px]" style={{ color: "var(--text3)" }}>{roleBlurb(n.field)}</div>

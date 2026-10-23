@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { ConflictFile } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
 import { peekRows, type PeekRow } from "../lib/conflictPeek.ts";
+import { LINE } from "./workspace/Chrome.tsx";
 
 /**
  * A read-only look at one file a pull request would conflict on.
@@ -38,7 +39,7 @@ export function ConflictPeek({ root, number, path }: { root: string; number: num
   else if (a.noMarkers) body = note("One side deleted or renamed this file while the other changed it, so git has no conflict markers to show — resolve it by keeping or dropping the file.");
   else {
     body = peekRows(a).map((r, i) => r.kind === "gap"
-      ? <span key={i} className="block px-2" style={{ color: TINT.gap }}>⋯ {r.hidden} line{r.hidden === 1 ? "" : "s"}</span>
+      ? <span key={i} className="block px-2" style={{ color: TINT.gap }}>… {r.hidden} line{r.hidden === 1 ? "" : "s"}</span>
       : (
         <span key={i} className="flex gap-2 px-2 whitespace-pre" style={{ color: TINT[r.kind] }}>
           <span className="shrink-0 w-8 text-right tabular-nums select-none" style={{ color: "var(--text3)" }}>{r.n}</span>
@@ -48,7 +49,7 @@ export function ConflictPeek({ root, number, path }: { root: string; number: num
   }
   return (
     <span className="block mt-1 py-1 overflow-auto font-mono text-[10.5px] rounded"
-      style={{ maxHeight: 240, border: "1px solid var(--surface-line)", background: "var(--surface-inset)" }}
+      style={{ maxHeight: 240, border: LINE, background: "var(--surface-inset)" }}
       role="region" aria-label={`Conflicts in ${path}`}>
       {body}
     </span>

@@ -114,7 +114,7 @@ export function ListView({ widths, onWidths, cut, dir, display, selName, chosen,
     const here = sortBy === k;
     return (
       <div data-hcell={col} className="relative flex" style={{ borderRight: "1px solid color-mix(in srgb, var(--surface-line) 26%, transparent)", minWidth: 0 }}>
-        <button className="agx-list-heading flex-1 min-w-0 flex items-center gap-[5px] text-left" style={{ color: here ? "var(--text)" : undefined, minHeight: 28, padding: "0 12px" }} onClick={() => onSort(k)} aria-sort={here ? (sortWay === "asc" ? "ascending" : "descending") : "none"}>
+        <button className="agx-list-heading flex-1 min-w-0 flex items-center gap-1 text-left" style={{ color: here ? "var(--text)" : undefined, minHeight: 28, padding: "0 12px" }} onClick={() => onSort(k)} aria-sort={here ? (sortWay === "asc" ? "ascending" : "descending") : "none"}>
           <span className="flex-1 min-w-0 truncate" style={{ textAlign: right ? "right" : "left" }}>{t}</span>
           {here && <StrataIcon set="act" name={sortWay === "asc" ? "arrow-up" : "arrow-down"} size={12} />}
         </button>

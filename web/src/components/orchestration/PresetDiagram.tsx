@@ -25,7 +25,7 @@ export function PresetDiagram({ rows }: { rows: DiagramRow[] }) {
   if (!rows.length) return null;
   const col = (side: "before" | "after") => (
     <div data-col={side} className="rounded-lg p-2 grid content-start gap-1 min-w-0"
-      style={{ background: side === "after" ? "color-mix(in srgb, var(--success) 9%, var(--bg2))" : "var(--bg2)" }}>
+      style={{ background: side === "after" ? "color-mix(in srgb, var(--success) 9%, var(--surface-card))" : "var(--surface-card)" }}>
       <span className="t-mono text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--text3)" }}>{side === "after" ? "After" : "Before"}</span>
       {rows.map((r) => (
         <div key={r.role} className="flex flex-wrap items-center gap-x-1 gap-y-0.5 text-[10px]" style={{ color: "var(--text2)", minHeight: 22 }}>

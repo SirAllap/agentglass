@@ -59,7 +59,7 @@ export function ScopeBar({ root, projects, overrides, inherited, busy, note, onR
       <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Settings for">
         <span className="text-[10px]" style={{ color: "var(--text3)" }}>Settings for</span>
         {options.map((o) => <Chip key={o.id} on={root === o.id} resting onClick={() => onRoot(o.id)} title={o.title} className="t-mono"
-          style={root === o.id ? { background: "var(--primary)", color: "var(--bg)", border: "1px solid var(--primary)" } : undefined}>{o.label}</Chip>)}
+          style={root === o.id ? { background: "var(--primary)", color: "var(--on-primary)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--primary)" } : undefined}>{o.label}</Chip>)}
       </div>
       <div className="flex items-center justify-between gap-3">
         <p className="m-0 min-w-0 text-[12px]" style={{ color: "var(--text3)" }} aria-live="polite">

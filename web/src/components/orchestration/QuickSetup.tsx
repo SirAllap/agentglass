@@ -140,7 +140,7 @@ export function QuickSetup(p: QuickSetupProps) {
             <div className="flex flex-wrap items-center gap-2 mt-auto">
               {o.active ? (
                 <>
-                  <StatusBadge tone="ok">{`\u2713 Applied for ${scopeWords(p.root)}`}</StatusBadge>
+                  <StatusBadge tone="ok">{`Applied for ${scopeWords(p.root)}`}</StatusBadge>
                   {cardUndo(back, p.policy, o.title) && <Button disabled={locked} title={`Undo "${back?.title}"`} onClick={() => void undo()}>{BACK_LABEL}</Button>}
                 </>
               ) : (

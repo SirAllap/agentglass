@@ -225,12 +225,12 @@ export function OpenWithDialog({ paths, onLaunch, onClose }: {
           else if (e.key === "ArrowDown") { e.preventDefault(); setAt(Math.min(rows.length - 1, pick + 1)); }
           else if (e.key === "ArrowUp") { e.preventDefault(); setAt(Math.max(0, pick - 1)); }
         }} className={`${INPUT} w-full mb-2`} style={INPUT_STYLE} />
-      <div role="listbox" aria-label="Applications" className="agx-scroll overflow-y-auto rounded-md" style={{ border: EDGE, maxHeight: 300, minHeight: 200, padding: 3, background: "color-mix(in srgb, var(--bg) 42%, transparent)" }}>
+      <div role="listbox" aria-label="Applications" className="agx-scroll overflow-y-auto rounded-md" style={{ border: EDGE, maxHeight: 300, minHeight: 200, padding: 4, background: "color-mix(in srgb, var(--bg) 42%, transparent)" }}>
         {!list && <p className="m-0 p-3" style={{ color: "var(--text3)" }}>Looking for applications…</p>}
         {empty && <p role="status" className="m-0 p-3" style={{ color: "var(--text3)" }}>{empty}</p>}
         {rows.map((r, i) => (
           <div key={r.app.id}>
-            {r.head && <div className="text-[11px]" style={{ color: "var(--text3)", fontWeight: 700, padding: "8px 6px 3px" }}>{r.head}</div>}
+            {r.head && <div className="text-[11px]" style={{ color: "var(--text3)", fontWeight: 700, padding: "8px 6px 4px" }}>{r.head}</div>}
             <button role="option" aria-selected={i === pick} onClick={() => setAt(i)} onDoubleClick={go} className="agx-btn w-full text-left block"
               style={{ minHeight: 36, padding: "4px 8px", marginBottom: 2, borderRadius: 5, background: i === pick ? "color-mix(in srgb, var(--primary) 20%, transparent)" : "transparent" }}>
               <span className="block truncate" style={{ fontWeight: 600 }}>{r.app.name}</span>
