@@ -96,7 +96,9 @@ describe("the board's wiring", () => {
   });
   test("the info icon, the sort control and the arrow do not fold twice", () => {
     expect(heading).toMatch(/role="note" onClick=\{\(e\) => e\.stopPropagation\(\)\}/);
-    expect(heading).toMatch(/<select[\s\S]*?onClick=\{\(e\) => e\.stopPropagation\(\)\}/);
+    // The sort icon is its own component, and its button stops the click before the bar sees it.
+    expect(bare).toMatch(/function SortButton[\s\S]*?onClick=\{\(e\) => \{ e\.stopPropagation\(\); setOpen/);
+    expect(heading).toContain("<SortButton");
     expect(heading).toMatch(/e\.stopPropagation\(\); toggleFold\(/);
   });
   test("the folded strip unfolds the same way, in the lane's colour", () => {
@@ -107,8 +109,12 @@ describe("the board's wiring", () => {
     expect(css).toMatch(/\.agx-lane-bar:hover \{ background: color-mix\(in srgb, var\(--lane\)/);
   });
   test("the sort control is in every open lane, in one place", () => {
-    expect(heading).toContain("data-sort={l.id}");
-    expect(heading).not.toMatch(/\{canFold && \(\s*<select/);
+    expect(heading).toContain("<SortButton");
+    expect(heading).not.toMatch(/\{canFold && \(\s*<SortButton/);
+    expect(heading).not.toContain("<select");
+    expect(bare).toContain("data-sort={lane}");
+    // A non-default order shows as a dot on the icon, in the same place as the icon.
+    expect(bare).toContain("data-sort-dot");
   });
   test("scroll is restored once and written back from both scrollers", () => {
     expect(bare).toContain("boardScroll(scrollKey)");

@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { HIT, ICON, MIN_BOX } from "../lib/iconSize.ts";
 import { InfoIcon } from "./settingsNavIcons.tsx";
+import { AnchoredMenu } from "./AnchoredMenu.tsx";
 import { CircleIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, FlagIcon, LinkIcon, PinIcon, RefreshIcon, SearchIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { FACES_MAX, eventLine, splitTitle, standing } from "../lib/prCardZones.ts";
 import { ALWAYS_OPEN, boardScroll, foldable, foldedLanes, laneSorts, setBoardScroll, setFoldedLanes, setLaneSorts, walkable } from "../lib/boardPrefs.ts";
@@ -723,50 +724,54 @@ export function TriageBoard({
      */
     <div ref={frame} data-board tabIndex={0} onKeyDown={onKey} className="flex flex-col h-full min-h-0 outline-none">
       {person && viewer && <PersonBanner login={viewer} onBack={person.onBack} />}
-      {/* The scope, said out loud. A board whose reach nobody states is a board
-          nobody trusts — and the first question anybody asks it is "where are
-          the other three hundred". */}
-      <div className="shrink-0 px-4 pt-3 pb-1 text-[12.5px] flex items-start gap-4">
-        <div className="min-w-0 flex-1">
+      {/*
+        * The scope, said out loud, in ONE line.
+        *
+        * A board whose reach nobody states is a board nobody trusts, but it
+        * took three stacked blocks to say it — a count and a sentence, a
+        * second sentence, a row of chips that repeated every lane's own count
+        * — about 150px above the first card on a screen whose whole job is the
+        * cards. The lane bars already carry their counts (the number on the
+        * left is the chip, and still lights its lane), so the chip row is gone,
+        * and the longer sentences moved into this line's tooltip, where they
+        * are read once, while learning what the board covers.
+        */}
+      <div className="shrink-0 px-4 py-1.5 text-[12.5px] flex items-center gap-3">
+        <div className="min-w-0 flex-1 truncate"
+          title={waiting
+            ? (viewer ? `${viewer}'s, and the ones ${viewer} was asked to look at. Until both are in, an empty lane means nothing.` : "Yours, and the ones you were asked to look at. Until both are in, an empty lane means nothing.")
+            : face === "failed" ? "Nothing is claimed about them, not even that they are empty."
+            : wide ? "Yours, the ones you were asked to look at, and the repository's, a page at a time."
+            : viewer ? `${viewer}'s, and the ones ${viewer} was asked to look at${person?.more ? " — the first page of each list" : ""}.`
+            : "Yours, and the ones you were asked to look at."}>
         {waiting || face === "failed" ? (
           <>
             {/* No number, because there is no number yet. A zero here is the
                 same lie the empty lanes used to tell, in bigger type. */}
-            <b className="text-[17px] font-semibold" style={{ color: "var(--text4)" }}>{waiting ? "…" : "—"}</b>
+            <b className="text-[15px] font-semibold" style={{ color: "var(--text4)" }}>{waiting ? "…" : "—"}</b>
             <span className="ml-1">{waiting ? "Reading the two lists this board is made of" : "Could not read the two lists this board is made of"}</span>
-            <span className="block text-[11px] mt-2" style={{ color: "var(--text3)" }}>
-              {waiting
-                ? (viewer ? `${viewer}'s, and the ones ${viewer} was asked to look at. Until both are in, an empty lane means nothing.` : "Yours, and the ones you were asked to look at. Until both are in, an empty lane means nothing.")
-                : "Nothing is claimed about them, not even that they are empty."}
-            </span>
           </>
         ) : (
           <>
-            <b className="text-[17px] font-semibold">{involved}</b>
+            <b className="text-[15px] font-semibold tabular-nums">{involved}</b>
             <span className="ml-1">
-              {wide
-                ? "open pull requests on this page of the repository"
-                : <>{totalKnown ? `of ${total} open pull requests` : "open pull requests"} want something from {viewer ?? "you"}</>}
+              {totalKnown && !wide ? `of ${total} open` : "open"}
+              {" · "}
+              {wide ? "this page of the repository" : viewer ? `${viewer}'s and asked of ${viewer}` : "yours and asked of you"}
             </span>
-            <span className="block text-[11px] mt-2" style={{ color: "var(--text3)" }}>
-              {wide
-                ? "Yours, the ones you were asked to look at, and the repository's, a page at a time."
-                : viewer ? <>{viewer}'s, and the ones {viewer} was asked to look at{person?.more ? " — the first page of each list" : ""}.</>
-                : <>Yours, and the ones you were asked to look at.</>}
-              {canLand > 0 && <> <span style={{ color: "var(--success-ink)" }}>{canLand}</span> can land right now.</>}
-            </span>
+            {canLand > 0 && <> <span style={{ color: "var(--text4)" }}>·</span> <span style={{ color: "var(--success-ink)" }}>{canLand} can land right now</span></>}
           </>
         )}
         </div>
         {/*
-          * Find, in the board, in the space the summary leaves.
+          * Find, in the board, at the end of the same line.
           *
           * Not the bar at the top: that one asks GitHub, and pressing return in
           * it leaves the board for a table of every pull request in the
           * repository. This is the other question — "which of THESE twelve" —
           * and the honest answer to it is not a shorter board. A card that
           * stops being drawn takes its lane's shape with it, and the counts
-          * above would start disagreeing with what is under them.
+          * would start disagreeing with what is under them.
           *
           * So nothing is removed: the ones that match keep their colour and the
           * rest go quiet. Same board, same places, one part of it lit.
@@ -775,13 +780,6 @@ export function TriageBoard({
           <div className="shrink-0 flex items-center gap-1.5">
             {/*
               * "Which of these is somebody waiting on me in", as one press.
-              *
-              * Here rather than up with the lane counts, and that is deliberate:
-              * those state the shape of the board and are not buttons (see the
-              * comment on them). This narrows it — the same job as the box beside
-              * it, and the same honest version of narrowing, which is to light
-              * the answers and quieten the rest rather than to take cards out of
-              * lanes whose counts are printed above them.
               *
               * Only when there is something to press it about, or when it is
               * already on — a toggle that vanishes while engaged is a board
@@ -806,32 +804,16 @@ export function TriageBoard({
                 {unreadCount} unread
               </button>
             )}
-            {/*
-              * No box of its own any more.
-              *
-              * There were two on this screen doing the same job — the app's find
-              * bar in the corner and one here — and now that ⌃F drives THIS
-              * search (see the engine above), a second field is a second place
-              * to type the same thing. What is left is the count, because it
-              * says something the bar cannot: how many of the cards in front of
-              * you answer, out of how many there are. The unread toggle beside
-              * it lights cards the same way and needs the same line.
-              */}
-            {!find && !onlyUnread && onlyLane === null && (
-              <button onClick={() => openFind()}
-                title="Find in these cards — number, title, author, branch, labels, assignees, reviewers, card id, card status, card people"
-                className="agx-btn inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[10.5px]"
-                style={{ color: "var(--text3)", border: EDGE }}>
-                <SearchIcon size={ICON.xs} />Find in these<span style={{ color: "var(--text4)" }}>⌃F</span>
-              </button>
-            )}
+            {/* The count is what the bar cannot say: how many of the cards in
+                front of you answer, out of how many there are. It sits LEFT of
+                the icon so the icon never moves, whatever state the board is in. */}
             {(find || onlyUnread || onlyLane !== null) && (
               <span className="text-[10.5px] tabular-nums whitespace-nowrap flex items-center gap-1.5"
                 style={{ color: hits ? "var(--primary)" : "var(--warning)" }}>
                 {find && <span className="font-medium">{find}</span>}
                 {hits} of {involved}
-                {/* One way out of every way in. A lane lit from the row above
-                    is left by pressing that chip again, but the board should not
+                {/* One way out of every way in. A lane lit from its count is
+                    left by pressing that count again, but the board should not
                     require you to remember which one you pressed. */}
                 {(find || onlyLane !== null) && (
                   <button onClick={() => { setFind(""); closeFind(); setOnlyLane(null); }}
@@ -840,56 +822,17 @@ export function TriageBoard({
                 )}
               </span>
             )}
+            <button onClick={() => openFind()}
+              aria-label="Find in these cards"
+              aria-pressed={!!find}
+              title="Find in these cards (⌃F) — number, title, author, branch, labels, assignees, reviewers, card id, card status, card people"
+              className="agx-btn shrink-0 grid place-items-center rounded-md"
+              style={{ width: MIN_BOX, height: MIN_BOX, color: find ? "var(--primary)" : "var(--text3)", border: EDGE }}>
+              <SearchIcon size={ICON.xs} />
+            </button>
           </div>
         )}
       </div>
-
-      {/*
-        * Every lane's count on one line.
-        *
-        * A summary, and deliberately not a second way to navigate: the lanes
-        * are directly underneath, 1–5 already jumps to them, and a row of
-        * buttons up here would read as filters that shrink the board. What it
-        * buys is the lanes you cannot see — five columns at 268px do not fit a
-        * narrow window, and the counts scrolled off the right edge are exactly
-        * what you want before deciding to go and look.
-        */}
-      {!waiting && face !== "failed" && (
-        <div className="shrink-0 flex flex-wrap gap-1 px-4 pb-1.5">
-          {cols.map((l) => {
-            const n = lanes.get(l.id)?.length ?? 0;
-            const on = onlyLane === l.id;
-            /* An empty lane has nothing to light, so it stays a plain chip:
-               pressing it would put the board in a state where every card is
-               quiet and the way out is the chip you just pressed. */
-            const Tag = n ? "button" : "span";
-            return (
-              <Tag key={l.id} data-seg={l.id}
-                {...(n ? {
-                  onClick: () => setOnlyLane((v) => (v === l.id ? null : l.id)),
-                  "aria-pressed": on,
-                  title: on ? "Show every lane again" : `Light the ${n} in ${l.label.toLowerCase()}, quieten the rest`,
-                } : {})}
-                className={`inline-flex items-baseline gap-1.5 rounded px-2 py-0.5 text-[10.5px]${n ? " agx-btn" : ""}`}
-                style={{
-                  color: l.tint,
-                  border: `1px solid color-mix(in srgb, ${l.tint} ${on ? "80%" : "45%"}, transparent)`,
-                  background: on ? `color-mix(in srgb, ${l.tint} 16%, transparent)` : "transparent",
-                  // An empty lane is still worth a segment — "none asked of you"
-                  // is an answer — but it should not compete with a lane of six.
-                  opacity: n ? 1 : 0.5,
-                }}>
-                <b className="tabular-nums font-semibold">{n}</b>
-                <span style={{ color: on ? l.tint : "var(--text3)" }}>{l.label.toLowerCase()}</span>
-              </Tag>
-            );
-          })}
-          <span className="inline-flex items-baseline rounded px-2 py-0.5 text-[10.5px] tabular-nums"
-            style={{ color: "var(--text4)", border: EDGE }}>
-            {totalKnown ? `${involved} / ${total}` : `${involved} on the board`}
-          </span>
-        </div>
-      )}
 
       {/* Sideways only. The five columns still have to be reachable on a narrow
           window; the up-and-down is each column's own, below. */}
@@ -1008,7 +951,20 @@ export function TriageBoard({
                     <h3 onClick={canFold ? () => toggleFold(l.id, all.length) : undefined}
                       className={`flex items-center gap-2 m-0 py-2 px-1.5 text-[11px] font-semibold rounded-sm${canFold ? " agx-lane-bar" : ""}`}
                       style={{ color: l.tint, "--lane": l.tint } as CSSProperties}>
-                      <span className="text-[13px] tabular-nums">{waiting ? "—" : all.length}</span>
+                      {/* The lane's count, and the one way to light just this lane: it
+                          used to be a chip in a row of its own above the lanes. A
+                          lane with nothing in it has nothing to light, so it stays
+                          plain: lighting it would leave every card quiet and the
+                          way out the very count you just pressed. */}
+                      {all.length > 0 && !waiting ? (
+                        <button data-seg={l.id} onClick={(e) => { e.stopPropagation(); setOnlyLane((v) => (v === l.id ? null : l.id)); }}
+                          aria-pressed={onlyLane === l.id}
+                          title={onlyLane === l.id ? "Show every lane again" : `Light the ${all.length} in ${l.label.toLowerCase()}, quieten the rest`}
+                          className="agx-btn rounded px-1 tabular-nums"
+                          style={{ color: l.tint, background: onlyLane === l.id ? `color-mix(in srgb, ${l.tint} 16%, transparent)` : "transparent" }}>
+                          <span className="text-[13px] tabular-nums">{all.length}</span>
+                        </button>
+                      ) : <span className="text-[13px] tabular-nums">{waiting ? "—" : all.length}</span>}
                       <span className="uppercase tracking-wide truncate">{l.label}</span>
                       {/*
                         * A DRAWN ⓘ, not the character.
@@ -1031,17 +987,10 @@ export function TriageBoard({
                         <InfoIcon size={ICON.xs} />
                       </span>
                       {/* Sort: in every lane and in every state, in the same place, so
-                          nothing beside it moves. Its value is the visible state. */}
-                      <select value={sortOf(l.id)} data-sort={l.id}
-                        onChange={(e) => setSort(l.id, e.target.value as SortKey)}
-                        onClick={(e) => e.stopPropagation()}
-                        aria-label={`Sort ${l.label}`}
-                        title={sortOf(l.id) === "default" ? "Sort this lane" : `Sorted by ${SORT_LABEL[sortOf(l.id)].toLowerCase()}`}
-                        className="ml-auto shrink-0 rounded text-[10px] font-normal agx-btn"
-                        style={{ height: MIN_BOX, maxWidth: 140, color: "var(--text3)", background: "transparent", border: EDGE }}>
-                        {SORT_KEYS.map((k) => <option key={k} value={k}>{SORT_LABEL[k]}</option>)}
-                      </select>
-                      <span className="text-[9px] px-1 rounded shrink-0" style={{ color: "var(--text4)", border: EDGE }}>{i + 1}</span>
+                          nothing beside it moves. A dot says an order other than the
+                          default is on; the menu says which. */}
+                      <SortButton lane={l.id} label={l.label} value={sortOf(l.id)} onPick={(k) => setSort(l.id, k)} />
+                      <span className="ml-0.5 text-[9px] px-1 rounded shrink-0" style={{ color: "var(--text4)", border: EDGE }}>{i + 1}</span>
                       {/*
                         * The fold lives HERE and not on the counts row above.
                         *
@@ -1175,6 +1124,50 @@ export function TriageBoard({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * A lane's sort, as an icon and a menu instead of a select.
+ *
+ * The select spelled out "Default order" in every lane's bar, up to 140px of a
+ * 268px column, to say that nothing was changed. The icon takes MIN_BOX, and the
+ * dot is the whole of the state that matters on the bar: an order other than
+ * the default is on. Which one is the menu's tick and the tooltip's. It stays
+ * in the same place in every state, and a press on it never folds the lane.
+ */
+function SortButton({ lane, label, value, onPick }: { lane: string; label: string; value: SortKey; onPick: (k: SortKey) => void }) {
+  const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLButtonElement>(null);
+  const on = value !== "default";
+  return (
+    <>
+      <button ref={anchor} data-sort={lane} onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+        aria-label={`Sort ${label}`} aria-haspopup="menu" aria-expanded={open}
+        title={on ? `Sorted by ${SORT_LABEL[value].toLowerCase()}` : "Sort this lane"}
+        className="ml-auto shrink-0 relative grid place-items-center rounded agx-hover"
+        style={{ width: MIN_BOX, height: MIN_BOX, color: on ? "var(--text2)" : "var(--text4)" }}>
+        <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor"
+          strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden focusable="false">
+          <path d="M5 13V3M2.5 5.5 5 3l2.5 2.5M11 3v10M8.5 10.5 11 13l2.5-2.5" />
+        </svg>
+        {on && <span data-sort-dot aria-hidden className="absolute rounded-full"
+          style={{ top: 2, right: 2, width: 5, height: 5, background: "var(--primary)" }} />}
+      </button>
+      {open && (
+        <AnchoredMenu anchor={anchor} align="left" minWidth={160} onClose={() => setOpen(false)}>
+          <div className="wfm" style={{ display: "contents" }}>
+            {SORT_KEYS.map((k) => (
+              <button key={k} type="button" role="menuitem" className="wfm-opt" aria-current={k === value || undefined}
+                onClick={() => { onPick(k); setOpen(false); }}>
+                <span className="ck" aria-hidden>{k === value ? <DoneIcon size={ICON.xs} /> : null}</span>
+                <span className="n">{SORT_LABEL[k]}</span>
+              </button>
+            ))}
+          </div>
+        </AnchoredMenu>
+      )}
+    </>
   );
 }
 

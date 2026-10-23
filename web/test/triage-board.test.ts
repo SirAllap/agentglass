@@ -89,9 +89,9 @@ const drawn = (html: string, lane: string): number => (column(html, lane).match(
 /** The number in the lane's heading. */
 const heading = (html: string, lane: string): string | null =>
   column(html, lane).match(/tabular-nums">([^<]+)</)?.[1] ?? null;
-/** The number in that lane's segment of the summary bar. */
+/** The number on the lane's count button, the one that lights the lane (the chip row it replaced is gone). */
 const segment = (html: string, lane: string): string | null =>
-  html.match(new RegExp(`data-seg="${lane}"[\\s\\S]*?<b[^>]*>([^<]+)</b>`))?.[1] ?? null;
+  html.match(new RegExp(`data-seg="${lane}"[^>]*>\\s*<span[^>]*>([^<]+)</span>`))?.[1] ?? null;
 
 /*
  * One board with a lane of every shape, built through the real classifier
@@ -190,7 +190,7 @@ describe("the scope sentence", () => {
   it("states what is on the board and what is not", () => {
     const html = full();
     expect(html).toContain(`${INVOLVED}</b>`);
-    expect(html).toContain("of 388 open pull requests want something from you");
+    expect(html).toContain("of 388 open · yours and asked of you");
     // No way to the rest from here: the repository is reached by searching.
     expect(html).not.toContain("show the other");
     expect(html).not.toContain("never shows more than that");
@@ -207,9 +207,8 @@ describe("the scope sentence", () => {
     expect(html).not.toContain("show every open pull request");
     expect(html).not.toContain("never shows more than that");
     expect(html).not.toContain("the other 0");
-    expect(html).toContain("open pull requests want something from you");
-    expect(html).not.toContain("of 1 open pull requests");
-    expect(html).toContain(`${INVOLVED} on the board`);
+    expect(html).toContain("open · yours and asked of you");
+    expect(html).not.toContain("of 1 open");
   });
 
   it("shouts about the ones that only need a press", () => {
@@ -233,7 +232,7 @@ describe("waiting is not the same as empty", () => {
     expect(html).toContain("Reading the two lists this board is made of");
     expect(html).not.toContain("Nothing wants anything from you");
     // Not "0 of 388". A count nobody has counted is the whole complaint.
-    expect(html).not.toContain("want something from you");
+    expect(html).not.toContain("yours and asked of you");
     expect(heading(html, "review")).toBe("—");
   });
 
@@ -322,9 +321,9 @@ describe("the summary bar", () => {
     expect(segment(html, "blocked")).toBe("1");
     expect(segment(html, "others")).toBe("1");
     expect(segment(html, "flight")).toBe("1");
-    // And the board against the repository, which is the same fraction the
-    // scope sentence states in words.
-    expect(html).toContain(`${INVOLVED} / 388`);
+    // The board against the repository is the one line above the lanes now.
+    expect(html).toContain(`${INVOLVED}</b>`);
+    expect(html).toContain("of 388 open");
   });
 
   it("agrees with the lane headings, because two counts that can drift will", () => {
@@ -355,22 +354,18 @@ describe("the summary bar", () => {
     const before = (html.match(/data-pr="/g) ?? []).length;
     expect(before, "a board with cards to keep").toBeGreaterThan(0);
 
-    /* The chips are buttons now — the empty ones deliberately are not, because
-       lighting a lane with nothing in it leaves a board where every card is
-       quiet and the way out is the chip you just pressed. */
-    const row = html.slice(html.indexOf('data-seg="review"'), html.indexOf('data-lane="review"'));
-    expect(row, "a lane with cards is pressable").toContain("<button");
-    expect(row).toContain('data-seg="land"');
+    /* The lane's count is the button now — an empty lane's deliberately is not,
+       because lighting a lane with nothing in it leaves a board where every
+       card is quiet and the way out is the count you just pressed. */
+    expect(html, "a lane with cards is pressable").toMatch(/<button data-seg="review"/);
+    expect(html).toMatch(/<button data-seg="land"/);
   });
 
   it("and an empty lane is not one of those buttons", () => {
     // `review` is empty in this fixture; `land` is not.
     const html = render({ mine: [pr(1)], review: [], total: 40 });
-    const seg = (id: string) => {
-      const i = html.indexOf(`data-seg="${id}"`);
-      return html.slice(html.lastIndexOf("<", i), i);
-    };
-    expect(seg("review"), "nothing to light").not.toContain("button");
+    expect(html, "nothing to light").not.toContain('data-seg="review"');
+    expect(html, "a lane holding the card is pressable").toContain("data-seg=");
   });
 
   it("is not drawn while the lists are still arriving", () => {
@@ -820,7 +815,7 @@ describe("the repository on the board, and results as cards", () => {
     expect(html).not.toContain("on this page of the repository");
     expect(html).not.toContain('data-lane="others"');
     expect(html).not.toContain("Load more pull requests");
-    expect(html).toContain("want something from you");
+    expect(html).toContain("open · yours and asked of you");
   });
 
   it("results are cards, merged ones included, never rows and never filed under Blocked", () => {
