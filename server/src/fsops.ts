@@ -20,7 +20,7 @@
  *
  * Simplifications that name their ceiling: the trash is the home trash only (a
  * file on another device is copied into it, not trashed in a per-mount
- * .Trash-<uid>); undo is one level each time, with no redo; a password given
+ * .Trash-<uid>); undo goes back one operation at a time and redo forward again; a password given
  * to the archiver travels in its argument list, visible to the same user's ps.
  */
 import {
@@ -108,8 +108,14 @@ const journal: Journal[] = [];
 const MAX_JOURNAL = 50;
 /** Ctrl+Z is for what was just done: after this, an entry is forgotten rather than undone by surprise. */
 export const JOURNAL_TTL_MS = 10 * 60_000;
+/** What was undone, newest last: each can be done again until something else happens. */
+interface Redo { label: string; at: number; run: () => Ok<{ label: string; count: number }> | Fail }
+const redoStack: Redo[] = [];
+/** True while an undo or redo is running, so the entries it writes do not wipe the redo it belongs to. */
+let replaying = false;
 function remember(kind: Kind, label: string, steps: Step[]): void {
   if (!steps.length) return;
+  if (!replaying) redoStack.length = 0;
   journal.push({ kind, label, steps, at: Date.now() });
   while (journal.length > MAX_JOURNAL) journal.shift();
 }
@@ -123,7 +129,12 @@ export function undoState(now = Date.now()): { available: boolean; label: string
   const j = newest(now);
   return { available: !!j, label: j ? j.label : null };
 }
-export function __resetJournalForTest(): void { journal.length = 0; jobs.clear(); }
+export function redoState(now = Date.now()): { available: boolean; label: string | null } {
+  while (redoStack.length && now - redoStack[redoStack.length - 1]!.at > JOURNAL_TTL_MS) redoStack.pop();
+  const r = redoStack[redoStack.length - 1];
+  return { available: !!r, label: r ? r.label : null };
+}
+export function __resetJournalForTest(): void { journal.length = 0; redoStack.length = 0; jobs.clear(); }
 
 /**
  * Move without ever replacing: rename(2) silently replaces a file that appeared
@@ -329,6 +340,7 @@ export function trashList(): TrashRow[] {
 
 /** Put trashed entries back. A taken place is refused, never overwritten. */
 export function fsRestore(ids: unknown, local: boolean): Ok<{ restored: string[] }> | Fail {
+  if (!replaying) redoStack.length = 0;
   if (!Array.isArray(ids) || !ids.length) return fail("nothing selected");
   const restored: string[] = [];
   const steps: Step[] = [];
@@ -366,6 +378,7 @@ export function fsRestore(ids: unknown, local: boolean): Ok<{ restored: string[]
 
 /** Empty the trash (or delete chosen entries) for good. */
 export async function fsEmptyTrash(ids: unknown, confirm: unknown): Promise<Ok<{ removed: number }> | Fail> {
+  redoStack.length = 0;
   const rows = trashList();
   const chosen = Array.isArray(ids) ? rows.filter((r) => ids.includes(r.id)) : rows;
   if (confirm !== chosen.length) return fail(`confirm with the count: ${chosen.length}`);
@@ -382,6 +395,7 @@ export async function fsEmptyTrash(ids: unknown, confirm: unknown): Promise<Ok<{
 export async function fsDelete(paths: unknown, confirm: unknown, local: boolean): Promise<Ok<{ deleted: number }> | Fail> {
   const ops = operands(paths, local);
   if (!ops.ok) return ops;
+  redoStack.length = 0;
   if (confirm !== ops.items.length) return fail(`confirm with the count: ${ops.items.length}`);
   let n = 0;
   for (const o of ops.items) {
@@ -398,7 +412,7 @@ export async function fsDelete(paths: unknown, confirm: unknown, local: boolean)
 
 /* ---- jobs: copy, move, duplicate, compress ----------------------------- */
 
-export interface JobView { id: string; kind: string; label: string; state: "running" | "done" | "error" | "cancelled"; total: number | null; done: number; items: number; error?: string; started: number; ended?: number }
+export interface JobView { id: string; kind: string; label: string; state: "running" | "done" | "error" | "cancelled"; total: number | null; done: number; items: number; error?: string; output?: string; started: number; ended?: number }
 interface Job extends JobView { stop: boolean; proc?: { kill: () => void } }
 const jobs = new Map<string, Job>();
 let jobSeq = 0;
@@ -422,6 +436,27 @@ function newJob(kind: string, label: string, total: number | null): Job {
   const finished = [...jobs.values()].filter((x) => x.state !== "running");
   while (finished.length > 20) jobs.delete(finished.shift()!.id);
   return j;
+}
+
+/** What a job started outside this file (a custom action) uses: the same list, the same Cancel, and a bounded output the panel can show. */
+export interface ExternalJob {
+  id: string;
+  progress(done: number, total: number | null): void;
+  /** What Cancel does to the running process. */
+  onCancel(kill: () => void): void;
+  stopped(): boolean;
+  end(state: "done" | "error" | "cancelled", error?: string, output?: string): void;
+}
+export function startExternalJob(kind: string, label: string, items: number): ExternalJob {
+  const j = newJob(kind, label, null);
+  j.items = items;
+  return {
+    id: j.id,
+    progress: (done, total) => { j.done = done; j.total = total; },
+    onCancel: (kill) => { j.proc = { kill }; },
+    stopped: () => j.stop,
+    end: (state, error, output) => { j.state = state; j.ended = Date.now(); j.proc = undefined; if (error) j.error = error; if (output) j.output = output; },
+  };
 }
 
 class Cancelled extends Error {}
@@ -680,25 +715,67 @@ export function fsUndo(local: boolean, now = Date.now()): Ok<{ label: string; co
   const j = newest(now);
   if (!j) return fail("nothing to undo");
   const label = j.label;
-  if (j.kind === "move" || j.kind === "rename") {
-    // Check every step before changing any: a half-undone move is worse than none.
-    for (const s of j.steps) {
-      if (!exists(s.to)) return fail(`${basename(s.to)} is no longer where it was put`);
-      if (exists(s.from!)) return fail(`${basename(s.from!)}: its old place is taken`);
-      if (browseReal(dirname(s.from!), local) === null) return fail(OUTSIDE);
+  const redoLabel = label.replace(/^Undo /, "Redo ");
+  const was = replaying;
+  replaying = true;
+  try {
+    if (j.kind === "move" || j.kind === "rename") {
+      // Check every step before changing any: a half-undone move is worse than none.
+      for (const s of j.steps) {
+        if (!exists(s.to)) return fail(`${basename(s.to)} is no longer where it was put`);
+        if (exists(s.from!)) return fail(`${basename(s.from!)}: its old place is taken`);
+        if (browseReal(dirname(s.from!), local) === null) return fail(OUTSIDE);
+      }
+      for (const s of j.steps.slice().reverse()) {
+        try { moveNoReplace(s.to, s.from!); } catch (e) { return fail(String((e as Error).message)); }
+      }
+      journal.splice(journal.indexOf(j), 1);
+      redoStack.push({ label: redoLabel, at: now, run: () => {
+        for (const s of j.steps) {
+          if (!exists(s.from!)) return fail(`${basename(s.from!)} is no longer where it was`);
+          if (exists(s.to)) return fail(`${basename(s.to)}: its place is taken`);
+          if (browseReal(dirname(s.to), local) === null) return fail(OUTSIDE);
+        }
+        for (const s of j.steps) {
+          try { moveNoReplace(s.from!, s.to); } catch (e) { return fail(String((e as Error).message)); }
+        }
+        journal.push({ ...j, at: Date.now() });
+        return { ok: true, label: redoLabel, count: j.steps.length };
+      } });
+    } else if (j.kind === "trash") {
+      const r = fsRestore(j.steps.map((s) => s.trashId), local);
+      if (!r.ok) return r;
+      journal.splice(journal.indexOf(j), 1);
+      redoStack.push({ label: redoLabel, at: now, run: () => {
+        const t = fsTrash(j.steps.map((s) => s.from!), local);
+        return t.ok ? { ok: true, label: redoLabel, count: j.steps.length } : t;
+      } });
+    } else {
+      // Created things (folder, file, copy, archive) go to the trash, which is reversible, and a redo brings the very same thing back.
+      const r = fsTrash(j.steps.map((s) => s.to), local);
+      if (!r.ok) return r;
+      const own = journal.pop(); // fsTrash pushed its own entry; undoing an undo is not offered
+      const ids = (own?.steps ?? []).map((s) => s.trashId);
+      journal.splice(journal.indexOf(j), 1);
+      redoStack.push({ label: redoLabel, at: now, run: () => {
+        const b = fsRestore(ids, local);
+        if (!b.ok) return b;
+        journal.push({ ...j, at: Date.now() });
+        return { ok: true, label: redoLabel, count: j.steps.length };
+      } });
     }
-    for (const s of j.steps.slice().reverse()) {
-      try { moveNoReplace(s.to, s.from!); } catch (e) { return fail(String((e as Error).message)); }
-    }
-  } else if (j.kind === "trash") {
-    const r = fsRestore(j.steps.map((s) => s.trashId), local);
-    if (!r.ok) return r;
-  } else {
-    // Created things (folder, file, copy, archive) go to the trash, which is reversible.
-    const r = fsTrash(j.steps.map((s) => s.to), local);
-    if (!r.ok) return r;
-    journal.pop(); // fsTrash pushed its own entry; undoing an undo is not offered
-  }
-  journal.splice(journal.indexOf(j), 1);
+  } finally { replaying = was; }
   return { ok: true, label, count: j.steps.length };
+}
+
+export function fsRedo(local: boolean, now = Date.now()): Ok<{ label: string; count: number }> | Fail {
+  void local;
+  if (!redoState(now).available) return fail("nothing to redo");
+  const r = redoStack[redoStack.length - 1]!;
+  const was = replaying;
+  replaying = true;
+  let out: Ok<{ label: string; count: number }> | Fail;
+  try { out = r.run(); } finally { replaying = was; }
+  if (out.ok) redoStack.pop();
+  return out;
 }

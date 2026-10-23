@@ -6,8 +6,8 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../../../lib/api.ts";
 import { HIT, ICON } from "../../../lib/iconSize.ts";
 import { FileTypeIcon } from "./StrataIcon.tsx";
-import { archiveName, compressSub, destProblem, trashDeleteWords, formatTakesPassword, modeBits, modeSymbolic, nameProblem, shortPath, toggleMode, type Who } from "../../../lib/finderOps.ts";
-import type { FsProps, FsTrashRow } from "../../../../../shared/types.ts";
+import { archiveName, compressSub, destProblem, trashDeleteWords, formatTakesPassword, modeBits, modeSymbolic, filterApps, nameProblem, shortPath, toggleMode, type Who } from "../../../lib/finderOps.ts";
+import type { FsProps, FsTrashRow, OpenWithApp, OpenWithList } from "../../../../../shared/types.ts";
 import { EDGE, INPUT, INPUT_STYLE, LINE } from "../../workspace/Chrome.tsx";
 import { Sheet } from "./FinderOpsUI.tsx";
 
@@ -196,6 +196,61 @@ export function TrashPanel({ home, onRestored, onClose }: { home: string; onRest
           <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE, color: "var(--error-ink)" }} onClick={() => void remove(sure.ids)}>Delete for good</button>
         </div>
       </Sheet>}
+    </Sheet>
+  );
+}
+
+/** Open With…: Strata's box (its shot 50): a search, "Recommended Applications" then "Other Applications", and "Always use for this file type". */
+export function OpenWithDialog({ paths, onLaunch, onClose }: {
+  paths: readonly string[]; onLaunch: (id: string, always: { mime: string } | null) => void; onClose: () => void;
+}) {
+  const [list, setList] = useState<OpenWithList | null>(null);
+  const [q, setQ] = useState("");
+  const [at, setAt] = useState(0);
+  const [always, setAlways] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => { let live = true; void api.openWithList([...paths]).then((r) => { if (live) setList(r); }); return () => { live = false; }; }, [paths]);
+  useEffect(() => { input.current?.focus(); }, [list]);
+  const rec = filterApps(list?.recommended ?? [], q), other = filterApps(list?.other ?? [], q);
+  const rows: { app: OpenWithApp; head?: string }[] = [...rec.map((app, i) => ({ app, head: i === 0 ? "Recommended Applications" : undefined })), ...other.map((app, i) => ({ app, head: i === 0 ? "Other Applications" : undefined }))];
+  const pick = Math.min(at, Math.max(0, rows.length - 1));
+  const mime = list?.mimes?.length === 1 ? list.mimes[0]! : null;
+  const go = () => { const r = rows[pick]; if (r) onLaunch(r.app.id, always && mime ? { mime } : null); };
+  const empty = list && !rows.length ? (q ? "No applications match" : list.error ?? list.empty ?? "No compatible applications were found") : null;
+  return (
+    <Sheet label="Open With" onClose={onClose} width={420}>
+      <b className="block text-[13px]">Open With</b>
+      <p className="m-0 mb-3" style={{ color: "var(--text3)" }}>Choose an application to open {paths.length === 1 ? "this item" : "these items"}</p>
+      <input ref={input} value={q} onChange={(e) => { setQ(e.target.value); setAt(0); }} spellCheck={false} placeholder="Search applications…" aria-label="Search applications"
+        onKeyDown={(e) => {
+          if (e.key === "Enter") { e.preventDefault(); go(); }
+          else if (e.key === "ArrowDown") { e.preventDefault(); setAt(Math.min(rows.length - 1, pick + 1)); }
+          else if (e.key === "ArrowUp") { e.preventDefault(); setAt(Math.max(0, pick - 1)); }
+        }} className={`${INPUT} w-full mb-2`} style={INPUT_STYLE} />
+      <div role="listbox" aria-label="Applications" className="overflow-y-auto rounded-md" style={{ border: EDGE, maxHeight: 260 }}>
+        {!list && <p className="m-0 p-3" style={{ color: "var(--text3)" }}>Looking for applications…</p>}
+        {empty && <p role="status" className="m-0 p-3" style={{ color: "var(--text3)" }}>{empty}</p>}
+        {rows.map((r, i) => (
+          <div key={r.app.id}>
+            {r.head && <div className="px-2 pt-2 pb-1 text-[11px]" style={{ color: "var(--text3)" }}>{r.head}</div>}
+            <button role="option" aria-selected={i === pick} onClick={() => setAt(i)} onDoubleClick={go} className="agx-btn w-full text-left px-2 rounded-md block"
+              style={{ minHeight: HIT, background: i === pick ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent" }}>
+              <span className="block truncate">{r.app.name}</span>
+              {r.app.comment && <span className="block truncate text-[11px]" style={{ color: "var(--text3)" }}>{r.app.comment}</span>}
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center justify-between gap-2 mt-3">
+        <label className="flex items-center gap-1.5" style={{ opacity: mime ? 1 : 0.5 }}>
+          <input type="checkbox" checked={always && !!mime} disabled={!mime} onChange={(e) => setAlways(e.target.checked)} />
+          {paths.length > 1 ? "Always use for these file types" : "Always use for this file type"}
+        </label>
+        <div className="flex gap-2">
+          <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE }} onClick={onClose}>Cancel</button>
+          <button className="agx-btn rounded-md px-3" disabled={!rows.length} style={{ minHeight: HIT, background: "var(--text)", color: "var(--bg)" }} onClick={go}>Open</button>
+        </div>
+      </div>
     </Sheet>
   );
 }

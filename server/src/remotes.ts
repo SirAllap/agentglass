@@ -138,12 +138,12 @@ const failure = (uri: string, raw: string, secrets: string[]): Extract<RemoteSte
   return { state: "error", error: line.slice(0, 240) || "gio could not mount it" };
 };
 
-interface Live { proc: GioProc; uri: string; buf: string; answers: Record<string, string>; code: number | null; pumped: boolean; wake: (() => void) | null; timer: ReturnType<typeof setTimeout>; asked: Pending | null; used: string[] }
+interface Live { proc: GioProc; uri: string; buf: string; answers: Record<string, string>; code: number | null; pumped: boolean; lastAt: number; wake: (() => void) | null; timer: ReturnType<typeof setTimeout>; asked: Pending | null; used: string[] }
 
 /** The connections in flight. A session is one `gio mount`, and it is gone the moment it ends, is cancelled, or sits unanswered for two minutes. */
 export class Sessions {
   private live = new Map<string, Live>();
-  constructor(private spawn: SpawnGio = spawnGio, private where: (uri: string) => Promise<string | undefined> = async () => undefined, private ttlMs = 120_000) {}
+  constructor(private spawn: SpawnGio = spawnGio, private where: (uri: string) => Promise<string | undefined> = async () => undefined, private ttlMs = 120_000, private quietMs = 250) {}
 
   async start(raw: unknown): Promise<RemoteStep> {
     const v = validateUri(raw);
@@ -151,11 +151,11 @@ export class Sessions {
     if (this.live.size >= 4) return { state: "error", error: "too many connections are waiting for an answer" };
     const proc = this.spawn(["gio", "mount", v.uri]);
     const id = crypto.randomUUID();
-    const s: Live = { proc, uri: v.uri, buf: "", answers: {}, code: null, pumped: false, wake: null, asked: null, used: [], timer: setTimeout(() => this.end(id), this.ttlMs) };
+    const s: Live = { proc, uri: v.uri, buf: "", answers: {}, code: null, pumped: false, lastAt: Date.now(), wake: null, asked: null, used: [], timer: setTimeout(() => this.end(id), this.ttlMs) };
     this.live.set(id, s);
     void proc.exited.then((c) => { s.code = c; s.wake?.(); });
     void (async () => {
-      try { const r = proc.out.getReader(); for (;;) { const { value, done } = await r.read(); if (done) break; s.buf += value; s.wake?.(); } } catch { /* the pipe closed */ }
+      try { const r = proc.out.getReader(); for (;;) { const { value, done } = await r.read(); if (done) break; s.buf += value; s.lastAt = Date.now(); s.wake?.(); } } catch { /* the pipe closed */ }
       s.pumped = true; s.wake?.();
     })();
     return this.next(id);
@@ -189,6 +189,14 @@ export class Sessions {
     const s = this.live.get(id)!;
     for (;;) {
       const p = parsePending(s.buf);
+      // gio waits for its answer after a real prompt and says nothing more. A server's own banner or share name can end in "Password: ", so a prompt counts only once the line has been quiet (L1 of the p67 review: a ceiling, not a proof: a server that stalls on purpose still looks like gio waiting).
+      const quiet = this.quietMs - (Date.now() - s.lastAt);
+      if (p && quiet > 0 && s.code === null) {
+        await new Promise<void>((res) => { s.wake = res; setTimeout(res, quiet).unref?.(); });
+        s.wake = null;
+        if (!this.live.has(id)) return { state: "error", error: "no such connection" };
+        continue;
+      }
       if (p?.kind === "prompt" && p.label in s.answers) {
         const typed = s.answers[p.label]!;
         delete s.answers[p.label];

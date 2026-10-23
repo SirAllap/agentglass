@@ -5371,7 +5371,7 @@ export interface LogDigest {
 
 /** One file operation, as POST /fs/op takes it (server/src/fsroute.ts). */
 export interface FsBody {
-  op: "mkdir" | "newfile" | "folder-with" | "rename" | "trash" | "restore" | "empty-trash" | "delete" | "copy" | "move" | "duplicate" | "compress" | "chmod" | "undo";
+  op: "mkdir" | "newfile" | "folder-with" | "rename" | "trash" | "restore" | "empty-trash" | "delete" | "copy" | "move" | "duplicate" | "compress" | "chmod" | "undo" | "redo";
   path?: string; paths?: string[]; parent?: string; dest?: string; name?: string; ids?: string[];
   confirm?: number; conflict?: "fail" | "keep-both"; format?: "zip" | "7z" | "tar.gz" | "tar"; password?: string; mode?: number;
 }
@@ -5380,6 +5380,10 @@ export interface FsJob { id: string; kind: string; label: string; state: "runnin
 export interface FsAnswer {
   ok: boolean; error?: string; path?: string; created?: string[]; job?: FsJob;
   undo?: { available: boolean; label: string | null };
+  redo?: { available: boolean; label: string | null };
 }
+/** One application Open With offers: the id is all the server takes back. */
+export interface OpenWithApp { id: string; name: string; comment: string; icon: string }
+export interface OpenWithList { ok: boolean; error?: string; mimes?: string[]; defaultId?: string | null; recommended?: OpenWithApp[]; other?: OpenWithApp[]; empty?: string }
 export interface FsTrashRow { id: string; name: string; from: string; deleted: string; kind: "dir" | "file" | "link"; bytes: number | null }
 export interface FsProps { path: string; name: string; kind: "dir" | "file" | "link"; bytes: number | null; mtime: number; mode: number; owner: string; group: string; link: string | null; hidden: boolean; mine: boolean }

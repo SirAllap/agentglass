@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   __resetJournalForTest, cancelJob, fsChmod, fsCompress, fsCopy, fsDelete, fsEmptyTrash, fsFolderWith, fsMkdir, fsNewFile, fsProps, fsRename,
-  fsRestore, fsTrash, fsUndo, keepBoth, listJobs, settle, trashList, trashRoot, undoState,
+  fsRedo, fsRestore, fsTrash, fsUndo, JOURNAL_TTL_MS, keepBoth, listJobs, settle, trashList, trashRoot, undoState, redoState,
 } from "../src/fsops.ts";
 
 const saved = { HOME: process.env.HOME, XDG: process.env.XDG_DATA_HOME, ROOTS: process.env.AGENTGLASS_DISK_ROOTS, CFG: process.env.XDG_CONFIG_HOME };
@@ -329,5 +329,92 @@ describe("naming", () => {
     expect(keepBoth(home, "free.txt")).toBe("free.txt");
     put(".bashrc");
     expect(keepBoth(home, ".bashrc")).toBe(".bashrc (copy)");
+  });
+});
+
+describe("redo: what was just undone, done again", () => {
+  test("an undone rename is renamed again, and can be undone once more", () => {
+    const a = put("a.txt");
+    expect(fsRename(a, "b.txt", true).ok).toBe(true);
+    expect(redoState().available).toBe(false);
+    expect(fsUndo(true).ok).toBe(true);
+    expect(existsSync(a)).toBe(true);
+    expect(redoState()).toEqual({ available: true, label: "Redo rename of a.txt" });
+    expect(fsRedo(true).ok).toBe(true);
+    expect(existsSync(a)).toBe(false);
+    expect(existsSync(join(home, "b.txt"))).toBe(true);
+    expect(redoState().available).toBe(false);
+    expect(fsUndo(true).ok).toBe(true);
+    expect(existsSync(a)).toBe(true);
+  });
+
+  test("an undone trash goes to the trash again", () => {
+    const a = put("a.txt");
+    expect(fsTrash([a], true).ok).toBe(true);
+    expect(fsUndo(true).ok).toBe(true);
+    expect(existsSync(a)).toBe(true);
+    expect(fsRedo(true).ok).toBe(true);
+    expect(existsSync(a)).toBe(false);
+    expect(trashList().length).toBe(1);
+    expect(fsUndo(true).ok).toBe(true);
+    expect(existsSync(a)).toBe(true);
+  });
+
+  test("an undone new folder comes back from the trash, not as a new empty one", () => {
+    const f = fsMkdir(home, "docs", true);
+    if (!f.ok) throw new Error("mkdir");
+    writeFileSync(join(f.path, "inner.txt"), "kept");
+    expect(fsUndo(true).ok).toBe(true);
+    expect(existsSync(f.path)).toBe(false);
+    expect(fsRedo(true).ok).toBe(true);
+    expect(readFileSync(join(f.path, "inner.txt"), "utf8")).toBe("kept");
+  });
+
+  test("a new operation clears the redo, so it is never offered after something else happened", () => {
+    const a = put("a.txt");
+    fsRename(a, "b.txt", true);
+    fsUndo(true);
+    expect(redoState().available).toBe(true);
+    fsMkdir(home, "other", true);
+    expect(redoState().available).toBe(false);
+    expect(fsRedo(true)).toEqual({ ok: false, error: "nothing to redo" });
+  });
+
+  test("a redo whose place was taken meanwhile is refused and changes nothing", () => {
+    const a = put("a.txt", "one");
+    fsRename(a, "b.txt", true);
+    fsUndo(true);
+    writeFileSync(join(home, "b.txt"), "someone else's");
+    const r = fsRedo(true);
+    expect(r.ok).toBe(false);
+    expect(readFileSync(join(home, "b.txt"), "utf8")).toBe("someone else's");
+    expect(readFileSync(a, "utf8")).toBe("one");
+  });
+
+  test("a redo is forgotten with the same lifetime as an undo", () => {
+    const a = put("a.txt");
+    fsRename(a, "b.txt", true);
+    fsUndo(true);
+    expect(redoState(Date.now() + JOURNAL_TTL_MS + 1000).available).toBe(false);
+  });
+
+  test("a permanent delete or a restore in between also ends the redo", async () => {
+    const a = put("a.txt");
+    fsRename(a, "b.txt", true);
+    fsUndo(true);
+    expect(redoState().available).toBe(true);
+    const b = put("c.txt");
+    expect((await fsDelete([b], 1, true)).ok).toBe(true);
+    expect(redoState().available).toBe(false);
+  });
+
+  test("a redo of several items is judged whole: one place taken, none moved", async () => {
+    const a = put("a.txt"), b = put("b.txt"), d = dir("dest");
+    expect((await fsCopy([a, b], d, { move: true, conflict: "fail" }, true)).ok).toBe(true);
+    expect(fsUndo(true).ok).toBe(true);
+    writeFileSync(join(d, "b.txt"), "taken");
+    expect(fsRedo(true).ok).toBe(false);
+    expect(existsSync(a)).toBe(true);
+    expect(existsSync(join(d, "a.txt"))).toBe(false);
   });
 });

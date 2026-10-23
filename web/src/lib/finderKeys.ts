@@ -32,6 +32,7 @@ export type Act =
   | { t: "folderwith" }
   | { t: "props" }
   | { t: "undo" }
+  | { t: "redo" }
   | { t: "pin" }
   | { t: "newtab" }
   | { t: "closetab" }
@@ -95,6 +96,11 @@ export function finderKey(k: KeyIn, ctx: Ctx): Act | null {
       case "PageDown": return { t: "extend", by: "pageDown" };
       default: return null;
     }
+  }
+  if ((k.ctrl || k.meta) && !k.alt) {
+    const low = k.key.toLowerCase();
+    // Strata's redo: Ctrl+Shift+Z or Ctrl+Y.
+    if ((k.shift && low === "z") || (!k.shift && low === "y")) return { t: "redo" };
   }
   if (k.ctrl || k.meta) {
     if (k.shift) return null;

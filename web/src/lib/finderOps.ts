@@ -45,7 +45,7 @@ export function menuFor(target: Target, c: MenuCtx): Item[][] {
   if (target === "empty") {
     return [
       [{ id: "new-folder", label: "New Folder", keys: "Ctrl+Shift+N" }, { id: "new-file", label: "New File" }, { id: "paste", label: "Paste", keys: "Ctrl+V", disabled: !c.canPaste }],
-      [{ id: "open-with", label: "Open With…", later: "Open With" }, { id: "terminal", label: "Open in Terminal", keys: "Ctrl+Alt+T" }],
+      [{ id: "open-with", label: "Open With…" }, { id: "terminal", label: "Open in Terminal", keys: "Ctrl+Alt+T" }],
       [{ id: "select-all", label: "Select All", keys: "Ctrl+A" }, { id: "refresh", label: "Refresh", keys: "F5" }, { id: "hidden", label: c.hidden ? "Hide Hidden Files" : "Show Hidden Files", keys: "Ctrl+H" }],
       [{ id: "customize", label: "Customize…", later: "Customize" }, { id: "props", label: "Properties" }],
     ];
@@ -53,7 +53,7 @@ export function menuFor(target: Target, c: MenuCtx): Item[][] {
   const folder = target === "folder";
   const open: Item[] = [
     { id: "open", label: "Open", keys: "Enter" },
-    { id: "open-with", label: "Open With…", later: "Open With" },
+    { id: "open-with", label: "Open With…" },
     ...(folder
       ? [{ id: "terminal" as const, label: "Open in Terminal", keys: "Ctrl+Alt+T" }, { id: "open-in" as const, label: "Open in New Tab", keys: "Ctrl+Enter" }]
       : [{ id: "preview" as const, label: "Quick preview", keys: "Space", disabled: !c.previewable }, { id: "print" as const, label: "Print" }]),
@@ -146,6 +146,7 @@ export function doneNote(op: string, n: number, name: string): string {
     case "newfile": return `Created ${what}`;
     case "compress": return `Compressed ${what}`;
     case "undo": return `Undid: ${what}`;
+    case "redo": return `Redid: ${what}`;
     default: return "Done";
   }
 }
@@ -228,4 +229,11 @@ export function jobFraction(j: { state: string; total: number | null; done: numb
 /** The jobs the panel still shows: the running ones, and a finished one for a few seconds so the end is seen. */
 export function jobsShown<T extends { state: string; ended?: number }>(jobs: readonly T[], now: number, keepMs = 4000): T[] {
   return jobs.filter((j) => j.state === "running" || (j.ended !== undefined && now - j.ended < keepMs));
+}
+
+/** Open With's search: every word must be in the name or the description, either case. */
+export function filterApps<T extends { name: string; comment: string }>(apps: readonly T[], query: string): T[] {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return [...apps];
+  return apps.filter((a) => { const h = `${a.name} ${a.comment}`.toLowerCase(); return words.every((w) => h.includes(w)); });
 }

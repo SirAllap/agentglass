@@ -6,10 +6,10 @@
  */
 import {
   cancelJob, clearFinishedJobs, fsChmod, fsCompress, fsCopy, fsDelete, fsEmptyTrash, fsFolderWith, fsMkdir, fsNewFile, fsProps, fsRename,
-  fsRestore, fsTrash, fsUndo, listJobs, trashList, undoState,
+  fsRedo, fsRestore, fsTrash, fsUndo, listJobs, redoState, trashList, undoState,
 } from "./fsops.ts";
 
-export const FS_OPS = ["mkdir", "newfile", "folder-with", "rename", "trash", "restore", "empty-trash", "delete", "copy", "move", "duplicate", "compress", "chmod", "undo"] as const;
+export const FS_OPS = ["mkdir", "newfile", "folder-with", "rename", "trash", "restore", "empty-trash", "delete", "copy", "move", "duplicate", "compress", "chmod", "undo", "redo"] as const;
 export type FsOp = (typeof FS_OPS)[number];
 /** The ones nobody can take back: an agent needs the person's say-so for these. */
 export const FS_IRREVERSIBLE: readonly FsOp[] = ["delete", "empty-trash"];
@@ -61,16 +61,17 @@ export async function fsRun(b: Record<string, unknown>, local: boolean): Promise
     case "compress": r = await fsCompress(paths, b.name, b.format, b.password, local); break;
     case "chmod": r = fsChmod(b.path, b.mode, local); break;
     case "undo": r = fsUndo(local); break;
+    case "redo": r = fsRedo(local); break;
     default: return { status: 400, body: { ok: false, error: `unknown op (${FS_OPS.join(", ")})` } };
   }
-  return { status: r.ok ? 200 : 400, body: { ...r, undo: undoState() } };
+  return { status: r.ok ? 200 : 400, body: { ...r, undo: undoState(), redo: redoState() } };
 }
 
 export function fsReadOp(what: string, q: URLSearchParams, local: boolean): { status: number; body: unknown } {
   if (!local) return { status: 403, body: { ok: false, error: "file operations are for the machine they run on" } };
   if (what === "jobs") return { status: 200, body: { jobs: listJobs() } };
   if (what === "trash") return { status: 200, body: { ok: true, entries: trashList() } };
-  if (what === "undo") return { status: 200, body: { ok: true, ...undoState() } };
+  if (what === "undo") return { status: 200, body: { ok: true, ...undoState(), redo: redoState() } };
   if (what === "props") { const r = fsProps(q.get("path"), local); return { status: r.ok ? 200 : 400, body: r }; }
   return { status: 404, body: { ok: false, error: "no such read" } };
 }

@@ -25,6 +25,7 @@ export const SECTIONS: Section[] = [
     { keys: "Delete", does: "Move to Trash" },
     { keys: "Shift+Delete", does: "Permanently delete" },
     { keys: "Ctrl+Z", does: "Undo the last move, rename, trash or copy" },
+    { keys: "Ctrl+Shift+Z, Ctrl+Y", does: "Redo what was just undone" },
     { keys: "F2, Ctrl+R", does: "Rename" },
     { keys: "Ctrl+Shift+N", does: "Create a folder" },
     { keys: "Ctrl+Alt+N", does: "Create a folder containing the selection" },

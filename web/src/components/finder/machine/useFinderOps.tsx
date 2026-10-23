@@ -9,7 +9,7 @@ import type { FsBody, FsJob } from "../../../../../shared/types.ts";
 import { ConfirmDialog, ContextMenu, InlineName, Sheet, type InlineEdit } from "./FinderOpsUI.tsx";
 import { printable, printUrl } from "../../../lib/finderPrint.ts";
 import { JobsPanel } from "./FinderJobs.tsx";
-import { CompressDialog, FolderPicker, PropsDialog, TrashPanel } from "./FinderDialogs.tsx";
+import { CompressDialog, OpenWithDialog, FolderPicker, PropsDialog, TrashPanel } from "./FinderDialogs.tsx";
 
 /** What the next step builds; until then the item says so instead of doing nothing. */
 const NOT_YET = new Set<string>();
@@ -50,6 +50,7 @@ type Ask =
   | { k: "compress"; c: Chosen }
   | { k: "props"; path: string; dir: string; name: string }
   | { k: "trash" }
+  | { k: "openwith"; paths: string[] }
   | { k: "pick"; op: "move" | "copy"; c: Chosen };
 
 export function useFinderOps(env: OpsEnv) {
@@ -139,6 +140,12 @@ export function useFinderOps(env: OpsEnv) {
         setAsk({ k: "props", path: joinPath(t.dir, t.rows[0]!.name), dir: t.dir, name: t.rows[0]!.name });
         return;
       }
+      case "open-with": {
+        // On the empty space it is the folder itself.
+        const ps = c && c.rows.length ? paths(c) : [into];
+        setAsk({ k: "openwith", paths: ps });
+        return;
+      }
       case "move-to": case "copy-to": { const t = need(); if (t) setAsk({ k: "pick", op: id === "move-to" ? "move" : "copy", c: t }); return; }
       case "pin": {
         const t = need(); if (!t) return;
@@ -203,6 +210,7 @@ export function useFinderOps(env: OpsEnv) {
     const c = e.chosen();
     const into = c ? c.dir : e.here();
     const map: Record<string, Item["id"] | undefined> = { cut: "cut", copyfiles: "copy", paste: "paste", duplicate: "duplicate", rename: "rename", trash: "trash", delete: "delete", newfolder: "new-folder", folderwith: "folder-with", props: "props", pin: "pin", opentab: "open-in" };
+    if (t === "redo") { void run({ op: "redo" }, [e.here()], "", 1).then(() => { for (const d of [into, e.here()]) e.reload(d); }); return true; }
     if (t === "undo") { void run({ op: "undo" }, [e.here()], "", 1).then(() => { for (const d of [into, e.here()]) e.reload(d); }); return true; }
     const id = map[t];
     if (!id) return false;
@@ -250,6 +258,8 @@ export function useFinderOps(env: OpsEnv) {
         onCopyPath={() => envRef.current.copyText(a.path, `Copied ${a.path}`)} />; })()}
       {ask?.k === "pick" && (() => { const c = ask.c; return <FolderPicker op={ask.op} paths={paths(c)} start={c.dir} home={env.home} onClose={() => setAsk(null)}
         onPick={(dest) => { const op = ask.op; setAsk(null); void run({ op, paths: paths(c), dest, conflict: "keep-both" }, [c.dir, dest], c.rows[0]!.name, c.rows.length); }} />; })()}
+      {ask?.k === "openwith" && (() => { const ps = ask.paths; return <OpenWithDialog paths={ps} onClose={() => setAsk(null)}
+        onLaunch={(id, always) => { setAsk(null); void api.openWithLaunch(id, ps, always ?? undefined).then((r) => envRef.current.say(r.ok ? (r.note ?? "Opened") : (r.error ?? "That did not open"))); }} />; })()}
       {ask?.k === "trash" && <TrashPanel home={env.home} onClose={() => setAsk(null)} onRestored={(dirs, said) => { for (const d of dirs) envRef.current.reload(d); envRef.current.say(said); }} />}
       {ask?.k === "delete" && (() => { const w = deleteWords(ask.names); return <ConfirmDialog title={w.title} body={w.body} confirm="Permanently delete" onClose={() => setAsk(null)} onConfirm={() => { const f = ask.run; setAsk(null); f(); }} />; })()}
     </>

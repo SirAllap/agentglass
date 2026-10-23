@@ -196,3 +196,33 @@ describe("what gio says after it consumed a credential", () => {
     expect(JSON.stringify(r)).not.toContain("hunter2-secret");
   });
 });
+
+describe("a prompt a server draws itself (L1)", () => {
+  /** A gio that prints `first`, then `later` after `gapMs` without being written to: a server that keeps talking. */
+  function chatty(first: string, later: string, gapMs: number) {
+    const written: string[] = [];
+    let close!: () => void, done!: (c: number) => void;
+    const out = new ReadableStream<string>({ start(c) { c.enqueue(first); setTimeout(() => { c.enqueue(later); setTimeout(() => { c.close(); done(0); }, 5); }, gapMs); close = () => { try { c.close(); } catch { /* closed */ } }; } });
+    const exited = new Promise<number>((r) => { done = r; });
+    const proc: GioProc = { out, err: async () => "", write: (s) => { written.push(s); }, kill: () => { close(); done(137); }, exited };
+    return { proc, written };
+  }
+
+  test("a line that only looks like a password prompt, followed at once by more output, never reaches the person", async () => {
+    const g = chatty("Welcome to files.example.org\nPassword: ", "your session is being recorded\n", 30);
+    const s = new Sessions(() => g.proc, async () => undefined, 120_000, 150);
+    const r = await s.start("smb://h/x");
+    expect(r.state).not.toBe("password");
+    expect(g.written).toEqual([]);
+  });
+
+  test("a real prompt, after which gio waits for the answer, is shown once the line has been quiet", async () => {
+    const g = chatty("Authentication Required\nPassword: ", "", 10_000);
+    const s = new Sessions(() => g.proc, async () => undefined, 120_000, 40);
+    const t0 = Date.now();
+    const r = await s.start("smb://h/x");
+    expect(r.state).toBe("password");
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(35);
+    s.cancel((r as { session: string }).session);
+  });
+});

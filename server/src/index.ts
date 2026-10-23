@@ -152,8 +152,10 @@ import { browseBatch } from "./browselist.ts";
 import { actOnDevice, devicePolicy, ensureDeviceWatch, listDevices, type DeviceAct } from "./volumes.ts";
 import { Sessions, discoverNetwork, gvfsDir, remotePolicy, remotesFromMounts } from "./remotes.ts";
 import { runTool } from "./volumes.ts";
+import { appsForAll, launchApp, mimeOf, setDefaultApp } from "./openwith.ts";
+import { actionsFor, deleteAction, listActions, readAction, runAction, saveAction } from "./finderactions.ts";
 import { fsRun, fsReadOp, fsJobs, fsPathsOf, fsGate, fsWantsJson } from "./fsroute.ts";
-import { browseDir, fileBytes, fileFacts, previewSlice, openInDesktop, pagePolicy, revealInFileManager } from "./browse.ts";
+import { browseDir, browseReal, fileBytes, fileFacts, previewSlice, openInDesktop, pagePolicy, revealInFileManager } from "./browse.ts";
 import { fileGitFacts } from "./fileGit.ts";
 import { benchEdit, benchEnd, benchLive, finderEditEnd, finderEditSave, finderEditState, readNote, writeNote } from "./bench.ts";
 import {
@@ -7512,7 +7514,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      *
      * Behind the same switch as directory browsing: turning that off must not
      * leave a second door standing. */
-    if (pathname === "/browse" || pathname === "/browse/list" || pathname.startsWith("/preview/") || pathname.startsWith("/fs/")) {
+    if (pathname === "/browse" || pathname === "/browse/list" || pathname.startsWith("/preview/") || pathname.startsWith("/fs/") || pathname.startsWith("/finder/openwith") || pathname.startsWith("/finder/actions")) {
       /* "local" opens dotted folders and the agentglass config folder, so it is judged
          like the tokenless sinks: a direct loopback socket AND not another OS
          user on this box (sinkFrom). With a token every route here needs it, but
@@ -7528,6 +7530,66 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         let b: { path?: unknown } = {};
         try { b = (await req.json()) as { path?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
         const r = openInDesktop(b?.path, localBrowse);
+        return json(r, r.ok ? 200 : 400);
+      }
+      /* Open With: the applications a file type has (a read), and starting one. Starting
+         an application on a person's files, and changing which one is their default,
+         are for the person: the desk key, not the machine token every agent shell holds. */
+      if (pathname === "/finder/openwith" && req.method === "GET") {
+        const ps = url.searchParams.getAll("path").slice(0, 500);
+        if (!ps.length) return json({ ok: false, error: "nothing selected" }, 400);
+        if (heldBackFrom(caller, ps)) return json(HELD_BACK, 403);
+        const mimes: string[] = [];
+        for (const p of ps) {
+          const real = browseReal(p, localBrowse);
+          if (!real) return json({ ok: false, error: "outside what this may open" }, 403);
+          const m = await mimeOf(real);
+          if (!m) return json({ ok: false, error: "the type of that file could not be found" }, 400);
+          mimes.push(m);
+        }
+        return json({ ok: true, ...appsForAll(mimes) });
+      }
+      if (pathname === "/finder/openwith/launch" && req.method === "POST") {
+        if (!trustedCaller(req, from)) return csrfBlocked();
+        if (!(deskHeld() && deskKeyOk(req))) return json({ ok: false, error: "only the desktop app starts an application for a person" }, 403);
+        let b: { id?: unknown; paths?: unknown; always?: unknown; mime?: unknown } = {};
+        try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+        if (Array.isArray(b?.paths) && heldBackFrom(caller, b.paths.filter((x): x is string => typeof x === "string"))) return json(HELD_BACK, 403);
+        const r = await launchApp(b?.id, b?.paths, { local: localBrowse });
+        if (r.ok && b.always === true) {
+          const d = await setDefaultApp(b.id, b.mime);
+          if (!d.ok) return json({ ok: true, note: d.error });
+        }
+        return json(r, r.ok ? 200 : 400);
+      }
+      /* The person's own actions: programs they wrote, run on a selection. Listing and
+         matching are reads. Defining, changing, deleting and running one are the
+         person's alone: the desk key, never the machine token an agent shell holds. */
+      if (pathname.startsWith("/finder/actions")) {
+        if (req.method === "GET") {
+          if (pathname === "/finder/actions") return json({ ok: true, ...listActions() });
+          if (pathname === "/finder/actions/read") { const r = readAction(url.searchParams.get("id") || ""); return json(r, r.ok ? 200 : 404); }
+          if (pathname === "/finder/actions/match") {
+            const ps = url.searchParams.getAll("path").slice(0, 1000);
+            if (heldBackFrom(caller, ps)) return json(HELD_BACK, 403);
+            return json({ ok: true, actions: (await actionsFor(ps, url.searchParams.get("source"), localBrowse)).map(({ script: _s, ...a }) => a) });
+          }
+          return json({ ok: false, error: "no such route" }, 404);
+        }
+        if (req.method !== "POST") return json({ ok: false, error: "method not allowed" }, 405);
+        if (!trustedCaller(req, from)) return csrfBlocked();
+        if (!fsWantsJson(req.headers.get("content-type"))) return json({ ok: false, error: "send application/json" }, 415);
+        if (!(deskHeld() && deskKeyOk(req))) return json({ ok: false, error: "only the desktop app changes or runs an action for a person" }, 403);
+        let b: Record<string, unknown> = {};
+        try { b = (await req.json()) as Record<string, unknown>; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+        if (!b || typeof b !== "object") return json({ ok: false, error: "invalid json" }, 400);
+        let r: { ok: boolean; error?: string };
+        if (pathname === "/finder/actions/run") {
+          if (Array.isArray(b.paths) && heldBackFrom(caller, b.paths.filter((x): x is string => typeof x === "string"))) return json(HELD_BACK, 403);
+          r = await runAction(b.id, b.paths, b.source, { local: localBrowse, deskProven: true, confirmed: b.confirmed === true });
+        } else if (pathname === "/finder/actions/save") r = saveAction({ manifest: b.manifest as string | Record<string, unknown>, script: typeof b.script === "string" ? b.script : undefined }, { create: b.create === true });
+        else if (pathname === "/finder/actions/delete") r = deleteAction(b.id);
+        else return json({ ok: false, error: "no such route" }, 404);
         return json(r, r.ok ? 200 : 400);
       }
       if (pathname === "/preview/reveal" && req.method === "POST") {

@@ -52,7 +52,7 @@ describe("the menus are Strata's", () => {
     expect(all.find((i) => i.id === "trash")!.disabled).toBeUndefined();
   });
   test("an item that is not built says what it is instead of doing nothing", () => {
-    expect(menuFor("file", ctx).flat().filter((i) => i.later).map((i) => i.id).sort()).toEqual(["customize", "open-with"]);
+    expect(menuFor("file", ctx).flat().filter((i) => i.later).map((i) => i.id).sort()).toEqual(["customize"]);
   });
   test("the header names one entry with its path, several by count", () => {
     expect(menuHead(["a.md"], "/home/x/")).toEqual({ title: "a.md", sub: "/home/x/a.md" });
@@ -74,7 +74,7 @@ describe("the keys", () => {
       [k("x", { ctrl: true }), "cut"], [k("v", { ctrl: true }), "paste"], [k("d", { ctrl: true }), "duplicate"], [k("c", { ctrl: true }), "copyfiles"],
       [k("F2"), "rename"], [k("r", { ctrl: true }), "rename"], [k("Delete"), "trash"], [k("Delete", { shift: true }), "delete"],
       [k("N", { ctrl: true, shift: true }), "newfolder"], [k("n", { ctrl: true, alt: true }), "folderwith"],
-      [k("Enter", { alt: true }), "props"], [k("z", { ctrl: true }), "undo"], [k("y"), "copy"], [k("p"), "pin"],
+      [k("Enter", { alt: true }), "props"], [k("z", { ctrl: true }), "undo"], [k("z", { ctrl: true, shift: true }), "redo"], [k("y", { ctrl: true }), "redo"], [k("y"), "copy"], [k("p"), "pin"],
     ];
     for (const [key, t] of want) expect(finderKey(key, free)).toEqual({ t } as never);
   });

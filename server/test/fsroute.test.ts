@@ -56,6 +56,17 @@ test("every answer carries what undo would do", async () => {
   expect(existsSync(join(home, "made"))).toBe(false);
 });
 
+test("redo goes through the same door, is reversible so an agent may use it, and every answer says what it would do", async () => {
+  expect((FS_IRREVERSIBLE as readonly string[]).includes("redo")).toBe(false);
+  await fsRun({ op: "mkdir", parent: home, name: "again" }, true);
+  const u = await fsRun({ op: "undo" }, true);
+  expect((u.body as { redo: { available: boolean; label: string } }).redo).toEqual({ available: true, label: "Redo new folder again" });
+  const r = await fsRun({ op: "redo" }, true);
+  expect(r.status).toBe(200);
+  expect(existsSync(join(home, "again"))).toBe(true);
+  expect((await fsRun({ op: "redo" }, true)).status).toBe(400);
+});
+
 test("a single path or a list both reach the operation, and every named path is listed for the held-back check", () => {
   expect(fsPathsOf({ path: "/a", paths: ["/b", 3], dest: "/c", parent: "/d" }).sort()).toEqual(["/a", "/b", "/c", "/d"]);
   expect(FS_IRREVERSIBLE).toEqual(["delete", "empty-trash"]);
