@@ -7,6 +7,8 @@ import { qrMatrix, qrSvgPath } from "../lib/qr.ts";
 import { fmtAgo } from "../lib/format.ts";
 import type { DeviceScope, PairedDevice, PairRequest, PairState, RemoteStatus, ServeResult } from "../../../shared/types.ts";
 import { Button } from "./workspace/Chrome.tsx";
+import { PhoneIcon, PlugIcon } from "./settingsNavIcons.tsx";
+import { ICON } from "../lib/iconSize.ts";
 
 /**
  * Adding a phone, from the machine's side.
@@ -158,7 +160,7 @@ export function PairPanel({ baseUrl, variant = "hero", onPaired, canTurnOnHttps 
 
   return (
     <>
-      <SettingsCard title="Connect your phone"
+      <SettingsCard title="Connect your phone" icon={<PlugIcon size={ICON.sm} />}
         actions={ticket
           ? <Button onClick={start} disabled={busy}>New code</Button>
           : <Button tone="primary" onClick={start} disabled={busy}>{busy ? "Starting…" : "Show the code"}</Button>}>
@@ -362,7 +364,7 @@ function Paired({ devices, busy, onForget }: {
   const [confirming, setConfirming] = useState<string | null>(null);
   if (!devices.length) return null;
   return (
-    <SettingsCard title="Paired devices">
+    <SettingsCard title="Paired devices" icon={<PhoneIcon size={ICON.sm} />}>
       {devices.map((d) => (
         <SettingRow key={d.id}
           label={d.label}

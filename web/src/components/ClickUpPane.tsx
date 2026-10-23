@@ -24,6 +24,7 @@ import { WFM_CSS } from "./workflowMapStyle.ts";
 import { Card, CountedPicker, CardView, PrView, TextRow, Tagged, ago, hint } from "./TrackerMapParts.tsx";
 import { EyeIcon, LockIcon, PlusIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { HIT, ICON } from "../lib/iconSize.ts";
+import { ColumnsIcon, PlugIcon, SearchIcon, SlidersIcon } from "./settingsNavIcons.tsx";
 
 const n = CLICKUP.nouns;
 
@@ -71,7 +72,7 @@ export function ConnectCard({ refused, error, onDone }: { refused: boolean; erro
      what connecting does as a list under that — one column, so it reads the
      same at the window's narrowest. */
   return (
-    <SettingsCard title={n.name} desc="Link it once and a pull request knows its card."
+    <SettingsCard title={n.name} icon={<PlugIcon size={ICON.sm} />} desc="Link it once and a pull request knows its card."
       status={<StatusBadge tone={refused ? "err" : "off"}>{refused ? "Token refused" : "Not connected"}</StatusBadge>}>
       <SettingRow agentExempt label="Connect with a token" hint={`${n.name} reads with a personal API token, kept on this machine.`}
         below={
@@ -113,7 +114,7 @@ export function ConnectCard({ refused, error, onDone }: { refused: boolean; erro
 /** The map before ClickUp is connected: there is nothing to draw yet, and Add is not offered. */
 export function WaitingMap({ name = n.name }: { name?: string }) {
   return (
-    <SettingsCard title="Workflow map" desc="Each step puts one control into agentglass. You build what it does from blocks."
+    <SettingsCard title="Workflow map" icon={<ColumnsIcon size={ICON.sm} />} desc="Each step puts one control into agentglass. You build what it does from blocks."
       actions={<Button tone="primary" disabled><PlusIcon size={ICON.xs} /> Add a step</Button>}>
       <EmptyState>{`Appears once ${name} is connected.`}</EmptyState>
     </SettingsCard>
@@ -235,7 +236,7 @@ export function ClickUpPane() {
           badge first in the control column, the switch after it, and the
           warning ink only while changes are on, because that is the state
           the person has to keep in mind. */}
-      <SettingsCard title={n.name} desc={provider?.detail ?? undefined}
+      <SettingsCard title={n.name} icon={<PlugIcon size={ICON.sm} />} desc={provider?.detail ?? undefined}
         status={<StatusBadge tone="ok">Connected</StatusBadge>}
         actions={<Button onClick={() => openSettings("connections")}>Manage connection</Button>}>
         <SettingRow label={<span id="cu-changes-l">{`Changes in ${n.name}`}</span>}
@@ -245,7 +246,7 @@ export function ClickUpPane() {
             onClick={() => void setChanges(!changesOn)} className="agx-switch-hit inline-flex items-center rounded-full" style={{ minHeight: HIT }}><Switch on={changesOn} /></button>} />
       </SettingsCard>
 
-      <Card id="cu-found" title="What we found" open={foundOpen ?? steps.length === 0} onToggle={setFoundOpen}
+      <Card id="cu-found" icon={<SearchIcon size={ICON.sm} />} title="What we found" open={foundOpen ?? steps.length === 0} onToggle={setFoundOpen}
         desc={reading ? undefined : `${part.counted.length} ${n.lists} count · ${distinct} statuses${part.folded.length ? ` · ${part.folded.length} ignored` : ""}${prefs.prLinkField ? ` · PR link ${prefs.prLinkField}` : ""}${prefs.swatchField ? ` · swatch ${prefs.swatchField}` : ""}`}
         status={<StatusBadge tone={state.kind === "error" ? "warn" : state.kind === "loading" ? "checking" : "ok"}>{reading ? "Reading your cards" : state.kind === "loading" ? "Reading" : state.kind === "error" ? (asOf ? `As of ${ago(asOf)}` : "Not read") : "Read-only"}</StatusBadge>}>
         <SettingRow label={`${n.lists[0]!.toUpperCase()}${n.lists.slice(1)} that count`}
@@ -299,7 +300,7 @@ export function ClickUpPane() {
         onRetry={reread} />
       {note && <div role="alert" className="text-[12px] -mt-3 mb-6" style={{ color: "var(--error-ink)" }}>{note}</div>}
 
-      <Card id="cu-shows" title="Where this shows up" desc="Hover a step above to see which part of this it adds."
+      <Card id="cu-shows" icon={<ColumnsIcon size={ICON.sm} />} title="Where this shows up" desc="Hover a step above to see which part of this it adds."
         actions={<Segmented label={`Does the pull request name a ${n.item}?`} value={linked ? "1" : "0"} onChange={(v) => setLinked(v === "1")}
           options={[{ id: "1", label: "Linked" }, { id: "0", label: "No link" }]} />}>
         <div className="grid gap-4 agx-settings-x pt-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))" }}>
@@ -315,7 +316,7 @@ export function ClickUpPane() {
       </Card>
 
       <div ref={advRef}>
-        <Card id="cu-adv" title="Advanced" desc="The fields and patterns the reading above is built on." open={advOpen} onToggle={setAdvOpen}>
+        <Card id="cu-adv" icon={<SlidersIcon size={ICON.sm} />} title="Advanced" desc="The fields and patterns the reading above is built on." open={advOpen} onToggle={setAdvOpen}>
           <TextRow label="PR link field" hint="The custom field that holds the pull request link. Empty: any field named github." value={prefs.prLinkField} placeholder="GitHub URL"
             onSave={async (v) => ((await send({ prLinkField: v } as never)) ? null : "That did not save")} />
           <TextRow label="Colour column field" hint="A drop-down shown as a swatch. Empty: guessed from the field names." value={prefs.swatchField} placeholder="Team"

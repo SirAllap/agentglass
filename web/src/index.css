@@ -3632,3 +3632,47 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-isl-menu-t { flex: 1; white-space: nowrap; }
 .agx-isl-menu-k { font: inherit; font-size: 10.5px; color: rgba(242, 240, 247, .42); }
 .agx-isl-menu-rule { height: 1px; margin: 4px 6px; background: rgba(255, 255, 255, .08); }
+
+/*
+ * The list + editor page type (SettingsListEditor.tsx): a list of what you keep
+ * beside the one you picked. Drawn from the card tokens, so it follows the
+ * theme; the picked entry carries the page's hue on its left edge.
+ */
+.agx-le-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 0 0 14px; column-span: all; }
+.agx-le-bar .agx-le-q { flex: 0 1 340px; min-width: 200px; }
+.agx-le { display: grid; grid-template-columns: minmax(300px, 430px) minmax(0, 1fr); gap: 18px; align-items: start; column-span: all; }
+@container agx-settings (max-width: 760px) { .agx-le { grid-template-columns: minmax(0, 1fr); } }
+.agx-le-list, .agx-le-ed {
+  background: var(--surface-card); border: 1px solid var(--surface-line); border-radius: 0.75rem;
+  box-shadow: var(--surface-lift); overflow: hidden; min-width: 0;
+}
+.agx-le-lg { display: flex; align-items: center; gap: 8px; padding: 10px 14px 7px; border-top: 1px solid var(--surface-line); }
+.agx-le-list > :first-child > .agx-le-lg { border-top: 0; }
+.agx-le-lg b { flex: 1; font-size: 11px; font-weight: 650; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text2); }
+.agx-le-n { font-size: 11px; color: var(--text3); }
+.agx-le-add { display: grid; place-items: center; width: 24px; height: 24px; border: 0; border-radius: 6px; background: none; color: var(--text3); cursor: pointer; }
+.agx-le-add:hover { color: var(--text); background: color-mix(in srgb, var(--text) 8%, transparent); }
+.agx-le-li {
+  display: flex; flex-direction: column; gap: 1px; width: 100%; padding: 9px 14px 9px 16px; position: relative;
+  border: 0; border-top: 1px solid color-mix(in srgb, var(--surface-line) 70%, transparent); background: none;
+  text-align: left; color: var(--text); cursor: pointer;
+}
+.agx-le-li:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
+.agx-le-li[aria-current="true"] { background: color-mix(in srgb, var(--hue, var(--primary)) 14%, transparent); }
+.agx-le-li[aria-current="true"]::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--hue, var(--primary)); }
+.agx-le-t { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 650; min-width: 0; }
+.agx-le-s { font-size: 11.5px; color: var(--text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agx-le-tag { font-size: 10px; font-weight: 500; padding: 0 6px; border-radius: 5px; color: var(--text3); box-shadow: inset 0 0 0 1px var(--surface-line); }
+.agx-le-empty { padding: 10px 16px 14px; font-size: 12px; color: var(--text3); }
+.agx-le-eh { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 14px 20px; border-bottom: 1px solid var(--surface-line); }
+.agx-le-et { margin: 0; font-size: 15px; font-weight: 650; color: var(--text); }
+.agx-le-ed .agx-sform { gap: 0; }
+.agx-le-body { display: flex; flex-direction: column; gap: 14px; padding: 16px 20px; }
+.agx-le-foot {
+  display: flex; align-items: center; gap: 10px; padding: 12px 20px; font-size: 12px; color: var(--text3);
+  border-top: 1px solid var(--surface-line); background: color-mix(in srgb, var(--surface-inset) 55%, transparent);
+}
+.agx-le-foot > i { width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
+.agx-le-foot[data-dirty] > i { background: var(--warning); }
+.agx-le-none { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 40px 20px; text-align: center; color: var(--text3); }
+.agx-le-none b { color: var(--text); }

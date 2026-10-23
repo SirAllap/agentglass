@@ -19,16 +19,15 @@
  * line goes first and the body follows it as context, so the two are not an
  * either/or.
  */
-import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { api } from "../lib/api.ts";
 import { taskConnected } from "../lib/taskConnected.ts";
 import { CONFLICT_EFFORTS, CONFLICT_MODELS, type ConflictEffort, type ConflictModel } from "../../../shared/types.ts";
 import type { ReviewRecipe, ReviewRecipeGroup, ReviewRecipeWhen, SkillInfo } from "../../../shared/types.ts";
 import { SettingRow } from "./SettingRow.tsx";
 import { EmptyState, Field, SettingsCard, SettingsForm, helpIdFor } from "./SettingsKit.tsx";
+import { EditorFoot, EditorPanel, ListBar, ListEditorSplit, ListPanel, NewButton, NothingSelected, differs } from "./SettingsListEditor.tsx";
 import { bumpReviewRecipes } from "./PrPanel.tsx";
-import { IconLabel, PlusIcon } from "../lib/glyphIcons.tsx";
-import { ICON } from "../lib/iconSize.ts";
 import { Button, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 import { Select } from "./Select.tsx";
 import { LaunchModeBadge, LaunchModeSelect } from "./LaunchMode.tsx";
@@ -120,8 +119,10 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
   const setAllowed = (next: string[]) => { setting("plugins.sessionReads.repos").set(next.join(",")); };
 
   const load = useCallback(async () => {
-    try { const r = await api.prPrompts(); setList(r.recipes ?? []); } catch { setList([]); }
+    try { const r = await api.prPrompts(); setList(r.recipes ?? []); return r.recipes ?? []; } catch { setList([]); return []; }
   }, []);
+  const [q, setQ] = useState("");
+  const [narrow, setNarrow] = useState<"all" | "builtin" | "mine">("all");
   useEffect(() => {
     if (!open) return;
     void load();
@@ -134,10 +135,18 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
     api.gitRepos().then((r) => setProjects((r.repos ?? []).filter((x) => !x.worktreeOf).map((x) => ({ root: x.root, name: x.name })))).catch(() => {});
   }, [open, load]);
 
-  const after = async (text: string, ok = true) => {
+  /* The first prompt is open when the page is: an editor with nothing in it, beside a list, reads as broken. */
+  useEffect(() => {
+    if (!editing && list) {
+      const f = GROUPS.flatMap((g) => list.filter((r) => r.group === g.id && (hasCards || r.id !== "note-on-card")))[0];
+      if (f) setEditing(f);
+    }
+  }, [list, editing, hasCards]);
+
+  const after = async (text: string, ok = true, keep?: string) => {
     setNote({ ok, text });
-    setEditing(null);
-    await load();
+    const fresh = await load();
+    setEditing(keep ? fresh.find((x) => x.id === keep) ?? null : null);
     // The menu holds this list in a module cache so pressing the button does
     // not cost a round trip. This is the one event that invalidates it.
     bumpReviewRecipes();
@@ -146,7 +155,7 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
   const save = async (r: ReviewRecipe) => {
     const res = await api.prPromptSave(r);
     if (!res.ok) { setNote({ ok: false, text: res.error ?? "That did not save" }); return; }
-    await after(`${r.title} saved`);
+    await after(`${r.title} saved`, true, r.id || undefined);
   };
   const drop = async (r: ReviewRecipe) => {
     await api.prPromptRemove(r.id).catch(() => {});
@@ -154,22 +163,26 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
   };
   const reset = async (r: ReviewRecipe) => {
     await api.prPromptReset(r.id).catch(() => {});
-    await after(`${r.title} back to the wording it ships with`);
+    await after(`${r.title} back to the wording it ships with`, true, r.id);
   };
 
   if (!list) return <SettingsCard title="Review prompts"><EmptyState>Reading your prompts…</EmptyState></SettingsCard>;
 
   const offered = (r: ReviewRecipe) => hasCards || r.id !== "note-on-card";
   const hidden = GROUPS.flatMap((g) => list.filter((r) => r.group === g.id && offered(r))).length;
+  const ql = q.trim().toLowerCase();
+  const visible = (r: ReviewRecipe) =>
+    offered(r) && (narrow === "all" || (narrow === "builtin") === !!r.builtIn)
+    && (!ql || `${r.title} ${r.body} ${r.skill ?? ""}`.toLowerCase().includes(ql));
+  const count = list.filter(offered).length;
+  const saved = editing?.id ? list.find((x) => x.id === editing.id) : undefined;
+  const common = { skills, projects, onChange: setEditing, onSave: save, onCancel: () => setEditing(saved ?? null) };
 
   return (
     <>
-      {/* Four groups, four cards. It was ONE card holding fifteen prompts with
-          a 9.5px tracked sub-label between them, so the page read as a single
-          list you had to scan end to end — and the four names that would have
-          told you where to stop were the smallest type on it. Each group
-          already carries the two lines a heading needs; they just were not
-          being used as one. */}
+      {/* One list, grouped, with the editor beside it. It was a card per group with the
+          editor opening under the row, which made the page a scroll through fifteen
+          prompts to find the form. Each group still carries the two lines a heading needs. */}
       <p className="text-[12.5px] m-0 pb-4" style={{ color: "var(--text3)" }}>
         What the Review with Claude button offers on a pull request. The one that fits the pull request in front of you is
         suggested at the top; the rest are always in the menu, because GitHub's fields describe what somebody remembered to set.
@@ -182,45 +195,38 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
         </div>
       )}
 
-      {GROUPS.map((g) => {
-        const rows = list.filter((r) => r.group === g.id && offered(r));
-        const common = { skills, projects, onChange: setEditing, onSave: save, onCancel: () => setEditing(null) };
-        return (
-          <SettingsCard key={g.id} title={g.label} desc={g.what}
-            actions={<Button disabled={!!editing} onClick={() => setEditing(blank(g.id))}>
-              <IconLabel icon={<PlusIcon size={ICON.xs} />}>New prompt</IconLabel>
-            </Button>}>
-            {rows.map((r) => (
-              <Fragment key={r.id}>
-                <SettingRow
-                  label={r.title}
-                  hint={<>
-                    {r.skill && <span className="block t-mono break-all" style={{ color: "var(--text3)" }}>Skill {r.skill}</span>}
-                    {g.id === "conflicts"
-                      ? `${r.repo ? `Only in ${projects.find((p) => p.root === r.repo)?.name ?? r.repo.split("/").pop()}` : "Every project"} · ${r.model && r.model !== "auto" ? r.model : "model from the conflict"}`
-                      : WHEN.find((w) => w.id === r.when)?.label}
-                    {!r.builtIn && " · yours"}
-                  </>}
-                  status={g.id === "conflicts" ? undefined : <LaunchModeBadge mode={r.permissionMode} />}
-                  actions={<Button onClick={() => setEditing(r)}>Edit</Button>} />
-                {/* Under the row it belongs to, not at the foot of the page.
-                    The editor used to render after the whole list, so pressing
-                    Edit on the first prompt appeared to do nothing at all until
-                    you scrolled past thirteen others to find it. */}
-                {editing?.id === r.id && (
-                  <Editor r={editing} presets={[]} {...common}
-                    onReset={r.builtIn ? () => void reset(r) : undefined}
-                    onDrop={() => void drop(r)} />
-                )}
-              </Fragment>
-            ))}
-            {!rows.length && <EmptyState>Nothing here — the built-ins were hidden.</EmptyState>}
-            {editing && !editing.id && editing.group === g.id && (
-              <Editor r={editing} presets={list.filter((x) => x.builtIn && (x.group === "conflicts") === (g.id === "conflicts"))} {...common} />
-            )}
-          </SettingsCard>
-        );
-      })}
+      <ListBar<typeof narrow> q={q} onQ={setQ} placeholder={`Filter ${count} prompts`} label="Filter review prompts"
+        filters={[{ id: "all", label: `All ${count}` }, { id: "builtin", label: `Built in ${list.filter((r) => offered(r) && r.builtIn).length}` }, { id: "mine", label: `Yours ${list.filter((r) => offered(r) && !r.builtIn).length}` }]}
+        filter={narrow} onFilter={setNarrow}>
+        <NewButton onClick={() => setEditing(blank("reviewing"))}>New prompt</NewButton>
+      </ListBar>
+
+      <ListEditorSplit
+        list={<ListPanel selected={editing ? editing.id || null : null}
+          onSelect={(id) => { const r = list.find((x) => x.id === id); if (r) setEditing(r); }}
+          nothing="Nothing matches."
+          sections={GROUPS.map((g) => ({
+            id: g.id, title: g.label, onAdd: () => setEditing(blank(g.id)), addLabel: `New prompt in ${g.label}`,
+            entries: list.filter((r) => r.group === g.id && visible(r)).map((r) => ({
+              id: r.id, title: r.title,
+              badge: g.id === "conflicts" ? undefined : <LaunchModeBadge mode={r.permissionMode} />,
+              sub: <>
+                {r.skill && <span className="t-mono">Skill {r.skill} · </span>}
+                {g.id === "conflicts"
+                  ? `${r.repo ? `Only in ${projects.find((p) => p.root === r.repo)?.name ?? r.repo.split("/").pop()}` : "Every project"} · ${r.model && r.model !== "auto" ? r.model : "model from the conflict"}`
+                  : WHEN.find((w) => w.id === r.when)?.label}
+                {!r.builtIn && " · yours"}
+              </>,
+            })),
+            empty: !list.some((r) => r.group === g.id && offered(r)) ? "Nothing here — the built-ins were hidden." : undefined,
+          }))} />}
+        editor={!editing ? (
+          <NothingSelected noun="prompt" label="Review prompt" onNew={() => setEditing(blank("reviewing"))} />
+        ) : (
+          <Editor r={editing} saved={saved} presets={editing.id ? [] : list.filter((x) => x.builtIn && (x.group === "conflicts") === (editing.group === "conflicts"))} {...common}
+            onReset={editing.builtIn ? () => void reset(editing) : undefined}
+            onDrop={editing.id ? () => void drop(editing) : undefined} />
+        )} />
 
       {/* Not a prompt, and here because this is the page about handing a pull request to a
           reviewer: what else the reviewer may be given. Off for every repository until added. */}
@@ -260,25 +266,14 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
  * fields, one primary Save, and what undoes the prompt (Reset, Hide or
  * Delete) at the far end of the same line, apart from Save and Cancel.
  */
-function Editor({ r, skills, projects, presets, onChange, onSave, onCancel, onReset, onDrop }: {
-  r: ReviewRecipe; skills: SkillInfo[]; projects: { root: string; name: string }[]; presets: ReviewRecipe[];
+function Editor({ r, saved, skills, projects, presets, onChange, onSave, onCancel, onReset, onDrop }: {
+  r: ReviewRecipe; saved?: ReviewRecipe; skills: SkillInfo[]; projects: { root: string; name: string }[]; presets: ReviewRecipe[];
   onChange: (r: ReviewRecipe) => void; onSave: (r: ReviewRecipe) => void; onCancel: () => void;
   onReset?: () => void; onDrop?: () => void;
 }) {
   const set = (patch: Partial<ReviewRecipe>) => onChange({ ...r, ...patch });
   const uid = useId();
   const f = (k: string) => `${uid}-${k}`;
-  /* Bring it into view and put the cursor in it. Even directly under its row,
-     an editor that opens below the fold is an editor somebody thinks did not
-     open — which is exactly how this started. `nearest` rather than `center`:
-     if it is already on screen, nothing should move. */
-  const box = useRef<HTMLDivElement>(null);
-  const first = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    box.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    first.current?.focus();
-  }, []);
-
   /* Skills whose name suggests they belong on a pull request go first: this
      list is 60 entries on a real machine and the four that matter here are
      never the four at the top alphabetically. */
@@ -290,11 +285,20 @@ function Editor({ r, skills, projects, presets, onChange, onSave, onCancel, onRe
   const SEL = `w-full ${INPUT}`;
 
   return (
-    <div ref={box} className="agx-settings-row">
-      <div className="agx-row-below">
+    <EditorPanel label="Review prompt" title={r.title || "New prompt"}
+      chips={[...(r.id && r.builtIn ? [{ tone: "off" as const, text: "Built in" }] : []), ...(!r.id ? [{ tone: "info" as const, text: "Draft" }] : [])]}
+      actions={<>
+        {onReset && <Button tone="danger" onClick={onReset} title="Back to the wording it ships with">Reset to built-in</Button>}
+        {onDrop && (
+          <Button tone={r.builtIn ? "plain" : "danger"} onClick={onDrop} title={r.builtIn ? "Take it out of the menu" : "Delete it"}>
+            {r.builtIn ? "Hide" : "Delete"}
+          </Button>
+        )}
+      </>}>
         <SettingsForm label={r.id ? `Edit ${r.title}` : "New prompt"} onSubmit={() => onSave(r)}>
+          <div className="agx-le-body">
           <Field label="Title" htmlFor={f("title")} help="What the menu shows.">
-            <input id={f("title")} ref={first} value={r.title} onChange={(e) => set({ title: e.target.value })}
+            <input id={f("title")} value={r.title} onChange={(e) => set({ title: e.target.value })}
               aria-describedby={helpIdFor(f("title"))} placeholder="What changed since my review"
               className={INPUT} style={INPUT_STYLE} />
           </Field>
@@ -407,19 +411,9 @@ function Editor({ r, skills, projects, presets, onChange, onSave, onCancel, onRe
             </Field>
           )}
 
-          <div className="agx-sform-actions">
-            <Button type="submit" tone="primary">Save</Button>
-            <Button onClick={onCancel}>Cancel</Button>
-            {(onReset || onDrop) && <span className="flex-1" />}
-            {onReset && <Button onClick={onReset} title="Back to the wording it ships with">Reset</Button>}
-            {onDrop && (
-              <Button tone="danger" onClick={onDrop} title={r.builtIn ? "Take it out of the menu" : "Delete it"}>
-                {r.builtIn ? "Hide" : "Delete"}
-              </Button>
-            )}
           </div>
+          <EditorFoot dirty={!r.id || differs(r, saved)} canSave noun="prompt" onCancel={onCancel} />
         </SettingsForm>
-      </div>
-    </div>
+    </EditorPanel>
   );
 }

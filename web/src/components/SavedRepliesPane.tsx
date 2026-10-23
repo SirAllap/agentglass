@@ -13,20 +13,20 @@ import { useEffect, useState } from "react";
 import { api } from "../lib/api.ts";
 import { bumpSavedReplies } from "./PrPanel.tsx";
 import { Button, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
-import { SettingRow } from "./SettingRow.tsx";
-import { EmptyState, Field, SettingsCard, SettingsForm, helpIdFor } from "./SettingsKit.tsx";
+import { Field, SettingsForm, helpIdFor } from "./SettingsKit.tsx";
+import { EditorFoot, EditorPanel, ListBar, ListEditorSplit, ListPanel, NewButton, NothingSelected, differs } from "./SettingsListEditor.tsx";
 
 interface Reply { id: string; title: string; text: string }
-
 
 export function SavedRepliesPane({ open }: { open: boolean }) {
   const [replies, setReplies] = useState<Reply[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  /** The one being edited, by id — or `""` for the new one being written. */
+  /** The one being edited, by id — or `""` for the new one being written; null until one is picked. */
   const [editing, setEditing] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [text, setText] = useState("");
+  const [q, setQ] = useState("");
 
   useEffect(() => {
     if (!open) return;
@@ -35,13 +35,23 @@ export function SavedRepliesPane({ open }: { open: boolean }) {
     return () => { live = false; };
   }, [open]);
 
+  const editRow = (r: Reply) => { setEditing(r.id); setTitle(r.title); setText(r.text); setErr(""); };
+  const clear = () => { setEditing(null); setTitle(""); setText(""); setErr(""); };
+  const newOne = () => { setEditing(""); setTitle(""); setText(""); setErr(""); };
+
+  /* The first reply is open when the page is: an editor with nothing in it, beside a list, reads as broken. */
+  useEffect(() => {
+    if (replies?.length && editing === null) editRow(replies[0]!);
+  }, [replies, editing]);
+
   /* Every write answers with the whole list, so the pane never has to guess what the
      file now says — and the composer's cache is dropped, or a reply saved here would
      not be in the menu until the window was reloaded. */
-  const after = (list: Reply[] | undefined) => {
+  const after = (list: Reply[] | undefined, keep?: string) => {
     setReplies(list ?? []);
     bumpSavedReplies();
-    setEditing(null); setTitle(""); setText("");
+    const next = keep ? list?.find((r) => r.id === keep) : undefined;
+    if (next) editRow(next); else clear();
   };
 
   const save = async () => {
@@ -50,7 +60,7 @@ export function SavedRepliesPane({ open }: { open: boolean }) {
     const r = await api.saveReply({ ...(editing ? { id: editing } : null), title: title.trim(), text });
     setBusy(false);
     if (!r.ok) { setErr(r.error || "That did not save."); return; }
-    after(r.replies);
+    after(r.replies, editing || undefined);
   };
 
   const remove = async (id: string) => {
@@ -60,56 +70,55 @@ export function SavedRepliesPane({ open }: { open: boolean }) {
     after(r.replies);
   };
 
-  const editRow = (r: Reply) => { setEditing(r.id); setTitle(r.title); setText(r.text); setErr(""); };
+  const saved = editing ? replies?.find((r) => r.id === editing) : undefined;
+  const dirty = editing !== null && differs({ title, text }, saved ? { title: saved.title, text: saved.text } : null);
+  const ql = q.trim().toLowerCase();
+  const shown = (replies ?? []).filter((r) => !ql || `${r.title} ${r.text}`.toLowerCase().includes(ql));
 
-  /* A card, like every other settings page: the replies are rows, Edit is
-     the one action on a row, and the form that writes one is the card's last
-     row, always there, so adding is not behind a button. Delete is beside Save
-     only while a reply is open for editing, apart from it at the far end. */
+  /* A list beside the editor, like the other pages that keep a list of your own words:
+     the replies on the left, the one open on the right. The form is always there, so
+     adding is not behind a button. Delete is in the editor's head, apart from Save. */
   return (
-    <SettingsCard title="Saved replies"
-      desc="Offered in every comment box in the pull request panel, under the quote button. Nothing ships in this list — these go out under your name.">
-      {replies === null && <EmptyState>Reading…</EmptyState>}
-      {replies !== null && replies.length === 0 && editing === null && <EmptyState>Nothing saved yet.</EmptyState>}
-      {replies?.map((r) => (
-        <SettingRow key={r.id} label={r.title}
-          /* The text itself is what a person wrote to post under their own
-             name — the same reason a pull request body reads in --font-prose
-             rather than the app's mono stack. Shown whole: a reply is a
-             sentence or two, and a cut one hides the word that tells it from
-             the next. */
-          hint={<span className="block whitespace-pre-wrap" style={{ fontFamily: "var(--font-prose)", lineHeight: 1.5 }}>{r.text}</span>}
-          actions={<Button onClick={() => editRow(r)} disabled={busy}>Edit</Button>} />
-      ))}
-
-      <div className="agx-settings-row">
-        <div className="agx-row-below">
-          <SettingsForm label={editing ? "Edit this reply" : "New reply"} onSubmit={() => void save()}>
-            <div className="text-[13.5px]" style={{ color: "var(--text)" }}>{editing ? "Edit this reply" : "New reply"}</div>
-            <Field label="Title" htmlFor="saved-reply-title" help="What the menu shows. Left empty, the first line is used.">
-              <input id="saved-reply-title" value={title} onChange={(e) => setTitle(e.target.value)}
-                aria-describedby={helpIdFor("saved-reply-title")} className={`w-full ${INPUT}`} style={INPUT_STYLE} />
-            </Field>
-            <Field label="Reply" htmlFor="saved-reply-text" help="What goes in the box. Markdown works here.">
-              <textarea id="saved-reply-text" value={text} onChange={(e) => setText(e.target.value)} rows={5}
-                aria-describedby={helpIdFor("saved-reply-text")}
-                className="w-full px-2.5 py-2 rounded-lg text-[12px] outline-none resize-y bg-[var(--surface-inset)] text-[var(--text)]"
-                style={{ ...INPUT_STYLE, fontFamily: "var(--font-prose)", lineHeight: 1.5 }} />
-            </Field>
-            <div className="agx-sform-actions">
-              <Button type="submit" tone="primary" disabled={busy || !text.trim()}>{editing ? "Save" : "Add"}</Button>
-              {editing !== null && (
-                <Button onClick={() => { setEditing(null); setTitle(""); setText(""); setErr(""); }}>Cancel</Button>
-              )}
-              {editing && <span className="flex-1" />}
-              {editing && (
-                <Button tone="danger" onClick={() => void remove(editing)} disabled={busy} title="Delete this saved reply">Delete</Button>
-              )}
-            </div>
-            {err && <div role="alert" className="agx-field-e">{err}</div>}
-          </SettingsForm>
-        </div>
-      </div>
-    </SettingsCard>
+    <>
+      <ListBar q={q} onQ={setQ} placeholder={`Filter ${replies?.length ?? 0} replies`} label="Filter saved replies">
+        <NewButton onClick={newOne} disabled={busy}>New reply</NewButton>
+      </ListBar>
+      <ListEditorSplit
+        list={<ListPanel selected={editing || null} onSelect={(id) => { const r = replies?.find((x) => x.id === id); if (r) editRow(r); }}
+          nothing={replies === null ? "Reading…" : replies.length ? "Nothing matches." : "Nothing saved yet. Nothing ships in this list — these go out under your name."}
+          sections={[{
+            id: "replies", title: "Replies", onAdd: newOne, addLabel: "New reply",
+            entries: shown.map((r) => ({
+              id: r.id, title: r.title || <i>Untitled</i>,
+              /* The text itself is what a person wrote to post under their own
+                 name — the same reason a pull request body reads in --font-prose
+                 rather than the app's mono stack. */
+              sub: <span style={{ fontFamily: "var(--font-prose)" }}>{r.text.split("\n")[0]}</span>,
+            })),
+          }]} />}
+        editor={editing === null ? <NothingSelected noun="reply" label="Saved reply" onNew={newOne} /> : (
+          <EditorPanel label="Saved reply" title={title.trim() || "New reply"}
+            chips={[editing ? { tone: "ok", text: "Saved" } : { tone: "info", text: "Draft" }]}
+            actions={editing ? <Button tone="danger" onClick={() => void remove(editing)} disabled={busy} title="Delete this saved reply">Delete this saved reply</Button> : undefined}>
+            <SettingsForm label={editing ? "Edit this reply" : "New reply"} onSubmit={() => void save()}>
+              <div className="agx-le-body">
+                <Field label="Title" htmlFor="saved-reply-title" help="What the menu shows. Left empty, the first line is used.">
+                  <input id="saved-reply-title" value={title} onChange={(e) => setTitle(e.target.value)}
+                    aria-describedby={helpIdFor("saved-reply-title")} className={`w-full ${INPUT}`} style={INPUT_STYLE} />
+                </Field>
+                <Field label="Reply" htmlFor="saved-reply-text" help="What goes in the box. Markdown works here. Used in every comment box in the pull request panel, under the quote button.">
+                  <textarea id="saved-reply-text" value={text} onChange={(e) => setText(e.target.value)} rows={8}
+                    aria-describedby={helpIdFor("saved-reply-text")}
+                    className="w-full px-2.5 py-2 rounded-lg text-[12px] outline-none resize-y bg-[var(--surface-inset)] text-[var(--text)]"
+                    style={{ ...INPUT_STYLE, fontFamily: "var(--font-prose)", lineHeight: 1.5 }} />
+                </Field>
+                {err && <div role="alert" className="agx-field-e">{err}</div>}
+              </div>
+              <EditorFoot dirty={dirty} canSave={!!text.trim()} noun="reply" busy={busy}
+                onCancel={() => { const r = saved; if (r) editRow(r); else clear(); }} />
+            </SettingsForm>
+          </EditorPanel>
+        )} />
+    </>
   );
 }

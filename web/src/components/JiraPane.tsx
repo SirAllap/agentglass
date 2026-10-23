@@ -14,6 +14,8 @@ import { WaitingMap } from "./ClickUpPane.tsx";
 import { __forgetJiraUnits, useJiraUnits } from "../lib/jiraUnits.ts";
 import type { StepsPatch } from "../lib/jiraWorkflow.ts";
 import { noteJiraSteps } from "../lib/jiraStepUi.ts";
+import { PlugIcon } from "./settingsNavIcons.tsx";
+import { ICON } from "../lib/iconSize.ts";
 
 const SPEC = PROVIDERS.find((p) => p.id === "jira")!;
 
@@ -39,7 +41,7 @@ function ConnectCard({ onDone }: { onDone: () => void }) {
     onDone();
   };
   return (
-    <SettingsCard title="Jira" desc="Link it once and a pull request knows its card."
+    <SettingsCard title="Jira" icon={<PlugIcon size={ICON.sm} />} desc="Link it once and a pull request knows its card."
       status={<StatusBadge tone="off">Not connected</StatusBadge>}>
       <SettingRow agentExempt label="Connect with a token" hint={SPEC.what}
         detail={SPEC.note ? { summary: SPEC.noteTitle ?? "Where the token is stored", body: SPEC.note } : undefined}

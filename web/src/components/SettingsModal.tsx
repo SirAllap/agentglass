@@ -57,7 +57,7 @@ import { TerminalIcon, DiffIcon, BrowserIcon, UnderstudyIcon, LanternIcon } from
 import {
   SlidersIcon, ThemeIcon, BellIcon, SidebarIcon, KeyboardIcon, BudgetIcon, PulseIcon,
   CommandIcon, ReviewIcon, QuoteIcon, PanesIcon, PlugIcon, ServerIcon, PhoneIcon,
-  PuzzleIcon, ShieldIcon, InfoIcon, ChecklistIcon,
+  PuzzleIcon, ShieldIcon, InfoIcon, ChecklistIcon, DownloadIcon,
 } from "./settingsNavIcons.tsx";
 import { resolvePane, openSettings, paneWhenClickupKnown } from "../lib/openSettings.ts";
 import { SettingsNav } from "./SettingsNav.tsx";
@@ -1340,7 +1340,7 @@ function LogDigestSection({ d }: { d: LogDigest | "failed" | null }) {
   const ago = (t: number) => minutesAgo(t);
   const note = (text: string) => <SettingRow label={text} />;
   return (
-    <SettingsCard title="Server log" desc={desc} fold={{ open, onToggle: setOpen }}>
+    <SettingsCard title="Server log" icon={<ChecklistIcon />} desc={desc} fold={{ open, onToggle: setOpen }}>
       {d === "failed" ? note("Could not read the log digest.")
         : !d ? note("Reading…")
         : (
@@ -1410,7 +1410,7 @@ function AboutPane({ open }: { open: boolean }) {
   };
 
   if (stErr) return (
-    <SettingsCard title="This build"
+    <SettingsCard title="This build" icon={<InfoIcon />}
       desc="Which version is running, and whether a newer one is out.">
       <SettingRow label="Could not read this build's version"
         status={<StatusBadge tone="err">Unavailable</StatusBadge>}
@@ -1418,7 +1418,7 @@ function AboutPane({ open }: { open: boolean }) {
     </SettingsCard>
   );
   if (!st) return (
-    <SettingsCard title="This build" desc="Which version is running, and whether a newer one is out.">
+    <SettingsCard title="This build" icon={<InfoIcon />} desc="Which version is running, and whether a newer one is out.">
       <SettingRow label="Reading version…" status={<StatusBadge tone="checking">Checking</StatusBadge>} />
     </SettingsCard>
   );
@@ -1432,9 +1432,14 @@ function AboutPane({ open }: { open: boolean }) {
   const short = st.info.stamp || (st.info.commit ? st.info.commit.slice(0, 7) : "unknown");
   const dirty = !!st.info.dirty;
   const mine = installedNotes(st.info.baseTag, st.info.distance, st.branch);
+  // The same three-way split the rows below draw: an update is on offer only
+  // when it is not running, not blocked and the build is behind.
+  const offered = !started && !st.blocked && st.behind !== 0;
   return (
     <>
-    <SettingsCard title="This build"
+    <SettingsCard title="This build" icon={<InfoIcon />}
+      tone={offered ? "decision" : "default"}
+      status={offered ? <StatusBadge tone="info">Update available</StatusBadge> : undefined}
       desc="Which version is running, and whether a newer one is out.">
       {/* The build you are running, as a row like any other: what it is on the
           left, and the one thing you can do about it on the right. The notes
@@ -1518,7 +1523,6 @@ function AboutPane({ open }: { open: boolean }) {
         <>
           <SettingRow
             label={`${st.branch} is available`}
-            status={<StatusBadge tone="warn">Update available</StatusBadge>}
             hint={st.behind > 1 ? `${st.behind} releases newer than yours.` : "One release newer than yours."}
             actions={<>
               <Button tone="ok" onClick={run} disabled={busy}>
@@ -1594,7 +1598,7 @@ function AboutPane({ open }: { open: boolean }) {
  */
 function AboutCredits() {
   return (
-    <SettingsCard title="Credits">
+    <SettingsCard title="Credits" icon={<ShieldIcon />}>
       <Row label="Portrait art by Viktor Hahn — CC BY 4.0"
         hint="The pixel-art portrait layers are his work, used under the Creative Commons Attribution 4.0 International licence. They are recoloured at paint time and otherwise unmodified."
         href="https://creativecommons.org/licenses/by/4.0/" />
@@ -2507,6 +2511,14 @@ function depTone(d: DepReport): StatusTone {
   return "off";
 }
 
+/** The page's two section labels ("On this machine", "Services"): a plain line of type between tiles, not a card. */
+function FlowLabel({ children }: { children: React.ReactNode }) {
+  return <h3 className="m-0 mt-2 mb-3 text-[11px] uppercase tracking-wider" style={{ color: "var(--text3)", columnSpan: "all" }}>{children}</h3>;
+}
+
+/** A tile's mark: the first letter of what it is, in the page's hue. */
+const Initial = ({ name }: { name: string }) => <span aria-hidden className="text-[12px] font-semibold">{name.charAt(0).toUpperCase()}</span>;
+
 function DepRow({ d, home }: { d: DepReport; home: string }) {
   const href = externalUrl(d.url);
   const [console, setConsole] = useState(false);
@@ -2521,28 +2533,17 @@ function DepRow({ d, home }: { d: DepReport; home: string }) {
   // they read this page.
   const canType = !!d.install && d.status !== "ok" && d.status !== "unsupported";
   const guide = !!href && d.status !== "unsupported" && d.status !== "ok";
+  const tone = depTone(d);
   return (
-    /* One action per row. Install opens a shell with the command typed in,
-       which finishes the job; when there is no honest one-liner the guide is
-       the action instead. Where there are both, the guide is a link in the
-       description, so the row never carries two buttons for one job. The
-       console opens under the row, which stays on screen above it. */
-    <SettingRow
-      label={<span className="inline-flex items-baseline gap-2 flex-wrap">
-        <span>{d.title}</span>
-        <code className="text-[11px] t-mono t-dim">{d.bin}</code>
-      </span>}
-      hint={<>
-        {d.what}
-        {d.detail && d.status !== "ok" && <span className="block mt-1">{d.detail}</span>}
-        {d.note && d.status !== "ok" && d.status !== "unsupported" && <span className="block mt-1">{d.note}</span>}
-        {canType && guide && (
-          <span className="block mt-1">
-            <a href={href} target="_blank" rel="noreferrer noopener" className="agx-textlink">Install guide ↗</a>
-          </span>
-        )}
-      </>}
-      status={<StatusBadge tone={depTone(d)}>{d.status === "missing" && d.required ? "Needed, not installed" : STATUS_LABEL[d.status]}</StatusBadge>}
+    /* A tile per tool that wants something. One action in its head: Install opens
+       a shell with the command typed in, which finishes the job; when there is no
+       honest one-liner the guide is the action instead, and where there are both
+       the guide is a link in the row, so a tile never carries two buttons for one
+       job. The console opens under the row. Amber edge only while the person is
+       needed (warn or err), never for a tool that is merely absent. */
+    <SettingsCard icon={<Initial name={d.title} />} title={d.title} desc={d.what}
+      tone={tone === "warn" || tone === "err" ? "decision" : "default"}
+      status={<StatusBadge tone={tone}>{d.status === "missing" && d.required ? "Needed, not installed" : STATUS_LABEL[d.status]}</StatusBadge>}
       actions={canType
         ? <Button aria-expanded={console} onClick={() => setConsole((v) => !v)}
             title="Open a shell here with the command typed in — you press Enter">
@@ -2550,9 +2551,19 @@ function DepRow({ d, home }: { d: DepReport; home: string }) {
           </Button>
         : guide
           ? <LinkButton href={href!}>Install guide</LinkButton>
-          : undefined}
-      below={console && canType ? <ShellConsole command={d.install!} cwd={home} onClose={() => setConsole(false)} /> : undefined}
-    />
+          : undefined}>
+      <SettingRow agentExempt label="Looks for" control={<code className="text-[11px] t-mono t-dim">{d.bin}</code>}
+        hint={<>
+          {d.detail && d.status !== "ok" && <span className="block">{d.detail}</span>}
+          {d.note && d.status !== "ok" && d.status !== "unsupported" && <span className="block mt-1">{d.note}</span>}
+          {canType && guide && (
+            <span className="block mt-1">
+              <a href={href} target="_blank" rel="noreferrer noopener" className="agx-textlink">Install guide ↗</a>
+            </span>
+          )}
+        </>}
+        below={console && canType ? <ShellConsole command={d.install!} cwd={home} onClose={() => setConsole(false)} /> : undefined} />
+    </SettingsCard>
   );
 }
 
@@ -2687,30 +2698,9 @@ function PrivacyPane({ open }: { open: boolean }) {
 
   return (
     <>
-      <SettingsCard title="Nothing is sent anywhere">
+      <SettingsCard title="Nothing is sent anywhere" icon={<ShieldIcon />} status={<StatusBadge tone="ok">Local only</StatusBadge>}>
         <SettingRow label="No analytics, no crash reporting, no phone-home"
           hint="There is nothing to turn off here. What this app does with your data, it does on this machine." />
-      </SettingsCard>
-      <SettingsCard title="What is on disk">
-        <Path label="History" value={d?.db ?? ""}
-          note="Every event, prompt, tool call and file change, in SQLite. Written owner-only — it holds prompts and command output in cleartext." />
-        <Path label="Settings" value={d?.config ?? ""}
-          note="Your preferences, budgets and the boards you have added." />
-        <Path label="Credentials" value={d?.credentials ?? ""}
-          note="Tokens for the services you connected, mode 0600. They are used by the server and never sent to the browser." />
-        {d && (
-          <SettingRow label="Retention"
-            hint={<>
-              History older than {d.retentionDays === 0 ? "— nothing is pruned" : `${d.retentionDays} days is pruned automatically`}.
-              Deleting the history file deletes all of it.
-            </>} />
-        )}
-      </SettingsCard>
-      <SettingsCard title="Activity">
-        {/* Activity has no nav entry; this row and the palette are its ways in. */}
-        <SettingRow label="Activity log" hint="What the app itself has been doing." onClick={() => openSettings("log")} />
-      </SettingsCard>
-      <SettingsCard title="What does leave this machine">
         {/* The headline answer is one line and stays open, because it is the
             claim this page exists to make. The enumeration behind it is the
             evidence, and evidence is read when it is doubted. */}
@@ -2728,6 +2718,25 @@ function PrivacyPane({ open }: { open: boolean }) {
             </>,
           }}
         />
+      </SettingsCard>
+      <SettingsCard title="What is on disk" icon={<ServerIcon />}>
+        <Path label="History" value={d?.db ?? ""}
+          note="Every event, prompt, tool call and file change, in SQLite. Written owner-only — it holds prompts and command output in cleartext." />
+        <Path label="Settings" value={d?.config ?? ""}
+          note="Your preferences, budgets and the boards you have added." />
+        <Path label="Credentials" value={d?.credentials ?? ""}
+          note="Tokens for the services you connected, mode 0600. They are used by the server and never sent to the browser." />
+        {d && (
+          <SettingRow label="Retention"
+            hint={<>
+              History older than {d.retentionDays === 0 ? "— nothing is pruned" : `${d.retentionDays} days is pruned automatically`}.
+              Deleting the history file deletes all of it.
+            </>} />
+        )}
+      </SettingsCard>
+      <SettingsCard title="Activity" icon={<ChecklistIcon />}>
+        {/* Activity has no nav entry; this row and the palette are its ways in. */}
+        <SettingRow label="Activity log" hint="What the app itself has been doing." onClick={() => openSettings("log")} />
       </SettingsCard>
     </>
   );
@@ -2768,39 +2777,29 @@ function IntegrationsPane({ open }: { open: boolean }) {
 
   const statusOf = (id: string) => status?.find((x) => x.id === id) ?? null;
 
-  /* One card per kind, and each carries its own verdict and the recheck at
-     its top right. It was one "Services" card with two eyebrow headings
-     inside it, which is a group heading drawn as a line of small caps with
-     rules above and below — the shape the settings sweep counted on every
-     page. The provider list is a constant (shared/providers.ts), so both
-     cards draw at once and only the badges wait for the answer. */
+  /* One tile per provider under one verdict and one recheck. The provider list
+     is a constant (shared/providers.ts), so every tile draws at once and only
+     the badges wait for the answer. */
+  const all = status?.filter((x) => PROVIDERS.some((p) => p.id === x.id)) ?? null;
+  const ok = all?.filter((x) => x.state === "connected").length ?? 0;
+  const bad = all?.filter((x) => x.state === "error").length ?? 0;
+  const verdict = !all
+    ? <StatusBadge tone={err ? "err" : "checking"}>{err ? "Not read" : "Checking"}</StatusBadge>
+    : bad
+      ? <StatusBadge tone="err">{bad} {bad === 1 ? "needs" : "need"} attention</StatusBadge>
+      : <StatusBadge tone={ok === all.length && ok > 0 ? "ok" : "off"}>{ok} of {all.length} connected</StatusBadge>;
   return (
     <>
-      {(["review", "task"] as const).map((kind) => {
-        const specs = PROVIDERS.filter((p) => p.kind === kind);
-        const mine = status?.filter((x) => specs.some((p) => p.id === x.id)) ?? null;
-        const ok = mine?.filter((x) => x.state === "connected").length ?? 0;
-        const bad = mine?.filter((x) => x.state === "error").length ?? 0;
-        const verdict = !mine
-          ? <StatusBadge tone={err ? "err" : "checking"}>{err ? "Not read" : "Checking"}</StatusBadge>
-          : bad
-            ? <StatusBadge tone="err">{bad} {bad === 1 ? "needs" : "need"} attention</StatusBadge>
-            : <StatusBadge tone={ok === mine.length && ok > 0 ? "ok" : "off"}>{ok} of {mine.length} connected</StatusBadge>;
-        return (
-          <SettingsCard key={kind}
-            title={kind === "review" ? "Review providers" : "Task providers"}
-            desc={kind === "review"
-              ? "Pull requests, checks and review state."
-              : "Where the things you owe come from. Each one you connect becomes a tab in Tasks."}
-            status={verdict}
-            actions={<Button pending={busy} onClick={() => void load()}>Recheck</Button>}>
-            {err && <SettingRow label={err} hint="Recheck to try again." />}
-            {specs.map((p) => (
-              <ProviderCard key={p.id} spec={p} status={statusOf(p.id)} checking={!status && !err} onChanged={load} />
-            ))}
-          </SettingsCard>
-        );
-      })}
+      <FlowLabel>Services</FlowLabel>
+      <div className="flex items-center gap-3 flex-wrap mb-1" style={{ columnSpan: "all" }}>
+        {verdict}
+        <span className="text-[12px] flex-1 min-w-0" style={{ color: "var(--text3)" }}>Pull requests, checks and review state, and where the things you owe come from. Each task provider you connect becomes a tab in Tasks.</span>
+        <Button pending={busy} onClick={() => void load()}>Recheck</Button>
+      </div>
+      {err && <SettingsCard title="Services" icon={<PlugIcon size={ICON.sm} />}><SettingRow agentExempt label={err} hint="Recheck to try again." /></SettingsCard>}
+      {PROVIDERS.map((p) => (
+        <ProviderCard key={p.id} spec={p} status={statusOf(p.id)} checking={!status && !err} onChanged={load} />
+      ))}
     </>
   );
 }
@@ -2978,48 +2977,15 @@ function ProviderCard({ spec, status, checking, onChanged }: {
 
   return (
     /*
-     * One row per provider, in one card per kind: the badges form a column you
-     * can read down in one movement. Everything conditional — the form, the
-     * confirmation, the workspace list — is the row's stacked slot, so a row
-     * with nothing to add is one line of name and one of description, and a
-     * row that grows does it under itself.
-     *
-     * The badge stays first in the control column in every state, and
-     * Disconnect after it; the confirmation that replaces Disconnect opens
-     * under the row, where the question is asked.
+     * One tile per provider. The badge is in the head in every state and so is
+     * the one action (Manage, or Disconnect once connected); everything
+     * conditional (the form, the confirmation, the workspace list) is the
+     * body's stacked slot, so a tile with nothing to add is one row, and one
+     * that grows does it under itself. Amber edge only while the person is
+     * needed: a refused token, never an optional service nobody connected.
      */
-    <SettingRow
-      rowRef={box}
-      /* Still remembered, still for the same reason: the row grows a detail
-         line and, when it is not connected, a form under it. Measured after
-         the card became a row, the page still moved 145px without this. */
-      minHeight={waiting ? rememberedHeights()[spec.id] ?? 56 : undefined}
-      label={spec.title}
-      hint={<>
-        <span className="block">{spec.what}</span>
-        {status?.detail && <span className="block mt-1">{status.detail}</span>}
-        {/* When that verdict was actually taken. The row above is read from a
-            cache — deliberately, because asking ClickUp live costs ten
-            seconds of its latency for a question the token answers — and a
-            cached verdict drawn with no date claims to be a live one. */}
-        {checked && <span className="block mt-1">{checked}</span>}
-        {/* Half of a provider can be down while the other half looks fine —
-            the ClickUp card bell fails on its own six-minute timer. Warning
-            ink and UNDER the detail, because it qualifies the verdict instead
-            of being it: a connected row with a broken bell is still connected. */}
-        {status?.notice && <span className="block mt-1" style={{ color: "var(--warning-ink)" }}>{status.notice}</span>}
-        {connected && spec.id === "clickup" && (
-          <span className="block mt-1">
-            <button type="button" className="agx-textlink" onClick={() => void changeWorkspace()}>Change workspace</button>
-            {" · "}
-            <button type="button" className="agx-textlink" onClick={() => openSettings("clickup")}>Workflow and boards</button>
-          </span>
-        )}
-        {waiting && <span className="agx-skeleton block mt-1 rounded" style={{ height: 13, maxWidth: 240 }} aria-hidden />}
-      </>}
-      /* The standing caveat about a provider — true whether or not you ever
-         connect it, and read once — behind a summary that says what it is. */
-      detail={spec.note && !connected && !waiting && !isJira ? { summary: spec.noteTitle ?? "About the credential", body: spec.note } : undefined}
+    <SettingsCard icon={<Initial name={spec.title} />} title={spec.title} desc={spec.what}
+      tone={look.tone === "err" ? "decision" : "default"}
       status={<StatusBadge tone={look.tone}>{look.label}</StatusBadge>}
       actions={isJira && !waiting
         ? <Button onClick={() => openSettings("jira")}>{connected ? "Manage" : "Set up"}</Button>
@@ -3032,9 +2998,42 @@ function ProviderCard({ spec, status, checking, onChanged }: {
             }}>
             Disconnect
           </Button>
-        : undefined}
-      below={below}
-    />
+        : undefined}>
+      <SettingRow
+        agentExempt
+        rowRef={box}
+        /* Still remembered, still for the same reason: the tile grows a detail
+           line and, when it is not connected, a form under it. Measured when it
+           was one row, the page still moved 145px without this. */
+        minHeight={waiting ? rememberedHeights()[spec.id] ?? 56 : undefined}
+        label={waiting ? "Checking…" : look.label}
+        hint={<>
+          {status?.detail && <span className="block">{status.detail}</span>}
+          {/* When that verdict was actually taken. The row above is read from a
+              cache — deliberately, because asking ClickUp live costs ten
+              seconds of its latency for a question the token answers — and a
+              cached verdict drawn with no date claims to be a live one. */}
+          {checked && <span className="block mt-1">{checked}</span>}
+          {/* Half of a provider can be down while the other half looks fine —
+              the ClickUp card bell fails on its own six-minute timer. Warning
+              ink and UNDER the detail, because it qualifies the verdict instead
+              of being it: a connected row with a broken bell is still connected. */}
+          {status?.notice && <span className="block mt-1" style={{ color: "var(--warning-ink)" }}>{status.notice}</span>}
+          {connected && spec.id === "clickup" && (
+            <span className="block mt-1">
+              <button type="button" className="agx-textlink" onClick={() => void changeWorkspace()}>Change workspace</button>
+              {" · "}
+              <button type="button" className="agx-textlink" onClick={() => openSettings("clickup")}>Workflow and boards</button>
+            </span>
+          )}
+          {waiting && <span className="agx-skeleton block mt-1 rounded" style={{ height: 13, maxWidth: 240 }} aria-hidden />}
+        </>}
+        /* The standing caveat about a provider — true whether or not you ever
+           connect it, and read once — behind a summary that says what it is. */
+        detail={spec.note && !connected && !waiting && !isJira ? { summary: spec.noteTitle ?? "About the credential", body: spec.note } : undefined}
+        below={below}
+      />
+    </SettingsCard>
   );
 }
 
@@ -3090,7 +3089,7 @@ function RequirementsPane({ open }: { open: boolean }) {
      the button is always where it was. */
   if (err || !deps) {
     return (
-      <SettingsCard title="On this machine" desc={desc}
+      <SettingsCard title="On this machine" icon={<ServerIcon size={ICON.sm} />} desc={desc}
         status={<StatusBadge tone={err ? "err" : "checking"}>{err ? "Not checked" : "Checking"}</StatusBadge>}
         actions={recheck}>
         <SettingRow label={err ? err : "Checking this machine…"} hint={err ? "Recheck to try again." : undefined} />
@@ -3109,33 +3108,41 @@ function RequirementsPane({ open }: { open: boolean }) {
   const wanting = live.filter((d) => d.status === "attention" || (d.status === "missing" && !d.required)).length;
 
   return (
-    /* The verdict is the card's badge and the recheck is its one action, at
-       the top right. Only what wants something gets a row — the status, the
-       detail, the install — and the ones that are ready collapse behind one
-       line, where a name and a dot are enough. */
-    <SettingsCard title="On this machine" desc={desc}
-      status={broken
-        ? <StatusBadge tone="err">{broken} needed {broken === 1 ? "tool" : "tools"} missing</StatusBadge>
-        : wanting
-          ? <StatusBadge tone="warn">{wanting} optional {wanting === 1 ? "feature" : "features"} off</StatusBadge>
-          : <StatusBadge tone="ok">Everything is here</StatusBadge>}
-      actions={recheck}>
+    /* The verdict and the recheck sit in one bar above the tiles. Only what wants
+       something gets a tile (the status, the detail, the install); the ones that
+       are ready collapse into one card, where a name and a dot are enough. */
+    <>
+      <div className="flex items-center gap-3 flex-wrap mb-1" style={{ columnSpan: "all" }}>
+        {broken
+          ? <StatusBadge tone="err">{broken} needed {broken === 1 ? "tool" : "tools"} missing</StatusBadge>
+          : wanting
+            ? <StatusBadge tone="warn">{wanting} optional {wanting === 1 ? "feature" : "features"} off</StatusBadge>
+            : <StatusBadge tone="ok">Everything is here</StatusBadge>}
+        <span className="text-[12px] flex-1 min-w-0" style={{ color: "var(--text3)" }}>{desc}</span>
+        {recheck}
+      </div>
+      <FlowLabel>On this machine</FlowLabel>
       {wants.map((d) => <DepRow key={d.id} d={d} home={shellRoot} />)}
 
-      {ready.length > 0 && (
-        <Fold label={wants.length ? `${ready.length} more ready` : `${ready.length} ready`}
-          hint="Everything else agentglass looks for, and found.">
-          <DepGrid deps={ready} />
-        </Fold>
-      )}
+      {(ready.length > 0 || idle.length > 0) && (
+        <SettingsCard title={wants.length ? "Ready" : "Everything found"} icon={<ServerIcon size={ICON.sm} />}
+          status={<StatusBadge tone="ok">{ready.length} ready</StatusBadge>}>
+          {ready.length > 0 && (
+            <Fold label={wants.length ? `${ready.length} more ready` : `${ready.length} ready`}
+              hint="Everything else agentglass looks for, and found.">
+              <DepGrid deps={ready} />
+            </Fold>
+          )}
 
-      {idle.length > 0 && (
-        <Fold label={`${idle.length} not used on ${platform}`}
-          hint="This platform never asks for these, so there is nothing to install.">
-          <DepGrid deps={idle} muted />
-        </Fold>
+          {idle.length > 0 && (
+            <Fold label={`${idle.length} not used on ${platform}`}
+              hint="This platform never asks for these, so there is nothing to install.">
+              <DepGrid deps={idle} muted />
+            </Fold>
+          )}
+        </SettingsCard>
       )}
-    </SettingsCard>
+    </>
   );
 }
 
@@ -3597,7 +3604,7 @@ function CardTrackerSection() {
     setRows((cur) => cur && { ...cur, chosen: r.projects ?? {} });
   };
   return (
-    <SettingsCard title="Card tracker"
+    <SettingsCard title="Card tracker" icon={<ChecklistIcon size={ICON.sm} />}
       desc={<>Which tracker a repository's cards live in. Auto reads the id's prefix.
         {note && <span className="block mt-1" role="alert" style={{ color: "var(--error-ink)" }}>{note}</span>}</>}>
       {!rows?.repos.length && <EmptyState>No repositories to choose for yet.</EmptyState>}
@@ -4565,7 +4572,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   {ql && show("privacy") && <PageMatchHeading id="privacy" onOpen={() => { setPane("privacy" as Pane); setQ(""); }} />}
                   {show("privacy") && <PrivacyPane open={open} />}
                   {show("privacy") && (
-                  <SettingsCard title="Take your data out"
+                  <SettingsCard title="Take your data out" icon={<DownloadIcon />}
                     desc="Everything this app has recorded, in a format something else can read.">
                     {/* Scoped like everything else: with a project open these
                         carry that project's rows, not the whole machine's. */}

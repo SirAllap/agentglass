@@ -47,9 +47,9 @@ export function TextRow({ label, hint, value, fallback = "", placeholder, onSave
 }
 
 /** A section of the page: a settings card (SettingsKit). `open`/`onToggle` make its header a disclosure. */
-export function Card({ title, status, actions, children, open, onToggle, desc }: { id?: string; title: string; status?: ReactNode; actions?: ReactNode; desc?: ReactNode; children: ReactNode; open?: boolean; onToggle?: (o: boolean) => void }) {
+export function Card({ title, status, actions, children, open, onToggle, desc, icon }: { id?: string; title: string; status?: ReactNode; actions?: ReactNode; desc?: ReactNode; icon?: ReactNode; children: ReactNode; open?: boolean; onToggle?: (o: boolean) => void }) {
   return (
-    <SettingsCard title={title} desc={desc} status={status} actions={actions}
+    <SettingsCard title={title} desc={desc} status={status} actions={actions} icon={icon}
       fold={onToggle ? { open: !!open, onToggle } : undefined}>
       {children}
     </SettingsCard>

@@ -10,6 +10,8 @@ import { PairPanel } from "./PairPanel.tsx";
 import { usePoll } from "../lib/usePoll.ts";
 import type { RemoteStatus, RemoteDevice } from "../../../shared/types.ts";
 import { Button } from "./workspace/Chrome.tsx";
+import { PhoneIcon, ServerIcon, ShieldIcon } from "./settingsNavIcons.tsx";
+import { ICON } from "../lib/iconSize.ts";
 
 /**
  * Open the dashboard on your phone.
@@ -138,7 +140,7 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
   };
 
   if (!st) return (
-    <SettingsCard title="Remote access" desc="Reaching this machine from a phone, and what that phone is allowed to do.">
+    <SettingsCard title="Remote access" icon={<PhoneIcon size={ICON.sm} />} desc="Reaching this machine from a phone, and what that phone is allowed to do.">
       <SettingRow label="Reading network state…" status={<StatusBadge tone="checking">Checking</StatusBadge>} />
     </SettingsCard>
   );
@@ -181,7 +183,8 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
 
   return (
     <>
-      <SettingsCard title="Remote access" desc="Reaching this machine from a phone, and what that phone is allowed to do.">
+      {/* Amber only for a real decision: the server listens but the gate would refuse every phone. */}
+      <SettingsCard title="Remote access" icon={<PhoneIcon size={ICON.sm} />} tone={st.exposed && !st.trustLan ? "decision" : "default"} desc="Reaching this machine from a phone, and what that phone is allowed to do.">
         {/* Always first, always the same row: what the server is doing, whether
             anything is attached to it at this instant, and the switch. */}
         {enabled === null ? (
@@ -257,7 +260,7 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
           <PairPanel baseUrl={url} variant={firstRun ? "hero" : "row"} onPaired={setPaired}
             canTurnOnHttps={!!st.tailnet?.installed && !st.addresses.some((a) => a.secure)} onStatus={apply} />
 
-          <SettingsCard title="Address">
+          <SettingsCard title="Address" icon={<ServerIcon size={ICON.sm} />}>
             <SettingRow
               label="Address"
               hint="Safe to share — it is an address, not a key. On a device that is not paired it opens a page and nothing else."
@@ -368,7 +371,7 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
           take back the key, and since the desktop app began requiring a token
           on loopback too, the code still guards something with the switch off. */}
       {enabled !== null && st.tokenRequired && (
-        <SettingsCard title="Access code">
+        <SettingsCard title="Access code" icon={<ShieldIcon size={ICON.sm} />} tone="danger">
           <SettingRow
             label={<span style={{ color: "var(--error-ink)" }}>Revoke this link</span>}
             hint={confirming
@@ -455,6 +458,7 @@ function Seen({ st, onChanged }: { st: RemoteStatus; onChanged: () => void }) {
 
   return (
     <SettingsCard
+      icon={<PhoneIcon size={ICON.sm} />}
       title="Who has reached this machine"
       desc={clients.liveCount > 0
         ? `${clients.liveCount === 1 ? "One device is" : `${clients.liveCount} devices are`} connected right now`
