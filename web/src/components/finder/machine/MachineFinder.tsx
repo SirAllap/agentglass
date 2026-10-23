@@ -37,6 +37,7 @@ import { closeTab, openTab, selectTab, showHere, stepTab, tabsOf } from "../../.
 import { useFinderOps, type Chosen } from "./useFinderOps.tsx";
 import { FinderSearch } from "./FinderSearch.tsx";
 import type { HitTarget } from "../../../lib/finderSearch.ts";
+import { useFolderPeek } from "./FolderPeek.tsx";
 import { IconsView, ListView, tilesPerRow } from "./FolderViews.tsx";
 import { StrataIcon } from "./StrataIcon.tsx";
 import { QuickLook } from "./QuickLook.tsx";
@@ -84,6 +85,8 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   onClose: () => void;
 }) {
   const [prefs, setPrefsState] = useState<Prefs>(loadPrefs);
+  /* Folder peeking is an Icons and List thing: Columns already shows what is inside a folder. */
+  const folderPeek = useFolderPeek(prefs.peek && prefs.view !== "columns", prefs.hidden);
   /* Every way out of the Editing tab asks first when nvim holds unsaved changes (lib/finderEdit.EXITS). The move is
      held in `held` and runs once the person has said Save or Discard; leaving ends the editor's session either way. */
   const editing = useRef<string | null>(null);
@@ -621,8 +624,8 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
                 <div className="flex-1 min-w-0 min-h-0 flex flex-col" data-dir={lastCol.path}>
                   {lastCol.state?.error ? <div className="p-3 text-[12px]" role="alert" style={{ color: "var(--warning-ink)" }}>{lastCol.state.error}</div>
                     : prefs.view === "icons"
-                      ? <IconsView display={lastCol.display} dir={lastCol.path} thumb={prefs.thumb} selName={sel[last] ?? null} chosen={liveMulti?.col === last ? liveMulti.choice.names : null} width={mainBox.w} label={`Entries of ${basename(lastCol.path)}`} onPick={(r, m) => onPickMod(last, r, m)} onOpen={(r) => (isFolder(r) && !r.locked ? go(joinPath(lastCol.path, r.name)) : canEditRow(r) && onBench(joinPath(lastCol.path, r.name), "edit"))} />
-                      : <ListView dir={lastCol.path} display={lastCol.display} selName={sel[last] ?? null} chosen={liveMulti?.col === last ? liveMulti.choice.names : null} rowH={rowH} prefs={prefs} label={`Entries of ${basename(lastCol.path)}`} onSort={onSort} onPick={(r, m) => onPickMod(last, r, m)} onOpen={(r) => (isFolder(r) && !r.locked ? go(joinPath(lastCol.path, r.name)) : canEditRow(r) && onBench(joinPath(lastCol.path, r.name), "edit"))} />}
+                      ? <IconsView peek={folderPeek.peek} display={lastCol.display} dir={lastCol.path} thumb={prefs.thumb} selName={sel[last] ?? null} chosen={liveMulti?.col === last ? liveMulti.choice.names : null} width={mainBox.w} label={`Entries of ${basename(lastCol.path)}`} onPick={(r, m) => onPickMod(last, r, m)} onOpen={(r) => (isFolder(r) && !r.locked ? go(joinPath(lastCol.path, r.name)) : canEditRow(r) && onBench(joinPath(lastCol.path, r.name), "edit"))} />
+                      : <ListView peek={folderPeek.peek} dir={lastCol.path} display={lastCol.display} selName={sel[last] ?? null} chosen={liveMulti?.col === last ? liveMulti.choice.names : null} rowH={rowH} prefs={prefs} label={`Entries of ${basename(lastCol.path)}`} onSort={onSort} onPick={(r, m) => onPickMod(last, r, m)} onOpen={(r) => (isFolder(r) && !r.locked ? go(joinPath(lastCol.path, r.name)) : canEditRow(r) && onBench(joinPath(lastCol.path, r.name), "edit"))} />}
                 </div>
               ) : null}
             </div>
@@ -673,6 +676,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
       )}
       {devices.dialogs}
       {ops.nodes}
+      {folderPeek.node}
       {help && <HelpSheet onClose={() => setHelp(false)} />}
       {searching && <FinderSearch home={home} onTarget={reveal} onClose={() => setSearching(false)} />}
       {settings && <FinderSettings say={setNote} prefs={prefs} onPref={setPrefs} onReset={() => { setPrefsState(DEFAULT_PREFS); savePrefs(DEFAULT_PREFS); setNote("Finder settings reset"); }} onForget={() => { try { localStorage.removeItem(SNAP_KEY); } catch { /* nothing kept */ } setDragged({}); scrolls.current = {}; setNote("Remembered places cleared"); }} onClose={() => setSettings(null)} />}

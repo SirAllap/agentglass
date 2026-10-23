@@ -43,10 +43,11 @@ export function AppearanceMenu({ anchor, prefs, onPref, onClose }: { anchor: DOM
 }
 
 /**
- * Strata's Settings window, as a modal over the finder: a page list on the left under
- * "SETTINGS" with "Search settings", the rows of the open page on the right, each
- * with its title, its one-line description and its control. A change is made the
- * moment it is clicked and clicked again to undo (lib/finderSettingsModel).
+ * Strata's Settings window: a centred card over a dimmed finder. The page list is on the
+ * left (an icon, a title and a subtitle each, under "SETTINGS" and a search field with
+ * its own icon); the open page is on the right, its rows in bordered cards under a
+ * section header, the control at the row's right. A change is made the moment it is
+ * clicked and clicked again to undo (lib/finderSettingsModel).
  */
 export function FinderSettings({ prefs, onPref, onReset, onForget, onClose, say }: { prefs: Prefs; onPref: (p: Partial<Prefs>) => void; onReset: () => void; onForget: () => void; onClose: () => void; say: (s: string) => void }) {
   const [q, setQ] = useState("");
@@ -63,15 +64,15 @@ export function FinderSettings({ prefs, onPref, onReset, onForget, onClose, say 
   const def = resetSort(prefs);
   const Switch = ({ on, label, onClick }: { on: boolean; label: string; onClick: () => void }) => (
     <button role="switch" aria-checked={on} aria-label={label} onClick={onClick} className="agx-btn shrink-0 relative rounded-full"
-      style={{ width: 38, height: 22, border: EDGE, background: on ? "var(--primary)" : "transparent" }}>
-      <span className="absolute rounded-full" style={{ top: 2, left: on ? 18 : 2, width: 16, height: 16, background: on ? "var(--bg)" : "var(--text3)", transition: "left 120ms" }} />
+      style={{ width: 38, height: 22, border: EDGE, background: on ? "color-mix(in srgb, var(--primary) 38%, transparent)" : "transparent" }}>
+      <span className="absolute rounded-full" style={{ top: 2, left: on ? 18 : 2, width: 16, height: 16, background: on ? "var(--primary-ink)" : "var(--text3)", transition: "left 120ms" }} />
     </button>
   );
   const control = (r: Row) => {
     switch (r.kind) {
       case "manager": return null;
       case "toggle": return <Switch on={toggleValue(prefs, r.id)} label={r.title} onClick={() => onPref({ [r.id]: !prefs[r.id] } as Partial<Prefs>)} />;
-      case "button": return <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE }} onClick={onForget}>{r.action}</button>;
+      case "button": return <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE }} onClick={r.id === "reset" ? onReset : onForget}>{r.action}</button>;
       case "sort": return (
         <span className="flex items-center gap-1.5">
           <select aria-label="Default sort field" className={INPUT} style={INPUT_STYLE} value={def.sortKey} onChange={(e) => onPref({ defSort: { ...def, sortKey: e.target.value as SortKey } })}>
@@ -104,49 +105,55 @@ export function FinderSettings({ prefs, onPref, onReset, onForget, onClose, say 
     }
   };
   return (
-    <div ref={frame} role="dialog" aria-label="Settings" className="absolute inset-0 flex flex-col" style={{ background: "var(--bg)", zIndex: 8 }}
-      onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } }}>
-      <div className="flex items-center gap-2 px-3 shrink-0" style={{ minHeight: 40, borderBottom: LINE }}>
-        <b className="flex-1 text-[13px]">Settings</b>
-        <button className="agx-btn rounded-md grid place-items-center" style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Close (Esc)" aria-label="Close settings" onClick={onClose}><StrataIcon set="act" name="x" size={ICON.sm} /></button>
-      </div>
-      <div className={`flex-1 min-h-0 flex ${narrow ? "flex-col" : ""}`}>
-        <nav aria-label="Settings pages" className={`shrink-0 flex gap-1 p-2.5 ${narrow ? "flex-wrap items-center" : "flex-col"}`} style={narrow ? { borderBottom: LINE } : { width: 220, borderRight: LINE }}>
-          {!narrow && <span className="px-1.5 pb-1 text-[10.5px] uppercase tracking-[0.1em]" style={{ color: "var(--text3)", fontWeight: 600 }}>Settings</span>}
-          <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search settings" aria-label="Search settings" spellCheck={false}
-            onKeyDown={(e) => { if (e.key !== "Escape") e.stopPropagation(); }} className={`${INPUT} ${narrow ? "flex-1 min-w-[140px]" : "w-full mb-1.5"}`} style={INPUT_STYLE} />
-          {PAGES.map((p) => (
-            <button key={p.id} aria-current={open === p.id ? "page" : undefined} disabled={!!q.trim() && !withHits.has(p.id)} onClick={() => setPage(p.id)}
-              className="agx-btn rounded-md px-2.5 py-1.5 text-left disabled:opacity-40" style={{ background: open === p.id ? "color-mix(in srgb, var(--primary) 14%, transparent)" : undefined }}>
-              <div className="text-[12.5px]">{p.title}</div>
-              <div className="text-[10.5px]" style={{ color: "var(--text3)" }}>{p.hint}</div>
-            </button>
-          ))}
-          {!narrow && <span className="flex-1" />}
-          <button className="agx-btn rounded-md px-2.5" style={{ minHeight: HIT, border: EDGE, color: "var(--text2)" }} onClick={onReset}>{narrow ? "Reset" : "Reset finder settings"}</button>
-        </nav>
-        <div className={`agx-scroll flex-1 min-w-0 min-h-0 overflow-y-auto ${narrow ? "px-4" : "px-6"} py-4`}>
-          <h2 className="m-0 mb-3 text-[16px]">{PAGES.find((p) => p.id === open)!.title}</h2>
-          {rows.length === 0 && <p style={{ color: "var(--text3)" }}>No matching settings</p>}
-          {sections.map((sec) => (
-            <section key={sec} aria-label={sec} className="mb-5">
-              <h4 className="m-0 mb-1 text-[10.5px] uppercase tracking-[0.1em]" style={{ color: "var(--text3)", fontWeight: 600 }}>{sec}</h4>
-              {rows.filter((r) => r.section === sec).map((r) => r.kind === "manager" ? (
-                <div key={r.id}>
-                  <p className="m-0 mb-3 text-[11.5px]" style={{ color: "var(--text3)" }}>{r.desc}</p>
-                  <ActionsManager narrow={narrow} say={say} />
-                </div>
-              ) : (
-                <div key={r.id} className={`flex gap-4 py-2.5 ${narrow ? "flex-col items-start gap-2" : "items-center"}`} style={{ borderTop: LINE }}>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[12.5px]">{r.title}</div>
-                    <div className="text-[11px]" style={{ color: "var(--text3)" }}>{r.desc}</div>
+    <div role="dialog" aria-label="Settings" className={`absolute inset-0 grid place-items-center ${narrow ? "p-2" : "p-4"}`} style={{ background: "color-mix(in srgb, var(--bg) 70%, transparent)", zIndex: 8 }}
+      onClick={onClose} onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } }}>
+      <div ref={frame} className="rounded-xl text-[12px] max-w-full max-h-full flex flex-col min-h-0 overflow-hidden" style={{ background: "var(--surface-card)", border: EDGE, width: "min(1180px, 100%)", height: "min(860px, 100%)" }} onClick={(e) => e.stopPropagation()}>
+        <div className={`flex-1 min-h-0 flex ${narrow ? "flex-col" : ""}`}>
+          <nav aria-label="Settings pages" className={`shrink-0 flex gap-1 p-3 ${narrow ? "flex-wrap items-center" : "flex-col"}`} style={narrow ? { borderBottom: LINE } : { width: 270, borderRight: LINE }}>
+            {!narrow && <span className="px-1.5 pt-1 pb-1.5 text-[10.5px] uppercase tracking-[0.1em]" style={{ color: "var(--text3)", fontWeight: 600 }}>Settings</span>}
+            <label className={`flex items-center gap-2 px-2.5 rounded-md ${narrow ? "flex-1 min-w-[140px]" : "mb-1.5"}`} style={{ border: EDGE, minHeight: 34, color: "var(--text3)" }}>
+              <StrataIcon set="act" name="search" size={ICON.sm} />
+              <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search settings" aria-label="Search settings" spellCheck={false}
+                onKeyDown={(e) => { if (e.key !== "Escape") e.stopPropagation(); }} className="flex-1 min-w-0 bg-transparent outline-none" style={{ color: "var(--text)", font: "inherit" }} />
+            </label>
+            {PAGES.map((p) => (
+              <button key={p.id} aria-current={open === p.id ? "page" : undefined} disabled={!!q.trim() && !withHits.has(p.id)} onClick={() => setPage(p.id)}
+                className="agx-btn rounded-md px-2.5 py-2 text-left disabled:opacity-40 flex items-center gap-2.5" style={{ background: open === p.id ? "color-mix(in srgb, var(--primary) 12%, transparent)" : undefined, color: open === p.id ? "var(--text)" : "var(--text2)" }}>
+                <span className="shrink-0 flex" style={{ color: open === p.id ? "var(--primary-ink)" : "var(--text3)" }}><StrataIcon set="act" name={p.icon} size={ICON.sm} /></span>
+                <span className="min-w-0"><span className="block text-[12.5px]" style={{ fontWeight: 600 }}>{p.title}</span><span className="block text-[11px]" style={{ color: "var(--text3)" }}>{p.hint}</span></span>
+              </button>
+            ))}
+          </nav>
+          <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+            <div className="flex items-center gap-2 px-6 shrink-0" style={{ minHeight: 52, borderBottom: LINE }}>
+              <h2 className="m-0 flex-1 text-[15px]">{PAGES.find((p) => p.id === open)!.title}</h2>
+              <button className="agx-btn rounded-md grid place-items-center" style={{ width: HIT, height: HIT, color: "var(--text3)" }} title="Close (Esc)" aria-label="Close settings" onClick={onClose}><StrataIcon set="act" name="x" size={ICON.sm} /></button>
+            </div>
+            <div className={`agx-scroll flex-1 min-w-0 min-h-0 overflow-y-auto ${narrow ? "px-3" : "px-6"} py-4`}>
+              {rows.length === 0 && <p style={{ color: "var(--text3)" }}>No matching settings</p>}
+              {sections.map((sec) => (
+                <section key={sec} aria-label={sec} className="mb-5">
+                  <h4 className="m-0 mb-2 px-0.5 text-[11px] uppercase tracking-[0.1em]" style={{ color: "var(--text3)", fontWeight: 600 }}>{sec}</h4>
+                  <div data-card={sec} className="overflow-hidden rounded-lg" style={{ border: EDGE }}>
+                    {rows.filter((r) => r.section === sec).map((r, i) => r.kind === "manager" ? (
+                      <div key={r.id} className="p-4" style={{ borderTop: i === 0 ? undefined : LINE }}>
+                        <p className="m-0 mb-3 text-[11.5px]" style={{ color: "var(--text3)" }}>{r.desc}</p>
+                        <ActionsManager narrow={narrow} say={say} />
+                      </div>
+                    ) : (
+                      <div key={r.id} className={`flex gap-4 px-4 py-3 ${narrow ? "flex-col items-start gap-2" : "items-center"}`} style={{ borderTop: i === 0 ? undefined : LINE }}>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[12.5px]" style={{ fontWeight: 600 }}>{r.title}</div>
+                          <div className="text-[11.5px]" style={{ color: "var(--text3)" }}>{r.desc}</div>
+                        </div>
+                        {control(r)}
+                      </div>
+                    ))}
                   </div>
-                  {control(r)}
-                </div>
+                </section>
               ))}
-            </section>
-          ))}
+            </div>
+          </div>
         </div>
       </div>
     </div>

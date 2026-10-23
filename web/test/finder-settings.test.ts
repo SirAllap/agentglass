@@ -39,7 +39,35 @@ describe("the finder draws them", () => {
   test("a pick consults the mirror setting", async () => { expect(await read("MachineFinder.tsx")).toContain("opensOnPick(row, prefs.mirror)"); });
   test("the settings sheet lists the three and a reset", async () => {
     const model = await Bun.file(new URL("../src/lib/finderSettingsModel.ts", import.meta.url)).text();
-    for (const t of ["Show sizes in Columns view", "Mirror columns selection", "Show F1 Shortcuts button"]) expect(model).toContain(t);
-    expect(await read("FinderChrome.tsx")).toContain("Reset finder settings");
+    for (const t of ["Show sizes in Columns view", "Mirror columns selection", "Show F1 Shortcuts button", "Reset finder settings"]) expect(model).toContain(t);
+  });
+});
+
+/* Strata's Settings window is a centred card over a dimmed browser, not a page that fills it: left nav with an icon and a subtitle per page, a search field with its own icon, and the rows in bordered cards under a section header. */
+describe("the settings window looks like Strata's", () => {
+  const read = (f: string) => Bun.file(new URL(`../src/components/finder/machine/${f}`, import.meta.url)).text();
+  const body = async () => { const s = await read("FinderChrome.tsx"); const a = s.indexOf("export function FinderSettings("); return s.slice(a, s.indexOf("\n}\n", a)); };
+  test("centred, 1180 by 860 at most, over a dimmed finder that closes on a click outside", async () => {
+    const s = await body();
+    expect(s).toContain("grid place-items-center");
+    expect(s).toContain("min(1180px, 100%)");
+    expect(s).toContain("min(860px, 100%)");
+    expect(s).toMatch(/onClick=\{onClose\}/);
+    expect(s).toContain("e.stopPropagation()");
+  });
+  test("the nav wears an icon and a subtitle per page, and the field a search icon", async () => {
+    const s = await body();
+    expect(s).toContain('name={p.icon}');
+    expect(s).toContain("{p.hint}");
+    expect(s).toContain('name="search"');
+  });
+  test("rows sit in a bordered card under their section header, divided from each other", async () => {
+    const s = await body();
+    expect(s).toContain('data-card={sec}');
+    expect(s).toMatch(/overflow-hidden rounded-lg/);
+    expect(s).toMatch(/borderTop: i === 0 \? undefined : LINE/);
+  });
+  test("the reset is a row, not a button hanging off the nav", async () => {
+    expect(await body()).not.toContain("Reset finder settings");
   });
 });
