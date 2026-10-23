@@ -355,4 +355,10 @@ describe("the classic bar's menu", () => {
     expect(back).toBeGreaterThan(start);
     expect(back).toBeLessThan(home);
   });
+  test("and the bar keeps a button back to the island at its foot", async () => {
+    const src = await Bun.file(new URL("../src/components/BrowserPanel.tsx", import.meta.url)).text();
+    const start = src.indexOf("const sideBody = (");
+    const end = src.indexOf("\n  );\n", start);
+    expect(src.slice(start, end)).toContain("Back to the island");
+  });
 });

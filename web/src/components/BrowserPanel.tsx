@@ -3009,6 +3009,15 @@ export function BrowserView({ active: viewOn, scope }: {
         </div>
       )}
       <LanesRow />
+      {/* The way back, always at the foot and in the accent: inside the menu it was not found. */}
+      <div className="shrink-0 px-1.5 pb-1.5 pt-1" style={{ borderTop: LINE }}>
+        <button type="button" onClick={() => { setClassic(false); setClassicChrome(false); }}
+          className="w-full flex items-center justify-center gap-2 rounded-lg text-[12px] font-medium"
+          style={{ height: CTRL_H.compact + 6, color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--primary) 40%, transparent)" }}>
+          <svg width={ICON.sm} height={ICON.sm} viewBox="0 0 16 16" aria-hidden><rect x="1.5" y="5" width="13" height="6" rx="3" fill="currentColor" /></svg>
+          Back to the island
+        </button>
+      </div>
     </div>
   );
 
