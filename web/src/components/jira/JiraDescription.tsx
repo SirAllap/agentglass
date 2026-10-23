@@ -16,7 +16,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { Markdown } from "../../lib/markdown.tsx";
-import { followLink } from "../../lib/linkRouter.ts";
+import { openExternal } from "../../lib/externalUrl.ts";
 import { descriptionMode } from "../../lib/jiraEdit.ts";
 import type { CardEdit } from "../../../../shared/providers.ts";
 import { CommentAction } from "../tasks/CardEdit.tsx";
@@ -84,7 +84,7 @@ export function JiraDescription({ text, edit, writes, url, busy, onSave }: {
       {mode === "locked" && (
         <div className="flex items-center gap-2 mt-1.5 text-[10.5px] flex-wrap" role="status" style={{ color: "var(--text3)" }}>
           <span>{LOCKED_SAYS}</span>
-          {url && <button className="agx-btn rounded-md px-2 py-0.5" onClick={(e) => followLink(url, e)} style={{ color: "var(--text2)", border: EDGE }}>Open in Jira</button>}
+          {url && <button className="agx-btn rounded-md px-2 py-0.5" onClick={() => openExternal(url)} style={{ color: "var(--text2)", border: EDGE }}>Open in Jira</button>}
         </div>
       )}
     </Section>

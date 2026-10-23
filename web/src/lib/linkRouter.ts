@@ -8,8 +8,9 @@
  * request's own body renderer) asks this one question here, rather than each
  * growing its own idea of what a pull request URL looks like.
  *
- * Three answers. A GitHub pull request opens the pull request view, a ClickUp
- * card opens the card in the Tasks view, and everything else — issues, commits
+ * Four answers. A GitHub pull request opens the pull request view, a ClickUp
+ * card opens the card in the Tasks view, an issue on the connected Jira site
+ * opens in the Jira tab, and everything else — issues, commits
  * outside this pull request, docs, any other host — leaves exactly as it did.
  *
  * Hosts are compared whole, after the URL parser has read them. A pattern over
@@ -29,6 +30,8 @@ import { openCard } from "./openCard.ts";
 import { openPr } from "./openPrs.ts";
 import { api } from "./api.ts";
 import { clickupSetup, clickupSetupNow } from "./clickupSetup.ts";
+import { trackerSetup, jiraSiteNow } from "./trackerSetup.ts";
+import { hasUrlCredentials } from "../../../shared/urlCredentials.ts";
 
 export type LinkRoute =
   | { kind: "pr"; repo: string; number: number; url: string }
@@ -38,6 +41,8 @@ export type LinkRoute =
    *  one. */
   | { kind: "ref"; repo: string; number: number; url: string }
   | { kind: "card"; query: string; url: string }
+  /** An issue on the Jira site this machine is connected to. */
+  | { kind: "jira"; key: string; url: string }
   | { kind: "external"; url: string };
 
 const GITHUB = new Set(["github.com", "www.github.com"]);
@@ -51,6 +56,19 @@ const CLICKUP = new Set(["app.clickup.com"]);
    trusted to have been trimmed. */
 const TRAILING = /[)\].,;:!?'"»>]+$/;
 const SAFE_SEGMENT = /^[\w.-]+$/;
+const JIRA_KEY = /^[A-Z][A-Z0-9_]*-\d+$/;
+
+/**
+ * The issue key a Jira address names, whatever host it is on: `/browse/ORBIT-7`,
+ * or `?selectedIssue=ORBIT-7` on a board, backlog or timeline URL. Shape only.
+ * Whether the host is OUR Jira site is the caller's question, because an
+ * address of this shape on any other host is somebody else's page.
+ */
+export function jiraKeyOf(u: URL): string | null {
+  const seg = u.pathname.split("/").filter(Boolean);
+  const key = seg[0] === "browse" && seg.length === 2 ? seg[1]! : u.searchParams.get("selectedIssue");
+  return key && JIRA_KEY.test(key) ? key : null;
+}
 
 /**
  * What a link is, as far as the app is concerned. Null when it is not a link
@@ -58,8 +76,10 @@ const SAFE_SEGMENT = /^[\w.-]+$/;
  *
  * `shortRef` says the anchor was written by the body autolinker from `#123`,
  * which is the only case an `/issues/` path is worth trying as a pull request.
+ * `jiraSite` is the connected Jira site's host; without one no address is a
+ * Jira issue, and an atlassian.net link of any other site stays external.
  */
-export function classifyLink(raw: string | null | undefined, opts: { shortRef?: boolean } = {}): LinkRoute | null {
+export function classifyLink(raw: string | null | undefined, opts: { shortRef?: boolean; jiraSite?: string | null } = {}): LinkRoute | null {
   const text = raw?.trim().replace(TRAILING, "");
   if (!text) return null;
   let u: URL;
@@ -67,8 +87,8 @@ export function classifyLink(raw: string | null | undefined, opts: { shortRef?: 
   if (u.protocol !== "https:" && u.protocol !== "http:") return null;
   const url = u.href;
   // Credentials in a URL are a disguise (`https://github.com@evil.example/`
-  // parses to evil.example, but `https://github.com:x@…` is worth refusing too).
-  if (u.username || u.password) return { kind: "external", url };
+  // parses to evil.example, but `https://github.com:<password>@…` is worth refusing too).
+  if (hasUrlCredentials(u)) return { kind: "external", url };
   const host = u.hostname.toLowerCase();
   const seg = u.pathname.split("/").filter(Boolean);
   if (GITHUB.has(host) && seg.length >= 4 && SAFE_SEGMENT.test(seg[0]!) && SAFE_SEGMENT.test(seg[1]!)) {
@@ -84,6 +104,10 @@ export function classifyLink(raw: string | null | undefined, opts: { shortRef?: 
   if (CLICKUP.has(host) && seg[0] === "t" && (seg.length === 2 || seg.length === 3)
     && seg.slice(1).every((s) => SAFE_SEGMENT.test(s) && !s.includes("."))) {
     return { kind: "card", query: seg[seg.length - 1]!, url };
+  }
+  if (opts.jiraSite && u.host === opts.jiraSite.toLowerCase()) {
+    const key = jiraKeyOf(u);
+    if (key) return { kind: "jira", key, url };
   }
   return { kind: "external", url };
 }
@@ -133,12 +157,18 @@ export interface RouteDeps {
   /** A boolean when the answer is already known, a promise when it is not. */
   hasCheckout: (repo: string) => boolean | Promise<boolean>;
   hasClickup: () => boolean | Promise<boolean>;
+  /** The connected Jira site's host, null when there is none; a promise when it is not yet known. */
+  jiraSite: () => string | null | Promise<string | null>;
   openPr: typeof openPr;
   openCard: typeof openCard;
   openExternal: typeof openExternal;
 }
 const live: RouteDeps = {
   hasCheckout, openPr, openCard, openExternal,
+  jiraSite: () => {
+    const now = jiraSiteNow();
+    return now !== undefined ? now : trackerSetup().then((t) => t.jira?.site ?? null);
+  },
   // Same answer the card chips use: a machine with no ClickUp board has no
   // view to open the card in.
   hasClickup: () => clickupSetupNow()?.connected ?? clickupSetup().then((s) => s.connected),
@@ -160,8 +190,25 @@ export function openInApp(
   deps: RouteDeps = live,
 ): boolean {
   if (wantsExternal(e, opts.strict)) return false;
-  const r = classifyLink(raw, opts);
+  let site = deps.jiraSite();
+  if (site instanceof Promise) {
+    /* Not known yet, and only an address shaped like a Jira issue needs it:
+       the same cancel-then-open-by-hand as below. */
+    let shaped = false;
+    try { shaped = !!jiraKeyOf(new URL(raw!.trim().replace(TRAILING, ""))); } catch { /* not a URL */ }
+    if (shaped) {
+      void site.then((s) => {
+        const j = classifyLink(raw, { ...opts, jiraSite: s });
+        if (j?.kind === "jira") deps.openCard(j.key, j.key, "jira");
+        else if (j) deps.openExternal(j.url);
+      });
+      return true;
+    }
+    site = null;
+  }
+  const r = classifyLink(raw, { ...opts, jiraSite: site });
   if (!r || r.kind === "external") return false;
+  if (r.kind === "jira") { deps.openCard(r.key, r.key, "jira"); return true; }
   const inApp = r.kind === "card"
     ? () => deps.openCard(r.query)
     : () => deps.openPr(r.repo, r.number, r.kind === "ref" ? { fallback: r.url } : {});
