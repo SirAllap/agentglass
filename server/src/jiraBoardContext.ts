@@ -76,7 +76,7 @@ export function boardEpics(creds: JiraCreds, board: string): Promise<JiraResult<
     return { ok: true, data: rowsOf(r.data).flatMap((e) => {
       const key = str(e.key);
       const color = isObj(e.color) ? str(e.color.key) : "";
-      return key ? [{ key, name: epicName(e, key), ...(color ? { color } : {}) }] : [];
+      return key ? [{ key, name: epicName(e, key), ...(color ? { color } : {}), ...(e.done === true ? { done: true } : {}) }] : [];
     }) };
   }, true);
 }

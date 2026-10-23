@@ -91,13 +91,13 @@ for (const flavor of ["cloud", "datacenter"] as const) {
       expect(fake.requests.length).toBe(0);
     });
 
-    test("where epics are named as areas, only their cards are asked for", async () => {
+    test("where epics are named as areas, only their cards and the open epics beside them are asked for", async () => {
       const seed = fake.state.issues["ORBIT-1000"]!;
       fake.state.issues["ORBIT-1900"] = { ...structuredClone(seed), id: "91900", key: "ORBIT-1900", summary: "Area: Game" };
       const r = await withCreds((c) => B.readBoardAreas(c, "3"));
       expect(r.ok).toBe(true);
       const jql = (fake.requests.filter((q) => q.path === searchPath).at(-1)!.body as { jql: string }).jql;
-      expect(jql).toContain("parent in (ORBIT-1900)");
+      expect(jql).toMatch(/parent in \(ORBIT-1900(, [A-Z]+-\d+)*\)/);
       expect(jql).not.toContain("parent is not EMPTY");
     });
 
@@ -112,7 +112,7 @@ for (const flavor of ["cloud", "datacenter"] as const) {
       fake.state.issues["ORBIT-1900"] = { ...structuredClone(seed), id: "91900", key: "ORBIT-1900", summary: "Area: Game" };
       fake.state.issues["ORBIT-1901"] = { ...structuredClone(fake.state.issues["ORBIT-1042"]!), id: "91901", key: "ORBIT-1901", parentKey: "ORBIT-1900" };
       const a = await D.runDoor("areas", { board: "board:3" });
-      expect(a.body).toMatchObject({ ok: true, state: { count: 1, truncated: false }, untrusted: { areas: [{ key: "ORBIT-1900", name: "Game", total: 1 }] } });
+      expect(a.body).toMatchObject({ ok: true, untrusted: { areas: expect.arrayContaining([expect.objectContaining({ key: "ORBIT-1900", name: "Game", total: 1, group: "area" })]) } });
       expect(D.isActing("areas")).toBe(false);
       expect((await D.runDoor("areas", { board: "x" })).body).toMatchObject({ ok: false });
     });

@@ -3,7 +3,8 @@
  * read carries: a parent epic, a sprint name, a priority, an assignee.
  */
 import { describe, expect, test } from "bun:test";
-import { areaCards, areaLine, areaName, areaRows, epicLabel, defaultPref, groupAreas, groupKeyed, parsePref, prefText } from "../src/lib/jiraAreas.ts";
+import { headChips, areaCards, areaLine, areaName, areaRows, epicLabel, defaultPref, groupAreas, groupKeyed, parsePref, prefText } from "../src/lib/jiraAreas.ts";
+import { OPEN_EPICS_MAX, countCell, underClause } from "../../shared/jiraAreas.ts";
 import type { JiraBoardEpic, ProviderTask } from "../../shared/providers.ts";
 
 const card = (id: string, o: Partial<ProviderTask> = {}): ProviderTask =>
@@ -18,9 +19,40 @@ describe("the areas of a board", () => {
   ];
   test("the epics named Area: are the areas, counted in the sprint and in all, an empty one kept", () => {
     expect(areaRows(EPICS, tasks, "Sprint 1")).toEqual([
-      { key: "ORBIT-980", name: "Game", total: 3, inSprint: 2, done: 1 },
-      { key: "ORBIT-981", name: "Admin", color: "color_3", total: 0, inSprint: 0, done: 0 },
+      { key: "ORBIT-980", name: "Game", group: "area", total: 3, inSprint: 2, done: 1 },
+      { key: "ORBIT-981", name: "Admin", color: "color_3", group: "area", total: 0, inSprint: 0, done: 0 },
+      { key: "ORBIT-16", name: "Old launch", group: "epic", total: 1, inSprint: 1, done: 0 },
     ]);
+  });
+  test("an open epic beside the areas is a row of its own; a done one and one past the cap are not", () => {
+    const epics: JiraBoardEpic[] = [
+      { key: "ORBIT-980", name: "Area: Game" }, { key: "ORBIT-1042", name: "[EPIC] Design system (tokens, components)" },
+      { key: "ORBIT-17", name: "QA runs", done: true },
+      ...Array.from({ length: 12 }, (_, n) => ({ key: `ORBIT-${200 + n}`, name: `Spike ${n}` })),
+    ];
+    const rows = areaRows(epics, [card("9", under("ORBIT-1042"))], undefined);
+    expect(rows.find((r) => r.key === "ORBIT-1042")).toMatchObject({ name: "Design system (tokens, components)", group: "epic", total: 1 });
+    expect(rows.find((r) => r.key === "ORBIT-17")).toBeUndefined();
+    expect(rows.filter((r) => r.group === "epic")).toHaveLength(OPEN_EPICS_MAX);
+    expect(rows[0]).toMatchObject({ key: "ORBIT-980", group: "area" });
+  });
+  test("a rail count is open over total, a finished row is a check, a truncated read says at least", () => {
+    expect(countCell({ total: 110, done: 109 }, false)).toEqual({ done: false, lead: "1", rest: " / 110", title: "1 open of 110; 109 done" });
+    expect(countCell({ total: 4, done: 4 }, false)).toMatchObject({ done: true, lead: "✓", rest: " 4" });
+    expect(countCell({ total: 0, done: 0 }, false)).toMatchObject({ done: true });
+    expect(countCell({ total: 110, done: 109 }, true).title).toBe("1 open of at least 110; 109 done");
+  });
+  test("an epic header's chips: open, done, and the sprint's own count", () => {
+    expect(headChips({ total: 9, done: 5, inSprint: 1 }, "Sprint 1", true)).toEqual({ open: "4 open", done: "5 done", sprint: "1 in Sprint 1 of at least 9" });
+    expect(headChips({ total: 9, done: 9, inSprint: 0 }, undefined, false)).toEqual({ open: "0 open", done: "9 done", sprint: null });
+  });
+  test("the kept read asks for the areas and the open epics beside them, never a done one", () => {
+    const epics: JiraBoardEpic[] = [{ key: "ORBIT-980", name: "Area: Game" }, { key: "ORBIT-1042", name: "Design system" }, { key: "ORBIT-17", name: "QA runs", done: true }];
+    expect(underClause(epics)).toBe("parent in (ORBIT-980, ORBIT-1042)");
+    expect(underClause([{ key: "ORBIT-1042", name: "Design system" }])).toBe("parent is not EMPTY");
+    expect(underClause([])).toBe("parent is not EMPTY");
+    const many = [{ key: "ORBIT-980", name: "Area: Game" }, ...Array.from({ length: 15 }, (_, n) => ({ key: `ORBIT-${300 + n}`, name: `Spike ${n}` }))];
+    expect(underClause(many).split(",")).toHaveLength(1 + OPEN_EPICS_MAX);
   });
   test("a board whose epics are not named as areas gets the epics that hold a card", () => {
     expect(areaRows([{ key: "ORBIT-16", name: "Old launch" }, { key: "ORBIT-17", name: "Nothing" }], tasks, undefined).map((r) => [r.key, r.total, r.inSprint]))

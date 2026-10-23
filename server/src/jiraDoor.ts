@@ -323,7 +323,7 @@ async function readLinkTypes(): Promise<DoorAnswer> {
 }
 
 /**
- * A board's areas (its epics named "Area: …") with how many cards each holds, in the sprint and in all: the same numbers
+ * A board's areas (its epics named "Area: …", then the open epics beside them) with how many cards each holds, in the sprint and in all: the same numbers
  * the Areas tree draws, from the same kept read. The names are the team's, so they ride under `untrusted`.
  */
 async function readAreas(board: unknown): Promise<DoorAnswer> {
@@ -337,7 +337,7 @@ async function readAreas(board: unknown): Promise<DoorAnswer> {
   if (!r.ok || !r.data) return { status: 200, body: { ok: false, error: r.error ?? "Jira did not answer", ...(r.throttled ? { throttled: true } : null) } };
   return {
     status: 200,
-    body: { ok: true, state: { count: r.data.rows.length, truncated: r.data.truncated }, untrusted: { sprint: clip(r.data.sprint, 80), areas: r.data.rows.map((a) => ({ key: a.key, name: clip(a.name, 80), total: a.total, inSprint: a.inSprint, done: a.done })) } },
+    body: { ok: true, state: { count: r.data.rows.length, truncated: r.data.truncated }, untrusted: { sprint: clip(r.data.sprint, 80), areas: r.data.rows.map((a) => ({ key: a.key, name: clip(a.name, 80), total: a.total, inSprint: a.inSprint, done: a.done, group: a.group })) } },
   };
 }
 

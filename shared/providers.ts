@@ -250,7 +250,7 @@ export interface JiraQuickFilter { id: string; name: string; description?: strin
 export interface JiraBoardSprint { id: string; name: string; state: "active"; start: number; end: number; goal?: string }
 
 /** An epic of the board, for its colour. `color` is one of Jira's named epic colours. */
-export interface JiraBoardEpic { key: string; name: string; color?: string }
+export interface JiraBoardEpic { key: string; name: string; color?: string; done?: boolean }
 
 /**
  * `GET /jira/board-context`: what sits around a board's cards. Three reads the site keeps still for ten minutes,

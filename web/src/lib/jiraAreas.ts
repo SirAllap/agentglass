@@ -47,7 +47,7 @@ export function parsePref(raw: string | null | undefined, hasAreas: boolean, fal
 
 export const prefText = (p: GroupPref): string => JSON.stringify(p);
 
-export { areaName, areaRows, epicLabel, type AreaRow } from "../../../shared/jiraAreas.ts";
+export { areaName, areaRows, countCell, epicLabel, headChips, type AreaRow } from "../../../shared/jiraAreas.ts";
 import { areaName } from "../../../shared/jiraAreas.ts";
 
 /** An Area's cards, in the order the read gave them. */

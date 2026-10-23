@@ -35,7 +35,7 @@ import { compareOrder } from "../../../shared/orderIndex.ts";
 import { ON_CHIP, ON_CHIP_OK } from "./tasks/chipStyle.ts";
 import { JiraQuickChips, JiraSprintHeader, ParentLabel } from "./jira/JiraBoardContext.tsx";
 import { JiraAreaHead, JiraAreaRail, JiraGroupControl, JiraScope, SPRINTS } from "./jira/JiraAreas.tsx";
-import { areaCards, areaLine, areaRows, defaultPref, epicLabel, groupAreas, groupKeyed, parsePref, prefText, type GroupPref, type KeyGroup } from "../lib/jiraAreas.ts";
+import { areaCards, areaRows, headChips, defaultPref, epicLabel, groupAreas, groupKeyed, parsePref, prefText, type GroupPref, type KeyGroup } from "../lib/jiraAreas.ts";
 import { TypeMark } from "./jira/JiraSections.tsx";
 import { guessOrder, rankOf, rankable, sortedByOrder, splitSprint, sprintTotals, type ParentGroup } from "../lib/jiraBoardContext.ts";
 import { blockersOf, foldCard, groupByStatus, looksLikeCardId, readyCount, tableColumns } from "../lib/boardGroups.ts";
@@ -2986,7 +2986,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
         const a = areaList.find((x) => x.key === areaSel);
         return a ? (
           <JiraAreaHead title={epicLabel(a.name)} fullTitle={a.name} hint={ctx?.sprint ? "Epics are not shown on the sprint board; their cards are." : undefined} sub={`${a.key} · ${areas.read?.truncated ? "at least " : ""}${a.total} cards`} done={a.done} total={a.total}
-            line={areaLine(a.total, a.inSprint, ctx?.sprint?.name, !!areas.read?.truncated)} />
+            chips={headChips(a, ctx?.sprint?.name, !!areas.read?.truncated)} />
         ) : null;
       })()}
       <div className="flex items-center gap-1.5 px-4 pb-1.5 flex-wrap shrink-0">

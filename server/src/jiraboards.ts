@@ -38,6 +38,7 @@ import {
   type JiraCreds, type JiraResult, type JiraTasks, type SeenStatus,
 } from "./jira.ts";
 import { activeSprint, boardEpics, quickFilterRows } from "./jiraBoardContext.ts";
+import { underClause } from "../../shared/jiraAreas.ts";
 import {
   addFolder, addView, cachedFor, currentView, isFolderBoard, putCache, removeFolder, removeView, replaceFolder, savedFolders, savedViews, setCurrent,
 } from "./jiraviews.ts";
@@ -385,7 +386,8 @@ export async function readBoard(creds: JiraCreds, id: string, quick: readonly st
 /**
  * The cards that sit under an epic on a board, done and open, in ONE kept read. The Areas tree draws its counts from it
  * and an Area's page is filtered from it, so opening a board costs this one search (a few pages) per ten minutes and
- * nothing per area. Sub-tasks are left out (their parent is a story, not an area). Ceiling: AREA_PAGES pages of 50
+ * nothing per area. The epics read are the areas plus at most OPEN_EPICS_MAX open ones beside them; an open epic past
+ * that is not on the rail. Sub-tasks are left out (their parent is a story, not an area). Ceiling: AREA_PAGES pages of 50
  * cards, newest first; a project with more says so through `truncated` and the counts are then "at least".
  */
 const AREA_PAGES = 6;
@@ -395,11 +397,10 @@ export function readBoardAreas(creds: JiraCreds, id: string): Promise<JiraResult
     const w = await boardWhere(creds, id, []);
     if (!w.ok || !w.data) return { ...w, data: undefined };
     if (w.data.empty) return { ok: true, data: { tasks: [], truncated: false } };
-    // The epics named "Area: …" are the areas: ask for their cards only, so a QA epic holding a hundred runs does not
-    // use up the pages. Where none is named so, every card under any epic (the tree then draws the epics that hold one).
+    // The epics named "Area: …" and the open ones beside them (see underClause): ask for their cards only, so a QA epic
+    // holding a hundred runs does not use up the pages.
     const epics = await boardEpics(creds, id);
-    const areas = (epics.data ?? []).filter((e) => /^area\s*:/i.test(e.name)).map((e) => e.key).filter((k) => /^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(k));
-    const under = areas.length ? `parent in (${areas.join(", ")})` : "parent is not EMPTY";
+    const under = underClause(epics.data ?? []);
     const jql = [...w.data.where, under, "issuetype not in subTaskIssueTypes()"].join(" AND ") + " ORDER BY updated DESC";
     const r = await searchJql(creds, jql, { board: { points: w.data.cfg.estimationField }, pages: AREA_PAGES });
     if (!r.ok || !r.data) return { ...r, data: undefined };
