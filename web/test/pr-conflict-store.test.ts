@@ -14,10 +14,20 @@ let answer: (n: number) => Promise<{ ok: boolean; conflicts: string[]; clean: bo
 const mod = await import("../src/lib/api.ts");
 (mod.api as unknown as { prConflictFiles: unknown }).prConflictFiles = (_r: string, n: number) => { calls.push(n); return answer(n); };
 
-const { askConflict, checkingConflict, conflictsFrom, forgetConflicts, learn, withConflict, onConflict } =
+const { askConflict, checkingConflict, conflictsFrom, forgetConflicts, reopenConflicts, learn, withConflict, onConflict } =
   await import("../src/lib/prConflictStore.ts");
 const { fileInLane, stakeFrom, viewKeeps } = await import("../src/lib/prLanes.ts");
 import type { PrSummary } from "../../shared/types.ts";
+import { readFileSync } from "node:fs";
+import { globalStubs } from "./stubGlobal.ts";
+
+const stubGlobal = globalStubs();
+const disk = new Map<string, string>();
+stubGlobal("localStorage", {
+  getItem: (k: string) => disk.get(k) ?? null,
+  setItem: (k: string, v: string) => { disk.set(k, v); },
+  removeItem: (k: string) => { disk.delete(k); },
+});
 
 const settle = () => new Promise((r) => setTimeout(r, 30));
 const row = (o: Partial<PrSummary> = {}): PrSummary => ({
@@ -82,7 +92,7 @@ describe("a conflict GitHub has not computed yet", () => {
     expect(calls).toEqual([]);
   });
 
-  it("keeps two in the air and twenty a minute", async () => {
+  it("keeps one in the air and six a minute", async () => {
     let live = 0, peak = 0;
     answer = async () => {
       live++; peak = Math.max(peak, live);
@@ -92,8 +102,8 @@ describe("a conflict GitHub has not computed yet", () => {
     };
     for (let n = 1; n <= 30; n++) askConflict("/repo", row({ number: n }));
     await new Promise((r) => setTimeout(r, 150));
-    expect(peak).toBe(2);
-    expect(calls.length).toBe(20);
+    expect(peak).toBe(1);
+    expect(calls.length).toBe(6);
     answer = async () => ({ ok: true, conflicts: ["a.ts", "b.ts"], clean: false });
   });
 
@@ -104,5 +114,53 @@ describe("a conflict GitHub has not computed yet", () => {
     expect(calls).toEqual([7]);
     expect(withConflict("/repo", row()).mergeable).toBe("UNKNOWN");
     answer = async () => ({ ok: true, conflicts: ["a.ts", "b.ts"], clean: false });
+  });
+
+  it("16 cards, 3 on screen: 3 calls; reopening the panel: 0", async () => {
+    // The card asks only once an IntersectionObserver says it is in view
+    // (asserted against source below); the store never hears of the other 13.
+    const cards = Array.from({ length: 16 }, (_, i) => row({ number: i + 1, headSha: `sha${i + 1}` }));
+    const visible = cards.slice(0, 3);
+    for (const c of visible) askConflict("/repo", c);
+    await settle();
+    expect(calls.length).toBe(3);
+    reopenConflicts();
+    calls.length = 0;
+    for (const c of cards) if (visible.includes(c)) askConflict("/repo", c);
+    await settle();
+    expect(calls.length).toBe(0);
+    expect(withConflict("/repo", visible[0]).mergeable).toBe("CONFLICTING");
+  });
+
+  it("asks again only when the head commit moves", async () => {
+    askConflict("/repo", row()); await settle();
+    askConflict("/repo", row()); await settle();
+    expect(calls).toEqual([7]);
+    askConflict("/repo", row({ headSha: "bbb" })); await settle();
+    expect(calls).toEqual([7, 7]);
+  });
+
+  it("a could-not-tell is asked once more after a minute, never in a loop", async () => {
+    answer = async () => { throw new Error("offline"); };
+    const real = Date.now;
+    let t = real();
+    Date.now = () => t;
+    try {
+      askConflict("/repo", row()); await settle();
+      t += 61_000;
+      askConflict("/repo", row()); await settle();
+      t += 61_000;
+      askConflict("/repo", row()); await settle();
+      askConflict("/repo", row()); await settle();
+      expect(calls).toEqual([7, 7]);
+      expect(checkingConflict("/repo", row())).toBe(false);
+    } finally { Date.now = real; }
+    answer = async () => ({ ok: true, conflicts: ["a.ts", "b.ts"], clean: false });
+  });
+
+  it("a card asks only while it is in the viewport", () => {
+    const src = readFileSync(new URL("../src/components/TriageBoard.tsx", import.meta.url), "utf8");
+    expect(src).toContain("new IntersectionObserver(");
+    expect(src).toContain("if (root && onScreen) askConflict(root, p);");
   });
 });

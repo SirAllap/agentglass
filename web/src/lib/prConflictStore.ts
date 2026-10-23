@@ -16,19 +16,36 @@
 import { api } from "./api.ts";
 import type { PrSummary } from "../../../shared/types.ts";
 
-/** At once. The preview is a merge on the server; the board is a glance. */
-const AT_ONCE = 2;
-/** A ceiling on a board of fifty UNKNOWN rows scrolled through. */
-const MAX_PER_MINUTE = 20;
-/** An answer is trusted for as long as the pull request's head is the same;
- *  this only bounds how long a "clean" is believed before it is asked again. */
-const CLEAN_TTL_MS = 5 * 60_000;
-/** One retry, after a failed ask, and then the TTL's pace. */
-const RETRY_MS = 30_000;
+/** One at a time: the preview is a merge on the server and the board is a glance. */
+const AT_ONCE = 1;
+/** A ceiling on a board scrolled through quickly. */
+const MAX_PER_MINUTE = 6;
+/** A "could not tell" is asked once more, no sooner than this, and then left. */
+const RETRY_MS = 60_000;
+/** Answers outlive the panel: reopening it must not ask again. */
+const STORE_KEY = "agx.prConflict.v1";
+const STORE_MAX = 400;
 
 type Entry = { at: number; conflicts: boolean | null; sha: string | null; failed: number };
 
 const seen = new Map<string, Entry>();
+let loaded = false;
+const load = (): void => {
+  if (loaded) return;
+  loaded = true;
+  try {
+    const raw = typeof localStorage !== "undefined" ? localStorage.getItem(STORE_KEY) : null;
+    if (raw) for (const [k, e] of JSON.parse(raw) as [string, Entry][]) if (!seen.has(k)) seen.set(k, e);
+  } catch { /* private window, blocked storage: the memory copy still works */ }
+};
+const save = (): void => {
+  try {
+    if (typeof localStorage === "undefined") return;
+    // Only answers: a failure is worth remembering for a minute, not across a restart.
+    const rows = [...seen].filter(([, e]) => e.conflicts !== null).slice(-STORE_MAX);
+    localStorage.setItem(STORE_KEY, JSON.stringify(rows));
+  } catch { /* same */ }
+};
 const inflight = new Set<string>();
 const waiting: { key: string; root: string; number: number; sha: string | null }[] = [];
 const listeners = new Set<() => void>();
@@ -77,6 +94,7 @@ function pump(): void {
  */
 export function learn(root: string, number: number, conflicts: boolean | null, sha: string | null = null): void {
   if (!root || !number) return;
+  load();
   const key = keyOf(root, number);
   const was = seen.get(key);
   if (conflicts === null) {
@@ -86,23 +104,33 @@ export function learn(root: string, number: number, conflicts: boolean | null, s
     if (was && was.conflicts === conflicts && was.sha === sha) { seen.set(key, { ...was, at: Date.now() }); return; }
     seen.set(key, { at: Date.now(), conflicts, sha, failed: 0 });
   }
+  if (conflicts !== null) save();
   tell();
 }
 
+/**
+ * Whether what is held settles the question for this commit.
+ *
+ * An answer holds until the head commit moves — no clock: asking again about
+ * the same commit is the flood this store exists to avoid. (The base moving
+ * under an unchanged head is not seen here; the page's own reading and
+ * GitHub's list catch it.) A "could not tell" is asked once more after
+ * RETRY_MS and then left alone until the head moves.
+ */
 const fresh = (e: Entry, sha: string | null | undefined, now: number): boolean => {
-  if (e.sha && sha && e.sha !== sha) return false; // pushed since: that answer is about another commit
-  if (e.conflicts === true) return true;           // holds until the head moves
-  if (e.conflicts === false) return now - e.at < CLEAN_TTL_MS;
-  return now - e.at < (e.failed <= 1 ? RETRY_MS : CLEAN_TTL_MS);
+  if (e.sha && sha && e.sha !== sha) return false;
+  if (e.conflicts !== null) return true;
+  return e.failed >= 2 || now - e.at < RETRY_MS;
 };
 
 /**
  * Ask, if nobody has lately. Called by whoever draws a card whose row says
- * UNKNOWN: it is the thing that knows the card is on screen. Never while the
- * window is in the background.
+ * UNKNOWN and is IN THE VIEWPORT (the caller observes that; a board of sixty is
+ * not sixty questions). Never while the window is in the background.
  */
 export function askConflict(root: string, row: Pick<PrSummary, "number" | "mergeable" | "headSha">): void {
   if (!root || !row.number || row.mergeable !== "UNKNOWN") return;
+  load();
   if (typeof document !== "undefined" && (document.hidden || !document.hasFocus())) return;
   const key = keyOf(root, row.number);
   const hit = seen.get(key);
@@ -115,8 +143,10 @@ export function askConflict(root: string, row: Pick<PrSummary, "number" | "merge
 /** Still being worked out: the row says UNKNOWN and no answer is held. */
 export function checkingConflict(root: string, row: Pick<PrSummary, "number" | "mergeable" | "headSha">): boolean {
   if (!root || row.mergeable !== "UNKNOWN") return false;
+  load();
   const hit = seen.get(keyOf(root, row.number));
-  return !hit || !fresh(hit, row.headSha, Date.now()) || hit.conflicts === null;
+  if (hit && hit.conflicts === null && hit.failed >= 2 && !(hit.sha && row.headSha && hit.sha !== row.headSha)) return false; // gave up: say nothing
+  return !hit || hit.conflicts === null || !fresh(hit, row.headSha, Date.now());
 }
 
 /**
@@ -127,6 +157,7 @@ export function checkingConflict(root: string, row: Pick<PrSummary, "number" | "
  */
 export function withConflict<T extends Pick<PrSummary, "number" | "mergeable" | "headSha">>(root: string, p: T): T {
   if (!root || p.mergeable !== "UNKNOWN") return p;
+  load();
   const hit = seen.get(keyOf(root, p.number));
   if (!hit || hit.conflicts !== true || !fresh(hit, p.headSha, Date.now())) return p;
   return { ...p, mergeable: "CONFLICTING" };
@@ -138,4 +169,13 @@ export function forgetConflicts(): void {
   waiting.length = 0;
   windowStart = 0;
   askedInWindow = 0;
+  loaded = true;
+  try { localStorage.removeItem(STORE_KEY); } catch { /* none */ }
+}
+
+/** The panel closed and opened again: memory is gone, what was persisted is not. */
+export function reopenConflicts(): void {
+  seen.clear();
+  waiting.length = 0;
+  loaded = false;
 }

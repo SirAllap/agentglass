@@ -1376,7 +1376,16 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
   /* GitHub answers UNKNOWN for a branch it has not looked at lately. The card
      asks git (lib/prConflictStore.ts) and says so meanwhile, rather than file
      itself under "ready to land" over a silence. */
-  if (root) askConflict(root, p);
+  const cardEl = useRef<HTMLDivElement>(null);
+  const [onScreen, setOnScreen] = useState(false);
+  useEffect(() => {
+    const el = cardEl.current;
+    if (!el || typeof IntersectionObserver === "undefined") { setOnScreen(true); return; }
+    const io = new IntersectionObserver((es) => { for (const e of es) setOnScreen(e.isIntersecting); });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+  useEffect(() => { if (root && onScreen) askConflict(root, p); }, [root, onScreen, p.number, p.mergeable, p.headSha]);
   const checkingMerge = root ? checkingConflict(root, p) : false;
   /** Said on the number itself for a moment: a clipboard write is invisible. */
   const [copied, setCopied] = useState<number | null>(null);
@@ -1422,7 +1431,7 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
        a test asking how many landed in a lane, a probe asking which column it
        is measuring. The number is already on screen; this just makes it
        addressable without reading the design. */
-    <div onClick={onOpen} role="button" tabIndex={-1} data-pr={p.number}
+    <div ref={cardEl} onClick={onOpen} role="button" tabIndex={-1} data-pr={p.number}
       data-dim={dim ? "1" : undefined}
       data-lit={lit ? "1" : undefined}
       data-cursor={cursor ? "1" : undefined}
