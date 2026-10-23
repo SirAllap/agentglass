@@ -7,6 +7,7 @@
 // the process that scope was minted for. Reviewing that from a terminal is
 // not review, which is the whole reason this file exists.
 import { PluginMark } from "./plugins/PluginMark.tsx";
+import { PluginPreview } from "./plugins/PluginPreview.tsx";
 import { BackIcon } from "./browser/icons.tsx";
 import { emitControl } from "../lib/controlBus.ts";
 import { closeSettings } from "../lib/openSettings.ts";
@@ -134,11 +135,16 @@ export function installedFrom(url: string, plugins: PublicPlugin[]): PublicPlugi
   }) ?? null;
 }
 
-/** The market entry that would replace what a market install has on disk, or null. */
-export function marketUpdate(plugin: PublicPlugin, catalogue: Catalogue | null): Catalogue["plugins"][number] | null {
+/** The market entry for the repository a market install came from, or null. */
+export function marketEntry(plugin: PublicPlugin, catalogue: Catalogue | null): Catalogue["plugins"][number] | null {
   if (!catalogue || plugin.source.kind !== "marketplace") return null;
   const have = plugin.source.plugin.url;
-  const entry = catalogue.plugins.find((e) => sameRepo(e.source.url, have));
+  return catalogue.plugins.find((e) => sameRepo(e.source.url, have)) ?? null;
+}
+
+/** The market entry that would replace what a market install has on disk, or null. */
+export function marketUpdate(plugin: PublicPlugin, catalogue: Catalogue | null): Catalogue["plugins"][number] | null {
+  const entry = marketEntry(plugin, catalogue);
   return entry && offerFor(entry, plugin.source) === "update" ? entry : null;
 }
 
@@ -300,7 +306,7 @@ export function PluginsPane({ open, focus }: {
           <div className="agx-plugin-grid">
             {shown.map((p) => (
               <PluginCard key={p.name} plugin={p} masterOn={!!master} envAllowsUnboxed={envAllowsUnboxed} onChanged={load}
-                update={marketUpdate(p, catalogue)} onSettings={() => setShowing(p.name)} />
+                update={marketUpdate(p, catalogue)} preview={marketEntry(p, catalogue)?.preview} onSettings={() => setShowing(p.name)} />
             ))}
           </div>
         )}
@@ -314,8 +320,10 @@ export function PluginsPane({ open, focus }: {
   );
 }
 
-function PluginCard({ plugin, masterOn, envAllowsUnboxed, onChanged, onSettings, update: listed }: {
+function PluginCard({ plugin, masterOn, envAllowsUnboxed, onChanged, onSettings, update: listed, preview }: {
   plugin: PublicPlugin; masterOn: boolean; envAllowsUnboxed: boolean; onChanged: () => void;
+  /** The picture its market listing carries; a plugin not from the market has none. */
+  preview?: string;
   /** The market entry that would replace what is installed, if the listing has moved on. */
   update: Catalogue["plugins"][number] | null;
   /** Opens this plugin's own settings inside the Plugins page. */
@@ -450,6 +458,7 @@ function PluginCard({ plugin, masterOn, envAllowsUnboxed, onChanged, onSettings,
         </Band>
       )}
 
+      <PluginPreview src={preview} name={plugin.name} />
       <div className="flex flex-col gap-3 p-4 flex-1 min-w-0">
         <div className="flex items-center gap-3.5 min-w-0">
           <PluginMark name={plugin.name} icon={plugin.icon} color={plugin.color} size={44} stamp={plugin.contentHash} />

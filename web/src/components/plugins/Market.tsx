@@ -34,6 +34,7 @@ import { Portal } from "../Portal.tsx";
 import { CloseButton } from "../CloseButton.tsx";
 import { LAYER } from "../../lib/layers.ts";
 import { Button, CHIP, CHIP_SURFACE, CHIP_SURFACE_CLS, Chip, EDGE, INPUT, INPUT_STYLE, LINE, RefreshButton } from "../workspace/Chrome.tsx";
+import { PluginPreview } from "./PluginPreview.tsx";
 import { SettingRow } from "../SettingRow.tsx";
 import { PLUGIN_CTRL_H } from "../../lib/pluginCard.ts";
 import { SettingsCard, StatusBadge } from "../SettingsKit.tsx";
@@ -322,8 +323,10 @@ export function Offer({ entry, owner, onInstalled, mode, was = null }: {
     {/* A compact card, the same tokens as an installed one: its initial (a list
         of things to pick from needs its rows told apart at a glance), what it
         is, where it draws, and one filled button at the bottom of every card. */}
-    <article className="flex flex-col gap-2.5 p-3.5 min-w-0 rounded-xl"
+    <article className="flex flex-col min-w-0 rounded-xl overflow-hidden"
       style={{ background: "var(--surface-card)", border: LINE, boxShadow: "var(--surface-lift)" }}>
+      <PluginPreview src={entry.preview} name={entry.title || entry.id} />
+      <div className="flex flex-col gap-2.5 p-3.5 flex-1 min-w-0">
       <div className="flex items-center gap-3 min-w-0">
         <span aria-hidden className="agx-market-tile shrink-0 grid place-items-center rounded-lg text-[15px] font-semibold" style={{
           width: 36, height: 36, color: tint,
@@ -365,6 +368,7 @@ export function Offer({ entry, owner, onInstalled, mode, was = null }: {
         <Button tone="primary" style={{ height: PLUGIN_CTRL_H }} className="ml-auto" pending={busy} onClick={install}>
           {busy ? (mode === "update" ? "Updating…" : "Installing…") : (mode === "update" ? "Update" : "Install")}
         </Button>
+      </div>
       </div>
     </article>
     <Details entry={entry} owner={owner} tint={tint} repo={repo} open={open} busy={busy}
