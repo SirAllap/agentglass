@@ -6174,8 +6174,8 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
   const blocksConflict = blockers.some((b) => b.kind === "conflicts");
   const blocksRequired = blockers.some((b) => b.kind === "required-missing" && b.weight === "blocks");
   useEffect(() => {
-    if (d.state === "OPEN") noteKnownBlock(root, d.number, d.headSha ?? "", { conflicted: blocksConflict, requiredMissing: blocksRequired });
-  }, [root, d.number, d.state, d.headSha, blocksConflict, blocksRequired]);
+    if (d.state === "OPEN") noteKnownBlock(root, d.number, headOfDetail(d), { conflicted: blocksConflict, requiredMissing: blocksRequired });
+  }, [root, d.number, d.state, d.headSha, d.commits.length, blocksConflict, blocksRequired]);
   const refusal = mergeRefusal(blockers, d.mergeState);
   const autoRefusal = autoMergeRefusal(blockers);
 

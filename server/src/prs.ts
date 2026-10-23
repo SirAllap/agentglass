@@ -2453,11 +2453,18 @@ async function askMergeable(repo: PrRepoId, ns: number[]): Promise<Map<number, s
   return out;
 }
 
-function scheduleMergeableRecheck(repo: PrRepoId, rows: PrSummary[]): void {
-  const ns = rows.filter((r) => r.mergeable === "UNKNOWN" && !rechecking.has(`${repo.key}\u0000${r.number}`)).map((r) => r.number);
-  if (!ns.length) return;
+/** Heads already asked about, so a refresh that still reads UNKNOWN does not
+ *  start the follow-up again: once per head commit, never a poll. */
+const mergeableAsked = new Set<string>();
+const askedKey = (repo: PrRepoId, r: PrSummary) => `${repo.key}\u0000${r.number}\u0000${r.headSha ?? r.updatedAt}`;
+
+export function scheduleMergeableRecheck(repo: PrRepoId, rows: PrSummary[], ask: (ns: number[]) => Promise<Map<number, string>> = (l) => askMergeable(repo, l), wait?: (ms: number) => Promise<void>): Promise<void> {
+  const todo = rows.filter((r) => r.mergeable === "UNKNOWN" && !mergeableAsked.has(askedKey(repo, r)) && !rechecking.has(`${repo.key}\u0000${r.number}`));
+  for (const r of todo) mergeableAsked.add(askedKey(repo, r));
+  const ns = todo.map((r) => r.number);
+  if (!ns.length) return Promise.resolve();
   for (const n of ns) rechecking.add(`${repo.key}\u0000${n}`);
-  void recheckMergeable(ns, (l) => askMergeable(repo, l), (n, m) => {
+  return recheckMergeable(ns, ask, (n, m) => {
     for (const [k, e] of listCache) {
       if (!k.startsWith(`${repo.key}\u0000`)) continue;
       const prs = e.prs.map((r) => (r.number === n && r.mergeable !== m ? { ...r, mergeable: m } : r));
@@ -2465,7 +2472,89 @@ function scheduleMergeableRecheck(repo: PrRepoId, rows: PrSummary[]): void {
     }
     const d = detailCache.get(`${repo.key}#${n}`);
     if (d && d.detail.mergeable !== m) detailCache.set(`${repo.key}#${n}`, { ...d, detail: { ...d.detail, mergeable: m } });
-  }).catch(() => {}).finally(() => { for (const n of ns) rechecking.delete(`${repo.key}\u0000${n}`); });
+  }, wait).then(() => {}).catch(() => {}).finally(() => { for (const n of ns) rechecking.delete(`${repo.key}\u0000${n}`); });
+}
+
+
+/*
+ * A REQUIRED CHECK THAT NEVER REPORTED, ON THE BOARD.
+ *
+ * The list's rollup only holds checks that exist, so a required job a path
+ * filter skipped is absent and the suite reads green: the card went to "ready
+ * to land" while the detail said merging was blocked. Two cheap reads close it:
+ * the required contexts once per base branch (ten minutes), and the check NAMES
+ * of only the cards that would otherwise be filed "ready" (approved, nothing
+ * red, nothing running), once per head commit, all in one request. Nothing is
+ * asked for a card that is not a candidate, and nothing again until a push.
+ *
+ * Ceiling, named: only a card that is approved and green is checked; any other
+ * card is blocked or waiting for another reason already.
+ */
+const REQUIRED_TTL_MS = 10 * 60_000;
+export const __requiredCaches = { ctx: new Map<string, { at: number; ctx: string[] }>(), names: new Map<string, string[]>() };
+const requiredCtxCache = __requiredCaches.ctx;
+const namesCache = __requiredCaches.names;
+const requiredAsking = new Set<string>();
+const isCandidate = (r: PrSummary) =>
+  r.state === "OPEN" && !r.isDraft && r.reviewDecision === "APPROVED" && !!r.headSha && r.checks?.failure === 0 && r.checks?.pending === 0 && r.checks?.total > 0;
+
+/** `rows` with `requiredMissing` set from what the caches already know. */
+export function stampRequired(repo: PrRepoId, rows: PrSummary[]): PrSummary[] {
+  return rows.map((r) => {
+    if (!isCandidate(r)) return r.requiredMissing ? { ...r, requiredMissing: undefined } : r;
+    const names = namesCache.get(`${repo.key}\u0000${r.number}\u0000${r.headSha}`);
+    const req = requiredCtxCache.get(`${repo.key}\u0000${r.baseRefName}`);
+    if (!names || !req) return r;
+    const missing = req.ctx.some((c) => !names.includes(c));
+    return missing === !!r.requiredMissing ? r : { ...r, requiredMissing: missing || undefined };
+  });
+}
+
+const REQUIRED_CTX_FIELDS = `branchProtectionRule{requiredStatusCheckContexts}
+  refUpdateRule{requiredStatusCheckContexts}
+  rules(first:50){nodes{type repositoryRuleset{enforcement} parameters{... on RequiredStatusChecksParameters{requiredStatusChecks{context}}}}}`;
+const NAMES_FIELDS = `commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{... on CheckRun{name} ... on StatusContext{context}}}}}}}`;
+
+export async function scheduleRequiredCheck(
+  repo: PrRepoId, rows: PrSummary[],
+  ask: (body: string) => Promise<Record<string, any> | null> = async (body) => {
+    const [owner, name] = repo.nameWithOwner.split("/");
+    const res = await ghJson<{ data?: { repository?: Record<string, any> } }>(
+      ["api", "graphql", "-f", `query=query { repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) { ${body} } }`]);
+    return res?.data?.repository ?? null;
+  },
+): Promise<number> {
+  const cands = rows.filter(isCandidate).filter((r) => !namesCache.has(`${repo.key}\u0000${r.number}\u0000${r.headSha}`));
+  const bases = [...new Set(rows.filter(isCandidate).map((r) => r.baseRefName))]
+    .filter((b) => b && !((requiredCtxCache.get(`${repo.key}\u0000${b}`)?.at ?? 0) > Date.now() - REQUIRED_TTL_MS));
+  if (!cands.length && !bases.length) return 0;
+  if (requiredAsking.has(repo.key)) return 0;
+  requiredAsking.add(repo.key);
+  let asked = 0;
+  try {
+    const parts: string[] = [];
+    bases.forEach((b, i) => parts.push(`b${i}: ref(qualifiedName: ${JSON.stringify("refs/heads/" + b)}) { ${REQUIRED_CTX_FIELDS} }`));
+    cands.forEach((r) => parts.push(`p${r.number}: pullRequest(number: ${Number(r.number)}) { ${NAMES_FIELDS} }`));
+    asked = 1;
+    const repoNode = await ask(parts.join("\n"));
+    if (!repoNode) return asked;
+    bases.forEach((b, i) => {
+      const n = repoNode[`b${i}`];
+      if (!n) return;
+      const rules = (n.rules?.nodes || []).filter((x: any) => x && (x.repositoryRuleset?.enforcement ?? "ACTIVE") === "ACTIVE");
+      requiredCtxCache.set(`${repo.key}\u0000${b}`, { at: Date.now(), ctx: requiredContextsOf(n.branchProtectionRule, n.refUpdateRule, rules) });
+    });
+    for (const r of cands) {
+      const nodes = repoNode[`p${r.number}`]?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes;
+      if (Array.isArray(nodes)) namesCache.set(`${repo.key}\u0000${r.number}\u0000${r.headSha}`, nodes.map((c: any) => String(c?.name ?? c?.context ?? "")).filter(Boolean));
+    }
+    for (const [k, e] of listCache) {
+      if (!k.startsWith(`${repo.key}\u0000`)) continue;
+      const prs = stampRequired(repo, e.prs);
+      if (prs.some((r, i) => r !== e.prs[i])) listCache.set(k, { ...e, prs });
+    }
+  } catch { /* the board keeps saying what the list says */ } finally { requiredAsking.delete(repo.key); }
+  return asked;
 }
 
 /** A complete page into the cache: the per-PR check cache, the disk copy, and
@@ -2482,12 +2571,15 @@ function storePage(repo: PrRepoId, filter: PrFilter, state: PrState, key: string
      the write `saveDiskCache` persists, so a blank that gets here outlives
      the session that caused it. */
   listCache.set(key, {
-    at: Date.now(), began: since, prs: keepNewerDetails(repo, page.rows.map((r) => carryOver(prior.get(r.number), r)), since),
+    at: Date.now(), began: since, prs: stampRequired(repo, keepNewerDetails(repo, page.rows.map((r) => carryOver(prior.get(r.number), r)), since)),
     loading: false, checksPending: false,
     total: page.total, hasNext: page.hasNext, cursor: page.cursor, fp,
   });
   saveDiskCache();
-  if (state === "open") scheduleMergeableRecheck(repo, listCache.get(key)!.prs);
+  if (state === "open") {
+    scheduleMergeableRecheck(repo, listCache.get(key)!.prs);
+    void scheduleRequiredCheck(repo, listCache.get(key)!.prs);
+  }
   /* And the open detail, if this read is newer than it. */
   for (const r of listCache.get(key)!.prs) {
     const dk = `${repo.key}#${r.number}`, hit = detailCache.get(dk);
@@ -3388,6 +3480,16 @@ export const GATE_QUERY = `query($owner:String!,$name:String!,$number:Int!){
  * Rulesets only count when `enforcement` is ACTIVE; EVALUATE is GitHub's dry
  * run and blocks nothing.
  */
+/** The status contexts a base branch requires, from classic protection, the
+ *  ref-update rule and the ACTIVE rulesets alike. */
+export function requiredContextsOf(bpr: any, ru: any, rules: any[]): string[] {
+  return [...new Set([
+    ...(bpr?.requiredStatusCheckContexts || []),
+    ...(ru?.requiredStatusCheckContexts || []),
+    ...rules.filter((r) => r.type === "REQUIRED_STATUS_CHECKS").flatMap((r) => (r.parameters?.requiredStatusChecks || []).map((c: any) => c?.context)),
+  ].filter(Boolean) as string[])];
+}
+
 export function mergeGateOf(repo: any): PrMergeGate | null {
   const pr = repo?.pullRequest;
   if (!pr) return null;
@@ -3439,11 +3541,7 @@ export function mergeGateOf(repo: any): PrMergeGate | null {
       ...(bpr?.requiresDeployments ? bpr.requiredDeploymentEnvironments || [] : []),
       ...ofType("REQUIRED_DEPLOYMENTS").flatMap((r) => r.parameters?.requiredDeploymentEnvironments || []),
     ] as string[])],
-    requiredContexts: [...new Set([
-      ...(bpr?.requiredStatusCheckContexts || []),
-      ...(ru?.requiredStatusCheckContexts || []),
-      ...ofType("REQUIRED_STATUS_CHECKS").flatMap((r) => (r.parameters?.requiredStatusChecks || []).map((c: any) => c?.context)),
-    ].filter(Boolean) as string[])],
+    requiredContexts: requiredContextsOf(bpr, ru, rules),
     mergeQueue: pr.isMergeQueueEnabled === true || ofType("MERGE_QUEUE").length > 0,
     inQueue: pr.isInMergeQueue === true,
   };

@@ -66,3 +66,14 @@ describe("the detail's findings reach the board", () => {
     expect(withKnownBlock(ROOT, row({ mergeable: "UNKNOWN" })).mergeable).toBe("CONFLICTING");
   });
 });
+
+describe("the panel keys the note by a head the detail really has", () => {
+  it("uses headOfDetail, not d.headSha, which the detail payload never carries", async () => {
+    /* Measured: the detail came back with no headSha, so a write keyed by it
+       was dropped and the card never moved after the box said blocked. */
+    const src = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
+    const at = src.indexOf("noteKnownBlock(root, d.number, ");
+    expect(at).toBeGreaterThan(0);
+    expect(src.slice(at, at + 80)).toContain("headOfDetail(d)");
+  });
+});
