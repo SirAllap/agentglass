@@ -10,7 +10,7 @@ import { useDiffHighlight } from "../../../lib/diffHighlight.ts";
 import { humanBytes } from "../../../lib/paletteModel.ts";
 import {
   COLOUR_LINES, GRAPH_MAX_BYTES, HTML_RENDER_MAX_BYTES, JSON_READ_CAP, READ_LINES,
-  graphAllowed, htmlRenderable, isolatedDoc, nextReadWidth, previewPlan, readMaxWidth, readWidthLabel, readWindow, sortedOrder, type ReadWidth, type PreviewTab,
+  defaultTab, graphAllowed, htmlRenderable, isGif, isolatedDoc, nextReadWidth, previewPlan, readMaxWidth, readWidthLabel, readWindow, sortedOrder, type ReadWidth, type PreviewTab,
 } from "../../../lib/finderPreview.ts";
 import { HIT } from "../../../lib/iconSize.ts";
 import type { FileFacts } from "../../../../../shared/types.ts";
@@ -23,6 +23,7 @@ import { editability } from "../../../lib/finderEdit.ts";
 import { FindBar } from "../../PeekFile.tsx";
 import { clear as clearFind, findRanges, paint as paintFind, reveal as revealFind, step as stepFind } from "../../../lib/mdFind.ts";
 import { SearchIcon } from "../../../lib/glyphIcons.tsx";
+import { StrataIcon } from "./StrataIcon.tsx";
 import { ICON } from "../../../lib/iconSize.ts";
 
 const note = (children: React.ReactNode, warn = false) => (
@@ -42,7 +43,11 @@ function printPane(el: HTMLElement | null, title: string) {
   document.body.appendChild(f);
 }
 
-export function PreviewBody({ path, facts, canEdit, root, onEditing, savedTab, onTab, bar, readW, onReadW }: {
+export function PreviewBody({ path, facts, canEdit, root, onEditing, savedTab, onTab, bar, readW, onReadW, autoplay, renderDocs }: {
+  /** Strata's "Render documents by default". */
+  renderDocs: boolean;
+  /** Strata's "Autoplay media previews": video, audio and GIF start by themselves. */
+  autoplay: boolean;
   readW: ReadWidth; onReadW: (w: ReadWidth) => void;
   bar: BarProps;
   path: string;
@@ -57,10 +62,10 @@ export function PreviewBody({ path, facts, canEdit, root, onEditing, savedTab, o
   canEdit: boolean;
 }) {
   const plan = useMemo(() => previewPlan(facts), [facts]);
-  const firstTab = (): PreviewTab => (savedTab && savedTab.path === path && (plan.tabs as string[]).includes(savedTab.tab) ? (savedTab.tab as PreviewTab) : (plan.tabs[0] ?? "Reading"));
+  const firstTab = (): PreviewTab => (savedTab && savedTab.path === path && (plan.tabs as string[]).includes(savedTab.tab) ? (savedTab.tab as PreviewTab) : defaultTab(plan.tabs, renderDocs));
   const [tab, setTabNow] = useState<PreviewTab>(firstTab);
   const setTab = (t: PreviewTab) => { setTabNow(t); onTab(path, t); };
-  useEffect(() => setTabNow(firstTab()), [path, plan]);
+  useEffect(() => setTabNow(firstTab()), [path, plan, renderDocs]);
   const [editing, setEditing] = useState(false);
   useEffect(() => setEditing(false), [path]);
   const mayEdit = canEdit && editability(facts);
@@ -135,11 +140,11 @@ export function PreviewBody({ path, facts, canEdit, root, onEditing, savedTab, o
     case "html": body = tab === "Rendered" ? <HtmlFrame path={path} bytes={facts.bytes} /> : <Reading facts={facts} name={facts.name} wrap={wrap} />; break;
     case "json": body = tab === "Reading" ? <Reading facts={facts} name={facts.name} wrap={wrap} /> : <JsonData path={path} bytes={facts.bytes} graph={tab === "Graph"} />; break;
     case "code": body = <Reading facts={facts} name={facts.name} wrap={wrap} readW={readW} />; break;
-    case "image": body = <Picture src={api.previewUrl(path)} facts={facts} />; break;
+    case "image": body = isGif(facts.name) && !autoplay ? <StillGif src={api.previewUrl(path)} facts={facts} /> : <Picture src={api.previewUrl(path)} facts={facts} />; break;
     case "convert": body = <Converted path={path} facts={facts} />; break;
     case "pdf": body = <iframe title={facts.name} src={api.previewUrl(path)} className="w-full flex-1" style={{ border: EDGE, borderRadius: 6, minHeight: 360, background: "var(--bg)" }} />; break;
-    case "audio": body = <audio src={api.previewUrl(path)} controls preload="metadata" className="w-full" aria-label={facts.name} />; break;
-    case "video": body = <video src={api.previewUrl(path)} controls preload="metadata" className="w-full" style={{ maxHeight: "60vh", borderRadius: 6 }} aria-label={facts.name} />; break;
+    case "audio": body = <audio src={api.previewUrl(path)} controls preload="metadata" autoPlay={autoplay} className="w-full" aria-label={facts.name} />; break;
+    case "video": body = <video src={api.previewUrl(path)} controls preload="metadata" autoPlay={autoplay} className="w-full" style={{ maxHeight: "60vh", borderRadius: 6 }} aria-label={facts.name} />; break;
     default: body = <p style={{ color: "var(--text3)" }}><b>{facts.name}</b> is a binary file ({humanBytes(facts.bytes)}): there is no text to show. “Open in Files” hands it to the desktop.</p>;
   }
   return (
@@ -280,6 +285,29 @@ function JsonData({ path, bytes, graph }: { path: string; bytes: number; graph: 
 /* ----------------------------------------------------------------- media */
 
 const CHECKER = "repeating-conic-gradient(color-mix(in srgb, var(--text) 8%, transparent) 0 25%, transparent 0 50%) 0 0 / 16px 16px";
+
+/** A GIF held on its first frame, with a button to let it run: what "Autoplay media previews" off means for a picture. */
+function StillGif({ src, facts }: { src: string; facts: FileFacts }) {
+  const [play, setPlay] = useState(false);
+  const [still, setStill] = useState<string | null>(null);
+  useEffect(() => {
+    setPlay(false); setStill(null);
+    const img = new Image();
+    img.onload = () => { const c = document.createElement("canvas"); c.width = img.naturalWidth; c.height = img.naturalHeight; c.getContext("2d")?.drawImage(img, 0, 0); try { setStill(c.toDataURL("image/png")); } catch { /* a frame that cannot be read plays instead */ setPlay(true); } };
+    img.onerror = () => setPlay(true);
+    img.src = src;
+  }, [src]);
+  if (play || !still) return <Picture src={src} facts={facts} />;
+  return (
+    <>
+      <div className="p-2 rounded-md min-w-0 self-start max-w-full relative" style={{ border: EDGE, background: CHECKER }}>
+        <img alt={facts.name} src={still} style={{ maxWidth: "100%", maxHeight: 420, display: "block" }} />
+        <button className="agx-btn absolute rounded-md grid place-items-center" style={{ right: 12, bottom: 12, width: HIT, height: HIT, background: "var(--surface-card)", border: EDGE, color: "var(--primary-ink)" }} aria-label="Play GIF" title="Play GIF" onClick={() => setPlay(true)}><StrataIcon set="act" name="play" size={ICON.sm} /></button>
+      </div>
+      <p className="mt-2 text-[11px]" style={{ color: "var(--text3)" }}>{facts.width && facts.height ? `${facts.width} × ${facts.height} px · ` : ""}{facts.mime} · {humanBytes(facts.bytes)} · paused</p>
+    </>
+  );
+}
 
 function Picture({ src, facts }: { src: string; facts: FileFacts }) {
   return (

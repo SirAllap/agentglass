@@ -204,6 +204,10 @@ export interface Prefs {
   f1: boolean;
   /** Strata's "Folder peeking": a card of what is inside a folder under the pointer, in Icons and List. */
   peek: boolean;
+  /** Strata's "Autoplay media previews": video, audio and GIF previews start by themselves. */
+  autoplay: boolean;
+  /** Strata's "Render documents by default": Markdown and HTML open on the rendered view, not the source. */
+  renderDocs: boolean;
 }
 
 export interface SortChoice { sortKey: SortKey; sortDir: SortDir; foldersFirst: boolean }
@@ -226,7 +230,7 @@ export const TEXT_MAX = 18;
 
 export const DEFAULT_PREFS: Prefs = {
   view: "columns", preview: true, density: "compact", textSize: 13, hidden: false, group: false, sizes: true, sidebar: true, rail: false,
-  sortKey: "name", sortDir: "asc", foldersFirst: true, thumb: THUMB_DEFAULT, sideW: 201, readW: READ_WIDTH_DEFAULT, mirror: true, f1: true, peek: false,
+  sortKey: "name", sortDir: "asc", foldersFirst: true, thumb: THUMB_DEFAULT, sideW: 201, readW: READ_WIDTH_DEFAULT, mirror: true, f1: true, peek: false, autoplay: false, renderDocs: true,
 };
 
 function readSortChoice(v: unknown): SortChoice | null {
@@ -265,6 +269,8 @@ export function readPrefs(raw: string | null): Prefs {
     mirror: flag(o.mirror, d.mirror),
     f1: flag(o.f1, d.f1),
     peek: flag(o.peek, d.peek),
+    autoplay: flag(o.autoplay, d.autoplay),
+    renderDocs: flag(o.renderDocs, d.renderDocs),
   };
 }
 

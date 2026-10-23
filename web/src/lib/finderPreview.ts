@@ -94,3 +94,12 @@ export const nextReadWidth = (w: ReadWidth): ReadWidth => READ_WIDTHS[(READ_WIDT
 /** CSS max-width for the column; Full has none. */
 export const readMaxWidth = (w: ReadWidth): string => (w === "full" ? "none" : `${w}ch`);
 export const readWidthLabel = (w: ReadWidth): string => (w === "full" ? "Full" : String(w));
+
+/** A GIF animates by itself in an <img>; "Autoplay media previews" off has to hold it on its first frame. */
+export const isGif = (name: string): boolean => /\.gif$/i.test(name) && name.length > 4;
+
+/** The view a file opens on: for a document with a rendered view, the one "Render documents by default" says; otherwise the plan's first. */
+export function defaultTab(tabs: readonly PreviewTab[], renderDocs: boolean): PreviewTab {
+  if (tabs.includes("Rendered") && tabs.includes("Source")) return renderDocs ? "Rendered" : "Source";
+  return tabs[0] ?? "Reading";
+}

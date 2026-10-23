@@ -565,7 +565,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   const previewOnly = !previewInline && peek;
   const lastCol = columns[last];
   const preview = (
-    <QuickLook root={workspace} savedTab={previewTab} onTab={(path, tab) => setPreviewTab({ path, tab })} onEditing={(p) => { editing.current = p; }} path={deepest?.path ?? null} row={deepest?.row ?? null}
+    <QuickLook autoplay={prefs.autoplay} renderDocs={prefs.renderDocs} root={workspace} savedTab={previewTab} onTab={(path, tab) => setPreviewTab({ path, tab })} onEditing={(p) => { editing.current = p; }} path={deepest?.path ?? null} row={deepest?.row ?? null}
       rows={deepest && isFolder(deepest.row) ? (columns[deepest.col + 1]?.state?.rows ?? null) : null}
       onBench={onBench} readW={prefs.readW} onReadW={(w) => setPrefs({ readW: w })} onClose={guarded("preview-close", () => (wide ? setPrefs({ preview: false }) : setPeek(false)))} />
   );

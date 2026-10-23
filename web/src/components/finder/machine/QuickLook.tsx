@@ -19,7 +19,8 @@ export function folderSummary(rows: readonly Row[]): string[] {
   return TYPE_GROUPS.filter((g) => n.has(g)).map((g) => `${g.toLowerCase()} ${n.get(g)}`);
 }
 
-export function QuickLook({ path, row, rows, root, savedTab, onTab, onEditing, onBench, onClose, readW, onReadW }: {
+export function QuickLook({ path, row, rows, root, savedTab, onTab, onEditing, onBench, onClose, readW, onReadW, autoplay, renderDocs }: {
+  autoplay: boolean; renderDocs: boolean;
   /** The reading column's width and where to say it changed (a preference, so it is kept). */
   readW: ReadWidth; onReadW: (w: ReadWidth) => void;
   path: string | null;
@@ -82,7 +83,7 @@ export function QuickLook({ path, row, rows, root, savedTab, onTab, onEditing, o
           </div>
         </>
       ) : (
-        <PreviewBody path={path} facts={facts} canEdit={canEditRow(row)} root={root} onEditing={onEditing} savedTab={savedTab} onTab={onTab} bar={bar} readW={readW} onReadW={onReadW} />
+        <PreviewBody path={path} facts={facts} canEdit={canEditRow(row)} root={root} onEditing={onEditing} savedTab={savedTab} onTab={onTab} bar={bar} readW={readW} onReadW={onReadW} autoplay={autoplay} renderDocs={renderDocs} />
       )}
     </div>
   );

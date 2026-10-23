@@ -11,7 +11,7 @@ describe("Settings rows", () => {
   });
   test("no row is a switch for something the finder does not have", () => {
     const text = ROWS.map((r) => r.title).join("|").toLowerCase();
-    for (const absent of ["autoplay", "10xer", "language", "theme library", "updates"]) expect(text).not.toContain(absent);
+    for (const absent of ["10xer", "language", "theme library", "updates"]) expect(text).not.toContain(absent);
   });
 });
 
