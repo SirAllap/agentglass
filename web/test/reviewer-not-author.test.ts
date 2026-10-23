@@ -22,6 +22,6 @@ describe("who a pull request can ask for a review", () => {
 
   test("the reviewers picker applies it", async () => {
     const src = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
-    expect(src).toContain("options={withoutAuthor([...reviewedOptions, ...rest], d.author)}");
+    expect(src).toContain("options={withFrequent(withoutAuthor([...reviewedOptions, ...rest], d.author), loadUse())}");
   });
 });

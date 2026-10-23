@@ -48,7 +48,9 @@ test("the board is handed the filtered lists, not the raw fetches", () => {
      prFilter.test.ts. */
   expect(src).toContain("applyRulesKeepUnread(boardMineCards, rules, readPrField, isRuleExempt)");
   expect(src).toContain("applyRulesKeepUnread(boardReviewCards, rules, readPrField, isRuleExempt)");
-  expect(src).toContain("mine={boardMineShown} review={boardReviewShown}");
+  // Wiring pinned: a person's board has its own lists (not the owner's rules);
+  // the owner's board is handed the filtered pair.
+  expect(src).toContain("mine={personLogin ? personLists.mine : boardMineShown} review={personLogin ? personLists.review : boardReviewShown}");
   /* The raw pair never reaches the component again — the exact shape of the bug. */
   expect(src).not.toContain("mine={boardMine}");
   /* And the builder is offered the fields of the rows on screen, not the

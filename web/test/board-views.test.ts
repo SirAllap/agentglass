@@ -35,7 +35,9 @@ describe("viewKeeps", () => {
     const board = await Bun.file(new URL("../src/components/TriageBoard.tsx", import.meta.url)).text();
     const panel = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
     expect(board).toContain("viewKeeps(view, id,");
-    expect(panel).toContain("view={boardView}");
+    // A person's board (a login search) has no view row, so it is handed "all";
+    // the owner's own board gets the picked view.
+    expect(panel).toContain('view={personLogin ? "all" : boardView}');
   });
 });
 

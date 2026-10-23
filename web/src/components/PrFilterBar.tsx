@@ -11,7 +11,7 @@ import {
 } from "../lib/prFilter.ts";
 import { SearchIcon } from "../lib/glyphIcons.tsx";
 import { CloseIcon } from "./CloseButton.tsx";
-import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { EDGE, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 /**
  * The PR list's filter bar (#pulldash-style): a query input, a wrapping row of
@@ -129,7 +129,7 @@ export function PrFilterBar({
           style={INPUT_STYLE} />
         {menuOpen && (
           <div id="pr-at-people" role="listbox" className="absolute left-0 right-0 top-full mt-1 rounded-lg overflow-y-auto agx-scroll"
-            style={{ zIndex: LAYER.menu, maxHeight: 260, border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", background: "color-mix(in srgb, var(--bg2) 98%, black)", boxShadow: "0 18px 44px -18px rgba(0,0,0,.8)" }}>
+            style={{ zIndex: LAYER.menu, maxHeight: 260, border: EDGE, background: "color-mix(in srgb, var(--bg2) 98%, black)", boxShadow: "0 18px 44px -18px rgba(0,0,0,.8)" }}>
             {!people ? (
               <div className="px-3 py-2 text-[11px]" style={{ color: "var(--text3)" }}>People are still loading…</div>
             ) : flat.length === 0 ? (

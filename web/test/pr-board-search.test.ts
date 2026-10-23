@@ -28,7 +28,7 @@ describe("a search is a section of the board", () => {
   });
 
   it("gates the board on what is shown", () => {
-    expect(src).toContain("(boardShown || resultsShown) && repo && !listState.needsAuth ? (");
+    expect(src).toContain("(boardShown || resultsShown || personLogin) && repo && !listState.needsAuth ? (");
     expect(src).toContain("const resultsShown = !boardShown && !inboxOn && !metricsOn;");
     // The table is gone: nothing draws a row of its own any more.
     expect(src).not.toContain("<PrRow");
@@ -508,7 +508,7 @@ describe("waiting for the board", () => {
      */
     expect(src).toContain("const boardWhole = !boardLoading");
     expect(src).toContain("p.checksLoaded === false");
-    expect(src).toContain("settling={boardSettling}");
+    expect(src).toContain("settling={personLogin ? false : boardSettling}");
   });
 
   it("never holds it on a refresh, and never for ever", () => {

@@ -14,7 +14,7 @@ test("PrPanel pages by Load more, with no Previous/Next footer", async () => {
   const src = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
   expect(src).not.toContain("pagerShown");
   expect(src).not.toContain("‹ Previous");
-  expect(src).toContain("more={listState.hasNext");
+  expect(src).toContain("listState.hasNext && listState.cursor");
   expect(src).toContain("pageRanOut({");
   expect(src).toMatch(/if \(queuesOnly\) setPages\(/);
 });
