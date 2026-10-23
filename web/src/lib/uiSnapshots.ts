@@ -396,7 +396,7 @@ const recipes = (rs: readonly RecipeRow[]): UiSnapshot => {
 const reviewPrompts = (rs: readonly ReviewPromptRow[]): UiSnapshot => {
   const r = head(rs);
   return {
-    state: { count: r.count, shown: r.shown, prompts: r.rows.map((x) => ({ id: x.id, group: x.group, when: x.when, builtIn: x.builtIn, hidden: x.hidden, hasSkill: x.hasSkill, chars: x.chars })) },
+    state: { count: r.count, shown: r.shown, prompts: r.rows.map((x) => ({ id: x.id, group: x.group, when: x.when, builtIn: x.builtIn, hidden: x.hidden, edited: x.edited, hasSkill: x.hasSkill, chars: x.chars })) },
     untrusted: { titles: Object.fromEntries(r.rows.map((x) => [x.id, x.title])) },
     see: ["/pr-prompts"],
   };

@@ -160,7 +160,7 @@ export function PairPanel({ baseUrl, variant = "hero", onPaired, canTurnOnHttps 
 
   return (
     <>
-      <SettingsCard title="Connect your phone" icon={<PlugIcon size={ICON.sm} />}
+      <SettingsCard title="Pairing" icon={<PlugIcon size={ICON.sm} />} desc="Show a code, scan it, say yes here."
         actions={ticket
           ? <Button onClick={start} disabled={busy}>New code</Button>
           : <Button tone="primary" onClick={start} disabled={busy}>{busy ? "Starting…" : "Show the code"}</Button>}>
@@ -182,12 +182,12 @@ export function PairPanel({ baseUrl, variant = "hero", onPaired, canTurnOnHttps 
                clause that keeps this from sliding back to blaming the phone. */
             label={<span style={{ color: "var(--error-ink)" }}>The cockpit in a browser cannot pair over this address.</span>}
             status={<StatusBadge tone="err">Plain HTTP</StatusBadge>}
-            hint={<>
-              A plain-HTTP page gets no WebCrypto, and pairing has to encrypt the credential to the
-              phone — so the handshake can't even start. The agentglass app pairs over it fine: it
-              makes its own key. The traffic is still readable by anything else on this network.
+            hint="A plain-HTTP page gets no WebCrypto, so a browser cannot start the handshake. The app pairs over it anyway."
+            detail={{ summary: "Why, and what to do", body: <>
+              Pairing has to encrypt the credential to the phone, and a plain-HTTP page has no primitives for
+              that. The agentglass app makes its own key. The traffic is still readable by anything else on this network.
               {!tailnet && <span className="block mt-1">Serve the cockpit over HTTPS, or forward the port so the phone reaches it as <span className="t-mono">http://localhost</span>.</span>}
-            </>}
+            </> }}
             below={canTurnOnHttps || tailnet ? (
               <div className="flex flex-col gap-2 text-[12px]" style={{ color: "var(--text2)" }}>
                 {canTurnOnHttps && (
@@ -364,11 +364,12 @@ function Paired({ devices, busy, onForget }: {
   const [confirming, setConfirming] = useState<string | null>(null);
   if (!devices.length) return null;
   return (
-    <SettingsCard title="Paired devices" icon={<PhoneIcon size={ICON.sm} />}>
+    <SettingsCard title="Devices" icon={<PhoneIcon size={ICON.sm} />} desc="Phones that can reach this machine, and what each may do.">
       {devices.map((d) => (
         <SettingRow key={d.id}
           label={d.label}
           hint={`${SCOPE_WORD[d.scope]} · ${d.lastSeenAt ? `last used ${fmtAgo(d.lastSeenAt)}` : "not used yet"}`}
+          status={<StatusBadge tone={d.lastSeenAt && Date.now() - d.lastSeenAt < 2 * 60_000 ? "ok" : "off"}>{d.lastSeenAt && Date.now() - d.lastSeenAt < 2 * 60_000 ? "Active" : "Idle"}</StatusBadge>}
           actions={confirming === d.id ? (
             <>
               <Button tone="danger" onClick={() => { setConfirming(null); onForget(d); }} disabled={busy}>Forget it</Button>

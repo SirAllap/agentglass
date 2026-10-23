@@ -38,7 +38,7 @@ const OLD = engine("hermes", {
 });
 const base = (): Policy => composePolicy(defaultStored(), {
   orchestrator: { engine: "claude", model: "sonnet" },
-  workers: { scout: { engine: "opencode", model: "" }, builder: { engine: "claude", model: "sonnet" }, verifier: { engine: "claude", model: "haiku" } },
+  workers: { scout: { engine: "opencode", model: "" }, builder: { engine: "claude", model: "sonnet" }, reviewer: { engine: "claude", model: "sonnet" }, verifier: { engine: "claude", model: "haiku" } },
 });
 const view = (o: Partial<OrchestrationViewProps> = {}) =>
   renderToStaticMarkup(React.createElement(OrchestrationView, {
@@ -57,8 +57,8 @@ const rowOf = (html: string, label: string): string => {
 describe("the card on the page", () => {
   test("it is the first card, and every preset says what it sets", () => {
     const html = view();
-    expect(html.indexOf("Start from a ready-made setup")).toBeGreaterThan(-1);
-    expect(html.indexOf("Start from a ready-made setup")).toBeLessThan(html.indexOf("Fine-tune who does what"));
+    expect(html.indexOf("Start from a preset")).toBeGreaterThan(-1);
+    expect(html.indexOf("Start from a preset")).toBeLessThan(html.indexOf("Fine-tune who does what"));
     for (const o of presetOffers([engine("claude"), engine("opencode")])) {
       const row = rowOf(html, o.title);
       for (const line of o.says) expect(row).toContain(line.replace(/'/g, "&#x27;"));
@@ -86,7 +86,7 @@ describe("the card on the page", () => {
   });
   test("the server's sentence for a refusal sits in the card", () => {
     const html = view({ notes: { quick: "policy.workerDefault: is wider than the most the main agent may allow; lower the default or raise that limit on purpose" } });
-    expect(html.indexOf("is wider than the most")).toBeGreaterThan(html.indexOf("Start from a ready-made setup"));
+    expect(html.indexOf("is wider than the most")).toBeGreaterThan(html.indexOf("Start from a preset"));
     expect(html.indexOf("is wider than the most")).toBeLessThan(html.indexOf("Fine-tune who does what"));
   });
 });
@@ -245,7 +245,7 @@ describe("a preset card shows what changes", () => {
   test("the diagram is one row per role the preset names: the engines now, then the engines after", () => {
     const o = presetOffers(ready, base()).find((x) => x.id === "claude-orchestrates")!;
     const rows = presetDiagram(base(), o.workers);
-    expect(rows.map((r) => r.word)).toEqual(["Scouts", "Builders", "Verifiers"]);
+    expect(rows.map((r) => r.word)).toEqual(["Scouts", "Builders", "Reviewers", "Verifiers"]);
     expect(rows[1]).toMatchObject({ role: "builder", before: ["claude"], after: ["opencode", "hermes"] });
   });
   test("a preset that moves only builders draws only builders; a blocked one draws nothing", () => {

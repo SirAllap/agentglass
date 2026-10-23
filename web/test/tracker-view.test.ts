@@ -107,7 +107,7 @@ describe("where it is wired", () => {
 
   test("Settings draws the choice only when both trackers are connected", () => {
     expect(settings).toContain("const both = !!setup?.clickup && !!setup?.jira;");
-    expect(settings).toContain("if (!both) return null;");
+    expect(settings).toContain("{both ? (<>");
     // and the request for the repositories is inside the same gate
     expect(settings).toMatch(/if \(!both\) return;\n\s+let live = true;\n\s+void api\.trackerProjects\(true\)/);
   });

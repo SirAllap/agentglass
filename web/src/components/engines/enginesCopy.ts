@@ -117,3 +117,62 @@ export const REPORT_BADGE: Record<ReportState, { tone: StatusTone; text: string 
   ready: { tone: "off", text: "Not connected" },
   missing: { tone: "off", text: "Not found" },
 };
+
+/* ── the tiles ── */
+
+/** One line of a tile's checklist: an icon state, what it is, what it says. */
+export interface TileCheck { state: "ok" | "warn" | "no"; label: string; value: string }
+
+/** A logo square's colour, per engine. A mark of the engine, not a theme colour: it stays the same in every theme. */
+const LOGO: Record<string, string> = {
+  claude: "#d98a6c", codex: "#3f9a93", gemini: "#5c8fc4", opencode: "#6b7bb8", hermes: "#8a6bb8",
+  antigravity: "#c4982f", qwen: "#4f7fb0",
+};
+export const logoOf = (id: string): string => LOGO[id] ?? "#8a8497";
+
+/** The line under an engine's name: its version, or why there is none. */
+export function versionLine(e: EngineReadiness | null): string {
+  if (!e) return "Checking…";
+  if (!e.found) return "Not on this machine";
+  if (e.version && e.versionOk === false && e.min) return `${e.version} · needs ${e.min}`;
+  return e.version ?? (e.slow ? "Checking…" : "Version unknown");
+}
+
+/** What the reporting probe says, in the tile's words. `null` is the roster not having answered. */
+export function reportingCheck(p: { found: boolean; connected: boolean; seenAt: number | null } | null, loaded: boolean, now: number): TileCheck {
+  const label = "Reports here";
+  if (!p) return { state: "no", label, value: loaded ? "No hook to wire" : "…" };
+  if (p.seenAt) return { state: "ok", label, value: `Last event ${agoWords(p.seenAt, now)}` };
+  if (p.connected) return { state: "warn", label, value: "Wired, no event yet" };
+  return { state: p.found ? "warn" : "no", label, value: p.found ? "Not connected" : "—" };
+}
+
+/** The checklist of an engine that is on this machine; the placeholders keep the row count while it is read. */
+export function tileChecks(e: EngineReadiness | null, now: number, report: TileCheck): TileCheck[] {
+  if (!e) return [
+    { state: "no", label: "Installed", value: "…" }, { state: "no", label: "Signed in", value: "…" },
+    report, { state: "no", label: "Can be used as", value: "…" }, { state: "no", label: "Last test", value: "…" },
+  ];
+  const a = e.account;
+  const roles = [e.roles.orchestrator.ok && "orchestrator", e.roles.worker.ok && "worker"].filter(Boolean).join(" and ");
+  const t = e.answers;
+  return [
+    { state: e.found ? "ok" : "no", label: "Installed", value: e.path ?? "Not on this machine" },
+    { state: a.signedIn === true ? "ok" : a.signedIn === false ? "warn" : "no", label: "Signed in", value: accountText(e).replace(/^Signed in with /, "") },
+    report,
+    { state: roles ? "ok" : "no", label: "Can be used as", value: roles || "Not yet" },
+    t.state === "ok" && t.at ? { state: "ok", label: "Last test", value: `${Math.max(1, Math.round((t.ms ?? 0) / 1000))} s, ${agoWords(t.at, now)}` }
+      : t.state === "failed" ? { state: "warn", label: "Last test", value: t.error ?? "Did not answer" }
+      : { state: "no", label: "Last test", value: t.state === "running" ? "Testing…" : "Not tested yet" },
+  ];
+}
+
+/** Ready, need you, not installed: the three numbers the page header and the filter share. */
+export function engineCounts(states: readonly EngineState[]): { all: number; ready: number; needs: number; absent: number } {
+  return {
+    all: states.length,
+    ready: states.filter((s) => s === "ready").length,
+    needs: states.filter((s) => s !== "ready" && s !== "checking" && s !== "missing").length,
+    absent: states.filter((s) => s === "missing").length,
+  };
+}

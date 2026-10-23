@@ -91,6 +91,14 @@ describe("the marks come from real facts, and only those", () => {
     expect(m.tmux).toMatchObject({ state: "needs", count: 1 });
   });
 
+  test("hooks wired with the gate off: the page still wants a decision, and the header keeps both words", () => {
+    const m = navMarks(facts({ hooksWired: true, gateOff: true })).hooks!;
+    expect(m).toMatchObject({ state: "needs", count: 1, wired: true });
+    expect(headerChips("hooks", m)).toEqual([{ tone: "ok", text: "Hooks wired" }, { tone: "warn", text: "The gate is off" }]);
+    expect(navMarks(facts({ hooksWired: true, gateOff: false })).hooks).toEqual({ state: "on" });
+    expect(headerChips("hooks", navMarks(facts({ hooksWired: false, gateOff: true })).hooks!)).toEqual([{ tone: "warn", text: "Claude Code hooks are not wired in" }]);
+  });
+
   test("Tools & services shows its count only when something wants you", () => {
     expect(navMarks(facts({ connectionsNeed: 0 })).connections).toBeUndefined();
     expect(navMarks(facts({ connectionsNeed: 3 })).connections).toMatchObject({ state: "needs", count: 3 });
@@ -130,6 +138,14 @@ describe("page header chips follow the mark", () => {
     expect(headerChips("jira", { state: "off" })).toEqual([{ tone: "off", text: "Not connected" }]);
     expect(headerChips("terminal", { state: "on" })).toEqual([]);
     expect(headerChips("terminal", { state: "none" })).toEqual([]);
+  });
+
+  test("a page that counts its own things says them in place of the mark's words, and a failed read still wins", () => {
+    const own = [{ tone: "ok" as const, text: "2 ready" }, { tone: "warn" as const, text: "1 needs you" }];
+    expect(headerChips("engines", { state: "needs", count: 1, title: "Codex needs sign-in or setup" }, false, false, own)).toEqual(own);
+    expect(headerChips("engines", { state: "needs", count: 1, title: "x" }, true, false, own)).toEqual([...own, { tone: "saving", text: "Saving" }]);
+    expect(headerChips("engines", { state: "err", chip: "Not scanned", title: "Could not scan" }, false, false, own)).toEqual([{ tone: "err", text: "Not scanned" }]);
+    expect(headerChips("engines", { state: "on" }, false, false, [])).toEqual([]);
   });
 
   test("needs-you names what needs the person, never a bare count", () => {
@@ -276,7 +292,7 @@ describe("the components wire these decisions and nothing else", () => {
 
   test("the modal draws marks and chips from navMarks, with no mark invented in the component", () => {
     expect(modal).toContain("navMarks({");
-    expect(modal).toContain("headerChips(navTab.id, marks[navTab.id] ?? NO_MARK, saving.has(navTab.id), savedPages.has(navTab.id))");
+    expect(modal).toContain("headerChips(navTab.id, marks[navTab.id] ?? NO_MARK, saving.has(navTab.id), savedPages.has(navTab.id), heads[navTab.id]?.chips)");
     expect(nav).not.toMatch(/state: "on"|state: "needs"/);
   });
 

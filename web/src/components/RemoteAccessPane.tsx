@@ -192,7 +192,8 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
   return (
     <>
       {/* Amber only for a real decision: the server listens but the gate would refuse every phone. */}
-      <SettingsCard title="Remote access" icon={<PhoneIcon size={ICON.sm} />} tone={st.exposed && !st.trustLan ? "decision" : "default"} desc="Reaching this machine from a phone, and what that phone is allowed to do.">
+      <SettingsCard title="Remote access" icon={<PhoneIcon size={ICON.sm} />} tone={st.exposed && !st.trustLan ? "decision" : "default"} desc="Reaching this machine from a phone, and what that phone is allowed to do."
+        status={enabled === null ? undefined : <StatusBadge tone={enabled ? "ok" : "off"}>{enabled ? "Listening" : "Off"}</StatusBadge>}>
         {/* Always first, always the same row: what the server is doing, whether
             anything is attached to it at this instant, and the switch. */}
         {enabled === null ? (
@@ -208,16 +209,17 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
             ariaChecked={!!enabled}
             label={<span className="flex items-center gap-2.5">
               <StateDot on={!!enabled} live={st.clients.liveCount > 0} />
-              {busy ? "Restarting the server…" : enabled ? "Listening on your network" : "Remote access is off"}
+              Allow remote access
             </span>}
             hint={
               /* This promised "the companion" — a phone-shaped web app that is
                  deleted. What answers on a phone now is the agentglass app, and
                  the browser that opens one of these addresses gets the cockpit,
                  so the sentence names the app rather than a page. */
-              enabled
-                ? "The agentglass app can reach this machine from the sofa: monitoring, sessions and gate approvals."
-                : "The server answers this machine only. Nothing off-box can reach it."}
+              busy ? "Restarting the server…"
+                : enabled
+                  ? "On: the agentglass app can reach this machine, for monitoring, sessions and gate approvals."
+                  : "Off: nothing listens beyond this machine."}
             /* Live count as a badge rather than a sentence: it changes every
                three seconds, and a number that moves inside prose is noise. */
             status={enabled && st.clients.liveCount > 0
@@ -236,6 +238,30 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
         {/* OUTSIDE `live`, and above everything, because it is about the route
             silently stopping rather than about setting one up. See TailnetTrouble. */}
         <TailnetTrouble st={st} />
+
+            {/* Read once, ever — so it costs one line until somebody wants it.
+                It follows the route actually chosen: a tailnet link is reachable
+                from anywhere and only by devices signed into their own Tailscale,
+                and saying "anyone on this network" over the top of that would be
+                false in the direction that teaches people to stop reading. */}
+            <SettingRow
+              label="What this exposes, and to whom"
+              hint="The dashboard and the actions you allow, only to a paired phone."
+              detail={{
+                summary: address?.tailnet ? "How Tailscale protects this route" : "What crosses your network in the clear",
+                body: address?.tailnet
+                  ? <>Over Tailscale this is encrypted end to end and reaches only devices signed into your
+                      tailnet, which makes it the safer of the two routes and the one to use on wifi you do
+                      not own. Each paired device still gets exactly what you granted it, and nothing more —
+                      forgetting one revokes only its own credential and closes what it is holding, and the
+                      others keep working.</>
+                  : <>Everything between a phone and this machine crosses your local network in the clear, so
+                      anything else on that network can read it. Each paired device gets exactly what you
+                      granted it and nothing more, but the link itself is not private. On wifi you do not own,
+                      use a Tailscale route instead.</>,
+              }}
+            />
+
 
         {/* Exposed, but the origin gate is shut: the page would load on the phone
             and every request inside it would 403. Open, not folded — it looks
@@ -268,10 +294,11 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
           <PairPanel baseUrl={url} variant={firstRun ? "hero" : "row"} onPaired={setPaired}
             canTurnOnHttps={!!st.tailnet?.installed && !st.addresses.some((a) => a.secure)} onStatus={apply} />
 
-          <SettingsCard title="Address" icon={<ServerIcon size={ICON.sm} />}>
+          <SettingsCard title="Network" icon={<ServerIcon size={ICON.sm} />} desc="Where a phone connects, and by which route.">
             <SettingRow
               label="Address"
-              hint="Safe to share — it is an address, not a key. On a device that is not paired it opens a page and nothing else."
+              hint="Safe to share: an address, not a key."
+              detail={{ summary: "Details", body: <>On a device that is not paired it opens a page and nothing else.</> }}
               below={<CommandLine command={url} shown={url.replace(/^https?:\/\//, "").replace(/\/$/, "")} />}
             />
 
@@ -316,27 +343,11 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
                 LAN address — the one needing no tailnet — behind a disclosure
                 triangle labelled "you cannot use these". */}
 
-            {/* Read once, ever — so it costs one line until somebody wants it.
-                It follows the route actually chosen: a tailnet link is reachable
-                from anywhere and only by devices signed into their own Tailscale,
-                and saying "anyone on this network" over the top of that would be
-                false in the direction that teaches people to stop reading. */}
-            <SettingRow
-              label="What this exposes, and to whom"
-              detail={{
-                summary: address?.tailnet ? "How Tailscale protects this route" : "What crosses your network in the clear",
-                body: address?.tailnet
-                  ? <>Over Tailscale this is encrypted end to end and reaches only devices signed into your
-                      tailnet, which makes it the safer of the two routes and the one to use on wifi you do
-                      not own. Each paired device still gets exactly what you granted it, and nothing more —
-                      forgetting one revokes only its own credential and closes what it is holding, and the
-                      others keep working.</>
-                  : <>Everything between a phone and this machine crosses your local network in the clear, so
-                      anything else on that network can read it. Each paired device gets exactly what you
-                      granted it and nothing more, but the link itself is not private. On wifi you do not own,
-                      use a Tailscale route instead.</>,
-              }}
-            />
+            {/* The origin gate, said even when it is open: a phone is let in only because private-network origins are trusted. */}
+            <SettingRow label="Private-network origins"
+              hint="A phone on the private network is let in because this is set."
+              detail={{ summary: "Details", body: <>Set with <span className="t-mono">AGENTGLASS_TRUST_LAN=1</span>. Without it the page would load on the phone and every request in it would be refused.</> }}
+              status={<StatusBadge tone={st.trustLan ? "ok" : "warn"}>{st.trustLan ? "Trusted" : "Not trusted"}</StatusBadge>} />
 
             {/* The failure this page exists for: the port is open, the server is
                 listening, and the firewall drops the packets without answering,
@@ -379,23 +390,24 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
           take back the key, and since the desktop app began requiring a token
           on loopback too, the code still guards something with the switch off. */}
       {enabled !== null && st.tokenRequired && (
-        <SettingsCard title="Access code" icon={<ShieldIcon size={ICON.sm} />} tone="danger">
+        <SettingsCard title="Token" icon={<ShieldIcon size={ICON.sm} />} desc="The access code every phone request carries.">
           <SettingRow
-            label={<span style={{ color: "var(--error-ink)" }}>Revoke this link</span>}
+            label="Machine token"
+            status={<StatusBadge tone="ok">Required</StatusBadge>}
             hint={confirming
               ? "Every paired device is forgotten, including the ones you cannot reach, and a new code is generated. The phones you still want will need to pair again."
-              : "Forgets every paired device and rotates the access code. This is the revoke that reaches a device you no longer have in your hand."}
+              : "Rotating forgets every paired device and issues a new code, which reaches a device you no longer have in your hand."}
             actions={confirming ? (
               <>
-                <Button tone="danger" onClick={revoke} disabled={busy}>{busy ? "Revoking…" : "Revoke"}</Button>
+                <Button tone="danger" onClick={revoke} disabled={busy}>{busy ? "Rotating…" : "Rotate"}</Button>
                 <Button onClick={() => setConfirming(false)} disabled={busy}>Keep it</Button>
               </>
             ) : (
-              <Button tone="danger" onClick={() => { setConfirming(true); setRevokeNote(null); }} disabled={busy}>Revoke</Button>
+              <Button tone="danger" onClick={() => { setConfirming(true); setRevokeNote(null); }} disabled={busy}>Rotate</Button>
             )}
           />
           {revokeNote && (
-            <SettingRow label="The link was not revoked" status={<StatusBadge tone="warn">Declined</StatusBadge>} hint={revokeNote} />
+            <SettingRow label="The token was not rotated" status={<StatusBadge tone="warn">Declined</StatusBadge>} hint={revokeNote} />
           )}
         </SettingsCard>
       )}

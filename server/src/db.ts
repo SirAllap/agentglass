@@ -20,6 +20,7 @@ import type { NormalizedEvent } from "./ingest.ts";
 import { costUsd, modelLabel, hasPrice, equivalentTokens } from "./pricing.ts";
 import { providerOf as sharedProviderOf, UNKNOWN as UNKNOWN_MODEL } from "../../shared/models.ts";
 import { workspaceRoots, scopeKey, scopeRoots, isWithin, sessionInScope, type Scope } from "./config.ts";
+import { RETENTION_DAYS, RETENTION_FROM_ENV, setRetentionDays } from "./retention.ts";
 import { changeRisks, sessionRisks, SESSION_RISK_CAP } from "../../shared/riskFlags.ts";
 
 /**
@@ -2315,7 +2316,8 @@ const isTerminal = (t: string) => t === "Stop" || t === "SessionEnd";
 // answerable. Prune anything older than AGENTGLASS_RETENTION_DAYS (default 8;
 // 0 disables pruning entirely).
 // ---------------------------------------------------------------------------
-export const RETENTION_DAYS = Math.max(0, Number(process.env.AGENTGLASS_RETENTION_DAYS ?? 8));
+// The retention lives in retention.ts so Settings can change it without opening this database; re-exported live.
+export { RETENTION_DAYS, RETENTION_FROM_ENV, setRetentionDays };
 
 /**
  * The understudy's own two windows — see the table block above for what is in
@@ -2447,6 +2449,32 @@ export function reclaimFreePages(): { freed: number; ms: number } | null {
     // correct either way, and the only thing lost is disk that was already lost.
     return null;
   }
+}
+
+/**
+ * Forget the history: every event, session, roll-up day and settled gate or reminder.
+ *
+ * Settings, credentials and anything live stay where they are: a gate still waiting for an
+ * answer and a reminder not yet acknowledged are requests, not history. The same tables
+ * pruneOldRows empties past a cutoff, here with no cutoff and the roll-up too, because a
+ * roll-up day is a summary of events that no longer exist and answering "what did this
+ * cost" from it after an erase would be history that was asked to be forgotten. One
+ * transaction, so a crash leaves all of it or none of it.
+ */
+export function eraseHistory(): { events: number; sessions: number; days: number } {
+  rollupPathCache = null;
+  const out = db.transaction(() => {
+    db.run(`DELETE FROM events_fts`);
+    const ev = db.run(`DELETE FROM events`);
+    recorded.forget();
+    const se = db.run(`DELETE FROM sessions`);
+    const days = db.run(`DELETE FROM daily_rollup`);
+    db.run(`DELETE FROM gates WHERE decision IS NOT NULL`);
+    db.run(`DELETE FROM reminders WHERE acked_at IS NOT NULL OR cancelled_at IS NOT NULL`);
+    return { events: ev.changes, sessions: se.changes, days: days.changes };
+  })();
+  riskMemo.clear();
+  return out;
 }
 
 export function pruneOldRows(): { events: number; sessions: number; rolled: number; snapshots: number; stubs: number } {

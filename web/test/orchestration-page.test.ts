@@ -42,7 +42,7 @@ const NONE = [OLD, engine("claude", { roles: { worker: { ok: false, why: "Not si
 
 const base = (): Policy => composePolicy(defaultStored(), {
   orchestrator: { engine: "claude", model: "sonnet" },
-  workers: { scout: { engine: "opencode", model: "" }, builder: { engine: "claude", model: "sonnet" }, verifier: { engine: "claude", model: "haiku" } },
+  workers: { scout: { engine: "opencode", model: "" }, builder: { engine: "claude", model: "sonnet" }, reviewer: { engine: "claude", model: "sonnet" }, verifier: { engine: "claude", model: "haiku" } },
 });
 const rule = (id: string, over: Partial<PolicyRule> = {}): PolicyRule => ({
   id, name: `Rule ${id}`, enabled: true, when: [{ kind: "usage", provider: "anthropic", window: "weekly", remainingAtMost: 10 }],
@@ -304,7 +304,9 @@ describe("Safety and limits", () => {
     expect(SAFETY.always.hint).toMatch(/\. Example: /);
     for (const r of Object.values(LIMIT_RANGE)) expect(r.hint).toMatch(/\. Example: /);
     const html = SAFE(view());
-    for (const t of ["What a worker may do by default", "The most the main agent may allow", "Limits", "Save these permissions", "Always refused", "Workers at once"]) expect(html).toContain(t);
+    for (const t of ["What a worker may do by default", "The most the main agent may allow", "Limits", "Workers at once"]) expect(html).toContain(t);
+    // Always refused and the save bar have their own places on the page: a card of their own and the bar that ends the column.
+    for (const t of ["Always refused", "Commands no worker may run", "Save these permissions"]) expect(view()).toContain(t);
   });
   test("a refusal under Save or a step opens the disclosure, so the sentence is not hidden", () => {
     expect(PANE).toContain("setSafetyOpen(true)");

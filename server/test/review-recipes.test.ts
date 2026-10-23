@@ -194,6 +194,33 @@ describe("the menu", () => {
     expect(P.reviewRecipe("verdict")?.title).toBe("Can I approve it? (quick)");
   });
 
+  it("keeps the permission mode saved over a built-in, and counts it as an edit", () => {
+    const before = P.reviewRecipe("verdict")!;
+    P.saveReviewRecipe({ ...before, permissionMode: "acceptEdits" });
+    const after = P.reviewRecipe("verdict")!;
+    expect(after.permissionMode).toBe("acceptEdits");
+    expect(after.edited).toBe(true);
+  });
+
+  it("says which built-ins were edited, and lists the hidden ones so they can be offered again", () => {
+    expect(P.reviewRecipes().some((r) => r.edited)).toBe(false);
+    const before = P.reviewRecipe("verdict")!;
+    // A save that changed nothing is not an edit.
+    P.saveReviewRecipe({ ...before });
+    expect(P.reviewRecipe("verdict")!.edited).toBeUndefined();
+    P.saveReviewRecipe({ ...before, title: "Ship it?" });
+    expect(P.reviewRecipe("verdict")!.edited).toBe(true);
+    expect(P.hiddenRecipes()).toEqual([]);
+    P.removeReviewRecipe("verdict");
+    const hidden = P.hiddenRecipes();
+    expect(hidden.map((r) => r.id)).toEqual(["verdict"]);
+    // As it ships: the edit is gone from the listing with the tombstone, and Offer again is a reset.
+    expect(hidden[0]!.title).toBe("Can I approve it? (quick)");
+    P.resetReviewRecipe("verdict");
+    expect(P.hiddenRecipes()).toEqual([]);
+    expect(P.reviewRecipe("verdict")!.edited).toBeUndefined();
+  });
+
   it("takes one of your own, and gives it back to you to delete", () => {
     const saved = P.saveReviewRecipe({ id: "", title: "Only the migrations", body: "Look at {number}", group: "focused", when: "any" });
     expect(saved.ok).toBe(true);

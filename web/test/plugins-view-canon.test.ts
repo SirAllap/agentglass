@@ -61,8 +61,8 @@ describe("the plugin panes", () => {
     expect(src).toContain("<Button");
   });
 
-  test("the market's type filter is Chip, not a pill", () => {
-    expect(market).toContain("<Chip");
+  test("the market's type filter is the kit's segmented control, not a pill", () => {
+    expect(market).toContain("<SegControl");
     expect(market).not.toContain("rounded-full whitespace-nowrap");
   });
 

@@ -68,7 +68,7 @@ const later = (over: Partial<Sources["later"]> = {}): Sources["later"] => ({
     usageRefresh: false,
   }),
   recipes: async () => [{ id: "r1", name: INJECTION, desc: INJECTION, scope: "repo", repo: "/home/ana/code/orbit", steps: 3, params: 1, tmux: false, confirm: true }],
-  reviewPrompts: async () => [{ id: "p1", title: INJECTION, group: "review", when: "open", builtIn: false, hidden: false, hasSkill: true, chars: 120 }],
+  reviewPrompts: async () => [{ id: "p1", title: INJECTION, group: "review", when: "open", builtIn: false, hidden: false, edited: false, hasSkill: true, chars: 120 }],
   savedReplies: async () => [{ id: "sr1", title: INJECTION, chars: 40 }],
   tmux: async () => ({
     source: "auto", binAvailable: true, binVersion: "3.4", capability: true, confMode: "append", overrideActive: true, broken: false,
@@ -322,7 +322,7 @@ describe("the second batch of panes keeps its words under untrusted even when th
   it("recipes, review prompts and saved replies: names and titles are untrusted, sizes are state", async () => {
     const l = later({
       recipes: async () => [{ id: "r1", name: "deploy-orbit", desc: "", scope: "repo", repo: "", steps: 2, params: 0, tmux: false, confirm: false }],
-      reviewPrompts: async () => [{ id: "p1", title: "resolve-reviews", group: "review", when: "open", builtIn: false, hidden: false, hasSkill: false, chars: 9 }],
+      reviewPrompts: async () => [{ id: "p1", title: "resolve-reviews", group: "review", when: "open", builtIn: false, hidden: false, edited: false, hasSkill: false, chars: 9 }],
       savedReplies: async () => [{ id: "s1", title: "thanks-again", chars: 12 }],
     });
     const src = sources({ later: l });

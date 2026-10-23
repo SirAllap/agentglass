@@ -95,11 +95,13 @@ describe("the lock, as each CLI is told it", () => {
     }
   });
 
-  step("a builder may edit its worktree; a scout and a verifier may not", () => {
+  step("a builder may edit its worktree; a scout, a reviewer and a verifier may not", () => {
     const claudeDeny = (role: typeof scout) =>
       (JSON.parse(roleLaunch(row("claude"), role, "")!.args[1]!) as { permissions: { deny: string[] } }).permissions.deny;
     expect(claudeDeny(builder)).not.toContain("Edit");
     expect(claudeDeny(workerRole("verifier")!)).toContain("Edit");
+    expect(claudeDeny(workerRole("reviewer")!)).toContain("Edit");
+    expect(claudeDeny(workerRole("reviewer")!)).toContain("Bash(git push:*)");
     const oc = JSON.parse(roleLaunch(row("opencode"), builder, "")!.env.OPENCODE_CONFIG_CONTENT!) as { permission: { edit?: string } };
     expect(oc.permission.edit).toBeUndefined();
   });
@@ -117,6 +119,7 @@ describe("starting a role", () => {
   const roles = (scoutOn: string) => ({
     scout: { provider: scoutOn, model: "" },
     builder: { provider: "claude", model: "sonnet" },
+    reviewer: { provider: "claude", model: "sonnet" },
     verifier: { provider: "claude", model: "haiku" },
   });
 
@@ -138,7 +141,7 @@ describe("starting a role", () => {
   });
 
   step("an unknown role is refused", () => {
-    expect(ops.roleStart("reviewer", roles("claude"), tmpdir())).toEqual({ ok: false, error: "no-role" });
+    expect(ops.roleStart("cartographer", roles("claude"), tmpdir())).toEqual({ ok: false, error: "no-role" });
   });
 
   step("the lock and the model ride ahead of the caller's flags, and the prompt stays last", () => {
@@ -198,7 +201,7 @@ describe("the setting", () => {
     expect(cfg.writeWorkerRole("scout", { provider: "codex", model: "" }).ok).toBe(false);
     expect(cfg.writeWorkerRole("scout", { provider: "claude", model: "haiku --dangerously-skip-permissions" }).ok).toBe(false);
     expect(cfg.writeWorkerRole("scout", { provider: "claude", model: "-p" }).ok).toBe(false);
-    expect(cfg.writeWorkerRole("reviewer", { provider: "claude", model: "" }).ok).toBe(false);
+    expect(cfg.writeWorkerRole("cartographer", { provider: "claude", model: "" }).ok).toBe(false);
   });
 
   step("a hand-edited role naming a CLI with no lock reads as the default", async () => {

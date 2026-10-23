@@ -7,7 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import type { EngineReadiness } from "../../shared/types.ts";
-import { accountText, actionOf, agoWords, badgeOf, engineState, firstRow, versionText } from "../src/components/engines/enginesCopy.ts";
+import { accountText, actionOf, agoWords, badgeOf, engineCounts, engineState, firstRow, logoOf, reportingCheck, tileChecks, versionLine, versionText } from "../src/components/engines/enginesCopy.ts";
 
 import { readEngines } from "../src/components/engines/readEngines.ts";
 
@@ -142,25 +142,24 @@ describe("the component", () => {
   const pane = readFileSync(new URL("../src/components/engines/EnginesPane.tsx", import.meta.url), "utf8");
   const code = pane.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
 
-  test("the badge and the action are in the card header, whatever the state", () => {
-    // One SettingsCard per engine, built with both slots from the same
-    // functions that the table above holds; there is no branch that omits them.
-    const card = code.slice(code.indexOf("function EngineCard("), code.indexOf("export function EnginesPane("));
-    expect(card).toMatch(/<SettingsCard title=\{p\.title\} desc=\{p\.what\}\s+icon=\{[^\n]*\}\s+status=\{<StatusBadge tone=\{badge\.tone\}>/);
-    expect(card).toMatch(/actions=\{<Button disabled=\{act\.disabled\}/);
-    expect(card).toContain("badgeOf(e)");
-    expect(card).toContain("actionOf(e)");
+  test("the badge and the action are in the tile, whatever the state", () => {
+    // One tile per engine, built with both from the same functions the table
+    // above holds; there is no branch that omits them.
+    const tile = code.slice(code.indexOf("function EngineTile("), code.indexOf("function AddCli("));
+    expect(tile).toMatch(/<StatusBadge tone=\{badge\.tone\}>\{badge\.text\}<\/StatusBadge>/);
+    expect(tile).toContain("<Button disabled={act.disabled} onClick={act.label === \"Test\" ? onTest : onRecheck}>{act.label}</Button>");
+    expect(tile).toContain("badgeOf(e)");
+    expect(tile).toContain("actionOf(e)");
   });
 
   test("while checking every row is there at its final height", () => {
-    // The card is built from `e === null` exactly as from an answer: same rows,
-    // same count, `…` where a value goes, so nothing jumps when it arrives.
-    const card = code.slice(code.indexOf("function EngineCard("), code.indexOf("export function EnginesPane("));
-    expect(card).toContain('e ? versionText(e) : "…"');
-    expect(code).toContain("minHeight={56}");
-    expect(card).toContain("reportingLoaded");
-    // Five: what it is held to and how it is run are one disclosure on the roles row now.
-    expect(card.match(/<SettingRow label=/g)!.length).toBeGreaterThanOrEqual(5);
+    // The tile is built from `e === null` exactly as from an answer: the same
+    // five checks with `…` where a value goes, so nothing jumps when it arrives.
+    expect(tileChecks(null, NOW, reportingCheck(null, false, NOW))).toHaveLength(5);
+    expect(tileChecks(ready(), NOW, reportingCheck(null, true, NOW))).toHaveLength(5);
+    const tile = code.slice(code.indexOf("function EngineTile("), code.indexOf("function AddCli("));
+    expect(tile).toContain("reportingLoaded");
+    expect(tile).toContain('e ? versionText(e) : "…"');
   });
 
   test("no page polls: it loads on open and on Recheck", () => {
@@ -177,9 +176,15 @@ describe("the component", () => {
     expect(code).toContain("onClick={act.label === \"Test\" ? onTest : onRecheck}");
   });
 
-  test("engines that are not installed fold into one card", () => {
-    expect(code).toContain("`${absent.length} not installed`");
-    expect(code).toContain('fold={{ open: view === "absent" || (absentOpen ?? present.length === 0), onToggle: setAbsentOpen }}');
+  test("engines that are not installed are tiles of their own, behind the same filter", () => {
+    expect(code).toContain('{ v: "absent", label: `Not installed ${counts.absent}` }');
+    expect(code).toContain("<AddCli />");
+  });
+
+  test("the header says the same three numbers the filter does", () => {
+    expect(code).toContain("useReportHead(\"engines\"");
+    expect(code).toContain("`${counts.ready} ready`");
+    expect(code).toContain("`${counts.absent} not installed`");
   });
 
   test("what a worker is held to is not promised as a wall: the lock is rules over a command line", () => {
@@ -191,8 +196,40 @@ describe("the component", () => {
 
   test("the old Agents list is a link to this page, not a second list", () => {
     const modal = readFileSync(new URL("../src/components/SettingsModal.tsx", import.meta.url), "utf8");
-    const section = modal.slice(modal.indexOf("function AgentsSection("), modal.indexOf("function AgentsSection(") + 700);
-    expect(section).toContain('onClick={() => openSettings("engines")}');
+    expect(modal).toContain('<WorkerRolesCard open={open} resetTick={resetTick} onEngines={() => openSettings("engines")} />');
     expect(modal).not.toContain("Other agents on this machine");
+  });
+});
+
+describe("the tiles' words", () => {
+  test("counts: ready, need you and not installed are the page header's and the filter's", () => {
+    expect(engineCounts(["ready", "ready", "signin", "old", "missing", "checking"])).toEqual({ all: 6, ready: 2, needs: 2, absent: 1 });
+    expect(engineCounts([])).toEqual({ all: 0, ready: 0, needs: 0, absent: 0 });
+  });
+
+  test("the checklist: what is fine, what wants a hand, what is simply absent", () => {
+    const rep = reportingCheck({ found: true, connected: true, seenAt: NOW - 120_000 }, true, NOW);
+    expect(rep).toEqual({ state: "ok", label: "Reports here", value: "Last event 2 minutes ago" });
+    expect(reportingCheck({ found: true, connected: true, seenAt: null }, true, NOW).state).toBe("warn");
+    expect(reportingCheck({ found: true, connected: false, seenAt: null }, true, NOW).value).toBe("Not connected");
+    expect(reportingCheck({ found: false, connected: false, seenAt: null }, true, NOW).state).toBe("no");
+    expect(reportingCheck(null, false, NOW).value).toBe("…");
+    const rows = tileChecks(ready({ account: { signedIn: false } }), NOW, rep);
+    expect(rows.map((r) => [r.label, r.state])).toEqual([["Installed", "ok"], ["Signed in", "warn"], ["Reports here", "ok"], ["Can be used as", "ok"], ["Last test", "no"]]);
+    expect(rows[3]!.value).toBe("worker");
+    expect(tileChecks(ready({ answers: { state: "ok", at: NOW - 5000, ms: 2400 } }), NOW, rep)[4]).toEqual({ state: "ok", label: "Last test", value: "2 s, just now" });
+    expect(tileChecks(ready({ answers: { state: "failed", error: "No answer" } }), NOW, rep)[4]!.state).toBe("warn");
+  });
+
+  test("the line under the name is the version, or why there is none", () => {
+    expect(versionLine(null)).toBe("Checking…");
+    expect(versionLine(ready())).toBe("2.1.296");
+    expect(versionLine(ready({ found: false, path: null, version: null }))).toBe("Not on this machine");
+    expect(versionLine(ready({ version: "0.21.0", min: "0.21.4", versionOk: false }))).toBe("0.21.0 · needs 0.21.4");
+  });
+
+  test("every engine has a logo colour, and an unknown one a quiet grey", () => {
+    for (const id of ["claude", "codex", "gemini", "opencode", "hermes", "antigravity"]) expect(logoOf(id)).toMatch(/^#[0-9a-f]{6}$/);
+    expect(logoOf("unheard-of")).toBe("#8a8497");
   });
 });

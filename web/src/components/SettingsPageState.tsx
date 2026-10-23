@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
-import type { PageNeed, PageProblem } from "../lib/settingsNav.ts";
+import type { HeaderChip, PageNeed, PageProblem } from "../lib/settingsNav.ts";
 import { SAVED_MS, nextSavePhase, type SavePhase } from "../lib/settingsStates.ts";
 
 /**
@@ -17,6 +17,15 @@ export interface PageStateSink {
   saving: (page: string, on: boolean) => void;
   /** The page found something only the person can do; `null` clears it. */
   needs: (page: string, n: PageNeed | null) => void;
+  /** What the page puts in its own header: its chips (in place of the nav mark's) and its one primary action. */
+  head: (page: string, h: PageHead | null, run?: () => void) => void;
+}
+
+/** A page's header, as the page says it. `chips` replace the nav mark's words; `action` is the top-right button. */
+export interface PageHead {
+  chips?: readonly HeaderChip[];
+  /** `plain` is a verb that adds nothing (Install), so it has no plus before it. */
+  action?: { label: string; plain?: boolean };
 }
 export const PageState = createContext<PageStateSink | null>(null);
 
@@ -68,4 +77,20 @@ export function useSavePhase(page: string, busy: boolean, failed = false): SaveP
   }, [phase]);
   useReportSaving(page, busy);
   return phase;
+}
+
+/**
+ * Put chips and a primary action in the page's header. `run` is what the button
+ * does; it is read through a ref so a new closure each render does not re-publish.
+ */
+export function useReportHead(page: string, head: PageHead | null, run?: () => void) {
+  const sink = useContext(PageState);
+  const runRef = useRef(run);
+  runRef.current = run;
+  const key = head ? JSON.stringify(head) : "";
+  useEffect(() => {
+    if (!sink || !key) return;
+    sink.head(page, JSON.parse(key) as PageHead, () => runRef.current?.());
+    return () => sink.head(page, null);
+  }, [sink, page, key]);
 }

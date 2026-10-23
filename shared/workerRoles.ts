@@ -2,8 +2,9 @@
  * The worker roles, and the lock each one runs under on whichever CLI it is
  * given.
  *
- * context-diet splits a job into three kinds of worker — a scout that finds,
- * a builder that changes, a verifier that runs the checks — and pinned each
+ * context-diet splits a job into kinds of worker — a scout that finds,
+ * a builder that changes, a reviewer that reads the change adversarially, a
+ * verifier that runs the checks — and pinned each
  * one to a Claude model in its agent files. The cheap two are exactly the
  * work that does not need Claude at all, so the role, not the agent file,
  * now names a provider and a model, and a person picks them in Settings.
@@ -26,7 +27,7 @@
  */
 import type { Provider } from "./agentKinds.ts";
 
-export type RoleId = "scout" | "builder" | "verifier";
+export type RoleId = "scout" | "builder" | "reviewer" | "verifier";
 
 export interface RoleChoice {
   provider: string;
@@ -57,6 +58,13 @@ export const WORKER_ROLES: WorkerRole[] = [
     title: "Builder",
     what: "Makes one bounded change in its worktree. Never commits or pushes.",
     readOnly: false,
+    default: { provider: "claude", model: "sonnet" },
+  },
+  {
+    id: "reviewer",
+    title: "Reviewer",
+    what: "Reads a change adversarially and reports what it finds. Changes nothing.",
+    readOnly: true,
     default: { provider: "claude", model: "sonnet" },
   },
   {

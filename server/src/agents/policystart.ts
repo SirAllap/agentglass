@@ -96,7 +96,7 @@ async function startNow(p: {
   seatRoot: string | null; probe?: () => Promise<EngineReadiness[]>;
 }): Promise<Answer> {
   const b = p.body;
-  if (b.role === undefined) return refuse("engine, model and allow go with a role: add --role scout, builder or verifier");
+  if (b.role === undefined) return refuse("engine, model and allow go with a role: add --role scout, builder, reviewer or verifier");
   if (typeof b.kind === "string") return refuse("a start through the policy takes --engine from the role's chain, not a kind");
   if (typeof b.remoteControl === "string") return refuse("a headless worker has no remote-control session: it runs one turn and exits");
   if (b.yolo === true) return refuse("a worker runs under its envelope, and skipping permissions is never combined with one");

@@ -76,12 +76,16 @@ export interface PageMark {
   title?: string;
   /** `err` only: the words of the page header's red chip. */
   chip?: string;
+  /** A page that is working and still wants something (hooks wired, gate off): the header keeps its green chip beside the needs-you one. */
+  wired?: true;
 }
 export const NO_MARK: PageMark = { state: "none" };
 
 /** What each fact is, read once when Settings opens. `null` is "not read yet" and draws nothing. */
 export interface NavFacts {
   hooksWired: boolean | null;
+  /** The gate is switched off in a build that ships one: a decision still waiting for the person. */
+  gateOff?: boolean | null;
   tmuxOk: boolean | null;
   /** Tools and services that are missing or not connected. */
   connectionsNeed: number | null;
@@ -117,7 +121,8 @@ export function navMarks(f: NavFacts): Record<string, PageMark> {
   const out: Record<string, PageMark> = {};
   const set = (id: string, m: PageMark | null) => { if (m) out[id] = m; };
   set("hooks", f.hooksWired === null ? null : f.hooksWired
-    ? { state: "on" } : { state: "needs", count: 1, title: "Claude Code hooks are not wired in" });
+    ? (f.gateOff ? { state: "needs", count: 1, title: "The gate is off", wired: true } : { state: "on" })
+    : { state: "needs", count: 1, title: "Claude Code hooks are not wired in" });
   set("tmux", f.tmuxOk === null ? null : f.tmuxOk
     ? { state: "on" } : { state: "needs", count: 1, title: "tmux is not on this machine" });
   set("connections", f.connectionsNeed === null || f.connectionsNeed <= 0 ? null
@@ -211,8 +216,10 @@ const STATE_WORDS: Record<string, { on?: string; off?: string }> = {
 /** Chips for a page header, from the page's mark and nothing else: the header
  *  can never say something the nav does not. A write that is out adds "Saving"
  *  after the verdict: the page keeps saying what it was while it saves. */
-export function headerChips(id: string, mark: PageMark, saving = false, saved = false): HeaderChip[] {
-  const chips = markChips(id, mark);
+export function headerChips(id: string, mark: PageMark, saving = false, saved = false, own?: readonly HeaderChip[]): HeaderChip[] {
+  /* A page that counts its own things (engines: ready, need you, not installed) says so in its words;
+     a page that could not be read keeps the red chip. */
+  const chips = own?.length && mark.state !== "err" ? [...own] : markChips(id, mark);
   if (saving) return [...chips, { tone: "saving", text: "Saving" }];
   return saved ? [...chips, { tone: "ok", text: "Saved" }] : chips;
 }
@@ -225,8 +232,10 @@ function markChips(id: string, mark: PageMark): HeaderChip[] {
   if (mark.state === "off" && w.off) return [{ tone: "off", text: w.off }];
   if (mark.state === "needs") {
     /* Says what, in the page's own words: a count of "needs you" with nothing
-       named is a mark nobody can act on. */
-    return [{ tone: "warn", text: mark.title ?? "Needs you" }];
+       named is a mark nobody can act on. A page that works and still wants a
+       decision (hooks wired, gate off) keeps its green word beside it. */
+    const needs: HeaderChip = { tone: "warn", text: mark.title ?? "Needs you" };
+    return mark.wired && w.on ? [{ tone: "ok", text: w.on }, needs] : [needs];
   }
   if (mark.state === "update") return [{ tone: "info", text: "Update available" }];
   return [];

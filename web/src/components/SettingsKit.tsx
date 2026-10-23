@@ -16,7 +16,7 @@
  * the old box until they do.
  */
 import { useId, useState, type ReactNode } from "react";
-import { CaretIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { CaretIcon, DoneIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import type { SavePhase } from "../lib/settingsStates.ts";
 import { ICON } from "../lib/iconSize.ts";
 import { Button, CHIP_SURFACE, CHIP_SURFACE_CLS, CTRL_H } from "./workspace/Chrome.tsx";
@@ -319,6 +319,10 @@ export function LinkButton({ href, children }: { href: string; children: ReactNo
  *  and an edge, at the large control height, the same for every select there. */
 export const SELECT_BOX = { maxWidth: 260 } as const;
 
+/** The class of a Select that fills a form field's width (an editor's Group, Model, Skill): the themed
+ *  kit select, never a native one, whose list and arrow the OS draws. */
+export const FIELD_SELECT = "agx-select w-full justify-between rounded-lg outline-none";
+
 
 
 /**
@@ -339,5 +343,36 @@ export function CommandLine({ command, shown }: { command: string; /** What is d
         style={{ color: "var(--text)", background: "var(--surface-inset)" }}>{shown ?? command}</code>
       <Button onClick={copy}>{copied ? "Copied" : "Copy"}</Button>
     </div>
+  );
+}
+
+/**
+ * One fact about a thing, as a line: a mark that says how it stands (a tick, a
+ * warning, a dash), the name of the fact, and its value at the right. The rows
+ * of a tool or service tile, where "Installed", "Account" and "Checked" are what
+ * the person scans for; a sentence is a SettingRow, not this. The mark is the
+ * tone and nothing else: ok is a tick, warn and err a warning, off a dash.
+ */
+export function CheckRow({ tone, label, value }: { tone: "ok" | "warn" | "err" | "off"; label: ReactNode; value?: ReactNode }) {
+  return (
+    <div className="agx-chk" data-tone={tone}>
+      <span aria-hidden className="agx-chk-m">{tone === "ok" ? <DoneIcon size={ICON.sm} /> : tone === "off" ? "–" : <WarningIcon size={ICON.sm} />}</span>
+      <span className="agx-chk-l">{label}</span>
+      {value !== undefined && value !== "" && <span className="agx-chk-v">{value}</span>}
+    </div>
+  );
+}
+
+/**
+ * A link that saves a file, drawn as a plain `Button`: the same height, edge and fill. It does not
+ * open anything or leave the app, so it has no arrow and no new tab: the browser downloads it.
+ */
+export function DownloadButton({ href, download, children }: { href: string; download: string; children: ReactNode }) {
+  return (
+    <a href={href} download={download}
+      className={`agx-btn ${CHIP_SURFACE_CLS} inline-flex items-center justify-center rounded-lg whitespace-nowrap leading-none text-[11px] px-2.5`}
+      style={{ height: CTRL_H.regular, ...CHIP_SURFACE, fontWeight: 500 }}>
+      {children}
+    </a>
   );
 }

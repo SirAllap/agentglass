@@ -117,7 +117,7 @@ are:
 | `AGENTGLASS_PROJECTS_DIR` | `~/.claude/projects` | Root the transcript scanner reads Claude Code session logs from. Several roots can be listed, separated by the platform's `PATH` delimiter (`:` on Linux/macOS, `;` on Windows). |
 | `AGENTGLASS_SCAN_INTERVAL_MS` | `3000` | Transcript scan poll interval (min 500). |
 | `AGENTGLASS_SCAN_DISABLED` | — | `1` → turn off the machine-wide transcript scanner (rely on hooks / OTel only). |
-| `AGENTGLASS_RETENTION_DAYS` | `8` | Days of **raw events** to keep (pruned hourly, with resolved gates and answered reminders). Covers the full 7d stats window. Expiring days are folded into a daily rollup first, so spend history outlives the rows. `0` = keep events for ever, and also keep the Clone's shifts, acts and runs for ever. It does **not** move the Clone's and Lantern's own windows (30 and 90 days, fixed) — see SECURITY.md, *What agentglass stores*. |
+| `AGENTGLASS_RETENTION_DAYS` | `8` | Days of **raw events** to keep (pruned hourly, with resolved gates and answered reminders). Covers the full 7d stats window. Expiring days are folded into a daily rollup first, so spend history outlives the rows. `0` = keep events for ever, and also keep the Clone's shifts, acts and runs for ever. Also chosen in Settings › Data & privacy (`retentionDays` in `config.json`, by the person only: shortening it deletes history at the next sweep); the variable wins when it is set. It does **not** move the Clone's and Lantern's own windows (30 and 90 days, fixed) — see SECURITY.md, *What agentglass stores*. |
 | `AGENTGLASS_PRICING` | — | Path to a JSON pricing override (see `server/src/pricing.ts`). |
 | `AGENTGLASS_PRICING_REFRESH` | — | `1` (or `true`/`yes`/`on`) → refresh exact model prices from LiteLLM at boot and daily. A credential-free GET of a public file, through the same egress check as the webhook; see [SECURITY.md](../SECURITY.md#one-request-that-carries-nothing-the-price-catalogue). The bundled table remains the offline fallback; `AGENTGLASS_PRICING` disables the refresh and stays authoritative. New rates price **new** events: a cost is computed once, when the event is stored, so a refresh never rewrites what a past day cost. |
 | `AGENTGLASS_WEBHOOK` | — | POST `{text}` here (a Slack/Discord-shaped incoming webhook) for alerts, Lantern watch notices and PR nudges sent with `send: true`. Loopback and the two hosts it exists for (`hooks.slack.com`, `discord.com`) work directly; any other destination requires `AGENTGLASS_ALLOW_REMOTE=1`. The host it resolved to is logged once at boot — the host, never the path, which is where a webhook URL keeps its credential. What travels is the notification's title and body — agent names, a checkout's base name, a PR's number, title, URL and reviewer logins — never a transcript, a diff or a token. Blanked out of every Clone run. |
@@ -131,7 +131,7 @@ are:
 | `AGENTGLASS_BUDGET_WRITE_DISABLED` | — | `1` → refuse changes to spend budgets from the app (`POST /budgets/set`). Reading them still works. |
 | `AGENTGLASS_TASK_WRITE_DISABLED` | — | `1` → make the **Tasks** view's local list read-only: no add, done, edit, delete or tag change reaches your Taskwarrior store. Reminders, which are the app's own, are unaffected. |
 | `AGENTGLASS_CLICKUP_WRITE` | — | `1` → allow **writes to a ClickUp board** (status, assignee, comments, checklists). Off by default, the opposite of the local list — a status change on a shared board fires automations and notifies people. Also a runtime toggle (`POST /clickup/writes`). See SECURITY.md. |
-| `AGENTGLASS_JIRA_WRITE` | — | `1` → allow **writes to a Jira site** (a move, an assignee, a comment, a step, a pull request link) from the app and, on a server at `AGENTGLASS_CONTROL_LEVEL=3`, from the agent door (`agentglass-ui jira step`, `jira link`). Off by default, like ClickUp's: a change on a shared site fires automations and notifies people. Also a stored toggle in the Jira settings (`POST /jira/writes`), which the door has no verb for. With it off, every acting route answers `Writing to Jira is switched off` and sends nothing, and so does the door at level 3; below level 3 the door's acting verbs are refused whatever this is set to. See SECURITY.md. |
+| `AGENTGLASS_JIRA_WRITE` | — | `1` → allow **writes to a Jira site** (a move, an assignee, a comment, a step, a pull request link) from the app and, on a server at `AGENTGLASS_CONTROL_LEVEL=3`, from the agent door (`agentglass-ui jira step`, `jira link`). Off by default, like ClickUp's: a change on a shared site fires automations and notifies people. Also a stored toggle in the Jira settings (`POST /jira/writes`), which the door has no verb for. Under it sit four more switches (`POST /jira/write-kinds`: move, comment, link, assign), all on until switched off, each refusing its own kind with `<Kind> is switched off in Settings`; a step that uses a kind that is off is refused whole. With it off, every acting route answers `Writing to Jira is switched off` and sends nothing, and so does the door at level 3; below level 3 the door's acting verbs are refused whatever this is set to. See SECURITY.md. |
 | `AGENTGLASS_BROWSER_READONLY` | — | `1` → when an agent drives the built-in browser (`agentglass-browser`, the MCP server), every **acting** verb — clicks, typing, `eval`, `cdp`, init scripts, uploads — is refused; reading, screenshots, the console and network logs keep working. |
 | `AGENTGLASS_CONTROL_LEVEL` | `2` | How far `POST /control` goes, read once when the server starts. `1` → opens and reads only; every change (`settings.set`) is refused with a `403` that names the door and this switch. `2` (the default) → also changes one of the settings the window exposes, with an undo chip. `3` → also level 3 doors, which **stage** only: they open a dialog filled in and the person's click is the effect (`pr.merge.stage`, `pr.comment.stage`, `pr.review.stage`, `card.move.stage`, `finder.op.stage`; no automatic grant exists). Level 3 is also what the Jira card door's `step`, `link`, `edit`, `comment`, `comment-edit`, `comment-delete`, `move`, `subtask`, `relate`, `unrelate`, `weblink`, `unweblink`, `worklog`, `worklog-edit`, `worklog-delete`, `watch`, `vote` and `rank` need, together with `AGENTGLASS_JIRA_WRITE`: those two perform, with no click, and are the only thing at this level that does. Unset is 2. A value that is set and is not 1, 2 or 3 (`0`, `off`, empty) fails **closed** to level 1, with one warning line at start naming the value. Nothing a caller can send changes it: restart the server to move it. |
 | `AGENTGLASS_CONTROL_READONLY` | — | `1` (or `true`, `yes`, `on`) → the same as level 1, and it wins over `AGENTGLASS_CONTROL_LEVEL`; `0`, `false`, `no`, `off` do nothing, anything else is read-only with a warning. The stricter alias, mirroring `AGENTGLASS_BROWSER_READONLY`: opens and reads work, every write is refused (a setting, the palette, the zoom). |
@@ -220,6 +220,19 @@ chat and the unattended one-shots keep their own. `GET /launch-permissions`
 reads them; `POST` writes them for the person. From an agent (a named worker
 included) a stricter mode or a longer deny list applies at once, and anything
 looser becomes a request the person approves (see the settings door below).
+
+`gateAnswerer`, `gateOnTimeout`, `chatStartIn`, `chatMode` and `chatDeny` are
+the Agents page's own choices (Settings ▸ Agents), all reachable through the
+settings door as `gate.answerer`, `gate.onTimeout`, `chats.startIn`, `chats.mode`
+and `chats.deny`. `gateAnswerer: "orchestrator"` also types one line into the
+chair's seat when the gate holds an outward action or a budget has been passed:
+the chair is told, never asked, and only a person releases a hold.
+`gateOnTimeout: "ask"` repeats the notification at a third and two thirds of the
+wait and then drops the action as before; it never extends the wait, because
+the hook holding the agent stops waiting when its own window ends. `chatDeny`
+is passed as `--disallowedTools` on every chat turn and on every chat pane
+started afterwards. `chatStartIn` (`last` or `open`) and `chatMode` (`inherit`,
+`default`, `acceptEdits` or `plan`) are read by the window when it opens a chat.
 
 > **Pricing is a user-editable default.** Numbers in `pricing.ts` are per 1M
 > tokens and matched against `model_name` by substring. Set
@@ -390,7 +403,7 @@ Every route is behind the token and the origin/Host gates described in [Security
 | `GET` · `POST /lantern/settings` · `POST /lantern/ticket` | The status reminder (`{nudge, minutes}`) and the server-side **watch** (`{watch, watchMinutes}`) that notifies when somebody is still stopped on you; a ticket opening a chat with the board as its first message. |
 | `GET /agents/named` · `POST /agents/named/{start,prompt,wait,read,keys,stop}` | **Named agents** — seat a CLI by name in a checkout (`--yolo` only if Settings allow; permission-shaped args refused with a 400 naming the flag), prompt it, wait for a state, read its screen, press a key, kill it. `agentglass-agent` is the CLI in front (`send-keys` → `keys`). |
 | `GET /engines` · `POST /engines/test` | **Engine readiness** — per engine (Claude Code, Codex, Antigravity, Gemini, Hermes, OpenCode): found, version against the minimum, account names (never a key), the roles it can take, and `missing`, whose first entry is the next thing to do. Cached by the binary's and the config directory's mtime; `?fresh=1` skips the cache and `?fresh=hermes` rechecks one engine. Never polled. The test route runs one real turn (`Reply with the single word: ok`) in a throwaway directory, one at a time per engine; it is `full` scope and origin-checked. |
-| `GET /agents/roles` · `POST /agents/roles` | **Worker roles** — which CLI and model a `scout`, `builder` or `verifier` runs on (`{role, provider, model}`), saved as `workerRoles` in `config.json`. Only a CLI with a lock this app can apply is accepted (Claude Code, OpenCode, Qwen Code). A named start with `role` takes its CLI, model and lock from here; naming a different `kind` beside it is a 400. |
+| `GET /agents/roles` · `POST /agents/roles` | **Worker roles** — which CLI and model a `scout`, `builder`, `reviewer` or `verifier` runs on (`{role, provider, model}`), saved as `workerRoles` in `config.json`. Only a CLI with a lock this app can apply is accepted (Claude Code, OpenCode, Qwen Code). A named start with `role` takes its CLI, model and lock from here; naming a different `kind` beside it is a 400. |
 | `GET` · `POST /agents/schedule` · `POST /agents/schedule/cancel` | **Scheduled starts** — `{name, cwd, when, prompt?, yolo?, kind?}`, `when` as `08:00`, `2026-09-06 08:00` or `+30m`. The named-agent rules are checked when written and again when it fires. The machine must be awake. |
 | `POST /agents/handoff` · `GET /agents/working` | Hand a session's conversation to another agent as a brief (`{session, kind}`), seated on the floating bench; whether anything is working — what the desktop's `agent` power mode polls. |
 | `GET /bench/{note,live}?root=` · `POST /bench/{note,edit,end}` | The floating bench: a per-checkout note (empty text deletes it), which slots still run, open a file in the checkout's editor, end one slot's tmux session (`{root, slot}`). |
@@ -433,7 +446,7 @@ kept in the window (`agx.orchestration.scope` in its local storage) and the page
 opens on it while that project is still on offer.
 
 **Right now** comes next: the main agent and the three
-jobs (scouts, builders, verifiers) as chains of engine tiles, each with its state
+jobs (scouts, builders, reviewers, verifiers) as chains of engine tiles, each with its state
 in a word, and one line saying whether the defaults, a ready-made setup or a rule
 put them there. It reads what the page already holds and makes no request.
 
@@ -464,7 +477,7 @@ nothing.
 
 | Field | What it holds | Default |
 | --- | --- | --- |
-| `base` | Read, not stored: the chair's engine and model, and each role's (`scout`, `builder`, `verifier`), as the app runs them today. One copy, so Settings and the policy cannot disagree. | what the seat and `workerRoles` say |
+| `base` | Read, not stored: the chair's engine and model, and each role's (`scout`, `builder`, `reviewer`, `verifier`), as the app runs them today. One copy, so Settings and the policy cannot disagree. | what the seat and `workerRoles` say |
 | `ask` | Per role and for the chair: `true` is "ask when it runs", so the person picks at the moment and the default is preselected. A role set to ask is never moved to another engine on its own. | all `false` |
 | `rules` | Up to 20, each `{id, name, when, orchestrator?, workers?, enabled}`. `when` is 1 to 4 triggers, all of which must hold: `always`, `usage` (a provider's `5h`, `weekly` or `either` window with at most N % left), `limit` (a provider is rate-limited), `hours` (days and a `HH:MM` span) and `budget`. A chain is 1 to 4 `{engine, model}` entries, tried in order. The first enabled rule whose triggers hold wins, per field. | none |
 | `ceiling` | The widest envelope an orchestrator may ask for in this project. | `write: worktree`, `network: false`, `commit: true` |
@@ -515,13 +528,13 @@ over plain `http://` to any host that is not this machine.
   Settings allow it, and a permission-shaped flag after `--` is refused — Codex's
   `-c`/`--config` overrides of the approval policy or the sandbox included
   (SECURITY.md has the list).
-  `start --role scout|builder|verifier` seats the CLI and model Settings ▸ Worker
+  `start --role scout|builder|reviewer|verifier` seats the CLI and model Settings ▸ Worker
   roles picks for that role, with its lock: push, commit, merge, rebase, reset,
   checkout, the network clients, `sudo` and `rm` are denied in the layer of that
   CLI a person's or a project's own config cannot loosen — for OpenCode, which
   merges its lock with the project's config instead, the start asks OpenCode for
   the merged rules and refuses when a project rule wins over the lock — and a
-  scout or a verifier may not edit files either; a `--model` or `--agent` after `--` is
+  scout, a reviewer or a verifier may not edit files either; a `--model` or `--agent` after `--` is
   refused, since those are the role's, and so is `--yolo`. It is a list of command prefixes, not a
   sandbox — `sh -c '…'` is not a command named `git push`. A project OpenCode
   plugin is arbitrary code run inside the worker and is not covered by the lock.

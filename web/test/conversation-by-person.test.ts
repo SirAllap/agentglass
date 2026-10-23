@@ -65,6 +65,6 @@ describe("the sub-filter by person", () => {
     const walk = src.slice(src.indexOf("const step = (dir: 1 | -1)"), src.indexOf("const speakerKey"));
     expect(walk).toContain('block: "center"');
     expect(walk).toContain('classList.add("agx-found")');
-    expect(walk).toContain("prefers-reduced-motion");
+    expect(walk).toContain("reducedMotion()");
   });
 });

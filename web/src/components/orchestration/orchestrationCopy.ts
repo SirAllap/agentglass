@@ -186,6 +186,9 @@ export const usageChoices = (): { value: UsageProviderId; label: string }[] =>
 
 export type Field = "orchestrator" | RoleId;
 
+/** The jobs in the order the page and the picture show them: the ones that make the change first, the read-only search last. */
+export const JOB_ORDER: readonly RoleId[] = ["builder", "reviewer", "verifier", "scout"];
+
 /** Set the one base choice of a field (the base is one choice; a chain is a rule). */
 export function withBaseChoice(p: Policy, field: Field, choice: EngineChoice): Policy {
   if (field === "orchestrator") return { ...p, base: { ...p.base, orchestrator: { ...p.base.orchestrator, value: [choice] } } };
@@ -333,7 +336,7 @@ export const PLAN_NEARLY_SPENT = 15;
 export const BACK_LABEL = "Undo";
 export const presetRuleId = (id: PresetId): string => `preset-${id}`;
 /** The two presets that always hold replace each other; the usage one stands apart. */
-const ALWAYS_PRESETS: readonly PresetId[] = ["claude-orchestrates", "all-on-claude"];
+export const ALWAYS_PRESETS: readonly PresetId[] = ["claude-orchestrates", "all-on-claude"];
 
 const CLAUDE = "claude";
 const claudeTitle = (): string => agentProvider(CLAUDE)?.title ?? CLAUDE;
@@ -712,11 +715,12 @@ export const roleBlurb = (f: Field): string => ({
   orchestrator: "Decides the plan and hands work out",
   scout: "Read the code, never write",
   builder: "Write code in their own copy",
+  reviewer: "Read the change like an opponent",
   verifier: "Run the checks and report",
 } as const)[f];
 
 /** The label of the row on the page that sets a job: where its Change button goes. */
-export const fineTuneRow = (f: Field): string => (f === "orchestrator" ? "Engine and model" : roleTitle(f));
+export const fineTuneRow = (f: Field): string => (f === "orchestrator" ? "Orchestrator" : roleTitle(f));
 
 /** One role of a preset's before-and-after picture: the engines tried now, and the ones the preset would try. */
 export interface DiagramRow { role: RoleId; word: string; before: string[]; after: string[] }
@@ -829,4 +833,33 @@ export function testDraft(
       : "The page cannot tell yet whether this condition holds (no reading for it), so it is shown as if it did not.";
   const next = withRule(policy, draft);
   return { holds, lines: testItNow(next, { on: (id) => (id === draft.id ? h === true : facts.on(id)) }, readiness) };
+}
+
+// ── the compact page: the one plan rule, the refused commands, the header chip ──
+
+/** Plan left, at most: what the threshold select offers; the rule's own value is added when it is not one of these. */
+export const THRESHOLDS: readonly number[] = [5, 10, 15, 20, 25, 30, 40, 50];
+export const thresholdsFor = (current: number | null): number[] =>
+  [...new Set(current === null ? THRESHOLDS : [...THRESHOLDS, current])].sort((a, b) => a - b);
+
+/** The commands, one per line: trimmed, no blanks, no repeats. */
+export const denyLines = (text: string): string[] => [...new Set(text.split("\n").map((l) => l.trim()).filter(Boolean))];
+
+/** The rule with its plan threshold changed; every other trigger stays as it was. */
+export function withThreshold(rule: PolicyRule, remainingAtMost: number): PolicyRule {
+  let done = false;
+  return { ...rule, when: rule.when.map((t) => (t.kind === "usage" && !done ? (done = true, { ...t, remainingAtMost }) : t)) };
+}
+
+/** The rule with its fallback engine changed: the first engine of every worker chain it sets, the rest of each chain kept. */
+export function withFallbackEngine(rule: PolicyRule, engine: string): PolicyRule {
+  if (!rule.workers) return rule;
+  const workers = Object.fromEntries(Object.entries(rule.workers).map(([r, c]) => [r, [{ engine, model: "" }, ...(c ?? []).slice(1)]]));
+  return { ...rule, workers: workers as PolicyRule["workers"] };
+}
+
+/** The header chip: the always-holding setup in force, or none. */
+export function presetChip(offers: readonly { id: PresetId; active: boolean }[], label: (id: PresetId) => string): { tone: "ok" | "off"; text: string } {
+  const on = offers.find((o) => o.active && ALWAYS_PRESETS.includes(o.id)) ?? offers.find((o) => o.active);
+  return on ? { tone: "ok", text: label(on.id) } : { tone: "off", text: "No preset" };
 }

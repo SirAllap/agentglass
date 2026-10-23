@@ -81,7 +81,7 @@ const step = story();
 describe("the routes", () => {
   step("status before connecting", async () => {
     const r = await fetch(base + "/jira/status", { headers });
-    expect(await r.json()).toEqual({ connected: false, site: null, kind: null, auth: null, api: null, deployment: null, account: null, prefixes: [], writes: false });
+    expect(await r.json()).toEqual({ connected: false, site: null, kind: null, auth: null, api: null, deployment: null, account: null, prefixes: [], writes: false, writeKinds: { move: true, comment: true, link: true, assign: true } });
   });
 
   step("a refused site is a 400 with a sentence, and the stand-in is never asked", async () => {
@@ -122,7 +122,7 @@ describe("the routes", () => {
   step("status after connecting names the site, the account and the keys, and no secret", async () => {
     const r = await fetch(base + "/jira/status", { headers });
     const text = await r.text();
-    expect(JSON.parse(text)).toEqual({ connected: true, site: "acme.atlassian.net", kind: "cloud", auth: "basic", api: 3, deployment: "cloud", account: "Ada Example", prefixes: ["ORBIT", "ACME"], writes: false });
+    expect(JSON.parse(text)).toEqual({ connected: true, site: "acme.atlassian.net", kind: "cloud", auth: "basic", api: 3, deployment: "cloud", account: "Ada Example", prefixes: ["ORBIT", "ACME"], writes: false, writeKinds: { move: true, comment: true, link: true, assign: true } });
     expect(secretsIn(text)).toEqual([]);
     expect(text).not.toContain(FAKE_EMAIL);
   });

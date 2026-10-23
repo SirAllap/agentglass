@@ -170,6 +170,6 @@ describe("a list with nothing in it", () => {
   test("the three list pages show it only when the whole list is empty, never for a filter", () => {
     expect(read("components/SavedRepliesPane.tsx")).toContain("blank={replies?.length === 0 ? {");
     expect(read("components/RecipesPane.tsx")).toContain("blank={list?.length === 0 ? {");
-    expect(read("components/ReviewPromptsPane.tsx")).toContain("blank={count === 0 ? {");
+    expect(read("components/ReviewPromptsPane.tsx")).toContain("blank={count === 0 && !hiddenList.length ? {");
   });
 });

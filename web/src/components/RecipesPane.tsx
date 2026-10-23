@@ -17,13 +17,17 @@ import { api } from "../lib/api.ts";
 import { retryLoad } from "../lib/retryLoad.ts";
 import type { Recipe, RecipeParam, GitRepoRef } from "../../../shared/types.ts";
 import { consoleRoot, runInConsole } from "./TerminalPanel.tsx";
-import { Field, SettingsCard, SettingsForm, helpIdFor } from "./SettingsKit.tsx";
+import { Field, SegControl, SettingsCard, SettingsForm, helpIdFor } from "./SettingsKit.tsx";
+import { Select } from "./Select.tsx";
+import { Switch } from "./SettingRow.tsx";
+import { MAX_COMMAND_PINS, RECIPE, togglePin, usePinMap } from "./CommandBar.tsx";
 import { EditorFoot, EditorPanel, ListBar, ListEditorSplit, ListPanel, NewButton, NothingSelected, differs } from "./SettingsListEditor.tsx";
 import { CommandIcon } from "./settingsNavIcons.tsx";
-import { useReportSaving } from "./SettingsPageState.tsx";
+import { useReportHead, useReportSaving } from "./SettingsPageState.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { IconLabel, PlusIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { CloseIcon } from "./CloseButton.tsx";
 import { Button, INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
 import { LaunchModeBadge, LaunchModeSelect } from "./LaunchMode.tsx";
 
@@ -45,7 +49,13 @@ export function RecipesPane({ open }: { open: boolean }) {
   useReportSaving("recipes", busy);
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [q, setQ] = useState("");
+  const [narrow, setNarrow] = useState<"all" | "pinned" | "repo">("all");
   const firstShown = useRef(false);
+  const pins = usePinMap();
+  /* A pin belongs to a repository's command bar: a command kept for one repo is pinned there, an everywhere one in the repo the console is on. */
+  const pinRoot = (r: Recipe) => (r.scope === "repo" && r.repo ? r.repo : consoleRoot());
+  const isPinned = (r: Recipe) => !!r.id && (pins[pinRoot(r)] ?? []).includes(`${RECIPE}${r.id}`);
+  useReportHead("recipes", { action: { label: "New recipe" } }, () => setEditing(blank()));
 
   const load = useCallback(async () => {
     try { const l = (await api.recipes()).recipes; setList(l); return l; } catch { setList([]); return []; }
@@ -80,13 +90,14 @@ export function RecipesPane({ open }: { open: boolean }) {
 
   const saved = editing?.id ? list?.find((x) => x.id === editing.id) : undefined;
   const ql = q.trim().toLowerCase();
-  const match = (r: Recipe) => !ql || `${r.name} ${r.desc} ${r.steps.join(" ")}`.toLowerCase().includes(ql);
+  const match = (r: Recipe) => (!ql || `${r.name} ${r.desc} ${r.steps.join(" ")}`.toLowerCase().includes(ql))
+    && (narrow === "all" || (narrow === "pinned" ? isPinned(r) : r.scope === "repo"));
   /* Everywhere first, then one section per repository the saved ones name. */
   const repoRoots = [...new Set((list ?? []).filter((r) => r.scope !== "global").map((r) => r.repo ?? ""))];
   const repoName = (root: string) => repos.find((x) => x.root === root)?.name || root.split("/").pop() || "repository";
   const entry = (r: Recipe) => ({
     id: r.id, title: r.name,
-    tags: r.boot ? ["at start"] : undefined,
+    tags: [...(isPinned(r) ? ["pinned"] : []), ...(r.boot ? ["at start"] : [])],
     badge: startsClaude(r) ? <LaunchModeBadge mode={r.permissionMode} /> : undefined,
     sub: <span className="t-mono">{r.steps.find((l) => l.trim()) ?? r.desc}</span>,
   });
@@ -105,9 +116,10 @@ export function RecipesPane({ open }: { open: boolean }) {
      split, so the list never moves to make room for it. */
   return (
     <>
-      <ListBar q={q} onQ={setQ} placeholder={`Filter ${list?.length ?? 0} commands`} label="Filter commands">
-        <NewButton onClick={() => setEditing(blank())}>New recipe</NewButton>
-      </ListBar>
+      <ListBar<"all" | "pinned" | "repo"> q={q} onQ={setQ} placeholder={`Filter ${list?.length ?? 0} commands`} label="Filter commands"
+        filters={[{ id: "all", label: `All ${list?.length ?? 0}` }, { id: "pinned", label: `Pinned ${(list ?? []).filter(isPinned).length}` },
+          { id: "repo", label: `This repo ${(list ?? []).filter((r) => r.scope === "repo").length}` }]}
+        filter={narrow} onFilter={setNarrow} />
       {note && (
         <div role={note.ok ? "status" : "alert"} className="agx-le-note text-[12px] pb-3"
           style={{ color: note.ok ? "var(--success-ink)" : "var(--error-ink)" }}>
@@ -124,7 +136,7 @@ export function RecipesPane({ open }: { open: boolean }) {
             action: <NewButton onClick={() => setEditing(blank())}>New recipe</NewButton>,
           } : undefined} />}
         editor={editing
-          ? <Editor r={editing} saved={saved} repos={repos} busy={busy} onChange={setEditing} onSave={save} onDrop={drop}
+          ? <Editor r={editing} saved={saved} repos={repos} busy={busy} pinned={isPinned(editing)} pinRoot={pinRoot(editing)} onChange={setEditing} onSave={save} onDrop={drop}
               onRun={editing.id ? () => setRunning(editing) : undefined}
               onCancel={() => setEditing(saved ?? null)} />
           : <NothingSelected noun="recipe" label="Command" onNew={() => setEditing(blank())} />} />
@@ -132,6 +144,18 @@ export function RecipesPane({ open }: { open: boolean }) {
     </>
   );
 }
+
+/** A yes/no inside a form: its words on the left, the house switch on the right, the whole row one target. */
+function SwitchField({ label, help, on, disabled, onToggle }: { label: string; help: string; on: boolean; disabled?: boolean; onToggle: () => void }) {
+  return (
+    <button type="button" role="switch" aria-checked={on} disabled={disabled} onClick={onToggle} className="agx-le-sw">
+      <span><b>{label}</b><span>{help}</span></span>
+      <Switch on={on} />
+    </button>
+  );
+}
+
+const PlayGlyph = () => <svg width="12" height="12" viewBox="0 0 10 10" aria-hidden><path d="M2 1.2v7.6L8.6 5z" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" /></svg>;
 
 /** One stacked field's control: the kit's input height and edge. */
 const FIELD = `w-full ${INPUT}`;
@@ -141,8 +165,8 @@ const FIELD = `w-full ${INPUT}`;
  * fields, one primary Save, and Delete up in the card's header where a Save
  * press cannot land on it.
  */
-function Editor({ r, saved, repos, busy, onChange, onSave, onDrop, onRun, onCancel }: {
-  r: Recipe; saved?: Recipe; repos: GitRepoRef[]; busy: boolean;
+function Editor({ r, saved, repos, busy, pinned, pinRoot, onChange, onSave, onDrop, onRun, onCancel }: {
+  r: Recipe; saved?: Recipe; repos: GitRepoRef[]; busy: boolean; pinned: boolean; pinRoot: string;
   onChange: (r: Recipe) => void; onSave: (r: Recipe) => void; onDrop: (r: Recipe) => void; onRun?: () => void; onCancel: () => void;
 }) {
   const uid = useId();
@@ -154,11 +178,12 @@ function Editor({ r, saved, repos, busy, onChange, onSave, onDrop, onRun, onCanc
    *  the server refuses saving the combination, so the editor says so up
    *  front rather than letting the save be the first to find out. */
   const cannotBoot = !!(r.params?.length) || !!r.confirm;
+  const pinsFull = (usePinMap()[pinRoot] ?? []).length >= MAX_COMMAND_PINS;
   return (
     <EditorPanel label="Command" title={r.name || "New recipe"}
-      chips={r.id ? undefined : [{ tone: "info", text: "Draft" }]}
+      chips={r.id ? (pinned ? [{ tone: "ok", text: "Pinned" }] : undefined) : [{ tone: "info", text: "Draft" }]}
       actions={r.id ? <>
-        {onRun && <Button onClick={onRun}>Run…</Button>}
+        {onRun && <Button onClick={onRun}><IconLabel icon={<PlayGlyph />}>Run now</IconLabel></Button>}
         <Button tone="danger" onClick={() => onDrop(r)}>Delete</Button>
       </> : undefined}>
           <SettingsForm label={r.id ? "Edit recipe" : "New recipe"} onSubmit={() => onSave(r)}>
@@ -191,24 +216,24 @@ function Editor({ r, saved, repos, busy, onChange, onSave, onDrop, onRun, onCanc
                 to a step whose first word is `claude`, and to nothing else. */}
             {startsClaude(r) && (
               <Field label="Permission mode" htmlFor={f("mode")} help="For a step that starts claude: how it asks before a tool runs.">
-                <LaunchModeSelect id={f("mode")} value={r.permissionMode} className={`w-full ${INPUT}`} style={INPUT_STYLE}
+                <LaunchModeSelect value={r.permissionMode}
                   onChange={(m) => set({ permissionMode: m })} />
               </Field>
             )}
 
             <Field label="Where it applies" htmlFor={f("scope")}>
-              <select id={f("scope")} value={r.scope} className={`w-56 ${INPUT}`} style={INPUT_STYLE}
-                onChange={(e) => set({ scope: e.target.value as Recipe["scope"], repo: e.target.value === "global" ? undefined : (r.repo || repos[0]?.root) })}>
-                <option value="global">Everywhere</option>
-                <option value="repo">One repository</option>
-              </select>
+              <div id={f("scope")}>
+                <SegControl<Recipe["scope"]> label="Where it applies" value={r.scope}
+                  options={[{ v: "global", label: "Everywhere" }, { v: "repo", label: "One repository" }]}
+                  onPick={(scope) => set({ scope, repo: scope === "global" ? undefined : (r.repo || repos[0]?.root) })} />
+              </div>
             </Field>
             {r.scope === "repo" && (
               <Field label="Repository" htmlFor={f("repo")}>
-                <select id={f("repo")} value={r.repo ?? ""} onChange={(e) => set({ repo: e.target.value })}
-                  className={FIELD} style={INPUT_STYLE}>
-                  {repos.map((x) => <option key={x.root} value={x.root}>{x.name || x.root}</option>)}
-                </select>
+                <div id={f("repo")}>
+                  <Select value={r.repo ?? ""} title="Repository" onChange={(v) => set({ repo: v })}
+                    options={repos.map((x) => ({ value: x.root, label: x.name || x.root }))} />
+                </div>
               </Field>
             )}
 
@@ -220,59 +245,47 @@ function Editor({ r, saved, repos, busy, onChange, onSave, onDrop, onRun, onCanc
                 alone rather than migrated away — an old recipe carrying it is
                 not wrong, it is just describing something that is now true of
                 all of them. */}
-            <label className="flex items-center gap-2 text-[12px]" style={{ color: "var(--text2)" }}
-              title={r.boot ? "A command that runs at start fires with nobody to ask" : undefined}>
-              <input type="checkbox" checked={!!r.confirm} onChange={(e) => set({ confirm: e.target.checked })} disabled={!!r.boot} />
-              Always ask first
-            </label>
+            <SwitchField label="Pinned" on={pinned} disabled={!r.id || (!pinned && (pinsFull))}
+              help={!r.id ? "Save it first, then pin it." : `Pinned commands sit in the command bar (${MAX_COMMAND_PINS} at most per repository).`}
+              onToggle={() => { togglePin(pinRoot, `${RECIPE}${r.id}`); }} />
+            <SwitchField label="Always ask first" on={!!r.confirm} disabled={!!r.boot}
+              help={r.boot ? "A command that runs at start fires with nobody to ask." : "Shows what will run and waits for you, every time."}
+              onToggle={() => set({ confirm: !r.confirm })} />
             {/* A boot recipe runs the moment the app opens, with nobody to fill
                 a box or click anything. The server refuses saving one that has
                 parameters, asks first, or reads as destructive — these two
-                checkboxes just keep the editor from leading somewhere the save
+                switches just keep the editor from leading somewhere the save
                 would refuse. */}
-            <label className="flex items-start gap-2 text-[12px]" style={{ color: cannotBoot ? "var(--text4)" : "var(--text2)" }}
-              title={cannotBoot ? "Remove the parameters or the ask-first to run it at start" : undefined}>
-              <input type="checkbox" className="mt-0.5" checked={!!r.boot} disabled={cannotBoot}
-                onChange={(e) => set(e.target.checked ? { boot: true, confirm: false } : { boot: false })} />
-              <span>Run when the app starts<span className="block agx-field-h">In the docked console, on every open.</span></span>
-            </label>
+            <SwitchField label="Run when the app starts" on={!!r.boot} disabled={cannotBoot}
+              help={cannotBoot ? "Remove the parameters or the ask-first to run it at start." : "In the docked console, on every open."}
+              onToggle={() => set(!r.boot ? { boot: true, confirm: false } : { boot: false })} />
 
             {/* Parameters. Kept next to the steps that use them, because the
                 only way to get a `{{key}}` right is to see both at once. */}
             <div className="flex flex-col gap-2">
               <span className="agx-field-l">Parameters</span>
-              {(r.params ?? []).map((p, i) => (
-                <div key={i} className="flex flex-col gap-3 rounded-lg p-3" style={{ background: "var(--surface-inset)" }}>
-                  <div className="flex items-baseline justify-between gap-3">
-                    <span className="text-[12px]" style={{ color: "var(--text2)" }}>Parameter {i + 1}</span>
-                    <button type="button" className="agx-textlink text-[12px]"
-                      onClick={() => set({ params: (r.params ?? []).filter((_, j) => j !== i) })}>Remove parameter {i + 1}</button>
-                  </div>
-                  <Field label="Name" htmlFor={f(`p${i}-key`)}>
-                    <input id={f(`p${i}-key`)} value={p.key} onChange={(e) => setParam(i, { key: e.target.value })}
-                      className={`t-mono ${FIELD}`} style={INPUT_STYLE} />
-                  </Field>
-                  <Field label="Type" htmlFor={f(`p${i}-type`)}>
-                    <select id={f(`p${i}-type`)} value={p.type} onChange={(e) => setParam(i, { type: e.target.value as RecipeParam["type"] })}
-                      className={`w-40 ${INPUT}`} style={INPUT_STYLE}>
-                      {PARAM_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-                    </select>
-                  </Field>
-                  {p.type === "choice" && (
-                    <Field label="Choices" htmlFor={f(`p${i}-opts`)} help="Separated by commas.">
-                      <input id={f(`p${i}-opts`)} value={(p.options ?? []).join(", ")}
+              {!!r.params?.length && (
+                <div className="agx-ptable" role="table" aria-label="Parameters">
+                  <div className="agx-ptable-h" role="row"><span>Name</span><span>Type</span><span>Choices</span><span>Flag</span><span /></div>
+                  {r.params.map((p, i) => (
+                    <div key={i} className="agx-ptable-r" role="row">
+                      <input aria-label={`Parameter ${i + 1} name`} value={p.key} onChange={(e) => setParam(i, { key: e.target.value })}
+                        className={`t-mono ${FIELD}`} style={INPUT_STYLE} />
+                      <Select value={p.type} title={`Parameter ${i + 1} type`} onChange={(v) => setParam(i, { type: v as RecipeParam["type"] })}
+                        options={PARAM_TYPES.map((t) => ({ value: t, label: t }))} />
+                      <input aria-label={`Parameter ${i + 1} choices, separated by commas`} disabled={p.type !== "choice"} placeholder={p.type === "choice" ? "one, two, three" : "—"}
+                        value={(p.options ?? []).join(", ")}
                         onChange={(e) => setParam(i, { options: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })}
-                        aria-describedby={helpIdFor(f(`p${i}-opts`))} placeholder="one, two, three" className={FIELD} style={INPUT_STYLE} />
-                    </Field>
-                  )}
-                  {p.type === "flag" && (
-                    <Field label="Flag" htmlFor={f(`p${i}-flag`)}>
-                      <input id={f(`p${i}-flag`)} value={p.value ?? ""} onChange={(e) => setParam(i, { value: e.target.value })}
-                        placeholder="--rebuild-fe" className={`t-mono ${FIELD}`} style={INPUT_STYLE} />
-                    </Field>
-                  )}
+                        className={FIELD} style={INPUT_STYLE} />
+                      <input aria-label={`Parameter ${i + 1} flag`} disabled={p.type !== "flag"} placeholder={p.type === "flag" ? "--rebuild-fe" : "—"}
+                        value={p.type === "flag" ? p.value ?? "" : ""} onChange={(e) => setParam(i, { value: e.target.value })}
+                        className={`t-mono ${FIELD}`} style={INPUT_STYLE} />
+                      <button type="button" className="agx-ptable-x" aria-label={`Remove parameter ${i + 1}`} title={`Remove parameter ${i + 1}`}
+                        onClick={() => set({ params: (r.params ?? []).filter((_, j) => j !== i) })}><CloseIcon size={ICON.xs} /></button>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              )}
               <div>
                 <Button onClick={() => set({ boot: false, params: [...(r.params ?? []), { key: "", label: "", type: "text" }] })}>
                   <IconLabel icon={<PlusIcon size={ICON.xs} />}>Add parameter</IconLabel>

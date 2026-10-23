@@ -4,22 +4,21 @@
  * one. One component for both editors so the first option always reads the
  * same: "Use the global setting (Bypass)".
  */
-import type { CSSProperties } from "react";
 import { LAUNCH_MODES, LAUNCH_MODE_BADGE, LAUNCH_MODE_LABEL, isLaunchMode, type LaunchMode } from "../../../shared/launchModes.ts";
 import { useLaunchPermissions } from "../lib/launchMode.ts";
-import { StatusBadge } from "./SettingsKit.tsx";
+import { FIELD_SELECT, StatusBadge } from "./SettingsKit.tsx";
+import { Select } from "./Select.tsx";
 
-export function LaunchModeSelect({ id, value, onChange, className, style }: {
-  id: string; value: LaunchMode | undefined; onChange: (m: LaunchMode | undefined) => void;
-  className: string; style: CSSProperties;
+export function LaunchModeSelect({ value, onChange, label = "Permission mode" }: {
+  value: LaunchMode | undefined; onChange: (m: LaunchMode | undefined) => void; label?: string;
 }) {
   const global = useLaunchPermissions()?.mode;
   return (
-    <select id={id} value={value ?? ""} className={className} style={style}
-      onChange={(e) => onChange(isLaunchMode(e.target.value) ? e.target.value : undefined)}>
-      <option value="">{global ? `Use the global setting (${LAUNCH_MODE_LABEL[global]})` : "Use the global setting"}</option>
-      {LAUNCH_MODES.map((m) => <option key={m} value={m}>{LAUNCH_MODE_LABEL[m]}</option>)}
-    </select>
+    <Select title={label} className={FIELD_SELECT} value={value ?? ""} onChange={(v) => onChange(isLaunchMode(v) ? v : undefined)}
+      options={[
+        { value: "", label: global ? `Use the global setting (${LAUNCH_MODE_LABEL[global]})` : "Use the global setting" },
+        ...LAUNCH_MODES.map((m) => ({ value: m, label: LAUNCH_MODE_LABEL[m] })),
+      ]} />
   );
 }
 

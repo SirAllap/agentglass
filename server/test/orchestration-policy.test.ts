@@ -209,7 +209,7 @@ describe("the owner's case, as a fixture with invented names", () => {
   const chain = [{ engine: "hermes", model: "" }, { engine: "opencode", model: "opencode/big-pickle" }];
   const owner = (): Policy => policy({
     rules: [{ id: "claude-orchestrates", name: "Claude only orchestrates", enabled: true, when: [{ kind: "always" }],
-      workers: { scout: chain, builder: chain, verifier: chain } }],
+      workers: { scout: chain, builder: chain, reviewer: chain, verifier: chain } }],
   });
 
   test("is a valid policy", () => {
@@ -238,7 +238,7 @@ describe("the owner's case, as a fixture with invented names", () => {
   });
   test("reads as one sentence", () => {
     const w = "Hermes, then OpenCode (opencode/big-pickle)";
-    expect(ruleSentence(owner().rules[0]!)).toBe(`When always: scout is ${w}; builder is ${w}; verifier is ${w}.`);
+    expect(ruleSentence(owner().rules[0]!)).toBe(`When always: scout is ${w}; builder is ${w}; reviewer is ${w}; verifier is ${w}.`);
   });
 });
 
@@ -289,5 +289,16 @@ describe("a rule link with no model", () => {
     const r = resolve(p, on("x"), allReady);
     expect(r.workers.builder.ok && r.workers.builder.choice.model).toBe("opus");
     expect(r.workers.scout.ok && r.workers.scout.choice).toEqual({ engine: "opencode", model: "" });
+  });
+});
+
+describe("a policy saved before the reviewer existed", () => {
+  test("is still read: the role it never knew reads as not asked, instead of the whole policy being ignored", async () => {
+    const { validateStored, defaultStored } = await import("../../shared/orchestration.ts");
+    const old = JSON.parse(JSON.stringify(defaultStored())) as { ask: { workers: Record<string, boolean> } };
+    delete old.ask.workers.reviewer;
+    const v = validateStored(old);
+    expect(v.ok).toBe(true);
+    if (v.ok) expect(v.value.ask.workers).toEqual({ scout: false, builder: false, reviewer: false, verifier: false });
   });
 });

@@ -25,7 +25,7 @@ import { pageScore, absentFor, rowId, type SettingsPage } from "../lib/settingsI
 import { motion, AnimatePresence } from "motion/react";
 import { Portal, PortalFloor } from "./Portal.tsx";
 import { LAYER } from "../lib/layers.ts";
-import { api } from "../lib/api.ts";
+import { api, type PrivacyFacts } from "../lib/api.ts";
 import { savePaneField as paneFieldSave } from "../lib/paneEngineSave.ts";
 import { browserPlaces, CAN_IMPORT_COOKIES, cookieSources, importCookies, forgetCookies, type CookieSource, type CookieImportReply } from "../lib/desktop.ts";
 import { loadProfiles } from "../lib/browserProfiles.ts";
@@ -41,7 +41,7 @@ import { __forgetClickupSetup, clickupSetup } from "../lib/clickupSetup.ts";
 import { forgetCards } from "../lib/prCardStore.ts";
 import { checkedLine } from "../lib/providerFreshness.ts";
 import { fmtAgo, minutesAgo } from "../lib/format.ts";
-import type { ActionRecord, GateRecord, UnderstudyClassRow } from "../../../shared/types.ts";
+import type { ActionRecord, GateRecord, UnderstudyClassRow, UnderstudyFrame } from "../../../shared/types.ts";
 import { mergeActivity, gateLine, actorLabel, activityDays, filterActivity, type ActivityFilter, type ActivityRow, type ActivityRun } from "../lib/activity.ts";
 import { useStableFlow } from "./useStableFlow.ts";
 import { ingestUpdate, isUpdateAvailable } from "../lib/updateStore.ts";
@@ -50,6 +50,7 @@ import { installedNotes, type NotesTarget } from "../lib/whatsNew.ts";
 import { autostartEnabled, setAutostart, isFullscreen, toggleFullscreen, IS_DESKTOP, IS_MAC_DESKTOP, HAS_BROWSER } from "../lib/desktop.ts";
 import { overlayOpen } from "../lib/overlays.ts";
 import { Select } from "./Select.tsx";
+import { GateCard, NewChatsCard, WorkerRolesCard } from "./agents/AgentsCards.tsx";
 import { WORKER_ROLES } from "../../../shared/workerRoles.ts";
 import { ALARM_VOICES, NOTIFY_VOICES, findVoice, playVoice, type Voice } from "../lib/sounds.ts";
 import { alarmVoiceId, setAlarmVoice } from "../lib/alarm.ts";
@@ -69,9 +70,9 @@ import { SettingsNav } from "./SettingsNav.tsx";
 import { SettingsSearchPanel } from "./SettingsSearchPanel.tsx";
 import { SettingsPageHeader } from "./SettingsPageHeader.tsx";
 import { SettingsToc } from "./SettingsToc.tsx";
-import { NO_FACTS, NO_MARK, groupByName, groupSearch, headerChips, hueVar, connectionsNeeding, navMarks, withNeeds, withProblems, type MatchIn, type NavFacts, type PageNeed, type PageProblem } from "../lib/settingsNav.ts";
+import { NO_FACTS, NO_MARK, groupByName, groupSearch, headerChips, hueVar, connectionsNeeding, navMarks, withNeeds, withProblems, type HeaderChip, type MatchIn, type NavFacts, type PageNeed, type PageProblem } from "../lib/settingsNav.ts";
 import { applyProblem, SAVED_MS } from "../lib/settingsStates.ts";
-import { PageState, useReportProblem, useReportSaving, useSavePhase, type PageStateSink } from "./SettingsPageState.tsx";
+import { PageState, useReportHead, useReportProblem, useReportSaving, useSavePhase, type PageHead, type PageStateSink } from "./SettingsPageState.tsx";
 import { RunningPanes } from "./RunningPanes.tsx";
 import { THEMES } from "../lib/highlight.ts";
 import { BudgetsPane } from "./BudgetsPane.tsx";
@@ -97,6 +98,9 @@ import { fmtScale, DEFAULT_SCALE, SCALES } from "../lib/uiScale.ts";
 import { currentAccent, setAccentPref } from "../lib/accent.ts";
 import { applyTheme } from "../lib/themes.ts";
 import { setting, subscribeSettings } from "../lib/settingsRegistry.ts";
+import { autoCheckUpdates } from "../lib/updateCheckPref.ts";
+import { LICENCES } from "../lib/licences.gen.ts";
+import { humanBytes } from "../lib/paletteModel.ts";
 import { MOD_KEY } from "../lib/format.ts";
 import { externalUrl } from "../lib/externalUrl.ts";
 import type { UpdateStatus, ReleaseNotes, HookSetupStatus, BrowserUseStatus, LogDigest } from "../../../shared/types.ts";
@@ -114,7 +118,8 @@ import { clock24, setClock24 } from "../lib/clockPref.ts";
 import { setSplashOn, splashOn } from "../lib/splashPref.ts";
 import { usageRefreshOn, setUsageRefreshOn } from "../lib/usageRefreshPref.ts";
 import { paceConfig, setPaceConfig, subscribePaceConfig } from "../lib/paceConfig.ts";
-import { hourLabel, type PaceConfig } from "../../../shared/pace.ts";
+import { PACE_MIN_MINUTES, type PaceConfig } from "../../../shared/pace.ts";
+import { providerUsage, subscribeProviderUsage } from "../lib/usageStore.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { bindings, resetBindings, subscribeBindings, isCustomised, LABELS, DEFAULTS, type ActionId,
          chordFor, hasCustomChord, rebindChord, clearChord, resetChords, chordsCustomised, chordFromEvent, chordLabel,
@@ -128,8 +133,10 @@ import { AppearancePane } from "./ThemePicker.tsx";
 import { ShellConsole } from "./ShellConsole.tsx";
 import { CloseButton } from "./CloseButton.tsx";
 import "./settingsSplit.css";
+import "./orchestration/orchestration.css";
+import "./settingsGroupB.css";
 import { HIT, ICON } from "../lib/iconSize.ts";
-import { AgentIcon, CheckboxIcon, ClockIcon, CrossIcon, EditIcon, LinkIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { AgentIcon, CheckboxIcon, ClockIcon, CrossIcon, EditIcon, IconLabel, LinkIcon, PlusIcon, RefreshIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { ciOnlyApproved } from "../lib/ciNotifyPref.ts";
 import { reviewGateOn, setReviewGate } from "../lib/reviewGatePref.ts";
 import { AskedAlertLog } from "./AskedAlertLog.tsx";
@@ -146,7 +153,7 @@ import { MuteGlyph } from "./TopBarNotes.tsx";
 import { Button, RefreshButton, INPUT, INPUT_STYLE, EDGE, LINE, Segmented } from "./workspace/Chrome.tsx";
 import { LAUNCH_MODES, LAUNCH_MODE_LABEL, isLaunchMode, parseDenyRules, type LaunchMode } from "../../../shared/launchModes.ts";
 import { setLaunchPermissions } from "../lib/launchMode.ts";
-import { SELECT_BOX, SegControl, EmptyState, Field, LinkButton, ProblemNote, SaveBar, SaveChip, SettingsCard, SettingsForm, StatusBadge, helpIdFor, type StatusTone } from "./SettingsKit.tsx";
+import { CheckRow, Disclosure, DownloadButton, SELECT_BOX, SegControl, EmptyState, Field, LinkButton, ProblemNote, SaveBar, SaveChip, SettingsCard, SettingsForm, StatusBadge, helpIdFor, type StatusTone } from "./SettingsKit.tsx";
 import { PreviewCard, WithPreview } from "./settings/PreviewCard.tsx";
 import { WindowPreview, SidebarPreview, DiffPreview, LanternPreview, BrowserPreview, LiveTabs, type LiveView } from "./settings/previews/index.ts";
 import { railItems } from "./settings/previews/MiniApp.tsx";
@@ -220,21 +227,26 @@ interface SetupStep {
   action?: { label: string; onClick: () => void; busy?: boolean; tone?: "primary" | "danger" };
 }
 
+/** A path with the home folder written as ~, which is also how it reads in the docs. */
+const tilde = (p: string) => p.replace(/^(\/home\/[^/]+|\/Users\/[^/]+|[A-Za-z]:\\Users\\[^\\]+)/, "~");
+
 /**
  * A checklist as one card: a row per step, its verdict as a badge, the button
  * that fixes that step beside the badge, and "N of M done" at the head. Rows
  * that are not steps (a notice, a way back) go in as children.
  */
-function SetupCard({ title, steps, note, error, actions, children, icon }: {
-  title: string; steps: SetupStep[]; note?: string | null; error?: string | null;
+function SetupCard({ title, desc, steps, note, error, actions, children, icon, chip }: {
+  title: string; desc?: React.ReactNode; steps: SetupStep[]; note?: string | null; error?: string | null;
   actions?: React.ReactNode; children?: React.ReactNode; icon?: React.ReactNode;
+  /** The card's verdict in its own words, in place of "N of M done" (the Agents page says "Wired"). */
+  chip?: React.ReactNode;
 }) {
   const known = steps.filter((s) => s.done !== null);
   const done = known.filter((s) => s.done).length;
   const all = known.length > 0 && done === known.length;
   return (
-    <SettingsCard title={title} actions={actions} icon={icon}
-      status={<StatusBadge tone={all ? "ok" : "off"}>{done} of {known.length} done</StatusBadge>}>
+    <SettingsCard title={title} desc={desc} actions={actions} icon={icon}
+      status={chip ?? <StatusBadge tone={all ? "ok" : "off"}>{done} of {known.length} done</StatusBadge>}>
       {steps.map((st) => (
         <SettingRow key={st.title} label={st.title} hint={st.detail} detail={st.more}
           status={st.done === true
@@ -309,7 +321,7 @@ function SourceRow({ id, i, n, onChanged, state }: {
 /** A row of mutually exclusive choices, for a preference with three answers
  *  rather than two. A toggle would have forced "show me their message" and
  *  "just tell me someone wrote" to be the same decision. */
-function Choice<T extends string>({ label, hint, detail, value, options, onPick, disabled, disabledHint, modified, settingId, wide }: {
+function Choice<T extends string>({ label, hint, detail, value, options, onPick, disabled, disabledHint, modified, settingId, wide, select }: {
   /** Longer words behind a "Details" link; the hint stays one line. */
   detail?: RowDetail;
   /** See SettingRow. */
@@ -318,12 +330,15 @@ function Choice<T extends string>({ label, hint, detail, value, options, onPick,
   onPick: (v: T) => void; disabled?: boolean; disabledHint?: string; modified?: boolean;
   /** Under the words in a narrow card even when the labels are short: a long hint beside two options squeezes them into a stack. */
   wide?: boolean;
+  /** A kit select instead of a segmented set: for a ladder too long to read as buttons (six wake floors). */
+  select?: boolean;
 }) {
   return (
     <SettingRow label={label} hint={disabled ? disabledHint ?? hint : hint} detail={detail} disabled={disabled} modified={modified} settingId={settingId}
       wide={wide ?? choiceIsWide(options.map((o) => o.label))}
-      control={
-        <SegControl label={label} value={value} options={options} onPick={onPick} disabled={disabled} />
+      control={select
+        ? <Select value={value} onChange={(v) => onPick(v as T)} disabled={disabled} title={label} options={options.map((o) => ({ value: o.v, label: o.label }))} />
+        : <SegControl label={label} value={value} options={options} onPick={onPick} disabled={disabled} />
       } />
   );
 }
@@ -486,7 +501,7 @@ const ALWAYS_RESET: ReadonlySet<string> = new Set(["prefs", "appearance", "rail"
 /** The page header's reset button, where it is not "Reset page". */
 const RESET_WORD: Record<string, string> = { rail: "Reset rail" };
 /** Pages short enough to read whole: they have no "on this page" index. */
-const NO_TOC: ReadonlySet<string> = new Set(["prefs", "appearance", "rail"]);
+const NO_TOC: ReadonlySet<string> = new Set(["prefs", "appearance", "rail", "connections"]);
 
 const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: string; status?: boolean; icon: (p: { size?: number }) => React.ReactElement }[] = [
   // "sound" removed: it named the Notifications rows, not anything on this
@@ -519,8 +534,8 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
   // setting is filed under the thing it configures.
   ...(HAS_BROWSER ? [{ id: "browser" as const, label: "Browser", group: "Workspace" as const, kw: "browser web page zoom login cookies import chrome firefox zen profile home search engine", what: "Where the built-in browser starts, and how to bring in the logins you already have.", icon: BrowserIcon }] : []),
   { id: "tasks", label: "Tasks", group: "Workspace", kw: "tasks sources github issues local taskwarrior clickup hide show providers view opens on", what: "Where the Tasks view starts, which trackers feed it, and how a branch finds its card.", icon: ChecklistIcon },
-  { id: "hooks", label: "Agents", group: "Agents", kw: "agents hooks claude code install setup worker roles scout builder verifier lock model opencode qwen how new chats run warm panes browser agent skill drive", what: "Wire Claude Code into this app, how new chats run, whether an agent can drive the browser, what else is installed, and which CLI each worker role runs on.", icon: PlugIcon },
-  { id: "engines", label: "Agent engines", group: "Agents", kw: "engine engines provider hermes opencode codex gemini antigravity claude model version minimum signed in sign-in login orchestrator worker role ready test recheck installed update reporting connect events", what: "Which agent CLIs this computer has, whether each is recent enough and signed in, and what each can do here.", icon: ChipIcon },
+  { id: "hooks", label: "Agents", group: "Agents", kw: "agents hooks claude code install setup worker roles scout builder reviewer verifier lock model gate who answers nobody answers starts in permission mode deny rules opencode qwen how new chats run warm panes browser agent skill drive", what: "Wire Claude Code into the app, decide how new chats run, and which CLI each worker role uses.", icon: PlugIcon },
+  { id: "engines", label: "Agent engines", group: "Agents", kw: "engine engines provider hermes opencode codex gemini antigravity claude model version minimum signed in sign-in login orchestrator worker role ready test recheck installed update reporting connect events", what: "Every agent CLI on this machine, what it can do inside agentglass, and what is left to wire.", icon: ChipIcon },
   { id: "orchestration", label: "Orchestration", group: "Agents", kw: "orchestration orchestrator main agent chair policy rule rules worker workers scout builder verifier engine model fallback chain ask when it runs usage weekly 5h plan hours budget ceiling envelope network commit write limits retries minutes per turn project override", what: "Which engine runs a project's main agent and does its work, the rules that change that for a while, and what a worker may do.", icon: FlowIcon },
   { id: "lantern", label: "Lantern", group: "Agents", kw: "lantern reminder status what doing needs you ask sessions working on interval orchestrator seat wake floor chair post", what: "What the Lantern may ask of a session, and how often it looks.", icon: LanternIcon },
   /* Filed beside Agents rather than under System, and the two readings are
@@ -539,7 +554,7 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
      someone else's code holding a scoped credential to this server — install,
      review what it declares, grant it, take it back. It is not an agent and it
      renders nothing of its own; see the note at the top of server/src/plugins.ts. */
-  { id: "plugins", label: "Plugins", group: "Library", kw: "plugins install extension manifest scope review approve enable disable remove entrypoint publisher source running pid re-consent reconsent", what: "Install, review and switch on someone else's code — and see whether it is actually running.", icon: PuzzleIcon },
+  { id: "plugins", label: "Plugins", group: "Library", kw: "plugins install extension manifest scope review approve enable disable remove entrypoint publisher source running pid re-consent reconsent", what: "Add-ons that read what the app knows. Nothing runs until you have read what it declares and switched it on.", icon: PuzzleIcon },
   /*
    * One page for everything outside this app.
    *
@@ -810,67 +825,101 @@ function RailPane() {
  */
 /** Panes whose content is a grid or a map of its own: one column of the page, at this width. */
 const WIDE_PANES = new Map<string, string>([
-  ["plugins", "1180px"],
-  /* The workflow map is a column of step cards beside a column of statuses, with the lines running between them; this is the width that keeps a card's header on two lines. */
-  ["clickup", "1100px"],
+  /* The workflow map is a column of step cards beside a column of statuses, with the lines running between them; 1100px is the width that keeps a card's header on two lines. The cap is higher so a wide window can put the other cards in two columns (.wfm in settingsGroupB.css), the map keeping the whole row. */
+  ["clickup", "1900px"],
   /* The same map, so the same width: narrower, the statuses fall under the steps and no line is drawn to them. */
-  ["jira", "1100px"],
+  ["jira", "1900px"],
 ]);
 
 const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 /** The hours a plan's weekly budget is spread over. See shared/pace.ts. */
+const DAY_INITIALS = ["M", "T", "W", "T", "F", "S", "S"];
+const HOUR_OPTS = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, k) => from + k).map((h) => ({ value: String(h), label: h >= 24 ? "24:00" : `${String(h).padStart(2, "0")}:00` }));
+
+/** The week as the budget sees it: one bar per day, as tall as that day's share of the week.
+ *  Today is outlined. A day that earns nothing is a flat line. */
+function WeekBars({ cfg }: { cfg: PaceConfig }) {
+  const hours = (i: number) => (cfg.spread === "all" ? 24 : cfg.workDays[i] ? Math.max(0, cfg.workEnd - cfg.workStart) : 0);
+  const week = [0, 1, 2, 3, 4, 5, 6].map(hours);
+  // All ticked-off is "every hour counts" (see PaceLines), so the bars say the same.
+  const none = week.every((h) => h === 0);
+  const hs = none ? week.map(() => 24) : week;
+  const top = Math.max(...hs, 1);
+  const today = (new Date().getDay() + 6) % 7;
+  return (
+    <div className="agx-weekbars" role="img" aria-label={`Share of the week's budget by day: ${hs.map((h, i) => `${DAY_NAMES[i]} ${Math.round((h / (hs.reduce((a, b) => a + b, 0) || 1)) * 100)}%`).join(", ")}`}>
+      {hs.map((h, i) => (
+        <span key={i} className="agx-weekbar" data-today={i === today ? "" : undefined} data-off={h === 0 ? "" : undefined}>
+          <i style={{ height: h === 0 ? 3 : Math.max(8, Math.round((h / top) * 52)) }} />
+          <b>{DAY_INITIALS[i]}</b>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function PacePane() {
   const cfg = useSyncExternalStore(subscribePaceConfig, paceConfig, paceConfig);
   const working = cfg.spread === "working";
+  const week = useWeeklyUsage();
+  useReportHead("budgets", week ? { chips: [{ tone: week.used >= cfg.alertAt ? "warn" : "ok", text: `Weekly ${Math.round(week.used)} %` }] } : null);
   return (
     <SettingsCard title="Plan pace" icon={<BudgetIcon size={ICON.sm} />}
-      desc="Spreads the week's budget over the days you work, so “runs out Thursday” means something.">
+      desc="Spreads the week's budget over the days you work, so “runs out Thursday” means something."
+      status={week ? <StatusBadge tone={week.used >= cfg.alertAt ? "warn" : "ok"}>{Math.round(week.used)} % of the week</StatusBadge> : undefined}>
+      <div className="agx-weekbars-wrap"><WeekBars cfg={cfg} /></div>
       <Choice<PaceConfig["spread"]>
         label="Spread the week's budget over"
-        hint="Working hours earn the budget, so the pace marker holds still overnight and at weekends. Every hour is a straight line across the week."
+        hint="Working hours earn the budget; every hour is a straight line."
+        detail={{ summary: "Details", body: <>Working hours earn the budget, so the pace marker holds still overnight and at weekends. Every hour is a straight line across the week.</> }}
         value={cfg.spread}
         onPick={(spread) => setPaceConfig({ spread })}
         options={[{ v: "working", label: "Working hours" }, { v: "all", label: "Every hour" }]} />
       <SettingRow label="Working days" disabled={!working}
         hint={working && !cfg.workDays.some(Boolean) ? "None ticked: every hour counts, as if Every hour were chosen." : "Days that earn budget."}
         control={
-          <span className="flex flex-wrap items-center gap-1 justify-self-end max-w-full">
+          <span className="agx-daychips" role="group" aria-label="Working days">
             {DAY_NAMES.map((d, i) => (
-              <button key={d} disabled={!working} aria-pressed={cfg.workDays[i]}
+              <button key={d} type="button" disabled={!working} aria-pressed={cfg.workDays[i]} aria-label={d} title={d}
                 onClick={() => setPaceConfig({ workDays: cfg.workDays.map((x, j) => (j === i ? !x : x)) })}
-                className="text-[11px] px-1.5 py-1 rounded-md disabled:cursor-not-allowed"
-                style={cfg.workDays[i]
-                  ? { background: "var(--primary)", color: "var(--on-primary)" }
-                  : { color: "var(--text3)" }}>
-                {d}
+                className="agx-daychip disabled:cursor-not-allowed">
+                {DAY_INITIALS[i]}
               </button>
             ))}
           </span>
         } />
-      <Stepper label="Work starts" hint="Hour the day begins earning budget"
-        value={hourLabel(cfg.workStart)} canDec={working && cfg.workStart > 0} canInc={working && cfg.workStart < cfg.workEnd - 1}
-        onDec={() => setPaceConfig({ workStart: cfg.workStart - 1 })} onInc={() => setPaceConfig({ workStart: cfg.workStart + 1 })} />
-      <Stepper label="Work ends" hint="Hour it stops"
-        value={hourLabel(cfg.workEnd)} canDec={working && cfg.workEnd > cfg.workStart + 1} canInc={working && cfg.workEnd < 24}
-        onDec={() => setPaceConfig({ workEnd: cfg.workEnd - 1 })} onInc={() => setPaceConfig({ workEnd: cfg.workEnd + 1 })} />
+      <SettingRow label="Work starts" hint="Hour the day begins earning budget." disabled={!working}
+        control={<Select value={String(cfg.workStart)} disabled={!working} title="Work starts" options={HOUR_OPTS(0, cfg.workEnd - 1)} onChange={(v) => setPaceConfig({ workStart: Number(v) })} />} />
+      <SettingRow label="Work ends" hint="Hour it stops." disabled={!working}
+        control={<Select value={String(cfg.workEnd)} disabled={!working} title="Work ends" options={HOUR_OPTS(cfg.workStart + 1, 24)} onChange={(v) => setPaceConfig({ workEnd: Number(v) })} />} />
       <Toggle on={cfg.rollover} onClick={() => setPaceConfig({ rollover: !cfg.rollover })}
         label="Roll unused share forward"
-        hint="Room left over from earlier today may be spent later, up to one extra day's share. Off, a day's share is a hard cap." />
-      <Choice<"1" | "3" | "6">
+        hint="A quiet Monday leaves more for Tuesday."
+        detail={{ summary: "Details", body: <>Room left over from earlier today may be spent later, up to one extra day's share. Off, a day's share is a hard cap.</> }} />
+      <Choice<"1" | "3" | "6"> select wide={false}
         label="Recent burn looks back"
-        hint="How far back the runs-out projection measures your speed"
+        hint="How far back the runs-out projection measures your speed."
         value={String(cfg.burnWindowHours) as "1" | "3" | "6"}
         onPick={(v) => setPaceConfig({ burnWindowHours: Number(v) })}
-        options={[{ v: "1", label: "1h" }, { v: "3", label: "3h" }, { v: "6", label: "6h" }]} />
-      <Choice<"80" | "90" | "95">
+        options={[{ v: "1", label: "1 hour" }, { v: "3", label: "3 hours" }, { v: "6", label: "6 hours" }]} />
+      <Choice<"80" | "90" | "95"> select wide={false}
         label="Alert when a weekly window reaches"
-        hint="One notification per window, and only while Usage is on under Notifications (off by default)"
+        hint="One notification per window."
+        detail={{ summary: "Details", body: <>Only while Usage is on under Notifications (off by default).</> }}
         value={String(cfg.alertAt) as "80" | "90" | "95"}
         onPick={(v) => setPaceConfig({ alertAt: Number(v) })}
-        options={[{ v: "80", label: "80%" }, { v: "90", label: "90%" }, { v: "95", label: "95%" }]} />
+        options={[{ v: "80", label: "80 %" }, { v: "90", label: "90 %" }, { v: "95", label: "95 %" }]} />
     </SettingsCard>
   );
+}
+
+/** The busiest long window of the plan, as a percent: what the page header says ("Weekly 82 %"). */
+function useWeeklyUsage(): { used: number } | null {
+  const rows = useSyncExternalStore(subscribeProviderUsage, providerUsage, providerUsage);
+  let used = -1;
+  for (const u of rows ?? []) if (u.available) for (const w of u.windows) if (w.minutes >= PACE_MIN_MINUTES && w.usedPercent > used) used = w.usedPercent;
+  return used < 0 ? null : { used };
 }
 
 /**
@@ -1030,7 +1079,8 @@ function ActivityPane({ open }: { open: boolean }) {
           a list of events, on the same ground and the same rhythm as them. */}
       <SettingsCard title="What this app has done">
         <SettingRow label="Newest first, kept indefinitely"
-          hint="These are the changes you made, not telemetry. Held tool calls appear here whoever resolved them, including the ones the timeout decided while nobody was looking."
+          hint="The changes you made, not telemetry."
+          detail={{ summary: "What is listed", body: <>Held tool calls appear here whoever resolved them, including the ones the timeout decided while nobody was looking.</> }}
           control={<Segmented label="Show" value={filter} onChange={setFilter}
             options={[{ id: "all", label: "All" }, { id: "orchestration", label: "Orchestration", title: "Only what an orchestrator or the policy did" }]} />} />
       </SettingsCard>
@@ -1204,9 +1254,37 @@ function verb(action: string): string {
  * because that is where the portrait art was built. NOTICE.md's pointer moved
  * with it.
  */
+/** The score, by kind of decision: how often the clone would have answered as the person did. Only decisions the
+ *  person typed or clicked are scored (see UnderstudyClassRow.n), and a kind with none is said once, not drawn. */
+function ScoreCard({ frame }: { frame: UnderstudyFrame | null }) {
+  const scored = (frame?.classes ?? []).filter((c) => c.n > 0).sort((x, y) => y.n - x.n);
+  const idle = (frame?.classes.length ?? 0) - scored.length;
+  const total = scored.reduce((n, c) => n + c.n, 0);
+  const tone = (raw: number) => (raw >= 0.85 ? "var(--success)" : raw >= 0.5 ? "var(--warning)" : "var(--error)");
+  return (
+    <SettingsCard title="The score" icon={<BudgetIcon size={ICON.sm} />}
+      desc="How often the clone would have answered like you, by kind of decision."
+      status={frame?.agreement != null ? <StatusBadge tone="info">{Math.round(frame.agreement)} % agreed</StatusBadge> : <StatusBadge tone="off">Nothing scored yet</StatusBadge>}>
+      {scored.map((c) => (
+        <SettingRow key={c.id} agentExempt label={c.label} hint={`${c.n} decision${c.n === 1 ? "" : "s"}`}
+          control={
+            <span className="agx-score" role="img" aria-label={`${Math.round(c.raw * 100)} % of ${c.n}`}>
+              <span className="agx-btable-track" style={{ flexBasis: 150 }}><span style={{ width: `${Math.round(c.raw * 100)}%`, background: tone(c.raw) }} /></span>
+              <b className="tabular-nums">{Math.round(c.raw * 100)} %</b>
+            </span>
+          } />
+      ))}
+      <SettingRow agentExempt label={scored.length ? "Decisions recorded" : "Nothing scored yet"}
+        hint={scored.length ? `${idle} other kind${idle === 1 ? " has" : "s have"} no decision yet.` : "Only a decision you typed or clicked is scored: an agent tolerating something is not you agreeing with it."}
+        control={scored.length ? <span className="tabular-nums text-[15px] font-semibold">{total.toLocaleString()}</span> : undefined} />
+    </SettingsCard>
+  );
+}
+
 function UnderstudyPane({ open, onLeave }: { open: boolean; onLeave: () => void }) {
   const frame = useUnderstudy();
   const [err, setErr] = useState<string | null>(null);
+  const [lookOpen, setLookOpen] = useState(false);
 
   // The switch has to show the server's answer, not this dialog's guess: it is
   // refused outright when the server has no auth token (there would be no
@@ -1215,6 +1293,7 @@ function UnderstudyPane({ open, onLeave }: { open: boolean; onLeave: () => void 
   useEffect(() => { if (open) void refreshUnderstudy(); }, [open]);
 
   const on = !!frame?.enabled;
+  useReportHead("understudy", frame ? { chips: [frame.halted ? { tone: "warn", text: "Halted" } : on ? { tone: "ok", text: "On" } : { tone: "off", text: "Off · score kept" }] } : null);
   return (
     <>
       {/* The switch and what it keeps are one card: the second is what the
@@ -1226,7 +1305,8 @@ function UnderstudyPane({ open, onLeave }: { open: boolean; onLeave: () => void 
           label="Let the clone watch"
           hint={frame?.halted
             ? "Halted — it is enabled and stopped. Switching it on again is what lowers the fence; there is no timer."
-            : "Separate from the knowledge below, and off is a reasonable answer: this writes down what a stand-in would have done and scores it against what you did. Reading the bank does not depend on it — the orchestrator remembers you either way."}
+            : "Off: nothing new is recorded; the score below is kept."}
+          detail={{ summary: "What it records", body: <>Separate from the knowledge below, and off is a reasonable answer: this writes down what a stand-in would have done and scores it against what you did. Reading the bank does not depend on it — the orchestrator remembers you either way.</> }}
           on={on}
           onClick={() => {
             void setUnderstudyEnabled(!on).then((r) => {
@@ -1235,17 +1315,25 @@ function UnderstudyPane({ open, onLeave }: { open: boolean; onLeave: () => void 
             });
           }} />
         {err && <div role="alert" className="agx-settings-x pt-2 pb-3 text-[12px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
-        <Row label={`Sealed situations — ${RETENTION.snapshotDays} days`}
-          hint="The material it read, kept only long enough to check a prediction against it. Swept on a fixed window of its own, deliberately not on the events retention you set: turning that off must not silently turn this off too." />
-        <Row label={`The fact of a write — ${RETENTION.stubDays} days`}
-          hint="Route, method and how it answered. Never the request body — there is no column for one." />
-        <Row label="The score — kept"
-          hint="Decisions and refusals do not expire. They are the score, and a score with holes in it is not a score." />
+        <SettingRow agentExempt label="What it keeps" hint="Only the decision and its context, never the code."
+          detail={{ summary: "What each part keeps, and for how long", body: <>
+            <b style={{ fontWeight: 600, color: "var(--text)" }}>Sealed situations, {RETENTION.snapshotDays} days.</b> The material it read, kept only long enough to check a prediction against it. Swept on a fixed window of its own, deliberately not on the events retention you set: turning that off must not silently turn this off too.{" "}
+            <b style={{ fontWeight: 600, color: "var(--text)" }}>The fact of a write, {RETENTION.stubDays} days.</b> Route, method and how it answered. Never the request body: there is no column for one.{" "}
+            <b style={{ fontWeight: 600, color: "var(--text)" }}>The score, kept.</b> Decisions and refusals do not expire. They are the score, and a score with holes in it is not a score.
+          </> }}
+          status={<StatusBadge tone="off">{RETENTION.snapshotDays} days</StatusBadge>} />
       </SettingsCard>
+      <ScoreCard frame={frame} />
       {/* What it learns from lives on this page, not behind a tab in a
           scoreboard: it decides what the orchestrator knows about you. */}
       <Teach active={open} />
-      <UnderstudyLook classes={frame?.classes ?? []} />
+      {/* The look editor is nine screens of pickers: closed until asked for, and drawn OUTSIDE a card when open, because a
+          card clips its corners with overflow hidden and the portrait could no longer stick (see UnderstudyLook). */}
+      <SettingsCard title="How it looks" icon={<UnderstudyIcon size={ICON.sm} />} desc="The face the clone wears, here and in its own view.">
+        <SettingRow agentExempt label="Customise the face" hint="Start from one of the faces, then change what is not you."
+          actions={<Button aria-expanded={lookOpen} onClick={() => setLookOpen((v) => !v)}>{lookOpen ? "Hide the look editor" : "Show the look editor"}</Button>} />
+      </SettingsCard>
+      {lookOpen && <UnderstudyLook classes={frame?.classes ?? []} />}
     </>
   );
 }
@@ -1328,8 +1416,13 @@ function LogDigestSection({ d }: { d: LogDigest | "failed" | null }) {
   const [open, setOpen] = useState(false);
   const ago = (t: number) => minutesAgo(t);
   const note = (text: string) => <SettingRow label={text} />;
+  // What the card says before it is opened: the worst thing in the last day, as a count of log lines.
+  const counts = d && d !== "failed"
+    ? { err: d.crashLoops.reduce((n, l) => n + l.count, 0) + d.groups.filter((g) => g.level === "error").reduce((n, g) => n + g.count, 0), warn: d.groups.filter((g) => g.level === "warn").reduce((n, g) => n + g.count, 0) }
+    : { err: 0, warn: 0 };
   return (
-    <SettingsCard title="Server log" icon={<ChecklistIcon />} desc={desc} fold={{ open, onToggle: setOpen }}>
+    <SettingsCard title="Log digest" icon={<ChecklistIcon />} desc={desc} fold={{ open, onToggle: setOpen }}
+      status={d && d !== "failed" ? (d.total === 0 ? <StatusBadge tone="ok">Quiet</StatusBadge> : <StatusBadge tone={counts.err ? "err" : "warn"}>{counts.err ? `${counts.err} error${counts.err === 1 ? "" : "s"}` : `${counts.warn} warning${counts.warn === 1 ? "" : "s"}`}</StatusBadge>) : undefined}>
       {d === "failed" ? note("Could not read the log digest.")
         : !d ? note("Reading…")
         : (
@@ -1366,6 +1459,9 @@ function AboutPane({ open }: { open: boolean }) {
   // reopening the same release is not a round trip that reaches github twice.
   const [want, setWant] = useState<NotesTarget | null>(null);
   const [notes, setNotes] = useState<ReleaseNotes | null>(null);
+  const [checkedAt, setCheckedAt] = useState<number | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [auto, setAuto] = useState(autoCheckUpdates);
 
   useEffect(() => {
     if (!want) return;
@@ -1385,7 +1481,7 @@ function AboutPane({ open }: { open: boolean }) {
     // the pane refreshes what the background check knows rather than keeping a
     // second, private answer.
     api.updateStatus()
-      .then((r) => { ingestUpdate(r); if (live) { setSt(r); setStErr(null); } })
+      .then((r) => { ingestUpdate(r); if (live) { setSt(r); setStErr(null); setCheckedAt(Date.now()); } })
       .catch((e) => { if (live) { setSt(null); setStErr(String(e?.message || e) || "the server did not answer"); } });
     return () => { live = false; };
   }, [open]);
@@ -1398,17 +1494,28 @@ function AboutPane({ open }: { open: boolean }) {
     setStarted(true);
   };
 
+  /* The button that asks the release feed right now, whatever the timer does. */
+  const recheck = async () => {
+    setChecking(true);
+    try { const r = await api.updateStatus(); ingestUpdate(r); setSt(r); setStErr(null); setCheckedAt(Date.now()); }
+    catch (e) { setStErr(String((e as Error)?.message || e) || "the server did not answer"); }
+    setChecking(false);
+  };
+  /* The one thing to do with an update, where the page's one action goes. */
+  const canInstall = !!st && !started && !st.blocked && st.behind !== 0;
+  useReportHead("about", canInstall && st ? { action: { label: `Install ${st.branch}`, plain: true } } : null, () => void run());
+
   if (stErr) return (
     <SettingsCard title="This build" icon={<InfoIcon />}
       desc="Which version is running, and whether a newer one is out.">
-      <SettingRow label="Could not read this build's version"
+      <SettingRow agentExempt label="Could not read this build's version"
         status={<StatusBadge tone="err">Unavailable</StatusBadge>}
         hint={<span className="break-all">{stErr}</span>} />
     </SettingsCard>
   );
   if (!st) return (
     <SettingsCard title="This build" icon={<InfoIcon />} desc="Which version is running, and whether a newer one is out.">
-      <SettingRow label="Reading version…" status={<StatusBadge tone="checking">Checking</StatusBadge>} />
+      <SettingRow agentExempt label="Reading version…" status={<StatusBadge tone="checking">Checking</StatusBadge>} />
     </SettingsCard>
   );
 
@@ -1435,8 +1542,8 @@ function AboutPane({ open }: { open: boolean }) {
           used to appear once, on the launch after an update, and were
           unreachable ever after — dismiss it, or update before it existed, and
           the only copy was on the release page. */}
-      <SettingRow
-        label={`agentglass ${st.info.version}`}
+      <SettingRow agentExempt
+        label="Version"
         hint={<>
           <span
             className="tabular-nums"
@@ -1444,13 +1551,11 @@ function AboutPane({ open }: { open: boolean }) {
               ? `built from an uncommitted tree — ${st.info.dirtyCount} packaged file(s) differ from ${st.info.commit.slice(0, 7)}`
               : st.info.commit}
             style={dirty ? { color: "var(--warning-ink)", fontWeight: 600 } : undefined}>
-            {short}
+            commit {short}
           </span>
-          {st.info.builtAt && <> · built {new Date(st.info.builtAt).toLocaleString()}</>}
+          {st.info.builtAt && <> · built {new Date(st.info.builtAt).toLocaleDateString(undefined, { day: "numeric", month: "long" })}</>}
         </>}
-        actions={mine
-          ? <Button tone="primary" onClick={() => setWant(mine)}>Release notes</Button>
-          : undefined}
+        control={<span className="t-mono text-[13px] font-semibold">{st.info.version}</span>}
       />
 
       {/* Said in words, because the stamp alone is only obvious once you know
@@ -1458,7 +1563,7 @@ function AboutPane({ open }: { open: boolean }) {
           no answer today — "whose uncommitted work is in the app I am running"
           — and it is absent outside the desktop shell on purpose. */}
       {dirty && (
-        <SettingRow
+        <SettingRow agentExempt
           label="Built from an uncommitted tree"
           status={<StatusBadge tone="warn">Uncommitted</StatusBadge>}
           hint={<>
@@ -1481,7 +1586,7 @@ function AboutPane({ open }: { open: boolean }) {
           updating had already been stopped — so this is the only place it can
           be reported at all. */}
       {st.last && (
-        <SettingRow
+        <SettingRow agentExempt
           label="Last update"
           status={<StatusBadge tone={st.last.ok ? "ok" : "err"}>{st.last.ok ? "Succeeded" : "Failed"}</StatusBadge>}
           hint={new Date(st.last.at).toLocaleString()}
@@ -1497,20 +1602,20 @@ function AboutPane({ open }: { open: boolean }) {
       )}
 
       {started ? (
-        <SettingRow label="Updating"
+        <SettingRow agentExempt label="Updating"
           status={<StatusBadge tone="checking">In progress</StatusBadge>}
           hint="The app will close and reopen on its own — this window going away is the update working, not crashing." />
       ) : st.blocked ? (
-        <SettingRow label="Updating is blocked"
+        <SettingRow agentExempt label="Updating is blocked"
           status={<StatusBadge tone="warn">Blocked</StatusBadge>}
           hint={st.blocked} />
       ) : st.behind === 0 ? (
-        <SettingRow label="Up to date"
+        <SettingRow agentExempt label="Up to date"
           status={<StatusBadge tone="ok">Current</StatusBadge>}
           hint={st.branch ? `${st.branch} is the newest release.` : undefined} />
       ) : (
         <>
-          <SettingRow
+          <SettingRow agentExempt
             label={`${st.branch} is available`}
             hint={st.behind > 1 ? `${st.behind} releases newer than yours.` : "One release newer than yours."}
             actions={<>
@@ -1543,7 +1648,7 @@ function AboutPane({ open }: { open: boolean }) {
               toolchain has to be here before it starts — said up front
               rather than left to fail the build and report it in the panel
               above, after the app has already gone down to restart. */}
-          <SettingRow
+          <SettingRow agentExempt
             label="Built on your machine from source"
             hint={<>Needs <span style={{ color: "var(--warning-ink)" }}>git</span> and <span style={{ color: "var(--warning-ink)" }}>bun</span> installed, and is Linux-only for now.</>}
             detail={{
@@ -1552,6 +1657,19 @@ function AboutPane({ open }: { open: boolean }) {
             }}
           />
         </>
+      )}
+
+      <SettingRow agentExempt label="Last update check"
+        hint={checkedAt ? `Checked ${minutesAgo(checkedAt)}.` : "Checked when this page opened."}
+        actions={<Button pending={checking} onClick={() => void recheck()}>Check for updates</Button>} />
+      <Toggle settingId="about.autoCheck" on={auto}
+        onClick={() => { setting("about.autoCheck").set(!auto); setAuto(!auto); }}
+        label="Look for a newer release by itself"
+        hint="Off: the release feed is asked only when you press Check."
+        detail={{ summary: "What it asks, and when", body: <>The desktop app asks the repository it was installed from for its newest tag, once shortly after it starts and then every six hours. Nothing else is sent, and a browser tab never does it.</> }} />
+      {mine && (
+        <SettingRow agentExempt label="Release notes" hint={`What changed in ${mine.tag}.`}
+          actions={<Button onClick={() => setWant(mine)}>Open</Button>} />
       )}
 
       <ReleaseNotesModal
@@ -1586,8 +1704,22 @@ function AboutPane({ open }: { open: boolean }) {
  * understudy is not the only thing in this app wearing that art any more.
  */
 function AboutCredits() {
+  const [all, setAll] = useState(false);
+  const shown = LICENCES.slice(0, 6);
   return (
-    <SettingsCard title="Credits" icon={<ShieldIcon />}>
+    <SettingsCard title="Licences and credits" icon={<ShieldIcon />}
+      desc="What this build is made of, and under which licence.">
+      {/* What the app compiles in, with the licence each package declares in its own package.json (gen:licences). */}
+      <SettingRow agentExempt label="Built with"
+        hint={`${LICENCES.length} packages ship in this build.`}
+        below={
+          <div className="agx-lic" role="list" aria-label="Packages and their licences">
+            {(all ? LICENCES : shown).map((l) => (
+              <span key={l.name} role="listitem" className="agx-lic-i"><b>{l.name}</b> <span>{l.licence}</span></span>
+            ))}
+          </div>
+        }
+        actions={LICENCES.length > shown.length ? <Button aria-expanded={all} onClick={() => setAll((v) => !v)}>{all ? "Show fewer" : `View all ${LICENCES.length}`}</Button> : undefined} />
       <Row label="Portrait art by Viktor Hahn — CC BY 4.0"
         hint="The pixel-art portrait layers are his work, used under the Creative Commons Attribution 4.0 International licence. They are recoloured at paint time and otherwise unmodified."
         href="https://creativecommons.org/licenses/by/4.0/" />
@@ -1671,6 +1803,9 @@ function CookieImport() {
      safeguard, it is a reason never to finish. */
   useEffect(() => { setChosen(current ? allSites(current.sites) : new Set()); setFilter(""); }, [current?.id]);
 
+  // The sites the profiles hold between them: what the header says there is to bring in.
+  useEffect(() => { setPageFact("importableSites", new Set((sources ?? []).filter((s) => s.readable).flatMap((s) => s.sites.map((x) => x.site))).size); }, [sources]);
+
   if (!CAN_IMPORT_COOKIES) return null;
 
   const view = siteView(current?.sites ?? [], filter);
@@ -1721,8 +1856,6 @@ function CookieImport() {
       + " Open the browser and you should be signed in.");
   };
 
-  // The sites the profiles hold between them: what the header says there is to bring in.
-  useEffect(() => { setPageFact("importableSites", new Set((sources ?? []).filter((s) => s.readable).flatMap((s) => s.sites.map((x) => x.site))).size); }, [sources]);
   const Bulk = ({ text, onClick, off }: { text: string; onClick: () => void; off?: boolean }) => (
     <Button size="compact" onClick={onClick} disabled={off}>{text}</Button>
   );
@@ -2027,17 +2160,18 @@ function AgentsPage({ open, chats, panes, browser, skills }: {
           rather than sitting there permanently unticked. */}
       <SetupCard
         title="Claude Code hooks" icon={hooksIcon}
+        desc="Lets agentglass see what your sessions are doing."
+        chip={<StatusBadge tone={st.installed ? "ok" : "warn"}>{st.installed ? "Wired" : "Not wired"}</StatusBadge>}
         error={err}
         note={note}
         steps={[
           { title: "Hook scripts in this build", done: st.bundled, says: { done: "Included" },
             detail: "Shipped with the app — nothing to fetch." },
           { title: "Wired into Claude Code", done: st.installed, says: { done: "Wired", todo: "Not wired" },
-            detail: <>Written to <span className="t-mono text-[11px]" style={{ color: "var(--text)" }}>{st.settingsPath}</span>, run under <span className="t-mono text-[11px]">{st.python}</span>.</>,
-            /* What the checklist is FOR, read once, so it sits behind a
-               summary that says what it holds. */
+            detail: <>Written to <span className="t-mono text-[11px]">{tilde(st.settingsPath)}</span>, run under <span className="t-mono text-[11px]">{st.python}</span>.</>,
+            /* What the checklist is FOR, read once, so it sits behind "Details". */
             more: {
-              summary: "What wiring this changes",
+              summary: "Details",
               body: <>
                 Every Claude Code session streams here live — what ran, what it
                 cost, when it stopped for you. It watches; it never stops a tool
@@ -2048,34 +2182,22 @@ function AgentsPage({ open, chats, panes, browser, skills }: {
               </>,
             },
             action: st.installed ? undefined : { label: busy ? "Enabling…" : "Enable", onClick: () => void act("install"), busy } },
-          { title: "Start a fresh Claude Code session", done: null,
+          { title: "Start a fresh session", done: null,
             detail: "Sessions already running keep the hooks they started with." },
         ]}>
         {/* The forwarder is a python script; the install writes the command
             but cannot make an interpreter appear. Said up front rather than
             left to a session that streams nothing and no error anywhere. */}
         <SettingRow label="Python on your PATH"
-          hint={<>The hooks run under <span className="t-mono">{st.python}</span> — it has to be on your PATH for events to arrive. Takes effect on the next Claude Code session; hooks load at startup.</>} />
+          hint={<>Hooks run under <span className="t-mono">{st.python}</span>; they load at startup.</>}
+          detail={{ summary: "Details", body: <>The forwarder is a python script, so <span className="t-mono">{st.python}</span> has to be on your PATH for events to arrive. A change takes effect on the next Claude Code session.</> }}
+          status={st.pythonVersion === undefined ? undefined
+            : st.pythonVersion ? <StatusBadge tone="ok">python {st.pythonVersion}</StatusBadge> : <StatusBadge tone="warn">Not found</StatusBadge>} />
       </SetupCard>
 
       {/* The gate. Its own card, below the forwarder, because it is the
           stronger thing and read second for the same reason. */}
-      <SettingsCard title="Gate" icon={<ShieldIcon size={ICON.sm} />} tone={st.gateBundled && !st.gate ? "decision" : "default"}
-        desc="Holds an outward action until somebody decides. A separate switch from the hooks above."
-        status={<StatusBadge tone={!st.gateBundled ? "off" : st.gate ? "ok" : "warn"}>{!st.gateBundled ? "Not in this build" : st.gate ? "On" : "Off · needs a decision"}</StatusBadge>}>
-        <SettingRow label="Hold what leaves this machine"
-          hint={<>
-            A push, a pull request, a comment, a review, a merge, a ticket or a message in a channel
-            waits here with the text it would send, and nobody answering means it does not happen.
-            Everything local — writing code, running tests, cutting a worktree — is never held.
-            <span className="block mt-1">Until you turn this on, that line is held by each agent remembering it.</span>
-          </>}
-          actions={st.gateBundled
-            ? <Button tone={st.gate ? "danger" : "primary"} disabled={busy} onClick={() => void gate(!st.gate)}>
-                {busy ? "Working…" : st.gate ? "Turn the gate off" : "Turn the gate on"}
-              </Button>
-            : undefined} />
-      </SettingsCard>
+      <GateCard st={st} busy={busy} open={open} onGate={(on) => void gate(on)} />
     </>
   );
 
@@ -2086,8 +2208,7 @@ function AgentsPage({ open, chats, panes, browser, skills }: {
       {panes}
       {browser}
       {skills}
-      <WorkerRolesSection open={open} resetTick={resetTick} />
-      <AgentsSection />
+      <WorkerRolesCard open={open} resetTick={resetTick} onEngines={() => openSettings("engines")} />
       {/* Both ways back, together and apart from everything that sets
           something: the hooks come out of the person's own Claude Code
           settings, the roles go back to the table in shared/workerRoles.ts.
@@ -2096,11 +2217,12 @@ function AgentsPage({ open, chats, panes, browser, skills }: {
           desc="Reversible, but they change what every session does.">
           {st?.bundled && st.installed && (
             <SettingRow label="Take the hooks back out"
-              hint={<>Removes the entries above; running sessions keep them until they end. Also <span className="t-mono">python3 hooks/install_hooks.py --uninstall</span> in a checkout. Global (<span className="t-mono">~/.claude</span>), so it covers every project.</>}
+              hint="Removes the entries above; running sessions keep them until they end."
+              detail={{ summary: "Details", body: <>Also <span className="t-mono">python3 hooks/install_hooks.py --uninstall</span> in a checkout. Global (<span className="t-mono">~/.claude</span>), so it covers every project.</> }}
               actions={<Button tone="danger" pending={busy} onClick={() => void act("uninstall")}>{busy ? "Disabling…" : "Disable hooks"}</Button>} />
           )}
           <SettingRow label="Forget worker roles"
-            hint={resetNote ?? (armed ? "Press again to put every role back on its default CLI and model." : "Back to the default CLI and model of every role.")}
+            hint={resetNote ?? (armed ? "Press again to put every role back on its default CLI and model." : "Back to “every role on its default CLI and model”.")}
             actions={<Button tone="danger" onClick={() => void resetRoles()}>{armed ? "Reset roles?" : "Reset roles"}</Button>} />
         </SettingsCard>
     </>
@@ -2171,22 +2293,24 @@ function LanternSection({ open }: { open: boolean }) {
     <div className="agx-split-page">
       <div className="agx-split-main">
         <SettingsCard title="Lantern" icon={ic}
-          desc="The board that watches every agent, and how often it taps you on the shoulder. It never starts, stops or queues anything."
+          desc="The board that watches every agent, and how often it taps you on the shoulder."
           status={<StatusBadge tone={watch ? "ok" : "off"}>{watch ? "Watching" : "Not watching"}</StatusBadge>}>
           {err && <div role="alert" className="agx-settings-x pt-2 pb-3 text-[11px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
           <Toggle on={watch} onClick={() => save({ watch: !watch })}
             label="Watch the agents and notify me"
-            hint="Every few minutes the agents are re-read and one notification goes out — the app's bell, the phone when paired, the desktop otherwise — if somebody is still stopped on you, a worker's window vanished, or work that was claimed has gone quiet for an hour. The instant alerts stay either way; this is the sweep behind them." />
-          <Choice label="How often it looks" value={nearWatch}
             hint="One notification per look at most, while something needs you."
+            detail={{ summary: "Details", body: <>Every few minutes the agents are re-read. One notification goes out — the app's bell, the phone when paired, the desktop otherwise — if somebody is still stopped on you, a worker's window vanished, or claimed work has gone quiet for an hour. The instant alerts stay either way; this is the sweep behind them. It never starts, stops or queues anything.</> }} />
+          <Choice label="How often it looks" value={nearWatch}
+            hint="How long between two looks at the board."
             options={WATCH_STEPS.map((m) => ({ v: String(m), label: `${m} min` }))}
             onPick={(m) => save({ watchMinutes: Number(m) })} disabled={!watch}
             disabledHint="Nothing is looked at while the watch is off." />
           <Toggle on={nudge} onClick={() => save({ nudge: !nudge })}
             label="Ask sessions what they are working on"
-            hint="On a prompt, a hooked session may be handed one line asking it to post its task (POST /agents/status). Off, and the Lantern lists sessions by name and pane only." />
-          <Choice label="How often one session may be asked again" value={near}
-            hint="A session that has already answered is left alone for this long, whatever name it chose."
+            hint="Names a bare session after what it is doing."
+            detail={{ summary: "Details", body: <>On a prompt, a hooked session may be handed one line asking it to post its task (<span className="t-mono">POST /agents/status</span>). Off, and the Lantern lists sessions by name and pane only.</> }} />
+          <Choice select wide={false} label="How often one session may be asked again" value={near}
+            hint="A session that answered is left alone for this long."
             options={STEPS.map((m) => ({ v: String(m), label: `${m} min` }))}
             onPick={(m) => save({ minutes: Number(m) })} disabled={!nudge}
             disabledHint="Nothing is asked while the reminder is off." />
@@ -2196,12 +2320,14 @@ function LanternSection({ open }: { open: boolean }) {
               re-reads the field, and the orchestrator is prompted only when what
               it found CHANGED. This is how long a quiet field may stay quiet
               before it gets a line anyway. */}
-          <Choice label="Wake the orchestrator at least every" value={String(seatWake)}
-            hint="The seat is woken when the field changes. This is the floor under that, so a quiet day still gets a line rather than a silence you cannot tell from a dead agent."
+          <Choice select wide={false} label="Wake the orchestrator at least every" value={String(seatWake)}
+            hint="How long a quiet field may stay quiet before the seat gets a line anyway."
+            detail={{ summary: "Details", body: <>The seat is woken when the field changes. This is the floor under that, so a quiet day still gets a line rather than a silence you cannot tell from a dead agent.</> }}
             options={[1, 2, 4, 8, 12, 24].map((h) => ({ v: String(h), label: h === 1 ? "1 hour" : `${h} hours` }))}
             onPick={(h) => { void api.seatWakeSave(Number(h)).then(() => setSeatWake(Number(h))); }} />
           <Choice label="How long the prompt cache stays warm" value={String(cacheTtl === 60 ? 60 : 5)}
-            hint="Each card counts it down from the session's last turn: a turn sent while it is warm is the cheap one. Five minutes on most plans; an hour on some."
+            hint="A turn sent while it is warm is the cheap one."
+            detail={{ summary: "Details", body: <>Each card counts it down from the session's last turn. Five minutes on most plans; an hour on some.</> }}
             options={[{ v: "5", label: "5 min" }, { v: "60", label: "1 hour" }]}
             onPick={(m) => save({ cacheTtlMinutes: Number(m) })} />
         </SettingsCard>
@@ -2213,75 +2339,6 @@ function LanternSection({ open }: { open: boolean }) {
         </PreviewCard>
       </aside>
     </div>
-  );
-}
-
-/**
- * WORKER ROLES — which CLI and model each context-diet role runs on.
- *
- * One row per role: the CLI (only the ones with a lock, since a role on any
- * other would be refused at start) and a model handed to it as it is. A CLI
- * that is offered but not installed says so rather than disappearing, so a
- * choice made on another machine still reads.
- */
-function WorkerRolesSection({ open, resetTick = 0 }: { open: boolean; resetTick?: number }) {
-  type Choice = { provider: string; model: string };
-  const [roles, setRoles] = useState<Record<string, Choice>>({});
-  const [clis, setClis] = useState<{ id: string; title: string; installed: boolean }[]>([]);
-  const [models, setModels] = useState<Record<string, string>>({});
-  const [note, setNote] = useState<string | null>(null);
-  const take = (r: { roles?: Record<string, Choice> }) => {
-    if (!r.roles) return;
-    setRoles(r.roles);
-    setModels(Object.fromEntries(Object.entries(r.roles).map(([k, v]) => [k, v.model])));
-  };
-  useEffect(() => {
-    if (!open) return;
-    void api.workerRoles().then((r) => { take(r); setClis(r.providers ?? []); })
-      .catch(() => setNote("Could not reach the server — the worker roles are unavailable."));
-  }, [open, resetTick]);
-  const save = (role: string, c: Choice) => {
-    setNote(null);
-    void api.workerRoleSave(role, c.provider, c.model)
-      .then((r) => { if (!r.ok) setNote(r.error ?? "Could not save."); else { take(r); setNote("Saved. Applies to the next worker started in that role."); } })
-      .catch(() => setNote("Could not save."));
-  };
-  return (
-    <SettingsCard title="Worker roles" icon={<PlugIcon size={ICON.sm} />}
-      desc="Which CLI and model a worker started in a role runs on (agentglass-agent start --role). Every role is locked against push, commit, merge and the network clients, in a layer the project's own config cannot loosen (OpenCode's is checked against the project's config at each start, and refused if loosened); a CLI with no such lock is not offered.">
-      {WORKER_ROLES.map((r) => {
-        const c = roles[r.id];
-        if (!c) return null;
-        const mid = `role-model-${r.id}`;
-        return (
-          <SettingRow key={r.id} label={r.title}
-            hint={`${r.what}${r.readOnly ? " File edits are refused too." : ""} Default: ${r.default.provider}, ${r.default.model}.`}
-            control={
-              <Select value={c.provider} align="right"
-                className="agx-select outline-none w-[128px] justify-between"
-                options={clis.map((p) => ({ value: p.id, label: p.installed ? p.title : `${p.title} (not installed)` }))}
-                onChange={(v) => save(r.id, { provider: v, model: "" })} />}
-            /* The model is a text field, so it stacks under the description
-               rather than sharing the control column with the CLI choice. */
-            below={
-              <div className="agx-sform">
-                <Field label="Model" htmlFor={mid} help="Handed to the CLI as typed. Empty runs its default model.">
-                  <input id={mid}
-                    value={models[r.id] ?? ""}
-                    onChange={(e) => setModels((m) => ({ ...m, [r.id]: e.target.value }))}
-                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); save(r.id, { provider: c.provider, model: models[r.id] ?? "" }); } }}
-                    onBlur={() => { if ((models[r.id] ?? "") !== c.model) save(r.id, { provider: c.provider, model: models[r.id] ?? "" }); }}
-                    placeholder="default model"
-                    aria-describedby={helpIdFor(mid)}
-                    spellCheck={false}
-                    className={`t-mono w-full ${INPUT}`}
-                    style={INPUT_STYLE} />
-                </Field>
-              </div>} />
-        );
-      })}
-      {note && <div role="status" className="agx-settings-x pt-2 pb-3 text-[11px]" style={{ color: "var(--text3)" }}>{note}</div>}
-    </SettingsCard>
   );
 }
 
@@ -2504,16 +2561,6 @@ function NotificationsSection(p: {
   );
 }
 
-function AgentsSection() {
-  return (
-    <SettingsCard title="Agent engines" icon={<PlugIcon size={ICON.sm} />}>
-      <SettingRow label="Which engines this computer has"
-        hint="Version, sign-in, what each can do, and whether it reports to this app: one card per engine, with its Connect button."
-        onClick={() => openSettings("engines")} />
-    </SettingsCard>
-  );
-}
-
 /**
  * What agentglass needs from the machine, and what it found.
  *
@@ -2588,6 +2635,9 @@ function FlowLabel({ children }: { children: React.ReactNode }) {
 /** A tile's mark: the first letter of what it is, in the page's hue. */
 const Initial = ({ name }: { name: string }) => <span aria-hidden className="text-[12px] font-semibold">{name.charAt(0).toUpperCase()}</span>;
 
+/** The first sentence: what a tile says at a glance, the rest being behind its Details. */
+const firstSentence = (t: string) => t.split(/(?<=[.!?])\s/)[0] ?? t;
+
 function DepRow({ d, home }: { d: DepReport; home: string }) {
   const href = externalUrl(d.url);
   const [console, setConsole] = useState(false);
@@ -2603,14 +2653,17 @@ function DepRow({ d, home }: { d: DepReport; home: string }) {
   const canType = !!d.install && d.status !== "ok" && d.status !== "unsupported";
   const guide = !!href && d.status !== "unsupported" && d.status !== "ok";
   const tone = depTone(d);
+  const mark: "ok" | "warn" | "err" | "off" = tone === "warn" ? "warn" : tone === "err" ? "err" : tone === "ok" ? "ok" : "off";
+  const more = !!(d.note && d.status !== "ok" && d.status !== "unsupported") || (canType && guide) || (d.status === "ok" && d.what);
   return (
-    /* A tile per tool that wants something. One action in its head: Install opens
+    /* A tile per tool: its version under the name, then a line per fact. One action in its head: Install opens
        a shell with the command typed in, which finishes the job; when there is no
        honest one-liner the guide is the action instead, and where there are both
-       the guide is a link in the row, so a tile never carries two buttons for one
-       job. The console opens under the row. Amber edge only while the person is
+       the guide is a link in the details, so a tile never carries two buttons for one
+       job. The console opens under the lines. Amber edge only while the person is
        needed (warn or err), never for a tool that is merely absent. */
-    <SettingsCard icon={<Initial name={d.title} />} title={d.title} desc={d.what}
+    <SettingsCard icon={<Initial name={d.title} />} title={d.title}
+      desc={d.status === "ok" ? d.detail : firstSentence(d.what)}
       tone={tone === "warn" || tone === "err" ? "decision" : "default"}
       status={<StatusBadge tone={tone}>{d.status === "missing" && d.required ? "Needed, not installed" : STATUS_LABEL[d.status]}</StatusBadge>}
       actions={canType
@@ -2621,17 +2674,20 @@ function DepRow({ d, home }: { d: DepReport; home: string }) {
         : guide
           ? <LinkButton href={href!}>Install guide</LinkButton>
           : undefined}>
-      <SettingRow agentExempt label="Looks for" control={<code className="text-[11px] t-mono t-dim">{d.bin}</code>}
-        hint={<>
-          {d.detail && d.status !== "ok" && <span className="block">{d.detail}</span>}
-          {d.note && d.status !== "ok" && d.status !== "unsupported" && <span className="block mt-1">{d.note}</span>}
-          {canType && guide && (
-            <span className="block mt-1">
-              <a href={href} target="_blank" rel="noreferrer noopener" className="agx-textlink">Install guide ↗</a>
-            </span>
-          )}
-        </>}
-        below={console && canType ? <ShellConsole command={d.install!} cwd={home} onClose={() => setConsole(false)} /> : undefined} />
+      {/* "Needs setup" is a tool that IS here and cannot be used yet (gh with no login, docker with no daemon). */}
+      <CheckRow tone={d.status === "ok" || d.status === "attention" ? "ok" : "off"} label="Installed"
+        value={d.status === "ok" || d.status === "attention" ? <code className="t-mono">{d.bin}</code> : d.status === "unsupported" ? "not used here" : <>not on your PATH <span className="t-mono">({d.bin})</span></>} />
+      {d.detail && d.status === "attention" && <CheckRow tone={mark} label="Needs" value={d.detail} />}
+      {more && (
+        <div className="agx-chk-more">
+          <Disclosure summary={`More about ${d.title}`}>
+            <p className="m-0">{d.what}</p>
+            {d.note && d.status !== "ok" && d.status !== "unsupported" && <p className="m-0 mt-1">{d.note}</p>}
+            {canType && guide && <p className="m-0 mt-1"><a href={href} target="_blank" rel="noreferrer noopener" className="agx-textlink">Install guide ↗</a></p>}
+          </Disclosure>
+        </div>
+      )}
+      {console && canType && <div className="agx-chk-more"><ShellConsole command={d.install!} cwd={home} onClose={() => setConsole(false)} /></div>}
     </SettingsCard>
   );
 }
@@ -2679,8 +2735,8 @@ function GhBudget({ open }: { open: boolean }) {
     <SettingsCard title="GitHub allowance" icon={<LinkIcon size={ICON.sm} />} desc="The API allowance this app spends, and what is left of it.">
       <SettingRow
         label="How much of your GitHub allowance is left"
-        hint="Every pull request, check and search this app shows spends one. GitHub refills them on a rolling window — 5,000 an hour for REST and GraphQL, 30 a minute for Search, which is the one that runs out first because looking up a card's pull requests is a search."
-        control={<RefreshButton onRefresh={() => void load()} busy={busy} title="Refresh the GitHub budget" />}
+        hint="Every pull request, check and search this app shows spends one."
+        detail={{ summary: "Details", body: <>GitHub refills them on a rolling window — 5,000 an hour for REST and GraphQL, 30 a minute for Search, which is the one that runs out first because looking up a card's pull requests is a search.</> }}
         below={<>
         {state && !state.ok && (
           <p className="mt-2 text-[12px]" style={{ color: "var(--text3)" }}>{state.error}</p>
@@ -2724,6 +2780,8 @@ function GhBudget({ open }: { open: boolean }) {
         })}
         </>}
       />
+      <SettingRow label="Refresh the GitHub budget" hint="Read on opening this page, never on a timer."
+        control={<RefreshButton onRefresh={() => void load()} busy={busy} title="Refresh the GitHub budget" />} />
     </SettingsCard>
   );
 }
@@ -2741,72 +2799,149 @@ function GhBudget({ open }: { open: boolean }) {
  * turned off something that was never running would be theatre.
  */
 function PrivacyPane({ open }: { open: boolean }) {
-  const [d, setD] = useState<{ db: string; config: string; credentials: string; retentionDays: number; pairedDevices: number; clickup: boolean } | null>(null);
+  const [d, setD] = useState<PrivacyFacts | null>(null);
+  const [recent, setRecent] = useState<ActionRecord[] | null>(null);
+  const [asking, setAsking] = useState<number | null>(null);
+  const [erasing, setErasing] = useState<"ask" | "busy" | null>(null);
+  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const load = useCallback(() => { void api.privacy().then(setD).catch(() => setD(null)); }, []);
   useEffect(() => {
     if (!open) return;
-    void api.privacy().then(setD).catch(() => setD(null));
-  }, [open]);
+    load();
+    void api.actions(3).then((r) => setRecent(r.actions)).catch(() => setRecent([]));
+  }, [open, load]);
 
-  /* A row, not a block of its own: what it holds on the left where every other
-     label is, and the path underneath it. The path is not a control — it is 70
-     characters of monospace that would take the whole control column and still
-     wrap — so it goes in the hint, where wrapping is what hints do. */
-  const Path = ({ label, value, note }: { label: string; value: string; note: string }) => (
-    <SettingRow label={label} hint={<>
-      {note}
-      <span className="block mt-1 break-all" style={{ fontFamily: "ui-monospace, monospace", color: "var(--text2)" }}>
-        {value || "—"}
-      </span>
-    </>} />
-  );
+  /* The history kept, and how long: a shorter time deletes what is older at the next hourly sweep, so it asks first. */
+  const RETENTION_CHOICES = [{ v: 8, label: "8 days" }, { v: 30, label: "30 days" }, { v: 90, label: "90 days" }, { v: 365, label: "1 year" }, { v: 0, label: "Keep everything" }];
+  const choices = d && !RETENTION_CHOICES.some((c) => c.v === d.retentionDays) ? [...RETENTION_CHOICES, { v: d.retentionDays, label: `${d.retentionDays} days` }] : RETENTION_CHOICES;
+  const shorter = (days: number) => !!d && days !== 0 && (d.retentionDays === 0 || days < d.retentionDays);
+  const chooseRetention = async (days: number) => {
+    if (!d || days === d.retentionDays) return;
+    if (shorter(days)) { setAsking(days); return; }
+    const r = await api.privacyRetention(days).catch(() => null);
+    setNote(r?.ok ? { ok: true, text: days === 0 ? "History is kept for ever from now on." : `History is kept ${days} days.` } : { ok: false, text: r?.error ?? "That did not save." });
+    load();
+  };
+  const confirmRetention = async () => {
+    if (asking === null) return;
+    const days = asking;
+    setAsking(null);
+    const r = await api.privacyRetention(days).catch(() => null);
+    setNote(r?.ok ? { ok: true, text: `History is kept ${days} days. Anything older goes at the next sweep, within the hour.` } : { ok: false, text: r?.error ?? "That did not save." });
+    load();
+  };
+  const erase = async () => {
+    setErasing("busy");
+    const r = await api.privacyErase().catch(() => null);
+    setErasing(null);
+    setNote(r?.ok ? { ok: true, text: `Erased ${r.events ?? 0} events and ${r.sessions ?? 0} sessions.` } : { ok: false, text: r?.error ?? "That did not work. Nothing was erased." });
+    load();
+  };
+
+  const timeOf = (t: number) => new Date(t).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  const size = (n: number | null | undefined) => (n === null || n === undefined ? "unknown size" : humanBytes(n));
+  const timer = IS_DESKTOP && autoCheckUpdates();
+  const DL = <IconLabel icon={<DownloadIcon size={ICON.xs} />}>Download</IconLabel>;
+  useReportSaving("privacy", erasing === "busy");
 
   return (
     <>
-      <SettingsCard title="Nothing is sent anywhere" icon={<ShieldIcon />} status={<StatusBadge tone="ok">Local only</StatusBadge>}>
-        <SettingRow label="No analytics, no crash reporting, no phone-home"
-          hint="There is nothing to turn off here. What this app does with your data, it does on this machine." />
+      <SettingsCard title="Nothing is sent anywhere" icon={<ShieldIcon />} status={<StatusBadge tone="ok">Local only</StatusBadge>}
+        desc="No analytics, no crash reporting, no phone-home.">
         {/* The headline answer is one line and stays open, because it is the
             claim this page exists to make. The enumeration behind it is the
             evidence, and evidence is read when it is doubted. */}
         <SettingRow
-          label="Only the calls you asked for"
-          hint={d && d.pairedDevices > 0
-            ? `${d.pairedDevices} paired device${d.pairedDevices === 1 ? " can" : "s can"} reach this server — see Remote.`
-            : "No device is paired, so nothing can reach this server from outside."}
+          label="What does leave this machine"
+          hint="Only the calls you asked for."
           detail={{
             summary: "Which calls, exactly",
             body: <>
-              GitHub through <code>gh</code>, {d?.clickup ? "ClickUp through its API, " : ""}and whatever an agent you started
+              {d && d.pairedDevices > 0
+                ? `${d.pairedDevices} paired device${d.pairedDevices === 1 ? " can" : "s can"} reach this server — see Remote. `
+                : "No device is paired, so nothing can reach this server from outside. "}
+              GitHub through <code>gh</code>, {d?.clickup ? "ClickUp through its API, " : ""}{d?.jira ? "Jira through its API, " : ""}and whatever an agent you started
               decides to do. Avatars are fetched from GitHub. Nothing else leaves, and nothing at all is
               sent to us — there is no endpoint of ours for it to go to.
             </>,
           }}
         />
+        <SettingRow label="Code hosting" hint="pull requests, checks, comments, through gh"
+          status={<StatusBadge tone="info">When you open them</StatusBadge>} />
+        {d?.clickup && <SettingRow label="ClickUp API" hint="cards, statuses" status={<StatusBadge tone="info">When you open them</StatusBadge>} />}
+        {d?.jira && <SettingRow label="Jira API" hint="cards, statuses" status={<StatusBadge tone="info">When you open them</StatusBadge>} />}
+        <SettingRow label="Update check" hint="release feed"
+          status={timer ? <StatusBadge tone="info">Every 6 hours</StatusBadge> : <StatusBadge tone="off">Only on request</StatusBadge>} />
       </SettingsCard>
-      <SettingsCard title="What is on disk" icon={<ServerIcon />}>
-        <Path label="History" value={d?.db ?? ""}
-          note="Every event, prompt, tool call and file change, in SQLite. Written owner-only — it holds prompts and command output in cleartext." />
-        <Path label="Settings" value={d?.config ?? ""}
-          note="Your preferences, budgets and the boards you have added." />
-        <Path label="Credentials" value={d?.credentials ?? ""}
-          note="Tokens for the services you connected, mode 0600. They are used by the server and never sent to the browser." />
+
+      <SettingsCard title="What is on disk" icon={<ServerIcon />} desc="Everything lives in your home folder."
+        status={note ? <StatusBadge tone={note.ok ? "ok" : "err"}>{note.ok ? "Saved" : "Not saved"}</StatusBadge> : undefined}>
+        <SettingRow label="History" hint="events and sessions"
+          control={<span className="tabular-nums text-[13px]" style={{ color: "var(--text2)" }}>{size(d?.dbBytes)}</span>}
+          detail={{ summary: "Where it is, and what it holds", body: <>Every event, prompt, tool call and file change, in SQLite, written owner-only: it holds prompts and command output in cleartext.<span className="block mt-1 t-mono break-all">{d?.db || "—"}</span></> }} />
+        <SettingRow label="Settings" hint="this window"
+          control={<span className="tabular-nums text-[13px]" style={{ color: "var(--text2)" }}>{size(d?.configBytes)}</span>}
+          detail={{ summary: "Where it is, and what it holds", body: <>Your preferences, budgets and the boards you have added.<span className="block mt-1 t-mono break-all">{d?.config || "—"}</span></> }} />
+        <SettingRow label="Credentials" hint="tokens of the services you connected"
+          control={<span className="text-[13px]" style={{ color: "var(--text2)" }}>file, owner only</span>}
+          detail={{ summary: "Where it is, and who reads it", body: <>Tokens for the services you connected, mode 0600. The server uses them and never sends them to the browser.<span className="block mt-1 t-mono break-all">{d?.credentials || "—"}</span></> }} />
         {d && (
           <SettingRow label="Retention"
-            hint={<>
-              History older than {d.retentionDays === 0 ? "— nothing is pruned" : `${d.retentionDays} days is pruned automatically`}.
-              Deleting the history file deletes all of it.
-            </>} />
+            hint={d.retentionFromEnv ? "Set by AGENTGLASS_RETENTION_DAYS where the server started: it wins over this page." : "How long history stays before the daily totals replace it."}
+            detail={{ summary: "What a shorter time does", body: <>Raw events older than the time you choose are folded into the daily totals and deleted at the next hourly sweep. Choosing a longer time keeps what is still there; it brings nothing back. Deleting the history file deletes all of it.</> }}
+            control={<Select align="right" style={SELECT_BOX} value={String(d.retentionDays)} disabled={d.retentionFromEnv} title="How long history is kept"
+              onChange={(v) => void chooseRetention(Number(v))} options={choices.map((c) => ({ value: String(c.v), label: c.label }))} />}
+            below={asking !== null ? (
+              <div className="flex items-center gap-2 flex-wrap text-[12px]" role="alert" style={{ color: "var(--warning-ink)" }}>
+                <span className="flex-1 min-w-0">Keep {asking} days? History older than that is deleted within the hour.</span>
+                <Button onClick={() => setAsking(null)}>Cancel</Button>
+                <Button tone="danger" onClick={() => void confirmRetention()}>Keep {asking} days</Button>
+              </div>
+            ) : note && !note.ok ? <span role="alert" className="text-[12px]" style={{ color: "var(--error-ink)" }}>{note.text}</span> : undefined} />
         )}
       </SettingsCard>
-      <SettingsCard title="Activity" icon={<ChecklistIcon />}>
-        {/* Activity has no nav entry; this row and the palette are its ways in. */}
-        <SettingRow label="Activity log" hint="What the app itself has been doing." onClick={() => openSettings("log")} />
+
+      <SettingsCard title="Activity log" icon={<ChecklistIcon />} desc="What the app itself has been doing.">
+        {/* Activity has no nav entry; this card and the palette are its ways in. */}
+        {(recent ?? []).map((a) => (
+          <SettingRow key={a.id} agentExempt label={<>{verb(a.action)}{a.target && <span className="t-dim"> {a.target}</span>}</>}
+            control={<span className="tabular-nums text-[12px] t-dim">{timeOf(a.at)}</span>} />
+        ))}
+        <SettingRow label="Activity log" hint="Every change this dashboard made, newest first." onClick={() => openSettings("log")} />
+      </SettingsCard>
+
+      <SettingsCard title="Take your data out" icon={<DownloadIcon />}
+        desc="Everything this app has recorded, in a format something else can read.">
+        {/* Scoped like everything else: with a project open these
+            carry that project's rows, not the whole machine's. */}
+        <SettingRow agentExempt label="Events — CSV" hint="One row per event, for a spreadsheet" actions={<DownloadButton href={api.exportUrl("csv")} download="agentglass-events.csv">{DL}</DownloadButton>} />
+        <SettingRow agentExempt label="Events — JSON" hint="Full payloads, for scripting" actions={<DownloadButton href={api.exportUrl("json")} download="agentglass-events.json">{DL}</DownloadButton>} />
+        {/* The only export that outlives retention: it reads the daily rollup as well as the live events, so a month that has already been pruned still comes out. */}
+        <SettingRow agentExempt label="Daily totals — CSV" hint="One row per day, back past the retention window" actions={<DownloadButton href={api.exportUrl("csv", "daily")} download="agentglass-daily.csv">{DL}</DownloadButton>} />
+        <SettingRow agentExempt label="Daily totals — JSON" hint="The same series, with where the retention seam falls" actions={<DownloadButton href={api.exportUrl("json", "daily")} download="agentglass-daily.json">{DL}</DownloadButton>} />
+        <SettingRow agentExempt label="Skills catalog — Markdown" hint="Every skill the fleet has available" actions={<DownloadButton href={api.skillsExportUrl()} download="agentglass-skills.md">{DL}</DownloadButton>} />
+      </SettingsCard>
+
+      {/* Reversible only from a backup: the one red thing on the page, apart from everything that only reads. */}
+      <SettingsCard title="Danger zone" tone="danger" icon={<WarningIcon size={ICON.sm} />} desc="Reversible only from a backup.">
+        <SettingRow agentNever="erases the person's history for good: only the person at the window decides what it is worth" label="Erase local history"
+          hint="Removes events, sessions and the daily totals. Settings and tokens stay."
+          actions={erasing === "ask" ? (
+            <>
+              <Button tone="danger" onClick={() => void erase()}>Erase for good</Button>
+              <Button onClick={() => setErasing(null)}>Keep it</Button>
+            </>
+          ) : <Button tone="danger" pending={erasing === "busy"} onClick={() => setErasing("ask")}>Erase history</Button>}
+          below={note?.ok && note.text.startsWith("Erased") ? <span role="status" className="text-[12px]" style={{ color: "var(--success-ink)" }}>{note.text}</span> : undefined} />
       </SettingsCard>
     </>
   );
 }
 
-function IntegrationsPane({ open }: { open: boolean }) {
+type ToolsFilter = "all" | "ready" | "needs";
+type ToolsCount = { total: number; ready: number; needs: number; busy: boolean };
+
+function IntegrationsPane({ open, filter, nonce, onCount }: { open: boolean; filter: ToolsFilter; nonce: number; onCount: (c: ToolsCount) => void }) {
   const [status, setStatus] = useState<ProviderStatus[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -2821,6 +2956,7 @@ function IntegrationsPane({ open }: { open: boolean }) {
   }, []);
 
   useEffect(() => { if (open) void load(); }, [open, load]);
+  useEffect(() => { if (open && nonce) void load(); }, [nonce]);
   useReportProblem("connections", err ? { chip: "Not read", title: err } : null, load);
 
   /*
@@ -2848,25 +2984,21 @@ function IntegrationsPane({ open }: { open: boolean }) {
   const all = status?.filter((x) => PROVIDERS.some((p) => p.id === x.id)) ?? null;
   const ok = all?.filter((x) => x.state === "connected").length ?? 0;
   const bad = all?.filter((x) => x.state === "error").length ?? 0;
-  const verdict = !all
-    ? <StatusBadge tone={err ? "err" : "checking"}>{err ? "Not read" : "Checking"}</StatusBadge>
-    : bad
-      ? <StatusBadge tone="err">{bad} {bad === 1 ? "needs" : "need"} attention</StatusBadge>
-      : <StatusBadge tone={ok === all.length && ok > 0 ? "ok" : "off"}>{ok} of {all.length} connected</StatusBadge>;
+  const readyN = ok, needsN = bad;
+  useEffect(() => { onCount({ total: PROVIDERS.length, ready: readyN, needs: needsN, busy }); }, [readyN, needsN, busy]);
+  const shown = (id: string) => {
+    const st = statusOf(id)?.state;
+    return filter === "all" || (filter === "ready" ? st === "connected" : st === "error");
+  };
   return (
     <>
-      <FlowLabel>Services</FlowLabel>
-      <div className="flex items-center gap-3 flex-wrap mb-1" style={{ columnSpan: "all" }}>
-        {verdict}
-        <span className="text-[12px] flex-1 min-w-0" style={{ color: "var(--text3)" }}>Pull requests, checks and review state, and where the things you owe come from. Each task provider you connect becomes a tab in Tasks.</span>
-        <Button pending={busy} onClick={() => void load()}>Recheck</Button>
-      </div>
+      {filter === "all" && <FlowLabel>Services</FlowLabel>}
       {err && (
         <SettingsCard title="Services" icon={<PlugIcon size={ICON.sm} />} tone="error" wide>
           <ProblemNote title={err} action={<Button pending={busy} onClick={() => void load()}>Try again</Button>}>The local server did not answer, so no service could be checked.</ProblemNote>
         </SettingsCard>
       )}
-      {PROVIDERS.map((p) => (
+      {PROVIDERS.filter((p) => shown(p.id)).map((p) => (
         <ProviderCard key={p.id} spec={p} status={statusOf(p.id)} checking={!status && !err} onChanged={load} />
       ))}
     </>
@@ -2938,7 +3070,10 @@ function ProviderCard({ spec, status, checking, onChanged }: {
   // own height in as the truth.
   useEffect(() => {
     if (waiting || !box.current) return;
-    rememberHeight(spec.id, box.current.getBoundingClientRect().height);
+    // The card's body: what the placeholder row stands in for.
+    const card = box.current.closest(".agx-scard");
+    const head = card?.querySelector(".agx-scard-head");
+    if (card && head) rememberHeight(spec.id, card.getBoundingClientRect().height - head.getBoundingClientRect().height);
   });
 
   // A card with no answer yet must not claim one. Showing "Not connected"
@@ -3068,45 +3203,45 @@ function ProviderCard({ spec, status, checking, onChanged }: {
             Disconnect
           </Button>
         : undefined}>
-      <SettingRow
-        agentExempt
-        rowRef={box}
-        /* Still remembered, still for the same reason: the tile grows a detail
-           line and, when it is not connected, a form under it. Measured when it
-           was one row, the page still moved 145px without this. */
-        minHeight={waiting ? rememberedHeights()[spec.id] ?? 56 : undefined}
-        label={waiting ? "Checking…" : look.label}
-        hint={<>
-          {status?.detail && <span className="block">{status.detail}</span>}
+      {waiting ? (
+        <SettingRow agentExempt rowRef={box} minHeight={rememberedHeights()[spec.id] ?? 56} label="Checking…"
+          hint={<span className="agx-skeleton block mt-1 rounded" style={{ height: 13, maxWidth: 240 }} aria-hidden />} />
+      ) : (
+        <>
+          {/* The verdict's own words: who you are signed in as, what is wrong, what is left to do. */}
+          <CheckRow tone={connected ? "ok" : look.tone === "err" ? "err" : "off"} label={connected ? "Account" : look.label}
+            value={status?.detail ?? (connected ? undefined : "no token yet")} />
           {/* When that verdict was actually taken. The row above is read from a
               cache — deliberately, because asking ClickUp live costs ten
               seconds of its latency for a question the token answers — and a
               cached verdict drawn with no date claims to be a live one. */}
-          {checked && <span className="block mt-1">{checked}</span>}
+          {checked && <CheckRow tone="off" label="Checked" value={checked.replace(/^Checked\s*/i, "")} />}
           {/* Half of a provider can be down while the other half looks fine —
               the ClickUp card bell fails on its own six-minute timer. Warning
-              ink and UNDER the detail, because it qualifies the verdict instead
+              ink and its own line, because it qualifies the verdict instead
               of being it: a connected row with a broken bell is still connected. */}
-          {status?.notice && <span className="block mt-1" style={{ color: "var(--warning-ink)" }}>{status.notice}</span>}
+          {status?.notice && <CheckRow tone="warn" label="Notice" value={status.notice} />}
           {connected && spec.id === "clickup" && (
-            <span className="block mt-1">
+            <div className="agx-chk-more">
               <button type="button" className="agx-textlink" onClick={() => void changeWorkspace()}>Change workspace</button>
               {" · "}
               <button type="button" className="agx-textlink" onClick={() => openSettings("clickup")}>Workflow and boards</button>
-            </span>
+            </div>
           )}
-          {waiting && <span className="agx-skeleton block mt-1 rounded" style={{ height: 13, maxWidth: 240 }} aria-hidden />}
-        </>}
-        /* The standing caveat about a provider — true whether or not you ever
-           connect it, and read once — behind a summary that says what it is. */
-        detail={spec.note && !connected && !waiting && !isJira ? { summary: spec.noteTitle ?? "About the credential", body: spec.note } : undefined}
-        below={below}
-      />
+          {/* The standing caveat about a provider — true whether or not you ever
+              connect it, and read once — behind a summary that says what it is. */}
+          {spec.note && !connected && !isJira && (
+            <div className="agx-chk-more"><Disclosure summary={spec.noteTitle ?? "About the credential"}>{spec.note}</Disclosure></div>
+          )}
+          {below && <div className="agx-chk-more">{below}</div>}
+          <div ref={box} hidden />
+        </>
+      )}
     </SettingsCard>
   );
 }
 
-function RequirementsPane({ open }: { open: boolean }) {
+function RequirementsPane({ open, filter, nonce, onCount }: { open: boolean; filter: ToolsFilter; nonce: number; onCount: (c: ToolsCount) => void }) {
   /**
    * Where the install shell opens.
    *
@@ -3146,7 +3281,13 @@ function RequirementsPane({ open }: { open: boolean }) {
   // Probed on open rather than at startup: it costs a handful of PATH lookups
   // plus two cached subprocess answers, and nothing outside this pane wants it.
   useEffect(() => { if (open) void load(false); }, [open]);
+  useEffect(() => { if (open && nonce) void load(true); }, [nonce]);
   useReportProblem("connections", err ? { chip: "Not checked", title: err } : null, () => void load(true));
+  useEffect(() => {
+    const live = (deps ?? []).filter((d) => d.status !== "unsupported");
+    onCount({ total: live.length, ready: live.filter((d) => d.status === "ok").length, busy,
+      needs: live.filter((d) => d.status === "attention" || (d.status === "missing" && d.required)).length });
+  }, [deps, busy]);
 
   const recheck = <Button pending={busy} onClick={() => void load(true)}>Recheck</Button>;
   const desc = <>
@@ -3176,31 +3317,23 @@ function RequirementsPane({ open }: { open: boolean }) {
   // is missing is the whole reason somebody opened this page.
   const wants = live.filter((d) => d.status !== "ok").sort(byUrgency);
   const ready = live.filter((d) => d.status === "ok").sort((a, b) => a.title.localeCompare(b.title));
-  const broken = live.filter((d) => d.status === "missing" && d.required).length;
-  const wanting = live.filter((d) => d.status === "attention" || (d.status === "missing" && !d.required)).length;
 
+  /* Needs you is what the person must act on: a needed tool missing, a tool that is there and not usable.
+     An optional tool nobody installed is neutral: it is in All, under its own tile. */
+  const needs = (d: DepReport) => d.status === "attention" || (d.status === "missing" && d.required);
+  const tiles = filter === "ready" ? [] : filter === "needs" ? wants.filter(needs) : wants;
   return (
-    /* The verdict and the recheck sit in one bar above the tiles. Only what wants
-       something gets a tile (the status, the detail, the install); the ones that
+    /* Only what wants something gets a tile (the status, the lines, the install); the ones that
        are ready collapse into one card, where a name and a dot are enough. */
     <>
-      <div className="flex items-center gap-3 flex-wrap mb-1" style={{ columnSpan: "all" }}>
-        {broken
-          ? <StatusBadge tone="err">{broken} needed {broken === 1 ? "tool" : "tools"} missing</StatusBadge>
-          : wanting
-            ? <StatusBadge tone={live.some((d) => d.status === "attention") ? "warn" : "off"}>{wanting} optional {wanting === 1 ? "feature" : "features"} off</StatusBadge>
-            : <StatusBadge tone="ok">Everything is here</StatusBadge>}
-        <span className="text-[12px] flex-1 min-w-0" style={{ color: "var(--text3)" }}>{desc}</span>
-        {recheck}
-      </div>
-      <FlowLabel>On this machine</FlowLabel>
-      {wants.map((d) => <DepRow key={d.id} d={d} home={shellRoot} />)}
+      {filter === "all" && <FlowLabel>On this machine</FlowLabel>}
+      {tiles.map((d) => <DepRow key={d.id} d={d} home={shellRoot} />)}
 
-      {(ready.length > 0 || idle.length > 0) && (
+      {filter !== "needs" && (ready.length > 0 || idle.length > 0) && (
         <SettingsCard title={wants.length ? "Ready" : "Everything found"} icon={<ServerIcon size={ICON.sm} />}
           status={<StatusBadge tone="ok">{ready.length} ready</StatusBadge>}>
           {ready.length > 0 && (
-            <Fold label={wants.length ? `${ready.length} more ready` : `${ready.length} ready`}
+            <Fold label={wants.length ? `${ready.length} more ready` : `${ready.length} ready`} defaultOpen={filter === "ready"}
               hint="Everything else agentglass looks for, and found.">
               <DepGrid deps={ready} />
             </Fold>
@@ -3214,6 +3347,30 @@ function RequirementsPane({ open }: { open: boolean }) {
           )}
         </SettingsCard>
       )}
+    </>
+  );
+}
+
+/** Tools & services: what this machine has and what the services say, under one filter and one Recheck. */
+function ToolsPane({ open }: { open: boolean }) {
+  const [filter, setFilter] = useState<ToolsFilter>("all");
+  const [nonce, setNonce] = useState(0);
+  const [deps, setDeps] = useState<ToolsCount>({ total: 0, ready: 0, needs: 0, busy: false });
+  const [provs, setProvs] = useState<ToolsCount>({ total: 0, ready: 0, needs: 0, busy: false });
+  const ready = deps.ready + provs.ready, needs = deps.needs + provs.needs, total = deps.total + provs.total;
+  useReportHead("connections", total ? { chips: [{ tone: "ok", text: `${ready} ready` }, ...(needs ? [{ tone: "warn" as const, text: `${needs} need you` }] : [])] } : null);
+  return (
+    <>
+      <div className="agx-tools-bar">
+        <SegControl<ToolsFilter> label="Show" value={filter} onPick={setFilter}
+          options={[{ v: "all", label: `All ${total}` }, { v: "ready", label: `Ready ${ready}` }, { v: "needs", label: `Needs you ${needs}` }]} />
+        <span className="flex-1" />
+        <Button pending={deps.busy || provs.busy} onClick={() => setNonce((n) => n + 1)}>
+          <IconLabel icon={<RefreshIcon size={ICON.xs} />}>Recheck</IconLabel>
+        </Button>
+      </div>
+      <RequirementsPane open={open} filter={filter} nonce={nonce} onCount={setDeps} />
+      <IntegrationsPane open={open} filter={filter} nonce={nonce} onCount={setProvs} />
     </>
   );
 }
@@ -3823,8 +3980,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
   /** Facts only the nav's marks and the page header's chips read. `null` is a
    *  read that has not landed or that failed: it draws no mark rather than a
    *  guess. Read with the batch above, once per open. */
-  const [facts, setFacts] = useState<Pick<NavFacts, "hooksWired" | "tmuxOk" | "jiraConnected" | "lanternWatching" | "updateAvailable" | "notificationsOn" | "pluginsRunning" | "pluginsNeed">>({
-    hooksWired: null, tmuxOk: null, jiraConnected: null, lanternWatching: null, updateAvailable: null, notificationsOn: null,
+  const [facts, setFacts] = useState<Pick<NavFacts, "hooksWired" | "gateOff" | "tmuxOk" | "jiraConnected" | "lanternWatching" | "updateAvailable" | "notificationsOn" | "pluginsRunning" | "pluginsNeed">>({
+    hooksWired: null, gateOff: null, tmuxOk: null, jiraConnected: null, lanternWatching: null, updateAvailable: null, notificationsOn: null,
     pluginsRunning: null, pluginsNeed: null,
   });
   useEffect(() => {
@@ -3834,14 +3991,14 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
       api.dependencies().then((r) => r.deps).catch(() => null),
       api.providers().then((r) => r.providers).catch(() => null),
       api.remoteStatus().then((r) => (r.clients.liveCount > 0 ? ("live" as const) : ("idle" as const))).catch(() => null),
-      api.hooksStatus().then((r) => r.installed).catch(() => null),
+      api.hooksStatus().then((r) => ({ installed: r.installed, gateOff: r.gateBundled && !r.gate })).catch(() => null),
       api.logDigest().catch(() => "failed" as const),
       api.jiraStatus().then((r) => r.connected).catch(() => null),
       api.lanternSettings().then((r) => (r.ok && typeof r.watch === "boolean" ? r.watch : null)).catch(() => null),
       api.updateStatus().then((r) => isUpdateAvailable(r)).catch(() => null),
       api.notifyPrefs().then((r) => (r.ok ? !r.prefs.none : null)).catch(() => null),
       api.plugins().then((r) => r.plugins).catch(() => null),
-    ]).then(([deps, provs, remote, hookInstalled, digest, jira, lanternWatching, updateAvailable, notificationsOn, plugs]) => {
+    ]).then(([deps, provs, remote, hookState, digest, jira, lanternWatching, updateAvailable, notificationsOn, plugs]) => {
       if (!live) return;
       setBadges({
         connections: connectionsNeeding(deps ?? [], provs ?? []),
@@ -3849,12 +4006,13 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
       });
       setLogDigest(digest);
       setOnboarding({
-        hook: hookInstalled === true,
+        hook: hookState?.installed === true,
         provider: (provs ?? []).some((p) => p.state === "connected"),
         paneEngine: (deps ?? []).some((d) => d.id === "tmux" && d.status === "ok"),
       });
       setFacts({
-        hooksWired: hookInstalled,
+        hooksWired: hookState === null ? null : hookState.installed,
+        gateOff: hookState?.gateOff ?? null,
         tmuxOk: deps === null ? null : deps.some((d) => d.id === "tmux" && d.status === "ok"),
         jiraConnected: jira, lanternWatching, updateAvailable, notificationsOn,
         pluginsRunning: plugs === null ? null : plugs.filter((x) => x.running).length,
@@ -4329,7 +4487,11 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
   const [problems, setProblems] = useState<Record<string, PageProblem>>({});
   const [needsBy, setNeedsBy] = useState<Record<string, PageNeed>>({});
   const [saving, setSaving] = useState<ReadonlySet<string>>(() => new Set());
+  // The page's own verdict beside its title (Orchestration names the setup in force); the pane publishes it.
+  const [pageChip, setPageChip] = useState<HeaderChip | null>(null);
   const retries = useRef<Record<string, () => void>>({});
+  const [heads, setHeads] = useState<Record<string, PageHead>>({});
+  const headRuns = useRef<Record<string, () => void>>({});
   const pageState = useMemo<PageStateSink>(() => ({
     problem: (page, p, retry) => {
       if (p && retry) retries.current[page] = retry;
@@ -4341,6 +4503,13 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
       if (n) next[page] = n; else delete next[page];
       return next;
     }),
+    head: (page, h, run) => {
+      if (h && run) headRuns.current[page] = run;
+      setHeads((cur) => {
+        if (!h) { if (!(page in cur)) return cur; const { [page]: _gone, ...rest } = cur; return rest; }
+        return { ...cur, [page]: h };
+      });
+    },
     saving: (page, on) => setSaving((cur) => {
       if (cur.has(page) === on) return cur;
       const next = new Set(cur);
@@ -4428,8 +4597,9 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
               {navTab && (
                 <SettingsPageHeader
                   label={navTab.label} group={groupByName(navTab.group) ?? null} icon={navTab.icon} what={navTab.what}
-                  chips={pageChips(navTab.id, headerChips(navTab.id, marks[navTab.id] ?? NO_MARK, saving.has(navTab.id), savedPages.has(navTab.id)), pageFacts)}
-                  primary={problems[navTab.id] ? <Button tone="primary" onClick={() => retries.current[navTab.id]?.()}>Try again</Button> : undefined}
+                  chips={pageChips(navTab.id, headerChips(navTab.id, marks[navTab.id] ?? NO_MARK, saving.has(navTab.id), savedPages.has(navTab.id), heads[navTab.id]?.chips), pageFacts).concat(navTab.id === "orchestration" && pageChip ? [pageChip] : [])}
+                  primary={problems[navTab.id] ? <Button tone="primary" onClick={() => retries.current[navTab.id]?.()}>Try again</Button>
+                    : heads[navTab.id]?.action ? <Button tone="primary" onClick={() => headRuns.current[navTab.id]?.()}>{heads[navTab.id]!.action!.plain ? heads[navTab.id]!.action!.label : <IconLabel icon={<PlusIcon size={ICON.xs} />}>{heads[navTab.id]!.action!.label}</IconLabel>}</Button> : undefined}
                   reset={pageModified(navTab.id) || ALWAYS_RESET.has(navTab.id) ? <Button disabled={!pageModified(navTab.id)} onClick={() => resetPage(navTab.id)}>{RESET_WORD[navTab.id] ?? "Reset page"}</Button> : undefined} />
               )}
               {/* The page's hue (its group's) tints every card's icon chip; a board's width
@@ -4740,26 +4910,6 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   )}
                   {ql && show("privacy") && <PageMatchHeading id="privacy" onOpen={() => { setPane("privacy" as Pane); setQ(""); }} />}
                   {show("privacy") && <PrivacyPane open={open} />}
-                  {show("privacy") && (
-                  <SettingsCard title="Take your data out" icon={<DownloadIcon />}
-                    desc="Everything this app has recorded, in a format something else can read.">
-                    {/* Scoped like everything else: with a project open these
-                        carry that project's rows, not the whole machine's. */}
-                    <Row label="Events — CSV" hint="One row per event, for a spreadsheet"
-                      href={api.exportUrl("csv")} download="agentglass-events.csv" />
-                    <Row label="Events — JSON" hint="Full payloads, for scripting"
-                      href={api.exportUrl("json")} download="agentglass-events.json" />
-                    {/* The only export that outlives retention: it reads the
-                        daily rollup as well as the live events, so a month
-                        that has already been pruned still comes out. */}
-                    <Row label="Daily totals — CSV" hint="One row per day, back past the retention window"
-                      href={api.exportUrl("csv", "daily")} download="agentglass-daily.csv" />
-                    <Row label="Daily totals — JSON" hint="The same series, with where the retention seam falls"
-                      href={api.exportUrl("json", "daily")} download="agentglass-daily.json" />
-                    <Row label="Skills catalog — Markdown" hint="Every skill the fleet has available"
-                      href={api.skillsExportUrl()} download="agentglass-skills.md" />
-                  </SettingsCard>
-                  )}
                   {ql && show("recipes") && <PageMatchHeading id="recipes" onOpen={() => { setPane("recipes" as Pane); setQ(""); }} />}
                   {show("recipes") && <RecipesPane open={open} />}
                   {ql && show("review-prompts") && <PageMatchHeading id="review-prompts" onOpen={() => { setPane("review-prompts" as Pane); setQ(""); }} />}
@@ -4864,7 +5014,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                     <Toggle on={usageRefresh}
                       onClick={() => { setUsageRefreshOn(!usageRefresh); setUsageRefreshState(!usageRefresh); }}
                       label="Keep Codex usage current"
-                      hint="Runs a minimal Codex turn hourly so the quota reading is not stale — uses a small amount of the quota it measures" />
+                      hint="Reads the meter hourly while the window is open."
+                      detail={{ summary: "Details", body: <>Runs a minimal Codex turn hourly so the quota reading is not stale. It uses a small amount of the quota it measures.</> }} />
                   </SettingsCard>
                   )}
 
@@ -5010,40 +5161,14 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   {ql && show("engines") && <PageMatchHeading id="engines" onOpen={() => { setPane("engines" as Pane); setQ(""); }} />}
                   {show("engines") && <EnginesPane />}
                   {ql && show("orchestration") && <PageMatchHeading id="orchestration" onOpen={() => { setPane("orchestration" as Pane); setQ(""); }} />}
-                  {show("orchestration") && <OrchestrationPane />}
+                  {show("orchestration") && <OrchestrationPane onChip={setPageChip} />}
                   {ql && show("hooks") && <PageMatchHeading id="hooks" onOpen={() => { setPane("hooks" as Pane); setQ(""); }} />}
 
                   {show("hooks") && (
                   <AgentsPage open={open}
                     chats={
-                    <SettingsCard title="New chats" icon={<PanesIcon size={ICON.sm} />}
-                      desc="What a chat gets when it starts.">
-                      {/* Merged from a separate "Chat" page: this and the tmux
-                          binary above answer the same question — what a pane
-                          actually runs on — and a person who came here to
-                          change the prefix key is the same person who wants
-                          to know whether a new chat gets one of these. */}
-                      <Choice<"server" | "process" | "tmux">
-                        label="How new chats run"
-                        hint={
-                          tmuxEngine && !tmuxEngine.available
-                            ? `tmux panes unavailable: ${tmuxEngine.reason}. Chats still run, one process per turn. See Requirements for how to add tmux.`
-                            : "Panes keep a warm claude per chat: faster turns, and you can attach from your terminal. Separate takes longer per turn and leaves nothing running."
-                        }
-                        disabled={tmuxEngine ? !tmuxEngine.available : true}
-                        disabledHint={tmuxEngine ? `Unavailable: ${tmuxEngine.reason}` : "Checking…"}
-                        value={enginePref ?? "server"}
-                        onPick={(v) => {
-                          const next = v === "server" ? null : v;
-                          setChatEnginePref(next);
-                          setEnginePref(next);
-                        }}
-                        options={[
-                          { v: "server", label: tmuxEngine?.defaultOn ? "Default (panes)" : "Default (separate)" },
-                          { v: "process", label: "Separate" },
-                          { v: "tmux", label: "tmux panes" },
-                        ]} />
-                    </SettingsCard>
+                    <NewChatsCard open={open} tmuxEngine={tmuxEngine} enginePref={enginePref}
+                      onEngine={(next) => { setChatEnginePref(next); setEnginePref(next); }} />
                     }
                     panes={tmuxEngine?.available ? <RunningPanes open={open} /> : null}
                     browser={HAS_BROWSER ? <AgentBrowserPane open={open} /> : null}
@@ -5062,7 +5187,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   </>
                   )}
                   {ql && show("connections") && <PageMatchHeading id="connections" onOpen={() => { setPane("connections" as Pane); setQ(""); }} />}
-                  {show("connections") && <><RequirementsPane open={open} /><IntegrationsPane open={open} /></>}
+                  {show("connections") && <ToolsPane open={open} />}
                   {ql && show("clickup") && cu && <PageMatchHeading id="clickup" onOpen={() => { setPane("clickup" as Pane); setQ(""); }} />}
                   {show("clickup") && cu && <ClickUpPane />}
                   {ql && show("jira") && <PageMatchHeading id="jira" onOpen={() => { setPane("jira" as Pane); setQ(""); }} />}

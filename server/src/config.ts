@@ -10,6 +10,7 @@ import type { Budget, GateRule } from "../../shared/types.ts";
 import { agentProvider } from "../../shared/agentKinds.ts";
 import { validateStored, type StoredPolicy } from "../../shared/orchestration.ts";
 import { DEFAULT_LAUNCH_DENY, isLaunchMode, parseDenyRules, type LaunchMode } from "../../shared/launchModes.ts";
+import { GATE_ANSWERERS, GATE_ON_TIMEOUT, CHAT_START_IN, CHAT_MODES, isOneOf, type GateAnswerer, type GateOnTimeout, type ChatStartIn, type ChatMode } from "../../shared/agentDefaults.ts";
 import { WORKER_ROLES, MODEL_RE, workerRole, type RoleChoice, type RoleId } from "../../shared/workerRoles.ts";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, realpathSync, readlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -143,6 +144,8 @@ interface Config {
   lanternNudge?: boolean;
   /** How often that reminder may repeat for one session, in minutes. */
   lanternNudgeMinutes?: number;
+  /** How long history is kept, in days (0 keeps everything). The environment variable wins. */
+  retentionDays?: number;
   /** The Lantern's watch: re-read the field every N minutes and notify when
    *  somebody is still stopped on a person, a worker's window vanished, or
    *  work that was claimed has gone quiet. On by default. See lanternwatch.ts. */
@@ -161,6 +164,14 @@ interface Config {
   /** Tools denied on every launch, one rule each. Absent means the shipped
    *  pair; an empty list is a person having cleared it. */
   launchDeny?: string[];
+  /** Who is told first when the gate holds an outward action, what happens when
+   *  nobody answers, the folder and mode a new chat starts with, and the rules
+   *  every chat turn is denied. See shared/agentDefaults.ts. */
+  gateAnswerer?: string;
+  gateOnTimeout?: string;
+  chatStartIn?: string;
+  chatMode?: string;
+  chatDeny?: string[];
   /** The person's switch: an agent's escalation applies without a request. Off
    *  unless the person turned it on (shared/settingClass.ts). */
   agentsChangeWithoutAsking?: boolean;
@@ -1252,6 +1263,16 @@ export const LANTERN_NUDGE_DEFAULT_MIN = 20;
 export const LANTERN_NUDGE_MIN_MIN = 5;
 export const LANTERN_NUDGE_MAX_MIN = 180;
 
+/** The retention the person chose in Settings, or null when none was (the environment, then the default, decide). */
+export function retentionDaysSetting(): number | null {
+  const n = config().retentionDays;
+  return typeof n === "number" && Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+}
+
+export function writeRetentionDays(days: number): { ok: boolean; persisted: boolean; error?: string } {
+  return mergeConfig({ retentionDays: Math.max(0, Math.floor(days)) }, "retention");
+}
+
 export function lanternNudge(): boolean {
   return config().lanternNudge !== false;
 }
@@ -1332,6 +1353,40 @@ export function writeLaunchPermissions(fields: { mode?: unknown; deny?: unknown 
     out.launchDeny = rules;
   }
   return mergeConfig(out, "launch permissions");
+}
+
+/** The Agents page's choices the server holds (shared/agentDefaults.ts): anything unusable reads as the default. */
+export const gateAnswerer = (): GateAnswerer => (isOneOf(GATE_ANSWERERS, config().gateAnswerer) ? (config().gateAnswerer as GateAnswerer) : "me");
+export const gateOnTimeout = (): GateOnTimeout => (isOneOf(GATE_ON_TIMEOUT, config().gateOnTimeout) ? (config().gateOnTimeout as GateOnTimeout) : "drop");
+export const chatStartIn = (): ChatStartIn => (isOneOf(CHAT_START_IN, config().chatStartIn) ? (config().chatStartIn as ChatStartIn) : "last");
+export const chatMode = (): ChatMode => (isOneOf(CHAT_MODES, config().chatMode) ? (config().chatMode as ChatMode) : "inherit");
+/** Denied on every chat turn, on top of nothing: absent is an empty list. */
+export function chatDeny(): string[] {
+  const raw = config().chatDeny;
+  return Array.isArray(raw) ? parseDenyRules(raw.filter((x): x is string => typeof x === "string").join("\n")).rules : [];
+}
+
+/** One field at a time, each checked against its list; a rule that does not parse refuses the whole write. */
+export function writeAgentDefaults(fields: { gateAnswerer?: unknown; gateOnTimeout?: unknown; chatStartIn?: unknown; chatMode?: unknown; chatDeny?: unknown }):
+{ ok: boolean; persisted: boolean; error?: string } {
+  const out: Record<string, unknown> = {};
+  const pick = <T extends string>(key: string, list: readonly T[], v: unknown) => {
+    if (v === undefined) return null;
+    if (!isOneOf(list, v)) return `${key}: one of ${list.join(", ")}`;
+    out[key] = v;
+    return null;
+  };
+  const no = pick("gateAnswerer", GATE_ANSWERERS, fields.gateAnswerer) ?? pick("gateOnTimeout", GATE_ON_TIMEOUT, fields.gateOnTimeout)
+    ?? pick("chatStartIn", CHAT_START_IN, fields.chatStartIn) ?? pick("chatMode", CHAT_MODES, fields.chatMode);
+  if (no) return { ok: false, persisted: false, error: no };
+  if (fields.chatDeny !== undefined) {
+    const text = Array.isArray(fields.chatDeny) ? fields.chatDeny.map(String).join("\n") : typeof fields.chatDeny === "string" ? fields.chatDeny : null;
+    if (text === null) return { ok: false, persisted: false, error: "the deny list is one rule per line" };
+    const { rules, bad } = parseDenyRules(text);
+    if (bad.length) return { ok: false, persisted: false, error: `not a rule: ${bad.slice(0, 3).join(", ")}` };
+    out.chatDeny = rules;
+  }
+  return mergeConfig(out, "agent defaults");
 }
 
 export function writeLanternSettings(fields: { lanternNudge?: boolean; lanternNudgeMinutes?: number; lanternWatch?: boolean; lanternWatchMinutes?: number; cacheTtlMinutes?: number }):

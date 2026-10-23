@@ -19,7 +19,7 @@ import { SettingRow, Switch, Toggle } from "./SettingRow.tsx";
 import { EmptyState, Field, SettingsCard, SettingsForm, StatusBadge, helpIdFor } from "./SettingsKit.tsx";
 import { useReportProblem } from "./SettingsPageState.tsx";
 import { problemChip } from "../lib/settingsStates.ts";
-import { Button, INPUT, INPUT_STYLE, Segmented } from "./workspace/Chrome.tsx";
+import { Button, INPUT, INPUT_STYLE, RefreshButton, Segmented } from "./workspace/Chrome.tsx";
 import { Dot, StatusPopover, type PanelView } from "./StatusPanel.tsx";
 import { ListEye, WorkflowMap } from "./WorkflowMap.tsx";
 import { WFM_CSS } from "./workflowMapStyle.ts";
@@ -120,6 +120,52 @@ export function WaitingMap({ name = n.name }: { name?: string }) {
       actions={<Button tone="primary" disabled><PlusIcon size={ICON.xs} /> Add a step</Button>}>
       <EmptyState>{`Appears once ${name} is connected.`}</EmptyState>
     </SettingsCard>
+  );
+}
+
+/** The minute's allowance, as the last response said it: nothing here asks ClickUp for anything. */
+function RequestBudgetCard({ epoch }: { epoch: number }) {
+  const [b, setB] = useState<{ limit: number; used: number; resetsInSec: number; known: boolean } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => { setBusy(true); void api.clickupBudget().then((r) => { if (r.ok) setB(r); }).catch(() => undefined).finally(() => setBusy(false)); }, []);
+  // On opening the page and on a Re-read, never on a timer: a number nobody is looking at is a request for nothing.
+  useEffect(() => { load(); }, [load, epoch]);
+  const pct = b ? Math.min(100, Math.round((b.used / b.limit) * 100)) : 0;
+  const tone = pct >= 90 ? "var(--error)" : pct >= 70 ? "var(--warning)" : "var(--success)";
+  return (
+    <SettingsCard title="Request budget" icon={<SlidersIcon size={ICON.sm} />} desc={`The tracker allows about ${b?.limit ?? 100} requests a minute per token.`}
+      status={b?.known ? <StatusBadge tone={pct >= 90 ? "err" : pct >= 70 ? "warn" : "ok"}>{pct} % used</StatusBadge> : undefined}>
+      <SettingRow agentExempt label="Last minute" hint="Cached reads do not count."
+        detail={{ summary: "Details", body: <>Read from the allowance ClickUp reported on its last answer, so looking costs nothing. It shows a full minute until this window has made a request, and again once the minute has turned over.</> }}
+        control={<RefreshButton onRefresh={load} busy={busy} title="Read the allowance again" />}
+        below={b && (
+          <span className="agx-btable-bar" role="img" aria-label={`${b.used} of ${b.limit} requests used`}>
+            <span className="agx-btable-track" style={{ flexBasis: 140 }}><span style={{ width: `${pct}%`, background: tone }} /></span>
+            <span className="tabular-nums">{b.used} / {b.limit}</span>
+            {b.known && b.resetsInSec > 0 && <span className="t-dim">resets in {b.resetsInSec} s</span>}
+            {!b.known && <span className="t-dim">no request made yet this minute</span>}
+          </span>
+        )} />
+    </SettingsCard>
+  );
+}
+
+/** Disconnect, asked once: the saved boards are the person's own list and survive. */
+function DisconnectBar({ onDone }: { onDone: () => void }) {
+  const [asking, setAsking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const go = async () => {
+    setBusy(true);
+    await api.providerDisconnect("clickup", { forgetBoards: false }).catch(() => undefined);
+    __forgetClickupSetup(); __forgetClickupPrefs(); __forgetClickupSpaces();
+    setBusy(false); setAsking(false); onDone();
+  };
+  return (
+    <div className="agx-gb-foot">
+      {asking && <span className="text-[12px] flex-1" style={{ color: "var(--text2)" }}>Your saved boards and steps stay. Reconnect with a token whenever you like.</span>}
+      {asking && <Button disabled={busy} onClick={() => setAsking(false)}>Cancel</Button>}
+      <Button tone="danger" pending={busy} aria-expanded={asking} onClick={() => (asking ? void go() : setAsking(true))}>{asking ? `Disconnect ${n.name}` : "Disconnect"}</Button>
+    </div>
   );
 }
 
@@ -250,6 +296,7 @@ export function ClickUpPane() {
           status={<span data-guard={changesOn ? "on" : "off"}><StatusBadge tone={changesOn ? "warn" : "off"}>{changesOn ? "On" : "Read-only"}</StatusBadge></span>}
           control={<button type="button" role="switch" aria-checked={changesOn} aria-labelledby="cu-changes-l" disabled={writes === null}
             onClick={() => void setChanges(!changesOn)} className="agx-switch-hit inline-flex items-center rounded-full" style={{ minHeight: HIT }}><Switch on={changesOn} /></button>} />
+        <DisconnectBar onDone={() => { setEpoch((e) => e + 1); reread(); }} />
       </SettingsCard>
 
       <Card id="cu-found" icon={<SearchIcon size={ICON.sm} />} title="What we found" open={foundOpen ?? steps.length === 0} onToggle={setFoundOpen}
@@ -320,6 +367,8 @@ export function ClickUpPane() {
           {!linked && ` This pull request names no ${n.item}: no ${n.name} block on it and no Pull requests section on the ${n.item}. Tasks works on its own.`}
         </div>
       </Card>
+
+      <RequestBudgetCard epoch={epoch} />
 
       <div ref={advRef}>
         <Card id="cu-adv" icon={<SlidersIcon size={ICON.sm} />} title="Advanced" desc="The fields and patterns the reading above is built on." open={advOpen} onToggle={setAdvOpen}>

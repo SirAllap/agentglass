@@ -23,7 +23,7 @@ const READY = [engine("claude"), engine("opencode"), engine("hermes", { found: f
 const policy = (rules: PolicyRule[] = []): Policy => ({
   ...composePolicy(defaultStored(), {
     orchestrator: { engine: "claude", model: "sonnet" },
-    workers: { scout: { engine: "opencode", model: "" }, builder: { engine: "claude", model: "sonnet" }, verifier: { engine: "claude", model: "haiku" } },
+    workers: { scout: { engine: "opencode", model: "" }, builder: { engine: "claude", model: "sonnet" }, reviewer: { engine: "claude", model: "sonnet" }, verifier: { engine: "claude", model: "haiku" } },
   }),
   rules,
 });
@@ -44,7 +44,7 @@ describe("role words", () => {
 describe("the flow picture", () => {
   test("the default: every job on its base choice, 'no rule is on'", () => {
     const nodes = flowNodes(policy([thin]), holds([]), READY);
-    expect(nodes.map((n) => n.field)).toEqual(["orchestrator", "scout", "builder", "verifier"]);
+    expect(nodes.map((n) => n.field)).toEqual(["orchestrator", "scout", "builder", "reviewer", "verifier"]);
     expect(nodes[0]!.sentence).toBe(`The main agent is ${title("claude")} sonnet: no rule is on.`);
     expect(nodes[2]!.chain).toEqual([{ engine: "claude", model: "sonnet" }]);
   });
@@ -73,7 +73,7 @@ describe("the flow picture", () => {
 describe("test it now", () => {
   test("one sentence per job, from the draft policy and this machine", () => {
     const out = testItNow(policy([thin]), holds(["thin-week"]), READY);
-    expect(out).toHaveLength(4);
+    expect(out).toHaveLength(5);
     expect(out[2]).toContain("big-pickle");
   });
   test("before the machine is checked it says so and runs nothing", () => {

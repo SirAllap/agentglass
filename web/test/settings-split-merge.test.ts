@@ -33,9 +33,11 @@ describe("slice 5: Lantern split, usage, data", () => {
   test("Export rows are a section of Data & privacy", () => {
     const b = block("privacy");
     expect(b).toContain("<PrivacyPane");
-    expect(b).toContain('<SettingsCard title="Take your data out"');
-    expect(b).toContain("api.exportUrl(");
-    expect(b).toContain("api.skillsExportUrl()");
+    // The card moved into the page's own component, so the exports sit in the same card order as the rest of the page.
+    const pane = src.slice(src.indexOf("function PrivacyPane("), src.indexOf("type ToolsFilter"));
+    expect(pane).toContain('<SettingsCard title="Take your data out"');
+    expect(pane).toContain("api.exportUrl(");
+    expect(pane).toContain("api.skillsExportUrl()");
     expect(src).not.toContain('show("export")');
   });
 

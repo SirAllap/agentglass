@@ -25,6 +25,8 @@ import { useDialogs } from "./ConfirmDialog.tsx";
 import { useCallback, useEffect, useState, useMemo, useSyncExternalStore } from "react";
 import { SettingRow, Switch } from "./SettingRow.tsx";
 import { EmptyState, Field, SettingsCard, SettingsForm, StatusBadge, type StatusTone } from "./SettingsKit.tsx";
+import { useReportHead } from "./SettingsPageState.tsx";
+import { SearchIcon } from "../lib/glyphIcons.tsx";
 import { api } from "../lib/api.ts";
 import { fmtAgo } from "../lib/format.ts";
 import { usePoll } from "../lib/usePoll.ts";
@@ -227,6 +229,8 @@ export function PluginsPane({ open, focus }: {
      is the bug that started this: a page for something that is gone used to
      sit in the nav until Settings was closed and opened again. */
   const here = showing ? plugins.find((p) => p.name === showing) : undefined;
+  /* Install is the page's one action, so it is in the header: on the list, not on a plugin's own settings. */
+  useReportHead("plugins", showing && here ? null : { action: { label: "Install a plugin" } }, () => setInstalling(true));
   useEffect(() => {
     if (showing && plugins.length && !plugins.some((p) => p.name === showing)) setShowing(null);
   }, [plugins, showing]);
@@ -256,16 +260,15 @@ export function PluginsPane({ open, focus }: {
           plugin is a row of the Installed card below, and the market is a card
           of its own: one idiom for the whole page, where there used to be a
           board of bordered tiles between two cards. */}
-      <SettingsCard title="Plugin system" desc="Nothing runs until you have read what it declares and switched it on.">
+      <SettingsCard label="Plugin system">
         <SettingRow
           onClick={busyMaster ? undefined : toggleMaster}
           role="switch"
           ariaChecked={!!master}
           label={master ? "Plugins are switched on" : "Plugins are switched off"}
-          hint={master ? "Enabled plugins may run" : "Nothing installed runs"}
-          detail={{ summary: "Details", body: master
+          hint={master
             ? "Enabled plugins may run. Turning this off stops every one of them immediately."
-            : "Nothing installed runs, no matter what it is enabled to do. Install and review still work." }}
+            : "Nothing installed runs, no matter what it is enabled to do. Install and review still work."}
           control={<Switch on={!!master} busy={busyMaster || master === null} />}
         />
         {masterError && <SettingRow label="The master switch was not changed" status={<StatusBadge tone="err">Failed</StatusBadge>} hint={masterError} />}
@@ -285,43 +288,40 @@ export function PluginsPane({ open, focus }: {
           {/* The list narrows by name, publisher and description at once, because
               "the one that watches the cockpit" is as likely a thing to remember
               as its name. */}
-          {plugins.length > 0 && (
+          <label className="agx-msearch" style={{ flex: "0 1 300px" }}>
+            <SearchIcon size={ICON.sm} />
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search plugins"
-              aria-label="Search installed plugins" className={`w-[260px] max-w-full ${INPUT}`}
-              style={{ ...INPUT_STYLE, height: PLUGIN_CTRL_H }} />
-          )}
+              aria-label="Search installed plugins" className={INPUT} style={INPUT_STYLE} />
+          </label>
           <RefreshButton onRefresh={() => void load()} title="Refresh the installed plugins" />
-          <Button tone="primary" style={{ height: PLUGIN_CTRL_H }} disabled={installing} onClick={() => setInstalling(true)}>Install a plugin</Button>
         </PageHead>
         {already && (
           <p className="m-0 mb-3 text-[12px]" style={{ color: "var(--text2)" }}>
             <strong>{already} is already installed.</strong> The link you followed asked for this one. It is in the list below; Update re-clones it at the source it came from.
           </p>
         )}
-        {plugins.length === 0 ? (
+        {plugins.length === 0 && (
           <EmptyState>Nothing installed yet. Install one from a folder or a git URL, or take one from the market below.</EmptyState>
-        ) : (
-          <div className="agx-plugin-grid">
-            {shown.map((p) => (
-              <PluginCard key={p.name} plugin={p} masterOn={!!master} envAllowsUnboxed={envAllowsUnboxed} onChanged={load}
-                update={marketUpdate(p, catalogue)} preview={marketEntry(p, catalogue)?.preview} onSettings={() => setShowing(p.name)} />
-            ))}
-          </div>
         )}
-        {/* The add form takes the tile's place, so "install another" is answered
-            where it was asked rather than at the top of the page. */}
-        {installing ? (
+        <div className="agx-plugin-grid">
+          {shown.map((p) => (
+            <PluginCard key={p.name} plugin={p} masterOn={!!master} envAllowsUnboxed={envAllowsUnboxed} onChanged={load}
+              update={marketUpdate(p, catalogue)} preview={marketEntry(p, catalogue)?.preview} onSettings={() => setShowing(p.name)} />
+          ))}
+          {/* A strip across the row on a laptop, a tile of the grid on a wide screen. While the form is open it
+              takes the tile's place, below, so "install another" is answered where it was asked. */}
+          {!installing && (
+            <button type="button" onClick={() => setInstalling(true)} className="agx-plugin-add">
+              <PlusIcon size={ICON.md} />
+              <b>{plugins.length ? "Install another plugin" : "Install a plugin"}</b>
+              <span>From the market below, a folder, or a git address.</span>
+            </button>
+          )}
+        </div>
+        {installing && (
           <div className="mt-4 rounded-xl overflow-hidden" style={{ background: "var(--surface-card)", border: LINE }}>
             <AddPluginCard onInstalled={load} open={installing} setOpen={setInstalling} prefill={prefill} />
           </div>
-        ) : (
-          <button type="button" onClick={() => setInstalling(true)}
-            className="agx-plugin-add mt-4 w-full rounded-xl flex items-center justify-center gap-x-4 gap-y-1 flex-wrap px-4 py-3.5 cursor-pointer">
-            <span className="inline-flex items-center gap-2 text-[13px] font-semibold" style={{ color: "var(--text)" }}>
-              <PlusIcon size={ICON.sm} /> Install another plugin
-            </span>
-            <span className="text-[12px] t-dim">From the market below, a folder, or a git address.</span>
-          </button>
         )}
         {plugins.length > 0 && shown.length === 0 && (
           <p className="m-0 text-[12px] t-dim">Nothing installed matches “{q.trim()}”</p>

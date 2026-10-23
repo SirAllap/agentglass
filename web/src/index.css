@@ -3346,8 +3346,19 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 }
 
 /* Plugins page: installed cards fill the width, two to a row once there is room for two 560px cards. */
-.agx-plugin-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(440px, 100%), 1fr)); gap: 16px; align-items: stretch; }
-.agx-plugin-add { background: transparent; border: 1px dashed var(--surface-line); color: var(--text2); transition: background-color 120ms ease, border-color 120ms ease; }
+/* Cards in the width there is: one under 760px of page, two from there, three on a wide screen. */
+.agx-plugin-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: stretch; }
+@container agx-settings (min-width: 760px) { .agx-plugin-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container agx-settings (min-width: 1500px) { .agx-plugin-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.agx-plugin-add {
+  grid-column: 1 / -1; display: flex; align-items: center; justify-content: center; gap: 8px 14px; flex-wrap: wrap; padding: 16px; border-radius: 13px; cursor: pointer;
+  background: transparent; border: 1px dashed var(--surface-line); color: var(--text2); font: inherit; transition: background-color 120ms ease, border-color 120ms ease;
+}
+.agx-plugin-add b { font-size: calc(14px * var(--agx-fs, 1)); color: var(--text); }
+.agx-plugin-add span { font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); max-width: 34ch; }
+@container agx-settings (min-width: 1500px) {
+  .agx-plugin-add { grid-column: auto; flex-direction: column; min-height: 200px; text-align: center; }
+}
 .agx-plugin-add:hover { background: var(--surface-card); border-color: color-mix(in srgb, var(--primary) 45%, var(--surface-line)); }
 .agx-perm > summary::-webkit-details-marker { display: none; }
 .agx-perm-caret { display: inline-block; transition: transform 120ms ease; }
@@ -3727,7 +3738,9 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
  * theme; the picked entry carries the page's hue on its left edge.
  */
 .agx-le-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 0 0 14px; column-span: all; }
-.agx-le-bar .agx-le-q { flex: 0 1 340px; min-width: 200px; }
+.agx-le-bar .agx-le-q { position: relative; flex: 1 1 200px; max-width: 340px; min-width: 180px; display: flex; }
+.agx-le-q > svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text3); pointer-events: none; }
+.agx-le-q > input { width: 100%; padding-left: 30px !important; }
 .agx-le { display: grid; grid-template-columns: minmax(300px, 430px) minmax(0, 1fr); gap: 18px; align-items: start; column-span: all; }
 @container agx-settings (max-width: 760px) { .agx-le { grid-template-columns: minmax(0, 1fr); } }
 .agx-le-list, .agx-le-ed {
@@ -3755,6 +3768,30 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-le-eh { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 14px 20px; border-bottom: 1px solid var(--surface-line); }
 .agx-le-et { margin: 0; font-size: calc(15px * var(--agx-fs, 1)); font-weight: 650; color: var(--text); }
 .agx-le-ed .agx-sform { gap: 0; }
+/* The editor of a prompt: fields beside the prompt when the card is wide enough for both, the prompt on top when it is not. */
+.agx-le-ed { container: agx-ed / inline-size; }
+.agx-le-eb { display: flex; flex-direction: column; }
+.agx-le-ep { order: -1; display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 16px 20px; }
+.agx-le-ef { display: flex; flex-direction: column; gap: 14px; padding: 16px 20px; border-top: 1px solid var(--surface-line); }
+@container agx-ed (min-width: 940px) {
+  .agx-le-eb { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); }
+  .agx-le-ep { order: 0; }
+  .agx-le-ef { border-top: 0; border-right: 1px solid var(--surface-line); }
+}
+.agx-le-pl { font-size: calc(13px * var(--agx-fs, 1)); font-weight: 650; color: var(--text); }
+.agx-le-vars { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); }
+.agx-le-vars button { border: 0; border-radius: 6px; padding: 2px 8px; font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--text); cursor: pointer; background: var(--surface-inset); }
+.agx-le-vars button:hover { background: color-mix(in srgb, var(--text) 12%, var(--surface-inset)); }
+.agx-le-count { font-variant-numeric: tabular-nums; }
+.agx-le-ta { width: 100%; min-height: 340px; resize: vertical; padding: 12px 14px; border-radius: 9px; font-size: calc(13px * var(--agx-fs, 1)); line-height: 1.55; color: var(--text); outline: none; }
+@container agx-ed (max-width: 939px) { .agx-le-ta { min-height: 240px; } }
+.agx-le-help { margin: 0; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); }
+.agx-le-pv { max-height: 150px; overflow: auto; border: 1px dashed var(--border2); border-radius: 9px; padding: 10px 14px; font-size: calc(12.5px * var(--agx-fs, 1)); line-height: 1.5; color: var(--text2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.agx-le-pv > b { color: var(--text); }
+.agx-le-pv mark { background: none; color: var(--primary-ink, var(--primary)); font-weight: 650; }
+.agx-le-pv-none { color: var(--text3); }
+.agx-le-chipb { border: 0; background: none; padding: 0; cursor: pointer; border-radius: 999px; }
+.agx-le-bar .agx-le-kind { width: auto; min-width: 128px; }
 .agx-le-body { display: flex; flex-direction: column; gap: 14px; padding: 16px 20px; }
 .agx-le-foot {
   display: flex; align-items: center; gap: 10px; padding: 12px 20px; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3);
@@ -3906,3 +3943,63 @@ html[data-reduce-motion] #ag-cover * { animation: none !important; }
 .agx-accent-dot[data-theme-dot] { background: linear-gradient(90deg, var(--text) 50%, var(--bg) 50%); box-shadow: inset 0 0 0 1px var(--border2); }
 .agx-accent-dot[aria-pressed="true"] { outline: 2.5px solid var(--text); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { .agx-theme-tile, .agx-accent-dot { transition: none; transform: none; } }
+
+/* ── engine tiles: one tile per CLI, a checklist, a foot of actions ──
+   Equal-height rows (the grid stretches), two columns on a laptop, three on a wide screen. A tile
+   that needs the person gets an amber edge along its top, like a decision card. */
+.agx-tiles-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 0 0 14px; }
+.agx-tiles { display: grid; grid-template-columns: 1fr; gap: 18px; align-items: stretch; }
+@container agx-settings (min-width: 760px) { .agx-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container agx-settings (min-width: 1500px) { .agx-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.agx-tile {
+  position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 12px; padding: 16px 18px;
+  background: var(--surface-card); border: 1px solid var(--surface-line); border-radius: 13px;
+  box-shadow: 0 1px 2px rgba(60, 40, 30, 0.05), 0 12px 26px -20px var(--shadow);
+}
+.agx-tile[data-attn]::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 3px; background: var(--warning); }
+.agx-tile[data-none] { background: transparent; border-style: dashed; box-shadow: none; }
+.agx-tile-h { display: flex; align-items: center; gap: 12px; }
+.agx-tile-logo { display: grid; place-items: center; flex: none; width: 40px; height: 40px; border-radius: 11px; color: #fff; font-size: calc(17px * var(--agx-fs, 1)); font-weight: 800; }
+.agx-tile-id { flex: 1; min-width: 0; }
+.agx-tile-id h3 { margin: 0; font-size: calc(17px * var(--agx-fs, 1)); font-weight: 700; color: var(--text); }
+.agx-tile-id small { display: block; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); }
+.agx-ck-list { display: flex; flex-direction: column; }
+.agx-ck { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid color-mix(in srgb, var(--surface-line) 75%, transparent); font-size: calc(13px * var(--agx-fs, 1)); color: var(--text); }
+.agx-ck-i { display: flex; flex: none; }
+.agx-ck[data-state="ok"] .agx-ck-i { color: var(--success); }
+.agx-ck[data-state="warn"] .agx-ck-i { color: var(--warning); }
+.agx-ck[data-state="no"] .agx-ck-i { color: var(--text4); }
+.agx-ck > span:nth-child(2) { flex: none; }
+.agx-ck em { flex: 1; min-width: 0; text-align: right; font-style: normal; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agx-tile-fix { display: flex; flex-direction: column; gap: 6px; font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.5; color: var(--text2); }
+.agx-tile-fix p { margin: 0; }
+.agx-tile-fix .agx-tile-hint { color: var(--text3); }
+.agx-tile-f { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: auto; }
+.agx-tile-more { display: inline-flex; align-items: center; gap: 4px; border: 0; background: none; padding: 4px 6px; border-radius: 6px; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); cursor: pointer; }
+.agx-tile-more:hover { color: var(--text); }
+.agx-tile-more[aria-expanded="true"] svg { transform: rotate(180deg); }
+/* While a tile is opened its neighbours keep their own height: equal rows are for the collapsed page, and stretching a closed tile to the height of an open one leaves a hole in it. */
+.agx-tiles:has(.agx-tile-d) { align-items: start; }
+.agx-tile-d { margin: 0 -18px -16px; border-top: 1px solid var(--surface-line); background: color-mix(in srgb, var(--surface-inset) 40%, transparent); }
+.agx-tile-add { align-items: stretch; justify-content: center; min-height: 200px; }
+.agx-tile-addb { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; flex: 1; border: 0; background: none; color: var(--text3); cursor: pointer; font: inherit; }
+.agx-tile-addb b { font-size: calc(14px * var(--agx-fs, 1)); color: var(--text); }
+.agx-tile-addb span { max-width: 28ch; text-align: center; font-size: calc(12px * var(--agx-fs, 1)); }
+.agx-tile-addb:hover { color: var(--text); }
+.agx-tiles-host { display: flex; gap: 8px; align-items: flex-start; margin: 14px 2px 0; font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.5; color: var(--text3); }
+.agx-tiles-host svg { flex: none; margin-top: 2px; }
+
+/* ── plugins: the count pill, the market's bar and its notes ── */
+.agx-tag { display: inline-flex; align-items: center; height: 22px; padding: 0 10px; border: 1px solid var(--surface-line); border-radius: 999px; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text2); }
+.agx-mbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 0 0 14px; }
+.agx-msearch { position: relative; display: flex; align-items: center; flex: 1 1 420px; max-width: 640px; }
+.agx-msearch > svg { position: absolute; left: 10px; color: var(--text3); pointer-events: none; }
+.agx-msearch > input { width: 100%; padding-left: 30px !important; padding-right: 44px !important; height: 32px; }
+.agx-msearch > kbd { position: absolute; right: 8px; padding: 0 6px; border: 1px solid var(--surface-line); border-radius: 5px; font: inherit; font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3); pointer-events: none; }
+.agx-mselect { width: auto; min-width: 144px; }
+.agx-pin-dot { width: 8px; height: 8px; border-radius: 50%; border: 2px solid var(--text4); }
+.agx-pin-dot[data-pinned] { border-color: var(--success); background: var(--success); }
+.agx-linkbtn { border: 0; background: none; padding: 4px 6px; border-radius: 6px; font: inherit; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text2); cursor: pointer; }
+.agx-linkbtn:hover { color: var(--text); background: color-mix(in srgb, var(--text) 7%, transparent); }
+.agx-pnote { display: flex; gap: 8px; align-items: flex-start; margin: 14px 2px 0; font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.5; color: var(--text3); }
+.agx-pnote > svg { flex: none; margin-top: 2px; }

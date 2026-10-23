@@ -22,7 +22,7 @@ import { ICON } from "../lib/iconSize.ts";
 const SPEC = PROVIDERS.find((p) => p.id === "jira")!;
 
 /** Sign in: the page's face before Jira is connected. Jira's Cloud / Data Center choice comes first because it decides which fields there are. */
-function ConnectCard({ onDone }: { onDone: () => void }) {
+function ConnectCard({ onDone, onCancel }: { onDone: () => void; onCancel?: () => void }) {
   const [kind, setKind] = useState<"cloud" | "dc">("cloud");
   const [site, setSite] = useState("");
   const [email, setEmail] = useState("");
@@ -77,6 +77,7 @@ function ConnectCard({ onDone }: { onDone: () => void }) {
             <div className="agx-field">
               <div className="agx-sform-actions">
                 <Button type="submit" tone="primary" pending={busy} disabled={!ready}>Connect</Button>
+                {onCancel && <Button onClick={onCancel}>Cancel</Button>}
               </div>
               {note && <div role="alert" className="agx-field-e">{note}</div>}
             </div>
@@ -102,6 +103,7 @@ export function JiraPane({ tracker }: { tracker?: ReactNode }) {
   const [views, setViews] = useState<{ views: number; folders: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [replacing, setReplacing] = useState(false);
   const settings = useJiraSettings();
 
   const read = useCallback(() => {
@@ -155,6 +157,14 @@ export function JiraPane({ tracker }: { tracker?: ReactNode }) {
     setStatus({ ...status, writes: !!r.writes });
     if (settings) noteJiraSettings({ ...settings, writes: !!r.writes });
   };
+  const setWriteKind = async (kind: keyof JiraStatus["writeKinds"], on: boolean) => {
+    setBusy(true);
+    const r = await api.jiraWriteKind(kind, on).catch(() => null);
+    setBusy(false);
+    if (!r?.ok || !r.writeKinds) { setNote(r?.error ?? "That did not save"); return; }
+    setNote(null);
+    setStatus({ ...status, writeKinds: r.writeKinds });
+  };
   const saveSteps = async (patch: StepsPatch): Promise<boolean> => {
     const r = await api.setJiraSteps(patch).catch(() => null);
     if (!r?.ok || !r.steps) { setNote(r?.error ?? "That did not save"); return false; }
@@ -184,10 +194,12 @@ export function JiraPane({ tracker }: { tracker?: ReactNode }) {
     closeSettings();
   };
 
+  if (replacing) return <div className="wfm"><ConnectCard onDone={() => { setReplacing(false); read(); }} onCancel={() => setReplacing(false)} /></div>;
+
   return (
     <JiraSettingsView status={status} writes={writes} writesBusy={busy} steps={steps} overrides={overrides} units={units} views={views} note={note}
       tracker={tracker} busy={busy}
-      onWrites={(on) => void setWrites(on)} onSteps={saveSteps} onReread={reread}
+      onWrites={(on) => void setWrites(on)} onWriteKind={(k, on) => void setWriteKind(k, on)} onReplace={() => setReplacing(true)} onSteps={saveSteps} onReread={reread}
       onClearOverride={(k) => void clearOverride(k)} onOpenTab={openTab} onDisconnect={() => void disconnect()} />
   );
 }

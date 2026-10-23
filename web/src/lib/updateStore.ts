@@ -2,6 +2,7 @@ import { api, IS_DEMO } from "./api.ts";
 import { IS_DESKTOP } from "./desktop.ts";
 import { recordNote } from "./sysNotify.ts";
 import type { UpdateStatus } from "../../../shared/types.ts";
+import { autoCheckUpdates } from "./updateCheckPref.ts";
 
 /**
  * Whether a newer release exists, checked in the background.
@@ -99,6 +100,8 @@ export function ingestUpdate(st: UpdateStatus | null): void {
 let timer: ReturnType<typeof setInterval> | null = null;
 
 async function check(): Promise<void> {
+  // The timer's own look, and only the timer's: the About page's button asks the server directly.
+  if (!autoCheckUpdates()) return;
   try {
     ingestUpdate(await api.updateStatus());
   } catch {

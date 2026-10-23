@@ -16,7 +16,7 @@ import { Button, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 import { Field, SettingsForm, helpIdFor } from "./SettingsKit.tsx";
 import { EditorFoot, EditorPanel, ListBar, ListEditorSplit, ListPanel, NewButton, NothingSelected, differs } from "./SettingsListEditor.tsx";
 import { QuoteIcon } from "./settingsNavIcons.tsx";
-import { useReportSaving } from "./SettingsPageState.tsx";
+import { useReportHead, useReportSaving } from "./SettingsPageState.tsx";
 import { ICON } from "../lib/iconSize.ts";
 
 interface Reply { id: string; title: string; text: string }
@@ -31,6 +31,7 @@ export function SavedRepliesPane({ open }: { open: boolean }) {
   const [title, setTitle] = useState("");
   const [text, setText] = useState("");
   const [q, setQ] = useState("");
+  useReportHead("saved-replies", { action: { label: "New reply" } }, () => newOne());
 
   useEffect(() => {
     if (!open) return;
@@ -84,9 +85,7 @@ export function SavedRepliesPane({ open }: { open: boolean }) {
      adding is not behind a button. Delete is in the editor's head, apart from Save. */
   return (
     <>
-      <ListBar q={q} onQ={setQ} placeholder={`Filter ${replies?.length ?? 0} replies`} label="Filter saved replies">
-        <NewButton onClick={newOne} disabled={busy}>New reply</NewButton>
-      </ListBar>
+      <ListBar q={q} onQ={setQ} placeholder={`Filter ${replies?.length ?? 0} replies`} label="Filter saved replies" />
       <ListEditorSplit
         list={<ListPanel selected={editing || null} onSelect={(id) => { const r = replies?.find((x) => x.id === id); if (r) editRow(r); }}
           nothing={replies === null ? "Reading…" : "Nothing matches."}
@@ -115,7 +114,7 @@ export function SavedRepliesPane({ open }: { open: boolean }) {
                   <input id="saved-reply-title" value={title} onChange={(e) => setTitle(e.target.value)}
                     aria-describedby={helpIdFor("saved-reply-title")} className={`w-full ${INPUT}`} style={INPUT_STYLE} />
                 </Field>
-                <Field label="Reply" htmlFor="saved-reply-text" help="What goes in the box. Markdown works here. Used in every comment box in the pull request panel, under the quote button.">
+                <Field label="Reply" htmlFor="saved-reply-text" help="Markdown works. Used in every comment box of the pull request panel, under the quote button.">
                   <textarea id="saved-reply-text" value={text} onChange={(e) => setText(e.target.value)} rows={8}
                     aria-describedby={helpIdFor("saved-reply-text")}
                     className="w-full px-2.5 py-2 rounded-lg text-[12px] outline-none resize-y bg-[var(--surface-inset)] text-[var(--text)]"

@@ -21,7 +21,7 @@
  * were left out and pages for them on request; a reply is one level deep, as
  * Jira's own are.
  */
-import { CARD_FIELDS, ISSUE_KEY, apiOf, idText, cardPointsField, jiraCall, jiraWriteEnabled, memoOk, priorities, siteFields, taskContext, toTask, withStored, type JiraCreds, type JiraResult, type TaskContext } from "./jira.ts";
+import { CARD_FIELDS, ISSUE_KEY, apiOf, idText, cardPointsField, jiraCall, jiraWriteEnabled, memoOk, priorities, siteFields, taskContext, toTask, withStored, writeRefusal, type JiraCreds, type JiraResult, type TaskContext } from "./jira.ts";
 import { ACCOUNT_ID, LOGIN, adfToMarkdown, markdownToAdf, markdownToWiki, readMentions, wikiToMarkdown, type Mention } from "./jiraAdf.ts";
 export { readMentions };
 import { worklogEvents } from "./jiraActivity.ts";
@@ -188,7 +188,8 @@ export type CommentOutcome = WriteOutcome & { detail?: TaskDetail; more?: number
  * `updated` so the next move is checked against the card as it now is.
  */
 export async function commentOn(creds: JiraCreds, key: string, markdown: string, rawMentions: unknown, replyTo?: unknown): Promise<CommentOutcome> {
-  if (!jiraWriteEnabled()) return { ok: false, error: "Writing to Jira is switched off" };
+  const off = writeRefusal("comment");
+  if (off) return { ok: false, error: off };
   if (!ISSUE_KEY.test(key)) return { ok: false, error: "That is not a Jira card id" };
   // A reply is Cloud's `parentId`; Data Center's REST has no thread, and a reply sent as a plain comment would not be one.
   if (replyTo !== undefined && replyTo !== null && replyTo !== "") {
@@ -251,7 +252,8 @@ function commentRefusal(r: JiraResult<unknown>, what: string): CommentEdit {
  * rather than this reading it a third time.
  */
 export async function editComment(creds: JiraCreds, key: string, id: string, markdown: string, rawMentions: unknown): Promise<CommentEdit> {
-  if (!jiraWriteEnabled()) return { ok: false, error: "Writing to Jira is switched off" };
+  const off = writeRefusal("comment");
+  if (off) return { ok: false, error: off };
   if (!ISSUE_KEY.test(key)) return { ok: false, error: "That is not a Jira card id" };
   if (typeof id !== "string" || !COMMENT_ID.test(id)) return { ok: false, error: "That is not a comment this card has" };
   const text = typeof markdown === "string" ? markdown.trim() : "";
@@ -273,7 +275,8 @@ export async function editComment(creds: JiraCreds, key: string, id: string, mar
 
 /** Delete your own comment. Two requests: the comment, then the DELETE. The thread's replies stay where Jira keeps them. */
 export async function deleteComment(creds: JiraCreds, key: string, id: string): Promise<CommentEdit> {
-  if (!jiraWriteEnabled()) return { ok: false, error: "Writing to Jira is switched off" };
+  const off = writeRefusal("comment");
+  if (off) return { ok: false, error: off };
   if (!ISSUE_KEY.test(key)) return { ok: false, error: "That is not a Jira card id" };
   if (typeof id !== "string" || !COMMENT_ID.test(id)) return { ok: false, error: "That is not a comment this card has" };
   const upper = key.toUpperCase();

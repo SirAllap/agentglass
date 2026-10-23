@@ -298,8 +298,9 @@ describe("the shared blocks", () => {
   test("no control in a settings pane is capped at 480px inside a wider card", () => {
     expect(read(join(SRC, "components", "SettingsModal.tsx"))).not.toContain("max-w-[480px]");
   });
-  test("the review prompt's body opens at 20 lines at least", () => {
-    expect(read(join(SRC, "components", "ReviewPromptsPane.tsx"))).toContain("Math.max(20, r.body.split");
+  test("the review prompt's body opens at 340px at least, the height of about 17 lines", () => {
+    expect(read(join(SRC, "components", "ReviewPromptsPane.tsx"))).toContain('className="agx-le-ta t-mono"');
+    expect(read(join(SRC, "index.css"))).toMatch(/\.agx-le-ta \{[^}]*min-height: 340px/);
   });
   test("a switch's wrapper has no line box, so a toggle has the same padding above and below", () => {
     // An inline-block on a text baseline leaves the descender gap under it: the

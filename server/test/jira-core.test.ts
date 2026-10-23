@@ -239,7 +239,7 @@ describe("a custom site, and how it signs in", () => {
       expect(dc.requests.every((q) => q.auth === FAKE_PAT_AUTH)).toBe(true);
       expect(await J.jiraStatus()).toEqual({
         connected: true, site: "jira.example.com", kind: "custom", auth: "bearer", api: 2, deployment: "server",
-        account: "Ada Example", prefixes: ["ORBIT", "ACME"], writes: false,
+        account: "Ada Example", prefixes: ["ORBIT", "ACME"], writes: false, writeKinds: { move: true, comment: true, link: true, assign: true },
       });
       // The project keys come from the unpaged v2 list, and nothing on a v2 site is asked of v3.
       expect(dc.requests.at(-1)!.path).toBe("/project");
@@ -564,13 +564,13 @@ describe("the switch for writes", () => {
 
 describe("status and disconnect", () => {
   test("disconnected, it says so and sends nothing", async () => {
-    expect(await J.jiraStatus()).toEqual({ connected: false, site: null, kind: null, auth: null, api: null, deployment: null, account: null, prefixes: [], writes: false });
+    expect(await J.jiraStatus()).toEqual({ connected: false, site: null, kind: null, auth: null, api: null, deployment: null, account: null, prefixes: [], writes: false, writeKinds: { move: true, comment: true, link: true, assign: true } });
     expect(fake.requests.length).toBe(0);
   });
 
   test("connected, it names the site, the account and the project keys", async () => {
     await J.connectJira(GOOD);
-    expect(await J.jiraStatus()).toEqual({ connected: true, site: "acme.atlassian.net", kind: "cloud", auth: "basic", api: 3, deployment: "cloud", account: "Ada Example", prefixes: ["ORBIT", "ACME"], writes: false });
+    expect(await J.jiraStatus()).toEqual({ connected: true, site: "acme.atlassian.net", kind: "cloud", auth: "basic", api: 3, deployment: "cloud", account: "Ada Example", prefixes: ["ORBIT", "ACME"], writes: false, writeKinds: { move: true, comment: true, link: true, assign: true } });
   });
 
   test("the generic status row costs no request", async () => {

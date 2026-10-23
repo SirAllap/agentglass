@@ -64,7 +64,7 @@ describe("columns: row 99, a column that opens is scrolled to, the first layout 
     const body = machine.slice(at, machine.indexOf("\n}\n", at));
     expect(body).toContain('behavior: "smooth"');
     expect(body).toContain("placed.current &&");
-    expect(body).toContain("prefers-reduced-motion: reduce");
+    expect(body).toContain("!reducedMotion()");
   });
 });
 

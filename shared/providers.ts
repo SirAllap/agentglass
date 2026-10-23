@@ -127,6 +127,8 @@ export interface JiraStatus {
   account: string | null;
   prefixes: string[];
   writes: boolean;
+  /** What writing may do once it is on at all; a kind is allowed until it is switched off. */
+  writeKinds: Record<"move" | "comment" | "link" | "assign", boolean>;
 }
 
 /**

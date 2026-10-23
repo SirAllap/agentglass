@@ -106,7 +106,7 @@ export const defaultStored = (): StoredPolicy => ({
   ceiling: { ...DEFAULT_CEILING, deny: [] },
   workerDefault: { ...DEFAULT_WORKER_ENVELOPE, deny: [] },
   limits: { ...DEFAULT_LIMITS },
-  ask: { orchestrator: false, workers: { scout: false, builder: false, verifier: false } },
+  ask: { orchestrator: false, workers: { scout: false, builder: false, reviewer: false, verifier: false } },
 });
 
 // ── strings ──────────────────────────────────────────────────────────────
@@ -368,10 +368,14 @@ export function validateStored(raw: unknown): Validated<StoredPolicy> {
   const a = closed(o.ask, "policy.ask", ["orchestrator", "workers"]);
   if (failed(a)) return a;
   if (typeof a.orchestrator !== "boolean") return bad("policy.ask.orchestrator", "has to be true or false");
-  const aw = closed(a.workers, "policy.ask.workers", ROLE_IDS);
+  /* A role added after a policy was saved (the reviewer) is simply not in that
+     file: it reads as "not asked", so an older policy keeps working instead of
+     being ignored for lacking a role it never knew. */
+  const aw = closed(a.workers, "policy.ask.workers", ROLE_IDS, []);
   if (failed(aw)) return aw;
   const workers = {} as Record<RoleId, boolean>;
   for (const r of ROLE_IDS) {
+    if (aw[r] === undefined) { workers[r] = false; continue; }
     if (typeof aw[r] !== "boolean") return bad(`policy.ask.workers.${r}`, "has to be true or false");
     workers[r] = aw[r] as boolean;
   }

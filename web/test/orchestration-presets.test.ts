@@ -32,7 +32,7 @@ const GONE = (id: string) => engine(id, { found: false, path: null, version: nul
 const OPENCODE_AND_CLAUDE = [engine("claude"), engine("opencode"), OLD_HERMES];
 const policy = (): Policy => composePolicy(defaultStored(), {
   orchestrator: { engine: "claude", model: "sonnet" },
-  workers: { scout: { engine: "opencode", model: "" }, builder: { engine: "claude", model: "sonnet" }, verifier: { engine: "claude", model: "haiku" } },
+  workers: { scout: { engine: "opencode", model: "" }, builder: { engine: "claude", model: "sonnet" }, reviewer: { engine: "claude", model: "sonnet" }, verifier: { engine: "claude", model: "haiku" } },
 });
 const offer = (id: string, ready: EngineReadiness[] | null) => presetOffers(ready).find((o) => o.id === id)!;
 const state = (over: Partial<PolicyRuleState> = {}): PolicyRuleState => ({
@@ -98,7 +98,7 @@ describe("what applying writes", () => {
     const next = applyPreset(policy(), "claude-orchestrates", ready)!;
     expect(next.rules).toEqual([{
       id: presetRuleId("claude-orchestrates"), name: `Quick setup: ${title("claude")} orchestrates`, enabled: true,
-      when: [{ kind: "always" }], workers: { scout: oc, builder: oc, verifier: oc },
+      when: [{ kind: "always" }], workers: { scout: oc, builder: oc, reviewer: oc, verifier: oc },
     }]);
     expect({ ...next, rules: [] }).toEqual({ ...policy(), rules: [] });
   });
@@ -107,7 +107,7 @@ describe("what applying writes", () => {
     const c = [{ engine: "claude", model: "" }];
     expect(rulesOf("all-on-claude")).toEqual([{
       id: presetRuleId("all-on-claude"), name: `Quick setup: all workers on ${title("claude")}`, enabled: true,
-      when: [{ kind: "always" }], workers: { scout: c, builder: c, verifier: c },
+      when: [{ kind: "always" }], workers: { scout: c, builder: c, reviewer: c, verifier: c },
     }]);
   });
 
@@ -154,7 +154,7 @@ describe("what a card says", () => {
     const o = offer("claude-orchestrates", OPENCODE_AND_CLAUDE);
     expect(o.says).toEqual([
       `The main agent stays ${title("claude")}.`,
-      `When this always holds: scouts use ${title("opencode")}; builders use ${title("opencode")}; verifiers use ${title("opencode")}. ${CHAIN_TAIL}`,
+      `When this always holds: scouts use ${title("opencode")}; builders use ${title("opencode")}; reviewers use ${title("opencode")}; verifiers use ${title("opencode")}. ${CHAIN_TAIL}`,
     ]);
     expect(offer("save-my-plan", OPENCODE_AND_CLAUDE).says).toEqual([
       `When ${PLAN_NEARLY_SPENT}% or less of the ${title("claude")} weekly plan is left: builders use ${title("opencode")}. ${CHAIN_TAIL}`,
@@ -208,6 +208,7 @@ describe("Check my setup", () => {
     expect(c.roles.map((r) => r.line)).toEqual([
       `Scouts would run on ${title("opencode")} opencode/big-pickle.`,
       `Builders would run on ${title("claude")} sonnet.`,
+      `Reviewers would run on ${title("claude")} sonnet.`,
       `Verifiers would run on ${title("claude")} haiku.`,
     ]);
   });
@@ -246,7 +247,7 @@ describe("Check my setup", () => {
     expect(c.roles.find((r) => r.id === "builder")!.line).toContain('from rule "Builders on Codex"');
     const line = c.rules.find((r) => r.id === presetRuleId("all-on-claude"))!.line;
     expect(line).not.toContain("already in the answers above");
-    expect(line).toBe('It holds now and applies to scouts and verifiers; "Builders on Codex" comes first for builders.');
+    expect(line).toBe('It holds now and applies to scouts, reviewers and verifiers; "Builders on Codex" comes first for builders.');
   });
   test("a role whose first choice cannot start says who takes over, in words", () => {
     const r = { id: "mine", name: "Hermes first", enabled: true, when: [{ kind: "always" as const }], workers: { builder: [{ engine: "hermes", model: "" }, { engine: "opencode", model: "" }] } };
@@ -256,10 +257,10 @@ describe("Check my setup", () => {
     expect(line).toContain(`because ${title("hermes")} needs an update, so it takes over`);
   });
   test("a rule that loses every field it names says it does not apply", () => {
-    const first = { id: "first", name: "Everything on OpenCode", enabled: true, when: [{ kind: "always" as const }], workers: { scout: [{ engine: "opencode", model: "" }], builder: [{ engine: "opencode", model: "" }], verifier: [{ engine: "opencode", model: "" }] } };
+    const first = { id: "first", name: "Everything on OpenCode", enabled: true, when: [{ kind: "always" as const }], workers: { scout: [{ engine: "opencode", model: "" }], builder: [{ engine: "opencode", model: "" }], reviewer: [{ engine: "opencode", model: "" }], verifier: [{ engine: "opencode", model: "" }] } };
     const p = applyPreset({ ...policy(), rules: [first] }, "all-on-claude", OPENCODE_AND_CLAUDE)!;
     const on = [state({ ruleId: "first", active: true }), state({ ruleId: presetRuleId("all-on-claude"), active: true })];
-    expect(checkSetup(p, on, OPENCODE_AND_CLAUDE).rules[1]!.line).toBe('It holds now, but it does not apply: "Everything on OpenCode" comes first for scouts, builders and verifiers.');
+    expect(checkSetup(p, on, OPENCODE_AND_CLAUDE).rules[1]!.line).toBe('It holds now, but it does not apply: "Everything on OpenCode" comes first for scouts, builders, reviewers and verifiers.');
   });
   test("only the rule states of the scope being read count: a global rule that holds is not the project's rule that does not", () => {
     const p = applyPreset(policy(), "save-my-plan", OPENCODE_AND_CLAUDE)!;

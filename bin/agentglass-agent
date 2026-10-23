@@ -169,7 +169,7 @@ def main():
     p.add_argument("name")
     p.add_argument("--cwd", required=True, help="the checkout (a worktree) it runs in")
     p.add_argument("--kind", default=None, help="which CLI: claude (default), codex, ...")
-    p.add_argument("--role", choices=["scout", "builder", "verifier"],
+    p.add_argument("--role", choices=["scout", "builder", "reviewer", "verifier"],
                    help="a worker role: the CLI and model Settings pick for it, locked against push, commit and merge")
     p.add_argument("--engine", help="with --role: which engine of the policy's chain runs it (the policy decides the choices)")
     p.add_argument("--model", help="with --engine: which model of that chain entry")

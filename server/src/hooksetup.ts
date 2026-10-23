@@ -393,6 +393,16 @@ function gateScriptState(r: ReturnType<typeof readCfg>): { gateScriptMissing: bo
   return { gateScriptMissing: missing, gateDenies: missing && !g!.guarded };
 }
 
+/** `python3 --version` as "3.12", or null when the interpreter does not answer. Asked at most once a minute: the status is read often and a process spawn is not free. */
+let pyAsked: { at: number; cmd: string; v: string | null } | null = null;
+export function pythonVersion(cmd = hookPython(), now = Date.now(), run: (cmd: string) => string = (c) => { const r = Bun.spawnSync([c, "--version"], { stdout: "pipe", stderr: "pipe", timeout: 2000 }); return r.exitCode === 0 ? `${r.stdout}${r.stderr}` : ""; }): string | null {
+  if (pyAsked && pyAsked.cmd === cmd && now - pyAsked.at < 60_000) return pyAsked.v;
+  let v: string | null = null;
+  try { v = /Python (\d+\.\d+)/.exec(run(cmd))?.[1] ?? null; } catch { /* not on PATH: null says so */ }
+  pyAsked = { at: now, cmd, v };
+  return v;
+}
+
 export function hookStatus(): HookSetupStatus {
   const path = settingsPath();
   const r = readCfg(path);
@@ -403,7 +413,7 @@ export function hookStatus(): HookSetupStatus {
   }
   const dir = hooksDir();
   return {
-    installed, bundled: dir !== null, settingsPath: path, python: hookPython(),
+    installed, bundled: dir !== null, settingsPath: path, python: hookPython(), pythonVersion: pythonVersion(),
     gate: "cfg" in r && asArray(((r.cfg?.hooks ?? {}) as any).PreToolUse).some(isGate),
     gateBundled: dir !== null && existsSync(join(dir, GATE_MARKER)),
     ...gateScriptState(r),

@@ -296,12 +296,12 @@ export function Teach({ active }: { active: boolean }) {
       {!data.terms.ok && (
         <SettingsCard title="Private-terms list" status={<StatusBadge tone="err">Missing</StatusBadge>}>
           <SettingRow label="It will not read anything yet"
-            hint={<>
+            hint="There is no private-terms list, and without one it refuses rather than guess."
+            detail={{ summary: "Why, and how to fix it", body: <>
               There is no private-terms list at <span className="t-mono break-all">{data.terms.path}</span>. That list is what stops a private name reaching a
-              file it should not, and without it this cannot tell "checked, clean" from "could not check" — so it refuses
-              rather than guessing. Create the file (one name, word or pattern per line; <span className="t-mono">AGENTGLASS_PRIVATE_TERMS</span> points
+              file it should not, and without it this cannot tell "checked, clean" from "could not check". Create the file (one name, word or pattern per line; <span className="t-mono">AGENTGLASS_PRIVATE_TERMS</span> points
               it elsewhere), or say so here if this machine genuinely has nothing to protect.
-            </>}
+            </> }}
             actions={
               <Button tone="danger" disabled={busy || allowedCount === 0}
                 onClick={() => void learn(true)}
@@ -347,9 +347,10 @@ export function Teach({ active }: { active: boolean }) {
         status={<StatusBadge tone={stepTone(!step1Active, step1Active)}>
           {stepWord(!step1Active, step1Active, `${data.never.length} word${data.never.length === 1 ? "" : "s"}`)}
         </StatusBadge>}
-        desc="Step 1. The only control here that can prevent something rather than undo it.">
+        desc="Step 1. The one control here that prevents something rather than undoes it.">
         <SettingRow label="Words it must never read"
-          hint="One per line. Anything with these words in its path or its text is not read — not skimmed, not stored, not summarised. Plain words rather than patterns, on purpose: you should be able to predict this exactly."
+          hint="One per line. Anything with these words in its path or its text is not read."
+          detail={{ summary: "What not read means", body: <>Not skimmed, not stored, not summarised. Plain words rather than patterns, on purpose: you should be able to predict this exactly.</> }}
           below={
             <div className="flex flex-col gap-1.5" style={{ maxWidth: 480 }}>
               <textarea
@@ -373,12 +374,15 @@ export function Teach({ active }: { active: boolean }) {
         status={<StatusBadge tone={stepTone(allowedCount > 0, step2Active)}>
           {stepWord(allowedCount > 0, step2Active, `${allowedCount} ticked`)}
         </StatusBadge>}
-        desc="Step 2. Rules — you saying what you do. Deliberate, written for an audience, and the highest-quality material here. These become the policy it reads before every prediction.">
+        desc="Step 2. What you wrote down you do: the policy it reads before every prediction.">
         {rules.map((s) => <Source key={s.id} s={s} />)}
       </SettingsCard>
 
       <SettingsCard title="What you actually did" icon={<ClockIcon size={ICON.sm} />}
-        desc="Precedents — the record, not the intent. Messier and far larger. A rule says “never main”; a precedent says what you actually did on a Tuesday when the base had moved. Only precedents can make a prediction yours rather than merely sensible. One row per project rather than one switch, because each project is filed separately — and which side of that line a project sits on decides where its rows may ever be used, not whether they may be read.">
+        desc="Precedents: the record, not the intent. One row per project.">
+        <SettingRow agentExempt label="Why a row per project"
+          hint="A rule says “never main”; a precedent says what you did on a Tuesday when the base had moved."
+          detail={{ summary: "Rules and precedents", body: <>Precedents are messier and far larger, and only they can make a prediction yours rather than merely sensible. Each project is filed separately, and which side of that line a project sits on decides where its rows may ever be used, not whether they may be read.</> }} />
         {shownPrecedents.map((s) => <Source key={s.id} s={s} />)}
         {precedents.length > PRECEDENT_ROWS && (
           <div className="agx-settings-x py-2">
@@ -441,7 +445,7 @@ export function Teach({ active }: { active: boolean }) {
 
       {(data.learned || data.policy) && (
         <SettingsCard title="What it knows now" icon={<ListIcon size={ICON.sm} />}
-          desc="The rules are compiled into files you can open and argue with. What it believes about you should never be something you have to query a database to find out.">
+          desc="The rules are compiled into files you can open and argue with.">
           <SettingRow rowRef={receipt} label="Rules" control={<span className="tabular-nums text-[15px]">{data.policy?.rules ?? 0}</span>} />
           <SettingRow label="Precedents" control={<span className="tabular-nums text-[15px]">{data.banked.toLocaleString()}</span>} />
           {/*
