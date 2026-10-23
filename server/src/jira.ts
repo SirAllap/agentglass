@@ -47,6 +47,8 @@ import { guardedFetch, privateAddress, type GuardedFetchOptions } from "./net.ts
 import { isIP } from "node:net";
 import { forgetCached } from "./jiraviews.ts";
 import { cardExtras } from "./jirafields.ts";
+import { webLinksOf } from "./jiraCardRead.ts";
+import type { CardWebLink } from "../../shared/providers.ts";
 import { clearCredential, redacted, secretFor, setCredential } from "./credentials.ts";
 import type { CallResult, WriteOutcome } from "./trackerTypes.ts";
 import { prAddress } from "../../shared/taskref.ts";
@@ -541,7 +543,11 @@ let searchComments = false;
 export const __setSearchComments = (on: boolean): void => { searchComments = on; };
 
 /** The site's own ids for the fields a board shows, found by what they are, never by what they are called. */
-export interface JiraFieldIds { sprint?: string; points: string[] }
+export interface JiraFieldIds {
+  sprint?: string; points: string[];
+  /** The Details a card read shows when the site has them: start date, the flag and the team. */
+  start?: string; flag?: string; team?: string;
+}
 
 /**
  * Which points field a card's number is read from. A board names the one it counts in; a view that does not takes the
@@ -575,7 +581,15 @@ export function siteFields(creds: JiraCreds): Promise<JiraResult<JiraFieldIds>> 
     const custom = (f: Record<string, unknown>) => (isObj(f.schema) ? str(f.schema.custom) : "");
     const byType = rows.filter((f) => custom(f).endsWith(":jsw-story-points"));
     const points = byType.length ? byType : rows.filter((f) => /^story points?$/i.test(str(f.name)) && isObj(f.schema) && str(f.schema.type) === "number");
-    return { ok: true, data: { sprint: rows.find((f) => custom(f).endsWith(":gh-sprint"))?.id as string | undefined, points: points.map((f) => str(f.id)) } };
+    const named = (re: RegExp, type: string) => rows.find((f) => re.test(str(f.name)) && isObj(f.schema) && str(f.schema.type) === type)?.id as string | undefined;
+    return { ok: true, data: {
+      sprint: rows.find((f) => custom(f).endsWith(":gh-sprint"))?.id as string | undefined,
+      points: points.map((f) => str(f.id)),
+      // Found by what they are where a type says so (the team); the start date and the flag have no type of their own, so by the name Jira gives them.
+      start: named(/^start date$/i, "date"),
+      flag: named(/^flagged$/i, "array"),
+      team: rows.find((f) => custom(f).endsWith(":atlassian-team"))?.id as string | undefined,
+    } };
   }, true);
 }
 
@@ -684,6 +698,7 @@ export function toTask(issue: unknown, cx: TaskContext, arrival?: number): Provi
     mine: !!(cx.me && whoId && cx.me === whoId),
   };
   if (created) task.created = created;
+  if (isObj(f.issuetype) && str(f.issuetype.name)) task.issueType = str(f.issuetype.name);
   Object.assign(task, cardExtras(f, cx.fields));
   if (arrival !== undefined) task.order = String(arrival).padStart(6, "0");
   return task;
@@ -1233,15 +1248,24 @@ function prLinksIn(raw: unknown): { canon: string; globalId: string; link: JiraP
   return out;
 }
 
-/** The pull requests this card is linked to on the site: one request. A link with no global id counts like any other. */
-export async function remoteLinks(creds: JiraCreds, key: string): Promise<JiraResult<JiraPrLink[]>> {
+/** What the card's remote links hold: the pull requests (as ever) and every link as a row. */
+export interface JiraRemoteLinks { links: JiraPrLink[]; web: CardWebLink[] }
+
+/** The card's remote links: one request, whether the caller wants the pull requests, every address, or both. A link with no global id counts like any other. */
+export async function remoteLinksAll(creds: JiraCreds, key: string): Promise<JiraResult<JiraRemoteLinks>> {
   if (!ISSUE_KEY.test(key)) return { ok: false, error: "That is not a Jira card id" };
   const r = await jiraCall<unknown>(creds, remoteLinksPath(creds, key));
   if (!r.ok) return { ...r, data: undefined };
   const seen = new Set<string>();
-  return { ok: true, data: prLinksIn(r.data).map((x) => x.link).filter((l) => !seen.has(l.url) && !!seen.add(l.url)) };
+  return { ok: true, data: { links: prLinksIn(r.data).map((x) => x.link).filter((l) => !seen.has(l.url) && !!seen.add(l.url)), web: webLinksOf(r.data) } };
+}
+/** The pull requests this card is linked to on the site: one request. */
+export async function remoteLinks(creds: JiraCreds, key: string): Promise<JiraResult<JiraPrLink[]>> {
+  const r = await remoteLinksAll(creds, key);
+  return r.ok && r.data ? { ok: true, data: r.data.links } : { ...r, data: undefined };
 }
 export const remoteLinksStored = (key: string): Promise<JiraResult<JiraPrLink[]>> => withStored((c) => remoteLinks(c, key));
+export const remoteLinksAllStored = (key: string): Promise<JiraResult<JiraRemoteLinks>> => withStored((c) => remoteLinksAll(c, key));
 
 export type LinkOutcome = { ok: true; linked: boolean; url: string } | { ok: false; error: string; unauthorised?: boolean };
 

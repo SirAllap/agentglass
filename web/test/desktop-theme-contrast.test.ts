@@ -144,7 +144,8 @@ describe("desktop themes, as painted", () => {
   });
 
   test("the chip sites ask chipInk, not a hard-coded white", async () => {
-    const src = await Bun.file(new URL("../src/components/TasksPanel.tsx", import.meta.url)).text();
+    // The two sites are the panel's own face and the activity row's, which moved to its own file.
+    const src = (await Bun.file(new URL("../src/components/TasksPanel.tsx", import.meta.url)).text()) + (await Bun.file(new URL("../src/components/CardEventRun.tsx", import.meta.url)).text());
     expect(src).not.toMatch(/\.color \|\| "var\(--bg4\)", color: "#fff"/);
     expect((src.match(/color: chipInk\(/g) ?? []).length).toBe(2);
   });

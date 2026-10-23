@@ -19,12 +19,13 @@ import { fmtAgo } from "../../lib/format.ts";
 import { openCard } from "../../lib/openCard.ts";
 import { Flag, CardFace, prioLook } from "../../lib/priority.tsx";
 import { TRACKERS } from "../../lib/trackerApi.ts";
-import type { ProviderTask } from "../../../../shared/providers.ts";
+import type { CardFact, ProviderTask } from "../../../../shared/providers.ts";
 import { EDGE } from "../workspace/Chrome.tsx";
 import { Select } from "../Select.tsx";
 import { TrackerStatusPick } from "../TrackerStatusPick.tsx";
 import { TrackerPeoplePick } from "../TrackerPeoplePick.tsx";
 import { TrackerHandOffButton } from "../TrackerHandOffButton.tsx";
+import { TypeMark } from "./JiraSections.tsx";
 import { CardActionBar, CardBand, CardBandField, CardChips, CardField, CardTitle, EYEBROW, useCopied } from "../CardChrome.tsx";
 
 export const WRITES_OFF = "Changes to Jira are switched off, so this card is read-only here. Turn on “Changes in Jira” in the Jira settings.";
@@ -87,7 +88,27 @@ export function JiraHead({ t, writable, onTask, onRefresh, refreshing }: {
 }
 
 /** The card tab's properties: the framed band, then the two columns. */
-export function JiraProps({ t, writable, onTask }: { t: ProviderTask; writable: boolean; onTask: (t: ProviderTask) => void }) {
+/**
+ * One Detail as a value: a person with a face, the flag in its own colour, an
+ * empty one as "None". The site decided which Details exist (see
+ * server/src/jiraCardRead.ts), so nothing here chooses rows.
+ */
+export function FactValue({ f }: { f: CardFact }) {
+  if (!f.value) return <span style={{ color: "var(--text4)" }}>None</span>;
+  if (f.id === "reporter") {
+    return (
+      <span className="inline-flex items-center gap-1.5 min-w-0" style={{ color: "var(--text2)" }}>
+        <CardFace p={{ name: f.value, initials: f.initials ?? "?", avatar: f.avatar }} size={18} />
+        <span className="min-w-0 truncate">{f.value}</span>
+      </span>
+    );
+  }
+  if (f.id === "type") return <span className="inline-flex items-center gap-1.5" style={{ color: "var(--text2)" }}><TypeMark type={f.value} />{f.value}</span>;
+  if (f.tone === "flag") return <span className="inline-flex items-center gap-1.5" style={{ color: "var(--error-ink)" }}><Flag c="var(--error)" on />{f.value}</span>;
+  return <span style={{ color: "var(--text2)" }}>{f.value}</span>;
+}
+
+export function JiraProps({ t, writable, onTask, facts }: { t: ProviderTask; writable: boolean; onTask: (t: ProviderTask) => void; facts?: CardFact[] }) {
   const query = t.customId ?? t.id;
   const [said, setSaid] = useState("");
   useEffect(() => { setSaid(""); }, [t.id]);
@@ -132,6 +153,7 @@ export function JiraProps({ t, writable, onTask }: { t: ProviderTask; writable: 
             )}
         </CardField>
         {rest.map(([k, v]) => <CardField key={k} label={k}>{v}</CardField>)}
+        {facts?.map((f) => <CardField key={f.id} label={f.label}><FactValue f={f} /></CardField>)}
       </div>
       {!!t.tags.length && (
         <div className="flex items-center gap-1.5 flex-wrap" aria-label="Labels">

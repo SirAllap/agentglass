@@ -2,6 +2,7 @@ import boardFixture from "./jira/boards.json";
 import errors from "./jira/errors.json";
 import fieldFixture from "./jira/fields.json";
 import boardExtras from "./jira/issues-board.json";
+import cardExtras from "./jira/card-extras.json";
 import issueSeeds from "./jira/issues.json";
 import linkTypes from "./jira/link-types.json";
 import myselfFixture from "./jira/myself.json";
@@ -110,6 +111,15 @@ export interface FakeWorkflow {
 
 const workflow: FakeWorkflow = workflowFixture;
 
+export interface FakeHistory {
+  id: string;
+  author: string;
+  created: string;
+  items: { field: string; fieldtype?: string; from?: string | null; fromString?: string | null; to?: string | null; toString?: string | null }[];
+}
+
+export interface FakeWorklog { id: string; author: string; started: string; created: string; timeSpentSeconds: number; comment?: string }
+
 export interface FakeComment {
   id: string;
   author: string;
@@ -145,6 +155,22 @@ export interface FakeIssue {
   pointsIn: "primary" | "alt";
   team: string | null;
   subtasks: string[];
+  /** What `card-extras.json` gives one card: files, components, versions, time, the flag, a start date, and which fields its edit screen offers. */
+  attachments?: { id: string; filename: string; size: number; mimeType: string; created: string; author: string }[];
+  components?: string[];
+  fixVersions?: string[];
+  versions?: string[];
+  timetracking?: { originalEstimate?: string; remainingEstimate?: string; timeSpent?: string };
+  flagged?: string | null;
+  startDate?: string | null;
+  /** The change history, oldest first, as the site keeps it; `changelogCount` makes that many status flips instead (a card with a long history). */
+  changelog?: FakeHistory[];
+  changelogCount?: number;
+  /** Work logged, oldest first; `worklogCount` makes that many short ones. */
+  worklogs?: FakeWorklog[];
+  worklogCount?: number;
+  /** The fields `expand=editmeta` lists; the default is a project with none of components, versions or time tracking. */
+  editmeta?: string[];
 }
 
 export interface FakeSprint { id: number; name: string; state: "active" | "closed" | "future" }
@@ -170,6 +196,8 @@ export interface FakeState {
   fields: Record<string, any>[];
   /** The boards the agile endpoints serve; a test reorders a column to play a board its project did not start with. */
   boards: (typeof boardFixture.boards)[number][];
+  /** How many comments the issue read carries before the rest must be paged; null is all of them, as before. */
+  commentCap: number | null;
   links: FakeLink[];
   remoteLinks: Record<string, FakeRemoteLink[]>;
   nextRemoteLinkId: number;
@@ -267,14 +295,28 @@ function seedState(flavor: FakeFlavor): FakeState {
   keyOrder.forEach((i, n) => {
     const more = (boardExtras.issues as Record<string, Partial<FakeIssue>>)[i.key] ?? {};
     Object.assign(i, { rank: `0|i${String(n).padStart(5, "0")}:`, sprints: [], points: null, pointsIn: "primary", team: null, subtasks: [] }, structuredClone(more));
+    Object.assign(i, structuredClone((cardExtras.issues as Record<string, Partial<FakeIssue>>)[i.key] ?? {}));
+    // A long history and a long work log, made rather than written out, for the cards that page.
+    if (i.changelogCount) {
+      i.changelog = Array.from({ length: i.changelogCount }, (_, n) => ({
+        id: String(50000 + n), author: n % 2 ? "acc-0001" : "acc-0002", created: stamp(n + 1),
+        items: [{ field: "status", fieldtype: "jira", from: n % 2 ? "10001" : "10000", fromString: n % 2 ? "In Progress" : "To Do", to: n % 2 ? "10000" : "10001", toString: n % 2 ? "To Do" : "In Progress" }],
+      }));
+    }
+    if (i.worklogCount) {
+      i.worklogs = Array.from({ length: i.worklogCount }, (_, n) => ({
+        id: String(60000 + n), author: n % 2 ? "acc-0001" : "acc-0002", started: stamp(n + 1), created: stamp(n + 1), timeSpentSeconds: 900 * (n % 4 + 1),
+      }));
+    }
   });
   return {
     issues, workflow, deny: { transition: [], assign: [], comment: [] }, searchLags: false, tick: 0,
     fields: structuredClone(flavor === "datacenter" ? fieldFixture.datacenter : fieldFixture.cloud),
     boards: structuredClone(boardFixture.boards),
-    links: structuredClone(boardExtras.links),
+    links: structuredClone([...boardExtras.links, ...cardExtras.links]),
     remoteLinks: structuredClone(boardExtras.remoteLinks) as Record<string, FakeRemoteLink[]>,
     nextRemoteLinkId: 20000,
+    commentCap: null,
   };
 }
 
@@ -330,14 +372,14 @@ function issueFields(i: FakeIssue, state: FakeState, dc: boolean) {
     resolution: i.resolution ? { name: i.resolution } : null,
     created: i.created,
     updated: i.updated,
-    comment: { comments: i.comments.map((c) => commentObject(c, dc)), total: i.comments.length },
+    comment: { comments: i.comments.slice(0, state.commentCap ?? undefined).map((c) => commentObject(c, dc)), maxResults: state.commentCap ?? i.comments.length, total: i.comments.length },
   };
 }
 
 /** The ids the site gave its custom fields; they differ by flavor so nothing can lean on one. */
 const FIELD_IDS = {
-  cloud: { sprint: "customfield_10020", points: { primary: "customfield_10016", alt: "customfield_10027" }, rank: "customfield_10019", team: "customfield_10001" },
-  datacenter: { sprint: "customfield_10104", points: { primary: "customfield_10106", alt: "customfield_10109" }, rank: "customfield_10105", team: null },
+  cloud: { sprint: "customfield_10020", points: { primary: "customfield_10016", alt: "customfield_10027" }, rank: "customfield_10019", team: "customfield_10001", start: "customfield_10015", flag: "customfield_10021" },
+  datacenter: { sprint: "customfield_10104", points: { primary: "customfield_10106", alt: "customfield_10109" }, rank: "customfield_10105", team: null, start: "customfield_10110", flag: "customfield_10111" },
 } as const;
 
 const linkedIssue = (k: string, state: FakeState, dc: boolean) => {
@@ -367,6 +409,14 @@ function boardFields(i: FakeIssue, state: FakeState, dc: boolean): Record<string
     [ids.points.primary]: i.pointsIn === "primary" ? i.points : null,
     [ids.points.alt]: i.pointsIn === "alt" ? i.points : null,
     [ids.rank]: i.rank,
+    attachment: (i.attachments ?? []).map((a) => ({ id: a.id, filename: a.filename, size: a.size, mimeType: a.mimeType, created: a.created, author: userObject(a.author, dc) })),
+    components: (i.components ?? []).map((name, n) => ({ id: String(10300 + n), name })),
+    fixVersions: (i.fixVersions ?? []).map((name, n) => ({ id: String(10400 + n), name })),
+    versions: (i.versions ?? []).map((name, n) => ({ id: String(10500 + n), name })),
+    timetracking: i.timetracking ?? {},
+    worklog: { startAt: 0, maxResults: 20, total: (i.worklogs ?? []).length, worklogs: (i.worklogs ?? []).slice(0, 20).map((w) => worklogObject(w, dc)) },
+    [ids.start]: i.startDate ?? null,
+    [ids.flag]: i.flagged ? [{ id: "10600", value: i.flagged }] : null,
   };
   if (ids.team) out[ids.team] = i.team ? { id: `team-${i.team.toLowerCase().replace(/\W+/g, "-")}`, name: i.team } : null;
   return out;
@@ -375,7 +425,7 @@ function boardFields(i: FakeIssue, state: FakeState, dc: boolean): Record<string
 /** `fields` is a comma list; absent or `*navigable` means everything but the
  *  comment block, which a real site also leaves out unless asked for, and but
  *  the board fields, which only a name or `*all` brings. */
-function issueObject(i: FakeIssue, state: FakeState, dc: boolean, fieldsParam?: string | null) {
+function issueObject(i: FakeIssue, state: FakeState, dc: boolean, fieldsParam?: string | null, expandParam?: string | null) {
   const base = issueFields(i, state, dc) as Record<string, unknown>;
   const board = boardFields(i, state, dc);
   const asked = (fieldsParam ?? "").split(",").map((f) => f.trim()).filter(Boolean);
@@ -387,7 +437,27 @@ function issueObject(i: FakeIssue, state: FakeState, dc: boolean, fieldsParam?: 
   } else {
     fields = Object.fromEntries(asked.filter((f) => f in all).map((f) => [f, all[f]]));
   }
-  return { id: i.id, key: i.key, self: `${prefixOf(dc ? "datacenter" : "cloud")}/issue/${i.id}`, fields };
+  const ids = FIELD_IDS[dc ? "datacenter" : "cloud"];
+  // The edit screen's field list, by the site's own ids; only when `expand` asks, as a real site does.
+  const editmeta = (expandParam ?? "").split(",").includes("editmeta")
+    ? { editmeta: { fields: Object.fromEntries((i.editmeta ?? ["summary", "description", "labels", "priority", "duedate", "assignee", "reporter"])
+        .map((n) => [n === "startDate" ? ids.start : n === "flagged" ? ids.flag : n, { name: n, required: false }])) } }
+    : {};
+  // The whole history rides inside the issue only when asked: this is the cost the card read never pays on open.
+  const hs = (i.changelog ?? []).map((h) => historyObject(h, dc));
+  const changelog = (expandParam ?? "").split(",").includes("changelog") ? { changelog: { startAt: 0, maxResults: 100, total: hs.length, histories: hs.slice(0, 100) } } : {};
+  return { id: i.id, key: i.key, self: `${prefixOf(dc ? "datacenter" : "cloud")}/issue/${i.id}`, ...editmeta, ...changelog, fields };
+}
+
+function historyObject(h: FakeHistory, dc: boolean) {
+  return { id: h.id, author: userObject(h.author, dc), created: h.created, items: h.items.map((it) => ({ fieldtype: "jira", ...it })) };
+}
+
+function worklogObject(w: FakeWorklog, dc: boolean) {
+  const secs = w.timeSpentSeconds;
+  const human = `${secs >= 3600 ? `${Math.floor(secs / 3600)}h` : ""}${secs % 3600 ? `${secs >= 3600 ? " " : ""}${(secs % 3600) / 60}m` : ""}`;
+  const doc = (t: string) => (dc ? t : { type: "doc", version: 1, content: [{ type: "paragraph", content: [{ type: "text", text: t }] }] });
+  return { id: w.id, author: userObject(w.author, dc), started: w.started, created: w.created, updated: w.created, timeSpent: human, timeSpentSeconds: secs, ...(w.comment ? { comment: doc(w.comment) } : {}) };
 }
 
 function commentObject(c: FakeComment, dc: boolean) {
@@ -754,17 +824,33 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
       return json(200, { issues: slice.map((i) => issueObject(i, live, false, fields)), isLast: last, ...(last ? {} : { nextPageToken: pageToken(offset + size) }) });
     }
 
-    if ((r = /^\/issue\/([^/]+)(?:\/(transitions|assignee|comment|remotelink))?$/.exec(path))) {
+    if ((r = /^\/issue\/([^/]+)(?:\/(transitions|assignee|comment|remotelink|changelog|worklog))?$/.exec(path))) {
       const key = decodeURIComponent(r[1]);
       const sub = r[2];
       const issue = live.issues[key];
       if (!issue) return notFound(key);
 
-      if (!sub && m === "GET") return json(200, issueObject(issue, live, dc, query.fields));
+      if (!sub && m === "GET") return json(200, issueObject(issue, live, dc, query.fields, query.expand));
 
       if (m !== "GET") {
         const limit = limited(key);
         if (limit) return limit;
+      }
+
+      // The paged change history is Cloud's; Data Center answers the same history only inside the issue (`expand=changelog`).
+      if (sub === "changelog" && m === "GET") {
+        if (dc) return json(404, { errorMessages: ["Not Found"], errors: {} });
+        const hs = (issue.changelog ?? []).map((h) => historyObject(h, dc));
+        const start = Math.max(0, Number(query.startAt) || 0);
+        const size = Math.min(Number(query.maxResults) || 100, 100);
+        return json(200, { self: "", maxResults: size, startAt: start, total: hs.length, isLast: start + size >= hs.length, values: hs.slice(start, start + size) });
+      }
+
+      if (sub === "worklog" && m === "GET") {
+        const ws = issue.worklogs ?? [];
+        const start = Math.max(0, Number(query.startAt) || 0);
+        const size = Math.min(Number(query.maxResults) || 1048576, 5000);
+        return json(200, { startAt: start, maxResults: size, total: ws.length, worklogs: ws.slice(start, start + size).map((w) => worklogObject(w, dc)) });
       }
 
       if (sub === "remotelink" && m === "GET") {
@@ -837,7 +923,10 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
       }
 
       if (sub === "comment" && m === "GET") {
-        return json(200, { startAt: 0, maxResults: issue.comments.length, total: issue.comments.length, comments: issue.comments.map((c) => commentObject(c, dc)) });
+        const all = query.orderBy === "-created" ? [...issue.comments].reverse() : issue.comments;
+        const start = Math.max(0, Number(query.startAt) || 0);
+        const size = Math.min(Number(query.maxResults) || 50, 100);
+        return json(200, { startAt: start, maxResults: size, total: all.length, comments: all.slice(start, start + size).map((c) => commentObject(c, dc)) });
       }
 
       if (sub === "comment" && m === "POST") {

@@ -7,7 +7,7 @@ import type { AskedAlert } from "../../../shared/notifyPayload.ts";
 import type { CheckOnBasePlan, CheckOnBaseStatus } from "../../../shared/checkOnBase.ts";
 import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, EnginesReport, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest } from "../../../shared/types.ts";
 import type { JiraUnits } from "../../../shared/jiraStatusUnits.ts";
-import type { ProvidersResponse, JiraBlockOutcome, JiraConnectResult, JiraHandoffRule, JiraMoves, JiraPerson, JiraSettings, JiraStep, JiraStepChoice, JiraStepKey, JiraStepPr, JiraSteps, JiraStepsRead, JiraStatus, JiraViews, JiraViewRead, JiraViewChoice, JiraProjectChoice, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, TrackerChoice } from "../../../shared/providers.ts";
+import type { ProvidersResponse, JiraBlockOutcome, JiraConnectResult, JiraHandoffRule, JiraMoves, JiraPerson, JiraSettings, JiraStep, JiraStepChoice, JiraStepKey, JiraStepPr, JiraSteps, JiraStepsRead, JiraStatus, JiraViews, JiraViewRead, JiraViewChoice, JiraProjectChoice, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, CardWebLink, CardEvent, TrackerChoice } from "../../../shared/providers.ts";
 import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from "../../../shared/notifyPrefs.ts";
 import type { CheckMetric } from "../../../shared/checkBaseline.ts";
 import type { UiReply } from "../../../shared/uiActions.ts";
@@ -1404,7 +1404,7 @@ const realApi = {
     get<{ ok: boolean; prs: CardPr[]; error?: string }>(`/jira/prs?${new URLSearchParams({ key, root })}`),
   /** The pull requests a card is linked to on the Jira site: one request, read when the card is opened. */
   jiraLinks: (key: string) =>
-    get<{ ok: boolean; links: { url: string; number: number; title: string; resolved: boolean }[]; error?: string }>(`/jira/links?${new URLSearchParams({ key })}`),
+    get<{ ok: boolean; links: { url: string; number: number; title: string; resolved: boolean }[]; web?: CardWebLink[]; error?: string }>(`/jira/links?${new URLSearchParams({ key })}`),
   /** Put a pull request on a card as a remote link. Refused by the server unless Jira writes are switched on. */
   jiraLink: (key: string, url: string, title = "") =>
     post<{ ok: boolean; linked?: boolean; url?: string; error?: string }>("/jira/link", { key, url, title }),
@@ -1470,6 +1470,9 @@ const realApi = {
   /** A Jira card with its description and comments as Markdown; `more` is how many comments the read left out. */
   jiraDetail: (key: string) =>
     get<{ ok: boolean; error?: string; throttled?: boolean; detail?: TaskDetail; more?: number }>(`/jira/detail?key=${encodeURIComponent(key)}`),
+  /** One page of what happened on a card: its history, the rest of its work log, or the comments the card read left out. `next` is where the following page starts. */
+  jiraActivity: (key: string, kind: "history" | "worklog" | "comments", startAt = 0) =>
+    get<{ ok: boolean; error?: string; throttled?: boolean; events?: CardEvent[]; comments?: TaskDetail["comments"]; total?: number; next?: number }>(`/jira/activity?${new URLSearchParams({ key, kind, startAt: String(startAt) })}`),
   /** Who a comment on this card may mention, for what was typed after `@`. `key` is the id a mention carries. */
   jiraPeople: (key: string, q: string) =>
     get<{ ok: boolean; error?: string; throttled?: boolean; people?: { key: string; name: string; initials: string; avatar?: string }[] }>(`/jira/people?${new URLSearchParams({ key, q })}`),
@@ -2893,6 +2896,7 @@ const demoApi: typeof realApi = {
   jiraAddFolder: (_k: string) => D({ ok: false, error: "not available in the demo" }),
   jiraRemoveFolder: (_i: string) => D({ ok: false }),
   jiraDetail: (_k: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraActivity: (_k: string, _kind: "history" | "worklog" | "comments", _at = 0) => D({ ok: false, error: "not available in the demo" }),
   jiraPeople: (_k: string, _q: string) => D({ ok: true, people: [] as { key: string; name: string; initials: string; avatar?: string }[] }),
   jiraComment: (_k: string, _t: string, _m?: { id: string; name: string }[]) => D({ ok: false, error: "not available in the demo" }),
   providerTasks: (_f?: boolean) => D({ tasks: [], more: false, at: 0 }),

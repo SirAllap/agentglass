@@ -11,7 +11,7 @@ import { describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { propsOf, JiraHead, JiraProps, WRITES_OFF } from "../src/components/jira/JiraFacts.tsx";
-import { SubtaskRows } from "../src/components/jira/JiraCard.tsx";
+import { SubtasksSection } from "../src/components/jira/JiraSections.tsx";
 import { JiraPrsView } from "../src/components/jira/JiraCardPrs.tsx";
 import type { ProviderTask } from "../../shared/providers.ts";
 
@@ -71,23 +71,23 @@ describe("with writes on", () => {
   });
 });
 
-describe("the subtasks tab", () => {
-  test("each subtask is its key, its title and its status", () => {
-    const html = renderToStaticMarkup(React.createElement(SubtaskRows, { rows: [card({ id: "1", customId: "ORBIT-1046", title: "Write the retry test", status: "To Do" })] }));
-    for (const w of ["ORBIT-1046", "Write the retry test", "To Do"]) expect(html).toContain(w);
+describe("the subtasks section", () => {
+  test("each subtask is its key, its title and its status, under a progress line", () => {
+    const html = renderToStaticMarkup(React.createElement(SubtasksSection, { rows: [card({ id: "1", customId: "ORBIT-1046", title: "Write the retry test", status: "To Do" })] }));
+    for (const w of ["ORBIT-1046", "Write the retry test", "To Do", "0 of 1 done"]) expect(html).toContain(w);
   });
 });
 
 describe("the pane's shape, read from source", () => {
   const src = async (p: string) => (await Bun.file(new URL(p, import.meta.url)).text()).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  test("the tabs are Card, GitHub and Subtasks, and Subtasks only for a card that has some", async () => {
+  test("the card is one scroll in Jira's order, with no tab strip and no section for a card that lacks one", async () => {
     const c = await src("../src/components/jira/JiraCard.tsx");
-    expect(c).toContain('{ id: "card", label: "Card" }');
-    expect(c).toContain('{ id: "github", label: "GitHub", count: prCount }');
-    expect(c).toContain('...(subtasks.length ? [{ id: "subtasks" as const, label: "Subtasks", count: subtasks.length }] : [])');
-    expect(c).toContain('...(files.length ? [{ id: "files" as const, label: "Files", count: files.length }] : [])');
-    expect(c).toContain('(tab === "subtasks" && !subtasks.length)');
-    expect(c).not.toContain("borderBottom: LINE }}>\n        <div className=\"flex items-center gap-1.5 px-5\"");
+    expect(c).not.toContain("<CardTabs");
+    const at = (w: string) => c.indexOf(w);
+    const order = ["<JiraProps", 'id="description"', "<AttachmentsSection", "<SubtasksSection", "<LinkedSection", "<WebLinksSection", 'id="development"', "<JiraActivity"];
+    for (const w of order) expect(at(w)).toBeGreaterThan(-1);
+    const found = order.map(at);
+    expect(found).toEqual(found.toSorted((x, y) => x - y));
   });
 
   test("the composer and its sentence exist only with writes on", async () => {
@@ -114,12 +114,8 @@ describe("the card chrome, shared with ClickUp's look", () => {
     expect(html).not.toContain("YOURS");
     expect(html).not.toContain("Hand off");
   });
-  test("the tab strip has no rule above or below it, and the Jira pane draws its head and tabs from the shared parts", async () => {
-    const card = await src("../src/components/jira/JiraCard.tsx");
+  test("the Jira pane draws its head and its band from the shared parts", async () => {
     const facts = await src("../src/components/jira/JiraFacts.tsx");
-    expect(card).toContain("<CardTabs");
-    expect(card).not.toMatch(/\{header\([^\n]*\n[^\n]*\n[^\n]*borderBottom/);
-    expect(card).toContain('<div className="shrink-0 px-4">\n        <CardTabs');
     expect(facts).toContain("<CardActionBar");
     expect(facts).toContain("<CardChips");
     expect(facts).toContain("<CardTitle");

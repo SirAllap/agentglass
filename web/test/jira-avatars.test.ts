@@ -68,7 +68,7 @@ describe("a face with a Jira picture", () => {
 
 describe("no tracker component sets a raw avatar src", () => {
   const root = join(import.meta.dir, "../src/components");
-  const files = ["TasksPanel.tsx", "AssignPicker.tsx", "TrackerPeoplePick.tsx", "jira/JiraCard.tsx", "tasks/Composer.tsx"];
+  const files = ["TasksPanel.tsx", "AssignPicker.tsx", "TrackerPeoplePick.tsx", "jira/JiraActivity.tsx", "tasks/Composer.tsx"];
   test("every <img> fed by an avatar goes through avatarSrc", () => {
     for (const f of files) {
       const src = readFileSync(join(root, f), "utf8").split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
@@ -78,7 +78,7 @@ describe("no tracker component sets a raw avatar src", () => {
     }
   });
   test("the faces fall back to initials when the picture fails", () => {
-    for (const f of ["TasksPanel.tsx", "AssignPicker.tsx", "TrackerPeoplePick.tsx", "jira/JiraCard.tsx"]) {
+    for (const f of ["TasksPanel.tsx", "AssignPicker.tsx", "TrackerPeoplePick.tsx", "jira/JiraActivity.tsx"]) {
       expect(readFileSync(join(root, f), "utf8"), f).toContain("onError");
     }
   });
@@ -94,7 +94,7 @@ describe("every Jira face goes through the proxy helper and falls back", () => {
     expect(cardFace).toContain("avatarSrc(p.avatar)");
     expect(cardFace).toContain("onError");
     expect(cardFace).not.toContain("src={p.avatar}");
-    const panel = await Bun.file(new URL("../src/components/TasksPanel.tsx", import.meta.url)).text();
+    const panel = await Bun.file(new URL("../src/components/CardEventRun.tsx", import.meta.url)).text();
     const at = panel.indexOf("avatarSrc(e.avatar)");
     expect(at).toBeGreaterThan(-1);
     expect(panel.slice(at, at + 400)).toContain("onError");

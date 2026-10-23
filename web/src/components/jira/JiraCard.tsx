@@ -12,27 +12,23 @@
  * comments). A comment is one write and the card read back, and that answer
  * replaces the thread, so posting costs no second read here.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../lib/api.ts";
-import { avatarSrc } from "../../lib/avatarSrc.ts";
-import { fmtAgo } from "../../lib/format.ts";
-import { chipInk } from "../../lib/contrast.ts";
 import { Markdown } from "../../lib/markdown.tsx";
 import { putCard } from "../../lib/prCardStore.ts";
 import { TRACKERS } from "../../lib/trackerApi.ts";
 import { OfferedPeople } from "../../lib/trackerComment.ts";
 import type { Mentionable } from "../../lib/mentions.ts";
 import type { ProviderTask, TaskDetail } from "../../../../shared/providers.ts";
-import { openCard } from "../../lib/openCard.ts";
 import { Composer, COMPOSER_MIN } from "../tasks/Composer.tsx";
 import { LINE } from "../workspace/Chrome.tsx";
-import { jiraLinksVersion, onJiraLinks, peekJiraLinks } from "../../lib/jiraLinks.ts";
-import { CardFiles } from "../CardFiles.tsx";
-import { CardTabs } from "../CardChrome.tsx";
+import { readJiraLinks, type JiraLinks } from "../../lib/jiraLinks.ts";
 import { JiraProps } from "./JiraFacts.tsx";
+import { JiraActivity } from "./JiraActivity.tsx";
+import { AttachmentsSection, LinkedSection, Section, SubtasksSection, WebLinksSection } from "./JiraSections.tsx";
 import { Spinner } from "../Spinner.tsx";
 import { JiraCardPrs } from "./JiraCardPrs.tsx";
-import { mentionsOfCard, withMentions } from "../../lib/jiraLinks.ts";
+import { mentionsOfCard } from "../../lib/jiraLinks.ts";
 
 /** The box may grow to this share of the pane, then scrolls inside; the ClickUp card's share. */
 const COMPOSER_SHARE = 0.3;
@@ -40,38 +36,6 @@ const COMPOSER_SHARE = 0.3;
 const PEOPLE_WAIT_MS = 250;
 
 type Row = Mentionable & { initials?: string; avatar?: string };
-
-function Author({ who, initials, avatar }: { who: string; initials?: string; avatar?: string }) {
-  const [broken, setBroken] = useState(false);
-  const size = { width: 18, height: 18, borderRadius: 999 } as const;
-  if (avatar && !broken) {
-    return <img src={avatarSrc(avatar)} alt="" title={who} loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken(true)}
-      className="shrink-0 object-cover" style={size} />;
-  }
-  return <span title={who} className="shrink-0 inline-flex items-center justify-center text-[9px] font-medium"
-    style={{ ...size, background: "var(--bg4)", color: chipInk(null) }}>{initials || "?"}</span>;
-}
-
-type Tab = "card" | "files" | "github" | "subtasks";
-
-/** Subtasks as the detail read gave them: the key, the title, the status as the site spells it. A row opens the card in the app. */
-export function SubtaskRows({ rows }: { rows: ProviderTask[] }) {
-  return (
-    <div className="flex flex-col" aria-label="Subtasks">
-      {rows.map((s) => {
-        const k = s.customId ?? s.id;
-        return (
-          <button key={s.id} onClick={() => openCard(k, k, "jira")} title={`Open ${k}`}
-            className="agx-btn flex items-center gap-2 min-w-0 text-left text-[11px] py-1.5" style={{ borderBottom: LINE }}>
-            <span className="tabular-nums shrink-0" style={{ color: "var(--text3)" }}>{k}</span>
-            <span className="flex-1 min-w-0 truncate" style={{ color: s.statusKind === "done" ? "var(--text3)" : "var(--text)" }}>{s.title}</span>
-            <span className="shrink-0 text-[10px]" style={{ color: "var(--text3)" }}>{s.status}</span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
 
 export function JiraCard({ t, header, writes, onTask }: {
   t: ProviderTask;
@@ -108,19 +72,16 @@ export function JiraCard({ t, header, writes, onTask }: {
 
   useEffect(() => { setDetail(null); setMore(0); setErr(""); void read(); }, [read]);
 
-  /* Which half of the card is on screen. GitHub is there for every card (the
-     pull requests are read when it is opened, never before); subtasks only when
-     the card has some. A different card starts on the card itself. */
-  const [tab, setTab] = useState<Tab>("card");
-  useEffect(() => { setTab("card"); }, [key]);
-  const subtasks = detail?.subtasks ?? [];
+  /* The card's remote links: one request, shared with the Development section (lib/jiraLinks.ts), so opening a card costs two in all. */
+  const [links, setLinks] = useState<JiraLinks | null>(null);
+  useEffect(() => {
+    let on = true;
+    setLinks(null);
+    void readJiraLinks(key).then((r) => { if (on) setLinks(r); });
+    return () => { on = false; };
+  }, [key]);
   // The pull requests the card's own words name, from the read already made.
   const mentions = useMemo(() => (detail ? mentionsOfCard(detail) : []), [detail]);
-  const files = detail?.attachments ?? [];
-  /* The counter reads what the GitHub tab's own read already holds; it asks for nothing. */
-  useSyncExternalStore(onJiraLinks, jiraLinksVersion, jiraLinksVersion);
-  const prCount = withMentions(peekJiraLinks(key)?.links ?? [], mentions).length;
-  const view: Tab = (tab === "subtasks" && !subtasks.length) || (tab === "files" && !files.length) ? "card" : tab;
 
   /* The composer, pinned under the thread. */
   const [say, setSay] = useState("");
@@ -197,51 +158,28 @@ export function JiraCard({ t, header, writes, onTask }: {
   return (
     <div ref={paneRef} className="flex flex-col flex-1 min-w-0 min-h-0">
       <div className="shrink-0" style={{ background: "var(--bg)" }}>{header({ onRefresh: refresh, refreshing })}</div>
-      <div className="shrink-0 px-4">
-        <CardTabs active={view} onPick={setTab} tabs={[
-          { id: "card", label: "Card" },
-          ...(files.length ? [{ id: "files" as const, label: "Files", count: files.length }] : []),
-          { id: "github", label: "GitHub", count: prCount },
-          ...(subtasks.length ? [{ id: "subtasks" as const, label: "Subtasks", count: subtasks.length }] : []),
-        ]} />
-      </div>
-
       <div ref={listRef} className="agx-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 py-3">
-        {view === "files" && <CardFiles files={files} />}
-        {view === "github" && <JiraCardPrs query={key} writable={writes} quiet={!writes} mentions={mentions} />}
-        {view === "subtasks" && <SubtaskRows rows={subtasks} />}
-        {view === "card" && err && <div className="text-[11px] mb-3" role="alert" style={{ color: "var(--error-ink)" }}>{err}</div>}
-        {view === "card" && !detail && !err && <Spinner label="Reading the card…" className="" />}
-        {view === "card" && <JiraProps t={detail?.task ?? t} writable={writes} onTask={onTask} />}
-        {view === "card" && detail && (
+        {err && <div className="text-[11px] mb-3" role="alert" style={{ color: "var(--error-ink)" }}>{err}</div>}
+        {!detail && !err && <Spinner label="Reading the card…" className="" />}
+        <JiraProps t={detail?.task ?? t} writable={writes} onTask={onTask} facts={detail?.facts} />
+        {detail && (
           <>
-            <div className="text-[10px] uppercase tracking-wide mb-1.5" style={{ color: "var(--text3)" }}>Description</div>
-            <div className="agx-cu-body mb-5 min-w-0 break-words">
-              {detail.description.trim()
-                ? <Markdown text={detail.description} />
-                : <span style={{ color: "var(--text4)" }}>No description.</span>}
-            </div>
-            <div className="text-[10px] uppercase tracking-wide mb-2" style={{ color: "var(--text3)" }}>
-              Comments{count ? ` · ${count}` : ""}
-            </div>
-            {more > 0 && (
-              <div className="text-[10.5px] mb-2" style={{ color: "var(--text3)" }}>
-                {more} earlier {more === 1 ? "comment is" : "comments are"} only on Jira.
+            <Section id="description" title="Description">
+              <div className="agx-cu-body min-w-0 break-words">
+                {detail.description.trim()
+                  ? <Markdown text={detail.description} />
+                  : <span style={{ color: "var(--text4)" }}>No description.</span>}
               </div>
-            )}
-            {!count && <div className="text-[11px]" style={{ color: "var(--text4)" }}>No comments yet.</div>}
-            {detail.comments.map((c) => (
-              <div key={c.id} className="mb-3.5 flex gap-2.5 min-w-0">
-                <Author who={c.who} initials={c.initials} avatar={c.avatar} />
-                <div className="min-w-0 flex-1">
-                  <div className="text-[10.5px] mb-0.5">
-                    <span className="font-semibold" style={{ color: "var(--text2)" }}>{c.who}</span>
-                    {c.at > 0 && <span style={{ color: "var(--text4)" }}>{" · "}{fmtAgo(c.at)} ago</span>}
-                  </div>
-                  <div className="agx-cu-body agx-cu-note min-w-0 break-words"><Markdown text={c.text} /></div>
-                </div>
-              </div>
-            ))}
+            </Section>
+            <AttachmentsSection files={detail.attachments ?? []} />
+            <SubtasksSection rows={detail.subtasks} />
+            <LinkedSection linked={detail.linked ?? []} />
+            <WebLinksSection links={links ? links.web : null} error={links?.error ?? ""} />
+            <Section id="development" title="Development">
+              <JiraCardPrs query={key} writable={writes} quiet={!writes} mentions={mentions} />
+            </Section>
+            <JiraActivity cardKey={key} comments={detail.comments} moreComments={more} worklog={detail.events ?? []} worklogMore={detail.worklogMore ?? 0}
+              onMoreComments={(page, left) => { setDetail((d) => (d ? { ...d, comments: [...d.comments, ...page] } : d)); setMore(left); }} />
           </>
         )}
       </div>

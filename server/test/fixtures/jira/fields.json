@@ -325,6 +325,41 @@
         "custom": "com.atlassian.jira.plugin.system.customfieldtypes:atlassian-team",
         "customId": 10001
       }
+    },
+    {
+      "id": "customfield_10015",
+      "name": "Start date",
+      "custom": true,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "cf[10015]",
+        "Start date"
+      ],
+      "schema": {
+        "type": "date",
+        "custom": "com.atlassian.jira.plugin.system.customfieldtypes:datepicker",
+        "customId": 10015
+      }
+    },
+    {
+      "id": "customfield_10021",
+      "name": "Flagged",
+      "custom": true,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "cf[10021]",
+        "Flagged"
+      ],
+      "schema": {
+        "type": "array",
+        "custom": "com.atlassian.jira.plugin.system.customfieldtypes:multicheckboxes",
+        "customId": 10021,
+        "items": "option"
+      }
     }
   ],
   "datacenter": [
@@ -635,6 +670,41 @@
         "type": "any",
         "custom": "com.pyxis.greenhopper.jira:gh-lexo-rank",
         "customId": 10105
+      }
+    },
+    {
+      "id": "customfield_10110",
+      "name": "Start date",
+      "custom": true,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "cf[10110]",
+        "Start date"
+      ],
+      "schema": {
+        "type": "date",
+        "custom": "com.atlassian.jira.plugin.system.customfieldtypes:datepicker",
+        "customId": 10110
+      }
+    },
+    {
+      "id": "customfield_10111",
+      "name": "Flagged",
+      "custom": true,
+      "navigable": true,
+      "orderable": true,
+      "searchable": true,
+      "clauseNames": [
+        "cf[10111]",
+        "Flagged"
+      ],
+      "schema": {
+        "type": "array",
+        "custom": "com.atlassian.jira.plugin.system.customfieldtypes:multicheckboxes",
+        "customId": 10111,
+        "items": "option"
       }
     }
   ]

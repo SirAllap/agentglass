@@ -447,6 +447,8 @@ export interface ProviderTask {
   subtasks?: number;
   /** The card this one sits under, when it has one (a Jira subtask's parent, a story's epic). Read on a card's own read, not on a board's. */
   parent?: { key: string; title: string };
+  /** The kind of card as the site names it ("Story", "Bug"), on the card's own read and on the rows it carries. */
+  issueType?: string;
   /**
    * Custom field values worth showing, already resolved from ids to names.
    *
@@ -977,7 +979,8 @@ export interface ViewTasksResponse {
  */
 export interface CardEvent {
   at: number;
-  kind: "created" | "status" | "seen";
+  /** `change` and `worklog` are Jira's: one edit of one field by a named person, and one entry of time logged; both carry `who` and their sentence in `text`. */
+  kind: "created" | "status" | "seen" | "change" | "worklog";
   /** The status this event put the card in. */
   status?: string;
   /** ClickUp's colour for it, so the row reads like the pill everywhere else. */
@@ -1048,8 +1051,49 @@ export interface CardAttachment {
   who?: string;
 }
 
+/** One card linked to another, in the words the link type uses for the side this card is on ("blocks", "is blocked by"). */
+export interface CardLinked {
+  id: string;
+  /** The phrase for this card's side of the link; links of one phrase are drawn together. */
+  phrase: string;
+  /** The link type's own name ("Blocks"), for a row's tooltip. */
+  type: string;
+  /** `out` when this card is the subject of the phrase. */
+  direction: "in" | "out";
+  task: ProviderTask;
+}
+
+/** One line of a card's Details: a label and a value as text. An empty value is a field the site offers on this card and nobody filled. */
+export interface CardFact {
+  id: string;
+  label: string;
+  value: string;
+  /** A person's face, for the rows that name one (the reporter). */
+  avatar?: string;
+  initials?: string;
+  /** A state worth a colour, not a value to read: the card is flagged. */
+  tone?: "flag";
+}
+
+/** A link from the card to a page: any address, not only a pull request. */
+export interface CardWebLink {
+  id: string;
+  url: string;
+  title: string;
+  /** The address's host, so a row says where it goes without the whole address. */
+  host: string;
+  /** The same address is a pull request, which the card also shows as one. */
+  pr?: boolean;
+}
+
 export interface TaskDetail {
   task: ProviderTask;
+  /** Work-log entries the card has beyond the ones in `events` (the read carries the first 20). */
+  worklogMore?: number;
+  /** The card's links to other cards, of every type and both directions. Absent when the card was read without them. */
+  linked?: CardLinked[];
+  /** The card's Details under the properties; a field the site does not offer here and the card does not have is not in it. */
+  facts?: CardFact[];
   /** The files on the card. Metadata only — see CardAttachment. */
   attachments?: CardAttachment[];
   /**

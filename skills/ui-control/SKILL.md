@@ -110,12 +110,14 @@ naming a level is the answer, not a puzzle. Ask the person.
 ## A Jira card
 
 A card on a Jira site is not a window, so it is not a door in the list above:
-`agentglass-ui jira ...` (MCP: `ui_jira_card`, `ui_jira_moves`, `ui_jira_steps`,
+`agentglass-ui jira ...` (MCP: `ui_jira_card`, `ui_jira_moves`, `ui_jira_links`, `ui_jira_activity`, `ui_jira_steps`,
 `ui_jira_step`, `ui_jira_link`) talks to the same routes the screen uses, under
 the same switch.
 
 ```bash
-agentglass-ui --as my-agent jira card ORBIT-1042     # facts in state, the words in untrusted
+agentglass-ui --as my-agent jira card ORBIT-1042     # facts in state, the words in untrusted: description, comments, subtasks, linked cards, files by name, Details
+agentglass-ui --as my-agent jira links ORBIT-1042    # every web link on it, pull requests included
+agentglass-ui --as my-agent jira activity ORBIT-1042 --kind history   # what happened on it, 100 at a time (--start <state.next> for the next page)
 agentglass-ui --as my-agent jira moves ORBIT-1042    # where it can go from here
 agentglass-ui --as my-agent jira steps               # handoff, review, merge: which are on
 agentglass-ui --as my-agent jira step ORBIT-1042 handoff --updated <state.updated> \

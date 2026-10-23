@@ -19,17 +19,19 @@
  * Ceiling: a card's description and comments are cut to fit UNTRUSTED_MAX_BYTES
  * between them, newest comments kept, and the short fields (title, labels,
  * people) are as long as the site made them;
- * attachments, changelog and custom fields are not here (GET /jira/detail has
- * them for a window, and an agent has no use for a file it cannot open).
+ * a file is named and sized but its bytes are not here (an agent has no use for a file it cannot open), and the
+ * change history is not here yet. The lists a card carries (subtasks, linked cards, files, Details) are cut to
+ * ROWS_MAX rows each, with the count of the rest in `state`.
  */
-import type { ProviderTask } from "../../shared/providers.ts";
+import type { ProviderTask, TaskDetail } from "../../shared/providers.ts";
 import { UNTRUSTED_MAX_BYTES } from "../../shared/uiActions.ts";
-import { ISSUE_KEY, linkPullRequestStored, movesStored, jiraWriteEnabled } from "./jira.ts";
+import { ISSUE_KEY, linkPullRequestStored, movesStored, jiraWriteEnabled, remoteLinksAllStored } from "./jira.ts";
+import { ACTIVITY_KINDS, activityStored, type ActivityKind } from "./jiraActivity.ts";
 import { detailStored } from "./jiraComments.ts";
 import { jiraSteps, runStepBody, STEP_KEYS } from "./jiraSteps.ts";
 import { rememberOwnMove } from "./jirawatch.ts";
 
-export const DOOR_VERBS = ["card", "moves", "steps", "step", "link"] as const;
+export const DOOR_VERBS = ["card", "moves", "links", "activity", "steps", "step", "link"] as const;
 export type DoorVerb = (typeof DOOR_VERBS)[number];
 /** The verbs that change the site. The rest read. */
 export const DOOR_ACTING: readonly DoorVerb[] = ["step", "link"];
@@ -116,22 +118,88 @@ export function cardParts(t: ProviderTask): { state: Record<string, unknown>; un
   };
 }
 
+/** The most rows of each list a card answer carries; the count of those left out is in `state`. */
+const ROWS_MAX = 40;
+
+/** What the pane draws beside the words, as an agent reads it: ids and counts in `state`, every string a person or a team typed in `untrusted`. */
+function listsOf(d: TaskDetail): { state: Record<string, unknown>; untrusted: Record<string, unknown> } {
+  const row = (t: ProviderTask) => ({ key: t.customId ?? t.id, title: clip(t.title, 160), status: t.status, ...(t.issueType ? { type: t.issueType } : null) });
+  const done = d.subtasks.filter((t) => t.statusKind === "done").length;
+  const linked = d.linked ?? [];
+  const files = d.attachments ?? [];
+  const facts = d.facts ?? [];
+  const left = (n: number) => (n > ROWS_MAX ? { notShown: n - ROWS_MAX } : null);
+  return {
+    state: {
+      subtasksDone: done, subtasksTotal: d.subtasks.length,
+      linkedCount: linked.length, attachmentCount: files.length,
+      ...(left(d.subtasks.length) ? { subtasksNotShown: d.subtasks.length - ROWS_MAX } : null),
+      ...(left(linked.length) ? { linkedNotShown: linked.length - ROWS_MAX } : null),
+      ...(left(files.length) ? { attachmentsNotShown: files.length - ROWS_MAX } : null),
+      ...(facts.some((f) => f.tone === "flag") ? { flagged: true } : null),
+    },
+    untrusted: {
+      ...(d.subtasks.length ? { subtasks: d.subtasks.slice(0, ROWS_MAX).map(row) } : null),
+      ...(linked.length ? { linked: linked.slice(0, ROWS_MAX).map((l) => ({ phrase: clip(l.phrase, 60), ...row(l.task) })) } : null),
+      ...(files.length ? { attachments: files.slice(0, ROWS_MAX).map((a) => ({ name: clip(a.title, 160), size: a.size, ...(a.who ? { by: clip(a.who, 80) } : null) })) } : null),
+      ...(facts.length ? { details: facts.map((f) => ({ label: f.label, value: clip(f.value, 200) })) } : null),
+    },
+  };
+}
+
 /** The whole card for a read: the task, its description and its comments, newest kept when the budget runs out. */
 async function readCard(key: string): Promise<DoorAnswer> {
   const r = await detailStored(key);
   if (!r.ok || !r.data) return { status: 200, body: { ok: false, error: r.error ?? "Jira did not answer", ...(r.throttled ? { throttled: true } : null) } };
   const { detail, more } = r.data;
   const { state, untrusted } = cardParts(detail.task);
+  const lists = listsOf(detail);
   // The head of the budget goes to the description, the rest to the comments from the newest back.
   const half = Math.floor(UNTRUSTED_MAX_BYTES / 2);
   const description = clip(detail.description ?? "", half);
-  const comments = newestComments(detail.comments, UNTRUSTED_MAX_BYTES - Buffer.byteLength(description) - Buffer.byteLength(JSON.stringify(untrusted)));
+  const comments = newestComments(detail.comments, UNTRUSTED_MAX_BYTES - Buffer.byteLength(description) - Buffer.byteLength(JSON.stringify({ ...untrusted, ...lists.untrusted })));
   return {
     status: 200,
     body: {
       ok: true, key: key.toUpperCase(),
-      state: { ...state, commentsShown: comments.length, ...(more ? { commentsNotShown: more } : null), writes: jiraWriteEnabled() },
-      untrusted: { ...untrusted, description, comments },
+      state: { ...state, ...lists.state, commentsShown: comments.length, ...(more ? { commentsNotShown: more } : null), writes: jiraWriteEnabled() },
+      untrusted: { ...untrusted, ...lists.untrusted, description, comments },
+    },
+  };
+}
+
+/** Every remote link of the card, the pull requests among them: one request, as the pane's Web links section reads. */
+async function readLinks(key: string): Promise<DoorAnswer> {
+  const r = await remoteLinksAllStored(key);
+  if (!r.ok || !r.data) return { status: 200, body: { ok: false, error: r.error ?? "Jira did not answer", ...(r.throttled ? { throttled: true } : null) } };
+  const web = r.data.web;
+  return {
+    status: 200,
+    body: {
+      ok: true, key: key.toUpperCase(),
+      state: { linkCount: web.length, pullRequests: web.filter((w) => w.pr).length, ...(web.length > ROWS_MAX ? { notShown: web.length - ROWS_MAX } : null) },
+      untrusted: { links: web.slice(0, ROWS_MAX).map((w) => ({ title: clip(w.title, 160), url: clip(w.url, 300), ...(w.pr ? { pullRequest: true } : null) })) },
+    },
+  };
+}
+
+/** One page of what happened on the card: its history (default), its work log, or the comments past the card read. Nothing here is part of `card`, as it is not part of opening one. */
+async function readActivity(key: string, kindRaw: unknown, startRaw: unknown): Promise<DoorAnswer> {
+  const kind = typeof kindRaw === "string" && kindRaw ? kindRaw : "history";
+  if (!(ACTIVITY_KINDS as readonly string[]).includes(kind)) return refuse(`kind is one of ${ACTIVITY_KINDS.join(", ")}`);
+  const start = typeof startRaw === "number" && Number.isFinite(startRaw) && startRaw >= 0 ? Math.floor(startRaw) : 0;
+  const r = await activityStored(kind as ActivityKind, key, start);
+  if (!r.ok || !r.data) return { status: 200, body: { ok: false, error: r.error ?? "Jira did not answer", ...(r.throttled ? { throttled: true } : null) } };
+  const d = r.data;
+  return {
+    status: 200,
+    body: {
+      ok: true, key: key.toUpperCase(),
+      state: { kind, total: d.total, shown: (d.events ?? d.comments ?? []).length, ...(d.next !== undefined ? { next: d.next } : null) },
+      untrusted: {
+        ...(d.events ? { events: d.events.slice(0, ROWS_MAX * 3).map((e) => ({ at: e.at, who: clip(e.who ?? "", 80), text: clip(e.text ?? "", 300) })) } : null),
+        ...(d.comments ? { comments: newestComments(d.comments, Math.floor(UNTRUSTED_MAX_BYTES / 2)) } : null),
+      },
     },
   };
 }
@@ -178,6 +246,10 @@ export async function runDoor(verb: string, b: Record<string, unknown>): Promise
       return ISSUE_KEY.test(key) ? readCard(key) : refuse("That is not a Jira card id");
     case "moves":
       return ISSUE_KEY.test(key) ? readMoves(key) : refuse("That is not a Jira card id");
+    case "links":
+      return ISSUE_KEY.test(key) ? readLinks(key) : refuse("That is not a Jira card id");
+    case "activity":
+      return ISSUE_KEY.test(key) ? readActivity(key, b.kind, b.start) : refuse("That is not a Jira card id");
     case "steps":
       return readSteps();
     case "step": {

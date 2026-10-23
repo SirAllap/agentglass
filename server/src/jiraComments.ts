@@ -19,6 +19,8 @@
  */
 import { CARD_FIELDS, apiOf, cardPointsField, jiraCall, jiraWriteEnabled, memoOk, siteFields, taskContext, toTask, withStored, type JiraCreds, type JiraResult, type TaskContext } from "./jira.ts";
 import { adfToMarkdown, markdownToAdf, markdownToWiki, wikiToMarkdown, type Mention } from "./jiraAdf.ts";
+import { worklogEvents } from "./jiraActivity.ts";
+import { attachmentsOf, commentRows, factsOf, linkedOf, offeredFields, textReader } from "./jiraCardRead.ts";
 import type { TaskDetail, ProviderTask } from "../../shared/providers.ts";
 import type { WriteOutcome } from "./trackerTypes.ts";
 
@@ -48,37 +50,30 @@ const avatarOf = (u: Record<string, unknown>): string | undefined => {
 };
 
 /** The card's description and comments, as Markdown, from one issue read. */
-export function toDetail(issue: unknown, task: ProviderTask, v: 2 | 3, me?: string, cx?: TaskContext): { detail: TaskDetail; more: number } {
+export function toDetail(issue: unknown, task: ProviderTask, v: 2 | 3, me?: string, cx?: TaskContext, ids?: { start?: string; flag?: string; team?: string }): { detail: TaskDetail; more: number } {
   const f = isObj(issue) && isObj(issue.fields) ? issue.fields : {};
   const box = isObj(f.comment) ? f.comment : {};
   const raw = (Array.isArray(box.comments) ? box.comments : []).filter(isObj);
-  // A login inside `[~ada]` is shown by the name the same answer gave it
-  // (the assignee, or somebody who commented); anyone else by the login.
-  const names: Record<string, string> = {};
-  for (const u of [f.assignee, ...raw.map((c) => c.author)]) {
-    if (isObj(u) && str(u.name) && str(u.displayName)) names[str(u.name)] = str(u.displayName);
-  }
-  const read = (body: unknown) => (v === 3 ? adfToMarkdown(body) : wikiToMarkdown(body, names));
-  const comments: TaskDetail["comments"] = raw.map((c) => {
-    const a = isObj(c.author) ? c.author : {};
-    const who = str(a.displayName) || str(a.name) || "Someone";
-    const avatar = avatarOf(a);
-    return {
-      id: str(c.id) || String(c.id ?? ""),
-      who,
-      text: read(c.body).text,
-      at: epoch(c.created),
-      initials: initialsOf(who),
-      ...(avatar ? { avatar } : {}),
-      ...(me && personId(a) === me ? { mine: true } : {}),
-    };
-  }).filter((c) => c.id).sort((x, y) => x.at - y.at);
+  const { comments, names } = commentRows(raw, v, me, [f.assignee]);
   const total = typeof box.total === "number" ? box.total : comments.length;
   // A subtask arrives as a stub (key, summary, status): enough for a row, not for a project.
   const subtasks = cx ? (Array.isArray(f.subtasks) ? f.subtasks : []).flatMap((s) => { const t = toTask(s, cx); return t ? [t] : []; }) : [];
+  // The rest of the card, only when the read asked for it: a link list that was not asked for is not "no links".
+  const attachments = Array.isArray(f.attachment) ? attachmentsOf(f) : undefined;
+  const linked = cx && Array.isArray(f.issuelinks) ? linkedOf(f, (s) => toTask(s, cx)) : undefined;
+  const facts = cx ? factsOf(f, ids ?? {}, offeredFields(issue)) : undefined;
+  // The first entries of the work log ride on the read (a field, no request); the rest are a page on demand.
+  const wl = isObj(f.worklog) ? f.worklog : null;
+  const events = wl ? worklogEvents(wl.worklogs, v) : undefined;
+  const worklogMore = wl && events && typeof wl.total === "number" ? Math.max(0, wl.total - (Array.isArray(wl.worklogs) ? wl.worklogs.length : 0)) : 0;
   return {
     // Asked and empty is an answer ("none left"); not asked, the board's own count stands.
-    detail: { task: Array.isArray(f.subtasks) ? { ...task, subtasks: f.subtasks.length } : task, description: f.description == null ? "" : read(f.description).text, subtasks, checklists: [], comments },
+    detail: {
+      task: Array.isArray(f.subtasks) ? { ...task, subtasks: f.subtasks.length } : task,
+      description: f.description == null ? "" : textReader(v, names)(f.description), subtasks, checklists: [], comments,
+      ...(attachments ? { attachments } : {}), ...(linked ? { linked } : {}), ...(facts ? { facts } : {}),
+      ...(events ? { events } : {}), ...(worklogMore ? { worklogMore } : {}),
+    },
     more: Math.max(0, total - comments.length),
   };
 }
@@ -93,16 +88,22 @@ export async function readDetail(creds: JiraCreds, key: string, o: { fresh?: boo
   const found = await siteFields(creds);
   const ids = found.ok && found.data ? found.data : null;
   const ask = { sprint: ids?.sprint, points: cardPointsField(ids) };
-  const fields = [...CARD_FIELDS, "description", "comment", "parent", "subtasks", ...(ask.sprint ? [ask.sprint] : []), ...(ask.points ? [ask.points] : [])].join(",");
+  const more = [ids?.start, ids?.flag, ids?.team].filter((x): x is string => !!x);
+  const fields = [
+    ...CARD_FIELDS, "description", "comment", "parent", "subtasks", "issuelinks", "attachment", "reporter", "issuetype",
+    "components", "fixVersions", "versions", "timetracking", "worklog",
+    ...(ask.sprint ? [ask.sprint] : []), ...(ask.points ? [ask.points] : []), ...more,
+  ].join(",");
+  // `editmeta` says which Details this card's edit screen offers; it rides on the same read.
   const [r, base] = await Promise.all([
-    jiraCall<unknown>(creds, `/rest/api/${v}/issue/${encodeURIComponent(key)}?fields=${fields}`, { fresh: o.fresh }),
+    jiraCall<unknown>(creds, `/rest/api/${v}/issue/${encodeURIComponent(key)}?fields=${fields}&expand=editmeta`, { fresh: o.fresh }),
     taskContext(creds),
   ]);
   if (!r.ok) return { ...r, data: undefined };
   const cx = { ...base, fields: ask };
   const task = toTask(r.data, cx);
   if (!task) return { ok: false, error: "Jira answered with something that is not a card" };
-  return { ok: true, data: toDetail(r.data, task, v, cx.me, cx) };
+  return { ok: true, data: toDetail(r.data, task, v, cx.me, cx, ids ?? undefined) };
 }
 
 export interface MentionPerson { key: string; name: string; initials: string; avatar?: string }

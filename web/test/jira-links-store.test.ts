@@ -77,4 +77,14 @@ describe("the tab counter reads what is held and asks for nothing", () => {
     expect(jiraLinksVersion()).toBeGreaterThan(v);
     expect(calls).toEqual(["ORBIT-7"]);
   });
+
+  it("carries every address the card links to beside the pull requests, from the same single read", async () => {
+    answer = async () => ({ ok: true, links: [], web: [{ id: "1", url: "https://docs.acme.example/design/sync", title: "Design note", host: "docs.acme.example" }] });
+    const r = await readJiraLinks("ORBIT-7");
+    expect(r.web.map((w) => w.title)).toEqual(["Design note"]);
+    expect(calls.length).toBe(1);
+    // A pull request linked from here joins the web links too, so the two sections agree without another read.
+    const v = addJiraLink("ORBIT-7", { url: "https://github.com/acme/orbit/pull/9", number: 9, title: "acme/orbit#9", resolved: false });
+    expect(v.web.map((w) => [w.title, !!w.pr])).toEqual([["Design note", false], ["acme/orbit#9", true]]);
+  });
 });

@@ -377,6 +377,11 @@ JIRA_VERBS = {
              "args": {"key": ("a card id such as ORBIT-1042", True)}},
     "moves": {"acting": False, "surface": "the moves a Jira card can make from where it is: ids in `state`, the team's names in `untrusted`",
               "args": {"key": ("a card id such as ORBIT-1042", True)}},
+    "links": {"acting": False, "surface": "every web link on a Jira card, pull requests included: how many in `state`, the titles and addresses in `untrusted`",
+              "args": {"key": ("a card id such as ORBIT-1042", True)}},
+    "activity": {"acting": False, "surface": "one page of what happened on a Jira card: its history (the default), its work log, or its comments past the card read; `state.next` is where the next page starts",
+                 "args": {"key": ("a card id such as ORBIT-1042", True), "kind": ("history, worklog or comments (history by default)", False),
+                          "start": ("where the page starts, from `state.next` of the last answer", False)}},
     "steps": {"acting": False, "surface": "the configured steps (handoff, review, merge) and whether each is on", "args": {}},
     "step": {"acting": True,
              "surface": "run one configured step on a card, as one request (the move, the comment and the link it is set to do); refused below control level 3, when Jira writes are off, or when the card changed since `updated`",
@@ -395,7 +400,7 @@ JIRA_VERBS = {
     "link": {"acting": True, "surface": "link a pull request to a card, once (refused below control level 3, when Jira writes are off, or when the address is not a pull request on a known host)",
              "args": {"key": ("a card id such as ORBIT-1042", True), "url": ("the pull request's address", True), "title": ("its title", False)}},
 }
-_JIRA_INT = ("updated", "pr_number")
+_JIRA_INT = ("updated", "pr_number", "start")
 _JIRA_BOOL = ("stay", "clear")
 
 
@@ -495,7 +500,7 @@ def main(argv=None):
     pm = p.add_mutually_exclusive_group()
     pm.add_argument("--now", action="store_true", help="open it at once: ONLY when the person just asked you to prepare this")
     pm.add_argument("--quiet", action="store_true", help="wait behind a chip if the person is typing (the default)")
-    p = sub.add_parser("jira", help="a Jira card through the routes the screen uses: card, moves, steps, step, link")
+    p = sub.add_parser("jira", help="a Jira card through the routes the screen uses: card, moves, links, activity, steps, step, link")
     js = p.add_subparsers(dest="jverb", required=True)
     for verb, spec in JIRA_VERBS.items():
         q = js.add_parser(verb, help=spec["surface"])

@@ -119,7 +119,8 @@ import { failed } from "./refused.ts";
 import { trackerProjects, setTrackerChoice } from "./trackerProjects.ts";
 import { holdCard as holdJiraCard } from "./jiraprcards.ts";
 import { ISSUE_KEY, connectJira, jiraStatus, setJiraWrites, jiraWriteEnabled, readIssue, findIssue, mine as jiraMine, searchText as jiraSearchText, withStored as withJira } from "./jira.ts";
-import { movesStored as jiraMoves, moveStored as jiraMove, remoteLinksStored as jiraLinks, linkPullRequestStored as jiraLink } from "./jira.ts";
+import { ACTIVITY_KINDS, activityStored as jiraActivity, type ActivityKind } from "./jiraActivity.ts";
+import { movesStored as jiraMoves, moveStored as jiraMove, remoteLinksStored as jiraLinks, remoteLinksAllStored as jiraLinksAll, linkPullRequestStored as jiraLink } from "./jira.ts";
 import {
   assignableStored as jiraAssignable, setAssigneeStored as jiraSetAssignee, handOffStored as jiraHandOff,
   jiraSettings, setHandoffRule as jiraSetHandoff, projectStatusesStored as jiraProjectStatuses,
@@ -6429,8 +6430,20 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      * links are read first and an address already there is not posted again.
      */
     if (req.method === "GET" && pathname === "/jira/links") {
-      const r = await jiraLinks((url.searchParams.get("key") ?? "").trim());
-      return json(r.ok ? { ok: true, links: r.data ?? [] } : { ok: false, links: [], error: r.error });
+      const r = await jiraLinksAll((url.searchParams.get("key") ?? "").trim());
+      return json(r.ok && r.data ? { ok: true, links: r.data.links, web: r.data.web } : { ok: false, links: [], web: [], error: r.error });
+    }
+    /*
+     * `GET /jira/activity?key=&kind=history|worklog|comments&startAt=`: one page of what happened on a card, read when its
+     * tab is opened (history), or when the pane asks for more (the rest of the work log, comments past the card read).
+     * Never part of opening a card. An answer is `{ok, events|comments, total, next?}`; `next` is the `startAt` of the following page.
+     */
+    if (req.method === "GET" && pathname === "/jira/activity") {
+      const kind = url.searchParams.get("kind") ?? "";
+      if (!(ACTIVITY_KINDS as readonly string[]).includes(kind)) return json({ ok: false, error: `kind is one of ${ACTIVITY_KINDS.join(", ")}` }, 400);
+      const at = Number(url.searchParams.get("startAt") ?? 0);
+      const r = await jiraActivity(kind as ActivityKind, (url.searchParams.get("key") ?? "").trim(), Number.isFinite(at) && at >= 0 ? at : 0);
+      return json(r.ok && r.data ? { ok: true, ...r.data } : { ok: false, error: r.error });
     }
     if (pathname === "/jira/link" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();

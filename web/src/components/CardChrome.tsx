@@ -105,10 +105,10 @@ export function CardTabs<Id extends string>({ tabs, active, onPick }: {
   tabs: readonly { id: Id; label: string; count?: number }[]; active: Id; onPick: (id: Id) => void;
 }) {
   return (
-    <div className="flex items-center gap-1.5" role="tablist" aria-label="Card sections">
+    <div className="flex items-center gap-1 flex-wrap" role="tablist" aria-label="Card sections">
       {tabs.map((t) => (
         <button key={t.id} role="tab" aria-selected={active === t.id} aria-current={active === t.id ? "page" : undefined} onClick={() => onPick(t.id)}
-          className="agx-btn text-[10px] uppercase tracking-[0.14em] px-2.5 py-1.5 rounded-t-md"
+          className="agx-btn text-[10px] uppercase tracking-[0.14em] px-2.5 py-1.5 rounded-t-md whitespace-nowrap"
           style={{
             color: active === t.id ? "var(--text)" : "var(--text3)",
             background: active === t.id ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent",

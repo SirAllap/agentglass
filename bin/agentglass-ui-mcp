@@ -158,6 +158,8 @@ def jira_tools(level=3):
                 props[k] = {"type": "integer", "minimum": 0, "description": why}
             elif k in UI._JIRA_BOOL:
                 props[k] = {"type": "boolean", "description": why}
+            elif k == "kind":
+                props[k] = {"type": "string", "enum": ["history", "worklog", "comments"], "description": why}
             elif k == "trigger":
                 props[k] = {"type": "string", "enum": ["handoff", "review", "merge"], "description": why}
             else:

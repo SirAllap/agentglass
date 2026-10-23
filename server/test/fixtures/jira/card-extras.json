@@ -1,0 +1,252 @@
+{
+  "links": [
+    {
+      "id": "10110",
+      "type": "Blocks",
+      "from": "ORBIT-1050",
+      "to": "ACME-8"
+    },
+    {
+      "id": "10111",
+      "type": "Blocks",
+      "from": "ACME-7",
+      "to": "ORBIT-1050"
+    },
+    {
+      "id": "10112",
+      "type": "Duplicate",
+      "from": "ORBIT-1050",
+      "to": "ACME-8"
+    },
+    {
+      "id": "10113",
+      "type": "Cloners",
+      "from": "ACME-7",
+      "to": "ORBIT-1050"
+    },
+    {
+      "id": "10114",
+      "type": "Relates",
+      "from": "ORBIT-1001",
+      "to": "ORBIT-1050"
+    }
+  ],
+  "issues": {
+    "ORBIT-1042": {
+      "attachments": [
+        {
+          "id": "30001",
+          "filename": "timeout-trace.png",
+          "size": 48210,
+          "mimeType": "image/png",
+          "created": "2026-10-02T09:15:00.000+0000",
+          "author": "acc-0002"
+        },
+        {
+          "id": "30002",
+          "filename": "sync-log.txt",
+          "size": 1290,
+          "mimeType": "text/plain",
+          "created": "2026-10-03T11:40:00.000+0000",
+          "author": "acc-0001"
+        }
+      ],
+      "components": [
+        "Sync"
+      ],
+      "fixVersions": [
+        "2.4"
+      ],
+      "versions": [],
+      "timetracking": {
+        "originalEstimate": "2d",
+        "remainingEstimate": "1d 4h",
+        "timeSpent": "4h"
+      },
+      "flagged": "Impediment",
+      "startDate": "2026-10-05",
+      "editmeta": [
+        "summary",
+        "description",
+        "labels",
+        "priority",
+        "duedate",
+        "assignee",
+        "reporter",
+        "fixVersions",
+        "timetracking",
+        "startDate",
+        "flagged"
+      ],
+      "worklogs": [
+        {
+          "id": "40001",
+          "author": "acc-0002",
+          "started": "2026-10-06T09:00:00.000+0000",
+          "created": "2026-10-06T17:00:00.000+0000",
+          "timeSpentSeconds": 2700,
+          "comment": "Reproduced the timeout with a large board"
+        },
+        {
+          "id": "40002",
+          "author": "acc-0001",
+          "started": "2026-10-07T10:30:00.000+0000",
+          "created": "2026-10-07T12:00:00.000+0000",
+          "timeSpentSeconds": 5400
+        }
+      ],
+      "changelog": [
+        {
+          "id": "41001",
+          "author": "acc-0002",
+          "created": "2026-10-02T09:00:00.000+0000",
+          "items": [
+            {
+              "field": "status",
+              "from": "10000",
+              "fromString": "To Do",
+              "to": "10001",
+              "toString": "In Progress"
+            },
+            {
+              "field": "assignee",
+              "from": null,
+              "fromString": null,
+              "to": "acc-0002",
+              "toString": "Grace Sample"
+            }
+          ]
+        },
+        {
+          "id": "41002",
+          "author": "acc-0001",
+          "created": "2026-10-03T10:00:00.000+0000",
+          "items": [
+            {
+              "field": "priority",
+              "from": "3",
+              "fromString": "Medium",
+              "to": "2",
+              "toString": "High"
+            },
+            {
+              "field": "labels",
+              "from": null,
+              "fromString": "sync",
+              "to": null,
+              "toString": "sync bug"
+            }
+          ]
+        },
+        {
+          "id": "41003",
+          "author": "acc-0001",
+          "created": "2026-10-04T11:00:00.000+0000",
+          "items": [
+            {
+              "field": "duedate",
+              "from": null,
+              "fromString": null,
+              "to": "2026-10-20",
+              "toString": "2026-10-20 00:00:00.0"
+            },
+            {
+              "field": "Start date",
+              "from": null,
+              "fromString": null,
+              "to": "2026-10-05",
+              "toString": "2026-10-05"
+            }
+          ]
+        },
+        {
+          "id": "41004",
+          "author": "acc-0002",
+          "created": "2026-10-05T12:00:00.000+0000",
+          "items": [
+            {
+              "field": "Link",
+              "from": null,
+              "fromString": null,
+              "to": "ORBIT-1043",
+              "toString": "This issue blocks ORBIT-1043"
+            },
+            {
+              "field": "RemoteWorkItemLink",
+              "from": null,
+              "fromString": null,
+              "to": null,
+              "toString": "This issue links to \"#2196 Fix the timeout\""
+            },
+            {
+              "field": "Attachment",
+              "from": null,
+              "fromString": null,
+              "to": "30001",
+              "toString": "timeout-trace.png"
+            }
+          ]
+        },
+        {
+          "id": "41005",
+          "author": "acc-0002",
+          "created": "2026-10-06T17:00:00.000+0000",
+          "items": [
+            {
+              "field": "timeestimate",
+              "from": "28800",
+              "fromString": "28800",
+              "to": "3600",
+              "toString": "3600"
+            },
+            {
+              "field": "timeoriginalestimate",
+              "from": null,
+              "fromString": null,
+              "to": "57600",
+              "toString": "57600"
+            },
+            {
+              "field": "WorklogId",
+              "from": null,
+              "fromString": null,
+              "to": "40001",
+              "toString": "40001"
+            },
+            {
+              "field": "Rank",
+              "from": null,
+              "fromString": null,
+              "to": null,
+              "toString": "Ranked higher"
+            },
+            {
+              "field": "customfield_12345",
+              "from": null,
+              "fromString": "old",
+              "to": null,
+              "toString": "new"
+            }
+          ]
+        }
+      ]
+    },
+    "ORBIT-1043": {
+      "editmeta": [
+        "summary",
+        "description",
+        "labels",
+        "priority",
+        "duedate",
+        "assignee",
+        "reporter",
+        "components",
+        "startDate"
+      ]
+    },
+    "ORBIT-1050": {
+      "changelogCount": 230,
+      "worklogCount": 25
+    }
+  }
+}

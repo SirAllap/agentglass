@@ -9,12 +9,14 @@
  * not on every render.
  */
 import { api } from "./api.ts";
+import type { CardWebLink } from "../../../shared/providers.ts";
 import { prMentions } from "../../../shared/taskref.ts";
 
 /** Where a row came from: a real remote link, or an address somebody wrote in the card's words. */
 export type LinkWhere = "link" | "comment" | "description";
 export interface JiraLink { url: string; number: number; title: string; resolved: boolean; where?: LinkWhere }
-export type JiraLinks = { links: JiraLink[]; error: string };
+/** `web` is every remote link of the card, the pull requests among them; `links` is the pull requests alone. */
+export type JiraLinks = { links: JiraLink[]; web: CardWebLink[]; error: string };
 
 const TTL_MS = 60_000;
 const held = new Map<string, { at: number; value: JiraLinks }>();
@@ -35,8 +37,8 @@ export function readJiraLinks(key: string): Promise<JiraLinks> {
   const going = pending.get(key);
   if (going) return going;
   const p = api.jiraLinks(key)
-    .then((r): JiraLinks => ({ links: r?.ok ? r.links ?? [] : [], error: r?.ok ? "" : r?.error || "Jira did not answer" }))
-    .catch((): JiraLinks => ({ links: [], error: "Could not reach the server" }))
+    .then((r): JiraLinks => ({ links: r?.ok ? r.links ?? [] : [], web: r?.ok ? r.web ?? [] : [], error: r?.ok ? "" : r?.error || "Jira did not answer" }))
+    .catch((): JiraLinks => ({ links: [], web: [], error: "Could not reach the server" }))
     .then((value) => { held.set(key, { at: Date.now(), value }); pending.delete(key); changed(); return value; });
   pending.set(key, p);
   return p;
@@ -44,8 +46,12 @@ export function readJiraLinks(key: string): Promise<JiraLinks> {
 
 /** A write just put this link on the card: what the card now carries, without asking again. */
 export function addJiraLink(key: string, link: JiraLink): JiraLinks {
-  const cur = held.get(key)?.value ?? { links: [], error: "" };
-  const value = { links: cur.links.some((l) => l.url === link.url) ? cur.links : [...cur.links, link], error: "" };
+  const cur = held.get(key)?.value ?? { links: [], web: [], error: "" };
+  const value = {
+    links: cur.links.some((l) => l.url === link.url) ? cur.links : [...cur.links, link],
+    web: cur.web.some((w) => w.url === link.url) ? cur.web : [...cur.web, { id: link.url, url: link.url, title: link.title, host: new URL(link.url).host, pr: true }],
+    error: "",
+  };
   held.set(key, { at: Date.now(), value });
   changed();
   return value;
