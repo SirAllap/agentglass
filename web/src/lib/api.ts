@@ -1,6 +1,7 @@
 import { forgetShared, sharedRead } from "./sharedRead.ts";
 import type { UiAction, Field, NoteStatus, PluginPanel, PluginPrNotes } from "./pluginTypes.ts";
 import type { ImportedPlace } from "./desktop.ts";
+import type { Policy } from "../../../shared/orchestration.ts";
 import type { PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/types.ts";
 import type { AskedAlert } from "../../../shared/notifyPayload.ts";
 import type { CheckOnBasePlan, CheckOnBaseStatus } from "../../../shared/checkOnBase.ts";
@@ -1502,6 +1503,15 @@ const realApi = {
   workerRoleSave: (role: string, provider: string, model: string) =>
     post<{ ok: boolean; error?: string; roles: Record<string, { provider: string; model: string }>;
     providers?: { id: string; title: string; installed: boolean }[] }>("/agents/roles", { role, provider, model }),
+  /** The orchestration policy in force for a project, or the global one. */
+  orchestration: (root?: string) =>
+    get<{ ok: boolean; error?: string; scope: "project" | "global"; root?: string; overrides: string[]; policy: Policy }>(
+      `/orchestration${root ? `?root=${encodeURIComponent(root)}` : ""}`),
+  /** Store a whole policy (null removes a project's own). Refused for anything
+   *  but the person's own window or a paired device. */
+  orchestrationSave: (policy: Policy | null, root?: string) =>
+    post<{ ok: boolean; error?: string; scope?: "project" | "global"; root?: string; overrides?: string[]; policy?: Policy }>(
+      "/orchestration", { root, policy }),
   /** Whether hooked sessions get asked what they are working on, and how
    *  often — the Lantern's one setting. */
   lanternSettings: () => get<{ ok: boolean; nudge: boolean; minutes: number; watch: boolean; watchMinutes: number; cacheTtlMinutes: number; min: number; max: number }>("/lantern/settings"),
@@ -2854,6 +2864,24 @@ const demoApi: typeof realApi = {
     providers: [{ id: "claude", title: "Claude Code", installed: true }, { id: "opencode", title: "OpenCode", installed: true }, { id: "qwen", title: "Qwen Code", installed: false }],
   }),
   workerRoleSave: (_r: string, _p: string, _m: string) => D({ ok: false, error: "not available in the demo", roles: {} }),
+  orchestration: (_root?: string) => D({
+    ok: true, scope: "global" as const, overrides: [] as string[],
+    policy: {
+      base: {
+        orchestrator: { value: [{ engine: "claude", model: "haiku" }], ask: false },
+        workers: {
+          scout: { value: [{ engine: "opencode", model: "" }], ask: false },
+          builder: { value: [{ engine: "claude", model: "sonnet" }], ask: false },
+          verifier: { value: [{ engine: "claude", model: "haiku" }], ask: false },
+        },
+      },
+      rules: [],
+      ceiling: { write: "worktree" as const, network: false, commit: true, deny: [] as string[] },
+      workerDefault: { write: "worktree" as const, network: false, commit: false, deny: [] as string[] },
+      limits: { maxWorkers: 3, turnMinutes: 30, maxRetries: 1 },
+    } as Policy,
+  }),
+  orchestrationSave: (_p: Policy | null, _root?: string) => D({ ok: false, error: "not available in the demo" }),
   lanternSettings: () => D({ ok: true, nudge: true, minutes: 20, watch: true, watchMinutes: 15, cacheTtlMinutes: 5, min: 5, max: 180 }),
   lanternSettingsSave: (_f: object) => D({ ok: false, error: "not available in the demo" }),
   lanternTicket: (_c?: string) => D({ ok: false, error: "not available in the demo" }),

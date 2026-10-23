@@ -7,6 +7,7 @@
 import { homedir, tmpdir } from "os";
 import { failed } from "./refused.ts";
 import { join } from "path";
+import { usageRead } from "./usageevents.ts";
 
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 /** Where the OAuth credentials live.
@@ -352,7 +353,19 @@ export function ingestStatusline(raw: unknown, now: number = Date.now()): boolea
   cacheAt = now;
   lastGood = next;
   persistLastGood(next);
+  usageRead();
   return true;
+}
+
+/**
+ * What this process last knew, without asking anybody: the cache, or the
+ * reading restored from disk. For a listener that must never cause a request
+ * (the orchestration policy); everything that wants a fresh answer calls
+ * `getUsage`.
+ */
+export async function peekUsage(): Promise<UsagePayload | null> {
+  await restoreLastGood();
+  return cache ?? lastGood;
 }
 
 /**
@@ -434,6 +447,7 @@ export async function getUsage(now: number = Date.now()): Promise<UsagePayload> 
       e instanceof UsageHttpError ? e.status : null);
   }
   cacheAt = now;
+  usageRead();
   return cache;
 }
 

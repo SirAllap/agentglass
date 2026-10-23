@@ -16,6 +16,7 @@ import type { ProviderUsage, QuotaWindow } from "../../shared/types.ts";
 import { windowLabel } from "../../shared/quota.ts";
 import { codexHome, CODEX_ENABLED, codexModels } from "./codex.ts";
 import { singleFlight } from "./singleflight.ts";
+import { usageRead } from "./usageevents.ts";
 
 /**
  * How many rollout files to open before giving up.
@@ -189,6 +190,7 @@ export async function refreshCodexUsage(): Promise<{ ok: boolean; error?: string
     // The turn's OUTPUT is worthless — the point is the rate_limits it wrote
     // on its way past. Drop the cache so the next read sees the new file.
     __resetCodexUsageCache();
+    usageRead();
     return code === 0 ? { ok: true } : { ok: false, error: `codex exited ${code}` };
   });
 }

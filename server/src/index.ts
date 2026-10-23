@@ -220,6 +220,8 @@ import { join as joinPath, resolve as resolvePath, basename } from "node:path";
 import { hostname, tmpdir } from "node:os";
 import { privateHost, resolvePeer, originOf, guardedFetch, hostsOnly } from "./net.ts";
 import { DESK_HEADER, claimDesk, deskHeld } from "./desk.ts";
+import { readPolicy, writePolicy } from "./orchestration.ts";
+import { armedWakeups, evaluate as evaluatePolicy, ruleStates, startPolicyEvaluator } from "./orchpolicy.ts";
 import { resolveToken, healthProof, tokenOk, isIntake, isAuthExempt, callerFor, allowed, mayReadForeignRoot, scopeNeeded, pluginOfRequest, answersFromADevice, deskKeyOk, understudyRequiresToken, UNDERSTUDY_NO_TOKEN_ERROR, mintUnderstudyToken, revokeUnderstudyToken, tokenlessWarning, type Caller, type Origin } from "./auth.ts";
 import {
   listPlugins, masterEnabled, setMaster, installPlugin, installFromCatalogue, updatePlugin, enablePlugin, disablePlugin, removePlugin, setPluginUnboxedConsent, envAllowsUnboxed,
@@ -1436,7 +1438,7 @@ import { bunBin, NO_BUN } from "./bunbin.ts";
 import { understudyRunEnv } from "./understudy-runenv.ts";
 import { recoverAfterRestart, startUnderstudyWatchdog, stopUnderstudyWatchdog, setResumeHook, setGitHook, setFenceHook, setAliveHook, setBunHook, setBusyHook } from "./understudy-watchdog.ts";
 import { openRequests, helpHistory, markAnswered } from "./understudy-help.ts";
-import { activeDevices, markSeen, revokeDevice, devices, publicDevice, whenStoreTampered, type Scope } from "./devices.ts";
+import { scopeAllows, activeDevices, markSeen, revokeDevice, devices, publicDevice, whenStoreTampered, type Scope } from "./devices.ts";
 import { credentialsPath, hasCredential } from "./credentials.ts";
 import { startCardWatch, cardForTitle } from "./clickupwatch.ts";
 import * as CardIndex from "./clickupindex.ts";
@@ -1688,6 +1690,28 @@ function mayHostBrowser(req: Request): boolean {
   if (deskHeld()) return deskKeyOk(req);
   const o = req.headers.get("origin");
   return !!o && vouchedOrigin(o);
+}
+
+/**
+ * Who may change the orchestration policy: the person. It decides which engine
+ * runs, what a worker may do and when that changes, so it is closed to every
+ * credential an agent on this machine holds: the machine token (every agent
+ * shell has it), a seat's, an understudy's, a plugin's. A paired device with
+ * the full grant was minted at the desk with somebody looking; the desktop
+ * app's own window holds the desk key, or, on a hand-started server with no
+ * key, speaks from the app's origin (the limit SECURITY.md states for one).
+ */
+function mayChangePolicy(req: Request, caller: Caller | null): boolean {
+  if (caller?.principal || caller?.kind === "plugin") return false;
+  if (caller?.kind === "device") return scopeAllows(caller.scope, "full");
+  return mayHostBrowser(req);
+}
+
+/** A project root as a policy key: absolute and plain, or nothing. */
+function policyRoot(v: unknown): string | undefined | null {
+  if (v === undefined || v === null || v === "") return undefined;
+  if (typeof v !== "string" || v.includes("\0") || !v.startsWith("/") || v.length > 500) return null;
+  return resolvePath(v);
 }
 
 function localOrigin(req: Request): boolean {
@@ -8255,6 +8279,45 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const r = writeWorkerRole(b.role, { provider: b.provider, model: b.model });
       return json({ ...r, roles: workerRoles() }, r.ok ? 200 : 400);
     }
+    /**
+     * The orchestration policy (shared/orchestration.ts). GET answers the
+     * policy in force for `?root=` (its own, or the global one); POST stores a
+     * whole policy and answers with the one now in force. Nothing runs from it
+     * yet: it is stored, checked and resolvable.
+     */
+    if (pathname === "/orchestration" && req.method === "GET") {
+      const root = policyRoot(url.searchParams.get("root"));
+      if (root === null) return json({ ok: false, error: "root: has to be an absolute path" }, 400);
+      const v = readPolicy(root);
+      return json({ ok: true, scope: v.scope, root: v.root, overrides: v.overrides, policy: v.policy });
+    }
+    if (pathname === "/orchestration" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { root?: unknown; policy?: unknown } = {};
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const root = policyRoot(b.root);
+      if (!mayChangePolicy(req, caller)) {
+        const r = { ok: false, error: "only the person can change the orchestration policy: change it in Settings, not from an agent" };
+        noteAction(clientIp, "/orchestration", { ...(root ? { root } : {}) }, r, asActor(caller));
+        return json(r, 403);
+      }
+      if (root === null) return json({ ok: false, error: "root: has to be an absolute path" }, 400);
+      if (!("policy" in b)) return json({ ok: false, error: "policy: is missing" }, 400);
+      const r = writePolicy(root, b.policy);
+      noteAction(clientIp, "/orchestration", { ...(root ? { root } : {}) }, r.ok ? { ok: true } : r, asActor(caller));
+      if (!r.ok) return json({ ok: false, error: r.error }, 400);
+      // Editing the rules is an event too: settle their switches and wake-ups now.
+      void evaluatePolicy().catch(() => {});
+      return json({ ok: true, scope: r.view.scope, root: r.view.root, overrides: r.view.overrides, policy: r.view.policy });
+    }
+    /**
+     * Which rules are on, and why a reading did not change one ("holding: the
+     * last usage reading is 47 min old"). Read-only; the evaluator hangs on
+     * events, so nothing here asks anybody for a reading.
+     */
+    if (pathname === "/orchestration/state" && req.method === "GET") {
+      return json({ ok: true, rules: ruleStates(), wakeups: armedWakeups() });
+    }
     if (pathname === "/seat/wake" && req.method === "GET") return json({ ok: true, hours: seatWakeHours() });
     if (pathname === "/seat/wake" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
@@ -9840,6 +9903,7 @@ setAliveHook(async (title, paneId) => {
   return !!(await paneOfRun(title));
 });
 startUnderstudyWatchdog();
+startPolicyEvaluator();
 startTaskSweep();
 startReminderTick();
 /* Scheduled agent starts ride a clock of the same shape. See agentschedule.ts. */

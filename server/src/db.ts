@@ -1669,6 +1669,30 @@ CREATE TABLE IF NOT EXISTS seat (
 `);
 
 /*
+ * WHETHER A POLICY RULE IS ON, kept so a restart does not forget it.
+ *
+ * A rule's switch has hysteresis: it turns on at a threshold and off only some
+ * way past it, so a reading that wobbles around the line cannot flap it. That
+ * is memory, and memory in the process dies with it. `memory` is each
+ * trigger's own last answer (and the `resetsAt` it saw), `holding` the reason
+ * the last reading could not change anything, `reading` what the rule saw when
+ * it last changed. See server/src/orchpolicy.ts.
+ */
+db.run(`
+CREATE TABLE IF NOT EXISTS policy_state (
+  scope TEXT NOT NULL,
+  rule_id TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 0,
+  since INTEGER NOT NULL DEFAULT 0,
+  reading TEXT NOT NULL DEFAULT '',
+  reading_at INTEGER NOT NULL DEFAULT 0,
+  holding TEXT NOT NULL DEFAULT '',
+  memory TEXT NOT NULL DEFAULT '[]',
+  PRIMARY KEY (scope, rule_id)
+);
+`);
+
+/*
  * THE SEAT'S QUEUE — what a project's orchestrator has been asked to see done,
  * and who it handed each one to (seatqueue.ts).
  *

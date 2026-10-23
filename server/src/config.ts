@@ -8,6 +8,7 @@
 
 import type { Budget, GateRule } from "../../shared/types.ts";
 import { agentProvider } from "../../shared/agentKinds.ts";
+import { validateStored, type StoredPolicy } from "../../shared/orchestration.ts";
 import { WORKER_ROLES, MODEL_RE, workerRole, type RoleChoice, type RoleId } from "../../shared/workerRoles.ts";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, realpathSync, readlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -160,6 +161,10 @@ interface Config {
   /** Which CLI and model each worker role runs on — shared/workerRoles.ts.
    *  A role left out, or one naming a CLI with no lock, is its default. */
   workerRoles?: Partial<Record<RoleId, RoleChoice>>;
+  /** The orchestration policy — shared/orchestration.ts. Only what the base
+   *  does not already hold: rules, the ceiling, defaults, limits and the
+   *  "ask" flags. `projects` is keyed by the checkout root, like budgets. */
+  orchestration?: { global?: unknown; projects?: Record<string, unknown> };
 }
 
 function load(path: string): Config {
@@ -1316,4 +1321,40 @@ export function writeWorkerRole(role: unknown, choice: unknown): { ok: boolean; 
   const c = validRoleChoice(choice);
   if (!c) return { ok: false, persisted: false, error: "that CLI has no lock this app can apply, or the model is not one word" };
   return mergeConfig({ workerRoles: { ...(config().workerRoles ?? {}), [r.id]: c } }, "worker roles");
+}
+
+/**
+ * The stored policy for a scope, or null when there is none (or the file's is
+ * unusable: a hand-edited entry that does not validate reads as absent, and the
+ * log says why, rather than as whatever it claims).
+ */
+export function readStoredPolicy(root?: string): StoredPolicy | null {
+  const o = config().orchestration;
+  const raw = root ? o?.projects?.[root] : o?.global;
+  if (raw === undefined) return null;
+  const v = validateStored(raw);
+  if (!v.ok) {
+    console.error(`[config] ignoring the orchestration policy for ${root ?? "global"}: ${v.error}`);
+    return null;
+  }
+  return v.value;
+}
+
+/** Roots with a project override, for the Settings list. */
+export function policyRoots(): string[] {
+  return Object.keys(config().orchestration?.projects ?? {}).filter((r) => readStoredPolicy(r));
+}
+
+/** Write one scope's stored policy, or drop a project's override with null.
+ *  Read-modify-write on the whole file like every setting here: not atomic,
+ *  and a policy is written by a person a few times a year. */
+export function writeStoredPolicy(root: string | undefined, stored: StoredPolicy | null): { ok: boolean; persisted: boolean; error?: string } {
+  if (!root && !stored) return { ok: false, persisted: false, error: "the global policy cannot be removed, only changed" };
+  return mergeConfig((existing) => {
+    const cur = (existing.orchestration ?? {}) as { global?: unknown; projects?: Record<string, unknown> };
+    if (!root) return { orchestration: { ...cur, global: stored } };
+    const projects = { ...(cur.projects ?? {}) };
+    if (stored) projects[root] = stored; else delete projects[root];
+    return { orchestration: { ...cur, projects } };
+  }, "the orchestration policy");
 }
