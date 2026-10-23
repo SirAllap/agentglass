@@ -53,12 +53,12 @@ export function JiraAreaRail({ project, areas, sprint, now, points, sel, onPick,
     return (
       <button key={a.key} onClick={() => onPick(sel === a.key ? null : a.key)} aria-pressed={sel === a.key}
         title={txt.title} className="agx-rail-row w-full flex items-start gap-2.5 text-left" style={row(sel === a.key)}>
-        <span aria-hidden className="shrink-0 rounded-full" style={{ width: 8, height: 8, marginTop: 5, background: `var(${epicTone(a.color)})` }} />
+        <span aria-hidden className="shrink-0 rounded-full" style={{ width: 8, height: 8, marginTop: 6, background: `var(${epicTone(a.color)})` }} />
         <span className="min-w-0 flex-1 flex flex-col" style={{ gap: 4 }}>
           <span style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", overflowWrap: "anywhere", lineHeight: 1.3 }}>{railTitle(a.name)}</span>
           <span className="flex items-center min-w-0" style={{ gap: 8 }}>
             {/* A fixed width for the key (a longer key just widens its own chip) and for the text: every bar starts and ends at the same x, whatever the row says. */}
-            <span className="shrink-0 text-center whitespace-nowrap" style={{ minWidth: KEY_W, boxSizing: "border-box", padding: "1px 7px", borderRadius: 999, fontSize: 9.5, fontWeight: 400, color: "var(--text3)", background: "color-mix(in srgb, var(--text) 8%, transparent)" }}>{a.key}</span>
+            <span className="shrink-0 text-center whitespace-nowrap" style={{ minWidth: KEY_W, boxSizing: "border-box", padding: "1px 8px", borderRadius: 999, fontSize: 9.5, fontWeight: 400, color: "var(--text3)", background: "color-mix(in srgb, var(--text) 8%, transparent)" }}>{a.key}</span>
             <span aria-hidden className="flex-1 flex overflow-hidden" data-testid="jira-rail-bar"
               style={{ minWidth: BAR_MIN, height: 5, borderRadius: 3, background: txt.tone === "none" ? undefined : "color-mix(in srgb, var(--text) 10%, transparent)",
                 backgroundImage: txt.tone === "none" ? "repeating-linear-gradient(90deg, color-mix(in srgb, var(--text) 16%, transparent) 0 3px, transparent 3px 6px)" : undefined }}>
