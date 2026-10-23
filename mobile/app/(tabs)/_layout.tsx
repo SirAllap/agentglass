@@ -10,7 +10,8 @@
  * held Now, Source control and Settings are gone.
  *
  * ── the header ───────────────────────────────────────────────────────────
- * Two things on the right of every destination: the usage chip, and the gear.
+ * The computer's name, with a way to another, where the title was; and on the
+ * right of every destination, the usage chip and the gear.
  * Settings used to sit behind a `···` sheet with two other screens, which was
  * three taps to a switch and a menu whose name said nothing about what was in
  * it. Everything that belongs to one screen stays on that screen, the way the
@@ -24,6 +25,7 @@ import { usePaletteTick } from "../../src/state/use-palette.ts";
 import { C, SPACE, T } from "../../src/theme.ts";
 import { TAP } from "../../src/ui.tsx";
 import { UsageChip } from "../../src/usage/Usage.tsx";
+import { ComputerChip } from "../../src/nav/ComputerChip.tsx";
 
 /** A header button, at the tap target the rest of the app holds itself to. */
 function HeaderButton({ label, onPress, side, children }: {
@@ -75,7 +77,13 @@ export default function TabsLayout(): React.ReactNode {
     </HeaderButton>
   );
 
-  const destination = { headerRight: () => trailing, headerTitleAlign: "left" as const };
+  /* The computer's name stands where the screen's title stood: the bar already
+     says which destination this is. */
+  const destination = {
+    headerTitle: () => <ComputerChip />,
+    headerRight: () => trailing,
+    headerTitleAlign: "left" as const,
+  };
 
   return (
     <Tabs

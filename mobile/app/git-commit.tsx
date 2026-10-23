@@ -34,7 +34,7 @@ export default function GitCommitScreen(): React.ReactNode {
   const [error, setError] = useState<string | null>(null);
   const [pulling, setPulling] = useState(false);
   const [copied, flash] = useFlash();
-  const [viewed, toggle] = useViewed(viewedKey(root, hash));
+  const [viewed, toggle] = useViewed(viewedKey(host?.id, root, hash));
 
   const load = useCallback(async (): Promise<void> => {
     if (!host || !root || !hash) return;

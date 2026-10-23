@@ -68,6 +68,9 @@ import { onHandoff, takeHandoff } from "../../src/terminal/handoff.ts";
 import { GateCard } from "../../src/terminal/GateCard.tsx";
 import { Glyph } from "../../src/nav/glyphs.tsx";
 import { UsageChip } from "../../src/usage/Usage.tsx";
+import { ComputerChip } from "../../src/nav/ComputerChip.tsx";
+import { ComputerGone } from "../../src/nav/ComputerGone.tsx";
+import { lastPane, rememberPane } from "../../src/state/last-pane.ts";
 import { gatesInOrder } from "../../src/model/gates.ts";
 import { paneFor } from "../../src/model/checkout.ts";
 import { ImageIcon, KeyboardIcon, MicIcon, ReposIcon, SettingsIcon } from "../../src/nav/icons.tsx";
@@ -328,6 +331,14 @@ function TerminalPane(): React.ReactNode {
   const [active, setActive] = useState<string | null>(null);
   const [state, setState] = useState<TerminalState>("connecting");
   const [why, setWhy] = useState<string | null>(null);
+  /* Which window each computer was on. On a switch the old computer's pane id
+     is dropped first, because `%5` is a window on every tmux server and the
+     new strip would otherwise match it by accident. */
+  const paneOwner = useRef(host?.id);
+  useEffect(() => {
+    if (paneOwner.current !== host?.id) { paneOwner.current = host?.id; setActive(null); return; }
+    rememberPane(host?.id, active);
+  }, [host?.id, active]);
   /*
    * How wide the terminal is, in columns — not how big the text is.
    *
@@ -1141,6 +1152,10 @@ function TerminalPane(): React.ReactNode {
         return want;
       }
       if (current && all.some((t) => t.paneId === current)) return current;
+      // Back on a computer already visited: the window it was left on, if it
+      // is still there, before the rule below picks one.
+      const back = lastPane(host?.id);
+      if (back && all.some((t) => t.paneId === back)) return back;
       const inSession = all.filter((t) => t.session === best);
       // The first pane with an agent under it, or the first window. Either way
       // something is on the screen rather than an empty terminal.
@@ -1817,6 +1832,7 @@ function TerminalPane(): React.ReactNode {
           flexDirection: "row", alignItems: "center", minHeight: 56,
           paddingLeft: SPACE.xs, paddingRight: SPACE.xs,
         }}>
+          <ComputerChip colors={K} compact />
           <Pressable
             onPress={() => setSessionsOpen(true)}
             accessibilityRole="button"
@@ -1997,6 +2013,7 @@ function TerminalPane(): React.ReactNode {
       </View>
 
       {/* ── the terminal ───────────────────────────────────────────────── */}
+      <ComputerGone>
       <View style={{ flex: 1 }}>
         {open ? (
           <TerminalView
@@ -2717,6 +2734,7 @@ function TerminalPane(): React.ReactNode {
           </View>
         </View>
       </View>
+      </ComputerGone>
       {/*
         The new tab, as a choice rather than a silent default.
 

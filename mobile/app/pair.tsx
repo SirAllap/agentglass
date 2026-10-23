@@ -28,6 +28,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { KeyboardAvoidingView, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { useRouter } from "expo-router";
 import Svg, { Circle } from "react-native-svg";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import * as Clipboard from "expo-clipboard";
@@ -40,6 +41,7 @@ import { probe } from "../src/lib/api.ts";
 import { randomnessReady } from "../src/lib/rng.ts";
 import type { Host } from "../src/lib/host.ts";
 import { useAgentglass } from "../src/state/host-context.tsx";
+import { needsAddress } from "../src/model/computers.ts";
 import { Btn, Field, Note } from "../src/ui.tsx";
 import { Glyph } from "../src/nav/glyphs.tsx";
 import { BackIcon } from "../src/nav/icons.tsx";
@@ -77,13 +79,18 @@ type Clock = { at: number } | "gone" | null;
 
 export default function PairScreen(): React.ReactNode {
   const insets = useSafeAreaInsets();
-  const { pair } = useAgentglass();
+  const { pair, hosts } = useAgentglass();
+  const router = useRouter();
+  /** Paired already: this is Add computer, and Back has somewhere to go. */
+  const canLeave = hosts.length > 0;
 
   const [step, setStep] = useState<Step>("start");
   const [origin, setOrigin] = useState("");
   const [ticket, setTicket] = useState("");
   const [code, setCode] = useState("");
   const [label, setLabel] = useState("My phone");
+  /** The address came with a link or a scan, so the form has no address to ask for. */
+  const [fromLink, setFromLink] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [clock, setClock] = useState<Clock>(null);
@@ -120,7 +127,7 @@ export default function PairScreen(): React.ReactNode {
   const arrived = useCallback((read: { ticket: string; origin?: string }): void => {
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     setTicket(read.ticket);
-    if (read.origin) setOrigin(read.origin);
+    if (read.origin) { setOrigin(read.origin); setFromLink(true); }
     setError(null);
     if (step === "code") digits.current?.focus();
     else { wantDigits.current = true; setStep("code"); }
@@ -410,7 +417,8 @@ export default function PairScreen(): React.ReactNode {
           };
           await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
           await pair(host);
-          return; // the root layout takes it from here
+          router.replace("/");
+          return;
         }
         if (answer.state === "rejected") {
           setStep("code");
@@ -528,6 +536,16 @@ export default function PairScreen(): React.ReactNode {
           thumb, with what is going to happen said above them.
         */
         <View style={{ flex: 1, ...pad, paddingHorizontal: SPACE.xl }}>
+          {canLeave ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Back"
+              onPress={() => router.back()}
+              style={{ width: 48, height: 48, marginLeft: -SPACE.md, alignItems: "center", justifyContent: "center" }}
+            >
+              <BackIcon color={C.text} size={22} />
+            </Pressable>
+          ) : null}
           <View style={{ flex: 1, justifyContent: "center", gap: SPACE.lg }}>
             <View style={{
               width: 56, height: 56, borderRadius: 28, alignItems: "center", justifyContent: "center",
@@ -535,9 +553,9 @@ export default function PairScreen(): React.ReactNode {
             }}>
               <Glyph name="link" color={C.primary} size={28} />
             </View>
-            <Text style={{ color: C.text, fontSize: 28, fontWeight: "600", lineHeight: 34 }}>Connect to your computer</Text>
+            <Text style={{ color: C.text, fontSize: 28, fontWeight: "600", lineHeight: 34 }}>{canLeave ? "Add another computer" : "Connect to your computer"}</Text>
             <Text style={{ color: C.text2, fontSize: 15.5, lineHeight: 23 }}>
-              On the computer, open agentglass › Settings › Remote access. It shows a QR code and six digits.
+              On the computer, open agentglass › Settings › Remote access. It shows a QR code and six digits.{canLeave ? " Your other computers stay as they are." : ""}
             </Text>
           </View>
           <View style={{ gap: 10 }}>
@@ -548,7 +566,7 @@ export default function PairScreen(): React.ReactNode {
               onPress={() => setStep("code")}
               style={({ pressed }) => ({ minHeight: 48, alignItems: "center", justifyContent: "center", opacity: pressed ? 0.7 : 1 })}
             >
-              <Text style={{ color: C.primary, fontSize: T.body, fontWeight: "600" }}>Type the address</Text>
+              <Text style={{ color: C.primary, fontSize: T.body, fontWeight: "600" }}>Type a code</Text>
             </Pressable>
             {error ? <Note tone="bad">{error}</Note> : null}
             <Text style={{ color: C.text3, fontSize: 13, textAlign: "center", paddingTop: SPACE.sm }}>
@@ -575,24 +593,37 @@ export default function PairScreen(): React.ReactNode {
             contentContainerStyle={{ padding: SPACE.lg, paddingTop: SPACE.sm, gap: SPACE.lg, paddingBottom: insets.bottom + SPACE.xl }}
             keyboardShouldPersistTaps="handled"
           >
-            <Field
-              label="Computer address"
-              value={origin}
-              onChangeText={(text) => { if (!absorb(text)) setOrigin(text); }}
-              placeholder="192.168.1.20:4000"
-              kind="code"
-            />
-            {/* The label and the placeholder both say "link", because the field
-                accepting one is the entire fix and nothing else on the screen
-                could say so. It used to read "from the QR code", which is where
-                the ticket comes from and not what may be put in here. */}
-            <Field
-              label="Ticket, or paste the whole link"
-              value={ticket}
-              onChangeText={(text) => { if (!absorb(text)) setTicket(text); }}
-              placeholder="paste http://…/?pair=… here"
-              kind="code"
-            />
+            {/* One field for what the computer shows: the link a scan or a paste
+                carries whole, or the bare code. A link brings the address with
+                it; a bare code has none, and only then is it asked for below. */}
+            <View style={{ flexDirection: "row", alignItems: "flex-end", gap: SPACE.sm }}>
+              <View style={{ flex: 1 }}>
+                <Field
+                  label="Link or code from the computer"
+                  value={ticket}
+                  onChangeText={(text) => { if (!absorb(text)) setTicket(text); }}
+                  placeholder="paste the link, or type the code"
+                  kind="code"
+                />
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Scan the QR code"
+                onPress={() => { void openCamera(); }}
+                style={{ width: 48, height: 48, alignItems: "center", justifyContent: "center", borderRadius: 10, backgroundColor: C.bg3 }}
+              >
+                <Glyph name="qr" color={C.text} size={22} />
+              </Pressable>
+            </View>
+            {!fromLink && needsAddress(ticket) ? (
+              <Field
+                label="Computer address"
+                value={origin}
+                onChangeText={(text) => { if (!absorb(text)) setOrigin(text); }}
+                placeholder="Computer address, like 192.168.1.20"
+                kind="code"
+              />
+            ) : null}
             <View style={{ gap: SPACE.sm }}>
               <Text style={{ color: C.text2, fontSize: 13, fontWeight: "500" }}>The six digits on the computer</Text>
               {/*

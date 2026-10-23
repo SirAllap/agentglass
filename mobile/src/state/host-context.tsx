@@ -31,7 +31,10 @@ import type {
 import { talkBody, talkSummary, talkUrgency } from "../../../shared/talkWords.ts";
 import { dedupePrs, mainCheckouts } from "../model/prRows.ts";
 import { ask, askCached, forgetCachedAsks, REVOKED } from "../lib/api.ts";
-import { forgetHost, loadHost, saveHost, type Host } from "../lib/host.ts";
+import { saveHost, type Host } from "../lib/host.ts";
+import {
+  loadHosts, markRevoked, removeHost, renameHost, setActive, type HostEntry, type HostList,
+} from "../lib/hosts.ts";
 import { openLive, type LiveHandle, type LiveState } from "../lib/live.ts";
 import { remember, shouldNotify, shouldNotifyTalk } from "../notifications/policy.ts";
 import { alertsDeliverable, raise } from "../notifications/notify.ts";
@@ -78,7 +81,11 @@ export interface Fleet {
 }
 
 interface Ctx {
-  host: Host | null;
+  /** The computer in use. Everything the 28 screens read hangs off this one;
+   *  the rest of the list is for the switcher and the Computers screen. */
+  host: HostEntry | null;
+  /** Every paired computer, most recently used first. */
+  hosts: HostEntry[];
   /** Null while the keystore is still being read: an app that renders "not
    *  paired" for one frame on every cold start sends people back through a
    *  handshake they already did. */
@@ -86,10 +93,18 @@ interface Ctx {
   live: LiveState;
   fleet: Fleet;
   refresh: () => void;
-  pair: (host: Host) => Promise<void>;
+  /** Pair a computer and make it the one in use. `name` is the owner's alias. */
+  pair: (host: Host, name?: string) => Promise<void>;
+  /** Forget the computer in use (the phone's half only). */
   forget: () => Promise<void>;
+  switchTo: (id: string) => Promise<void>;
+  rename: (id: string, name: string) => Promise<void>;
+  /** Forget any computer on the list. When it is the one in use, the next most
+   *  recent takes its place, or the phone lands on Connect if none is left. */
+  forgetComputer: (id: string) => Promise<void>;
 }
 
+const NO_HOSTS: HostList = { active: null, hosts: [] };
 const EMPTY: Fleet = { gates: [], prs: [], me: "", at: 0, error: null };
 
 const HostContext = createContext<Ctx | null>(null);
@@ -101,7 +116,7 @@ export function useAgentglass(): Ctx {
 }
 
 export function HostProvider({ children }: { children: ReactNode }): ReactNode {
-  const [host, setHost] = useState<Host | null>(null);
+  const [list, setList] = useState<HostList>(NO_HOSTS);
   const [ready, setReady] = useState(false);
   const [live, setLive] = useState<LiveState>("offline");
   const [fleet, setFleet] = useState<Fleet>(EMPTY);
@@ -119,9 +134,20 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
    *  anything: it does not, see SAME_ALERT_MS. */
   const seen = useRef(new Map<string, number>());
 
+  /* The entry in use, with an identity that moves only when something the
+     effects below depend on moves: its id, address, key, or removal. A rename
+     or a switch of `lastUsed` hands out a new object in `list`, and an effect
+     keyed on that would tear down and rebuild the socket for nothing. */
+  const active = list.hosts.find((h) => h.id === list.active) ?? null;
+  const host = useMemo(
+    () => active,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [active?.id, active?.origin, active?.token, active?.revoked],
+  );
+
   useEffect(() => {
     void (async () => {
-      setHost(await loadHost());
+      setList(await loadHosts());
       setReady(true);
     })();
 
@@ -142,7 +168,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
     void alertsDeliverable();
   }, []);
 
-  const load = useCallback(async (which: Host): Promise<void> => {
+  const load = useCallback(async (which: HostEntry): Promise<void> => {
     const mine = ++generation.current;
     /*
      * The gates, and only the gates.
@@ -169,16 +195,20 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
     // person at the computer took this phone off the list, and every request
     // from here on is a 401. Drop it and land on the pairing screen.
     if (!gates.ok && gates.error === REVOKED) {
-      // Stopped explicitly, not left to the lifecycle effect noticing `host`
-      // went null: a revoke is usually noticed while the phone is in the
-      // background, which is exactly where the service is still running and
-      // the notification still up. Leaving it to the effect worked in
-      // principle (see its own `if (!host)` branch) but made the fix invisible
-      // at the one call site a reviewer would look at first.
-      syncKeepAlive(false);
-      await forgetHost();
-      setHost(null);
+      // MARKED, not forgotten: the entry stays so the list can say "Removed at
+      // the computer" and offer to forget it, and the other computers on the
+      // phone keep their keys and their alerts. Forgetting here lost the only
+      // record of what happened, and with one computer paired sent the phone
+      // back to the first-run screen without a word.
+      const next = await markRevoked(which.id);
+      if (mine !== generation.current) return;
+      setList(next);
       setFleet(EMPTY);
+      // Stopped explicitly, and only when nothing usable is left: a revoke is
+      // usually noticed while the phone is in the background, where the
+      // service is still running and its notification still up, and one
+      // removed computer must not silence the others.
+      if (!next.hosts.some((h) => !h.revoked)) syncKeepAlive(false);
       return;
     }
 
@@ -217,7 +247,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
    * limit and is stated rather than hidden: a machine with thirty repositories
    * would otherwise spend a minute of radio to find one red build.
    */
-  const loadPrs = useCallback(async (which: Host): Promise<void> => {
+  const loadPrs = useCallback(async (which: HostEntry): Promise<void> => {
     prsAt.current = Date.now();
     /* `force`: this IS the refresh. What it reads is kept for the Pull requests
        tab, which no longer asks the same lists again when it opens. */
@@ -267,7 +297,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
   // The socket. Torn down and rebuilt when the host changes, which is the only
   // time its URL or credential can differ.
   useEffect(() => {
-    if (!host) { setLive("offline"); return; }
+    if (!host || host.revoked) { setLive("offline"); return; }
     resetMarks(); // another computer's marks are not this one's
     let dirty = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -408,7 +438,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
     // `forget()` already calls it directly; this is the backstop for every
     // OTHER way `host` can go null, so there is one place a stray keep-alive
     // cannot survive rather than one per caller.
-    if (!host) { syncKeepAlive(false); return; }
+    if (!host || host.revoked) { syncKeepAlive(false); return; }
     let timer: ReturnType<typeof setInterval> | null = null;
     // Set false in cleanup and checked before every syncKeepAlive call this
     // effect makes. `syncNow` awaits two promises with nothing to cancel them:
@@ -458,28 +488,53 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
     return () => { alive = false; stop(); sub.remove(); };
   }, [host, load, loadPrs]);
 
+  /* What a change of computer drops, in one place: the data and the colours of
+     the one left must not show under the one arrived at. The socket, the polls
+     and the marks are rebuilt by the effects keyed on `host`. */
+  const leave = (): void => {
+    generation.current++;
+    forgetCachedAsks();
+    setDeskTheme(null);
+    setFleet(EMPTY);
+  };
+
   const value = useMemo<Ctx>(() => ({
     host,
+    hosts: list.hosts,
     ready,
     live,
     fleet,
     refresh,
-    pair: async (next: Host): Promise<void> => {
-      await saveHost(next);
+    pair: async (next: Host, name?: string): Promise<void> => {
+      const after = await saveHost(next, name);
       forgetCachedAsks();
+      generation.current++;
       setFleet(EMPTY);
-      setHost(next);
+      // Another computer than the one on screen: its colours do not carry over.
+      if (after.active !== list.active) setDeskTheme(null);
+      setList(after);
     },
     forget: async (): Promise<void> => {
-      syncKeepAlive(false);
-      await forgetHost();
-      forgetCachedAsks();
-      // The next computer paired must not start in this one's colours.
-      setDeskTheme(null);
-      setFleet(EMPTY);
-      setHost(null);
+      if (list.active) await value.forgetComputer(list.active);
     },
-  }), [host, ready, live, fleet, refresh]);
+    switchTo: async (id: string): Promise<void> => {
+      if (id === list.active) return;
+      const after = await setActive(id);
+      leave();
+      setList(after);
+    },
+    rename: async (id: string, name: string): Promise<void> => {
+      setList(await renameHost(id, name));
+    },
+    forgetComputer: async (id: string): Promise<void> => {
+      const after = await removeHost(id);
+      // Only the one in use takes data with it. Forgetting another computer
+      // leaves what is on screen alone.
+      if (id === list.active) leave();
+      if (!after.hosts.some((h) => !h.revoked)) syncKeepAlive(false);
+      setList(after);
+    },
+  }), [host, list, ready, live, fleet, refresh]);
 
   return <HostContext.Provider value={value}>{children}</HostContext.Provider>;
 }

@@ -39,8 +39,9 @@ function Gate(): React.ReactNode {
     if (!ready) return;
     void SplashScreen.hideAsync();
     const onPairing = segments[0] === "pair";
+    // A paired phone may be on the pairing screen: that is Add computer. The
+    // screen itself leaves for the tabs once it has paired.
     if (!host && !onPairing) router.replace("/pair");
-    if (host && onPairing) router.replace("/");
   }, [host, ready, segments, router]);
 
   // A tapped alert opens what it is about, once there is a computer to show it

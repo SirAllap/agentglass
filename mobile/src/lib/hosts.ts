@@ -296,3 +296,9 @@ export function markRevoked(id: string): Promise<HostList> {
     return tidy(list.hosts.map((h) => (h === target ? { ...h, revoked: Date.now() } : h)), list.active);
   });
 }
+
+/** A key for state that belongs to one computer: two of them can both have a
+ *  checkout at /home/x/orbit, and a tick made on one must not show on the other. */
+export function computerKey(host: { id?: string } | null | undefined, key: string): string {
+  return `${host?.id ?? ""}\0${key}`;
+}

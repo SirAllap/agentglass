@@ -367,8 +367,12 @@ describe("match the computer", () => {
 describe("the desk does not outlive its computer", () => {
   test("forgetting a computer drops its theme before the next one is paired", () => {
     const src = readFileSync(join(import.meta.dir, "../src/state/host-context.tsx"), "utf8");
-    const at = src.indexOf("forget: async");
+    // The colours are dropped by `leave()`, which forgetting the computer in
+    // use (and switching away from it) both call.
+    const at = src.indexOf("const leave = (): void => {");
     expect(at).toBeGreaterThan(-1);
-    expect(src.slice(at, src.indexOf("},", at))).toContain("setDeskTheme(null)");
+    expect(src.slice(at, src.indexOf("};", at))).toContain("setDeskTheme(null)");
+    const forget = src.indexOf("forgetComputer: async");
+    expect(src.slice(forget, src.indexOf("}), [", forget))).toContain("leave()");
   });
 });

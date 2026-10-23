@@ -11,10 +11,10 @@
 import { toggled } from "../model/gitReview.ts";
 import { memoryStore } from "./memory-store.ts";
 
-/** One commit's ticks, keyed by checkout and hash so two worktrees of one
- *  repository never share them. */
-export function viewedKey(root: string, hash: string): string {
-  return `${root}\0${hash}`;
+/** One commit's ticks, keyed by computer, checkout and hash so two worktrees of
+ *  one repository, or two computers with the same path, never share them. */
+export function viewedKey(computerId: string | undefined, root: string, hash: string): string {
+  return `${computerId ?? ""}\0${root}\0${hash}`;
 }
 
 export const useViewed = memoryStore<ReadonlySet<string>>(new Set(), toggled);

@@ -32,6 +32,11 @@ export function computerName(said: unknown, origin: string): string {
   return addressName(origin);
 }
 
+/** What a computer last said its name was, if this run has asked it. */
+export function saidName(origin: string): string | undefined {
+  return known.get(origin);
+}
+
 export function useComputer(host: Host | null): string {
   const origin = host?.origin ?? "";
   const [name, setName] = useState(() => known.get(origin) ?? computerName(null, origin));

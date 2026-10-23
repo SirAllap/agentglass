@@ -18,7 +18,7 @@
  * know what it is for.
  */
 import type { DeviceScope } from "../../../shared/types.ts";
-import { addHost, loadHosts, removeHost, type HostEntry } from "./hosts.ts";
+import { addHost, loadHosts, removeHost, type HostEntry, type HostList } from "./hosts.ts";
 
 export interface Host {
   /** `http://192.168.1.20:4000` — scheme, host and port, no trailing slash. */
@@ -39,9 +39,10 @@ export async function loadHost(): Promise<HostEntry | null> {
   return hosts.find((h) => h.id === active) ?? null;
 }
 
-/** Pair a computer and make it the active one. */
-export async function saveHost(host: Host): Promise<void> {
-  await addHost(host);
+/** Pair a computer and make it the active one. `name` is the owner's own
+ *  alias for it, when they typed one. */
+export function saveHost(host: Host, name?: string): Promise<HostList> {
+  return addHost({ ...host, ...(name ? { name } : {}) });
 }
 
 /**

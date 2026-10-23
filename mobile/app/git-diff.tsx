@@ -99,7 +99,7 @@ export default function GitDiffScreen(): React.ReactNode {
   const [pulling, setPulling] = useState(false);
   const [wrap, setWrap] = useState(true);
   const [jump, setJump] = useState(false);
-  const [viewed, toggle] = useViewed(viewedKey(String(root ?? ""), String(hash ?? "")));
+  const [viewed, toggle] = useViewed(viewedKey(host?.id, String(root ?? ""), String(hash ?? "")));
   const list = useRef<FlatList<DiffRow>>(null);
 
   const load = useCallback(async (): Promise<void> => {
