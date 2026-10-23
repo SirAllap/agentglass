@@ -3075,21 +3075,34 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 /* the shape that grows: a solid colour with nothing in it, clipped from the pill to the page */
 .agx-isl-morph { position: absolute; inset: 0; background: rgba(22, 19, 31, .84);
   clip-path: inset(0px calc(50% - var(--pw)) calc(100% - var(--ph)) calc(50% - var(--pw)) round var(--pr));
-  transition: clip-path 320ms cubic-bezier(0.32, 0.72, 0, 1) 20ms, background-color 100ms ease; will-change: clip-path; }
-.agx-isl.is-shown .agx-isl-morph { clip-path: inset(0px 0px 0px 0px round 20px); background: transparent; transition: clip-path 380ms cubic-bezier(0.32, 0.72, 0, 1), background-color 260ms ease 360ms; }
+  transition: clip-path 320ms cubic-bezier(0.32, 0.72, 0, 1) 120ms; will-change: clip-path; }
+.agx-isl.is-shown .agx-isl-morph { clip-path: inset(0px 0px 0px 0px round 20px); background: transparent; transition: clip-path 380ms cubic-bezier(0.32, 0.72, 0, 1);
+  animation: agx-morph-fill 380ms cubic-bezier(0.32, 0.72, 0, 1) forwards, agx-morph-clear 200ms ease-out 380ms forwards; }
+/* closing mirrors it: opaque first, the blur comes off underneath, then it shrinks back to the capsule's colour.
+   Not while is-snap, which is the mount frame of an open. */
+.agx-isl:not(.is-shown):not(.is-snap) .agx-isl-morph { animation: agx-morph-seal 120ms ease-out forwards, agx-morph-dark 320ms cubic-bezier(0.32, 0.72, 0, 1) 120ms forwards; }
+/* the colour change rides the motion and is opaque from the first frame, so the page behind is never seen
+   unblurred: the capsule's dark grows into the theme background, then clears to show the glass under it */
+@keyframes agx-morph-fill { from { background: rgb(22, 19, 31); } to { background: var(--bg); } }
+@keyframes agx-morph-clear { from { background: var(--bg); } to { background: transparent; } }
+@keyframes agx-morph-seal { from { background: transparent; } to { background: var(--bg); } }
+@keyframes agx-morph-dark { from { background: var(--bg); } to { background: rgb(22, 19, 31); } }
 /* the open overview's glass: the page behind is blurred past reading, the tint is the theme's own */
 .agx-isl-glass { position: absolute; left: 12px; right: 12px; top: 12px; bottom: 12px; z-index: 29; border-radius: 20px; pointer-events: none; opacity: 0;
   background: color-mix(in srgb, var(--bg) 52%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent), 0 24px 60px -24px rgba(0, 0, 0, .45); transition: opacity 100ms ease-out; }
-/* The blur is switched on once the open has settled and off the moment the close starts (a
-   zero-length animation, so no frame fades through it): the desktop app composites on the
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent), 0 24px 60px -24px rgba(0, 0, 0, .45);
+  /* closing: the blur and the layer stay for the 120 ms the morph takes to turn opaque, then go, hidden under it */
+  transition: opacity 0s 120ms; animation: agx-glass-hold 120ms linear; }
+@keyframes agx-glass-hold { from, to { -webkit-backdrop-filter: blur(40px) saturate(160%); backdrop-filter: blur(40px) saturate(160%); } }
+/* The blur is switched on once the open has settled, under the still opaque morph, and off
+   once the close has sealed it (zero-length animations, so no frame fades through it): the desktop app composites on the
    CPU, and a blurred backdrop over the growing shape measured p50 33 ms / p95 50 ms per frame
    against 17 ms without it, under 4x throttle. Settled, it is a static layer. */
 @keyframes agx-glass-blur { to { -webkit-backdrop-filter: blur(40px) saturate(160%); backdrop-filter: blur(40px) saturate(160%); } }
-.agx-isl-glass.is-shown { opacity: 1; transition: opacity 260ms ease-out 360ms; animation: agx-glass-blur 0s 640ms forwards; }
+.agx-isl-glass.is-shown { opacity: 1; transition: opacity 0s 380ms; animation: agx-glass-blur 0s 380ms forwards; }
 @media (prefers-reduced-transparency: reduce) {
   .agx-isl-glass, .agx-isl-glass.is-shown { background: var(--bg); animation: none; }
-  .agx-isl.is-shown .agx-isl-morph { background: var(--bg); }
+  .agx-isl.is-shown .agx-isl-morph { animation: none; background: var(--bg); }
 }
 /* while it is open the collapsed content stays mounted but out of the way; closing,
    the capsule's icons come back over the last stretch of the shrink */
@@ -3142,7 +3155,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
    shape is never empty: it carries its content in and out */
 .agx-isl-mc { position: absolute; inset: 0; display: flex; flex-direction: column; opacity: 0; transform: scale(.985); transform-origin: 50% 0;
   clip-path: inset(0px calc(50% - var(--pw)) calc(100% - var(--ph)) calc(50% - var(--pw)) round var(--pr));
-  transition: opacity 240ms ease-in 20ms, transform 320ms cubic-bezier(0.32, 0.72, 0, 1) 20ms, clip-path 320ms cubic-bezier(0.32, 0.72, 0, 1) 20ms; }
+  transition: opacity 240ms ease-in 120ms, transform 3120ms cubic-bezier(0.32, 0.72, 0, 1) 120ms, clip-path 3120ms cubic-bezier(0.32, 0.72, 0, 1) 120ms; }
 .agx-isl.is-shown .agx-isl-mc { opacity: 1; transform: none; clip-path: inset(0px 0px 0px 0px round 20px);
   transition: opacity 200ms cubic-bezier(0.23, 1, 0.32, 1) 40ms, transform 380ms cubic-bezier(0.32, 0.72, 0, 1), clip-path 380ms cubic-bezier(0.32, 0.72, 0, 1); }
 /* the containers come in after the shape, one after another, rising 8px */
@@ -3241,7 +3254,8 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 @media (prefers-reduced-motion: reduce) {
   .agx-isl { transition: background 150ms ease; }
   .agx-isl-mc, .agx-isl.is-shown .agx-isl-mc, .agx-isl-box { transform: none; }
-  .agx-isl-morph, .agx-isl.is-shown .agx-isl-morph { transition: none; clip-path: inset(0px 0px 0px 0px round 20px); }
+  .agx-isl-morph, .agx-isl.is-shown .agx-isl-morph { transition: none; animation: none; clip-path: inset(0px 0px 0px 0px round 20px); }
+  .agx-isl-glass.is-shown { transition: none; animation-delay: 0s; }
 }
 
 /* The island's ⋯ menu. Its own rules, apart from the capsule's: dark glass in
