@@ -4,7 +4,7 @@
  * are refused before the round trip.
  */
 import { describe, expect, test } from "bun:test";
-import { clipPaths, deleteWords, doneNote, menuFor, menuHead, nameProblem, shortPath, pasteOp, stemEnd, type MenuCtx } from "../src/lib/finderOps.ts";
+import { clipPaths, deleteWords, doneNote, dropPlan, jobFraction, jobsShown, menuFor, menuHead, nameProblem, shortPath, pasteOp, stemEnd, type MenuCtx } from "../src/lib/finderOps.ts";
 import { finderKey, type KeyIn } from "../src/lib/finderKeys.ts";
 
 const k = (key: string, o: Partial<KeyIn> = {}): KeyIn => ({ key, ctrl: false, meta: false, shift: false, alt: false, ...o });
@@ -24,9 +24,9 @@ describe("the menus are Strata's", () => {
       ["Move to Trash", "Permanently delete"],
     ]);
   });
-  test("a folder swaps Quick preview and Print for Terminal and Open in…, and adds Pin", () => {
+  test("a folder swaps Quick preview and Print for Terminal and Open in New Tab, and adds Pin", () => {
     const g = labels(menuFor("folder", ctx));
-    expect(g[1]).toEqual(["Open", "Open With…", "Open in Terminal", "Open in…"]);
+    expect(g[1]).toEqual(["Open", "Open With…", "Open in Terminal", "Open in New Tab"]);
     expect(g[5]![0]).toBe("Pin to sidebar");
     expect(labels(menuFor("folder", { ...ctx, pinned: true }))[5]![0]).toBe("Unpin from sidebar");
   });
@@ -52,7 +52,7 @@ describe("the menus are Strata's", () => {
     expect(all.find((i) => i.id === "trash")!.disabled).toBeUndefined();
   });
   test("an item that is not built says what it is instead of doing nothing", () => {
-    expect(menuFor("file", ctx).flat().filter((i) => i.later).map((i) => i.id).sort()).toEqual(["customize", "open-with", "print"]);
+    expect(menuFor("file", ctx).flat().filter((i) => i.later).map((i) => i.id).sort()).toEqual(["customize", "open-with"]);
   });
   test("the header names one entry with its path, several by count", () => {
     expect(menuHead(["a.md"], "/home/x/")).toEqual({ title: "a.md", sub: "/home/x/a.md" });
@@ -133,5 +133,36 @@ describe("words", () => {
   test("the footer line after an operation", () => {
     expect(doneNote("trash", 1, "a.txt")).toBe("Moved a.txt to the trash");
     expect(doneNote("delete", 3, "")).toBe("Deleted 3 items");
+  });
+});
+
+describe("dropping rows on a folder", () => {
+  test("moves, and copies with Ctrl", () => {
+    expect(dropPlan("/h/a", ["x.txt"], "/h/b", false)).toEqual({ op: "move", conflict: "keep-both" });
+    expect(dropPlan("/h/a", ["x.txt"], "/h/b", true)).toEqual({ op: "copy", conflict: "keep-both" });
+  });
+  test("into the folder they are in is nothing for a move and a copy with Ctrl", () => {
+    expect(dropPlan("/h/a", ["x.txt"], "/h/a", false)).toBe("nothing");
+    expect(dropPlan("/h/a", ["x.txt"], "/h/a", true)).toEqual({ op: "copy", conflict: "keep-both" });
+  });
+  test("never into itself or inside itself, but a sibling that shares a prefix is fine", () => {
+    expect(dropPlan("/h", ["a"], "/h/a", false)).toBe("inside");
+    expect(dropPlan("/h", ["a"], "/h/a/deep/er", true)).toBe("inside");
+    expect(dropPlan("/h", ["a"], "/h/ab", false)).toEqual({ op: "move", conflict: "keep-both" });
+    expect(dropPlan("/", ["a"], "/a/b", false)).toBe("inside");
+  });
+  test("an empty pick is nothing", () => { expect(dropPlan("/h", [], "/x", false)).toBe("nothing"); });
+});
+
+describe("the jobs panel", () => {
+  test("how far a job has got", () => {
+    expect(jobFraction({ state: "running", total: null, done: 5 })).toBeNull();
+    expect(jobFraction({ state: "running", total: 200, done: 50 })).toBe(0.25);
+    expect(jobFraction({ state: "running", total: 100, done: 900 })).toBe(1);
+    expect(jobFraction({ state: "done", total: null, done: 0 })).toBe(1);
+  });
+  test("a finished job stays a few seconds, a running one stays", () => {
+    const js = [{ state: "running", id: 1 }, { state: "done", ended: 9_000, id: 2 }, { state: "done", ended: 1_000, id: 3 }, { state: "error", id: 4 }];
+    expect(jobsShown(js, 10_000).map((j) => j.id)).toEqual([1, 2]);
   });
 });

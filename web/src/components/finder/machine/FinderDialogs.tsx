@@ -4,9 +4,10 @@
 // doing is /fs/op, so a box only collects and hands back.
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../../lib/api.ts";
-import { HIT } from "../../../lib/iconSize.ts";
-import { archiveName, compressSub, destProblem, formatTakesPassword, modeBits, modeSymbolic, nameProblem, shortPath, toggleMode, type Who } from "../../../lib/finderOps.ts";
-import type { FsProps } from "../../../../../shared/types.ts";
+import { HIT, ICON } from "../../../lib/iconSize.ts";
+import { FileTypeIcon } from "./StrataIcon.tsx";
+import { archiveName, compressSub, destProblem, trashDeleteWords, formatTakesPassword, modeBits, modeSymbolic, nameProblem, shortPath, toggleMode, type Who } from "../../../lib/finderOps.ts";
+import type { FsProps, FsTrashRow } from "../../../../../shared/types.ts";
 import { EDGE, INPUT, INPUT_STYLE, LINE } from "../../workspace/Chrome.tsx";
 import { Sheet } from "./FinderOpsUI.tsx";
 
@@ -118,7 +119,7 @@ export function FolderPicker({ op, paths, start, home, onPick, onClose }: { op: 
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
     let live = true; setDirs(null); setErr(null);
-    void api.browseList(at, 0, false, undefined, 500).then((r) => { if (!live) return; if (r.ok) setDirs(r.entries.filter((e) => e.kind === "dir" && !e.locked).map((e) => e.name)); else setErr(r.error ?? "Could not open it"); });
+    void api.browseList(at, 0, false, undefined, 500).then((r) => { if (!live) return; if (r.ok) setDirs(r.entries.filter((e) => e.kind === "dir" && !e.locked).map((e) => e.name).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true }))); else setErr(r.error ?? "Could not open it"); });
     return () => { live = false; };
   }, [at]);
   const join = (n: string) => `${at.replace(/\/$/, "")}/${n}`;
@@ -131,7 +132,7 @@ export function FolderPicker({ op, paths, start, home, onPick, onClose }: { op: 
       <p className="m-0 mb-2 truncate" style={{ color: "var(--text3)" }} title={at}>{shortPath(at, home, 44)}</p>
       <div role="listbox" aria-label="Folders" className="rounded-md overflow-y-auto" style={{ border: EDGE, height: 220 }}>
         {at !== "/" && <button role="option" aria-selected={false} className="agx-btn w-full text-left px-3" style={{ minHeight: HIT - 4, color: "var(--text3)" }} onClick={() => setAt(up)}>..</button>}
-        {dirs?.map((n) => <button key={n} role="option" aria-selected={false} className="agx-btn w-full text-left px-3 truncate" style={{ minHeight: HIT - 4 }} onClick={() => setAt(join(n))}>{n}</button>)}
+        {dirs?.map((n) => <button key={n} role="option" aria-selected={false} className="agx-btn w-full text-left px-3 truncate" style={{ minHeight: HIT - 4 }} onClick={() => setAt(join(n))}><span className="flex items-center gap-2"><FileTypeIcon name={n} isDir broken={false} size={ICON.sm} /><span className="truncate">{n}</span></span></button>)}
         {dirs && !dirs.length && <p className="m-0 p-3" style={{ color: "var(--text3)" }}>No folders here</p>}
         {err && <p role="alert" className="m-0 p-3" style={{ color: "var(--error-ink)" }}>{err}</p>}
       </div>
@@ -140,6 +141,61 @@ export function FolderPicker({ op, paths, start, home, onPick, onClose }: { op: 
         <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE }} onClick={onClose}>Cancel</button>
         <button className="agx-btn rounded-md px-3" disabled={!!problem || !!err} style={{ minHeight: HIT, background: "var(--text)", color: "var(--bg)" }} onClick={() => onPick(at)}>{verb} here</button>
       </div>
+    </Sheet>
+  );
+}
+
+/** The Trash entry of the sidebar: what is in the freedesktop trash, each with Restore and Delete, and Empty trash for all. Deleting here is for good, so it asks, and the server wants the desktop app for it. */
+export function TrashPanel({ home, onRestored, onClose }: { home: string; onRestored: (dirs: string[], said: string) => void; onClose: () => void }) {
+  const [rows, setRows] = useState<FsTrashRow[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [sure, setSure] = useState<{ ids: string[]; words: { title: string; body: string } } | null>(null);
+  const load = () => { void api.fsTrash().then((r) => { if (r.ok) setRows(r.entries); else setErr("Could not read the trash"); }); };
+  useEffect(load, []);
+  const restore = async (r: FsTrashRow) => {
+    const a = await api.fsOp({ op: "restore", ids: [r.id] });
+    if (!a.ok) { setErr(a.error ?? "That did not work"); return; }
+    setErr(null); load(); onRestored([r.from.slice(0, r.from.lastIndexOf("/")) || "/"], `Restored ${r.name}`);
+  };
+  const remove = async (ids: string[]) => {
+    const a = await api.fsOp({ op: "empty-trash", ids, confirm: ids.length });
+    setSure(null);
+    if (!a.ok) { setErr(a.error ?? "That did not work"); return; }
+    setErr(null); load();
+  };
+  const ask = (ids: string[], names: string[]) => setSure({ ids, words: trashDeleteWords(names) });
+  return (
+    <Sheet label="Trash" onClose={onClose} width={460}>
+      <div>
+        <b className="block text-[13px] mb-2">Trash</b>
+        <div role="list" aria-label="Trashed items" className="rounded-md overflow-y-auto" style={{ border: EDGE, maxHeight: 280, minHeight: 60 }}>
+          {rows?.map((r) => (
+            <div key={r.id} role="listitem" className="flex items-center gap-2 px-3 py-1.5" style={{ borderBottom: LINE }}>
+              <div className="flex-1 min-w-0">
+                <div className="truncate">{r.name}</div>
+                <div className="truncate text-[10.5px]" style={{ color: "var(--text3)" }} title={r.from}>{shortPath(r.from, home, 44)} · {r.deleted.replace("T", " ")}</div>
+              </div>
+              <button className="agx-btn rounded-md px-2" style={{ minHeight: HIT - 6, border: EDGE }} onClick={() => void restore(r)}>Restore</button>
+              <button className="agx-btn rounded-md px-2" aria-label={`Delete ${r.name} for good`} style={{ minHeight: HIT - 6, border: EDGE, color: "var(--error-ink)" }} onClick={() => ask([r.id], [r.name])}>Delete</button>
+            </div>
+          ))}
+          {rows && !rows.length && <p className="m-0 p-3" style={{ color: "var(--text3)" }}>The trash is empty</p>}
+          {!rows && !err && <p className="m-0 p-3" style={{ color: "var(--text3)" }}>Reading the trash…</p>}
+        </div>
+        <p role="alert" className="m-0 mt-1.5 min-h-[16px]" style={{ color: "var(--error-ink)" }}>{err}</p>
+        <div className="flex justify-end gap-2 mt-2">
+          <button className="agx-btn rounded-md px-3" disabled={!rows?.length} style={{ minHeight: HIT, border: EDGE, color: "var(--error-ink)" }} onClick={() => rows && ask(rows.map((r) => r.id), rows.map((r) => r.name))}>Empty trash</button>
+          <button autoFocus className="agx-btn rounded-md px-3" style={{ minHeight: HIT, background: "var(--text)", color: "var(--bg)" }} onClick={onClose}>Close</button>
+        </div>
+      </div>
+      {sure && <Sheet label={sure.words.title} onClose={() => setSure(null)}>
+        <b className="block text-[13px] mb-1">{sure.words.title}</b>
+        <p className="m-0 mb-3" style={{ color: "var(--text3)" }}>{sure.words.body}</p>
+        <div className="flex justify-end gap-2">
+          <button autoFocus className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE }} onClick={() => setSure(null)}>Cancel</button>
+          <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE, color: "var(--error-ink)" }} onClick={() => void remove(sure.ids)}>Delete for good</button>
+        </div>
+      </Sheet>}
     </Sheet>
   );
 }

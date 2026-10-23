@@ -71,16 +71,16 @@ describe("create and rename", () => {
 });
 
 describe("the boundary", () => {
-  test("a place outside home is refused for every operation", () => {
+  test("a place outside home is refused for every operation", async () => {
     const f = join(outside, "secret.txt");
     writeFileSync(f, "s");
     expect(fsRename(f, "x", true).ok).toBe(false);
     expect(fsTrash([f], true).ok).toBe(false);
-    expect(fsDelete([f], 1, true).ok).toBe(false);
+    expect((await fsDelete([f], 1, true)).ok).toBe(false);
     expect(fsMkdir(outside, "x", true).ok).toBe(false);
     expect(existsSync(f)).toBe(true);
   });
-  test("a link to the outside is trashed and deleted AS A LINK; the target is never touched", () => {
+  test("a link to the outside is trashed and deleted AS A LINK; the target is never touched", async () => {
     const target = join(outside, "keep");
     mkdirSync(target);
     writeFileSync(join(target, "inner.txt"), "i");
@@ -89,7 +89,7 @@ describe("the boundary", () => {
     expect(t.ok).toBe(true);
     expect(existsSync(join(target, "inner.txt"))).toBe(true);
     symlinkSync(target, join(home, "door2"));
-    expect(fsDelete([join(home, "door2")], 1, true).ok).toBe(true);
+    expect((await fsDelete([join(home, "door2")], 1, true)).ok).toBe(true);
     expect(existsSync(join(target, "inner.txt"))).toBe(true);
   });
   test("a copy of a tree that holds a link to the outside copies the LINK, not what it points at", async () => {
@@ -103,34 +103,34 @@ describe("the boundary", () => {
     expect(lstatSync(copied).isSymbolicLink()).toBe(true);
     expect(readlinkSync(copied)).toBe(outside);
   });
-  test("a path that goes through a link to the outside is refused", () => {
+  test("a path that goes through a link to the outside is refused", async () => {
     symlinkSync(outside, join(home, "door"));
     writeFileSync(join(outside, "f.txt"), "f");
     expect(fsRename(join(home, "door", "f.txt"), "g.txt", true).ok).toBe(false);
-    expect(fsDelete([join(home, "door", "f.txt")], 1, true).ok).toBe(false);
+    expect((await fsDelete([join(home, "door", "f.txt")], 1, true)).ok).toBe(false);
     expect(existsSync(join(outside, "f.txt"))).toBe(true);
   });
-  test("the home folder itself and a folder that holds it cannot be moved or deleted", () => {
-    expect(fsDelete([home], 1, true).ok).toBe(false);
+  test("the home folder itself and a folder that holds it cannot be moved or deleted", async () => {
+    expect((await fsDelete([home], 1, true)).ok).toBe(false);
     expect(fsTrash([home], true).ok).toBe(false);
     expect(fsRename(home, "elsewhere", true).ok).toBe(false);
     expect(existsSync(home)).toBe(true);
   });
-  test("a root folder the finder starts from, or a folder above one, is left alone", () => {
+  test("a root folder the finder starts from, or a folder above one, is left alone", async () => {
     const work = dir("outer/work");
     process.env.AGENTGLASS_DISK_ROOTS = work;
-    expect(fsDelete([work], 1, true).ok).toBe(false);
+    expect((await fsDelete([work], 1, true)).ok).toBe(false);
     expect(fsTrash([work], true).ok).toBe(false);
     expect(fsRename(work, "w2", true).ok).toBe(false);
-    expect(fsDelete([join(home, "outer")], 1, true).ok).toBe(false);
+    expect((await fsDelete([join(home, "outer")], 1, true)).ok).toBe(false);
     expect(existsSync(work)).toBe(true);
     expect(fsTrash([put("outer/work/a.txt")], true).ok).toBe(true);
   });
-  test("dotted secret stores stay shut even for a local caller", () => {
+  test("dotted secret stores stay shut even for a local caller", async () => {
     const ssh = dir(".ssh");
     writeFileSync(join(ssh, "id_ed25519"), "k");
     expect(fsTrash([ssh], true).ok).toBe(false);
-    expect(fsDelete([join(ssh, "id_ed25519")], 1, true).ok).toBe(false);
+    expect((await fsDelete([join(ssh, "id_ed25519")], 1, true)).ok).toBe(false);
     expect(existsSync(join(ssh, "id_ed25519"))).toBe(true);
   });
 });
@@ -176,30 +176,30 @@ describe("the trash", () => {
   test("a trash id is a name, never a path", () => {
     expect(fsRestore(["../../etc/passwd"], true).ok).toBe(false);
   });
-  test("empty trash asks for the count", () => {
+  test("empty trash asks for the count", async () => {
     fsTrash([put("a.txt"), put("b.txt")], true);
-    expect(fsEmptyTrash(undefined, 1).ok).toBe(false);
+    expect((await fsEmptyTrash(undefined, 1)).ok).toBe(false);
     expect(trashList().length).toBe(2);
-    const r = fsEmptyTrash(undefined, 2);
+    const r = await fsEmptyTrash(undefined, 2);
     expect(r.ok && r.removed).toBe(2);
     expect(trashList()).toEqual([]);
   });
 });
 
 describe("permanent delete", () => {
-  test("needs the count the person was shown", () => {
+  test("needs the count the person was shown", async () => {
     const a = put("a.txt"), b = put("b.txt");
-    expect(fsDelete([a, b], undefined, true).ok).toBe(false);
-    expect(fsDelete([a, b], 1, true).ok).toBe(false);
+    expect((await fsDelete([a, b], undefined, true)).ok).toBe(false);
+    expect((await fsDelete([a, b], 1, true)).ok).toBe(false);
     expect(existsSync(a)).toBe(true);
-    const r = fsDelete([a, b], 2, true);
+    const r = await fsDelete([a, b], 2, true);
     expect(r.ok && r.deleted).toBe(2);
     expect(existsSync(a)).toBe(false);
   });
-  test("a folder goes with what it holds", () => {
+  test("a folder goes with what it holds", async () => {
     const d = dir("d/e");
     writeFileSync(join(d, "f"), "f");
-    expect(fsDelete([join(home, "d")], 1, true).ok).toBe(true);
+    expect((await fsDelete([join(home, "d")], 1, true)).ok).toBe(true);
     expect(existsSync(join(home, "d"))).toBe(false);
   });
 });

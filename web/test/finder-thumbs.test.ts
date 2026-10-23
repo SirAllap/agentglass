@@ -41,10 +41,19 @@ describe("which files get a thumbnail", () => {
 
 describe("the Icons view draws it", () => {
   const src = Bun.file(new URL("../src/components/finder/machine/FolderViews.tsx", import.meta.url)).text();
+  const thumb = Bun.file(new URL("../src/components/finder/machine/Thumb.tsx", import.meta.url)).text();
+  const col = Bun.file(new URL("../src/components/finder/machine/Column.tsx", import.meta.url)).text();
   test("only through isThumbable, lazily, and falls back to the icon when the picture fails", async () => {
     const s = await src;
     expect(s).toContain("isThumbable(");
-    expect(s).toContain('loading="lazy"');
-    expect(s).toContain("onError");
+    const t = await thumb;
+    expect(t).toContain('loading="lazy"');
+    expect(t).toContain("onError");
+    expect(t).toContain("fallback");
+  });
+  test("a column row draws it too, at 17 px, for a file and never for a folder or a locked one", async () => {
+    const c = await col;
+    expect(c).toContain("const ROW_THUMB = 17;");
+    expect(c).toContain("!r.locked && !dir && isThumbable(r.name)");
   });
 });

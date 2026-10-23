@@ -2832,4 +2832,6 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-prose-pane table { display: block; max-width: 100%; overflow-x: auto; }
 
 /* A row of the finder's columns answers the pointer before it is clicked, as Strata's do. */
+/* What a drag would drop on: a folder row, a column, a place in the sidebar, the Trash. */
+[data-drop-on] { outline: 2px solid var(--primary); outline-offset: -2px; background: color-mix(in srgb, var(--primary) 14%, transparent); border-radius: 6px; }
 .agx-fm-row:hover { background: color-mix(in srgb, var(--primary) 8%, transparent); }

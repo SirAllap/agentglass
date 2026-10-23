@@ -55,8 +55,8 @@ export function menuFor(target: Target, c: MenuCtx): Item[][] {
     { id: "open", label: "Open", keys: "Enter" },
     { id: "open-with", label: "Open With…", later: "Open With" },
     ...(folder
-      ? [{ id: "terminal" as const, label: "Open in Terminal", keys: "Ctrl+Alt+T" }, { id: "open-in" as const, label: "Open in…", later: "Open in a new tab or window" }]
-      : [{ id: "preview" as const, label: "Quick preview", keys: "Space", disabled: !c.previewable }, { id: "print" as const, label: "Print", later: "Print" }]),
+      ? [{ id: "terminal" as const, label: "Open in Terminal", keys: "Ctrl+Alt+T" }, { id: "open-in" as const, label: "Open in New Tab", keys: "Ctrl+Enter" }]
+      : [{ id: "preview" as const, label: "Quick preview", keys: "Space", disabled: !c.previewable }, { id: "print" as const, label: "Print" }]),
   ];
   return [
     [{ id: "folder-with", label: "New Folder with Selection" }],
@@ -102,6 +102,17 @@ export function pasteOp(c: Clip | null, into: string): { op: "copy" | "move"; co
   if (!c || !c.names.length) return "empty";
   if (c.mode === "cut" && c.dir === into) return "nothing";
   return { op: c.mode === "cut" ? "move" : "copy", conflict: "keep-both" };
+}
+
+/** What dropping rows on a folder does: a move, or a copy with Ctrl; nothing into the folder they are in, and never into themselves or something inside them. */
+export function dropPlan(srcDir: string, names: readonly string[], dest: string, ctrl: boolean): { op: "move" | "copy"; conflict: "keep-both" } | "nothing" | "inside" {
+  if (!names.length) return "nothing";
+  for (const n of names) {
+    const own = (srcDir === "/" ? "" : srcDir) + "/" + n;
+    if (dest === own || dest.startsWith(own + "/")) return "inside";
+  }
+  if (!ctrl && dest === srcDir) return "nothing";
+  return { op: ctrl ? "copy" : "move", conflict: "keep-both" };
 }
 
 /** A name somebody typed for a rename or a new folder: the same rule the server holds, said before the round trip. */
@@ -195,4 +206,26 @@ export function destProblem(paths: readonly string[], dest: string, op: "move" |
     if (op === "move" && p.slice(0, p.lastIndexOf("/")) === d) return "It is already in that folder";
   }
   return null;
+}
+
+/** The question before the trash is emptied, or one entry in it is deleted: the count and the names, up to a few. */
+export function trashDeleteWords(names: readonly string[]): { title: string; body: string } {
+  const shown = names.slice(0, 5).map((n) => `“${n}”`).join(", ");
+  const more = names.length > 5 ? ` and ${names.length - 5} more` : "";
+  return {
+    title: names.length === 1 ? `Delete “${names[0]}” for good?` : `Delete ${names.length} items for good?`,
+    body: `${shown}${more} will be gone from the trash for good. This cannot be undone.`,
+  };
+}
+
+/** How far a copy or move has got, 0 to 1; null while the total is still being counted. */
+export function jobFraction(j: { state: string; total: number | null; done: number }): number | null {
+  if (j.state === "done") return 1;
+  if (j.total === null || j.total <= 0) return null;
+  return Math.min(1, j.done / j.total);
+}
+
+/** The jobs the panel still shows: the running ones, and a finished one for a few seconds so the end is seen. */
+export function jobsShown<T extends { state: string; ended?: number }>(jobs: readonly T[], now: number, keepMs = 4000): T[] {
+  return jobs.filter((j) => j.state === "running" || (j.ended !== undefined && now - j.ended < keepMs));
 }

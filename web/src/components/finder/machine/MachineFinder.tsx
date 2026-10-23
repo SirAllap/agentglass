@@ -31,6 +31,8 @@ import { AppearanceMenu, FinderSettings, HelpSheet } from "./FinderChrome.tsx";
 import { externalPlace, folderTargetMove } from "../../../lib/finderMiller.ts";
 import { exitDecision, type Exit } from "../../../lib/finderEdit.ts";
 import { FinderPathBar } from "./FinderPathBar.tsx";
+import { FinderTabs } from "./FinderTabs.tsx";
+import { closeTab, openTab, selectTab, showHere, stepTab, tabsOf } from "../../../lib/finderTabs.ts";
 import { useFinderOps, type Chosen } from "./useFinderOps.tsx";
 import { FinderSearch } from "./FinderSearch.tsx";
 import type { HitTarget } from "../../../lib/finderSearch.ts";
@@ -108,6 +110,8 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   const [back] = useState(() => { const s = loadSnap(); return s && s.trail[0] === (start || home || "/") ? s : null; });
   const [trail, setTrail] = useState<string[]>(() => back?.trail ?? [start || home || "/"]);
   const [sel, setSel] = useState<(string | null)[]>(() => back?.sel ?? [null]);
+  /* Folder tabs: each is only the folder it shows; the active one follows wherever the finder goes. */
+  const [tabs, setTabs] = useState(() => tabsOf(back?.trail[back.trail.length - 1] ?? (start || home || "/")));
   /* Strata folds the sidebar to its icon rail while the path is typed. */
   const [pathEditing, setPathEditing] = useState(false);
   const selRef = useRef(sel); selRef.current = sel;
@@ -284,6 +288,14 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   const pick = useCallback((col: number, row: Row): void => ((selRef.current[col] ?? null) === row.name ? pickRaw(col, row) : pickHeld(col, row)), [pickRaw, pickHeld]);
 
   const last = trail.length - 1;
+  const here = trail[last] ?? trail[0]!;
+  useEffect(() => { setTabs((t) => showHere(t, here)); }, [here]);
+  const newTab = useCallback((path?: string) => {
+    setTabs((t) => openTab(t, path ?? tabsRef.current.paths[tabsRef.current.active]!));
+    if (path) go(path);
+  }, [go]);
+  const tabsRef = useRef(tabs); tabsRef.current = tabs;
+  const toTab = useCallback((t: ReturnType<typeof tabsOf>) => { setTabs(t); go(t.paths[t.active]!); }, [go]);
   const chosenOf = (col: number): Choice => (multi && multi.col === col && trail[col] === multi.path ? multi.choice : single(sel[col] ?? null));
   const liveMulti = multi && trail[multi.col] === multi.path && multi.choice.names.size > 1 ? multi : null;
 
@@ -410,6 +422,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
     reload: (dir) => store.current?.load(dir, prefs.hidden, true),
     say: setNote,
     hidden: prefs.hidden,
+    columnsView: prefs.view === "columns",
     home,
     pins,
     togglePin: togglePinned,
@@ -419,6 +432,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
     preview: () => { if (wide) setPrefs({ preview: !prefs.preview }); else setPeek((p) => !p); },
     copyText: (text, said) => { void navigator.clipboard?.writeText(text).then(() => setNote(said)).catch(() => setNote("Could not copy")); },
     terminal: (dir) => onBench(dir, "terminal"),
+    openTab: (path) => newTab(path),
   });
   const opsOpen = useRef(false); opsOpen.current = ops.hasMenu;
 
@@ -445,6 +459,9 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
       case "path": setPathSignal((n) => n + 1); break;
       case "copy": copyChosen(); break;
       case "help": setHelp((h) => !h); break;
+      case "newtab": newTab(); break;
+      case "closetab": if (tabs.paths.length > 1) toTab(closeTab(tabs, tabs.active)); break;
+      case "tab": if (tabs.paths.length > 1) toTab(stepTab(tabs, a.by)); break;
       case "extend": {
         const col = prefs.view === "columns" ? focusCol : last;
         const rows = columns[col]?.display.rows ?? [];
@@ -501,6 +518,39 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
     ops.contextAt(e.clientX, e.clientY, dirEl.dataset.dir!, t.closest<HTMLElement>("[data-row]")?.dataset.row ?? null);
   };
 
+  /* Drag and drop inside the finder, by delegation as the right click is: a row is picked up, and a folder row, a column, a sidebar place or the Trash takes it. Ctrl copies. */
+  const dropMark = useRef<Element | null>(null);
+  const unmark = () => { dropMark.current?.removeAttribute("data-drop-on"); dropMark.current = null; };
+  const dropTarget = (t: HTMLElement): { el: Element; path: string; trash: boolean } | null => {
+    const tr = t.closest("[data-drop-trash]"); if (tr) return { el: tr, path: "", trash: true };
+    const pl = t.closest<HTMLElement>("[data-drop-path]"); if (pl) return { el: pl, path: pl.dataset.dropPath!, trash: false };
+    const dirEl = t.closest<HTMLElement>("[data-dir]"); if (!dirEl) return null;
+    const row = t.closest<HTMLElement>("[data-row][data-folder]");
+    return row && dirEl.contains(row) ? { el: row, path: joinPath(dirEl.dataset.dir!, row.dataset.row!), trash: false } : { el: dirEl, path: dirEl.dataset.dir!, trash: false };
+  };
+  const dnd = {
+    onDragStart: (e: React.DragEvent) => {
+      const t = e.target as HTMLElement, row = t.closest<HTMLElement>("[data-row]"), dirEl = t.closest<HTMLElement>("[data-dir]");
+      if (!row || !dirEl) return;
+      e.dataTransfer.effectAllowed = "copyMove";
+      e.dataTransfer.setData("text/plain", ops.dragStart(dirEl.dataset.dir!, row.dataset.row!).join("\n"));
+    },
+    onDragOver: (e: React.DragEvent) => {
+      const d = dropTarget(e.target as HTMLElement);
+      const allowed = d ? (d.trash ? "move" : ops.dropAllows(d.path, e.ctrlKey)) : null;
+      if (!d || !allowed) { unmark(); return; }
+      e.preventDefault(); e.dataTransfer.dropEffect = allowed;
+      if (dropMark.current !== d.el) { unmark(); d.el.setAttribute("data-drop-on", ""); dropMark.current = d.el; }
+    },
+    onDragLeave: (e: React.DragEvent) => { if (!(e.currentTarget as Element).contains(e.relatedTarget as Node | null)) unmark(); },
+    onDrop: (e: React.DragEvent) => {
+      const d = dropTarget(e.target as HTMLElement); unmark();
+      if (!d) return;
+      e.preventDefault(); ops.dropOn(d.path, e.ctrlKey, d.trash);
+    },
+    onDragEnd: () => { unmark(); ops.dragEnd(); },
+  };
+
   /* ---- layout ---- */
   const sideOn = compact ? sidePage : sideMode !== "hidden";
   const previewInline = wide && prefs.preview;
@@ -523,6 +573,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   const tool = "agx-btn rounded-md grid place-items-center shrink-0";
   return (
     <div ref={root} data-machine-finder className="relative flex-1 min-h-0 min-w-0 flex flex-col" style={{ fontSize: prefs.textSize, color: "var(--text)" }}>
+      <FinderTabs tabs={tabs} home={home} onNew={() => newTab()} onSelect={(i) => toTab(selectTab(tabs, i))} onClose={(i) => toTab(closeTab(tabs, i))} />
       <div className="flex items-center gap-1.5 px-2.5 py-1.5 shrink-0" style={{ borderBottom: LINE }}>
         <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", opacity: sideOn ? 1 : 0.7 }} aria-pressed={sideOn} title={sidebarTip(compact ? (sidePage ? "full" : "hidden") : sideMode, "Ctrl+B")} aria-label="Toggle sidebar (Ctrl+B)"
           onClick={toggleSide}><StrataIcon set="act" name="panel-left-symbolic" size={17} /></button>
@@ -532,6 +583,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
           <button className={tool} disabled={!parentOf(trail[0]!)} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", opacity: parentOf(trail[0]!) ? 1 : 0.4 }} title="Parent folder (Alt+Up)" aria-label="Parent folder" onClick={goUp}><StrataIcon set="act" name="arrow-up" size={17} /></button>
         </>}
         <FinderPathBar path={trail[last] ?? trail[0]!} home={home} onGo={go} signalEdit={pathSignal} onEditing={setPathEditing} volumes={devices.volumes} onRemote={devices.openAddress} />
+        <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="New tab (Ctrl+T)" aria-label="New tab" onClick={() => newTab()}><StrataIcon set="act" name="plus" size={17} /></button>
         <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Search (Ctrl+K)" aria-label="Search" onClick={openSearch}><StrataIcon set="act" name="search" size={17} /></button>
         <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Appearance" aria-label="Appearance" aria-haspopup="menu" onClick={(e) => setMenu(e.currentTarget.getBoundingClientRect())}><StrataIcon set="act" name={prefs.view} size={17} /></button>
         <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Settings" aria-label="Settings" aria-haspopup="menu" onClick={(e) => setSettings(e.currentTarget.getBoundingClientRect())}><StrataIcon set="act" name="settings" size={17} /></button>
@@ -539,11 +591,11 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
       </div>
 
       <div className="flex-1 min-h-0 flex">
-        {sideOn && <Sidebar places={placesFor(home, places)} pins={pins} here={trail[0]!} mode={compact || sideMode === "hidden" ? "full" : pathEditing ? "rail" : sideMode} width={sidebarWidth(compact || sideMode === "hidden" ? "full" : pathEditing || sideMode === "rail" ? "rail" : "full", prefs.sideW, box.w)} onResize={(w) => setPrefs({ sideW: sidebarWidth("full", w, box.w) })} onGo={go} onRecent={onRecent} onNetwork={devices.openNetwork} volumes={devices.volumes} busy={devices.busy} onVolume={devices.onVolume} onVolumeAct={devices.onVolumeAct} />}
+        {sideOn && <Sidebar places={placesFor(home, places)} pins={pins} here={trail[0]!} mode={compact || sideMode === "hidden" ? "full" : pathEditing ? "rail" : sideMode} width={sidebarWidth(compact || sideMode === "hidden" ? "full" : pathEditing || sideMode === "rail" ? "rail" : "full", prefs.sideW, box.w)} onResize={(w) => setPrefs({ sideW: sidebarWidth("full", w, box.w) })} onGo={go} onRecent={onRecent} onTrash={ops.openTrash} onNetwork={devices.openNetwork} volumes={devices.volumes} busy={devices.busy} onVolume={devices.onVolume} onVolumeAct={devices.onVolumeAct} dnd={dnd} />}
         {!(compact && sidePage) && (
           <>
             {/* With the preview beside the columns and nothing dragged, the columns take what their names ask for and the preview takes all that is left, as Strata's does; a gap between the two was the free room with nowhere to go. */}
-            <div ref={main} className="min-w-0 min-h-0 flex" onContextMenu={onContext} style={{ flex: previewInline && prefs.view === "columns" && prevDrag === undefined ? "0 1 auto" : "1 1 0%" }}>
+            <div ref={main} className="min-w-0 min-h-0 flex" onContextMenu={onContext} {...dnd} style={{ flex: previewInline && prefs.view === "columns" && prevDrag === undefined ? "0 1 auto" : "1 1 0%" }}>
               {previewOnly ? (
                 <div className="flex-1 min-w-0 min-h-0 flex flex-col">
                   <button className="agx-btn text-left px-3 text-[11px] shrink-0" style={{ minHeight: HIT, color: "var(--text3)", borderBottom: LINE }} onClick={() => setPeek(false)}>← Back to the folder (Space)</button>
@@ -555,7 +607,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
                     <Column key={c.path} dir={c.path} title={basename(c.path)} filterSignal={filterTick.col === i ? filterTick.n : 0} width={widths[i]!} onResize={(w) => setDragged((d) => ({ ...d, [c.path]: w }))} onFit={() => setDragged((d) => ({ ...d, [c.path]: fitWidth(c.state?.rows.map((r) => r.name) ?? [], measure, mainBox.w || undefined) }))} state={c.state} display={c.display} selName={sel[i] ?? null} chosen={liveMulti?.col === i ? liveMulti.choice.names : null} focused={i === focusCol} prefs={prefs} rowH={rowH}
                       filter={filters[c.path] ?? ""} onFilter={(v) => setFilters((f) => ({ ...f, [c.path]: v }))}
                       scrollTop={scrolls.current[c.path]} onScrollTop={(t) => onScrollTop(c.path, t)} onPick={(r, m) => onPickMod(i, r, m)} onOpen={(r) => { if (isFolder(r) && !r.locked) { pick(i, r); enterFolder(i); } else if (canEditRow(r)) onBench(joinPath(c.path, r.name), "edit"); }}
-                      onFocusCol={() => setFocusCol(i)} onRefresh={() => refresh(c.path)} onSort={onSort} onPref={setPrefs} />
+                      onFocusCol={() => setFocusCol(i)} onRefresh={() => refresh(c.path)} onSort={onSort} onPref={setPrefs} edit={ops.edit?.dir === c.path ? ops.edit : null} />
                   ))}
                 </ColumnsRow>
               ) : lastCol ? (

@@ -173,3 +173,46 @@ describe("M10 and L4: restore", () => {
     expect(fsRestore([row.id], true).ok).toBe(false);
   });
 });
+
+describe("M6, M7: the big and the odd", () => {
+  test("M6: deleting a big tree lets the server breathe", async () => {
+    const { fsDelete } = await import("../src/fsops.ts");
+    const root = dir("big");
+    for (let d = 0; d < 40; d++) { dir(`big/d${d}`); for (let f = 0; f < 400; f++) writeFileSync(join(root, `d${d}`, `f${f}`), ""); }
+    let ticks = 0;
+    const t = setInterval(() => { ticks++; }, 1);
+    const r = await fsDelete([root], 1, true);
+    clearInterval(t);
+    expect(r.ok).toBe(true);
+    expect(existsSync(root)).toBe(false);
+    expect(ticks).toBeGreaterThan(0);
+  });
+  test("M7: across devices a link is moved as a link and a fifo stops the move with the source untouched", async () => {
+    const { statSync, symlinkSync, lstatSync, readlinkSync } = await import("node:fs");
+    const { mkdtempSync: mk } = await import("node:fs");
+    const shm = "/dev/shm";
+    if (!existsSync(shm)) return;
+    const far = mk(join(shm, "agx-m7-"));
+    try {
+      if (statSync(far).dev === statSync(home).dev) return;
+      process.env.AGENTGLASS_DISK_ROOTS = far;
+      const src = dir("src-tree");
+      writeFileSync(join(src, "a.txt"), "a");
+      symlinkSync("a.txt", join(src, "link"));
+      const ok = await fsCopy([src], far, { move: true }, true, 5000);
+      expect(ok.ok).toBe(true);
+      expect(readlinkSync(join(far, "src-tree", "link"))).toBe("a.txt");
+      expect(lstatSync(join(far, "src-tree", "link")).isSymbolicLink()).toBe(true);
+      expect(existsSync(src)).toBe(false);
+      const odd = dir("odd-tree");
+      writeFileSync(join(odd, "keep.txt"), "k");
+      Bun.spawnSync(["mkfifo", join(odd, "pipe")]);
+      const bad = await fsCopy([odd], far, { move: true }, true, 5000);
+      expect(bad.ok).toBe(false);
+      expect(JSON.stringify(bad)).toMatch(/pipe/);
+      expect(readFileSync(join(odd, "keep.txt"), "utf8")).toBe("k");
+      expect(existsSync(join(odd, "pipe"))).toBe(true);
+      expect(existsSync(join(far, "odd-tree"))).toBe(false);
+    } finally { rmSync(far, { recursive: true, force: true }); }
+  });
+});

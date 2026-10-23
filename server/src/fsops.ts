@@ -264,7 +264,7 @@ export function trashOne(o: Operand): Ok<{ id: string }> | Fail {
     if ((e as NodeJS.ErrnoException).code === "EXDEV") {
       // Another device: copy it in, then take the original away. Not atomic, and said so at the top.
       try { copyTreeSync(o.path, join(files, id)); rmSync(o.path, { recursive: true, force: true }); }
-      catch (e2) { try { unlinkSync(join(info, `${id}.trashinfo`)); } catch { /* */ } return fail(String((e2 as Error).message)); }
+      catch (e2) { rmSync(join(files, id), { recursive: true, force: true }); try { unlinkSync(join(info, `${id}.trashinfo`)); } catch { /* */ } return fail(String((e2 as Error).message)); }
     } else { try { unlinkSync(join(info, `${id}.trashinfo`)); } catch { /* */ } return fail(String((e as Error).message)); }
   }
   return { ok: true, id };
@@ -278,7 +278,9 @@ function copyTreeSync(src: string, dst: string): void {
     for (const e of readdirSync(src)) copyTreeSync(join(src, e), join(dst, e));
     return;
   }
-  if (st.isFile()) { copyFileSync(src, dst, FS.COPYFILE_EXCL); chmodSync(dst, st.mode & 0o777); }
+  if (st.isFile()) { copyFileSync(src, dst, FS.COPYFILE_EXCL); chmodSync(dst, st.mode & 0o777); return; }
+  // A pipe, socket or device cannot be copied, and the caller deletes the original once this returns: stop, so it is not lost.
+  throw new Error(`${src}: a pipe, socket or device cannot be moved to another disk`);
 }
 
 export function fsTrash(paths: unknown, local: boolean): Ok<{ trashed: { path: string; id: string }[] }> | Fail {
@@ -363,13 +365,13 @@ export function fsRestore(ids: unknown, local: boolean): Ok<{ restored: string[]
 }
 
 /** Empty the trash (or delete chosen entries) for good. */
-export function fsEmptyTrash(ids: unknown, confirm: unknown): Ok<{ removed: number }> | Fail {
+export async function fsEmptyTrash(ids: unknown, confirm: unknown): Promise<Ok<{ removed: number }> | Fail> {
   const rows = trashList();
   const chosen = Array.isArray(ids) ? rows.filter((r) => ids.includes(r.id)) : rows;
   if (confirm !== chosen.length) return fail(`confirm with the count: ${chosen.length}`);
   for (const r of chosen) {
-    rmSync(join(trashRoot(), "files", r.id), { recursive: true, force: true });
-    rmSync(join(trashRoot(), "info", `${r.id}.trashinfo`), { force: true });
+    await rm(join(trashRoot(), "files", r.id), { recursive: true, force: true });
+    await rm(join(trashRoot(), "info", `${r.id}.trashinfo`), { force: true });
   }
   return { ok: true, removed: chosen.length };
 }
@@ -377,7 +379,7 @@ export function fsEmptyTrash(ids: unknown, confirm: unknown): Ok<{ removed: numb
 /* ---- permanent delete -------------------------------------------------- */
 
 /** Gone for good. `confirm` must equal the number of paths: the count the person was shown. */
-export function fsDelete(paths: unknown, confirm: unknown, local: boolean): Ok<{ deleted: number }> | Fail {
+export async function fsDelete(paths: unknown, confirm: unknown, local: boolean): Promise<Ok<{ deleted: number }> | Fail> {
   const ops = operands(paths, local);
   if (!ops.ok) return ops;
   if (confirm !== ops.items.length) return fail(`confirm with the count: ${ops.items.length}`);
@@ -385,7 +387,8 @@ export function fsDelete(paths: unknown, confirm: unknown, local: boolean): Ok<{
   for (const o of ops.items) {
     try {
       // rmSync unlinks a link and never walks through one; a directory is walked by what it holds, not by where links point.
-      rmSync(o.path, { recursive: true, force: false });
+      // Async, so a tree of a hundred thousand entries is walked off the event loop and the server keeps answering.
+      await rm(o.path, { recursive: true, force: false });
       n++;
     } catch (e) { return fail(`${o.name}: ${(e as Error).message}${n ? ` (${n} already deleted)` : ""}`); }
   }
@@ -450,7 +453,11 @@ async function copyTree(src: string, dst: string, job: Job): Promise<void> {
     job.items++;
     return;
   }
-  if (!st.isFile()) return; // sockets, fifos and devices are not copied
+  if (!st.isFile()) {
+    // Sockets, fifos and devices cannot be copied. A copy leaves them behind; a move would delete them with the original, so it stops here and the source stays whole.
+    if (job.kind === "move") throw new Error(`${src}: a ${st.isFIFO() ? "pipe" : st.isSocket() ? "socket" : "device"} cannot be moved to another disk`);
+    return;
+  }
   if (st.size < BIG) {
     await copyFile(src, dst, FS.COPYFILE_EXCL | FS.COPYFILE_FICLONE);
     job.done += st.size;
@@ -547,7 +554,7 @@ export async function fsCopy(paths: unknown, dest: unknown, opts: CopyOpts, loca
             await publish(tmp, p.to, p.o.st.isDirectory() && !p.o.st.isSymbolicLink());
           } catch (e) { rmSync(tmp, { recursive: true, force: true }); throw e; }
           created.push(p.to);
-          if (opts.move) { rmSync(p.o.path, { recursive: true, force: true }); steps.push({ from: p.o.path, to: p.to }); }
+          if (opts.move) { await rm(p.o.path, { recursive: true, force: true }); steps.push({ from: p.o.path, to: p.to }); }
           else steps.push({ to: p.to });
         }
       }

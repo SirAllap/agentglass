@@ -76,3 +76,17 @@ describe("the keys Strata has that the finder now answers", () => {
     expect(keyStep({ col: 0, row: 4 }, "PageUp", cols, 10).row).toBe(0);
   });
 });
+
+describe("the folder tab keys", () => {
+  test("Ctrl+T, Ctrl+W, Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+Enter", () => {
+    expect(finderKey(k("t", { ctrl: true }), free)).toEqual({ t: "newtab" });
+    expect(finderKey(k("w", { ctrl: true }), free)).toEqual({ t: "closetab" });
+    expect(finderKey(k("Tab", { ctrl: true }), free)).toEqual({ t: "tab", by: 1 });
+    expect(finderKey(k("Tab", { ctrl: true, shift: true }), free)).toEqual({ t: "tab", by: -1 });
+    expect(finderKey(k("Enter", { ctrl: true }), free)).toEqual({ t: "opentab" });
+  });
+  test("a text field keeps them, and Alt does not take them", () => {
+    expect(finderKey(k("t", { ctrl: true }), { inField: true, hasSelection: false })).toBeNull();
+    expect(finderKey(k("t", { ctrl: true, alt: true }), free)).not.toEqual({ t: "newtab" });
+  });
+});

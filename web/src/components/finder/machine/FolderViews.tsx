@@ -6,22 +6,14 @@
 // many tiles as fit, so the window is still arithmetic).
 import { ago } from "../../../lib/fileRecents.ts";
 import { api } from "../../../lib/api.ts";
+import { Thumb } from "./Thumb.tsx";
 import { formatSize, isFolder, isThumbable, itemsLabel, joinPath, kindWord, tileSize, tilesPerRow, type Display, type Prefs, type Row, type SortKey } from "../../../lib/finderMiller.ts";
-import { useState } from "react";
 import { ICON } from "../../../lib/iconSize.ts";
 import { LINE } from "../../workspace/Chrome.tsx";
 import { RowIcon, modOf, noRange, type Mod } from "./Column.tsx";
 import { VirtualList } from "./VirtualList.tsx";
 
 export { tilesPerRow };
-
-/** An image's own picture, drawn by the browser. A file it cannot decode falls back to the icon: the row never shows a broken image. */
-function Thumb({ path, row, size }: { path: string; row: Row; size: number }) {
-  const [bad, setBad] = useState(false);
-  if (bad) return <RowIcon row={row} size={ICON.xl} />;
-  return <img src={api.previewUrl(path)} alt="" loading="lazy" decoding="async" draggable={false} onError={() => setBad(true)}
-    style={{ width: size, height: size, objectFit: "cover", borderRadius: 6, background: "color-mix(in srgb, var(--text) 7%, transparent)" }} />;
-}
 
 const selStyle = (sel: boolean) => sel
   ? { background: "color-mix(in srgb, var(--primary) 16%, transparent)", boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--primary) 38%, transparent)" }
@@ -40,11 +32,11 @@ export function IconsView({ display, dir, thumb, selName, chosen, width, onPick,
       render={(i) => (
         <div key={i} className="flex px-2" style={{ height: tile.h }}>
           {rows.slice(i * per, i * per + per).map((r) => (
-            <div key={r.name} role="option" data-row={r.name} aria-selected={r.name === selName || !!chosen?.has(r.name)} title={r.name} onMouseDown={noRange} onClick={(e) => onPick(r, modOf(e))} onDoubleClick={() => onOpen(r)}
+            <div key={r.name} role="option" data-row={r.name} data-folder={isFolder(r) && !r.locked ? "" : undefined} draggable={!r.locked} aria-selected={r.name === selName || !!chosen?.has(r.name)} title={r.name} onMouseDown={noRange} onClick={(e) => onPick(r, modOf(e))} onDoubleClick={() => onOpen(r)}
               className="flex flex-col items-center justify-center gap-1.5 rounded-lg cursor-pointer px-1 min-w-0"
               style={{ width: tile.w, height: tile.h - 4, color: r.locked ? "var(--text4)" : "var(--text)", ...selStyle(r.name === selName || !!chosen?.has(r.name)) }}>
               <span className="flex" style={{ color: isFolder(r) ? "var(--warning-ink)" : "var(--text3)" }}>
-                {!r.locked && !isFolder(r) && isThumbable(r.name) ? <Thumb path={joinPath(dir, r.name)} row={r} size={thumb} /> : <RowIcon row={r} size={Math.max(ICON.xl, Math.round(thumb * 0.6))} />}
+                {!r.locked && !isFolder(r) && isThumbable(r.name) ? <Thumb path={joinPath(dir, r.name)} size={thumb} radius={6} fallback={<RowIcon row={r} size={ICON.xl} />} /> : <RowIcon row={r} size={Math.max(ICON.xl, Math.round(thumb * 0.6))} />}
               </span>
               <span className="w-full text-center text-[11.5px] leading-tight line-clamp-2 break-all">{r.name}</span>
             </div>
@@ -76,7 +68,7 @@ export function ListView({ display, selName, chosen, rowH, prefs, onPick, onOpen
           if (it.header) return <div key={`h:${it.header}`} className="flex items-end px-3.5 pb-1 text-[9.5px] uppercase tracking-[0.14em]" style={{ height: rowH, color: "var(--text4)", fontWeight: 600 }}>{it.header}</div>;
           const r = it.row!;
           return (
-            <div key={r.name} role="option" data-row={r.name} aria-selected={r.name === selName || !!chosen?.has(r.name)} onMouseDown={noRange} onClick={(e) => onPick(r, modOf(e))} onDoubleClick={() => onOpen(r)}
+            <div key={r.name} role="option" data-row={r.name} data-folder={isFolder(r) && !r.locked ? "" : undefined} draggable={!r.locked} aria-selected={r.name === selName || !!chosen?.has(r.name)} onMouseDown={noRange} onClick={(e) => onPick(r, modOf(e))} onDoubleClick={() => onOpen(r)}
               className="grid items-center gap-2 px-3.5 mx-1 rounded-md cursor-pointer"
               style={{ gridTemplateColumns: COLS, height: rowH, color: r.locked ? "var(--text4)" : "var(--text)", ...selStyle(r.name === selName || !!chosen?.has(r.name)) }}>
               <span className="flex items-center gap-2 min-w-0"><span className="shrink-0 flex"><RowIcon row={r} /></span><span className="truncate">{r.name}</span></span>

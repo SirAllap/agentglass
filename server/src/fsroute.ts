@@ -53,8 +53,8 @@ export async function fsRun(b: Record<string, unknown>, local: boolean): Promise
     case "rename": r = fsRename(b.path, b.name, local); break;
     case "trash": r = fsTrash(paths, local); break;
     case "restore": r = fsRestore(b.ids, local); break;
-    case "empty-trash": r = fsEmptyTrash(b.ids, b.confirm); break;
-    case "delete": r = fsDelete(paths, b.confirm, local); break;
+    case "empty-trash": r = await fsEmptyTrash(b.ids, b.confirm); break;
+    case "delete": r = await fsDelete(paths, b.confirm, local); break;
     case "copy": r = await fsCopy(paths, b.dest, { conflict }, local); break;
     case "move": r = await fsCopy(paths, b.dest, { move: true, conflict }, local); break;
     case "duplicate": r = await fsCopy(paths, null, { duplicate: true }, local); break;

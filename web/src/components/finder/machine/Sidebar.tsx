@@ -2,8 +2,8 @@
 // shelves that come with later phases, and what is not there yet said once.
 //
 // A row that cannot be opened is drawn as one that cannot, with the reason on
-// hover — Trash and Network belong to later phases and a button that does
-// nothing is a worse thing to ship than a label that says so.
+// hover — a button that does nothing is a worse thing to ship than a label
+// that says so.
 import { StrataIcon } from "./StrataIcon.tsx";
 import { SIDE_DEFAULT } from "../../../lib/finderColumns.ts";
 import { ICON } from "../../../lib/iconSize.ts";
@@ -27,7 +27,7 @@ export function placesFor(home: string, known: readonly DiskPlace[]): Place[] {
   const has = (p: string) => known.length === 0 || known.some((k) => k.path === p);
   return [
     { id: "home", label: "Home", path: home },
-    { id: "trash", label: "Trash", off: "Trash comes with file operations" },
+    { id: "trash", label: "Trash" },
     { id: "network", label: "Network" },
     { id: "recent", label: "Recent" },
     ...XDG.map((n): Place => ({ id: n, label: n, path: joinPath(home, n) })).filter((p) => has(p.path!)),
@@ -37,13 +37,15 @@ export function placesFor(home: string, known: readonly DiskPlace[]): Place[] {
 /** What a button at the end of a DEVICES row asks for. */
 export type VolumeAsk = LockButton["act"] | ReleaseButton["act"];
 
-export function Sidebar({ places, pins, here, mode, width, onResize, onGo, onRecent, onNetwork, volumes = [], busy, onVolume, onVolumeAct }: {
+export function Sidebar({ places, pins, here, mode, width, onResize, onGo, onRecent, onNetwork, onTrash, dnd, volumes = [], busy, onVolume, onVolumeAct }: {
   places: Place[]; pins: readonly string[]; here: string; mode: Exclude<SidebarMode, "hidden">;
   /** The DEVICES section: drawn only when there is a volume, as in Strata. `busy` is the ids with an action under way. */
   volumes?: readonly Volume[]; busy?: ReadonlySet<string>; onVolume?: (v: Volume) => void; onVolumeAct?: (v: Volume, ask: VolumeAsk) => void;
   /** Pixels, from lib/finderColumns `sidebarWidth`: the rail's fixed width or what was dragged. */
   width: number; onResize: (w: number) => void;
-  onGo: (path: string) => void; onRecent: () => void; onNetwork?: () => void;
+  onGo: (path: string) => void; onRecent: () => void; onTrash: () => void; onNetwork?: () => void;
+  /** The finder's drag handlers: a place with data-drop-path takes what is dropped on it, and Trash takes it to the trash. */
+  dnd?: React.HTMLAttributes<HTMLElement>;
 }) {
   const rail = mode === "rail";
   const [menu, setMenu] = useState<{ v: Volume; at: DOMRect } | null>(null);
@@ -51,8 +53,8 @@ export function Sidebar({ places, pins, here, mode, width, onResize, onGo, onRec
     const on = !!p.path && (here === p.path);
     const off = !!p.off;
     return (
-      <button key={p.id} disabled={off} aria-current={on ? "true" : undefined} aria-label={rail ? p.label : undefined} title={p.off ?? (rail ? p.label : undefined)}
-        onClick={() => (p.id === "recent" ? onRecent() : p.id === "network" ? onNetwork?.() : p.path && onGo(p.path))}
+      <button key={p.id} data-drop-path={p.path && !off && p.id !== "recent" && p.id !== "trash" ? p.path : undefined} data-drop-trash={p.id === "trash" ? "" : undefined} disabled={off} aria-current={on ? "true" : undefined} aria-label={rail ? p.label : undefined} title={p.off ?? (rail ? p.label : undefined)}
+        onClick={() => (p.id === "recent" ? onRecent() : p.id === "trash" ? onTrash() : p.id === "network" ? onNetwork?.() : p.path && onGo(p.path))}
         className={`agx-btn w-full flex items-center ${rail ? "justify-center" : "gap-2 px-2.5"} rounded-md text-left disabled:cursor-not-allowed`}
         style={{ minHeight: rail ? 28 : 26, color: off ? "var(--text4)" : on ? "var(--text)" : "var(--text2)", fontWeight: on ? 600 : 400, background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : undefined }}>
         <span className="shrink-0 flex" style={{ color: "var(--primary-ink)" }}><StrataIcon set="act" name={PLACE_ICON[p.id] ?? "folder"} size={ICON.md} /></span>
@@ -86,7 +88,7 @@ export function Sidebar({ places, pins, here, mode, width, onResize, onGo, onRec
   };
   return (
     <div className="relative shrink-0 flex min-h-0" style={{ width }}>
-      <nav aria-label="Places" data-mode={mode} className="agx-scroll overflow-y-auto overflow-x-hidden flex-1 min-w-0 py-1.5 px-1 text-[12px] flex flex-col gap-0.5"
+      <nav aria-label="Places" data-mode={mode} {...dnd} className="agx-scroll overflow-y-auto overflow-x-hidden flex-1 min-w-0 py-1.5 px-1 text-[12px] flex flex-col gap-0.5"
         style={{ borderRight: LINE, background: "var(--surface-nav)" }}>
         {places.map(row)}
         {pins.length > 0 && !rail && <div className="px-2.5 pt-2 pb-0.5 text-[10px] uppercase" style={{ color: "var(--text4)" }}>Pinned</div>}

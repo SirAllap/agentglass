@@ -4,7 +4,7 @@
  * as the nine toggles, and which folders a destination picker may offer.
  */
 import { describe, expect, test } from "bun:test";
-import { archiveName, compressSub, formatTakesPassword, modeBits, modeSymbolic, toggleMode, destProblem } from "../src/lib/finderOps.ts";
+import { archiveName, compressSub, formatTakesPassword, modeBits, modeSymbolic, toggleMode, destProblem, trashDeleteWords } from "../src/lib/finderOps.ts";
 
 describe("compress", () => {
   test("one item keeps its name, several are called Archive", () => {
@@ -47,5 +47,15 @@ describe("a destination", () => {
   test("a move into where it already is is nothing to do", () => {
     expect(destProblem(["/h/a/x"], "/h/a", "move")).toMatch(/already/);
     expect(destProblem(["/h/a/x"], "/h/a", "copy")).toBeNull();
+  });
+});
+
+describe("the trash", () => {
+  test("deleting from it says the count and the names", () => {
+    expect(trashDeleteWords(["a.txt"]).title).toBe("Delete “a.txt” for good?");
+    const w = trashDeleteWords(["a", "b", "c", "d", "e", "f", "g"]);
+    expect(w.title).toBe("Delete 7 items for good?");
+    expect(w.body).toContain("and 2 more");
+    expect(w.body).toContain("cannot be undone");
   });
 });

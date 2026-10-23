@@ -9,12 +9,17 @@ import { useEffect, useRef, useState } from "react";
 import { CaretIcon } from "../../../lib/glyphIcons.tsx";
 import { FileTypeIcon, StrataIcon } from "./StrataIcon.tsx";
 import { HIT, ICON } from "../../../lib/iconSize.ts";
-import { formatSize, isDefaultSort, isFolder, itemsLabel, makeDefaultSort, resetSort, type Display, type Prefs, type Row, type SortKey } from "../../../lib/finderMiller.ts";
+import { formatSize, isDefaultSort, isFolder, isThumbable, joinPath, itemsLabel, makeDefaultSort, resetSort, type Display, type Prefs, type Row, type SortKey } from "../../../lib/finderMiller.ts";
 import type { FolderState } from "../../../lib/finderFolders.ts";
 import { EDGE, INPUT, INPUT_STYLE, LINE } from "../../workspace/Chrome.tsx";
 import { MenuCap, MenuItem, MenuRule, Popover } from "./Popover.tsx";
+import { InlineName, type InlineEdit } from "./FinderOpsUI.tsx";
+import { Thumb } from "./Thumb.tsx";
 import { VirtualList } from "./VirtualList.tsx";
 import { TIGHT_W, dragWidth } from "../../../lib/finderColumns.ts";
+
+/** Strata draws an image in its row as a 17 px square in place of the file icon. */
+const ROW_THUMB = 17;
 
 /** Ctrl and Shift on a click: what makes it a choice of several rows. */
 export interface Mod { ctrl: boolean; shift: boolean }
@@ -27,7 +32,7 @@ export function RowIcon({ row, size = ICON.sm }: { row: Row; size?: number }) {
   return <FileTypeIcon name={row.name} isDir={isFolder(row)} broken={row.broken === true} size={size} />;
 }
 
-export function Column({ dir: folderPath, title, filterSignal, width, onResize, onFit, state, display, selName, chosen, focused, prefs, rowH, filter, onFilter, onPick, onOpen, onFocusCol, onRefresh, onSort, onPref, scrollTop, onScrollTop }: {
+export function Column({ dir: folderPath, title, filterSignal, width, onResize, onFit, state, display, selName, chosen, focused, prefs, rowH, filter, onFilter, onPick, onOpen, onFocusCol, onRefresh, onSort, onPref, scrollTop, onScrollTop, edit }: {
   /** The folder this column lists: a right click in it says where it landed. */
   dir: string;
   title: string;
@@ -57,6 +62,8 @@ export function Column({ dir: folderPath, title, filterSignal, width, onResize, 
   /** Where this column was scrolled when the finder was last closed, and where it is now. */
   scrollTop?: number;
   onScrollTop?: (top: number) => void;
+  /** A name being typed in this column: a new row on top, or the chosen row renamed in place. */
+  edit?: InlineEdit | null;
 }) {
   const [menu, setMenu] = useState<DOMRect | null>(null);
   const [finding, setFinding] = useState(filter !== "");
@@ -118,11 +125,13 @@ export function Column({ dir: folderPath, title, filterSignal, width, onResize, 
             <button className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE }} onClick={onRefresh}>Retry</button>
           </div>
         </div>
-      ) : display.items.length === 0 ? (
+      ) : display.items.length === 0 && !(edit && edit.was === null) ? (
         <div className="flex-1 min-h-0 grid place-items-center p-6 text-center text-[12px]" style={{ color: "var(--text3)" }}>
           {loading ? "Reading…" : filter ? `Nothing here is called “${filter}”.` : state && state.hiddenSkipped ? `This directory is empty. ${state.hiddenSkipped} hidden ${state.hiddenSkipped === 1 ? "item" : "items"} left out.` : "This directory is empty"}
         </div>
       ) : (
+        <>
+        {edit && edit.was === null && <div className="shrink-0 pt-1"><InlineName key="new" edit={edit} rowH={rowH} icon={<FileTypeIcon name={edit.initial} isDir={edit.isDir} broken={false} size={ICON.sm} />} /></div>}
         <VirtualList count={display.items.length} rowH={rowH} label={`Entries of ${title}`} className="flex-1" keepInView={selItem} initialTop={scrollTop} onTop={onScrollTop}
           render={(i) => {
             const it = display.items[i]!;
@@ -133,7 +142,7 @@ export function Column({ dir: folderPath, title, filterSignal, width, onResize, 
             const sel = r.name === selName || !!chosen?.has(r.name);
             const dir = isFolder(r);
             return (
-              <div key={r.name} role="option" data-row={r.name} aria-selected={sel} aria-disabled={r.locked || undefined} title={r.why ?? r.name}
+              <div key={r.name} role="option" data-row={r.name} data-folder={dir && !r.locked ? "" : undefined} draggable={!r.locked && !(edit && edit.was === r.name)} aria-selected={sel} aria-disabled={r.locked || undefined} title={r.why ?? r.name}
                 onMouseDown={noRange} onClick={(e) => onPick(r, modOf(e))} onDoubleClick={() => onOpen(r)}
                 className="agx-fm-row flex items-center gap-2 px-2.5 mx-1 rounded-md cursor-pointer"
                 style={{
@@ -141,8 +150,8 @@ export function Column({ dir: folderPath, title, filterSignal, width, onResize, 
                   background: sel ? "color-mix(in srgb, var(--primary) 16%, transparent)" : undefined,
                   boxShadow: sel ? "inset 0 0 0 1px color-mix(in srgb, var(--primary) 38%, transparent)" : undefined,
                 }}>
-                <span className="shrink-0 flex"><RowIcon row={r} /></span>
-                <NameCell name={r.name} />
+                <span className="shrink-0 flex">{!r.locked && !dir && isThumbable(r.name) ? <Thumb path={joinPath(folderPath, r.name)} size={ROW_THUMB} radius={3} fallback={<RowIcon row={r} />} /> : <RowIcon row={r} />}</span>
+                {edit && edit.was === r.name ? <InlineName key="ren" edit={edit} rowH={rowH - 4} icon={null} /> : <NameCell name={r.name} />}
                 {dir ? (
                   <>
                     {r.items !== null && !tight && r.name === selName && <span className="shrink-0 tabular-nums text-[10px] px-1.5 rounded-md" style={{ background: "color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text3)", fontWeight: 400 }}>{itemsLabel(r.items)}</span>}
@@ -154,6 +163,7 @@ export function Column({ dir: folderPath, title, filterSignal, width, onResize, 
               </div>
             );
           }} />
+        </>
       )}
 
       {menu && (
