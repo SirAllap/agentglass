@@ -3102,7 +3102,14 @@ async function runVerb(
           ${catchBlock}
         })()`
           : `(() => {
-          try { return { __agxOk: true, __agxV: (${js}) }; }
+          try {
+            const __v = (${js});
+            /* A promise cannot cross the bridge: it came back as the opaque
+               bridge failure and was reported as "not an expression", which
+               sent an agent rewriting a script that was fine. Named here. */
+            if (__v && typeof __v.then === "function") return { __agxOk: false, __agxPromise: true };
+            return { __agxOk: true, __agxV: __v };
+          }
           ${catchBlock}
         })()`;
         try {
@@ -3118,8 +3125,11 @@ async function runVerb(
             run,
             new Promise<typeof EVAL_TIMED_OUT>((res) => { timer = setTimeout(() => res(EVAL_TIMED_OUT), evalMs); }),
           ]).finally(() => clearTimeout(timer)) as
-            { __agxOk?: boolean; __agxV?: unknown; __agxErr?: string; __agxWhere?: string } | typeof EVAL_TIMED_OUT;
+            { __agxOk?: boolean; __agxV?: unknown; __agxErr?: string; __agxWhere?: string; __agxPromise?: boolean } | typeof EVAL_TIMED_OUT;
           if (outcome === EVAL_TIMED_OUT) return await giveUpOnEval(cdp, evalMs);
+          if (outcome && outcome.__agxOk === false && outcome.__agxPromise) {
+            return { ok: false, error: "the expression returned a promise, which cannot be handed back as it is: ask again with --await (await: true) for its value" };
+          }
           if (outcome && outcome.__agxOk === false) {
             return {
               ok: false,

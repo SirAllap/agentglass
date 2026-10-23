@@ -1397,6 +1397,14 @@ describe("eval's wrapper stays synchronous unless asked", () => {
     expect(el.ran[0], "a plain eval went out as an async IIFE").not.toContain("async");
   });
 
+  // A promise came back as the opaque bridge failure and was reported as "not an expression".
+  test("a plain eval that returns a promise says to ask with --await", async () => {
+    const el = fakeGuest((code: string) => new Function("return " + code)());
+    const r = await runBrowserAsk(el, ask("eval", { js: "Promise.resolve(3)" }));
+    expect(r.ok).toBe(false);
+    expect(String((r as { error?: string }).error)).toContain("--await");
+  });
+
   test("and --await does, because that is what it is for", async () => {
     const el = fakeGuest(() => ({ __agxOk: true, __agxV: 2 }));
     await runBrowserAsk(el, ask("eval", { js: "fetch('/x')", await: true }));
