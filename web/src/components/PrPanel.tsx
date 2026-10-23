@@ -110,12 +110,11 @@ import {
   anchorId, bootstrapSince, clearSeen, foldedIdx, markAllSeen, newKeys, newSince, onSeenChange, readSeen,
   reviewSpeaks, writeSeen, type NewAtom,
 } from "../lib/prNew.ts";
-import { unreadOf, type Unread } from "../lib/prUnread.ts";
+import { unreadOf } from "../lib/prUnread.ts";
 import { quoteReply } from "../lib/prQuote.ts";
 import { sinceRange, sinceTitle } from "../lib/prSinceReview.ts";
 import { withoutWhitespace } from "../lib/diffNoWhitespace.ts";
 import { loginOf, ownersOf } from "../lib/codeowners.ts";
-import { UnreadBadge } from "./UnreadBadge.tsx";
 import { excerpt, findInDiffs, groupByFile, type Match } from "../lib/diffFind.ts";
 import { PrFilterBar } from "./PrFilterBar.tsx";
 import { FilterBuilder } from "./tasks/FilterBuilder.tsx";
@@ -127,10 +126,10 @@ import { Avatar } from "./Avatar.tsx";
 import { StatusPill } from "./StatusPill.tsx";
 import { PeekFile, type Peek } from "./PeekFile.tsx";
 import { mergeBlockedWhy, checksLine, checksStanding, checksShort, githubWillMerge } from "../../../shared/mergeReason.ts";
-import { mergeBlockers, mergeRefusal, autoMergeRefusal, staleApproval } from "../../../shared/mergeBlockers.ts";
-import { pagerShown, pageRanOut } from "../lib/prPager.ts";
-import type { BoardView } from "../lib/prLanes.ts";
-import { parseQuery, applyFilters, applyRulesKeepUnread, peopleMatched, buildFacets, activeCount, readPrField, builderFields, queryToRules, type RepoFacets } from "../lib/prFilter.ts";
+import { mergeBlockers, mergeRefusal, autoMergeRefusal } from "../../../shared/mergeBlockers.ts";
+import { pageRanOut } from "../lib/prPager.ts";
+import { viewIsWide, viewKeeps, board as fileBoard, stakeFrom, type BoardView } from "../lib/prLanes.ts";
+import { parseQuery, applyFilters, applyRulesKeepUnread, buildFacets, readPrField, builderFields, queryToRules, type RepoFacets } from "../lib/prFilter.ts";
 import { CodeBlock as MdCodeBlock } from "../lib/mdCode.tsx";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
 import { cardRef, chipAction } from "../lib/cardRef.ts";
@@ -194,11 +193,6 @@ type Tab = "overview" | "conversation" | "commits" | "files" | "checks" | "revie
 // The open/closed axis, orthogonal to the scope views. "closed" holds merged +
 // closed, exactly like GitHub's own Closed tab; "all" is everything.
 type StateSel = "open" | "closed" | "all";
-const STATES: { id: StateSel; label: string }[] = [
-  { id: "open", label: "Open" },
-  { id: "closed", label: "Closed" },
-  { id: "all", label: "All" },
-];
 
 /**
  * Saved views: a scope and a query, together, under one name.
@@ -480,32 +474,6 @@ function PrCardChip({ pr, card }: {
 /* `humanReview`, not `reviewDecision` — the fourth surface with the same bug.
    GitHub counts the auto-review bot, so this chip called a pull request
    approved that no person had read. See `humanReview` on PrSummary. */
-function ReviewChip({ v, decision }: { v: PrSummary["humanReview"]; decision?: string | null }) {
-  if (!v) return null;
-  /* Capitalised, like GitHub's own — "approved" all lower case beside
-     "APPROVED" on the same screen was the inconsistency reported. */
-  if (v.kind === "approved") {
-    /* Amber for a RE-REQUEST, not for time passing — see staleApproval. An approval GitHub still counts is green here too, even with
-       commits on top of it; this chip has no room for the quiet note, so it
-       drops the "moved" word rather than say something the merge box, right
-       below it on the same pull request, does not. */
-    const amber = v.askedAgain || !staleApproval(decision).counts;
-    return v.stale && amber
-      ? <Chip text="Approved · moved" tint="var(--warning)" />
-      : <Chip text="Approved" tint="var(--success)" />;
-  }
-  if (v.kind === "changes") {
-    /* Everybody who requested changes has since been re-asked — pending, like
-       the list's own "Awaiting review" chip, not still red. */
-    if (v.cleared) return <Chip text="Awaiting review" tint="var(--warning)" />;
-    return v.askedAgain
-      ? <Chip text="Changes requested · asked again" tint="var(--error)" />
-      : <Chip text="Changes requested" tint="var(--error)" />;
-  }
-  if (v.kind === "awaiting") return <Chip text="Awaiting review" tint="var(--warning)" />;
-  return <Chip text="Commented" tint="var(--text3)" />;
-}
-
 const REVIEW_ROUND: Record<StoryVerdict, { word: string; tint: string }> = {
   APPROVED: { word: "Approved", tint: "var(--success)" },
   CHANGES_REQUESTED: { word: "Changes requested", tint: "var(--error)" },
@@ -1316,27 +1284,6 @@ function Loading({ label, fill, size = 22 }: { label: string; fill?: boolean; si
   );
 }
 
-function Skeletons({ n = 6 }: { n?: number }) {
-  return (
-    <div aria-hidden>
-      <style>{`@keyframes agxpulse{0%,100%{opacity:.35}50%{opacity:.7}}
-@media (prefers-reduced-motion:reduce){.agx-sk{animation:none!important}}`}</style>
-      {Array.from({ length: n }, (_, i) => (
-        <div key={i} className="px-2.5 py-2 border-b" style={{ borderColor: "color-mix(in srgb, var(--text) 11%, transparent)" }}>
-          <div className="agx-sk rounded" style={{
-            height: 8, width: `${58 + ((i * 13) % 34)}%`, background: "color-mix(in srgb, var(--border) 55%, transparent)",
-            animation: `agxpulse 1.4s ease-in-out ${i * 0.09}s infinite`,
-          }} />
-          <div className="agx-sk rounded mt-1.5" style={{
-            height: 6, width: `${30 + ((i * 7) % 20)}%`, background: "color-mix(in srgb, var(--border) 38%, transparent)",
-            animation: `agxpulse 1.4s ease-in-out ${i * 0.09 + 0.2}s infinite`,
-          }} />
-        </div>
-      ))}
-    </div>
-  );
-}
-
 /**
  * The list's columns, as one string.
  *
@@ -1344,7 +1291,6 @@ function Skeletons({ n = 6 }: { n?: number }) {
  * drift apart — headings that do not sit over their own values are worse than
  * no headings at all.
  */
-const PR_GRID = "78px minmax(0,1fr) 118px 112px 84px 84px";
 
 /**
  * Row backgrounds live here rather than in a `style` prop because an inline
@@ -1369,18 +1315,7 @@ to{box-shadow:0 0 0 14px transparent}}
    sent back for. */
 .agx-ghchip{border:1px solid color-mix(in srgb, var(--border) 70%, transparent);background:color-mix(in srgb, var(--bg2) 60%, transparent);color:var(--text2)}
 .agx-ghchip:hover{border-color:color-mix(in srgb, var(--primary) 55%, transparent);background:color-mix(in srgb, var(--primary) 12%, transparent);color:var(--text)}
-.agx-prrow:hover{background:color-mix(in srgb, var(--border) 16%, transparent)}
-.agx-prrow[data-active="1"]{background:color-mix(in srgb, var(--primary) 12%, transparent)}
-.agx-prrow[data-active="1"]:hover{background:color-mix(in srgb, var(--primary) 18%, transparent)}
 `;
-
-/** The state of a pull request as the one glyph the ID column has room for. */
-function rowState(p: PrSummary): { tint: string; title: string } {
-  if (p.state === "MERGED") return { tint: "var(--primary)", title: "Merged" };
-  if (p.state === "CLOSED") return { tint: "var(--text3)", title: "Closed without merging" };
-  if (p.isDraft) return { tint: "var(--text3)", title: "Draft" };
-  return { tint: "var(--success)", title: "Open" };
-}
 
 /**
  * Who was asked to review, as faces.
@@ -1426,73 +1361,6 @@ function ReviewerMark({ state, again }: { state: ReviewerState; again?: boolean 
       {again && <span aria-hidden className="flex" style={{ color: "var(--text4)" }} title="Asked to look again"><RefreshIcon size={ICON.sm} /></span>}
       <span aria-hidden className="flex" style={{ color: spec.c }}>{spec.g}</span>
     </span>
-  );
-}
-
-function ReviewerStack({ p }: { p: PrSummary }) {
-  const list = p.reviewers ?? [];
-  if (list.length === 0) {
-    const pending = p.checksLoaded === false;
-    return (
-      <span className="text-[10px]" style={{ color: "var(--text3)" }}
-        title={pending ? "Still loading" : "Nobody has been asked to review"}>{pending ? "…" : "—"}</span>
-    );
-  }
-  const shown = list.slice(0, 3);
-  const rest = list.length - shown.length;
-  return (
-    <span className="flex items-center min-w-0" title={`Review requested from ${list.map((r) => r.login).join(", ")}`}>
-      {shown.map((r, i) => (
-        <span key={r.login} className="shrink-0 rounded-full" style={{ marginLeft: i === 0 ? 0 : -5, boxShadow: "0 0 0 1.5px var(--bg2)" }}>
-          <ReviewerFace r={r} size={18} />
-        </span>
-      ))}
-      {rest > 0 && <span className="ml-1 text-[10px] tabular-nums shrink-0" style={{ color: "var(--text3)" }}>+{rest}</span>}
-    </span>
-  );
-}
-
-function ChecksCell({ p }: { p: PrSummary }) {
-  const c = p.checks;
-  const loading = p.checksLoaded === false;
-  return (
-    <span className="flex items-center gap-1.5 min-w-0">
-      <Dot tint={loading ? "var(--text3)" : stateTint(p)}
-        title={loading ? "Check states are still loading" : `${c.success} passed · ${c.failure} failed · ${c.skipped} skipped · ${c.pending} running`} />
-      <span className="text-[10.5px] tabular-nums truncate" style={{ color: loading ? "var(--text3)" : "var(--text2)" }}>
-        {/* Not yet fetched is not the same as none. Saying "no checks" here
-            would be a claim about the repository rather than about us. */}
-        {loading ? "Checks…"
-          : c.total === 0 ? "No checks"
-          : c.pending > 0 ? `${c.total - c.pending}/${c.total}`
-          : c.failure > 0 ? `${c.failure} failing` : "Green"}
-      </span>
-    </span>
-  );
-}
-
-function PrTableHead() {
-  return (
-    <div className="grid items-center gap-3 px-3 py-1.5 border-b shrink-0 sticky top-0 z-10 select-none"
-      style={{
-        gridTemplateColumns: PR_GRID,
-        borderColor: "color-mix(in srgb, var(--text) 11%, transparent)",
-        // The workspace panel this lives in is painted --bg2; a sticky heading
-        // in --bg would read as a band of the wrong colour sliding over the
-        // rows rather than as the table's own header.
-        background: "var(--surface-card)",
-        color: "var(--text3)",
-        fontSize: 10,
-        letterSpacing: ".07em",
-        textTransform: "uppercase",
-      }}>
-      <span>ID</span>
-      <span>Title / context</span>
-      <span>Reviewers</span>
-      <span>Checks</span>
-      <span>Updated</span>
-      <span />
-    </div>
   );
 }
 
@@ -1810,145 +1678,6 @@ function Pill({ on, label, icon, dot, count, countTint, title, onClick }: {
   );
 }
 
-function PrRow({ p, active, onSelect, onReview, pinned, onTogglePin, q, unread, spend }: {
-  p: PrSummary; active: boolean; onSelect: () => void; onReview: () => void;
-  /** Remarks since you last looked, or null. The same badge the board's cards
-   *  wear — see prUnread.ts. */
-  unread?: Unread | null;
-  /** What is in the filter box, so a row that is here because of a PERSON can
-   *  say which one. Without it a search for "ada" returns rows whose author
-   *  column says somebody else, and the list looks like it ignored you. */
-  q?: string;
-  /** On the bar at the top. Undefined where there is no repository to pin it
-   *  against, and the control then does not appear at all. */
-  pinned?: boolean; onTogglePin?: () => void;
-  /** What this branch has cost locally, already worded — see spendChipFor.
-   *  Null both when nothing was spent and when the answer has not landed. */
-  spend?: SpendChip | null;
-}) {
-  const st = rowState(p);
-  const shownLabels = p.labels.slice(0, 2);
-  return (
-    <div data-pr-row={p.number} data-active={active ? "1" : undefined} onClick={onSelect} role="button" tabIndex={-1}
-      className="group/prrow grid items-center gap-3 px-3 py-2 border-b cursor-pointer agx-prrow"
-      style={{
-        gridTemplateColumns: PR_GRID,
-        borderColor: "color-mix(in srgb, var(--text) 11%, transparent)",
-        boxShadow: active ? "inset 2px 0 0 var(--primary)" : undefined,
-      }}>
-      <span className="flex items-center gap-1 text-[10.5px] tabular-nums" style={{ color: "var(--text3)" }}>
-        {/*
-          * Pin it without opening it.
-          *
-          * Reported as "how do I pin from here?" — the answer was that you
-          * could not: the toggle lived inside the pull request, so putting one
-          * on the bar meant taking the trip the bar exists to save.
-          *
-          * Revealed on hover and held open once pinned, like the × on the chips
-          * it feeds, so a list of sixteen rows is not a list of sixteen stars.
-          * `stopPropagation`, or the click also opens the row it sits in.
-          */}
-        {onTogglePin && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onTogglePin(); }}
-            title={pinned ? `Unpin #${p.number}` : `Pin #${p.number} to the bar at the top`}
-            aria-label={pinned ? `Unpin #${p.number}` : `Pin #${p.number}`}
-            /* Sized here, not inherited. This sat inside a 10.5px row of
-               tabular numbers and took its size from them — a control that is
-               only a glyph has no words to be read at, so it has to carry its
-               own size and its own target rather than borrowing the type scale
-               of whatever it was dropped into. */
-            className={`shrink-0 leading-none grid place-items-center rounded ${pinned ? "" : "opacity-0 group-hover/prrow:opacity-100 focus:opacity-100"}`}
-            style={{
-              color: pinned ? "var(--primary-hover)" : "var(--text3)",
-              fontSize: 15, width: 22, height: 22,
-            }}>
-            <PinIcon size={ICON.sm} filled={pinned} />
-          </button>
-        )}
-        <span title={st.title} style={{ color: st.tint }}>⇅</span>#{p.number}
-      </span>
-
-      <div className="min-w-0">
-        <div className="flex items-center gap-1.5 min-w-0">
-          <span className="truncate text-[12px]" style={{ color: "var(--text)" }}>{p.title}</span>
-          {/* Before the "here" chip and before the labels: this is the only
-              thing on the row that can be true of a pull request nobody has
-              touched all week, and the row's second line is where facts about
-              the pull request live. */}
-          {unread && <UnreadBadge u={unread} />}
-          {p.isCurrentBranch && <Chip text="here" tint="var(--primary)" title="This checkout is on that branch" />}
-        </div>
-        <div className="flex items-center gap-1.5 mt-0.5 min-w-0 text-[10px]" style={{ color: "var(--text3)" }}>
-          <span className="truncate shrink-0" style={{ maxWidth: 140 }}>{p.author}</span>
-          {/* Why this row is in the answer. Assignees and requested reviewers
-              both — on a board they are one question, "where is this person",
-              and which hat they wear on a given pull request is not what was
-              being asked. */}
-          {peopleMatched(p, q ?? "").slice(0, 3).map((login) => (
-            <span key={login} className="shrink-0 flex items-center gap-1 rounded px-1"
-              title={`${login} is on this pull request`}
-              style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 16%, transparent)" }}>
-              <Avatar login={login} size={ICON.xs} />
-              <span className="truncate" style={{ maxWidth: 110 }}>{login}</span>
-            </span>
-          ))}
-          {/*
-            * Where it lands.
-            *
-            * Asked for, and the interesting case is the one that is easy to
-            * miss: most of these go to the trunk, and a stacked one goes to
-            * another feature branch. Reading the list, those look identical —
-            * and merging a stack thinking it lands on the trunk is a mistake
-            * you make once and remember.
-            *
-            * So the base is always shown, because that is what was asked for,
-            * and the one that is NOT the trunk is tinted rather than dimmed.
-            * The arrow is there so it reads as a destination and not as one
-            * more label.
-            */}
-          <span className="shrink-0 whitespace-nowrap flex items-center gap-0.5"
-            title={`Merges into ${p.baseRefName}`}>
-            <span style={{ color: "var(--text4)" }}>→</span>
-            <span style={isTrunk(p.baseRefName)
-              ? { color: "var(--text3)" }
-              : { color: "var(--warning-ink)" }}>{p.baseRefName}</span>
-          </span>
-          {/* Beside the branch it is about, and set in the row's own dim tone
-              rather than a colour: this is a fact about the pull request, not a
-              verdict on it, and a board where the expensive ones glow red would
-              be answering a question nobody asked while reviewing. Tabular
-              figures so a column of them lines up on the decimal point. */}
-          {spend && (
-            <span className="shrink-0 tabular-nums" title={spend.title}
-              style={{ color: "var(--text3)" }}>{spend.text}</span>
-          )}
-          {p.isDraft ? <Chip text="draft" tint="var(--text3)" /> : <ReviewChip v={p.humanReview} decision={p.reviewDecision} />}
-          {shownLabels.map((l) => <Chip key={l.name} text={l.name} tint={l.color ? `#${l.color}` : "var(--primary)"} />)}
-          {p.labels.length > shownLabels.length && (
-            <span className="tabular-nums shrink-0" title={p.labels.map((l) => l.name).join(", ")}>+{p.labels.length - shownLabels.length}</span>
-          )}
-        </div>
-      </div>
-
-      <ReviewerStack p={p} />
-      <ChecksCell p={p} />
-      <span className="text-[10px] tabular-nums" style={{ color: "var(--text3)" }}>{ago(p.updatedAt)}</span>
-
-      {/* The row's one action, and the panel's whole reason to exist: hand the
-          pull request to the chat rather than to a browser tab. It stops the
-          click from also opening the row, which would bury the chat it just
-          opened under a detail page nobody asked for. */}
-      <button onClick={(e) => { e.stopPropagation(); onReview(); }}
-        className="agx-btn text-[10px] px-2 py-1 rounded justify-self-end whitespace-nowrap"
-        title="Hand this pull request to the chat for a local review"
-        style={{ border: EDGE, color: "var(--text2)" }}>
-        Review →
-      </button>
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // panel
 // ---------------------------------------------------------------------------
@@ -1979,24 +1708,31 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     () => repos.find((r) => r.root === root)?.worktreeOf ?? root,
     [repos, root],
   );
-  /** The panel opens on what is waiting on you, not on what you wrote — that
-   *  is the question a review dashboard exists to answer. If nothing is waiting
-   *  the first load falls through to your own pull requests once, so opening it
-   *  never lands on an empty pane. */
-  const [filter, setFilter] = useState<Filter>("review");
-  const [stateSel, setStateSel] = useState<StateSel>("open");
+  /** The list behind the board is the repository's: the board's own two queues
+   *  (needs my review, mine) are separate reads, so this scope is `all` and the
+   *  views are filters over the board, see `boardView`. */
+  const [filter, setFilter] = useState<Filter>("all");
   /** Cursors we have walked through. `[]` is page 1; each Next pushes the
    *  cursor that fetched the page we are about to show, so Previous is a pop.
    *  GitHub's cursors are opaque and only move forward, so a stack is the only
    *  way back. */
   const [pages, setPages] = useState<string[]>([]);
   const cursor = pages[pages.length - 1];
-  const fellBack = useRef(false);
   // The filter query for the current scope tab — the single source of truth for
   // both the search box and every facet dropdown (parsed in lib/prFilter.ts).
   // Cleared when the scope changes so each tab (mine / review / all) starts
   // fresh; "all" can be hundreds of rows and a facet beats scrolling.
   const [query, setQuery] = useState("");
+  /* What the box asked GitHub for, once Enter was pressed. */
+  const [serverQuery, setServerQuery] = useState("");
+  /*
+   * There is no state switch: the board is open work, and a search is the way to
+   * anything else. Typing filters the open ones live and for free; Enter asks
+   * GitHub for EVERY pull request of the repository whatever its state, which is
+   * what looking up a colleague's merged one by number or title needs. Ceiling:
+   * a closed or merged pull request is reachable only by searching for it.
+   */
+  const stateSel: StateSel = serverQuery.trim() ? "all" : "open";
   /*
    * Everything in this scope, collected page by page so a text filter can see
    * past the page on screen.
@@ -2030,7 +1766,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * quietly replaced by the side effect of looking up one card. So what was
    * there is remembered and put back the moment the search is cleared.
    */
-  const beforeJump = useRef<{ filter: Filter; state: StateSel } | null>(null);
+  const beforeJump = useRef<{ filter: Filter } | null>(null);
   /**
    * The errand this view has already run.
    *
@@ -2047,15 +1783,15 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     if (!active || !jumpTo) return;
     if (servedJump.current === jumpTo.n) return;
     servedJump.current = jumpTo.n;
-    if (!beforeJump.current) beforeJump.current = { filter, state: stateSel };
+    if (!beforeJump.current) beforeJump.current = { filter };
     setQuery(jumpTo.query);
     setFilter("all");
     // Only as wide as the errand needs. `all` is every pull request the
     // repository has ever had — 16,199 against 389 open on a real one — and it
     // is asked for only when the thing being looked for is already closed,
     // which the sender knows and says.
-    setStateSel(jumpTo.scope === "all" ? "all" : "open");
-    fellBack.current = true; // and do not let the empty-list fallback move us
+    // An errand for one that is already closed asks GitHub at once.
+    if (jumpTo.scope === "all") setServerQuery(jumpTo.query);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, jumpTo?.n]);
 
@@ -2065,7 +1801,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     const was = beforeJump.current;
     beforeJump.current = null;
     setFilter(was.filter);
-    setStateSel(was.state);
   }, [query]);
   /*
    * Two searches, and only one of them is automatic.
@@ -2084,19 +1819,37 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * not a search, it is the end of one, and making somebody press Enter to get
    * their list back would be a chore with nothing behind it.
    */
-  const [serverQuery, setServerQuery] = useState("");
   useEffect(() => { if (!query.trim() && serverQuery) setServerQuery(""); }, [query, serverQuery]);
   const runSearch = useCallback(() => setServerQuery(query), [query]);
   // A new server search is a new list — start it at page one, never continuing a
   // cursor that belonged to the previous query.
   useEffect(() => { setPages([]); }, [serverQuery]);
   const [prs, setPrs] = useState<PrSummary[]>([]);
+  /*
+   * The pages walked so far, kept together.
+   *
+   * `prs` is ONE page, replaced by each fetch. The board has no Previous/Next:
+   * Load more appends, and cards already seen stay where they are. So the pages
+   * accumulate here, per scope (repository, scope, state, server search), and a
+   * poll that re-reads the page you are on refreshes those rows in place.
+   * Ceiling: rows of an earlier page are refreshed only when their page is
+   * fetched again, so a card far up can be a few minutes stale; Refresh at page
+   * one starts over.
+   */
+  const accKey = `${root}|${filter}|${stateSel}|${serverQuery}`;
+  const [acc, setAcc] = useState<{ key: string; rows: PrSummary[] }>({ key: "", rows: [] });
+  useEffect(() => {
+    setAcc((cur) => {
+      if (pages.length === 0 || cur.key !== accKey) return { key: accKey, rows: prs };
+      const fresh = new Map(prs.map((p) => [p.number, p]));
+      const seen = new Set(cur.rows.map((p) => p.number));
+      return { key: accKey, rows: [...cur.rows.map((p) => fresh.get(p.number) ?? p), ...prs.filter((p) => !seen.has(p.number))] };
+    });
+  }, [prs, accKey, pages.length]);
+  const listRows = acc.key === accKey ? acc.rows : prs;
   const [listState, setListState] = useState<{ fetchedAt: number; loading: boolean; checksPending?: boolean; error?: string; needsAuth?: boolean; total?: number; hasNext?: boolean; cursor?: string | null; pageSize?: number }>({ fetchedAt: 0, loading: false });
-  // Two different things, which the panel used to conflate. `selected` is the
-  // pull request you are *in* — the list gives way to it, as a page.
-  // `rowCursor` is only where the keyboard is in the list, so j/k can walk the
-  // rows without opening (and fetching) every one it passes over. Named apart
-  // from the pagination `cursor` above, which is a GitHub page token.
+  // `selected` is the pull request you are *in* — the list gives way to it, as a
+  // page. Where the keyboard is in the board is the board's own business.
   const [selected, setSelected] = useState<number | null>(null);
   /* Read from callbacks that must not re-create themselves every time the
      selection changes — and declared HERE, above every one of them, because a
@@ -2104,7 +1857,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
      day somebody calls one of those during render. */
   const selectedRef = useRef<number | null>(null);
   useEffect(() => { selectedRef.current = selected; }, [selected]);
-  const [rowCursor, setRowCursor] = useState<number | null>(null);
   /** Whether the pull request's masthead has given its metadata back to the
    *  page. Reset whenever another pull request is opened, or the second one
    *  would open already collapsed with its scroll at the top. */
@@ -2176,7 +1928,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    *  it — editing a body is a mode, not a box wedged into the read view. */
   const [editingBody, setEditingBody] = useState(false);
   /** Open a pull request as a page. Back returns to the list, cursor intact. */
-  const openPr = useCallback((n: number) => { setRowCursor(n); setSelected(n); setTab("overview"); setEditingBody(false); }, []);
+  const openPr = useCallback((n: number) => { setSelected(n); setTab("overview"); setEditingBody(false); }, []);
   const backToList = useCallback(() => { setSelected(null); setDetailErr(""); setEditingBody(false); }, []);
 
   /*
@@ -2752,23 +2504,12 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       // picking a view — or just waiting through a refresh — opened whatever
       // happened to be first. A row is opened when somebody opens it.
       if (!reading && pageRanOut({ pageDepth: pages.length, rows: r.prs.length, hasNext: !!r.hasNext })) setPages([]);
-      if (!reading) setRowCursor((cur) => (cur && r.prs.some((p) => p.number === cur) ? cur : null));
       const settle = settleAfter(r, settleDelay.current);
       if (settleTimer.current) clearTimeout(settleTimer.current);
       settleTimer.current = settle.wait == null
         ? null
         : setTimeout(() => { loadListRef.current?.(); }, settle.wait);
       settleDelay.current = settle.next;
-      // Nothing waiting on you: show your own instead of an empty pane. Once
-      // only, so choosing "Needs my review" yourself is never overruled.
-      /* …and never out from under an open pull request. Even with the
-         selection now surviving a scope change, a filter that changes itself
-         while you are reading is a pane rearranging behind your back. */
-      if (want === "review" && stateSel === "open" && r.prs.length === 0 && !r.loading && !r.error
-        && !fellBack.current && selectedRef.current == null) {
-        fellBack.current = true;
-        setFilter("mine");
-      }
     }).catch((e) => {
       if (req !== listReq.current) return;
       setListState({ fetchedAt: 0, loading: false, error: String(e) });
@@ -2808,7 +2549,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     // longer exists. The counts go too — they are per-state, and leaving them
     // up is how every pill read 0 after switching to Closed.
     setPages([]);
-    setViewCounts({});
     // The rows STAY on screen while the new ones are fetched.
     //
     // Blanking them meant every switch showed a skeleton for as long as GitHub
@@ -3148,8 +2888,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * collected so far, growing as it lands.
    */
   const pool = useMemo(
-    () => (filters.text.trim() && sweep?.key === sweepKey ? sweep.rows : prs),
-    [prs, filters.text, sweep, sweepKey],
+    () => (filters.text.trim() && sweep?.key === sweepKey ? sweep.rows : listRows),
+    [listRows, filters.text, sweep, sweepKey],
   );
   /*
    * Filtered HERE, not only on the server.
@@ -3237,28 +2977,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const visiblePrs = unreadOnly ? unreadPrs : basePrs;
   const facets = useMemo(() => buildFacets(prs, filters, facetOpts), [prs, filters, facetOpts]);
 
-  /** What each view last counted.
-   *
-   *  Only the scope currently loaded has rows to count, so a view on another
-   *  scope can only report what it last saw — the same deal the panel already
-   *  makes for the list itself, which shows its own age rather than pretending
-   *  to be live. A view that has never been loaded shows no number at all,
-   *  because a made-up one next to "Failing" is worse than none: you would act
-   *  on it. */
-  const [viewCounts, setViewCounts] = useState<Record<string, number>>({});
-  /**
-   * Only the server's totals. Nothing is counted from the rows on screen.
-   *
-   * A tally of the current page under a pill that filters the whole repository
-   * is not a smaller truth, it is a wrong one — it read "Yoshiofthewire 2" when
-   * he has three, because the third is on page four.
-   */
-  const viewCount = useCallback((v: (typeof VIEWS)[number]): number | null => {
-    const exact = viewCounts[v.id];
-    return typeof exact === "number" ? exact : null;
-  }, [viewCounts]);
-
-  const activeView = VIEWS.find((v) => v.scope === filter && v.query === query.trim());
 
   /*
    * The board is the way in, and it is remembered.
@@ -3298,10 +3016,17 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const [inboxUnread, setInboxUnread] = useState(0);
   /* CI metrics: the repository's checks against their own history. Another view of the same exclusive row as the Inbox. */
   const [metricsOn, setMetricsOn] = useState(false);
+  /* The lanes: open work, nothing typed in the search box. */
   const boardShown = boardOn && !searching && !inboxOn && !metricsOn;
-  /* The board is never paginated: a page left over from the table would fetch and
-     count a page nobody is looking at. Back on the table it starts at page one. */
-  useEffect(() => { if (boardShown) setPages([]); }, [boardShown]);
+  /* The rest of the board's surface: a search, or the closed and merged ones,
+     drawn as rows in the same panel. The lanes are a triage of OPEN work and
+     filing a merged pull request would put it under "Blocked". */
+  const resultsShown = !boardShown && !inboxOn && !metricsOn;
+  /* Needs my review and Mine are the viewer's two queues, read once and never
+     paginated: a page left over from a wide view would fetch and count a page
+     nobody is looking at. Everything else on the board is a page of the list. */
+  const queuesOnly = boardShown && !viewIsWide(boardView);
+  useEffect(() => { if (queuesOnly) setPages([]); }, [queuesOnly]);
 
   /*
    * The two scopes the board is built from — and it costs no new request.
@@ -3357,11 +3082,62 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   /* What the filters hid, for the one thing that still needs it: a stacked pull
      request names its base, and the base may be filtered out. */
   const boardUnfiltered = useMemo(() => ({ mine: boardMineCards, review: boardReviewCards }), [boardMineCards, boardReviewCards]);
+  /*
+   * The rest of the repository, for the views that reach past the two queues.
+   *
+   * The list behind the board already holds it (scope `all`, state open) and is
+   * fetched either way, so this costs no request. Open ones only: a scope
+   * switch keeps the previous rows on screen until the new ones land, and a
+   * closed row filed into a lane would sit under "Blocked".
+   */
+  const boardWide = boardShown && viewIsWide(boardView);
+  const boardOthersCards = useMemo(
+    () => (boardWide ? listRows.filter((p) => p.state === "OPEN").map((p) => withCard(p, hasTaskProvider)) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [boardWide, listRows, hasTaskProvider, cardTick],
+  );
+  const boardOthersShown = useMemo(
+    () => applyRulesKeepUnread(boardOthersCards, rules, readPrField, isRuleExempt),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [boardOthersCards, rules, repo?.key, seenMarks],
+  );
   const boardReviewShown = useMemo(
     () => applyRulesKeepUnread(boardReviewCards, rules, readPrField, isRuleExempt),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [boardReviewCards, rules, repo?.key, seenMarks],
   );
+  /*
+   * What each pill counts is what its board shows, and nothing else.
+   *
+   * The pills used to print the server's total for the scope, which counts every
+   * pull request you ever opened (175) under a board that draws the open ones
+   * (16). Now the same pools, the same rules and the same filing the board uses.
+   * The three wide views count the repository's list, which is a page at a time:
+   * while there is another page the number would be a floor, so it is left off
+   * rather than printed wrong.
+   */
+  const boardViewCounts = useMemo(() => {
+    const open = (rows: PrSummary[]) => rows.filter((p) => p.state === "OPEN");
+    const mine = open(boardMineShown);
+    const review = open(boardReviewShown);
+    const wideRows = open(listRows.map((p) => withCard(p, hasTaskProvider)));
+    const stakeOf = stakeFrom(mine, review);
+    const byNumber = (rows: PrSummary[]) => [...new Map(rows.map((p) => [p.number, p])).values()];
+    const count = (view: BoardView, rows: PrSummary[]) => {
+      const filed = fileBoard(byNumber(rows), stakeOf);
+      let n = 0;
+      for (const [lane, list] of filed) for (const p of list) if (viewKeeps(view, lane, stakeOf(p), p)) n++;
+      return n;
+    };
+    const wideKnown = !listState.hasNext && stateSel === "open" && !searching && filter === "all";
+    const all = [...mine, ...review, ...wideRows];
+    const out: Partial<Record<BoardView, number>> = {
+      review: new Set(review.map((p) => p.number)).size,
+      mine: new Set(mine.map((p) => p.number)).size,
+    };
+    if (wideKnown) for (const v of ["failing", "ready", "all"] as BoardView[]) out[v] = count(v, all);
+    return out;
+  }, [boardMineShown, boardReviewShown, listRows, hasTaskProvider, listState.hasNext, stateSel, searching, filter]);
 
   /*
    * The fields the builder offers, taken from the rows the surface is drawing.
@@ -3376,9 +3152,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const ruleRows = useMemo(() => {
     if (!boardShown) return prs;
     const by = new Map<number, PrSummary>();
-    for (const p of [...boardMineCards, ...boardReviewCards]) if (!by.has(p.number)) by.set(p.number, p);
+    for (const p of [...boardMineCards, ...boardReviewCards, ...boardOthersCards]) if (!by.has(p.number)) by.set(p.number, p);
     return [...by.values()];
-  }, [boardShown, prs, boardMineCards, boardReviewCards]);
+  }, [boardShown, prs, boardMineCards, boardReviewCards, boardOthersCards]);
   /* Only the fields that anything on this board actually has — which is what
      keeps the tracker's two out of the way of everybody who has no tracker. */
   const ruleFields = useMemo(() => builderFields(ruleRows, filters, facetOpts), [ruleRows, filters, facetOpts]);
@@ -3393,12 +3169,12 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const presetCountsById = useMemo(
     () => presetCounts<PrSummary>(
       presetsApi.presets,
-      boardShown ? [boardMineCards, boardReviewCards] : [applyFilters(pool, filters)],
+      boardShown ? [boardMineCards, boardReviewCards, boardOthersCards] : [applyFilters(pool, filters)],
       (rows, f) => applyRulesKeepUnread(rows as PrSummary[], f, readPrField, isRuleExempt),
       (p) => p.number,
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [presetsApi.presets, boardShown, boardMineCards, boardReviewCards, pool, filters, repo?.key, seenMarks],
+    [presetsApi.presets, boardShown, boardMineCards, boardReviewCards, boardOthersCards, pool, filters, repo?.key, seenMarks],
   );
   const [builderOpenSignal, setBuilderOpenSignal] = useState(0);
   const editPresetRule = useCallback((id: string) => { presetsApi.apply(id); setBuilderOpenSignal((n) => n + 1); }, [presetsApi]);
@@ -3417,9 +3193,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
      say "your filters" instead of "nothing". Counted by number: a pull request
      that is both yours and asked of you is in both lists. */
   const boardHidden = useMemo(() => {
-    const count = (a: PrSummary[], b: PrSummary[]) => new Set([...a, ...b].map((p) => p.number)).size;
-    return count(boardMineCards, boardReviewCards) - count(boardMineShown, boardReviewShown);
-  }, [boardMineCards, boardReviewCards, boardMineShown, boardReviewShown]);
+    const count = (...lists: PrSummary[][]) => new Set(lists.flat().map((p) => p.number)).size;
+    return count(boardMineCards, boardReviewCards, boardOthersCards) - count(boardMineShown, boardReviewShown, boardOthersShown);
+  }, [boardMineCards, boardReviewCards, boardOthersCards, boardMineShown, boardReviewShown, boardOthersShown]);
   /*
    * The board asks again while the check rollups are still out.
    *
@@ -3504,7 +3280,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
         const o = listOutcome(r);
         if (live && o === "answered") {
           setBoardMine((cur) => withReopened(openLists(holdEdits(keepLoadedChecks(cur, r.prs ?? []), editLog.current, r.fetchedAt)), r.startedAt));
-          if (typeof r.total === "number") setViewCounts((c) => ({ ...c, mine: r.total! }));
         }
         return o;
       }),
@@ -3512,7 +3287,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
         const o = listOutcome(r);
         if (live && o === "answered") {
           setBoardReview((cur) => openLists(holdEdits(keepLoadedChecks(cur, r.prs ?? []), editLog.current, r.fetchedAt)));
-          if (typeof r.total === "number") setViewCounts((c) => ({ ...c, review: r.total! }));
         }
         return o;
       }),
@@ -3564,18 +3338,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     return m;
   }, [spend]);
 
-  // If the cursor's row is filtered out, move it to the first row still visible
-  // rather than leaving a phantom highlight on a hidden PR — the same
-  // reconciliation loadList does when the list itself changes. Only when a
-  // cursor existed; never auto-places one out of the empty initial state. The
-  // *open* pull request is deliberately left alone: you asked for that page, and
-  // a filter typed underneath it is no reason to close it.
-  useEffect(() => {
-    if (rowCursor != null && !visiblePrs.some((p) => p.number === rowCursor)) {
-      setRowCursor(visiblePrs[0]?.number ?? null);
-    }
-  }, [visiblePrs, rowCursor]);
-
   useEffect(() => {
     if (tab !== "checks" || !detail || !root) return;
     let live = true;
@@ -3590,18 +3352,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   // on the same thing: App.tsx ignores bare letters while the workspace is open,
   // so j/k/n/p are free here). Selection is derived, not a second state.
   const listRef = useRef<HTMLDivElement>(null);
-  const stepSel = (d: number) => {
-    if (!visiblePrs.length) return;
-    const i = visiblePrs.findIndex((p) => p.number === rowCursor);
-    const ni = i < 0 ? (d > 0 ? 0 : visiblePrs.length - 1) : (i + d + visiblePrs.length) % visiblePrs.length;
-    const n = visiblePrs[ni].number;
-    setRowCursor(n);
-    // Walking past the bottom of the viewport with j should not mean losing the
-    // row you are on.
-    requestAnimationFrame(() => {
-      document.querySelector(`[data-pr-row="${n}"]`)?.scrollIntoView({ block: "nearest" });
-    });
-  };
   const onListKey = (e: React.KeyboardEvent) => {
     const inInput = /input|textarea/i.test((e.target as HTMLElement)?.tagName ?? "");
     if (e.key === "/" && !inInput) {
@@ -3610,19 +3360,16 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       return;
     }
     if (inInput) { if (e.key === "Escape") (e.target as HTMLElement).blur(); return; }
-    const k = e.key.toLowerCase();
-    if (k === "j" || e.key === "ArrowDown") { e.preventDefault(); e.stopPropagation(); stepSel(1); }
-    else if (k === "k" || e.key === "ArrowUp") { e.preventDefault(); e.stopPropagation(); stepSel(-1); }
-    // The list is a page now, so the keyboard needs a way in as well as a way
-    // along: Enter opens the row the cursor is on.
-    else if (e.key === "Enter" && rowCursor != null) { e.preventDefault(); e.stopPropagation(); openPr(rowCursor); }
-    else if (e.key === "Escape" && query) { e.preventDefault(); setQuery(""); }
+    // j, k and Enter belong to the board, which walks the cards it draws.
+    if (e.key === "Escape" && query) { e.preventDefault(); setQuery(""); }
   };
   // Make the list keyboard-ready the moment the panel opens, but never steal
   // focus from a field the user is already in (only claim it off <body>).
   useEffect(() => {
     if (!active) return;
-    requestAnimationFrame(() => { if (document.activeElement === document.body) listRef.current?.focus(); });
+    requestAnimationFrame(() => {
+      if (document.activeElement === document.body) (listRef.current?.querySelector<HTMLElement>("[data-board]") ?? listRef.current)?.focus();
+    });
   }, [active]);
 
   /*
@@ -5074,15 +4821,15 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             forgetCards();
             /* What is on screen, once. The board is YOUR two queues, and the
                server answers both from ONE request (QUEUES_QUERY in prs.ts), as
-               it does the table when that shows one of them; a table showing
-               anything else is forced only when it is the thing on screen. */
+               it does the list when that is the queue; the list is forced only
+               when it is the thing on screen (a wide view, results). */
             if (boardShown) {
               boardForce.current = true;
               setBoardTick((n) => n + 1);
               reads.push(new Promise<void>((r) => { boardSettle.current = r; }));
             }
-            const tableIsQueue = stateSel === "open" && (filter === "mine" || filter === "review") && !cursor && !serverQuery;
-            reads.push(Promise.resolve(loadList(!boardShown || tableIsQueue)));
+            const listOnScreen = !boardShown || viewIsWide(boardView);
+            reads.push(Promise.resolve(loadList(listOnScreen)));
             settled();
           }} busy={running} spinning={refreshing}
             title={selected != null ? "Refresh this pull request" : "Refresh the list"} />
@@ -5147,31 +4894,15 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               title="Every check of this repository against its own history — slow, passed on a re-run, drifting"
               onClick={() => { setInboxOn(false); setMetricsOn(true); }} />
             <span className="self-center shrink-0" style={{ width: 1, height: 12, background: "color-mix(in srgb, var(--text) 14%, transparent)" }} />
-            {VIEWS.map((v) => {
-              const n = viewCount(v);
-              const on = !inboxOn && !metricsOn && (boardShown ? boardView === v.id : activeView?.id === v.id);
+            {VIEWS.filter((v) => v.id !== "all").map((v) => {
+              const n = boardViewCounts[v.id as BoardView] ?? null;
+              const on = !inboxOn && !metricsOn && boardShown && boardView === v.id;
               return (
                 <Pill key={v.id} on={on} label={v.label} title={v.hint}
                   dot={v.tint ?? undefined} count={n ?? undefined}
-                  onClick={() => { setInboxOn(false); setMetricsOn(false); setStateSel("open"); setFilter("all"); setQuery(""); setBoardView(v.id as BoardView); }} />
+                  onClick={() => { setInboxOn(false); setMetricsOn(false); setFilter("all"); setQuery(""); setBoardView(boardView === v.id ? "all" : (v.id as BoardView)); }} />
               );
             })}
-            {!activeView && (
-              <span className="text-[10px] px-2 py-0.5 rounded-full shrink-0 self-center"
-                style={{ color: "var(--text3)", border: "1px dashed color-mix(in srgb, var(--text) 16%, transparent)" }}>Custom</span>
-            )}
-            {/* Open / Closed / All — the state axis. "Closed" holds merged +
-                closed, like GitHub's own Closed tab. The board is a triage of
-                OPEN work (its lanes are "needs your review", "ready to land",
-                "blocked"), so picking Closed or All leaves it for the table:
-                fed the closed list, the board drew merged pull requests in
-                "Blocked" with "Open to re-run" under a heading counting them
-                as open. */}
-            <div className="ml-auto self-center">
-              <Segmented value={stateSel} label="Pull request state"
-                options={STATES.map((s) => ({ id: s.id, label: s.label, title: `Show ${s.label.toLowerCase()} pull requests` }))}
-                onChange={setStateSel} />
-            </div>
           </div>
           {/* Always, once the repository is known — not "once rows arrived".
               The bar is built from the rows, so gating it on them made it drop
@@ -5224,12 +4955,25 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               <CiMetrics root={projectRoot} repo={repo?.nameWithOwner ?? ""} active={active && selected == null} />
             ) : inboxOn ? (
               <Inbox repo={repo?.nameWithOwner ?? ""} root={projectRoot} prs={prs} onFlash={flash} onUnread={setInboxUnread} active={active && selected == null} />
-            ) : boardShown && repo && !listState.needsAuth ? (
-              /* The board replaces the TABLE, not the panel: every pill, facet
-                 and search above stays where it was, and picking any of them
-                 switches back to the table it belongs to. */
+            ) : (boardShown || resultsShown) && repo && !listState.needsAuth ? (
+              /* The board is the panel's one surface: every pill, facet and
+                 search above stays where it was, and a search or the closed
+                 and merged ones draw as rows inside it (`results`). */
               <TriageBoard
                 mine={boardMineShown} review={boardReviewShown} unfiltered={boardUnfiltered} view={boardView}
+                others={boardWide ? boardOthersShown : undefined}
+                more={listState.hasNext && listState.cursor && !(filters.text.trim() && sweep?.key === sweepKey)
+                  ? { loading: listState.loading, onMore: () => { if (listState.cursor) setPages((p) => [...p, listState.cursor!]); } }
+                  : undefined}
+                results={resultsShown ? {
+                  title: serverQuery.trim()
+                    ? `pull requests of any state matching “${query.trim()}”`
+                    : `open pull requests matching “${query.trim()}” — press ⏎ to search every state`,
+                  rows: visiblePrs,
+                  loading: listState.loading && pages.length === 0,
+                  empty: serverQuery.trim() ? "No pull request of this repository matches." : "No open pull request matches — press ⏎ to search closed and merged ones too.",
+                  onBack: () => { setQuery(""); },
+                } : undefined}
                 /* The filter bar's own chip and switch — see the comment on
                    `unreadOnly` above. The board used to keep a second, unwired
                    copy of this switch and render a second chip for it, so
@@ -5249,9 +4993,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 pinned={(n) => isPinned(repo.nameWithOwner, n)}
                 onOpen={openPr}
                 onTogglePin={(p) => togglePin(repo.nameWithOwner, p.number, p.title)}
-                onShowTable={() => { setInboxOn(false); setMetricsOn(false); setStateSel("all"); setFilter("all"); setQuery(""); }}
+                onShowTable={() => { setInboxOn(false); setMetricsOn(false); setFilter("all"); setQuery(""); setBoardView("all"); }}
                 busy={busy}
-                loading={boardLoading} settling={boardSettling} acting={actingOn} root={root}
+                loading={boardLoading || (boardWide && listState.loading && boardOthersCards.length === 0)} settling={boardSettling} acting={actingOn} root={root}
                 failed={boardFailed} hidden={boardHidden}
                 onRetry={() => { boardForce.current = true; setBoardTick((n) => n + 1); }}
                 /* `repo.key`, because that is what the conversation's "last
@@ -5308,59 +5052,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               </div>
             ) : !repo ? (
               <div className="p-3 text-[11px]" style={{ color: "var(--text3)" }}>{listState.error || "No GitHub remote on this repository"}</div>
-            ) : prs.length === 0 ? (
-              listState.loading ? <Skeletons /> : (
-                <div className="p-3 text-[11px]" style={{ color: "var(--text3)" }}>
-                  {(() => {
-                    const what = stateSel === "open" ? "open " : stateSel === "closed" ? "closed " : "";
-                    return filter === "mine" ? `No ${what}pull requests of yours`
-                      : filter === "review" ? "Nothing waiting on your review"
-                      : `No ${what}pull requests`;
-                  })()}
-                </div>
-              )
-            ) : visiblePrs.length === 0 ? (
-              <div className="p-3 text-[11px] flex flex-col items-start gap-1.5" style={{ color: "var(--text3)" }}>
-                <span>No pull requests match {activeCount(filters) === 1 ? "this filter" : "these filters"}.</span>
-                <button onClick={() => setQuery("")} className="text-[10.5px] px-2 py-0.5 rounded hover:bg-white/5" style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)" }}>Clear filters</button>
-              </div>
-            ) : (
-              // Dimmed, not blanked, while the next scope loads: you can still
-              // read what is there, and it is obvious it is being replaced.
-              <div style={{ opacity: listState.loading ? 0.45 : 1, transition: "opacity .15s" }}>
-                <PrTableHead />
-                {visiblePrs.map((p) => (
-                  <PrRow key={p.number} p={p} active={p.number === rowCursor} q={filters.text}
-                    unread={unreadOf(p, repo?.key, seenMarks)}
-                    onSelect={() => openPr(p.number)} onReview={() => doLocalReview(p.number)}
-                    pinned={!!repo && isPinned(repo.nameWithOwner, p.number)}
-                    spend={spendChipFor(spendByBranch.get(p.headRefName), spend)}
-                    onTogglePin={repo ? () => togglePin(repo.nameWithOwner, p.number, p.title) : undefined} />
-                ))}
-              </div>
-            )}
+            ) : null}
           </div>
-          {/* Pages, because a repository has more pull requests than one screen
-              of them and the panel used to stop at the first fifty with no way
-              to say so. Cursors only move forward, so Previous walks a stack. */}
-          {pagerShown({ hasRepo: !!repo, boardShown, hasNext: !!listState.hasNext, pageDepth: pages.length }) && (
-            <div className="flex items-center gap-2 px-2 py-1.5 border-t shrink-0 text-[10px]"
-              style={{ borderColor: "color-mix(in srgb, var(--text) 11%, transparent)", color: "var(--text3)" }}>
-              <button onClick={() => setPages((p) => p.slice(0, -1))} disabled={pages.length === 0 || listState.loading}
-                className="agx-btn px-2 py-0.5 rounded disabled:opacity-35"
-                style={{ border: EDGE, color: "var(--text2)" }}>‹ Previous</button>
-              <span className="tabular-nums">
-                Page {pages.length + 1}
-                {listState.total != null && listState.pageSize
-                  ? ` of ${Math.max(1, Math.ceil(listState.total / listState.pageSize))} · ${listState.total} total`
-                  : ""}
-              </span>
-              <button onClick={() => { if (listState.cursor) setPages((p) => [...p, listState.cursor!]); }}
-                disabled={!listState.hasNext || !listState.cursor || listState.loading}
-                className="agx-btn ml-auto px-2 py-0.5 rounded disabled:opacity-35"
-                style={{ border: EDGE, color: "var(--text2)" }}>Next ›</button>
-            </div>
-          )}
         </div>
         ) : (
         <div className="relative flex-1 flex flex-col min-w-0 min-h-0">

@@ -2,19 +2,6 @@
 // can be tested without the component graph.
 
 /**
- * Whether the Previous/Next footer is drawn.
- *
- * The board is two unpaginated lists of its own; a page number belongs to the
- * table. With the footer drawn under the board, "Page 2 of 2 · 22 total" sat
- * beneath a board that said nothing wanted anything from you, and the two read
- * as one contradictory answer. Ceiling: the board shows only the first page of
- * each queue it summarises; paging a queue is a table's job.
- */
-export function pagerShown(o: { hasRepo: boolean; boardShown: boolean; hasNext: boolean; pageDepth: number }): boolean {
-  return o.hasRepo && !o.boardShown && (o.hasNext || o.pageDepth > 0);
-}
-
-/**
  * Whether a page we are standing on has ceased to exist.
  *
  * The page stack survives opening a pull request and coming back, and the

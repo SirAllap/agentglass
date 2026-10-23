@@ -20,7 +20,7 @@ import { FACES_MAX, eventLine, splitTitle, standing } from "../lib/prCardZones.t
 import { ALWAYS_OPEN, foldable, foldedLanes, setFoldedLanes, walkable } from "../lib/boardPrefs.ts";
 import type { PrSummary } from "../../../shared/types.ts";
 import { staleApproval } from "../../../shared/mergeBlockers.ts";
-import { LANES, LANE_CAP, board as fileAll, suggestedAction, ACTION_LABEL, viewKeeps, type BoardView, type Filed, type LaneId } from "../lib/prLanes.ts";
+import { LANES, LANE_CAP, board as fileAll, fileInLane, suggestedAction, ACTION_LABEL, viewKeeps, viewIsWide, type BoardView, type Filed, type LaneId } from "../lib/prLanes.ts";
 import { isTrunkBranch, type Stack } from "../lib/prStack.ts";
 import { usePrStacks } from "../lib/usePrStacks.ts";
 import { spineSentence, type Facts } from "../lib/prStackWords.ts";
@@ -83,7 +83,7 @@ type Card = PrSummary & { filed: Filed };
 export function TriageBoard({
   mine, review, total, hasTaskProvider, pinned,
   onOpen, onTogglePin, onShowTable, onAct, busy, acting, loading, settling, failed, hidden, onRetry, root, repoKey,
-  onlyUnread, onOnlyUnread, unfiltered, view = "all",
+  onlyUnread, onOnlyUnread, unfiltered, view = "all", others, results, more,
 }: {
   /** The `mine` scope, as the panel already has it. */
   mine: PrSummary[];
@@ -174,6 +174,35 @@ export function TriageBoard({
   unfiltered?: { mine: PrSummary[]; review: PrSummary[] };
   /** Which of the panel's views is picked: a filter over the cards below, see `viewKeeps`. */
   view?: BoardView;
+  /**
+   * The rest of the repository, one page of it: pull requests that are neither
+   * yours nor asked of you. Filed in the same lanes (they have no stake, so they
+   * land in "waiting on someone else" unless they are ready to land) and drawn
+   * only by the views that reach past your two queues — see `viewIsWide`.
+   */
+  others?: PrSummary[];
+  /**
+   * A flat list in place of the lanes: search results, or the closed and merged
+   * pull requests. Lanes are a triage of OPEN work, and filing a merged pull
+   * request would put it under "Blocked", so these are rows and not cards.
+   */
+  /**
+   * The repository's list has another page. The board shows it as a card at the
+   * end of the section (and a button in the footer under the lanes) that APPENDS
+   * the next page: there is no Previous/Next, because a page number is a table's
+   * idea and rows already seen should stay.
+   */
+  more?: { loading: boolean; onMore: () => void };
+  results?: {
+    title: string;
+    rows: PrSummary[];
+    /** The list is being fetched and has nothing to show yet. */
+    loading: boolean;
+    /** What an empty answer says. */
+    empty: string;
+    /** Back to the lanes. */
+    onBack: () => void;
+  };
 }) {
   /* Answers arriving one at a time, each one a re-render of the board and
      nothing else — the cards do not move, a chip appears on one of them. */
@@ -211,26 +240,29 @@ export function TriageBoard({
   useEffect(() => {
     if (!root) return;
     const ids = new Set<string>();
-    for (const p of [...mine, ...review]) for (const c of trueChecks(p).checks?.failing ?? []) { const j = jobIdOf(c); if (j) ids.add(j); }
+    for (const p of [...mine, ...review, ...(others ?? [])]) for (const c of trueChecks(p).checks?.failing ?? []) { const j = jobIdOf(c); if (j) ids.add(j); }
     if (ids.size) void loadCached(root, [...ids]);
-  }, [root, mine, review, trueChecks, rollupTick]);
+  }, [root, mine, review, others, trueChecks, rollupTick]);
 
+  /* Whether the repository's page is on this board at all. Counted from the
+     * view, not from `others` being non-empty: an empty page is still "wide". */
+  const wide = viewIsWide(view) && !!others;
   const lanes = useMemo(() => {
     // De-duplicated by number before filing: a pull request that is both yours
     // and asked of you arrives twice, and would otherwise be drawn twice.
     const by = new Map<number, PrSummary>();
-    for (const p of [...mine, ...review]) if (!by.has(p.number)) by.set(p.number, trueChecks(p));
+    for (const p of [...mine, ...review, ...(wide ? others ?? [] : [])]) if (!by.has(p.number)) by.set(p.number, trueChecks(p));
     const m = new Set(mine.map((p) => p.number));
     const r = new Set(review.map((p) => p.number));
     const filed = fileAll([...by.values()], (p) => ({ mine: m.has(p.number), asked: r.has(p.number) }),
       (p) => (root && p.checks?.failing?.length ? failureHint(p.checks.failing, (job) => summaryOf(failureKey(root, job))) : null));
     if (view === "all") return filed;
     for (const [id, list] of filed) {
-      filed.set(id, list.filter((p) => viewKeeps(view, id, { mine: m.has(p.number), asked: r.has(p.number) })));
+      filed.set(id, list.filter((p) => viewKeeps(view, id, { mine: m.has(p.number), asked: r.has(p.number) }, p)));
     }
     return filed;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mine, review, trueChecks, bumpRollup, root, failureTick, knownTick, view]);
+  }, [mine, review, others, wide, trueChecks, bumpRollup, root, failureTick, knownTick, view]);
 
   const cards = useMemo(() => [...lanes.values()].flat(), [lanes]);
   /* Per repository: this board IS one repository's, so the answer is read off
@@ -289,7 +321,7 @@ export function TriageBoard({
    * wrong number gets to sound like a right one.
    */
   const totalKnown = rest >= 0;
-  const tableLabel = rest > 0 ? `Show all ${total} as a table` : "Show the table";
+  const tableLabel = rest > 0 ? `Show all ${total}` : "Show every open pull request";
 
   /*
    * The columns actually drawn.
@@ -545,7 +577,35 @@ export function TriageBoard({
     });
   }, []);
 
+  /*
+   * j and k walk the cards that are DRAWN, in reading order (lane by lane, or
+   * the result rows), and Enter opens the one the cursor is on. The cursor is a
+   * pull request number, not an index, so a refresh that moves the cards does
+   * not move it to a different one; when its card is gone it simply starts
+   * again from the first.
+   */
+  const [cur, setCur] = useState<number | null>(null);
+  const walk = (dir: 1 | -1) => {
+    const order = results ? results.rows.map((r) => r.number) : cols.flatMap((_, i) => shown(i).map((p) => p.number));
+    if (!order.length) return;
+    const at = cur == null ? -1 : order.indexOf(cur);
+    const to = order[at < 0 ? (dir > 0 ? 0 : order.length - 1) : (at + dir + order.length) % order.length]!;
+    setCur(to);
+    requestAnimationFrame(() => {
+      frame.current?.querySelector<HTMLElement>(`[data-pr="${to}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    });
+  };
   const onKey = (e: React.KeyboardEvent) => {
+    if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+      const tag = (e.target as HTMLElement)?.tagName ?? "";
+      if (!/INPUT|TEXTAREA|SELECT/.test(tag)) {
+        const k = e.key.toLowerCase();
+        if (k === "j" || e.key === "ArrowDown") { e.preventDefault(); e.stopPropagation(); walk(1); return; }
+        if (k === "k" || e.key === "ArrowUp") { e.preventDefault(); e.stopPropagation(); walk(-1); return; }
+        /* Enter on a focused button is that button's own press. */
+        if (e.key === "Enter" && cur != null && !/BUTTON|A/.test(tag)) { e.preventDefault(); e.stopPropagation(); onOpen(cur); return; }
+      }
+    }
     /* ⌃F opens the app's own find bar, seeded with whatever is already being
        searched — the board no longer has a field of its own, and the bar is
        driving this search either way (see the engine above). */
@@ -554,10 +614,65 @@ export function TriageBoard({
       openFind(find);
       return;
     }
-    /* No other keys. The board used to answer 1-4, j/k/h/l, Enter, p and a; the
+    /* No other keys. The board used to answer 1-4, h/l, p and a as well; the
        last one fired on Ctrl+Alt+A, the chord that closes and opens the bench,
-       and opened whatever card the cursor was resting on. Nobody used them. */
+       and opened whatever card the cursor was resting on. Nobody used them.
+       j, k and Enter are back because the list they replaced had them, and the
+       modifier check above is what keeps that chord out. */
   };
+
+  if (results) {
+    return (
+      <div ref={frame} data-board tabIndex={0} onKeyDown={onKey} className="flex flex-col h-full min-h-0 outline-none">
+        <div className="shrink-0 px-4 pt-3 pb-2 flex items-center gap-3 text-[12.5px]">
+          <b className="text-[17px] font-semibold tabular-nums">{results.rows.length}</b>
+          <span className="min-w-0 truncate" title={results.title}>{results.title}</span>
+          <button onClick={results.onBack} className="agx-btn ml-auto shrink-0 rounded px-2 py-1 text-[10.5px]"
+            style={{ color: "var(--text2)", border: EDGE }}>
+            Back to the board
+          </button>
+        </div>
+        <div className="flex-1 min-h-0 overflow-y-auto agx-scroll px-4 pb-3" data-results>
+          {results.loading && results.rows.length === 0 ? (
+            <div aria-hidden className="grid gap-2.5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(268px, 1fr))" }}>
+              {[0, 1, 2, 3].map((k) => (
+                <div key={k} className="rounded-lg animate-pulse"
+                  style={{ height: 74, background: "var(--surface-card)", border: EDGE, animationDelay: `${k * 0.08}s` }} />
+              ))}
+            </div>
+          ) : results.rows.length === 0 ? (
+            <p className="m-0 text-[11px]" style={{ color: "var(--text3)" }}>{results.empty}</p>
+          ) : (
+            /* The same card as the lanes, on a grid: a search result is a pull
+               request, and the board has one way to draw those. Dimmed while
+               the next page loads, so what is there is still readable. */
+            <div className="grid gap-x-2.5 items-start"
+              style={{ gridTemplateColumns: "repeat(auto-fill, minmax(268px, 1fr))", opacity: results.loading ? 0.45 : 1, transition: "opacity .15s" }}>
+              {results.rows.map((r) => {
+                const p = trueChecks(r);
+                const filed: Filed = p.state === "MERGED" ? { lane: "others", reason: "Merged." }
+                  : p.state === "CLOSED" ? { lane: "others", reason: "Closed without merging." }
+                  : fileInLane(p, { mine: false, asked: false });
+                return (
+                  <CardView key={p.number} p={{ ...p, filed }} hasTaskProvider={hasTaskProvider} repoUses={repoUses}
+                    pinned={pinned(p.number)} onOpen={() => onOpen(p.number)} onPin={() => onTogglePin(p)}
+                    onAct={onAct} busy={busy} acting={acting} cursor={cur === p.number} root={root}
+                    unread={unreadOf(p, repoKey, readSeen())} onOpenBase={onOpen} />
+                );
+              })}
+              {more && (
+                <button onClick={more.onMore} disabled={more.loading}
+                  className="agx-btn rounded-lg mb-2 text-[11px] disabled:opacity-60"
+                  style={{ minHeight: 74, border: `1px dashed color-mix(in srgb, var(--text) 24%, transparent)`, color: "var(--text2)" }}>
+                  {more.loading ? "Loading more…" : "Load more"}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     /*
@@ -571,7 +686,7 @@ export function TriageBoard({
      * cards with nothing on screen saying which lane you were in. The
      * scrolling belongs to each column, one per lane, below.
      */
-    <div ref={frame} tabIndex={0} onKeyDown={onKey} className="flex flex-col h-full min-h-0 outline-none">
+    <div ref={frame} data-board tabIndex={0} onKeyDown={onKey} className="flex flex-col h-full min-h-0 outline-none">
       {/* The scope, said out loud. A board whose reach nobody states is a board
           nobody trusts — and the first question anybody asks it is "where are
           the other three hundred". */}
@@ -593,14 +708,18 @@ export function TriageBoard({
           <>
             <b className="text-[17px] font-semibold">{involved}</b>
             <span className="ml-1">
-              {totalKnown ? `of ${total} open pull requests` : "open pull requests"} want something from you
+              {wide
+                ? "open pull requests on this page of the repository"
+                : <>{totalKnown ? `of ${total} open pull requests` : "open pull requests"} want something from you</>}
             </span>
             <span className="block text-[11px] mt-2" style={{ color: "var(--text3)" }}>
-              Yours, and the ones you were asked to look at. The board never shows more than that
+              {wide
+                ? "Yours, the ones you were asked to look at, and the repository's, a page at a time."
+                : <>Yours, and the ones you were asked to look at. The board never shows more than that
               {" — "}
               <button onClick={onShowTable} style={{ color: "var(--primary-ink)" }}>
-                {rest > 0 ? `the other ${rest} are a table` : "the rest are a table"}
-              </button>.
+                {rest > 0 ? `show the other ${rest}` : "show every open pull request"}
+              </button>.</>}
               {canLand > 0 && <> <span style={{ color: "var(--success-ink)" }}>{canLand}</span> can land right now.</>}
             </span>
           </>
@@ -929,7 +1048,7 @@ export function TriageBoard({
                           <CardView key={p.number} p={p} hasTaskProvider={hasTaskProvider} repoUses={repoUses}
                             pinned={pinned(p.number)} onOpen={() => onOpen(p.number)} onPin={() => onTogglePin(p)}
                             onAct={onAct} busy={busy} acting={acting}
-                            dim={!matches(p) || (onlyLane !== null && onlyLane !== l.id)} root={root}
+                            dim={!matches(p) || (onlyLane !== null && onlyLane !== l.id)} cursor={cur === p.number} root={root}
                             unread={unread.get(p.number)}
                             stack={stacks.of(p.number)} factsOf={factsOf} lit={lit === p.number} onLit={setLit} onOpenBase={onOpen} />
                         ))}
@@ -985,7 +1104,14 @@ export function TriageBoard({
       {!waiting && involved > 0 && (
         <div className="shrink-0 flex flex-wrap items-center gap-2.5 px-4 py-2 text-[10.5px]"
           style={{ color: "var(--text3)", borderTop: LINE }}>
-          {!totalKnown ? (
+          {wide ? (
+            more ? (
+              <button onClick={more.onMore} disabled={more.loading} className="agx-btn rounded px-2 py-0.5 disabled:opacity-60"
+                style={{ color: "var(--text2)", border: EDGE }}>
+                {more.loading ? "Loading more…" : "Load more pull requests"}
+              </button>
+            ) : <span>That is every pull request in this list.</span>
+          ) : !totalKnown ? (
             <span>How many others are open is not a number this view can trust.</span>
           ) : rest > 0 ? (
             <span>The other <b style={{ color: "var(--text2)" }}>{rest}</b> open pull requests want nothing from you right now.</span>
@@ -998,10 +1124,12 @@ export function TriageBoard({
               ? <>{quiet} of these {quiet === 1 ? "has" : "have"} gone {QUIET_DAYS} days without a push or a comment</>
               : <>everything here moved in the last {QUIET_DAYS} days</>}
           </span>
-          <button onClick={onShowTable} className="agx-btn ml-auto rounded px-2 py-0.5"
-            style={{ color: "var(--text2)", border: EDGE }}>
-            {tableLabel}
-          </button>
+          {!wide && (
+            <button onClick={onShowTable} className="agx-btn ml-auto rounded px-2 py-0.5"
+              style={{ color: "var(--text2)", border: EDGE }}>
+              {tableLabel}
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -1022,6 +1150,13 @@ export function TriageBoard({
 function cardVerdict(p: PrSummary): {
   tint: string; glyph: ReactNode; line: string; aria: string; url?: string; skeleton?: boolean;
 } | null {
+  /* A finished pull request is waiting on nobody: a closed or merged one found
+     by a search says so instead of "No review asked for yet". */
+  if (p.state !== "OPEN") {
+    const merged = p.state === "MERGED";
+    return { tint: merged ? "var(--primary)" : "var(--text3)", glyph: <DoneIcon size={ICON.xs} />,
+      line: merged ? "Merged" : "Closed without merging", aria: merged ? "Merged" : "Closed without merging" };
+  }
   /* A draft is waiting on nobody, and said so nowhere — it was a label lost
      among the others. */
   if (p.isDraft) {
@@ -1199,7 +1334,7 @@ function cardVerdict(p: PrSummary): {
 const copyEdge = (done: boolean) =>
   `1px solid color-mix(in srgb, ${done ? "var(--success) 50%" : "var(--border) 55%"}, transparent)`;
 
-function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, busy, acting, dim, root, unread, stack, factsOf, lit, onLit, onOpenBase }: {
+function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, busy, acting, dim, cursor, root, unread, stack, factsOf, lit, onLit, onOpenBase }: {
   p: Card; hasTaskProvider: boolean;
   /** This repository links work items at all: see prCardBlock.ts. */
   repoUses: boolean;
@@ -1217,6 +1352,8 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
    * the shape means something.
    */
   dim?: boolean;
+  /** The keyboard (j and k) is on this card. */
+  cursor?: boolean;
   /** Where to ask how far behind this branch is. Absent means do not ask. */
   root?: string;
   /** The stack this pull request is in, or null: see prStack.ts. */
@@ -1281,6 +1418,7 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
     <div onClick={onOpen} role="button" tabIndex={-1} data-pr={p.number}
       data-dim={dim ? "1" : undefined}
       data-lit={lit ? "1" : undefined}
+      data-cursor={cursor ? "1" : undefined}
       className={`rounded-lg mb-2 cursor-pointer agx-btn agx-prc overflow-hidden${stack ? " agx-stk-card" : ""}`}
       style={{
         minHeight: stack ? spineHeight(stack.spine) : undefined,
@@ -1293,6 +1431,7 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
            every word legible, which is the difference between "not this one"
            and "gone". */
         ...(dim ? { opacity: 0.32, filter: "saturate(0.25)" } : null),
+        ...(cursor ? { outline: "2px solid var(--primary)", outlineOffset: -2 } : null),
         transition: "opacity 120ms ease, filter 120ms ease",
       }}>
       {/*

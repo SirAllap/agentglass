@@ -20,12 +20,18 @@ const alerts = await Bun.file(new URL("../src/components/Alerts.tsx", import.met
 
 const code = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
 
-describe("PR board state axis", () => {
-  it("is the house Segmented", () => {
-    expect(code(pr)).toMatch(/<Segmented value=\{stateSel\}/);
+describe("PR board has no state axis", () => {
+  it("has no Open / Closed / All switch and no All pill", () => {
+    expect(code(pr)).not.toMatch(/<Segmented value=\{stateSel\}/);
+    expect(code(pr)).not.toContain("setStateSel");
+    expect(code(pr)).toContain('VIEWS.filter((v) => v.id !== "all")');
   });
 
-  it("leaves the board for the table on Closed or All, and has no switch of its own", () => {
+  it("asks GitHub for every state only once Enter was pressed", () => {
+    expect(code(pr)).toContain('const stateSel: StateSel = serverQuery.trim() ? "all" : "open";');
+  });
+
+  it("shows search results as cards of the board, and has no switch of its own", () => {
     /* The board is whatever Open shows; there is no stored preference to fall
        out of step with the state axis. */
     expect(code(pr)).toContain("const boardOn = stateSel === \"open\";");
@@ -33,8 +39,8 @@ describe("PR board state axis", () => {
     expect(pr).not.toContain("agentglass.pr.board");
   });
 
-  it("puts the board back on Open when a view is picked", () => {
-    expect(pr).toContain('setInboxOn(false); setMetricsOn(false); setStateSel("open"); setFilter("all"); setQuery(""); setBoardView(v.id as BoardView);');
+  it("a view pill clears the search and pressing the lit one again goes back to everything", () => {
+    expect(pr).toContain('setInboxOn(false); setMetricsOn(false); setFilter("all"); setQuery(""); setBoardView(boardView === v.id ? "all" : (v.id as BoardView));');
   });
 });
 

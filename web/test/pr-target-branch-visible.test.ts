@@ -31,11 +31,8 @@ describe("target branch chip", () => {
     expect(panel).toContain('<Field label="Branch" max="62%"');
     expect(panel).not.toContain('<Field label="Branch" max={460}');
   });
-  it("list row: the destination span has no width cap", () => {
-    const tag = line(panel, 'title={`Merges into ${p.baseRefName}`}');
-    expect(tag).toContain("shrink-0");
-    expect(tag).not.toContain("maxWidth");
-    expect(tag).not.toContain("truncate");
+  it("the list row is gone: the board's cards are the only list", () => {
+    expect(panel).not.toContain("Merges into ${p.baseRefName}");
   });
   it("board card: the base is never truncated", () => {
     const tag = line(board, "title={`${p.headRefName} → ${p.baseRefName}`}");

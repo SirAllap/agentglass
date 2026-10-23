@@ -422,16 +422,28 @@ export const ACTION_LABEL: Record<Suggested, string> = {
  * what is wrong and what can land. The stake is judged AFTER filing, which is
  * the point: a pull request that is yours and asked of you keeps the lane it
  * would have everywhere else instead of moving when a pill is pressed.
- * Ceiling: these are the viewer's two queues, not every open pull request in
- * the repository.
+ * `failing`, `ready` and `all` also take in the rest of the repository, a page
+ * at a time, and `review` and `mine` stay the viewer's two queues (see
+ * `viewIsWide`). Ceiling: "wide" is the page the list holds, not every open
+ * pull request in one go; the pager under the board walks the rest.
  */
 export type BoardView = "all" | "review" | "mine" | "failing" | "ready";
 
-export function viewKeeps(view: BoardView, lane: LaneId, stake: Stake): boolean {
+/** Whether a view reaches past the viewer's own two queues, to the repository. */
+export function viewIsWide(view: BoardView): boolean {
+  return view === "failing" || view === "ready" || view === "all";
+}
+
+/**
+ * `p` is read only by `failing`: somebody else's red pull request files under
+ * "others" (not yours to move), which is not "blocked", yet it is exactly what
+ * the old `checks:red` search listed.
+ */
+export function viewKeeps(view: BoardView, lane: LaneId, stake: Stake, p?: { checks?: { failure?: number }; mergeable?: string }): boolean {
   switch (view) {
     case "review": return stake.asked;
     case "mine": return stake.mine;
-    case "failing": return lane === "blocked";
+    case "failing": return lane === "blocked" || (p?.checks?.failure ?? 0) > 0 || p?.mergeable === "CONFLICTING";
     case "ready": return lane === "land";
     default: return true;
   }

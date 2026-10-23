@@ -21,9 +21,8 @@ describe("pull request pins use the tack", () => {
     expect(code(panel)).not.toContain("StarIcon");
   });
 
-  it("the card button, the row button and the panel button draw a tack, filled when pinned", () => {
+  it("the card button and the panel button draw a tack, filled when pinned", () => {
     expect(code(board)).toContain("<PinIcon size={ICON.xs} filled={pinned} />");
-    expect(code(panel)).toContain("<PinIcon size={ICON.sm} filled={pinned} />");
     expect(code(panel)).toContain("<PinIcon size={ICON.xs} filled={currentPinned} />");
   });
 

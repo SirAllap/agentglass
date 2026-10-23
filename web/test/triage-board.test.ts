@@ -193,18 +193,18 @@ describe("the scope sentence", () => {
     expect(html).toContain("of 388 open pull requests want something from you");
     // The subtraction is the promise: the board is not hiding the rest, it is
     // pointing at them.
-    expect(html).toContain(`the other ${388 - INVOLVED} are a table`);
+    expect(html).toContain(`show the other ${388 - INVOLVED}`);
   });
 
   it("drops every number built on the total when the total disagrees", () => {
     /*
-     * Clamping is how "the other 0 are a table" got onto a screen with 388 open
+     * Clamping is how "show the other 0" got onto a screen with 388 open
      * pull requests behind it, and "5 of 3 want something from you" is the same
      * bad total two sentences later. The way out stays; the false counts go —
      * and they go together, or the screen contradicts itself.
      */
     const html = render({ total: 1, mine: MINE, review: REVIEW });
-    expect(html).toContain("the rest are a table");
+    expect(html).toContain("show every open pull request");
     expect(html).not.toContain("the other 0");
     expect(html).toContain("open pull requests want something from you");
     expect(html).not.toContain("of 1 open pull requests");
@@ -257,7 +257,7 @@ describe("waiting is not the same as empty", () => {
   });
 
   it("offers the table from the empty state too, since that is the way out", () => {
-    expect(render({ loading: false, total: 388 })).toContain("Show all 388 as a table");
+    expect(render({ loading: false, total: 388 })).toContain("Show all 388");
   });
 });
 
@@ -732,25 +732,27 @@ describe("the shortcuts the legend promises", () => {
     expect(bare).toContain("preventScroll: true");
   });
 
-  it("the board answers no card keys, and prints none", () => {
+  it("the board answers j, k and Enter only, and never with a modifier held", () => {
     // Ctrl+Alt+A closes and opens the bench; the board's `a` read it as "open
-    // this card" and opened whatever the cursor rested on. The keys went.
-    for (const k of ['"j"', '"k"', '"h"', '"l"', '"p"', '"a"']) {
+    // this card" and opened whatever the cursor rested on. Those keys went; j,
+    // k and Enter came back because the list they replaced had them, behind a
+    // modifier guard so the chord stays out.
+    expect(bare).toContain("!e.ctrlKey && !e.metaKey && !e.altKey");
+    for (const k of ['"h"', '"l"', '"p"', '"a"']) {
       expect(bare, `the board still handles ${k}`).not.toContain(`k === ${k}`);
     }
     expect(SRC).not.toContain("</K> pin<");
     expect(SRC).not.toContain("</K> open it<");
   });
 
-  it("no card paints a keyboard cursor", () => {
-    // With the keys gone nothing could move it, so one card always wore a blue
-    // border and a left strip that read as a pull request state.
+  it("no card paints a keyboard cursor until a key has moved it", () => {
+    // One card used to wear a blue border and a left strip for ever, which read
+    // as a pull request state. The cursor starts on nothing.
     const html = render({ review: [pr(1), pr(2)], mine: [pr(3)], total: 3 });
     expect(drawn(html, "review")).toBeGreaterThan(0);
-    expect(html).not.toContain("data-cur");
+    expect(html).not.toContain('data-cursor="1"');
     expect(html).not.toContain("inset 2px 0 0");
-    expect(SRC).not.toContain("data-cur");
-    expect(SRC).not.toMatch(/\bsetCur\b/);
+    expect(SRC).toContain("useState<number | null>(null)");
   });
 });
 
@@ -805,5 +807,49 @@ describe("the identity line of a board card", () => {
   it("does not print the author's name: the first face bottom right is the author", () => {
     expect(line).toContain("ago(p.updatedAt)");
     expect(line).not.toContain("{p.author}");
+  });
+});
+
+describe("the repository on the board, and results as cards", () => {
+  const theirs = (n: number, o: Parameters<typeof pr>[1] = {}) => pr(n, { author: "other", ...o });
+
+  it("failing keeps somebody else's red pull request, which files under 'others'", () => {
+    const html = render({ view: "failing", mine: [], review: [], others: [theirs(10, { fail: 2 }), theirs(11)], total: -1 });
+    expect(drawn(html, "others")).toBe(1);
+    expect(html).toContain('data-pr="10"');
+    expect(html).not.toContain('data-pr="11"');
+  });
+
+  it("the two queues ignore the repository's page", () => {
+    const html = render({ view: "mine", mine: [pr(1)], review: [], others: [theirs(10, { fail: 2 })], total: -1 });
+    expect(html).toContain('data-pr="1"');
+    expect(html).not.toContain('data-pr="10"');
+  });
+
+  it("all draws the page of the repository with a sentence that does not claim it wants something from you", () => {
+    const html = render({ view: "all", mine: [pr(1)], review: [], others: [theirs(10)], total: -1 });
+    expect(html).toContain('data-pr="10"');
+    expect(html).toContain("on this page of the repository");
+    expect(html).not.toContain("want something from you");
+  });
+
+  it("results are cards, merged ones included, never rows and never filed under Blocked", () => {
+    const html = render({
+      results: {
+        title: "closed and merged pull requests", loading: false, empty: "none", onBack: () => {},
+        rows: [theirs(20, { state: "MERGED", fail: 1 }), theirs(21, { state: "CLOSED" }), theirs(22)],
+      },
+    });
+    expect(html).toContain('data-results');
+    expect((html.match(/data-pr="/g) ?? []).length).toBe(3);
+    expect(html).toContain("Merged.");
+    expect(html).toContain("Closed without merging.");
+    expect(html).not.toContain("data-lane=");
+    expect(html).toContain("Back to the board");
+  });
+
+  it("an empty result says why", () => {
+    const html = render({ results: { title: "x", loading: false, empty: "No pull requests match this search.", onBack: () => {}, rows: [] } });
+    expect(html).toContain("No pull requests match this search.");
   });
 });
