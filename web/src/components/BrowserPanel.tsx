@@ -1443,8 +1443,12 @@ export function BrowserView({ active: viewOn, scope }: {
       }
       return kept;
     });
-    if (id === profile) switchTo("");
-  }, [profile, switchTo]);
+    /* Back to the default name only. switchTo("") would restore the default
+       container's saved strip (or mint a home tab) and re-save the dropped
+       one's tabs: dropping the container on screen after the person closed
+       everything brought back a page from an older session. */
+    if (id === profile) { setNaming(null); setTyped(null); setProfile(""); }
+  }, [profile]);
 
   /*
    * S9: whether this container's tabs send `X-Agentglass-Agent` to a dev

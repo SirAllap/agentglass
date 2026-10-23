@@ -320,3 +320,16 @@ describe("the island is the default chrome", () => {
     expect(src).toContain('"Classic tab list"');
   });
 });
+
+describe("dropping the container on screen", () => {
+  test("leaves only what was open: no saved strip comes back, no home tab is made", async () => {
+    const src = await Bun.file(new URL("../src/components/BrowserPanel.tsx", import.meta.url)).text();
+    const start = src.indexOf("const forgetProfile = useCallback(");
+    expect(start).toBeGreaterThan(-1);
+    const end = src.indexOf("}, [profile]);", start);
+    expect(end).toBeGreaterThan(start);
+    const body = src.slice(start, end).split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+    expect(body).not.toContain("switchTo(");
+    expect(body).toContain('setProfile("")');
+  });
+});
