@@ -39,6 +39,7 @@ import "@xterm/xterm/css/xterm.css";
 import { answerDecrqm } from "../lib/xtermDecrqm.ts";
 import { openExternal } from "../lib/externalUrl.ts";
 import { registerPathLinks } from "../lib/termPathLinks.ts";
+import { TERM_URL } from "../lib/termUrls.ts";
 import { followLink, oscLinkHandler } from "../lib/linkRouter.ts";
 import type { GitRepoRef, GitBranch, PrBranchSummary, TerminalCommands, TmuxWindow, TmuxPane, PtyServerFrame, PtyClientFrame } from "../../../shared/types.ts";
 import { chipTarget } from "../lib/chipTarget.ts";
@@ -829,7 +830,7 @@ function createSession(root: string, agentTicket?: string): Sess {
   answerDecrqm(term as never);
   // A pull request or a ClickUp card opens in the app; Ctrl/Cmd-click still
   // goes to the browser. See linkRouter.ts.
-  term.loadAddon(new WebLinksAddon((e, uri) => { followLink(uri, e); }));
+  term.loadAddon(new WebLinksAddon((e, uri) => { followLink(uri, e); }, { urlRegex: TERM_URL }));
   // A path that exists opens in the finder. `root` is where this shell began.
   // Ceiling: after a `cd`, or over ssh, a relative path that ALSO exists under
   // `root` links to that one. Absolute and ~/ paths are exact.

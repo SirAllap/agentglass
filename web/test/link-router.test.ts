@@ -309,7 +309,7 @@ const [TERMINAL, MARKDOWN, PR_PANEL] = (await Promise.all(
 
 describe("the three places that draw links all ask the router", () => {
   it("the terminal's URL addon, the shared markdown and the pull request body", () => {
-    expect(/new WebLinksAddon\(\(e, uri\) => \{ followLink\(uri, e\); \}\)/.test(TERMINAL)).toBe(true);
+    expect(/new WebLinksAddon\(\(e, uri\) => \{ followLink\(uri, e\); \}, \{ urlRegex: TERM_URL \}\)/.test(TERMINAL)).toBe(true);
     expect(MARKDOWN.includes("openInApp(href, e, { strict: true })")).toBe(true);
     expect(PR_PANEL.includes("openInApp(href, e, { shortRef: isShortRef(a!.textContent) })")).toBe(true);
   });
