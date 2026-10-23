@@ -141,7 +141,7 @@ export function presenceLabel(verb: string, name: string, key = ""): string {
 
 /** The pointer's travel time: grows with the distance, clamped so a short hop stays quick and a long one never drags. */
 export function travelMs(dx: number, dy: number): number {
-  return Math.round(Math.min(680, Math.max(260, 180 + Math.hypot(dx, dy) * 0.9)));
+  return Math.round(Math.min(240, Math.max(110, 90 + Math.hypot(dx, dy) * 0.25)));
 }
 
 /**

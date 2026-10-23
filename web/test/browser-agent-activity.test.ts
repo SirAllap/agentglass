@@ -127,6 +127,14 @@ describe("the flash where an agent acted", () => {
     const fn = d.slice(d.indexOf("export async function runBrowserAsk("), d.indexOf("export const FLASH_MS"));
     expect(fn.includes("if (reply.ok) flashWhereActed(")).toBe(true);
   });
+  // The pointer set off when the act answered, a page load behind every click.
+  test("the pointer is aimed before the act runs, and the aim draws nothing", () => {
+    const d = readFileSync(new URL("../src/lib/browserDrive.ts", import.meta.url), "utf8");
+    const fn = d.slice(d.indexOf("export async function runBrowserAsk("), d.indexOf("export const FLASH_MS"));
+    expect(fn.indexOf("aimAt(a[0], ask);")).toBeGreaterThan(-1);
+    expect(fn.indexOf("aimAt(a[0], ask);")).toBeLessThan(fn.indexOf("await runVerb("));
+    expect(flashScript({ kind: "focus" }, 700, false)).toContain("if (false)");
+  });
 });
 
 describe("the log opens from the badge", () => {
@@ -157,8 +165,8 @@ describe("the presence drawn over a driven tab", () => {
     expect(own).toContain('(editor ? "" : e.innerText)');
   });
   test("travel grows with distance and stays inside its clamp", () => {
-    expect(travelMs(0, 0)).toBe(260);
-    expect(travelMs(3000, 0)).toBe(680);
+    expect(travelMs(0, 0)).toBe(110);
+    expect(travelMs(3000, 0)).toBe(240);
     expect(travelMs(200, 0)).toBeGreaterThan(travelMs(50, 0));
   });
   test("the lap stays inside the page on every keyframe, corners included", () => {

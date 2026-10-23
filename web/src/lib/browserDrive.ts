@@ -2070,6 +2070,11 @@ async function pollGuestClock(
  */
 export async function runBrowserAsk(...a: Parameters<typeof runVerb>): ReturnType<typeof runVerb> {
   const ask = a[1];
+  /* The pointer goes where the act is about to land, not where it landed: an
+     act that navigates answers a second later, and a pointer that set off then
+     trailed every click by the length of a page load. Not awaited, and queued
+     ahead of the act's own script, so it costs the act nothing. */
+  aimAt(a[0], ask);
   const reply = await runVerb(...a);
   if (reply.ok) flashWhereActed(a[0], ask);
   return stampWhere(reply, { tab: ask.args.atTab, container: ask.args.atProfile });
@@ -2090,10 +2095,11 @@ export const FLASH_MS = 600;
  * fire-and-forget: a click that navigated has no element left, and that is a
  * flash that does not happen, never an error for the agent.
  */
-export function flashScript(plan: Exclude<FlashPlan, null>, ms = FLASH_MS): string {
+export function flashScript(plan: Exclude<FlashPlan, null>, ms = FLASH_MS, draw = true): string {
   const body = `
     const r = e.getBoundingClientRect();
     if (!r.width && !r.height) return { kind: "none" };
+    if (${draw}) {
     const calm = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const box = document.createElement("div");
     box.setAttribute("data-agx-flash", "");
@@ -2104,6 +2110,7 @@ export function flashScript(plan: Exclude<FlashPlan, null>, ms = FLASH_MS): stri
     (document.body || document.documentElement).appendChild(box);
     if (!calm) requestAnimationFrame(() => { box.style.opacity = "0"; });
     setTimeout(() => box.remove(), ${ms});
+    }
     /* Where it landed and what the thing is CALLED, for the panel's pointer:
        a label, a placeholder or a short visible text, never a value, so what
        was typed into a field cannot ride out this way. */
@@ -2134,9 +2141,15 @@ export function onActLanded(fn: (l: ActLanding) => void): () => void {
 function flashWhereActed(el: DrivableWebview, ask: BrowserAskFrame): void {
   const plan = flashPlan(ask);
   if (!plan) return;
+  try { void Promise.resolve(el.executeJavaScript(flashScript(plan))).catch(() => { /* the page moved on */ }); } catch { /* not attached */ }
+}
+
+function aimAt(el: DrivableWebview, ask: BrowserAskFrame): void {
+  const plan = landed && flashPlan(ask);
+  if (!plan) return;
   const tab = typeof ask.args.atTab === "string" ? ask.args.atTab : "";
   try {
-    void Promise.resolve(el.executeJavaScript(flashScript(plan))).then((r) => {
+    void Promise.resolve(el.executeJavaScript(flashScript(plan, FLASH_MS, false))).then((r) => {
       const h = r as { kind?: string; x?: number; y?: number; w?: number; h?: number; name?: string } | null;
       if (!tab || !landed || h?.kind !== "ok" || typeof h.x !== "number") return;
       landed({ tab, verb: ask.op, key: typeof ask.args.key === "string" ? ask.args.key : "",
