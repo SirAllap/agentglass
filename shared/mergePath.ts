@@ -381,7 +381,8 @@ export function mergePath(i: MergePathInput): MergePath {
   const roster = buildRoster({
     reviews: i.reviews, reviewers: i.reviewers, author: i.author, headSha: i.headSha, reviewDecision: i.reviewDecision,
     gate, threadAuthors: i.threadAuthors, askedAt: i.askedAt,
-    askedAgain: hv?.kind === "changes" && (hv.askedAgain || hv.cleared) ? hv.who : undefined,
+    // The server's flag is "somebody in who"; with the request list in hand the roster reads it per person.
+    askedAgain: !i.reviewers && hv?.kind === "changes" && (hv.askedAgain || hv.cleared) ? hv.who : undefined,
   });
   const entries = roster.entries;
   const guard = mergeGuard({ reviews: i.reviews, reviewers: i.reviewers, author: i.author });

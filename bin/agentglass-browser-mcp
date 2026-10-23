@@ -411,6 +411,8 @@ TOOLS = [
                 "since": {"type": "number", "description": "Only console and network newer than this epoch ms — pass the `now` from your last observe."},
                 "shot": {"type": "boolean", "description": "Include a screenshot in the same answer."},
                 "delta": {"type": "boolean", "description": "Only what changed since your last observe of this document: {delta:true, added:[nodes], removed:[ids], changed:[{e, fields}], same:n}, new console/network, and form/storage/viewport only when they changed. After a navigation or with no earlier observe it answers in full with delta:false and a reason. Positions (`at`) are not diffed."},
+                "viewport": {"type": "boolean", "description": "Only the nodes on screen right now, plus `outOfView`: how many were left out. Not a baseline, so not with delta."},
+                "root": {"type": "string", "description": "Only the subtree of this element: an id like e12 from an earlier observe (refused with a sentence if it is gone). Not a baseline, so not with delta."},
             },
         },
     },
@@ -1189,6 +1191,7 @@ TOOLS = [
                 "js": {"type": "string", "description": "Expression, e.g. document.querySelectorAll('.row').length"},
                 "await": {"type": "boolean"},
                 "max": {"type": "number", "description": "Truncate the serialised result at this many characters."},
+                "timeoutMs": {"type": "number", "description": "Stop waiting for the script after this long (default 10000, 100..40000). A promise that never settles or a loop is answered ok:false with executionStopped (and mayHaveLateEffects for a pending promise): the script may have changed the page before it stopped."},
             },
             "required": ["js"],
         },
@@ -1518,6 +1521,15 @@ TOOLS = [
     {
         "name": "browser_back",
         "description": "Go back in this page's history.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "browser_done",
+        "description": (
+            "Say you are finished with your tab, so the person's overview shows Done instead of "
+            "guessing from your silence. Touches no page; allowed in read-only mode and while the "
+            "person has the tab. Your next verb on the tab marks it as working again."
+        ),
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
@@ -2124,7 +2136,7 @@ def run(name, args, raw=False):
     # reason to open another one, not a reason to stop.
     if sent_to and str(res.get("error") or "").startswith("no tab called"):
         forget_tab(who)
-        if verb == "open" and who:
+        if verb == "open" and who and not args.get("page"):
             body.pop("page", None)
             body["profile"] = who
             res = call(verb, body)

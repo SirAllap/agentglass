@@ -20,15 +20,15 @@
 // and whatever an agent was doing on it. `visibility`, never `display:none` —
 // a display:none ancestor measures 0x0, and a guest resized to nothing comes
 // back reflowed to a single column.
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { CloseButton } from "./CloseButton.tsx";
 import { LanesRow } from "./LanesRow.tsx";
 import { Portal } from "./Portal.tsx";
 import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
 import { BROWSER_PARTITION, HAS_BROWSER, IS_DESKTOP, applySessionSettings, browserDevtools, browserDevtoolsClose, browserDevtoolsRect, browserDevtoolsZoom, browserCdp, browserZoom, browserShelfRead, captureFullPage, cookieSources, onDevtoolsZoom, onDevtoolsOpen, onBrowserZoom, onBrowserOpenTab, onBrowserKey, onBrowserSearch, onBrowserInspect, setActiveBrowserGuest, setGuestOwner, openEphemeralTab, closeEphemeralTab } from "../lib/desktop.ts";
 import { buildSearchUrl, displayUrl, normalizeNavigationUrl } from "../lib/browserUrl.ts";
-import { BLANK, homePage, searchEngine, zoomLevel, setZoomLevel as saveZoom, zoomPercent, stepZoom, ZOOM_MIN, ZOOM_MAX, devtoolsSide, setDevtoolsSide, devtoolsSize, setDevtoolsSize, devtoolsZoom, setDevtoolsZoom, sidebarOpen, setSidebarOpen, sidebarWidth, setSidebarWidth, type DevtoolsSide } from "../lib/browserPrefs.ts";
-import { addTab, closeTab, listable, newTab, patchTab, pruneBlank, sleepingTab, stepTab, tabLabel, wake, withInspected, type BrowserTab } from "../lib/browserTabs.ts";
+import { BLANK, homePage, searchEngine, zoomLevel, setZoomLevel as saveZoom, zoomPercent, stepZoom, ZOOM_MIN, ZOOM_MAX, devtoolsSide, setDevtoolsSide, devtoolsSize, setDevtoolsSize, devtoolsZoom, setDevtoolsZoom, sidebarOpen, classicChrome, setClassicChrome, setSidebarOpen, sidebarWidth, setSidebarWidth, type DevtoolsSide } from "../lib/browserPrefs.ts";
+import { addTab, closeTab, SLEEP_GRACE_MS, type Recency, listable, newTab, patchTab, popupHome, pruneBlank, sleepingTab, stepTab, tabLabel, wake, withInspected, type BrowserTab } from "../lib/browserTabs.ts";
 import { dropsBefore, isDrag, parseDrop, type DropAt } from "../lib/browserDrag.ts";
 import {
   MAX_ESSENTIALS, allItems, emptyShelf, findByUrl, folderCount, insertFolder, place, readShelves, removeItem, saveShelves,
@@ -45,8 +45,11 @@ import {
 import { VIEWPORTS, type Viewport } from "../lib/browserViewport.ts";
 import { browserNav, clearBrowserNav, subscribeBrowserNav } from "../lib/browserNav.ts";
 import { clientId, serveBrowserAsk, setBrowserAskHandler } from "../lib/browserBus.ts";
+import { activityReducer, actionOf, agentLabel, doneMayMark, pausedRefusal, tabState, type Activity, type TabAgent } from "../lib/browserAgentActivity.ts";
 import { api } from "../lib/api.ts";
-import { forgetAgentZoom, reapplyZoom, applyGuestZoom, setPageZoomer, crossContainerRefusal, mintTakesThePane, type GuestZoom, type DrivableWebview } from "../lib/browserDrive.ts";
+import { forgetAgentZoom, reapplyZoom, applyGuestZoom, setPageZoomer, crossContainerRefusal, mintTakesThePane, notePopup, onActLanded, type ActLanding, type GuestZoom, type DrivableWebview } from "../lib/browserDrive.ts";
+import { AgentPresence } from "./browser/AgentPresence.tsx";
+import { BrowserIsland } from "./browser/BrowserIsland.tsx";
 import { onBrowserTabs } from "../lib/browserBus.ts";
 import { COLLECTOR } from "../lib/browserObserve.ts";
 import { PagePicker } from "./browser/PagePicker.tsx";
@@ -63,9 +66,11 @@ import { suggest, type Suggestion } from "../lib/suggest.ts";
 import {
   BackIcon, BlankPageIcon, CloseIcon, CodeIcon, ExternalIcon, ForwardIcon, GlobeIcon,
   HomeIcon, LockIcon, MoreIcon, NoteIcon, PenIcon, ReloadIcon, SearchIcon,
-  SpinnerIcon, StopIcon, TargetIcon, FolderIcon, ContainerIcon, SpaceIcon, CameraIcon, PanelIcon, UpIcon, DownIcon, SplitIcon,
+  SpinnerIcon, StopIcon, TargetIcon, FolderIcon, ContainerIcon, SpaceIcon, CameraIcon, PanelIcon, UpIcon, DownIcon, SplitIcon, PauseIcon, PlusIcon,
 } from "./browser/icons.tsx";
-import { CheckboxIcon, DoneIcon, SwapIcon } from "../lib/glyphIcons.tsx";
+import { AgentChip, AgentPill } from "./browser/AgentBadge.tsx";
+import { IslandMenu, ZoomIcon } from "./browser/IslandMenu.tsx";
+import { CheckboxIcon, CopyIcon, DoneIcon, SwapIcon } from "../lib/glyphIcons.tsx";
 import { Button, Chip, CTRL_H, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 
 /** Electron's `<webview>` is not in React's JSX catalogue, and its methods are
@@ -86,7 +91,7 @@ export type WebviewEl = HTMLElement & {
   loadURL(url: string): Promise<void>;
   getTitle(): string;
   executeJavaScript(code: string): Promise<unknown>;
-  capturePage(rect?: { x: number; y: number; width: number; height: number }): Promise<{ toDataURL(): string }>;
+  capturePage(rect?: { x: number; y: number; width: number; height: number }): Promise<Shot>;
   openDevTools(): void;
   closeDevTools(): void;
   isDevToolsOpened(): boolean;
@@ -198,6 +203,41 @@ export function __wakeFirstTab(on: boolean): void { wakeFirst = on; }
  */
 const CLOSE_CELL = 20;
 
+/**
+ * A small picture of a tab for the island's overview. The guest's own
+ * NativeImage is resized natively to 480 px and encoded as JPEG: no decode and
+ * no canvas on the page's thread, which is what an every-few-seconds refresh
+ * can afford. At most 1.5 s (a hidden guest can take its time or never answer);
+ * an empty capture is no picture.
+ */
+type Shot = { toDataURL(): string; isEmpty?(): boolean; resize?(o: { width: number; quality?: string }): { toJPEG?(q: number): Uint8Array; toDataURL(): string } };
+async function pictureOf(w: { capturePage(): Promise<Shot> } | undefined): Promise<string | null> {
+  if (!w) return null;
+  const shot = await Promise.race([
+    w.capturePage().catch(() => null),
+    new Promise<null>((r) => setTimeout(() => r(null), 1500)),
+  ]);
+  if (!shot || shot.isEmpty?.()) return null;
+  try {
+    const small = shot.resize ? shot.resize({ width: 480, quality: "good" }) : shot;
+    const url = small.toDataURL();
+    return url && url.length > 64 ? url : null;
+  } catch { return null; }
+}
+
+/*
+ * A tab an agent is driving, when it is not the one in front, stays painted
+ * BEHIND it instead of hidden. A hidden guest runs no rendering steps at all:
+ * no frames, no idle periods, no resize or intersection observers, and a page
+ * that waits on any of them (GitHub's menus) never opens. Measured: Resources
+ * stayed shut in a background tab and opened in a lane. Only tabs mid-task,
+ * so twenty other tabs cost nothing.
+ */
+function drivenBehind(a: TabAgent | undefined): boolean {
+  const k = tabState(a, undefined, Date.now())?.key;
+  return !!k && k !== "done" && k !== "waiting" && k !== "yours";
+}
+
 export function BrowserView({ active: viewOn, scope }: {
   active: boolean;
   /**
@@ -254,6 +294,8 @@ export function BrowserView({ active: viewOn, scope }: {
      * fine; it read as about:blank because the guest that measured it had no
      * network route out.
      */
+    // Everything was closed on purpose last time: restore nothing, invent nothing.
+    if (saved && !Object.keys(saved.byProfile).length) return [];
     if (!set) {
       const t = sleepingTab(homePage(), "", null, saved?.current ?? "");
       return [wakeFirst ? { ...t, asleep: false } : t];
@@ -287,7 +329,7 @@ export function BrowserView({ active: viewOn, scope }: {
      * agent's tab should be.
      */
     const here = saved?.current ?? "";
-    const mine = set.tabs.map((t) => sleepingTab(t.url, t.title, t.icon, here));
+    const mine = set.tabs.map((t) => ({ ...sleepingTab(t.url, t.title, t.icon, here, t.id), ...(t.agent ? { agent: t.agent } : null) }));
     /*
      * A CONTAINER THAT NO LONGER EXISTS BRINGS NOTHING BACK.
      *
@@ -305,7 +347,7 @@ export function BrowserView({ active: viewOn, scope }: {
     const known = new Set(loadProfiles(globalThis.localStorage ?? null).map((p) => p.id));
     const theirs = Object.entries(saved?.byProfile ?? {})
       .filter(([id]) => id !== here && (!id || known.has(id)))
-      .flatMap(([id, s]) => s.tabs.map((t) => sleepingTab(t.url, t.title, t.icon, id)));
+      .flatMap(([id, s]) => s.tabs.map((t) => ({ ...sleepingTab(t.url, t.title, t.icon, id, t.id), ...(t.agent ? { agent: t.agent } : null) })));
     /* And the file is told, once, rather than left to be re-read every launch. */
     for (const id of Object.keys(saved?.byProfile ?? {})) {
       if (id && id !== here && !known.has(id)) forgetProfileTabs(id);
@@ -522,6 +564,10 @@ export function BrowserView({ active: viewOn, scope }: {
   /** The bar itself, and how wide. Hidden, it leaves a hot edge that brings it
    *  back floating — see the sidebar's markup. */
   const [sideOpen, setSideOpen] = useState(() => sidebarOpen());
+  /** The island (default) or the classic list on the right; see BrowserIsland. */
+  const [classic, setClassic] = useState(() => classicChrome());
+  /** The island tucked itself away because the page is the person's: the dock goes too. */
+  const [islandTucked, setIslandTucked] = useState(false);
   const [sideW, setSideW] = useState(() => sidebarWidth());
   const [peek, setPeek] = useState(false);
   /** Which folder is being renamed, and what it says so far. */
@@ -566,6 +612,49 @@ export function BrowserView({ active: viewOn, scope }: {
    *  answer `profiles` and to refuse a `newtab` into one that does not exist. */
   const profilesRef = useRef<BrowserProfile[]>([]);
   profilesRef.current = profiles;
+  /** Which agent is driving which tab, whether it is mid-ask, and whether the
+   *  person has taken the tab back. Read by the ask handler through a ref for
+   *  the same reason as the lists above. */
+  const [acts, dispatchAct] = useReducer(activityReducer, {} as Activity);
+  /* Where each tab's last act landed, for the drawn pointer. One slot in
+     browserDrive, filled while this panel is up. */
+  const [landings, setLandings] = useState<Record<string, ActLanding>>({});
+  useEffect(() => onActLanded((l) => setLandings((m) => ({ ...m, [l.tab]: l }))), []);
+  /* The last picture seen of each tab, for the overview: it opens with these
+     at once instead of waiting on a capture. Refreshed while an agent acts on
+     the tab in front (at most every 3 s, only while it is on screen, since a
+     hidden guest gives no picture) and whenever the overview opens. Kept in a
+     ref: a new picture must not re-render the panel. */
+  const shots = useRef(new Map<string, string>());
+  const shotAt = useRef(new Map<string, number>());
+  const snapTab = useCallback(async (id: string) => {
+    const src = await pictureOf(els.current.get(id) as never);
+    if (src) shots.current.set(id, src);
+    return src;
+  }, []);
+  /** The classic scrollbars the guest draws, which a <webview> shows through the overview's 12px margin. */
+  const gutterOf = useCallback(async (id: string) => {
+    const e = els.current.get(id);
+    if (!e) return null;
+    try {
+      const [w, h] = (await e.executeJavaScript("[innerWidth - document.documentElement.clientWidth, innerHeight - document.documentElement.clientHeight]")) as [number, number];
+      const z = 1.2 ** e.getZoomLevel(); // CSS px of a zoomed page back to the panel's
+      return { r: Math.max(0, Math.round(w * z)), b: Math.max(0, Math.round(h * z)) };
+    } catch { return null; }
+  }, []);
+  const spaceName = useCallback((id: string) => profileName(profilesRef.current, id), []);
+  useEffect(() => {
+    if (!activeId || !landings[activeId]) return;
+    const now = Date.now();
+    if (now - (shotAt.current.get(activeId) ?? 0) < 3000) return;
+    shotAt.current.set(activeId, now);
+    void snapTab(activeId);
+  }, [landings, activeId, snapTab]);
+  const actsRef = useRef<Activity>(acts);
+  actsRef.current = acts;
+  /* When each tab was last in front. An agent's own verbs are read from `acts`
+     at the moment a slot is needed, so nothing here ticks while they run. */
+  const shownAt = useRef<Record<string, number>>({});
   /** §12: did the ask now being served say `--show`? Written by the ask handler
    *  one statement before `TabOps.open` reads it — see the note there for why a
    *  ref is safe here and an argument was not available. */
@@ -582,6 +671,7 @@ export function BrowserView({ active: viewOn, scope }: {
    *  registered once per view switch and would otherwise be holding the first
    *  render's copy of them for the rest of the session. */
   const reopenRef = useRef<() => void>(() => {});
+  const sideNavRef = useRef<(back: boolean, guest?: number) => void>(() => {});
   const closeHereRef = useRef<() => void>(() => {});
   const stepTabRef = useRef<(forward: boolean) => void>(() => {});
   const elRef = useRef<() => WebviewEl | null>(() => null);
@@ -736,7 +826,7 @@ export function BrowserView({ active: viewOn, scope }: {
       // means the count BEFORE it — the very first tab ever must still read
       // as `existing === 0`.
       const existing = tabsRef.current.length;
-      const made = addTab(tabsRef.current, url, activeIdRef.current, id ?? profile, undefined, partition);
+      const made = addTab(tabsRef.current, url, activeIdRef.current, id ?? profile, undefined, partition, recency());
       /* The reason travels. It used to be dropped here and the caller was told
          "could not open a tab" — with the panel holding a sentence that says
          exactly what to do about it. */
@@ -942,14 +1032,12 @@ export function BrowserView({ active: viewOn, scope }: {
                ask then sits until its own 45s timeout, and a refusal that took
                that long to arrive reads exactly like a hang. */
             client: clientId(),
-            /* Three causes, and the third is the one that bit a peer session
-             twice: tab ids are minted fresh on every launch, so an id written
-             down before a restart names nothing afterwards — with the page
-             sitting there open. The old wording claimed two causes that were
-             both wrong in that case and sent them looking for who had closed
-             what. */
+            /* Three causes. A tab keeps its id across a restart and across
+             switching container, so the third is only a tab that was never
+             written to the session before the app went away (an old session
+             file has no ids at all). */
           error: `no tab called ${targetId} — it was closed, it belongs to a window that is gone, `
-              + `or the app has restarted since you read that id (ids are not stable across restarts). `
+              + `or the app restarted before that tab was saved. `
               + `Call \`tabs\` to re-read them, or open your own with \`open --as <your name> <url>\`.`,
           }).catch(() => { /* already timed out */ });
           return;
@@ -999,6 +1087,41 @@ export function BrowserView({ active: viewOn, scope }: {
           return;
         }
       }
+      /* `done` is the agent saying it has finished: it marks the tab and is
+         answered even when the person has taken it over. Only the agent that
+         drives the tab marks it; anybody else's `done` is answered and changes
+         nothing on screen. */
+      if (ask.op === "done") {
+        if (owner) {
+          if (doneMayMark(actsRef.current[owner.id], ask.args.as)) dispatchAct({ type: "done", tab: owner.id });
+          ask.args.atTab = owner.id;
+          ask.args.atProfile = owner.profile ? profileName(profilesRef.current, owner.profile) : "default";
+        }
+        void serveBrowserAsk(null, ask);
+        return;
+      }
+      /* The person has this tab: an agent's ask is answered, not served. Same
+         early reply as the refusal above, so it is instant rather than a 45 s
+         timeout, and it comes before anything reaches the guest. */
+      if (owner && actsRef.current[owner.id]?.paused) {
+        void api.browserResult({
+          id: ask.id, ok: false, client: clientId(),
+          error: pausedRefusal(typeof ask.args.as === "string" ? ask.args.as : ""),
+        }).catch(() => { /* already timed out */ });
+        return;
+      }
+      /* The tab shows who is driving it and whether it is mid-ask; the log row
+         is written when the answer is known. */
+      const agent = agentLabel(ask.args.as, owner?.profile ? profileName(profilesRef.current, owner.profile) : "default");
+      const serve = (wv: DrivableWebview | null) => {
+        if (!owner) { void serveBrowserAsk(wv, ask); return; }
+        dispatchAct({ type: "begin", tab: owner.id, agent, op: ask.op });
+        if (owner.agent !== agent) patch(owner.id, { agent });
+        serveBrowserAsk(wv, ask).then(
+          (ok) => dispatchAct({ type: "end", tab: owner.id, action: actionOf(ask, ok, Date.now()), at: Date.now() }),
+          () => dispatchAct({ type: "end", tab: owner.id, action: actionOf(ask, false, Date.now()), at: Date.now() }),
+        );
+      };
       /* §8: the answer says which tab it came from and whose container that is.
          Resolved HERE and nowhere else — `runBrowserAsk` is handed one webview
          and cannot name it — so it rides down on the frame and is stamped onto
@@ -1009,13 +1132,27 @@ export function BrowserView({ active: viewOn, scope }: {
         ask.args.atTab = owner.id;
         ask.args.atProfile = owner.profile ? profileName(profilesRef.current, owner.profile) : "default";
       }
-      if (!targetId) { void serveBrowserAsk(null, ask); return; }
+      if (!targetId) {
+        /* Nothing is open (the person closed the last tab). `open` mints one;
+           `newtab`/`tabs` are served without a page; anything that needs a page
+           says so, rather than the misleading "view is not open". */
+        if (ask.op === "open" && typeof ask.args.profile !== "string") ask.args.profile = profile;
+        else if (ask.args.pageBound !== false && ask.op !== "health" && ask.op !== "open") {
+          void api.browserResult({
+            id: ask.id, ok: false, client: clientId(),
+            error: "no tab is open — the person closed them all. Open one with `open <url>` or `newtab <url>` first.",
+          }).catch(() => { /* already timed out */ });
+          return;
+        }
+        void serveBrowserAsk(null, ask);
+        return;
+      }
       const target = els.current.get(targetId);
       /* An agent asking IS a reason to wake up. Without this the first ask of a
          session is answered "there is no browser view in this window" while the
          panel sits there mounted and asleep — and the CLI then opens the view,
          which is the app taking the screen off whoever was typing. */
-      if (target) { void serveBrowserAsk(target as unknown as DrivableWebview, ask); return; }
+      if (target) { serve(target as unknown as DrivableWebview); return; }
       setTabs((prev) => (prev.find((t) => t.id === targetId)?.asleep ? wake(prev, targetId) : prev));
       // A beat for the guest to attach. Long enough on this machine, and the
       // ask is answered either way rather than left hanging.
@@ -1024,7 +1161,7 @@ export function BrowserView({ active: viewOn, scope }: {
            ask to have run and left its own answer in the ref. */
         mintShow.current = ask.args.show === true;
         mintEphemeral.current = ask.args.ephemeral === true;
-        void serveBrowserAsk(els.current.get(targetId) as unknown as DrivableWebview | null, ask);
+        serve(els.current.get(targetId) as unknown as DrivableWebview | null);
       }, 1200);
     });
     return () => setBrowserAskHandler(null);
@@ -1178,10 +1315,11 @@ export function BrowserView({ active: viewOn, scope }: {
    */
   useEffect(() => onBrowserZoom((level) => { void applyZoom(level); }), [applyZoom]);
 
-  const open = useCallback((url: string, from?: string, profile?: string, shelfId?: string) => {
+  const open = useCallback((url: string, from?: string, profile?: string, shelfId?: string, opened?: (id: string) => void, partition?: string) => {
     setTabs((prev) => {
-      const r = addTab(prev, url, from, profile, shelfId);
+      const r = addTab(prev, url, from, profile, shelfId, partition, recency());
       if ("error" in r) { say(r.error); return prev; }
+      opened?.(r.tab.id);
       setActiveId(r.tab.id);
       return r.tabs;
     });
@@ -1196,6 +1334,7 @@ export function BrowserView({ active: viewOn, scope }: {
       ].slice(0, 25);
     }
     els.current.delete(id);
+    dispatchAct({ type: "forget", tab: id });
     setTabs((prev) => {
       const r = closeTab(prev, id);
       setActiveId(r.activeId);
@@ -1259,7 +1398,7 @@ export function BrowserView({ active: viewOn, scope }: {
       ? []
       : set
         ? set.tabs.map((t, i) => {
-            const tab = sleepingTab(t.url, t.title, t.icon, profileId);
+            const tab = sleepingTab(t.url, t.title, t.icon, profileId, kept.some((k) => k.id === t.id) ? undefined : t.id);
             return i === set.active ? { ...tab, asleep: false } : tab;
           })
         : [newTab(homePage(), profileId)];
@@ -1319,8 +1458,12 @@ export function BrowserView({ active: viewOn, scope }: {
       }
       return kept;
     });
-    if (id === profile) switchTo("");
-  }, [profile, switchTo]);
+    /* Back to the default name only. switchTo("") would restore the default
+       container's saved strip (or mint a home tab) and re-save the dropped
+       one's tabs: dropping the container on screen after the person closed
+       everything brought back a page from an older session. */
+    if (id === profile) { setNaming(null); setTyped(null); setProfile(""); }
+  }, [profile]);
 
   /*
    * S9: whether this container's tabs send `X-Agentglass-Agent` to a dev
@@ -1340,7 +1483,12 @@ export function BrowserView({ active: viewOn, scope }: {
   /* A page that opened a window used to be handed to the OS browser, because a
      single-page view had nowhere to put it. Now it goes beside the tab it came
      from — which is what makes an OAuth popup finish inside the app. */
-  useEffect(() => onBrowserOpenTab((url) => open(url, activeId)), [open, activeId]);
+  useEffect(() => onBrowserOpenTab((url, opener) => {
+    const idOf = (id: string) => { try { return els.current.get(id)?.getWebContentsId(); } catch { return undefined; } };
+    const home = popupHome(tabsRef.current, idOf, opener, activeId);
+    if (!home) { say("A page that is no longer open asked for a tab; it was not opened."); return; }
+    open(url, home.from, home.profile, undefined, (id) => notePopup(opener, id, url), home.partition);
+  }), [open, activeId]);
 
   /*
    * The chords, arriving from the shell because the page had the focus.
@@ -1476,8 +1624,20 @@ export function BrowserView({ active: viewOn, scope }: {
     return () => { ro.disconnect(); window.removeEventListener("resize", send); };
   }, [dtGuest, viewOn, covered, ownOverlay, dtSide, dtSize]);
 
-  useEffect(() => onBrowserKey((k) => {
+  /* The mouse's side buttons. The glass is up exactly while an agent holds the
+     page, and the page is then not the person's to navigate. Only the tab the
+     press came from moves: a line printed in another tab moves nothing here. */
+  sideNavRef.current = (back, guest) => {
+    if (document.querySelector(".agx-presence-glass")) return;
+    const w = el();
+    let id: number | undefined;
+    try { id = w?.getWebContentsId(); } catch { return; }
+    if (!w || guest === undefined || id !== guest) return;
+    if (back) w.goBack(); else w.goForward();
+  };
+  useEffect(() => onBrowserKey((k, guest) => {
     if (k === "T") { reopenRef.current(); return; }
+    if (k === "<" || k === ">") { sideNavRef.current(k === "<", guest); return; }
     if (k === "w") { closeHereRef.current(); return; }
     if (k === "t") { setOmni("new"); return; }
     if (k === "f") { setFind((f) => f ?? ""); setTimeout(() => findRef.current?.focus(), 0); return; }
@@ -1748,6 +1908,7 @@ export function BrowserView({ active: viewOn, scope }: {
 
   const moreBtn = useRef<HTMLButtonElement | null>(null);
   const [menuAtXY, setMenuAtXY] = useState<{ top: number; right: number } | null>(null);
+  const [menuByKey, setMenuByKey] = useState(false);
 
   /*
    * The box opens with something in it.
@@ -1972,6 +2133,18 @@ export function BrowserView({ active: viewOn, scope }: {
      would otherwise act on the state before last. */
   modeRef.current = mode;
   activeIdRef.current = activeId;
+  if (activeId) shownAt.current[activeId] = Date.now();
+  /** What `addTab` needs to put the least-used awake tab to sleep for a new one. */
+  const recency = (): Recency => {
+    const now = Date.now();
+    const lastAct = (a: TabAgent) => a.lastAt ?? a.log[a.log.length - 1]?.at ?? 0;
+    const usedAt: Record<string, number> = { ...shownAt.current };
+    for (const [id, a] of Object.entries(actsRef.current)) usedAt[id] = Math.max(usedAt[id] ?? 0, lastAct(a));
+    return {
+      activeId: activeIdRef.current, usedAt,
+      held: (t) => { const a = actsRef.current[t.id]; return !!a && (a.paused || a.working > 0 || now - lastAct(a) < SLEEP_GRACE_MS); },
+    };
+  };
   shelfRef.current = shelf;
 
   /* ------------------------------------------------------------ the box */
@@ -2018,7 +2191,8 @@ export function BrowserView({ active: viewOn, scope }: {
   const runOmni = (raw: string) => {
     const next = raw === BLANK ? BLANK : normalizeNavigationUrl(raw, searchEngine());
     if (!next) return;
-    if (omni === "new") open(next, activeId, profile);
+    // With no tab open there is nothing to navigate, so an address typed in the bar mints one.
+    if (omni === "new" || !active) open(next, activeId, profile);
     else go(next);
     setOmni(null); setTyped(null); setHint(-1);
   };
@@ -2201,7 +2375,7 @@ export function BrowserView({ active: viewOn, scope }: {
    *  the new half of a split goes beside the one you are on, and the one you
    *  are on is the one the bar is talking to. */
   const openBeside = (url: string) => {
-    const r = addTab(tabs, url, activeId, profile);
+    const r = addTab(tabs, url, activeId, profile, undefined, undefined, recency());
     if ("error" in r) { say(r.error); return; }
     setTabs(r.tabs);
     setSplitId(r.tab.id);
@@ -2422,12 +2596,14 @@ export function BrowserView({ active: viewOn, scope }: {
     </span>
   );
 
-  const barMenu = menuOpen && menuAtXY ? (
+  const barMenu = menuOpen && menuAtXY && classic ? (
     <Portal>
       <div className="fixed inset-0" style={{ zIndex: 40 }} onClick={() => setMenuOpen(false)} />
       <div className="fixed rounded-lg text-[11px] py-1 shadow-2xl"
         style={{ top: menuAtXY.top, right: menuAtXY.right, zIndex: 41, width: Math.max(230, Math.min(320, sideW - 8)), background: "var(--surface-card)", border: EDGE }}>
         {[
+          // First in the classic bar: it is the way back, and buried at the bottom nobody found it.
+          { key: "chrome", node: menuRow(<PanelIcon size={14} />, classic ? "Back to the island" : "Classic tab list"), hint: "", run: () => { const c = !classic; setClassic(c); setClassicChrome(c); if (c) { setSideOpen(true); setSidebarOpen(true); } } },
           { key: "home", node: menuRow(<HomeIcon size={14} />, "Home"), hint: "", run: () => go(homePage()) },
           { key: "new", node: menuRow(<span style={{ fontSize: 13, lineHeight: 1 }}>+</span>, "New tab"), hint: "Ctrl+T", run: () => setOmni("new") },
           { key: "keep", node: menuRow(<FolderIcon size={13} />, "Keep this page"), hint: "", run: () => { if (activeId) keep({ kind: "tab", id: activeId }, { to: "loose" }); } },
@@ -2457,7 +2633,7 @@ export function BrowserView({ active: viewOn, scope }: {
             say("Opened in your browser");
           } },
           { key: "zoom", node: menuRow(null, "Zoom back to 100%"), hint: "Ctrl+0", run: () => applyZoom(0) },
-          { key: "hide", node: menuRow(<PanelIcon size={14} />, "Hide this bar"), hint: "Ctrl+S", run: () => { setSideOpen(false); setSidebarOpen(false); } },
+          ...(classic ? [{ key: "hide", node: menuRow(<PanelIcon size={14} />, "Hide this bar"), hint: "Ctrl+S", run: () => { setSideOpen(false); setSidebarOpen(false); } }] : []),
         ].map((it) => (it.sep ? (
           <div key={it.key} className="my-1" style={{ borderTop: LINE }} />
         ) : (
@@ -2489,6 +2665,26 @@ export function BrowserView({ active: viewOn, scope }: {
         ))}
       </div>
     </Portal>
+  ) : null;
+
+  /* The island's own ⋯: the few things a person needs from a floating bar.
+     The rows reuse the classic menu's actions, so the two cannot drift apart. */
+  const islandMenu = menuOpen && menuAtXY && !classic ? (
+    <IslandMenu at={menuAtXY} byKey={menuByKey} onClose={() => setMenuOpen(false)} items={[
+      { key: "home", label: "Home", icon: <HomeIcon size={ICON.sm} />, run: () => go(homePage()) },
+      { key: "new", label: "New tab", icon: <PlusIcon size={ICON.sm} />, hint: "Ctrl+T", run: () => setOmni("new") },
+      { key: "find", label: "Find on this page", icon: <SearchIcon size={ICON.sm} />, hint: "Ctrl+F", run: () => { setFind((f) => f ?? ""); setTimeout(() => findRef.current?.focus(), 0); } },
+      { key: "copy", label: "Copy the address", icon: <CopyIcon size={ICON.sm} />, run: () => { void navigator.clipboard.writeText(active?.url ?? ""); say("Address copied"); } },
+      { key: "hard", label: "Reload, ignoring the cache", icon: <ReloadIcon size={ICON.sm} />, run: () => { try { el()?.reloadIgnoringCache(); } catch { el()?.reload(); } } },
+      { key: "zoom", label: "Zoom back to 100%", icon: <ZoomIcon />, hint: "Ctrl+0", run: () => applyZoom(0) },
+      { key: "ext", label: "Open in your own browser", icon: <ExternalIcon size={ICON.sm} />, run: () => {
+        const u = active?.url;
+        if (!u || u === BLANK) { say("There is no page to open"); return; }
+        window.open(u, "_blank");
+        say("Opened in your browser");
+      } },
+      { key: "chrome", label: "Classic tab list", icon: <PanelIcon size={ICON.sm} />, rule: true, run: () => { setClassic(true); setClassicChrome(true); setSideOpen(true); setSidebarOpen(true); } },
+    ]} />
   ) : null;
 
   const sideBody = (
@@ -2525,13 +2721,22 @@ export function BrowserView({ active: viewOn, scope }: {
         </div>
         <SideTool label="Hide this bar (Ctrl+S)"
           onClick={() => { setSideOpen(false); setSidebarOpen(false); }}><PanelIcon /></SideTool>
-        <span className="flex-1" />
+        {/* The spacer stays a spacer in every state; the chip only fills it. */}
+        <span className="flex-1 min-w-0 flex items-center justify-end gap-0.5 pr-0.5">
+          {active && acts[active.id] && <AgentChip agent={acts[active.id]!} />}
+          {/* One control in both states: pressed means the tab is yours and the
+              agent's asks are refused; pressing again hands it back. */}
+          {active && acts[active.id] && (
+            <SideTool on={acts[active.id]!.paused}
+              label={acts[active.id]!.paused ? "Hand this tab back to the agent" : "Take this tab over: refuse the agent's asks"}
+              onClick={() => dispatchAct({ type: "pause", tab: active.id, paused: !acts[active.id]!.paused })}><PauseIcon /></SideTool>
+          )}
+        </span>
         <SideTool label="Back" onClick={() => el()?.goBack()} disabled={!active?.canBack}><BackIcon /></SideTool>
         <SideTool label="Forward" onClick={() => el()?.goForward()} disabled={!active?.canForward}><ForwardIcon /></SideTool>
         <SideTool label={active?.loading ? "Stop" : "Reload"}
           onClick={() => (active?.loading ? el()?.stop() : el()?.reload())}>{active?.loading ? <StopIcon /> : <ReloadIcon />}</SideTool>
       </div>
-      {barMenu}
       <div className="px-1.5 pt-1 pb-1.5 shrink-0 flex items-center gap-1">
         <button onClick={() => setOmni("edit")}
           title={active?.url || "Type an address"}
@@ -2763,6 +2968,7 @@ export function BrowserView({ active: viewOn, scope }: {
                           ? <span className="shrink-0" style={{ color: "var(--text3)" }}><SpinnerIcon /></span>
                           : <Favicon src={t.icon} />}
                         <span className="min-w-0 flex-1 truncate text-[11px]">{tabLabel(t)}</span>
+                        {acts[t.id] && <AgentPill agent={acts[t.id]!} />}
                         {/* Which one is the other half. Without it a split reads as one tab
                             being active and another one being, somehow, also on screen. */}
                         {split && t.id === splitId && (
@@ -2832,6 +3038,15 @@ export function BrowserView({ active: viewOn, scope }: {
         </div>
       )}
       <LanesRow />
+      {/* The way back, always at the foot and in the accent: inside the menu it was not found. */}
+      <div className="shrink-0 px-1.5 pb-1.5 pt-1" style={{ borderTop: LINE }}>
+        <button type="button" onClick={() => { setClassic(false); setClassicChrome(false); }}
+          className="w-full flex items-center justify-center gap-2 rounded-lg text-[12px] font-medium"
+          style={{ height: CTRL_H.compact + 6, color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--primary) 40%, transparent)" }}>
+          <svg width={ICON.sm} height={ICON.sm} viewBox="0 0 16 16" aria-hidden><rect x="1.5" y="5" width="13" height="6" rx="3" fill="currentColor" /></svg>
+          Back to the island
+        </button>
+      </div>
     </div>
   );
 
@@ -2952,6 +3167,20 @@ export function BrowserView({ active: viewOn, scope }: {
           * long url is truncated, because two lines of address bouncing the
           * page's bottom corner is worse than the half you cannot read.
           */}
+        {!classic && !IS_DEMO && (
+          <BrowserIsland tabs={tabs} activeId={activeId} acts={acts}
+            spaceName={spaceName}
+            address={active?.url && active.url !== BLANK ? displayUrl(active.url) : ""}
+            canBack={!!active?.canBack} canForward={!!active?.canForward} loading={!!active?.loading}
+            onShow={show} onClose={(id) => { close(id); shots.current.delete(id); setLandings((m) => { const { [id]: _gone, ...rest } = m; return rest; }); }} onNew={(space) => { if (space !== undefined) switchTo(space); setOmni("new"); }} onAddress={() => setOmni("edit")}
+            onBack={() => el()?.goBack()} onForward={() => el()?.goForward()} onReload={() => el()?.reload()} onStop={() => el()?.stop()}
+            onMenu={(r, byKey) => { setMenuAtXY({ top: r.bottom + 6, right: Math.max(6, window.innerWidth - r.right) }); setMenuByKey(byKey); setMenuOpen(true); }} menuOpen={menuOpen}
+            onToggle={(id) => { const a = actsRef.current[id]; if (a) dispatchAct({ type: "pause", tab: id, paused: !a.paused }); }}
+            picture={snapTab}
+            gutter={gutterOf}
+            lastPicture={(id) => shots.current.get(id) ?? null}
+            onTucked={setIslandTucked} />
+        )}
         {hover && (
           <div className="absolute bottom-0 left-0 max-w-[70%] truncate text-[10.5px] px-2 py-1 rounded-tr-md pointer-events-none"
             style={{ zIndex: 20, color: "var(--text2)", background: "var(--surface-card)",
@@ -2997,8 +3226,12 @@ export function BrowserView({ active: viewOn, scope }: {
               ? { left: 0, width: `${splitAt * 100}%` }
               : split && t.id === splitId
                 ? { left: `${splitAt * 100}%`, right: 0 }
-                : { left: 0, right: 0, ...(t.id === activeId ? null : { visibility: "hidden" }) }}>
-            <div style={{ width: viewport.width ? `${viewport.width}px` : "100%", height: "100%", maxWidth: "100%" }}>
+                : { left: 0, right: 0, ...(t.id === activeId ? { zIndex: 1 } : drivenBehind(acts[t.id]) ? { zIndex: 0, pointerEvents: "none" as const } : { visibility: "hidden" as const }) }}>
+            <div style={{ position: "relative", width: viewport.width ? `${viewport.width}px` : "100%", height: "100%", maxWidth: "100%" }}>
+              {acts[t.id] && (
+                <AgentPresence agent={acts[t.id]!} landing={landings[t.id] ?? null} url={t.url} quiet={!classic && islandTucked && t.id === activeId}
+                  onToggle={() => dispatchAct({ type: "pause", tab: t.id, paused: !acts[t.id]!.paused })} />
+              )}
               {IS_DEMO ? (
                 <DemoPage url={t.url || BLANK} />
               ) : (
@@ -3074,7 +3307,17 @@ export function BrowserView({ active: viewOn, scope }: {
         {/* Somewhere to start. A blank guest paints a black rectangle the size
             of the window, which is what made this view read as broken rather
             than as empty. */}
-        {blank && !active?.failed && (
+        {!active && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3" data-agx-empty="1"
+            style={{ background: "var(--bg)" }}>
+            <span style={{ color: "var(--text3)", opacity: 0.3 }}><BlankPageIcon size={40} /></span>
+            <span className="text-[11px]" style={{ color: "var(--text3)" }}>Nothing is open</span>
+            <button type="button" onClick={() => setOmni("new")}
+              className="text-[11px] px-3 py-1.5 rounded-md"
+              style={{ background: "var(--surface-card)", color: "var(--text2)", border: LINE }}>New tab</button>
+          </div>
+        )}
+        {active && blank && !active.failed && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 pointer-events-none"
             style={{ background: "var(--bg)" }}>
             <span style={{ color: "var(--text3)", opacity: 0.3 }}><BlankPageIcon size={40} /></span>
@@ -3212,7 +3455,7 @@ export function BrowserView({ active: viewOn, scope }: {
       </div>
       {/* The grip. In the gap, wide enough for a pointer even though the line
           it draws is one pixel — the same handle the card pane has. */}
-      {sideOpen && (
+      {classic && sideOpen && (
         <div role="separator" aria-orientation="vertical" tabIndex={0}
           aria-label="Drag to resize the bar"
           title="Drag to resize · double-click for the usual width"
@@ -3237,7 +3480,7 @@ export function BrowserView({ active: viewOn, scope }: {
           className="shrink-0 self-stretch"
           style={{ width: 5, marginLeft: -3, cursor: "col-resize", zIndex: 5 }} />
       )}
-      {sideOpen ? (
+      {!classic ? null : sideOpen ? (
         <aside className="shrink-0 min-h-0" style={{ width: sideW }}>{sideBody}</aside>
       ) : (
         <>
@@ -3254,6 +3497,10 @@ export function BrowserView({ active: viewOn, scope }: {
           )}
         </>
       )}
+      {/* Drawn here, not in the side bar: with the island there is no side
+          bar, and the island's own ⋯ opened a menu nothing rendered. */}
+      {barMenu}
+      {islandMenu}
       {/* What the other browser has, before any of it lands here.
           An import that simply happens is one nobody can check — and this one
           adds fourteen folders and seventy-odd pages to something arranged by

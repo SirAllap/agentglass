@@ -518,6 +518,9 @@ import { windowRepo } from "./windowrepo.ts";
 import { prepareReviewPrompt } from "./prs.ts";
 import { claudeCode, supportsSessionName } from "./agents/claudecode.ts";
 import { agentArgv, agentBinFor, claimAgentTicket } from "./agentticket.ts";
+import { launchFlags, launchPerm } from "./launchperm.ts";
+import { isLaunchMode } from "../../shared/launchModes.ts";
+import { reviewRecipe } from "./reviewPrompts.ts";
 import { agentKind } from "../../shared/agentKinds.ts";
 
 import { applyThemeTo } from "./themesync.ts";
@@ -899,7 +902,7 @@ export function ptyOpen(ws: PtyWs) {
      already read that as "open a plain shell in the worktree", which is the
      right answer rather than an empty pane. */
   const agentBin = ticket ? agentBinFor(ticket.kind ?? "claude") : null;
-  const agentRun = ticket ? agentArgv(agentBin, ticket, supportsSessionName(agentBin)) : [];
+  const agentRun = ticket ? agentArgv(agentBin, { ...ticket, perm: launchPerm(ticket.mode, ticket.yolo) }, supportsSessionName(agentBin)) : [];
 
   /*
    * Where the pane opens.
@@ -2077,7 +2080,7 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
           // The flag is the SPEC's, never the client's, and only where the CLI
           // has one: passing Claude's to Codex is an unknown option and an
           // immediate exit.
-          ? [bin, ...(msg.yolo === true && spec?.yoloFlag ? [spec.yoloFlag] : [])]
+          ? [bin, ...launchFlags(kind, launchPerm(msg.mode, msg.yolo === true))]
           // No agent on this machine is not a reason to open nothing: a shell
           // in the right project is still most of what was asked for, and the
           // same answer `cmd:"issue"` gives.
@@ -2170,7 +2173,9 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
         // on — and which CLIs do that, and which need a flag instead, is the
         // question agents/launch.ts holds the table for.
         const opened = await engineWindowRunning(plan.cwd, `pr-${number}`,
-          agentArgv(bin, { prompt: plan.prompt, yolo: false, title: "" }, supportsSessionName(bin)),
+          // A one-off "Run with…" wins over the prompt's own mode, which wins
+          // over the global one.
+          agentArgv(bin, { prompt: plan.prompt, yolo: false, title: "", perm: launchPerm(isLaunchMode(msg.mode) ? msg.mode : reviewRecipe(typeof msg.recipe === "string" ? msg.recipe : "")?.permissionMode) }, supportsSessionName(bin)),
           plan.cwd, undefined, lastTmuxTarget()?.session ?? "", true);
         /*
          * And then go there.
@@ -2288,7 +2293,7 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
         // the same division as `--name`: an allowlist, so a socket reachable from
         // the UI still cannot pass an arbitrary argument. Claude only — another
         // CLI's `--model` takes different values.
-        const argv = agentArgv(bin, { prompt, yolo: msg.yolo === true, title }, supportsSessionName(bin), modelFlags(msg.model, msg.effort));
+        const argv = agentArgv(bin, { prompt, yolo: msg.yolo === true, title, perm: launchPerm(msg.mode, msg.yolo === true) }, supportsSessionName(bin), modelFlags(msg.model, msg.effort));
         // `reuse` is the caller's to ask for: a live window with this exact name
         // in this checkout is selected instead of a second one being started
         // beside it, and the prompt is NOT sent again — right for a name that
@@ -2333,7 +2338,7 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
       }
       // The server's argv, not the client's: the binary, `--resume` and the one
       // flag the picker is allowed to ask for.
-      const argv = [bin, "--resume", id, ...(msg.yolo === true ? ["--dangerously-skip-permissions"] : [])];
+      const argv = [bin, "--resume", id, ...launchFlags("claude", launchPerm(msg.mode, msg.yolo === true))];
       const name = basename(cwd) || "resume";
       /*
        * C7 again — resuming is launching — below every refusal on this path (a

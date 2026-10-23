@@ -53,6 +53,8 @@ export interface BrowserTab {
    * shelf entry wherever it wanders, and the entry shows where it is.
    */
   shelfId?: string;
+  /** The last agent that acted on this tab, kept across a restart (see SavedTab). */
+  agent?: string;
   /**
    * `newtab --from-template`'s own in-memory jar — the visible-tab twin of a
    * lane's ephemeral fork. Set only for a tab minted that way; absent means
@@ -83,11 +85,50 @@ export const MAX_TABS = 12;
  * How many rows the strip will hold at all.
  *
  * Still bounded — an unbounded list is a leak with a nicer name — but bounded
- * by what a list costs rather than by what a browser costs. Sized for the
- * fleet the browser is built for: "if we want ten different agents working
- * on forty-five completely different tabs at the same time".
+ * by what a list costs rather than by what a browser costs. Sized for fifty
+ * containers of up to twenty pages, with room over.
+ *
+ * Measured in headless Chrome, software-rendered, with Mission Control open on
+ * 50 containers: 600 rows is 7.2k DOM nodes and 12 MB of JS heap, opens in
+ * 380 ms, filters in 27 ms, and scrolls at 36 ms a frame against 22 ms for a
+ * 36-row list — the rest of that is the blur's raster, not the rows. An asleep
+ * row is plain data and a card, so the cap is where Mission Control stops
+ * being a screen to scan, not where memory runs out. Past it, drop a container.
  */
-export const MAX_ROWS = 64;
+export const MAX_ROWS = 600;
+
+/** An agent that acted on a tab this recently still holds it: putting that page
+ *  to sleep would reload it under the agent's next verb. Shorter than
+ *  IDLE_RELEASE_MS on purpose — that one decides who owns a badge, this one
+ *  decides whether a reload is rude. */
+export const SLEEP_GRACE_MS = 3 * 60_000;
+
+/** What the panel knows about its tabs that the list does not. */
+export interface Recency {
+  activeId: string;
+  /** When each tab was last in front or acted on. Missing = never: sleeps first. */
+  usedAt: Readonly<Record<string, number>>;
+  /** An agent is working it, has paused it, or acted on it within SLEEP_GRACE_MS. */
+  held: (t: BrowserTab) => boolean;
+}
+
+/**
+ * Which awake tab goes to sleep to make room: the least recently used one that
+ * is not in front and not held by an agent. Ties go to the earlier row, so the
+ * choice is the same every time. `null` when every awake tab is protected.
+ *
+ * Ceiling: "used" is selection and agent verbs. A page playing media or holding
+ * an unsaved form is not detected — the shell reports neither — so a tab left
+ * in the background can be put to sleep mid-song.
+ */
+export function pickSleeper(tabs: readonly BrowserTab[], r: Recency): string | null {
+  let best: BrowserTab | null = null;
+  for (const t of tabs) {
+    if (t.asleep || t.id === r.activeId || r.held(t)) continue;
+    if (!best || (r.usedAt[t.id] ?? 0) < (r.usedAt[best.id] ?? 0)) best = t;
+  }
+  return best ? best.id : null;
+}
 
 let seq = 0;
 
@@ -112,8 +153,8 @@ export function __resetTabIds(): void { seq = 0; }
  *  and this is where they meet: without it, a tab you opened as Work would
  *  return as Default — same title, same icon, same address, signed in as
  *  somebody else, and nothing on screen to say so. */
-export function sleepingTab(url: string, title: string, icon: string | null, profile = ""): BrowserTab {
-  return { ...newTab(url, profile), title, icon, asleep: true };
+export function sleepingTab(url: string, title: string, icon: string | null, profile = "", id?: string): BrowserTab {
+  return { ...newTab(url, profile), ...(id ? { id } : null), title, icon, asleep: true };
 }
 
 /**
@@ -153,34 +194,56 @@ export function tabLabel(t: BrowserTab): string {
  * end of the strip. Moving to index 0, or to the last tab, means closing three
  * tabs in a row throws you somewhere different each time.
  *
- * Closing the last tab leaves one blank tab rather than an empty strip: a
- * browser view with no page in it has nothing to show and no way back.
+ * Closing the last tab leaves NOTHING open. The panel used to put a blank tab
+ * in its place because an empty view had no way back; the island's overview
+ * has a "New tab" card and the person's bar takes an address, so it has one
+ * now. The replacement also showed as a white card in the container of the
+ * tab just closed, which read as a page that would not close.
  */
 export function closeTab(tabs: BrowserTab[], id: string): { tabs: BrowserTab[]; activeId: string } {
   const i = tabs.findIndex((t) => t.id === id);
   if (i < 0) return { tabs, activeId: tabs[0]?.id ?? "" };
   const rest = tabs.filter((t) => t.id !== id);
-  if (!rest.length) {
-    // The replacement stays in the profile the closed tab was in: closing your
-    // last work tab should not quietly drop you back into the default identity.
-    const fresh = newTab(BLANK, tabs[i]!.profile);
-    return { tabs: [fresh], activeId: fresh.id };
-  }
+  if (!rest.length) return { tabs: [], activeId: "" };
   const next = rest[Math.min(i, rest.length - 1)]!;
   return { tabs: rest, activeId: next.id };
 }
 
+/**
+ * Where a tab a page opened goes: beside the tab that opened it, in that tab's
+ * profile and jar. It went beside whichever tab was in front, in the owner's
+ * own profile, so a link in an agent's container opened with the owner's
+ * cookies. `idOf` is a tab's WebContents id. A page that named no opener (an
+ * older shell) keeps the tab in front; an opener that is none of ours is
+ * `null`, because no profile is a safe guess for a page nobody can attribute:
+ * the front tab's is the owner's cookies, a named one may be another agent's.
+ */
+export function popupHome(
+  tabs: readonly Pick<BrowserTab, "id" | "profile" | "partition">[], idOf: (tabId: string) => number | undefined,
+  opener: number | undefined, activeId: string | undefined,
+): { from: string | undefined; profile: string | undefined; partition?: string } | null {
+  if (opener === undefined) return { from: activeId, profile: undefined };
+  const t = tabs.find((x) => idOf(x.id) === opener);
+  if (!t) return null;
+  return { from: t.id, profile: t.profile, ...(t.partition ? { partition: t.partition } : {}) };
+}
+
 /** Add one after the tab it was opened from — a link opened in a new tab
  *  belongs beside its parent, not at the far end of the strip. */
-export function addTab(tabs: BrowserTab[], url: string, afterId?: string, profile?: string, shelfId?: string, partition?: string): { tabs: BrowserTab[]; tab: BrowserTab } | { error: string } {
+export function addTab(tabs: BrowserTab[], url: string, afterId?: string, profile?: string, shelfId?: string, partition?: string, recency?: Recency): { tabs: BrowserTab[]; tab: BrowserTab; slept?: string } | { error: string } {
   if (tabs.length >= MAX_ROWS) {
     return { error: `${MAX_ROWS} pages is the limit. Close one first — or drop a profile you are done with, which closes its pages with it.` };
   }
   /* The memory cap, counted where the memory is. A new tab is born awake, so
      it needs a guest's worth of room; the ones asleep cost nothing and are not
      in this count. */
+  let slept: string | undefined;
   if (tabs.filter((t) => !t.asleep).length >= MAX_TABS) {
-    return { error: `${MAX_TABS} pages awake at once is the limit — each one is a live browser, and this app is also running your agents. Close one, let one go to sleep, or pass --wait-slot <seconds> to queue for a free one.` };
+    slept = (recency && pickSleeper(tabs, recency)) || undefined;
+    if (!slept) {
+      return { error: `${MAX_TABS} pages awake at once is the limit, and every one of them is in front or in an agent's hands right now. Close one, or pass --wait-slot <seconds> to queue for a free one.` };
+    }
+    tabs = tabs.map((t) => (t.id === slept ? { ...t, asleep: true } : t));
   }
   // A link opened from a page stays in the profile that page is signed into.
   // Anything else would sign you out mid-flow, which is the one thing profiles
@@ -189,7 +252,7 @@ export function addTab(tabs: BrowserTab[], url: string, afterId?: string, profil
   const tab = newTab(url, profile ?? from?.profile ?? "", shelfId, partition);
   const at = afterId ? tabs.findIndex((t) => t.id === afterId) : -1;
   const next = at < 0 ? [...tabs, tab] : [...tabs.slice(0, at + 1), tab, ...tabs.slice(at + 1)];
-  return { tabs: next, tab };
+  return { tabs: next, tab, ...(slept ? { slept } : null) };
 }
 
 /** Fold a change into one tab, leaving the others identical — so React only

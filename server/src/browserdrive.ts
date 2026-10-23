@@ -82,6 +82,7 @@ export type BrowserOp =
   | "inspect"
   | "tools" | "call-tool"
   | "whoami"
+  | "done"
   | "lane"
   | "health";
 /** Every verb, exported so a test can hold the CLI and the MCP to it — see
@@ -103,6 +104,7 @@ export const BROWSER_OPS: readonly BrowserOp[] = [
   "throttle", "har", "region", "clipboard", "save", "headers", "fake", "trace", "intercept",
   "checkup", "dialog", "handoff", "vitals", "a11y",
   "whoami",
+  "done",
   "lane",
   "health",
 ];
@@ -197,7 +199,7 @@ const TIMEOUT_MS: Record<BrowserOp, number> = {
   cdp: 60_000, listeners: 15_000, coverage: 30_000, screencast: 20_000,
   /* A question the panel answers from memory. `whoami` is the same question
      with the caller's own identity folded in, and one extra `tabs` behind it. */
-  profiles: 5_000, whoami: 5_000, lane: 20_000,
+  profiles: 5_000, whoami: 5_000, done: 5_000, lane: 20_000,
   /* Several CDP overrides in one round trip, none of them slow. */
   emulate: 20_000,
   /* The one verb whose whole point is waiting. Its own `wait` bounds it; this
@@ -721,6 +723,9 @@ const OBSERVE_OPS: ReadonlySet<BrowserOp> = new Set([
      refused it, the one call an agent should make BEFORE deciding whether it
      may act would be the first thing refused. */
   "whoami",
+  /* `done` only tells the person's overview the agent has finished: it touches
+     no page, so read-only mode has nothing to refuse. */
+  "done",
   /* Reading what a page offers looks and runs nothing; `call-tool` is not
      here, so it acts by default like every unclassified verb. */
   "tools",
@@ -2655,6 +2660,14 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
         if (!Number.isInteger(n) || n < 100 || n > 200_000) return { error: "max must be 100..200000" };
         args.max = n;
       }
+      /* How long the script gets before the call stops waiting for it (10 s
+         when absent). Under the 45 s the relay itself waits for an eval, so
+         the answer that names the timeout is the one that arrives. */
+      if (b.timeoutMs !== undefined) {
+        const n = Number(b.timeoutMs);
+        if (!Number.isInteger(n) || n < 100 || n > 40_000) return { error: "timeoutMs must be 100..40000" };
+        args.timeoutMs = n;
+      }
       break;
     }
     case "addInitScript": {
@@ -2768,6 +2781,20 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
          (`observeTracked`), because a caller asserting its own baseline can
          only be wrong in ways nothing here could see. */
       if (op === "observe" && (b.delta === true || b.delta === "true")) args.delta = true;
+      /* A look at part of the page: the viewport, or the subtree of one
+         element. Neither is a baseline (the page stores no snapshot for it), so
+         neither can be a delta: a diff against a part would call the rest of
+         the page removed. */
+      if (op === "observe") {
+        if (b.viewport === true || b.viewport === "true") args.viewport = true;
+        if (b.root !== undefined) {
+          if (typeof b.root !== "string" || !/^e[0-9]+$/.test(b.root)) return { error: "root must be an id from an observation, like e12" };
+          args.root = b.root;
+        }
+        if (args.delta === true && (args.viewport === true || args.root !== undefined)) {
+          return { error: "delta compares whole pages: leave out viewport and root, or leave out delta" };
+        }
+      }
       break;
     }
     case "resize": {
@@ -3048,6 +3075,7 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
     case "forms":
     case "back":
     case "forward":
+    case "done":
       break;
     case "tools":
       break;

@@ -85,6 +85,23 @@ export function bellState(ws: PrWatch[], seenAt = 0, checksDone = true): { kind:
   return { kind: "off", waiting: 0, ...(last ? { last } : null) };
 }
 
+const short = (sha: string | undefined): string => (sha ?? "").slice(0, 7);
+
+/**
+ * What the chip says about the run a CI watch is looking at. After an Update branch the old head's green is not
+ * the answer, so the person is told the watch is waiting for the new one, and told in words when the update moved
+ * nothing. Null when nothing is being watched or no head has been read yet.
+ */
+export function watchPhase(ws: PrWatch[]): { kind: "waiting" | "unchanged" | "watching"; text: string } | null {
+  const w = ws.find((x) => x.active && x.rule.type !== "comment" && (x.head || x.sync));
+  if (!w) return null;
+  const from = short(w.sync?.from ?? w.head);
+  if (w.sync?.state === "waiting") return { kind: "waiting", text: `Waiting for new run (head ${from} → …)` };
+  if (w.sync?.state === "moved") return { kind: "waiting", text: `Waiting for new run (head ${from} → ${short(w.head)})` };
+  if (w.sync?.state === "unchanged") return { kind: "unchanged", text: `Update did not change the head — still watching the old run (${from})` };
+  return w.head ? { kind: "watching", text: `Watching run on ${short(w.head)}` } : null;
+}
+
 export const firedOk = (w: PrWatch): boolean => !/fail/i.test(w.lastText ?? "");
 
 /** "CI passed · 10:42" — what the button says once a watch has fired; the tick or cross before it is drawn, not typed. */

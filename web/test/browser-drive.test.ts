@@ -6,11 +6,14 @@
  * a template instead of being encoded, a click that reports success having hit
  * nothing, and a typed value that a framework throws away on its next render.
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { globalStubs } from "./stubGlobal";
-import { claimAgentZoom, forgetAgentZoom, reapplyZoom, resetBrowserSettings, resetStableIds, runBrowserAsk, type DrivableWebview } from "../src/lib/browserDrive.ts";
+import { claimAgentZoom, forgetAgentZoom, reapplyZoom, resetBrowserSettings, notePopup, resetStableIds, runBrowserAsk, setFindWaitMs, type DrivableWebview } from "../src/lib/browserDrive.ts";
 import { cookieSetParams as buildCookie } from "../src/lib/cookieSet.ts";
 const stubGlobal = globalStubs();
+/* An act verb looks again for a selector that matches nothing; fast here. */
+beforeAll(() => setFindWaitMs(1000));
+afterAll(() => setFindWaitMs());
 
 const canary = () => (globalThis as unknown as { __canary: { hit: number } }).__canary;
 
@@ -92,6 +95,8 @@ function fakeGuestWithCookies(host = "example.com") {
   };
   return fakeGuest((code) => new Function("document", `return ${code}`)(document));
 }
+
+const DRIVE_SRC = await Bun.file(new URL("../src/lib/browserDrive.ts", import.meta.url)).text();
 
 describe("driving a page", () => {
   test("a navigation the egress guard refused says why, not just ERR_TUNNEL_CONNECTION_FAILED", async () => {
@@ -309,6 +314,41 @@ describe("driving a page", () => {
     const r = await runBrowserAsk(el, ask("click", { selector: ".save" }));
     expect(r.ok).toBe(false);
     expect(r.error).toContain("covered by e42 .modal-backdrop");
+  });
+
+  test("a click the page refused is not tried again: the gate is the page's last word", async () => {
+    const el = fakeGuest(() => ({ kind: "blocked", reason: "disabled" }));
+    await runBrowserAsk(el, ask("click", { selector: ".save" }));
+    expect(el.ran.filter((c) => c.includes("__got")).length).toBe(1);
+  });
+
+  test("a selector that matches nothing yet is looked for again until it does", async () => {
+    let n = 0;
+    const el = fakeGuest((c) => (c.includes("__got") && !c.includes("data-agx-flash") && ++n < 3 ? { kind: "none" } : { kind: "ok" }));
+    const r = await runBrowserAsk(el, ask("click", { selector: ".save" }));
+    expect(r.ok).toBe(true);
+    expect(n).toBe(3);
+  });
+
+  test("a click that opened a tab says which, so the next call can go there", async () => {
+    const el = Object.assign(fakeGuest((c) => {
+      if (c.includes("__got")) {
+        notePopup(7, "t9-terms", "https://example.com/terms");
+        notePopup(8, "t3-other", "https://example.com/elsewhere");
+      }
+      return { kind: "ok" };
+    }), { getWebContentsId: () => 7 });
+    const r = await runBrowserAsk(el, ask("click", { selector: "a" }));
+    expect((r.value as any).effect.popups).toEqual([{ page: "t9-terms", url: "https://example.com/terms" }]);
+    // The next act did not open it: it is not that act's to report.
+    const again = await runBrowserAsk(el, ask("click", { selector: "a" }));
+    expect((again.value as any).effect.popups).toBeUndefined();
+  });
+
+  test("and a click that opened nothing carries no popups at all", async () => {
+    const el = Object.assign(fakeGuest(), { getWebContentsId: () => 11 });
+    const r = await runBrowserAsk(el, ask("click", { selector: "a" }));
+    expect((r.value as any).effect.popups).toBeUndefined();
   });
 
   test("dblclick, rightclick and hover go through the same gate as click", async () => {
@@ -565,6 +605,31 @@ describe("driving a page", () => {
     // than reporting a press that did nothing.
     expect(src).toContain("prevented");
     expect((r.value as Record<string, unknown>)?.applied).toBe("edit");
+  });
+
+  /*
+   * A field that adds a row on Enter, written the way many pages still are:
+   * `if (event.keyCode !== 13) return`. A KeyboardEvent built from `key` alone
+   * has keyCode 0, so `press Enter` answered applied:"none" and the row never
+   * appeared; `type --submit` then sat out a 20 s wait for a navigation that
+   * Enter in such a field never causes.
+   */
+  test("Enter carries the legacy keyCode a page may still test for", async () => {
+    const el = fakeGuest(() => ({ kind: "ok", applied: "none", prevented: false, on: "input" }));
+    await runBrowserAsk(el, ask("press", { key: "Enter" }));
+    const src = el.ran[0] ?? "";
+    expect(src).toContain("keyCode: LEGACY[name]");
+    expect(src).toContain("init.which = init.keyCode");
+    expect(src).toMatch(/Enter":\s*13/);
+  });
+
+  test("type --submit answers without waiting for a navigation", async () => {
+    const el = fakeGuest(() => ({ kind: "ok", secret: false }));
+    const t0 = Date.now();
+    const r = await runBrowserAsk(el, ask("type", { selector: "#q", text: "x", submit: true }));
+    expect(r.ok).toBe(true);
+    expect(Date.now() - t0, "settled() would wait 20 s").toBeLessThan(5000);
+    expect(el.ran.join(" ")).toContain("keyCode: 13");
   });
 
   test("an empty capture is a failure, not a zero-byte screenshot", async () => {
@@ -1332,6 +1397,14 @@ describe("eval's wrapper stays synchronous unless asked", () => {
     expect(el.ran[0], "a plain eval went out as an async IIFE").not.toContain("async");
   });
 
+  // A promise came back as the opaque bridge failure and was reported as "not an expression".
+  test("a plain eval that returns a promise says to ask with --await", async () => {
+    const el = fakeGuest((code: string) => new Function("return " + code)());
+    const r = await runBrowserAsk(el, ask("eval", { js: "Promise.resolve(3)" }));
+    expect(r.ok).toBe(false);
+    expect(String((r as { error?: string }).error)).toContain("--await");
+  });
+
   test("and --await does, because that is what it is for", async () => {
     const el = fakeGuest(() => ({ __agxOk: true, __agxV: 2 }));
     await runBrowserAsk(el, ask("eval", { js: "fetch('/x')", await: true }));
@@ -1371,6 +1444,87 @@ describe("eval's wrapper stays synchronous unless asked", () => {
     // is almost never the one on screen.
     expect(src, "rAF does not fire on a tab that is not painting").not.toContain("requestAnimationFrame");
     expect(src).toContain("setTimeout");
+  });
+
+  /*
+   * A script that never finishes held the verb until the relay gave up at 45 s
+   * with a sentence about the browser not responding, and a loop took the whole
+   * tab with it. The call now ends on its own clock, and the answer says what
+   * is known: it stopped, and the page may have been changed before it did.
+   */
+  describe("eval that never finishes", () => {
+    type Call = { method: string; params?: unknown };
+    /** A DevTools relay that answers, recording what it was asked. `blocked`
+     *  stands for a page whose main thread is stuck in a loop: it answers
+     *  nothing until the execution is terminated. */
+    function relay(blocked: boolean) {
+      const calls: Call[] = [];
+      let freed = !blocked;
+      const waiting: Array<() => void> = [];
+      const cdp = async (method: string, params?: unknown) => {
+        calls.push({ method, params });
+        if (method === "Runtime.terminateExecution") { freed = true; waiting.splice(0).forEach((f) => f()); return { ok: true, result: {} }; }
+        if (!freed) await new Promise<void>((r) => waiting.push(r));
+        return { ok: true, result: { result: { value: 1 } } };
+      };
+      return { calls, cdp };
+    }
+    const never = () => new Promise(() => {});
+
+    test("the timer is held to the ceiling the relay allows, and a value that is not a number is the default", () => {
+      const line = DRIVE_SRC.split("\n").find((l) => l.includes("if (Number.isFinite(askedMs)) evalMs ="));
+      expect(line).toContain("askedMs > EVAL_TIMEOUT_MAX_MS ? EVAL_TIMEOUT_MAX_MS : askedMs < 0 ? 0 : askedMs");
+      expect(DRIVE_SRC).toContain("let evalMs = EVAL_TIMEOUT_MS;");
+      expect(DRIVE_SRC).toContain("const EVAL_TIMEOUT_MAX_MS = 40_000;");
+    });
+
+    test("a promise that never settles is given up on, with the caveat", async () => {
+      const el = fakeGuest(never);
+      const { calls, cdp } = relay(false);
+      const t0 = Date.now();
+      const r = await runBrowserAsk(el, ask("eval", { js: "new Promise(() => {})", await: true, timeoutMs: 40 }),
+        undefined, undefined, undefined, cdp);
+      expect(Date.now() - t0).toBeLessThan(2000);
+      expect(r.ok).toBe(false);
+      expect(r.error).toContain("did not finish in 0.04s");
+      expect(r.error).toContain("it may have changed the page before it stopped");
+      expect(r.value).toEqual({ executionStopped: true, mayHaveLateEffects: true });
+      // The page still answered, so there was nothing to terminate.
+      expect(calls.map((c) => c.method)).not.toContain("Runtime.terminateExecution");
+    });
+
+    test("a loop that blocks the page is terminated through the protocol", async () => {
+      const el = fakeGuest(never);
+      const { calls, cdp } = relay(true);
+      const r = await runBrowserAsk(el, ask("eval", { js: "(() => { for (;;) {} })()", timeoutMs: 40 }),
+        undefined, undefined, undefined, cdp);
+      expect(r.ok).toBe(false);
+      expect(r.error).toContain("did not finish in 0.04s");
+      expect(r.value).toEqual({ executionStopped: true, mayHaveLateEffects: false });
+      expect(calls.map((c) => c.method)).toContain("Runtime.terminateExecution");
+    });
+
+    test("a loop the shell cannot terminate says so instead of claiming it stopped", async () => {
+      const el = fakeGuest(never);
+      const cdp = async () => ({ ok: false, error: "no debugger seat" });
+      const r = await runBrowserAsk(el, ask("eval", { js: "(() => { for (;;) {} })()", timeoutMs: 40 }),
+        undefined, undefined, undefined, cdp);
+      expect(r.ok).toBe(false);
+      expect((r.value as { executionStopped: boolean }).executionStopped).toBe(false);
+      expect(r.error).toContain("could not be stopped");
+    });
+
+    test("a script that finishes in time is answered as before, and the clock is cleared", async () => {
+      const el = fakeGuest(() => ({ __agxOk: true, __agxV: 2 }));
+      const r = await runBrowserAsk(el, ask("eval", { js: "1+1", timeoutMs: 40 }));
+      expect(r).toEqual({ ok: true, value: { value: 2, truncated: false } });
+    });
+
+    test("the default is ten seconds, and the page is told nothing about it", async () => {
+      const el = fakeGuest(() => ({ __agxOk: true, __agxV: 2 }));
+      await runBrowserAsk(el, ask("eval", { js: "1+1" }));
+      expect(el.ran[0]).not.toContain("10000");
+    });
   });
 
   test("both still catch the page's throw in the page", async () => {
@@ -1815,12 +1969,14 @@ describe("stale ids say why, and say to observe again", () => {
     tagName: string; dataset: Record<string, string>; innerText: string; id: string; className: string;
     disabled: boolean; parentElement: null; outerHTML: string; textContent: string;
     getAttribute(n: string): string | null; getBoundingClientRect(): { x: number; y: number; width: number; height: number; top: number; left: number };
-    contains(o: unknown): boolean; scrollIntoView(): void; click(): void; querySelectorAll(sel: string): Node[];
+    contains(o: unknown): boolean; scrollIntoView(): void; click?(): void; querySelectorAll(sel: string): Node[];
+    dispatchEvent?(ev: { type: string }): boolean; closest?(sel: string): Node | null;
   };
 
   /** A document with one button per label, a window of its own (so `__agxSeq`
    *  lives where a real page keeps it), and the guest that runs scripts
    *  against them. */
+  const EvStub = class { constructor(public type: string, init: object) { Object.assign(this, init); } };
   function fakePage(buttons: string[], href = "https://example.com/a") {
     const clicked: string[] = [];
     const nodes: Node[] = buttons.map((label, i) => ({
@@ -1830,7 +1986,8 @@ describe("stale ids say why, and say to observe again", () => {
       getBoundingClientRect: () => ({ x: 10, y: 10 + 40 * i, width: 80, height: 20, top: 10 + 40 * i, left: 10 }),
       contains: () => false,
       scrollIntoView() {},
-      click() { clicked.push(label); },
+      dispatchEvent(ev: { type: string }) { if (ev.type === "click") clicked.push(label); return true; },
+      closest: () => null,
       querySelectorAll: () => [],
     }));
     /* The form the buttons sit in — what `region` is pointed at. */
@@ -1854,9 +2011,9 @@ describe("stale ids say why, and say to observe again", () => {
       querySelector(sel: string): Node | null { return document.querySelectorAll(sel)[0] ?? null; },
     };
     const run = (code: string) => new Function(
-      "window", "document", "location", "getComputedStyle", "innerWidth", "innerHeight", "localStorage", "sessionStorage",
+      "window", "document", "location", "getComputedStyle", "innerWidth", "innerHeight", "localStorage", "sessionStorage", "PointerEvent", "MouseEvent",
       `return ${code}`,
-    )(win, document, { href }, () => ({ display: "block", visibility: "visible", opacity: "1" }), 1200, 800, {}, {});
+    )(win, document, { href }, () => ({ display: "block", visibility: "visible", opacity: "1" }), 1200, 800, {}, {}, EvStub, EvStub);
     /* The collector patches fetch and friends on a real window; here it has
        nothing to patch and nothing this checks depends on it. */
     const el = fakeGuest((code) => (code.includes("__agxLog = log") ? 1 : run(code)));
@@ -2228,5 +2385,27 @@ describe("cookies --set with attributes goes through the protocol, not document.
     const r = await runBrowserAsk(fakeGuest(), ask("cookies", { set: { name: "a", value: "b", httpOnly: true } }),
       undefined, undefined, undefined, liar);
     expect(r.ok).toBe(false);
+  });
+});
+
+describe("an act counts a transparent control as there", () => {
+  test("opacity 0 is not hidden: a custom checkbox is the real input at opacity 0", async () => {
+    const src = await Bun.file(new URL("../src/lib/browserDrive.ts", import.meta.url)).text();
+    const body = src.slice(src.indexOf("function actionable("), src.indexOf("if (visible && enabled && stable)"));
+    const code = body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+    expect(code).toContain("const visible = rect.width > 0");
+    expect(code).not.toContain("opacity");
+  });
+});
+
+describe("a page that does not load", () => {
+  // A failed load answered with the webview bridge's own sentence, which read as the browser breaking.
+  test("says Chromium's reason in words, without the bridge's wrapping", async () => {
+    const { loadFailure } = await import("../src/lib/browserDrive.ts");
+    const m = loadFailure("Error invoking remote method 'GUEST_VIEW_MANAGER_CALL': Error: ERR_NAME_NOT_RESOLVED (-105) loading 'https://orbit.invalid/'");
+    expect(m).not.toContain("GUEST_VIEW_MANAGER_CALL");
+    expect(m).toContain("ERR_NAME_NOT_RESOLVED");
+    expect(m).toContain("does not resolve");
+    expect(loadFailure("ERR_SOMETHING_NEW (-999)")).toBe("ERR_SOMETHING_NEW (-999)");
   });
 });

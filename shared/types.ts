@@ -1,5 +1,6 @@
 // Shared event + analytics contract between server and web.
 // Keep this file dependency-free so both sides can import it.
+import type { LaunchMode } from "./launchModes.ts";
 import type { NotifyKind, NotifyPrefs } from "./notifyPrefs.ts";
 import type { AskedAlert, NotifyPayload } from "./notifyPayload.ts";
 import type { CheckUsual } from "./checkBaseline.ts";
@@ -649,11 +650,11 @@ export type PtyClientFrame =
    *  in its own catalogue, never the prompt itself, so this socket still cannot
    *  choose the text that reaches the agent. `card` is the tracker id the panel
    *  read off the branch, which the server has no way to work out. */
-  | { t: "tmux"; cmd: "review"; number: number; root: string; recipe?: string; card?: string }
+  | { t: "tmux"; cmd: "review"; number: number; root: string; recipe?: string; card?: string; mode?: LaunchMode }
   /** Start work on an issue in a window of the user's tmux. `agent` opens the
    *  CLI in it, `yolo` buys exactly one flag, and `title` is data that
    *  `sessionTitle` sanitises before it reaches an argv array. */
-  | { t: "tmux"; cmd: "issue"; n?: number; cwd: string; name?: string; prompt?: string; agent?: boolean; yolo?: boolean; title?: string; model?: string; effort?: string; reuse?: boolean }
+  | { t: "tmux"; cmd: "issue"; n?: number; cwd: string; name?: string; prompt?: string; agent?: boolean; yolo?: boolean; mode?: LaunchMode; title?: string; model?: string; effort?: string; reuse?: boolean }
   /** The tab strip's four window commands, plus take-over. Kept in step with
    *  `TmuxAction` in server/src/tmuxctl.ts, which is what runs them. */
   /** `fit` sizes the tmux window to THIS client — see tmuxctl.ts, and the
@@ -677,7 +678,7 @@ export type PtyClientFrame =
    * makes. It is a boolean rather than a string for that reason.
    */
   | {
-      t: "tmux"; cmd: "agent"; yolo?: boolean;
+      t: "tmux"; cmd: "agent"; yolo?: boolean; mode?: LaunchMode;
       /**
        * Which CLI, as an id from shared/agentKinds.ts.
        *
@@ -699,7 +700,7 @@ export type PtyClientFrame =
    * and `yolo` is the only flag the client may ask for — the binary and every
    * other argument are the server's.
    */
-  | { t: "tmux"; cmd: "resume"; id: string; cwd: string; split?: boolean; yolo?: boolean }
+  | { t: "tmux"; cmd: "resume"; id: string; cwd: string; split?: boolean; yolo?: boolean; mode?: LaunchMode }
   /* `session` shows another tmux session in this strip. It is a `switch-client`,
      the same call the app used to make BY ITSELF when it opened a window
      elsewhere — which took four windows of somebody's own work off their screen.
@@ -1219,7 +1220,7 @@ export interface BrowserAskFrame {
        replaces the current view. */
     | "tabs" | "tab" | "newtab" | "closetab"
     | "console" | "network" | "resize" | "zoom" | "html" | "waitfor" | "observe"
-    | "eval" | "select" | "reload" | "cookies" | "frames"
+    | "eval" | "select" | "reload" | "cookies" | "frames" | "done"
     /* §3's actionability half: click's other verbs, and a whole form as one
        call. See browserDrive.ts's `actionable()` for the gate all but
        focus/blur share. */
@@ -2124,6 +2125,12 @@ export interface PrWatch {
   active: boolean;
   lastAt?: number;
   lastText?: string;
+  /** The head commit the watch last read this pull request at: what "Watching run on abc1234" names. */
+  head?: string;
+  /** Set after an Update branch the server accepted: `waiting` = the head has not moved yet (checks of the old head
+   *  are not news), `moved` = it has, its checks are not there yet, `unchanged` = it never moved and the watch has
+   *  gone back to the current head. `from` is the head the sync started on. */
+  sync?: { state: "waiting" | "moved" | "unchanged"; from?: string };
 }
 
 export interface PrWatchFire {
@@ -4071,6 +4078,8 @@ export interface PrActionResult {
   /** Update branch only: GitHub refused because base and head conflict — the
    *  one refusal the panel can offer to resolve. */
   conflict?: boolean;
+  /** Update branch only: the head GitHub had when the request was made, so a watch can tell the new one apart. */
+  headBefore?: string;
   /** Update branch only: GitHub accepted the request (it answers 202, queued)
    *  but the branch had not moved when last read, so nothing was synced here. */
   requested?: boolean;
@@ -5150,6 +5159,9 @@ export interface Recipe {
    *  there is nobody at boot to ask. */
   boot?: boolean;
   addedAt: number;
+  /** When a step starts `claude`, the permission mode it is started in.
+   *  Absent follows the global setting. */
+  permissionMode?: LaunchMode;
 }
 
 export interface RecipesResponse { recipes: Recipe[] }
@@ -5202,6 +5214,9 @@ export interface ReviewRecipe {
    *  lets the conflict decide — see shared/conflictModel.ts. */
   model?: ConflictModel;
   effort?: ConflictEffort;
+  /** The permission mode the terminal this prompt opens starts in. Absent
+   *  follows the global setting (Settings ▸ Terminal ▸ Launch permissions). */
+  permissionMode?: LaunchMode;
 }
 
 /** `auto` is a setting, not a model: it means "let the conflict decide". */

@@ -587,6 +587,29 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
       expect(askedArgs[1]?.delta, "a plain observe asked for a delta").toBeUndefined();
     });
 
+    step("eval --timeout-ms is sent, and only when given", async () => {
+      await openWindow();
+      asked = []; askedArgs = [];
+      answers = { eval: { ok: true, value: { value: 1 } } };
+      expect((await cli("eval", "1+1", "--timeout-ms", "2500")).code).toBe(0);
+      expect((await cli("eval", "1+1")).code).toBe(0);
+      expect(askedArgs.map((x) => x.timeoutMs)).toEqual([2500, undefined]);
+    });
+
+    step("observe --viewport and --root ask for a part of the page, and never with --delta", async () => {
+      await openWindow();
+      asked = []; askedArgs = [];
+      answers = { observe: { ok: true, value: { url: "u", title: "t", tree: [], outOfView: 4, console: [], network: [] } } };
+      expect((await cli("observe", "--viewport")).code).toBe(0);
+      expect((await cli("observe", "--root", "e12")).code).toBe(0);
+      expect((await cli("observe")).code).toBe(0);
+      expect(askedArgs.map((x) => [x.viewport, x.root])).toEqual([[true, undefined], [undefined, "e12"], [undefined, undefined]]);
+      const both = await cli("observe", "--delta", "--viewport");
+      expect(both.code).toBe(2);
+      expect(both.err).toContain("--delta compares whole pages");
+      expect(askedArgs).toHaveLength(3);
+    });
+
     step("a look the caller only sees part of says so, so it never becomes a delta's baseline", async () => {
       await openWindow();
       asked = []; askedArgs = [];
@@ -867,6 +890,18 @@ describe("an agent has an identity without asking for one", () => {
     expect(askedArgs.map((x) => [x.page, x.profile])).toEqual([
       ["t-gone", undefined], [undefined, "agent-four"],
     ]);
+  });
+
+  step("a NAMED tab that is gone is refused, never answered with a new tab", async () => {
+    /* A script held a tab's id and sent `--page <id> open <url>` for a minute;
+       when the id stopped naming anything every call quietly minted a tab. */
+    await openWindow();
+    answers.open = { ok: false, error: "no tab called t-old — the app restarted before that tab was saved" };
+    askedArgs.length = 0;
+    const r = await cliAsMe("--page", "t-old", "open", "--as", "agent-four", "https://example.com/");
+    expect(askedArgs.map((x) => [x.page, x.profile]), "a second ask minted a tab").toEqual([["t-old", undefined]]);
+    expect(r.code).not.toBe(0);
+    expect(r.out + r.err).toContain("no tab called t-old");
   });
 });
 

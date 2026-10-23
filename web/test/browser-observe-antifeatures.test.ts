@@ -38,7 +38,7 @@ describe("observe script anti-features", () => {
       // Tree contains e (id), role, name, testid, id, disabled, hidden, covered, at (bounds)
       // But not innerHTML or full element content
       expect(script).toContain('e: stamp(el)');
-      expect(script).toContain('role: el.getAttribute("role")');
+      expect(script).toContain('el.getAttribute("role") || el.tagName.toLowerCase()');
       expect(script).toContain('at: [');
       // Should NOT include innerHTML or huge content
       expect(script).not.toContain("innerHTML");
@@ -148,7 +148,7 @@ describe("observe script anti-features", () => {
 
     test("tree includes role attribute", () => {
       const script = observeScript(0, 200);
-      expect(script).toContain('role: el.getAttribute("role")');
+      expect(script).toContain('el.getAttribute("role") || el.tagName.toLowerCase()');
     });
 
     test("tree includes actual element id if present", () => {
@@ -160,7 +160,7 @@ describe("observe script anti-features", () => {
       const script = observeScript(0, 200);
       // PICK list includes only interactive elements
       expect(script).toContain('const PICK = "a,button,input,select,textarea,[role],[data-testid],summary,h1,h2,h3"');
-      expect(script).toContain("document.querySelectorAll(PICK)");
+      expect(script).toContain("f.root.querySelectorAll(PICK)");
     });
   });
 

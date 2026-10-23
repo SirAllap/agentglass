@@ -214,7 +214,7 @@ describe("the panel is wired to all three", () => {
        being about breaking the browser. The two paths are eight lines apart in
        the file and the obvious tidy-up is to merge them. */
     const human = code(between(
-      "const open = useCallback((url: string, from?: string, profile?: string, shelfId?: string) => {",
+      "const open = useCallback((url: string, from?: string, profile?: string, shelfId?: string, opened?: (id: string) => void, partition?: string) => {",
       "const close = useCallback("));
     expect(human.includes("setActiveId(r.tab.id)")).toBe(true);
     expect(human.includes("mintTakesThePane(")).toBe(false);

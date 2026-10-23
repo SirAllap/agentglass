@@ -34,6 +34,7 @@ THE VERBS, by what you reach for them for:
                                                   # label= text= placeholder= testid=
   wait        wait · waitfor
   navigate    open · back · forward · reload
+  finished    done                                # when the task is over: the overview shows Done
   tabs        tabs · tab · newtab · closetab · profiles
   identity    whoami · cookies · profiles · session · permissions
               whoami                              # BEFORE anything else: am I
@@ -76,6 +77,7 @@ Env:
 """
 import argparse
 import base64
+import io
 import json
 import os
 import re
@@ -1232,6 +1234,93 @@ def do_steps(a):
             return None
         steps.append({"op": op, "args": {key: parts[1]}})
     return steps
+
+
+class BrowserError(Exception):
+    """A verb a `script` called was refused or failed; the message is the server's sentence."""
+
+
+class ScriptLimit(Exception):
+    """Not a BrowserError, so a script's `except BrowserError` cannot swallow the ceiling."""
+
+
+# THE CEILING of one `script`: 200 verb calls and 120 s of wall clock. It is a
+# guard against a loop that never ends (`while True: click('#next')`), not a
+# budget; a task that needs more is several scripts. The wall clock is checked
+# before each verb, so one slow verb can run past it by its own timeout.
+SCRIPT_MAX_CALLS = 200
+SCRIPT_MAX_SECONDS = 120
+# The verbs with a named helper in a script; any other verb is `b("op", **args)`.
+SCRIPT_HELPERS = ("open", "observe", "click", "type", "press", "select", "wait", "waitfor",
+                  "text", "read", "links", "extract", "eval")
+# The one argument each helper takes first, under the name the SERVER reads it by.
+SCRIPT_FIRST_ARG = {"open": "url", "click": "selector", "type": "selector", "select": "selector",
+                    "wait": "selector", "text": "selector", "press": "key", "waitfor": "js",
+                    "eval": "js", "extract": "fields"}
+
+
+def run_script(a, page, code):
+    """Run `code` with one function per verb, each sent addressed and stamped
+    exactly as a `do` step is. Returns the answer object `script` prints.
+
+    Readonly and the egress guard need nothing here: every verb is a server
+    call like any other, so the server refuses what it would refuse anyway.
+    The code runs with this CLI's own rights, the same an agent's shell has.
+    """
+    calls = [0]
+    started = time.monotonic()
+
+    def b(op, **args):
+        if calls[0] >= SCRIPT_MAX_CALLS:
+            raise ScriptLimit(f"stopped: a script may make at most {SCRIPT_MAX_CALLS} verb calls")
+        if time.monotonic() - started > SCRIPT_MAX_SECONDS:
+            raise ScriptLimit(f"stopped: a script may run at most {SCRIPT_MAX_SECONDS} s")
+        calls[0] += 1
+        res = call(op, stamped(a, _at(page, args)))
+        if not res.get("ok"):
+            raise BrowserError(res.get("error") or "failed")
+        return res.get("value")
+
+    def helper(op):
+        key = SCRIPT_FIRST_ARG.get(op)
+        def h(first=None, second=None, **args):
+            if first is not None:
+                args[key or "arg"] = first
+            if op == "type" and second is not None:
+                args["text"] = second
+            return b(op, **args)
+        h.__name__ = op
+        return h
+
+    def fill(fields=None, submit=False, **kw):
+        return b("fill", fields={**(fields or {}), **kw}, submit=submit)
+
+    out = io.StringIO()
+    ns = {"b": b, "fill": fill, "BrowserError": BrowserError, "json": json,
+          **{op: helper(op) for op in SCRIPT_HELPERS},
+          "print": lambda *x, **k: print(*x, **{**k, "file": out})}
+    ans = {"ok": True}
+    try:
+        exec(compile(code, "<script>", "exec"), ns)
+    except BaseException as e:  # SystemExit too: it must not end the CLI before the answer
+        tb = e.__traceback__
+        line = None
+        while tb:
+            if tb.tb_frame.f_code.co_filename == "<script>":
+                line = tb.tb_lineno
+            tb = tb.tb_next
+        if isinstance(e, SyntaxError) and e.filename == "<script>":
+            line = e.lineno
+        ans["ok"] = False
+        sentence = e.msg if isinstance(e, SyntaxError) else (str(e) or type(e).__name__)
+        ans["error"] = f"line {line}: {sentence}" if line else sentence
+    ans["printed"] = out.getvalue()
+    if "result" in ns:
+        ans["result"] = ns["result"]
+    if getattr(a, "observe", True):
+        obs = call("observe", stamped(a, _at(page, {"delta": True})))
+        ans["observe"] = obs.get("value") if obs.get("ok") else {"error": obs.get("error")}
+    return ans
 
 
 def steps_at(steps, page):
@@ -2402,6 +2491,8 @@ def main():
     p.add_argument("--omit-background", dest="omitBackground", action="store_true", help="capture with transparent background instead of opaque")
     sub.add_parser("back", help="go back in this page's history")
     sub.add_parser("forward", help="go forward again")
+    sub.add_parser("done", help="tell the person's overview you are finished with your tab "
+                                "(touches no page; your next verb marks it working again)")
     p = sub.add_parser("text", help="the text of one element, instead of the whole page")
     p.add_argument("selector")
 
@@ -2416,6 +2507,12 @@ def main():
     p.add_argument("--delta", action="store_true",
                    help="only what changed since your last observe of this document: added nodes, removed and "
                         "changed ids, new console/network. Full answer (delta:false + reason) after a navigation")
+    p.add_argument("--viewport", action="store_true",
+                   help="only the nodes on screen right now, and `outOfView`: how many were left out. "
+                        "Not a baseline for --delta")
+    p.add_argument("--root", metavar="ID",
+                   help="only the subtree of this element (an id like e12 from an observation). "
+                        "Not a baseline for --delta")
 
     p = sub.add_parser("eval", help="run javascript in the page and get the result back")
     p.add_argument("js", nargs="?")
@@ -2423,6 +2520,10 @@ def main():
                                   "quotes, newlines, backticks, dollar signs")
     p.add_argument("--await", dest="await_", action="store_true", help="the expression returns a promise")
     p.add_argument("--max", type=int, default=None)
+    p.add_argument("--timeout-ms", dest="timeoutMs", type=int, default=None, metavar="MS",
+                   help="stop waiting for the script after this long (default 10000, at most 40000). A promise that "
+                        "never settles or a loop is answered ok:false, executionStopped, and the script may "
+                        "have changed the page before it stopped")
     p = sub.add_parser("addInitScript", help="run javascript before every page's own scripts, from now on")
     p.add_argument("name", help="re-registering the same name replaces it, rather than stacking")
     p.add_argument("js")
@@ -2910,6 +3011,16 @@ def main():
     p.add_argument("--field", action="append", default=[], metavar="NAME=SELECTOR", help="for --read extract: one field, repeatable")
     p.add_argument("--concurrency", type=int, default=2, help="tabs open at once, 1 to 4 (default 2)")
     p = sub.add_parser(
+        "script",
+        help="Python with ifs and loops over the verbs, in ONE call, ending with an observe",
+        description="CODE is Python (a quoted string, or - to read it from stdin). Each verb is a "
+                    "function that returns its value or raises BrowserError; print() and a variable "
+                    "named `result` come back in the one JSON answer, with the page after "
+                    "(a delta when you observed it before). At most 200 verb calls and 120 s.",
+    )
+    p.add_argument("code", help="the Python to run, or - for stdin")
+    p.add_argument("--no-observe", dest="observe", action="store_false", help="leave the final observation out")
+    p = sub.add_parser(
         "do",
         help="several verbs in ONE call — starting this process costs ~104ms, so six "
              "verbs is most of a second spent before touching the page",
@@ -3084,6 +3195,15 @@ def main():
         # early as well, and the next verb that does will get it for free.
         return emit("cdp", res.get("value") or {}, a)
 
+    if a.cmd == "script":
+        page, refusal = addressed(a, "script")
+        if refusal:
+            print(refusal, file=sys.stderr)
+            return 1
+        res = run_script(a, page, sys.stdin.read() if a.code == "-" else a.code)
+        code = emit("script", res, a)
+        return code if res["ok"] else 1
+
     if a.cmd == "do":
         # A READ-ONLY BATCH IS THE DANGEROUS ONE. `do "read" "text body"` has
         # no leading `open` to overwrite the page, so on an unaddressed call it
@@ -3254,6 +3374,13 @@ def main():
             body["shot"] = True
         if a.delta:
             body["delta"] = True
+        if a.viewport:
+            body["viewport"] = True
+        if a.root:
+            body["root"] = a.root
+        if a.delta and (a.viewport or a.root):
+            print("--delta compares whole pages: leave out --viewport and --root, or leave out --delta", file=sys.stderr)
+            return 2
     elif a.cmd in ("tab", "closetab"):
         # An index if it looks like one, an id otherwise. `tabs` prints both,
         # so either is a thing the caller has in front of it.
@@ -3280,6 +3407,8 @@ def main():
         body = {"js": a.js, "await": a.await_}
         if a.max is not None:
             body["max"] = a.max
+        if a.timeoutMs is not None:
+            body["timeoutMs"] = a.timeoutMs
     elif a.cmd == "addInitScript":
         body = {"name": a.name, "js": a.js}
     elif a.cmd == "call-tool":
@@ -3853,7 +3982,11 @@ def main():
         forget_tab(who)
         # And try once more, in the identity we already have: a tab that has
         # been closed is a reason to open another one, not a reason to stop.
-        if a.cmd == "open" and who:
+        # NOT when the caller NAMED the tab. `--page <old id> open <url>` meant
+        # "go there in THAT tab"; answering it by minting a new one made a script
+        # that held a stale id open one extra tab per call (11 in a minute,
+        # measured), and each answer looked like success. The refusal stands.
+        if a.cmd == "open" and who and not getattr(a, "page", None):
             body.pop("page", None)
             # …but NOT `profile: "(default)"` for `--shared`. The panel mints a
             # container for a name it does not know, so retrying the person's

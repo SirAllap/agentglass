@@ -32,12 +32,30 @@
  * Ceilings, chosen and not missed:
  *  - "all CI passed" is every check the rollup lists, not only the required
  *    ones; GitHub's required-ness is not read here.
- *  - a rule added on a PR whose checks are ALREADY green fires on the next
- *    tick: it cannot tell "green since this morning" from "just went green".
+ *  - a rule added on a PR whose checks are ALREADY green does not fire: the first read after arming says "Already
+ *    green on abc1234" on the watch (`primed`), because it cannot tell "green since this morning" from "just went
+ *    green" and a toast for the former reads as stale. A run still going when armed fires when it turns green.
  *  - `check.match` is a substring, not a regex.
  *  - no "also behind main" alert.
  *  - a CI rule that has not fired within a week is dropped, so a merged PR is
  *    not read for ever.
+ *
+ * After Update branch. GitHub merges the base a moment after the button, and until the new head has checks of
+ * its own the read still returns the OLD head and its old green runs: a rule armed in that gap announced a run
+ * that was about to be replaced. So an accepted sync is written down per PR (`noteSync`, `pr_sync_mark`: the
+ * head it started from) and, while the read's head is still that one, no CI rule is decided. The head moves:
+ * its checks decide as usual, and none yet is "not started" (an empty list is never green). It does not move
+ * within SYNC_WAIT_MS: the sync did nothing, the watch says so (`PrWatch.sync`) and goes back to the current
+ * head. An old run that was ALREADY finished at that moment is not announced (that is the bug again, seen
+ * three minutes late); a run still going, or re-run, is. The mark is per PR and not per rule, so a rule armed AFTER the press is covered. Cost: one prompt read
+ * on the press, then the running cadence for at most SYNC_RUN_MS; no new timer.
+ * The press is written down when it BEGINS (`updateBranch`'s first callback), not when GitHub has answered: the answer
+ * takes seconds, and a rule armed inside them found no sync on record. A refused press takes the note back (`dropSync`).
+ * Whatever decides to speak re-reads the head once first and speaks only for the head that is live now; a head that
+ * moved in between is evaluated as a new head, and a re-read that fails speaks of nothing. Every verdict names its
+ * commit ("CI passed on abc1234") so a wrong one is visible.
+ * Ceiling: checks that register one workflow at a time can read as "all done" on the new head before the last
+ * one exists; that is not debounced. A head moved by a push or by GitHub's own button is not a sync we heard.
  */
 import { randomUUID } from "node:crypto";
 import { db } from "./db.ts";
@@ -60,7 +78,9 @@ CREATE TABLE IF NOT EXISTS pr_watch (
   last_text TEXT,
   -- comment rules: the newest remark already accounted for, persisted so a comment made while
   -- the server was down is still reported at the next sight of the PR
-  seen INTEGER
+  seen INTEGER,
+  -- 0 until the first read after the rule was armed has been looked at: a pass already there then is "already green", not news
+  primed INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_pr_watch_pr ON pr_watch(repo, number);
 CREATE TABLE IF NOT EXISTS pr_watch_preset (
@@ -78,18 +98,36 @@ CREATE TABLE IF NOT EXISTS pr_watch_fire (
   payload TEXT NOT NULL,
   created INTEGER NOT NULL
 );
+-- An Update branch GitHub accepted: the head it started from, so the old head's result is not taken for the new one.
+CREATE TABLE IF NOT EXISTS pr_sync_mark (
+  repo TEXT NOT NULL,
+  number INTEGER NOT NULL,
+  from_sha TEXT,
+  at INTEGER NOT NULL,
+  state TEXT NOT NULL,
+  -- unchanged only: the old run was already finished when the wait ran out, so its result is not news
+  settled INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (repo, number)
+);
 CREATE TABLE IF NOT EXISTS pr_watch_seen (
   repo TEXT NOT NULL,
   number INTEGER NOT NULL,
   PRIMARY KEY (repo, number)
 );
 `);
+try { db.exec("ALTER TABLE pr_watch ADD COLUMN primed INTEGER NOT NULL DEFAULT 1"); } catch { /* already present */ }
 
 /** How often the timer looks at what is due; the reads themselves are spread by `readEveryMs`. */
 export const WATCH_POLL_MS = 10_000;
 /** A PR whose CI is running is re-read this often, however long the rule has waited. */
 export const RUNNING_READ_MS = 30_000;
 const IDLE_READ_MS = 3 * 60_000;
+/** How long after an accepted sync the head may take to move before the sync is said to have done nothing. */
+export const SYNC_WAIT_MS = 3 * 60_000;
+/** After the head moved, how long its checks may take to appear before the watch stops expecting them. */
+export const SYNC_RUN_MS = 10 * 60_000;
+const SYNC_NOTE_MS = 60 * 60_000;
+const UNCHANGED_NOTE = "Update did not change the head";
 export const CI_RULE_TTL_MS = 7 * 24 * 60 * 60_000;
 const KEEP_FIRED_MS = 14 * 24 * 60 * 60_000;
 
@@ -101,7 +139,9 @@ const MAX_READS_PER_TICK = 20;
 /** `state` is the PR's own state, when the read had it: a merged or closed PR ends every watch on it. */
 export interface Snapshot { checks?: PrCheckRollup; allDone: boolean; verdict: "green" | "red" | null; all: PrCheck[]; state?: string; /** The head commit these checks were read at. */ sha?: string }
 export type ReadChecks = (root: string, number: number) => Promise<Snapshot | null>;
-export interface Outcome { summary: string; detail: string; ok: boolean }
+export interface Outcome { summary: string; detail: string; ok: boolean; /** The short commit the verdict is about, when the read had one. */ on?: string }
+/** What is said to the person: the verdict and the commit it is about. */
+const said = (o: Outcome): string => o.on ? `${o.summary} on ${o.on}` : o.summary;
 
 // ---------------------------------------------------------------------------
 // rules
@@ -173,7 +213,7 @@ export function evalRule(rule: PrWatchRule, s: Snapshot): Outcome | null {
 
 interface Row {
   id: string; repo: string; number: number; root: string; title: string; rule: string;
-  active: number; created: number; last_at: number | null; last_text: string | null; seen?: number | null;
+  active: number; created: number; last_at: number | null; last_text: string | null; seen?: number | null; primed?: number;
 }
 
 /* The comment rule is matched by its serialised form, not json_extract: SQLite throws on malformed JSON, and one
@@ -184,12 +224,72 @@ const ruleOf = (r: Row): PrWatchRule | null => { try { return coerceRule(JSON.pa
 const withRule = (rows: Row[]): { r: Row; rule: PrWatchRule }[] =>
   rows.flatMap((r) => { const rule = ruleOf(r); return rule ? [{ r, rule }] : []; });
 
-const toWatch = ({ r, rule }: { r: Row; rule: PrWatchRule }): PrWatch => ({
-  id: r.id, repo: r.repo, number: r.number, rule,
-  active: r.active === 1,
-  ...(r.last_at ? { lastAt: r.last_at } : null),
-  ...(r.last_text ? { lastText: r.last_text } : null),
-});
+const toWatch = ({ r, rule }: { r: Row; rule: PrWatchRule }): PrWatch => {
+  const live = r.active === 1;
+  const m = live ? markOf(r.repo, r.number) : null;
+  const head = live ? headSeen.get(`${r.repo}#${r.number}`) : undefined;
+  return {
+    id: r.id, repo: r.repo, number: r.number, rule,
+    active: live,
+    ...(r.last_at ? { lastAt: r.last_at } : null),
+    ...(r.last_text ? { lastText: r.last_text } : null),
+    ...(head ? { head } : null),
+    ...(m ? { sync: { state: m.state, ...(m.from_sha ? { from: m.from_sha } : null) } } : null),
+  };
+};
+
+// ---------------------------------------------------------------------------
+// Update branch
+// ---------------------------------------------------------------------------
+
+interface Mark { from_sha: string | null; at: number; state: "waiting" | "moved" | "unchanged"; settled: number }
+const markOf = (repo: string, number: number): Mark | null =>
+  db.query<Mark, [string, number]>(`SELECT from_sha, at, state, settled FROM pr_sync_mark WHERE repo = ? AND number = ?`).get(repo, number);
+const headSeen = new Map<string, string>();
+
+/** A sync GitHub accepted on this PR, started from `from` (null: it could not be read, the next read supplies it).
+ *  Said once per press; a second press starts the wait again. */
+export function noteSync(repo: string, number: number, from: string | null, now = Date.now()): void {
+  db.run(`INSERT INTO pr_sync_mark (repo, number, from_sha, at, state) VALUES (?, ?, ?, ?, 'waiting')
+          ON CONFLICT(repo, number) DO UPDATE SET from_sha = excluded.from_sha, at = excluded.at, state = 'waiting', settled = 0`, [repo, number, from, now]);
+  changed();
+}
+
+/** The press was refused or failed: nothing moved, so there is no old head to wait out. */
+export function dropSync(repo: string, number: number): void {
+  if (db.run(`DELETE FROM pr_sync_mark WHERE repo = ? AND number = ?`, [repo, number]).changes) changed();
+}
+
+/**
+ * Is a CI result on this read about the sync's old head. Moves the mark along as the reads show the head moving,
+ * and says whether the rules wait (`hold`) and whether the sync turned out to have done nothing.
+ */
+function syncHold(repo: string, number: number, s: Snapshot, now: number): { hold: boolean; unchanged: boolean } {
+  const m = markOf(repo, number);
+  if (!m) return { hold: false, unchanged: false };
+  const set = (state: Mark["state"]) => { db.run(`UPDATE pr_sync_mark SET state = ? WHERE repo = ? AND number = ?`, [state, repo, number]); changed(); m.state = state; };
+  const drop = () => { db.run(`DELETE FROM pr_sync_mark WHERE repo = ? AND number = ?`, [repo, number]); changed(); };
+  if (!m.from_sha && s.sha) { db.run(`UPDATE pr_sync_mark SET from_sha = ? WHERE repo = ? AND number = ?`, [s.sha, repo, number]); m.from_sha = s.sha; changed(); }
+  const moved = !!s.sha && !!m.from_sha && s.sha !== m.from_sha;
+  if (m.state === "waiting" || m.state === "unchanged") {
+    if (moved) { if (m.state === "unchanged") { drop(); return { hold: false, unchanged: false }; } set("moved"); }
+    else if (m.state === "unchanged") {
+      if (m.settled && s.allDone) return { hold: true, unchanged: true };
+      if (m.settled) { db.run(`UPDATE pr_sync_mark SET settled = 0 WHERE repo = ? AND number = ?`, [repo, number]); m.settled = 0; } // a re-run: its result is news
+      return { hold: false, unchanged: true };
+    }
+    else if (now - m.at < SYNC_WAIT_MS) return { hold: true, unchanged: false };
+    else {
+      const settled = s.allDone ? 1 : 0;
+      db.run(`UPDATE pr_sync_mark SET settled = ? WHERE repo = ? AND number = ?`, [settled, repo, number]); m.settled = settled;
+      set("unchanged");
+      return { hold: !!settled, unchanged: true };
+    }
+  }
+  // moved: its checks decide as soon as there are any; a list that stays empty is not waited for for ever
+  if (s.all.length || now - m.at > SYNC_RUN_MS) drop();
+  return { hold: false, unchanged: false };
+}
 
 function presetRules(json: string): PrWatchRule[] {
   try { return (JSON.parse(json) as unknown[]).map(coerceRule).filter((r): r is PrWatchRule => !!r); } catch { return []; }
@@ -238,7 +338,7 @@ export function addWatch(i: AddInput, notify = true): { ok: boolean; watch?: PrW
     return { ok: false, error: `at most ${MAX_RULES_PER_PR} rules on one pull request` };
   }
   if (had) {
-    db.run(`UPDATE pr_watch SET active = 1, created = ?, seen = ?, title = ?, root = ? WHERE id = ?`, [Date.now(), Date.now(), title, i.root, had.id]);
+    db.run(`UPDATE pr_watch SET active = 1, primed = 0, created = ?, seen = ?, title = ?, root = ? WHERE id = ?`, [Date.now(), Date.now(), title, i.root, had.id]);
     if (notify) changed();
     return { ok: true, watch: toWatch({ r: { ...had, active: 1 }, rule }) };
   }
@@ -246,7 +346,7 @@ export function addWatch(i: AddInput, notify = true): { ok: boolean; watch?: PrW
     id: randomUUID(), repo: i.repo, number: i.number, root: i.root, title, rule: JSON.stringify(rule),
     active: 1, created: Date.now(), last_at: null, last_text: null, seen: Date.now(),
   };
-  db.run(`INSERT INTO pr_watch (id, repo, number, root, title, rule, active, created, seen) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+  db.run(`INSERT INTO pr_watch (id, repo, number, root, title, rule, active, created, seen, primed) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, 0)`,
     [row.id, row.repo, row.number, row.root, row.title, row.rule, row.created, row.seen ?? null]);
   if (notify) changed();
   return { ok: true, watch: toWatch({ r: row, rule }) };
@@ -313,7 +413,7 @@ function deliver(r: Row, rule: PrWatchRule, o: Outcome, now = Date.now(), snap?:
   /* One alert per event: the PR, the commit the checks were read at, and the verdict. The alert is what a window
      draws and keeps until the person acts on it (askedAlerts.ts); the fire below is the bell row and the OS popup.
      A fire for an event already raised says nothing more. */
-  const f: Omit<PrWatchFire, "seq"> = { ruleId: r.id, rule: rule.type, repo: r.repo, number: r.number, title: r.title, summary: o.summary, detail: o.detail, ok: o.ok };
+  const f: Omit<PrWatchFire, "seq"> = { ruleId: r.id, rule: rule.type, repo: r.repo, number: r.number, title: r.title, summary: said(o), detail: o.detail, ok: o.ok };
   const alert = raiseAsked({ key: askedAlertKey({ repo: r.repo, number: r.number, sha: eventId, verdict: o.summary }), ok: o.ok,
     payload: watchPayload(f, { root: r.root, checks: snap?.checks, all: snap?.all }), armedAt: r.created }, now);
   if (!alert) return;
@@ -336,7 +436,7 @@ export function ackFire(seq: number): { ok: boolean } {
 
 /** Claim first, deliver second. Returns whether THIS call won the claim. */
 function fireOnce(r: Row, rule: PrWatchRule, o: Outcome, now: number, snap?: Snapshot): boolean {
-  const text = o.detail ? `${o.summary}: ${o.detail}` : o.summary;
+  const text = o.detail ? `${said(o)}: ${o.detail}` : said(o);
   const won = db.run(`UPDATE pr_watch SET active = 0, last_at = ?, last_text = ? WHERE id = ? AND active = 1`, [now, text, r.id]).changes > 0;
   if (won) { deliver(r, rule, o, now, snap); changed(); }
   return won;
@@ -391,6 +491,25 @@ export function readEveryMs(rows: Row[], running = true): number {
 const schedule = new Map<string, { next: number; wait: number; running: boolean }>();
 export function __resetSchedule(): void { schedule.clear(); }
 
+/** The first read after arming has been looked at: from here on a green is news. */
+function primeAll(repo: string, number: number): void {
+  db.run(`UPDATE pr_watch SET primed = 1 WHERE repo = ? AND number = ? AND primed = 0 AND active = 1`, [repo, number]);
+}
+
+/** What each CI rule says about this read, each outcome naming the commit it is about. */
+function decide(rows: Row[], s: Snapshot, unchanged: boolean): { r: Row; rule: PrWatchRule; o: Outcome }[] {
+  const outs: { r: Row; rule: PrWatchRule; o: Outcome }[] = [];
+  for (const { r, rule } of withRule(rows)) {
+    if (rule.type === "comment") continue;
+    let o = evalRule(rule, s);
+    if (!o) continue;
+    if (unchanged && !o.detail) o = { ...o, detail: UNCHANGED_NOTE };
+    if (s.sha) o = { ...o, on: s.sha.slice(0, 7) };
+    outs.push({ r, rule, o });
+  }
+  return outs;
+}
+
 /**
  * One pass: read each watched PR once (however many rules it has) and fire what has come due.
  *
@@ -401,6 +520,7 @@ export function __resetSchedule(): void { schedule.clear(); }
 export async function checkWatches(read: ReadChecks, now = Date.now(), gate = false): Promise<number> {
   db.run(`UPDATE pr_watch SET active = 0, last_at = ?, last_text = 'expired' WHERE active = 1 AND created < ? AND rule NOT LIKE '%"type":"comment"%'`, [now, now - CI_RULE_TTL_MS]);
   db.run(`DELETE FROM pr_watch WHERE active = 0 AND last_at < ?`, [now - KEEP_FIRED_MS]);
+  db.run(`DELETE FROM pr_sync_mark WHERE at < ?`, [now - SYNC_NOTE_MS]);
   const byPr = new Map<string, Row[]>();
   for (const r of db.query<Row, []>(`SELECT * FROM pr_watch WHERE active = 1`).all()) {
     const k = `${r.repo}#${r.number}`;
@@ -416,20 +536,56 @@ export async function checkWatches(read: ReadChecks, now = Date.now(), gate = fa
   for (const [k, rows] of due) {
     let snap: Snapshot | null = null;
     try { snap = await read(rows[0]!.root, rows[0]!.number); } catch { /* the next tick asks again */ }
-    const running = snap ? !snap.allDone || snap.all.some((c) => !c.done) : schedule.get(k)?.running ?? true;
+    const { repo, number } = rows[0]!;
+    // A head with no rollup at all is news only to a sync that is waiting for it; otherwise it is a read that found nothing.
+    if (snap && !snap.checks && !snap.all.length && !markOf(repo, number)) snap = null;
+    const hold = snap ? syncHold(repo, number, snap, now) : { hold: false, unchanged: false };
+    const waiting = markOf(repo, number)?.state;
+    const running = snap ? !snap.allDone || snap.all.some((c) => !c.done) || waiting === "waiting" || waiting === "moved" : schedule.get(k)?.running ?? true;
     const base = readEveryMs(rows, running);
     const wait = schedule.get(k)?.wait ?? base;
     schedule.set(k, snap ? { next: now + base, wait: base, running } : { next: now + Math.min(wait * 2, 10 * 60_000), wait: Math.min(wait * 2, 10 * 60_000), running });
     if (!snap) continue;
-    shareChecks(rows[0]!.repo, rows[0]!.number, snap);
-    if (snap.state && snap.state !== "OPEN") { endPr(rows[0]!.repo, rows[0]!.number, snap.state === "MERGED" ? "merged" : "closed", now); continue; }
-    for (const { r, rule } of withRule(rows)) {
-      if (rule.type === "comment") continue;
-      const o = evalRule(rule, snap);
-      if (o && fireOnce(r, rule, o, now, snap)) fired++;
+    shareChecks(repo, number, snap);
+    if (snap.state && snap.state !== "OPEN") { endPr(repo, number, snap.state === "MERGED" ? "merged" : "closed", now); continue; }
+    noteHead(repo, number, snap.sha);
+    if (hold.hold) { primeAll(repo, number); continue; } // the sync's old head: its runs are not news, and a rule armed now waits for the new one
+    let cur = snap;
+    let outs = decide(rows, cur, hold.unchanged);
+    if (outs.length) {
+      /* About to speak: ask once more which head is live. The read that decided is seconds old, and a head that moved
+         since is a run about to be replaced. Not confirmed (the read failed) is not spoken either. */
+      let live: Snapshot | null = null;
+      try { live = await read(rows[0]!.root, number); } catch { /* the next read asks again */ }
+      if (!live) continue;
+      if (live.sha && cur.sha && live.sha !== cur.sha) {
+        shareChecks(repo, number, live);
+        if (live.state && live.state !== "OPEN") { endPr(repo, number, live.state === "MERGED" ? "merged" : "closed", now); continue; }
+        noteHead(repo, number, live.sha);
+        const h = syncHold(repo, number, live, now);
+        cur = live;
+        outs = h.hold ? [] : decide(rows, cur, h.unchanged);
+      }
     }
+    for (const { r, rule, o } of outs) {
+      if (r.primed === 0 && o.ok) { // armed on a run that was already green: said on the watch, not announced
+        const sha = cur.sha ? ` on ${cur.sha.slice(0, 7)}` : "";
+        const text = rule.type === "check" ? `${rule.match} already passed${sha}` : `Already green${sha}`;
+        if (db.run(`UPDATE pr_watch SET active = 0, primed = 1, last_at = ?, last_text = ? WHERE id = ? AND active = 1`, [now, text, r.id]).changes) changed();
+      } else if (fireOnce(r, rule, o, now, cur)) fired++;
+    }
+    primeAll(repo, number);
   }
   return fired;
+}
+
+/** The head a PR was last read at, remembered for the chip; said to the windows only when it changes. */
+function noteHead(repo: string, number: number, sha: string | undefined): void {
+  const k = `${repo}#${number}`;
+  if (!sha || headSeen.get(k) === sha) return;
+  headSeen.set(k, sha);
+  if (headSeen.size > 500) headSeen.delete(headSeen.keys().next().value!);
+  changed();
 }
 
 let timer: ReturnType<typeof setInterval> | null = null;

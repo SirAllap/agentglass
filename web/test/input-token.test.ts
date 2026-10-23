@@ -123,6 +123,8 @@ const ALLOWED: { file: string; marker: string; why: string }[] = [
     why: "the Ctrl+K overlay draws its own bar (icon, field, mode chips) with one border; the field inside it is transparent" },
   { file: "FinderOpsUI.tsx", marker: "aria-invalid={!!problem}",
     why: "inline rename sits inside the listing row at the row's own height; INPUT's 32px box would resize the row" },
+  { file: "browser/BrowserIsland.tsx", marker: 'className="agx-isl-find"',
+    why: "sits in the overview's glass header beside the count pill and takes that pill's height and radius, not a form field's" },
   { file: "FinderCustomize.tsx", marker: 'aria-label="Pick a color"',
     why: "sr-only native colour input opened from a swatch button; it is never seen, so there is no look to share" },
 

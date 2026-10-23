@@ -315,6 +315,8 @@ function JsonData({ path, bytes, graph }: { path: string; bytes: number; graph: 
 /* ----------------------------------------------------------------- media */
 
 const CHECKER = "repeating-conic-gradient(color-mix(in srgb, var(--text) 8%, transparent) 0 25%, transparent 0 50%) 0 0 / 16px 16px";
+// The picture takes the whole pane, centred, at its own proportions; a small one is not blown up past its pixels.
+const FIT = { maxWidth: "100%", maxHeight: "100%", display: "block", boxSizing: "border-box", border: EDGE, background: CHECKER } as const;
 
 /** A GIF held on its first frame, with a button to let it run: what "Autoplay media previews" off means for a picture. */
 function StillGif({ src, facts }: { src: string; facts: FileFacts }) {
@@ -330,11 +332,11 @@ function StillGif({ src, facts }: { src: string; facts: FileFacts }) {
   if (play || !still) return <Picture src={src} facts={facts} />;
   return (
     <>
-      <div className="p-2 rounded-md min-w-0 self-start max-w-full relative" style={{ border: EDGE, background: CHECKER }}>
-        <img alt={facts.name} src={still} style={{ maxWidth: "100%", maxHeight: 420, display: "block" }} />
+      <div className="flex-1 min-h-0 min-w-0 flex items-center justify-center relative">
+        <img alt={facts.name} src={still} className="p-2 rounded-md" style={FIT} />
         <button className="agx-btn absolute rounded-md grid place-items-center" style={{ right: 12, bottom: 12, width: HIT, height: HIT, background: "var(--surface-card)", border: EDGE, color: "var(--primary-ink)" }} aria-label="Play GIF" title="Play GIF" onClick={() => setPlay(true)}><StrataIcon set="act" name="play" size={ICON.sm} /></button>
       </div>
-      <p className="mt-2 text-[11px]" style={{ color: "var(--text3)" }}>{facts.width && facts.height ? `${facts.width} × ${facts.height} px · ` : ""}{facts.mime} · {humanBytes(facts.bytes)} · paused</p>
+      <p className="mt-2 text-[11px] text-center" style={{ color: "var(--text3)" }}>{facts.width && facts.height ? `${facts.width} × ${facts.height} px · ` : ""}{facts.mime} · {humanBytes(facts.bytes)} · paused</p>
     </>
   );
 }
@@ -342,10 +344,10 @@ function StillGif({ src, facts }: { src: string; facts: FileFacts }) {
 function Picture({ src, facts }: { src: string; facts: FileFacts }) {
   return (
     <>
-      <div className="p-2 rounded-md min-w-0 self-start max-w-full" style={{ border: EDGE, background: CHECKER }}>
-        <img alt={facts.name} src={src} style={{ maxWidth: "100%", maxHeight: 420, display: "block" }} />
+      <div className="flex-1 min-h-0 min-w-0 flex items-center justify-center">
+        <img alt={facts.name} src={src} className="p-2 rounded-md" style={FIT} />
       </div>
-      <p className="mt-2 text-[11px]" style={{ color: "var(--text3)" }}>{facts.width && facts.height ? `${facts.width} × ${facts.height} px · ` : ""}{facts.mime} · {humanBytes(facts.bytes)}</p>
+      <p className="mt-2 text-[11px] text-center" style={{ color: "var(--text3)" }}>{facts.width && facts.height ? `${facts.width} × ${facts.height} px · ` : ""}{facts.mime} · {humanBytes(facts.bytes)}</p>
     </>
   );
 }

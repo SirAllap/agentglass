@@ -8,7 +8,8 @@
  * show and no way back.
  */
 import { beforeEach, describe, expect, it } from "bun:test";
-import { addTab, closeTab, isBlank, listable, MAX_TABS, newTab, patchTab, pruneBlank, stepTab, tabLabel, withInspected, __resetTabIds } from "../src/lib/browserTabs.ts";
+import { readFileSync } from "node:fs";
+import { addTab, closeTab, pickSleeper, SLEEP_GRACE_MS, type Recency, popupHome, isBlank, listable, MAX_TABS, newTab, patchTab, pruneBlank, stepTab, tabLabel, withInspected, __resetTabIds } from "../src/lib/browserTabs.ts";
 
 beforeEach(__resetTabIds);
 
@@ -66,14 +67,11 @@ describe("closing", () => {
     expect(two.activeId).toBe(c.id);
   });
 
-  it("leaves a blank tab rather than an empty strip", () => {
-    // A browser view with no page in it has nothing to show and no way back.
-    const only = newTab("https://a.test/");
-    const r = closeTab([only], only.id);
-    expect(r.tabs).toHaveLength(1);
-    expect(r.tabs[0]!.url).toBe("about:blank");
-    expect(r.activeId).toBe(r.tabs[0]!.id);
-    expect(r.tabs[0]!.id).not.toBe(only.id);
+  it("closing the last tab leaves nothing open", () => {
+    // The island's overview and the person's bar are the way back, so no blank
+    // tab is put in the closed one's place (it showed as a white card there).
+    const only = newTab("https://a.test/", "work");
+    expect(closeTab([only], only.id)).toEqual({ tabs: [], activeId: "" });
   });
 
   it("ignores a tab that is not there", () => {
@@ -127,6 +125,61 @@ describe("opening", () => {
     if (!("error" in r)) return;
     expect(r.error).toContain(String(MAX_TABS));
     expect(r.error).toContain("Close one");
+  });
+});
+
+describe("a full strip puts the least-used tab to sleep", () => {
+  const full = () => Array.from({ length: MAX_TABS }, (_, i) => newTab(`https://x${i}.test/`));
+  const rec = (tabs: ReturnType<typeof full>, over: Partial<Recency> = {}): Recency => ({
+    activeId: tabs[0]!.id,
+    usedAt: Object.fromEntries(tabs.map((t, i) => [t.id, 1000 + i])),
+    held: () => false,
+    ...over,
+  });
+
+  it("picks the oldest-used, not the first row", () => {
+    const tabs = full();
+    const r = rec(tabs, { usedAt: Object.fromEntries(tabs.map((t, i) => [t.id, 1000 - i])) });
+    expect(pickSleeper(tabs, r)).toBe(tabs[MAX_TABS - 1]!.id);
+  });
+
+  it("never the tab in front, even when it is the oldest", () => {
+    const tabs = full();
+    const r = rec(tabs, { activeId: tabs[0]!.id, usedAt: { ...rec(tabs).usedAt, [tabs[0]!.id]: 1 } });
+    expect(pickSleeper(tabs, r)).toBe(tabs[1]!.id);
+  });
+
+  it("never a tab an agent holds", () => {
+    const tabs = full();
+    const held = new Set([tabs[1]!.id, tabs[2]!.id]);
+    expect(pickSleeper(tabs, rec(tabs, { held: (t) => held.has(t.id) }))).toBe(tabs[3]!.id);
+  });
+
+  it("skips tabs already asleep, and answers null when every one is protected", () => {
+    const tabs = full().map((t, i) => (i === 1 ? { ...t, asleep: true } : t));
+    expect(pickSleeper(tabs, rec(tabs))).toBe(tabs[2]!.id);
+    expect(pickSleeper(tabs, rec(tabs, { held: () => true }))).toBeNull();
+  });
+
+  it("addTab sleeps the pick, seats the new tab awake and names who slept", () => {
+    const tabs = full();
+    const r = addTab(tabs, "https://thirteen.test/", undefined, undefined, undefined, undefined, rec(tabs));
+    if ("error" in r) throw new Error(r.error);
+    expect(r.slept).toBe(tabs[1]!.id);
+    expect(r.tabs.find((t) => t.id === r.slept)!.asleep).toBe(true);
+    expect(r.tab.asleep).toBeUndefined();
+    expect(r.tabs.filter((t) => !t.asleep).length).toBe(MAX_TABS);
+  });
+
+  it("still refuses, with a true sentence, when every awake tab is in front or held", () => {
+    const tabs = full();
+    const r = addTab(tabs, "https://thirteen.test/", undefined, undefined, undefined, undefined, rec(tabs, { held: () => true }));
+    expect("error" in r).toBe(true);
+    if ("error" in r) expect(r.error).toContain("in an agent's hands");
+  });
+
+  it("grace is minutes, so an agent between two verbs keeps its page", () => {
+    expect(SLEEP_GRACE_MS).toBeGreaterThanOrEqual(60_000);
   });
 });
 
@@ -206,16 +259,6 @@ describe("profiles", () => {
     const r = addTab([newTab("https://a.test/", "work")], "https://b.test/");
     if ("error" in r) throw new Error("should have opened");
     expect(r.tab.profile).toBe("");
-  });
-
-  it("closing the last tab leaves a blank one in the same profile", () => {
-    // Closing your last work tab should not quietly drop you back into the
-    // default identity — the strip would look the same and the next page you
-    // opened would be signed in as somebody else.
-    const only = newTab("https://a.test/", "work");
-    const r = closeTab([only], only.id);
-    expect(r.tabs.length).toBe(1);
-    expect(r.tabs[0]!.profile).toBe("work");
   });
 });
 
@@ -297,5 +340,51 @@ describe("the inspector mark", () => {
        that closed mid-flight. Adding it would light a mark on nothing. */
     const one = withInspected(new Set(), "t1", true);
     expect(withInspected(one, "", true)).toBe(one);
+  });
+});
+
+describe("a page that opens a tab", () => {
+  /* A link with target=_blank in an agent's container tab opened in the
+     owner's own profile, beside whatever tab was in front: the agent's page
+     got the owner's cookies. */
+  const tabs = [
+    { id: "t1", profile: "" },
+    { id: "t2", profile: "orbit-agent" },
+    { id: "t3", profile: "orbit-agent", partition: "persist:agx-eph-1" },
+  ] as never;
+  const ids: Record<string, number> = { t1: 40, t2: 41, t3: 42 };
+  const idOf = (id: string) => ids[id];
+
+  it("opens beside its opener, in the opener's profile, not the front tab's", () => {
+    expect(popupHome(tabs, idOf, 41, "t1")).toEqual({ from: "t2", profile: "orbit-agent" });
+  });
+  it("keeps an ephemeral opener's own jar", () => {
+    expect(popupHome(tabs, idOf, 42, "t1")).toEqual({ from: "t3", profile: "orbit-agent", partition: "persist:agx-eph-1" });
+  });
+  it("stays the owner's when the owner's tab opened it", () => {
+    expect(popupHome(tabs, idOf, 40, "t2")).toEqual({ from: "t1", profile: "" });
+  });
+  it("is refused when the opener is none of ours, rather than guessed", () => {
+    /* No profile is a safe guess for a page nobody can attribute: the front
+       tab's is the owner's cookies, and a named one may be another agent's. */
+    expect(popupHome(tabs, idOf, 99, "t1")).toBeNull();
+  });
+  it("falls back to the tab in front only when the page named no opener", () => {
+    expect(popupHome(tabs, idOf, undefined, "t2")).toEqual({ from: "t2", profile: undefined });
+  });
+});
+
+describe("the popup is wired from the page to the panel", () => {
+  const read = (f: string) => readFileSync(new URL(f, import.meta.url), "utf8");
+  it("sends the opener's id from both places a guest asks for a tab", () => {
+    const main = read("../../electron/main.js");
+    expect(main).toContain('win.webContents.send("ag:browser-open-tab", safe, guest.id)');
+    expect(main).toContain('win.webContents.send("ag:browser-open-tab", url, guest.id)');
+  });
+  it("hands it through the bridge and opens in the opener's profile and jar", () => {
+    expect(read("../../electron/preload.js")).toContain("fn(String(url), typeof opener === \"number\" ? opener : undefined)");
+    const panel = read("../src/components/BrowserPanel.tsx");
+    expect(panel).toContain("popupHome(tabsRef.current, idOf, opener, activeId)");
+    expect(panel).toContain("open(url, home.from, home.profile, undefined, (id) => notePopup(opener, id, url), home.partition)");
   });
 });

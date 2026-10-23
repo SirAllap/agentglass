@@ -125,6 +125,16 @@ describe("round trip", () => {
     expect(set.active).toBe(1);
   });
 
+  it("keeps which agent last acted on a tab, and nothing about what it did", () => {
+    // The overview counts the tabs an agent holds; without this a restart
+    // reported every one of them as nobody's until the agent acted again.
+    const tabs = [tab("https://shop.example.com/", { agent: "orbit-ci" }), tab("https://docs.example.com/")];
+    saveSession("", tabs, tabs[0]!.id);
+    const set = setFor(readSession(), "")!;
+    expect(set.tabs[0]!.agent).toBe("orbit-ci");
+    expect("agent" in set.tabs[1]!).toBe(false);
+  });
+
   it("points at the right tab after the blank ones are dropped", () => {
     // The index is into the SAVED list, not the live one. Saving the live index
     // would open on the wrong page, or past the end of the list.
@@ -137,6 +147,15 @@ describe("round trip", () => {
     const tabs = [tab("https://a.test/"), tab("about:blank")];
     saveSession("", tabs, tabs[1]!.id);
     expect(setFor(readSession(), "")!.active).toBe(0);
+  });
+
+  it("an empty strip is remembered as empty, not as a missing file", () => {
+    // Otherwise the next launch finds no session and invents a home-page tab.
+    saveSession("", [], "");
+    const s = readSession();
+    expect(s).not.toBeNull();
+    expect(s!.byProfile).toEqual({});
+    expect(setFor(s, "")).toBeNull();
   });
 
   it("writes nothing at all when there was nothing to keep", () => {
@@ -274,5 +293,45 @@ describe("a strip holding more than one profile", () => {
     saveSession("agent1", [tab("https://staging.test/", { profile: "agent1" })], "");
     saveSession("agent1", [], "");
     expect(setFor(readSession(), "agent1")).toBeNull();
+  });
+});
+
+describe("a tab keeps its id", () => {
+  // A script drove one tab by id for a minute; the id changed under it (same tab,
+  // new random suffix) because every restore built the tab again with newTab.
+  it("comes back from the session with the id it was saved under", () => {
+    const first = newTab("https://orbit.example/a", "work");
+    saveSession("work", [first], first.id);
+    const back = setFor(readSession(), "work")!.tabs[0]!;
+    expect(back.id).toBe(first.id);
+    expect(sleepingTab(back.url, back.title, back.icon, "work", back.id).id).toBe(first.id);
+  });
+
+  it("is minted fresh when the session has none, or a hand-edited one", () => {
+    store.set(SESSION_KEY, JSON.stringify({ v: 2, current: "", byProfile: { "": { active: 0, tabs: [
+      { url: "https://orbit.example/a", title: "", icon: null, id: "<script>" },
+      { url: "https://orbit.example/b", title: "", icon: null },
+    ] } } }));
+    const tabs = setFor(readSession(), "")!.tabs;
+    expect(tabs.map((t) => t.id)).toEqual([undefined, undefined]);
+  });
+
+  it("is never shared by two tabs in a set", () => {
+    store.set(SESSION_KEY, JSON.stringify({ v: 2, current: "", byProfile: { "": { active: 0, tabs: [
+      { url: "https://orbit.example/a", title: "", icon: null, id: "t1-abcdef" },
+      { url: "https://orbit.example/b", title: "", icon: null, id: "t1-abcdef" },
+    ] } } }));
+    expect(setFor(readSession(), "")!.tabs.map((t) => t.id)).toEqual(["t1-abcdef", undefined]);
+  });
+});
+
+describe("every restore hands the saved id back", () => {
+  // Launch (this profile, the others) and switching
+  // container away and back; one that forgets the id gives the tab a new address.
+  it("passes t.id at each sleepingTab call that reads a saved tab", async () => {
+    const src = await Bun.file(new URL("../src/components/BrowserPanel.tsx", import.meta.url)).text();
+    const calls = src.split("\n").filter((l) => /sleepingTab\(t\.url, t\.title, t\.icon,/.test(l));
+    expect(calls.length).toBe(3);
+    for (const l of calls) expect(l).toMatch(/\bt\.id\b/);
   });
 });

@@ -6,8 +6,9 @@ import { A11Y_SCRIPT, VITALS_SCRIPT, VITAL_LIMITS, rate, type VitalName } from "
 import { LLMS_SCRIPT, PAGE_TOOLS_SCRIPT, callToolScript, shapeCallResult, shapeLlms, shapeTools } from "./browserPageTools.ts";
 import { jsLit } from "../../../shared/jsLit.ts";
 import { cookieSetParams } from "./cookieSet.ts";
-import { FIND, locatorLit, parseLocator } from "./browserLocator.ts";
+import { FIND, ON_SCREEN, locatorLit, parseLocator } from "./browserLocator.ts";
 import { CHECKUP_PAGE, classifyCollector, classifyEvents, collectorSince, trackInflight, type CdpEvent } from "./browserCheckup.ts";
+import { flashPlan, type FlashPlan } from "./browserAgentActivity.ts";
 
 /**
  * The window's half of "let an agent drive the browser".
@@ -177,6 +178,8 @@ export interface DrivableWebview {
   /** Whether the main frame is loading. Optional: a stand-in may not have it,
    *  and a guest that cannot say is treated as not loading. */
   isLoading?(): boolean;
+  /** The guest's WebContents id: how a tab it opened is traced back to it. */
+  getWebContentsId?(): number;
 }
 
 /** How much page text is worth sending back. An agent reading a page needs the
@@ -575,9 +578,93 @@ interface ShotClip { x: number; y: number; width: number; height: number }
  * `querySelectorAll` catches both in one pass — a throw is the syntax error,
  * a length is the count — before `body` ever runs against a real element.
  */
-function resolveOne(selLit: string, body: string, lenient = false): string {
+/**
+ * Disabled the way a person sees it, which is more than `e.disabled`: a
+ * button inside an aria-disabled group or a disabled <fieldset> ignores the
+ * click just the same, and `e.disabled` says false for both.
+ * shortcut: a <legend>'s controls are exempt from their fieldset's disabled
+ * in HTML and are counted disabled here; that is the case to add if it bites.
+ */
+/**
+ * The prototype whose native `value` setter writes a field. A field inside a
+ * same-origin frame belongs to the FRAME's window: the top window's setter
+ * called on it throws "Illegal invocation", so its own realm's is taken.
+ */
+const VALUE_PROTO = `((n) => {
+    const w = n.ownerDocument && n.ownerDocument !== document && n.ownerDocument.defaultView || null;
+    const T = w ? w.HTMLTextAreaElement : HTMLTextAreaElement;
+    return n instanceof T ? T.prototype : (w ? w.HTMLInputElement : HTMLInputElement).prototype;
+  })`;
+
+const DISABLED = `((n) => !!n.disabled || !!(n.closest && n.closest('[aria-disabled="true"], fieldset[disabled]')))`;
+
+/**
+ * How long an act verb looks again for a selector that matches nothing yet.
+ * The commonest wasted round was a click on a button the page renders a
+ * moment later: refused at once, the agent spends a `waitfor` and a second
+ * click. Only "nothing matches" is waited on — several matches and a refusal
+ * from the gate are the page's answer, and looking again changes neither.
+ */
+const FIND_WAIT_MS = 3000;
+let findWaitMs = FIND_WAIT_MS;
+/** For tests: refusals there are about the sentence, not the wait. */
+export function setFindWaitMs(ms = FIND_WAIT_MS): void { findWaitMs = ms; }
+
+/**
+ * Run an act verb's page script until its selector matches something or the
+ * wait runs out. Safe to repeat by construction: a script answers
+ * `{kind: "none"}` only from the resolution, BEFORE its body touched the page,
+ * so nothing was sent and nothing is sent twice. A body that ran answers
+ * anything else, and that answer is final.
+ */
+async function untilFound<T>(run: () => Promise<T>): Promise<T> {
+  const deadline = Date.now() + findWaitMs;
+  for (;;) {
+    const r = await run();
+    if ((r as { kind?: string } | null)?.kind !== "none" || Date.now() + 250 > deadline) return r;
+    await new Promise((res) => setTimeout(res, 250));
+  }
+}
+
+/** How long `eval` waits for a script before it stops waiting. */
+const EVAL_TIMEOUT_MS = 10_000;
+const EVAL_TIMEOUT_MAX_MS = 40_000;
+const EVAL_TIMED_OUT = Symbol("eval timed out");
+
+/**
+ * The answer for an `eval` that ran out of time, after finding out which kind
+ * of "never finishes" it was. A page that still answers a trivial evaluation
+ * is waiting on a promise or a timer: nothing can cancel that, so the call is
+ * abandoned and the answer says it may still act later. One that does not
+ * answer is stuck in a loop on its main thread, and the protocol's
+ * terminateExecution is what ends it. Either way the script may have changed
+ * the page before it stopped, and the sentence says so.
+ *
+ * The ceiling: a promise that is abandoned keeps running in the page, and a
+ * callback it scheduled can still fire after this answer.
+ */
+async function giveUpOnEval(
+  cdp: (method: string, params?: unknown) => Promise<{ ok: boolean; result?: unknown; error?: string }>,
+  ms: number,
+): Promise<{ ok: boolean; value: { executionStopped: boolean; mayHaveLateEffects: boolean }; error: string }> {
+  const answers = await Promise.race([
+    cdp("Runtime.evaluate", { expression: "1", returnByValue: true }).then((r) => r.ok, () => false),
+    new Promise<boolean>((res) => setTimeout(() => res(false), 250)),
+  ]);
+  const ended = answers ? true : (await cdp("Runtime.terminateExecution").catch(() => ({ ok: false }))).ok;
+  const secs = +(ms / 1000).toFixed(2);
+  return {
+    ok: false,
+    value: { executionStopped: ended, mayHaveLateEffects: answers },
+    error: `the script did not finish in ${secs}s; ` + (ended
+      ? "it may have changed the page before it stopped"
+      : "it could not be stopped, and it may have changed the page already"),
+  };
+}
+
+function resolveOne(selLit: string, body: string, lenient = false, act = false): string {
   return `(() => {
-    const __got = ${ONE}(${selLit}, ${lenient}, ${readIdSeq()});
+    const __got = ${ONE}(${selLit}, ${lenient}, ${readIdSeq()}, ${act});
     if (__got.kind !== "ok") return __got;
     const e = __got.e;
     ${body}
@@ -597,7 +684,7 @@ function resolveOne(selLit: string, body: string, lenient = false): string {
  * anything matches at all: several matches there mean the first, as they
  * always have. A verb that acts refuses several.
  */
-const ONE = `((__spec, __lenient, __floor) => {
+const ONE = `((__spec, __lenient, __floor, __act) => {
     /*
        What the selector names is decided by FIND (browserLocator.ts): an id
        from an observation, a CSS selector, or a locator like
@@ -629,7 +716,6 @@ const ONE = `((__spec, __lenient, __floor) => {
     if (__idm) {
       const __from = (${ID_ORIGIN})(__idm[1]);
       if (__from !== "minted") return { kind: __from, url: location.href };
-      if (__all.length === 0) return { kind: "gone", url: location.href };
     }
     /* The ids a refusal hands back are minted the way observe mints them:
        from the driver's counter (__floor) and into this document's ranges,
@@ -657,6 +743,27 @@ const ONE = `((__spec, __lenient, __floor) => {
        distinguishes, so it always appears; the trimmed text is what a person
        actually recognises; and the id in front is one the caller can act on
        straight away instead of narrowing anything. */
+    /* An id the page dropped is answered with what took its place, when an
+       observe remembers what the id was (its role and name) and exactly ONE
+       node on screen is that now: a re-render swapped the node and the agent
+       would otherwise spend an observe finding the same button again. Named,
+       never acted on — a silent repair could land on another node that wears
+       the same label, so the caller decides. */
+    if (__idm && __all.length === 0) {
+      let __was = null;
+      for (const __snap of Object.values(window.__agxLast || {})) {
+        __was = ((__snap && __snap.tree) || []).find((__t) => __t.e === __idm[1]) || null;
+        if (__was) break;
+      }
+      if (__was && __was.name) {
+        const __again = ${FIND}({ by: "role", role: __was.role, name: __was.name, exact: true });
+        const __one = __again.kind === "found" ? __again.all : [];
+        if (__one.length === 1) {
+          return __keep({ kind: "gone", url: location.href, instead: __stamp(__one[0]), was: __was.role + ' "' + __was.name + '"' });
+        }
+      }
+      return { kind: "gone", url: location.href };
+    }
     const __describe = (__n) => {
       const __same = __n.parentElement
         ? [...__n.parentElement.children].filter((__c) => __c.tagName === __n.tagName)
@@ -687,6 +794,17 @@ const ONE = `((__spec, __lenient, __floor) => {
        that reads: a locator names ONE thing by what it is, and "the first
        Save button" is never what somebody who wrote role=button[name=Save]
        meant. */
+    /* Several matches that only ONE of can be acted on are that one: a
+       hidden mobile menu beside the desktop one, or a disabled copy of the
+       button, is not something a click could have meant. Narrowed by what
+       never changes within a click (on screen, not disabled), never by what
+       is covering it, which is a moment and not a choice. Only for a verb
+       that acts: a read of "the button" has no such one to prefer. */
+    if (__all.length > 1 && __act) {
+      const __on = ${ON_SCREEN}, __off = ${DISABLED};
+      const __can = __all.filter((__n) => __on(__n) && !__off(__n));
+      if (__can.length === 1) return { kind: "ok", e: __can[0] };
+    }
     if (__all.length > 1 && !(__lenient && __spec.css !== undefined)) {
       return __keep({ kind: "many", count: __all.length, samples: __all.slice(0, 5).map(__describe) });
     }
@@ -727,6 +845,7 @@ async function nodeFor(
 function selectorError(sel: string, r: {
   kind?: string; message?: string; count?: number; samples?: string[];
   hidden?: string[]; hiddenCount?: number; near?: string[]; by?: string; url?: string;
+  instead?: string; was?: string;
 } | null | undefined): string {
   if (r?.kind === "invalid") return `invalid selector "${sel}": ${r.message}`;
   if (r?.kind === "many") {
@@ -739,6 +858,9 @@ function selectorError(sel: string, r: {
   if (r?.kind === "foreign") {
     return `${sel} was not handed out by an observe of this page — it came from another tab, or from a page this tab has left. `
       + "Observe this tab again and use its ids";
+  }
+  if (r?.kind === "gone" && r.instead) {
+    return `${sel} is no longer in the page; ${r.was} is now ${r.instead}. Nothing was done — repeat the call with ${r.instead}`;
   }
   if (r?.kind === "gone") {
     return `${sel} is no longer in the page — the node the observe saw was removed or re-rendered since. Observe again for the current ids`;
@@ -864,9 +986,13 @@ function actionable(timeoutMs = 3000): string {
       if (e.scrollIntoView) e.scrollIntoView({ block: "center", inline: "center" });
       const rect = e.getBoundingClientRect();
       const style = getComputedStyle(e);
+      /* Opacity is NOT part of it, as in Playwright: a transparent control is
+         still there to be clicked, and a custom checkbox is drawn exactly that
+         way — the real input at opacity 0 over a styled label. Counting it as
+         hidden refused TodoMVC's toggle after a 6 s wait (measured). */
       const visible = rect.width > 0 && rect.height > 0
-        && style.visibility !== "hidden" && style.display !== "none" && Number(style.opacity) !== 0;
-      const enabled = !e.disabled && e.getAttribute("aria-disabled") !== "true";
+        && style.visibility !== "hidden" && style.display !== "none";
+      const enabled = !${DISABLED}(e);
       // Two reads of the same rect agreeing is "stable" — an element still
       // animating into place never matches its own previous frame. The
       // comparisons read backwards (0.5 first) because this codebase treats
@@ -877,12 +1003,21 @@ function actionable(timeoutMs = 3000): string {
         && 0.5 > Math.abs(rect.width - last.width) && 0.5 > Math.abs(rect.height - last.height);
       last = rect;
       if (visible && enabled && stable) {
-        const cx = Math.min(Math.max(rect.left + rect.width / 2, 0), innerWidth - 1);
-        const cy = Math.min(Math.max(rect.top + rect.height / 2, 0), innerHeight - 1);
-        const top = document.elementFromPoint(cx, cy);
+        /* The root the element lives in answers for what is on top of it: a
+           frame's boxes are in the frame's own viewport, and a shadow tree
+           hides its insides from the document's own elementFromPoint. */
+        const rt = (e.getRootNode && e.getRootNode()) || document;
+        const vw = rt.defaultView || window;
+        const cx = Math.min(Math.max(rect.left + rect.width / 2, 0), (rt.defaultView ? vw.innerWidth : innerWidth) - 1);
+        const cy = Math.min(Math.max(rect.top + rect.height / 2, 0), (rt.defaultView ? vw.innerHeight : innerHeight) - 1);
+        const top = (rt.elementFromPoint ? rt : document).elementFromPoint(cx, cy);
         if (!top) return resolve({ ok: false, reason: "not on screen" });
-        if (top !== e && !e.contains(top)) return resolve({ ok: false, reason: "covered by " + describe(top) });
-        return resolve({ ok: true });
+        /* Covered is waited out like the other three: a toast or a closing
+           backdrop over the button is gone a moment later, and failing at
+           the first look cost a round to click again. */
+        if (top === e || e.contains(top)) return resolve({ ok: true });
+        if (Date.now() > deadline) return resolve({ ok: false, reason: "covered by " + describe(top) });
+        return setTimeout(tick, 60);
       }
       if (Date.now() > deadline) {
         return resolve({ ok: false, reason: !visible ? "not visible" : !enabled ? "disabled" : "still moving" });
@@ -892,6 +1027,50 @@ function actionable(timeoutMs = 3000): string {
     tick();
   })`;
 }
+
+/**
+ * A CLICK IS A PRESS, NOT A LONE `click` EVENT.
+ *
+ * `el.click()` dispatches one `click` and nothing before it. Measured on a
+ * React chat list and on menus that open on mousedown: the verb answered ok,
+ * the page did nothing, because those handlers listen to pointerdown or
+ * mousedown and never saw a press. So this fires what a mouse makes, at the
+ * centre of the element (the point the actionable gate just checked), on
+ * whatever is topmost there: over, enter, move, down, focus, up, click.
+ *
+ * Browser rules kept: a pointerdown that is cancelled suppresses the mouse
+ * down and up (click still comes); a cancelled mousedown means no focus move.
+ * The click then runs its default action (link, submit, checkbox) as a native
+ * one does. Ceiling: enter/leave go to the target only, not up its ancestor
+ * chain, and there is no pointerout for the previous element.
+ * Runs inside a `resolveOne` body, after the gate said ok.
+ */
+const PRESS = `(() => {
+  const r = e.getBoundingClientRect();
+  const x = Math.min(Math.max(r.left + r.width / 2, 0), innerWidth - 1);
+  const y = Math.min(Math.max(r.top + r.height / 2, 0), innerHeight - 1);
+  const t = document.elementFromPoint(x, y) || e;
+  const base = { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, screenX: x, screenY: y, button: 0 };
+  const ptr = (type, buttons, noBubble) => t.dispatchEvent(new PointerEvent(type, {
+    ...base, buttons, bubbles: !noBubble, cancelable: !noBubble, pointerId: 1, pointerType: "mouse", isPrimary: true,
+    width: 1, height: 1, pressure: buttons ? 0.5 : 0,
+  }));
+  const mouse = (type, buttons, noBubble) => t.dispatchEvent(new MouseEvent(type, {
+    ...base, buttons, bubbles: !noBubble, cancelable: !noBubble, detail: /^mouse(over|enter|move)$/.test(type) ? 0 : 1,
+  }));
+  ptr("pointerover", 0); ptr("pointerenter", 0, true); mouse("mouseover", 0); mouse("mouseenter", 0, true);
+  ptr("pointermove", 0); mouse("mousemove", 0);
+  const downOk = ptr("pointerdown", 1);
+  /* pointerdown cancelled: a browser sends no compatibility mouse events. */
+  const mouseOk = downOk ? mouse("mousedown", 1) : false;
+  if (mouseOk) {
+    const f = t.closest ? t.closest("a[href],button,input,select,textarea,summary,[tabindex],[contenteditable]") : null;
+    if (f && f !== document.activeElement && f.focus) f.focus();
+  }
+  ptr("pointerup", 0);
+  if (downOk) mouse("mouseup", 0);
+  mouse("click", 0);
+})()`;
 
 /** The sentence for a `resolveOne` body that returned `{ kind: "blocked" }` —
  *  an element found, but not safe to act on yet. Falls back to
@@ -1068,6 +1247,18 @@ export function callerKey(name: string): string {
   return "k" + h.toString(36);
 }
 
+/** The legacy `keyCode` of the keys a page is likely to test for. A
+ *  KeyboardEvent built from `key` alone has keyCode 0, and a page written
+ *  against `event.keyCode === 13` (React TodoMVC's new-todo field, measured)
+ *  reads that as "some other key" and does nothing. */
+const LEGACY_KEY_CODES: Record<string, number> = {
+  Backspace: 8, Tab: 9, Enter: 13, Escape: 27, Space: 32, PageUp: 33, PageDown: 34,
+  End: 35, Home: 36, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Delete: 46,
+};
+
+/** Enter as a page that tests `keyCode` or `which` still sees it. */
+const ENTER_KEYDOWN = `new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true })`;
+
 /** Wait for the guest to finish a navigation it has just been given. Resolves
  *  either way — "it loaded" and "it failed" are both answers, and the failure
  *  text is more useful to an agent than a timeout would be. */
@@ -1205,7 +1396,27 @@ function within<T>(p: Promise<T>, ms: number): Promise<T | null> {
   });
 }
 
+/**
+ * Tabs a page opened (a target=_blank link, window.open), noted by the panel
+ * as it opens them, keyed by the opener's WebContents id. An act reads the
+ * ones its own page opened while it ran into `effect.popups`: the agent used
+ * to learn of the new tab by listing tabs, or by clicking again.
+ */
+const popups: Array<{ opener: number; page: string; url: string; at: number }> = [];
+export function notePopup(opener: number | undefined, page: string, url: string): void {
+  if (!opener || popups.some((p) => p.page === page)) return;
+  popups.push({ opener, page, url, at: Date.now() });
+  if (popups.length > 20) popups.shift();
+}
+function popupsSince(el: DrivableWebview, since: number): Array<{ page: string; url: string }> {
+  let me: number | undefined;
+  try { me = el.getWebContentsId?.(); } catch { return []; }
+  return popups.filter((p) => p.opener === me && p.at >= since).map(({ page, url }) => ({ page, url }));
+}
+
 type ActWatch = {
+  /** When the act began: a popup noted from here on is this act's. */
+  at: number;
   /** A main-frame navigation to another document started. */
   started: boolean;
   /** The URL changed within the same document (pushState, a fragment). */
@@ -1223,7 +1434,7 @@ type ActWatch = {
 function watchNavigation(el: DrivableWebview): ActWatch {
   let wake: (() => void) | null = null;
   const w: ActWatch = {
-    started: false, inPage: false, subframe: false, stopped: false, failed: null,
+    at: Date.now(), started: false, inPage: false, subframe: false, stopped: false, failed: null,
     untilStopped: (ms) => new Promise<void>((resolve) => {
       if (w.stopped) return resolve();
       const t = setTimeout(() => { wake = null; resolve(); }, ms);
@@ -1270,6 +1481,8 @@ export type ActEffect = {
   dialog?: unknown;
   newErrors?: string[];
   failedRequests?: Array<{ method: string; url: string; status: number }>;
+  /** Tabs the act opened, by id: `--page <id>` goes straight there. */
+  popups?: Array<{ page: string; url: string }>;
   /** What ended the wait: the navigation finishing, a quiet page, or the cap. */
   settledBy: "navigation" | "quiet" | "cap";
   settleMs: number;
@@ -1310,6 +1523,8 @@ async function settleAfterAct(
     settleMs: Date.now() - started,
   };
   if (w.started) effect.newDocument = true;
+  const opened = popupsSince(el, w.at);
+  if (opened.length) effect.popups = opened;
   if (w.failed) effect.loadFailed = w.failed;
   if (seen && typeof seen === "object") {
     if (seen.dialog) effect.dialog = seen.dialog;
@@ -1317,6 +1532,25 @@ async function settleAfterAct(
     if (Array.isArray(seen.failedRequests) && seen.failedRequests.length) effect.failedRequests = seen.failedRequests;
   }
   return effect;
+}
+
+/* Chromium's code, said in words. A failed loadURL came back as "Error
+   invoking remote method 'GUEST_VIEW_MANAGER_CALL': Error: ERR_... (-111)",
+   the bridge's sentence rather than the page's, and an agent read it as the
+   browser breaking. The code stays in the answer; the bridge's wrapping goes. */
+const LOAD_ERRORS: Array<[RegExp, string]> = [
+  [/ERR_NAME_NOT_RESOLVED/, "the address does not resolve"],
+  [/ERR_(TUNNEL|PROXY)_CONNECTION_FAILED/, "the connection to it failed on the way out (the proxy or the egress guard could not reach it)"],
+  [/ERR_CONNECTION_(REFUSED|RESET|CLOSED)/, "the server refused or dropped the connection"],
+  [/ERR_(CONNECTION_)?TIMED_OUT/, "the server did not answer in time"],
+  [/ERR_INTERNET_DISCONNECTED/, "this machine is offline"],
+  [/ERR_UNSAFE_PORT/, "Chromium refuses that port for any page"],
+  [/ERR_CERT_/, "its certificate is not trusted"],
+];
+export function loadFailure(msg: string): string {
+  const bare = msg.replace(/^Error invoking remote method '[^']*': (Error: )?/, "");
+  const said = LOAD_ERRORS.find(([re]) => re.test(bare))?.[1];
+  return said ? `${bare}: ${said}` : bare;
 }
 
 /** `open`'s navigation, shared with `checkup`: load, wait for it to finish,
@@ -1343,7 +1577,10 @@ async function navigateTo(
     // `settled` is the authority either way: a genuinely bad address still
     // arrives as did-fail-load with its own reason.
     const msg = e instanceof Error ? e.message : String(e);
-    if (!msg.includes("(-3)") && !msg.includes("ERR_ABORTED")) return { ok: false, error: msg };
+    if (!msg.includes("(-3)") && !msg.includes("ERR_ABORTED")) {
+      const why = loadFailure(msg);
+      return { ok: false, error: explain ? await explain(why) : why };
+    }
   }
   const err = await nav;
   if (err) return { ok: false, error: explain ? await explain(err) : err };
@@ -1899,7 +2136,182 @@ async function pollGuestClock(
  */
 export async function runBrowserAsk(...a: Parameters<typeof runVerb>): ReturnType<typeof runVerb> {
   const ask = a[1];
-  return stampWhere(await runVerb(...a), { tab: ask.args.atTab, container: ask.args.atProfile });
+  guardFrames(a[0]);
+  /* The pointer goes where the act is about to land, not where it landed: an
+     act that navigates answers a second later, and a pointer that set off then
+     trailed every click by the length of a page load. Not awaited, and queued
+     ahead of the act's own script, so it costs the act nothing. */
+  aimAt(a[0], ask);
+  const reply = await runVerb(...a);
+  if (reply.ok) flashWhereActed(a[0], ask);
+  /* Again on the page the ask left behind: a navigation brings a document the
+     check has not seen, and its first act (GitHub's menu opens on a frame)
+     fell inside the 50 ms the check needs. Measured: Resources stayed shut on
+     a tab off screen until a later ask installed the fallback. */
+  guardFrames(a[0]);
+  return stampWhere(reply, { tab: ask.args.atTab, container: ask.args.atProfile });
+}
+
+/** How long the mark stays up. Long enough to catch the eye, short enough to be gone before the next act. */
+export const FLASH_MS = 600;
+
+/**
+ * A short outline drawn in the page at the element an agent just acted on, so a
+ * person watching the tab sees WHERE. Not `highlightScript`: that is a dimmed
+ * spotlight with a caption for a screenshot, far too loud for every click.
+ *
+ * Fixed to the viewport at the element's rect, inert (`pointer-events:none`),
+ * removed by its own timer. The colour is the system's `Highlight`, so no
+ * colour of ours lands in somebody's page. With `prefers-reduced-motion` it is
+ * the same outline for the same time, with no fade. It is drawn AFTER the act,
+ * fire-and-forget: a click that navigated has no element left, and that is a
+ * flash that does not happen, never an error for the agent.
+ */
+export function flashScript(plan: Exclude<FlashPlan, null>, ms = FLASH_MS, draw = true): string {
+  /* The aim brings the element to where the act will put it, instantly, so the
+     pointer lands on the element and not on the one that was there before the
+     act scrolled (a list's third row clicked, the pointer on the fourth). */
+  const body = `
+    if (${!draw} && e.scrollIntoView) e.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+    const r = e.getBoundingClientRect();
+    if (!r.width && !r.height) return { kind: "none" };
+    if (${draw}) {
+    const calm = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const box = document.createElement("div");
+    box.setAttribute("data-agx-flash", "");
+    box.style.cssText = "position:fixed;left:" + (r.left - 2) + "px;top:" + (r.top - 2) + "px;"
+      + "width:" + (r.width + 4) + "px;height:" + (r.height + 4) + "px;box-sizing:border-box;"
+      + "outline:2px solid Highlight;border-radius:4px;pointer-events:none;z-index:2147483647;"
+      + (calm ? "" : "transition:opacity " + ${ms} + "ms ease-out;opacity:1;");
+    (document.body || document.documentElement).appendChild(box);
+    if (!calm) requestAnimationFrame(() => { box.style.opacity = "0"; });
+    setTimeout(() => box.remove(), ${ms});
+    }
+    /* Where it landed and what the thing is CALLED, for the panel's pointer:
+       a label, a placeholder or a short visible text, never a value, so what
+       was typed into a field cannot ride out this way. */
+    /* Visible text only for what is not an editor: a contenteditable or a
+       role=textbox holds what the agent just typed, and a select holds every
+       option. Those are named by their label or nothing. */
+    const editor = e.isContentEditable || e.tagName === "INPUT" || e.tagName === "TEXTAREA" || e.tagName === "SELECT" || e.getAttribute("role") === "textbox";
+    const name = (e.getAttribute("aria-label") || e.getAttribute("placeholder") || (e.labels && e.labels[0] && e.labels[0].innerText)
+      || (editor ? "" : e.innerText) || "").trim().replace(/\\s+/g, " ").slice(0, 40);
+    return { kind: "ok", x: r.left, y: r.top, w: r.width, h: r.height, vw: innerWidth, name };`;
+  return plan.kind === "focus"
+    ? `(() => { const e = document.activeElement; if (!e || e === document.body) return { kind: "none" }; ${body} })()`
+    : resolveOne(locatorLit(plan.selector), body, true);
+}
+
+/** Where an agent's act landed, in the guest's CSS pixels; `vw` is the guest's
+ *  viewport width in the same pixels, so the panel can convert to its own. */
+export interface ActLanding { tab: string; verb: string; key: string; x: number; y: number; w: number; h: number; vw: number; name: string }
+
+/* One slot, the idiom the bus uses: the panel draws the pointer, and this file
+   must not import the panel. Nobody listening is the normal case off-desktop. */
+let landed: ((l: ActLanding) => void) | null = null;
+export function onActLanded(fn: (l: ActLanding) => void): () => void {
+  landed = fn;
+  // A second panel taking the slot is not undone by the first one leaving.
+  return () => { if (landed === fn) landed = null; };
+}
+
+/* The pointer's landing from what the page answered: shared by the aim before an act and
+   the measure after it. */
+function land(ask: BrowserAskFrame, r: unknown): void {
+  const h = r as { kind?: string; x?: number; y?: number; w?: number; h?: number; vw?: number; name?: string } | null;
+  const tab = typeof ask.args.atTab === "string" ? ask.args.atTab : "";
+  if (!tab || !landed || h?.kind !== "ok" || typeof h.x !== "number") return;
+  landed({ tab, verb: ask.op, key: typeof ask.args.key === "string" ? ask.args.key : "",
+    x: h.x, y: h.y ?? 0, w: h.w ?? 0, h: h.h ?? 0, vw: h.vw ?? 0, name: h.name ?? "" });
+}
+
+/* The outline is drawn after the act, and the pointer moves to where the element is NOW:
+   a control that only exists while its row is hovered (a message's toolbar) had no place
+   before the act, and the aim put the pointer wherever it was last drawn. An element the
+   act removed answers none, and the aim's landing stays. */
+function flashWhereActed(el: DrivableWebview, ask: BrowserAskFrame): void {
+  const plan = flashPlan(ask);
+  if (!plan) return;
+  try { void Promise.resolve(el.executeJavaScript(flashScript(plan))).then((r) => land(ask, r)).catch(() => { /* the page moved on */ }); } catch { /* not attached */ }
+}
+
+/**
+ * A page keeps moving while nobody looks at the window.
+ *
+ * A window on a workspace nobody looks at (or under a screen that went dark)
+ * gets no frames from the compositor, so a guest's requestAnimationFrame never
+ * fires: measured 1 frame a second against 63 on screen. Timers still run. A
+ * page that waits on a frame before it swaps its content — GitHub's own
+ * navigation does — then changes its address and never its page, and every
+ * act after that finds nothing (6 s and a refusal per click, a whole walk lost).
+ *
+ * So before each ask the guest checks for a frame within 50 ms (on screen one
+ * comes in 16), and only when none comes does it wrap requestAnimationFrame:
+ * every frame asked for is also armed on a timer, 16 ms while frames are
+ * missing and 150 ms once a real one came back, whichever answers first. A page
+ * on screen is never touched, which matters on strict sites that check their
+ * built-ins. Measured with frames withheld: GitHub's Issues click rendered in
+ * 1.3 s with it, never without.
+ * Ceiling: a frame the page asked for inside those first 50 ms still waits on
+ * the compositor, and a page that kept its own reference to the function from
+ * before is not reached. Once in, the wrap stays for the life of the document.
+ */
+export const FRAME_GUARD = `(() => {
+  /* Installed already: the wrap's own toString says so. Never a named global,
+     which any page could test to tell an agent from a person. */
+  const wrapped = () => Object.prototype.hasOwnProperty.call(window.requestAnimationFrame, "toString");
+  if (wrapped()) return;
+  let came = false;
+  requestAnimationFrame(() => { came = true; });
+  setTimeout(() => {
+    if (came || wrapped()) return;
+    const real = window.requestAnimationFrame.bind(window), cancelReal = window.cancelAnimationFrame.bind(window);
+    const jobs = new Map(); let next = 1, starved = true;
+    const fire = (id, ts, byFrame) => {
+      const j = jobs.get(id); if (!j) return; jobs.delete(id);
+      if (byFrame) starved = false; else { starved = true; cancelReal(j.r); }
+      clearTimeout(j.t); j.cb(ts);
+    };
+    const raf = function requestAnimationFrame(cb) {
+      const id = next++;
+      const j = { cb, r: 0, t: 0 }; jobs.set(id, j);
+      j.r = real((ts) => fire(id, ts, true));
+      j.t = setTimeout(() => fire(id, performance.now(), false), starved ? 16 : 150);
+      return id;
+    };
+    const caf = function cancelAnimationFrame(id) { const j = jobs.get(id); if (!j) return; jobs.delete(id); cancelReal(j.r); clearTimeout(j.t); };
+    /* Idle periods come after frames, so without frames requestIdleCallback
+       never runs either (measured: an idle callback still pending after a
+       second while timers ran), and GitHub's menus wait on one. It gets the
+       same race: the browser's idle period or a 50 ms timer. */
+    const ric = window.requestIdleCallback && window.requestIdleCallback.bind(window), cic = window.cancelIdleCallback && window.cancelIdleCallback.bind(window);
+    const idle = new Map(); let nextIdle = 1;
+    const ricw = function requestIdleCallback(cb, opts) {
+      const id = nextIdle++;
+      const go = (d) => { const j = idle.get(id); if (!j) return; idle.delete(id); if (cic) cic(j.r); clearTimeout(j.t); cb(d); };
+      idle.set(id, { r: ric ? ric((d) => go(d), opts) : 0, t: setTimeout(() => go({ didTimeout: true, timeRemaining: () => 0 }), 50) });
+      return id;
+    };
+    const cicw = function cancelIdleCallback(id) { const j = idle.get(id); if (!j) return; idle.delete(id); if (cic) cic(j.r); clearTimeout(j.t); };
+    for (const [f, n] of [[raf, "requestAnimationFrame"], [caf, "cancelAnimationFrame"], [ricw, "requestIdleCallback"], [cicw, "cancelIdleCallback"]]) f.toString = () => "function " + n + "() { [native code] }";
+    window.requestAnimationFrame = raf; window.cancelAnimationFrame = caf;
+    window.requestIdleCallback = ricw; window.cancelIdleCallback = cicw;
+  }, 50);
+})()`;
+
+/* Only with a panel drawing this guest (the same signal the pointer uses):
+   off the desktop nothing listens, and the driver's tests count its scripts. */
+function guardFrames(el: DrivableWebview): void {
+  if (!landed) return;
+  try { void Promise.resolve(el.executeJavaScript(FRAME_GUARD)).catch(() => { /* the page moved on */ }); } catch { /* not attached */ }
+}
+
+function aimAt(el: DrivableWebview, ask: BrowserAskFrame): void {
+  const plan = landed && flashPlan(ask, true);
+  if (!plan) return;
+  try {
+    void Promise.resolve(el.executeJavaScript(flashScript(plan, FLASH_MS, false))).then((r) => land(ask, r)).catch(() => { /* the page moved on */ });
+  } catch { /* not attached */ }
 }
 
 /** Run one verb against the guest. Throws nothing: every failure is an answer,
@@ -2362,14 +2774,14 @@ async function runVerb(
         // WHAT is wrong rather than landing on the wrong thing in silence.
         const before = el.getURL();
         const watch = watchNavigation(el);
-        const hit = await withFocus(el, cdp, () => el.executeJavaScript(resolveOne(sel,
+        const hit = await withFocus(el, cdp, () => untilFound(() => el.executeJavaScript(resolveOne(sel,
           `return (${actionable()}).then((r) => {
              if (!r.ok) return { kind: "blocked", reason: r.reason };
              const t0 = ${MUTATIONS_ON};
-             e.click();
+             ${PRESS};
              return { kind: "ok", t0 };
-           });`,
-        ), true)).catch((err: unknown) => { watch.dispose(); throw err; }) as { kind: string; reason?: string; t0?: number } | boolean;
+           });`, false, true,
+        ), true))).catch((err: unknown) => { watch.dispose(); throw err; }) as { kind: string; reason?: string; t0?: number } | boolean;
         if (!hit || (hit as { kind: string }).kind !== "ok") {
           watch.dispose();
           return { ok: false, error: actionError(String(ask.args.selector ?? ""), hit as never) };
@@ -2412,14 +2824,14 @@ async function runVerb(
         /* No user activation and no emulated focus here: a hover, a right-click or a
            checkbox must not be able to open a window or write the clipboard, which
            a real one never grants a page. `click` alone carries a gesture. */
-        const hit = await el.executeJavaScript(resolveOne(sel,
+        const hit = await untilFound(() => el.executeJavaScript(resolveOne(sel,
           `return (${actionable()}).then((r) => {
              if (!r.ok) return { kind: "blocked", reason: r.reason };
              ${dispatch}
              const b = e.getBoundingClientRect();
              return { kind: "ok", x: b.x + b.width / 2, y: b.y + b.height / 2 };
-           });`,
-        ))  as { kind: string; reason?: string; x?: number; y?: number } | boolean;
+           });`, false, true,
+        ))) as { kind: string; reason?: string; x?: number; y?: number } | boolean;
         if (!hit || (hit as { kind: string }).kind !== "ok") {
           return { ok: false, error: actionError(String(ask.args.selector ?? ""), hit as never) };
         }
@@ -2438,9 +2850,9 @@ async function runVerb(
 
       case "focus":
       case "blur": {
-        const hit = await el.executeJavaScript(resolveOne(sel,
-          `e.${ask.op}(); return { kind: "ok" };`,
-        )) as { kind: string } | boolean;
+        const hit = await untilFound(() => el.executeJavaScript(resolveOne(sel,
+          `e.${ask.op}(); return { kind: "ok" };`, false, true,
+        ))) as { kind: string } | boolean;
         if (!hit || (hit as { kind: string }).kind !== "ok") {
           return { ok: false, error: selectorError(String(ask.args.selector ?? ""), hit as never) };
         }
@@ -2454,17 +2866,25 @@ async function runVerb(
         // filled" is not an answer an agent can act on.
         const fields = (ask.args.fields ?? {}) as Record<string, string>;
         const pairs = Object.entries(fields).map(([s, v]) => `[${jsLit(s)}, ${locatorLit(s)}, ${jsLit(v)}]`).join(", ");
-        const result = await el.executeJavaScript(
+        /* Every field is found before any is written, so a field that is not
+           there yet is waited for (untilFound) without typing into the ones
+           before it twice. */
+        const result = await untilFound(() => el.executeJavaScript(
           `(() => {
              const pairs = [${pairs}];
-             const filled = [], secret = [];
+             const filled = [], secret = [], changed = {};
              const one = ${ONE};
-             for (const [fsel, spec, text] of pairs) {
-               const got = one(spec, false, ${readIdSeq()});
-               if (got.kind !== "ok") return { ...got, selector: fsel, secret };
-               const fe = got.e;
+             const found = [];
+             for (const [fsel, spec] of pairs) {
+               const got = one(spec, false, ${readIdSeq()}, true);
+               if (got.kind !== "ok") return { ...got, selector: fsel };
+               found.push(got.e);
+             }
+             for (let i = 0; pairs.length > i; i++) {
+               const [fsel, , text] = pairs[i];
+               const fe = found[i];
                fe.focus();
-               const proto = fe instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+               const proto = (${VALUE_PROTO})(fe);
                const set = Object.getOwnPropertyDescriptor(proto, "value");
                if (set && set.set) set.set.call(fe, text); else fe.value = text;
                fe.dispatchEvent(new Event("input", { bubbles: true }));
@@ -2473,24 +2893,35 @@ async function runVerb(
                /* The same verdict type reaches, for the same reason: only this
                   side can see that the node is a password field, and the
                   relay redacts by what it is told here. */
-               if (fe.type === "password" || /(^|\\s)(current|new)-password|one-time-code/.test(fe.autocomplete || "")) secret.push(fsel);
+               const hush = fe.type === "password" || /(^|\\s)(current|new)-password|one-time-code/.test(fe.autocomplete || "");
+               if (hush) secret.push(fsel);
+               /* Read back: a mask, a maxlength or a framework that reverts
+                  is what an agent used to spend an observe finding out. Only
+                  a field the page changed is named, and by the KIND of
+                  change, never the value: a key typed into a plain text
+                  field is a secret this side cannot recognise. */
+               const now = String(fe.value);
+               if (now !== text) {
+                 changed[fsel] = !now ? "emptied" : text.startsWith(now) ? "cut short"
+                   : now.includes(text) ? "reformatted" : "replaced";
+               }
              }
-             return { kind: "ok", filled, secret };
+             return { kind: "ok", filled, secret, changed };
            })()`,
-        ) as { kind: string; selector?: string; message?: string; count?: number; samples?: string[]; filled?: string[]; secret?: string[] };
+        )) as { kind: string; selector?: string; message?: string; count?: number; samples?: string[]; filled?: string[]; secret?: string[]; changed?: Record<string, string> };
         if (result?.kind !== "ok") {
           const badSel = result?.selector ?? "";
-          /* The fields before the one that failed WERE filled, so a secret
-             among them is still named: the relay redacts by it on a refusal
-             as well. */
-          return {
-            ok: false, error: `could not fill ${badSel} — ${selectorError(badSel, result as never)}`,
-            ...(result?.secret?.length ? { value: { secretFields: result.secret } } : {}),
-          };
+          /* Nothing was written (every field is found first), so there is no
+             secret to name on a refusal. */
+          return { ok: false, error: `could not fill ${badSel} — ${selectorError(badSel, result as never)}` };
         }
         return {
           ok: true,
-          value: { filled: result.filled, ...(result.secret?.length ? { secretFields: result.secret } : {}) },
+          value: {
+            filled: result.filled,
+            ...(result.secret?.length ? { secretFields: result.secret } : {}),
+            ...(result.changed && Object.keys(result.changed).length ? { changedByPage: result.changed } : {}),
+          },
         };
       }
 
@@ -2501,7 +2932,9 @@ async function runVerb(
         return await withFocus(el, cdp, async () => {
           const text = jsLit(String(ask.args.text ?? ""));
           const submit = ask.args.submit === true;
-          const hit = await el.executeJavaScript(resolveOne(sel,
+          const before = el.getURL();
+          const watch = watchNavigation(el);
+          const hit = await untilFound(() => el.executeJavaScript(resolveOne(sel,
             `e.focus();
                /* A rich-text editor (contenteditable, no value property) has no
                 setter to call. execCommand insertText runs the browser's own
@@ -2515,20 +2948,20 @@ async function runVerb(
                if (sel && e.textContent) sel.selectAllChildren(e);
                const did = document.execCommand("insertText", false, ${text});
                if (!did) return { kind: "blocked", reason: "the editor refused the text" };
-               ${submit ? `e.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));` : ""}
+               ${submit ? `e.dispatchEvent(${ENTER_KEYDOWN});` : ""}
                return { kind: "ok", secret: false, rich: true };
              }
              // The native setter, then an input event: React and every other
                // framework listens for the event and ignores a value assigned
                // behind its back, so a plain e.value = x types into a field that
                // snaps back on the next render.
-               const proto = e instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+               const proto = (${VALUE_PROTO})(e);
                const set = Object.getOwnPropertyDescriptor(proto, "value");
                if (set && set.set) set.set.call(e, ${text}); else e.value = ${text};
                e.dispatchEvent(new Event("input", { bubbles: true }));
                e.dispatchEvent(new Event("change", { bubbles: true }));
                ${submit ? `if (e.form) e.form.requestSubmit ? e.form.requestSubmit() : e.form.submit();
-                            else e.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));` : ""}
+                            else e.dispatchEvent(${ENTER_KEYDOWN});` : ""}
                /* Whether what was just typed is a secret, decided HERE because
                   this is the only side that can see the node. The relay only
                   ever sees the selector, so typing a real password into a field
@@ -2540,12 +2973,17 @@ async function runVerb(
                   literal that builds the page script, and one would end it.) */
                const secret = e.type === "password"
                  || /(^|\\s)(current|new)-password|one-time-code/.test(e.autocomplete || "");
-               return { kind: "ok", secret };`,
-          )) as { kind: string; secret?: boolean } | boolean;
+               return { kind: "ok", secret };`, false, true,
+          )).catch((err: unknown) => { watch.dispose(); throw err; })) as { kind: string; secret?: boolean } | boolean;
           if (!hit || (hit as { kind: string }).kind !== "ok") {
+            watch.dispose();
             return { ok: false, error: selectorError(String(ask.args.selector ?? ""), hit as never) };
           }
-          if (submit && !(hit as { rich?: boolean }).rich) await settled(el, 20_000);
+          /* The wait a click and a press use. This was settled(el, 20_000), which
+             resolves on a navigation and on nothing else: Enter in a field that
+             adds a row to the page navigates nowhere, so it sat out its 20 s and
+             the relay gave up at 15 with "the browser did not answer". */
+          if (submit) await settleAfterAct(el, watch, before, Date.now()); else watch.dispose();
           return {
             ok: true,
             value: {
@@ -2710,6 +3148,12 @@ async function runVerb(
            which fence is the right one. */
         const js = String(ask.args.js ?? "");
         const max = Number(ask.args.max ?? 20_000);
+        // The relay already holds this to 100..40000; held here too, since a timer
+        // is what it sets and NaN would fire at once.
+        const askedMs = Number(ask.args.timeoutMs ?? EVAL_TIMEOUT_MS);
+        // A plain comparison, not Math.min: it is the bound the analyser reads as one.
+        let evalMs = EVAL_TIMEOUT_MS;
+        if (Number.isFinite(askedMs)) evalMs = askedMs > EVAL_TIMEOUT_MAX_MS ? EVAL_TIMEOUT_MAX_MS : askedMs < 0 ? 0 : askedMs;
         /*
          * THE ERROR IS CAUGHT IN THE PAGE, because that is the only place it
          * is legible.
@@ -2760,12 +3204,34 @@ async function runVerb(
           ${catchBlock}
         })()`
           : `(() => {
-          try { return { __agxOk: true, __agxV: (${js}) }; }
+          try {
+            const __v = (${js});
+            /* A promise cannot cross the bridge: it came back as the opaque
+               bridge failure and was reported as "not an expression", which
+               sent an agent rewriting a script that was fine. Named here. */
+            if (__v && typeof __v.then === "function") return { __agxOk: false, __agxPromise: true };
+            return { __agxOk: true, __agxV: __v };
+          }
           ${catchBlock}
         })()`;
         try {
-          const outcome = await el.executeJavaScript(wrapped) as
-            { __agxOk?: boolean; __agxV?: unknown; __agxErr?: string; __agxWhere?: string };
+          /* On a clock of its own. A script that never finishes (a promise
+             nobody settles, or a loop) held this verb until the relay gave up
+             at 45 s with a sentence about the browser not responding, and a
+             loop took the tab with it. The race is here and not in the page
+             because a loop leaves the page no way to look at a clock. */
+          const run = el.executeJavaScript(wrapped);
+          run.catch(() => {}); // a terminated run rejects later, with nobody waiting
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const outcome = await Promise.race([
+            run,
+            new Promise<typeof EVAL_TIMED_OUT>((res) => { timer = setTimeout(() => res(EVAL_TIMED_OUT), evalMs); }),
+          ]).finally(() => clearTimeout(timer)) as
+            { __agxOk?: boolean; __agxV?: unknown; __agxErr?: string; __agxWhere?: string; __agxPromise?: boolean } | typeof EVAL_TIMED_OUT;
+          if (outcome === EVAL_TIMED_OUT) return await giveUpOnEval(cdp, evalMs);
+          if (outcome && outcome.__agxOk === false && outcome.__agxPromise) {
+            return { ok: false, error: "the expression returned a promise, which cannot be handed back as it is: ask again with --await (await: true) for its value" };
+          }
           if (outcome && outcome.__agxOk === false) {
             return {
               ok: false,
@@ -3941,7 +4407,7 @@ async function runVerb(
            measured on the bench, `select e3` on the <select> an observation
            had just called e3 answered "nothing matched". */
         const value = jsLit(String(ask.args.value ?? ""));
-        const done = await el.executeJavaScript(resolveOne(sel,
+        const done = await untilFound(() => el.executeJavaScript(resolveOne(sel,
           `if (e.tagName !== "SELECT") return { kind: "refused", why: "not a select" };
              const opts = [...e.options];
              const hit = opts.find((o) => o.value === ${value}) || opts.find((o) => (o.text || "").trim() === ${value});
@@ -3949,8 +4415,8 @@ async function runVerb(
              e.value = hit.value;
              e.dispatchEvent(new Event("input", { bubbles: true }));
              e.dispatchEvent(new Event("change", { bubbles: true }));
-             return { kind: "ok", value: hit.value, text: (hit.text || "").trim() };`,
-        )) as { kind: string; value?: string; text?: string; why?: string; options?: string[] };
+             return { kind: "ok", value: hit.value, text: (hit.text || "").trim() };`, false, true,
+        ))) as { kind: string; value?: string; text?: string; why?: string; options?: string[] };
         if (done?.kind === "ok") return { ok: true, value: { ok: true, value: done.value, text: done.text } };
         if (done?.kind === "refused") {
           /* "not a select" travels as plain words and becomes "<select>"
@@ -4081,7 +4547,14 @@ async function runVerb(
           base: base && typeof base.doc === "string" && Number.isInteger(base.seq)
             ? { doc: base.doc, seq: base.seq as number } : null,
           idBase,
+          viewport: ask.args.viewport === true,
+          root: typeof ask.args.root === "string" ? ask.args.root : undefined,
         })) as Record<string, unknown>;
+        /* A root the page would not name: the same three sentences every other
+           id gets, ending in "observe again". */
+        if (value && typeof value.__agxRoot === "string") {
+          return { ok: false, error: selectorError(String(ask.args.root), { kind: value.__agxRoot, url: String(value.url ?? "") }) };
+        }
         releaseIds(idBase, TREE_MAX, Number(value?.idSeq));
         if (value && typeof value === "object") delete value.idSeq;
         if (ask.args.shot === true) {
@@ -4264,13 +4737,16 @@ async function runVerb(
           const mods = parts.map((m) => m.toLowerCase());
           const has = (m) => mods.includes(m);
           const one = name.length === 1;
+          const LEGACY = ${jsLit(LEGACY_KEY_CODES)};
           const init = {
             key: name === "Space" ? " " : name,
             code: one ? "Key" + name.toUpperCase() : name,
+            keyCode: LEGACY[name] || (one ? name.toUpperCase().charCodeAt(0) : 0),
             bubbles: true, cancelable: true, composed: true,
             ctrlKey: has("control") || has("ctrl"), shiftKey: has("shift"),
             altKey: has("alt"), metaKey: has("meta") || has("cmd"),
           };
+          init.which = init.keyCode;
           const target = document.activeElement || document.body;
           const send = (type) => target.dispatchEvent(new KeyboardEvent(type, init));
           const wentThrough = send("keydown");

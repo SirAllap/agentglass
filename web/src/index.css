@@ -280,23 +280,17 @@
    * container and the title, the eyebrows, the dividers and the rows all end
    * at the same x — which is what a page margin is.
    *
-   * CENTRED, and it used to be left — the reasoning changed because the
-   * surface did.
-   *
-   * Left was right for a 1010px dialog: centring inside it left 127px of
-   * channel each side, two thirds of the nav's own width, which turned the nav
-   * into a detached island. Settings is a page now and takes the window, so
-   * the slack is no longer 127px of awkward gutter, it is several hundred
-   * pixels of dead screen hanging off one side while the column hugs the nav.
-   *
-   * What made left worth defending is kept: the title, every eyebrow and every
-   * label still share ONE vertical line, because the whole column moves
-   * together. It is simply a line the page centres rather than one glued to
-   * the nav's border.
+   * LEFT, on the nav's reading edge, and capped at 1120px. It was centred in a
+   * 760px column: on a 2560px window that left a 1040px band of dead screen to
+   * the left of the title and as much again to the right, with every form a
+   * 480px strip inside it. Left is the edge the title, every eyebrow and every
+   * label share, so the whole column moves together; the cap is where a row of
+   * label, hint and control stops being readable at a glance, not a taste.
+   * A wider window leaves the slack on the right, where nothing reads it.
    */
   .agx-settings-col {
-    max-width: var(--agx-settings-col, 760px);
-    margin-inline: auto;
+    max-width: var(--agx-settings-col, 1120px);
+    margin-inline: 0;
     container-type: inline-size;
     container-name: agx-settings;
   }
@@ -1952,9 +1946,15 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
   .agx-decl-label { padding-top: 4px; }
 }
 
-/* A stacked form: label above, help below, 12px between fields, 480px at
-   most — a token field as wide as the card asks for a paragraph. */
-.agx-sform { display: flex; flex-direction: column; gap: 12px; max-width: 480px; }
+/* A stacked form: label above, help below, 12px between fields. It takes the
+   card's width: the 480px cap it had left a form narrower than the card around
+   it, with the buttons stopping short of the edge the rows end at. */
+.agx-sform { display: flex; flex-direction: column; gap: 12px; }
+/* A control fills its field, which fills its card. In the components layer, so a
+   field that wants a short box (a port, a count) still says so with `w-[96px]`. */
+@layer components {
+  .agx-field > :where(input:not([type=checkbox], [type=radio], [type=range], [type=color]), select, textarea) { width: 100%; }
+}
 .agx-field { display: flex; flex-direction: column; gap: 6px; }
 .agx-field-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .agx-field-l { font-size: 12px; font-weight: 500; color: var(--text2); }
@@ -2961,3 +2961,369 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-perm[open] > summary .agx-perm-caret { transform: rotate(90deg); }
 @media (prefers-reduced-motion: reduce) { .agx-perm-caret { transition: none; } }
 .agx-market-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr)); gap: 14px; padding: 4px 16px 14px; align-items: stretch; }
+
+/*
+ * AGENT PRESENCE over a browser tab (components/browser/AgentPresence.tsx).
+ * The mark's two colours are fixed rather than the theme's primary: the
+ * presence has to read as "agentglass, an agent" on any palette, the same
+ * violet and green the app icon carries.
+ * Cost: the rim, haze and dock are painted once when acting starts; per frame
+ * only the satellite (transform) and the pointer's glide (transform) move.
+ */
+:root { --agx-mark: #8b5cf6; --agx-contact: #10b981; --agx-ease: cubic-bezier(0.23, 1, 0.32, 1); --agx-move: cubic-bezier(0.65, 0, 0.35, 1); --agx-out: cubic-bezier(0.16, 1, 0.3, 1); }
+.agx-presence { position: absolute; inset: 0; pointer-events: none; z-index: 15; }
+.agx-presence-glass { position: absolute; inset: 0; pointer-events: auto; cursor: default; outline: none; }
+.agx-presence-rim { position: absolute; inset: 0; opacity: 0; transition: opacity 180ms ease-out; }
+.agx-presence-on .agx-presence-rim { opacity: 1; transition: opacity 480ms var(--agx-ease); }
+.agx-presence-rim::before { content: ""; position: absolute; inset: 0; padding: 1px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--agx-mark) 70%, transparent), color-mix(in srgb, var(--agx-mark) 30%, transparent) 45%, color-mix(in srgb, var(--primary) 45%, transparent));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; }
+.agx-presence-rim::after { content: ""; position: absolute; inset: 0; box-shadow: inset 0 0 14px 0 color-mix(in srgb, var(--agx-mark) 7%, transparent); }
+/* 20px: a 6px contact and a 14px tail, its origin on the head, kept 7px inside the edge by the lap */
+.agx-presence-sat { position: absolute; left: 0; top: 0; width: 20px; height: 8px; margin: -4px 0 0 -18px; transform-origin: 18px 4px; opacity: 0; transition: opacity 180ms ease-out; will-change: transform; }
+.agx-presence-on .agx-presence-sat { opacity: 1; transition: opacity 480ms var(--agx-ease) 120ms; }
+.agx-presence-sat::before { content: ""; position: absolute; left: 0; right: 4px; top: 3px; height: 2px; border-radius: 2px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--agx-contact) 55%, transparent)); }
+.agx-presence-sat::after { content: ""; position: absolute; right: -4px; top: -2px; width: 12px; height: 12px; border-radius: 50%;
+  background: radial-gradient(circle, var(--agx-contact) 0 2.6px, color-mix(in srgb, var(--agx-contact) 20%, transparent) 3.4px, transparent 6px); }
+.agx-presence-ghost { position: absolute; left: 0; top: 0; z-index: 1; opacity: 0; transition-property: transform, opacity; transition-timing-function: var(--agx-move), ease-out; will-change: transform; }
+.agx-presence-on .agx-presence-ghost { opacity: 1; }
+.agx-presence-on .agx-presence-ghost.is-stale { opacity: 0; }
+.agx-presence-arrow { display: block; width: 20px; height: 20px; filter: drop-shadow(0 1px 1.5px rgba(40, 20, 90, .28)); }
+.agx-presence-label { position: absolute; left: 18px; top: 20px; white-space: nowrap; font-size: 11px; font-weight: 500; line-height: 1; padding: 4px 8px; border-radius: 7px;
+  color: color-mix(in srgb, var(--agx-mark) 70%, var(--text)); background: color-mix(in srgb, var(--bg) 86%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--agx-mark) 22%, transparent), 0 6px 16px -8px rgba(40, 20, 90, .35); }
+/* The dock: the island's own glass, so the agent's two places on the page read
+   as one object. Dark in both themes, like the island. */
+.agx-presence-dock { pointer-events: auto; position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; align-items: center; gap: 10px;
+  max-width: calc(100% - 32px); padding: 6px; border-radius: 22px; color: #f2f0f7; --agx-dock-mark: #a78bfa; --agx-dock-yours: #fbbf24; --agx-dock-take: #f59e0b;
+  transition: box-shadow 300ms var(--agx-out);
+  z-index: 2; background: rgba(22, 19, 31, .97);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 0 0 1px color-mix(in srgb, var(--agx-mark) 34%, transparent), 0 18px 40px -18px rgba(40, 20, 90, .55);
+  animation: agx-dock-in 360ms var(--agx-ease); }
+@keyframes agx-dock-in { from { opacity: 0; transform: translate(-50%, 8px) scale(.98); filter: blur(2px); } }
+.agx-presence-well { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 16px;
+  background: color-mix(in srgb, var(--agx-dock-mark) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--agx-dock-mark) 26%, transparent); }
+.agx-presence-mark { flex: none; transition: color 300ms var(--agx-out); }
+.agx-presence-dock.is-yours { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 0 0 1px color-mix(in srgb, var(--agx-dock-yours) 45%, transparent), 0 18px 40px -18px rgba(40, 20, 90, .55); --agx-dock-mark: var(--agx-dock-yours); }
+.agx-presence-who { display: flex; flex-direction: column; gap: 4px; min-width: 112px; }
+.agx-presence-task { font-size: 12.5px; font-weight: 600; letter-spacing: -.005em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* As wide as the longest word, so the dock and Take over stay put as the state changes. */
+.agx-presence-state { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; height: 20px; padding: 0 8px 0 6px; border-radius: 10px;
+  font-size: 11px; font-weight: 500; letter-spacing: .01em; color: #c4b5fd; background: color-mix(in srgb, var(--agx-mark) 18%, transparent);
+  transition: background-color 280ms ease-out, color 280ms ease-out; }
+.agx-presence-dock.is-thinking .agx-presence-state, .agx-presence-dock.is-waiting .agx-presence-state, .agx-presence-dock.is-working .agx-presence-state { color: rgba(242, 240, 247, .72); background: rgba(255, 255, 255, .08); }
+.agx-presence-dock.is-yours .agx-presence-state { color: var(--agx-dock-yours); background: color-mix(in srgb, var(--agx-dock-yours) 16%, transparent); }
+.agx-presence-state svg { flex: none; overflow: visible; }
+.agx-st-ring { transform-origin: 6px 5.5px; animation: agx-st-ring 900ms ease-out infinite; }
+@keyframes agx-st-ring { from { opacity: .9; transform: scale(.3); } to { opacity: 0; transform: scale(1); } }
+.agx-st-caret { animation: agx-st-blink 1s steps(2, start) infinite; }
+@keyframes agx-st-blink { to { visibility: hidden; } }
+.agx-st-needle { transform-origin: 8px 8px; animation: agx-st-spin 1.6s var(--agx-ease) infinite; }
+@keyframes agx-st-spin { to { transform: rotate(360deg); } }
+.agx-st-up { animation: agx-st-nudge 900ms ease-in-out infinite; }
+.agx-st-down { animation: agx-st-nudge 900ms ease-in-out infinite reverse; }
+@keyframes agx-st-nudge { 50% { transform: translateY(-1px); } }
+.agx-st-pupil { animation: agx-st-look 2.4s ease-in-out infinite; }
+@keyframes agx-st-look { 30%, 45% { transform: translateX(1.5px); } 70%, 85% { transform: translateX(-1.5px); } }
+.agx-st-dot { animation: agx-st-dot 1.2s ease-in-out infinite; }
+.agx-st-dot:nth-child(2) { animation-delay: .15s; }
+.agx-st-dot:nth-child(3) { animation-delay: .3s; }
+@keyframes agx-st-dot { 0%, 60%, 100% { opacity: .35; } 30% { opacity: 1; } }
+/* A word or icon that changes crosses over (Swap in AgentPresence.tsx): the host's width follows the new layer. */
+.agx-sw { position: relative; display: block; flex: none; align-self: stretch; transition: width 260ms var(--agx-out); }
+.agx-presence-state .agx-sw { height: 20px; }
+.agx-sw-lay { position: absolute; left: 0; top: 0; bottom: 0; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.agx-presence-dock button .agx-sw-lay { gap: 8px; }
+.agx-sw-lay.is-in { animation: agx-sw-in 260ms var(--agx-out) both; }
+.agx-sw-lay.is-out { animation: agx-sw-out 200ms var(--agx-out) both; pointer-events: none; }
+@keyframes agx-sw-in { from { opacity: 0; filter: blur(3px); transform: translateY(5px); } }
+@keyframes agx-sw-out { to { opacity: 0; filter: blur(3px); transform: translateY(-5px); } }
+.agx-presence-dock button { flex: none; display: inline-flex; align-items: center; height: 40px; padding: 0 16px 0 10px; border-radius: 16px; border: 0; cursor: pointer; font: inherit; font-size: 13px; font-weight: 700; letter-spacing: -.005em;
+  background: var(--agx-dock-take); color: #2a1700; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .35), 0 6px 16px -8px rgba(245, 158, 11, .8);
+  transition: transform 150ms var(--agx-ease), background-color 280ms ease-out, box-shadow 280ms ease-out, color 280ms ease-out; }
+.agx-presence-dock button:hover { background: #fbbf24; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), 0 8px 22px -6px rgba(245, 158, 11, .95); }
+.agx-presence-dock button:active { transform: scale(.97); }
+.agx-presence-dock button:focus-visible { outline: 2px solid #a78bfa; outline-offset: 2px; }
+.agx-presence-dock button.is-back { background: var(--agx-mark); color: #fff; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .25), 0 6px 16px -8px rgba(139, 92, 246, .9); }
+.agx-presence-dock button.is-back:hover { background: #9a70f8; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .3), 0 8px 22px -6px rgba(139, 92, 246, .95); }
+.agx-gl { display: block; flex: none; width: 24px; height: 24px; overflow: visible; transition: transform 150ms var(--agx-ease); }
+.agx-presence-dock button:hover .agx-gl { transform: translateY(-1px) rotate(-7deg) scale(1.08); }
+.agx-presence-dock button.is-back:hover .agx-gl { transform: translateX(-2px); }
+/* The alien watches the agent's pointer (lookAt): pupils and head ease 200ms, transform only. */
+.agx-al-head { transform-box: fill-box; transform-origin: 50% 100%; transform: rotate(calc(var(--agx-tilt, 0) * 1deg)); transition: transform 200ms ease-out; }
+.agx-al-eyes { transform: translate(calc(var(--agx-lx, 0) * 1px), calc(var(--agx-ly, 0) * 1px)); transition: transform 200ms ease-out; }
+.agx-al-eye, .agx-sp-eye { transform-box: fill-box; transform-origin: center; transition: transform 150ms var(--agx-ease); }
+.agx-presence-dock button:hover .agx-al-eye, .agx-presence-dock button:hover .agx-sp-eye { transform: scaleY(1.2); }
+.agx-presence-dock button:active .agx-al-eye, .agx-presence-dock button:active .agx-sp-eye { transform: scaleY(.15); }
+/* The spark: pulses and a dot circles it at rest, leans in on hover, blinks on press. */
+.agx-sp-star, .agx-sp-lift, .agx-sp-x, .agx-sp-y, .agx-sp-ring { transform-box: fill-box; transform-origin: center; }
+.agx-sp-star { animation: agx-sp-pulse 2.8s ease-in-out infinite; }
+@keyframes agx-sp-pulse { 50% { transform: scale(1.07); } }
+.agx-sp-x { animation: agx-sp-x 2s cubic-bezier(.37, 0, .63, 1) infinite alternate; }
+.agx-sp-y { animation: agx-sp-y 2s cubic-bezier(.37, 0, .63, 1) infinite alternate -1s; }
+@keyframes agx-sp-x { from { transform: translateX(-10.5px); } to { transform: translateX(10.5px); } }
+@keyframes agx-sp-y { from { transform: translateY(-4px); } to { transform: translateY(4px); } }
+.agx-sp-lift { transition: transform 150ms var(--agx-ease); }
+.agx-sp-ring { opacity: .5; transition: opacity 150ms ease-out; }
+.agx-presence-dock button:hover .agx-sp-lift { transform: rotate(14deg) scale(1.14); }
+.agx-presence-dock button:hover .agx-sp-ring { opacity: .9; }
+.agx-presence-dock button:active .agx-sp-lift { transform: rotate(0) scale(.86); }
+@media (prefers-reduced-motion: reduce) {
+  .agx-presence-ghost { transition-property: opacity; }
+  .agx-presence-dock, .agx-presence-state, .agx-presence-state *, .agx-presence-dock button * { animation: none; }
+  .agx-sw { transition-duration: 1ms; }
+  .agx-sw-lay.is-out { opacity: 0; }
+  .agx-al-head, .agx-al-eyes { transform: none; transition: none; }
+}
+@media (prefers-reduced-transparency: reduce) { .agx-presence-dock { background: #16131f; } }
+
+/*
+ * THE ISLAND (components/browser/BrowserIsland.tsx). A box that is always the
+ * whole page minus 12px, shown through a clip-path: compact, pill, tucked and
+ * open are four clips of one element, so growing never re-lays it out. Hit
+ * testing follows the clip, so the page under the hidden part stays clickable.
+ * The capsule is dark in every theme, like the hardware it is named after, and
+ * has no backdrop-filter: Chrome blurs the square box and ignores a rounded
+ * clip (measured: a pale rectangle round the capsule). The OPEN overview is
+ * glass that follows the theme: its blur lives on .agx-isl-glass, a sibling
+ * with a real border-radius, in no clipped ancestor (a clip-path makes its
+ * subtree a backdrop root, which would blur nothing), and it only fades in
+ * once the shape has finished growing.
+ */
+.agx-isl { position: absolute; left: 12px; right: 12px; top: 12px; bottom: 12px; z-index: 18; color: #f2f0f7; background: rgba(22, 19, 31, .84); border-radius: 20px;
+  clip-path: inset(0px calc(50% - 52px) calc(100% - 30px) calc(50% - 52px) round 15px);
+  /* collapsing waits 700 ms: a pointer that slips off the pill for a moment
+     finds it still open when it comes back (hover intent). 250 ms closed it
+     under a hand that overshot the counter by a few pixels. */
+  transition: clip-path 300ms cubic-bezier(0.32, 0.72, 0, 1) 700ms, background 220ms ease 700ms, top 300ms cubic-bezier(0.32, 0.72, 0, 1) 700ms; font-size: 12px; }
+.agx-isl:not(.is-open):is(:hover, .is-peek), .agx-isl:not(.is-open):focus-within { clip-path: inset(0px calc(50% - 210px) calc(100% - 36px) calc(50% - 210px) round 18px); background: rgba(22, 19, 31, .96); transition-duration: 300ms; transition-delay: 0ms; }
+.agx-isl.is-yours:not(.is-open):is(:hover, .is-peek), .agx-isl.is-yours:not(.is-open):focus-within { clip-path: inset(0px calc(50% - 300px) calc(100% - 40px) calc(50% - 300px) round 20px); }
+.agx-isl.is-tucked:not(.is-open):not(:hover):not(.is-peek):not(:focus-within) { clip-path: inset(0px calc(50% - 18px) calc(100% - 14px) calc(50% - 18px) round 0px 0px 8px 8px); background: rgba(22, 19, 31, .55); }
+/* Tucked, it lives on the top edge; opened from the arrow it comes down to
+   its own place (a pill glued to the edge read as stuck). The panel keeps it
+   open (.is-peek) while the pointer crosses the gap it just left. */
+/* Only folded all the way: a bar still shown by focus (the address, the menu)
+   after the peek ended was pulled up to the edge. */
+.agx-isl.is-tucked:not(.is-open):not(:hover):not(.is-peek):not(:focus-within) { top: 0; }
+/* Open beats every size the pill takes on hover or when tucked: a hover rule
+   that won here shrank the open overview under the pointer, which then left
+   it, which grew it again — a loop (measured on the installed app, tab yours). */
+.agx-isl.is-open { clip-path: inset(0px var(--sbr, 0px) var(--sbb, 0px) 0px round 20px) !important; background: transparent !important; top: 12px !important; z-index: 30; transition: none !important; }
+/* the shape that grows: a solid colour with nothing in it, clipped from the pill to the page */
+.agx-isl-morph { position: absolute; inset: 0; background: rgba(22, 19, 31, .84);
+  clip-path: inset(0px calc(50% - var(--pw)) calc(100% - var(--ph)) calc(50% - var(--pw)) round var(--pr));
+  transition: clip-path 320ms cubic-bezier(0.32, 0.72, 0, 1) 120ms; will-change: clip-path; }
+.agx-isl.is-shown .agx-isl-morph { clip-path: inset(0px 0px 0px 0px round 20px); background: transparent; transition: clip-path 380ms cubic-bezier(0.32, 0.72, 0, 1);
+  animation: agx-morph-fill 380ms cubic-bezier(0.32, 0.72, 0, 1) forwards, agx-morph-clear 200ms ease-out 380ms forwards; }
+/* closing mirrors it: opaque first, the blur comes off underneath, then it shrinks back to the capsule's colour.
+   Not while is-snap, which is the mount frame of an open. */
+.agx-isl:not(.is-shown):not(.is-snap) .agx-isl-morph { animation: agx-morph-seal 120ms ease-out forwards, agx-morph-dark 320ms cubic-bezier(0.32, 0.72, 0, 1) 120ms forwards; }
+/* the colour change rides the motion and is opaque from the first frame, so the page behind is never seen
+   unblurred: the capsule's dark grows into the theme background, then clears to show the glass under it */
+@keyframes agx-morph-fill { from { background: rgb(22, 19, 31); } to { background: var(--bg); } }
+@keyframes agx-morph-clear { from { background: var(--bg); } to { background: transparent; } }
+@keyframes agx-morph-seal { from { background: transparent; } to { background: var(--bg); } }
+@keyframes agx-morph-dark { from { background: var(--bg); } to { background: rgb(22, 19, 31); } }
+/* the open overview's glass: the page behind is blurred past reading, the tint is the theme's own */
+.agx-isl-glass { position: absolute; left: 12px; right: calc(12px + var(--sbr, 0px)); top: 12px; bottom: calc(12px + var(--sbb, 0px)); z-index: 29; border-radius: 20px; pointer-events: none; opacity: 0;
+  background: color-mix(in srgb, var(--bg) 52%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent), 0 24px 60px -24px rgba(0, 0, 0, .45);
+  /* closing: the blur and the layer stay for the 120 ms the morph takes to turn opaque, then go, hidden under it */
+  transition: opacity 0s 120ms; animation: agx-glass-hold 120ms linear; }
+@keyframes agx-glass-hold { from, to { -webkit-backdrop-filter: blur(40px) saturate(160%); backdrop-filter: blur(40px) saturate(160%); } }
+/* The blur is switched on once the open has settled, under the still opaque morph, and off
+   once the close has sealed it (zero-length animations, so no frame fades through it): the desktop app composites on the
+   CPU, and a blurred backdrop over the growing shape measured p50 33 ms / p95 50 ms per frame
+   against 17 ms without it, under 4x throttle. Settled, it is a static layer. */
+@keyframes agx-glass-blur { to { -webkit-backdrop-filter: blur(40px) saturate(160%); backdrop-filter: blur(40px) saturate(160%); } }
+.agx-isl-glass.is-shown { opacity: 1; transition: opacity 0s 380ms; animation: agx-glass-blur 0s 380ms forwards; }
+@media (prefers-reduced-transparency: reduce) {
+  .agx-isl-glass, .agx-isl-glass.is-shown { background: var(--bg); animation: none; }
+  .agx-isl-box, .agx-isl-sum, .agx-isl-away { background: var(--bg); }
+  .agx-isl.is-shown .agx-isl-morph { animation: none; background: var(--bg); }
+}
+/* while it is open the collapsed content stays mounted but out of the way; closing,
+   the capsule's icons come back over the last stretch of the shrink */
+.agx-isl.is-open .agx-isl-status, .agx-isl.is-open .agx-isl-bar, .agx-isl.is-open .agx-isl-tuck { opacity: 0; pointer-events: none; transition: opacity 90ms ease-out; }
+.agx-isl.is-open.is-shown .agx-isl-compact { opacity: 0; transition: opacity 90ms ease-out; }
+.agx-isl.is-open:not(.is-shown) .agx-isl-compact { opacity: 1; transition: opacity 140ms ease-out 190ms; }
+/* the frame the overview leaves in is the capsule; a pointer resting there then grows it to the pill with its own transition */
+.agx-isl.is-snap:not(.is-open) { clip-path: inset(0px calc(50% - 52px) calc(100% - 30px) calc(50% - 52px) round 15px) !important; }
+.agx-isl-compact, .agx-isl-status, .agx-isl-bar, .agx-isl-tuck { z-index: 1; }
+/* a change of size that must not animate: the overview appears and goes in one frame */
+.agx-isl.is-snap { transition: none !important; }
+
+.agx-isl-scrim { position: absolute; inset: 0; z-index: 29; background: rgba(22, 19, 31, .18); opacity: 0; transition: opacity 160ms ease-out; }
+.agx-isl-scrim.is-shown { opacity: 1; }
+.agx-isl-compact, .agx-isl-tuck { position: absolute; left: 50%; top: 0; transform: translateX(-50%); display: flex; align-items: center; justify-content: center; pointer-events: none; transition: opacity 140ms ease-out 60ms; }
+.agx-isl-compact { width: 104px; height: 30px; gap: 8px; }
+.agx-isl-tuck { width: 36px; height: 14px; color: #f5c76b; opacity: 0; }
+.agx-isl.is-tucked:not(:hover):not(.is-peek):not(:focus-within) .agx-isl-tuck { opacity: 1; }
+.agx-isl.is-tucked:not(:hover):not(.is-peek):not(:focus-within) .agx-isl-compact,
+.agx-isl:not(.is-open):is(:hover, .is-peek) .agx-isl-compact, .agx-isl:not(.is-open):focus-within .agx-isl-compact { opacity: 0; transition-delay: 0ms; transition-duration: 80ms; }
+.agx-isl-num { font-weight: 600; font-size: 11px; font-variant-numeric: tabular-nums; color: #fff; }
+.agx-isl-dot { width: 6px; height: 6px; border-radius: 50%; background: #6b6578; flex: none; }
+.agx-isl-dot.is-working { background: #34d399; box-shadow: 0 0 0 3px rgba(52, 211, 153, .22); }
+.agx-isl-dot.is-taken { background: #f5c76b; box-shadow: 0 0 0 3px rgba(245, 199, 107, .22); }
+/* the pill's two faces: a status line while an agent drives, the person's bar otherwise */
+.agx-isl-status, .agx-isl-bar { box-sizing: border-box; position: absolute; left: 50%; top: 0; transform: translateX(-50%); display: flex; align-items: center; opacity: 0; transition: opacity 120ms ease-out; }
+.agx-isl:not(.is-open):is(:hover, .is-peek) .agx-isl-status, .agx-isl:not(.is-open):focus-within .agx-isl-status, .agx-isl:not(.is-open):is(:hover, .is-peek) .agx-isl-bar, .agx-isl:not(.is-open):focus-within .agx-isl-bar { opacity: 1; transition: opacity 180ms ease-out 60ms; }
+/* the pill's contents leave with the same 700 ms grace as its shape */
+.agx-isl-status, .agx-isl-bar { transition: opacity 120ms ease-out 700ms; }
+.agx-isl-compact { transition: opacity 140ms ease-out 850ms; }
+.agx-isl-status { width: 420px; height: 36px; gap: 8px; padding: 0 10px 0 12px; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; text-align: left; }
+.agx-isl-title { flex: 1; min-width: 0; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* the text is its own box so it can end in an ellipsis; a flex row cannot. The count keeps an 8px gap from it. */
+.agx-isl-doing { display: flex; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 0; max-width: 58%; font-size: 11px; color: #c4b5fd; }
+.agx-isl-doing-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agx-isl-status .agx-isl-num { flex: none; margin-left: 2px; }
+.agx-isl-bar { width: 600px; height: 40px; gap: 2px; padding: 0 8px; }
+.agx-isl-ib { flex: none; width: 26px; height: 26px; display: grid; place-items: center; border-radius: 7px; border: 0; background: none; color: #cfcad9; cursor: pointer; }
+.agx-isl-ib svg { width: 16px; height: 16px; }
+.agx-isl-ib:hover:not(:disabled) { background: rgba(255, 255, 255, .08); }
+.agx-isl-ib:disabled { opacity: .35; cursor: default; }
+.agx-isl-addr { flex: 1; min-width: 0; height: 28px; margin: 0 6px; border: 0; border-radius: 14px; padding: 0 12px; text-align: left; font: inherit; color: #f2f0f7; background: rgba(255, 255, 255, .08); cursor: text; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The way into the overview, so a target a hand finds without aiming: the bar's full height less its padding. */
+.agx-isl-count { flex: none; min-width: 40px; height: 30px; margin-left: 2px; padding: 0 12px; border: 0; border-radius: 15px; background: rgba(167, 139, 250, .2); color: #fff; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; cursor: pointer; transition: background 140ms ease; }
+.agx-isl-count:hover { background: rgba(167, 139, 250, .34); }
+.agx-isl-hand { flex: none; height: 26px; margin-left: 8px; padding: 0 12px; border: 0; border-radius: 13px; background: #f5c76b; color: #2a1d00; font-weight: 600; font-size: 11.5px; cursor: pointer; }
+.agx-isl-hand:active, .agx-isl-count:active, .agx-isl-ib:active:not(:disabled) { transform: scale(.96); }
+/* the overview */
+/* the overview is clipped to the same shape as it grows and shrinks, so the
+   shape is never empty: it carries its content in and out */
+.agx-isl-mc { position: absolute; inset: 0 var(--sbr, 0px) var(--sbb, 0px) 0; display: flex; flex-direction: column; opacity: 0; transform: scale(.985); transform-origin: 50% 0;
+  clip-path: inset(0px calc(50% - var(--pw)) calc(100% - var(--ph)) calc(50% - var(--pw)) round var(--pr));
+  transition: opacity 240ms ease-in 120ms, transform 3120ms cubic-bezier(0.32, 0.72, 0, 1) 120ms, clip-path 3120ms cubic-bezier(0.32, 0.72, 0, 1) 120ms; }
+.agx-isl.is-shown .agx-isl-mc { opacity: 1; transform: none; clip-path: inset(0px 0px 0px 0px round 20px);
+  transition: opacity 200ms cubic-bezier(0.23, 1, 0.32, 1) 40ms, transform 380ms cubic-bezier(0.32, 0.72, 0, 1), clip-path 380ms cubic-bezier(0.32, 0.72, 0, 1); }
+/* The containers are islands: each hugs its tabs and floats over the glass. On
+   opening they spring out of the pill (--fx/--fy, measured in the component),
+   staggered by --i, critically damped so nothing overshoots, transform and
+   opacity only, under 400 ms in all. The blur is the glass's own; an island
+   sits in the clipped overview, which is a backdrop root, so a blur of its own
+   would blur nothing and cost a layer. */
+.agx-isl-mc { --agx-spring: linear(0, .11, .31, .503, .657, .771, .85, .904, .939, .962, .976, .985, .991, .994, .997, .998, 1); }
+.agx-isl-box { opacity: 0; transform: translate(var(--fx, 0px), var(--fy, 0px)) scale(.4); transition: opacity 100ms ease-out, transform 120ms ease-out, translate 260ms cubic-bezier(0.23, 1, 0.32, 1); }
+.agx-isl.is-shown .agx-isl-box { opacity: 1; transform: none; transition: opacity 160ms ease-out calc(10ms + var(--i, 0) * 28ms), transform 290ms var(--agx-spring) calc(10ms + var(--i, 0) * 28ms), translate 260ms cubic-bezier(0.23, 1, 0.32, 1); }
+.agx-isl-head { position: absolute; left: 0; right: 0; top: 18px; z-index: 2; display: flex; justify-content: center; pointer-events: none; }
+.agx-isl-sum, .agx-isl-away { pointer-events: auto; background: color-mix(in srgb, var(--bg) 62%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent), 0 1px 2px rgba(30, 20, 60, .08), 0 8px 20px -8px rgba(30, 20, 60, .18); }
+.agx-isl-sum { margin: 0; height: 32px; padding: 0 16px; display: flex; align-items: center; gap: 8px; white-space: nowrap; border-radius: 16px; font-size: 12px; color: var(--text2); }
+.agx-isl-sum strong { color: var(--text); font-weight: 600; }
+.agx-isl-sum i { color: color-mix(in srgb, var(--text2) 55%, transparent); font-style: normal; }
+.agx-isl-away { position: absolute; right: 18px; top: 0; width: 32px; height: 32px; border-radius: 16px; }
+.agx-isl-mc .agx-isl-away:hover:not(:disabled) { background: color-mix(in srgb, var(--bg) 90%, transparent); }
+.agx-isl-hint { position: absolute; left: 0; right: 0; bottom: 20px; margin: 0; text-align: center; font-size: 11px; color: color-mix(in srgb, var(--text2) 55%, transparent); pointer-events: none; }
+/* the archipelago: islands wrap and sit centred, vertically too while they are few */
+.agx-isl-boxes { flex: 1; overflow: auto; padding: 76px 90px 44px; display: flex; flex-wrap: wrap; justify-content: center; align-content: center; align-content: safe center; gap: 30px 34px; }
+.agx-isl-box { position: relative; top: var(--dy, 0px); min-width: 236px; max-width: 100%; padding: 12px 14px 14px; border-radius: 24px; box-sizing: border-box;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg) 78%, transparent), color-mix(in srgb, var(--bg) 54%, transparent));
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 8%, transparent), 0 1px 1px rgba(30, 20, 60, .06), 0 8px 16px -4px rgba(30, 20, 60, .10), 0 26px 50px -14px rgba(30, 20, 60, .22); }
+.agx-isl-box:hover { translate: 0 -3px; }
+.agx-isl-box header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.agx-isl-bn { font-weight: 600; font-size: 12.5px; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agx-isl-bc { font-size: 11px; margin-right: 6px; color: color-mix(in srgb, var(--text2) 70%, transparent); font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* A box's state chip: the act's word while an agent acts, Thinking between, Done once it went quiet. */
+.agx-isl-state { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px 0 6px; border-radius: 11px; font-size: 11px; font-weight: 600; white-space: nowrap; color: var(--ink-agent); background: rgba(139, 92, 246, .14); animation: agx-state-in 200ms var(--agx-ease); }
+.agx-isl-state svg { flex: none; overflow: visible; width: 12px; height: 12px; }
+.agx-isl-state.is-waiting { color: var(--text2); background: color-mix(in srgb, var(--text) 8%, transparent); }
+.agx-isl-state.is-done { color: var(--ink-ok); background: rgba(16, 185, 129, .16); }
+.agx-isl-state.is-yours { color: var(--ink-you); background: rgba(245, 158, 11, .16); }
+/* The working island wears the mark's orbit: a violet halo that breathes round
+   its edge and the green contact travelling it (a lead dot and two fading
+   behind), the same pair the page wears while it is driven. Only these animate. */
+.agx-isl-halo { position: absolute; inset: -1px; border-radius: 25px; pointer-events: none; box-shadow: 0 0 0 1px color-mix(in srgb, var(--ring) 55%, transparent), 0 0 22px rgba(139, 92, 246, .30), 0 0 64px rgba(139, 92, 246, .16); animation: agx-isl-breathe 3.6s ease-in-out infinite alternate; }
+@keyframes agx-isl-breathe { from { opacity: .55; } to { opacity: 1; } }
+.agx-isl-sat { position: absolute; left: 0; top: 0; width: 7px; height: 7px; border-radius: 50%; background: #10b981; pointer-events: none; z-index: 2;
+  offset-path: inset(-8px round 32px); offset-rotate: 0deg; offset-anchor: 50% 50%; box-shadow: 0 0 0 3px rgba(16, 185, 129, .18), 0 0 10px 2px rgba(16, 185, 129, .55);
+  animation: agx-orbit 12s linear infinite; animation-delay: calc(var(--ph, 0) * -1s); }
+.agx-isl-sat.t1 { width: 5px; height: 5px; opacity: .5; box-shadow: 0 0 6px 1px rgba(16, 185, 129, .4); animation-delay: calc(var(--ph, 0) * -1s + .2s); }
+.agx-isl-sat.t2 { width: 3px; height: 3px; opacity: .28; box-shadow: none; animation-delay: calc(var(--ph, 0) * -1s + .4s); }
+@keyframes agx-orbit { from { offset-distance: 0%; } to { offset-distance: 100%; } }
+.agx-isl-box.is-s-thinking .agx-isl-halo { animation: none; }
+.agx-isl-box.is-s-thinking .agx-isl-sat { animation-duration: 24s; }
+.agx-st-tick { stroke-dasharray: 9; stroke-dashoffset: 9; animation: agx-st-tick 360ms var(--agx-ease) 120ms forwards; }
+@keyframes agx-st-tick { to { stroke-dashoffset: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .agx-isl-halo, .agx-isl-state, .agx-st-tick { animation: none; stroke-dashoffset: 0; }
+  .agx-isl-sat, .agx-isl-sat.t1, .agx-isl-sat.t2 { animation: none; offset-distance: 12%; }
+  .agx-isl-sat.t1 { offset-distance: 10.5%; } .agx-isl-sat.t2 { offset-distance: 9%; }
+}
+/* tabs: smaller pictures, the title under them, a round + after the last */
+.agx-isl-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px 10px; }
+.agx-isl-card { position: relative; flex: none; width: 132px; display: flex; flex-direction: column; gap: 6px; min-width: 0; cursor: pointer; outline: none; border: 0; padding: 0; background: none; color: inherit; font: inherit; text-align: left; }
+.agx-isl-shot { position: relative; border-radius: 10px; }
+.agx-isl-thumb { position: relative; width: 132px; height: 82px; border-radius: 10px; overflow: hidden; background: var(--bg3); box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent), 0 2px 6px -2px rgba(30, 20, 60, .22); transition: box-shadow 160ms, transform 160ms cubic-bezier(0.23, 1, 0.32, 1); }
+.agx-isl-thumb img { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; background: #fff; }
+.agx-isl-card.is-on .agx-isl-thumb { box-shadow: 0 0 0 2px var(--ring), 0 2px 6px -2px rgba(30, 20, 60, .22); }
+/* the agent's tab: a thick accent ring that breathes, its state on the picture and in words under it; the person's own tab is amber, the rest of a live box steps back */
+.agx-isl-card.is-driven .agx-isl-thumb { box-shadow: 0 0 0 3px var(--ink-agent), 0 0 18px 2px rgba(139, 92, 246, .45); animation: agx-isl-drv 1.8s ease-in-out infinite alternate; }
+@keyframes agx-isl-drv { to { box-shadow: 0 0 0 3px var(--ink-agent), 0 0 26px 5px rgba(139, 92, 246, .7); } }
+.agx-isl-card.is-on:not(.is-driven) .agx-isl-thumb { box-shadow: 0 0 0 2px var(--ink-you), 0 2px 6px -2px rgba(30, 20, 60, .22); }
+.agx-isl-card.is-dim .agx-isl-thumb, .agx-isl-card.is-dim .agx-isl-cap { opacity: .55; }
+.agx-isl-drv { position: absolute; left: 5px; top: 5px; z-index: 1; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 11px; color: #fff; background: var(--ink-agent); box-shadow: 0 1px 4px rgba(30, 20, 60, .4); }
+.agx-isl-tag { align-self: flex-start; max-width: 100%; box-sizing: border-box; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 8px; border-radius: 8px; font-size: 10.5px; font-weight: 700; line-height: 1.4; }
+.agx-isl-tag.is-agent { color: #fff; background: var(--ink-agent); }
+.agx-isl-tag.is-you { color: var(--text); background: color-mix(in srgb, var(--ink-you) 28%, transparent); }
+@media (prefers-reduced-motion: reduce) { .agx-isl-card.is-driven .agx-isl-thumb { animation: none; } }
+.agx-isl-card:focus-visible .agx-isl-thumb { outline: 2px solid var(--ring); outline-offset: 3px; }
+@media (hover: hover) and (pointer: fine) { .agx-isl-card:hover .agx-isl-thumb { transform: translateY(-1px); box-shadow: 0 0 0 1.5px color-mix(in srgb, #8b5cf6 60%, transparent), 0 6px 14px -4px rgba(30, 20, 60, .25); } }
+.agx-isl-mono { position: absolute; inset: 0; display: grid; place-items: center; align-content: center; gap: 6px; font-size: 16px; font-weight: 600; color: var(--text2); }
+.agx-isl-mono small { font-size: 11px; font-weight: 400; color: color-mix(in srgb, var(--text2) 85%, transparent); }
+.agx-isl-x { position: absolute; top: 5px; right: 5px; width: 20px; height: 20px; padding: 0; border-radius: 10px; border: 0; display: grid; place-items: center; line-height: 1; color: #fff; background: rgba(29, 26, 39, .72); opacity: 0; transform: scale(.9); cursor: pointer; transition: opacity 140ms cubic-bezier(0.23, 1, 0.32, 1), transform 140ms cubic-bezier(0.23, 1, 0.32, 1); }
+.agx-isl-x svg { width: 9px; height: 9px; }
+.agx-isl-card:hover .agx-isl-x, .agx-isl-card:focus-visible .agx-isl-x, .agx-isl-x:focus-visible { opacity: 1; transform: none; }
+.agx-isl-x:hover { background: #e5484d; }
+.agx-isl-cap { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 10.5px; color: color-mix(in srgb, var(--text2) 85%, transparent); }
+.agx-isl-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* the owner: violet for a tab an agent holds, amber for one that is yours */
+.agx-isl-who { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--ink-you); }
+.agx-isl-who.is-agent { background: var(--ink-agent); }
+.agx-isl-add { flex: none; width: 26px; height: 26px; margin-top: 28px; padding: 0; border: 0; border-radius: 13px; display: grid; place-items: center; cursor: pointer; color: color-mix(in srgb, var(--text2) 60%, transparent); background: color-mix(in srgb, var(--text) 6%, transparent); transition: background 140ms, color 140ms, transform 140ms cubic-bezier(0.23, 1, 0.32, 1); }
+.agx-isl-add:hover { background: rgba(139, 92, 246, .16); color: var(--ink-agent); }
+.agx-isl-add:active { transform: scale(.92); }
+.agx-isl-add:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.agx-isl-row > .agx-isl-add:only-child { margin-top: 0; }
+/* many containers or tabs: smaller pictures, a search field beside the count */
+.agx-isl-boxes.is-dense { gap: 18px 24px; padding-top: 84px; }
+.agx-isl-boxes.is-dense .agx-isl-box { top: 0; padding: 10px 12px 12px; }
+.agx-isl-boxes.is-dense .agx-isl-box header { margin-bottom: 8px; }
+.agx-isl-boxes.is-dense .agx-isl-card, .agx-isl-boxes.is-dense .agx-isl-thumb { width: 104px; }
+.agx-isl-boxes.is-dense .agx-isl-thumb { height: 64px; }
+.agx-isl-boxes.is-dense .agx-isl-add { margin-top: 18px; }
+.agx-isl-boxes.is-dense .agx-isl-row > .agx-isl-add:only-child { margin-top: 0; }
+.agx-isl-head { gap: 10px; align-items: center; }
+.agx-isl-find { pointer-events: auto; width: 240px; height: 32px; padding: 0 14px; border: 0; border-radius: 16px; font: inherit; font-size: 12px; color: var(--text); background: color-mix(in srgb, var(--bg) 62%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent), 0 1px 2px rgba(30, 20, 60, .08); outline: none; }
+.agx-isl-find:focus-visible { box-shadow: inset 0 0 0 2px var(--ring); }
+.agx-isl-find::placeholder { color: color-mix(in srgb, var(--text2) 60%, transparent); }
+.agx-isl-none { width: 100%; margin: 0; text-align: center; font-size: 12px; color: var(--text2); }
+.agx-isl-mc { --ring: color-mix(in srgb, #a78bfa 72%, var(--text)); --ink-agent: color-mix(in srgb, #8b5cf6 62%, var(--text)); --ink-ok: color-mix(in srgb, #10b981 58%, var(--text)); --ink-you: color-mix(in srgb, #f59e0b 62%, var(--text)); color: var(--text); }
+.agx-isl-mc .agx-isl-ib { color: var(--text2); }
+.agx-isl-mc .agx-isl-ib:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 10%, transparent); }
+@media (prefers-reduced-motion: reduce) {
+  .agx-isl { transition: background 150ms ease; }
+  .agx-isl-mc, .agx-isl.is-shown .agx-isl-mc { transform: none; }
+  .agx-isl-box, .agx-isl.is-shown .agx-isl-box { opacity: 1; transform: none; transition: none; }
+  .agx-isl-thumb, .agx-isl-x, .agx-isl-add { transition: none; }
+  .agx-isl-morph, .agx-isl.is-shown .agx-isl-morph { transition: none; animation: none; clip-path: inset(0px 0px 0px 0px round 20px); }
+  .agx-isl-glass.is-shown { transition: none; animation-delay: 0s; }
+}
+
+/* The island's ⋯ menu. Its own rules, apart from the capsule's: dark glass in
+   the island's colours, rows of 30 px, and an entrance that grows from the
+   button (not for a keyboard open). */
+.agx-isl-menu { position: fixed; z-index: 41; min-width: 244px; padding: 6px; border-radius: 14px; color: #f2f0f7; font-size: 12px;
+  background: rgba(22, 19, 31, .92); box-shadow: 0 0 0 1px rgba(255, 255, 255, .08), 0 18px 40px -16px rgba(0, 0, 0, .65);
+  transform-origin: calc(100% - 14px) 0; }
+.agx-isl-menu.is-anim { animation: agx-isl-menu-in 140ms ease-out; }
+@keyframes agx-isl-menu-in { from { opacity: 0; transform: scale(.97); } }
+@media (prefers-reduced-motion: reduce) { .agx-isl-menu.is-anim { animation: none; } }
+.agx-isl-menu-row { all: unset; box-sizing: border-box; width: 100%; height: 30px; padding: 0 10px; border-radius: 8px; display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.agx-isl-menu-row:hover, .agx-isl-menu-row:focus-visible { background: rgba(255, 255, 255, .09); }
+.agx-isl-menu-row:focus-visible { outline: 1.5px solid rgba(167, 139, 250, .6); outline-offset: -1.5px; }
+.agx-isl-menu-ic { display: grid; place-items: center; flex: none; color: rgba(242, 240, 247, .62); }
+.agx-isl-menu-row:hover .agx-isl-menu-ic, .agx-isl-menu-row:focus-visible .agx-isl-menu-ic { color: #d8ccff; }
+.agx-isl-menu-t { flex: 1; white-space: nowrap; }
+.agx-isl-menu-k { font: inherit; font-size: 10.5px; color: rgba(242, 240, 247, .42); }
+.agx-isl-menu-rule { height: 1px; margin: 4px 6px; background: rgba(255, 255, 255, .08); }

@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { failed } from "./refused.ts";
 import { resolveTmuxBin, tmuxSocket, engineSocketArgs } from "./tmuxbin.ts";
 import { confPath, confHealth, ensureConf } from "./tmuxconf.ts";
+import { PLACE_FORMAT, parsePlaceWindows, placeArgs } from "./tmuxplace.ts";
 /* The restore layer is bookkeeping ON TOP of this one, and it already imports
    this file — so it hands its recorder down here instead of us reaching up for
    it. A static import upwards would be a cycle; a dynamic one made the bundler
@@ -603,7 +604,9 @@ export async function engineWindowOutcome(
    * with the session is that session's current one already.
    */
   const out = there.ok
-    ? await tmux(["new-window", ...(select ? [] : ["-d"]), "-t", `=${session}:`, ...shape])
+    ? await tmux(["new-window", ...(select ? [] : ["-d"]),
+        ...placeArgs(parsePlaceWindows((await tmux(["list-windows", "-t", `=${session}:`, "-F", PLACE_FORMAT])).stdout), clean ?? "", `=${session}:`),
+        ...shape])
     : await tmux(["new-session", "-d", "-s", session, ...shape]);
   if (!out.ok) {
     const said = out.stderr.replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 200);

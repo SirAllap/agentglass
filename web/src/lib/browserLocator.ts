@@ -34,8 +34,11 @@
  * has to take apart, and a parse error comes back without the page being
  * searched.
  *
- * Ceilings, chosen: no frames and no shadow roots (CSS reaches neither
- * either); role attributes other than `name` (`level`, `checked`, `pressed`)
+ * Ceilings, chosen: open shadow roots and same-origin frames are searched
+ * only when the document itself has no match (so a "Save" in the page hides a
+ * "Save" in a component), and a plain CSS selector reaches neither, as CSS
+ * does not; closed shadow roots and cross-origin frames are not reachable at
+ * all; role attributes other than `name` (`level`, `checked`, `pressed`)
  * are refused rather than ignored; the name is observe's, not Chromium's
  * accessible name, so a name built from aria-labelledby or an <input
  * type=submit>'s value is not one — `label=` and `text=` reach those — and it
@@ -44,7 +47,7 @@
  * its button share an aria-label, label= names both and is refused.
  */
 import { jsLit } from "../../../shared/jsLit.ts";
-import { ACC_NAME, PICK } from "./browserObserve.ts";
+import { ACC_NAME, PICK, ROOTS } from "./browserObserve.ts";
 
 export type Locator =
   | { css: string }
@@ -138,11 +141,19 @@ export const ON_SCREEN = `(n) => {
  */
 export const FIND = `((spec) => {
   if (spec.invalid) return { kind: "invalid", message: spec.invalid };
+  /* The search runs over the document first, and only when that finds nothing
+     over the open shadow roots and same-origin frames under it too (see ROOTS):
+     the common page pays for one root, and a node inside a component is found
+     without the caller saying where it is. A plain CSS selector stays on the
+     document, as it always did; an id from an observation goes everywhere. */
+  const isId = spec.css !== undefined && /^\\[data-agx-e="e[0-9]+"\\]$/.test(spec.css);
+  const search = (roots) => {
+  const every = (sel) => roots ? roots.flatMap((f) => [...f.root.querySelectorAll(sel)]) : [...document.querySelectorAll(sel)];
   if (spec.css !== undefined) {
     let all;
-    try { all = document.querySelectorAll(spec.css); }
+    try { all = every(spec.css); }
     catch (err) { return { kind: "invalid", message: String((err && err.message) || err) }; }
-    return { kind: "found", all: [...all], hidden: [], near: [] };
+    return { kind: "found", all, hidden: [], near: [] };
   }
   const norm = (s) => String(s == null ? "" : s).replace(/\\s+/g, " ").trim();
   const name = ${ACC_NAME};
@@ -179,11 +190,11 @@ export const FIND = `((spec) => {
       const own = norm(n.getAttribute("role")).split(" ")[0];
       return own ? [own] : [n.tagName.toLowerCase(), implicit(n)];
     };
-    pool = [...document.querySelectorAll(${jsLit(PICK + ",h4,h5,h6,dialog,img,nav,main,li,ul,ol,table,article,form,aside")})]
+    pool = every(${jsLit(PICK + ",h4,h5,h6,dialog,img,nav,main,li,ul,ol,table,article,form,aside")})
       .filter((n) => roles(n).includes(spec.role));
     texts = spec.name === undefined ? null : (n) => [name(n) || n.getAttribute("alt") || ""];
   } else if (spec.by === "label") {
-    pool = [...document.querySelectorAll("input,select,textarea,[aria-label],[aria-labelledby]")];
+    pool = every("input,select,textarea,[aria-label],[aria-labelledby]");
     texts = (n) => [
       /* A label that wraps its control also reads the control's own text —
          a wrapped select's label says "Plan Team Solo" — so that is taken out. */
@@ -194,13 +205,17 @@ export const FIND = `((spec) => {
       }),
       n.getAttribute("aria-label"),
       ...norm(n.getAttribute("aria-labelledby")).split(" ").filter(Boolean)
-        .map((id) => { const t = document.getElementById(id); return t ? t.textContent : ""; }),
+        .map((id) => {
+          const rt = (n.getRootNode && n.getRootNode()) || document;
+          const t = (rt.getElementById ? rt : document).getElementById(id);
+          return t ? t.textContent : "";
+        }),
     ].filter((t) => norm(t));
   } else if (spec.by === "placeholder") {
-    pool = [...document.querySelectorAll("[placeholder]")];
+    pool = every("[placeholder]");
     texts = (n) => [n.getAttribute("placeholder")];
   } else if (spec.by === "testid") {
-    pool = [...document.querySelectorAll("[data-testid]")];
+    pool = every("[data-testid]");
     texts = (n) => [n.getAttribute("data-testid")];
   } else {
     const skip = { SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1 };
@@ -218,7 +233,9 @@ export const FIND = `((spec) => {
         walk(c);
       }
     };
-    walk(document.body || document.documentElement);
+    for (const f of roots || [{ root: document }]) {
+      walk(f.root === document ? (document.body || document.documentElement) : (f.root.body || f.root));
+    }
     /* The innermost ON SCREEN, so a hidden or one-pixel child (a tooltip, a
        screen-reader-only label) does not take the place of the visible thing
        around it. In document order a node's descendants come straight after
@@ -226,7 +243,7 @@ export const FIND = `((spec) => {
        holds for any subsequence too. */
     const innermost = (list) => list.filter((n, i) => !(list[i + 1] && n.contains(list[i + 1])));
     pool = [...innermost(hits.filter(big)), ...innermost(hits.filter((n) => !big(n)))]
-      .concat([...document.querySelectorAll('input[type="button"],input[type="submit"],input[type="reset"]')]
+      .concat(every('input[type="button"],input[type="submit"],input[type="reset"]')
         .filter((n) => fits(n.value)));
     texts = (n) => [n.tagName === "INPUT" ? n.value : n.textContent];
   }
@@ -245,6 +262,23 @@ export const FIND = `((spec) => {
     .filter((n) => everywhere || onScreen(n))
     .map((n) => ({ n, t: norm(texts ? texts(n)[0] : name(n)).slice(0, 40) }))
     .filter((x) => x.t)
+    /* Closest first: the first five in document order were the page header
+       every time ("Skip to content", "Homepage"...), when the one meant was a
+       "Issues 16" further down. One that contains the wanted words, then one
+       that shares a word, then the rest, each in page order. */
+    .map((x, i) => {
+      const t = x.t.toLowerCase();
+      const words = lower.split(" ").filter((w) => w.length > 2);
+      return { ...x, i, s: lower && t.includes(lower) ? 0 : words.some((w) => t.includes(w)) ? 1 : 2 };
+    })
+    .sort((a, b) => a.s - b.s || a.i - b.i)
     .slice(0, 5);
   return { kind: "found", all, hidden, near };
+  };
+  let r = search(null);
+  if (r.kind === "found" && !r.all.length && !r.hidden.length && (spec.css === undefined || isId)) {
+    const more = (${ROOTS})(document);
+    if (more.length > 1) r = search(more);
+  }
+  return r;
 })`;

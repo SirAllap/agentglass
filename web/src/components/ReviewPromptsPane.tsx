@@ -31,6 +31,7 @@ import { IconLabel, PlusIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { Button, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 import { Select } from "./Select.tsx";
+import { LaunchModeBadge, LaunchModeSelect } from "./LaunchMode.tsx";
 import { SELECT_BOX } from "./SettingsKit.tsx";
 import { Toggle } from "./SettingRow.tsx";
 import { setting } from "../lib/settingsRegistry.ts";
@@ -200,6 +201,7 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
                       : WHEN.find((w) => w.id === r.when)?.label}
                     {!r.builtIn && " · yours"}
                   </>}
+                  status={g.id === "conflicts" ? undefined : <LaunchModeBadge mode={r.permissionMode} />}
                   actions={<Button onClick={() => setEditing(r)}>Edit</Button>} />
                 {/* Under the row it belongs to, not at the foot of the page.
                     The editor used to render after the whole list, so pressing
@@ -338,6 +340,15 @@ function Editor({ r, skills, projects, presets, onChange, onSave, onCancel, onRe
             </Field>
           )}
 
+          {/* Not on a conflict prompt: that tab is opened by the merge view with
+              its own model choice, and the field would be one that does nothing. */}
+          {r.group !== "conflicts" && (
+            <Field label="Permission mode" htmlFor={f("mode")} help="How the terminal this prompt opens asks before a tool runs.">
+              <LaunchModeSelect id={f("mode")} value={r.permissionMode} className={SEL} style={INPUT_STYLE}
+                onChange={(m) => set({ permissionMode: m })} />
+            </Field>
+          )}
+
           {/* The skill, in two halves: which one, and what to pass it. Split
               because the arguments are where the placeholders go and a single
               text box made people type the slash and the name by hand every
@@ -367,7 +378,7 @@ function Editor({ r, skills, projects, presets, onChange, onSave, onCancel, onRe
           <Field label="The prompt" htmlFor={f("body")} help={r.skill ? "Sent after the skill line, as context." : undefined}>
             <textarea id={f("body")} value={r.body} onChange={(e) => set({ body: e.target.value })}
               aria-describedby={r.skill ? helpIdFor(f("body")) : undefined}
-              rows={Math.min(24, Math.max(8, r.body.split("\n").length + 1))} spellCheck={false}
+              rows={Math.min(40, Math.max(20, r.body.split("\n").length + 1))} spellCheck={false}
               placeholder={"Pull request #{number} of {repo}.\n\nRead-only: change nothing…"}
               className="w-full text-[12px] px-2.5 py-2 rounded-lg outline-none t-mono bg-[var(--surface-inset)] text-[var(--text)]"
               style={{ ...INPUT_STYLE, resize: "vertical" }} />

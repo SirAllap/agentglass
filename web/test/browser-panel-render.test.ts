@@ -73,10 +73,36 @@ const seedSession = (url: string, title: string) => {
 
 beforeEach(() => {
   store.clear();
+  /* The bar these tests read is the classic tab list; the island is the default chrome. */
+  store.set("agentglass.browser.chrome", "classic");
   // Cache-busting the import between cases would re-register React's dispatcher
   // for nothing: the panel reads storage in its state initialisers, so a fresh
   // render is enough.
   store.set("__t", String(Math.random()));
+});
+
+describe("nothing open", () => {
+  const emptied = () => store.set("agentglass.browser.session", JSON.stringify({ v: 2, current: "", byProfile: {} }));
+
+  test("an emptied browser restores empty and says so, with a way to start", async () => {
+    emptied();
+    const html = await draw();
+    expect(html).toContain("Nothing is open");
+    expect(html).toContain("New tab");
+  });
+
+  test("a browser with a page does not show the empty state", async () => {
+    seedSession("https://orbit.example/", "Orbit");
+    expect(await draw()).not.toContain("Nothing is open");
+  });
+
+  test("the island still draws with no tab, its count at 0 and the reload disabled", async () => {
+    emptied();
+    store.delete("agentglass.browser.chrome");
+    const html = await draw();
+    expect(html).toContain("agx-isl-num");
+    expect(html).toMatch(/aria-label="Reload"[^>]*disabled/);
+  });
 });
 
 describe("the bar draws what it is for", () => {
@@ -278,5 +304,61 @@ describe("the close button's place in the row", () => {
     }));
     const html = await draw();
     expect(html).toContain('aria-hidden="true"');
+  });
+});
+
+describe("the island is the default chrome", () => {
+  test("with no choice made, the page gets the island and the list is not drawn", async () => {
+    store.delete("agentglass.browser.chrome");
+    const html = await draw();
+    expect(html).toContain('class="agx-isl');
+    expect(html).not.toContain("New folder");
+  });
+  test("the classic list is one menu choice away, and comes back as it was", async () => {
+    expect(await draw()).toContain("New folder");
+    const src = await Bun.file(new URL("../src/components/BrowserPanel.tsx", import.meta.url)).text();
+    expect(src).toContain('"Classic tab list"');
+  });
+});
+
+describe("dropping the container on screen", () => {
+  test("leaves only what was open: no saved strip comes back, no home tab is made", async () => {
+    const src = await Bun.file(new URL("../src/components/BrowserPanel.tsx", import.meta.url)).text();
+    const start = src.indexOf("const forgetProfile = useCallback(");
+    expect(start).toBeGreaterThan(-1);
+    const end = src.indexOf("}, [profile]);", start);
+    expect(end).toBeGreaterThan(start);
+    const body = src.slice(start, end).split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+    expect(body).not.toContain("switchTo(");
+    expect(body).toContain('setProfile("")');
+  });
+});
+
+describe("the ⋯ menu", () => {
+  test("is drawn outside the side bar, which the island never mounts", async () => {
+    const src = await Bun.file(new URL("../src/components/BrowserPanel.tsx", import.meta.url)).text();
+    const start = src.indexOf("const sideBody = (");
+    expect(start).toBeGreaterThan(-1);
+    const end = src.indexOf("\n  );\n", start);
+    expect(end).toBeGreaterThan(start);
+    expect(src.slice(start, end)).not.toContain("{barMenu}");
+    expect(src.split("{barMenu}").length).toBe(2);
+  });
+});
+
+describe("the classic bar's menu", () => {
+  test("starts with the way back to the island", async () => {
+    const src = await Bun.file(new URL("../src/components/BrowserPanel.tsx", import.meta.url)).text();
+    const start = src.indexOf("const barMenu = ");
+    expect(start).toBeGreaterThan(-1);
+    const back = src.indexOf('"Back to the island"', start), home = src.indexOf('"Home"', start);
+    expect(back).toBeGreaterThan(start);
+    expect(back).toBeLessThan(home);
+  });
+  test("and the bar keeps a button back to the island at its foot", async () => {
+    const src = await Bun.file(new URL("../src/components/BrowserPanel.tsx", import.meta.url)).text();
+    const start = src.indexOf("const sideBody = (");
+    const end = src.indexOf("\n  );\n", start);
+    expect(src.slice(start, end)).toContain("Back to the island");
   });
 });

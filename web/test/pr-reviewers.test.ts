@@ -435,3 +435,23 @@ describe("a comment after a change request", () => {
     expect(R.reviewerTitle(r!, "asked for changes", ago)).toBe("bob — asked for changes 5d");
   });
 });
+
+describe("asked again is a request newer than the review", () => {
+  const ask = (at: string, login: string) => ({ kind: "review-requested", detail: login, at });
+  const d = {
+    reviewers: [{ login: "reviewer-a" }, { login: "reviewer-b" }],
+    reviews: [
+      review("reviewer-a", "CHANGES_REQUESTED", "2026-10-20T10:00:00Z"),
+      review("reviewer-b", "CHANGES_REQUESTED", "2026-10-05T10:00:00Z"),
+    ],
+    timeline: [ask("2026-10-16T10:00:00Z", "reviewer-a"), ask("2026-10-14T10:00:00Z", "reviewer-b")],
+  };
+  test("the request that predates the review is not a re-request", () => {
+    expect(reviewerRoster(d).map((r) => `${r.login}:${!!r.again}`).sort()).toEqual(["reviewer-a:false", "reviewer-b:true"]);
+  });
+  test("so the verdict is not cleared while the first still holds the merge", () => {
+    const v = R.reviewVerdict(reviewerRoster(d));
+    expect(v).toMatchObject({ kind: "changes", askedAgain: true });
+    expect(v.cleared).toBeUndefined();
+  });
+});

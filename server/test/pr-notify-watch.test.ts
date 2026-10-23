@@ -37,6 +37,8 @@ const snap = (all: PrCheck[]) => {
 };
 const ctx = { repo: "acme/orbit", number: 7, root: "/x/orbit", title: "ORBIT-1042 add thing" };
 const add = (rule: unknown, over: Partial<typeof ctx> = {}) => W.addWatch({ ...ctx, ...over, rule });
+/** The first read after arming has been seen: from here a green is news, not "already green". */
+const primed = () => DB.db.run("UPDATE pr_watch SET primed = 1");
 /** A read whose answer the test changes between ticks. */
 const reader = (initial: ReturnType<typeof snap>) => {
   const box = { s: initial, calls: 0 };
@@ -151,6 +153,7 @@ describe("firing", () => {
   });
   it("two racing passes cannot both claim the same rule", async () => {
     add({ type: "ci-pass" });
+    primed();
     const { read } = reader(snap([chk("a", "success")]));
     await Promise.all([W.checkWatches(read), W.checkWatches(read)]);
     expect(fired.length).toBe(1);
@@ -233,6 +236,7 @@ describe("comments", () => {
 describe("the fire queue: a closed window still gets told", () => {
   it("a fire with nobody listening is kept, oldest first, and handed over once acknowledged away", async () => {
     add({ type: "ci-pass" }, { number: 31 }); add({ type: "ci-pass" }, { number: 32 });
+    primed();
     await W.checkWatches(async () => snap([chk("a", "success")])); // no listener needs to exist for the fire to be kept
     const q = W.pendingFires();
     expect(q.map((f) => f.number).sort()).toEqual([31, 32]);
@@ -245,6 +249,7 @@ describe("the fire queue: a closed window still gets told", () => {
   });
   it("the live frame carries the same seq the queue holds", async () => {
     add({ type: "ci-pass" });
+    primed();
     await W.checkWatches(async () => snap([chk("a", "success")]));
     expect(fired[0]!.seq).toBe(W.pendingFires()[0]!.seq);
   });
@@ -255,6 +260,7 @@ describe("the fire queue: a closed window still gets told", () => {
   });
   it("an unacknowledged fire expires after 24 hours", async () => {
     add({ type: "ci-pass" });
+    primed();
     await W.checkWatches(async () => snap([chk("a", "success")]));
     expect(W.pendingFires(Date.now() + W.FIRE_TTL_MS - 60_000).length).toBe(1);
     expect(W.pendingFires(Date.now() + W.FIRE_TTL_MS + 60_000).length).toBe(0);
@@ -399,6 +405,7 @@ describe("adding", () => {
   });
   it("a corrupted rule row is skipped, not fatal to the list or the tick", async () => {
     add({ type: "ci-pass" });
+    primed();
     DB.db.run("INSERT INTO pr_watch (id, repo, number, root, title, rule, active, created) VALUES ('bad', 'acme/orbit', 7, '/x', 't', '{not json', 1, 1)");
     expect(W.listWatches().watches.length).toBe(1);
     expect(await W.checkWatches(async () => snap([chk("a", "success")]))).toBe(1);
@@ -444,6 +451,7 @@ describe("restart", () => {
   it("a waiting rule fires from a fresh process, and a fired one does not fire again", async () => {
     add({ type: "ci-pass" }, { number: 21 });
     add({ type: "ci-pass" }, { number: 22 });
+    primed();
     await W.checkWatches(async (_r, n) => (n === 22 ? snap([chk("a", "success")]) : snap([chk("a", "pending")])));
     expect(fired.map((f) => f.number)).toEqual([22]);
     // A second process on the same database: everything it knows is the file. The path
@@ -511,11 +519,12 @@ describe("the alert behind a fire", () => {
   it("a fire raises one alert that carries its target, and the fire names it", async () => {
     const A = await import("../src/askedAlerts.ts");
     add({ type: "ci-pass" });
+    primed();
     const { read } = reader(withSha([chk("a", "success")], "abc123"));
     expect(await W.checkWatches(read)).toBe(1);
     const open = A.openAsked();
     expect(open).toHaveLength(1);
-    expect(open[0]!.payload.title).toBe("CI passed · acme/orbit #7");
+    expect(open[0]!.payload.title).toBe("CI passed on abc123 · acme/orbit #7");
     expect(open[0]!.payload.target).toEqual({ kind: "pr", repo: "acme/orbit", number: 7, root: "/x/orbit" });
     expect(open[0]!.key).toBe("acme/orbit#7@abc123:CI passed");
     expect(fired[0]!.alertId).toBe(open[0]!.id);
@@ -544,11 +553,13 @@ describe("the alert behind a fire", () => {
   it("pressing the bell again on the same head after the alert was closed is a new ask", async () => {
     const A = await import("../src/askedAlerts.ts");
     add({ type: "ci-pass" });
+    primed();
     const { read } = reader(withSha([chk("a", "success")], "abc123"));
     await W.checkWatches(read, 1_000);
     A.closeAsked(A.openAsked()[0]!.id, false);
     await Bun.sleep(5);
     add({ type: "ci-pass" }); // re-armed
+    primed();
     await W.checkWatches(read, 2_000);
     expect(A.openAsked()).toHaveLength(1);
     expect(fired).toHaveLength(2);
@@ -556,8 +567,10 @@ describe("the alert behind a fire", () => {
   it("a new commit is a new event", async () => {
     const A = await import("../src/askedAlerts.ts");
     add({ type: "ci-pass" });
+    primed();
     await W.checkWatches(reader(withSha([chk("a", "success")], "abc123")).read);
     add({ type: "ci-pass" });
+    primed();
     await W.checkWatches(reader(withSha([chk("a", "success")], "def456")).read);
     expect(A.openAsked().map((a) => a.key.split("@")[1])).toEqual(["abc123:CI passed", "def456:CI passed"]);
   });

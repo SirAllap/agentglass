@@ -7,170 +7,20 @@
  * window. The script is the real string handed to executeJavaScript — the
  * thing under test is what it finds, which reading its source cannot pin.
  */
-import { afterAll, describe, expect, test } from "bun:test";
-import { runBrowserAsk, type DrivableWebview } from "../src/lib/browserDrive.ts";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { runBrowserAsk, setFindWaitMs } from "../src/lib/browserDrive.ts";
 import { parseLocator } from "../src/lib/browserLocator.ts";
-
-type Style = { display?: string; visibility?: string };
-
-class N {
-  tagName: string;
-  attrs: Record<string, string> = {};
-  children: N[] = [];
-  parentElement: N | null = null;
-  text = "";
-  style: Style = {};
-  box = { width: 100, height: 20 };
-  events: string[] = [];
-  value = "";
-  type = "";
-  checked = false;
-  disabled = false;
-  multiple = false;
-  labels: N[] = [];
-  options: Array<{ value: string; text: string }> = [];
-  dataset: Record<string, string>;
-  nodeType = 1;
-  constructor(tag: string, attrs: Record<string, string> = {}, ...kids: Array<N | string>) {
-    this.tagName = tag.toUpperCase();
-    this.attrs = { ...attrs };
-    if (tag === "input") this.type = attrs.type ?? "text";
-    if (attrs.value !== undefined) this.value = attrs.value;
-    for (const k of kids) {
-      if (typeof k === "string") this.text += k;
-      else { k.parentElement = this; this.children.push(k); }
-    }
-    /* STAMP writes `dataset.agxE`, and a CSS lookup reads `data-agx-e`: the
-       same attribute, as in a page. */
-    const key = (k: string) => "data-" + k.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase());
-    this.dataset = new Proxy({} as Record<string, string>, {
-      get: (_t, k: string) => this.attrs[key(k)],
-      set: (_t, k: string, v: string) => { this.attrs[key(k)] = v; return true; },
-    });
-  }
-  get id() { return this.attrs.id ?? ""; }
-  /* How many times a script asked a node for its text — one native call in
-     a page, however deep the node, so the recursion below counts once. */
-  static reads = 0;
-  static depth = 0;
-  get textContent(): string {
-    if (N.depth === 0) N.reads++;
-    N.depth++;
-    try { return this.text + this.children.map((c) => c.textContent).join(""); } finally { N.depth--; }
-  }
-  /* Chromium's rule: a node that is not rendered answers with its
-     textContent; one that is leaves out its children that are not. */
-  get innerText(): string {
-    if (!this.shown()) return this.textContent;
-    return this.text + this.children.map((c) => (c.shown() ? c.innerText : "")).join("");
-  }
-  get className() { return this.attrs.class ?? ""; }
-  get form() { return null; }
-  get autocomplete() { return this.attrs.autocomplete ?? ""; }
-  shown(): boolean {
-    return this.style.display !== "none" && (!this.parentElement || this.parentElement.shown());
-  }
-  getAttribute(k: string) { return this.attrs[k] ?? null; }
-  hasAttribute(k: string) { return k in this.attrs; }
-  setAttribute(k: string, v: string) { this.attrs[k] = v; }
-  contains(o: N | null): boolean {
-    for (let n = o; n; n = n.parentElement) if (n === this) return true;
-    return false;
-  }
-  getBoundingClientRect() {
-    const w = this.shown() ? this.box.width : 0, h = this.shown() ? this.box.height : 0;
-    return { x: 10, y: 10, left: 10, top: 10, width: w, height: h, right: 10 + w, bottom: 10 + h };
-  }
-  getClientRects() { return this.shown() ? [this.getBoundingClientRect()] : []; }
-  scrollIntoView() {}
-  focus() { this.events.push("focus"); }
-  blur() { this.events.push("blur"); }
-  click() { this.events.push("click"); }
-  dispatchEvent(e: { type: string }) { this.events.push(e.type); return true; }
-  all(): N[] { return this.children.flatMap((c) => [c, ...c.all()]); }
-  querySelectorAll(sel: string): N[] { return this.all().filter((n) => matches(n, sel)); }
-  querySelector(sel: string): N | null { return this.querySelectorAll(sel)[0] ?? null; }
-}
-
-/** The selector shapes the driver's scripts ask for: `*`, a tag, `#id`,
- *  `[attr]`, `[attr="v"]`, and comma lists of those. Anything else is a
- *  syntax error, as a real page would say about a selector it cannot parse. */
-function matches(n: N, sel: string): boolean {
-  return sel.split(",").map((s) => s.trim()).some((one) => {
-    const m = /^([a-z0-9*]*)((?:#[\w-]+|\[[\w-]+(?:="[^"]*")?\])*)$/i.exec(one);
-    if (!m || !one) throw new SyntaxError(`'${one}' is not a valid selector`);
-    const [, tag, rest] = m;
-    if (tag && tag !== "*" && n.tagName !== tag.toUpperCase()) return false;
-    for (const part of rest!.match(/#[\w-]+|\[[^\]]+\]/g) ?? []) {
-      if (part.startsWith("#")) { if (n.id !== part.slice(1)) return false; continue; }
-      const [, k, v] = /^\[([\w-]+)(?:="([^"]*)")?\]$/.exec(part)!;
-      if (!(k! in n.attrs)) return false;
-      if (v !== undefined && n.attrs[k!] !== v) return false;
-    }
-    return true;
-  });
-}
-
-const h = (tag: string, attrs: Record<string, string> = {}, ...kids: Array<N | string>) => new N(tag, attrs, ...kids);
-
-/** A page over `body`. A new page is a new window, which is what a navigation is. */
-function page(body: N) {
-  const html = h("html", {}, body);
-  const doc = {
-    body, documentElement: html, title: "The app",
-    querySelectorAll: (s: string) => html.querySelectorAll(s),
-    querySelector: (s: string) => html.querySelector(s),
-    getElementById: (id: string) => html.all().find((n) => n.id === id) ?? null,
-    elementFromPoint: (): N | null => null,
-  };
-  const win: Record<string, unknown> = { scrollY: 0, innerHeight: 800, scrollTo() {}, scrollBy() {} };
-  /* Ids stamped in a fixture stand for an observe of THIS page, so the page
-     carries the record an observe leaves (the counter and the range it
-     minted): an id is asked where it came from before it is acted on, and
-     one no observe of this document minted is refused as foreign. */
-  const stamped = html.all().map((n) => Number(/^e([0-9]+)$/.exec(n.attrs["data-agx-e"] ?? "")?.[1] ?? 0));
-  const top = Math.max(0, ...stamped);
-  if (top) { win.__agxSeq = top; win.__agxRanges = [[1, top]]; }
-  const globals: Record<string, unknown> = {
-    document: doc, window: win,
-    getComputedStyle: (n: N) => ({
-      display: n.style.display ?? "block", visibility: n.style.visibility ?? "visible", opacity: "1",
-    }),
-    innerWidth: 1280, innerHeight: 800,
-    HTMLInputElement: class {}, HTMLTextAreaElement: class {},
-    Event: class { constructor(public type: string) {} },
-    MouseEvent: class { constructor(public type: string) {} },
-    KeyboardEvent: class { constructor(public type: string) {} },
-    setTimeout, Date, location: { href: "https://orbit.example/app" },
-  };
-  const run = (code: string) =>
-    new Function(...Object.keys(globals), `return ${code}`)(...Object.values(globals)) as unknown;
-  /* The actionability gate asks what is on top at the element's centre: the
-     element it is looking at, in a page with nothing covering anything. */
-  let looking: N | null = null;
-  doc.elementFromPoint = () => looking;
-  const guest = {
-    ran: [] as string[],
-    loadURL: async () => {}, goBack: () => {}, goForward: () => {},
-    canGoBack: () => false, canGoForward: () => false, reload: () => {}, reloadIgnoringCache: () => {},
-    getURL: () => "https://orbit.example/app", getTitle: () => "The app",
-    isLoading: () => false,
-    executeJavaScript: async (code: string) => {
-      guest.ran.push(code);
-      // Whatever element the script scrolled to is the one on top.
-      for (const n of html.all()) n.scrollIntoView = () => { looking = n; };
-      return await run(code);
-    },
-    capturePage: async () => ({ toDataURL: () => "" }),
-    addEventListener: () => {}, removeEventListener: () => {},
-  } as unknown as DrivableWebview & { ran: string[] };
-  return { guest, doc, win };
-}
+import { N, h, page } from "./standinDom.ts";
 
 const ask = (op: string, args: Record<string, unknown> = {}) => ({ id: "b1", op, args }) as never;
 
 /* The hostile suites plant a canary on the global; every suite shares this process. */
 afterAll(() => { delete (globalThis as { __canary?: unknown }).__canary; });
+
+/* An act verb waits for a selector that matches nothing yet. The refusals
+   below are about what the sentence says, not about waiting for it. */
+beforeAll(() => setFindWaitMs(0));
+afterAll(() => setFindWaitMs());
 
 /** The sign-up form every suite below points at. Ids are stamped the way
  *  observe stamps them, so `e2` means what an observation said it meant. */
@@ -530,6 +380,15 @@ describe("a locator finds what a person would point at", () => {
     expect(r.error).toMatch(/e[0-9]+ button[^,]*"Delete"/);
   });
 
+  // On GitHub the five offered were the page header every time, never the "Issues 16" that was meant.
+  test("and offers the closest first, not the first in the page", async () => {
+    const { guest } = app();
+    const r = await runBrowserAsk(guest, ask("click", { selector: 'role=button[name="Draft copy"]' }));
+    expect(r.ok).toBe(false);
+    const first = String(r.error).split("on this page:")[1]?.match(/"([^"]*)"/)?.[1];
+    expect(first).toBe("Save draft");
+  });
+
   test("nothing matching says what of that kind IS there", async () => {
     const { guest } = app();
     const r = await runBrowserAsk(guest, ask("click", { selector: 'role=button[name="Publish"]' }));
@@ -705,14 +564,16 @@ describe("what the review of the first version found", () => {
     expect(plan.value).toBe("solo");
   });
 
-  test("fill that fails on a later field still names the secret it already filled", async () => {
+  test("fill that cannot find a later field writes none of them, so trying again types nothing twice", async () => {
     const pinLabel = h("label", {}, "Access code");
     const pin = h("input", { type: "password" });
     pin.labels = [pinLabel];
     const { guest } = page(h("body", {}, pinLabel, pin));
     const r = await runBrowserAsk(guest, ask("fill", { fields: { "label=Access code": "4242", "#nowhere": "x" } }));
     expect(r.ok).toBe(false);
-    expect((r.value as { secretFields?: string[] }).secretFields).toEqual(["label=Access code"]);
+    expect(r.error).toContain("#nowhere");
+    expect(pin.value).toBe("");
+    expect(pin.events).toEqual([]);
   });
 
   test("a refusal describes an input by what it is, never by what was typed into it", async () => {
@@ -751,5 +612,140 @@ describe("what the review of the first version found", () => {
     expect(g.__canary.hit).toBe(0);
     // drag's own code has comparisons in it, so the check is the payload's.
     for (const code of guest.ran) expect(code).not.toContain("</script>");
+  });
+});
+
+describe("an act verb waits for the page to catch up, never for input it already sent", () => {
+  test("a button that renders a moment late is clicked, not refused", async () => {
+    const save = h("button", {}, "Save");
+    const body = h("body", {});
+    const { guest } = page(body);
+    const run = guest.executeJavaScript;
+    let calls = 0;
+    guest.executeJavaScript = async (code: string) => {
+      if (++calls === 2) { save.parentElement = body; body.children.push(save); }
+      return run(code);
+    };
+    setFindWaitMs(2000);
+    try {
+      const r = await runBrowserAsk(guest, ask("click", { selector: 'role=button[name="Save"]' }));
+      expect(r.error).toBeUndefined();
+      expect(save.events).toContain("click");
+    } finally { setFindWaitMs(0); }
+  });
+
+  test("of three that match, the one that can be acted on is the one", async () => {
+    const mobile = h("button", { class: "buy" }, "Buy");
+    mobile.style.display = "none";
+    const off = h("button", { class: "buy" }, "Buy");
+    off.disabled = true;
+    const real = h("button", { class: "buy" }, "Buy");
+    const { guest } = page(h("body", {}, mobile, off, real));
+    const r = await runBrowserAsk(guest, ask("click", { selector: "button" }));
+    expect(r.error).toBeUndefined();
+    expect(real.events).toContain("click");
+    expect(mobile.events).toEqual([]);
+    expect(off.events).toEqual([]);
+  });
+
+  test("two that can both be acted on are still refused, with ids", async () => {
+    const { guest } = page(h("body", {}, h("button", {}, "A"), h("button", {}, "B")));
+    const r = await runBrowserAsk(guest, ask("click", { selector: "button" }));
+    expect(r.error).toContain("matched 2 elements");
+  });
+
+  test("disabled is inherited: from an aria-disabled group, and from a disabled fieldset", async () => {
+    const inGroup = h("button", {}, "Next");
+    const inSet = h("button", {}, "Send");
+    const { guest } = page(h("body", {},
+      h("div", { "aria-disabled": "true" }, inGroup),
+      h("fieldset", { disabled: "" }, inSet),
+    ));
+    const a = await runBrowserAsk(guest, ask("click", { selector: 'role=button[name="Next"]' }));
+    expect(a.error).toContain("disabled");
+    const b = await runBrowserAsk(guest, ask("click", { selector: 'role=button[name="Send"]' }));
+    expect(b.error).toContain("disabled");
+    expect(inGroup.events).not.toContain("click");
+    expect(inSet.events).not.toContain("click");
+  }, 10_000);
+
+  test("an overlay that goes away is waited out, not reported as the answer", async () => {
+    const save = h("button", {}, "Save changes");
+    const veil = h("div", { class: "toast-veil" });
+    const { guest, doc } = page(h("body", {}, save, veil));
+    let looks = 0;
+    doc.elementFromPoint = () => (++looks > 3 ? save : veil);
+    const r = await runBrowserAsk(guest, ask("click", { selector: 'role=button[name="Save changes"]' }));
+    expect(r.error).toBeUndefined();
+    expect(save.events).toContain("click");
+  });
+
+  test("an overlay that stays is still named when the wait runs out", async () => {
+    const save = h("button", {}, "Save changes");
+    const veil = h("div", { class: "modal-backdrop" });
+    const { guest, doc } = page(h("body", {}, save, veil));
+    doc.elementFromPoint = () => veil;
+    const r = await runBrowserAsk(guest, ask("click", { selector: 'role=button[name="Save changes"]' }));
+    expect(r.error).toContain("covered by div.modal-backdrop");
+    expect(save.events).not.toContain("click");
+  }, 10_000);
+});
+
+describe("a receipt says what a look would have told you", () => {
+  test("fill reads each field back and names the ones the page changed", async () => {
+    const name = h("input", { id: "name" });
+    const phone = h("input", { id: "phone" });
+    let held = "";
+    Object.defineProperty(phone, "value", { get: () => held, set: (v: string) => { held = "(555) " + v; } });
+    const { guest } = page(h("body", {}, name, phone));
+    const r = await runBrowserAsk(guest, ask("fill", { fields: { "#name": "Ada", "#phone": "0100" } }));
+    expect(r.error).toBeUndefined();
+    expect((r.value as { changedByPage?: unknown }).changedByPage).toEqual({ "#phone": "reformatted" });
+    expect(JSON.stringify(r)).not.toContain("(555)");
+  });
+
+  test("and a value the page changed is named by kind, never shown", async () => {
+    const pw = h("input", { id: "pw", type: "password" });
+    let held = "";
+    Object.defineProperty(pw, "value", { get: () => held, set: (v: string) => { held = v.slice(0, 4); } });
+    const { guest } = page(h("body", {}, pw));
+    const r = await runBrowserAsk(guest, ask("fill", { fields: { "#pw": "orbit-pass-1" } }));
+    expect((r.value as { changedByPage?: unknown }).changedByPage).toEqual({ "#pw": "cut short" });
+    expect(JSON.stringify(r)).not.toContain("orbi");
+  });
+
+  test("fill that took every value as typed says nothing more", async () => {
+    const { guest } = page(h("body", {}, h("input", { id: "name" })));
+    const r = await runBrowserAsk(guest, ask("fill", { fields: { "#name": "Ada" } }));
+    expect((r.value as { changedByPage?: unknown }).changedByPage).toBeUndefined();
+  });
+
+  test("an id that was re-rendered is answered with the one that took its place, and nothing is clicked", async () => {
+    const fresh = h("button", {}, "Save");
+    const body = h("body", {}, h("button", { "data-agx-e": "e5" }, "Save"));
+    const { guest, win } = page(body);
+    body.children = [fresh];
+    fresh.parentElement = body;
+    win.__agxLast = { "": { tree: [{ e: "e5", role: "button", name: "Save" }] } };
+    const r = await runBrowserAsk(guest, ask("click", { selector: "e5" }));
+    expect(r.ok).toBe(false);
+    const m = /button "Save" is now (e[0-9]+)/.exec(r.error ?? "");
+    expect(m).not.toBeNull();
+    expect(fresh.events).not.toContain("click");
+    const again = await runBrowserAsk(guest, ask("click", { selector: m![1]! }));
+    expect(again.error).toBeUndefined();
+    expect(fresh.events).toContain("click");
+  });
+
+  test("and with two that could have taken it, the refusal stays the plain one", async () => {
+    const body = h("body", {}, h("button", { "data-agx-e": "e5" }, "Save"));
+    const { guest, win } = page(body);
+    const a = h("button", {}, "Save"), b = h("button", {}, "Save");
+    body.children = [a, b];
+    a.parentElement = body; b.parentElement = body;
+    win.__agxLast = { "": { tree: [{ e: "e5", role: "button", name: "Save" }] } };
+    const r = await runBrowserAsk(guest, ask("click", { selector: "e5" }));
+    expect(r.error).toContain("no longer in the page");
+    expect(r.error).not.toContain("is now");
   });
 });

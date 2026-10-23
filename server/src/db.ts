@@ -2064,32 +2064,34 @@ function providerScope(provider?: string | null): { clause: string; args: string
  * Every project/cwd path the events table actually contains.
  *
  * Tiny — single digits on a real database, because it is one entry per checkout
- * anyone has ever worked in — and both columns are indexed, so this is two
- * covering scans measured at 5ms and 2ms. Cached anyway, and invalidated the
- * moment an event arrives carrying a path that is not in it, so a brand-new
- * worktree shows up on its first event rather than up to a TTL later.
+ * anyone has ever worked in. The two DISTINCT scans that find it are cheap warm
+ * (4 ms) and not cold: 94-98 ms of index pages read from disk on a 1.1 GB
+ * database, repeated every 30 s on the loop. So it is read once, kept for the
+ * life of the process, and grown at ingest by the one place a path can arrive.
+ * Only retention's delete can remove one, and it drops the set.
  */
-const PATHS_TTL_MS = 30_000;
-let pathCache: { at: number; paths: string[] } | null = null;
+export function pathSet(seed: () => string[]) {
+  let paths: Set<string> | null = null;
+  return {
+    all: (): string[] => [...(paths ??= new Set(seed()))],
+    /** A path the table has not held before: a new worktree must appear in a
+     *  scoped dashboard on its first event. No-op until the set is first read. */
+    note: (p: unknown): void => { if (typeof p === "string" && p) paths?.add(p); },
+    forget: (): void => { paths = null; },
+  };
+}
 
-function recordedPaths(): string[] {
-  if (pathCache && Date.now() - pathCache.at < PATHS_TTL_MS) return pathCache.paths;
+const recorded = pathSet(() => {
   const seen = new Set<string>();
   for (const col of ["project_path", "cwd_path"] as const) {
     for (const r of db.query<{ p: string | null }, []>(`SELECT DISTINCT ${col} AS p FROM events`).all()) {
       if (r.p) seen.add(r.p);
     }
   }
-  const paths = [...seen];
-  pathCache = { at: Date.now(), paths };
-  return paths;
-}
-
-/** Called at ingest when a row carries a path the cached set has not seen. */
-function notePath(p: unknown): void {
-  if (typeof p !== "string" || !p) return;
-  if (pathCache && !pathCache.paths.includes(p)) pathCache = null;
-}
+  return [...seen];
+});
+const recordedPaths = recorded.all;
+const notePath = recorded.note;
 
 /** SQL fragment + args restricting an events query to one project.
  *
@@ -2665,6 +2667,7 @@ export function pruneOldRows(): { events: number; sessions: number; rolled: numb
     }
     db.run(`DELETE FROM events_fts WHERE rowid IN (SELECT id FROM events WHERE timestamp < ?)`, [cutoff]);
     const ev = db.run(`DELETE FROM events WHERE timestamp < ?`, [cutoff]);
+    recorded.forget();
     const se = db.run(`DELETE FROM sessions WHERE last_seen < ?`, [cutoff]);
     // Resolved gates only — a pending one is a live request, never retention's
     // business no matter how old its row looks.

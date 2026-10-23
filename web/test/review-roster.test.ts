@@ -49,6 +49,39 @@ describe("one reviewer, every state", () => {
   }
 });
 
+// A request counts only when it is newer than that person's latest review. Times
+// are minutes before T(0): reviewer-a answered 20 h ago after a request 5 d ago,
+// reviewer-b answered 16 d ago and was asked again 7 d ago.
+const H = 60, D = 24 * H;
+describe("asked again means asked after the review", () => {
+  const ask = (login: string, min: number) => ({ askedAt: { [login]: T(min) } });
+  const rows: [string, Partial<RosterInput>, ReviewerState, boolean][] = [
+    ["request older than the review: the ball is with the author", { reviews: [rv("reviewer-a", "CHANGES_REQUESTED", 20 * H)], reviewers: [{ login: "reviewer-a" }], ...ask("reviewer-a", 5 * D) }, "changes", false],
+    ["request newer than the review: waiting on them", { reviews: [rv("reviewer-b", "CHANGES_REQUESTED", 16 * D)], reviewers: [{ login: "reviewer-b" }], ...ask("reviewer-b", 7 * D) }, "changes-again", true],
+    ["no request time known: the request list stands", { reviews: [rv("reviewer-a", "CHANGES_REQUESTED", 20 * H)], reviewers: [{ login: "reviewer-a" }] }, "changes-again", true],
+    ["not on the request list at all", { reviews: [rv("reviewer-a", "CHANGES_REQUESTED", 20 * H)], ...ask("reviewer-a", 5 * D) }, "changes", false],
+    ["the server's flag, request older than the review", { reviews: [rv("reviewer-a", "CHANGES_REQUESTED", 20 * H)], askedAgain: ["reviewer-a"], ...ask("reviewer-a", 5 * D) }, "changes", false],
+    ["approved, request older than the approval", { reviews: [rv("reviewer-a", "APPROVED", 20 * H)], reviewers: [{ login: "reviewer-a" }], ...ask("reviewer-a", 5 * D) }, "approved", false],
+    ["approved, request newer than the approval", { reviews: [rv("reviewer-a", "APPROVED", 5 * D)], reviewers: [{ login: "reviewer-a" }], ...ask("reviewer-a", 20 * H) }, "approved", true],
+    ["a team request is never a person asked again", { reviews: [rv("reviewer-a", "CHANGES_REQUESTED", 20 * H)], reviewers: [{ login: "acme/orbit-core", isTeam: true }] }, "changes", false],
+  ];
+  for (const [name, over, state, again] of rows) {
+    test(name, () => {
+      const e = buildRoster(input(over)).entries.find((x) => x.login === "reviewer-a" || x.login === "reviewer-b")!;
+      expect([e.state, e.askedAgain]).toEqual([state, again]);
+    });
+  }
+
+  test("one pull request, both reviewers: A stays on the author, B is waited on", () => {
+    const r = buildRoster(input({
+      reviews: [rv("reviewer-a", "CHANGES_REQUESTED", 20 * H), rv("reviewer-b", "CHANGES_REQUESTED", 16 * D)],
+      reviewers: [{ login: "reviewer-a" }, { login: "reviewer-b" }],
+      askedAt: { "reviewer-a": T(5 * D), "reviewer-b": T(7 * D) },
+    }));
+    expect(r.entries.map((e) => `${e.login}:${e.state}`).sort()).toEqual(["reviewer-a:changes", "reviewer-b:changes-again"]);
+  });
+});
+
 describe("who is never a reviewer", () => {
   test("the author's own comments and approvals", () => {
     const r = buildRoster(input({ reviews: [rv("bob", "COMMENTED"), rv("BOB", "APPROVED")], reviewers: [{ login: "bob" }] }));

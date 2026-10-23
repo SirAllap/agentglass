@@ -19,9 +19,12 @@
 //
 // 4. Nothing waits on the network. `gh` costs a second or more per call and the
 //    server has one thread; every read is a cached answer with its age shown.
+import { LAUNCH_MODES, LAUNCH_MODE_LABEL, type LaunchMode } from "../../../shared/launchModes.ts";
+import { LaunchModeBadge } from "./LaunchMode.tsx";
 import { withoutAuthor, authorLeftOutHint } from "../lib/reviewerPick.ts";
 import { dataInk } from "../lib/contrast.ts";
 import { onScreen } from "../lib/findScope.ts";
+import { openPr, prRefFromUrl } from "../lib/openPrs.ts";
 import { PluginPrActions } from "./plugins/PluginPrActions.tsx";
 import { PublishReview } from "./plugins/PublishReview.tsx";
 import { latestRun } from "../lib/publishReview.ts";
@@ -97,6 +100,8 @@ import { PeoplePick } from "./PeoplePick.tsx";
 import { listMembers } from "../lib/listMembers.ts";
 import { orderMembers } from "../lib/peopleOrder.ts";
 import { SCROLLBAR_CSS, LINEBTN_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, LineMenuCtx, type LinePick, type LineSel } from "./diff/DiffLines.tsx";
+import { GapRow } from "./diff/GapRow.tsx";
+import { expandHunks, inDiff, reveal, type Reveals } from "../../../shared/diffGaps.ts";
 import { Toggle } from "./diff/DiffControls.tsx";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { Select } from "./Select.tsx";
@@ -150,6 +155,7 @@ import { externalUrl, openExternal } from "../lib/externalUrl.ts";
 import { cardRef, chipAction } from "../lib/cardRef.ts";
 import { trackerName } from "../../../shared/taskref.ts";
 import { reviewerRoster, reviewerTitle, blockingReviewers, reviewVerdict, verdictLine, type ReviewerRow, type ReviewerState } from "../lib/prReviewers.ts";
+import { askedAtOf } from "../../../shared/reviewRoster.ts";
 import { expandRecipe } from "../../../shared/recipeText.ts";
 import { suggestRecipeId } from "../../../shared/reviewSuggest.ts";
 import { openSettings } from "../lib/openSettings.ts";
@@ -1122,43 +1128,24 @@ function toFileChange(f: ParsedFile, i: number): FileChange {
   };
 }
 
-/**
- * The lines around a hunk, fetched on demand.
- *
- * A diff only carries what GitHub chose to send — three lines of context — so
- * the code just above a change is not in the payload at all and there is
- * nothing to reveal locally. Each expansion asks the server for that slice of
- * the file at this side of the pull request, twenty lines at a time, the way
- * GitHub's own chevrons work.
+/*
+ * The head side of a file, fetched once per file and commit and kept: every
+ * expander click after the first is arithmetic on these lines, not a request.
+ * The server reads it from the local checkout when it has the commit and from
+ * GitHub (one contents call, cached by sha) when it does not.
  */
-function ExpandContext({ root, number, path, from, to, side = "RIGHT" }: {
-  root: string; number: number; path: string; from: number; to: number; side?: "LEFT" | "RIGHT";
-}) {
-  const [lines, setLines] = useState<string[] | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  if (from > to) return null;
-  const load = async () => {
-    setBusy(true); setErr(null);
-    const r = await api.prFileSlice(root, number, path, side, from, to).catch(() => null);
-    setBusy(false);
-    if (!r?.ok || !r.lines) { setErr(r?.error || "Could not read that part of the file"); return; }
-    setLines(r.lines);
-  };
-  if (lines) {
-    return (
-      <div className="whitespace-pre px-3 py-0.5 text-[12px]" style={{ ...CODE_FONT_STYLE, color: "var(--text3)", background: "color-mix(in srgb, var(--border) 8%, transparent)" }}>
-        {lines.join("\n")}
-      </div>
-    );
+const headFiles = new Map<string, Promise<string[] | null>>();
+function headFile(root: string, number: number, path: string, sha: string): Promise<string[] | null> {
+  const key = `${root}\0${number}\0${sha}\0${path}`;
+  let p = headFiles.get(key);
+  if (!p) {
+    p = api.prFileSlice(root, number, path, "RIGHT").then((r) => (r?.ok && r.lines && !r.binary ? r.lines : null)).catch(() => null);
+    headFiles.set(key, p);
+    if (headFiles.size > 24) headFiles.delete(headFiles.keys().next().value as string);
+    // A failure is not worth keeping: the next click should try again.
+    void p.then((v) => { if (!v) headFiles.delete(key); });
   }
-  return (
-    <button onClick={load} disabled={busy} title={`Show lines ${from}-${to}`}
-      className="agx-btn w-full text-left px-3 py-0.5 text-[10.5px]"
-      style={{ color: err ? "var(--error)" : "var(--text3)", background: "color-mix(in srgb, var(--border) 10%, transparent)" }}>
-      {err ?? (busy ? "…" : `⌃⌄ Expand ${to - from + 1} line${to - from ? "s" : ""}`)}
-    </button>
-  );
+  return p;
 }
 
 /**
@@ -1216,12 +1203,13 @@ function ImageDiff({ root, number, path, status }: {
   );
 }
 
-function DiffPane({ file, split, wrap, onPick, sel, expand, rowAfter, permalink }: {
+function DiffPane({ file, split, wrap, onPick, sel, expandFrom, rowAfter, permalink }: {
   file: FileChange; split: boolean; wrap: boolean;
   onPick?: (p: LinePick) => void; sel?: LineSel;
-  /** Renders the "expand" strip above each hunk, when the file is one we can
-   *  fetch more of. Absent for a commit diff, which is not a pull request. */
-  expand?: (hunkIndex: number) => React.ReactNode;
+  /** Where to read the rest of the file from, when it is one that can be
+   *  expanded. Absent for a commit diff (not a pull request) and for a file
+   *  with no unchanged text to show: added, removed, renamed, binary. */
+  expandFrom?: { root: string; number: number; path: string; sha: string };
   /** Renders a review-comment thread inline, under the line it is anchored to.
    *  Called per row with the new/old line numbers; return null for lines with
    *  no comment. Absent for a commit diff, which carries no review threads. */
@@ -1236,13 +1224,35 @@ function DiffPane({ file, split, wrap, onPick, sel, expand, rowAfter, permalink 
   // out coloured. A very long diff drops the theme (not the parse) so a
   // thousand-line file does not spend its time colouring.
   const { hilite } = useDiffHighlight(file.file_path);
+  // The lines the diff leaves out: what has been asked for, and the file to
+  // take them from. Revealed lines are spliced into the hunks as context, so
+  // both views draw, number and colour them like any other line.
+  const [rv, setRv] = useState<Reveals>({});
+  const [text, setText] = useState<string[] | null>(null);
+  const [fetching, setFetching] = useState<{ busy: boolean; err: string | null }>({ busy: false, err: null });
+  const can = !!expandFrom;
+  const view = useMemo(() => (can ? expandHunks(file.hunks, text, rv) : { hunks: file.hunks, open: [] }), [can, file.hunks, text, rv]);
+  const onExpand = async (key: number, dir: "up" | "down" | "all") => {
+    if (!expandFrom) return;
+    setRv((r) => reveal(r, key, dir));
+    if (text) return;
+    setFetching({ busy: true, err: null });
+    const lines = await headFile(expandFrom.root, expandFrom.number, expandFrom.path, expandFrom.sha);
+    if (lines) setText(lines);
+    setFetching({ busy: false, err: lines ? null : "Could not read the rest of this file" });
+  };
+  const gapRow = view.open.length ? (at: number) => {
+    const g = view.open.find((o) => o.at === at);
+    return g ? <GapRow gap={g} busy={fetching.busy} error={fetching.err} onExpand={(dir) => void onExpand(g.key, dir)} /> : null;
+  } : undefined;
+  const canPick = can ? (line: number, side: "LEFT" | "RIGHT") => inDiff(file.hunks, line, side) : undefined;
   const heavy = file.hunks.reduce((n, h) => n + h.lines.length, 0) > 3000;
   return (
     <HiliteCtx.Provider value={heavy ? { ...hilite, theme: null } : hilite}>
       <LineMenuCtx.Provider value={onPick ? { permalink } : null}>
         {split
-          ? <SplitDiff c={file} wrap={wrap} onPick={onPick} sel={sel} rowAfter={rowAfter} />
-          : <UnifiedDiff c={file} wrap={wrap} onPick={onPick} sel={sel} hunkAction={expand} rowAfter={rowAfter} />}
+          ? <SplitDiff c={file} hunks={view.hunks} wrap={wrap} onPick={onPick} canPick={canPick} sel={sel} rowAfter={rowAfter} gapRow={gapRow} />
+          : <UnifiedDiff c={file} hunks={view.hunks} wrap={wrap} onPick={onPick} canPick={canPick} sel={sel} rowAfter={rowAfter} gapRow={gapRow} />}
       </LineMenuCtx.Provider>
     </HiliteCtx.Provider>
   );
@@ -1642,7 +1652,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   jumpTo?: import("../lib/openPrs.ts").PrJump | null;
   onOpenChatWith?: (cwd: string, prompt: string, title: string) => void;
   /** Hand the review to the user's own tmux instead of to the chat. */
-  onReviewInTerminal?: (root: string, number: number, recipe?: string, card?: string) => void;
+  onReviewInTerminal?: (root: string, number: number, recipe?: string, card?: string, mode?: LaunchMode) => void;
 }) {
   const { ask, askText, open: askOpen, dialog } = useDialogs();
   const { askMerge, open: mergeOpen, dialog: mergeDialog } = useMergeDialog();
@@ -3563,6 +3573,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   // renders.
   const fieldPicker = usePrFieldPicker(detail, root, act, flash,
     (add, remove, colors) => setLabels(add, remove, colors), (...a) => field(...a));
+  /** Every "ask for a review" ends in the sidebar's picker, at what was pressed. */
+  const askReviewers = (from?: DOMRect | null) => fieldPicker.openAt("reviewers", from);
 
   const key = repo && detail ? `${repo.key}#${detail.number}` : "";
 
@@ -4337,24 +4349,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       lane: `react:${nodeId}:${content}`,
     });
   };
-  const doReviewers = async () => {
-    if (!detail) return;
-    // Logins, which is what the endpoint takes. A team arrives here under its
-    // name for want of anywhere better to put it — exactly as it did when this
-    // list was strings, so nothing about requesting one changes here.
-    const cur = detail.reviewers.map((r) => r.login);
-    const next = await askText({
-      title: `Reviewers on #${detail.number}`, confirmLabel: "Save",
-      input: { label: "Comma-separated logins — remove one by deleting it", initial: cur.join(", ") },
-    });
-    if (next == null) return;
-    const want = next.split(",").map((s) => s.trim().replace(/^@/, "")).filter(Boolean);
-    const add = want.filter((l) => !cur.includes(l));
-    const remove = cur.filter((l) => !want.includes(l));
-    if (add.length === 0 && remove.length === 0) return;
-    void field(reviewersPatch(detail.number, add, remove), () => api.prReviewers(root, detail.number, add, remove), "Reviewers did not save", "reviewers");
-  };
-
   /** The chase, written for you: who it waits on, what for, where — on the
    *  clipboard always, and down the alerts' channel when one is configured. */
   const doNudge = async () => {
@@ -5175,9 +5169,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 d={d} busy={busy || !!mergeWork} local={local} onShowLocal={showLocal} stackUi={stackUi} onOpenPr={openPr}
                 onEditTitle={doEditTitle} onDraft={() => { void field(draftPatch(d.number, !d.isDraft), () => api.prDraft(root, d.number, !d.isDraft), d.isDraft ? "Mark ready failed" : "Convert to draft failed", "draft"); }}
                 onClose={doClose} onLocalReview={(recipe) => doLocalReview(undefined, recipe)}
-                onReviewInTerminal={onReviewInTerminal && d && !readOnly ? (recipe) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "") : undefined}
+                onReviewInTerminal={onReviewInTerminal && d && !readOnly ? (recipe, mode) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "", mode) : undefined}
                 condensed={condensed}
-                onLabels={doLabels} onReviewers={doReviewers} onNudge={doNudge}
+                onLabels={doLabels} onReviewers={askReviewers} onNudge={doNudge}
                 onEditField={fieldPicker.open}
                 /* Your review, counted where the panel already counts it — the
                    strip is a reader of these three, never a second source. */
@@ -5308,8 +5302,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                           onEditRequest={() => setEditingBody(true)}
                           onToggleTask={doToggleTask}
                           onLocalReview={(recipe) => doLocalReview(undefined, recipe)}
-                          onReviewInTerminal={onReviewInTerminal && d && !readOnly ? (recipe) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "") : undefined}
-                          onMerge={doMerge} onClose={doClose} onAskReview={doReviewers}
+                          onReviewInTerminal={onReviewInTerminal && d && !readOnly ? (recipe, mode) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "", mode) : undefined}
+                          onMerge={doMerge} onClose={doClose} onAskReview={askReviewers}
                           method={mergeMethod} onMethod={setMergeMethod}
                           onUpdateBranch={doUpdateBranch}
                           onRerun={() => act("Re-run checks", () => api.prRerun(root, d.number))}
@@ -5790,13 +5784,13 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
   onLocalReview: (recipe?: string) => void;
   /** The terminal half of the same choice. Absent where there is no terminal —
    *  the phone — and the button then behaves as it always did. */
-  onReviewInTerminal?: (recipe?: string) => void; onMerge: (method: MergeMethod) => void; onClose: () => void;
+  onReviewInTerminal?: (recipe?: string, mode?: LaunchMode) => void; onMerge: (method: MergeMethod) => void; onClose: () => void;
   onRerun: () => void; onAutoMerge: () => void; onCancelAutoMerge: () => void; onDraft: () => void; onGoThreads: () => void;
   /** Take me to that review inside this panel, by the node id of its row —
    *  falling back to `url` outside when this panel has no row for it. */
   onGoReview: (nodeId: string | undefined, url: string) => void;
   /** Opens the reviewers picker: the box's "Ask someone to review". */
-  onAskReview: () => void;
+  onAskReview: (from?: DOMRect) => void;
   /** Open Files with the "since your review" filter already on. */
   onGoMoved: () => void;
   /** How many of this review's files have changed since your own last review — see
@@ -5944,8 +5938,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
    * merge button and its state, the conflict resolver, the branch actions —
    * handed in as nodes so each exists once.
    */
-  const askedAt: Record<string, string> = {};
-  for (const e of d.timeline ?? []) if (e.kind === "review-requested" && e.detail && (!askedAt[e.detail.toLowerCase()] || e.at > askedAt[e.detail.toLowerCase()])) askedAt[e.detail.toLowerCase()] = e.at;
+  const askedAt = askedAtOf(d.timeline);
   const path = mergePath({
     state: d.state, mergeState: d.mergeState, mergeable: d.mergeable, isDraft: d.isDraft,
     reviewDecision: d.reviewDecision, humanReview: d.humanReview, reviewers: d.reviewers, reviews: d.reviews, askedAt, timeline: d.timeline,
@@ -5956,13 +5949,13 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
     conflicted, conflictFiles: conflictFiles?.files.length, behind, awaitingChecks, unknownSince, githubProblem, prLagging, autoArmed: !!d.autoMerge, unstickOffer,
   });
   const heroHas = (id: PathAction["id"]) => path.hero.primary?.id === id || path.hero.secondary?.id === id || path.hero.also?.id === id;
-  const onPathAction = (a: PathAction) => {
+  const onPathAction = (a: PathAction, from?: DOMRect) => {
     switch (a.id) {
       case "open-log": openExternal(a.url); break;
       case "rerun": onRerun(); break;
       case "go-thread": onGoThreads(); break;
       case "go-review": onGoReview(a.nodeId, a.url ?? d.url); break;
-      case "ask-review": onAskReview(); break;
+      case "ask-review": onAskReview(from); break;
       case "mark-ready": onDraft(); break;
       case "open-github": openExternal(d.url); break;
       case "update-branch": onUpdateBranch(updateMove.syncLocal); break;
@@ -6371,7 +6364,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
             alphabets — twice, because the first fix only reached one of
             them. */}
         <ReviewMenu d={d} canTerm={!!onReviewInTerminal}
-          onPick={(recipe, where) => (where === "term" ? onReviewInTerminal?.(recipe) : onLocalReview(recipe))} />
+          onPick={(recipe, where, mode) => (where === "term" ? onReviewInTerminal?.(recipe, mode) : onLocalReview(recipe))} />
         <PluginPrActions number={d.number} local={local} onShowLocal={onShowLocal} root={root} head={{ sha: d.headSha, at: d.readAt }} />
         {/* The panel's own Btn, like its neighbour. A hand-rolled anchor with
             its own padding beside a Btn is two heights in a row of two. */}
@@ -6674,7 +6667,7 @@ export function Menu({ label, title, children, align = "right", primary, bare }:
 }
 
 export function MenuItem({ children, onClick, danger, kbd, icon }: {
-  children: React.ReactNode; onClick: () => void; danger?: boolean; kbd?: string;
+  children: React.ReactNode; onClick: (e: React.MouseEvent<HTMLButtonElement>) => void; danger?: boolean; kbd?: string;
   /** Drawn before the words, in the words' own colour. Pass it HERE and not as a
    *  child: the label is a truncating box, and an svg put inside it (they are
    *  `display: block` under the reset) took a line to itself, so the eye sat
@@ -6703,7 +6696,8 @@ const MenuHead = ({ children }: { children: React.ReactNode }) => (
 );
 
 /**
- * The chat, as an afterthought on a row that is already a button.
+ * One prompt in the Review menu, and the chat as an afterthought on a row that
+ * is already a button.
  *
  * It was two icons — a terminal and a chat — on a row whose TITLE did a third
  * thing. Reported straight away: pressing the row anywhere but exactly on the
@@ -6715,14 +6709,55 @@ const MenuHead = ({ children }: { children: React.ReactNode }) => (
  * exception, kept because the chat pane is genuinely the quicker read
  * sometimes. `stopPropagation`, or it would fire the row's terminal underneath
  * it.
+ *
+ * The ⋮ now opens the other ways to run it, under the row rather than as a second floating
+ * menu inside a scrolling one — in the chat instead, or once in another
+ * permission mode than the one it would start in. The quiet badge says when a
+ * prompt's own mode differs from the global one.
  */
-function ChatInstead({ onChat }: { onChat: () => void }) {
+function ReviewItem({ r, ink, canTerm, close, onPick }: {
+  r: ReviewRecipe; ink: string; canTerm: boolean; close: () => void;
+  onPick: (recipe: string, where: "term" | "chat", mode?: LaunchMode) => void;
+}) {
+  const [more, setMore] = useState(false);
+  const run = (where: "term" | "chat", mode?: LaunchMode) => { close(); onPick(r.id, where, mode); };
+  const sub = "agx-mi w-full flex items-center gap-2 pl-6 pr-3 py-1 text-[11px] cursor-pointer";
+  // Only the row's own key press: Enter on the ⋮ inside it bubbles here too, and
+  // would run the prompt instead of opening its other ways.
+  const key = (fn: () => void) => (e: React.KeyboardEvent) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); fn(); } };
   return (
-    <button onClick={(e) => { e.stopPropagation(); onChat(); }} title="In the chat pane instead"
-      className="ml-auto inline-flex items-center justify-center rounded hover:bg-white/10 shrink-0"
-      style={{ width: 20, height: 20, color: "var(--text3)" }} aria-label="In the chat pane instead">
-      <span className="text-[13px] leading-none">&#8942;</span>
-    </button>
+    <>
+      <div role="menuitem" tabIndex={0}
+        onClick={() => run(canTerm ? "term" : "chat")}
+        onKeyDown={key(() => run(canTerm ? "term" : "chat"))}
+        title={r.skill || r.title}
+        className="agx-mi w-full flex items-center gap-2 px-3 py-1.5 text-[11px] cursor-pointer" style={{ color: ink }}>
+        <span className="min-w-0 truncate flex-1">
+          {r.skill && <span style={{ color: "var(--primary-ink)" }}>/ </span>}
+          {r.title}
+        </span>
+        <LaunchModeBadge mode={r.permissionMode} />
+        <button onClick={(e) => { e.stopPropagation(); setMore((m) => !m); }} title="More ways to run it"
+          aria-expanded={more} aria-label="More ways to run it"
+          className="ml-auto inline-flex items-center justify-center rounded hover:bg-white/10 shrink-0"
+          style={{ width: 20, height: 20, color: "var(--text3)" }}>
+          <span className="text-[13px] leading-none">&#8942;</span>
+        </button>
+      </div>
+      {more && (
+        <div role="group" aria-label={`Ways to run ${r.title}`}>
+          <div role="menuitem" tabIndex={0} className={sub} style={{ color: "var(--text2)" }}
+            onClick={() => run("chat")} onKeyDown={key(() => run("chat"))}>In the chat pane instead</div>
+          {canTerm && <>
+            <div className="pl-6 pr-3 pt-1 text-[10px]" style={{ color: "var(--text4)" }}>Run with…</div>
+            {LAUNCH_MODES.map((m) => (
+              <div key={m} role="menuitem" tabIndex={0} className={sub} style={{ color: "var(--text2)" }}
+                onClick={() => run("term", m)} onKeyDown={key(() => run("term", m))}>{LAUNCH_MODE_LABEL[m]}</div>
+            ))}
+          </>}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -6807,7 +6842,7 @@ const PING_RECIPE = "ready-for-review";
  */
 function ReviewMenu({ d, onPick, canTerm, primary = true }: {
   d: PrDetail;
-  onPick: (recipe: string, where: "term" | "chat") => void;
+  onPick: (recipe: string, where: "term" | "chat", mode?: LaunchMode) => void;
   /** False in a window with no terminal to send it to — the row then offers
    *  the chat alone rather than a button that quietly does nothing. */
   canTerm: boolean;
@@ -6844,17 +6879,7 @@ function ReviewMenu({ d, onPick, canTerm, primary = true }: {
                   destination lines it used to be: one shape to learn, and the
                   suggestion is a prompt like the rest — it is just the one this
                   pull request calls for. */}
-              <div role="menuitem" tabIndex={0}
-                onClick={() => { close(); onPick(top.id, canTerm ? "term" : "chat"); }}
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); close(); onPick(top.id, canTerm ? "term" : "chat"); } }}
-                title={top.skill || top.title}
-                className="agx-mi w-full flex items-center gap-2 px-3 py-1.5 text-[11px] cursor-pointer" style={{ color: "var(--text)" }}>
-                <span className="min-w-0 truncate flex-1">
-                  {top.skill && <span style={{ color: "var(--primary-ink)" }}>/ </span>}
-                  {top.title}
-                </span>
-                <ChatInstead onChat={() => { close(); onPick(top.id, "chat"); }} />
-              </div>
+              <ReviewItem r={top} ink="var(--text)" canTerm={canTerm} close={close} onPick={onPick} />
             </>
           )}
           {groups.map((g) => {
@@ -6870,17 +6895,7 @@ function ReviewMenu({ d, onPick, canTerm, primary = true }: {
                      nothing at all. And it runs in a terminal, because that is
                      where a review belongs — a real agent in tmux that survives
                      this app, which you can attach to and keep working in. */
-                  <div key={r.id} role="menuitem" tabIndex={0}
-                    onClick={() => { close(); onPick(r.id, canTerm ? "term" : "chat"); }}
-                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); close(); onPick(r.id, canTerm ? "term" : "chat"); } }}
-                    title={r.skill || r.title}
-                    className="agx-mi w-full flex items-center gap-2 px-3 py-1.5 text-[11px] cursor-pointer" style={{ color: "var(--text2)" }}>
-                    <span className="min-w-0 truncate flex-1">
-                      {r.skill && <span style={{ color: "var(--primary-ink)" }}>/ </span>}
-                      {r.title}
-                    </span>
-                    <ChatInstead onChat={() => { close(); onPick(r.id, "chat"); }} />
-                  </div>
+                  <ReviewItem key={r.id} r={r} ink="var(--text2)" canTerm={canTerm} close={close} onPick={onPick} />
                 ))}
               </Fragment>
             );
@@ -7059,8 +7074,10 @@ type PickOption = { value: string; label: string; sub?: string; color?: string; 
  * the way GitHub's label menu does — so ticking four labels is one write, not
  * four. Single-select (milestone) commits on the click.
  */
-function FieldPicker({ anchor, title, hint, multi, loading, options, selected, onCommit, onClose, side }: {
+function FieldPicker({ anchor, title, hint, multi, loading, options, selected, heldLabel = "Selected", onCommit, onClose, side }: {
   anchor: DOMRect; title: string; hint: string; multi: boolean; loading: boolean;
+  /** What the people already on it are called, pinned above everybody else. */
+  heldLabel?: string;
   options: PickOption[]; selected: string[];
   /** Writes the difference, and says whether it landed. `true` when there was
    *  nothing to write — this is "is it safe to go on", not "did it write". */
@@ -7168,7 +7185,16 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
   const ghChanged = sel.filter((x) => !selected.includes(x)).length + selected.filter((x) => !sel.includes(x)).length;
 
   const t = q.trim().toLowerCase();
-  const shown = t ? options.filter((o) => o.label.toLowerCase().includes(t) || o.value.toLowerCase().includes(t) || !!o.sub?.toLowerCase().includes(t)) : options;
+  /* Who is already on it comes first, from what was there when the menu OPENED
+     (`selected`), not from what is ticked now: a row that jumps under the
+     cursor as you tick it is worse than a list that stays put. Not while
+     filtering — then the list is an answer to the filter, in its own order. */
+  const held = multi && !t ? options.filter((o) => selected.includes(o.value)).map((o) => ({ ...o, section: heldLabel })) : [];
+  const shown = t
+    ? options.filter((o) => o.label.toLowerCase().includes(t) || o.value.toLowerCase().includes(t) || !!o.sub?.toLowerCase().includes(t))
+    : held.length
+      ? [...held, ...options.filter((o) => !selected.includes(o.value)).map((o) => ({ ...o, section: o.section ?? "Others" }))]
+      : options;
 
   /* One width, always. The menu is already tall — that is the space going
      spare, not the width — so the other half of the errand stacks under the
@@ -7204,7 +7230,7 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
           {loading ? (
             <div className="px-3 py-3 text-[11px]" style={{ color: "var(--text3)" }}>Loading…</div>
           ) : shown.length === 0 ? (
-            <div className="px-3 py-3 text-[11px]" style={{ color: "var(--text3)" }}>No matches.</div>
+            <div className="px-3 py-3 text-[11px]" style={{ color: "var(--text3)" }}>{t ? "No matches." : "Nobody to pick from here."}</div>
           ) : shown.map((o, i) => {
             const on = sel.includes(o.value);
             return (
@@ -7214,7 +7240,8 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
               )}
               <button onClick={() => toggle(o.value)}
                 className="agx-mi w-full text-left flex items-center gap-2 px-2.5 py-1.5 text-[11px]"
-                style={{ color: "var(--text2)" }}>
+                aria-pressed={on}
+                style={{ color: on ? "var(--text)" : "var(--text2)", background: on ? "color-mix(in srgb, var(--primary) 14%, transparent)" : undefined }}>
                 <span className="w-3.5 shrink-0 text-center" style={{ color: on ? "var(--primary)" : "transparent" }}><DoneIcon size={ICON.xs} /></span>
                 {o.color != null && <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: `#${o.color}` }} />}
                 {o.avatar != null && <Avatar login={o.avatar} size={16} />}
@@ -7718,10 +7745,16 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
     setLoading(false);
   }, [root, facets, mentions]);
 
-  const open = useCallback((field: SidebarField, e: React.MouseEvent<HTMLButtonElement>) => {
-    setPicker({ field, anchor: e.currentTarget.getBoundingClientRect() });
+  /* `from` is the rect of what was pressed. Without one (the pressed thing is
+     gone, or never had a box) the picker opens in the middle of the window. */
+  const openAt = useCallback((field: SidebarField, from?: DOMRect | null) => {
+    const mid = new DOMRect(window.innerWidth / 2 + 150, window.innerHeight / 4, 0, 0);
+    setPicker({ field, anchor: from && from.width + from.height > 0 ? from : mid });
     void ensureOptions();
   }, [ensureOptions]);
+  const open = useCallback((field: SidebarField, e: React.MouseEvent<HTMLButtonElement>) => {
+    openAt(field, e.currentTarget.getBoundingClientRect());
+  }, [openAt]);
   const close = () => setPicker(null);
 
   // The picker holds its selection locally and hands back the final set; here
@@ -7814,7 +7847,7 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
           : "Collaborators on this repository")}
         options={withFrequent(withoutAuthor([...reviewedOptions, ...rest], d.author), loadUse())}
         side={(h) => <ClickUpSide d={d} note={note} {...h} />}
-        selected={was} onClose={close} onCommit={commit(was, "Reviewers", reviewersPatch, (add, remove) => api.prReviewers(root, d.number, add, remove))} />;
+        selected={was} heldLabel="Already asked" onClose={close} onCommit={commit(was, "Reviewers", reviewersPatch, (add, remove) => api.prReviewers(root, d.number, add, remove))} />;
     } else if (picker.field === "assignees") {
       const was = d.assignees;
       node = <FieldPicker anchor={a} title="Assign people" hint="Up to 10 assignees" multi loading={loading}
@@ -7833,7 +7866,7 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
     }
   }
 
-  return { open, node };
+  return { open, openAt, node };
 }
 
 /**
@@ -8646,7 +8679,7 @@ function PrSidebar({ d, root, spend, onEditField, onRerequest }: {
                       : v.kind === "approved" ? "Approved" : v.kind === "changes" ? "Changes requested"
                       : v.kind === "commented" ? "Commented" : "Awaiting"}
                   </b>
-                  {v.askedAgain && !v.cleared && <span className="truncate" style={{ color: "var(--text4)" }}>· asked again</span>}
+                  {v.askedAgain && !v.cleared && <span className="truncate" style={{ color: "var(--text4)" }}>· {v.who.length > 1 ? `${rows.filter((r) => v.who.includes(r.login) && r.again).length} of ${v.who.length} ` : ""}asked again</span>}
                 </div>
               )}
               <ReviewerList rows={rows} author={d.author} onAsk={onRerequest} />
@@ -8760,12 +8793,12 @@ function Masthead({ root, repo, d, busy, local, stackUi, onOpenPr, onShowLocal, 
   localHead?: PrLocalHead | null;
   onEditTitle: () => void; onDraft: () => void; onClose: () => void; onLocalReview: (recipe?: string) => void;
   /** Absent when the workspace has no terminal to send it to. */
-  onReviewInTerminal?: (recipe?: string) => void;
+  onReviewInTerminal?: (recipe?: string, mode?: LaunchMode) => void;
   /** Scrolled past the top: the metadata folds away and the title stays. */
   condensed?: boolean;
   /** The typed dialog behind the overflow menu; the inline ＋ buttons use the
    *  picker instead. */
-  onLabels: () => void; onReviewers: () => void; onNudge?: () => void;
+  onLabels: () => void; onReviewers: (from?: DOMRect) => void; onNudge?: () => void;
   /** Opens the shared reviewer/label picker anchored to the clicked ＋. */
   onEditField: (field: SidebarField, e: React.MouseEvent<HTMLButtonElement>) => void;
   /** How far YOUR review has got: files ticked off, threads still open, line
@@ -8911,7 +8944,7 @@ function Masthead({ root, repo, d, busy, local, stackUi, onOpenPr, onShowLocal, 
             review. The chat is kept because it is occasionally the quicker
             read, not because it is the better place to send somebody. */}
         <ReviewMenu d={d} canTerm={!!onReviewInTerminal}
-          onPick={(recipe, where) => (where === "term" ? onReviewInTerminal?.(recipe) : onLocalReview(recipe))} />
+          onPick={(recipe, where, mode) => (where === "term" ? onReviewInTerminal?.(recipe, mode) : onLocalReview(recipe))} />
         <PluginPrActions number={d.number} local={local} onShowLocal={onShowLocal} root={root} head={{ sha: d.headSha, at: d.readAt }} />
         {/* Out of the overflow, because it is the most-pressed thing in it.
             "Open on GitHub" is what you reach for whenever this panel does not
@@ -8945,7 +8978,7 @@ function Masthead({ root, repo, d, busy, local, stackUi, onOpenPr, onShowLocal, 
                   to a pull request that is still going. On a merged one GitHub
                   does not offer them either. */}
               {d.state === "OPEN" && <>
-                <MenuItem icon={<UserIcon size={ICON.sm} />} onClick={() => { close(); onReviewers(); }}>Request a review</MenuItem>
+                <MenuItem icon={<UserIcon size={ICON.sm} />} onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); close(); onReviewers(r); }}>Request a review</MenuItem>
                 <MenuItem icon={<DraftIcon size={ICON.sm} />} onClick={() => { close(); onDraft(); }}>{d.isDraft ? "Mark ready for review" : "Convert to draft"}</MenuItem>
               </>}
               <MenuItem icon={<TagIcon size={ICON.sm} />} onClick={() => { close(); onLabels(); }}>Edit labels</MenuItem>
@@ -9084,6 +9117,7 @@ function Masthead({ root, repo, d, busy, local, stackUi, onOpenPr, onShowLocal, 
         <Field label="Changes">
           <span className="tabular-nums" style={{ color: "var(--success-ink)" }}>+{d.additions}</span>
           <span className="tabular-nums" style={{ color: "var(--error-ink)" }}>−{d.deletions}</span>
+          <DiffBlocks additions={d.additions} deletions={d.deletions} />
           <span style={{ color: "var(--text3)" }}>· {d.changedFiles} file{d.changedFiles === 1 ? "" : "s"}</span>
         </Field>
         <Field label="Assignee" max={190}>
@@ -11046,18 +11080,9 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
                             </div>
                           );
                         } : undefined}
-                        expand={(hi) => {
-                          // The gap between the end of the previous hunk and the
-                          // start of this one — the lines GitHub did not send.
-                          const h = change.hunks[hi];
-                          if (!h) return null;
-                          const prev = hi > 0 ? change.hunks[hi - 1] : null;
-                          const prevEnd = prev ? prev.newStart + prev.newLines - 1 : 0;
-                          const from = Math.max(prevEnd + 1, h.newStart - 20);
-                          const to = h.newStart - 1;
-                          if (to < from) return null;
-                          return <ExpandContext root={root} number={d.number} path={f.path} from={from} to={to} />;
-                        }}
+                        key={`${f.path}@${headSha}`}
+                        expandFrom={headSha && (f.status === "modified" || f.status === "changed")
+                          ? { root, number: d.number, path: f.path, sha: headSha } : undefined}
                       />
                     )
                     /* Two different nothings, and saying the wrong one is how a
@@ -11745,10 +11770,20 @@ const EVENT_TINT: Record<string, string> = {
 function TimelineEvent({ e }: { e: PrEvent }) {
   /* The words are shared/prEventLine.ts, which the phone reads too; this only
      says how each kind of part is drawn. */
+  // A mention from another pull request opens that pull request here, as a chip, not in the browser.
+  const pr = e.kind === "cross-referenced" ? prRefFromUrl(e.url) : null;
   const said = eventParts(e).map((p, i) => {
+    if (pr && i === 1) return (
+      <Fragment key={i}>{" mentioned this in "}
+        <button type="button" onClick={() => openPr(pr.repo, pr.number)} title="Open this pull request here"
+          className="px-1.5 py-0.5 rounded align-middle" style={{ ...CODE_FONT_STYLE, color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 12%, transparent)", cursor: "pointer" }}>{e.detail}</button>
+      </Fragment>
+    );
     switch (p.as) {
-      case "who": return <b key={i} style={{ color: "var(--text)" }}>{p.text}</b>;
-      case "strong": return <b key={i} style={{ color: "var(--text2)" }}>{p.text}</b>;
+      case "who": return <UserPill key={i} name={p.text} />;
+      case "strong": return e.kind === "assigned" || e.kind === "unassigned" || e.kind === "review-requested"
+        ? <UserPill key={i} name={p.text} />
+        : <b key={i} style={{ color: "var(--text2)" }}>{p.text}</b>;
       case "code": return <code key={i} style={{ ...CODE_FONT_STYLE, color: "var(--text)" }}>{p.text}</code>;
       case "label": return <Chip key={i} text={p.text} tint={e.kind === "unlabeled" ? "var(--text3)" : p.tint ? `#${p.tint}` : "var(--primary)"} />;
       default: return <Fragment key={i}>{p.text}</Fragment>;
@@ -11757,14 +11792,37 @@ function TimelineEvent({ e }: { e: PrEvent }) {
   const inner = <span>{said} <span style={{ color: "var(--text3)" }}>· {agoFull(e.at)}</span></span>;
   return (
     <div className="agx-tiny">
-      {e.actor && <Avatar login={e.actor} size={ICON.md} />}
-      {e.url ? <a href={externalUrl(e.url)} target="_blank" rel="noreferrer noopener" style={{ color: "inherit" }}>{inner}</a> : inner}
+      {e.url && !pr ? <a href={externalUrl(e.url)} target="_blank" rel="noreferrer noopener" style={{ color: "inherit" }}>{inner}</a> : inner}
     </div>
   );
 }
 
 /** Commits pushed back to back, as GitHub prints them: who, how many, and the
  *  subjects. The Commits tab has the rest. */
+/** A GitHub user named in running text: face and name in a quiet pill, so a person stands out from the words around them. */
+/** GitHub's five-square diffstat: the share of added and deleted lines at a glance, grey for what is left over by rounding. */
+function DiffBlocks({ additions, deletions }: { additions: number; deletions: number }) {
+  const total = additions + deletions;
+  if (!total) return null;
+  const add = Math.round((5 * additions) / total);
+  const del = Math.min(5 - add, Math.round((5 * deletions) / total));
+  return (
+    <span className="inline-flex items-center gap-0.5 align-middle" aria-label={`${additions} added, ${deletions} deleted`}>
+      {Array.from({ length: 5 }, (_, i) => (
+        <span key={i} className="rounded-sm" style={{ width: 8, height: 8, background: i < add ? "var(--success-ink)" : i < add + del ? "var(--error-ink)" : "var(--surface-line)" }} />
+      ))}
+    </span>
+  );
+}
+
+function UserPill({ name }: { name: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 align-middle rounded-full pl-0.5 pr-1.5" style={{ background: "var(--surface-inset)", border: LINE, color: "var(--text)", fontWeight: 600 }}>
+      <Avatar login={name} size={ICON.sm} />{name}
+    </span>
+  );
+}
+
 /** A branch name in running text, as the same chip the header uses. */
 function RefPill({ name }: { name: string }) {
   return <code className="px-1 py-0.5 rounded text-[10.5px]" style={{ ...CODE_FONT_STYLE, color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 12%, transparent)", overflowWrap: "anywhere" }}>{name}</code>;
@@ -11782,7 +11840,7 @@ function CommitsEvent({ commits }: { commits: PrCommit[] }) {
   if (!first) return null;
   return (
     <div className="agx-tiny" style={{ alignItems: "flex-start", flexDirection: "column", gap: 2 }}>
-      <span className="flex items-center gap-1.5">{first.author && <Avatar login={first.author} size={ICON.md} />}<b>{first.author || "somebody"}</b> added {commits.length} commit{commits.length === 1 ? "" : "s"}
+      <span className="flex items-center gap-1.5"><UserPill name={first.author || "somebody"} /> added {commits.length} commit{commits.length === 1 ? "" : "s"}
         {first.committedAt && <span style={{ color: "var(--text3)" }}> · {agoFull(first.committedAt)}</span>}</span>
       {commits.map((c) => (
         <span key={c.oid} className="flex gap-2 min-w-0 w-full">
@@ -12195,7 +12253,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   const opened = (
     <div key="opened" className="agx-tiny">
       <span className="agx-node"><PlusIcon size={ICON.xs} /></span>
-      <span><b>{d.author}</b> opened this pull request from <RefPill name={d.headRefName} /> into <RefPill name={d.baseRefName} /></span>
+      <span><UserPill name={d.author} /> opened this pull request from <RefPill name={d.headRefName} /> into <RefPill name={d.baseRefName} /></span>
     </div>
   );
   /* The real force-push events now come from the timeline with their own

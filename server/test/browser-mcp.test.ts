@@ -504,6 +504,17 @@ describe.skipIf(!HAVE_PY)("the MCP surface addresses its own tab", () => {
    * The criterion in the owner's words: two clients driving one browser, and
    * neither one's read comes back with the other's page.
    */
+  /* A script held a tab's id and sent `open` on it for a minute; once the id
+     named nothing, every call quietly minted a tab and read as success. */
+  test("opening a NAMED tab that is gone is refused, not answered with a new tab", async () => {
+    sent = [];
+    says = { open: { ok: false, error: "no tab called t-old — the app restarted before that tab was saved" } };
+    const r = await client("orbit-a", freshState(), [{ name: "browser_open", arguments: { url: "https://orbit.example/a", page: "t-old" } }]);
+    const opens = sent.filter((s) => s.op === "open");
+    expect(opens.length, "a second open minted a tab").toBe(1);
+    expect(r[0]!.isError).toBe(true);
+  });
+
   test("two clients open in two containers and read their own tab", async () => {
     sent = [];
     says = { open: { ok: true, value: { id: "t-a", url: "u", title: "t" } } };

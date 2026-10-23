@@ -25,6 +25,7 @@ import { failed } from "./refused.ts";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { gitAsync, safeAbs, repoRootOf } from "./git.ts";
+import { splitFileLines } from "../../shared/diffGaps.ts";
 import { makeViewTempDir } from "./viewtemp.ts";
 import { inScopeReal, staysIn } from "./config.ts";
 import { recipePromptText } from "./reviewPrompts.ts";
@@ -513,7 +514,8 @@ export async function prRollup(rootIn: unknown, numberIn: unknown, fresh = false
     const pr = r?.data?.repository?.pullRequest;
     const ctxs = pr?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts;
     const raw = ctxs?.nodes;
-    if (!raw) return { ok: false, error: "GitHub would not list its checks" };
+    // A commit with no checks yet (the gap after a sync or a push) has no rollup but does have a head: the watch needs it to tell "not started" from "old".
+    if (!raw) return { ok: false, error: "GitHub would not list its checks", sha: pr?.commits?.nodes?.[0]?.commit?.oid || undefined, state: typeof pr?.state === "string" ? pr.state : undefined };
     const normalised = raw.map(withWorkflow);
     const r2 = rollupChecks(normalised);
     // The commit named in this same response, not the cached one: a push since the list read would file these runs under the old commit.
@@ -5090,6 +5092,11 @@ export async function fileSlice(rootIn: unknown, numberIn: unknown, args: {
   const ref = left ? pr?.base?.sha : pr?.head?.sha;
   const from = left ? repo.nameWithOwner : (pr?.head?.repo?.full_name ?? repo.nameWithOwner);
   if (!ref) return { ok: false, error: "could not read the pull request's commits" };
+  // The checkout usually has both commits already, and a blob read from it is
+  // no request at all. Only a commit it does not have (a fork's head that was
+  // never fetched) goes to GitHub.
+  const local = await localText(rootIn, ref, path);
+  if (local != null) return sliceOf(local, args);
   const file = await contentAt(from, path, ref);
   if (!file) return { ok: false, error: `${path} is not on that side` };
   // A file GitHub will not inline is a big one or a binary one; either way the
@@ -5100,10 +5107,34 @@ export async function fileSlice(rootIn: unknown, numberIn: unknown, args: {
   const buf = Buffer.from(String(file.content).replace(/\n/g, ""), "base64");
   // A NUL in the first few KB is the usual "this is not text" tell.
   if (buf.subarray(0, 8000).includes(0)) return { ok: true, binary: true, url: file.download_url ?? "" };
-  const all = buf.toString("utf8").split("\n");
+  return sliceOf(buf.toString("utf8"), args);
+}
+
+function sliceOf(text: string, args: { from?: unknown; to?: unknown }) {
+  const all = splitFileLines(text);
   const start = Math.max(1, Number(args.from) || 1);
   const to = Math.min(all.length, Number(args.to) || all.length);
   return { ok: true, lines: all.slice(start - 1, to), start, total: all.length };
+}
+
+/* Past this a file is not worth sending whole to expand a few lines of it. */
+const LOCAL_BLOB_CAP = 2 * 1024 * 1024;
+
+/** A file at a commit, read from the local checkout; null when the checkout
+ *  cannot say (no such commit or path, binary, too big), so the caller asks
+ *  GitHub. `ref` is a 40-hex sha from GitHub, never a user string, and the
+ *  path may not climb out of the tree. */
+export async function localText(rootIn: unknown, ref: string, path: string): Promise<string | null> {
+  if (!/^[0-9a-f]{40}$/.test(ref) || path.split("/").includes("..") || /[\0\n]/.test(path)) return null;
+  const abs = safeAbs(rootIn);
+  const root = abs ? repoRootOf(abs) : null;
+  if (!root) return null;
+  const obj = `${ref}:${path}`;
+  const size = await gitAsync(root, ["cat-file", "-s", obj]);
+  if (size.code !== 0 || !(Number(size.stdout) <= LOCAL_BLOB_CAP)) return null;
+  const r = await gitAsync(root, ["cat-file", "blob", obj]);
+  if (r.code !== 0 || r.stdout.slice(0, 8000).includes("\0")) return null;
+  return r.stdout;
 }
 
 /**
@@ -5326,7 +5357,7 @@ export function updateBranchRefusal(raw: string): PrActionResult | null {
 
 /** Merge the base into the PR branch — the button whose absence is why half a
  *  branch list carries hand-made "Merge origin/master into …" commits. */
-export async function updateBranch(rootIn: unknown, number: unknown, syncLocal?: unknown): Promise<PrActionResult> {
+export async function updateBranch(rootIn: unknown, number: unknown, syncLocal?: unknown, began?: (before: string | undefined) => Promise<void>): Promise<PrActionResult> {
   const abs = safeAbs(rootIn);
   const root = abs ? repoRootOf(abs) : null;
   const wantLocal = syncLocal === true || syncLocal === "true";
@@ -5335,8 +5366,11 @@ export async function updateBranch(rootIn: unknown, number: unknown, syncLocal?:
      not happen at all, so "ok" says nothing about the branch having moved. */
   const pr = root ? await prBranches(root, Number(number)) : null;
   const before = root && pr ? await remoteHeadOf(root, pr.head) : null;
+  // Said before GitHub is asked: the answer takes seconds, and a notify armed inside them must already know.
+  try { await began?.(before ?? undefined); } catch { /* the note is a courtesy to the watch: the press goes on */ }
   const r = await runPr(rootIn, Number(number), ["pr", "update-branch", String(Number(number))]);
   if (!r.ok) return updateBranchRefusal(r.error || "") ?? r;
+  const out = (x: PrActionResult): PrActionResult => before ? { ...x, headBefore: before } : x;
   let landed: UpdateLanded = "unknown";
   if (root && pr && before) {
     landed = updateLanded(before, await remoteHeadOf(root, pr.head));
@@ -5347,20 +5381,20 @@ export async function updateBranch(rootIn: unknown, number: unknown, syncLocal?:
     }
   }
   if (landed === "unmoved") {
-    return { ...r, requested: true, detail: "Update requested — GitHub has not moved the branch yet. Your local copy was left as it is." };
+    return out({ ...r, requested: true, detail: "Update requested — GitHub has not moved the branch yet. Your local copy was left as it is." });
   }
   /* A head that could not be read is not a head that moved. Only a sync the
      person asked for claims anything, so only that path is held back. */
   if (landed === "unknown" && wantLocal && root) {
-    return { ...r, requested: true, detail: "Update requested — the branch on GitHub could not be read to confirm it moved. Your local copy was left as it is." };
+    return out({ ...r, requested: true, detail: "Update requested — the branch on GitHub could not be read to confirm it moved. Your local copy was left as it is." });
   }
-  if (!wantLocal || !root) return r;
+  if (!wantLocal || !root) return out(r);
   /* "Synced" first, because what somebody wants to know is whether it worked;
      the two halves follow, in the order they happened. The old wording opened
      with "updated on GitHub", which reads as a report rather than an answer.
      It also said so, and fast-forwarded, straight after the 202, when nothing
      had moved: "your local branch moved up too" over a branch that did not. */
-  return { ...r, detail: `Synced — updated on GitHub, and ${await syncLocalHead(root, Number(number))}` };
+  return out({ ...r, detail: `Synced — updated on GitHub, and ${await syncLocalHead(root, Number(number))}` });
 }
 
 /**

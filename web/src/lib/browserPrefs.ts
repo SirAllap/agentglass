@@ -229,6 +229,14 @@ export function setDevtoolsZoom(level: number): void {
 /* ---------------------------------------------------------------- the bar */
 
 export const SIDEBAR_OPEN_KEY = "agentglass.browser.sidebar";
+export const CHROME_KEY = "agentglass.browser.chrome";
+
+/** The island (the default) or the classic tab list on the right. The island
+ *  gives the page the whole width and keeps the tabs in a pill a person opens
+ *  when they want to see what is open; the list is kept for whoever needs its
+ *  folders and shelf, which the island does not show. */
+export function classicChrome(): boolean { return read(CHROME_KEY) === "classic"; }
+export function setClassicChrome(on: boolean): void { write(CHROME_KEY, on ? "classic" : ""); }
 export const SIDEBAR_W_KEY = "agentglass.browser.sidebarWidth";
 
 /** Open unless it was closed. The bar IS the tab strip now — starting hidden

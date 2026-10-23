@@ -23,6 +23,10 @@ import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { IconLabel, PlusIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { Button, INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
+import { LaunchModeBadge, LaunchModeSelect } from "./LaunchMode.tsx";
+
+/** Same test as the server's (recipes.ts withLaunchFlags): a step whose first word is `claude`. */
+const startsClaude = (r: Recipe) => r.steps.some((l) => /^\s*(?:exec\s+)?claude(?=\s|$)/.test(l));
 
 const PARAM_TYPES: RecipeParam["type"][] = ["text", "choice", "flag", "repo", "worktree", "branch"];
 
@@ -83,6 +87,7 @@ export function RecipesPane({ open }: { open: boolean }) {
               {r.params?.length ? ` · ${r.params.length} param${r.params.length === 1 ? "" : "s"}` : ""}
               {r.boot ? " · at start" : ""}
             </>}
+            status={startsClaude(r) ? <LaunchModeBadge mode={r.permissionMode} /> : undefined}
             actions={<>
               <Button onClick={() => setRunning(r)}>Run…</Button>
               <Button onClick={() => setEditing(r)}>Edit</Button>
@@ -155,6 +160,15 @@ function Editor({ r, repos, onChange, onSave, onDrop, onCancel }: {
                 className="w-full text-[12px] px-2.5 py-2 rounded-lg outline-none font-mono bg-[var(--surface-inset)] text-[var(--text)]"
                 style={{ ...INPUT_STYLE, resize: "vertical" }} />
             </Field>
+
+            {/* Only for a command that starts Claude: the server adds the flags
+                to a step whose first word is `claude`, and to nothing else. */}
+            {startsClaude(r) && (
+              <Field label="Permission mode" htmlFor={f("mode")} help="For a step that starts claude: how it asks before a tool runs.">
+                <LaunchModeSelect id={f("mode")} value={r.permissionMode} className={`w-full ${INPUT}`} style={INPUT_STYLE}
+                  onChange={(m) => set({ permissionMode: m })} />
+              </Field>
+            )}
 
             <Field label="Where it applies" htmlFor={f("scope")}>
               <select id={f("scope")} value={r.scope} className={`w-56 ${INPUT}`} style={INPUT_STYLE}

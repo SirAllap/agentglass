@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import type { PrWatch } from "../../shared/types.ts";
-import { bellState, hasActiveWatch, ruleLabel, sameRule, setPrWatchState, watchesOf } from "../src/lib/prWatchStore.ts";
+import { bellState, hasActiveWatch, ruleLabel, sameRule, setPrWatchState, watchPhase, watchesOf } from "../src/lib/prWatchStore.ts";
 
 const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
 const src = async (p: string) => strip(await Bun.file(new URL(p, import.meta.url)).text());
@@ -129,5 +129,36 @@ describe("wiring", () => {
     expect(live).toContain('frame.type === "prwatch"');
     expect(live).toContain("fireWatchAlert(frame.data)");
     expect(await Bun.file(new URL("../src/lib/sysNotify.ts", import.meta.url)).text()).toContain("NOT about an agent blocked on the");
+  });
+});
+
+describe("what the chip says about the run it is watching", () => {
+  const A = "aaaaaaa1111111111111111111111111111aaaaa";
+  const B = "bbbbbbb2222222222222222222222222222bbbbb";
+  it("names the head being watched", () => {
+    expect(watchPhase([w({ head: A })])).toEqual({ kind: "watching", text: "Watching run on aaaaaaa" });
+  });
+  it("after Update branch: waiting for the head to move, then for the new head's checks", () => {
+    expect(watchPhase([w({ head: A, sync: { state: "waiting", from: A } })]))
+      .toEqual({ kind: "waiting", text: "Waiting for new run (head aaaaaaa → …)" });
+    expect(watchPhase([w({ head: B, sync: { state: "moved", from: A } })]))
+      .toEqual({ kind: "waiting", text: "Waiting for new run (head aaaaaaa → bbbbbbb)" });
+  });
+  it("a sync that moved nothing says so in words", () => {
+    expect(watchPhase([w({ head: A, sync: { state: "unchanged", from: A } })]))
+      .toEqual({ kind: "unchanged", text: "Update did not change the head — still watching the old run (aaaaaaa)" });
+  });
+  it("says nothing for a spent watch, a comment-only watch or no head read yet", () => {
+    expect(watchPhase([])).toBeNull();
+    expect(watchPhase([w({})])).toBeNull();
+    expect(watchPhase([w({ active: false, head: A })])).toBeNull();
+    expect(watchPhase([w({ rule: { type: "comment" }, head: A })])).toBeNull();
+  });
+  it("the chip, its tooltip and the menu use it, with the house button and no new size", () => {
+    const m = body(menu, "export function PrWatchMenu(");
+    expect(m).toContain("watchPhase(");
+    expect(m).toContain('phase?.kind === "waiting" ? "Waiting for new run"');
+    expect(m).toContain("phase.text");
+    expect(m).toContain("data-pr-watch-phase");
   });
 });

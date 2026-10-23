@@ -14,6 +14,7 @@
  */
 
 import { phase2Routes } from "./fixtures2.ts";
+import { speedRoutes } from "./fixtures3.ts";
 
 export type BenchState = {
   /** The dev-loop page's bugs: seeded (`broken`) or fixed. */
@@ -222,7 +223,7 @@ export function makeHandler(state: BenchState, sleep: (ms: number) => Promise<un
       Object.assign(state, freshState());
       return json(state);
     }
-    const more = await phase2Routes(p, req, state);
+    const more = (await phase2Routes(p, req, state)) ?? (await speedRoutes(p, req, state));
     if (more) return more;
     return new Response("not found", { status: 404 });
   };

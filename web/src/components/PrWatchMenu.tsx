@@ -16,7 +16,7 @@ import { api } from "../lib/api.ts";
 import { ICON } from "../lib/iconSize.ts";
 import { suggestCheckNames } from "../lib/prWatchSuggest.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
-import { bellState, firedLabel, firedOk, markFireSeen, useFireSeen, presetOf, ruleLabel, sameRule, usePrWatchState, watchesOf } from "../lib/prWatchStore.ts";
+import { bellState, firedLabel, firedOk, markFireSeen, useFireSeen, presetOf, ruleLabel, sameRule, usePrWatchState, watchPhase, watchesOf } from "../lib/prWatchStore.ts";
 import { Select } from "./Select.tsx";
 import { BellIcon } from "./settingsNavIcons.tsx";
 import { CrossIcon, DoneIcon } from "../lib/glyphIcons.tsx";
@@ -72,9 +72,11 @@ export function PrWatchMenu({ root, repo, d }: {
   const names = suggestCheckNames(d.checksAll, match);
   const current = live.map((w) => w.rule);
 
-  const label = bell.kind === "on" ? `Watching ${bell.waiting}` : bell.kind === "fired" && bell.last ? firedLabel(bell.last) : "Notify";
+  const phase = watchPhase(mine);
+  const label = bell.kind === "on" ? (phase?.kind === "waiting" ? "Waiting for new run" : `Watching ${bell.waiting}`) : bell.kind === "fired" && bell.last ? firedLabel(bell.last) : "Notify";
   const tone = bell.kind === "on" ? "primary" : bell.kind === "fired" ? "ok" : "plain";
   const title = bell.kind === "off" && !bell.last?.lastText ? "Notify me when CI passes, fails, or someone comments"
+    : bell.kind === "on" && phase ? phase.text
     : bell.last?.lastText ? `Last: ${bell.last.lastText}` : "Watching this pull request";
 
   return (
@@ -89,6 +91,7 @@ export function PrWatchMenu({ root, repo, d }: {
       </Button>
       {open && (
         <div className="absolute z-50 top-full mt-1.5 right-0 rounded-lg agx-menu p-2 flex flex-col gap-1" style={{ minWidth: 268 }} data-pr-watch-menu>
+          {phase && <div className="px-1 text-[10px]" style={{ color: "var(--text3)" }} data-pr-watch-phase={phase.kind}>{phase.text}</div>}
           <div className={GROUP_HEADING} style={{ color: "var(--text4)", paddingTop: 2 }}>Notify me when…</div>
           {FIXED.map(({ rule, hint }) => (
             <Row key={rule.type} on={!!waiting(rule)} onToggle={() => void toggle(rule)}>

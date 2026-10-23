@@ -51,3 +51,25 @@ test("and waitfor is not given a selector, whatever the help used to say", () =>
   expect(doArgs().waitfor, "waitfor takes a condition").toBe("js");
   expect(CLI).not.toContain("'waitfor #done'");
 });
+
+test("every do example in the skill is one the short form runs as written", () => {
+  /* The skill is what an agent copies. Its first `do` example was
+     `"waitfor #done"`, which sends "#done" as JavaScript: the batch an agent
+     is told to reach for failed on its second step. */
+  const SKILL = readFileSync(new URL("../../skills/browser-use/SKILL.md", import.meta.url), "utf8");
+  const map = doArgs();
+  const lines = SKILL.split("\n").filter((l) => /agentglass-browser do ["']/.test(l) || /^\s*`?do ["']/.test(l) || / `do ["']/.test(l));
+  expect(lines.length).toBeGreaterThan(1);
+  const wrong: string[] = [];
+  for (const line of lines) {
+    const after = line.slice(line.indexOf("do ") + 3);
+    for (const m of after.matchAll(/"([^"]+)"|'([^']+)'/g)) {
+      const step = (m[1] ?? m[2])!;
+      const [op, arg] = [step.split(" ")[0]!, step.slice(step.indexOf(" ") + 1)];
+      if (!step.includes(" ")) continue;
+      if (!map[op]) wrong.push(`${step}: ${op} takes more than one argument in the short form`);
+      else if (op === "waitfor" && /^(#|\.|e[0-9]+$)/.test(arg)) wrong.push(`${step}: waitfor takes a condition, not a selector`);
+    }
+  }
+  expect(wrong).toEqual([]);
+});

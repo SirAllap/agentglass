@@ -21,6 +21,15 @@ import { describe, expect, it } from "bun:test";
 import { renderToString } from "react-dom/server";
 import React from "react";
 import { BrowserView, __forceBrowser } from "../src/components/BrowserPanel";
+import { globalStubs } from "./stubGlobal";
+import { CHROME_KEY } from "../src/lib/browserPrefs.ts";
+
+/* The container rows live in the classic tab list; the island is the default
+   chrome, so this paints the list on purpose. */
+globalStubs()("localStorage", {
+  getItem: (k: string) => (k === CHROME_KEY ? "classic" : null),
+  setItem: () => {}, removeItem: () => {}, clear: () => {}, key: () => null, length: 0,
+});
 
 const paint = () => {
   __forceBrowser(true);

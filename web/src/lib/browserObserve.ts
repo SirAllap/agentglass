@@ -284,6 +284,49 @@ export const ID_ORIGIN = `(id) => {
 }`;
 
 /*
+ * EVERY TREE A PAGE KEEPS, not only the document's own.
+ *
+ * Open shadow roots (a web component's inside) and same-origin frames hold
+ * their own trees, which `document.querySelectorAll` does not reach, so a
+ * button inside one was simply not on the page as far as observe and the
+ * locators were concerned. This lists the roots to search: the start itself,
+ * then every open shadow root and every frame document found under it, one
+ * pass over the elements, nested ones included. `in` says what kind of root,
+ * and a frame also carries its name (or id, or position among the frames).
+ *
+ * The ceilings, chosen: a CLOSED shadow root hides itself from the page, and a
+ * cross-origin frame throws when its document is read, so neither is reachable
+ * from here and both are skipped without an error. A frame that has not
+ * loaded yet has no document and is skipped the same way. At most 64 roots, so
+ * a page made of thousands of widgets cannot make one look unbounded.
+ *
+ * One record serves every root: ids are minted by the script running in the
+ * top window (the counter, the ranges and the WeakSet live on it), so an id
+ * stamped inside a frame is accepted by ID_ORIGIN like any other.
+ *
+ * Function source, like STAMP: `(${ROOTS})(document)`.
+ */
+export const ROOTS = `(start) => {
+    const found = [{ root: start }];
+    let frames = 0;
+    for (const f of found) {
+      if (found.length >= 64) break;
+      const own = f.root.nodeType === 1 ? [f.root] : [];
+      for (const n of own.concat([...f.root.querySelectorAll("*")])) {
+        if (n.shadowRoot) found.push({ root: n.shadowRoot, in: "shadow" });
+        const t = String(n.tagName).toUpperCase();
+        if (t === "IFRAME" || t === "FRAME") {
+          let d = null;
+          try { d = n.contentDocument; } catch (err) { d = null; }
+          if (d && d.querySelectorAll) found.push({ root: d, in: "frame", frame: n.getAttribute("name") || n.id || frames });
+          frames++;
+        }
+      }
+    }
+    return found;
+  }`;
+
+/*
  * Put an id on a node, once — shared by `observe` and `region`, so the two
  * cannot disagree about which node an id names.
  *
@@ -364,6 +407,10 @@ export type ObserveOpts = {
   /** Where this document's id counter starts if it has not started yet — see
    *  the note beside `stamp` below for why it comes from outside the page. */
   idBase?: number;
+  /** List only the nodes whose box intersects the viewport, and count the rest. */
+  viewport?: boolean;
+  /** List only the subtree of this element (an id from an observation). */
+  root?: string;
 };
 
 /**
@@ -388,6 +435,26 @@ export const PICK = "a,button,input,select,textarea,[role],[data-testid],summary
 /** Everything at once. `since` filters the two logs; 0 means "from the top". */
 export const observeScript = (since: number, treeMax: number, opts: ObserveOpts = {}): string => `(() => {
   const log = window.__agxLog || { console: [], network: [] };
+  /*
+     SCOPE. A look at part of the page — the viewport, or the subtree of one
+     element — answers with less, and must leave the delta baseline alone: it
+     stores no snapshot and carries no doc or seq, so the relay keeps handing
+     the caller the full look it last took and a later delta is measured
+     against that. The root is asked where its id came from BEFORE the counter
+     below moves, because that counter is what tells "never observed" apart.
+  */
+  const onlyView = ${opts.viewport === true};
+  const wantRoot = ${JSON.stringify(/^e[0-9]+$/.test(opts.root ?? "") ? opts.root : "")};
+  let rootEl = null;
+  if (wantRoot) {
+    const from = (${ID_ORIGIN})(wantRoot);
+    if (from !== "minted") return { __agxRoot: from, url: location.href };
+    for (const f of (${ROOTS})(document)) {
+      try { rootEl = f.root.querySelector('[data-agx-e="' + wantRoot + '"]'); } catch (err) { rootEl = null; }
+      if (rootEl) break;
+    }
+    if (!rootEl) return { __agxRoot: "gone", url: location.href };
+  }
   window.__agxSeq = Math.max(window.__agxSeq || 0, ${Number(opts.idBase) || 0});
   const firstId = window.__agxSeq + 1;
   const seen = (arr) => arr.filter((r) => !${since} || r.at > ${since});
@@ -424,52 +491,86 @@ export const observeScript = (since: number, treeMax: number, opts: ObserveOpts 
     if (!r.width || !r.height) return "zero size";
     return null;
   };
-  const covering = (el, r) => {
+  const covering = (el, r, root) => {
     const x = r.x + r.width / 2, y = r.y + r.height / 2;
-    if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) return "off screen";
-    const top = document.elementFromPoint(x, y);
+    /* A frame has a viewport of its own, and its boxes are in it. */
+    const vw = root.defaultView;
+    if (x < 0 || y < 0 || x > (vw ? vw.innerWidth : innerWidth) || y > (vw ? vw.innerHeight : innerHeight)) return "off screen";
+    const top = (root.elementFromPoint ? root : document).elementFromPoint(x, y);
     if (!top || top === el || el.contains(top) || top.contains(el)) return null;
     return (top.dataset && top.dataset.agxE ? top.dataset.agxE + " " : "")
       + top.tagName.toLowerCase()
       + (top.id ? "#" + top.id : "")
       + (top.className && typeof top.className === "string" ? "." + top.className.trim().split(/\\s+/)[0] : "");
   };
+  const roots = (${ROOTS})(rootEl || document);
+  /* Where each root's boxes live: an element root answers for the tree it is
+     in, a frame has a viewport of its own. */
+  for (const f of roots) f.scope = f.root.nodeType === 1 ? ((f.root.getRootNode && f.root.getRootNode()) || document) : f.root;
+  if (rootEl) {
+    const rn = roots[0].scope;
+    roots[0].in = rn === document ? undefined : rn.nodeType === 11 ? "shadow" : "frame";
+  }
+  /* Unnamed layout wrappers — role presentation, none or generic, with no
+     name, id or test id — say nothing an agent could use or point at, and a
+     toolbar built of them lists three for every button. Left out and counted. */
+  const WRAP = { presentation: 1, none: 1, generic: 1 };
+  let outOfView = 0, wrappers = 0, hiddenSeen = 0;
+  const inView = (r, vw) => r.x + r.width > 0 && (vw ? vw.innerWidth : innerWidth) > r.x
+    && r.y + r.height > 0 && (vw ? vw.innerHeight : innerHeight) > r.y;
   const tree = [];
-  for (const el of document.querySelectorAll(PICK)) {
-    if (tree.length >= ${treeMax}) break;
-    const r = el.getBoundingClientRect();
-    const hidden = why(el, r);
-    /* Hidden things are REPORTED, not dropped — but only the ones that would
-       otherwise be interesting, so a page of display:none templates does not
-       drown the tree. */
-    if (hidden && tree.filter((t) => t.hidden).length >= 20) continue;
-    const covered = hidden ? null : covering(el, r);
-    tree.push({
-      e: stamp(el),
-      role: el.getAttribute("role") || el.tagName.toLowerCase(),
-      name: name(el),
-      testid: el.getAttribute("data-testid") || undefined,
-      id: el.id || undefined,
-      disabled: el.disabled === true || undefined,
-      hidden: hidden || undefined,
-      covered: covered || undefined,
-      at: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)],
-    });
+  walk: for (const f of roots) {
+    const vw = f.scope.defaultView;
+    const found = f.root.nodeType === 1 && f.root.matches && f.root.matches(PICK)
+      ? [f.root, ...f.root.querySelectorAll(PICK)] : f.root.querySelectorAll(PICK);
+    for (const el of found) {
+      if (tree.length >= ${treeMax}) break walk;
+      const role = el.getAttribute("role") || el.tagName.toLowerCase();
+      const nm = name(el);
+      if (!nm && WRAP[role] && !el.id && !el.getAttribute("data-testid")) { wrappers++; continue; }
+      const r = el.getBoundingClientRect();
+      const hidden = why(el, r);
+      if (onlyView && (hidden || !inView(r, vw))) { outOfView++; continue; }
+      /* Hidden things are REPORTED, not dropped — but only the ones that would
+         otherwise be interesting, so a page of display:none templates does not
+         drown the tree. */
+      if (hidden && hiddenSeen >= 20) continue;
+      if (hidden) hiddenSeen++;
+      const covered = hidden ? null : covering(el, r, f.scope);
+      tree.push({
+        e: stamp(el),
+        role,
+        name: nm || undefined,
+        testid: el.getAttribute("data-testid") || undefined,
+        id: el.id || undefined,
+        disabled: el.disabled === true || undefined,
+        hidden: hidden || undefined,
+        covered: covered || undefined,
+        /* Inside an open shadow root or a same-origin frame, said short. The
+           box is then in that frame's own viewport. */
+        in: f.in,
+        frame: f.in === "frame" ? f.frame : undefined,
+        at: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)],
+      });
+    }
   }
   const form = [];
-  for (const el of document.querySelectorAll("input,select,textarea")) {
-    const r = el.getBoundingClientRect();
-    if (!r.width || !r.height) continue;
-    form.push({
-      /* The same id the tree gives the node, so a delta can say WHICH field
-         changed, and the field can be acted on straight from this list. */
-      e: stamp(el),
-      name: el.name || name(el) || el.id || "",
-      type: el.type || el.tagName.toLowerCase(),
-      value: el.type === "password" ? "(hidden)" : String(el.value ?? "").slice(0, 200),
-      checked: el.type === "checkbox" || el.type === "radio" ? !!el.checked : undefined,
-      options: el.tagName === "SELECT" ? [...el.options].map((o) => o.value).slice(0, 40) : undefined,
-    });
+  for (const f of roots) {
+    for (const el of f.root.querySelectorAll("input,select,textarea")) {
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      if (onlyView && !inView(r, f.scope.defaultView)) continue;
+      form.push({
+        /* The same id the tree gives the node, so a delta can say WHICH field
+           changed, and the field can be acted on straight from this list. */
+        e: stamp(el),
+        name: el.name || name(el) || el.id || "",
+        type: el.type || el.tagName.toLowerCase(),
+        value: el.type === "password" ? "(hidden)" : String(el.value ?? "").slice(0, 200),
+        checked: el.type === "checkbox" || el.type === "radio" ? !!el.checked : undefined,
+        options: el.tagName === "SELECT" ? [...el.options].map((o) => o.value).slice(0, 40) : undefined,
+      });
+    }
   }
   if (window.__agxSeq >= firstId) (window.__agxRanges = window.__agxRanges || []).push([firstId, window.__agxSeq]);
   const full = {
@@ -514,6 +615,9 @@ export const observeScript = (since: number, treeMax: number, opts: ObserveOpts 
        invisible to every other verb. */
     dialog: window.__agxDialog || undefined,
   };
+  if (onlyView) full.outOfView = outOfView;
+  if (wrappers) full.wrappers = wrappers;
+  if (onlyView || rootEl) return full;
   /*
      THE BASELINE, per document and per caller. The window object IS the
      document's lifetime: a navigation brings a new one, and with it an empty
@@ -559,7 +663,10 @@ export const observeScript = (since: number, treeMax: number, opts: ObserveOpts 
     d.removed = d.removed.filter((e) => {
       if (typeof e !== "string" || !/^e[0-9]+$/.test(e)) return false;
       let still = null;
-      try { still = document.querySelector('[data-agx-e="' + e + '"]'); } catch { still = null; }
+      for (const f of roots) {
+        try { still = f.root.querySelector('[data-agx-e="' + e + '"]'); } catch { still = null; }
+        if (still) break;
+      }
       if (still) unlisted.push(e);
       return !still;
     });

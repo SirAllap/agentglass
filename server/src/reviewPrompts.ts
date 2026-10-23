@@ -17,6 +17,7 @@
  * launched, not here, and pretending otherwise would only stop somebody writing
  * the word `rm` in a sentence about a diff.
  */
+import { isLaunchMode } from "../../shared/launchModes.ts";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
@@ -147,6 +148,7 @@ export function saveReviewRecipe(r: ReviewRecipe): { ok: boolean; error?: string
     group: GROUPS.includes(r.group) ? r.group : "reviewing",
     when: WHENS.includes(r.when) ? r.when : "any",
     ...(typeof r.rank === "number" ? { rank: r.rank } : {}),
+    ...(isLaunchMode(r.permissionMode) ? { permissionMode: r.permissionMode } : {}),
     // Conflict prompts only. A repo on a review prompt would be a field that
     // does nothing, and a field that does nothing is one somebody trusts.
     ...(r.group === "conflicts" ? conflictFields(r) : {}),

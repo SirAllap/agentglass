@@ -140,6 +140,10 @@ contextBridge.exposeInMainWorld("agentglass", {
   setWindowBackground: (/** @type {string} */ color, /** @type {{ dark?: string, light?: string } | undefined} */ both) =>
     ipcRenderer.send("ag:setWindowBackground", String(color ?? ""),
       both && typeof both === "object" ? { dark: String(both.dark ?? ""), light: String(both.light ?? "") } : null),
+  /** The theme's primary (#rrggbb), for the scrollbars of pages in the
+   *  built-in browser. Fire-and-forget, like the background above. */
+  setGuestScrollbar: (/** @type {string} */ primary) =>
+    ipcRenderer.send("ag:setGuestScrollbar", String(primary ?? "")),
   /** @param {(p: unknown) => void} fn */
   onServerFailed: (fn) => {
     /** @type {IpcListener} */
@@ -188,10 +192,10 @@ contextBridge.exposeInMainWorld("agentglass", {
   /** A page in the built-in browser asked for a window — a middle click, a
    *  `target="_blank"`, an OAuth popup. It used to be handed to the OS
    *  browser because there was nowhere else to put it; now it becomes a tab.
-   * @param {(url: string) => void} fn */
+   * @param {(url: string, opener?: number) => void} fn */
   onBrowserOpenTab: (fn) => {
     /** @type {IpcListener} */
-    const h = (_e, url) => fn(String(url));
+    const h = (_e, url, opener) => fn(String(url), typeof opener === "number" ? opener : undefined);
     ipcRenderer.on("ag:browser-open-tab", h);
     return () => ipcRenderer.removeListener("ag:browser-open-tab", h);
   },
@@ -200,10 +204,11 @@ contextBridge.exposeInMainWorld("agentglass", {
    *  forwards the three that need this app's own chrome: a new tab, the address
    *  bar, the find strip. Reload and back are handled in the shell and never
    *  arrive here — they belong to the page, and the focus stays on it.
-   * @param {(key: string) => void} fn */
+   *  A side button also names the guest it was pressed in.
+   * @param {(key: string, guest?: number) => void} fn */
   onBrowserKey: (fn) => {
     /** @type {IpcListener} */
-    const h = (_e, key) => fn(String(key));
+    const h = (_e, key, guest) => fn(String(key), typeof guest === "number" ? guest : undefined);
     ipcRenderer.on("ag:browser-key", h);
     return () => ipcRenderer.removeListener("ag:browser-key", h);
   },

@@ -35,6 +35,7 @@ const { startEgressProxy, literalRefusal, EGRESS_ENV } = require("./egress-guard
 /* S9: the honest "an agent is driving this" header — see identify-header.js
    for the decision and which origins count. */
 const { IDENTIFY_HEADER, shouldIdentify, createOwnerBook } = require("./identify-header.js");
+const { createScrollbarBook } = require("./guest-scrollbar.js");
 
 /**
  * The browser's egress guard, once it is listening — see egress-guard.js for
@@ -3395,6 +3396,8 @@ let browserGuest = null;
 /** Every attached guest. `browserGuest` is whichever of them the renderer says
  *  is on screen; this is what lets a destroyed tab fall back to another. */
 const browserGuests = new Set();
+/** The scrollbar every guest page wears, in the colours the renderer last reported — see guest-scrollbar.js. */
+const guestScrollbar = createScrollbarBook();
 /** Per guest, the favicon URLs Chromium has reported for it. The allowlist
  *  `ag:browserFavicon` checks against; see where it is filled for why. */
 const guestFavicons = new WeakMap();
@@ -3526,6 +3529,12 @@ const stepZoom = (level, dir) => {
   return Math.log(held / 100) / Math.log(1.2);
 };
 
+const SIDE_BUTTON_TOKEN = `agx-side:${require("crypto").randomBytes(8).toString("hex")}:`;
+/* The side-button listener's own JS world in every page: the page shares its
+   DOM events but none of its globals, so it never sees the token or a flag.
+   0 is the page's world and 999 is Electron's preload world. */
+const SIDE_BUTTON_WORLD = 1043;
+
 /**
  * Back and forward on a guest, across two Electron generations.
  *
@@ -3605,6 +3614,28 @@ function guardWebviews(win, opts = {}) {
     // trap. Only the chords that move you *out* are forwarded; everything else
     // belongs to the page, where Ctrl+L, Ctrl+F and the rest still mean what
     // they mean in a browser.
+    /*
+     * The mouse's side buttons, over a page. On Linux Electron raises no
+     * app-command, and the guest is its own process, so neither the window nor
+     * the renderer ever sees the press. The only place it exists is the page's
+     * own mouseup (button 3 back, 4 forward), so a listener goes in on every
+     * document and reports on the console under a per-process token. It runs
+     * in an isolated world, so the page can neither read the token nor see
+     * that the listener is there; and the press names the guest it came from,
+     * so the panel moves that tab and no other, and only while no agent holds
+     * the glass. Ceiling: a page that guessed the token could move itself one
+     * step in history, and nothing more.
+     */
+    guest.on("dom-ready", () => {
+      guestScrollbar.apply(guest);
+      guest.executeJavaScriptInIsolatedWorld(SIDE_BUTTON_WORLD, [{ code: `(() => { if (window.__agxSide) return; window.__agxSide = 1;
+        addEventListener("mouseup", (e) => { if (e.button === 3 || e.button === 4) { e.preventDefault(); console.info(${JSON.stringify(SIDE_BUTTON_TOKEN)} + e.button); } }, true); })()` }]).catch(() => {});
+    });
+    guest.on("console-message", (_e, _lvl, message) => {
+      const m = typeof message === "string" ? message : _e && _e.message;
+      if (typeof m !== "string" || !m.startsWith(SIDE_BUTTON_TOKEN) || win.isDestroyed()) return;
+      try { win.webContents.send("ag:browser-key", m.endsWith("3") ? "<" : ">", guest.id); } catch { /* gone */ }
+    });
     guest.on("before-input-event", (event, input) => {
       if (input.type !== "keyDown") return;
       const mod = process.platform === "darwin" ? input.meta : input.control;
@@ -3880,7 +3911,8 @@ function guardWebviews(win, opts = {}) {
         // test — see above.
         || /\b(width|height)=/.test(String(features || ""));
       if (!wantsWindow) {
-        win.webContents.send("ag:browser-open-tab", safe);
+        // The opener's id, so the tab opens in the opener's profile, beside it.
+        win.webContents.send("ag:browser-open-tab", safe, guest.id);
         return { action: "deny" };
       }
       return {
@@ -4046,7 +4078,7 @@ function guardWebviews(win, opts = {}) {
         canBack: canNav(guest, -1),
         canForward: canNav(guest, 1),
         on: {
-          openTab: (/** @type {string} */ url) => win.webContents.send("ag:browser-open-tab", url),
+          openTab: (/** @type {string} */ url) => win.webContents.send("ag:browser-open-tab", url, guest.id),
           copyText: (/** @type {string} */ text) => clipboard.writeText(String(text || "")),
           openExternal: (/** @type {string} */ url) => { void shell.openExternal(url); },
           copyImage: () => { try { guest.copyImageAt(params.x, params.y); } catch { /* gone */ } },
@@ -4660,6 +4692,13 @@ app.whenReady().then(async () => {
     if (!win || win.isDestroyed()) return;
     try { win.setBackgroundColor(bg); } catch { /* a window on its way out */ }
     saveWindowState(win);
+  });
+  // The theme's primary, on every paint of a theme: pages in the built-in
+  // browser draw their scrollbars in it. Applied to the open ones now, to the
+  // rest as they load.
+  ipcMain.on("ag:setGuestScrollbar", (e, primary) => {
+    if (isLaneHost(e.sender) || !guestScrollbar.setPrimary(primary)) return;
+    for (const g of browserGuests) guestScrollbar.apply(g);
   });
   // The browser element-picker's copy/screenshot, done on the main-process
   // clipboard so it works while the <webview> guest holds focus — the preload

@@ -257,12 +257,27 @@ describe("the shared blocks", () => {
     expect(row).toContain('<span className="agx-slot">{status}{control}{actions}</span>');
     expect(kit).toContain('<div className="agx-slot">{status}{actions}</div>');
   });
-  test("a form stacks: label above the field, help under it, 480px at most", () => {
-    expect(css).toMatch(/\.agx-sform \{ display: flex; flex-direction: column; gap: 12px; max-width: 480px; \}/);
+  test("a form stacks: label above the field, help under it, as wide as its card", () => {
+    // A 480px cap left every form a strip inside a card twice its width.
+    expect(css).toMatch(/\.agx-sform \{ display: flex; flex-direction: column; gap: 12px; \}/);
+    // The controls fill the field; the rule sits in a layer so `w-[96px]` still wins.
+    expect(css).toMatch(/@layer components \{\s*\.agx-field > :where\(input:not\([^)]*\), select, textarea\) \{ width: 100%; \}/);
     expect(css).toMatch(/\.agx-field \{ display: flex; flex-direction: column; gap: 6px; \}/);
     const field = kit.slice(kit.indexOf("export function Field("));
     expect(field.indexOf("<label")).toBeLessThan(field.indexOf("{children}"));
     expect(field.indexOf("{children}")).toBeLessThan(field.indexOf("agx-field-h"));
+  });
+  test("the column hugs the nav and is wide, instead of a 760px strip floating in the middle", () => {
+    const col = css.slice(css.indexOf(".agx-settings-col {"), css.indexOf("}", css.indexOf(".agx-settings-col {")));
+    expect(col).toContain("var(--agx-settings-col, 1120px)");
+    expect(col).toContain("margin-inline: 0");
+    expect(col).not.toContain("margin-inline: auto");
+  });
+  test("no control in a settings pane is capped at 480px inside a wider card", () => {
+    expect(read(join(SRC, "components", "SettingsModal.tsx"))).not.toContain("max-w-[480px]");
+  });
+  test("the review prompt's body opens at 20 lines at least", () => {
+    expect(read(join(SRC, "components", "ReviewPromptsPane.tsx"))).toContain("Math.max(20, r.body.split");
   });
   test("a switch's wrapper has no line box, so a toggle has the same padding above and below", () => {
     // An inline-block on a text baseline leaves the descender gap under it: the
