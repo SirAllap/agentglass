@@ -9,6 +9,7 @@
  */
 import { createContext, isValidElement, useContext, useLayoutEffect, useState } from "react";
 import { Disclosure } from "./SettingsKit.tsx";
+import { Ticks } from "./Ticks.tsx";
 import { rowMatches, rowId } from "../lib/settingsIndex.ts";
 
 /* ─────────────────────────── Searching the settings ─────────────────────────
@@ -161,7 +162,7 @@ export function SettingRow({ label, hint, control, status, actions, below, detai
             under 13.5px type is not a gap (the sweep found this pair "touching"
             on every settings pane there is). See `.agx-row-help` in index.css. */}
         {hint !== undefined && hint !== "" && (
-          <span className="agx-row-help">{hint}</span>
+          <span className="agx-row-help"><Ticks>{hint}</Ticks></span>
         )}
         {more && stacked === undefined && <Disclosure summary={more.summary}>{more.body}</Disclosure>}
       </span>

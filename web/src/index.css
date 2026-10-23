@@ -4003,3 +4003,6 @@ html[data-reduce-motion] #ag-cover * { animation: none !important; }
 .agx-linkbtn:hover { color: var(--text); background: color-mix(in srgb, var(--text) 7%, transparent); }
 .agx-pnote { display: flex; gap: 8px; align-items: flex-start; margin: 14px 2px 0; font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.5; color: var(--text3); }
 .agx-pnote > svg { flex: none; margin-top: 2px; }
+
+/* A backticked word in a hint or a status line (`Ticks`): code, drawn as code. The fill is the inset surface the segmented controls sit on, so it follows the theme. */
+.agx-ticks { padding: 0 4px; border-radius: 4px; background: var(--surface-inset); color: var(--text2); font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.94em; }

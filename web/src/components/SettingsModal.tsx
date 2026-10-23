@@ -44,6 +44,7 @@ import { fmtAgo, minutesAgo } from "../lib/format.ts";
 import type { ActionRecord, GateRecord, UnderstudyClassRow, UnderstudyFrame } from "../../../shared/types.ts";
 import { mergeActivity, gateLine, actorLabel, activityDays, filterActivity, type ActivityFilter, type ActivityRow, type ActivityRun } from "../lib/activity.ts";
 import { useStableFlow } from "./useStableFlow.ts";
+import { Ticks } from "./Ticks.tsx";
 import { ingestUpdate, isUpdateAvailable } from "../lib/updateStore.ts";
 import { ReleaseNotesModal } from "./ReleaseNotesModal.tsx";
 import { installedNotes, type NotesTarget } from "../lib/whatsNew.ts";
@@ -2739,7 +2740,7 @@ function GhBudget({ open }: { open: boolean }) {
         detail={{ summary: "Details", body: <>GitHub refills them on a rolling window — 5,000 an hour for REST and GraphQL, 30 a minute for Search, which is the one that runs out first because looking up a card's pull requests is a search.</> }}
         below={<>
         {state && !state.ok && (
-          <p className="mt-2 text-[12px]" style={{ color: "var(--text3)" }}>{state.error}</p>
+          <p className="mt-2 text-[12px]" style={{ color: "var(--text3)" }}><Ticks>{state.error}</Ticks></p>
         )}
         {/* Three bars, the size the three real ones will be. `gh api` is a
             subprocess and a network round trip; without these the section is a

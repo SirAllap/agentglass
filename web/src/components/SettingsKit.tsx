@@ -20,6 +20,7 @@ import { CaretIcon, DoneIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import type { SavePhase } from "../lib/settingsStates.ts";
 import { ICON } from "../lib/iconSize.ts";
 import { Button, CHIP_SURFACE, CHIP_SURFACE_CLS, CTRL_H } from "./workspace/Chrome.tsx";
+import { Ticks } from "./Ticks.tsx";
 
 /**
  * What a card is for. `default` is a group of settings. `decision` is a card
@@ -79,7 +80,7 @@ export function SettingsCard({ title, desc, status, actions, children, label, fo
           <div className="agx-slot">{status}{actions}</div>
         )}
       </div>
-      {desc && <div className="agx-scard-desc">{desc}</div>}
+      {desc && <div className="agx-scard-desc"><Ticks>{desc}</Ticks></div>}
     </>
   ) : null;
   const name = {
@@ -358,7 +359,7 @@ export function CheckRow({ tone, label, value }: { tone: "ok" | "warn" | "err" |
     <div className="agx-chk" data-tone={tone}>
       <span aria-hidden className="agx-chk-m">{tone === "ok" ? <DoneIcon size={ICON.sm} /> : tone === "off" ? "–" : <WarningIcon size={ICON.sm} />}</span>
       <span className="agx-chk-l">{label}</span>
-      {value !== undefined && value !== "" && <span className="agx-chk-v">{value}</span>}
+      {value !== undefined && value !== "" && <span className="agx-chk-v"><Ticks>{value}</Ticks></span>}
     </div>
   );
 }
