@@ -1,130 +1,89 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { SettingRow, Switch } from "./SettingRow.tsx";
+import { SettingRow, Toggle } from "./SettingRow.tsx";
 import {
   THEMES, isDarkTheme, EXPERIMENTAL_THEME_IDS,
   themeMode, desktopPaletteName, onDesktopPalette,
   type Theme, type ThemeMode,
 } from "../lib/themes.ts";
-import { ACCENTS, currentAccent, lastAccent } from "../lib/accent.ts";
-import { setting } from "../lib/settingsRegistry.ts";
+import { ACCENTS, currentAccent } from "../lib/accent.ts";
+import { setting, subscribeSettings } from "../lib/settingsRegistry.ts";
+import { DENSITIES, UI_FONT_SIZES, resetReduceMotion, reduceMotionChoice, type Density } from "../lib/lookPrefs.ts";
+import { IS_DESKTOP, translucentSupported } from "../lib/desktop.ts";
+import { Select } from "./Select.tsx";
 import { SERVER, authHeaders } from "../lib/api.ts";
-import { DoneIcon } from "../lib/glyphIcons.tsx";
-import { HIT, ICON } from "../lib/iconSize.ts";
-import { Button, CTRL_H, EDGE } from "./workspace/Chrome.tsx";
-import { SettingsCard } from "./SettingsKit.tsx";
+import { ICON } from "../lib/iconSize.ts";
+import { Button } from "./workspace/Chrome.tsx";
+import { SegControl, SettingsCard } from "./SettingsKit.tsx";
 import { PreviewCard, WithPreview } from "./settings/PreviewCard.tsx";
-import { AppearancePreview } from "./settings/previews/index.ts";
+import { AppearancePreview, LiveTabs, type LiveView } from "./settings/previews/index.ts";
 import { railItems } from "./settings/previews/MiniApp.tsx";
 import { loadRail, subscribeRail, SHIPPED_RAIL } from "./workspace/views.ts";
-import { ThemeIcon } from "./settingsNavIcons.tsx";
+import { ThemeIcon, SlidersIcon } from "./settingsNavIcons.tsx";
 
 /* Settings → Appearance.
  *
- * Two layers: a System / Dark / Light segment that maps to the two serious
- * neutral defaults (and tracks the OS on "System"), then the
- * full palette grid underneath for anyone who wants a specific scheme. Picking
- * from the grid drops the segment to whatever that palette is. */
+ * Three cards. Theme: a System / Dark / Light segment that maps to the two
+ * serious neutral defaults (and tracks the OS on "System"), and under it the
+ * palettes as large tiles; picking one drops the segment to whatever that
+ * palette is. Accent: seven circles, the first meaning "no override". Density
+ * & type: how much air rows get, the interface font size, a see-through
+ * sidebar (desktop only) and reduced motion. */
 
 /**
- * A palette shown as a palette.
- *
- * Three dots eleven pixels wide, in a row with a name, is a bullet — it says
- * "this theme has colours" and stops. What you are choosing between is a
- * GROUND and what sits on it, so the swatch is a band of the ground with the
- * accent and a semantic colour beside it, at a size where the difference
- * between two dark greys is actually visible.
- *
- * Drawn from `vars`, not from `preview`: preview is three colours somebody
- * chose to represent the theme, and the real ones cannot disagree with the app
- * because they ARE the app.
+ * The palettes the first view offers, in the order they are drawn: the light
+ * ones first, then the dark, the way a person reads a row of swatches. Whichever
+ * theme is in use is always among them, because a picker that hides your own
+ * theme behind "more" is a picker that tells you your choice was not one of
+ * the good ones.
  */
-function ThemeBtn({ t, current, onPick }: { t: Theme; current: string; onPick: (id: string) => void }) {
-  const on = t.id === current;
+const FEATURED_IDS = ["porcelain", "paper", "light", "blue-light", "catppuccin-latte", "solarized-light", "graphite", "tokyo-night"];
+
+/**
+ * A palette shown as a palette: a tile with its ground and its card colour side by
+ * side, and its name under it. Drawn from `vars`, not from `preview`: preview is
+ * three colours somebody chose to represent the theme, and the real ones cannot
+ * disagree with the app because they ARE the app.
+ */
+function ThemeTile({ t, on, onPick }: { t: Theme; on: boolean; onPick: (id: string) => void }) {
   const v = t.vars as Record<string, string>;
-  const ground = v["--bg"] ?? t.preview.primary;
   return (
-    <button
-      onClick={() => onPick(t.id)}
-      title={t.name}
-      className="rounded-lg overflow-hidden text-left transition-transform hover:scale-[1.02]"
-      style={{
-        border: `1px solid ${on ? "var(--primary)" : "color-mix(in srgb, var(--border) 45%, transparent)"}`,
-        boxShadow: on ? "0 0 0 1px var(--primary)" : undefined,
-      }}
-    >
-      <span className="flex h-7" aria-hidden>
-        <span style={{ flex: 3, background: ground }} />
-        <span style={{ flex: 1, background: v["--primary"] ?? t.preview.accent }} />
-        <span style={{ flex: 1, background: v["--success"] ?? t.preview.secondary }} />
+    <button type="button" onClick={() => onPick(t.id)} title={t.name} aria-pressed={on} className="agx-theme-tile">
+      <span className="agx-theme-sw" aria-hidden>
+        <i style={{ background: v["--bg"] ?? t.preview.primary }} />
+        <i style={{ background: v["--bg2"] ?? t.preview.secondary }} />
       </span>
-      <span className="flex items-center gap-1.5 px-2 py-1 text-[11.5px] leading-tight"
-        style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", color: on ? "var(--primary-hover)" : "var(--text3)" }}>
-        <span className="min-w-0 break-words">{t.name}</span>
-        {on && <span className="ml-auto shrink-0 flex"><DoneIcon size={ICON.xs} /></span>}
-      </span>
+      <span className="agx-theme-name">{t.name}</span>
     </button>
   );
 }
 
-/** One list, split into its dark run and its light run — empty runs dropped so
- *  the experimental section never shows a bare row with nothing under it. Each
- *  run is a row of its own (a name and the tiles under it), not an eyebrow
- *  inside a card. `more` renames the rows so a second set under the first does
- *  not repeat their names. */
-function Grid({ items, current, onPick, more }: { items: Theme[]; current: string; onPick: (id: string) => void; more?: boolean }) {
-  const groups = [
-    { label: more ? "More dark palettes" : "Dark palettes", items: items.filter(isDarkTheme) },
-    { label: more ? "More light palettes" : "Light palettes", items: items.filter((t) => !isDarkTheme(t)) },
-  ].filter((g) => g.items.length);
+function TileGrid({ items, current, onPick }: { items: Theme[]; current: string; onPick: (id: string) => void }) {
   return (
-    <>
-      {groups.map((g) => (
-        <SettingRow key={g.label} agentExempt label={g.label}
-          below={
-            <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(128px, 1fr))" }}>
-              {g.items.map((t) => <ThemeBtn key={t.id} t={t} current={current} onPick={onPick} />)}
-            </div>
-          } />
-      ))}
-    </>
+    <div className="agx-theme-grid">
+      {items.map((t) => <ThemeTile key={t.id} t={t} on={t.id === current} onPick={onPick} />)}
+    </div>
   );
 }
 
-/** The palette grid alone — curated run plus a disclosure for the rest. Dumb by
- *  design: it reports a pick and applies nothing, so its parent stays the single
- *  place that decides what "picking a theme" means. */
-/**
- * How many palettes to show before this becomes a catalogue.
- *
- * Thirty-seven is a list you read; six is a set you recognise. The six are the
- * first of the curated ones plus, always, whichever you are actually using —
- * because a picker that hides your own theme behind "more" is a picker that
- * tells you your choice was not one of the good ones.
- */
-const FEATURED = 6;
-
+/** The palette tiles: the featured eight, and a row that opens the rest (dark, then light). Reports a pick and applies nothing, so its parent stays the one place that decides what "picking a theme" means. */
 export function PaletteRows({ current, onChange }: { current: string; onChange: (id: string) => void }) {
   const [showAll, setShowAll] = useState(false);
-  const curated = THEMES.filter((t) => !EXPERIMENTAL_THEME_IDS.has(t.id));
   const experimental = THEMES.filter((t) => EXPERIMENTAL_THEME_IDS.has(t.id));
-
-  const featured = curated.slice(0, FEATURED);
+  const featured = FEATURED_IDS.map((id) => THEMES.find((t) => t.id === id)).filter((t): t is Theme => !!t);
   if (!featured.some((t) => t.id === current)) {
     const mine = THEMES.find((t) => t.id === current);
-    if (mine) featured[FEATURED - 1] = mine;
+    if (mine) featured[featured.length - 1] = mine;
   }
   const rest = THEMES.filter((t) => !featured.some((f) => f.id === t.id));
-
-  /* Rows, so the card's one divider falls between them: the curated run, then
-     a row that opens the rest instead of a bordered full-width button. */
   return (
     <>
-      <Grid items={featured} current={current} onPick={onChange} />
+      <SettingRow agentExempt label="Palettes" below={<TileGrid items={featured} current={current} onPick={onChange} />} />
       <SettingRow agentExempt label="More palettes"
         hint={`${rest.length} more, ${experimental.length} of them experimental`}
         detail={{ summary: "Details", body: "The rest of the curated palettes, then the decorative and second-flavour ones kept for tinkering." }}
         control={<Button aria-expanded={showAll} onClick={() => setShowAll((v) => !v)}>{showAll ? "Hide" : "Show"}</Button>} />
-      {showAll && <Grid more items={rest} current={current} onPick={onChange} />}
+      {showAll && <SettingRow agentExempt label="More dark palettes" below={<TileGrid items={rest.filter(isDarkTheme)} current={current} onPick={onChange} />} />}
+      {showAll && <SettingRow agentExempt label="More light palettes" below={<TileGrid items={rest.filter((t) => !isDarkTheme(t))} current={current} onPick={onChange} />} />}
     </>
   );
 }
@@ -164,8 +123,15 @@ function DesktopMark({ source }: { source: string }) {
   );
 }
 
-/** The whole Appearance page: mode segment on top, palette grid below. Owns the
- *  one decision — a mode click applies the matching serious theme, a grid click
+/** A look setting's value, read from the registry and re-read when anybody (the row, an agent, an undo) changes it. */
+function useSetting<T extends string | number | boolean>(id: string): T {
+  return useSyncExternalStore(subscribeSettings, () => setting(id).get() as T, () => setting(id).default as T);
+}
+
+const DENSITY_LABEL: Record<Density, string> = { compact: "Compact", comfortable: "Comfortable", roomy: "Roomy" };
+
+/** The whole Appearance page: theme, accent, density and type. Owns the one
+ *  decision — a mode click applies the matching serious theme, a grid click
  *  applies that palette and re-labels the segment — and keeps app state in step
  *  through `onChange`. */
 export function AppearancePane({ current, onChange, onAccent }: {
@@ -191,34 +157,27 @@ export function AppearancePane({ current, onChange, onAccent }: {
   };
 
   const [accent, setAccentState] = useState(() => currentAccent());
-  /* The colour the theme brings by itself, for the swatch beside the switch.
-     `--theme-primary` is stamped by `applyAccent` before the overlay goes on,
-     so this is the theme's own even while an accent is laid over it. */
-  const [own, setOwn] = useState("");
-  useEffect(() => {
-    setOwn(getComputedStyle(document.documentElement).getPropertyValue("--theme-primary").trim());
-  }, [accent, current, desk]);
   const chooseAccent = (id: string) => {
     setting("appearance.accent").set(id); // stores it and re-asserts the theme, so the overlay (or its removal) lands
     setAccentState(id);
     onAccent?.(id);
   };
-  /* Following is the absence of an override, so the switch writes "" going on
-     and the last colour going off — never nothing, or the row would look
-     broken with every circle dark. */
   const following = accent === "";
 
-  /* Two cards, one decision between them: Mode and Accent are settings and
-     read as rows; the palettes are a picker, and a picker is its own card
-     rather than an eyebrow inside this one. Both live here because picking a
-     palette moves Mode, and the two share that state. */
+  const density = useSetting<Density>("appearance.density");
+  const fontPx = useSetting<number>("appearance.fontSize");
+  const translucent = useSetting<boolean>("appearance.translucent");
+  const reduce = useSetting<boolean>("appearance.reduceMotion");
+  const canSeeThrough = translucentSupported();
+  const [, setTick] = useState(0);
+  const followsSystem = reduceMotionChoice() === null;
+
+  const [view, setView] = useState<LiveView>("settings");
   const rail = useSyncExternalStore(subscribeRail, loadRail, () => SHIPPED_RAIL);
   return (
-    <WithPreview preview={<PreviewCard id="appearance" title="The real app">
-      {/* The app has no density, interface-font or translucency setting, so those stay at what it ships with. */}
-      <AppearancePreview theme={current} accent={accent} density="comfortable" fontPx={13} translucent={false} rail={railItems(rail)} /></PreviewCard>}>
-      <SettingsCard title="Theme" icon={<ThemeIcon size={ICON.sm} />}
-        desc="One palette for the whole cockpit — chrome, terminal, and (on the desktop) your tmux and nvim follow it.">
+    <WithPreview preview={<PreviewCard id="appearance" title="The real app" actions={<LiveTabs view={view} onView={setView} />}>
+      <AppearancePreview theme={current} accent={accent} density={density} fontPx={fontPx} translucent={translucent} view={view} rail={railItems(rail)} /></PreviewCard>}>
+      <SettingsCard title="Theme" icon={<ThemeIcon size={ICON.sm} />}>
         <SettingRow
           settingId="appearance.mode"
           wide
@@ -229,75 +188,63 @@ export function AppearancePane({ current, onChange, onAccent }: {
             : desk
               ? <>Your desktop's theme is {desk.name}, one click away. <b>System</b> follows your OS's dark or light.</>
               : <>A serious neutral pair. <b>System</b> follows your OS.</> }}
-          control={<span className="inline-flex items-center p-0.5 rounded-lg" role="group" aria-label="Mode"
-            style={{ height: CTRL_H.regular, background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: EDGE }}>
-            {[...(desk ? [{ m: "desktop" as ThemeMode, label: "" }] : []), ...MODES].map(({ m, label }) => {
-              const on = mode === m;
-              return (
-                <button key={m} onClick={() => chooseMode(m)} aria-pressed={on}
-                  title={m === "desktop" && desk ? `Wear ${desk.name}, your desktop's theme, and follow it when you switch` : undefined}
-                  className="px-3 h-[22px] inline-flex items-center rounded-md text-[12px] transition-colors"
-                  style={on
-                    ? { background: "var(--surface-card)", color: "var(--text)", boxShadow: "0 1px 2px rgba(0,0,0,0.25)" }
-                    : { color: "var(--text3)" }}>
-                  {m === "desktop" && desk ? <DesktopMark source={desk.source} /> : label}
-                </button>
-              );
-            })}
-          </span>}
+          control={<SegControl<ThemeMode> label="Mode" value={mode} onPick={chooseMode}
+            options={[...(desk ? [{ v: "desktop" as ThemeMode, label: <DesktopMark source={desk.source} /> }] : []), ...MODES.map(({ m, label }) => ({ v: m, label }))]} />}
         />
-      </SettingsCard>
-
-      <SettingsCard title="Palette" icon={<ThemeIcon size={ICON.sm} />}
-        desc="Pick one by name instead of the neutral pair. Choosing one sets Mode to match.">
         <PaletteRows current={current} onChange={choose} />
       </SettingsCard>
 
-      <SettingsCard title="Accent" icon={<ThemeIcon size={ICON.sm} />}
-        desc="Laid over the theme's own colour, for the things that read as live.">
-        {/* Accent. The switch is the decision — follow the theme, or choose —
-            and the circles are only the second half of it, so they sit under
-            the description rather than crowding the control column: eight
-            round targets and a switch on one line pushed the words narrow.
-            It was a dashed circle in the row with the other seven, which reads
-            as an eighth colour: somebody ran this app for weeks laying a
-            hand-picked green over a desktop theme whose own accent they
-            wanted, because nothing on that circle said what it did. A sentence
-            can say it; a swatch cannot. */}
+      <SettingsCard title="Accent" icon={<SlidersIcon size={ICON.sm} />}
+        desc={<>Laid over the theme's own colour. “Theme” means no override.</>}>
+        {/* The first circle is the decision to follow the theme, drawn half
+            dark and half light so it reads as "neither", and the seven after it
+            are the colours to lay over. It replaces a switch beside them: a
+            switch and eight round targets on one line crowded the words, and
+            a circle that says "Theme" under the pointer says it in place. */}
         <SettingRow
           settingId="appearance.accent"
-          label="Accent" modified={!following}
+          label="Colour" modified={!following}
           hint={following
-            ? <>Following your theme{desk && mode === "desktop" ? <> — <b style={{ color: "var(--text3)" }}>{desk.name}</b> brings its own</> : <>'s own primary</>}.</>
-            : <>Laid over the theme's own primary, for the things that read as live.</>}
-          control={<span className="flex justify-end"><button onClick={() => chooseAccent(following ? lastAccent() : "")}
-            role="switch" aria-checked={following} aria-label="Follow the theme's accent"
-            title="Follow the theme's accent" className="inline-flex items-center gap-1.5">
-            <Switch on={following} />
-            {own
-              /* Smaller than the seven on purpose: it is the colour being
-                 followed, not an eighth colour to pick. */
-              ? <span className="w-3.5 h-3.5 rounded-full shrink-0" style={{ background: own, opacity: following ? 1 : 0.35 }} />
-              : null}
-          </button></span>}
-          below={<span className="flex flex-wrap items-center gap-2" aria-hidden={following}
-            style={{ opacity: following ? 0.3 : 1, pointerEvents: following ? "none" : undefined }}>
-            {ACCENTS.filter((a) => a.primary).map((a) => {
+            ? <>Following {desk && mode === "desktop" ? <b style={{ color: "var(--text3)" }}>{desk.name}</b> : "your theme"}'s own primary</>
+            : <>Laid over the theme's own primary</>}
+          below={<span role="group" aria-label="Accent" className="flex flex-wrap items-center gap-2.5">
+            {ACCENTS.map((a) => {
               const on = accent === a.id;
+              const isTheme = a.id === "";
               return (
-                <button key={a.id} onClick={() => chooseAccent(a.id)} title={a.name} aria-label={a.name}
-                  className="rounded-full transition-transform hover:scale-110"
-                  style={{
-                    width: HIT, height: HIT, background: a.primary,
-                    outline: on ? "2px solid var(--text)" : "none",
-                    outlineOffset: "1.5px",
-                  }} />
+                <button key={a.id || "theme"} type="button" onClick={() => chooseAccent(a.id)} aria-pressed={on}
+                  title={isTheme ? "Theme: no override" : a.name} aria-label={isTheme ? "Theme (no override)" : a.name}
+                  className="agx-accent-dot" data-theme-dot={isTheme ? "" : undefined}
+                  style={isTheme ? undefined : { background: a.primary }} />
               );
             })}
           </span>}
         />
       </SettingsCard>
 
+      <SettingsCard title="Density & type" icon={<ThemeIcon size={ICON.sm} />}>
+        <SettingRow
+          settingId="appearance.density" label="Density" modified={density !== "comfortable"}
+          hint="How much air rows and cards get."
+          below={<SegControl<Density> label="Density" value={density} onPick={(v) => setting("appearance.density").set(v)}
+            options={DENSITIES.map((d) => ({ v: d, label: DENSITY_LABEL[d] }))} />} />
+        <SettingRow
+          settingId="appearance.fontSize" label="Interface font size" modified={fontPx !== 13}
+          hint="Terminals have their own size."
+          detail={{ summary: "Details", body: "Scales the text the app sets by a class. An icon, a size set inline and the terminal keep theirs. Display size, under Window & startup, scales everything at once." }}
+          below={<Select value={String(fontPx)} onChange={(v) => setting("appearance.fontSize").set(Number(v))}
+            options={UI_FONT_SIZES.map((n) => ({ value: String(n), label: `${n} px` }))} />} />
+        <Toggle settingId="appearance.translucent" on={translucent} modified={translucent} disabled={!canSeeThrough}
+          onClick={() => setting("appearance.translucent").set(!translucent)}
+          label="Translucent window"
+          hint={canSeeThrough ? "Lets the desktop blur through the sidebar." : IS_DESKTOP ? "Needs a newer desktop shell." : "Only the desktop app can do this."}
+          detail={{ summary: "Details", body: "The rail, the top bar and this page's navigation let the desktop show through; the content keeps its own ground. On macOS and Windows it takes effect at once. On Linux a window is made see-through when it opens, so it is from the next launch." }} />
+        <Toggle settingId="appearance.reduceMotion" on={reduce} modified={!followsSystem}
+          onClick={() => setting("appearance.reduceMotion").set(!reduce)}
+          label="Reduce motion"
+          hint="Skips the flight and fade animations."
+          detail={{ summary: "Details", body: <>It follows your system's setting until you choose here.{!followsSystem && <> <button type="button" className="underline" onClick={() => { resetReduceMotion(); setTick((n) => n + 1); }}>Follow the system again</button>.</>} Turning it off does not undo the few animations the stylesheet drops by itself when the system asks for less motion.</> }} />
+      </SettingsCard>
     </WithPreview>
   );
 }

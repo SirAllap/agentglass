@@ -1,6 +1,7 @@
 /** Pure decisions the previews make from the settings they are handed. */
 
-export type Density = "compact" | "comfortable" | "roomy";
+import type { Density } from "../../../lib/lookPrefs.ts";
+export type { Density };
 /** Row padding in em, per density: the preview's rows breathe the way the app's do. */
 export const DENSITY_PAD: Record<Density, number> = { compact: 0.35, comfortable: 0.6, roomy: 0.9 };
 export const densityPad = (d: Density | undefined): number => DENSITY_PAD[d ?? "comfortable"] ?? DENSITY_PAD.comfortable;

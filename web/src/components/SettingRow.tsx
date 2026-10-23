@@ -163,7 +163,7 @@ export function SettingRow({ label, hint, control, status, actions, below, detai
         {hint !== undefined && hint !== "" && (
           <span className="agx-row-help">{hint}</span>
         )}
-        {more && <Disclosure summary={more.summary}>{more.body}</Disclosure>}
+        {more && stacked === undefined && <Disclosure summary={more.summary}>{more.body}</Disclosure>}
       </span>
       {slotted
         ? <span className="agx-slot">{status}{control}{actions}</span>
@@ -175,6 +175,8 @@ export function SettingRow({ label, hint, control, status, actions, below, detai
           <span className={`min-w-0${role === "switch" ? " flex" : ""}`}>{control}</span>
         )}
       {stacked !== undefined && <div className="agx-row-below">{stacked}</div>}
+      {/* With a control stacked under the words, the Details come after it: the control is what the row is for. */}
+      {more && stacked !== undefined && <div className="agx-row-below" style={{ marginTop: 0 }}><Disclosure summary={more.summary}>{more.body}</Disclosure></div>}
     </>
   );
   const cls = `agx-settings-row${top ? " items-start" : ""}${onClick || href ? " agx-hover" : ""}${wide ? " agx-row-wide" : ""}`;

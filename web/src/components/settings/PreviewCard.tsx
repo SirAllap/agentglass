@@ -17,9 +17,9 @@ export function WithPreview({ preview, children }: { preview: ReactNode; childre
 }
 
 /** The card a preview sits in. `data-preview-slot` names the page it follows. */
-export function PreviewCard({ id, title, children }: { id: string; title: string; children: ReactNode }) {
+export function PreviewCard({ id, title, actions, children }: { id: string; title: string; actions?: ReactNode; children: ReactNode }) {
   return (
-    <SettingsCard title={title}>
+    <SettingsCard title={title} actions={actions}>
       <div data-preview-slot={id} className="px-4 py-3">{children}</div>
     </SettingsCard>
   );

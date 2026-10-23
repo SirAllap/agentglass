@@ -211,9 +211,10 @@ const STATE_WORDS: Record<string, { on?: string; off?: string }> = {
 /** Chips for a page header, from the page's mark and nothing else: the header
  *  can never say something the nav does not. A write that is out adds "Saving"
  *  after the verdict: the page keeps saying what it was while it saves. */
-export function headerChips(id: string, mark: PageMark, saving = false): HeaderChip[] {
+export function headerChips(id: string, mark: PageMark, saving = false, saved = false): HeaderChip[] {
   const chips = markChips(id, mark);
-  return saving ? [...chips, { tone: "saving", text: "Saving" }] : chips;
+  if (saving) return [...chips, { tone: "saving", text: "Saving" }];
+  return saved ? [...chips, { tone: "ok", text: "Saved" }] : chips;
 }
 
 function markChips(id: string, mark: PageMark): HeaderChip[] {

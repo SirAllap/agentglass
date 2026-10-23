@@ -1,6 +1,5 @@
-import { useState } from "react";
-import { DEFAULT_RAIL, MiniApp, MINI_VIEWS, type MiniView } from "./MiniApp.tsx";
-import { PreviewNote, Scaled } from "./Frame.tsx";
+import { LiveWindow, type LiveView } from "./LiveWindow.tsx";
+import { PreviewNote } from "./Frame.tsx";
 import { previewVars } from "./previewTheme.ts";
 import type { Density, RailItem } from "./logic.ts";
 
@@ -12,27 +11,20 @@ export interface AppearancePreviewProps {
   density: Density;
   fontPx: number;
   translucent: boolean;
+  /** Which of the app's screens the window shows (the tabs live in the card's header). */
+  view: LiveView;
   rail?: readonly RailItem[];
 }
 
-/** The window in the theme and accent being chosen, at the density and font size set, in four views. Nothing is painted on the real app. */
+/** The app's own screens, in the theme and accent being chosen, at the density and font size set. Nothing is painted on the real app. */
 export function AppearancePreview(p: AppearancePreviewProps) {
-  const [view, setView] = useState<MiniView>("dash");
   return (
     <div className="flex flex-col gap-3 min-w-0">
-      <div role="tablist" aria-label="View" className="agx-seg">
-        {MINI_VIEWS.map((v) => (
-          <button key={v.id} type="button" role="tab" aria-selected={view === v.id} data-on={view === v.id ? "" : undefined} onClick={() => setView(v.id)}
-            className="text-[11px] px-2 py-1 rounded-md border-0 cursor-pointer"
-            style={{ background: view === v.id ? "var(--surface-card)" : "transparent", color: view === v.id ? "var(--text)" : "var(--text3)" }}>{v.label}</button>
-        ))}
+      <div data-preview="appearance" className="min-w-0 rounded-lg"
+        style={{ ...previewVars(p.theme, p.accent), background: p.translucent ? "linear-gradient(135deg, var(--bg3), color-mix(in srgb, var(--primary) 22%, var(--bg4)))" : "transparent", padding: p.translucent ? "1.2em" : 0 }}>
+        <LiveWindow view={p.view} zoomPct={100} aspect={1.6} rail={p.rail} density={p.density} fontPx={p.fontPx} translucent={p.translucent} />
       </div>
-      <Scaled label="The window in the chosen theme" vars={previewVars(p.theme, p.accent)}>
-        <div data-preview="appearance" style={{ background: p.translucent ? "linear-gradient(135deg, var(--primary), var(--bg4))" : "transparent", padding: p.translucent ? "1.2em" : 0, borderRadius: "1em" }}>
-          <MiniApp view={view} rail={p.rail ?? DEFAULT_RAIL} density={p.density} fontPx={p.fontPx} translucent={p.translucent} />
-        </div>
-      </Scaled>
-      <PreviewNote>A miniature on demo data, in the theme and accent chosen.</PreviewNote>
+      <PreviewNote>The app's own screens on invented data, in the theme and accent chosen.</PreviewNote>
     </div>
   );
 }

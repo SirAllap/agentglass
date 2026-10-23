@@ -150,6 +150,11 @@ describe("the first frame and the stylesheet agree with the module", () => {
     }
   });
 
+  it("a size the stylesheet sets itself follows the font size too: none is a bare px", () => {
+    const bare = [...stylesheet.matchAll(/font-size:\s*[0-9.]+px/g)].map((m) => m[0]);
+    expect(bare).toEqual([]);
+  });
+
   it("every text size set by a class has a rule, so the font size reaches it", () => {
     const sizes = new Set<string>();
     const walk = (d: string) => {

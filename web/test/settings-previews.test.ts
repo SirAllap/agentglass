@@ -103,7 +103,7 @@ describe("the markup follows the values it is given", () => {
     const s = html(h(SidebarPreview, { items: on, selected: "git" }));
     expect(s).toContain('data-rail-item="git"');
     expect(s).not.toContain('data-rail-item="term"');
-    const w = (o: object) => html(h(WindowPreview, { zoomPct: 100, fullscreen: false, startAtLogin: false, launchAnimation: false, showClock: false, codexQuota: false, ...o }));
+    const w = (o: object) => html(h(WindowPreview, { zoomPct: 100, fullscreen: false, startAtLogin: false, launchAnimation: false, showClock: false, codexQuota: false, view: "settings" as const, ...o }));
     expect(w({})).toContain("data-frame");
     expect(w({ fullscreen: true })).not.toContain("data-frame");
     expect(w({ fullscreen: true, showClock: true })).toContain("data-clock");

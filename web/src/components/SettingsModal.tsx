@@ -10,6 +10,10 @@
 // they control, and downloads say what you actually get.
 import { useModalDialog } from "../lib/focusTrap.ts";
 import { PluginSettingsPane } from "./plugins/PluginSettingsPane.tsx";
+import {
+  reducedMotion, DEFAULT_DENSITY, DEFAULT_UI_FONT, densityPref, setDensityPref, uiFontPref, setUiFontPref, translucentPref, setTranslucentPref,
+  reduceMotionChoice, resetReduceMotion,
+} from "../lib/lookPrefs.ts";
 import { Fragment, createContext, isValidElement, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { RecipesPane } from "./RecipesPane.tsx";
 import { ReviewPromptsPane } from "./ReviewPromptsPane.tsx";
@@ -65,8 +69,8 @@ import { SettingsNav } from "./SettingsNav.tsx";
 import { SettingsSearchPanel } from "./SettingsSearchPanel.tsx";
 import { SettingsPageHeader } from "./SettingsPageHeader.tsx";
 import { SettingsToc } from "./SettingsToc.tsx";
-import { NO_FACTS, NO_MARK, groupByName, groupSearch, headerChips, hueVar, connectionsNeeding, navMarks, withNeeds, withProblems, type MatchIn, type NavFacts, type PageNeed, type PageProblem } from "../lib/settingsNav.ts";
-import { applyProblem } from "../lib/settingsStates.ts";
+import { NO_FACTS, NO_MARK, groupByName, groupSearch, headerChips, hueVar, navMarks, withProblems, type MatchIn, type NavFacts, type PageProblem } from "../lib/settingsNav.ts";
+import { applyProblem, SAVED_MS } from "../lib/settingsStates.ts";
 import { PageState, useReportProblem, useReportSaving, useSavePhase, type PageStateSink } from "./SettingsPageState.tsx";
 import { RunningPanes } from "./RunningPanes.tsx";
 import { THEMES } from "../lib/highlight.ts";
@@ -144,7 +148,7 @@ import { LAUNCH_MODES, LAUNCH_MODE_LABEL, isLaunchMode, parseDenyRules, type Lau
 import { setLaunchPermissions } from "../lib/launchMode.ts";
 import { SELECT_BOX, SegControl, EmptyState, Field, LinkButton, ProblemNote, SaveChip, SettingsCard, SettingsForm, StatusBadge, helpIdFor, type StatusTone } from "./SettingsKit.tsx";
 import { PreviewCard, WithPreview } from "./settings/PreviewCard.tsx";
-import { WindowPreview, SidebarPreview, DiffPreview, LanternPreview, BrowserPreview } from "./settings/previews/index.ts";
+import { WindowPreview, SidebarPreview, DiffPreview, LanternPreview, BrowserPreview, LiveTabs, type LiveView } from "./settings/previews/index.ts";
 import { railItems } from "./settings/previews/MiniApp.tsx";
 import { restoredNote } from "../lib/restoredNote.ts";
 
@@ -463,14 +467,19 @@ const LAST_PANE_KEY = "agentglass.settings.pane";
  * a second, static mark next to a page that already has a real one would
  * be the decorative kind he deletes.
  */
+/** Pages with a reset that is always drawn (greyed until something moved), where the mockup has one. */
+const ALWAYS_RESET: ReadonlySet<string> = new Set(["prefs", "appearance"]);
+/** Pages short enough to read whole: they have no "on this page" index. */
+const NO_TOC: ReadonlySet<string> = new Set(["prefs", "appearance"]);
+
 const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: string; status?: boolean; icon: (p: { size?: number }) => React.ReactElement }[] = [
   // "sound" removed: it named the Notifications rows, not anything on this
   // page, and once pageScore reads a page's own rows a stray word in `kw`
   // only wins ties it should lose — "notification sound" now reaches
   // Notifications on the strength of its OWN rows, so Window does not need
   // to keep claiming a word it has nothing behind.
-  { id: "prefs", label: "Window & startup", group: "General", kw: "display size zoom clock fullscreen start login launch animation splash preferences", what: "The window itself — size, fullscreen, the clock, and how it starts.", icon: SlidersIcon },
-  { id: "appearance", label: "Appearance", group: "General", kw: "theme accent colour color font dark light mode palette", what: "Theme, accent and how dense the app is drawn.", icon: ThemeIcon },
+  { id: "prefs", label: "Window & startup", group: "General", kw: "display size zoom clock fullscreen start login launch animation splash preferences", what: "How big the window is and what it does when the machine boots.", icon: SlidersIcon },
+  { id: "appearance", label: "Appearance", group: "General", kw: "theme accent colour color dark light mode palette density compact roomy translucent transparent blur reduce motion animation", what: "How the window looks. Every change shows on the right as you make it.", icon: ThemeIcon },
   { id: "notifications", label: "Notifications", group: "General", kw: "notifications sound alert desktop notify quiet chime ping alert sounds message mirror this machine approved reminder alarm somebody says collect without interrupting only when pull request something much them agentglass keep what stopped interrupts muted mute unmute lantern silence none all", what: "What is allowed to interrupt you, and how.", icon: BellIcon },
   // Next to Shortcuts on purpose: which drawer a view sits in is what decides
   // whether it has a number, so the two pages answer one question between them.
@@ -3965,7 +3974,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
     const raf = requestAnimationFrame(() => {
       const el = contentRef.current?.querySelector<HTMLElement>(`[data-row="${CSS.escape(id)}"]`);
       if (el) {
-        const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+        const reduce = reducedMotion();
         el.scrollIntoView({ block: "center", behavior: reduce ? "auto" : "smooth" });
         el.classList.add("agx-row-flash");
         window.setTimeout(() => el.classList.remove("agx-row-flash"), 1200);
@@ -4002,6 +4011,19 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
   // Remounts the appearance rows after a reset: they hold their own copy of
   // the accent and would go on showing the one that was just cleared.
   const [appearanceNonce, setAppearanceNonce] = useState(0);
+  /* The screen the live preview of Window & startup and of Appearance shows. */
+  const [liveView, setLiveView] = useState<LiveView>("settings");
+  /* "Saved" beside a page's title for a moment after a control on it wrote: the pages
+     that write at once (no Save button) say so, so a change is never silent. */
+  const [savedPages, setSavedPages] = useState<ReadonlySet<string>>(() => new Set());
+  const savedTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const flashSaved = useCallback((page: string) => {
+    setSavedPages((cur) => (cur.has(page) ? cur : new Set(cur).add(page)));
+    clearTimeout(savedTimers.current[page]);
+    savedTimers.current[page] = setTimeout(() => setSavedPages((cur) => { const n = new Set(cur); n.delete(page); return n; }), SAVED_MS);
+  }, []);
+  useEffect(() => subscribeSettings((c) => flashSaved(c.id.split(".")[0] ?? "")), [flashSaved]);
+  useEffect(() => () => { for (const t of Object.values(savedTimers.current)) clearTimeout(t); }, []);
   // The modal lives as long as the app. The diff toolbars and Ctrl +/- over a
   // terminal write these stores behind its back, so the dot and Reset would be
   // decided on a value from app start. Re-read them whenever it opens.
@@ -4067,6 +4089,10 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
     ],
     appearance: [
       { modified: accent !== "", reset: () => { setAccentPref(""); applyTheme(theme); setAccentState(""); setAppearanceNonce((n) => n + 1); } },
+      { modified: densityPref() !== DEFAULT_DENSITY, reset: () => { setDensityPref(DEFAULT_DENSITY); setAppearanceNonce((n) => n + 1); } },
+      { modified: uiFontPref() !== DEFAULT_UI_FONT, reset: () => { setUiFontPref(DEFAULT_UI_FONT); setAppearanceNonce((n) => n + 1); } },
+      { modified: translucentPref(), reset: () => { setTranslucentPref(false); setAppearanceNonce((n) => n + 1); } },
+      { modified: reduceMotionChoice() !== null, reset: () => { resetReduceMotion(); setAppearanceNonce((n) => n + 1); } },
     ],
     terminal: [
       { modified: renderer !== "auto", reset: () => { setRendererPref("auto"); setRenderer("auto"); } },
@@ -4413,9 +4439,9 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
               {navTab && (
                 <SettingsPageHeader
                   label={navTab.label} group={groupByName(navTab.group) ?? null} icon={navTab.icon} what={navTab.what}
-                  chips={headerChips(navTab.id, marks[navTab.id] ?? NO_MARK, saving.has(navTab.id))}
+                  chips={headerChips(navTab.id, marks[navTab.id] ?? NO_MARK, saving.has(navTab.id), savedPages.has(navTab.id))}
                   primary={problems[navTab.id] ? <Button tone="primary" onClick={() => retries.current[navTab.id]?.()}>Try again</Button> : undefined}
-                  reset={pageModified(navTab.id) ? <Button onClick={() => resetPage(navTab.id)}>Reset page</Button> : undefined} />
+                  reset={pageModified(navTab.id) || ALWAYS_RESET.has(navTab.id) ? <Button disabled={!pageModified(navTab.id)} onClick={() => resetPage(navTab.id)}>Reset page</Button> : undefined} />
               )}
               {/* The page's hue (its group's) tints every card's icon chip; a board's width
                   is set here, on the ancestor of both the grid that reads it and the
@@ -4425,7 +4451,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   "--hue": hueVar(groupByName(navTab?.group ?? "")?.id ?? "system"),
                   ...(WIDE_PANES.has(pane) ? { "--agx-settings-col": WIDE_PANES.get(pane) } : null),
                 } as React.CSSProperties}>
-                {!ql && <SettingsToc scope={colRef} scroller={contentRef} page={navPane} />}
+                {!ql && !NO_TOC.has(navPane) && <SettingsToc scope={colRef} scroller={contentRef} page={navPane} />}
                 <div className="agx-settings-content">
                   {/*
                     A BOARD (WIDE_PANES) is one column at the width it chose,
@@ -4749,56 +4775,59 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   {show("saved-replies") && <SavedRepliesPane open={open} />}
                   {ql && show("prefs") && <PageMatchHeading id="prefs" onOpen={() => { setPane("prefs" as Pane); setQ(""); }} />}
                   {show("prefs") && (
-                  <WithPreview preview={<PreviewCard id="prefs" title="This window on your desktop">
+                  <WithPreview preview={<PreviewCard id="prefs" title="This window on your desktop" actions={<LiveTabs view={liveView} onView={setLiveView} />}>
                     {/* No on/off for the clock: the top bar shows it in fullscreen whatever the 12h/24h choice. */}
                     <WindowPreview zoomPct={Math.round(scale * 100)} fullscreen={fullscreen} startAtLogin={autostart === true} launchAnimation={splash}
-                      showClock codexQuota={usageRefresh} rail={railItems(railLayout)} /></PreviewCard>}>
-                  <SettingsCard title="Size and startup" icon={<PanesIcon size={ICON.sm} />}
-                    desc="How big the window is, and what it does when the machine boots.">
+                      showClock codexQuota={usageRefresh} view={liveView} rail={railItems(railLayout)} /></PreviewCard>}>
+                  <SettingsCard title="Size and startup" icon={<PanesIcon size={ICON.sm} />}>
                     {/* Desktop only, like launch-at-login: in a browser tab the
-                        browser's own zoom already does this, and better. */}
+                        browser's own zoom already does this, and better. The
+                        four common sizes sit under the words, as one choice. */}
                     {IS_DESKTOP && (
                       <SettingRow label="Display size" modified={scale !== DEFAULT_SCALE}
-                        hint="How big everything inside the window is"
+                        hint="How big everything inside the window is."
                         detail={{ summary: "Details", body: `Remembered between launches. ${MOD_KEY}+ / ${MOD_KEY}− anywhere, ${MOD_KEY}0 to reset — except over a terminal, where the same keys size the terminal instead and leave the window alone.` }}
-                        control={<ScaleControl scale={scale} onZoom={onZoom} />} />
+                        below={<ScaleControl scale={scale} onZoom={(d) => { onZoom(d); flashSaved("prefs"); }} />} />
                     )}
-                    <Toggle on={fullscreen} onClick={async () => setFullscreenState(await toggleFullscreen())}
+                    <Toggle on={fullscreen} onClick={async () => { setFullscreenState(await toggleFullscreen()); flashSaved("prefs"); }}
                       label="Fullscreen"
-                      hint="Hide the window frame — F11 anywhere" />
+                      hint="Hide the window frame — F11 anywhere." />
                     {autostart !== null && (
                       <Toggle on={autostart} onClick={async () => {
                         const next = await setAutostart(!autostart);
-                        if (next !== null) setAutostartState(next);
+                        if (next !== null) { setAutostartState(next); flashSaved("prefs"); }
                       }}
                         label="Start at login"
-                        hint="Open agentglass automatically when you log in" />
+                        hint="Open agentglass automatically when you log in." />
                     )}
                     {/* Read before anything is drawn (web/index.html), so the
                         change shows at the next launch, not this one. */}
-                    <Toggle on={splash} modified={!splash} onClick={() => { const v = !splash; setSplashOn(v); setSplash(v); }}
+                    <Toggle on={splash} modified={!splash} onClick={() => { const v = !splash; setSplashOn(v); setSplash(v); flashSaved("prefs"); }}
                       label="Launch animation"
-                      hint="The cover that plays while the app wakes up"
+                      hint="The cover that plays while the app wakes up."
                       detail={{ summary: "Details", body: "Covers the window while the terminal, sessions and git load, then the mark flies to the top bar. Off shows the plain loading screen. Takes effect from the next launch." }} />
-                    {/* Off is the default and off means nothing is watching:
-                        with no client subscribed the server never starts the
-                        D-Bus monitor at all. On a machine that cannot do this
-                        the row stays but says why, rather than vanishing and
-                        leaving you wondering whether you imagined it. */}
                   </SettingsCard>
 
                   <SettingsCard title="Top bar" icon={<SlidersIcon size={ICON.sm} />}>
                     <Choice<"12" | "24">
                       label="Clock"
-                      hint="12 or 24 hours, in fullscreen"
+                      hint="12 or 24 hours, in fullscreen."
                       detail={{ summary: "Details", body: "The top bar shows the time in fullscreen, where the desktop's own clock is hidden." }}
                       value={h24 ? "24" : "12"}
-                      onPick={(v) => { setClock24(v === "24"); setH24(v === "24"); }}
+                      onPick={(v) => { setClock24(v === "24"); setH24(v === "24"); flashSaved("prefs"); }}
                       options={[{ v: "12", label: "12h" }, { v: "24", label: "24h" }]} />
+                    {/* The same switch as Keep Codex usage current under Usage & budgets:
+                        one setting, shown where the top bar's Codex line is decided. */}
+                    <Toggle on={usageRefresh}
+                      onClick={() => { setUsageRefreshOn(!usageRefresh); setUsageRefreshState(!usageRefresh); flashSaved("prefs"); }}
+                      label="Codex quota"
+                      hint="Keep Codex usage current."
+                      detail={{ summary: "Details", body: "Runs a minimal Codex turn hourly so the quota reading is not stale. It uses a small amount of the quota it measures. The same switch is under Usage & budgets." }} />
                   </SettingsCard>
 
                   {/* Only steps that are true: the cover is listed when it is
-                      on, the login step when the app starts with the machine. */}
+                      on, the login step when the app starts with the machine,
+                      the Lantern when it is watching. */}
                   <SettingsCard title="What happens at login" icon={<ChecklistIcon size={ICON.sm} />}
                     desc="In this order, and only the steps you left on.">
                     {/* In a wrapper, not directly in the card body: a numbered list is read
@@ -4809,6 +4838,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       ...(splash ? [["The launch cover plays", "while the terminal, sessions and git load"]] : []),
                       ["agentglass opens", IS_DESKTOP ? `at the size you picked: ${fmtScale(scale)}` : "in its window"],
                       ["Your panes come back", "where they were, from the last layout capture"],
+                      ...(facts.lanternWatching ? [["The Lantern starts watching", "one look right away, then on its schedule"]] : []),
                     ].map(([name, what], i) => (
                       <SettingRow key={name} agentExempt hint={what}
                         label={<span className="agx-step"><i aria-hidden>{i + 1}</i>{name}</span>} />

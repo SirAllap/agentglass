@@ -19,8 +19,8 @@ import { LocalReviewPreview } from "./LocalReviewPreview.tsx";
  *   <PagePreview id="diff" split={split} wrap={wrap} />  ->  PREVIEWS.diff.component
  */
 export const PREVIEWS = {
-  prefs: { component: WindowPreview, props: ["zoomPct", "fullscreen", "startAtLogin", "launchAnimation", "showClock", "codexQuota", "rail?"] },
-  appearance: { component: AppearancePreview, props: ["theme", "accent", "density", "fontPx", "translucent", "rail?"] },
+  prefs: { component: WindowPreview, props: ["zoomPct", "fullscreen", "startAtLogin", "launchAnimation", "showClock", "codexQuota", "view", "rail?"] },
+  appearance: { component: AppearancePreview, props: ["theme", "accent", "density", "fontPx", "translucent", "view", "rail?"] },
   rail: { component: SidebarPreview, props: ["items", "selected"] },
   diff: { component: DiffPreview, props: ["split", "wrap", "syntaxTheme?"] },
   lantern: { component: LanternPreview, props: ["watch", "everyMin", "wakeMin"] },
@@ -33,5 +33,6 @@ export const PREVIEWS = {
 
 export type PreviewId = keyof typeof PREVIEWS;
 export { WindowPreview, AppearancePreview, SidebarPreview, DiffPreview, LanternPreview, BrowserPreview, OrchestrationPreview, JevInboxPreview, ContextDietPreview, LocalReviewPreview };
+export { LiveTabs, LIVE_VIEWS, type LiveView } from "./LiveWindow.tsx";
 export { previewVars } from "./previewTheme.ts";
 export type { RailItem, Density, JevMode, CapLabel } from "./logic.ts";

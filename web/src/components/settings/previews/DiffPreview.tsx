@@ -29,20 +29,27 @@ const HUNKS: DiffHunk[] = [{
   ],
 }];
 
-/** The real diff renderer on a small invented diff: Split or Inline, Wrap or scroll. */
-export function DiffPreview({ split, wrap, syntaxTheme }: DiffPreviewProps) {
+/** The diff renderer on a small invented diff, with no frame: what a live window shows for this view. */
+export function DiffDemo({ split, wrap, syntaxTheme }: DiffPreviewProps) {
   // The hook reads the saved syntax theme once, at mount; the page's control moves after that.
   const { hilite, setThemePref } = useDiffHighlight("src/net/reconnect.ts");
   useEffect(() => { if (syntaxTheme) setThemePref(syntaxTheme); }, [syntaxTheme, setThemePref]);
   const hunks = useMemo(() => HUNKS, []);
   return (
-    <PreviewBox label="A diff, split or inline">
       <div data-preview="diff" className="rounded-lg overflow-x-auto overflow-y-hidden min-w-0" style={{ background: "var(--bg)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--surface-line)" }}>
         <div className="px-3 py-1.5 text-[11px]" style={{ color: "var(--text3)", background: "var(--surface-nav)" }}>src/net/reconnect.ts</div>
         <HiliteCtx.Provider value={hilite}>
           {split ? <SplitDiff hunks={hunks} wrap={wrap} /> : <UnifiedDiff hunks={hunks} wrap={wrap} />}
         </HiliteCtx.Provider>
       </div>
+  );
+}
+
+/** The real diff renderer on a small invented diff: Split or Inline, Wrap or scroll. */
+export function DiffPreview(p: DiffPreviewProps) {
+  return (
+    <PreviewBox label="A diff, split or inline">
+      <DiffDemo {...p} />
       <PreviewNote>The app's own diff view on an invented change.</PreviewNote>
     </PreviewBox>
   );
