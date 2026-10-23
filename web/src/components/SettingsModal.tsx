@@ -16,7 +16,7 @@ import { SavedRepliesPane } from "./SavedRepliesPane.tsx";
 import { lastTerminalRoot } from "./TerminalPanel.tsx";
 import { Filter, Fold, SettingRow, Toggle, Switch } from "./SettingRow.tsx";
 import { resetShown } from "../lib/settingsModified.ts";
-import { pageScore, searchSettings, absentFor, expandWord, rowId, type SettingsPage } from "../lib/settingsIndex.ts";
+import { pageScore, absentFor, rowId, type SettingsPage } from "../lib/settingsIndex.ts";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal, PortalFloor } from "./Portal.tsx";
 import { LAYER } from "../lib/layers.ts";
@@ -60,6 +60,11 @@ import {
   PuzzleIcon, ShieldIcon, InfoIcon, ChecklistIcon,
 } from "./settingsNavIcons.tsx";
 import { resolvePane, openSettings, paneWhenClickupKnown } from "../lib/openSettings.ts";
+import { SettingsNav } from "./SettingsNav.tsx";
+import { SettingsSearchPanel } from "./SettingsSearchPanel.tsx";
+import { SettingsPageHeader } from "./SettingsPageHeader.tsx";
+import { SettingsToc } from "./SettingsToc.tsx";
+import { NO_FACTS, NO_MARK, groupByName, groupSearch, headerChips, navMarks, type MatchIn, type NavFacts } from "../lib/settingsNav.ts";
 import { RunningPanes } from "./RunningPanes.tsx";
 import { THEMES } from "../lib/highlight.ts";
 import { BudgetsPane } from "./BudgetsPane.tsx";
@@ -360,8 +365,9 @@ type Pane = "recipes" | "review-prompts" | "saved-replies" | "appearance" | "pre
  *  ring instead of filed into one — see the pinned button before the group
  *  loop, which is the only place this literal is read. */
 type TabGroup = "General" | "Workspace" | "Agents" | "Library" | "Connections" | "System" | "Get started" | "";
-// Rendered in this order; a group with no matching tab is dropped, so search
-// collapses to just the sections that still have something in them.
+// The nav's groups in drawing order. lib/settingsNav.ts is what draws them
+// (NAV_GROUPS, then System pinned) and settings-nav-groups.test.ts holds the
+// two lists equal; a group with no page is dropped there.
 /*
  * Six groups, each named for the object its pages configure.
  *
@@ -447,6 +453,11 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
   { id: "rail", label: "Sidebar", group: "General", kw: "rail sidebar views order icons hide show reorder tabs drawer group arrange", what: "Which views are on the sidebar, in which drawer, and in what order.", icon: SidebarIcon },
   { id: "keys", label: "Shortcuts", group: "General", kw: "keyboard keys bindings shortcut chord rebind reset to defaults columns some others", what: "Every binding, rebindable.", icon: KeyboardIcon },
   { id: "terminal", label: "Terminal", group: "Workspace", kw: "terminal launch permissions permission mode ask auto accept edits bypass yolo deny disallowed tools font size cursor typography monospace face renderer gpu focus follows mouse hover pane sloppy scrollback copy on select right-click paste line height tab tabs group groups grouping project name rules prefix runs on engine own tmux shell", what: "Type, renderer, mouse, tab groups, how much scrollback each shell keeps, what a Terminal opens on, and the permissions an agent it opens starts with.", icon: TerminalIcon },
+  /* Its own page, not a block inside Tools & services: it is the engine
+     every pane and every chat runs on, with a binary, a config and a restore of
+     its own — three settings deep is not a row in a list of "is it installed".
+     Filed beside Terminal, the view that runs on it. */
+  { id: "tmux", label: "Pane engine (tmux)", group: "Workspace", kw: "tmux panes engine pane prefix key binary bundled config override restore reboot layout resume socket status bar chat warm cli claude", what: "What a pane runs on — the tmux binary, its config and prefix, and restore.", icon: PanesIcon },
   { id: "diff", label: "Diff", group: "Workspace", kw: "diff split side by side inline unified wrap word wrap changes review default view wrap long lines syntax theme colours", what: "How a diff opens, everywhere the app shows one.", icon: DiffIcon },
   // Only where there is a browser to configure. A settings tab for something
   // that is not there reads as a broken feature rather than one that doesn't apply.
@@ -475,6 +486,11 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
      to be. */
   { id: "review-prompts", label: "Review prompts", group: "Library", kw: "review prompts pr pull request claude menu skill re-review reviewer wording edit", what: "What Review with Claude offers, and the words it sends.", icon: ReviewIcon },
   { id: "saved-replies", label: "Saved replies", group: "Library", kw: "saved replies canned comment pr pull request review wording snippet template", what: "The sentences you write over and over on other people's pull requests.", icon: QuoteIcon },
+  /* Filed with what you keep and reuse, last in Library: a plugin is
+     someone else's code holding a scoped credential to this server — install,
+     review what it declares, grant it, take it back. It is not an agent and it
+     renders nothing of its own; see the note at the top of server/src/plugins.ts. */
+  { id: "plugins", label: "Plugins", group: "Library", kw: "plugins install extension manifest scope review approve enable disable remove entrypoint publisher source running pid re-consent reconsent", what: "Install, review and switch on someone else's code — and see whether it is actually running.", icon: PuzzleIcon },
   /*
    * One page for everything outside this app.
    *
@@ -497,16 +513,6 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
   /* Always there, unlike ClickUp's: the form that connects Jira lives on this page. */
   { id: "jira", label: "Jira", group: "Connections", kw: "jira atlassian cloud data center site token email personal access token writes changes projects keys prefixes hand off qa assignee status saved views folders board filter tracker connect disconnect", what: "Your Jira site, what agentglass may change there, and the steps a pull request can run on a card.", icon: ChecklistIcon },
   { id: "remote", label: "Remote", group: "Connections", kw: "remote access pair phone tailscale token device", what: "Reach this machine from your phone.", icon: PhoneIcon },
-  /* Filed beside Remote rather than under Agents: a plugin is
-     someone else's code holding a scoped credential to this server, the
-     same trust shape a paired device has — install, review what it
-     declares, grant it, take it back. It is not an agent and it renders
-     nothing of its own; see the note at the top of server/src/plugins.ts. */
-  { id: "plugins", label: "Plugins", group: "Connections", kw: "plugins install extension manifest scope review approve enable disable remove entrypoint publisher source running pid re-consent reconsent", what: "Install, review and switch on someone else's code — and see whether it is actually running.", icon: PuzzleIcon },
-  /* Its own section, not a block inside Tools & services: it is the engine
-     every pane and every chat runs on, with a binary, a config and a restore of
-     its own — three settings deep is not a row in a list of "is it installed". */
-  { id: "tmux", label: "Pane engine (tmux)", group: "System", kw: "tmux panes engine pane prefix key binary bundled config override restore reboot layout resume socket status bar chat warm cli claude", what: "What a pane runs on — the tmux binary, its config and prefix, and restore.", icon: PanesIcon },
   { id: "privacy", label: "Data & privacy", group: "System", kw: "export download data json csv daily totals markdown events skills catalog take out privacy telemetry data local storage retention database credentials tokens tracking analytics who sees", what: "Where your data is, what leaves this machine, and how to take it out.", icon: ShieldIcon },
   { id: "about", label: "About", group: "System", kw: "about version update release notes changelog credit attribution licence license portrait art", what: "Version, release notes, updates and the third-party licences this build carries.", icon: InfoIcon },
   { id: "log", label: "Activity", group: "", kw: "activity log history events feed", what: "What the app itself has been doing.", status: true, icon: PulseIcon },
@@ -3699,7 +3705,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
    * slow answer cost the whole page ten seconds. The three go out together for
    * the same reason.
    */
-  const [badges, setBadges] = useState<{ connections?: number; remote?: "live" | null }>({});
+  const [badges, setBadges] = useState<{ connections?: number; remote?: "live" | "idle" | null }>({});
   const [logDigest, setLogDigest] = useState<LogDigest | "failed" | null>(null);
   /** The three onboarding steps, read from the same state Connections and
    *  Agents already show — this owns no state of its own, so it cannot say
@@ -3707,27 +3713,42 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
    *  the reads land, which keeps the pinned row off the nav rather than
    *  flashing it and pulling it back a second later. */
   const [onboarding, setOnboarding] = useState<{ hook: boolean; provider: boolean; paneEngine: boolean } | null>(null);
+  /** Facts only the nav's marks and the page header's chips read. `null` is a
+   *  read that has not landed or that failed: it draws no mark rather than a
+   *  guess. Read with the batch above, once per open. */
+  const [facts, setFacts] = useState<Pick<NavFacts, "hooksWired" | "tmuxOk" | "jiraConnected" | "lanternWatching" | "updateAvailable" | "notificationsOn">>({
+    hooksWired: null, tmuxOk: null, jiraConnected: null, lanternWatching: null, updateAvailable: null, notificationsOn: null,
+  });
   useEffect(() => {
     if (!open) return;
     let live = true;
     void Promise.all([
-      api.dependencies().then((r) => r.deps).catch(() => [] as DepReport[]),
-      api.providers().then((r) => r.providers).catch(() => [] as ProviderStatus[]),
-      api.remoteStatus().then((r) => (r.clients.liveCount > 0 ? ("live" as const) : null)).catch(() => null),
-      api.hooksStatus().then((r) => r.installed).catch(() => false),
+      api.dependencies().then((r) => r.deps).catch(() => null),
+      api.providers().then((r) => r.providers).catch(() => null),
+      api.remoteStatus().then((r) => (r.clients.liveCount > 0 ? ("live" as const) : ("idle" as const))).catch(() => null),
+      api.hooksStatus().then((r) => r.installed).catch(() => null),
       api.logDigest().catch(() => "failed" as const),
-    ]).then(([deps, provs, remote, hookInstalled, digest]) => {
+      api.jiraStatus().then((r) => r.connected).catch(() => null),
+      api.lanternSettings().then((r) => (r.ok && typeof r.watch === "boolean" ? r.watch : null)).catch(() => null),
+      api.updateStatus().then((r) => r.available === true).catch(() => null),
+      api.notifyPrefs().then((r) => (r.ok ? !r.prefs.none : null)).catch(() => null),
+    ]).then(([deps, provs, remote, hookInstalled, digest, jira, lanternWatching, updateAvailable, notificationsOn]) => {
       if (!live) return;
       setBadges({
-        connections: deps.filter((d) => d.status !== "ok" && d.status !== "unsupported").length
-          + provs.filter((p) => p.state === "error" || p.state === "needs-auth").length,
+        connections: (deps ?? []).filter((d) => d.status !== "ok" && d.status !== "unsupported").length
+          + (provs ?? []).filter((p) => p.state === "error" || p.state === "needs-auth").length,
         remote,
       });
       setLogDigest(digest);
       setOnboarding({
-        hook: hookInstalled,
-        provider: provs.some((p) => p.state === "connected"),
-        paneEngine: deps.some((d) => d.id === "tmux" && d.status === "ok"),
+        hook: hookInstalled === true,
+        provider: (provs ?? []).some((p) => p.state === "connected"),
+        paneEngine: (deps ?? []).some((d) => d.id === "tmux" && d.status === "ok"),
+      });
+      setFacts({
+        hooksWired: hookInstalled,
+        tmuxOk: deps === null ? null : deps.some((d) => d.id === "tmux" && d.status === "ok"),
+        jiraConnected: jira, lanternWatching, updateAvailable, notificationsOn,
       });
     });
     return () => { live = false; };
@@ -3797,27 +3818,11 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
    *  block used to test; every one of those becomes `{show("x") && …}`. */
   const show = useCallback((id: string): boolean => (ql ? matchIds.has(id) : pane === id), [ql, matchIds, pane]);
   const absentHit = ql ? absentFor(ql) : null;
-  const rowResults = useMemo(() => (ql ? searchSettings(ql, tabs as SettingsPage[]) : []), [ql, tabs]);
-  /** The rows actually on screen — the ones on a page that made the cap-5
-   *  cut — in the same rank order the header counts. This, not `rowResults`
-   *  itself, is what up/down cycles through: a result you cannot see is not
-   *  one you can land on with Enter. */
-  const visibleResults = useMemo(() => rowResults.filter((r) => matchIds.has(r.pane)), [rowResults, matchIds]);
-  /** Words a hit above only reached through a synonym — shown once, in the
-   *  "· also: …" clause, so typing "chime" is told it found "sound" rather
-   *  than silently substituting one word for the other. */
-  const synonymsUsed = useMemo(() => {
-    if (!ql) return [] as string[];
-    const words = ql.split(/\s+/).filter(Boolean);
-    const hitTexts = visibleResults.map((r) => (r.label + " " + r.section).toLowerCase());
-    const used = new Set<string>();
-    for (const w of words) for (const e of expandWord(w)) {
-      if (e.synonym && hitTexts.some((t) => t.includes(e.word))) used.add(e.word);
-    }
-    return [...used];
-  }, [ql, visibleResults]);
-  const [highlight, setHighlight] = useState(0);
-  useEffect(() => { setHighlight(0); }, [ql]);
+  /** "Names + help" reads hints and sections as well as a row's own name. */
+  const [matchIn, setMatchIn] = useState<MatchIn>("help");
+  /** The search panel's model: pages, each with the rows that answered, in
+   *  rank order. It is the settings index's own ranking, only grouped. */
+  const searchModel = useMemo(() => groupSearch(ql, tabs, matchIn), [ql, tabs, matchIn]);
   /*
    * The row to land on, once the page above has actually mounted.
    *
@@ -3846,7 +3851,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
     });
     return () => cancelAnimationFrame(raf);
   }, [flashRow, ql, pane]);
-  /** Enter on a highlighted result, or a click on one: land on it. Clearing
+  /** Enter on the selected result, or a click on one: land on it. Clearing
    *  the query first is what makes `flashRow`'s effect (above) wait for the
    *  single settled page to mount before it goes looking for the row. */
   const landOnResult = useCallback((r: { pane: string; row: string }) => {
@@ -3854,37 +3859,6 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
     setQ("");
     if (r.row) setFlashRow(r.row);
   }, []);
-  /*
-   * Marks and keeps on screen the highlighted result as the arrow keys move
-   * it — a class on the row's own DOM node (a `data-row` lookup, the same
-   * one the flash uses), not the flash class itself: the flash means "this
-   * is the one you picked", and every row up/down passes through on the way
-   * there would light up the same way a landing does.
-   *
-   * `highlightedEl` is a ref, not state — the element the LAST render marked,
-   * so this can remove the class from it before adding it to (or nowhere,
-   * once the query clears) the next one, without re-scanning every row in
-   * the DOM to find whichever one happens to be wearing it.
-   */
-  const highlightedEl = useRef<HTMLElement | null>(null);
-  useEffect(() => {
-    highlightedEl.current?.classList.remove("agx-row-current");
-    highlightedEl.current = null;
-    if (!ql || !visibleResults.length) return;
-    const r = visibleResults[Math.min(highlight, visibleResults.length - 1)];
-    if (!r?.row) return;
-    const el = contentRef.current?.querySelector<HTMLElement>(`[data-row="${CSS.escape(r.row)}"]`);
-    if (!el) return;
-    el.classList.add("agx-row-current");
-    el.scrollIntoView({ block: "nearest" });
-    highlightedEl.current = el;
-  }, [highlight, ql, visibleResults]);
-  const onSearchKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (!ql || !visibleResults.length) return;
-    if (e.key === "ArrowDown") { e.preventDefault(); setHighlight((h) => Math.min(h + 1, visibleResults.length - 1)); }
-    else if (e.key === "ArrowUp") { e.preventDefault(); setHighlight((h) => Math.max(h - 1, 0)); }
-    else if (e.key === "Enter") { e.preventDefault(); landOnResult(visibleResults[Math.min(highlight, visibleResults.length - 1)]!); }
-  }, [ql, visibleResults, highlight, landOnResult]);
   const [termFont, setTermFontState] = useState(() => currentTermFont());
   const [termSize, setTermSizeState] = useState(() => currentTermSize());
   const [termLine, setTermLineState] = useState(() => currentTermLineHeight());
@@ -4163,6 +4137,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
   const searchRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
     if (!open) return;
+    // Not in the icon-rail layout: focus there opens the field over the page, which nobody asked for on open.
+    if (window.matchMedia?.("(max-width: 1100px)").matches) return;
     const id = requestAnimationFrame(() => searchRef.current?.focus({ preventScroll: true }));
     return () => cancelAnimationFrame(id);
   }, [open]);
@@ -4198,6 +4174,19 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose, escArmed]);
 
+  /** The page on screen as the nav knows it: a plugin's own page is the Plugins page. */
+  const navPane = pane.startsWith("plugin:") ? "plugins" : pane;
+  const navTab = TABS.find((x) => x.id === navPane);
+  const colRef = useRef<HTMLDivElement | null>(null);
+  const tabIcons = useMemo(() => new Map(tabs.map((t) => [t.id as string, t.icon])), [tabs]);
+  const marks = useMemo(() => navMarks({
+    ...NO_FACTS, ...facts,
+    connectionsNeed: badges.connections ?? null,
+    remoteLive: badges.remote ? badges.remote === "live" : null,
+    logNeed: logDigest === null || logDigest === "failed" ? null : logDigest.quiet ? 0 : logDigest.crashLoops.length + logDigest.spikes.length,
+    clickupConnected: cuConnected,
+  }), [facts, badges, logDigest, cuConnected]);
+
   return (
     /* Everything this dialog opens — a confirm, a menu, a picker — is a portal
        of its own, and a portal's floor is 9999 unless it is told otherwise.
@@ -4225,168 +4214,25 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
           <motion.div
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             transition={{ duration: 0.14 }}
-            className="fixed inset-0 flex pointer-events-auto"
+            className="agx-settings-shell fixed inset-0 flex pointer-events-auto"
             style={{ zIndex: 10000, background: "var(--bg)" }}>
 
-            {/* Three strips and a scroller, and the order is the point: the two
-                things you always want — the way out, and the way to find a
-                setting by name — sit OUTSIDE the scroll container, so neither
-                can be pushed off the top by a long nav. */}
-            {/* The nav paints its OWN tone. It shared --bg with the page, so
-                two regions that do entirely different jobs — twenty-four
-                places you can go, and the one you are in — were the same
-                surface with a 25%-alpha hairline between them, and the
-                complaint that "the sidebar and the view look like the same
-                thing" was a literal description of the colour values. The
-                border is at full --surface-line now for the same reason: a
-                seam this important is not a suggestion. */}
-            <aside className="agx-settings-nav shrink-0 flex flex-col border-r"
-              style={{ background: "var(--surface-nav)", borderColor: "var(--surface-line)" }}>
-              {/* Leaving is a button you press, not an x you hunt for in a
-                  corner — and it says where it takes you, because after ten
-                  minutes in here that is the thing you have to be told.
-                *
-                  The row IS the button. It was a button the size of its text
-                  inside a padded bar, so the bar looked like the control and
-                  only the arrow and the words answered the pointer; a press on
-                  the rest of the row landed on nothing. Full width, no padding
-                  around it, and the only things that change on hover and press
-                  are its fill and its ink, so nothing under the pointer moves. */}
-              <button onClick={onClose} type="button"
-                className="agx-navback shrink-0 w-full flex items-center gap-2 px-5 border-b text-[13px] text-left"
-                style={{ color: "var(--text3)", borderColor: "var(--surface-line)", minHeight: 56 }}>
-                <svg width={ICON.sm} height={ICON.sm} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
-                  <path d="M19 12H5" /><path d="m12 19-7-7 7-7" />
-                </svg>
-                <span>Back to app</span>
-              </button>
-
-              <div className="shrink-0 px-3 py-3 border-b" style={{ borderColor: "var(--surface-line)" }}>
-                {/* --bg, not --bg2. The box used the raised tone, which was
-                    right when the nav under it was --bg and inverts now that
-                    the nav leans toward --bg2 itself: a field has to sit IN
-                    its surface, and painted at the surface's own tone it was
-                    a rectangle of border with nothing behind it.
-                  *
-                    Focused on open and on Ctrl+F, and the shortcut is printed
-                    on the box. Typing is what you came here to do — twenty-four
-                    pages is past the count where hunting the nav beats naming
-                    the thing — and a shortcut nobody is told about is one
-                    nobody uses. */}
-                <div className="relative">
-                  <input ref={searchRef} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onSearchKeyDown} placeholder="Search settings"
-                    aria-keyshortcuts="Control+F"
-                    className={`w-full pr-14 ${INPUT}`}
-                    style={INPUT_STYLE} />
-                  <span className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-[10.5px] tabular-nums"
-                    style={{ color: "var(--text4)" }}>Ctrl F</span>
-                </div>
-              </div>
-
-              {/* px-2.5, not px-2, and the 2px is the point: every nav item is a
-                  button with its own px-2.5, so the container's padding plus
-                  the button's decides where the TEXT lands. */}
-              <div className="min-h-0 flex-1 agx-scroll overflow-y-auto overflow-x-hidden py-2 px-2.5 flex flex-col gap-0.5">
-                {/* Pinned above every ring, not filed into one, and gone the
-                    moment `onboardingDone` — no "you're all set" row left
-                    behind for it to become. Held back on a search too: it
-                    answers "what's left", not "what's Terminal", so it has
-                    no business in a query for the latter. */}
-                {onboarding && !onboardingDone && !ql && (
-                  <button onClick={() => setPane("onboarding")}
-                    aria-current={pane === "onboarding" ? "page" : undefined}
-                    className="w-full text-left px-2.5 py-1.5 mb-1.5 rounded-lg text-[13px] flex items-center gap-2"
-                    style={pane === "onboarding"
-                      ? { background: "color-mix(in srgb, var(--primary) 15%, transparent)", color: "var(--text)" }
-                      : { color: "var(--text2)", border: EDGE }}>
-                    <span className="min-w-0 truncate">Get started</span>
-                    <span className="ml-auto shrink-0 text-[10.5px] tabular-nums" style={{ color: "var(--text4)" }}>
-                      {[onboarding.hook, onboarding.provider, onboarding.paneEngine].filter(Boolean).length}/3
-                    </span>
-                  </button>
-                )}
-                {(() => {
-                  const hit = (t: typeof TABS[number]) => !ql || pageScore(t as SettingsPage, ql) > 0;
-                  const groups = TAB_GROUPS
-                    .map((g) => ({ g, tabs: tabs.filter((t) => t.group === g && hit(t)) }))
-                    .filter((x) => x.tabs.length);
-                  if (!groups.length) return <div className="px-2.5 py-3 text-[12.5px]" style={{ color: "var(--text4)" }}>No settings match “{q.trim()}”.</div>;
-                  return groups.map(({ g, tabs }) => (
-                    <div key={g} className="flex flex-col gap-0.5">
-                      {/* A group heading gets more room ABOVE it than its
-                          items get between them — measured at 42px either
-                          side before this, which is why "Agents"
-                          read as belonging to the row above rather than to
-                          the rows below. The rule is in tailwind.config.js
-                          beside the scale, because it is about meaning
-                          rather than size: a heading hugs what it names. */}
-                      <div className="px-2.5 pt-4 pb-1 text-[11px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>{g}</div>
-                      {tabs.map((t) => (
-                        <button key={t.id} onClick={() => setPane(t.id)}
-                          aria-current={pane === t.id ? "page" : undefined}
-                          className="w-full text-left px-2.5 py-2 rounded-lg text-[13px] flex items-center gap-2.5"
-                          style={pane === t.id
-                            ? { background: "color-mix(in srgb, var(--primary) 15%, transparent)", color: "var(--text)" }
-                            : { color: "var(--text3)" }}>
-                          {/* The icon is what turns a page of prose into a
-                              shape you can scan — a nav of twenty-four
-                              identical text rows was the thing that read as
-                              "nothing invites you in". Dimmed to `--text4`
-                              when the row isn't active so the active row's
-                              full-color icon is still the one your eye lands
-                              on first, the same job the highlight pill does. */}
-                          <span className="shrink-0 flex" style={{ color: pane === t.id ? "var(--text)" : "var(--text4)" }}>
-                            <t.icon size={ICON.md} />
-                          </span>
-                          <span className="min-w-0 truncate">{t.label}</span>
-                          {/* A count when something wants you, a dot when
-                              something is simply happening. Different marks
-                              because they are different facts: one is a
-                              chore, the other is a phone on the sofa. */}
-                          {t.id === "connections" && !!badges.connections && (
-                            <span className="ml-auto shrink-0 text-[10.5px] tabular-nums px-1.5 rounded-full"
-                              style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 16%, transparent)" }}
-                              title={`${badges.connections} ${badges.connections === 1 ? "thing wants" : "things want"} something`}>
-                              {badges.connections}
-                            </span>
-                          )}
-                          {t.id === "about" && logDigest && logDigest !== "failed" && !logDigest.quiet && (
-                            <span className="ml-auto shrink-0 text-[10.5px] tabular-nums px-1.5 rounded-full"
-                              style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 16%, transparent)" }}
-                              title="The server log has a crash loop or a spike worth a look">
-                              log {logDigest.crashLoops.length + logDigest.spikes.length}
-                            </span>
-                          )}
-                          {t.id === "remote" && badges.remote === "live" && (
-                            <span className="ml-auto shrink-0 rounded-full" aria-label="a device is connected"
-                              title="A device is connected right now"
-                              style={{ width: 6, height: 6, background: "var(--success)" }} />
-                          )}
-                          {/* A word, not a 6px ring — the ring was the first
-                              draft here, and it failed its own house rule the
-                              moment it was screenshotted: a dot that needs a
-                              tooltip to explain itself is exactly the "icon
-                              too small to read" complaint this pass exists to
-                              fix. "State" says outright that the page reports
-                              rather than sets, at a size a mouse can actually
-                              land on. Held back when the page already carries
-                              its own live mark above (Tools & services' count)
-                              so nobody reads two unrelated marks on one row. */}
-                          {t.status && !(t.id === "connections" && !!badges.connections) && (
-                            <span className="ml-auto shrink-0 text-[10px] uppercase tracking-[0.08em] px-1.5 py-0.5 rounded-full"
-                              aria-label="reports state, not a setting"
-                              title="Reports what is already happening — not a switch."
-                              style={{ color: "var(--text4)", border: "1px solid color-mix(in srgb, var(--text4) 55%, transparent)" }}>
-                              State
-                            </span>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  ));
-                })()}
-              </div>
-            </aside>
+            {/* Back to app and the search box sit OUTSIDE the scrolling list, so a
+                long nav can never push either off the top. The nav paints its
+                OWN tone (--surface-nav) at a full-strength seam: it shared --bg
+                with the page, so two regions that do entirely different jobs —
+                twenty-four places you can go, and the one you are in — were the
+                same surface with a 25%-alpha hairline between them. */}
+            <SettingsNav
+              pages={tabs} marks={marks} current={navPane}
+              onGo={(id) => setPane(id as Pane)} onClose={onClose}
+              pinned={onboarding && !onboardingDone && !ql
+                ? { done: [onboarding.hook, onboarding.provider, onboarding.paneEngine].filter(Boolean).length, total: 3, active: pane === "onboarding" }
+                : null}
+              search={
+                <SettingsSearchPanel q={q} onQ={setQ} mode={matchIn} onMode={setMatchIn} model={searchModel}
+                  absent={absentHit?.say ?? null} onLand={landOnResult} inputRef={searchRef} icons={tabIcons} />
+              } />
 
                   {/* The COLUMN is capped, and everything in it ends together.
                       Capping the ROW was the first attempt and it left every
@@ -4405,7 +4251,19 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                 them was measure; on a page the column is capped at 1120 and sits on the nav side,
                 so the slack is free and the gap is what stops the title reading
                 as an extension of the nav it sits beside. */}
-            <div ref={contentRef} className="agx-settings-main agx-scroll flex-1 min-w-0 overflow-y-auto pt-8 pb-10">
+            <div ref={contentRef} className="agx-settings-main agx-scroll flex-1 min-w-0 overflow-y-auto">
+              {/* The header stays while the cards scroll under it. It names the
+                  page on screen even while a query is stacking other pages
+                  below it: those carry their own heading (PageMatchHeading). */}
+              {navTab && (
+                <SettingsPageHeader
+                  label={navTab.label} group={groupByName(navTab.group) ?? null} icon={navTab.icon} what={navTab.what}
+                  chips={headerChips(navTab.id, marks[navTab.id] ?? NO_MARK)}
+                  reset={pageModified(navTab.id) ? <Button onClick={() => resetPage(navTab.id)}>Reset page</Button> : undefined} />
+              )}
+              <div className="agx-settings-page">
+                {!ql && <SettingsToc scope={colRef} scroller={contentRef} page={navPane} />}
+                <div className="agx-settings-content">
                   {/*
                     A WIDER COLUMN on the panes that are BOARDS rather than
                     reading.
@@ -4419,75 +4277,9 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                     `max-width` that reads it, which is why the first attempt
                     changed nothing at all.
                   */}
-                  <div className="agx-settings-col"
+                  <div ref={colRef} className="agx-settings-col"
                     style={WIDE_PANES.has(pane) ? ({ "--agx-settings-col": WIDE_PANES.get(pane) } as React.CSSProperties) : undefined}>
                   <Filter.Provider value={filterCtx}>
-                  {/*
-                   * The results header.
-                   *
-                   * Replaces the old "Showing the N settings on this page
-                   * that match…" banner, which named ONE page because there
-                   * was only ever one page on screen at a time. Now that a
-                   * query can put more than one page's content on screen at
-                   * once (see `matches`/`show` above), the count has to be
-                   * the total across all of them, and "also:" has to say
-                   * which typed word found a hit only because a synonym
-                   * carried it there — a search that quietly substitutes a
-                   * word is a search that lies about what you asked for.
-                   */}
-                  {ql && (
-                    <div className="agx-settings-row mb-3 rounded-lg" style={{ background: "color-mix(in srgb, var(--primary) 9%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 25%, transparent)" }}>
-                      <span className="text-[12.5px]" style={{ color: "var(--text2)" }}>
-                        {/* visibleResults, not rowResults: the count on this line has to be
-                            the count of rows actually rendered below. rowResults holds every
-                            page's matches before the cap-5 truncation, so on a query wide
-                            enough to reach a 6th page it said "14 settings match" over a
-                            screen that showed 9 of them — a number nothing on screen backed. */}
-                        {absentHit ? absentHit.say : visibleResults.length === 0
-                          ? `No setting matches “${q.trim()}”.`
-                          : (
-                            <>
-                              <span className="tabular-nums" style={{ color: "var(--text)" }}>{visibleResults.length}</span>
-                              {" "}setting{visibleResults.length === 1 ? "" : "s"} match “{q.trim()}”
-                              {synonymsUsed.length > 0 && (
-                                <span style={{ color: "var(--text4)" }}> · also: {synonymsUsed.join(", ")}</span>
-                              )}
-                            </>
-                          )}
-                      </span>
-                      <Button className="justify-self-end" onClick={() => setQ("")}>Show all</Button>
-                    </div>
-                  )}
-                  {!ql && (() => {
-                    const t = TABS.find((x) => x.id === pane);
-                    return t ? (
-                      /* px-1 rather than px-4: the cards below carry their
-                         own 18px of inner padding, so a title indented to the
-                         old row padding sat a clear step to the RIGHT of every
-                         heading it governs. It leads the column now.
-                       *
-                       * 22px, and no rule under it: the 24px of space before
-                       * the first card is the chapter break. The rule that was
-                       * here was one more line beside a heading, counted on
-                       * every page by the settings sweep. Reset page sits on
-                       * the title's line, at the right, on the pages that can
-                       * have it — a plain button, because it changes nothing
-                       * until it is pressed and what it resets is named. */
-                      <div className="mb-6 px-1">
-                        <div className="flex items-center justify-between gap-4">
-                          <h2 className="m-0 text-[22px] font-semibold tracking-[-0.015em]" style={{ color: "var(--text)" }}>{t.label}</h2>
-                          {pageModified(t.id) && (
-                            <Button onClick={() => resetPage(t.id)}>Reset page</Button>
-                          )}
-                        </div>
-                        {/* No measure cap of its own — the column is the cap. At 62ch this broke
-                            to two lines with a single word on the second while 300px of the
-                            card below it sat empty, which reads as a layout fault rather
-                            than as a sentence. */}
-                        {t.what && <div className="text-[13px] mt-2" style={{ color: "var(--text3)" }}>{t.what}</div>}
-                      </div>
-                    ) : null;
-                  })()}
                   {ql && show("appearance") && <PageMatchHeading id="appearance" onOpen={() => { setPane("appearance" as Pane); setQ(""); }} />}
                   {show("appearance") && (
                   <AppearancePane key={appearanceNonce} current={theme} onChange={onTheme} onAccent={setAccentState} />
@@ -5108,7 +4900,9 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   {show("about") && <><AboutPane open={open} /><LogDigestSection d={logDigest} /></>}
                   </Filter.Provider>
                   </div>
-                  </div>
+                </div>
+              </div>
+            </div>
           {escArmed && (
             /* The hint IS the mechanism. One Escape used to throw the page
                away, which is fine for a popover and wrong for somewhere you

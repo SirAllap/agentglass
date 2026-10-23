@@ -25,6 +25,10 @@ const src = readFileSync(new URL("../src/components/SettingsModal.tsx", import.m
  *  thing it says was removed. */
 const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/^\s*\/\/.*$/gm, "");
 const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
+/** The nav lives in its own component now; the modal only mounts it. */
+const navSrc = readFileSync(new URL("../src/components/SettingsNav.tsx", import.meta.url).pathname, "utf8");
+const navCode = navSrc.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/^\s*\/\/.*$/gm, "");
+const searchSrc = readFileSync(new URL("../src/components/SettingsSearchPanel.tsx", import.meta.url).pathname, "utf8");
 
 describe("settings is a page", () => {
   test("no scrim and no fixed dialog width", () => {
@@ -33,15 +37,18 @@ describe("settings is a page", () => {
   });
 
   test("it fills the window", () => {
-    expect(code).toContain('className="fixed inset-0 flex pointer-events-auto"');
+    expect(code).toContain('className="agx-settings-shell fixed inset-0 flex pointer-events-auto"');
   });
 
-  test("the nav is its own column with a fixed width, narrower at a narrow window", () => {
-    expect(code).toMatch(/<aside className="agx-settings-nav shrink-0 flex flex-col border-r"/);
-    // 280 wide, and 216 under 800px: the window's minimum is 640, where a
-    // 280px nav left the settings column narrower than one row.
-    expect(css).toMatch(/\.agx-settings-nav \{ width: 280px; \}/);
-    expect(css).toMatch(/@media \(max-width: 800px\) \{\s*\.agx-settings-nav \{ width: 216px; \}/);
+  test("the nav is its own column with a fixed width, and an icon rail at a narrow window", () => {
+    expect(navCode).toMatch(/<aside className="agx-settings-nav shrink-0 flex flex-col border-r"/);
+    expect(code).toContain("<SettingsNav");
+    expect(css).toMatch(/\.agx-settings-nav \{ width: var\(--nav-w\); \}/);
+    expect(css).toMatch(/\.agx-settings-shell \{\s*--nav-w: 292px;/);
+    expect(css).toMatch(/@media \(min-width: 2200px\) \{ \.agx-settings-shell \{ --nav-w: 320px; \} \}/);
+    // Under 1100px the nav folds to a 68px rail: the window's minimum is 640, where a 280px nav
+    // left the settings column narrower than one row. A rail keeps every page one click away.
+    expect(css).toMatch(/@media \(max-width: 1100px\) \{ \.agx-settings-shell \{ --nav-w: 68px; \} \}/);
   });
 });
 
@@ -52,13 +59,15 @@ describe("the way out and the way to search never scroll away", () => {
      silently started slicing the wrong element and reported that the way out
      of settings had been deleted. A landmark test that depends on source
      ORDER is a test that fails on unrelated work. */
-  const at = code.indexOf('<aside className="agx-settings-nav shrink-0');
-  const aside = code.slice(at, code.indexOf("</aside>", at));
+  const at = navCode.indexOf('<aside className="agx-settings-nav shrink-0');
+  const aside = navCode.slice(at, navCode.indexOf("</aside>", at));
 
   test("both sit above the scrolling list", () => {
     const back = aside.indexOf("Back to app");
-    const search = aside.indexOf('placeholder="Search settings"');
+    const search = aside.indexOf("{search}");
     const scroller = aside.indexOf("overflow-y-auto");
+    expect(searchSrc).toContain('placeholder="Search settings"');
+    expect(code).toMatch(/search=\{\s*<SettingsSearchPanel/);
     expect(back).toBeGreaterThan(-1);
     expect(search).toBeGreaterThan(back);
     expect(scroller).toBeGreaterThan(search);

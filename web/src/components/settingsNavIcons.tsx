@@ -220,3 +220,43 @@ export function InboxIcon({ size = ICON.md }: P) {
     </svg>
   );
 }
+
+/* The Settings shell's own glyphs: one per nav group, the search box, the
+   group caret. Same 24x24 stroke style as above. */
+export type GroupIconKey = "cog" | "window" | "bot" | "shelf" | "link";
+
+export function GroupIcon({ name, size = ICON.md }: { name: GroupIconKey; size?: number }) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      {name === "cog" && <><circle cx="12" cy="12" r="3.2" /><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" /></>}
+      {name === "window" && <path d="M3 6.5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM3 9.5h18" />}
+      {name === "bot" && <path d="M12 3v3M6 8h12a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2zM9 13h.01M15 13h.01M9 17h6" />}
+      {name === "shelf" && <path d="M5 4v16M10 4v16M15 5.5l4 14.5" />}
+      {name === "link" && <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" />}
+    </svg>
+  );
+}
+
+export function SearchIcon({ size = ICON.md }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <circle cx="11" cy="11" r="6.5" /><path d="M16 16l4.5 4.5" />
+    </svg>
+  );
+}
+
+export function ChevronDownIcon({ size = ICON.md }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  );
+}
+
+export function ChevronRightIcon({ size = ICON.md }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <path d="M9 6l6 6-6 6" />
+    </svg>
+  );
+}

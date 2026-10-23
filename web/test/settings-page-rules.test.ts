@@ -227,9 +227,17 @@ describe("the one divider", () => {
       expect(r.body, r.sel).not.toMatch(/border/);
     }
     expect(css).not.toContain(".agx-settings-head + .agx-settings-rows");
-    const title = modal.indexOf("{t.label}</h2>");
+    // The page title no longer carries a rule of its own: the sticky header bar
+    // (.agx-ph) has the one hairline, under the whole header, and the title and
+    // its row inside it draw nothing.
+    const header = readFileSync(new URL("../src/components/SettingsPageHeader.tsx", import.meta.url).pathname, "utf8");
+    const title = header.indexOf("{label}</h2>");
     expect(title).toBeGreaterThan(-1);
-    expect(modal.slice(modal.lastIndexOf("<div", modal.lastIndexOf("<div", title) - 1), title)).not.toMatch(/border-b/);
+    expect(header.slice(header.lastIndexOf("<div", title), title)).not.toMatch(/border-b/);
+    for (const r of rules.filter((x) => /^\.agx-ph-(title|row|crumb|sum)\b/.test(x.sel))) {
+      expect(r.body, r.sel).not.toMatch(/border(-top|-bottom|-left|-right)?\s*:/);
+    }
+    expect(rules.find((x) => x.sel === ".agx-ph")?.body).toMatch(/border-bottom/);
   });
 });
 
