@@ -30,7 +30,7 @@ import { taskLink } from "../lib/taskLink.ts";
 import { onCard, cardVersion, withCard } from "../lib/prCardStore.ts";
 import { CHIP_H } from "../lib/priority.tsx";
 import { CardTracker } from "./CardTracker.tsx";
-import { LANE_MIN_PX, RESULT_COLUMNS, resultColumn, resultsHeading, stillReading } from "../lib/prSearch.ts";
+import { LANE_WIDTH_PX, RESULT_COLUMNS, resultColumn, resultsHeading, stillReading } from "../lib/prSearch.ts";
 import { repoUsesTracker, trackerBlock } from "../lib/prCardBlock.ts";
 import { CTRL_H, EDGE, LINE } from "./workspace/Chrome.tsx";
 import { CODE_FONT_STYLE } from "./diff/DiffLines.tsx";
@@ -434,11 +434,11 @@ export function TriageBoard({
   /*
    * FOLDED LANES, and the arithmetic that made it worth doing.
    *
-   * The board demands `5 × 268 + 4 × 10 + 32 = 1412` CSS pixels. A screen at
-   * 175% leaves 1170, which is why the cards wrap and the
-   * last one is cut off. A lane folded from 268 to 44 gives back 224 plus its
-   * gap, so TWO folded lanes bring the minimum under 1000 — below that
-   * width, without a breakpoint and without anything moving on its own.
+   * Lanes are a fixed LANE_WIDTH_PX, so a window too narrow for them scrolls
+   * sideways instead of squeezing. A folded lane (44 px) still gives back
+   * the difference plus its gap, so folding is how a narrow window sees
+   * more lanes at once, without a breakpoint and without anything moving on
+   * its own.
    *
    * FOLDING IS NOT FILTERING, and the board already refused that twice in
    * writing. Eight printed numbers derive from the flattened partition rather
@@ -929,12 +929,14 @@ export function TriageBoard({
             </div>
           </div>
         ) : (
-          <div className="grid gap-2.5 h-full" style={{
-            /* A folded lane is a fixed 44px; the rest share what is left. 268
-               stays the floor for the open ones — it is what a card needs
-               before its title starts wrapping, measured at 120px of title box
-               where a 33-character subject already runs to three lines. */
-            gridTemplateColumns: cols.map((l) => (isFolded(l.id) ? "44px" : `minmax(${LANE_MIN_PX}px, 1fr)`)).join(" "),
+          <div className="grid gap-2.5 h-full w-max" style={{
+            /* A folded lane is a fixed 44px and an open one is LANE_WIDTH_PX,
+               never a share of the window: the card inside keeps the width it
+               was drawn for, and the box around the columns (`w-max`, inside
+               the sideways scroller above) is as wide as they are, so what does
+               not fit is reached by scrolling whole lanes, as a Jira board
+               does. Shift+wheel and the arrow keys scroll it natively. */
+            gridTemplateColumns: cols.map((l) => (isFolded(l.id) ? "44px" : `${LANE_WIDTH_PX}px`)).join(" "),
           }}>
             {cols.map((l, i) => {
               const all = lanes.get(l.id) ?? [];

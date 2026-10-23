@@ -145,6 +145,14 @@ export function matchedAs(
 
 /** What a lane needs before its card's title starts wrapping, and the gap between lanes. */
 export const LANE_MIN_PX = 268;
+/**
+ * The width an open lane has on the board, fixed. Measured as the lane's card
+ * at a 2576 px window with three lanes open beside the folded review strip (780 px: nothing inside it wraps or
+ * moves). The board is that wide whatever the window is: when the lanes do not
+ * fit, the lane strip scrolls sideways a whole lane at a time instead of
+ * squeezing each one toward LANE_MIN_PX.
+ */
+export const LANE_WIDTH_PX = 780;
 export const LANE_GAP_PX = 10;
 /**
  * How many result columns a wide panel gets. Not the board's lane count: a
