@@ -17,11 +17,13 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { AgentStateKey, TabAgent } from "../../lib/browserAgentActivity.ts";
-import { PRESENCE_LINGER_MS, agentState, lapKeyframes, pointerAt, presenceLabel, travelMs } from "../../lib/browserAgentActivity.ts";
+import { PRESENCE_LINGER_MS, agentState, isActVerb, lapKeyframes, pointerAt, presenceLabel, travelMs } from "../../lib/browserAgentActivity.ts";
 import type { ActLanding } from "../../lib/browserDrive.ts";
 import { LivingMark } from "../Logo.tsx";
 
 const LAP_MS = 18_000;
+/** Verbs that move the page without being acts in the log's sense, and so raise the glass too. */
+const MOVES = new Set(["open", "scroll", "hover"]);
 const calmNow = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 /* Up while the agent works, and for a beat after: an agent works in bursts
@@ -55,6 +57,14 @@ export function AgentPresence({ agent, landing, url = "", onToggle, quiet = fals
   const last = useRef({ x: 48, y: 40 });
   const live = useAgentLive(agent);
   const state = agentState(agent);
+  /* The glass is for a page an agent is changing: one that only reads it
+     (a look, a screenshot) leaves the person's hand on it. Up from the first
+     act, down with the rest of the presence. */
+  const [acting, setActing] = useState(false);
+  useEffect(() => {
+    if (!live) setActing(false);
+    else if (agent.working > 0 && (isActVerb(agent.op ?? "") || MOVES.has(agent.op ?? ""))) setActing(true);
+  }, [live, agent.working, agent.op]);
   const liveRef = useRef(live);
   liveRef.current = live;
   const [ghost, setGhost] = useState<{ x: number; y: number; label: string; travel: number; seq: number } | null>(null);
@@ -70,8 +80,8 @@ export function AgentPresence({ agent, landing, url = "", onToggle, quiet = fals
      and only from this tab's page, never from wherever else the person is typing. */
   useEffect(() => {
     const a = document.activeElement;
-    if (live && a && a.tagName === "WEBVIEW" && root.current?.parentElement?.contains(a)) glass.current?.focus({ preventScroll: true });
-  }, [live]);
+    if (live && acting && a && a.tagName === "WEBVIEW" && root.current?.parentElement?.contains(a)) glass.current?.focus({ preventScroll: true });
+  }, [live, acting]);
 
   /* The lap is rebuilt only when the page changes size. */
   useEffect(() => {
@@ -112,7 +122,7 @@ export function AgentPresence({ agent, landing, url = "", onToggle, quiet = fals
       {/* A pane of glass over the page while an agent drives it: the person's
           pointer, wheel and keys stop here, so not even a hover reaches the page
           until Take over. The agent's own input goes to the guest directly. */}
-      {live && <div ref={glass} className="agx-presence-glass" tabIndex={-1} onPointerDown={(e) => e.currentTarget.focus({ preventScroll: true })} />}
+      {live && acting && <div ref={glass} className="agx-presence-glass" tabIndex={-1} onPointerDown={(e) => e.currentTarget.focus({ preventScroll: true })} />}
       {ghost && (
         <div className={"agx-presence-ghost" + (stale ? " is-stale" : "")} style={{ transform: `translate(${ghost.x}px, ${ghost.y}px)`, transitionDuration: `${ghost.travel}ms` }}>
           <svg className="agx-presence-arrow" viewBox="0 0 20 20" aria-hidden>

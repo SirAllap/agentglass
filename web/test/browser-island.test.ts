@@ -24,7 +24,9 @@ describe("the glass over a driven page", () => {
   const css = Bun.file(new URL("../src/index.css", import.meta.url));
   // A person's hover over a page an agent drove opened menus mid-task.
   test("is up for as long as the island names the agent, and takes the pointer", async () => {
-    expect(presence).toContain('{live && <div ref={glass} className="agx-presence-glass"');
+    expect(presence).toContain('{live && acting && <div ref={glass} className="agx-presence-glass"');
+    // An agent that only read the person's tab locked it for thirty seconds.
+    expect(presence).toContain('else if (agent.working > 0 && (isActVerb(agent.op ?? "") || MOVES.has(agent.op ?? ""))) setActing(true);');
     expect(await css.text()).toMatch(/\.agx-presence-glass \{[^}]*pointer-events: auto/);
   });
 });
