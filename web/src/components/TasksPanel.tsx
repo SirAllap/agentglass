@@ -35,7 +35,7 @@ import { compareOrder } from "../../../shared/orderIndex.ts";
 import { ON_CHIP, ON_CHIP_OK } from "./tasks/chipStyle.ts";
 import { JiraQuickChips, JiraSprintHeader, ParentLabel } from "./jira/JiraBoardContext.tsx";
 import { JiraAreaHead, JiraAreaRail, JiraGroupControl, JiraScope, SPRINTS } from "./jira/JiraAreas.tsx";
-import { areaCards, areaLine, areaRows, defaultPref, groupAreas, groupKeyed, parsePref, prefText, type GroupPref, type KeyGroup } from "../lib/jiraAreas.ts";
+import { areaCards, areaLine, areaRows, defaultPref, epicLabel, groupAreas, groupKeyed, parsePref, prefText, type GroupPref, type KeyGroup } from "../lib/jiraAreas.ts";
 import { TypeMark } from "./jira/JiraSections.tsx";
 import { guessOrder, rankOf, rankable, sortedByOrder, splitSprint, sprintTotals, type ParentGroup } from "../lib/jiraBoardContext.ts";
 import { blockersOf, foldCard, groupByStatus, looksLikeCardId, readyCount, tableColumns } from "../lib/boardGroups.ts";
@@ -2437,7 +2437,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
     void load(boardViewId, false);
   };
   /* The Areas tree: the board's epics counted over the one read the server keeps. An Area is open when its key is in `areaSel`. */
-  const areaList = useMemo(() => areaRows(ctx?.epics ?? [], areas.read?.tasks ?? [], ctx?.sprint?.name), [ctx, areas.read]);
+  const areaList = useMemo(() => areaRows(ctx?.epics ?? [], areas.read?.tasks ?? [], ctx?.sprint?.name, data?.tasks), [ctx, areas.read, data]);
   const hasAreas = !!source.caps.context && areaList.length > 0;
   const sprintView = areaSel === SPRINTS;
   const pref: GroupPref = parsePref(prefRaw, hasAreas, defaultPref(sprintView));
@@ -2985,7 +2985,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
       {!onLooked && inAreaPage && (() => {
         const a = areaList.find((x) => x.key === areaSel);
         return a ? (
-          <JiraAreaHead title={a.name} sub={`${a.key} · ${areas.read?.truncated ? "at least " : ""}${a.total} cards`} done={a.done} total={a.total}
+          <JiraAreaHead title={epicLabel(a.name)} fullTitle={a.name} hint={ctx?.sprint ? "Epics are not shown on the sprint board; their cards are." : undefined} sub={`${a.key} · ${areas.read?.truncated ? "at least " : ""}${a.total} cards`} done={a.done} total={a.total}
             line={areaLine(a.total, a.inSprint, ctx?.sprint?.name, !!areas.read?.truncated)} />
         ) : null;
       })()}

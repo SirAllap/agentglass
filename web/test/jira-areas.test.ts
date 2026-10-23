@@ -3,7 +3,7 @@
  * read carries: a parent epic, a sprint name, a priority, an assignee.
  */
 import { describe, expect, test } from "bun:test";
-import { areaCards, areaLine, areaName, areaRows, defaultPref, groupAreas, groupKeyed, parsePref, prefText } from "../src/lib/jiraAreas.ts";
+import { areaCards, areaLine, areaName, areaRows, epicLabel, defaultPref, groupAreas, groupKeyed, parsePref, prefText } from "../src/lib/jiraAreas.ts";
 import type { JiraBoardEpic, ProviderTask } from "../../shared/providers.ts";
 
 const card = (id: string, o: Partial<ProviderTask> = {}): ProviderTask =>
@@ -40,6 +40,41 @@ describe("the areas of a board", () => {
   test("area groups wear the epic's name, and the bare cards are 'No area'", () => {
     const g = groupAreas(tasks, EPICS);
     expect(g.map((x) => x.title)).toEqual(["Game", "Old launch", "No area"]);
+  });
+});
+
+describe("an epic's name in a narrow rail", () => {
+  test("the [EPIC] tag goes and the name is cut at the first ' (' with the key left to the row", () => {
+    expect(epicLabel("[EPIC] Design system (tokens, components, /design page, screen migration)")).toBe("Design system");
+    expect(epicLabel("[epic]Billing")).toBe("Billing");
+    expect(epicLabel("Area: Mobile")).toBe("Mobile");
+  });
+  test("a long name with no bracket is cut at 28 characters with an ellipsis, a short one is left alone", () => {
+    const l = epicLabel("Migrate every screen of the old checkout to the new payment flow");
+    expect(l).toBe("Migrate every screen of the…");
+    expect(l.length).toBeLessThanOrEqual(28);
+    expect(epicLabel("Design system")).toBe("Design system");
+  });
+  test("a name that is only the tag keeps something to show", () => {
+    expect(epicLabel("[EPIC]")).toBe("[EPIC]");
+  });
+});
+
+describe("the sprint count of an epic whose kept read is older than the sprint", () => {
+  const epics: JiraBoardEpic[] = [{ key: "ORBIT-1135", name: "[EPIC] Design system (tokens)" }];
+  const kept = [card("1", { ...under("ORBIT-1135") }), card("2", under("ORBIT-1135"))];
+  test("a child that the kept read has without a sprint but the board's own read has in it is counted once", () => {
+    const fresh = [card("1", { ...under("ORBIT-1135"), sprint: "Sprint 1" })];
+    expect(areaRows(epics, kept, "Sprint 1", fresh)[0]).toMatchObject({ total: 2, inSprint: 1 });
+    expect(areaRows(epics, [{ ...kept[0]!, sprint: "Sprint 1" }, kept[1]!], "Sprint 1", fresh)[0]).toMatchObject({ total: 2, inSprint: 1 });
+  });
+  test("a card only the board's read has still counts in the total, so the line never says 1 of 0", () => {
+    const fresh = [card("9", { ...under("ORBIT-1135"), sprint: "Sprint 1" })];
+    expect(areaRows(epics, [kept[1]!], "Sprint 1", fresh)[0]).toMatchObject({ total: 2, inSprint: 1 });
+  });
+  test("a card in another sprint, or under another epic, is not counted", () => {
+    const fresh = [card("1", { ...under("ORBIT-1135"), sprint: "Sprint 0" }), card("5", { ...under("ORBIT-16"), sprint: "Sprint 1" })];
+    expect(areaRows(epics, kept, "Sprint 1", fresh)[0]!.inSprint).toBe(0);
   });
 });
 

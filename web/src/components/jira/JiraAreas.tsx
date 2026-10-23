@@ -8,7 +8,7 @@
  * board with neither (where the scope switch is simply not offered).
  */
 import { HIT } from "../../lib/iconSize.ts";
-import { GROUP_BY, type AreaRow, type GroupBy, type GroupPref, type ThenBy } from "../../lib/jiraAreas.ts";
+import { GROUP_BY, epicLabel, type AreaRow, type GroupBy, type GroupPref, type ThenBy } from "../../lib/jiraAreas.ts";
 import { epicTone, sprintLine } from "../../lib/jiraBoardContext.ts";
 import type { JiraBoardSprint } from "../../../../shared/providers.ts";
 import { Segmented, EDGE } from "../workspace/Chrome.tsx";
@@ -45,10 +45,11 @@ export function JiraAreaRail({ project, areas, sprint, now, points, sel, onPick,
       {state === "ready" && !areas.length && <div className="px-3 py-1 text-[11px]" style={{ color: "var(--text3)" }}>This board has no epics to group by.</div>}
       {areas.map((a) => (
         <button key={a.key} onClick={() => onPick(sel === a.key ? null : a.key)} aria-pressed={sel === a.key}
-          title={`${a.name}: ${a.total} cards, ${a.inSprint} in the sprint, ${a.done} done`}
+          title={`${a.name} (${a.key}): ${a.total} cards, ${a.inSprint} in the sprint, ${a.done} done`}
           className="agx-rail-row w-full flex items-center gap-2 text-left" style={row(sel === a.key)}>
           <span aria-hidden className="shrink-0 rounded-full" style={{ width: 8, height: 8, background: `var(${epicTone(a.color)})` }} />
-          <span className="truncate min-w-0 flex-1">{a.name}</span>
+          <span className="truncate min-w-0 flex-1">{epicLabel(a.name)}</span>
+          <span className="shrink-0 truncate" style={{ color: "var(--text4)", fontSize: 10, fontWeight: 400, maxWidth: 56 }}>{a.key}</span>
           <span className="tabular-nums shrink-0" style={{ color: "var(--text3)", fontSize: 11 }}>{a.total}</span>
         </button>
       ))}
@@ -71,14 +72,14 @@ export function JiraAreaRail({ project, areas, sprint, now, points, sel, onPick,
 }
 
 /** The heading over an Area or the sprint: what it is, how many are in the sprint, and how far along it is. */
-export function JiraAreaHead({ title, sub, line, done, total, children }: {
-  title: string; sub?: string; line: string; done: number; total: number; children?: React.ReactNode;
+export function JiraAreaHead({ title, fullTitle, sub, line, hint, done, total, children }: {
+  title: string; fullTitle?: string; sub?: string; line: string; hint?: string; done: number; total: number; children?: React.ReactNode;
 }) {
   const pct = total ? Math.round((done / total) * 100) : 0;
   return (
     <div className="px-4 pt-2.5 pb-1.5 min-w-0" data-testid="jira-area-head">
       <div className="flex items-baseline gap-2.5 min-w-0">
-        <span className="font-bold truncate" style={{ fontSize: 15, color: "var(--text)" }}>{title}</span>
+        <span className="font-bold truncate" title={fullTitle} style={{ fontSize: 15, color: "var(--text)" }}>{title}</span>
         {sub && <span className="truncate text-[11px]" style={{ color: "var(--text3)" }}>{sub}</span>}
       </div>
       <div className="flex items-center gap-3 text-[11.5px] mt-0.5" style={{ color: "var(--text2)" }}>
@@ -89,6 +90,7 @@ export function JiraAreaHead({ title, sub, line, done, total, children }: {
         <span className="tabular-nums" style={{ color: "var(--text3)" }}>{done} done · {Math.max(0, total - done)} open</span>
         {children}
       </div>
+      {hint && <div className="text-[10.5px] mt-0.5" style={{ color: "var(--text4)" }}>{hint}</div>}
     </div>
   );
 }
