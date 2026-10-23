@@ -23,7 +23,7 @@ export function JiraCardPane({ t, writable, onTask, nav, onClose }: CardPaneProp
           {onClose && <CloseButton onClick={onClose} title="Close · Esc" />}
         </div>
       )}
-      <JiraCard key={t.id} t={t} header={(r) => <JiraHead t={t} writable={writable} onTask={onTask} onRefresh={r.onRefresh} refreshing={r.refreshing} />} writes={writable} onTask={onTask} />
+      <JiraCard key={t.id} t={t} header={(r) => <JiraHead t={t} writable={writable} onTask={onTask} onRefresh={r.onRefresh} refreshing={r.refreshing} ed={r.ed} />} writes={writable} onTask={onTask} />
     </div>
   );
 }

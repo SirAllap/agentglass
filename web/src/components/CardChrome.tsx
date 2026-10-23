@@ -86,10 +86,14 @@ export function CardChips({ id, copied, onCopy, mine, extra }: {
 }
 
 /** The title, with the button that copies it after its last word, so it follows the wrap. */
-export function CardTitle({ title, copied, onCopy }: { title: string; copied: Copied | null; onCopy: (value: string, which: Copied) => void }) {
+export function CardTitle({ title, copied, onCopy, children }: {
+  title: string; copied: Copied | null; onCopy: (value: string, which: Copied) => void;
+  /** What stands in for the title's text where it can be typed over; the copy button stays. */
+  children?: React.ReactNode;
+}) {
   return (
     <h2 className="text-[13px] font-semibold leading-snug" style={{ color: "var(--text)", textWrap: "balance" }}>
-      {title}
+      {children ?? title}
       <button onClick={() => onCopy(title, "title")}
         className="inline-flex items-center justify-center align-middle ml-1.5 rounded hover:bg-white/10"
         style={{ width: 20, height: 20, color: copied === "title" ? "var(--success)" : "var(--text4)" }}

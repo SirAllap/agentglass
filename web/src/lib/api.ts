@@ -7,7 +7,7 @@ import type { AskedAlert } from "../../../shared/notifyPayload.ts";
 import type { CheckOnBasePlan, CheckOnBaseStatus } from "../../../shared/checkOnBase.ts";
 import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, EnginesReport, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest } from "../../../shared/types.ts";
 import type { JiraUnits } from "../../../shared/jiraStatusUnits.ts";
-import type { ProvidersResponse, JiraBlockOutcome, JiraConnectResult, JiraHandoffRule, JiraMoves, JiraPerson, JiraSettings, JiraStep, JiraStepChoice, JiraStepKey, JiraStepPr, JiraSteps, JiraStepsRead, JiraStatus, JiraViews, JiraViewRead, JiraViewChoice, JiraProjectChoice, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, CardWebLink, CardEvent, TrackerChoice } from "../../../shared/providers.ts";
+import type { CardEdit, CardFact, ProvidersResponse, JiraBlockOutcome, JiraConnectResult, JiraHandoffRule, JiraMoves, JiraPerson, JiraSettings, JiraStep, JiraStepChoice, JiraStepKey, JiraStepPr, JiraSteps, JiraStepsRead, JiraStatus, JiraViews, JiraViewRead, JiraViewChoice, JiraProjectChoice, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, CardWebLink, CardEvent, TrackerChoice } from "../../../shared/providers.ts";
 import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from "../../../shared/notifyPrefs.ts";
 import type { CheckMetric } from "../../../shared/checkBaseline.ts";
 import type { UiReply } from "../../../shared/uiActions.ts";
@@ -23,6 +23,8 @@ type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? Partial<T[K]> : T
    because this provider answers 401 for a card that does not exist and a code
    pretending to know which it was would be wrong on the common case. */
 type ClickUpWrite = { ok: boolean; error?: string; conflict?: boolean; unauthorised?: boolean; task?: ProviderTask };
+/** One field of a Jira card's Details, as `/jira/edit` takes it (see server/src/jiraEdit.ts). */
+export type JiraEditAsk = { field: string; value?: string | boolean | null; add?: string; remove?: string };
 /** A Jira write's answer: ClickUp's shape, plus `partial` when only some of it landed (a warning, never plain success). */
 type JiraWrite = ClickUpWrite & { partial?: string; /** What each block of a step did, in run order. */ blocks?: JiraBlockOutcome[] };
 
@@ -1477,8 +1479,18 @@ const realApi = {
   jiraPeople: (key: string, q: string) =>
     get<{ ok: boolean; error?: string; throttled?: boolean; people?: { key: string; name: string; initials: string; avatar?: string }[] }>(`/jira/people?${new URLSearchParams({ key, q })}`),
   /** One comment, Markdown; `mentions` are the people named in it, by the id `jiraPeople` gave. */
-  jiraComment: (key: string, text: string, mentions: { id: string; name: string }[] = []) =>
-    post<ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string }>("/jira/comment", { key, text, mentions }),
+  jiraComment: (key: string, text: string, mentions: { id: string; name: string }[] = [], replyTo?: string) =>
+    post<ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string }>("/jira/comment", { key, text, mentions, ...(replyTo ? { replyTo } : {}) }),
+  /** Your own comment, changed (the answer is the comment as it now stands) or deleted. The card's stamp moved with either: read the card again. */
+  jiraCommentEdit: (key: string, id: string, text: string, mentions: { id: string; name: string }[] = []) =>
+    post<ClickUpWrite & { comment?: TaskDetail["comments"][number]; partial?: string }>("/jira/comment/edit", { key, id, text, mentions }),
+  jiraCommentDelete: (key: string, id: string) =>
+    post<ClickUpWrite & { removed?: boolean }>("/jira/comment/delete", { key, id }),
+  /** One field of a card's Details. `updated` is the stamp the person saw; the answer is the card, its Details and what it still lets them change. */
+  jiraEdit: (key: string, ask: JiraEditAsk, updated: number) =>
+    post<ClickUpWrite & { facts?: CardFact[]; edit?: CardEdit }>("/jira/edit", { key, ...ask, updated }),
+  /** Labels the site knows that start with what was typed. */
+  jiraLabels: (q: string) => get<{ ok: boolean; error?: string; throttled?: boolean; labels?: string[] }>(`/jira/labels?q=${encodeURIComponent(q)}`),
   providerTasks: (force = false) =>
     get<ProviderTasksResponse>(`/tasks/provider${force ? "?force=1" : ""}`),
 
@@ -2898,7 +2910,11 @@ const demoApi: typeof realApi = {
   jiraDetail: (_k: string) => D({ ok: false, error: "not available in the demo" }),
   jiraActivity: (_k: string, _kind: "history" | "worklog" | "comments", _at = 0) => D({ ok: false, error: "not available in the demo" }),
   jiraPeople: (_k: string, _q: string) => D({ ok: true, people: [] as { key: string; name: string; initials: string; avatar?: string }[] }),
-  jiraComment: (_k: string, _t: string, _m?: { id: string; name: string }[]) => D({ ok: false, error: "not available in the demo" }),
+  jiraComment: (_k: string, _t: string, _m?: { id: string; name: string }[], _r?: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraCommentEdit: (_k: string, _i: string, _t: string, _m?: { id: string; name: string }[]) => D({ ok: false, error: "not available in the demo" }),
+  jiraCommentDelete: (_k: string, _i: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraEdit: (_k: string, _a: JiraEditAsk, _u: number) => D({ ok: false, error: "not available in the demo" }),
+  jiraLabels: (_q: string) => D({ ok: true, labels: [] as string[] }),
   providerTasks: (_f?: boolean) => D({ tasks: [], more: false, at: 0 }),
   recipes: (_r?: string) => D({ recipes: [] }),
   recipeSave: (_r: Recipe) => D({ ok: false, error: "not available in the demo" }),

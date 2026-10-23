@@ -111,7 +111,7 @@ naming a level is the answer, not a puzzle. Ask the person.
 
 A card on a Jira site is not a window, so it is not a door in the list above:
 `agentglass-ui jira ...` (MCP: `ui_jira_card`, `ui_jira_moves`, `ui_jira_links`, `ui_jira_activity`, `ui_jira_steps`,
-`ui_jira_step`, `ui_jira_link`) talks to the same routes the screen uses, under
+`ui_jira_step`, `ui_jira_link`, `ui_jira_edit`, `ui_jira_comment`, `ui_jira_comment-edit`, `ui_jira_comment-delete`) talks to the same routes the screen uses, under
 the same switch.
 
 ```bash
@@ -123,6 +123,11 @@ agentglass-ui --as my-agent jira steps               # handoff, review, merge: w
 agentglass-ui --as my-agent jira step ORBIT-1042 handoff --updated <state.updated> \
     --pr-url https://github.com/acme/orbit/pull/318 --pr-title "Retry the export"
 agentglass-ui --as my-agent jira link ORBIT-1042 https://github.com/acme/orbit/pull/318
+agentglass-ui --as my-agent jira edit ORBIT-1042 --field priority --value 2 --updated <state.updated>   # one field of the Details
+agentglass-ui --as my-agent jira edit ORBIT-1042 --field duedate --clear --updated <state.updated>      # take a date off
+agentglass-ui --as my-agent jira comment ORBIT-1042 --text "Fixed in the next build" --reply-to 30004   # a comment; --reply-to threads it (Cloud)
+agentglass-ui --as my-agent jira comment-edit ORBIT-1042 --id 30004 --text "Fixed in 0.24"            # your own comment only
+agentglass-ui --as my-agent jira comment-delete ORBIT-1042 --id 30004 --confirm                        # your own, for good
 ```
 
 - `step` runs what the owner configured (the move, the comment, the link) as one
@@ -130,7 +135,15 @@ agentglass-ui --as my-agent jira link ORBIT-1042 https://github.com/acme/orbit/p
   card first, and if the answer is a `409` conflict the card moved, so read it
   again and decide again rather than retry. `--to`, `--stay`, `--clear`,
   `--assign` and `--comment` answer a block that asks when it runs.
-- **`step` and `link` change a shared site, with no click from the person.**
+- `edit` changes one field per call: `summary`, `priority` (an id), `labels` (`--add` or
+  `--remove` one), `duedate`, `start` (`2026-01-31`), `parent` (a card id), `flag`
+  (`--value true`), `originalEstimate`, `remainingEstimate` (`2h 30m`); `--clear` takes
+  a date, the parent, the flag or an estimate off. A field the card's own edit screen
+  does not offer is refused before it is sent, and a `409` means the card moved since
+  `--updated`: read it again. `comment-edit` and `comment-delete` work only on a
+  comment of the connected account, and delete needs `--confirm` because it cannot be
+  undone (the screen asks first).
+- **`step`, `link`, `edit`, `comment`, `comment-edit` and `comment-delete` change a shared site, with no click from the person.**
   They run only when the owner has done two things: started the server at
   control level 3, and switched Jira writes on. On a server as it starts
   (level 2), at level 1 or read-only, each is refused with a `403` and a

@@ -144,7 +144,8 @@ describe("every shared floating component closes with its owner", () => {
   }
 
   it("the Tasks card's menus carry it: status band, priority, sprint and field through Select, tags and card hop on their own", () => {
-    const src = code("components/TasksPanel.tsx");
+    // Priority and the tag box moved to tasks/CardEdit.tsx; the menus are still the Tasks card's.
+    const src = code("components/TasksPanel.tsx") + "\n" + code("components/tasks/CardEdit.tsx");
     expect(code("components/Select.tsx")).toMatch(/useCloseWithOwner\(\(\) => setOpen\(false\), \{ open, from: btnRef \}\)/);
     for (const head of ["<Select value={t.status}", "<Select value={now} busy={busy} disabled={!writable}", "<Select value={now} busy={busy} loading={loading}", "<Select value={now} busy={busy} title={busy ? `Setting"]) expect(src).toContain(head);
     expect(src).not.toMatch(/useCloseWithOwner\([^\n]*open: statusOpen/);

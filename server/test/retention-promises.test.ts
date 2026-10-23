@@ -238,6 +238,11 @@ describe("the promises SECURITY.md makes about retention", () => {
     // somebody wrote by mistake would be an odd reading of a promise about
     // telemetry. Ours records nothing about it either way.
     "/clickup/comment/delete",
+    // Deletes the person's own comment on a Jira card, in Jira, by its id and
+    // only when its author is the connected account. Same reading as the
+    // ClickUp comment above: it is their workspace's text, ours records nothing
+    // about it, and no database is opened. The check below holds it to that.
+    "/jira/comment/delete",
     // DOES remove a row, and SECURITY.md says so: a status line on the
     // Lantern's board, by name, whoever posted it — the fourth of the rows the
     // document names as removable, beside `/agents/status` with `done`, which

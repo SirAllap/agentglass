@@ -67,11 +67,17 @@ describe("the tracker card's chip", () => {
 
   test("the priority menu lists all five, marks the current one and calls the empty one Clear: it is the app's Select", async () => {
     const src = await Bun.file(new URL("../src/components/TasksPanel.tsx", import.meta.url)).text();
+    // The menu moved to tasks/CardEdit.tsx (PriorityMenu); the write stays in the ClickUp wrapper.
+    const edit = await Bun.file(new URL("../src/components/tasks/CardEdit.tsx", import.meta.url)).text();
+    const mAt = edit.indexOf("export function PriorityMenu(");
+    const menu = edit.slice(mAt, edit.indexOf("\n}\n", mAt));
+    // Clear is offered by default (ClickUp can leave a card without a priority); Jira turns it off, which has no such card.
+    expect(menu).toContain('const all = [...options, ...(clearable ? [{ id: "", label: "Clear", c: "var(--text4)" }] : [])];');
+    expect(menu).toContain("<Select value={now}");
+    expect(menu).toContain("<Flag c={o.c} on={!!o.id} />");
     const at = src.indexOf("function PriorityPick(");
     const body = src.slice(at, src.indexOf("function ClickUpRow(", at));
-    expect(body).toContain('const all = [...PRIOS, { id: "", label: "Clear", c: "var(--text4)" } as const];');
-    expect(body).toContain("<Select value={now}");
-    expect(body).toContain("<Flag c={o.c} on={!!o.id} />");
+    expect(body).toContain("options={PRIOS}");
     expect(body).toContain('api.clickupPriority(t.id, id || null, stamp)');
   });
 

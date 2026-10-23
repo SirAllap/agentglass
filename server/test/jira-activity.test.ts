@@ -117,7 +117,8 @@ for (const flavor of ["cloud", "datacenter"] as FakeFlavor[]) {
 
     test("opening a card asks for no history, and carries the first work log from the same read", async () => {
       const r = await K.detailStored("ORBIT-1042");
-      expect(wire()).toEqual(["GET /issue/ORBIT-1042"]);
+      // The issue read, and on Cloud the comment list once for who answers whom (the comments inside an issue read carry no parentId).
+      expect(wire().filter((w) => !w.endsWith("/comment"))).toEqual(["GET /issue/ORBIT-1042"]);
       const q = fake.requests[0]!.query;
       expect(q.fields!.split(",")).toContain("worklog");
       expect(q.fields).not.toContain("changelog");

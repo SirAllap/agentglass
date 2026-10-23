@@ -1073,6 +1073,24 @@ export interface CardFact {
   initials?: string;
   /** A state worth a colour, not a value to read: the card is flagged. */
   tone?: "flag";
+  /** The edit this row takes (see `CardEdit`), and the value as the site would be sent it back (an estimate as "2h 30m", a date as 2026-01-31). */
+  field?: string;
+  raw?: string;
+}
+
+/**
+ * What this card's edit screen lets the app change, read off the site's own `editmeta`. Absent when writing to Jira is
+ * switched off or the site named no fields: a control is drawn only for what is listed here.
+ */
+export interface CardEdit {
+  /** Edit keys the site offers on this card: summary, priority, labels, duedate, start, parent, flag, originalEstimate, remainingEstimate. */
+  fields: string[];
+  /** The priorities this card may take, most urgent first. */
+  priorities: { id: string; name: string }[];
+  /** The one it has now, by the site's id (the card's own `priority` is a rank, which says nothing of which of two High-ish names it is). */
+  priority?: { id: string; name: string };
+  /** Whether a comment can be answered in a thread (Cloud) or only added (Data Center). */
+  reply: boolean;
 }
 
 /** A link from the card to a page: any address, not only a pull request. */
@@ -1094,6 +1112,8 @@ export interface TaskDetail {
   linked?: CardLinked[];
   /** The card's Details under the properties; a field the site does not offer here and the card does not have is not in it. */
   facts?: CardFact[];
+  /** What may be changed from here; see `CardEdit`. */
+  edit?: CardEdit;
   /** The files on the card. Metadata only — see CardAttachment. */
   attachments?: CardAttachment[];
   /**
@@ -1112,6 +1132,14 @@ export interface TaskDetail {
     mine?: boolean;
     /** Ticked off in ClickUp. */
     resolved?: boolean;
+    /** Jira: the comment was changed after it was written. */
+    edited?: boolean;
+    /** Jira: who can see it, when it is not everybody (a role or group the site named). */
+    restricted?: string;
+    /** Jira: the people the comment names, as a write takes them back, so a changed comment keeps its mentions. */
+    mentions?: { id: string; name: string }[];
+    /** Jira (Cloud): the comment this one answers; absent on a comment that starts a thread. */
+    parentId?: string;
     /** How many replies the thread has, from the workspace's own count. */
     replies?: number;
     /** The author's face, the way a reply already carries one. ClickUp draws it

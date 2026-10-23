@@ -20,6 +20,8 @@ registry of doors a Stream Deck button does (POST /control).
     agentglass-ui jira steps                    # the configured steps (handoff, review, merge) and whether each is on
     agentglass-ui jira step ORBIT-1042 handoff --updated 1768294800000 --pr-url https://github.com/acme/orbit/pull/318
     agentglass-ui jira link ORBIT-1042 https://github.com/acme/orbit/pull/318
+    agentglass-ui jira edit ORBIT-1042 --field priority --value 2 --updated 1768294800000   # one field of the Details
+    agentglass-ui jira comment ORBIT-1042 --text "Fixed in the next build" --reply-to 30004   # a comment, or a thread reply
 
 Every answer is one JSON object on stdout, {"ok": true, ...} or
 {"ok": false, "error": "one sentence"}; the exit code is 0 when ok and 1
@@ -399,9 +401,31 @@ JIRA_VERBS = {
              }},
     "link": {"acting": True, "surface": "link a pull request to a card, once (refused below control level 3, when Jira writes are off, or when the address is not a pull request on a known host)",
              "args": {"key": ("a card id such as ORBIT-1042", True), "url": ("the pull request's address", True), "title": ("its title", False)}},
+    "edit": {"acting": True,
+             "surface": "change one field of a card's Details: title (summary), priority (a priority id), labels (add or remove one), duedate or start (2026-01-31), parent (a card id), flag (true or false), originalEstimate or remainingEstimate (2h 30m); `clear` takes a date, the parent, the flag or an estimate off. Refused below control level 3, when Jira writes are off, for a field the card's edit screen does not offer, or when the card changed since `updated`; the answer is the card as it now stands",
+             "args": {
+                 "key": ("a card id such as ORBIT-1042", True),
+                 "field": ("summary, priority, labels, duedate, start, parent, flag, originalEstimate or remainingEstimate", True),
+                 "updated": ("the stamp from `card` (state.updated)", True),
+                 "value": ("the new value, as text", False),
+                 "add": ("labels only: the label to add", False),
+                 "remove": ("labels only: the label to take off", False),
+                 "clear": ("true to take the value off", False),
+             }},
+    "comment": {"acting": True,
+                "surface": "add a comment to a card, or answer one in its thread with reply_to (Cloud only); refused below control level 3 or when Jira writes are off",
+                "args": {"key": ("a card id such as ORBIT-1042", True), "text": ("the comment, as Markdown", True),
+                         "reply_to": ("the id of the comment this answers", False)}},
+    "comment-edit": {"acting": True,
+                     "surface": "change one of the connected account's own comments; refused for anybody else's, below control level 3 or when Jira writes are off",
+                     "args": {"key": ("a card id such as ORBIT-1042", True), "id": ("the comment's id", True), "text": ("the new text, as Markdown", True)}},
+    "comment-delete": {"acting": True,
+                       "surface": "delete one of the connected account's own comments, for good; refused for anybody else's, below control level 3 or when Jira writes are off, and unless confirm is true",
+                       "args": {"key": ("a card id such as ORBIT-1042", True), "id": ("the comment's id", True),
+                                "confirm": ("true to say you mean it: it cannot be undone", True)}},
 }
 _JIRA_INT = ("updated", "pr_number", "start")
-_JIRA_BOOL = ("stay", "clear")
+_JIRA_BOOL = ("stay", "clear", "confirm")
 
 
 def jira_body(verb, given, as_name=None):
@@ -433,8 +457,11 @@ def jira_body(verb, given, as_name=None):
         elif not isinstance(v, str):
             return None, f"{k} must be text"
         flat[k] = v
-    body = {k: flat[k] for k in ("key", "trigger", "updated", "url", "title") if k in flat}
-    choice = {k: flat[k] for k in ("to", "stay", "clear", "assign", "comment") if k in flat}
+    body = {k: flat[k] for k in ("key", "trigger", "updated", "url", "title", "field", "value", "add", "remove", "id", "text", "reply_to", "confirm") if k in flat}
+    # `clear` is a step's choice on a step and a top-level word on an edit.
+    if verb == "edit" and "clear" in flat:
+        body["clear"] = flat["clear"]
+    choice = {k: flat[k] for k in ("to", "stay", "clear", "assign", "comment") if k in flat and verb == "step"}
     pr = {k[3:]: flat[k] for k in ("pr_url", "pr_title", "pr_number", "pr_author") if k in flat}
     if choice:
         body["choice"] = choice
@@ -500,7 +527,7 @@ def main(argv=None):
     pm = p.add_mutually_exclusive_group()
     pm.add_argument("--now", action="store_true", help="open it at once: ONLY when the person just asked you to prepare this")
     pm.add_argument("--quiet", action="store_true", help="wait behind a chip if the person is typing (the default)")
-    p = sub.add_parser("jira", help="a Jira card through the routes the screen uses: card, moves, links, activity, steps, step, link")
+    p = sub.add_parser("jira", help="a Jira card through the routes the screen uses: card, moves, links, activity, steps, step, link, edit, comment, comment-edit, comment-delete")
     js = p.add_subparsers(dest="jverb", required=True)
     for verb, spec in JIRA_VERBS.items():
         q = js.add_parser(verb, help=spec["surface"])

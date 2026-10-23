@@ -12,9 +12,16 @@
  * Every state is drawn: reading, failed with a way to try again, empty, and a
  * history that is longer than the site would give.
  *
- * Ceiling: the rows are Jira's words as Jira wrote them; there is no reply,
- * edit or delete here yet, and a comment restricted to a role is read like any
- * other because the site only sends the ones this account may see.
+ * Comments: threads one level deep (Cloud), a reply box at the pane's foot that
+ * says whom it answers, your own comment changed in place or deleted after one
+ * sentence that says it cannot come back, an "edited" marker and a marker on a
+ * comment restricted to a role.
+ *
+ * Ceiling: the rows are Jira's words as Jira wrote them. A changed comment is
+ * sent as Markdown with the people it named, so what Markdown cannot say (a
+ * panel, a table cell merge) is flattened the way the card's description would
+ * be. The All tab draws a reply in time order with the name it answers, not
+ * nested.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api.ts";
@@ -22,11 +29,14 @@ import { fmtAgo } from "../../lib/format.ts";
 import { Markdown } from "../../lib/markdown.tsx";
 import { avatarSrc } from "../../lib/avatarSrc.ts";
 import { chipInk } from "../../lib/contrast.ts";
-import { ACTIVITY_TABS, allRows, commentsFor, eventsFor, needsHistory, type ActivityTab } from "../../lib/jiraActivityRows.ts";
+import { ACTIVITY_TABS, allRows, eventsFor, needsHistory, type ActivityTab } from "../../lib/jiraActivityRows.ts";
+import { answeredBy, threadsOf } from "../../lib/jiraThreads.ts";
 import type { CardEvent, TaskDetail } from "../../../../shared/providers.ts";
 import { EventRun } from "../CardEventRun.tsx";
 import { CardTabs } from "../CardChrome.tsx";
+import { CommentAction } from "../tasks/CardEdit.tsx";
 import { Spinner } from "../Spinner.tsx";
+import { ICON } from "../../lib/iconSize.ts";
 import { EDGE } from "../workspace/Chrome.tsx";
 import { Section } from "./JiraSections.tsx";
 
@@ -72,17 +82,140 @@ export function Author({ who, initials, avatar, size = 18 }: { who: string; init
     style={{ ...box, fontSize: Math.max(9, Math.round(size * 0.36)), background: "var(--bg4)", color: chipInk(null) }}>{initials || "?"}</span>;
 }
 
-function CommentRow({ c }: { c: Comment }) {
+/**
+ * What a person can do to the comments, handed down by the card while writing to
+ * Jira is on and the site described the card; absent, the comments are only read.
+ * `edit` and `remove` answer with the sentence that says why they did not land,
+ * or null when they did.
+ */
+export interface CommentAct {
+  /** Replies are threaded here (Cloud); on Data Center there is no reply control. */
+  reply: boolean;
+  /** The comment the box at the foot is answering, if any. */
+  replyingTo: string | null;
+  onReply: (c: Comment | null) => void;
+  edit: (c: Comment, text: string) => Promise<string | null>;
+  remove: (c: Comment) => Promise<string | null>;
+}
+
+const LOCK = "M7 11V8a5 5 0 0 1 10 0v3M5 11h14v9H5z";
+
+/** One comment's card: who and when (edited, restricted), its words or the box they are changed in, and what can be done to it. */
+function CommentCard({ c, act, root, answers }: { c: Comment; act?: CommentAct; root: Comment; answers?: string }) {
+  const [mode, setMode] = useState<"read" | "edit" | "delete">("read");
+  const [draft, setDraft] = useState(c.text);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  useEffect(() => { if (mode === "read") setDraft(c.text); }, [c.text, mode]);
+  const gone = useRef(false);
+  useEffect(() => { gone.current = false; return () => { gone.current = true; }; }, []);
+
+  const save = async () => {
+    if (!act || busy) return;
+    if (!draft.trim()) { setErr("A comment cannot be empty: delete it instead"); return; }
+    if (draft.trim() === c.text.trim()) { setMode("read"); return; }
+    setBusy(true); setErr("");
+    const why = await act.edit(c, draft);
+    if (gone.current) return;
+    setBusy(false);
+    if (why) setErr(why); else setMode("read");
+  };
+  const drop = async () => {
+    if (!act || busy) return;
+    setBusy(true); setErr("");
+    const why = await act.remove(c);
+    if (gone.current) return;
+    setBusy(false);
+    if (why) setErr(why);
+  };
+
+  return (
+    <div className="agx-card rounded-lg px-3 py-2 min-w-0" style={{ border: EDGE }}>
+      <div className="text-[10.5px] mb-1 flex items-center gap-x-1 flex-wrap">
+        <span className="font-semibold" style={{ color: "var(--text2)" }}>{c.who}</span>
+        {c.at > 0 && <span style={{ color: "var(--text4)" }} title={new Date(c.at).toLocaleString()}>{" · "}{fmtAgo(c.at)} ago</span>}
+        {c.edited && <span style={{ color: "var(--text4)" }} title="Changed after it was written">{" · "}edited</span>}
+        {answers && <span style={{ color: "var(--text4)" }}>{" · "}replying to {answers}</span>}
+        {c.restricted && (
+          <span className="inline-flex items-center gap-1 rounded px-1" style={{ color: "var(--warning-ink)", border: EDGE }} title={`Only ${c.restricted} can see this comment`}>
+            <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d={LOCK} /></svg>
+            Restricted to {c.restricted}
+          </span>
+        )}
+      </div>
+      {mode === "edit" ? (
+        <div className="flex flex-col gap-1.5">
+          <textarea value={draft} autoFocus rows={4} disabled={busy} aria-label="Change this comment"
+            onChange={(e) => { setDraft(e.target.value); setErr(""); }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void save(); }
+              // Escape closes the box and nothing else: it must not reach the pane behind it.
+              if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setMode("read"); setErr(""); }
+            }}
+            className="w-full text-[11.5px] rounded px-2 py-1.5 outline-none resize-y"
+            style={{ background: "var(--bg)", color: "var(--text)", border: EDGE, minHeight: 64 }} />
+          <div className="flex items-center gap-2 text-[10.5px]">
+            <button className="agx-btn rounded-md px-2 py-0.5" disabled={busy} onClick={() => void save()} style={{ color: "var(--text)", border: EDGE }}>{busy ? "Saving…" : "Save"}</button>
+            <button className="agx-btn rounded-md px-2 py-0.5" disabled={busy} onClick={() => { setMode("read"); setErr(""); }} style={{ color: "var(--text3)" }}>Cancel</button>
+            <span style={{ color: "var(--text4)" }}>Markdown · Ctrl+Enter saves</span>
+          </div>
+        </div>
+      ) : (
+        <div className="agx-cu-body agx-cu-note min-w-0 break-words"><Markdown text={c.text} /></div>
+      )}
+      {err && <div className="text-[10.5px] mt-1" role="alert" style={{ color: "var(--error-ink)" }}>{err}</div>}
+      {act && mode === "read" && (
+        <div className="flex items-center gap-1 mt-1.5">
+          {act.reply && (
+            <CommentAction iconOnly label="Reply" title={`Answer ${root.who} in this thread`} d="M9 14l-5-5 5-5M4 9h9a7 7 0 0 1 7 7v4"
+              on={act.replyingTo === root.id} tone="var(--primary)" onClick={() => act.onReply(act.replyingTo === root.id ? null : root)} />
+          )}
+          {c.mine && (
+            <>
+              <CommentAction iconOnly label="Edit" title="Change this comment" d="M4 20h4l10-10a2.8 2.8 0 0 0-4-4L4 16v4z" onClick={() => { setDraft(c.text); setMode("edit"); }} />
+              <span aria-hidden className="mx-0.5" style={{ width: 1, height: 16, background: "color-mix(in srgb, var(--text) 12%, transparent)" }} />
+              <CommentAction iconOnly label="Delete" title="Delete this comment" tone="var(--error)" d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13M10 11v6M14 11v6" onClick={() => setMode("delete")} />
+            </>
+          )}
+        </div>
+      )}
+      {/* Asked in place, and said in full: nothing in Jira brings a deleted comment back. */}
+      {act && mode === "delete" && (
+        <div className="flex items-center gap-2 mt-1.5 text-[10.5px] flex-wrap" role="alertdialog" aria-label="Delete this comment?">
+          <span style={{ color: "var(--text2)" }}>Delete this comment for good? Jira cannot bring it back.</span>
+          <button className="agx-btn rounded-md px-2 py-0.5" disabled={busy} onClick={() => void drop()} style={{ color: "var(--error-ink)", border: EDGE }}>{busy ? "Deleting…" : "Delete"}</button>
+          <button className="agx-btn rounded-md px-2 py-0.5" disabled={busy} onClick={() => { setMode("read"); setErr(""); }} style={{ color: "var(--text3)" }}>Keep it</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CommentRow({ c, act, answers }: { c: Comment; act?: CommentAct; answers?: string }) {
   return (
     <div className="agx-ev">
       <span className="agx-av"><Author who={c.who} initials={c.initials} avatar={c.avatar} size={FACE} /></span>
-      <div className="agx-card rounded-lg px-3 py-2 min-w-0" style={{ border: EDGE }}>
-        <div className="text-[10.5px] mb-1">
-          <span className="font-semibold" style={{ color: "var(--text2)" }}>{c.who}</span>
-          {c.at > 0 && <span style={{ color: "var(--text4)" }} title={new Date(c.at).toLocaleString()}>{" · "}{fmtAgo(c.at)} ago</span>}
+      <CommentCard c={c} act={act} root={c} answers={answers} />
+    </div>
+  );
+}
+
+/** A comment and the answers under it, one level deep as Jira draws them. */
+function ThreadRow({ root, replies, orphan, act }: { root: Comment; replies: Comment[]; orphan: boolean; act?: CommentAct }) {
+  return (
+    <div className="agx-ev">
+      <span className="agx-av"><Author who={root.who} initials={root.initials} avatar={root.avatar} size={FACE} /></span>
+      <CommentCard c={root} act={act} root={root} answers={orphan ? "a comment that is not shown" : undefined} />
+      {replies.length > 0 && (
+        <div className="mt-2 ml-2 pl-3 flex flex-col gap-2" style={{ borderLeft: "2px solid var(--surface-line)" }} aria-label={`Answers to ${root.who}`}>
+          {replies.map((r) => (
+            <div key={r.id} className="flex items-start gap-2 min-w-0">
+              <span className="mt-0.5 shrink-0"><Author who={r.who} initials={r.initials} avatar={r.avatar} size={20} /></span>
+              <div className="min-w-0 flex-1"><CommentCard c={r} act={act} root={root} /></div>
+            </div>
+          ))}
         </div>
-        <div className="agx-cu-body agx-cu-note min-w-0 break-words"><Markdown text={c.text} /></div>
-      </div>
+      )}
     </div>
   );
 }
@@ -96,8 +229,10 @@ const EMPTY: Record<ActivityTab, string> = {
 
 const MORE_BTN = "agx-btn text-[10.5px] px-2.5 py-1 rounded-lg";
 
-export function JiraActivity({ cardKey, comments, moreComments, onMoreComments, worklog, worklogMore }: {
+export function JiraActivity({ cardKey, comments, moreComments, onMoreComments, worklog, worklogMore, act }: {
   cardKey: string;
+  /** What can be done to the comments; absent where they are only read. */
+  act?: CommentAct;
   comments: Comment[];
   /** Comments the card read left out. */
   moreComments: number;
@@ -209,12 +344,12 @@ export function JiraActivity({ cardKey, comments, moreComments, onMoreComments, 
 
   let body: React.ReactNode;
   if (tab === "comments") {
-    const rows = commentsFor(comments, newest);
+    const rows = threadsOf(comments, newest);
     body = (
       <>
         {newest && moreCommentsBar}
         {!rows.length && !moreComments && <div className="text-[11px]" style={{ color: "var(--text4)" }}>{EMPTY.comments}</div>}
-        <div className="agx-jtl">{rows.map((c) => <CommentRow key={c.id} c={c} />)}</div>
+        <div className="agx-jtl">{rows.map((t) => <ThreadRow key={t.root.id} root={t.root} replies={t.replies} orphan={t.orphan} act={act} />)}</div>
         {!newest && moreCommentsBar}
       </>
     );
@@ -234,6 +369,7 @@ export function JiraActivity({ cardKey, comments, moreComments, onMoreComments, 
     );
   } else {
     const rows = allRows(comments, history.events, logEvents, newest);
+    const answered = answeredBy(comments);
     body = (
       <>
         {newest && moreCommentsBar}
@@ -242,7 +378,7 @@ export function JiraActivity({ cardKey, comments, moreComments, onMoreComments, 
         <div className="agx-jtl">
           {rows.map((row) => row.kind === "events"
             ? <EventRun key={row.id} events={row.events} open={openRuns.has(row.id)} onToggle={() => runToggle(row.id)} />
-            : <CommentRow key={row.comment.id} c={row.comment} />)}
+            : <CommentRow key={row.comment.id} c={row.comment} act={act} answers={answered.get(row.comment.id)} />)}
         </div>
         {!newest && historyBar}
         {!newest && moreCommentsBar}

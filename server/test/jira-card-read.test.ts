@@ -63,9 +63,9 @@ for (const flavor of ["cloud", "datacenter"] as FakeFlavor[]) {
     const detail = async (key: string) => (await K.detailStored(key)).data!.detail;
     const facts = async (key: string) => Object.fromEntries((await detail(key)).facts!.map((f) => [f.id, f]));
 
-    test("opening a card is one request, with the named field list and the edit screen's field list", async () => {
+    test("opening a card is one request (two on Cloud for a card with comments, to know who answers whom), with the named field list and the edit screen's field list", async () => {
       await K.detailStored("ORBIT-1042");
-      expect(fake.requests.map((r) => `${r.method} ${r.path}`)).toEqual(["GET /issue/ORBIT-1042"]);
+      expect(fake.requests.map((r) => `${r.method} ${r.path}`)).toEqual(["GET /issue/ORBIT-1042", ...(dc ? [] : ["GET /issue/ORBIT-1042/comment"])]);
       const q = fake.requests[0]!.query;
       expect(q.expand).toBe("editmeta");
       const asked = q.fields!.split(",");
@@ -80,7 +80,10 @@ for (const flavor of ["cloud", "datacenter"] as FakeFlavor[]) {
       // Fix versions and time are offered here and filled; components are filled though not offered; Affects versions are neither.
       expect(f.components!.value).toBe("Sync");
       expect(f.fixVersions!.value).toBe("2.4");
-      expect(f.time!.value).toBe("4h spent · 2d estimated · 1d 4h left");
+      // Where the screen offers time, the estimates are two rows that can be changed and the line keeps what is spent.
+      expect(f.time!.value).toBe("4h spent");
+      expect(f.originalEstimate).toMatchObject({ value: "2d", field: "originalEstimate", raw: "2d" });
+      expect(f.remainingEstimate).toMatchObject({ value: "1d 4h", field: "remainingEstimate", raw: "1d 4h" });
       expect("versions" in f).toBe(false);
     });
 
@@ -154,7 +157,7 @@ for (const flavor of ["cloud", "datacenter"] as FakeFlavor[]) {
     test("a site's zero time is no time", () => {
       const f = { timetracking: { timeSpent: "0m" } };
       expect(R.factsOf(f, {}, null)).toEqual([]);
-      expect(R.factsOf(f, {}, new Set(["timetracking"])).map((x) => [x.id, x.value])).toEqual([["time", ""]]);
+      expect(R.factsOf(f, {}, new Set(["timetracking"])).map((x) => [x.id, x.value])).toEqual([["originalEstimate", ""], ["remainingEstimate", ""]]);
       expect(R.factsOf({ timetracking: { timeSpent: "30m", remainingEstimate: "0m" } }, {}, null)[0]!.value).toBe("30m spent");
     });
 

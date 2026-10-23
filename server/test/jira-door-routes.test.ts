@@ -395,7 +395,7 @@ describe.skipIf(!HAVE_PY)("the card verbs, as pure functions", () => {
   test("the CLI's verbs are the server's, no more and no fewer", () => {
     expect(py(CLI, "print(json.dumps(list(g['JIRA_VERBS'])))")).toEqual([...DOOR_VERBS]);
     const acting = py(CLI, "print(json.dumps([k for k, v in g['JIRA_VERBS'].items() if v['acting']]))");
-    expect(acting).toEqual(["step", "link"]);
+    expect(acting).toEqual(["step", "link", "edit", "comment", "comment-edit", "comment-delete"]);
   });
 
   test("a step's choice and pull request travel nested, as the route reads them, and the name is stamped", () => {
@@ -418,14 +418,14 @@ describe.skipIf(!HAVE_PY)("the card verbs, as pure functions", () => {
   test("the MCP twin lists one tool per verb, reads marked read-only, acting ones not", () => {
     const tools = py(MCP, "print(json.dumps(g['jira_tools']()))") as { name: string; annotations: { readOnlyHint: boolean }; inputSchema: { required: string[] } }[];
     expect(tools.map((t) => t.name)).toEqual(DOOR_VERBS.map((v) => `ui_jira_${v}`));
-    expect(Object.fromEntries(tools.map((t) => [t.name, t.annotations.readOnlyHint]))).toEqual({ ui_jira_card: true, ui_jira_moves: true, ui_jira_links: true, ui_jira_activity: true, ui_jira_steps: true, ui_jira_step: false, ui_jira_link: false });
+    expect(Object.fromEntries(tools.map((t) => [t.name, t.annotations.readOnlyHint]))).toEqual({ ui_jira_card: true, ui_jira_moves: true, ui_jira_links: true, ui_jira_activity: true, ui_jira_steps: true, ui_jira_step: false, ui_jira_link: false, ui_jira_edit: false, ui_jira_comment: false, "ui_jira_comment-edit": false, "ui_jira_comment-delete": false });
     expect(tools.find((t) => t.name === "ui_jira_step")!.inputSchema.required).toEqual(["key", "trigger", "updated"]);
   });
 
   test("below level 3 the MCP twin lists the reads only, and a step is marked as able to take something away", () => {
     for (const level of [1, 2]) expect((py(MCP, "print(json.dumps(g['jira_tools'](D)))", level) as { name: string }[]).map((t) => t.name)).toEqual(["ui_jira_card", "ui_jira_moves", "ui_jira_links", "ui_jira_activity", "ui_jira_steps"]);
     const at3 = py(MCP, "print(json.dumps(g['jira_tools'](3)))") as { name: string; annotations: { destructiveHint: boolean } }[];
-    expect(Object.fromEntries(at3.map((t) => [t.name, t.annotations.destructiveHint]))).toEqual({ ui_jira_card: false, ui_jira_moves: false, ui_jira_links: false, ui_jira_activity: false, ui_jira_steps: false, ui_jira_step: true, ui_jira_link: false });
+    expect(Object.fromEntries(at3.map((t) => [t.name, t.annotations.destructiveHint]))).toEqual({ ui_jira_card: false, ui_jira_moves: false, ui_jira_links: false, ui_jira_activity: false, ui_jira_steps: false, ui_jira_step: true, ui_jira_link: false, ui_jira_edit: false, ui_jira_comment: false, "ui_jira_comment-edit": false, "ui_jira_comment-delete": true });
   });
 });
 

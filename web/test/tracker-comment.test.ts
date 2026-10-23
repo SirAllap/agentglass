@@ -108,7 +108,8 @@ const code = (s: string) => s.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.te
 describe("the Jira card pane", () => {
   test("header and composer stay put; only the thread between them scrolls", () => {
     const src = code(pane);
-    const header = src.indexOf('<div className="shrink-0" style={{ background: "var(--bg)" }}>{header({ onRefresh: refresh, refreshing })}</div>');
+    // The header wrapper now also holds the edit note's reserved line; it is still one fixed block above the scroller.
+    const header = src.indexOf('<div className="shrink-0" style={{ background: "var(--bg)" }}>');
     const scroller = src.indexOf('<div ref={listRef} className="agx-scroll flex-1 min-h-0 overflow-y-auto');
     const foot = src.indexOf('<div className="shrink-0 px-4 pt-2 pb-3" style={{ borderTop: LINE }}>');
     const box = src.indexOf("<Composer value={say}");
@@ -133,9 +134,10 @@ describe("the Jira card pane", () => {
 
   test("a comment that brings the thread back is not followed by another read", () => {
     const send = code(pane).slice(code(pane).indexOf("const send = () => {"));
-    expect(send).toMatch(/if \(r\.detail\) \{ setDetail\(r\.detail\);[^\n]*\}\n\s*else void read\(\);/);
+    // The detail is merged with the threads already held (keepThreads), which is still "use what came back".
+    expect(send).toMatch(/if \(r\.detail\) \{ const sent = r\.detail; setDetail\([^\n]*\}\n\s*else void read\(\);/);
     // The mentions sent are the people the text names among those offered.
-    expect(send).toContain("TRACKERS.jira.comment(detail?.task ?? t, say, offered.current.named(say))");
+    expect(send).toContain("TRACKERS.jira.comment(detail?.task ?? t, say, offered.current.named(say), replyTo?.id)");
     // A refused comment keeps its draft.
     expect(send).toMatch(/if \(!r\.ok\) \{ setSayErr\([^)]*\); return; \}/);
   });

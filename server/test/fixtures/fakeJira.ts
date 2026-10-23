@@ -126,6 +126,10 @@ export interface FakeComment {
   created: string;
   updated: string;
   body: unknown;
+  /** The comment this one answers (Cloud's threads). */
+  parentId?: string;
+  /** Who may see it, when not everybody. */
+  visibility?: { type: string; value: string };
 }
 
 export interface FakeIssue {
@@ -135,6 +139,8 @@ export interface FakeIssue {
   summary: string;
   issueType: string;
   priorityId: string;
+  /** The due date, `YYYY-MM-DD`; absent or null for none. */
+  dueDate?: string | null;
   labels: string[];
   parentKey: string | null;
   reporter: string;
@@ -367,6 +373,7 @@ function issueFields(i: FakeIssue, state: FakeState, dc: boolean) {
     issuetype: { name: i.issueType },
     project: { key: i.projectKey, name: projects.find((p) => p.key === i.projectKey)!.name },
     labels: i.labels,
+    duedate: i.dueDate ?? null,
     parent: parent ? { id: parent.id, key: parent.key, fields: { summary: parent.summary, issuetype: { name: parent.issueType } } } : undefined,
     description: i.description,
     resolution: i.resolution ? { name: i.resolution } : null,
@@ -460,8 +467,14 @@ function worklogObject(w: FakeWorklog, dc: boolean) {
   return { id: w.id, author: userObject(w.author, dc), started: w.started, created: w.created, updated: w.created, timeSpent: human, timeSpentSeconds: secs, ...(w.comment ? { comment: doc(w.comment) } : {}) };
 }
 
-function commentObject(c: FakeComment, dc: boolean) {
-  return { id: c.id, author: userObject(c.author, dc), body: c.body, created: c.created, updated: c.updated };
+/** `listed` is the comment endpoint's shape, which carries `parentId`; the comments inside an issue read do not (measured on a real site). */
+function commentObject(c: FakeComment, dc: boolean, listed = false) {
+  return {
+    id: c.id, author: userObject(c.author, dc), body: c.body, created: c.created, updated: c.updated,
+    // A number, as a real site sends it.
+    ...(listed && c.parentId && !dc ? { parentId: Number(c.parentId) } : {}),
+    ...(c.visibility ? { visibility: c.visibility } : {}),
+  };
 }
 
 function transitionObject(t: FakeTransition, withFields: boolean, dc: boolean) {
@@ -824,6 +837,38 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
       return json(200, { issues: slice.map((i) => issueObject(i, live, false, fields)), isLast: last, ...(last ? {} : { nextPageToken: pageToken(offset + size) }) });
     }
 
+    // One comment by id: read, change and delete. Whoever the token is may change their own; another's is a 403, as for a non-admin.
+    if ((r = /^\/issue\/([^/]+)\/comment\/(\d+)$/.exec(path))) {
+      const issue = live.issues[decodeURIComponent(r[1])];
+      if (!issue) return notFound(decodeURIComponent(r[1]));
+      const c = issue.comments.find((x) => x.id === r![2]);
+      if (!c) return json(404, { errorMessages: ["Can not find a comment for the given id."], errors: {} });
+      if (m === "GET") return json(200, commentObject(c, dc, true));
+      const limit = limited(issue.key);
+      if (limit) return limit;
+      if (c.author !== myselfFixture.accountId) return json(403, { errorMessages: ["You do not have permission to edit this comment."], errors: {} });
+      if (m === "DELETE") {
+        issue.comments.splice(issue.comments.indexOf(c), 1);
+        bump(issue);
+        return json(204, null);
+      }
+      if (m === "PUT") {
+        const sent = (body as { body?: unknown } | undefined)?.body;
+        if (dc ? typeof sent !== "string" || !sent.trim() : !sent || typeof sent !== "object" || (sent as { type?: string }).type !== "doc") return bad({}, ["Comment body can not be empty!"]);
+        c.body = sent;
+        c.updated = stamp((live.tick += 2));
+        issue.updated = c.updated;
+        return json(200, commentObject(c, dc, true));
+      }
+    }
+
+    // Cloud's label autocomplete and Data Center's suggest route: the labels cards carry, matching what was typed.
+    if (m === "GET" && ((!dc && path === "/jql/autocompletedata/suggestions") || (dc && path === "/rest/api/1.0/labels/suggest"))) {
+      const q = (query.fieldValue ?? query.query ?? "").toLowerCase();
+      const all = [...new Set(Object.values(live.issues).flatMap((i) => i.labels))].filter((l) => l.toLowerCase().startsWith(q)).sort();
+      return dc ? json(200, { token: q, suggestions: all.map((l) => ({ label: l, html: l })) }) : json(200, { results: all.map((l) => ({ value: l, displayName: l })) });
+    }
+
     if ((r = /^\/issue\/([^/]+)(?:\/(transitions|assignee|comment|remotelink|changelog|worklog))?$/.exec(path))) {
       const key = decodeURIComponent(r[1]);
       const sub = r[2];
@@ -836,6 +881,45 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
         const limit = limited(key);
         if (limit) return limit;
       }
+
+      // A field edit. The fake is as forgiving as Jira: it takes a field the card's edit screen does not list, so a test that
+      // expects a refusal is proving OUR guard and not the fake's. Answered 204: on a real site `returnIssue` answers with only
+      // the fields the PUT changed and no `updated`, so nothing here pretends it is the card read back.
+      if (!sub && m === "PUT") {
+        const b = (body ?? {}) as { fields?: Record<string, unknown>; update?: Record<string, { add?: string; remove?: string }[]> };
+        const ids = FIELD_IDS[dc ? "datacenter" : "cloud"];
+        const f = b.fields ?? {};
+        if ("summary" in f) {
+          if (typeof f.summary !== "string" || !f.summary.trim()) return bad({ summary: "You must specify a summary of the issue." });
+          issue.summary = f.summary;
+        }
+        if ("priority" in f) {
+          const id = (f.priority as { id?: string } | null)?.id;
+          if (!id || !priorities.some((p) => p.id === id)) return bad({ priority: "The priority selected is invalid." });
+          issue.priorityId = id;
+        }
+        if ("duedate" in f) issue.dueDate = (f.duedate as string | null) ?? null;
+        if (ids.start in f) issue.startDate = (f[ids.start] as string | null) ?? null;
+        if (ids.flag in f) issue.flagged = Array.isArray(f[ids.flag]) ? String((f[ids.flag] as { value?: string }[])[0]?.value ?? "") || null : null;
+        if ("timetracking" in f) {
+          const t = { ...(issue.timetracking ?? {}), ...(f.timetracking as Record<string, string>) };
+          // As Jira does: the empty string takes an estimate off, and `null` is accepted and changes nothing.
+          for (const k of Object.keys(t) as (keyof typeof t)[]) if (t[k] === "") delete t[k];
+          issue.timetracking = t;
+        }
+        if ("parent" in f) {
+          const k = (f.parent as { key?: string } | null)?.key ?? null;
+          if (k && !live.issues[k]) return bad({ parent: "Issue does not exist." });
+          issue.parentKey = k;
+        }
+        for (const op of b.update?.labels ?? []) {
+          if (op.add && !issue.labels.includes(op.add)) issue.labels = [...issue.labels, op.add];
+          if (op.remove) issue.labels = issue.labels.filter((l) => l !== op.remove);
+        }
+        bump(issue);
+        return json(204, null);
+      }
+
 
       // The paged change history is Cloud's; Data Center answers the same history only inside the issue (`expand=changelog`).
       if (sub === "changelog" && m === "GET") {
@@ -926,7 +1010,7 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
         const all = query.orderBy === "-created" ? [...issue.comments].reverse() : issue.comments;
         const start = Math.max(0, Number(query.startAt) || 0);
         const size = Math.min(Number(query.maxResults) || 50, 100);
-        return json(200, { startAt: start, maxResults: size, total: all.length, comments: all.slice(start, start + size).map((c) => commentObject(c, dc)) });
+        return json(200, { startAt: start, maxResults: size, total: all.length, comments: all.slice(start, start + size).map((c) => commentObject(c, dc, true)) });
       }
 
       if (sub === "comment" && m === "POST") {
@@ -945,10 +1029,12 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
           text = doc;
         }
         const when = stamp(++live.tick);
-        const c: FakeComment = { id: String(30000 + live.tick), author: myselfFixture.accountId, created: when, updated: when, body: text };
+        const parentId = (body as { parentId?: string } | undefined)?.parentId;
+        if (parentId !== undefined && (dc || !issue.comments.some((x) => x.id === parentId))) return bad({}, ["Parent comment not found."]);
+        const c: FakeComment = { id: String(30100 + live.tick), author: myselfFixture.accountId, created: when, updated: when, body: text, ...(parentId ? { parentId } : {}) };
         issue.comments.push(c);
         issue.updated = when;
-        return json(201, commentObject(c, dc));
+        return json(201, commentObject(c, dc, true));
       }
     }
 

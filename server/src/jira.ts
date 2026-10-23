@@ -238,7 +238,7 @@ function limitSentence(reason: string | null, seconds: number, pathname: string)
 export type JiraResult<T> = CallResult<T> & { status?: number };
 
 export interface CallOpts {
-  method?: "GET" | "POST" | "PUT";
+  method?: "GET" | "POST" | "PUT" | "DELETE";
   body?: unknown;
   timeoutMs?: number;
   /** A read nobody is waiting on: answered `throttled` with no request while a hold is on. */

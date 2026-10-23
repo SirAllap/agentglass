@@ -6679,8 +6679,32 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname === "/jira/comment" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
-      const r = await jiraCommentOn(String(b.key ?? ""), typeof b.text === "string" ? b.text : "", b.mentions);
+      const r = await jiraCommentOn(String(b.key ?? ""), typeof b.text === "string" ? b.text : "", b.mentions, b.replyTo);
       return json(r, r.ok ? 200 : 400);
+    }
+    /* Your own comment, changed or deleted. Both behind the write switch, 400 with a sentence when refused. */
+    if (pathname === "/jira/comment/edit" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = await jiraCommentEdit(String(b.key ?? ""), String(b.id ?? ""), typeof b.text === "string" ? b.text : "", b.mentions);
+      return json(r, r.ok ? 200 : 400);
+    }
+    if (pathname === "/jira/comment/delete" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = await jiraCommentDelete(String(b.key ?? ""), String(b.id ?? ""));
+      return json(r, r.ok ? 200 : 400);
+    }
+    /* One field of a card's Details changed (jiraEdit.ts). 409 when the card moved since the person saw it. */
+    if (pathname === "/jira/edit" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = await jiraEditCard(String(b.key ?? ""), { field: b.field, value: b.value, add: b.add, remove: b.remove }, typeof b.updated === "number" ? b.updated : 0);
+      return json(r, r.ok ? 200 : r.conflict ? 409 : 400);
+    }
+    if (req.method === "GET" && pathname === "/jira/labels") {
+      const r = await jiraLabels(url.searchParams.get("q") ?? "");
+      return json(r.ok ? { ok: true, labels: r.data ?? [] } : { ok: false, error: r.error, ...(r.throttled ? { throttled: true } : null) });
     }
     /* Boards, saved by pasting their address. Reads and one write path, and
        the write path refuses unless AGENTGLASS_CLICKUP_WRITE=1 — see
@@ -10586,7 +10610,8 @@ startCardWatch((n) => broadcast({ type: "card", data: n }));
 /* The same bell for a connected Jira: one search every six minutes, nothing
    at all while Jira is not connected. See jirawatch.ts. */
 import { startJiraWatch, rememberOwnMove as jiraRememberOwnMove, rememberOwnAssign as jiraRememberOwnAssign } from "./jirawatch.ts";
-import { detailStored as jiraDetailRead, mentionableStored as jiraMentionable, commentStored as jiraCommentOn } from "./jiraComments.ts";
+import { detailStored as jiraDetailRead, mentionableStored as jiraMentionable, commentStored as jiraCommentOn, editCommentStored as jiraCommentEdit, deleteCommentStored as jiraCommentDelete } from "./jiraComments.ts";
+import { editStored as jiraEditCard, labelSuggestionsStored as jiraLabels } from "./jiraEdit.ts";
 startJiraWatch((n) => broadcast({ type: "card", data: n }));
 /* Re-asks the open pull request lists a real client has looked at, on a timer,
    so a comment posted while nobody is on the PRs tab still reaches `noteTalk`

@@ -88,7 +88,7 @@ export interface Tracker {
   handOff?(task: ProviderTask, choice?: { to?: string; clear?: boolean }): Promise<CardWriteResult>;
   /** One comment, Markdown. `mentions` are the people named in it by the id the
    *  tracker's people search gave; ClickUp finds them itself and ignores it. */
-  comment(task: ProviderTask, markdown: string, mentions?: CommentMention[]): Promise<CommentResult>;
+  comment(task: ProviderTask, markdown: string, mentions?: CommentMention[], replyTo?: string): Promise<CommentResult>;
 }
 
 const CLICKUP: Tracker = {

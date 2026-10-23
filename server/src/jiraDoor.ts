@@ -27,14 +27,15 @@ import type { ProviderTask, TaskDetail } from "../../shared/providers.ts";
 import { UNTRUSTED_MAX_BYTES } from "../../shared/uiActions.ts";
 import { ISSUE_KEY, linkPullRequestStored, movesStored, jiraWriteEnabled, remoteLinksAllStored } from "./jira.ts";
 import { ACTIVITY_KINDS, activityStored, type ActivityKind } from "./jiraActivity.ts";
-import { detailStored } from "./jiraComments.ts";
+import { deleteCommentStored, detailStored, editCommentStored, commentStored } from "./jiraComments.ts";
+import { editStored, type EditAsk } from "./jiraEdit.ts";
 import { jiraSteps, runStepBody, STEP_KEYS } from "./jiraSteps.ts";
 import { rememberOwnMove } from "./jirawatch.ts";
 
-export const DOOR_VERBS = ["card", "moves", "links", "activity", "steps", "step", "link"] as const;
+export const DOOR_VERBS = ["card", "moves", "links", "activity", "steps", "step", "link", "edit", "comment", "comment-edit", "comment-delete"] as const;
 export type DoorVerb = (typeof DOOR_VERBS)[number];
 /** The verbs that change the site. The rest read. */
-export const DOOR_ACTING: readonly DoorVerb[] = ["step", "link"];
+export const DOOR_ACTING: readonly DoorVerb[] = ["step", "link", "edit", "comment", "comment-edit", "comment-delete"];
 export const isActing = (v: string): boolean => (DOOR_ACTING as readonly string[]).includes(v);
 
 /**
@@ -114,6 +115,40 @@ export function cardParts(t: ProviderTask): { state: Record<string, unknown>; un
       ...(t.sprint ? { sprint: t.sprint } : null),
       ...(t.tags?.length ? { tags: t.tags } : null),
       ...(t.parent ? { parent: t.parent.title } : null),
+    },
+  };
+}
+
+/**
+ * The edit a door body asks for. `clear` is the one way to take a value off (a date, the parent, an estimate, the
+ * flag), so no verb has to spell Jira's per-field way of clearing; a flag is `true` or `false` as text or as a boolean.
+ */
+export function editAsk(b: Record<string, unknown>): EditAsk | string {
+  const ask: EditAsk = { field: b.field, value: b.value, add: b.add, remove: b.remove };
+  if (b.clear !== undefined && typeof b.clear !== "boolean") return "clear must be true or false";
+  if (b.clear === true) {
+    if (b.value !== undefined || b.add !== undefined || b.remove !== undefined) return "clear takes no value: it only takes one off";
+    if (b.field === "duedate" || b.field === "start" || b.field === "parent") ask.value = null;
+    else if (b.field === "originalEstimate" || b.field === "remainingEstimate") ask.value = "";
+    else if (b.field === "flag") ask.value = false;
+    else return "clear applies to duedate, start, parent, flag and the estimates";
+  }
+  if (b.field === "flag" && typeof ask.value === "string") {
+    const low = ask.value.toLowerCase();
+    if (low !== "true" && low !== "false") return "flag is true or false";
+    ask.value = low === "true";
+  }
+  return ask;
+}
+
+/** The answer of a write that gives the card back: ok and the card's state, or the sentence. */
+function written(r: { ok: boolean; error?: string; conflict?: boolean; unauthorised?: boolean; partial?: string; task?: ProviderTask }, extra: Record<string, unknown> = {}): DoorAnswer {
+  const { state, untrusted } = r.task ? cardParts(r.task) : { state: {}, untrusted: {} };
+  return {
+    status: r.ok ? 200 : r.conflict ? 409 : 400,
+    body: {
+      ok: r.ok, ...(r.error ? { error: r.error } : null), ...(r.conflict ? { conflict: true } : null), ...(r.unauthorised ? { unauthorised: true } : null),
+      ...(r.ok ? { state: { ...state, ...(r.partial ? { partial: true } : null), ...extra }, untrusted: { ...untrusted, ...(r.partial ? { partial: r.partial } : null) } } : null),
     },
   };
 }
@@ -274,6 +309,25 @@ export async function runDoor(verb: string, b: Record<string, unknown>): Promise
     case "link": {
       const r = await linkPullRequestStored(key, typeof b.url === "string" ? b.url : "", typeof b.title === "string" ? b.title : "");
       return { status: r.ok ? 200 : 400, body: r.ok ? { ok: true, state: { linked: r.linked, url: r.url } } : { ok: false, error: r.error } };
+    }
+    case "edit": {
+      const ask = editAsk(b);
+      if (typeof ask === "string") return refuse(ask);
+      return written(await editStored(key, ask, typeof b.updated === "number" ? b.updated : 0));
+    }
+    case "comment": {
+      const r = await commentStored(key, typeof b.text === "string" ? b.text : "", [], b.reply_to);
+      return written(r);
+    }
+    case "comment-edit": {
+      const r = await editCommentStored(key, String(b.id ?? ""), typeof b.text === "string" ? b.text : "", []);
+      return written(r, r.comment ? { commentId: r.comment.id, edited: true } : {});
+    }
+    case "comment-delete": {
+      // The screen asks the person first; an agent says it meant it, which is the same sentence in a different mouth.
+      if (b.confirm !== true) return refuse("Deleting a comment cannot be undone: pass confirm true to say you mean it");
+      const r = await deleteCommentStored(key, String(b.id ?? ""));
+      return written(r, r.removed ? { removed: true } : {});
     }
     default:
       return refuse(`That is not a card verb: ${DOOR_VERBS.join(", ")}`);

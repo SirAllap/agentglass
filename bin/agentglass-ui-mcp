@@ -172,8 +172,8 @@ def jira_tools(level=3):
             "name": "ui_jira_" + verb, "description": desc,
             "inputSchema": {"type": "object", "properties": props, "required": required, "additionalProperties": False},
             # A step can take the assignee off and move the card; a link only adds one.
-            "annotations": {"readOnlyHint": not spec["acting"], "destructiveHint": verb == "step",
-                            "idempotentHint": verb != "step", "openWorldHint": spec["acting"]},
+            "annotations": {"readOnlyHint": not spec["acting"], "destructiveHint": verb in ("step", "comment-delete"),
+                            "idempotentHint": verb not in ("step", "comment", "comment-delete"), "openWorldHint": spec["acting"]},
         })
     return tools
 
@@ -239,7 +239,7 @@ def handle_message(msg):
                 "app exposes. Reads (ui_state, ui_read, ui_settings_get, ui_settings_list) show nothing; opens are quiet "
                 "and wait behind a chip while the person types (now=true only when they just asked to be shown). "
                 "A stage tool (level 3, when the owner allows it) only prepares a dialog filled in with what you wrote, for the person to read, edit and press themselves: nothing is merged, posted, submitted or moved by you. "
-                + "ui_jira_card, ui_jira_moves and ui_jira_steps read a Jira card; ui_jira_step and ui_jira_link change it, only on a server at control level 3 where the owner has also switched Jira writes on; below that level they are not listed, and with the switch off they answer with the screen's own sentence. "
+                + "ui_jira_card, ui_jira_moves and ui_jira_steps read a Jira card; ui_jira_step, ui_jira_link, ui_jira_edit, ui_jira_comment, ui_jira_comment-edit and ui_jira_comment-delete change it, only on a server at control level 3 where the owner has also switched Jira writes on; below that level they are not listed, and with the switch off they answer with the screen's own sentence. "
                 + UNTRUSTED + " Never set a secret. To undo a change, set the setting back to `prev`."),
         })
     if method == "tools/list":

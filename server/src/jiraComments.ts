@@ -13,13 +13,18 @@
  * against it. Who can be mentioned is one search per typed query, kept ten
  * minutes.
  *
- * Ceiling: comments are not edited or deleted here, replies and reactions do
- * not exist in Jira's REST API, and a card with more comments than the issue
- * read carries says how many were left out rather than paging for them.
+ * Your own comment can be changed or deleted (two requests each: the comment,
+ * to be sure it is yours, then the write) and answered in a thread (a POST
+ * with `parentId`, Cloud only). Reactions are not in Jira's public REST.
+ *
+ * Ceiling: a card with more comments than the issue read carries says how many
+ * were left out and pages for them on request; a reply is one level deep, as
+ * Jira's own are.
  */
-import { CARD_FIELDS, apiOf, cardPointsField, jiraCall, jiraWriteEnabled, memoOk, siteFields, taskContext, toTask, withStored, type JiraCreds, type JiraResult, type TaskContext } from "./jira.ts";
+import { CARD_FIELDS, ISSUE_KEY, apiOf, idText, cardPointsField, jiraCall, jiraWriteEnabled, memoOk, priorities, siteFields, taskContext, toTask, withStored, type JiraCreds, type JiraResult, type TaskContext } from "./jira.ts";
 import { adfToMarkdown, markdownToAdf, markdownToWiki, wikiToMarkdown, type Mention } from "./jiraAdf.ts";
 import { worklogEvents } from "./jiraActivity.ts";
+import { editOf, rememberOffered } from "./jiraEdit.ts";
 import { attachmentsOf, commentRows, factsOf, linkedOf, offeredFields, textReader } from "./jiraCardRead.ts";
 import type { TaskDetail, ProviderTask } from "../../shared/providers.ts";
 import type { WriteOutcome } from "./trackerTypes.ts";
@@ -30,7 +35,6 @@ const epoch = (v: unknown): number => { const t = Date.parse(str(v)); return Num
 const initialsOf = (name: string): string =>
   name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => Array.from(w)[0]!.toUpperCase()).join("") || "?";
 
-const ISSUE_KEY = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
 /** Jira's own limit is 32,767 characters; Markdown grows a little on the way. */
 const MAX_COMMENT = 30_000;
 const PEOPLE_PAGE = 20;
@@ -81,7 +85,7 @@ export function toDetail(issue: unknown, task: ProviderTask, v: 2 | 3, me?: stri
 export interface JiraDetail { detail: TaskDetail; more: number }
 
 /** One card with its words. One request, plus the priority list when it is not remembered. */
-export async function readDetail(creds: JiraCreds, key: string, o: { fresh?: boolean } = {}): Promise<JiraResult<JiraDetail>> {
+export async function readDetail(creds: JiraCreds, key: string, o: { fresh?: boolean; /** Ask which comment answers which; the read-back after a comment skips it. */ threads?: boolean } = {}): Promise<JiraResult<JiraDetail>> {
   if (!ISSUE_KEY.test(key)) return { ok: false, error: "That is not a Jira card id" };
   const v = apiOf(creds);
   // The site's own sprint and points fields, learned once and remembered. Where they cannot be read the card comes without them.
@@ -103,7 +107,31 @@ export async function readDetail(creds: JiraCreds, key: string, o: { fresh?: boo
   const cx = { ...base, fields: ask };
   const task = toTask(r.data, cx);
   if (!task) return { ok: false, error: "Jira answered with something that is not a card" };
-  return { ok: true, data: toDetail(r.data, task, v, cx.me, cx, ids ?? undefined) };
+  const read = toDetail(r.data, task, v, cx.me, cx, ids ?? undefined);
+  if (v === 3 && o.threads !== false && read.detail.comments.length) await threadParents(creds, key, read.detail.comments);
+  // What this card lets a person change is only said while writing to Jira is on: with it off there is no control to draw.
+  const offered = offeredFields(r.data);
+  rememberOffered(key, offered);
+  if (jiraWriteEnabled()) {
+    const list = await priorities(creds);
+    const edit = editOf(offered, { start: ids?.start, flag: ids?.flag }, list.ok && list.data ? list.data : null, v, isObj(r.data) && isObj(r.data.fields) ? r.data.fields : undefined);
+    if (edit) read.detail.edit = edit;
+  }
+  return { ok: true, data: read };
+}
+
+/**
+ * Which comment answers which, on Cloud. The comments inside an issue read carry no `parentId` (measured on a real
+ * site; only the comment list does), so a card with comments costs one more request to draw its threads. It asks for as
+ * many as the issue read carried, in the same order, and a failure leaves the comments flat rather than failing the card.
+ */
+async function threadParents(creds: JiraCreds, key: string, rows: TaskDetail["comments"]): Promise<void> {
+  const r = await jiraCall<unknown>(creds, `/rest/api/3/issue/${encodeURIComponent(key)}/comment?orderBy=created&maxResults=${Math.min(rows.length, 100)}`);
+  const list = r.ok && isObj(r.data) && Array.isArray(r.data.comments) ? r.data.comments : [];
+  const parent = new Map<string, string>();
+  // `id` is a string and `parentId` a number on a real site; either is read as text.
+  for (const c of list) if (isObj(c) && idText(c.id) && idText(c.parentId)) parent.set(idText(c.id), idText(c.parentId));
+  for (const row of rows) { const p = parent.get(row.id); if (p) row.parentId = p; }
 }
 
 export interface MentionPerson { key: string; name: string; initials: string; avatar?: string }
@@ -152,6 +180,8 @@ export function commentBody(markdown: string, mentions: Mention[], v: 2 | 3): { 
   return { body: v === 3 ? markdownToAdf(markdown, mentions) : markdownToWiki(markdown, mentions) };
 }
 
+const COMMENT_ID = /^\d{1,12}$/;
+
 /** The sentence for a comment Jira refused with a 400: its own words are never passed on. */
 const NOT_ACCEPTED = "Jira did not accept that comment";
 
@@ -163,9 +193,14 @@ export type CommentOutcome = WriteOutcome & { detail?: TaskDetail; more?: number
  * comment cannot conflict with an edit; the read afterwards brings the new
  * `updated` so the next move is checked against the card as it now is.
  */
-export async function commentOn(creds: JiraCreds, key: string, markdown: string, rawMentions: unknown): Promise<CommentOutcome> {
+export async function commentOn(creds: JiraCreds, key: string, markdown: string, rawMentions: unknown, replyTo?: unknown): Promise<CommentOutcome> {
   if (!jiraWriteEnabled()) return { ok: false, error: "Writing to Jira is switched off" };
   if (!ISSUE_KEY.test(key)) return { ok: false, error: "That is not a Jira card id" };
+  // A reply is Cloud's `parentId`; Data Center's REST has no thread, and a reply sent as a plain comment would not be one.
+  if (replyTo !== undefined && replyTo !== null && replyTo !== "") {
+    if (apiOf(creds) !== 3) return { ok: false, error: "This Jira does not thread comments: add a comment instead" };
+    if (typeof replyTo !== "string" || !COMMENT_ID.test(replyTo)) return { ok: false, error: "That is not a comment this card has" };
+  }
   const text = typeof markdown === "string" ? markdown.trim() : "";
   if (!text) return { ok: false, error: "Write something first" };
   if (text.length > MAX_COMMENT) return { ok: false, error: "That comment is too long for Jira" };
@@ -173,9 +208,10 @@ export async function commentOn(creds: JiraCreds, key: string, markdown: string,
   const body = commentBody(text, readMentions(rawMentions, v), v);
   if (v === 3 ? !(body.body as { content: unknown[] }).content.length : !str(body.body).trim()) return { ok: false, error: "Write something first" };
   const upper = key.toUpperCase();
-  const post = await jiraCall<unknown>(creds, `/rest/api/${v}/issue/${encodeURIComponent(upper)}/comment`, { method: "POST", body });
+  const parent = typeof replyTo === "string" && replyTo ? { parentId: replyTo } : {};
+  const post = await jiraCall<unknown>(creds, `/rest/api/${v}/issue/${encodeURIComponent(upper)}/comment`, { method: "POST", body: { ...body, ...parent } });
   if (!post.ok) {
-    if (post.status === 400) return { ok: false, error: NOT_ACCEPTED };
+    if (post.status === 400) return { ok: false, error: parent.parentId ? "Jira did not accept that reply: the comment may have been deleted" : NOT_ACCEPTED };
     if (post.status === 403) return { ok: false, error: `Your Jira account cannot comment on ${upper}` };
     // No answer, or a server error, says nothing about whether it landed, and
     // sending the kept draft again would be a second comment.
@@ -184,15 +220,86 @@ export async function commentOn(creds: JiraCreds, key: string, markdown: string,
     }
     return { ok: false, unauthorised: post.unauthorised, error: post.error };
   }
-  const back = await readDetail(creds, upper, { fresh: true });
+  // The card is read back for its stamp and its count; who answers whom is not asked again (the pane keeps what it knew).
+  const back = await readDetail(creds, upper, { fresh: true, threads: false });
   if (!back.ok || !back.data) return { ok: true, partial: "The comment was posted, but the card could not be read back. Reload it." };
   return { ok: true, task: back.data.detail.task, detail: back.data.detail, more: back.data.more };
+}
+
+export type CommentEdit = WriteOutcome & { comment?: TaskDetail["comments"][number]; removed?: boolean };
+
+/** The comment, when it is the connected account's own; otherwise the sentence that stops the write. One request. */
+async function ownComment(creds: JiraCreds, upper: string, id: string): Promise<{ raw: Record<string, unknown>; me: string } | { stop: CommentEdit }> {
+  const v = apiOf(creds);
+  const [r, cx] = await Promise.all([
+    jiraCall<unknown>(creds, `/rest/api/${v}/issue/${encodeURIComponent(upper)}/comment/${id}`, { fresh: true }),
+    taskContext(creds),
+  ]);
+  if (!r.ok || !isObj(r.data)) return { stop: { ok: false, unauthorised: r.unauthorised, error: `Nothing was changed: could not check the comment first. ${r.error ?? "Jira did not answer"}` } };
+  const author = isObj(r.data.author) ? personId(r.data.author) : "";
+  if (!cx.me || !author) return { stop: { ok: false, error: "Nothing was changed: could not tell whose comment this is" } };
+  if (author !== cx.me) return { stop: { ok: false, error: "That comment is somebody else's: only your own can be changed here" } };
+  return { raw: r.data, me: cx.me };
+}
+
+/** Why Jira refused a comment edit or delete, in our words. */
+function commentRefusal(r: JiraResult<unknown>, what: string): CommentEdit {
+  if (r.status === 400) return { ok: false, error: `Jira did not accept that ${what}` };
+  if (r.status === 403) return { ok: false, error: `Your Jira account cannot ${what} that comment` };
+  if (r.status === 404) return { ok: false, error: "That comment is gone: reload the card" };
+  return { ok: false, unauthorised: r.unauthorised, error: r.error };
+}
+
+/**
+ * Change your own comment. Two requests: the comment (it must be yours, and
+ * it must still be there), then the PUT, whose answer is the comment as it now
+ * stands. The card's `updated` moved with it, so the pane reads the card again
+ * rather than this reading it a third time.
+ */
+export async function editComment(creds: JiraCreds, key: string, id: string, markdown: string, rawMentions: unknown): Promise<CommentEdit> {
+  if (!jiraWriteEnabled()) return { ok: false, error: "Writing to Jira is switched off" };
+  if (!ISSUE_KEY.test(key)) return { ok: false, error: "That is not a Jira card id" };
+  if (typeof id !== "string" || !COMMENT_ID.test(id)) return { ok: false, error: "That is not a comment this card has" };
+  const text = typeof markdown === "string" ? markdown.trim() : "";
+  if (!text) return { ok: false, error: "A comment cannot be empty: delete it instead" };
+  if (text.length > MAX_COMMENT) return { ok: false, error: "That comment is too long for Jira" };
+  const v = apiOf(creds);
+  const body = commentBody(text, readMentions(rawMentions, v), v);
+  if (v === 3 ? !(body.body as { content: unknown[] }).content.length : !str(body.body).trim()) return { ok: false, error: "A comment cannot be empty: delete it instead" };
+  const upper = key.toUpperCase();
+  const own = await ownComment(creds, upper, id);
+  if ("stop" in own) return own.stop;
+  const put = await jiraCall<unknown>(creds, `/rest/api/${v}/issue/${encodeURIComponent(upper)}/comment/${id}`, { method: "PUT", body });
+  if (!put.ok) return commentRefusal(put, "change");
+  const rows = isObj(put.data) ? commentRows([put.data], v, own.me, [put.data.author]).comments : [];
+  return rows[0] ? { ok: true, comment: rows[0] } : { ok: true, partial: "The comment was changed, but could not be read back. Reload it." };
+}
+
+/** Delete your own comment. Two requests: the comment, then the DELETE. The thread's replies stay where Jira keeps them. */
+export async function deleteComment(creds: JiraCreds, key: string, id: string): Promise<CommentEdit> {
+  if (!jiraWriteEnabled()) return { ok: false, error: "Writing to Jira is switched off" };
+  if (!ISSUE_KEY.test(key)) return { ok: false, error: "That is not a Jira card id" };
+  if (typeof id !== "string" || !COMMENT_ID.test(id)) return { ok: false, error: "That is not a comment this card has" };
+  const upper = key.toUpperCase();
+  const own = await ownComment(creds, upper, id);
+  if ("stop" in own) return own.stop;
+  const del = await jiraCall<unknown>(creds, `/rest/api/${apiOf(creds)}/issue/${encodeURIComponent(upper)}/comment/${id}`, { method: "DELETE" });
+  if (!del.ok) return commentRefusal(del, "delete");
+  return { ok: true, removed: true };
 }
 
 // What the routes call: the stored connection, or the sentence that says there is none.
 export const detailStored = (key: string): Promise<JiraResult<JiraDetail>> => withStored((c) => readDetail(c, key));
 export const mentionableStored = (key: string, q: string): Promise<JiraResult<MentionPerson[]>> => withStored((c) => mentionable(c, key, q));
-export async function commentStored(key: string, markdown: string, mentions: unknown): Promise<CommentOutcome> {
-  const r = await withStored(async (c) => ({ ok: true, data: await commentOn(c, key, markdown, mentions) }));
+export async function commentStored(key: string, markdown: string, mentions: unknown, replyTo?: unknown): Promise<CommentOutcome> {
+  const r = await withStored(async (c) => ({ ok: true, data: await commentOn(c, key, markdown, mentions, replyTo) }));
+  return r.ok && r.data ? r.data : { ok: false, error: r.error ?? "Jira is not connected" };
+}
+export async function editCommentStored(key: string, id: string, markdown: string, mentions: unknown): Promise<CommentEdit> {
+  const r = await withStored(async (c) => ({ ok: true, data: await editComment(c, key, id, markdown, mentions) }));
+  return r.ok && r.data ? r.data : { ok: false, error: r.error ?? "Jira is not connected" };
+}
+export async function deleteCommentStored(key: string, id: string): Promise<CommentEdit> {
+  const r = await withStored(async (c) => ({ ok: true, data: await deleteComment(c, key, id) }));
   return r.ok && r.data ? r.data : { ok: false, error: r.error ?? "Jira is not connected" };
 }

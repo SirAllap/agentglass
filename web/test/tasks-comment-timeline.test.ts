@@ -43,7 +43,9 @@ function fnBody(text: string, sig: string): string {
 
 const card = naked(fnBody(src, "function CardDetail("));
 const events = naked(fnBody(eventRun, "function EventRun("));
-const action = naked(fnBody(src, "function CommentAction("));
+// CommentAction moved to tasks/CardEdit.tsx so a second tracker's card can draw it too.
+const cardEdit = await Bun.file(new URL("../src/components/tasks/CardEdit.tsx", import.meta.url)).text();
+const action = naked(fnBody(cardEdit, "function CommentAction("));
 
 describe("a card's activity is the pull request's timeline", () => {
   it("found the pieces it reads", () => {

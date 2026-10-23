@@ -1,6 +1,6 @@
 import type { CardAttachment, CardFact, CardLinked, CardWebLink, ProviderTask, TaskDetail } from "../../shared/providers.ts";
 import { prAddress } from "../../shared/taskref.ts";
-import { adfToMarkdown, wikiToMarkdown } from "./jiraAdf.ts";
+import { adfToMarkdown, wikiToMarkdown, type ReadText } from "./jiraAdf.ts";
 
 /*
  * What a Jira card shows besides its words, read off the one issue answer:
@@ -84,27 +84,37 @@ const optionsOf = (v: unknown): string => (Array.isArray(v) ? v : []).flatMap((x
  * site sent none; `ids` are the custom fields found on the site.
  */
 export function factsOf(f: Record<string, unknown>, ids: DetailFieldIds, offered: Set<string> | null): CardFact[] {
-  const rows: { id: string; label: string; field: string; value: string; person?: Record<string, unknown>; tone?: "flag" }[] = [];
+  const rows: { id: string; label: string; field: string; value: string; person?: Record<string, unknown>; tone?: "flag"; edit?: string; raw?: string }[] = [];
   const reporter = isObj(f.reporter) ? f.reporter : null;
   rows.push({ id: "reporter", label: "Reporter", field: "reporter", value: reporter ? str(reporter.displayName) || str(reporter.name) : "", person: reporter ?? undefined });
   rows.push({ id: "type", label: "Type", field: "issuetype", value: isObj(f.issuetype) ? str(f.issuetype.name) : "" });
   rows.push({ id: "components", label: "Components", field: "components", value: namesOf(f.components) });
   rows.push({ id: "fixVersions", label: "Fix versions", field: "fixVersions", value: namesOf(f.fixVersions) });
   rows.push({ id: "versions", label: "Affects versions", field: "versions", value: namesOf(f.versions) });
-  rows.push({ id: "start", label: "Start date", field: ids.start ?? "", value: ids.start ? /^\d{4}-\d{2}-\d{2}/.exec(str(f[ids.start]))?.[0] ?? "" : "" });
-  rows.push({ id: "time", label: "Time tracking", field: "timetracking", value: timeOf(f.timetracking) });
+  const start = ids.start ? /^\d{4}-\d{2}-\d{2}/.exec(str(f[ids.start]))?.[0] ?? "" : "";
+  rows.push({ id: "start", label: "Start date", field: ids.start ?? "", value: start, edit: "start", raw: start });
+  // Where the estimates can be changed they are two rows of their own, and the one line keeps only what is spent.
+  const tt = isObj(f.timetracking) ? f.timetracking : {};
+  const estimates = !!offered?.has("timetracking");
+  rows.push({ id: "time", label: "Time tracking", field: estimates ? "" : "timetracking", value: estimates ? timeOf({ timeSpent: tt.timeSpent }) : timeOf(f.timetracking) });
+  if (estimates) {
+    rows.push({ id: "originalEstimate", label: "Original estimate", field: "timetracking", value: str(tt.originalEstimate), edit: "originalEstimate", raw: str(tt.originalEstimate) });
+    rows.push({ id: "remainingEstimate", label: "Remaining estimate", field: "timetracking", value: str(tt.remainingEstimate), edit: "remainingEstimate", raw: str(tt.remainingEstimate) });
+  }
   const flag = ids.flag ? optionsOf(f[ids.flag]) : "";
-  rows.push({ id: "flag", label: "Flagged", field: "", value: flag, tone: flag ? "flag" : undefined });
+  rows.push({ id: "flag", label: "Flagged", field: ids.flag ?? "", value: flag, tone: flag ? "flag" : undefined, edit: "flag", raw: flag ? "1" : "" });
   const team = ids.team && isObj(f[ids.team]) ? str((f[ids.team] as Record<string, unknown>).name) || str((f[ids.team] as Record<string, unknown>).title) : "";
   rows.push({ id: "team", label: "Team", field: "", value: team });
   const out: CardFact[] = [];
   for (const r of rows) {
-    if (!r.value && !(r.field && offered?.has(r.field))) continue;
+    const open = !!(r.field && offered?.has(r.field));
+    if (!r.value && !open) continue;
     const avatar = r.person && isObj(r.person.avatarUrls) ? str(r.person.avatarUrls["48x48"]) : "";
     out.push({
       id: r.id, label: r.label, value: r.value,
       ...(r.person && r.value ? { initials: initialsOf(r.value), ...(avatar.startsWith("https://") ? { avatar } : {}) } : {}),
       ...(r.tone ? { tone: r.tone } : {}),
+      ...(open && r.edit ? { field: r.edit, raw: r.raw ?? "" } : {}),
     });
   }
   return out;
@@ -147,8 +157,9 @@ export const epochOf = epoch;
  * The site's words as Markdown: ADF on Cloud's v3, wiki markup on Data Center's v2. A login inside `[~ada]` is shown
  * by the name the same answer gave it, and anyone else by the login.
  */
-export const textReader = (v: 2 | 3, names: Record<string, string>) => (body: unknown): string =>
-  (v === 3 ? adfToMarkdown(body) : wikiToMarkdown(body, names)).text;
+export const fullReader = (v: 2 | 3, names: Record<string, string>) => (body: unknown): ReadText =>
+  v === 3 ? adfToMarkdown(body) : wikiToMarkdown(body, names);
+export const textReader = (v: 2 | 3, names: Record<string, string>) => (body: unknown): string => fullReader(v, names)(body).text;
 
 /** Login to display name, from every person the answer named. */
 export function loginNames(people: unknown[]): Record<string, string> {
@@ -157,18 +168,30 @@ export function loginNames(people: unknown[]): Record<string, string> {
   return names;
 }
 
+/** Jira stamps `updated` a moment after `created` on a comment nobody touched; a second is the margin. */
+export const edited = (created: number, updated: number): boolean => created > 0 && updated - created >= 1000;
+
 /** The comments of one answer as the pane draws them, oldest first, and the names its authors went by. */
 export function commentRows(raw: Record<string, unknown>[], v: 2 | 3, me: string | undefined, others: unknown[] = []): { comments: TaskDetail["comments"]; names: Record<string, string> } {
   const names = loginNames([...others, ...raw.map((c) => c.author)]);
-  const read = textReader(v, names);
+  const read = fullReader(v, names);
   const comments = raw.map((c) => {
+    const said = read(c.body);
     const a = isObj(c.author) ? c.author : {};
     const who = str(a.displayName) || str(a.name) || "Someone";
     const avatar = avatarOf(a);
+    const made = epoch(c.created), changed = epoch(c.updated);
+    const seen = isObj(c.visibility) ? str(c.visibility.value) || str(c.visibility.identifier) : "";
     return {
       id: str(c.id) || String(c.id ?? ""),
+      ...(edited(made, changed) ? { edited: true as const } : {}),
+      ...(seen ? { restricted: seen.slice(0, 80) } : {}),
+      // A number on a real site, a string in the docs.
+      ...(idText(c.parentId) ? { parentId: idText(c.parentId) } : {}),
       who,
-      text: read(c.body),
+      text: said.text,
+      // The people the words name, so that changing the comment sends them back as mentions and does not flatten them to plain text.
+      ...(said.mentions.length ? { mentions: said.mentions.map((m) => ({ id: m.id, name: m.name })) } : {}),
       at: epoch(c.created),
       initials: initialsOf(who),
       ...(avatar ? { avatar } : {}),
