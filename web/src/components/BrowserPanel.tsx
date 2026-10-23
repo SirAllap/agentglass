@@ -28,7 +28,7 @@ import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
 import { BROWSER_PARTITION, HAS_BROWSER, IS_DESKTOP, applySessionSettings, browserDevtools, browserDevtoolsClose, browserDevtoolsRect, browserDevtoolsZoom, browserCdp, browserZoom, browserShelfRead, captureFullPage, cookieSources, onDevtoolsZoom, onDevtoolsOpen, onBrowserZoom, onBrowserOpenTab, onBrowserKey, onBrowserSearch, onBrowserInspect, setActiveBrowserGuest, setGuestOwner, openEphemeralTab, closeEphemeralTab } from "../lib/desktop.ts";
 import { buildSearchUrl, displayUrl, normalizeNavigationUrl } from "../lib/browserUrl.ts";
 import { BLANK, homePage, searchEngine, zoomLevel, setZoomLevel as saveZoom, zoomPercent, stepZoom, ZOOM_MIN, ZOOM_MAX, devtoolsSide, setDevtoolsSide, devtoolsSize, setDevtoolsSize, devtoolsZoom, setDevtoolsZoom, sidebarOpen, classicChrome, setClassicChrome, setSidebarOpen, sidebarWidth, setSidebarWidth, type DevtoolsSide } from "../lib/browserPrefs.ts";
-import { addTab, closeTab, listable, newTab, patchTab, popupHome, pruneBlank, sleepingTab, stepTab, tabLabel, wake, withInspected, type BrowserTab } from "../lib/browserTabs.ts";
+import { addTab, closeTab, SLEEP_GRACE_MS, type Recency, listable, newTab, patchTab, popupHome, pruneBlank, sleepingTab, stepTab, tabLabel, wake, withInspected, type BrowserTab } from "../lib/browserTabs.ts";
 import { dropsBefore, isDrag, parseDrop, type DropAt } from "../lib/browserDrag.ts";
 import {
   MAX_ESSENTIALS, allItems, emptyShelf, findByUrl, folderCount, insertFolder, place, readShelves, removeItem, saveShelves,
@@ -652,6 +652,9 @@ export function BrowserView({ active: viewOn, scope }: {
   }, [landings, activeId, snapTab]);
   const actsRef = useRef<Activity>(acts);
   actsRef.current = acts;
+  /* When each tab was last in front. An agent's own verbs are read from `acts`
+     at the moment a slot is needed, so nothing here ticks while they run. */
+  const shownAt = useRef<Record<string, number>>({});
   /** §12: did the ask now being served say `--show`? Written by the ask handler
    *  one statement before `TabOps.open` reads it — see the note there for why a
    *  ref is safe here and an argument was not available. */
@@ -823,7 +826,7 @@ export function BrowserView({ active: viewOn, scope }: {
       // means the count BEFORE it — the very first tab ever must still read
       // as `existing === 0`.
       const existing = tabsRef.current.length;
-      const made = addTab(tabsRef.current, url, activeIdRef.current, id ?? profile, undefined, partition);
+      const made = addTab(tabsRef.current, url, activeIdRef.current, id ?? profile, undefined, partition, recency());
       /* The reason travels. It used to be dropped here and the caller was told
          "could not open a tab" — with the panel holding a sentence that says
          exactly what to do about it. */
@@ -1314,7 +1317,7 @@ export function BrowserView({ active: viewOn, scope }: {
 
   const open = useCallback((url: string, from?: string, profile?: string, shelfId?: string, opened?: (id: string) => void, partition?: string) => {
     setTabs((prev) => {
-      const r = addTab(prev, url, from, profile, shelfId, partition);
+      const r = addTab(prev, url, from, profile, shelfId, partition, recency());
       if ("error" in r) { say(r.error); return prev; }
       opened?.(r.tab.id);
       setActiveId(r.tab.id);
@@ -2130,6 +2133,18 @@ export function BrowserView({ active: viewOn, scope }: {
      would otherwise act on the state before last. */
   modeRef.current = mode;
   activeIdRef.current = activeId;
+  if (activeId) shownAt.current[activeId] = Date.now();
+  /** What `addTab` needs to put the least-used awake tab to sleep for a new one. */
+  const recency = (): Recency => {
+    const now = Date.now();
+    const lastAct = (a: TabAgent) => a.lastAt ?? a.log[a.log.length - 1]?.at ?? 0;
+    const usedAt: Record<string, number> = { ...shownAt.current };
+    for (const [id, a] of Object.entries(actsRef.current)) usedAt[id] = Math.max(usedAt[id] ?? 0, lastAct(a));
+    return {
+      activeId: activeIdRef.current, usedAt,
+      held: (t) => { const a = actsRef.current[t.id]; return !!a && (a.paused || a.working > 0 || now - lastAct(a) < SLEEP_GRACE_MS); },
+    };
+  };
   shelfRef.current = shelf;
 
   /* ------------------------------------------------------------ the box */
@@ -2360,7 +2375,7 @@ export function BrowserView({ active: viewOn, scope }: {
    *  the new half of a split goes beside the one you are on, and the one you
    *  are on is the one the bar is talking to. */
   const openBeside = (url: string) => {
-    const r = addTab(tabs, url, activeId, profile);
+    const r = addTab(tabs, url, activeId, profile, undefined, undefined, recency());
     if ("error" in r) { say(r.error); return; }
     setTabs(r.tabs);
     setSplitId(r.tab.id);

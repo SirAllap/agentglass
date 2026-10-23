@@ -170,7 +170,7 @@ wait        wait · waitfor (--until network-idle | no-timers) · events
 many pages  scrape URL... (--read markdown|links|extract… --concurrency 1-4): a tab each, closed after
 navigate    open · back · forward · reload
 finished    done — when your task in the browser is over, run `agentglass-browser done` (MCP: browser_done): the person's overview shows Done instead of guessing from silence. Touches no page, allowed read-only and while the person has the tab; your next verb marks the tab working again.
-tabs        tabs · tab · newtab · closetab · profiles (open|newtab --wait-slot S queues at 12 awake)
+tabs        tabs · tab · newtab · closetab · profiles (open|newtab --wait-slot S queues only when all 12 awake are in front or held; otherwise the 13th page puts the least-used one to sleep)
 containers  whoami · profiles (--make/--drop) · newtab --profile · lanes
 identity    cookies · storage · session save/load (MCP: storage_state) · permission · permissions · clipboard
 templates   template save/list/rm NAME (CLI-only, no MCP tool) — a named session for `lane new --from-template`

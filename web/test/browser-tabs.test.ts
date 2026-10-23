@@ -9,7 +9,7 @@
  */
 import { beforeEach, describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
-import { addTab, closeTab, popupHome, isBlank, listable, MAX_TABS, newTab, patchTab, pruneBlank, stepTab, tabLabel, withInspected, __resetTabIds } from "../src/lib/browserTabs.ts";
+import { addTab, closeTab, pickSleeper, SLEEP_GRACE_MS, type Recency, popupHome, isBlank, listable, MAX_TABS, newTab, patchTab, pruneBlank, stepTab, tabLabel, withInspected, __resetTabIds } from "../src/lib/browserTabs.ts";
 
 beforeEach(__resetTabIds);
 
@@ -125,6 +125,61 @@ describe("opening", () => {
     if (!("error" in r)) return;
     expect(r.error).toContain(String(MAX_TABS));
     expect(r.error).toContain("Close one");
+  });
+});
+
+describe("a full strip puts the least-used tab to sleep", () => {
+  const full = () => Array.from({ length: MAX_TABS }, (_, i) => newTab(`https://x${i}.test/`));
+  const rec = (tabs: ReturnType<typeof full>, over: Partial<Recency> = {}): Recency => ({
+    activeId: tabs[0]!.id,
+    usedAt: Object.fromEntries(tabs.map((t, i) => [t.id, 1000 + i])),
+    held: () => false,
+    ...over,
+  });
+
+  it("picks the oldest-used, not the first row", () => {
+    const tabs = full();
+    const r = rec(tabs, { usedAt: Object.fromEntries(tabs.map((t, i) => [t.id, 1000 - i])) });
+    expect(pickSleeper(tabs, r)).toBe(tabs[MAX_TABS - 1]!.id);
+  });
+
+  it("never the tab in front, even when it is the oldest", () => {
+    const tabs = full();
+    const r = rec(tabs, { activeId: tabs[0]!.id, usedAt: { ...rec(tabs).usedAt, [tabs[0]!.id]: 1 } });
+    expect(pickSleeper(tabs, r)).toBe(tabs[1]!.id);
+  });
+
+  it("never a tab an agent holds", () => {
+    const tabs = full();
+    const held = new Set([tabs[1]!.id, tabs[2]!.id]);
+    expect(pickSleeper(tabs, rec(tabs, { held: (t) => held.has(t.id) }))).toBe(tabs[3]!.id);
+  });
+
+  it("skips tabs already asleep, and answers null when every one is protected", () => {
+    const tabs = full().map((t, i) => (i === 1 ? { ...t, asleep: true } : t));
+    expect(pickSleeper(tabs, rec(tabs))).toBe(tabs[2]!.id);
+    expect(pickSleeper(tabs, rec(tabs, { held: () => true }))).toBeNull();
+  });
+
+  it("addTab sleeps the pick, seats the new tab awake and names who slept", () => {
+    const tabs = full();
+    const r = addTab(tabs, "https://thirteen.test/", undefined, undefined, undefined, undefined, rec(tabs));
+    if ("error" in r) throw new Error(r.error);
+    expect(r.slept).toBe(tabs[1]!.id);
+    expect(r.tabs.find((t) => t.id === r.slept)!.asleep).toBe(true);
+    expect(r.tab.asleep).toBeUndefined();
+    expect(r.tabs.filter((t) => !t.asleep).length).toBe(MAX_TABS);
+  });
+
+  it("still refuses, with a true sentence, when every awake tab is in front or held", () => {
+    const tabs = full();
+    const r = addTab(tabs, "https://thirteen.test/", undefined, undefined, undefined, undefined, rec(tabs, { held: () => true }));
+    expect("error" in r).toBe(true);
+    if ("error" in r) expect(r.error).toContain("in an agent's hands");
+  });
+
+  it("grace is minutes, so an agent between two verbs keeps its page", () => {
+    expect(SLEEP_GRACE_MS).toBeGreaterThanOrEqual(60_000);
   });
 });
 
