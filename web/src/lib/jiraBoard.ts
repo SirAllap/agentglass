@@ -130,7 +130,7 @@ export const JIRA_BOARD: BoardSource = {
   removeFolder: (id) => api.jiraRemoveFolder(id),
 
   where: async () => ({ ok: false }),
-  find: (ref) => api.jiraFind(ref),
+  find: (ref, signal) => api.jiraFind(ref, signal),
   search: async (q, _force, signal) => api.jiraSearch(q, signal),
   searchStream: async (q, _force, onSome, signal) => {
     const r = await api.jiraSearch(q, signal);

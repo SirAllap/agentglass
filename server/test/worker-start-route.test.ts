@@ -374,6 +374,20 @@ describe.skipIf(!have)("who may reach an agent, and who may start one", () => {
     expect((await h.asPerson("/seat/inbox", { root: OTHER, peek: true })).status).toBe(400);
   });
 
+  test("a seat reads its own project on every seat GET, whatever root the query names", async () => {
+    for (const path of ["/seat", "/seat/tasks", "/seat/needs?format=json", "/seat/field?format=json"]) {
+      const sep = path.includes("?") ? "&" : "?";
+      const other = await h.read(`${path}${sep}root=${encodeURIComponent(OTHER)}`, h.seatToken);
+      expect(other.status).toBe(403);
+      expect(other.body.error).toContain("its own project");
+      // No root, or its own, is its own project.
+      expect((await h.read(path, h.seatToken)).body.root).toBe(h.dir);
+      expect((await h.read(`${path}${sep}root=${encodeURIComponent(h.dir)}`, h.seatToken)).status).toBe(200);
+    }
+    // The person is asked which project, as before.
+    expect((await h.read(`/seat/tasks?root=${encodeURIComponent(OTHER)}`, MACHINE)).status).toBe(400);
+  });
+
   test("a seat owns nothing outside its project, and never a seat: not its own chair, not another project's", async () => {
     // Its own chair is a row with no owner, and stays one.
     const chair = (await h.listed()).find((a) => a.name.startsWith("orchestrator-") && !a.endedAt)!;

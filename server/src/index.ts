@@ -8467,24 +8467,36 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      * re-reads its whole context every turn. So the same facts, as text, with
      * nothing else in the envelope.
      */
+    /* Whose project a read is about: the person says, with `?root=`; a seat's is
+       the one its credential was minted for, whatever the query names. */
+    const readGate = (): { root: string } | { error: string; status: number } => {
+      if (caller?.principal === "seat") {
+        const own = caller.seat?.root;
+        if (!own) return { error: "this seat's project is not known, so it speaks for none", status: 403 };
+        const g = Seat.seatSpeaksFor(own, url.searchParams.get("root"));
+        return "error" in g ? { ...g, status: 403 } : g;
+      }
+      const g = Seat.seatable(url.searchParams.get("root") || workspaceRoot());
+      return "error" in g ? { ...g, status: 400 } : g;
+    };
     /* The queue, read-only, for a seat that would rather not carry the whole
        `/seat` answer to find out what is waiting. */
     if (pathname === "/seat/tasks" && req.method === "GET") {
-      const gate = Seat.seatable(url.searchParams.get("root") || workspaceRoot());
-      if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
+      const gate = readGate();
+      if ("error" in gate) return json({ ok: false, error: gate.error }, gate.status);
       return json({ ok: true, root: gate.root, tasks: SeatQueue.tasksFor(gate.root) });
     }
     /* What the seat has asked the person for, as text, for the same reason the
        field is text: the thing reading it pays to read. */
     if (pathname === "/seat/needs" && req.method === "GET") {
-      const gate = Seat.seatable(url.searchParams.get("root") || workspaceRoot());
-      if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
+      const gate = readGate();
+      if ("error" in gate) return json({ ok: false, error: gate.error }, gate.status);
       if (url.searchParams.get("format") === "json") return json({ ok: true, root: gate.root, needs: SeatNeeds.needsFor(gate.root) });
       return new Response(SeatNeeds.needReadout(gate.root), { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
     }
     if (pathname === "/seat/field" && req.method === "GET") {
-      const gate = Seat.seatable(url.searchParams.get("root") || workspaceRoot());
-      if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
+      const gate = readGate();
+      if ("error" in gate) return json({ ok: false, error: gate.error }, gate.status);
       const rows = Seat.fieldFor(gate.root, await boardNow().catch(() => []));
       if (url.searchParams.get("format") === "json") {
         return json({ ok: true, root: gate.root, field: rows, unread: SeatInbox.unreadCount(gate.root), stopped: SeatInbox.unreadWorthWaking(gate.root) });
@@ -8506,8 +8518,8 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       return new Response(fieldReadout(rows) + tray, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
     }
     if (pathname === "/seat" && req.method === "GET") {
-      const gate = Seat.seatable(url.searchParams.get("root") || workspaceRoot());
-      if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
+      const gate = readGate();
+      if ("error" in gate) return json({ ok: false, error: gate.error }, gate.status);
       return json({ ok: true, ...(await Seat.seatStatus(gate.root)), doctrineText: readDoctrine(gate.root).text, tasks: SeatQueue.tasksFor(gate.root), needs: SeatNeeds.needsFor(gate.root), lines: Seat.seatLines(gate.root), floorHours: seatWakeHours(), models: claudeModels(), defaultModel: Seat.defaultSeatModel() });
     }
     if (pathname.startsWith("/seat/") && req.method === "POST") {

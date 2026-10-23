@@ -2046,7 +2046,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
     };
     /* Another tracker asks its own `find`, with its own idea of an id. */
     if (source.id !== "clickup" && looksLikeCardId(asked, true, source.shortKeys)) {
-      idLookup = source.find(asked).then(landCard).catch(() => { /* the search may still find it */ });
+      idLookup = source.find(asked, ac.signal).then(landCard).catch(() => { /* the search may still find it */ });
     } else if (source.id === "clickup" && /^\s*([A-Za-z][\w]*-)?\d{3,}\s*$/.test(asked)) {
       /*
        * ASKED OF THE FETCHER, NOT OF THE CACHE.
@@ -2162,7 +2162,9 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
         return { asked, rows: [...had, ...fresh], looking: false };
       });
       setFoundBySearch(new Set(found.map((t) => t.id)));
-      setNote(null);
+      /* A cut list that has some matches reads as the whole answer, and
+         "not in the list" then reads as "does not exist". */
+      setNote(wholeTruncated ? { ok: true, text: `These are the matches in the part of ${source.nouns.tracker} this search reaches; there may be more.` } : null);
     } catch {
       /* An abort is not a failure to report — it is what was asked for. Any
          other throw is, but only while this is still the search on screen. */

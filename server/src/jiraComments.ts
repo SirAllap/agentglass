@@ -77,7 +77,8 @@ export function toDetail(issue: unknown, task: ProviderTask, v: 2 | 3, me?: stri
   // A subtask arrives as a stub (key, summary, status): enough for a row, not for a project.
   const subtasks = cx ? (Array.isArray(f.subtasks) ? f.subtasks : []).flatMap((s) => { const t = toTask(s, cx); return t ? [t] : []; }) : [];
   return {
-    detail: { task, description: f.description == null ? "" : read(f.description).text, subtasks, checklists: [], comments },
+    // Asked and empty is an answer ("none left"); not asked, the board's own count stands.
+    detail: { task: Array.isArray(f.subtasks) ? { ...task, subtasks: f.subtasks.length } : task, description: f.description == null ? "" : read(f.description).text, subtasks, checklists: [], comments },
     more: Math.max(0, total - comments.length),
   };
 }

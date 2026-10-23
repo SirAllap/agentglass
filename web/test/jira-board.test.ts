@@ -342,7 +342,7 @@ describe("a control Jira cannot honour is not drawn", () => {
     const search = body.slice(body.indexOf("const searchAll = useCallback("));
     expect(search).toContain('source.id === "clickup" && /^\\s*([A-Za-z][\\w]*-)?\\d{3,}\\s*$/.test(asked)');
     expect(search).toContain('source.id !== "clickup" && looksLikeCardId(asked, true, source.shortKeys)');
-    expect(search).toContain("source.find(asked).then(landCard)");
+    expect(search).toContain("source.find(asked, ac.signal).then(landCard)");
     // A source that cannot stream is asked once, not streamed and then asked again.
     expect(search).toContain("!source.caps.stream ? { ok: false } : await source.searchStream(");
     expect(body).toContain("if (!source.caps.workspaceSearch) { if (looksLikeId) void reveal(); return; }");

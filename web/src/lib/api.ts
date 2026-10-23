@@ -1419,7 +1419,7 @@ const realApi = {
   /** One Jira card by its key or numeric id. */
   jiraTask: (id: string) => get<{ ok: boolean; error?: string; task?: ProviderTask }>(`/jira/task?id=${encodeURIComponent(id)}`),
   /** A card from what was typed: `ORBIT-1042`, or a bare number tried against the site's projects. */
-  jiraFind: (q: string) => get<{ ok: boolean; error?: string; task?: ProviderTask; asked?: string }>(`/jira/find?q=${encodeURIComponent(q)}`),
+  jiraFind: (q: string, signal?: AbortSignal) => get<{ ok: boolean; error?: string; task?: ProviderTask; asked?: string }>(`/jira/find?q=${encodeURIComponent(q)}`, signal),
   /** What is assigned to you and not done. `truncated` when the page cap cut it short. */
   jiraSearch: (q: string, signal?: AbortSignal) => get<{ ok: boolean; error?: string; tasks?: ProviderTask[]; truncated?: boolean; throttled?: boolean }>(`/jira/search?q=${encodeURIComponent(q)}`, signal),
   /** The moves a Jira card has from where it is. An empty list carries `cannot`, the sentence for it. */
@@ -2852,7 +2852,7 @@ const demoApi: typeof realApi = {
   trackerProjects: (_r?: boolean) => D({ ok: true, projects: {}, repos: [] }),
   setTrackerProject: (_r: string, _t: TrackerChoice) => D({ ok: false, error: "not available in the demo" }),
   jiraTask: (_i: string) => D({ ok: false, error: "not available in the demo" }),
-  jiraFind: (_q: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraFind: (_q: string, _signal?: AbortSignal) => D({ ok: false, error: "not available in the demo" }),
   jiraSearch: (_q: string) => D({ ok: false, error: "not available in the demo" }),
   jiraTransitions: (_k: string) => D({ ok: false, error: "not available in the demo" }),
   jiraTransition: (_k: string, _t: string, _u: number) => D({ ok: false, error: "not available in the demo" }),

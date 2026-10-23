@@ -33,6 +33,8 @@ export interface Harness {
   post(path: string, body: unknown, token: string, extra?: Record<string, string>): Promise<Ans & { status: number }>;
   asSeat(path: string, body: unknown, extra?: Record<string, string>): Promise<Ans & { status: number }>;
   asPerson(path: string, body: unknown, extra?: Record<string, string>): Promise<Ans & { status: number }>;
+  /** A GET with the given token: status and the JSON body when there is one. */
+  read(path: string, token: string): Promise<{ status: number; body: Record<string, any> }>;
   listed(): Promise<Record<string, any>[]>;
   row(name: string): Promise<Record<string, any> | undefined>;
   actions(): Promise<{ actor: string; action: string; ok: boolean; detail: string | null }[]>;
@@ -148,6 +150,10 @@ sleep 300
     dir, base, wt, logs, state: `${dir}/state`, seatToken, post, until,
     asSeat: (p, b, x) => post(p, b, seatToken, x),
     asPerson: (p, b, x) => post(p, b, MACHINE, x),
+    read: async (p, token) => {
+      const res = await fetch(base + p, { headers: { Authorization: `Bearer ${token}` } });
+      return { status: res.status, body: await res.json().catch(() => ({})) as Record<string, any> };
+    },
     listed: async () => (await get<{ result: { agents: Record<string, any>[] } }>("/agents/named?all=1")).result.agents,
     row: async (name) => (await h.listed()).find((a) => a.name === name),
     actions: async () => (await get<{ actions: { actor: string; action: string; ok: boolean; detail: string | null }[] }>("/actions?limit=200")).actions,

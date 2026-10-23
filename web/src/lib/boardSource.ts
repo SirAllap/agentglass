@@ -130,7 +130,7 @@ export interface BoardSource {
   /** Is this card already on a board that is held? */
   where: (ref: string) => Read<"clickupWhere">;
   /** Fetch one card by reference. */
-  find: (ref: string) => Read<"clickupFind">;
+  find: (ref: string, signal?: AbortSignal) => Read<"clickupFind">;
   search: (q: string, force?: boolean, signal?: AbortSignal) => Read<"clickupSearch">;
   searchStream: (
     q: string, force: boolean, onSome: Parameters<typeof api.clickupSearchStream>[2], signal?: AbortSignal,

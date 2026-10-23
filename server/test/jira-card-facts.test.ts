@@ -83,10 +83,20 @@ for (const flavor of ["cloud", "datacenter"] as FakeFlavor[]) {
       expect(n).toBe(dc ? 1 : 2);
     });
 
-    test("a card with none of them carries none of the keys", async () => {
+    test("a card with none of them carries none of the keys, and says zero subtasks", async () => {
       const t = (await K.detailStored("ORBIT-1001")).data!.detail;
-      for (const k of ["sprint", "points", "subtasks"]) expect(k in t.task).toBe(false);
+      for (const k of ["sprint", "points"]) expect(k in t.task).toBe(false);
+      // Subtasks were asked for and none came back: zero, said outright.
+      expect(t.task.subtasks).toBe(0);
       expect(t.subtasks).toEqual([]);
+    });
+
+    test("a card whose subtasks were all removed says zero, so the board's stale count does not stand", () => {
+      const stale = { id: "20043", customId: "ORBIT-1043", title: "Retry the webhook delivery", subtasks: 2 } as never;
+      const asked = K.toDetail({ fields: { subtasks: [] } }, stale, dc ? 2 : 3);
+      expect(asked.detail.task.subtasks).toBe(0);
+      const notAsked = K.toDetail({ fields: {} }, stale, dc ? 2 : 3);
+      expect(notAsked.detail.task.subtasks).toBe(2);
     });
 
     test("the fields are learned once: the second card is one request", async () => {
