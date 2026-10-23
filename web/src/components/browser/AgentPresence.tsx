@@ -40,8 +40,10 @@ export function useAgentLive(agent: TabAgent | undefined): boolean {
   return live;
 }
 
-export function AgentPresence({ agent, landing, onToggle, quiet = false }: {
+export function AgentPresence({ agent, landing, url = "", onToggle, quiet = false }: {
   agent: TabAgent;
+  /** The tab's address: a new page leaves the pointer pointing at something no longer there. */
+  url?: string;
   landing: ActLanding | null;
   onToggle: () => void;
   /** The island tucked away because the page is the person's: the dock leaves with it. */
@@ -56,6 +58,20 @@ export function AgentPresence({ agent, landing, onToggle, quiet = false }: {
   const liveRef = useRef(live);
   liveRef.current = live;
   const [ghost, setGhost] = useState<{ x: number; y: number; label: string; travel: number; seq: number } | null>(null);
+  const glass = useRef<HTMLDivElement | null>(null);
+  /* The pointer stays where the last act landed, in screen pixels; once the
+     page under it changes it points at whatever took that place, so it leaves
+     with the page and comes back with the next act. */
+  const [stale, setStale] = useState(false);
+  const seenUrl = useRef(url);
+  useEffect(() => { if (url !== seenUrl.current) { seenUrl.current = url; setStale(true); } }, [url]);
+  /* The glass stops the keys too, but a page that already had the focus would
+     keep getting them: it takes the focus off this tab's page when it rises,
+     and only from this tab's page, never from wherever else the person is typing. */
+  useEffect(() => {
+    const a = document.activeElement;
+    if (live && a && a.tagName === "WEBVIEW" && root.current?.parentElement?.contains(a)) glass.current?.focus({ preventScroll: true });
+  }, [live]);
 
   /* The lap is rebuilt only when the page changes size. */
   useEffect(() => {
@@ -84,6 +100,7 @@ export function AgentPresence({ agent, landing, onToggle, quiet = false }: {
     const { x, y } = pointerAt(landing, root.current?.clientWidth ?? 0);
     const travel = calmNow() ? 0 : travelMs(x - last.current.x, y - last.current.y);
     last.current = { x, y };
+    setStale(false);
     setGhost((g) => ({ x, y, travel, label: presenceLabel(landing.verb, landing.name, landing.key), seq: (g?.seq ?? 0) + 1 }));
   }, [landing]);
 
@@ -95,9 +112,9 @@ export function AgentPresence({ agent, landing, onToggle, quiet = false }: {
       {/* A pane of glass over the page while an agent drives it: the person's
           pointer, wheel and keys stop here, so not even a hover reaches the page
           until Take over. The agent's own input goes to the guest directly. */}
-      {live && <div className="agx-presence-glass" tabIndex={-1} onPointerDown={(e) => e.currentTarget.focus({ preventScroll: true })} />}
+      {live && <div ref={glass} className="agx-presence-glass" tabIndex={-1} onPointerDown={(e) => e.currentTarget.focus({ preventScroll: true })} />}
       {ghost && (
-        <div className="agx-presence-ghost" style={{ transform: `translate(${ghost.x}px, ${ghost.y}px)`, transitionDuration: `${ghost.travel}ms` }}>
+        <div className={"agx-presence-ghost" + (stale ? " is-stale" : "")} style={{ transform: `translate(${ghost.x}px, ${ghost.y}px)`, transitionDuration: `${ghost.travel}ms` }}>
           <svg className="agx-presence-arrow" viewBox="0 0 20 20" aria-hidden>
             <path d="M3 2 16.5 9.6l-6.1 1.3-2.9 6.1z" fill="var(--agx-mark)" stroke="#fff" strokeWidth="1.5" strokeLinejoin="round" />
             <circle cx="7.6" cy="16.4" r="2.4" fill="var(--agx-contact)" stroke="#fff" strokeWidth="1.2" />

@@ -24,7 +24,18 @@ describe("the glass over a driven page", () => {
   const css = Bun.file(new URL("../src/index.css", import.meta.url));
   // A person's hover over a page an agent drove opened menus mid-task.
   test("is up for as long as the island names the agent, and takes the pointer", async () => {
-    expect(presence).toContain('{live && <div className="agx-presence-glass"');
+    expect(presence).toContain('{live && <div ref={glass} className="agx-presence-glass"');
     expect(await css.text()).toMatch(/\.agx-presence-glass \{[^}]*pointer-events: auto/);
+  });
+});
+
+describe("the pointer and the keys", () => {
+  // After a navigation the pointer kept pointing at the old page's spot, over whatever replaced it.
+  test("the pointer leaves with the page and comes back with the next act", () => {
+    expect(presence).toMatch(/if \(url !== seenUrl\.current\) \{ seenUrl\.current = url; setStale\(true\); \}/);
+    expect(presence).toContain("setStale(false);");
+  });
+  test("the glass takes the focus from this tab's page only", () => {
+    expect(presence).toContain('a.tagName === "WEBVIEW" && root.current?.parentElement?.contains(a)');
   });
 });

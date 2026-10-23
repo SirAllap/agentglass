@@ -2988,6 +2988,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
   background: radial-gradient(circle, var(--agx-contact) 0 2.6px, color-mix(in srgb, var(--agx-contact) 20%, transparent) 3.4px, transparent 6px); }
 .agx-presence-ghost { position: absolute; left: 0; top: 0; opacity: 0; transition-property: transform, opacity; transition-timing-function: var(--agx-move), ease-out; will-change: transform; }
 .agx-presence-on .agx-presence-ghost { opacity: 1; }
+.agx-presence-on .agx-presence-ghost.is-stale { opacity: 0; }
 .agx-presence-arrow { display: block; width: 20px; height: 20px; filter: drop-shadow(0 1px 1.5px rgba(40, 20, 90, .28)); }
 .agx-presence-label { position: absolute; left: 18px; top: 20px; white-space: nowrap; font-size: 11px; font-weight: 500; line-height: 1; padding: 4px 8px; border-radius: 7px;
   color: color-mix(in srgb, var(--agx-mark) 70%, var(--text)); background: color-mix(in srgb, var(--bg) 86%, transparent);

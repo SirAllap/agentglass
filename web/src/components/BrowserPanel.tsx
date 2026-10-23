@@ -3114,7 +3114,7 @@ export function BrowserView({ active: viewOn, scope }: {
                 : { left: 0, right: 0, ...(t.id === activeId ? null : { visibility: "hidden" }) }}>
             <div style={{ position: "relative", width: viewport.width ? `${viewport.width}px` : "100%", height: "100%", maxWidth: "100%" }}>
               {acts[t.id] && (
-                <AgentPresence agent={acts[t.id]!} landing={landings[t.id] ?? null} quiet={!classic && islandTucked && t.id === activeId}
+                <AgentPresence agent={acts[t.id]!} landing={landings[t.id] ?? null} url={t.url} quiet={!classic && islandTucked && t.id === activeId}
                   onToggle={() => dispatchAct({ type: "pause", tab: t.id, paused: !acts[t.id]!.paused })} />
               )}
               {IS_DEMO ? (
