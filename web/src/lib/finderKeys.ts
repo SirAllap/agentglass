@@ -24,6 +24,9 @@ export type Act =
   | { t: "help" }
   | { t: "refresh" }
   | { t: "filter" }
+  | { t: "extend"; by: "up" | "down" | "pageUp" | "pageDown" }
+  | { t: "all" }
+  | { t: "toggle" }
   | { t: "view"; view: "columns" | "icons" | "list" };
 
 export interface KeyIn { key: string; ctrl: boolean; meta: boolean; shift: boolean; alt: boolean }
@@ -50,8 +53,18 @@ export function finderKey(k: KeyIn, ctx: Ctx): Act | null {
       default: return null;
     }
   }
+  if (!k.ctrl && !k.meta && k.shift && !k.alt) {
+    switch (k.key) {
+      case "ArrowUp": return { t: "extend", by: "up" };
+      case "ArrowDown": return { t: "extend", by: "down" };
+      case "PageUp": return { t: "extend", by: "pageUp" };
+      case "PageDown": return { t: "extend", by: "pageDown" };
+      default: return null;
+    }
+  }
   if (k.ctrl || k.meta) {
     if (k.shift) return null;
+    if (k.key === " ") return { t: "toggle" };
     switch (k.key.toLowerCase()) {
       case "h": case ".": return { t: "hidden" };
       case "f": return { t: "filter" };
@@ -60,6 +73,7 @@ export function finderKey(k: KeyIn, ctx: Ctx): Act | null {
       case "3": return { t: "view", view: "list" };
       case "arrowup": return { t: "move", key: "Home" };
       case "arrowdown": return { t: "move", key: "End" };
+      case "a": return { t: "all" };
       case "b": return { t: "sidebar" };
       case "l": return { t: "path" };
       case "c": return ctx.hasSelection ? null : { t: "copy" };

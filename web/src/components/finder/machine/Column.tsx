@@ -17,6 +17,12 @@ import { MenuCap, MenuItem, MenuRule, Popover } from "./Popover.tsx";
 import { VirtualList } from "./VirtualList.tsx";
 import { dragWidth, splitName } from "../../../lib/finderColumns.ts";
 
+/** Ctrl and Shift on a click: what makes it a choice of several rows. */
+export interface Mod { ctrl: boolean; shift: boolean }
+export const modOf = (e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): Mod => ({ ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey });
+/** A Shift-click would also select the text between the two rows. */
+export const noRange = (e: React.MouseEvent) => { if (e.shiftKey || e.ctrlKey || e.metaKey) e.preventDefault(); };
+
 export function RowIcon({ row, size = ICON.sm }: { row: Row; size?: number }) {
   if (row.locked) return <LockIcon size={size} />;
   if (row.kind === "link" && !isFolder(row)) return <LinkIcon size={size} />;
@@ -24,7 +30,7 @@ export function RowIcon({ row, size = ICON.sm }: { row: Row; size?: number }) {
   return <span className="flex" style={{ color: TONE_INK[g.tone] }}><GlyphIcon glyph={g.glyph} size={size} /></span>;
 }
 
-export function Column({ title, closable, onClosePane, filterSignal, width, onResize, onFit, state, display, selName, focused, prefs, rowH, filter, onFilter, onPick, onOpen, onFocusCol, onRefresh, onSort, onPref }: {
+export function Column({ title, closable, onClosePane, filterSignal, width, onResize, onFit, state, display, selName, chosen, focused, prefs, rowH, filter, onFilter, onPick, onOpen, onFocusCol, onRefresh, onSort, onPref, scrollTop, onScrollTop }: {
   title: string;
   /** Not the first column: it can be closed, which drops it and what is to its right. */
   closable: boolean;
@@ -39,17 +45,22 @@ export function Column({ title, closable, onClosePane, filterSignal, width, onRe
   state: FolderState | undefined;
   display: Display;
   selName: string | null;
+  /** More than one row chosen (Ctrl or Shift): every name in it is drawn selected. */
+  chosen: ReadonlySet<string> | null;
   focused: boolean;
   prefs: Prefs;
   rowH: number;
   filter: string;
   onFilter: (v: string) => void;
-  onPick: (row: Row) => void;
+  onPick: (row: Row, mod?: Mod) => void;
   onOpen: (row: Row) => void;
   onFocusCol: () => void;
   onRefresh: () => void;
   onSort: (k: SortKey) => void;
   onPref: (p: Partial<Prefs>) => void;
+  /** Where this column was scrolled when the finder was last closed, and where it is now. */
+  scrollTop?: number;
+  onScrollTop?: (top: number) => void;
 }) {
   const [menu, setMenu] = useState<{ kind: "sort" | "opts"; at: DOMRect } | null>(null);
   const [finding, setFinding] = useState(filter !== "");
@@ -62,7 +73,7 @@ export function Column({ title, closable, onClosePane, filterSignal, width, onRe
 
   return (
     <section aria-label={`Folder ${title}`} onMouseDown={onFocusCol} className="relative flex flex-col min-h-0 shrink-0"
-      style={{ width, borderRight: LINE }}>
+      style={{ width, borderRight: LINE, scrollSnapAlign: "start" }}>
       {/* The column that has the keyboard wears a bar on top; a colour alone would not survive a theme that has no accent to spare. */}
       <div aria-hidden className="absolute left-0 right-0 top-0" style={{ height: 3, background: focused ? "var(--primary)" : "transparent", zIndex: 2 }} />
       <div role="separator" aria-orientation="vertical" aria-label={`Resize ${title}`} aria-valuenow={Math.round(width)} tabIndex={0}
@@ -115,18 +126,18 @@ export function Column({ title, closable, onClosePane, filterSignal, width, onRe
           {loading ? "Reading…" : filter ? `Nothing here is called “${filter}”.` : state && state.hiddenSkipped ? `This directory is empty. ${state.hiddenSkipped} hidden ${state.hiddenSkipped === 1 ? "item" : "items"} left out.` : "This directory is empty"}
         </div>
       ) : (
-        <VirtualList count={display.items.length} rowH={rowH} label={`Entries of ${title}`} className="flex-1" keepInView={selItem}
+        <VirtualList count={display.items.length} rowH={rowH} label={`Entries of ${title}`} className="flex-1" keepInView={selItem} initialTop={scrollTop} onTop={onScrollTop}
           render={(i) => {
             const it = display.items[i]!;
             if (it.header) {
               return <div key={`h:${it.header}`} className="flex items-end px-3 pb-1 text-[9.5px] uppercase tracking-[0.14em]" style={{ height: rowH, color: "var(--text4)", fontWeight: 600 }}>{it.header}</div>;
             }
             const r = it.row!;
-            const sel = r.name === selName;
+            const sel = r.name === selName || !!chosen?.has(r.name);
             const dir = isFolder(r);
             return (
               <div key={r.name} role="option" aria-selected={sel} aria-disabled={r.locked || undefined} title={r.why ?? r.name}
-                onClick={() => onPick(r)} onDoubleClick={() => onOpen(r)}
+                onMouseDown={noRange} onClick={(e) => onPick(r, modOf(e))} onDoubleClick={() => onOpen(r)}
                 className="agx-fm-row flex items-center gap-2 px-2.5 mx-1 rounded-md cursor-pointer"
                 style={{
                   height: rowH, color: r.locked ? "var(--text4)" : "var(--text)", fontWeight: sel ? 600 : 400,

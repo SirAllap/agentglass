@@ -10,24 +10,26 @@
 // lib/finderMiller.ts and lib/finderKeys.ts, where they are tested; the reading
 // of a folder a page at a time is lib/finderFolders.ts. This file only holds the
 // state and draws it.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../../lib/api.ts";
 import { FolderStore, type FolderState } from "../../../lib/finderFolders.ts";
-import { columnWidth, fillLast, previewWidth } from "../../../lib/finderColumns.ts";
+import { columnWidth, previewFits, revealScroll, stripPad, previewWidth, sidebarWidth } from "../../../lib/finderColumns.ts";
 import { back as histBack, canBack, canForward, forward as histForward, here as histHere, startHistory, visit, type History } from "../../../lib/finderHistory.ts";
+import { readMachineSnap, writeMachineSnap } from "../../../lib/finderMachineState.ts";
 import { finderKey } from "../../../lib/finderKeys.ts";
+import { clickSelect, extendBy, extendSelect, selectAll, selectedFooter, single, toggleCursor, type Choice } from "../../../lib/finderSelect.ts";
 import {
-  DEFAULT_PREFS, canEditRow, displayRows, footerCount, gridStep, indexOfName, isFolder, joinPath, keyStep, nextSidebar, parentOf, readPrefs, rowHeight, sidebarMode, sidebarPrefs, sidebarTip, writePrefs,
+  DEFAULT_PREFS, canEditRow, displayRows, opensOnPick, footerCount, gridStep, indexOfName, isFolder, joinPath, keyStep, nextSidebar, parentOf, readPrefs, rowHeight, sidebarMode, sidebarPrefs, sidebarTip, writePrefs,
   type ColShape, type Display, type Prefs, type Row, type SortKey,
 } from "../../../lib/finderMiller.ts";
 import { CopyIcon, GridIcon } from "../../../lib/glyphIcons.tsx";
-import { ArrowLeftIcon, ArrowRightIcon, ArrowUpIcon, PanelLeftIcon } from "../../../lib/finderIcons.tsx";
+import { ArrowLeftIcon, ArrowRightIcon, ArrowUpIcon, PanelLeftIcon, SlidersIcon } from "../../../lib/finderIcons.tsx";
 import { HIT, ICON } from "../../../lib/iconSize.ts";
 import { isAppChord } from "../../../lib/keybindings.ts";
 import type { DiskPlace } from "../../../../../shared/types.ts";
 import { EDGE, LINE } from "../../workspace/Chrome.tsx";
-import { Column } from "./Column.tsx";
-import { AppearanceMenu, HelpSheet } from "./FinderChrome.tsx";
+import { Column, type Mod } from "./Column.tsx";
+import { AppearanceMenu, FinderSettings, HelpSheet } from "./FinderChrome.tsx";
 import { FinderPathBar } from "./FinderPathBar.tsx";
 import { IconsView, ListView, tilesPerRow } from "./FolderViews.tsx";
 import { QuickLook } from "./QuickLook.tsx";
@@ -38,13 +40,14 @@ const PREFS_KEY = "agentglass.finder.machine.prefs";
 const loadPrefs = (): Prefs => { try { return readPrefs(localStorage.getItem(PREFS_KEY)); } catch { return DEFAULT_PREFS; } };
 const savePrefs = (p: Prefs) => { try { localStorage.setItem(PREFS_KEY, writePrefs(p)); } catch { /* a private window forgets; the finder still works */ } };
 
+const SNAP_KEY = "agentglass.finder.machine.state";
+const loadSnap = () => { try { return readMachineSnap(localStorage.getItem(SNAP_KEY)); } catch { return null; } };
+
 /** How long a one-line answer ("Copied …") stays in the footer: Strata's FEEDBACK_FLASH. */
 const FEEDBACK_MS = 2000;
 
 /** Wide enough for the sidebar and the columns side by side. */
 const SIDE_MIN = 640;
-/** Wide enough to keep the preview beside the columns. */
-const PREVIEW_MIN = 900;
 /** Past this many rows a folder that is still arriving is not re-sorted on every page. */
 const BIG = 2000;
 
@@ -65,31 +68,49 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
   const [prefs, setPrefsState] = useState<Prefs>(loadPrefs);
   const setPrefs = useCallback((p: Partial<Prefs>) => setPrefsState((cur) => { const n = { ...cur, ...p }; savePrefs(n); return n; }), []);
 
-  const [trail, setTrail] = useState<string[]>([start || home || "/"]);
-  const [sel, setSel] = useState<(string | null)[]>([null]);
-  const [focusCol, setFocusCol] = useState(0);
+  /* Where it was left, if that is still where the palette says it is: a chip or a link that moved the place wins over the memory. */
+  const [back] = useState(() => { const s = loadSnap(); return s && s.trail[0] === (start || home || "/") ? s : null; });
+  const [trail, setTrail] = useState<string[]>(() => back?.trail ?? [start || home || "/"]);
+  const [sel, setSel] = useState<(string | null)[]>(() => back?.sel ?? [null]);
+  const [focusCol, setFocusCol] = useState(() => back?.focusCol ?? 0);
   const [filters, setFilters] = useState<Record<string, string>>({});
-  const [peek, setPeek] = useState(false);
+  const [peek, setPeek] = useState(() => back?.peek ?? false);
   const [sidePage, setSidePage] = useState(false);
   const [help, setHelp] = useState(false);
   /** The panel's own width once somebody has dragged its edge. */
-  const [prevDrag, setPrevDrag] = useState<number | undefined>(undefined);
+  const [prevDrag, setPrevDrag] = useState<number | undefined>(() => back?.prevDrag);
   const [filterTick, setFilterTick] = useState({ col: 0, n: 0 });
   const [hist, setHist] = useState<History>(() => startHistory(start || home || "/"));
   const [menu, setMenu] = useState<DOMRect | null>(null);
+  const [settings, setSettings] = useState<DOMRect | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [pathSignal, setPathSignal] = useState(0);
   const [version, setVersion] = useState(0);
   /** Columns somebody dragged, by folder: their width wins over the names' until they double-click the edge. */
-  const [dragged, setDragged] = useState<Record<string, number>>({});
+  const [dragged, setDragged] = useState<Record<string, number>>(() => back?.dragged ?? {});
+  /* How far each column is scrolled: read on the way out, so it is a ref and not a render. */
+  const scrolls = useRef<Record<string, number>>({ ...back?.scroll });
+  /* More than one row of one column chosen. Held by the folder it was chosen in, so a column that is gone or replaced takes it with it. */
+  const [multi, setMulti] = useState<{ col: number; path: string; choice: Choice } | null>(null);
   const wantFirst = useRef<number | null>(null);
+  const snapNow = useRef<() => string>(() => "");
+  snapNow.current = () => writeMachineSnap({ v: 1, trail, sel, focusCol, scroll: scrolls.current, dragged, peek, ...(prevDrag === undefined ? {} : { prevDrag }) });
+  const save = useCallback(() => { try { localStorage.setItem(SNAP_KEY, snapNow.current()); } catch { /* a private window forgets; the finder still works */ } }, []);
+  useEffect(() => { save(); }, [trail, sel, focusCol, dragged, peek, prevDrag, save]);
+  const scrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onScrollTop = useCallback((path: string, top: number) => {
+    scrolls.current[path] = top;
+    if (scrollTimer.current) clearTimeout(scrollTimer.current);
+    scrollTimer.current = setTimeout(save, 300);
+  }, [save]);
+  // Closing the finder unmounts it: what is scrolled right now must be in the store before it goes.
+  useEffect(() => () => { if (scrollTimer.current) clearTimeout(scrollTimer.current); save(); }, [save]);
 
   const root = useRef<HTMLDivElement>(null);
   const main = useRef<HTMLDivElement>(null);
   const box = useBox(root);
   const mainBox = useBox(main);
   const compact = box.w > 0 && box.w < SIDE_MIN;
-  const wide = box.w >= PREVIEW_MIN;
 
   /* Made and torn down by the effect, not at first render: React runs a dev effect
      twice (mount, cleanup, mount), and a store disposed by the first cleanup and
@@ -169,12 +190,30 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
 
   /* ---- selection ---- */
   const pick = useCallback((col: number, row: Row) => {
+    setMulti(null);
     setSel((s) => [...s.slice(0, col), row.name]);
-    setTrail((t) => (isFolder(row) && !row.locked ? [...t.slice(0, col + 1), joinPath(t[col]!, row.name)] : t.slice(0, col + 1)));
+    setTrail((t) => (opensOnPick(row, prefs.mirror) ? [...t.slice(0, col + 1), joinPath(t[col]!, row.name)] : t.slice(0, col + 1)));
     setFocusCol(col);
-  }, []);
+  }, [prefs.mirror]);
 
   const last = trail.length - 1;
+  const chosenOf = (col: number): Choice => (multi && multi.col === col && trail[col] === multi.path ? multi.choice : single(sel[col] ?? null));
+  const liveMulti = multi && trail[multi.col] === multi.path && multi.choice.names.size > 1 ? multi : null;
+
+  /* A choice of several rows has no child column: the preview follows the cursor row alone. */
+  const choose = useCallback((col: number, c: Choice) => {
+    const rows = columns[col]?.display.rows ?? [];
+    setFocusCol(col);
+    if (c.names.size <= 1) { const row = rows.find((r) => r.name === c.cursor); if (row) pick(col, row); return; }
+    setMulti({ col, path: trail[col]!, choice: c });
+    setSel((s) => [...s.slice(0, col), c.cursor]);
+    setTrail((t) => t.slice(0, col + 1));
+  }, [columns, trail, pick]);
+  const onPickMod = useCallback((col: number, row: Row, mod?: Mod) => {
+    if (!mod || (!mod.ctrl && !mod.shift)) { pick(col, row); return; }
+    choose(col, clickSelect(columns[col]?.display.rows ?? [], chosenOf(col), row.name, mod));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [columns, choose, multi, sel, trail, pick]);
   /* Each column as wide as its longest name asks, the free room going to the last
      one; a dragged column keeps the width it was given. Measured with the font the
      rows are drawn in, so "fits" means fits. */
@@ -187,8 +226,8 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefs.textSize, box.w > 0]);
   const widths = useMemo(
-    () => fillLast(columns.map((c) => columnWidth(c.state?.rows.map((r) => r.name) ?? [], measure, dragged[c.path])), mainBox.w - 2),
-    [columns, measure, dragged, mainBox.w]);
+    () => columns.map((c) => columnWidth(c.state?.rows.map((r) => r.name) ?? [], measure, dragged[c.path])),
+    [columns, measure, dragged]);
   // A folder row that is selected has its own column; the selection that matters for the preview is the deepest one.
   const deepest = (() => {
     for (let c = trail.length - 1; c >= 0; c--) {
@@ -229,7 +268,7 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
       const rows = c.display.rows;
       const at = indexOfName(rows, sel[last] ?? null);
       if (key === "ArrowLeft" && prefs.view === "list") { goUp(); return; }
-      const per = prefs.view === "icons" ? tilesPerRow(mainBox.w) : 1;
+      const per = prefs.view === "icons" ? tilesPerRow(mainBox.w, prefs.thumb) : 1;
       const next = prefs.view === "list" && key === "ArrowRight" ? at : gridStep(at < 0 ? 0 : at, rows.length, per, key);
       const row = rows[at < 0 && (key === "ArrowDown" || key === "ArrowRight") ? 0 : next]; if (row) pick(last, row);
       return;
@@ -249,9 +288,18 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
   const copy = useCallback((p: string) => {
     void navigator.clipboard?.writeText(p).then(() => setNote(`Copied ${p}`)).catch(() => setNote("Could not copy"));
   }, []);
+  /* With several rows chosen, Ctrl+C copies every path, one a line. */
+  const copyChosen = () => {
+    if (!liveMulti) { copy(currentPath); return; }
+    const dir = trail[liveMulti.col]!;
+    const paths = (columns[liveMulti.col]?.display.rows ?? []).filter((r) => liveMulti.choice.names.has(r.name)).map((r) => joinPath(dir, r.name));
+    void navigator.clipboard?.writeText(paths.join("\n")).then(() => setNote(`Copied ${paths.length} paths`)).catch(() => setNote("Could not copy"));
+  };
   const currentPath = deepest?.path ?? trail[focusCol] ?? trail[0]!;
 
   const sideMode = sidebarMode(prefs);
+  /* Strata's rule: beside the browser only when what the sidebar leaves still holds a column and the preview's own floor. */
+  const wide = box.w > 0 && !(compact && sidePage) && previewFits(box.w - ((compact ? sidePage : sideMode !== "hidden") ? sidebarWidth(sideMode === "rail" ? "rail" : "full", prefs.sideW, box.w) : 0), prefs.view);
   /* One step for the button and Ctrl+B alike, as in Strata: full, the icon rail, hidden, full. */
   const toggleSide = useCallback(() => (compact ? setSidePage((v) => !v) : setPrefs(sidebarPrefs(nextSidebar(sideMode)))), [compact, sideMode, setPrefs]);
 
@@ -275,10 +323,20 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
       case "hidden": setPrefs({ hidden: !prefs.hidden }); break;
       case "sidebar": toggleSide(); break;
       case "path": setPathSignal((n) => n + 1); break;
-      case "copy": copy(currentPath); break;
+      case "copy": copyChosen(); break;
       case "help": setHelp((h) => !h); break;
+      case "extend": {
+        const col = prefs.view === "columns" ? focusCol : last;
+        const rows = columns[col]?.display.rows ?? [];
+        const page = Math.max(1, Math.floor(mainBox.h / rowHeight(prefs.density, prefs.textSize)) - 2);
+        const per = prefs.view === "icons" ? tilesPerRow(mainBox.w, prefs.thumb) : 1;
+        choose(col, extendSelect(rows, chosenOf(col), extendBy(a.by, page, per)));
+        break;
+      }
+      case "all": { const col = prefs.view === "columns" ? focusCol : last; choose(col, selectAll(columns[col]?.display.rows ?? [], chosenOf(col))); break; }
+      case "toggle": { const col = prefs.view === "columns" ? focusCol : last; choose(col, toggleCursor(columns[col]?.display.rows ?? [], chosenOf(col))); break; }
     }
-  }, [move, deepest, prefs, enterFolder, go, goUp, hist, goHist, home, trail, focusCol, onBench, wide, toggleSide, setPrefs, copy, currentPath]);
+  }, [move, choose, columns, multi, sel, mainBox.w, mainBox.h, last, deepest, prefs, enterFolder, go, goUp, hist, goHist, home, trail, focusCol, onBench, wide, toggleSide, setPrefs, copy, currentPath]);
 
   // On the window, capture phase: the palette keeps focus in its own search box, and ↓ there must still move the list.
   const actRef = useRef(act); actRef.current = act;
@@ -290,6 +348,8 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
       const own = !!t?.closest?.("[data-finder-box]");
       const inField = field && !(own && (t as HTMLInputElement).value === "");
       if (!own && !root.current?.contains(t) && t !== document.body) return;
+      // A resize grip owns its arrow keys; the window listener runs first, in capture, and would walk the rows instead.
+      if (t?.closest?.('[role="separator"]')) return;
       const a = finderKey({ key: e.key, ctrl: e.ctrlKey, meta: e.metaKey, shift: e.shiftKey, alt: e.altKey }, { inField, hasSelection: !!window.getSelection()?.toString() });
       if (!a) return;
       e.preventDefault(); e.stopPropagation();
@@ -319,6 +379,7 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
   const count = (() => {
     const n = lastCol?.state;
     if (!n) return "Reading…";
+    if (liveMulti) return selectedFooter(columns[liveMulti.col]?.display.rows ?? [], liveMulti.choice);
     return `${footerCount(n.total, deepest?.row ?? null)}${!deepest && !n.done ? " so far" : ""}`;
   })();
 
@@ -332,12 +393,13 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
         <button className={tool} disabled={!canForward(hist)} style={{ width: HIT, height: HIT, border: EDGE, color: "var(--text2)", opacity: canForward(hist) ? 1 : 0.4 }} title="Forward (Alt+Right)" aria-label="Forward" onClick={() => goHist(histForward(hist))}><ArrowRightIcon size={ICON.sm} /></button>
         <button className={tool} disabled={!parentOf(trail[0]!)} style={{ width: HIT, height: HIT, border: EDGE, color: "var(--text2)", opacity: parentOf(trail[0]!) ? 1 : 0.4 }} title="Parent folder (Alt+Up)" aria-label="Parent folder" onClick={goUp}><ArrowUpIcon size={ICON.sm} /></button>
         <FinderPathBar path={trail[last] ?? trail[0]!} home={home} onGo={go} signalEdit={pathSignal} />
-        <button className={tool} style={{ width: HIT, height: HIT, border: EDGE, color: "var(--text2)" }} title="Copy the selected path (Ctrl+C)" aria-label="Copy path" onClick={() => copy(currentPath)}><CopyIcon size={ICON.sm} /></button>
+        <button className={tool} style={{ width: HIT, height: HIT, border: EDGE, color: "var(--text2)" }} title="Copy the selected path (Ctrl+C)" aria-label="Copy path" onClick={copyChosen}><CopyIcon size={ICON.sm} /></button>
+        <button className={tool} style={{ width: HIT, height: HIT, border: EDGE, color: "var(--text2)" }} title="Finder settings" aria-label="Finder settings" aria-haspopup="menu" onClick={(e) => setSettings(e.currentTarget.getBoundingClientRect())}><SlidersIcon size={ICON.sm} /></button>
         <button className={tool} style={{ width: HIT, height: HIT, border: EDGE, color: "var(--text2)" }} title="Appearance" aria-label="Appearance" aria-haspopup="menu" onClick={(e) => setMenu(e.currentTarget.getBoundingClientRect())}><GridIcon size={ICON.sm} /></button>
       </div>
 
       <div className="flex-1 min-h-0 flex">
-        {sideOn && <Sidebar places={placesFor(home, places)} here={trail[0]!} mode={compact || sideMode === "hidden" ? "full" : sideMode} onGo={go} onRecent={onRecent} />}
+        {sideOn && <Sidebar places={placesFor(home, places)} here={trail[0]!} mode={compact || sideMode === "hidden" ? "full" : sideMode} width={sidebarWidth(compact || sideMode === "hidden" ? "full" : sideMode === "rail" ? "rail" : "full", prefs.sideW, box.w)} onResize={(w) => setPrefs({ sideW: sidebarWidth("full", w, box.w) })} onGo={go} onRecent={onRecent} />}
         {!(compact && sidePage) && (
           <>
             <div ref={main} className="flex-1 min-w-0 min-h-0 flex">
@@ -347,11 +409,11 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
                   {preview}
                 </div>
               ) : prefs.view === "columns" ? (
-                <ColumnsRow>
+                <ColumnsRow widths={widths} active={focusCol}>
                   {columns.map((c, i) => (
-                    <Column key={c.path} title={basename(c.path)} closable={i > 0} onClosePane={() => { setTrail((t) => t.slice(0, i)); setSel((x) => x.slice(0, i)); setFocusCol((f) => Math.min(f, i - 1)); }} filterSignal={filterTick.col === i ? filterTick.n : 0} width={widths[i]!} onResize={(w) => setDragged((d) => ({ ...d, [c.path]: w }))} onFit={() => setDragged((d) => { const n = { ...d }; delete n[c.path]; return n; })} state={c.state} display={c.display} selName={sel[i] ?? null} focused={i === focusCol} prefs={prefs} rowH={rowH}
+                    <Column key={c.path} title={basename(c.path)} closable={i > 0} onClosePane={() => { setTrail((t) => t.slice(0, i)); setSel((x) => x.slice(0, i)); setFocusCol((f) => Math.min(f, i - 1)); }} filterSignal={filterTick.col === i ? filterTick.n : 0} width={widths[i]!} onResize={(w) => setDragged((d) => ({ ...d, [c.path]: w }))} onFit={() => setDragged((d) => { const n = { ...d }; delete n[c.path]; return n; })} state={c.state} display={c.display} selName={sel[i] ?? null} chosen={liveMulti?.col === i ? liveMulti.choice.names : null} focused={i === focusCol} prefs={prefs} rowH={rowH}
                       filter={filters[c.path] ?? ""} onFilter={(v) => setFilters((f) => ({ ...f, [c.path]: v }))}
-                      onPick={(r) => pick(i, r)} onOpen={(r) => { if (isFolder(r) && !r.locked) { pick(i, r); enterFolder(i); } else if (canEditRow(r)) onBench(joinPath(c.path, r.name), "edit"); }}
+                      scrollTop={scrolls.current[c.path]} onScrollTop={(t) => onScrollTop(c.path, t)} onPick={(r, m) => onPickMod(i, r, m)} onOpen={(r) => { if (isFolder(r) && !r.locked) { pick(i, r); enterFolder(i); } else if (canEditRow(r)) onBench(joinPath(c.path, r.name), "edit"); }}
                       onFocusCol={() => setFocusCol(i)} onRefresh={() => refresh(c.path)} onSort={onSort} onPref={setPrefs} />
                   ))}
                 </ColumnsRow>
@@ -359,8 +421,8 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
                 <div className="flex-1 min-w-0 min-h-0 flex flex-col">
                   {lastCol.state?.error ? <div className="p-3 text-[12px]" role="alert" style={{ color: "var(--warning-ink)" }}>{lastCol.state.error}</div>
                     : prefs.view === "icons"
-                      ? <IconsView display={lastCol.display} selName={sel[last] ?? null} width={mainBox.w} label={`Entries of ${basename(lastCol.path)}`} onPick={(r) => pick(last, r)} onOpen={(r) => (isFolder(r) && !r.locked ? go(joinPath(lastCol.path, r.name)) : canEditRow(r) && onBench(joinPath(lastCol.path, r.name), "edit"))} />
-                      : <ListView display={lastCol.display} selName={sel[last] ?? null} rowH={rowH} prefs={prefs} label={`Entries of ${basename(lastCol.path)}`} onSort={onSort} onPick={(r) => pick(last, r)} onOpen={(r) => (isFolder(r) && !r.locked ? go(joinPath(lastCol.path, r.name)) : canEditRow(r) && onBench(joinPath(lastCol.path, r.name), "edit"))} />}
+                      ? <IconsView display={lastCol.display} dir={lastCol.path} thumb={prefs.thumb} selName={sel[last] ?? null} chosen={liveMulti?.col === last ? liveMulti.choice.names : null} width={mainBox.w} label={`Entries of ${basename(lastCol.path)}`} onPick={(r, m) => onPickMod(last, r, m)} onOpen={(r) => (isFolder(r) && !r.locked ? go(joinPath(lastCol.path, r.name)) : canEditRow(r) && onBench(joinPath(lastCol.path, r.name), "edit"))} />
+                      : <ListView display={lastCol.display} selName={sel[last] ?? null} chosen={liveMulti?.col === last ? liveMulti.choice.names : null} rowH={rowH} prefs={prefs} label={`Entries of ${basename(lastCol.path)}`} onSort={onSort} onPick={(r, m) => onPickMod(last, r, m)} onOpen={(r) => (isFolder(r) && !r.locked ? go(joinPath(lastCol.path, r.name)) : canEditRow(r) && onBench(joinPath(lastCol.path, r.name), "edit"))} />}
                 </div>
               ) : null}
             </div>
@@ -386,21 +448,38 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
       </div>
 
       <footer className="flex items-center gap-3 px-2.5 shrink-0 text-[11px]" style={{ minHeight: 26, borderTop: LINE, color: "var(--text3)" }}>
-        <button type="button" className="agx-btn rounded-md px-2 inline-flex items-center gap-1.5" style={{ minHeight: HIT - 6, color: "var(--text2)" }}
-          title="Show all file-view shortcuts (F1)" onClick={() => setHelp(true)}><kbd className="text-[10px]" style={{ fontFamily: "inherit", fontWeight: 600 }}>F1</kbd> Shortcuts</button>
+        {prefs.f1 && (
+          <button type="button" className="agx-btn rounded-md px-2 inline-flex items-center gap-1.5" style={{ minHeight: HIT - 6, color: "var(--text2)" }}
+            title="Show all file-view shortcuts (F1)" onClick={() => setHelp(true)}><kbd className="text-[10px]" style={{ fontFamily: "inherit", fontWeight: 600 }}>F1</kbd> Shortcuts</button>
+        )}
         <span className="flex-1" />
         <span className="truncate" aria-live="polite">{note ?? count}</span>
       </footer>
       {help && <HelpSheet onClose={() => setHelp(false)} />}
+      {settings && <FinderSettings anchor={settings} prefs={prefs} onPref={setPrefs} onReset={() => { setPrefsState(DEFAULT_PREFS); savePrefs(DEFAULT_PREFS); setNote("Finder settings reset"); }} onClose={() => setSettings(null)} />}
       {menu && <AppearanceMenu anchor={menu} prefs={prefs} onPref={setPrefs} onClose={() => setMenu(null)} />}
     </div>
   );
 }
 
-/** The columns, scrolled to the right-hand end whenever one is added so the newest is the one in view. */
-function ColumnsRow({ children }: { children: React.ReactNode }) {
+/** The columns, scrolled so the active one is whole in view and the leftmost visible column is not sliced (see finderColumns.revealScroll). */
+function ColumnsRow({ children, widths, active }: { children: React.ReactNode; widths: number[]; active: number }) {
   const el = useRef<HTMLDivElement>(null);
-  const n = Array.isArray(children) ? children.length : 1;
-  useEffect(() => { if (el.current) el.current.scrollLeft = el.current.scrollWidth; }, [n]);
-  return <div ref={el} className="agx-scroll flex-1 min-w-0 min-h-0 flex overflow-x-auto overflow-y-hidden">{children}</div>;
+  const [pad, setPad] = useState(0);
+  const key = widths.join(",");
+  useLayoutEffect(() => {
+    const e = el.current; if (!e) return;
+    const t = revealScroll({ widths, active, page: e.clientWidth, current: e.scrollLeft });
+    const need = stripPad(widths, t, e.clientWidth);
+    if (need !== pad) { setPad(need); return; } // the strip grows first; this effect runs again with the room in place
+    e.scrollLeft = t;
+    // `key` is the widths themselves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, active, pad]);
+  return (
+    <div ref={el} className="agx-scroll flex-1 min-w-0 min-h-0 flex overflow-x-auto overflow-y-hidden" style={{ scrollSnapType: "x proximity" }}>
+      {children}
+      {pad > 0 && <div aria-hidden className="shrink-0" style={{ width: pad }} />}
+    </div>
+  );
 }

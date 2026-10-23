@@ -22,6 +22,9 @@ export interface Row {
   why?: string;
 }
 
+/** Whether choosing this row opens its column: a folder that may be shown, with "Mirror columns selection" on. */
+export const opensOnPick = (r: Pick<Row, "kind" | "items" | "locked">, mirror: boolean): boolean => mirror && isFolder(r) && !r.locked;
+
 /** A folder, or a link the server found to lead to one it may show. */
 export const isFolder = (r: Pick<Row, "kind" | "items">): boolean => r.kind === "dir" || (r.kind === "link" && r.items !== null);
 
@@ -179,14 +182,26 @@ export interface Prefs {
   rail: boolean;
   sortKey: SortKey;
   sortDir: SortDir;
+  /** Icons view: the side of an image's thumbnail in pixels. */
+  thumb: number;
+  /** The full sidebar's width in pixels, as dragged. */
+  sideW: number;
+  /** Choosing a folder opens its column (Strata: "Mirror columns selection"). */
+  mirror: boolean;
+  /** The footer's "F1 Shortcuts" button. The key works either way. */
+  f1: boolean;
 }
+
+export const THUMB_MIN = 32;
+export const THUMB_MAX = 256;
+export const THUMB_DEFAULT = 64;
 
 export const TEXT_MIN = 11;
 export const TEXT_MAX = 18;
 
 export const DEFAULT_PREFS: Prefs = {
   view: "columns", preview: true, density: "compact", textSize: 13, hidden: false, group: false, sizes: true, sidebar: true, rail: false,
-  sortKey: "name", sortDir: "asc",
+  sortKey: "name", sortDir: "asc", thumb: THUMB_DEFAULT, sideW: 201, mirror: true, f1: true,
 };
 
 /** Stored preferences, field by field: one that is missing or the wrong type falls back alone. */
@@ -209,6 +224,10 @@ export function readPrefs(raw: string | null): Prefs {
     rail: flag(o.rail, d.rail),
     sortKey: pick(o.sortKey, ["name", "size", "modified"], d.sortKey),
     sortDir: pick(o.sortDir, ["asc", "desc"], d.sortDir),
+    thumb: typeof o.thumb === "number" && Number.isFinite(o.thumb) ? Math.min(THUMB_MAX, Math.max(THUMB_MIN, Math.round(o.thumb))) : d.thumb,
+    sideW: typeof o.sideW === "number" && Number.isFinite(o.sideW) ? Math.min(360, Math.max(169, Math.round(o.sideW))) : d.sideW,
+    mirror: flag(o.mirror, d.mirror),
+    f1: flag(o.f1, d.f1),
   };
 }
 
@@ -330,4 +349,19 @@ export function kindWord(r: Pick<Row, "name" | "kind" | "items">): string {
   if (isFolder(r)) return "Folder";
   const dot = r.name.lastIndexOf(".");
   return dot > 0 && dot < r.name.length - 1 ? `${r.name.slice(dot + 1).toUpperCase()} file` : "File";
+}
+
+/* ------------------------------------------------------------- icons view */
+
+/** A tile: the picture, a line or two of name, and room round them. Never smaller than the icon tile it replaced. */
+export const tileSize = (thumb: number): { w: number; h: number } => ({ w: Math.max(112, thumb + 32), h: Math.max(92, thumb + 44) });
+
+export const tilesPerRow = (width: number, thumb: number): number => Math.max(1, Math.floor((width - 16) / tileSize(thumb).w));
+
+const THUMBABLE = new Set("png jpg jpeg gif webp avif bmp ico svg".split(" "));
+
+/** Whether the browser can draw this file as its own thumbnail. A name with no extension, or only a dot, is not a picture. */
+export function isThumbable(name: string): boolean {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 && THUMBABLE.has(name.slice(dot + 1).toLowerCase());
 }

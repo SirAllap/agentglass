@@ -4,7 +4,7 @@
  * cut while there is room. Drag and double-click change one column's width.
  */
 import { describe, expect, test } from "bun:test";
-import { COL_CHROME, COL_MAX, COL_MIN, columnWidth, dragWidth, fillLast, longestNames, previewWidth, splitName } from "../src/lib/finderColumns.ts";
+import { COL_CHROME, COL_MAX, COL_MIN, columnWidth, dragWidth, longestNames, revealScroll, stripPad, previewWidth, splitName } from "../src/lib/finderColumns.ts";
 
 const px = (s: string) => s.length * 7;
 
@@ -44,14 +44,41 @@ describe("a dragged width", () => {
   });
 });
 
-describe("free width", () => {
-  test("goes to the last column, so it fills before anything is cut", () => {
-    expect(fillLast([200, 300], 900)).toEqual([200, 700]);
+describe("padding so an edge can be reached", () => {
+  test("short last columns: room is added until the window is filled from the edge", () => {
+    expect(stripPad([300, 300, 300, 300, 300], 900, 700)).toBe(100);
+    expect(stripPad([300, 300], 0, 700)).toBe(0);
+    expect(stripPad([300, 300, 300, 300], 0, 700)).toBe(0);
   });
-  test("when the columns are already wider than the room, nothing is taken away", () => {
-    expect(fillLast([400, 500], 600)).toEqual([400, 500]);
-    expect(fillLast([], 600)).toEqual([]);
+});
+
+describe("a lone column keeps its own width", () => {
+  test("the free room stays empty, as in Strata: nothing hands it to the last column", async () => {
+    const src = await Bun.file(new URL("../src/components/finder/machine/MachineFinder.tsx", import.meta.url)).text();
+    expect(src).not.toContain("fillLast");
   });
+});
+
+describe("scrolling the strip to the active column", () => {
+  const W = [300, 300, 300, 300, 300]; // five columns in a 700 px window
+  test("everything fits: no scroll", () => { expect(revealScroll({ widths: [300, 300], active: 1, page: 700, current: 0 })).toBe(0); });
+  test("the newest column in view starts the window on a column's own edge", () => {
+    // right edge of column 4 is 1500; the window needs to start at ≥ 800; the next edge is 900
+    expect(revealScroll({ widths: W, active: 4, page: 700, current: 0 })).toBe(900);
+  });
+  test("never a window that starts mid-column", () => {
+    for (let a = 0; a < 5; a++) { const s = revealScroll({ widths: W, active: a, page: 700, current: 123 }); expect(s % 300).toBe(0); }
+  });
+  test("a window that is already right stays", () => { expect(revealScroll({ widths: W, active: 3, page: 700, current: 600 })).toBe(600); });
+  test("going back left brings the column to the left edge", () => { expect(revealScroll({ widths: W, active: 0, page: 700, current: 900 })).toBe(0); });
+  test("uneven widths: the edge is the column's own", () => {
+    const w = [200, 350, 260, 410];
+    const s = revealScroll({ widths: w, active: 3, page: 700, current: 0 });
+    expect([0, 200, 550, 810]).toContain(s);
+    expect(s + 700).toBeGreaterThanOrEqual(1220);
+  });
+  test("a column wider than the window shows from its left edge", () => { expect(revealScroll({ widths: [300, 900], active: 1, page: 700, current: 0 })).toBe(300); });
+  test("empty or unmeasured is 0", () => { expect(revealScroll({ widths: [], active: 0, page: 700, current: 5 })).toBe(0); expect(revealScroll({ widths: [300], active: 0, page: 0, current: 5 })).toBe(0); });
 });
 
 describe("the column edge", () => {

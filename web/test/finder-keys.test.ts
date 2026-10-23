@@ -32,7 +32,21 @@ describe("which keys the finder takes", () => {
   test("letters and Tab are left alone: they are the palette's", () => {
     expect(finderKey(k("a"), free)).toBeNull();
     expect(finderKey(k("Tab"), free)).toBeNull();
-    expect(finderKey(k("ArrowDown", { shift: true }), free)).toBeNull();
+    expect(finderKey(k("ArrowLeft", { shift: true }), free)).toBeNull();
+    expect(finderKey(k("Home", { shift: true }), free)).toBeNull();
+  });
+  test("shift+arrows and pages extend the selection; ctrl+A takes all; ctrl+space toggles", () => {
+    expect(finderKey(k("ArrowDown", { shift: true }), free)).toEqual({ t: "extend", by: "down" });
+    expect(finderKey(k("ArrowUp", { shift: true }), free)).toEqual({ t: "extend", by: "up" });
+    expect(finderKey(k("PageDown", { shift: true }), free)).toEqual({ t: "extend", by: "pageDown" });
+    expect(finderKey(k("PageUp", { shift: true }), free)).toEqual({ t: "extend", by: "pageUp" });
+    expect(finderKey(k("a", { ctrl: true }), free)).toEqual({ t: "all" });
+    expect(finderKey(k(" ", { ctrl: true }), free)).toEqual({ t: "toggle" });
+  });
+  test("in a text field none of them is taken", () => {
+    const typing = { inField: true, hasSelection: false };
+    expect(finderKey(k("a", { ctrl: true }), typing)).toBeNull();
+    expect(finderKey(k("ArrowDown", { shift: true }), typing)).toBeNull();
   });
 });
 

@@ -42,14 +42,34 @@ export function columnWidth(names: readonly string[], measure: (text: string) =>
 
 export const dragWidth = (start: number, dx: number): number => clamp(start + dx, DRAG_MIN, DRAG_MAX);
 
-/** Hand whatever width is left to the last column. */
-export function fillLast(widths: readonly number[], available: number): number[] {
-  if (!widths.length) return [];
-  const used = widths.reduce((a, b) => a + b, 0);
-  const out = [...widths];
-  if (available > used) out[out.length - 1] = out[out.length - 1]! + (available - used);
-  return out;
+/**
+ * Where the strip of columns scrolls so the active one is whole in view and the
+ * leftmost visible column is not cut. Strata reveals the active column with the
+ * smallest move (ui/browser/columns/reveal.rs), which leaves whatever is at the
+ * left edge sliced mid-row; here the window starts on a column's own left edge.
+ * A column wider than the window is shown from its left edge.
+ */
+export function revealScroll(o: { widths: readonly number[]; active: number; page: number; current: number }): number {
+  const { widths, active, page, current } = o;
+  if (!widths.length || page <= 0) return 0;
+  const a = Math.min(Math.max(0, active), widths.length - 1);
+  const lefts: number[] = [];
+  let at = 0;
+  for (const w of widths) { lefts.push(at); at += w; }
+  const left = lefts[a]!;
+  void at;
+  const right = left + widths[a]!;
+  if (widths[a]! >= page) return left;
+  const need = right - page;
+  // Already a window that starts on a column edge and holds the active column: stay.
+  if (current >= need - 0.5 && current <= left + 0.5 && lefts.some((l) => Math.abs(l - current) < 0.5)) return current;
+  const edge = lefts.find((l) => l >= need - 0.5 && l <= left) ?? left;
+  // Past the strip's own end when the last columns are short: the caller pads the strip so that edge can be reached.
+  return Math.max(0, edge);
 }
+
+/** The room to add after the last column so a scroll to `target` can be reached: the window must still be filled. */
+export const stripPad = (widths: readonly number[], target: number, page: number): number => target <= 0 ? 0 : Math.max(0, Math.ceil(target + page - widths.reduce((a, b) => a + b, 0)));
 
 /**
  * A name cut in the middle, as Strata cuts it: the head gives way and the end
@@ -72,4 +92,29 @@ export function splitName(name: string, keep = 8): [head: string, tail: string] 
 export function previewWidth(boxW: number, dragged?: number): number {
   if (dragged === undefined) return Math.max(300, Math.min(460, Math.round(boxW * 0.36)));
   return clamp(dragged, 240, Math.max(240, boxW - 320));
+}
+
+/** Strata: the sidebar starts 201 px wide and never goes under 169. */
+export const SIDE_DEFAULT = 201;
+export const SIDE_MIN = 169;
+export const SIDE_MAX = 360;
+const RAIL_W = 34;
+
+/** The sidebar's pixels: the rail is fixed, the full list is what was dragged, kept off the columns' last 320 px. */
+export function sidebarWidth(mode: "full" | "rail", dragged: number, boxW: number): number {
+  if (mode === "rail") return RAIL_W;
+  return clamp(dragged, SIDE_MIN, Math.max(SIDE_MIN, Math.min(SIDE_MAX, boxW - 320)));
+}
+
+/** Strata's floor for the preview itself (MIN_SPLIT_PREVIEW_WIDTH). */
+export const PREVIEW_MIN_W = 240;
+const COLUMN_MIN_W = 300;
+const GRIP_W = 6;
+
+/**
+ * Whether the preview can sit beside the browser. `room` is what the sidebar left over.
+ * Columns want one standard column beside it, Icons and List 240.
+ */
+export function previewFits(room: number, view: "columns" | "icons" | "list"): boolean {
+  return room - GRIP_W - (view === "columns" ? COLUMN_MIN_W : 240) >= PREVIEW_MIN_W;
 }

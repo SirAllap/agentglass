@@ -2,7 +2,7 @@
 // about the finder itself rather than about a folder.
 import { Fragment, useState } from "react";
 import { SECTIONS, filterShortcuts } from "../../../lib/finderShortcuts.ts";
-import { TEXT_MAX, TEXT_MIN, type Prefs } from "../../../lib/finderMiller.ts";
+import { TEXT_MAX, TEXT_MIN, THUMB_DEFAULT, THUMB_MAX, THUMB_MIN, type Prefs } from "../../../lib/finderMiller.ts";
 import { HIT } from "../../../lib/iconSize.ts";
 import { EDGE, INPUT, INPUT_STYLE } from "../../workspace/Chrome.tsx";
 import { MenuCap, MenuItem, MenuRule, Popover } from "./Popover.tsx";
@@ -27,9 +27,30 @@ export function AppearanceMenu({ anchor, prefs, onPref, onClose }: { anchor: DOM
         <button className="agx-btn rounded-md grid place-items-center" style={{ width: HIT, height: HIT, border: EDGE }} aria-label="Larger text" disabled={prefs.textSize >= TEXT_MAX} onClick={() => onPref({ textSize: prefs.textSize + 1 })}>+</button>
       </div>
       <MenuRule />
+      <MenuCap>Thumbnail size</MenuCap>
+      <div className="flex items-center gap-2 px-3.5" style={{ minHeight: 30 }}>
+        <input type="range" min={THUMB_MIN} max={THUMB_MAX} step={16} value={prefs.thumb} aria-label="Thumbnail size" className="flex-1 min-w-0" onChange={(e) => onPref({ thumb: Number(e.target.value) })} />
+        <span className="tabular-nums text-center" style={{ minWidth: 44 }} aria-live="polite">{prefs.thumb} px</span>
+        <button className="agx-btn rounded-md px-2" style={{ minHeight: HIT, border: EDGE }} disabled={prefs.thumb === THUMB_DEFAULT} onClick={() => onPref({ thumb: THUMB_DEFAULT })}>Reset</button>
+      </div>
+      <MenuRule />
       <MenuItem on={prefs.group} onClick={() => onPref({ group: !prefs.group })}>Group by file type</MenuItem>
       <MenuItem on={prefs.sizes} onClick={() => onPref({ sizes: !prefs.sizes })}>Show sizes in Columns</MenuItem>
       <MenuItem on={prefs.hidden} hint="Ctrl+H" onClick={() => onPref({ hidden: !prefs.hidden })}>Hidden files</MenuItem>
+    </Popover>
+  );
+}
+
+/** Strata's BROWSING settings that mean something here. A change is made the moment it is clicked and clicked again to undo. */
+export function FinderSettings({ anchor, prefs, onPref, onReset, onClose }: { anchor: DOMRect; prefs: Prefs; onPref: (p: Partial<Prefs>) => void; onReset: () => void; onClose: () => void }) {
+  return (
+    <Popover anchor={anchor} onClose={onClose} width={280} label="Finder settings">
+      <MenuCap>Browsing</MenuCap>
+      <MenuItem on={prefs.sizes} onClick={() => onPref({ sizes: !prefs.sizes })}>Show sizes in Columns view</MenuItem>
+      <MenuItem on={prefs.mirror} onClick={() => onPref({ mirror: !prefs.mirror })}>Mirror columns selection</MenuItem>
+      <MenuItem on={prefs.f1} hint="F1" onClick={() => onPref({ f1: !prefs.f1 })}>Show F1 Shortcuts button</MenuItem>
+      <MenuRule />
+      <MenuItem onClick={() => { onReset(); onClose(); }}>Reset finder settings</MenuItem>
     </Popover>
   );
 }

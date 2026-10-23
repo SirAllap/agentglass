@@ -39,6 +39,8 @@ export const ArchiveBoxIcon = ({ size = ICON.sm, className }: P) => (
   <svg {...svg(size, className)}><path d="M2 2.6h10v2.6H2zM3 5.2v6.2h8V5.2M5.8 7.6h2.4" /></svg>);
 export const WaveformIcon = ({ size = ICON.sm, className }: P) => (
   <svg {...svg(size, className)}><path d="M2 6.4v1.2M4.6 4v6M7 2v10M9.4 4.4v5.2M12 6v2" /></svg>);
+export const SlidersIcon = ({ size = ICON.sm, className }: P) => (
+  <svg {...svg(size, className)}><path d="M2 4h5.2M10 4h2M2 10h2M7 10h5M7.2 2.4v3.2M4.4 8.4v3.2" /></svg>);
 export const PanelLeftIcon = ({ size = ICON.sm, className }: P) => (
   <svg {...svg(size, className)}><path d="M2 2.6h10v8.8H2zM5.4 2.6v8.8" /></svg>);
 export const ArrowLeftIcon = ({ size = ICON.sm, className }: P) => (

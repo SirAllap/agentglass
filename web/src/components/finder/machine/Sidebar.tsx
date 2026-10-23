@@ -5,6 +5,7 @@
 // hover — Trash and Network belong to later phases and a button that does
 // nothing is a worse thing to ship than a label that says so.
 import { PlaceIcon } from "../../../lib/finderIcons.tsx";
+import { SIDE_DEFAULT } from "../../../lib/finderColumns.ts";
 import { ICON } from "../../../lib/iconSize.ts";
 import { joinPath, type SidebarMode } from "../../../lib/finderMiller.ts";
 import type { DiskPlace } from "../../../../../shared/types.ts";
@@ -27,10 +28,12 @@ export function placesFor(home: string, known: readonly DiskPlace[]): Place[] {
   ];
 }
 
-/** Strata's widths: the full list 201 px, the rail 34. */
-export const SIDEBAR_W = { full: 201, rail: 34 } as const;
-
-export function Sidebar({ places, here, mode, onGo, onRecent }: { places: Place[]; here: string; mode: Exclude<SidebarMode, "hidden">; onGo: (path: string) => void; onRecent: () => void }) {
+export function Sidebar({ places, here, mode, width, onResize, onGo, onRecent }: {
+  places: Place[]; here: string; mode: Exclude<SidebarMode, "hidden">;
+  /** Pixels, from lib/finderColumns `sidebarWidth`: the rail's fixed width or what was dragged. */
+  width: number; onResize: (w: number) => void;
+  onGo: (path: string) => void; onRecent: () => void;
+}) {
   const rail = mode === "rail";
   const row = (p: Place) => {
     const on = !!p.path && (here === p.path);
@@ -46,9 +49,28 @@ export function Sidebar({ places, here, mode, onGo, onRecent }: { places: Place[
     );
   };
   return (
-    <nav aria-label="Places" data-mode={mode} className="agx-scroll overflow-y-auto overflow-x-hidden shrink-0 py-1.5 px-1 text-[12px] flex flex-col gap-0.5"
-      style={{ width: SIDEBAR_W[mode], borderRight: LINE, background: "var(--surface-nav)" }}>
-      {places.map(row)}
-    </nav>
+    <div className="relative shrink-0 flex min-h-0" style={{ width }}>
+      <nav aria-label="Places" data-mode={mode} className="agx-scroll overflow-y-auto overflow-x-hidden flex-1 min-w-0 py-1.5 px-1 text-[12px] flex flex-col gap-0.5"
+        style={{ borderRight: LINE, background: "var(--surface-nav)" }}>
+        {places.map(row)}
+      </nav>
+      {!rail && (
+        <div role="separator" aria-orientation="vertical" aria-label="Resize the sidebar" aria-valuenow={Math.round(width)} tabIndex={0}
+          title="Drag to resize, double-click to reset" className="absolute top-0 bottom-0 agx-col-edge" style={{ right: 0, width: 6, cursor: "col-resize", zIndex: 3, touchAction: "none" }}
+          onDoubleClick={() => onResize(SIDE_DEFAULT)}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            const x0 = e.clientX, w0 = width, el = e.currentTarget;
+            el.setPointerCapture(e.pointerId);
+            const move = (ev: PointerEvent) => onResize(w0 + ev.clientX - x0);
+            const up = () => { el.removeEventListener("pointermove", move); el.removeEventListener("pointerup", up); el.removeEventListener("pointercancel", up); };
+            el.addEventListener("pointermove", move); el.addEventListener("pointerup", up); el.addEventListener("pointercancel", up);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowLeft" || e.key === "ArrowRight") { e.preventDefault(); e.stopPropagation(); onResize(width + (e.key === "ArrowLeft" ? -16 : 16)); }
+            else if (e.key === "Enter" || e.key === "0") { e.preventDefault(); e.stopPropagation(); onResize(SIDE_DEFAULT); }
+          }} />
+      )}
+    </div>
   );
 }
