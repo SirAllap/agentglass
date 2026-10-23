@@ -1,9 +1,10 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { DeviceScope, PublicPlugin } from "../../../../shared/types.ts";
 import { CopyIcon, EyeIcon, NoteIcon, HandIcon } from "../../lib/glyphIcons.tsx";
 import { CommandIcon, PuzzleIcon, ShieldIcon, SlidersIcon } from "../settingsNavIcons.tsx";
 import { PLUGIN_READ_WORDS } from "../../../../shared/pluginUi.ts";
-import { describeSandbox, type SandboxGrant } from "../../../../shared/pluginSandbox.ts";
+import { describeSandbox } from "../../../../shared/pluginSandbox.ts";
+import { foldChips, sandboxSections, type SandboxSection } from "../../lib/pluginDeclarationLayout.ts";
 import { boxWording, neighbourKeyWording, processIsBoxed, processWillNotStart } from "../../lib/pluginBoxState.ts";
 import { HIT, ICON } from "../../lib/iconSize.ts";
 import { EDGE } from "../workspace/Chrome.tsx";
@@ -111,7 +112,7 @@ export function PluginDeclaration({ plugin, flat }: { plugin: PublicPlugin; flat
   const boxed = processIsBoxed(box);
   const neighbourKey = neighbourKeyWording(plugin);
   return (
-    <div className="flex flex-col gap-2.5 min-w-0">
+    <div className="agx-decl flex flex-col gap-2.5 min-w-0 w-full">
       <Block flat={flat} icon={<EyeIcon size={ICON.sm} />} tint={tint} head="What it sees" chip={SCOPE_WORD[plugin.scope]}>
         <p className="m-0 text-[12px] leading-relaxed" style={{ color: "var(--text2)" }}>{SCOPE_SENTENCE[plugin.scope]}</p>
       </Block>
@@ -146,13 +147,8 @@ export function PluginDeclaration({ plugin, flat }: { plugin: PublicPlugin; flat
               ))}
             </div>
           )}
-          <div className="flex flex-col gap-1">
-            <Row label="Network" tint={d.internet ? "var(--warning)" : undefined}>
-              {d.internet ? "any host on the internet" : "this app only"}
-            </Row>
-            <Grants label="Reads" grants={d.reads} />
-            <Grants label="Writes" grants={d.writes} />
-            {d.programs.length > 0 && <Row label="Programs">{d.programs.join(", ")}</Row>}
+          <div className="agx-decl-grid">
+            {sandboxSections(d).map((sec) => <SectionRow key={sec.key} sec={sec} />)}
           </div>
         </Block>
       )}
@@ -177,12 +173,40 @@ export function PluginDeclaration({ plugin, flat }: { plugin: PublicPlugin; flat
   );
 }
 
-function Row({ label, tint, children }: { label: string; tint?: string; children: ReactNode }) {
+/** Labels left, values right on a wide container; stacked on a narrow one
+ *  (the container query lives in index.css, `.agx-decl-grid`). */
+function SectionRow({ sec }: { sec: SandboxSection }) {
   return (
-    <div className="flex items-start gap-2 min-w-0 text-[12px] leading-snug">
-      <span className="shrink-0 w-[68px] t-dim">{label}</span>
-      <span className="min-w-0 break-all" style={{ color: tint ?? "var(--text)" }}>{children}</span>
+    <div className="agx-decl-row">
+      <span className="agx-decl-label t-dim">{sec.label}</span>
+      {sec.chips
+        ? <Chips chips={sec.chips} />
+        : <span className="min-w-0 break-words" style={{ color: sec.warn ? "var(--warning)" : "var(--text)" }}>{sec.value}</span>}
     </div>
+  );
+}
+
+/** Paths and programs as wrapped chips, folded after eight. */
+function Chips({ chips }: { chips: { text: string; secret?: string }[] }) {
+  const [all, setAll] = useState(false);
+  const { shown, hidden } = foldChips(chips, all);
+  return (
+    <span className="flex flex-wrap items-center gap-1 min-w-0">
+      {shown.map((c) => (
+        <span key={c.text} className="t-mono text-[11px] px-1.5 py-0.5 rounded-md break-all"
+          style={{ color: c.secret ? "var(--error)" : "var(--text)", background: "var(--surface-inset)", border: EDGE }}>
+          {c.text}{c.secret && <span style={{ color: "var(--error-ink)" }}> · {c.secret}</span>}
+        </span>
+      ))}
+      {hidden > 0 && (
+        <button type="button" className="agx-btn text-[11px] px-1.5 py-0.5 rounded-md" style={{ color: "var(--primary-ink)" }}
+          onClick={() => setAll(true)}>+{hidden} more · Show all</button>
+      )}
+      {all && chips.length > 8 && (
+        <button type="button" className="agx-btn text-[11px] px-1.5 py-0.5 rounded-md" style={{ color: "var(--text3)" }}
+          onClick={() => setAll(false)}>Show fewer</button>
+      )}
+    </span>
   );
 }
 
@@ -201,22 +225,6 @@ function FixBlock({ command, flat }: { command: string; flat?: boolean }) {
         <CopyIcon size={ICON.xs} />
       </button>
     </div>
-  );
-}
-
-/** One line per path, so a red one cannot hide in a comma-separated run. */
-function Grants({ label, grants }: { label: string; grants: SandboxGrant[] }) {
-  if (grants.length === 0) return null;
-  return (
-    <Row label={label}>
-      <span className="flex flex-col gap-0.5">
-        {grants.map((g) => (
-          <span key={g.path} className="t-mono text-[11.5px]" style={{ color: g.secret ? "var(--error)" : "var(--text)" }}>
-            {g.path}{g.secret && <span className="t-dim" style={{ color: "var(--error-ink)" }}> · {g.secret}</span>}
-          </span>
-        ))}
-      </span>
-    </Row>
   );
 }
 

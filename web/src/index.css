@@ -1134,6 +1134,21 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
   background: rgba(0, 0, 0, 0.66);
 }
 
+/* The scrolling body of a dialog: a slim bar, and a shade at whichever edge
+   has more to show (the "local" layers travel with the content, the "scroll"
+   ones stay and cover them until the content moves away). */
+.agx-dialog-body {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  overscroll-behavior: contain;
+  background:
+    linear-gradient(var(--surface-card) 30%, transparent) top / 100% 24px no-repeat local,
+    linear-gradient(transparent, var(--surface-card) 70%) bottom / 100% 24px no-repeat local,
+    radial-gradient(farthest-side at 50% 0, rgba(0, 0, 0, .35), transparent) top / 100% 8px no-repeat scroll,
+    radial-gradient(farthest-side at 50% 100%, rgba(0, 0, 0, .35), transparent) bottom / 100% 8px no-repeat scroll;
+}
+.agx-dialog-body:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+
 /* One row of a long, scrolling list — a session's conversation, a diff.
  *
  * `content-visibility: auto` lets the browser skip layout and paint for the
@@ -1922,7 +1937,20 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 .agx-disclosure-caret { display: inline-flex; color: var(--text3); transform: rotate(-90deg); transition: transform 120ms ease; }
 .agx-disclosure[open] > .agx-disclosure-s .agx-disclosure-caret { transform: none; }
 .agx-disclosure-b { margin-top: 4px; padding-left: 16px; color: var(--text3); line-height: 1.5; max-width: 64ch; }
+.agx-disclosure-b.agx-wide { max-width: none; }
 @media (prefers-reduced-motion: reduce) { .agx-disclosure-caret { transition: none; } }
+
+/* What a plugin declares: labels left and values right while the container is
+   wide, stacked once it is not. The container is the card or the dialog body,
+   not the window, so the same block lays itself out in both. */
+.agx-decl { container: agx-decl / inline-size; }
+.agx-decl-grid { display: flex; flex-direction: column; gap: 8px; }
+.agx-decl-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; font-size: 12px; line-height: 1.4; min-width: 0; }
+.agx-decl-label { font-size: 10px; text-transform: uppercase; letter-spacing: .12em; }
+@container agx-decl (min-width: 420px) {
+  .agx-decl-row { grid-template-columns: 80px minmax(0, 1fr); gap: 8px; }
+  .agx-decl-label { padding-top: 4px; }
+}
 
 /* A stacked form: label above, help below, 12px between fields, 480px at
    most — a token field as wide as the card asks for a paragraph. */

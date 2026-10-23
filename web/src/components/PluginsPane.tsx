@@ -471,7 +471,7 @@ function PluginCard({ plugin, masterOn, envAllowsUnboxed, onChanged, onSettings 
             Where it draws is part of what is being approved: a plugin that
             starts drawing somewhere new has a new manifest hash, and is asked
             about again. Drawn by this app, never run in it. */}
-        <Disclosure summary="What it can do" defaultOpen={needsReview}>
+        <Disclosure summary="What it can do" wide>
           <PluginDeclaration plugin={plugin} flat />
         </Disclosure>
 

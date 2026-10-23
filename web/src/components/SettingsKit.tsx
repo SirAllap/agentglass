@@ -130,8 +130,10 @@ export function StatusBadge({ tone, children }: { tone: StatusTone; children: Re
  * token is stored", never "More" or "About this one". A reader decides from
  * the summary whether to open it; a vague one makes them open all of them.
  */
-export function Disclosure({ summary, children, defaultOpen }: {
+export function Disclosure({ summary, children, defaultOpen, wide }: {
   summary: string; children: ReactNode; defaultOpen?: boolean;
+  /** Full width of the row, for a body that is structure rather than a paragraph. */
+  wide?: boolean;
 }) {
   return (
     <details className="agx-disclosure" open={defaultOpen}>
@@ -139,7 +141,7 @@ export function Disclosure({ summary, children, defaultOpen }: {
         <span aria-hidden className="agx-disclosure-caret"><CaretIcon size={ICON.xs} /></span>
         {summary}
       </summary>
-      <div className="agx-disclosure-b">{children}</div>
+      <div className={wide ? "agx-disclosure-b agx-wide" : "agx-disclosure-b"}>{children}</div>
     </details>
   );
 }

@@ -164,7 +164,7 @@ describe("the declaration is a named disclosure inside the plugin's row", () => 
     // showing the declaration on every visit is noise. Inside a row the blocks
     // are flat: the row is already the frame, and a box that holds boxes is the
     // defect the settings sweep counts.
-    expect(pane).toContain('<Disclosure summary="What it can do" defaultOpen={needsReview}>');
+    expect(pane).toContain('<Disclosure summary="What it can do" wide>');
     expect(pane).toContain("<PluginDeclaration plugin={plugin} flat />");
   });
 });
