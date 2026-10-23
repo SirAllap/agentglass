@@ -3034,10 +3034,18 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
    it, which grew it again — a loop (measured on the installed app, tab yours). */
 .agx-isl.is-open { clip-path: inset(0px 0px 0px 0px round 20px) !important; background: transparent !important; top: 12px !important; z-index: 30; transition: none !important; }
 /* the shape that grows: a solid colour with nothing in it, clipped from the pill to the page */
-.agx-isl-morph { position: absolute; inset: 0; background: #16131f;
+.agx-isl-morph { position: absolute; inset: 0; background: rgba(22, 19, 31, .84);
   clip-path: inset(0px calc(50% - var(--pw)) calc(100% - var(--ph)) calc(50% - var(--pw)) round var(--pr));
-  transition: clip-path 300ms cubic-bezier(0.32, 0.72, 0, 1) 60ms; will-change: clip-path; }
-.agx-isl.is-shown .agx-isl-morph { clip-path: inset(0px 0px 0px 0px round 20px); transition: clip-path 380ms cubic-bezier(0.32, 0.72, 0, 1); }
+  transition: clip-path 320ms cubic-bezier(0.32, 0.72, 0, 1) 20ms, background-color 320ms ease 20ms; will-change: clip-path; }
+.agx-isl.is-shown .agx-isl-morph { clip-path: inset(0px 0px 0px 0px round 20px); background: #16131f; transition: clip-path 380ms cubic-bezier(0.32, 0.72, 0, 1), background-color 200ms ease; }
+/* while it is open the collapsed content stays mounted but out of the way; closing,
+   the capsule's icons come back over the last stretch of the shrink */
+.agx-isl.is-open .agx-isl-status, .agx-isl.is-open .agx-isl-bar, .agx-isl.is-open .agx-isl-tuck { opacity: 0; pointer-events: none; transition: opacity 90ms ease-out; }
+.agx-isl.is-open.is-shown .agx-isl-compact { opacity: 0; transition: opacity 90ms ease-out; }
+.agx-isl.is-open:not(.is-shown) .agx-isl-compact { opacity: 1; transition: opacity 140ms ease-out 190ms; }
+/* the frame the overview leaves in is the capsule; a pointer resting there then grows it to the pill with its own transition */
+.agx-isl.is-snap:not(.is-open) { clip-path: inset(0px calc(50% - 52px) calc(100% - 30px) calc(50% - 52px) round 15px) !important; }
+.agx-isl-compact, .agx-isl-status, .agx-isl-bar, .agx-isl-tuck { z-index: 1; }
 /* a change of size that must not animate: the overview appears and goes in one frame */
 .agx-isl.is-snap { transition: none !important; }
 
@@ -3048,14 +3056,14 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-isl-tuck { width: 36px; height: 14px; color: #f5c76b; opacity: 0; }
 .agx-isl.is-tucked:not(:hover):not(:focus-within) .agx-isl-tuck { opacity: 1; }
 .agx-isl.is-tucked:not(:hover):not(:focus-within) .agx-isl-compact,
-.agx-isl:hover .agx-isl-compact, .agx-isl:focus-within .agx-isl-compact { opacity: 0; transition-delay: 0ms; transition-duration: 80ms; }
+.agx-isl:not(.is-open):hover .agx-isl-compact, .agx-isl:not(.is-open):focus-within .agx-isl-compact { opacity: 0; transition-delay: 0ms; transition-duration: 80ms; }
 .agx-isl-num { font-weight: 600; font-size: 11px; font-variant-numeric: tabular-nums; color: #fff; }
 .agx-isl-dot { width: 6px; height: 6px; border-radius: 50%; background: #6b6578; flex: none; }
 .agx-isl-dot.is-working { background: #34d399; box-shadow: 0 0 0 3px rgba(52, 211, 153, .22); }
 .agx-isl-dot.is-taken { background: #f5c76b; box-shadow: 0 0 0 3px rgba(245, 199, 107, .22); }
 /* the pill's two faces: a status line while an agent drives, the person's bar otherwise */
 .agx-isl-status, .agx-isl-bar { box-sizing: border-box; position: absolute; left: 50%; top: 0; transform: translateX(-50%); display: flex; align-items: center; opacity: 0; transition: opacity 120ms ease-out; }
-.agx-isl:hover .agx-isl-status, .agx-isl:focus-within .agx-isl-status, .agx-isl:hover .agx-isl-bar, .agx-isl:focus-within .agx-isl-bar { opacity: 1; transition: opacity 180ms ease-out 60ms; }
+.agx-isl:not(.is-open):hover .agx-isl-status, .agx-isl:not(.is-open):focus-within .agx-isl-status, .agx-isl:not(.is-open):hover .agx-isl-bar, .agx-isl:not(.is-open):focus-within .agx-isl-bar { opacity: 1; transition: opacity 180ms ease-out 60ms; }
 /* the pill's contents leave with the same 250 ms grace as its shape */
 .agx-isl-status, .agx-isl-bar { transition: opacity 120ms ease-out 250ms; }
 .agx-isl-compact { transition: opacity 140ms ease-out 400ms; }
@@ -3075,14 +3083,18 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-isl-hand { flex: none; height: 26px; margin-left: 8px; padding: 0 12px; border: 0; border-radius: 13px; background: #f5c76b; color: #2a1d00; font-weight: 600; font-size: 11.5px; cursor: pointer; }
 .agx-isl-hand:active, .agx-isl-count:active, .agx-isl-ib:active:not(:disabled) { transform: scale(.96); }
 /* the overview */
+/* the overview is clipped to the same shape as it grows and shrinks, so the
+   shape is never empty: it carries its content in and out */
 .agx-isl-mc { position: absolute; inset: 0; display: flex; flex-direction: column; opacity: 0; transform: scale(.985); transform-origin: 50% 0;
-  transition: opacity 140ms ease-out, transform 160ms ease-out; }
-.agx-isl.is-shown .agx-isl-mc { opacity: 1; transform: none; transition: opacity 200ms cubic-bezier(0.23, 1, 0.32, 1) 200ms, transform 280ms cubic-bezier(0.23, 1, 0.32, 1) 200ms; }
+  clip-path: inset(0px calc(50% - var(--pw)) calc(100% - var(--ph)) calc(50% - var(--pw)) round var(--pr));
+  transition: opacity 240ms ease-in 20ms, transform 320ms cubic-bezier(0.32, 0.72, 0, 1) 20ms, clip-path 320ms cubic-bezier(0.32, 0.72, 0, 1) 20ms; }
+.agx-isl.is-shown .agx-isl-mc { opacity: 1; transform: none; clip-path: inset(0px 0px 0px 0px round 20px);
+  transition: opacity 200ms cubic-bezier(0.23, 1, 0.32, 1) 40ms, transform 380ms cubic-bezier(0.32, 0.72, 0, 1), clip-path 380ms cubic-bezier(0.32, 0.72, 0, 1); }
 /* the containers come in after the shape, one after another, rising 8px */
 .agx-isl-box { opacity: 0; transform: translateY(8px); transition: opacity 120ms ease-out, transform 120ms ease-out; }
 .agx-isl.is-shown .agx-isl-box { opacity: 1; transform: none; transition: opacity 260ms cubic-bezier(0.23, 1, 0.32, 1), transform 320ms cubic-bezier(0.23, 1, 0.32, 1); }
-.agx-isl.is-shown .agx-isl-box:nth-child(1) { transition-delay: 230ms; } .agx-isl.is-shown .agx-isl-box:nth-child(2) { transition-delay: 270ms; }
-.agx-isl.is-shown .agx-isl-box:nth-child(3) { transition-delay: 310ms; } .agx-isl.is-shown .agx-isl-box:nth-child(n+4) { transition-delay: 350ms; }
+.agx-isl.is-shown .agx-isl-box:nth-child(1) { transition-delay: 100ms; } .agx-isl.is-shown .agx-isl-box:nth-child(2) { transition-delay: 130ms; }
+.agx-isl.is-shown .agx-isl-box:nth-child(3) { transition-delay: 160ms; } .agx-isl.is-shown .agx-isl-box:nth-child(n+4) { transition-delay: 190ms; }
 .agx-isl-head { display: flex; align-items: center; gap: 10px; padding: 18px 22px 6px; }
 .agx-isl-sum { flex: 1; margin: 0; font-size: 15px; color: #b9b3c6; }
 .agx-isl-sum strong { color: #fff; font-weight: 600; }

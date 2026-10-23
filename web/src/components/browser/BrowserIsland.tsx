@@ -115,8 +115,19 @@ export function BrowserIsland(p: IslandProps) {
   const [snap, setSnap] = useState(false);
   const closer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unsnap = () => requestAnimationFrame(() => requestAnimationFrame(() => setSnap(false)));
+  /* The shape starts at the size of the pill that was clicked and ends at the
+     resting capsule, whose icons fade in over its last stretch: it lands as
+     the capsule, never as an empty dark pill waiting for its content. */
+  const PILL = yours ? { w: 300, h: 40, r: 20 } : { w: 210, h: 36, r: 18 };
+  const CAPSULE = { w: 52, h: 30, r: 15 };
+  const [morph, setMorph] = useState(PILL);
+  const finish = useCallback(() => {
+    if (closer.current) { clearTimeout(closer.current); closer.current = null; }
+    setSnap(true); setOpen(false); unsnap();
+  }, []);
   const show = useCallback(() => {
     if (closer.current) { clearTimeout(closer.current); closer.current = null; }
+    setMorph(PILL);
     const front = activeId;
     const now: Record<string, string> = {};
     for (const t of tabs) { const src = p.lastPicture(t.id); if (src) now[t.id] = src; }
@@ -125,15 +136,16 @@ export function BrowserIsland(p: IslandProps) {
     requestAnimationFrame(() => setShown(true));
     // the page in front is the one worth refreshing; a hidden guest gives no picture
     if (front) void p.picture(front).then((src) => { if (src) setPics((m) => ({ ...m, [front]: src })); });
-  }, [open, tabs, activeId, p]);
+  }, [open, tabs, activeId, p, yours]); // eslint-disable-line react-hooks/exhaustive-deps
   const hide = useCallback((pick?: string) => {
     if (!open) return;
     if (pick && pick !== activeId) p.onShow(pick);
+    setMorph(CAPSULE);
     setShown(false);
+    // done when the shape's own transition ends; the timer only covers one that never reports
     if (closer.current) clearTimeout(closer.current);
-    // the shape shrinks back into the pill (300 ms) before the overview goes
-    closer.current = setTimeout(() => { closer.current = null; setSnap(true); setOpen(false); unsnap(); }, 380);
-  }, [open, activeId, p]);
+    closer.current = setTimeout(finish, 700);
+  }, [open, activeId, p, finish]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => { if (closer.current) clearTimeout(closer.current); }, []);
 
   /* Escape is the overview's alone while it is up: other window handlers
@@ -149,15 +161,18 @@ export function BrowserIsland(p: IslandProps) {
   // focus lands on the page you were on once, when it opens, never again on a re-render
   useEffect(() => { if (open) box.current?.querySelector<HTMLElement>(".agx-isl-card.is-on")?.focus({ preventScroll: true }); }, [open]);
 
-  const from = yours ? { w: 300, h: 40, r: 20 } : { w: 210, h: 36, r: 18 };
   const cls = "agx-isl" + (open ? " is-open" : "") + (shown ? " is-shown" : "") + (snap ? " is-snap" : "") + (tucked ? " is-tucked" : "") + (yours ? " is-yours" : "") + (act?.paused ? " is-taken" : "");
   const dot = act?.paused ? "is-taken" : working ? "is-working" : "";
   return (
     <>
       {open && <div className={"agx-isl-scrim" + (shown ? " is-shown" : "")} onClick={() => hide()} />}
       <div ref={box} className={cls} role={open ? "dialog" : undefined} aria-label={open ? "Every tab" : undefined}
-        style={{ "--pw": `${from.w}px`, "--ph": `${from.h}px`, "--pr": `${from.r}px` } as React.CSSProperties}>
-        {!open && (
+        style={{ "--pw": `${morph.w}px`, "--ph": `${morph.h}px`, "--pr": `${morph.r}px` } as React.CSSProperties}>
+        {/* under the collapsed content, so the capsule's icons are on top of it as it lands */}
+        {open && <div className="agx-isl-morph" aria-hidden
+          onTransitionEnd={(e) => { if (!shown && e.target === e.currentTarget && e.propertyName === "clip-path") finish(); }} />}
+        {/* the collapsed island is never unmounted: it only changes opacity, so no frame waits for it */}
+        {(
           <>
             <span className="agx-isl-compact" aria-hidden>
               <LivingMark size={16} style={{ color: "#a78bfa" }} />
@@ -191,7 +206,6 @@ export function BrowserIsland(p: IslandProps) {
             )}
           </>
         )}
-        {open && <div className="agx-isl-morph" aria-hidden />}
         {open && (
           <div className="agx-isl-mc">
             <div className="agx-isl-head">
