@@ -17,11 +17,12 @@
  * in Workspace, so the rail's pip is derived and never set by hand.
  */
 import { api } from "./api.ts";
-import type { LanternRow, LanternWatch } from "../components/LanternView.tsx";
+import type { LanternChair, LanternRow, LanternWatch } from "../components/LanternView.tsx";
 import { attention } from "../../../shared/fieldRules.ts";
 
 let rows: LanternRow[] | null = null;
 let watch: LanternWatch | null = null;
+let chairs: LanternChair[] = [];
 let cacheTtlMin = 5;
 let readAt = 0;
 let error = false;
@@ -48,6 +49,7 @@ export async function refreshLantern(): Promise<void> {
       const r = await api.agentBoard();
       rows = r.ok ? (r.agents ?? []) : (rows ?? []);
       if (r.ok && r.watch) watch = r.watch;
+      if (r.ok) chairs = r.chairs ?? [];
       if (r.ok && typeof r.cacheTtlMinutes === "number") cacheTtlMin = r.cacheTtlMinutes;
       error = !r.ok;
       if (r.ok) known = true;
@@ -105,6 +107,8 @@ export function subscribeLantern(l: () => void, fast = false): () => void {
 export const lanternRows = (): LanternRow[] | null => rows;
 export const lanternFailed = (): boolean => error;
 export const lanternKnown = (): boolean => known;
+/** The occupied chairs, from the same answer as the rows: no request of their own. */
+export const lanternChairs = (): LanternChair[] => chairs;
 /** What the watch last found, from the same answer. */
 export const lanternWatch = (): LanternWatch | null => watch;
 /** The provider's prompt-cache window, from Settings — what the cards count down. */
@@ -145,6 +149,6 @@ export function groupLantern(rows: LanternRow[]): { need: LanternRow[]; finished
 
 /** For tests that render the view with a known board — or, with null, put the
  *  store back to never having read one. */
-export function __setLanternRows(next: LanternRow[] | null): void {
-  rows = next; known = next !== null; error = false; readAt = Date.now(); emit();
+export function __setLanternRows(next: LanternRow[] | null, seated: LanternChair[] = []): void {
+  rows = next; chairs = seated; known = next !== null; error = false; readAt = Date.now(); emit();
 }

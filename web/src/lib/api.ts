@@ -1494,7 +1494,7 @@ const realApi = {
       `/recipes/render?id=${encodeURIComponent(id)}&values=${encodeURIComponent(JSON.stringify(values))}`),
   /** Who is working on what: what each agent said, joined with the panes,
    *  worktrees and deputy runs this app already reads. */
-  agentBoard: () => get<{ ok: boolean; agents?: import("../components/LanternView.tsx").LanternRow[]; watch?: import("../components/LanternView.tsx").LanternWatch; cacheTtlMinutes?: number }>("/agents/board"),
+  agentBoard: () => get<{ ok: boolean; agents?: import("../components/LanternView.tsx").LanternRow[]; chairs?: import("../components/LanternView.tsx").LanternChair[]; watch?: import("../components/LanternView.tsx").LanternWatch; cacheTtlMinutes?: number }>("/agents/board"),
   /** Take a status line off the board, whoever posted it — a person's call,
    *  which is why it is not the tokenless `done` an agent sends for itself. */
   agentForget: (name: string) => post<{ ok: boolean; cleared?: boolean; error?: string }>("/agents/forget", { name }),
@@ -1504,6 +1504,8 @@ const realApi = {
   seatOpen: (root: string, powers?: string, model?: string) =>
     post<{ ok: boolean; already?: boolean; error?: string }>("/seat/open", { root, powers, model }),
   seatClose: (root: string) => post<{ ok: boolean; was?: boolean }>("/seat/close", { root }),
+  /** Stand the chair down and seat the engine the policy names. Refused until the hand-off is written. */
+  seatChange: (root: string) => post<{ ok: boolean; error?: string }>("/seat/change", { root }),
   seatSettingsSave: (root: string, f: { powers?: string; model?: string }) =>
     post<{ ok: boolean; error?: string }>("/seat/settings", { root, ...f }),
   seatDoctrineSave: (root: string, text: string) =>
@@ -2407,6 +2409,22 @@ function demoLanternField(): import("../components/LanternView.tsx").LanternRow[
     { name: "deployment", from: "seen", state: "idle", paneId: "%25", session: "d7", worktree: "/home/you/code/orbit", branch: "main", saidAt: m(300),
       facts: { model: "claude-sonnet-5", tools: 105, errors: 0, turns: 113, cost: 17.2, startedAt: m(900), lastSeen: m(300), lastTool: { name: "Bash", what: "Tail the deploy log until the health check passes", at: m(300) } },
       git: { dirty: 0, ahead: 0, at: now } },
+    { name: "orchestrator-orbit", role: "orchestrator", chairOf: "/home/you/code/orbit", from: "seen", state: "working", paneId: "%40", session: "d8", worktree: "/home/you/code/orbit", branch: "main", saidAt: m(1), doing: "assigning the export fixes",
+      facts: { model: "claude-sonnet-5", tools: 61, errors: 0, turns: 18, cost: 4.4, startedAt: m(140), lastSeen: m(1), lastTool: { name: "Bash", what: "Open a builder for the retry fix", at: m(1) } },
+      git: { dirty: 0, ahead: 0, at: now } },
+    { name: "builder-export-retry", under: "/home/you/code/orbit", startedBy: { engine: "opencode", model: "big-pickle", rule: "Night hours", position: 1 }, from: "seen", state: "working", paneId: "%41", worktree: "/home/you/code/orbit-wt/orbit-1042", branch: "feat/orbit-1042", saidAt: m(0), doing: "the retry keeps the last page",
+      facts: { model: "big-pickle", tools: 38, errors: 0, turns: 9, cost: 0, startedAt: m(20), lastSeen: m(0), lastTool: { name: "Edit", what: "server/src/export.ts", at: m(0) } },
+      git: { dirty: 3, ahead: 1, at: now } },
+    { name: "scout-invoice-paths", under: "/home/you/code/orbit", startedBy: { engine: "claude", model: "haiku", rule: "base", position: 0 }, from: "seen", state: "idle", paneId: "%42", worktree: "/home/you/code/orbit", branch: "main", saidAt: m(12),
+      facts: { model: "claude-haiku-5", tools: 21, errors: 0, turns: 4, cost: 0.2, startedAt: m(30), lastSeen: m(12), lastTool: { name: "Grep", what: "invoice.total", at: m(12) } },
+      git: { dirty: 0, ahead: 0, at: now } },
+    { name: "builder-calendar-docs", under: "/home/you/code/orbit", startedBy: { engine: "claude", model: "sonnet", rule: "base", position: 0 }, from: "seen", state: "waiting", paneId: "%43", worktree: "/home/you/code/orbit-wt/orbit-1051", branch: "feat/orbit-1051",
+      needsYou: { kind: "permission", why: "Claude needs your permission to use Bash: bun run docs", since: m(4) }, saidAt: m(4),
+      facts: { model: "claude-sonnet-5", tools: 17, errors: 0, turns: 5, cost: 0.9, startedAt: m(25), lastSeen: m(4) },
+      git: { dirty: 1, ahead: 0, at: now } },
+    { name: "builder-old-retention", orphaned: true, startedBy: { engine: "claude", model: "sonnet", rule: "base", position: 0 }, from: "seen", state: "working", paneId: "%44", worktree: "/home/you/code/orbit-wt/orbit-0998", branch: "feat/orbit-0998", saidAt: m(3), doing: "pruning rows past ninety days",
+      facts: { model: "claude-sonnet-5", tools: 54, errors: 1, turns: 12, cost: 2.1, startedAt: m(60), lastSeen: m(3) },
+      git: { dirty: 2, ahead: 1, at: now } },
     { name: "cards-to-work", from: "said", state: "idle", doing: "queued: the three returned cards", saidAt: m(95), paneId: "%13", session: "d8", worktree: "/home/you/code/orbit-wt/cards", branch: "chore/cards-to-work", landed: false, landedInto: "main", left: "branch chore/cards-to-work, 2 commits",
       facts: { model: "claude-opus-5", tools: 77, errors: 0, turns: 30, cost: 9.1, startedAt: m(500), lastSeen: m(95) },
       git: { dirty: 0, ahead: 2, lastCommit: { subject: "chore(cards): take the three returned ones", at: m(96) }, at: now } },
@@ -2882,11 +2900,12 @@ const demoApi: typeof realApi = {
   recipeRender: (_i: string, _v: Record<string, string>) => D({ ok: false, error: "not available in the demo" }),
   // `connected: false` — the demo has no token, and every chip that gates on
   // this stays off rather than leading somewhere that does not exist.
-  agentBoard: () => D({ ok: true, agents: demoLanternField(), watch: { at: Date.now() - 6 * 60_000, flagged: 2, every: 15, on: true }, cacheTtlMinutes: 5 }),
+  agentBoard: () => D({ ok: true, agents: demoLanternField(), chairs: [{ root: "/home/you/code/orbit", name: "orchestrator-orbit", kind: "claude", model: "sonnet", next: { engine: "opencode", model: "big-pickle" }, handedOff: true }], watch: { at: Date.now() - 6 * 60_000, flagged: 2, every: 15, on: true }, cacheTtlMinutes: 5 }),
   agentForget: (_name: string) => D({ ok: true, cleared: true }),
   seat: () => D({ ok: true, root: "/demo/orbit", live: false, seat: null, agent: null, doctrine: "", doctrineText: "", tasks: [], needs: [], models: [], defaultModel: "", field: [], lines: [], wokenAt: null, floorHours: 4, screen: "", reports: [], unread: 0 } as SeatAnswer),
   seatOpen: (_r: string, _p?: string, _m?: string) => D({ ok: false, error: "not available in the demo" }),
   seatClose: (_r: string) => D({ ok: false }),
+  seatChange: (_r: string) => D({ ok: false, error: "not available in the demo" }),
   seatSettingsSave: (_r: string, _f: object) => D({ ok: false, error: "not available in the demo" }),
   seatDoctrineSave: (_r: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
   seatTaskAdd: (_r: string, _t: string, _p?: string) => D({ ok: false, error: "not available in the demo" }),

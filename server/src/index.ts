@@ -3385,7 +3385,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname === "/agents/board") {
       /* Every source at once — see lantern.ts, which the terminal's "Ask
          about the field" reads too, so the view and the chat cannot disagree. */
-      return json({ ok: true, agents: await boardNow(), watch: lastLook(), cacheTtlMinutes: cacheTtlMinutes() });
+      return json({ ok: true, agents: await boardNow(), chairs: await Seat.chairsNow(), watch: lastLook(), cacheTtlMinutes: cacheTtlMinutes() });
     }
     if (pathname === "/agents/status" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
@@ -8534,6 +8534,15 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         return json(r, r.ok ? 200 : 400);
       }
       if (verb === "close") return json(await Seat.closeSeat(root));
+      /* Changing the engine in the chair is the person's: a seat standing
+         itself down to sit again as something else is not a thing it asks. */
+      if (verb === "change") {
+        if (asSeat) return json({ ok: false, error: "only a person changes the chair" }, 403);
+        if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
+        const r = await Seat.changeChair(root, { wakeHours: seatWakeHours() });
+        noteAction(clientIp, "/seat/change", { root }, r, asActor(caller));
+        return json(r, r.ok ? 200 : 409);
+      }
       /* The seat's own report. Not `/agents/status`: that is the board, and
          the seat is deliberately not on it. */
       if (verb === "say") return json(Seat.seatSays(root, typeof b.line === "string" ? b.line : ""), 200);

@@ -14,7 +14,7 @@
  * allowed.
  */
 import { describe, expect, test } from "bun:test";
-import { mergeActivity, gateLine, actorLabel, nobodyDecidedWhy } from "../src/lib/activity.ts";
+import { mergeActivity, gateLine, actorLabel, nobodyDecidedWhy, filterActivity } from "../src/lib/activity.ts";
 import type { ActionRecord, GateRecord } from "../../shared/types.ts";
 
 const action = (o: Partial<ActionRecord>): ActionRecord => ({
@@ -138,4 +138,14 @@ describe("who it is shown against", () => {
     expect(actorLabel({ kind: "gate", at: 1, key: "g", row: gate({ resolution: "timeout", decided_by: null }) }))
       .toBe("");
   });
+});
+
+// The Orchestration filter narrows rows already read: what a chair or the
+// policy did, set apart from what a person did.
+test("the orchestration filter keeps a seat's and the policy's rows, and nobody else's", () => {
+  const act = (id: number, actor: string | null) => ({ kind: "action" as const, at: id, key: `a${id}`, row: { id, at: id, action: "/x", target: "t", ok: true, actor } as never });
+  const gate = (id: number, by: string | null) => ({ kind: "gate" as const, at: id, key: `g${id}`, row: { id, decided_at: id, decided_by: by } as never });
+  const rows = [act(1, "local"), act(2, "seat:orchestrator-abc"), act(3, "policy"), act(4, null), gate(5, "seat:orchestrator-abc"), gate(6, "local")];
+  expect(filterActivity(rows, "all")).toHaveLength(6);
+  expect(filterActivity(rows, "orchestration").map((r) => r.key)).toEqual(["a2", "a3", "g5"]);
 });

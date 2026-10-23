@@ -425,6 +425,36 @@ const label = (c: EngineChoice): string => {
   return c.model ? `${t} (${c.model})` : t;
 };
 
+/** "OpenCode (big-pickle)": an engine and model in a person's words. */
+export const choiceLabel = label;
+
+/** What a worker's row remembers of how it was started (`named_agent.started_by`),
+ *  as much as a screen draws. The rest of the stamp stays on the server. */
+export interface Origin { engine: EngineId; model: string; rule: string; position: number; retries?: number; ceilingLost?: true }
+
+/** The stamp as a row can carry it, or null when the column holds something
+ *  else (an old row, a hand edit): never a half-built origin. */
+export function originOf(stamp: unknown): Origin | null {
+  const s = stamp as Partial<Origin> | null | undefined;
+  if (!s || typeof s !== "object" || typeof s.engine !== "string" || !s.engine) return null;
+  return {
+    engine: s.engine, model: typeof s.model === "string" ? s.model : "",
+    rule: typeof s.rule === "string" && s.rule ? s.rule : "base",
+    position: typeof s.position === "number" && s.position > 0 ? Math.floor(s.position) : 0,
+    ...(typeof s.retries === "number" && s.retries > 0 ? { retries: s.retries } : null),
+    ...(s.ceilingLost === true ? { ceilingLost: true as const } : null),
+  };
+}
+
+/** The one line under a worker's name: which engine, and which decision put it there. */
+export function originLine(o: Origin): string {
+  const by = o.rule === "base" ? "the base policy" : `rule "${o.rule}"`;
+  const bits = [label({ engine: o.engine, model: o.model }), by];
+  if (o.position > 0) bits.push(`${["", "", "2nd", "3rd", "4th"][o.position + 1] ?? `${o.position + 1}th`} in the chain`);
+  if (o.retries) bits.push("moved after a failed start");
+  return bits.join(" · ");
+}
+
 /** Walk a chain, skip what this machine cannot run right now, say why. An
  *  engine the probe has not seen is not ready: never a silent guess. */
 function pick(chain: Chain, role: "orchestrator" | "worker", readiness: readonly EngineReadiness[]): { choice: EngineChoice; position: number; because: string[] } | { why: string; because: string[] } {

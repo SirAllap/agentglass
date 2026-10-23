@@ -37,7 +37,7 @@ import { forgetCards } from "../lib/prCardStore.ts";
 import { checkedLine } from "../lib/providerFreshness.ts";
 import { fmtAgo, minutesAgo } from "../lib/format.ts";
 import type { ActionRecord, GateRecord, UnderstudyClassRow } from "../../../shared/types.ts";
-import { mergeActivity, gateLine, actorLabel, activityDays, type ActivityRow, type ActivityRun } from "../lib/activity.ts";
+import { mergeActivity, gateLine, actorLabel, activityDays, filterActivity, type ActivityFilter, type ActivityRow, type ActivityRun } from "../lib/activity.ts";
 import { ingestUpdate } from "../lib/updateStore.ts";
 import { ReleaseNotesModal } from "./ReleaseNotesModal.tsx";
 import { installedNotes, type NotesTarget } from "../lib/whatsNew.ts";
@@ -984,6 +984,7 @@ function KeyRow({ id, keyName, capturing, onCapture, error, chord }: {
  */
 function ActivityPane({ open }: { open: boolean }) {
   const [rows, setRows] = useState<ActivityRow[] | null>(null);
+  const [filter, setFilter] = useState<ActivityFilter>("all");
   useEffect(() => {
     if (!open) return;
     let alive = true;
@@ -1026,7 +1027,9 @@ function ActivityPane({ open }: { open: boolean }) {
           a list of events, on the same ground and the same rhythm as them. */}
       <SettingsCard title="What this app has done">
         <SettingRow label="Newest first, kept indefinitely"
-          hint="These are the changes you made, not telemetry. Held tool calls appear here whoever resolved them, including the ones the timeout decided while nobody was looking." />
+          hint="These are the changes you made, not telemetry. Held tool calls appear here whoever resolved them, including the ones the timeout decided while nobody was looking."
+          control={<Segmented label="Show" value={filter} onChange={setFilter}
+            options={[{ id: "all", label: "All" }, { id: "orchestration", label: "Orchestration", title: "Only what an orchestrator or the policy did" }]} />} />
       </SettingsCard>
       {/*
         RUNS, not one line each.
@@ -1050,7 +1053,13 @@ function ActivityPane({ open }: { open: boolean }) {
           share a day is the same word printed twenty times and no answer at
           all to "when was this". Said once, as the card's title, it becomes
           the thing it was trying to be. */}
-      {activityDays(rows).map(({ day, runs }) => (
+      {filter === "orchestration" && !filterActivity(rows, filter).length && (
+        <SettingsCard title="Orchestration">
+          <SettingRow label="Nothing from an orchestrator or the policy yet"
+            hint="What a chair does through the app, and when a rule turns on or off, is listed here." />
+        </SettingsCard>
+      )}
+      {activityDays(filterActivity(rows, filter)).map(({ day, runs }) => (
         <SettingsCard key={day} title={day}>
           {runs.map((run) => (
             run.kind === "gate"

@@ -544,6 +544,16 @@ export async function liveOwnedBy(seatRoot: string): Promise<number> {
   return ownedLive.get(seatRoot)?.n ?? 0;
 }
 
+const ownedRows = db.query<Row, []>(`SELECT * FROM named_agent WHERE seat_root IS NOT NULL AND ended_at IS NULL`);
+/** Every live worker a seat owns, with how it was started: the board's join
+ *  reads this to put a worker under its chair. One query, no tmux. */
+export function liveOwned(): { name: string; paneId: string; seatRoot: string; startedBy?: unknown }[] {
+  return ownedRows.all().map((r) => {
+    const a = toAgent(r);
+    return { name: a.name, paneId: a.paneId, seatRoot: a.seatRoot!, ...(a.startedBy !== undefined ? { startedBy: a.startedBy } : null) };
+  });
+}
+
 /** The engine session a headless worker's last turn ran in, for a resume. */
 export function resumeIdOf(name: string): string | null {
   return byName.get(name)?.resume_id ?? null;

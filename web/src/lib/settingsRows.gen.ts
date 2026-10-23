@@ -73,6 +73,7 @@ export const SETTINGS_ROWS: SettingsRowRaw[] = [
   { pane: "lantern", section: "Lantern", label: "How often one session may be asked again", hint: "A session that has already answered is left alone for this long, whatever name it chose." },
   { pane: "lantern", section: "Lantern", label: "Wake the orchestrator at least every", hint: "" },
   { pane: "lantern", section: "Lantern", label: "Watch the agents and notify me", hint: "" },
+  { pane: "log", section: "Orchestration", label: "Nothing from an orchestrator or the policy yet", hint: "What a chair does through the app, and when a rule turns on or off, is listed here." },
   { pane: "log", section: "What this app has done", label: "Loading…", hint: "" },
   { pane: "log", section: "What this app has done", label: "Newest first, kept indefinitely", hint: "" },
   { pane: "log", section: "What this app has done", label: "Nothing yet", hint: "" },
