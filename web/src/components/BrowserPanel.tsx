@@ -658,7 +658,7 @@ export function BrowserView({ active: viewOn, scope }: {
    *  registered once per view switch and would otherwise be holding the first
    *  render's copy of them for the rest of the session. */
   const reopenRef = useRef<() => void>(() => {});
-  const sideNavRef = useRef<(back: boolean) => void>(() => {});
+  const sideNavRef = useRef<(back: boolean, guest?: number) => void>(() => {});
   const closeHereRef = useRef<() => void>(() => {});
   const stepTabRef = useRef<(forward: boolean) => void>(() => {});
   const elRef = useRef<() => WebviewEl | null>(() => null);
@@ -1614,15 +1614,19 @@ export function BrowserView({ active: viewOn, scope }: {
   }, [dtGuest, viewOn, covered, ownOverlay, dtSide, dtSize]);
 
   /* The mouse's side buttons. The glass is up exactly while an agent holds the
-     page, and the page is then not the person's to navigate. */
-  sideNavRef.current = (back) => {
+     page, and the page is then not the person's to navigate. Only the tab the
+     press came from moves: a line printed in another tab moves nothing here. */
+  sideNavRef.current = (back, guest) => {
     if (document.querySelector(".agx-presence-glass")) return;
-    
-    if (back) el()?.goBack(); else el()?.goForward();
+    const w = el();
+    let id: number | undefined;
+    try { id = w?.getWebContentsId(); } catch { return; }
+    if (!w || guest === undefined || id !== guest) return;
+    if (back) w.goBack(); else w.goForward();
   };
-  useEffect(() => onBrowserKey((k) => {
+  useEffect(() => onBrowserKey((k, guest) => {
     if (k === "T") { reopenRef.current(); return; }
-    if (k === "<" || k === ">") { sideNavRef.current(k === "<"); return; }
+    if (k === "<" || k === ">") { sideNavRef.current(k === "<", guest); return; }
     if (k === "w") { closeHereRef.current(); return; }
     if (k === "t") { setOmni("new"); return; }
     if (k === "f") { setFind((f) => f ?? ""); setTimeout(() => findRef.current?.focus(), 0); return; }

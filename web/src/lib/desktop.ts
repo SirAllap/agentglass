@@ -64,7 +64,7 @@ type DesktopBridge = {
   onBrowserZoom?: (fn: (level: number) => void) => () => void;
   onBrowserOpenTab?: (fn: (url: string, opener?: number) => void) => () => void;
   /** Absent on shells built before the browser had its own keyboard. */
-  onBrowserKey?: (fn: (key: string) => void) => () => void;
+  onBrowserKey?: (fn: (key: string, guest?: number) => void) => () => void;
   onBrowserSearch?: (fn: (text: string) => void) => () => void;
   /** All absent on shells built before the inspector was a pane. */
   browserDevtools?: (req: { guest: number; rect: DevtoolsRect; x?: number; y?: number; zoom?: number }) => Promise<{ ok: boolean; docked?: boolean; error?: string }>;
@@ -258,7 +258,7 @@ export function onBrowserZoom(fn: (level: number) => void): () => void {
  * reload and back to itself: those are the page's own business and forwarding
  * them would take the focus off it for nothing.
  */
-export function onBrowserKey(fn: (key: string) => void): () => void {
+export function onBrowserKey(fn: (key: string, guest?: number) => void): () => void {
   const b = bridge();
   return b?.onBrowserKey ? b.onBrowserKey(fn) : () => {};
 }
