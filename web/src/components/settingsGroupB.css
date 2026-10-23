@@ -19,6 +19,8 @@
   border: 1px solid var(--border2); color: var(--text3); background: transparent;
 }
 .agx-daychip[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
+.agx-daychip:hover:not(:disabled):not([aria-pressed="true"]) { border-color: var(--text3); color: var(--text); }
+.agx-daychip[aria-pressed="true"]:hover:not(:disabled) { filter: brightness(1.12); }
 .agx-daychip:disabled { opacity: 0.55; }
 
 /* Spending: budgets as a table, and a card footer for the one action. */
