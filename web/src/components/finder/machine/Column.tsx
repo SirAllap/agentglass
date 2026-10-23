@@ -15,7 +15,7 @@ import type { FolderState } from "../../../lib/finderFolders.ts";
 import { INPUT, INPUT_STYLE, LINE, RefreshButton } from "../../workspace/Chrome.tsx";
 import { MenuCap, MenuItem, MenuRule, Popover } from "./Popover.tsx";
 import { VirtualList } from "./VirtualList.tsx";
-import { TIGHT_W, dragWidth, headerInline, splitName } from "../../../lib/finderColumns.ts";
+import { TIGHT_W, dragWidth, headerInline } from "../../../lib/finderColumns.ts";
 
 /** Ctrl and Shift on a click: what makes it a choice of several rows. */
 export interface Mod { ctrl: boolean; shift: boolean }
@@ -154,7 +154,7 @@ export function Column({ title, closable, onClosePane, filterSignal, width, onRe
                 <NameCell name={r.name} />
                 {dir ? (
                   <>
-                    {r.items !== null && !tight && <span className="shrink-0 tabular-nums text-[10px] px-1.5 rounded-md" style={{ background: "color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text3)", fontWeight: 400 }}>{itemsLabel(r.items)}</span>}
+                    {r.items !== null && !tight && r.name === selName && <span className="shrink-0 tabular-nums text-[10px] px-1.5 rounded-md" style={{ background: "color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text3)", fontWeight: 400 }}>{itemsLabel(r.items)}</span>}
                     <span className="shrink-0 flex" style={{ color: "var(--text4)", transform: "rotate(-90deg)" }}><CaretIcon size={ICON.xs} /></span>
                   </>
                 ) : prefs.sizes && r.bytes !== null && !tight ? (
@@ -195,13 +195,7 @@ export function Column({ title, closable, onClosePane, filterSignal, width, onRe
   );
 }
 
-/** The name, its middle given up first when the column is narrower than it. */
+/** The name, ending in an ellipsis when the column is narrower than it, as Strata's does. */
 function NameCell({ name }: { name: string }) {
-  const [head, tail] = splitName(name);
-  return (
-    <span className="flex flex-1 min-w-0 overflow-hidden">
-      <span className="truncate" style={{ flexShrink: 1, minWidth: 0 }}>{head}</span>
-      {tail && <span className="shrink-0 whitespace-pre">{tail}</span>}
-    </span>
-  );
+  return <span className="flex-1 min-w-0 truncate">{name}</span>;
 }

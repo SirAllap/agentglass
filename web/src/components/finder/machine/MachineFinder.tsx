@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../../lib/api.ts";
 import { FolderStore, type FolderState } from "../../../lib/finderFolders.ts";
-import { columnWidth, previewFits, stripLayout, previewWidth, sidebarWidth } from "../../../lib/finderColumns.ts";
+import { columnWidth, fitWidth, previewFits, stripLayout, previewWidth, sidebarWidth } from "../../../lib/finderColumns.ts";
 import { back as histBack, canBack, canForward, forward as histForward, here as histHere, startHistory, visit, type History } from "../../../lib/finderHistory.ts";
 import { readMachineSnap, writeMachineSnap } from "../../../lib/finderMachineState.ts";
 import { finderKey } from "../../../lib/finderKeys.ts";
@@ -226,8 +226,8 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefs.textSize, box.w > 0]);
   const widths = useMemo(
-    () => columns.map((c) => columnWidth(c.state?.rows.map((r) => r.name) ?? [], measure, dragged[c.path])),
-    [columns, measure, dragged]);
+    () => columns.map((c) => columnWidth(dragged[c.path], mainBox.w || undefined)),
+    [columns, dragged, mainBox.w]);
   // A folder row that is selected has its own column; the selection that matters for the preview is the deepest one.
   const deepest = (() => {
     for (let c = trail.length - 1; c >= 0; c--) {
@@ -412,7 +412,7 @@ export function MachineFinder({ home, start, places, target, onPlace, onBench, o
               ) : prefs.view === "columns" ? (
                 <ColumnsRow widths={widths} active={focusCol}>
                   {columns.map((c, i) => (
-                    <Column key={c.path} title={basename(c.path)} closable={i > 0} onClosePane={() => { setTrail((t) => t.slice(0, i)); setSel((x) => x.slice(0, i)); setFocusCol((f) => Math.min(f, i - 1)); }} filterSignal={filterTick.col === i ? filterTick.n : 0} width={widths[i]!} onResize={(w) => setDragged((d) => ({ ...d, [c.path]: w }))} onFit={() => setDragged((d) => { const n = { ...d }; delete n[c.path]; return n; })} state={c.state} display={c.display} selName={sel[i] ?? null} chosen={liveMulti?.col === i ? liveMulti.choice.names : null} focused={i === focusCol} prefs={prefs} rowH={rowH}
+                    <Column key={c.path} title={basename(c.path)} closable={i > 0} onClosePane={() => { setTrail((t) => t.slice(0, i)); setSel((x) => x.slice(0, i)); setFocusCol((f) => Math.min(f, i - 1)); }} filterSignal={filterTick.col === i ? filterTick.n : 0} width={widths[i]!} onResize={(w) => setDragged((d) => ({ ...d, [c.path]: w }))} onFit={() => setDragged((d) => ({ ...d, [c.path]: fitWidth(c.state?.rows.map((r) => r.name) ?? [], measure, mainBox.w || undefined) }))} state={c.state} display={c.display} selName={sel[i] ?? null} chosen={liveMulti?.col === i ? liveMulti.choice.names : null} focused={i === focusCol} prefs={prefs} rowH={rowH}
                       filter={filters[c.path] ?? ""} onFilter={(v) => setFilters((f) => ({ ...f, [c.path]: v }))}
                       scrollTop={scrolls.current[c.path]} onScrollTop={(t) => onScrollTop(c.path, t)} onPick={(r, m) => onPickMod(i, r, m)} onOpen={(r) => { if (isFolder(r) && !r.locked) { pick(i, r); enterFolder(i); } else if (canEditRow(r)) onBench(joinPath(c.path, r.name), "edit"); }}
                       onFocusCol={() => setFocusCol(i)} onRefresh={() => refresh(c.path)} onSort={onSort} onPref={setPrefs} />

@@ -1,19 +1,19 @@
 /*
- * The width of a Miller column, decided where it can be tested.
+ * The width of a Miller column, as Strata decides it (src/ui/browser/columns.rs).
  *
- * Fixed at 232 px every column read "agentglass-fea…" for ten different names
- * while half the window was empty. A column is as wide as its longest name needs
- * (icon, size and padding included), between a floor and a ceiling; a column
- * somebody dragged keeps the width they gave it; and the free width goes to the
- * last column, so a name is cut only when there is genuinely no room.
+ * Every column is 300 px (COLUMN_WIDTH) and never narrower: a drag or an autofit
+ * is bounded below by those 300 px, and above by the room the strip has (its
+ * visible width). More columns than fit scroll sideways instead of squeezing,
+ * which is what an earlier "fit everything" rule did, cutting names to four
+ * letters. Autofit, a double-click on the edge, is the one place a name's
+ * length counts: the longest name plus what a row spends beside it, bounded the
+ * same way.
  */
 
-export const COL_MIN = 260;
-export const COL_MAX = 420;
+export const COL_DEFAULT = 300;
 /** What a row spends beside the name: icon, gaps, the size or count, the padding. */
 export const COL_CHROME = 92;
-/** A dragged column may go narrower and wider than the automatic range. */
-const DRAG_MIN = 120;
+/** Without a known page, a column may not be wider than this. */
 const DRAG_MAX = 800;
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
@@ -33,14 +33,19 @@ export function longestNames(names: readonly string[], k = 16): string[] {
   return top;
 }
 
-export function columnWidth(names: readonly string[], measure: (text: string) => number, dragged?: number): number {
-  if (dragged !== undefined) return clamp(dragged, DRAG_MIN, DRAG_MAX);
-  let w = 0;
-  for (const n of longestNames(names)) w = Math.max(w, measure(n));
-  return clamp(Math.ceil(w) + COL_CHROME, COL_MIN, COL_MAX);
+/** One column's pixels: 300, or what was dragged, never under 300 and never over the strip's visible width. */
+export function columnWidth(dragged?: number, page = DRAG_MAX): number {
+  return clamp(dragged ?? COL_DEFAULT, COL_DEFAULT, Math.max(COL_DEFAULT, Math.min(DRAG_MAX, page)));
 }
 
-export const dragWidth = (start: number, dx: number): number => clamp(start + dx, DRAG_MIN, DRAG_MAX);
+/** Autofit: the longest name's width plus the row's chrome, bounded like a drag. */
+export function fitWidth(names: readonly string[], measure: (text: string) => number, page = DRAG_MAX): number {
+  let w = 0;
+  for (const n of longestNames(names)) w = Math.max(w, measure(n));
+  return columnWidth(Math.ceil(w) + COL_CHROME, page);
+}
+
+export const dragWidth = (start: number, dx: number): number => clamp(start + dx, COL_DEFAULT, DRAG_MAX);
 
 /**
  * Where the strip of columns scrolls so the active one is whole in view and the
@@ -70,19 +75,6 @@ export function revealScroll(o: { widths: readonly number[]; active: number; pag
 
 /** The room to add after the last column so a scroll to `target` can be reached: the window must still be filled. */
 export const stripPad = (widths: readonly number[], target: number, page: number): number => target <= 0 ? 0 : Math.max(0, Math.ceil(target + page - widths.reduce((a, b) => a + b, 0)));
-
-/**
- * A name cut in the middle, as Strata cuts it: the head gives way and the end
- * stays, because `agentglass-finder-v2.json` and `agentglass-finder-v3.json` differ
- * at the end and an ellipsis there would make them the same row. The split is
- * after the last dot when the extension is short, else eight characters from the end.
- */
-export function splitName(name: string, keep = 8): [head: string, tail: string] {
-  if (name.length <= keep * 2) return [name, ""];
-  const dot = name.lastIndexOf(".");
-  const cut = dot > 0 && name.length - dot <= keep ? Math.max(dot - 3, 1) : name.length - keep;
-  return [name.slice(0, cut), name.slice(cut)];
-}
 
 /**
  * The preview panel's width: a third of the finder, 300 to 460 px, unless it was

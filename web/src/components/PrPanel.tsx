@@ -5985,7 +5985,7 @@ function ConflictActions({ root, number, branch, base, repo, title, disabled }: 
           // It opens somewhere you are not looking. Without this the button
           // did its whole job in silence and read as broken.
           setNote(`Claude is on it in a tmux window — "conflict-${number}", in ${p.root.split("/").pop()}`);
-        }} disabled={disabled || !!busy}
+        }} disabled={disabled || !!busy} primary
         title={`Open a tmux window in that worktree with Claude, told which side is which and which files are in conflict.`}>
         {busy === "claude" ? "Preparing…" : <><SparkleIcon size={ICON.xs} />Hand to Claude in a terminal</>}
       </Btn>
