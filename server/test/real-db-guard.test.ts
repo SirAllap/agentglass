@@ -47,6 +47,21 @@ describe("defaultDbRefusal", () => {
     expect(defaultDbRefusal(real, { compiled: true, execPath: "/tmp/probe/agentglass-server", tmp: "/tmp" })).not.toBeNull();
   });
 
+  test("an AppImage mounted under the temp directory is an install, a copied build is not", () => {
+    // The scratch directory is itself under the real temp directory, so the
+    // temp directory of this run is a subdirectory and the AppImage sits beside it.
+    const tmp = join(scratch, "tmp");
+    const appImage = join(scratch, "downloads", "agentglass_0.0.0_x86_64.AppImage");
+    mkdirSync(join(scratch, "downloads"), { recursive: true });
+    writeFileSync(appImage, "");
+    const mounted = join(tmp, ".mount_agentgXYZ123", "resources", "agentglass-server");
+    expect(defaultDbRefusal(real, { compiled: true, execPath: mounted, tmp, appImage })).toBeNull();
+    // no APPIMAGE, a file that is not there, or a file that is itself under the temp directory: still a build
+    expect(defaultDbRefusal(real, { compiled: true, execPath: mounted, tmp })).not.toBeNull();
+    expect(defaultDbRefusal(real, { compiled: true, execPath: mounted, tmp, appImage: join(scratch, "downloads", "gone.AppImage") })).not.toBeNull();
+    expect(defaultDbRefusal(real, { compiled: true, execPath: mounted, tmp, appImage: join(tmp, "copy.AppImage") })).not.toBeNull();
+  });
+
   test("a home directory kept in git does not make an install a checkout", () => {
     const home2 = join(scratch, "dotfiles-home");
     mkdirSync(join(home2, ".git"), { recursive: true });

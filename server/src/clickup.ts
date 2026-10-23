@@ -29,6 +29,12 @@ import type {
   ListMember, TaskReply, ProviderTask, ClickUpUser, ClickUpWorkspace, ListStatus, ListField, ListPlace, TaskDetail,
   CardEvent, CardFieldKind, CardPr, ClickUpSpace } from "../../shared/providers.ts";
 
+import type { CallResult, WriteOutcome } from "./trackerTypes.ts";
+import { hasUrlCredentials } from "../../shared/urlCredentials.ts";
+// Defined in trackerTypes.ts so the Jira client can use them without importing
+// this file; re-exported so no existing importer changes.
+export type { CallResult, WriteOutcome };
+
 const CLICKUP_API = "https://api.clickup.com/api/v2";
 
 /**
@@ -80,18 +86,6 @@ export const rateBudget = (): { remaining: number; resetAt: number } | null => b
  *  turns over. Five, not one: a poll and a click can race, and the click is
  *  the one that must not be the request that gets refused. */
 const RESERVE = 5;
-
-export interface CallResult<T> {
-  ok: boolean;
-  data?: T;
-  /** For the person, never a raw body. */
-  error?: string;
-  /** True when the token was rejected — the one error that means "reconnect"
-   *  rather than "try later". */
-  unauthorised?: boolean;
-  /** True when we were refused for rate, or held back before being refused. */
-  throttled?: boolean;
-}
 
 /**
  * One call, with every failure turned into a sentence.
@@ -2077,32 +2071,6 @@ export function clickupWriteEnabled(): boolean {
 /** @deprecated Read `clickupWriteEnabled()` — this is a snapshot at import. */
 export const CLICKUP_WRITE_ENABLED = process.env.AGENTGLASS_CLICKUP_WRITE === "1";
 
-export interface WriteOutcome {
-  ok: boolean;
-  error?: string;
-  /** The task as it stands after the write, re-read rather than assumed. */
-  task?: ProviderTask;
-  /** Somebody else changed it between the read and the write. */
-  conflict?: boolean;
-  /**
-   * The token was refused — reconnect, rather than try again.
-   *
-   * `conflict` has always been a field rather than a sentence, and this is the
-   * other failure with a different remedy, so it gets the same treatment. The
-   * read path (`CallResult`) has carried it all along and the writes computed
-   * it and threw it away: `put` classifies 401/403 and then every caller
-   * flattened the result to `{ ok: false, error }`.
-   *
-   * NOT a general error taxonomy, and deliberately not: this provider answers
-   * 401 for a card that does not exist (see findTask), so a code claiming to
-   * name the cause would be wrong on exactly the case people hit most. Two
-   * flags for the two remedies the app can actually offer — reload, reconnect
-   * — and prose for the human, which is the only thing that can be honest
-   * about the rest.
-   */
-  unauthorised?: boolean;
-}
-
 /**
  * The precondition, as close as this API gets to one.
  *
@@ -3295,7 +3263,7 @@ export function prNumberFromUrl(url: string): number | null {
     const u = new URL((url || "").trim());
     // https only, the host exactly (no port, no userinfo), and the number runs
     // to the end of its path segment: `/pull/10<U+200B>65` is not PR 10.
-    if (u.protocol === "https:" && /^(www\.)?github\.com$/i.test(u.hostname) && !u.port && !u.username && !Reflect.get(u, "pass" + "word")) {
+    if (u.protocol === "https:" && /^(www\.)?github\.com$/i.test(u.hostname) && !u.port && !hasUrlCredentials(u)) {
       m = /^\/[^/]+\/[^/]+\/pull\/(\d+)(?:\/|$)/i.exec(u.pathname);
     }
   } catch { /* not an absolute URL: GitLab below, or nothing */ }

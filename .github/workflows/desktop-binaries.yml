@@ -301,7 +301,7 @@ jobs:
           # every leg red — is the case this job exists to REPORT. Dying here
           # would report it as a broken workflow instead of as a broken release.
           gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --dir assets \
-            --pattern '*.dmg' --pattern '*.AppImage' --pattern '*.deb' --pattern '*.exe' || true
+            --pattern '*.dmg' --pattern '*.AppImage' --pattern '*.deb' --pattern '*.exe' --pattern '*.apk' || true
           ls -l assets
 
       # A checksum file so someone who downloads over a captive-portal wifi, or
@@ -310,13 +310,18 @@ jobs:
       # download from, and the assets that DID ship deserve their hashes.
       # Bare names, no paths, so it works as `sha256sum -c SHA256SUMS` from the
       # directory the browser dropped the files into.
+      #
+      # The APK is built by android-apk.yml, a separate workflow, so it may or
+      # may not be attached yet when this runs. It used to be left out of the
+      # glob and the sums listed five of the six files; now it is hashed when it
+      # is there, and android-apk.yml adds its own line when it lands second.
       - name: SHA256SUMS over the attached installers
         env:
           GH_TOKEN: ${{ github.token }}
         working-directory: assets
         run: |
           shopt -s nullglob
-          files=(*.dmg *.AppImage *.deb *.exe)
+          files=(*.dmg *.AppImage *.deb *.exe *.apk)
           if [ ${#files[@]} -eq 0 ]; then
             echo "::warning::$GITHUB_REF_NAME has no installers attached — nothing to checksum"
             exit 0

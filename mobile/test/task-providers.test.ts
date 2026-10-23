@@ -24,6 +24,12 @@ describe("tracksWork", () => {
     expect(tracksWork([at("taskwarrior", "connected")])).toBe(true);
   });
 
+  test("a connected Jira does not switch the Cards tab on: nothing here can show its cards yet", () => {
+    expect(tracksWork([at("clickup", "needs-auth"), at("jira", "connected")])).toBe(false);
+    expect(taskProvider([at("clickup", "needs-auth"), at("jira", "connected")])).toBeNull();
+    expect(taskProvider([at("clickup", "connected"), at("jira", "connected")])?.id).toBe("clickup");
+  });
+
   test("any one of them is enough", () => {
     // ClickUp is this workspace's tool and not the definition of a task.
     expect(tracksWork([at("clickup", "needs-auth"), at("taskwarrior", "connected")])).toBe(true);

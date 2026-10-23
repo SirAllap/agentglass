@@ -1,0 +1,9 @@
+{
+  "accountId": "acc-0001",
+  "accountType": "atlassian",
+  "emailAddress": "ada@acme.example",
+  "displayName": "Ada Example",
+  "active": true,
+  "timeZone": "Europe/London",
+  "locale": "en_GB"
+}

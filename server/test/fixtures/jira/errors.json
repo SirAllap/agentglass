@@ -1,0 +1,17 @@
+{
+  "400": { "errorMessages": ["The request is not valid."], "errors": {} },
+  "401": { "message": "Client must be authenticated to access this resource.", "status-code": 401 },
+  "403": { "errorMessages": ["You do not have permission to do that."], "errors": {} },
+  "404": { "errorMessages": ["Issue does not exist or you do not have permission to see it."], "errors": {} },
+  "409": { "errorMessages": ["The issue was changed by someone else, try again."], "errors": {} },
+  "429": { "message": "Rate limit exceeded." },
+  "500": { "errorMessages": ["Internal server error."], "errors": {} },
+  "goneSearch": {
+    "errorMessages": ["The requested API has been removed. Use the /rest/api/3/search/jql API instead."],
+    "errors": {}
+  },
+  "unboundedJql": {
+    "errorMessages": ["Unbounded JQL queries are not allowed here. Please add a search restriction to your query."],
+    "errors": {}
+  }
+}

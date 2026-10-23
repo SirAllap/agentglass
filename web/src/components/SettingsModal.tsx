@@ -56,7 +56,7 @@ import {
   CommandIcon, ReviewIcon, QuoteIcon, PanesIcon, PlugIcon, ServerIcon, PhoneIcon,
   PuzzleIcon, ShieldIcon, InfoIcon, ChecklistIcon,
 } from "./settingsNavIcons.tsx";
-import { resolvePane, openSettings } from "../lib/openSettings.ts";
+import { resolvePane, openSettings, paneWhenClickupKnown } from "../lib/openSettings.ts";
 import { RunningPanes } from "./RunningPanes.tsx";
 import { ThemePicker } from "./diff/DiffControls.tsx";
 import { BudgetsPane } from "./BudgetsPane.tsx";
@@ -126,6 +126,7 @@ import { refreshUnderstudy } from "../lib/understudyStore.ts";
 import { mutedSources, setMuted, sourceLabel, subscribeMuted } from "../lib/notePolicy.ts";
 import { MuteGlyph } from "./TopBarNotes.tsx";
 import { RefreshButton, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
+import { restoredNote } from "../lib/restoredNote.ts";
 
 /** A heading inside a Section, for a pane that answers the same question about
  *  two different sources. Without it "Quiet" and "Alert sounds" sit in one flat
@@ -510,7 +511,7 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
   /* Its own section, not a block inside Tools & services: it is the engine
      every pane and every chat runs on, with a binary, a config and a restore of
      its own — three settings deep is not a row in a list of "is it installed". */
-  { id: "tmux", label: "Pane engine (tmux)", group: "System", kw: "tmux panes engine pane prefix key binary bundled config override restore reboot layout scrollback resume socket status bar chat warm cli claude", what: "What a pane runs on — the tmux binary, its config and prefix, and restore.", icon: PanesIcon },
+  { id: "tmux", label: "Pane engine (tmux)", group: "System", kw: "tmux panes engine pane prefix key binary bundled config override restore reboot layout resume socket status bar chat warm cli claude", what: "What a pane runs on — the tmux binary, its config and prefix, and restore.", icon: PanesIcon },
   { id: "privacy", label: "Data & privacy", group: "System", kw: "export download data json csv daily totals markdown events skills catalog take out privacy telemetry data local storage retention database credentials tokens tracking analytics who sees", what: "Where your data is, what leaves this machine, and how to take it out.", icon: ShieldIcon },
   { id: "about", label: "About", group: "System", kw: "about version update release notes changelog credit attribution licence license portrait art", what: "Version, release notes, updates and the third-party licences this build carries.", icon: InfoIcon },
   { id: "log", label: "Activity", group: "", kw: "activity log history events feed", what: "What the app itself has been doing.", status: true, icon: PulseIcon },
@@ -2966,6 +2967,10 @@ function ProviderCard({ spec, status, checking, onChanged }: {
   onChanged: () => Promise<void> | void;
 }) {
   const [token, setToken] = useState("");
+  /* Jira signs in with an email and a site as well as the token. Held only
+     until the connect call returns; the token is never shown back. */
+  const [email, setEmail] = useState("");
+  const [site, setSite] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [spaces, setSpaces] = useState<{ id: string; name: string }[] | null>(null);
@@ -2999,15 +3004,19 @@ function ProviderCard({ spec, status, checking, onChanged }: {
      contradiction on one line. */
   const checked = waiting ? "" : checkedLine(status?.at);
 
+  const isJira = spec.id === "jira";
+  const ready = !!token.trim() && (!isJira || !!site.trim());
   const connect = async () => {
-    if (!token.trim()) return;
+    if (!ready) return;
     setBusy(true);
-    const r = await api.providerConnect(spec.id, token.trim());
+    const r = isJira
+      ? await api.jiraConnect(email.trim(), site.trim(), token.trim())
+      : await api.providerConnect(spec.id, token.trim());
     setBusy(false);
     if (!r.ok) { setNote(r.error ?? "That did not work"); return; }
     // Cleared on success and only on success: a refused token is usually one
     // that was pasted short, and retyping it is a chore nobody needs.
-    setToken(""); setNote(null);
+    setToken(""); setEmail(""); setSite(""); setNote(null);
     if (spec.id === "clickup") { __forgetClickupSetup(); __forgetClickupPrefs(); __forgetClickupSpaces(); }
     await onChanged();
   };
@@ -3121,6 +3130,16 @@ function ProviderCard({ spec, status, checking, onChanged }: {
 
       {wantsToken && !connected && (
         <div className="flex items-center gap-2 mt-2.5 flex-wrap">
+          {isJira && (
+            <>
+              <input type="text" value={email} onChange={(e) => setEmail(e.target.value)}
+                placeholder="Email or username (none for a personal access token)" spellCheck={false} autoComplete="off" aria-label="Jira email or username"
+                className={`flex-1 min-w-[200px] ${INPUT}`} style={INPUT_STYLE} />
+              <input type="text" value={site} onChange={(e) => setSite(e.target.value)}
+                placeholder="acme.atlassian.net or jira.example.com" spellCheck={false} autoComplete="off" aria-label="Jira site"
+                className={`flex-1 min-w-[200px] ${INPUT}`} style={INPUT_STYLE} />
+            </>
+          )}
           {/* `type=password`, and there is nothing to reveal: the value here is
               what you are typing, never what is stored. */}
           <input type="password" value={token} onChange={(e) => setToken(e.target.value)}
@@ -3128,11 +3147,11 @@ function ProviderCard({ spec, status, checking, onChanged }: {
             placeholder="Paste your personal API token" spellCheck={false} autoComplete="off"
             className={`flex-1 min-w-[200px] ${INPUT}`}
             style={INPUT_STYLE} />
-          <button onClick={() => void connect()} disabled={busy || !token.trim()}
+          <button onClick={() => void connect()} disabled={busy || !ready}
             className="text-[11.5px] px-3 py-1.5 rounded-lg"
             style={{ background: "color-mix(in srgb, var(--primary) 20%, transparent)",
               border: "1px solid color-mix(in srgb, var(--primary) 48%, transparent)",
-              color: "var(--text)", opacity: busy || !token.trim() ? 0.4 : 1 }}>
+              color: "var(--text)", opacity: busy || !ready ? 0.4 : 1 }}>
             {busy ? "Checking…" : "Connect"}
           </button>
         </div>
@@ -3147,7 +3166,7 @@ function ProviderCard({ spec, status, checking, onChanged }: {
             How to get one ↗
           </a>
         )}
-        {connected && wantsToken && (
+        {connected && spec.id === "clickup" && (
           <button onClick={async () => {
             const r = await api.providerWorkspaces(spec.id);
             if (!r.ok) { setNote(r.error ?? "Could not read the workspaces"); return; }
@@ -3458,7 +3477,7 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
     setBusy(true); setNote(null);
     api.tmuxRestoreAction(action, resume as "lazy" | "all")
       .then((r) => {
-        if (r.ok && action === "restore") setNote(`Restored ${r.restored ?? 0} session${(r.restored ?? 0) === 1 ? "" : "s"}.`);
+        if (r.ok && action === "restore") setNote(restoredNote(r.restored ?? 0));
         else if (r.ok && action === "capture") setNote("Layout captured.");
         else if (r.ok) setNote("Restore state cleared.");
         else setErr(r.error ?? "That did not work.");
@@ -3598,7 +3617,7 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
 
       <SettingRow
         label="Restore after reboot"
-        hint={<>When the host reboots, the engine's tmux dies with it — this photographs the layout (sessions, tabs, splits, scrollback, each pane's directory and start command) and rebuilds it at the next boot. "Lazy" restores the tree and resumes each agent when you reopen its chat; "All" relaunches every recorded CLI, resuming each conversation. Nothing here touches your own tmux or its resurrect saves.</>}
+        hint={<>When the host reboots, the engine's tmux dies with it — this photographs the layout (sessions, tabs, splits, each pane's directory and start command; not what scrolled past) and rebuilds it at the next boot. "Lazy" restores the tree and resumes each agent when you reopen its chat; "All" relaunches every recorded CLI, resuming each conversation. Nothing here touches your own tmux or its resurrect saves.</>}
         control={<span className="flex items-center gap-2 justify-self-end">
           <select value={resume} onChange={(e) => setResume(e.target.value)} disabled={busy}
             className="text-[12px] px-2 py-1 rounded-lg"
@@ -3825,12 +3844,19 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
   useEffect(() => {
     if (!open) return;
     let live = true;
-    void clickupSetup().then((c) => { if (live) setCuConnected(c.connected); });
+    void clickupSetup().then((c) => {
+      if (!live) return;
+      setCuConnected(c.connected);
+      setPane((p) => paneWhenClickupKnown(p, c.connected) as Pane);
+    });
     return () => { live = false; };
   }, [open, pane]);
   const cu = cuConnected === true;
   const tabs = useMemo(() => TABS.filter((t) => t.id !== "clickup" || cu), [cu]);
-  useEffect(() => { if (pane === "clickup" && cuConnected === false) setPane("connections"); }, [pane, cuConnected]);
+  /* The way off a ClickUp page that is not there is decided by the read above,
+     not by the last value of `cuConnected`: right after connecting that value
+     is still the old `false`, and an effect on it undid a jump to the page
+     before the fresh read could say the page exists. */
   const matches = useMemo(() => (
     ql ? tabs.map((t) => ({ id: t.id, s: pageScore(t as SettingsPage, ql) }))
       .filter((x) => x.s > 0).sort((a, b) => b.s - a.s).slice(0, 5)

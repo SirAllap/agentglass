@@ -38,7 +38,7 @@ import "@xterm/xterm/css/xterm.css";
 import { answerDecrqm } from "../lib/xtermDecrqm.ts";
 import { openExternal } from "../lib/externalUrl.ts";
 import { registerPathLinks } from "../lib/termPathLinks.ts";
-import { followLink } from "../lib/linkRouter.ts";
+import { followLink, oscLinkHandler } from "../lib/linkRouter.ts";
 import type { GitRepoRef, GitBranch, PrBranchSummary, TerminalCommands, TmuxWindow, TmuxPane, PtyServerFrame, PtyClientFrame } from "../../../shared/types.ts";
 import { chipTarget } from "../lib/chipTarget.ts";
 import { openPr } from "../lib/openPrs.ts";
@@ -460,6 +460,9 @@ export function askAboutText(selection: string, note: string): string {
 /** The four doors of the pane with the keyboard — the twins of the buttons it
  *  draws in its corner. */
 export type PaneDoor = "git" | "diff" | "pr" | "card";
+/** The worktree behind the focused pane; null unless the terminal is on screen. */
+let paneRootNow: () => string | null = () => null;
+export function focusedPaneRoot(): string | null { return paneRootNow(); }
 export function openFocusedPaneDoor(which: PaneDoor): boolean { return paneDoor(which); }
 
 /**
@@ -792,6 +795,8 @@ function createSession(root: string, agentTicket?: string): Sess {
     wordSeparator: tp.wordSeparator,
     theme: themeFromCss(),
     macOptionIsMeta: true,
+    // A link the program printed with its own target (OSC 8). See oscLinkHandler.
+    linkHandler: oscLinkHandler,
   });
   // Before anything is written: the width table decides how many columns each
   // character claims, and a line already parsed under the old one keeps the
@@ -2415,6 +2420,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
       setCopyFlash(Date.now());
       return true;
     };
+    paneRootNow = () => wtRef.current?.root ?? null;
     paneDoor = (which) => {
       const wt = wtRef.current;
       if (which === "pr") {
@@ -2489,6 +2495,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     if (focused) requestAnimationFrame(() => focused.term.focus());
     return () => {
       panelClose = () => {};
+      paneRootNow = () => null;
       panelFind = () => false;
       panelPluck = () => false;
       unclaim();

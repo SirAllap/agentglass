@@ -209,8 +209,8 @@ export function WindowSwitcher({ open, onClose, onGone }: {
                 <span className="min-w-0 truncate text-[12.5px]" style={{ color: lit ? "var(--text)" : "var(--text2)" }}>
                   {r.name || "shell"}
                 </span>
-                <span className="shrink-0 min-w-0 max-w-[30%] truncate text-[11px]" style={{ color: "var(--text4)" }} title={r.repo}>
-                  {r.repo}
+                <span className="shrink-0 min-w-0 max-w-[30%] truncate text-[11px]" style={{ color: "var(--text4)" }} title={r.checkout ? `${r.checkout} (worktree of ${r.repo})` : r.repo}>
+                  {r.checkout || r.repo}
                 </span>
                 {sessions > 1 && (
                   <span className="shrink-0 text-[11px] truncate max-w-[20%]" style={{ color: "var(--text4)" }} title={`tmux session ${r.session}`}>

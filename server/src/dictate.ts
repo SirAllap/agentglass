@@ -81,6 +81,9 @@ export interface Transcript {
   ok: boolean;
   text?: string;
   error?: string;
+  /** Set when the HTTP status should not be the generic 400: an oversize
+   *  recording is a 413, as an oversize image already is (imageUpload.ts). */
+  status?: number;
 }
 
 /** A minute of speech is a long thing to say to a phone, and the cap is here
@@ -107,7 +110,7 @@ export async function transcribe(dataIn: unknown, nameIn: unknown): Promise<Tran
   let bytes: Buffer;
   try { bytes = Buffer.from(data, "base64"); } catch { return { ok: false, error: "not base64" }; }
   if (!bytes.length) return { ok: false, error: "empty recording" };
-  if (bytes.length > MAX_BYTES) return { ok: false, error: "that recording is too long" };
+  if (bytes.length > MAX_BYTES) return { ok: false, status: 413, error: "that recording is too long" };
 
   const bin = transcriberOn();
   if (!bin) {

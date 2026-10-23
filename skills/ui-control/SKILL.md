@@ -134,8 +134,9 @@ naming a level is the answer, not a puzzle. Ask the person.
   `machine.open`, `peek.file`, the bench (`bench.toggle`, `bench.file`,
   `bench.board`), `settings.open`, and the Git modals (`git.modal` for Insights,
   Bisect and the git palette, `git.compare`, `git.blame`, `git.rebase`). A Git
-  modal opens over the view they are on, on the checkout the Git view is on, and
-  the person closes it from the modal itself; the view does not change. Use a
+  modal opens over the view they are on, on the checkout of the focused terminal
+  pane when you ask from one (otherwise the one the Git view is on), and
+  the person closes it from the modal itself, with Escape or the X; the view does not change. Use a
   view switch only when what they asked to see is that view. Then say in chat, BEFORE you switch, what you are
   about to show and where you are putting them; and when you have shown it, you
   switch back with `view.open` to where they were (`agentglass-ui read view` tells you).

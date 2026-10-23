@@ -81,7 +81,7 @@ import { AskedExtras, sendExtras } from "./AskedExtras.tsx";
 import { prContext, type ExtraItem } from "../lib/stepExtras.ts";
 import { AssignPicker, Face, useAskAssign, useAskTakeOff } from "./AssignPicker.tsx";
 import { blocksSentence, peopleButtonLabel } from "../lib/stepBlocksView.ts";
-import { mergeCardRef, mergeNote, statusColor, readyForQaStatus, reviewStatus, cardNoteText, whoToTell } from "../lib/cardMove.ts";
+import { mergeCardRef, stagedMove, mergeNote, statusColor, readyForQaStatus, reviewStatus, cardNoteText, whoToTell } from "../lib/cardMove.ts";
 import { useClickupPrefs, clickupPrefs } from "../lib/clickupPrefs.ts";
 import { cardPlan, cardPlanNote } from "../lib/cardPlan.ts";
 import { cardOf, askingCard, onCard, putCard, forgetCards, cardVersion, withCard } from "../lib/prCardStore.ts";
@@ -4262,9 +4262,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     if (!found?.ok || !found.task) { flash(false, found?.error || "ClickUp could not find the card"); return; }
     const task = found.task;
     const meta = task.listId ? await api.clickupList(task.listId).catch(() => null) : null;
-    const target = (meta?.ok ? (meta.statuses ?? []) : []).find((st) => st.status.toLowerCase() === want.toLowerCase());
-    if (!target) { flash(false, `${ref.label}: its list has no status called "${want}"`); return; }
-    if (target.status === task.status) { flash(true, `${ref.label} is already ${target.status}`); return; }
+    const plan = stagedMove(want, task, meta?.ok ? (meta.statuses ?? []) : []);
+    if (plan.step === "missing") { flash(false, `${ref.label}: its list has no status called "${want}"`); return; }
+    if (plan.step === "already") { flash(true, `${ref.label} is already ${plan.status}`); return; }
+    const target = { status: plan.status };
     const said = await ask({
       title: `Move to ${target.status}?`, preparedBy: by, confirmLabel: `Move to ${target.status}`,
       body: `${ref.label}\n${task.status} \u2192 ${target.status}`,

@@ -123,7 +123,7 @@ export function SettingRow({ label, hint, control, onClick, href, download, disa
   // Under the row, not inside it: see HintMore. Pulled up into the row's own
   // bottom padding so the pair still reads as one row.
   const more = fold && operable ? (
-    <div className="px-4 -mt-2.5 pb-3">
+    <div className="agx-settings-more px-4 -mt-2.5 pb-3">
       <HintMore open={hintOpen} toggle={() => setHintOpen((v) => !v)} controls={hintId} />
     </div>
   ) : null;

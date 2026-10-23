@@ -1,0 +1,7 @@
+[
+  { "id": "1", "name": "Highest", "description": "This problem will block progress.", "statusColor": "#d04437", "isDefault": false },
+  { "id": "2", "name": "High", "description": "Serious problem that could block progress.", "statusColor": "#f15c75", "isDefault": false },
+  { "id": "3", "name": "Medium", "description": "Has the potential to affect progress.", "statusColor": "#f79232", "isDefault": true },
+  { "id": "4", "name": "Low", "description": "Minor problem or easily worked around.", "statusColor": "#707070", "isDefault": false },
+  { "id": "5", "name": "Lowest", "description": "Trivial problem with little or no impact.", "statusColor": "#999999", "isDefault": false }
+]

@@ -75,12 +75,24 @@ async function boot(extraPath = ""): Promise<{ server: ReturnType<typeof Bun.spa
     stdout: "ignore",
     stderr: "pipe",
   });
-  for (let i = 0; i < 150; i++) {
-    try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok && pidsIn(pidFile).length) return { server, pidFile }; } catch { /* not up yet */ }
+  /* Every wait here ends, and says what it was waiting for. One CI run of the
+     first test in this file hit its 30 s ceiling with no message at all: an
+     unbounded fetch or exit wait reports a timeout and nothing else, and the
+     cause (a slow cold boot, or a server that ignored the signal) was lost. */
+  for (const end = Date.now() + 15_000; Date.now() < end;) {
+    try { if ((await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(2000) })).ok && pidsIn(pidFile).length) return { server, pidFile }; } catch { /* not up yet */ }
     await Bun.sleep(100);
   }
   server.kill("SIGKILL");
-  throw new Error("the server or its monitor did not come up: " + (await new Response(server.stderr as ReadableStream).text()).slice(0, 400));
+  const said = await Promise.race([new Response(server.stderr as ReadableStream).text(), Bun.sleep(2000).then(() => "(stderr not closed)")]);
+  throw new Error(`the server or its monitor did not come up in 15 s (monitor pids written: ${pidsIn(pidFile).length}): ` + said.slice(0, 400));
+}
+
+/** Waits for the server to go after a signal; a server that does not is a failure with a name, not a timeout. */
+async function exitedAfter(server: ReturnType<typeof Bun.spawn>, sig: NodeJS.Signals, ms = 10_000): Promise<void> {
+  server.kill(sig);
+  const done = await Promise.race([server.exited.then(() => true), Bun.sleep(ms).then(() => false)]);
+  if (!done) { server.kill("SIGKILL"); throw new Error(`the server was still running ${ms} ms after ${sig}`); }
 }
 
 const started: number[] = [];
@@ -124,8 +136,7 @@ describe.skipIf(!LINUX)("the dbus-monitor dies with the server", () => {
       await Bun.sleep(300);
       expect(alive(pid)).toBe(true);
 
-      server.kill(sig);
-      await server.exited;
+      await exitedAfter(server, sig);
       expect(await gone(pid, 3000)).toBe(true);
     }, SERVER_BOOT_MS);
   }
@@ -140,8 +151,7 @@ describe.skipIf(!LINUX)("the dbus-monitor dies with the server", () => {
     await Bun.sleep(300);
     expect(alive(pid)).toBe(true);
 
-    server.kill("SIGTERM");
-    await server.exited;
+    await exitedAfter(server, "SIGTERM");
     expect(await gone(pid, 3000)).toBe(true);
   }, SERVER_BOOT_MS);
 });

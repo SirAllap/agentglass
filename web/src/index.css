@@ -266,6 +266,11 @@
   .agx-settings-rows > * + * {
     border-top: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
   }
+  /* The More under an operable row is a sibling of it (a control inside a
+     switch is not exposed as a button) and is pulled up into the row's padding
+     so the pair reads as one row. The rule above drew a divider between them,
+     which put More on a line of its own. */
+  .agx-settings-rows > .agx-settings-more { border-top: 0; }
 
   /*
    * The measure, on the COLUMN — which is the whole of why the last attempt

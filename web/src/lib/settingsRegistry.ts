@@ -613,6 +613,10 @@ export function makeSettings(defs: readonly SettingDef[], now: () => number = Da
       // without it that window offered an "x → x" chip whose Undo did nothing.
       if (r.prev === r.value) return { ok: true, id: d.id, prev: r.prev, value: r.value, undo: "", unchanged: true };
       const handle = `u${++seq}`;
+      /* A newer write to the same setting retires the older chips for it: they
+         would come back one after another as each newer one went, and Undo on
+         one would put back a value this setting no longer follows. */
+      for (const x of log) if (x.id === d.id) x.shown = false;
       log = [...log, { handle, id: d.id, label: d.label, prev: r.prev, value: r.value, at: now(), ...(as ? { as } : {}), shown: true, undone: false, revert: r.revert }].slice(-KEPT);
       touch();
       return { ok: true, id: d.id, prev: r.prev, value: r.value, undo: handle };

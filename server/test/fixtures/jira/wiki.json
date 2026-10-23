@@ -1,0 +1,6 @@
+{
+  "description": "h2. Problem\n\nThe export stalls when the board has more than *200 cards*. See the [runbook|https://docs.acme.example/runbook] and ask [~grace].\n\n* Reproduce with the large board\n* Compare against the small board\n\n{code:ts}\nawait exportBoard(board, { limit: 200 });\n{code}\n\n||Board||Seconds||\n|small|2|",
+  "comments": {
+    "30001": "[~ada] can you take a look at the retry loop?"
+  }
+}

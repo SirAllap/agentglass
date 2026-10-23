@@ -18,7 +18,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import {
-  ActivityIndicator, KeyboardAvoidingView, Linking, Pressable, ScrollView, Text, TextInput, View,
+  ActivityIndicator, KeyboardAvoidingView, Pressable, ScrollView, Text, TextInput, View,
 } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import type { IssueDetail, IssuePr, IssuePrsReport, IssueStartResult, PrSummary } from "../../../shared/types.ts";
@@ -30,6 +30,7 @@ import { requestHandoff } from "../../src/terminal/handoff.ts";
 import { openLinkedPr } from "../../src/state/open-pr.ts";
 import { repoOf } from "../../src/model/prRef.ts";
 import { since } from "../../src/lib/dates.ts";
+import { openHttp } from "../../src/lib/openHttp.ts";
 import { canRunAgents } from "../../src/model/scope.ts";
 import { prVerdict } from "../../src/model/issueList.ts";
 import { listPath } from "../../src/model/prSearch.ts";
@@ -349,7 +350,7 @@ export default function IssueScreen(): React.ReactNode {
               is that you did not have to go there. */}
           {detail.url ? (
             <View style={{ paddingTop: SPACE.lg }}>
-              <Btn label="Open on GitHub" onPress={() => { void Linking.openURL(detail.url); }} />
+              <Btn label="Open on GitHub" onPress={() => { openHttp(detail.url); }} />
             </View>
           ) : null}
         </>

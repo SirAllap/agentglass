@@ -67,6 +67,7 @@ function defaultDbPath(): string {
     // `B:/~BUN/root/…` is the same thing on Windows.
     compiled: Bun.main.startsWith("/$bunfs/") || Bun.main.includes("~BUN"),
     execPath: process.execPath,
+    appImage: process.env.APPIMAGE,
     tmp: tmpdir(),
   });
   if (refused) throw new Error(refused);
@@ -204,12 +205,18 @@ function copyInto(src: string, dst: string): boolean {
  */
 export function defaultDbRefusal(
   path: string,
-  run: { compiled: boolean; execPath: string; tmp: string },
+  run: { compiled: boolean; execPath: string; tmp: string; appImage?: string },
 ): string | null {
   const under = (p: string, dir: string) => { const r = relative(dir, p); return !!r && !r.startsWith("..") && !isAbsolute(r); };
   if (under(path, run.tmp)) return null;
   let where: string | null = null;
   if (run.compiled) {
+    // An AppImage runs from a mount (or an extraction) under the temp directory
+    // but is installed: the file the person launched, named by the runtime in
+    // APPIMAGE, lives elsewhere. A build copied into the temp directory has no
+    // such file outside it. A variable set by hand passes for an install, as a
+    // binary copied by hand does (see the ceilings above).
+    if (under(run.execPath, run.tmp) && run.appImage && !under(run.appImage, run.tmp) && existsSync(run.appImage)) return null;
     if (under(run.execPath, run.tmp)) where = run.tmp;
     else for (let d = dirname(run.execPath); ; d = dirname(d)) {
       if (existsSync(join(d, ".git")) && existsSync(join(d, "electron", "build.mjs"))) { where = d; break; }

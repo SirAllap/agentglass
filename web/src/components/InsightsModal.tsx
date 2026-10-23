@@ -11,6 +11,7 @@ import { CloseButton } from "./CloseButton.tsx";
 import { api } from "../lib/api.ts";
 import type { RepoStats, Changelog, ChangelogEntry } from "../../../shared/types.ts";
 import { EDGE } from "./workspace/Chrome.tsx";
+import { useEscapeClose } from "../lib/useDismiss.ts";
 
 const DAY_OPTS = [7, 30, 90];
 
@@ -52,6 +53,7 @@ function Entry({ e }: { e: ChangelogEntry }) {
 }
 
 export function InsightsModal({ root, onClose }: { root: string; onClose: () => void }) {
+  useEscapeClose(onClose);
   const [days, setDays] = useState(30);
   const [stats, setStats] = useState<RepoStats | null>(null);
   const [changelog, setChangelog] = useState<Changelog | null>(null);

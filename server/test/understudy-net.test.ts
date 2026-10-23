@@ -171,10 +171,13 @@ describe("what the net refuses to touch", () => {
     // Both shapes of the blind list: an exact path and a prefix.
     await post("/pair/claim", { code: CANARY, name: "Pixel 9" });
     await post("/providers/connect", { id: "clickup", token: CANARY });
+    // The site is one the client refuses before any request, so this stays off the network.
+    await post("/jira/connect", { email: "ada@acme.example", site: "refused.example", token: CANARY });
     await post("/control", { cmd: "view", to: "dash", secret: CANARY });
 
     expect(ledgerFor("/pair/claim")).toEqual([]);
     expect(ledgerFor("/providers/connect")).toEqual([]);
+    expect(ledgerFor("/jira/connect")).toEqual([]);
     expect(ledgerFor("/control")).toEqual([]);
   });
 

@@ -93,6 +93,23 @@ export function statusOptions(statuses: ListStatus[], current: string): ListStat
     .sort((a, b) => a.orderindex - b.orderindex);
 }
 
+/**
+ * What a staged "move the card" request does once the card and its list are
+ * read: nothing to ask because the list has no such status, nothing to do
+ * because the card is already there, or the question to put to the person.
+ * The status is matched by the board's own spelling, case aside, and the
+ * target comes back as the board wrote it.
+ */
+export function stagedMove(
+  want: string,
+  card: { status: string },
+  statuses: ListStatus[],
+): { step: "missing" } | { step: "already"; status: string } | { step: "ask"; status: string } {
+  const target = statuses.find((st) => eqStatus(st.status, want));
+  if (!target) return { step: "missing" };
+  return eqStatus(target.status, card.status) ? { step: "already", status: target.status } : { step: "ask", status: target.status };
+}
+
 /** The value of "do not touch the board", and the option the dialog opens on.
  *  Empty, so it can never collide with a status a workspace has actually
  *  named. */

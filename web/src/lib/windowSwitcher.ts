@@ -24,6 +24,10 @@ export interface SwitcherRow {
    *  checkout's, for a worktree; the directory's own name outside a repository
    *  or while the server is still resolving it. */
   repo: string;
+  /** The worktree folder the pane is in, when it is a sibling checkout of the
+   *  repository (`orbit-fix-login` beside `orbit`); empty in the main checkout.
+   *  What tells two windows of one repository apart. */
+  checkout: string;
   /** The pane to land in: the one whose agent is most urgent, else the first. */
   paneId: string;
   status?: WindowStatus;
@@ -31,6 +35,23 @@ export interface SwitcherRow {
 }
 
 const lastSegment = (p: string) => p.replace(/\/+$/, "").split("/").pop() || p;
+
+/**
+ * The sibling checkout a pane's directory is in, by folder name.
+ *
+ * Worktrees live beside the repository, so the first folder below the
+ * repository's parent is the checkout even when the pane is in a subfolder of
+ * it. A worktree kept INSIDE the repository's own folder reads as the main
+ * checkout: the server says which repository, not which worktree, and the
+ * switcher does not walk the disk for it.
+ */
+export function checkoutOf(repo: string | null | undefined, path: string): string {
+  if (!repo) return "";
+  const root = repo.replace(/\/+$/, "");
+  const parent = root.slice(0, root.lastIndexOf("/") + 1);
+  if (!parent || path === root || path.startsWith(root + "/") || !path.startsWith(parent)) return "";
+  return path.slice(parent.length).split("/")[0] ?? "";
+}
 
 /**
  * One row per window, from the per-pane list the server already answers.
@@ -61,6 +82,7 @@ export function windowsFromPanes(panes: readonly AgentPane[]): SwitcherRow[] {
       index: Number(home.windowIndex) || 0,
       name: home.windowName,
       repo: lastSegment(lead.repo || lead.path),
+      checkout: checkoutOf(lead.repo, lead.path),
       paneId: lead.paneId,
       status,
       attached: home.attached !== false,
@@ -94,7 +116,7 @@ export function rankWindows(rows: readonly SwitcherRow[], query: string): Switch
   if (!q) return [...rows].sort(byUrgency);
   const scored: { r: SwitcherRow; s: number }[] = [];
   for (const r of rows) {
-    const s = scoreMatch(`${r.session}/${r.repo}/${r.name}`, q, false);
+    const s = scoreMatch(`${r.session}/${r.repo}/${r.checkout}/${r.name}`, q, false);
     if (s >= 0) scored.push({ r, s });
   }
   // scoreMatch's own bands: name starts with it (800+), name contains it

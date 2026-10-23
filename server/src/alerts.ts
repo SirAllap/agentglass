@@ -476,7 +476,9 @@ export function describeSession(sourceApp: string, sessionId: string, cwdIn = ""
   // The session prefix ONLY when there is no pane. It is a disambiguator, and a
   // pane already disambiguates — carrying both left six characters of a UUID on
   // a line that had just been made readable.
-  return at ? `${where} · ${at}` : `${where} (${sessionId.slice(0, 6)})`;
+  // Eight characters, as every other place that shows a session id does. Six cut
+  // a short id mid-word: "sess-one" read "(sess-o)" on a phone's notification.
+  return at ? `${where} · ${at}` : `${where} (${sessionId.slice(0, 8)})`;
 }
 
 /**

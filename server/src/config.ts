@@ -117,7 +117,7 @@ interface Config {
   /** The user's extra config lines for agentglass's tmux server (Level 1).
    *  Plain text, validated before it is ever applied. */
   tmuxOverride?: string;
-  /** Restore the pane layout (windows, splits, scrollback) at boot, after a
+  /** Restore the pane layout (windows, splits, directories) at boot, after a
    *  reboot took the tmux server down. Off by default. See tmuxrestore.ts. */
   tmuxRestore?: boolean;
   /** How restored agent panes relaunch their CLI: "lazy" restores the layout

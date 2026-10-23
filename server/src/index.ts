@@ -116,6 +116,7 @@ import {
 } from "./issues.ts";
 import { currentRuns, runById, runActivity, startRun, adoptPane, finishRun } from "./runs.ts";
 import { failed } from "./refused.ts";
+import { connectJira, jiraStatus, setJiraWrites, jiraWriteEnabled, readIssue, findIssue, mine as jiraMine, searchText as jiraSearchText, withStored as withJira } from "./jira.ts";
 import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, addClickupFolder, refreshFoldersIfStale, replaceViewUrl, readView } from "./providers.ts";
 import { clickupPrefs, setClickupPrefs, settleFirstRun } from "./clickupPrefs.ts";
 import { savedViews, savedFolders, currentView, setCurrent, removeView, removeFolder, knownCardPrefix, knownNoCustomIds, boardHolding, setWritesAllowed, patchCachedTask } from "./clickupviews.ts";
@@ -2245,7 +2246,9 @@ const UNDERSTUDY_MACHINE = new Set([
   "/ingest", "/browser/ready", "/statusline", "/v1/traces", "/otlp/v1/traces", "/v1/logs", "/otlp/v1/logs",
   "/desk/claim",
 ]);
-const UNDERSTUDY_BLIND = new Set(["/control", "/control/result", "/providers", "/pair", ...UNDERSTUDY_MACHINE]);
+// `/jira/connect` by name and not `/jira/` by prefix: it is the one Jira route
+// that receives a token, and the card routes that follow should be recorded.
+const UNDERSTUDY_BLIND = new Set(["/control", "/control/result", "/providers", "/pair", "/jira/connect", ...UNDERSTUDY_MACHINE]);
 function understudyBlind(pathname: string): boolean {
   return UNDERSTUDY_BLIND.has(pathname) || UNDERSTUDY_BLIND_PREFIXES.some((p) => pathname.startsWith(p));
 }
@@ -6281,6 +6284,43 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (!r) return json({ ok: false, error: "not found" }, 404);
       return json(r, r.ok ? 200 : 400);
     }
+    /*
+     * Jira. `/jira/connect` is the second route that receives a token, and like
+     * `/providers/connect` it answers with who you are and never with the
+     * credential, the email or the address as typed. It is on the understudy's
+     * blind list by name (UNDERSTUDY_BLIND) for the same reason that one is.
+     */
+    if (pathname === "/jira/status") return json(await jiraStatus());
+    /*
+     * Reading cards. Answers are 200 with `ok: false` and a sentence, the way
+     * the ClickUp reads answer: "not connected" is not a failed request. The
+     * token is read inside `withStored` and never reaches a response.
+     */
+    if (req.method === "GET" && pathname === "/jira/task") {
+      const r = await withJira((c) => readIssue(c, url.searchParams.get("id") ?? ""));
+      return json(r.ok ? { ok: true, task: r.data } : { ok: false, error: r.error });
+    }
+    if (req.method === "GET" && pathname === "/jira/find") {
+      const r = await withJira((c) => findIssue(c, url.searchParams.get("q") ?? ""));
+      return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error });
+    }
+    if (req.method === "GET" && (pathname === "/jira/mine" || pathname === "/jira/search")) {
+      const r = await withJira((c) => pathname === "/jira/mine" ? jiraMine(c) : jiraSearchText(c, url.searchParams.get("q") ?? ""));
+      return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error, ...(r.throttled ? { throttled: true } : null) });
+    }
+    if (pathname === "/jira/connect" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = await connectJira({ email: b.email, site: b.site, token: b.token, auth: b.auth });
+      return json(r, r.ok ? 200 : 400);
+    }
+    if (pathname === "/jira/writes" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      if (typeof b.on !== "boolean") return json({ ok: false, error: "on must be true or false" }, 400);
+      setJiraWrites(b.on);
+      return json({ ok: true, writes: jiraWriteEnabled() });
+    }
     /* Boards, saved by pasting their address. Reads and one write path, and
        the write path refuses unless AGENTGLASS_CLICKUP_WRITE=1 — see
        clickup.ts for why this one defaults to off while the local list
@@ -7902,7 +7942,8 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       let b: { data?: unknown; name?: unknown };
       try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const said = await transcribe(b.data, b.name);
-      return json(said, said.ok ? 200 : 400);
+      const { status, ...body } = said;
+      return json(body, said.ok ? 200 : status ?? 400);
     }
 
     if (pathname === "/terminal/image" && req.method === "POST") {

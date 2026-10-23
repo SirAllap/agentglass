@@ -152,7 +152,7 @@ describe("the page is only there with ClickUp", () => {
     const src = await Bun.file(new URL("../src/components/SettingsModal.tsx", import.meta.url).pathname).text();
     expect(src).toContain('{show("clickup") && cu && <ClickUpPane />}');
     expect(src).toContain('const tabs = useMemo(() => TABS.filter((t) => t.id !== "clickup" || cu), [cu]);');
-    expect(src).toContain('if (pane === "clickup" && cuConnected === false) setPane("connections");');
+    expect(src).toContain("setPane((p) => paneWhenClickupKnown(p, c.connected) as Pane);");
   });
   test("the old blocks are gone from Tools & services", async () => {
     const src = await Bun.file(new URL("../src/components/SettingsModal.tsx", import.meta.url).pathname).text();

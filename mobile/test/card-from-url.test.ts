@@ -43,7 +43,7 @@ describe("the chip", () => {
   test("tries the in-app card before the system browser", async () => {
     const src = code(await chip);
     expect(src.includes("cardIdFromUrl(")).toBe(true);
-    expect(src.indexOf("cardIdFromUrl(")).toBeLessThan(src.indexOf("Linking.openURL"));
+    expect(src.indexOf("cardIdFromUrl(")).toBeLessThan(src.indexOf("openHttp("));
   });
   test("says it opens a card, not that it finds one, when it goes to the card", async () => {
     expect((await chip).includes("Open card ${ref.label}")).toBe(true);

@@ -25,7 +25,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { repoOf } from "../../src/model/prRef.ts";
 import { checksMoved, nextDetailPoll } from "../../src/model/checkJobs.ts";
-import { ActivityIndicator, Linking, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import type { PrCheckRollup, PrDetail, ReviewRecipe, ReviewRecipesResponse } from "../../../shared/types.ts";
 import { ask } from "../../src/lib/api.ts";
@@ -46,6 +46,7 @@ import { RECIPES_PATH, menuFor, situationOf } from "../../src/model/reviewMenu.t
 import { requestHandoff } from "../../src/terminal/handoff.ts";
 import { clearDraft, draft, forWire } from "../../src/model/reviewDraft.ts";
 import { since } from "../../src/lib/dates.ts";
+import { openHttp } from "../../src/lib/openHttp.ts";
 import { mergeVerdict } from "../../../shared/mergeReason.ts";
 import {
   MERGE_LABEL, MERGE_OPTION, allowedMethods, mergeSubject, pickMergeMethod,
@@ -748,7 +749,7 @@ export default function PrScreen(): React.ReactNode {
               />
             ) : null}
 
-            <Btn label="Open on GitHub" onPress={() => { void Linking.openURL(detail.url); }} />
+            <Btn label="Open on GitHub" onPress={() => { openHttp(detail.url); }} />
           </>
         ) : null}
       </ScrollView>

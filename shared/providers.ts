@@ -33,7 +33,7 @@ export type ProviderKind = "review" | "task";
  */
 export type AuthKind = "cli" | "token" | "none";
 
-export type ProviderId = "github" | "gitlab" | "taskwarrior" | "clickup";
+export type ProviderId = "github" | "gitlab" | "taskwarrior" | "clickup" | "jira";
 
 export interface ProviderSpec {
   id: ProviderId;
@@ -78,7 +78,42 @@ export const PROVIDERS: ProviderSpec[] = [
     help: "https://developer.clickup.com/docs/authentication",
     note: "A personal API token, from ClickUp's Settings → Apps. It starts with `pk_` and does not expire. Stored on this machine in a file only you can read, and never sent to the browser.",
   },
+  {
+    id: "jira", title: "Jira", kind: "task", auth: "token",
+    what: "Your Jira Cloud site. Connecting is as far as it goes for now: no cards are read yet.",
+    help: "https://id.atlassian.com/manage-profile/security/api-tokens",
+    note: "Your site (like acme.atlassian.net, or the address of your own Jira) and a token. On Jira Cloud that is your email and an API token from your Atlassian account's security page, which expires at most a year after you make it. On Jira Data Center it is a personal access token from your profile, with no email. Stored on this machine in a file only you can read, and never sent to the browser.",
+  },
 ];
+
+/** The answer to `POST /jira/connect`. The account is its display name; the
+ *  token, the email and the site as typed never come back. */
+export interface JiraConnectResult { ok: boolean; error?: string; account?: string }
+
+/** How a Jira connection signs in: an account and a token (`basic`, Jira
+ *  Cloud and Data Center) or a personal access token alone (`bearer`). */
+export type JiraAuth = "basic" | "bearer";
+/** `cloud` for exactly `<name>.atlassian.net`; `custom` for any other host: a
+ *  Cloud site behind a domain, or Data Center / Server. */
+export type JiraKind = "cloud" | "custom";
+/** What the site says it runs as, from `serverInfo.deploymentType`. */
+export type JiraDeployment = "cloud" | "server";
+
+/** The answer to `GET /jira/status`: enough for a card to decide whether it is
+ *  Jira's, and no secret. `prefixes` are the project keys this account can see.
+ *  `api` is the REST generation kept on the connection: 3 (with ADF) on Cloud,
+ *  2 (wiki markup) on Data Center. */
+export interface JiraStatus {
+  connected: boolean;
+  site: string | null;
+  kind: JiraKind | null;
+  auth: JiraAuth | null;
+  api: 2 | 3 | null;
+  deployment: JiraDeployment | null;
+  account: string | null;
+  prefixes: string[];
+  writes: boolean;
+}
 
 /** What a provider is doing right now, as one of four answers a person can act
  *  on. Deliberately not a boolean: "installed but not logged in" and "not
@@ -212,6 +247,9 @@ export interface ProviderTask {
      *  sharing initials — and a picker that toggles by name is a picker that
      *  eventually removes the wrong person. */
     id?: number;
+    /** The tracker's own id where it is not a number: Jira's `accountId` (Cloud)
+     *  or `key`/`name` (Data Center). Identity, like `id`: a name is not. */
+    key?: string;
     name: string;
     initials: string;
     /** The colour ClickUp assigned this person. */

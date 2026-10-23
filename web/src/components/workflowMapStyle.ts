@@ -30,8 +30,9 @@ export const WFM_CSS = `
 .wfm-step[data-bad]{box-shadow:0 0 0 1px var(--error),0 1px 2px rgba(0,0,0,.08)}
 .wfm-step[data-flash]{animation:wfm-fl .9s var(--w-ease)}
 @keyframes wfm-fl{0%{background:var(--w-wash2)}100%{background:var(--bg)}}
-.wfm-sh{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:12px;align-items:center;padding:16px 16px 0}
-.wfm-acts{display:flex;align-items:center;gap:4px;flex-wrap:wrap;justify-content:flex-end}
+.wfm-sh{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:16px 16px 0}
+.wfm-sh>:first-child{flex:none}.wfm-sh>:nth-child(2){flex:1 1 200px;min-width:0}
+.wfm-acts{display:flex;align-items:center;gap:4px;flex-wrap:wrap;justify-content:flex-end;margin-left:auto}
 .wfm-sb{padding:8px 16px 16px 56px;display:flex;flex-direction:column;gap:12px}
 .wfm-pin{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 4px;border-radius:10px;background:var(--text);color:var(--bg);font-size:10px;font-weight:700;font-variant-numeric:tabular-nums;transition:background .12s;border:0}
 .wfm-pin[data-lg]{min-width:28px;height:28px;border-radius:14px;font-size:13px}
@@ -130,4 +131,5 @@ export const WFM_CSS = `
 .wfm-ok{color:var(--success-ink)}
 @media (prefers-reduced-motion:reduce){.wfm *{transition:none!important;animation:none!important}}
 @media (max-width:760px){.wfm-grid{grid-template-columns:minmax(0,1fr)}.wfm-lines{display:none}.wfm-col{position:static;max-height:none}}
+@container agx-settings (max-width:860px){.wfm-grid{grid-template-columns:minmax(0,1fr)}.wfm-lines{display:none}.wfm-col{position:static;max-height:none}}
 `;

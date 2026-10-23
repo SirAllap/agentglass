@@ -26,8 +26,8 @@
  * `__submitVerdict`), so the four surfaces cannot disagree about what a Claude
  * prompt looks like.
  */
-import { mkdirSync, renameSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { db } from "./db.ts";
 import { tmux, engineWindowRunning, KEPT_MARK } from "./tmuxpane.ts";
@@ -421,21 +421,34 @@ export function lockLoosened(rules: OpenCodeRule[], lock: string): { subject: st
  * Fails closed: an OpenCode that will not say, or says something this cannot
  * read, is a lock nobody checked. About two seconds per start, measured.
  */
-export async function openCodeLockLoosened(bin: string, cwd: string, env: Record<string, string>): Promise<string | null> {
+export async function openCodeLockLoosened(bin: string, cwd: string, env: Record<string, string>, timeoutMs = 20_000): Promise<string | null> {
   const lock = env.OPENCODE_CONFIG_CONTENT;
   if (!lock) return "the role carries no OpenCode lock";
   const agent = (JSON.parse(lock) as { default_agent?: string }).default_agent ?? "build";
   let out = "";
+  /* The answer goes to a file, not a pipe. OpenCode starts helpers of its own,
+     and one that outlives it keeps a pipe's write end open: reading to EOF then
+     waits for that helper, not for OpenCode, and the kill below (which reaches
+     only OpenCode) never ends the wait. Measured: a role-start test with a 30 s
+     ceiling timed out twice in 41 loaded runs. A file is complete the moment
+     OpenCode has exited, whoever else still holds it open. */
+  const dir = mkdtempSync(join(tmpdir(), "agx-oc-rules-"));
   try {
+    const file = join(dir, "rules.json");
     const proc = Bun.spawn([bin, "debug", "agent", agent], {
-      cwd, env: { ...process.env, ...env }, stdin: "ignore", stdout: "pipe", stderr: "ignore",
+      cwd, env: { ...process.env, ...env }, stdin: "ignore", stdout: Bun.file(file), stderr: "ignore",
     });
-    const timer = setTimeout(() => proc.kill(), 20_000);
-    [out] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<"late">((r) => { timer = setTimeout(() => r("late"), timeoutMs); });
+    const done = await Promise.race([proc.exited, late]);
     clearTimeout(timer);
-    if (proc.exitCode !== 0) return `OpenCode would not show its ${agent} agent's rules`;
+    if (done === "late") { try { proc.kill(); } catch { /* gone */ } return `OpenCode would not show its ${agent} agent's rules`; }
+    if (done !== 0) return `OpenCode would not show its ${agent} agent's rules`;
+    out = readFileSync(file, "utf8");
   } catch {
     return `OpenCode would not show its ${agent} agent's rules`;
+  } finally {
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
   }
   let rules: OpenCodeRule[];
   try {

@@ -1,0 +1,34 @@
+{
+  "categories": {
+    "new": { "id": 2, "key": "new", "name": "To Do", "colorName": "blue-gray" },
+    "indeterminate": { "id": 4, "key": "indeterminate", "name": "In Progress", "colorName": "yellow" },
+    "done": { "id": 3, "key": "done", "name": "Done", "colorName": "green" }
+  },
+  "statuses": [
+    { "id": "1", "name": "To Do", "category": "new" },
+    { "id": "2", "name": "In Progress", "category": "indeterminate" },
+    { "id": "3", "name": "In Review", "category": "indeterminate" },
+    { "id": "4", "name": "QA", "category": "indeterminate" },
+    { "id": "5", "name": "Done", "category": "done" }
+  ],
+  "transitions": {
+    "1": [
+      { "id": "11", "name": "Start progress", "toStatusId": "2", "requiredFields": [], "acceptsAssignee": false }
+    ],
+    "2": [
+      { "id": "21", "name": "Request review", "toStatusId": "3", "requiredFields": [], "acceptsAssignee": true },
+      { "id": "22", "name": "Back to To Do", "toStatusId": "1", "requiredFields": [], "acceptsAssignee": false }
+    ],
+    "3": [
+      { "id": "31", "name": "Send to QA", "toStatusId": "4", "requiredFields": [], "acceptsAssignee": true, "postAssign": "acc-0003" },
+      { "id": "32", "name": "Back to In Progress", "toStatusId": "2", "requiredFields": [], "acceptsAssignee": false }
+    ],
+    "4": [
+      { "id": "41", "name": "Approve", "toStatusId": "5", "requiredFields": ["resolution"], "acceptsAssignee": false },
+      { "id": "42", "name": "Reject", "toStatusId": "2", "requiredFields": [], "acceptsAssignee": false }
+    ],
+    "5": [
+      { "id": "51", "name": "Reopen", "toStatusId": "1", "requiredFields": [], "acceptsAssignee": false }
+    ]
+  }
+}

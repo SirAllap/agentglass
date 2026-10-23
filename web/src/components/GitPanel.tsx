@@ -1158,6 +1158,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     const run = () => {
       const m = takeGitModal();
       if (!m) return;
+      // The pane the agent was in, not the checkout this view last showed.
+      if (m.root) setRoot(m.root);
       if (m.which === "insights") setInsightsOpen(true);
       else if (m.which === "bisect") setBisectOpen(true);
       else if (m.which === "palette") setPaletteOpen(true);

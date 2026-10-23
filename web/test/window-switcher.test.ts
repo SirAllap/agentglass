@@ -46,6 +46,11 @@ describe("rows from panes", () => {
     expect(rows[0]!.sessionId).toBe("$0");
   });
 
+  test("a pane in a subfolder of a sibling worktree still names the worktree", () => {
+    const [r] = windowsFromPanes([pane({ path: "/home/dev/code/orbit-fix-login/web/src", repo: "/home/dev/code/orbit" })]);
+    expect(r!.checkout).toBe("orbit-fix-login");
+  });
+
   test("named by project: a worktree or a subfolder answers its repository", () => {
     const rows = windowsFromPanes([
       pane({ windowId: "@1", path: "/home/dev/code/orbit-fix-login", repo: "/home/dev/code/orbit" }),
@@ -53,6 +58,9 @@ describe("rows from panes", () => {
       pane({ windowId: "@3", path: "/home/dev/scratch", repo: null }),
     ]);
     expect(rows.map((r) => r.repo)).toEqual(["orbit", "orbit", "scratch"]);
+    // And the worktree is named too, or two windows of one repository are the
+    // same word: a sibling checkout shows its folder, a subfolder does not.
+    expect(rows.map((r) => r.checkout)).toEqual(["orbit-fix-login", "", ""]);
   });
 
   test("popups are not places to go", () => {
@@ -61,7 +69,7 @@ describe("rows from panes", () => {
 });
 
 const row = (over: Partial<SwitcherRow>): SwitcherRow => ({
-  windowId: "@1", sessionId: "$0", session: "main", index: 1, name: "AI01", repo: "orbit",
+  windowId: "@1", sessionId: "$0", session: "main", index: 1, name: "AI01", repo: "orbit", checkout: "",
   paneId: "%1", attached: true, ...over,
 });
 

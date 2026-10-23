@@ -363,3 +363,39 @@ test.skipIf(!HAVE_PY)("an origin whose localStorage cannot be read is named and 
     expect(r.stderr).toContain("localStorage for https://www.orbit.example: could not read");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+// A login that lives inside a Firefox/Zen container is skipped by default (an
+// unpartitioned copy would change what it means). Asking for the container by
+// name brings only that container's cookies, never the default ones' mix and
+// never partitioned third-party storage.
+test.skipIf(!HAVE_PY)("a named container's cookies come over and nothing else does", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "agx-ffcontainer-"));
+  try {
+    fakeProfile(dir);
+    const db = new Database(join(dir, "cookies.sqlite"));
+    const soon = Date.now() + 30 * DAY;
+    db.run(`INSERT INTO moz_cookies (originAttributes, name, value, host, path, expiry, isSecure, isHttpOnly, sameSite)
+      VALUES ('^userContextId=2&partitionKey=%28https%2Cother.example%29', 'third_party', 'x', 'www.orbit.example', '/', ${soon}, 1, 1, 1)`);
+    db.close();
+    writeFileSync(join(dir, "containers.json"), JSON.stringify({ identities: [{ userContextId: 2, name: "Work Two" }, { userContextId: 3, name: "Other" }] }));
+    const script = `
+import importlib.machinery, importlib.util, json, sys
+l = importlib.machinery.SourceFileLoader("agb", ${JSON.stringify(join(import.meta.dir, "../../bin/agentglass-browser"))})
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("agb", l)); l.exec_module(m)
+d = ${JSON.stringify(dir)}
+names = lambda c: sorted(p["name"] for p in m.read_firefox_cookies(d, "orbit.example", container=c)[0])
+out = {"default": names(None), "two": names(2), "three": names(3), "by_name": m.firefox_container_id(d, "work two")}
+try: m.firefox_container_id(d, "nope")
+except ValueError as e: out["error"] = str(e)
+print(json.dumps(out))`;
+    const p = Bun.spawn(["python3", "-I", "-c", script], { stdout: "pipe", stderr: "pipe" });
+    const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
+    expect(await p.exited, err).toBe(0);
+    const r = JSON.parse(out);
+    expect(r.default).not.toContain("contained");
+    expect(r.two).toEqual(["contained"]);
+    expect(r.three).toEqual([]);
+    expect(r.by_name).toBe(2);
+    expect(r.error).toContain("work two");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

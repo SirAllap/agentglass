@@ -13,4 +13,4 @@
 # See server/test/isolation.ts and server/test/tmpsweep.ts for what the two
 # preloads do and why they live there; isolation.ts has to come first.
 [test]
-preload = ["./server/test/isolation.ts", "./server/test/tmpsweep.ts"]
+preload = ["./server/test/isolation.ts", "./server/test/tmpsweep.ts", "./server/test/envscope.ts"]

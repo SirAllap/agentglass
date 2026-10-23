@@ -1,0 +1,7 @@
+[
+  { "accountId": "acc-0001", "name": "ada", "key": "JIRAUSER10000", "displayName": "Ada Example", "active": true, "emailVisible": true, "email": "ada@acme.example" },
+  { "accountId": "acc-0002", "name": "grace", "key": "JIRAUSER10001", "displayName": "Grace Sample", "active": true, "emailVisible": false, "email": "grace@acme.example" },
+  { "accountId": "acc-0003", "name": "lin", "key": "JIRAUSER10002", "displayName": "Lin Tester", "active": true, "emailVisible": true, "email": "lin@acme.example" },
+  { "accountId": "acc-0004", "name": "margaret", "key": "JIRAUSER10003", "displayName": "Margaret Hidden", "active": true, "emailVisible": false, "email": "margaret@acme.example" },
+  { "accountId": "acc-0005", "name": "kai", "key": "JIRAUSER10004", "displayName": "Kai Dormant", "active": false, "emailVisible": false, "email": "kai@acme.example" }
+]

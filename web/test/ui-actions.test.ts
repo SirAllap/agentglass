@@ -175,6 +175,27 @@ describe("the doors, each through its own seam", () => {
   });
 });
 
+describe("a Git modal asked for from a terminal pane", () => {
+  const at = (root: string | null) => ({ ...ctx().c, paneRoot: () => root }) as UiCtx;
+
+  it("is about that pane's worktree, not the Git view's checkout", () => {
+    const wt = "/home/ana/code/orbit-wt/fix-login";
+    runControl(ui("git.modal", { which: "insights" }), at(wt));
+    expect(takeGitModal()).toEqual({ which: "insights", root: wt });
+    runControl(ui("git.compare", { base: "origin/main" }), at(wt));
+    expect(takeGitModal()).toEqual({ which: "compare", base: "origin/main", root: wt });
+    runControl(ui("git.blame", { path: "src/a.ts" }), at(wt));
+    expect(takeGitModal()).toEqual({ which: "blame", path: "src/a.ts", root: wt });
+    runControl(ui("git.rebase", { base: "origin/main" }), at(wt));
+    expect(takeGitModal()).toEqual({ which: "rebase", base: "origin/main", root: wt });
+  });
+
+  it("carries no root when no terminal is up", () => {
+    runControl(ui("git.modal", { which: "bisect" }), at(null));
+    expect(takeGitModal()).toEqual({ which: "bisect" });
+  });
+});
+
 describe("the doors of the second batch", () => {
   it("the rebase editor and the git palette latch for the Git view, no view switch", () => {
     const k = ctx();

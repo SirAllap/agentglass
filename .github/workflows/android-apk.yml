@@ -264,6 +264,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$GITHUB_REF_NAME" "$APK" --clobber --repo "$GITHUB_REPOSITORY"
 
+      # The checksum list is written by desktop-binaries.yml, which may have
+      # finished before this APK was attached. When it did, its list has five
+      # files; add the sixth. When it has not run yet, it will hash the APK
+      # itself. Two jobs rewriting one file can still lose a line in the same
+      # second; the next `gh release download` + `sha256sum -c` shows it.
+      - name: Add the APK to SHA256SUMS
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p sums
+          if gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --dir sums --pattern SHA256SUMS; then
+            grep -v -F " $APK" sums/SHA256SUMS > sums/new || true
+            sha256sum "$APK" >> sums/new
+            mv sums/new sums/SHA256SUMS
+            gh release upload "$GITHUB_REF_NAME" sums/SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            echo "No SHA256SUMS on the release yet — desktop-binaries.yml will hash the APK."
+          fi
+
       - name: Keep the build even when there is no tag
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

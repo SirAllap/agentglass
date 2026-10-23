@@ -25,7 +25,7 @@ const WHERE = "Connect it on the computer (Settings › Integrations).";
 export function trackerRows(statuses: ProviderStatus[] | null | undefined): TrackerRow[] {
   // ClickUp first: it is the one with a board, and the order the mocks show.
   const order = (id: string): number => (id === "clickup" ? 0 : 1);
-  const specs = PROVIDERS.filter((p) => p.kind === "task").sort((a, b) => order(a.id) - order(b.id));
+  const specs = PROVIDERS.filter((p) => p.kind === "task" && p.id !== "jira").sort((a, b) => order(a.id) - order(b.id));
   const rows: TrackerRow[] = specs.map((spec) => {
     const row = (badge: TrackerBadge, reason: string): TrackerRow => ({ id: spec.id, title: spec.title, badge, reason });
     const s = statuses?.find((p) => p.id === spec.id);

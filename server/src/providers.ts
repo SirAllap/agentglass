@@ -19,6 +19,7 @@ import { hasCredential, redacted, setCredential, clearCredential } from "./crede
 import { whoAmI, workspaces, clickupTasks, clickupCached, forgetAll, credentialGeneration, applyCommentCounts as applyCounts, seedCommentCounts as seedCounts } from "./clickup.ts";
 import { cardWatchTrouble, forgetWatch } from "./clickupwatch.ts";
 import { forget as forgetClickupIndex } from "./clickupindex.ts";
+import { disconnectJira, jiraRefused } from "./jira.ts";
 
 const found = (bin: string): boolean => !!Bun.which(bin);
 
@@ -121,6 +122,14 @@ async function statusOf(id: ProviderId): Promise<ProviderStatus> {
         detail: `${who || "Connected"} · ${snap.tasks.length} task${snap.tasks.length === 1 ? "" : "s"} assigned to you`,
       };
     }
+    case "jira": {
+      if (!hasCredential("jira")) return { id, state: "needs-auth", detail: "No token yet" };
+      // No request: whether the token works is what the last real call
+      // found out, and that is kept in memory (see jira.ts).
+      if (jiraRefused()) return { id, state: "error", detail: "Jira refused these credentials — connect again" };
+      const known = redacted("jira");
+      return { id, state: "connected", detail: [known?.account, known?.site].filter(Boolean).join(" · ") || "Connected" };
+    }
   }
 }
 
@@ -144,6 +153,9 @@ export interface ConnectResult {
  * so the badge means what it says from the first second.
  */
 export async function connectProvider(id: ProviderId, token: string): Promise<ConnectResult> {
+  // Jira needs the email and the site as well as the token, so it has its own
+  // door (`connectJira`); a bare token cannot be checked against anything.
+  if (id === "jira") return { ok: false, error: "Jira needs your email and site as well. Use the Jira connection form" };
   if (id !== "clickup") return { ok: false, error: "That provider is not connected with a token" };
   const t = token.trim();
   if (!t) return { ok: false, error: "Paste a token first" };
@@ -184,7 +196,8 @@ export async function connectProvider(id: ProviderId, token: string): Promise<Co
 }
 
 export async function disconnectProvider(id: ProviderId, o: { forgetBoards?: boolean } = {}): Promise<ConnectResult> {
-  clearCredential(id);
+  // Jira keeps its own memory (holds, memo, refused latch) beside the credential.
+  if (id === "jira") disconnectJira(); else clearCredential(id);
   // The cached list goes too. Leaving it would show somebody else's tasks after
   // a disconnect, which is the one thing a disconnect must not do.
   if (id === "clickup") {

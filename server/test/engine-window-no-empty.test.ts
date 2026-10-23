@@ -129,7 +129,10 @@ describe("the session a run creates", () => {
       dir, { AGX_PROBE: "reached-the-pane" },
     );
     expect(w).not.toBeNull();
-    for (let i = 0; i < 50 && !(await Bun.file(out).exists()); i++) await Bun.sleep(20);
+    // The pane is a process tmux forks, and on a busy machine it starts late:
+    // a one-second wait read the file before `sh` had written it. Ten seconds
+    // is a ceiling, not a delay; the loop leaves the moment the file exists.
+    for (const end = Date.now() + 10_000; !(await Bun.file(out).exists()) && Date.now() < end;) await Bun.sleep(20);
     expect(await Bun.file(out).text()).toBe("reached-the-pane");
   });
 });

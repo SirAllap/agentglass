@@ -38,6 +38,14 @@ export function openSettings(pane?: SettingsPane, row?: SettingsRowId): void {
 const PANE_ALIAS: Record<string, string> = { open: "prefs", export: "privacy" };
 export const resolvePane = (id: string): string => PANE_ALIAS[id] ?? id;
 
+/** The ClickUp page exists only while ClickUp is connected; asked for without
+ *  it, the way on is the page that connects it. Applied to a FRESH read: a
+ *  stale "not connected" held from before the token was saved sent
+ *  `openSettings("clickup")` back to Tools & services, an `applied: true` that
+ *  changed nothing on screen. */
+export const paneWhenClickupKnown = (pane: string, connected: boolean): string =>
+  pane === "clickup" && !connected ? "connections" : pane;
+
 /*
  * The other direction: a row inside Settings that switches the app to a view
  * underneath it — Plugins' "Open" button, taking you to the panel a plugin

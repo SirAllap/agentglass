@@ -84,6 +84,9 @@ const MUTATING = [
   `pathname.startsWith("/providers/")`,
   `pathname.startsWith("/recipes/")`,
   `pathname.startsWith("/clickup/")`,
+  // Jira: connect stores a credential, writes flips the switch every later write asks.
+  `pathname === "/jira/connect"`,
+  `pathname === "/jira/writes"`,
   `pathname.startsWith("/tasks/write/")`,
   `pathname.startsWith("/tasks/remind")`,
   // The read marks every device syncs through. Not dangerous, but durable and
