@@ -10,7 +10,7 @@ import { PathIcon, StrataIcon } from "./StrataIcon.tsx";
 import type { FileFacts } from "../../../../../shared/types.ts";
 import { looksSecret, type ReadWidth } from "../../../lib/finderPreview.ts";
 import { BarButton, PreviewBar } from "./PreviewBar.tsx";
-import { PreviewBody } from "./PreviewBody.tsx";
+import { PreviewBody, Placeholder } from "./PreviewBody.tsx";
 
 /** A folder's own summary: how many of what, from the rows already read. */
 export function folderSummary(rows: readonly Row[]): string[] {
@@ -89,9 +89,7 @@ export function QuickLook({ path, row, rows, root, savedTab, onTab, onEditing, o
       ) : failed || !facts ? (
         <>
           <PreviewBar lead={bar.lead} name={bar.name} meta={bar.meta} title={path} dragPath={path} onOpen={bar.onOpen} onClose={onClose} />
-          <div className="flex-1 min-h-0 agx-scroll overflow-y-auto px-4 py-3 text-[12px]">
-            {failed ? <p role="alert" style={{ color: "var(--warning-ink)" }}>Not shown: {failed}.</p> : <p style={{ color: "var(--text3)" }}>Reading…</p>}
-          </div>
+          <Placeholder icon={bar.lead} state={failed ? "failed" : "loading"} reason={failed ?? undefined} />
         </>
       ) : (
         <PreviewBody path={path} facts={facts} canEdit={canEditRow(row)} root={root} onEditing={onEditing} savedTab={savedTab} onTab={onTab} bar={bar} readW={readW} onReadW={onReadW} autoplay={autoplay} renderDocs={renderDocs} />

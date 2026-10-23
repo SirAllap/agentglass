@@ -28,9 +28,10 @@ describe("what counts as a GIF", () => {
 describe("the preview draws it", () => {
   const read = (f: string) => Bun.file(new URL(`../src/components/finder/machine/${f}`, import.meta.url)).text();
   test("audio and video take autoPlay from the setting, never a literal", async () => {
-    const s = await read("PreviewBody.tsx");
-    expect(s.match(/autoPlay=\{autoplay\}/g)?.length).toBe(2);
-    expect(s).not.toMatch(/autoPlay(?!=\{autoplay\})/);
+    const s = await read("MediaPreview.tsx");
+    expect(s.match(/autoPlay: autoplay/g)?.length).toBe(1);
+    expect(s).not.toMatch(/autoPlay(?!: autoplay)/);
+    expect(await read("PreviewBody.tsx")).toContain("autoplay={autoplay}");
   });
   test("a GIF is held still unless autoplay is on or the person asks to play it", async () => {
     const s = await read("PreviewBody.tsx");

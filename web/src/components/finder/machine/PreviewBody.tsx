@@ -3,7 +3,6 @@
 // rendered, a page in an isolated frame, JSON as text / tree / graph, pictures,
 // PDF, audio and video in their own viewers, and a plain message for a binary.
 // The "Editing" tab is nvim running in this pane (FinderNvim); the header's "Open in nvim" is the bench.
-import { schemeOfTheme } from "../../../lib/schemeOfTheme.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../../lib/api.ts";
 import { Markdown } from "../../../lib/markdown.tsx";
@@ -13,12 +12,14 @@ import {
   COLOUR_LINES, GRAPH_MAX_BYTES, HTML_RENDER_MAX_BYTES, JSON_READ_CAP, READ_LINES,
   defaultTab, graphAllowed, hasRawHtml, htmlRenderable, isGif, isolatedDoc, nextReadWidth, previewPlan, readMaxWidth, readWidthLabel, readWindow, sortedOrder, type ReadWidth, type PreviewTab,
 } from "../../../lib/finderPreview.ts";
+import { placeholderText } from "../../../lib/finderMedia.ts";
 import { HIT } from "../../../lib/iconSize.ts";
 import type { FileFacts } from "../../../../../shared/types.ts";
 import { EDGE } from "../../workspace/Chrome.tsx";
 import { CODE_FONT_STYLE } from "../../diff/DiffLines.tsx";
 import { JsonGraph, JsonTree } from "./JsonViews.tsx";
 import { BarButton, PreviewBar } from "./PreviewBar.tsx";
+import { MediaPreview } from "./MediaPreview.tsx";
 import { FinderNvim } from "./FinderNvim.tsx";
 import { editability } from "../../../lib/finderEdit.ts";
 import { FindBar } from "../../PeekFile.tsx";
@@ -26,6 +27,19 @@ import { clear as clearFind, findRanges, paint as paintFind, reveal as revealFin
 import { SearchIcon } from "../../../lib/glyphIcons.tsx";
 import { StrataIcon } from "./StrataIcon.tsx";
 import { ICON } from "../../../lib/iconSize.ts";
+
+/** Strata's placeholder: what the file is, a title, and why there is nothing to draw. */
+export function Placeholder({ icon, state, reason, detail }: { icon: React.ReactNode; state: "loading" | "failed" | "binary"; reason?: string; detail?: string }) {
+  const t = placeholderText(state, reason);
+  return (
+    <div role={state === "failed" ? "alert" : "status"} className="flex-1 flex flex-col items-center justify-center gap-1.5 p-6 text-center text-[12px]" style={{ color: "var(--text3)" }}>
+      {icon}
+      <b style={{ color: state === "failed" ? "var(--warning-ink)" : "var(--text2)" }}>{t.title}</b>
+      {t.why && <span>{t.why}</span>}
+      {detail && <span className="text-[11px]">{detail}</span>}
+    </div>
+  );
+}
 
 const note = (children: React.ReactNode, warn = false) => (
   <p className="m-0 mb-2 text-[11px]" style={{ color: warn ? "var(--warning-ink)" : "var(--text3)" }}>{children}</p>
@@ -160,9 +174,8 @@ export function PreviewBody({ path, facts, canEdit, root, onEditing, savedTab, o
     case "image": body = isGif(facts.name) && !autoplay ? <StillGif src={api.previewUrl(path)} facts={facts} /> : <Picture src={api.previewUrl(path)} facts={facts} />; break;
     case "convert": body = <Converted path={path} facts={facts} />; break;
     case "pdf": body = <iframe title={facts.name} src={api.previewUrl(path)} className="w-full flex-1" style={{ border: EDGE, borderRadius: 6, minHeight: 360, background: "var(--bg)" }} />; break;
-    case "audio": body = <audio style={{ colorScheme: schemeOfTheme() }} src={api.previewUrl(path)} controls preload="metadata" autoPlay={autoplay} className="w-full" aria-label={facts.name} />; break;
-    case "video": body = <video src={api.previewUrl(path)} controls preload="metadata" autoPlay={autoplay} className="w-full" style={{ maxHeight: "60vh", borderRadius: 6 }} aria-label={facts.name} />; break;
-    default: body = <p style={{ color: "var(--text3)" }}><b>{facts.name}</b> is a binary file ({humanBytes(facts.bytes)}): there is no text to show. “Open in Files” hands it to the desktop.</p>;
+    case "audio": case "video": body = <MediaPreview path={path} facts={facts} kind={plan.viewer} autoplay={autoplay} />; break;
+    default: body = <Placeholder icon={bar.lead} state="binary" detail={`${humanBytes(facts.bytes)} · “Open in Files” hands it to the desktop.`} />;
   }
   return (
     <>

@@ -4762,6 +4762,19 @@ export interface FileFacts {
   converter?: string | null;
   error?: string;
 }
+/** What ffprobe says about an audio or video file. Mirrors server/src/mediafacts.ts. */
+export interface MediaFacts {
+  ok: boolean;
+  duration?: number;
+  video?: { codec: string; width: number; height: number; fps?: number };
+  audio?: { codec: string; channels?: number; sampleRate?: number };
+  bitRate?: number;
+  title?: string;
+  artist?: string;
+  album?: string;
+  track?: string;
+  error?: string;
+}
 /** What git knows about one file the finder has selected. Mirrors server/src/fileGit.ts. */
 export type FileGitStatus = "clean" | "modified" | "added" | "deleted" | "renamed" | "untracked" | "ignored" | "conflict";
 export interface FileGitFacts {

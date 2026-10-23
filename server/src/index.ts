@@ -156,6 +156,7 @@ import { runTool } from "./volumes.ts";
 import { appsForAll, launchApp, mimeOf, setDefaultApp } from "./openwith.ts";
 import { actionsFor, deleteAction, listActions, readAction, runAction, saveAction } from "./finderactions.ts";
 import { fsRun, fsReadOp, fsJobs, fsPathsOf, fsGate, fsWantsJson } from "./fsroute.ts";
+import { mediaFacts, posterFrame } from "./mediafacts.ts";
 import { browseDir, browseReal, fileBytes, fileFacts, previewSlice, openInDesktop, pagePolicy, revealInFileManager } from "./browse.ts";
 import { fileGitFacts } from "./fileGit.ts";
 import { benchEdit, benchEnd, benchLive, finderEditEnd, finderEditSave, finderEditState, readNote, writeNote } from "./bench.ts";
@@ -7643,6 +7644,12 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       }
       if (pathname === "/browse") return json(browseDir(url.searchParams.get("path") || "", url.searchParams.get("hidden") === "1", localBrowse));
       if (pathname === "/preview/facts") return json(fileFacts(url.searchParams.get("path") || "", localBrowse));
+      if (pathname === "/preview/media") return json(await mediaFacts(url.searchParams.get("path") || "", localBrowse));
+      if (pathname === "/preview/poster") {
+        const r = await posterFrame(url.searchParams.get("path") || "", localBrowse);
+        if (!r.ok) return json({ error: r.error }, 404);
+        return new Response(r.body, { headers: { ...cors, "content-type": "image/jpeg", "cache-control": "no-store", "x-content-type-options": "nosniff" } });
+      }
       if (pathname === "/preview/git") return json(await fileGitFacts(url.searchParams.get("path") || "", localBrowse));
       /* The Machine tab's viewers: a slice of the file, never the whole of it in
          memory. `cap` serves the head of a big text file; `Range` is what lets an

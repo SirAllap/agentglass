@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { hasRawHtml } from "../src/lib/finderPreview.ts";
 
 const body = await Bun.file(new URL("../src/components/finder/machine/PreviewBody.tsx", import.meta.url)).text();
+const media = await Bun.file(new URL("../src/components/finder/machine/MediaPreview.tsx", import.meta.url)).text();
 
 describe("hasRawHtml", () => {
   test.each(["# Title\n<div class=\"x\">hi</div>", "a <br/> b", "<details>\n<summary>x</summary>", "</p>"])("%j has", (t) => { expect(hasRawHtml(t)).toBe(true); });
@@ -25,7 +26,7 @@ describe("the scheme of a theme", () => {
 describe("the preview", () => {
   test("shows the note only for a text with HTML, and tells the audio bar the theme", () => {
     expect(body).toContain("{hasRawHtml(facts.text) && <div role=\"note\"");
-    expect(body).toContain("colorScheme: schemeOfTheme()");
-    expect(body).not.toContain('colorScheme: "light dark"');
+    expect(media).toContain("colorScheme: schemeOfTheme()");
+    expect(media).not.toContain('colorScheme: "light dark"');
   });
 });
