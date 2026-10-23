@@ -18,6 +18,7 @@
  * `@Name` notifies anybody.
  */
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { avatarSrc } from "../../lib/avatarSrc.ts";
 import { Markdown } from "../../lib/markdown.tsx";
 import { bold, bullet, checklist, code, fence, heading, insertText, italic, link, newline, ordered, quote, strike, table, type Sel } from "../../lib/mdEditor.ts";
 import { pushRecent, readRecent, writeRecent } from "../../lib/emojiData.ts";
@@ -320,7 +321,7 @@ export function Composer({ value, onChange, onSend, onCancel, busy, placeholder,
               <span className="shrink-0 grid place-items-center rounded-full text-[9px]"
                 style={{ width: 18, height: 18, background: p.color ?? "color-mix(in srgb, var(--text) 14%, transparent)", color: "#fff" }}>
                 {p.avatar
-                  ? <img src={p.avatar} alt="" width={18} height={18} style={{ borderRadius: "50%" }} />
+                  ? <img src={avatarSrc(p.avatar)} alt="" width={18} height={18} style={{ borderRadius: "50%" }} onError={(e) => { e.currentTarget.style.display = "none"; }} />
                   : (p.initials || p.name.slice(0, 2)).toUpperCase()}
               </span>
               <span className="truncate">{p.name}</span>

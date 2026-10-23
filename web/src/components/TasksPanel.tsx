@@ -21,6 +21,7 @@ import { cardPrsOf, onCardPrs, cardPrVersion, widestCardPrChip } from "../lib/ca
 import { digitMetrics, trackPx, whoCellWidth, PR_FLOOR, WHO_FLOOR } from "../lib/tasksColumnFit.ts";
 import { paintThenRevalidate, PRS_TTL_MS, swr, THREAD_TTL_MS } from "../lib/cardTabCache.ts";
 import { api } from "../lib/api.ts";
+import { avatarSrc } from "../lib/avatarSrc.ts";
 import { CLICKUP_BOARD, type BoardSource } from "../lib/boardSource.ts";
 import { JIRA_BOARD } from "../lib/jiraBoard.ts";
 import { useClickupPrefs, clickupPrefs, clickupPrefsSaved } from "../lib/clickupPrefs.ts";
@@ -1300,7 +1301,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
                 </svg>
               ) : r.kind === "builtin" ? (
                 myFace ? (
-                  <img src={myFace} alt="" loading="lazy" referrerPolicy="no-referrer"
+                  <img src={avatarSrc(myFace)} alt="" loading="lazy" referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.display = "none"; }}
                     className={`rounded-full${busy ? " animate-pulse" : ""}`} style={{ width: 14, height: 14, objectFit: "cover" }} />
                 ) : (
                   <span className={busy ? "animate-pulse" : undefined} style={{ width: 8, height: 8, borderRadius: 999, border: `1.5px solid ${sel ? tone : "var(--text3)"}` }} />
@@ -2863,7 +2864,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
             paddingLeft: myFace ? 3 : 10,
           }}>
           {myFace && (
-            <img src={myFace} alt="" loading="lazy" referrerPolicy="no-referrer"
+            <img src={avatarSrc(myFace)} alt="" loading="lazy" referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.display = "none"; }}
               className="rounded-full shrink-0"
               style={{ width: 15, height: 15, objectFit: "cover" }} />
           )}
@@ -3486,7 +3487,8 @@ function EventRun({ events, open, onToggle, faceFor }: {
             const person = seenWho ? faceFor?.(seenWho) : null;
             if (e.avatar) {
               return (
-                <img src={e.avatar} alt="" loading="lazy" referrerPolicy="no-referrer" title={e.who}
+                <img src={avatarSrc(e.avatar)} alt="" loading="lazy" referrerPolicy="no-referrer" title={e.who}
+                  onError={(ev) => { ev.currentTarget.style.display = "none"; }}
                   className="shrink-0 self-center rounded-full"
                   style={{ width: 14, height: 14, objectFit: "cover" }} />
               );
@@ -3496,7 +3498,7 @@ function EventRun({ events, open, onToggle, faceFor }: {
                fallback every other face in this panel uses. */
             if (person) {
               return person.avatar
-                ? <img src={person.avatar} alt="" loading="lazy" referrerPolicy="no-referrer" title={person.name}
+                ? <img src={avatarSrc(person.avatar)} alt="" loading="lazy" referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.display = "none"; }} title={person.name}
                     className="shrink-0 self-center rounded-full"
                     style={{ width: 14, height: 14, objectFit: "cover" }} />
                 : <span className="shrink-0 self-center rounded-full inline-flex items-center justify-center"
@@ -4548,6 +4550,7 @@ function Face({ p, n, size = 18 }: {
   /** 18 in a row of faces; `TL_AVATAR` for the speaker beside a comment. */
   size?: number;
 }) {
+  const [broken, setBroken] = useState(false);
   const ring = p.me ? "var(--success)" : "transparent";
   const base = {
     width: size, height: size, borderRadius: 999, marginLeft: n ? -5 : 0,
@@ -4565,10 +4568,10 @@ function Face({ p, n, size = 18 }: {
      */
     zIndex: 3 - n,
   } as const;
-  if (p.avatar) {
+  if (p.avatar && !broken) {
     return (
-      <img src={p.avatar} alt="" title={p.me ? `${p.name} — you` : p.name}
-        loading="lazy" referrerPolicy="no-referrer"
+      <img src={avatarSrc(p.avatar)} alt="" title={p.me ? `${p.name} — you` : p.name}
+        loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken(true)}
         style={{ ...base, objectFit: "cover", position: "relative" }} />
     );
   }

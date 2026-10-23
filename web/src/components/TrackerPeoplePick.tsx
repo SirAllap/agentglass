@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { avatarSrc } from "../lib/avatarSrc.ts";
 import { PeoplePick } from "./PeoplePick.tsx";
 import { EDGE } from "./workspace/Chrome.tsx";
 import { putCard } from "../lib/prCardStore.ts";
@@ -16,7 +17,7 @@ const initialsOf = (name: string): string =>
 function Face({ m }: { m: { name: string; avatar?: string; initials?: string; color?: string } }) {
   const [broken, setBroken] = useState(false);
   return m.avatar && !broken
-    ? <img src={m.avatar} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken(true)} className="shrink-0 object-cover" style={FACE} />
+    ? <img src={avatarSrc(m.avatar)} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken(true)} className="shrink-0 object-cover" style={FACE} />
     : <span className="shrink-0 inline-flex items-center justify-center text-[9px] font-medium"
       style={{ ...FACE, background: m.color || "var(--bg4)", color: chipInk(m.color) }}>{m.initials ?? initialsOf(m.name)}</span>;
 }

@@ -14,6 +14,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api.ts";
+import { avatarSrc } from "../../lib/avatarSrc.ts";
 import { fmtAgo } from "../../lib/format.ts";
 import { chipInk } from "../../lib/contrast.ts";
 import { Markdown } from "../../lib/markdown.tsx";
@@ -39,7 +40,7 @@ function Author({ who, initials, avatar }: { who: string; initials?: string; ava
   const [broken, setBroken] = useState(false);
   const size = { width: 18, height: 18, borderRadius: 999 } as const;
   if (avatar && !broken) {
-    return <img src={avatar} alt="" title={who} loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken(true)}
+    return <img src={avatarSrc(avatar)} alt="" title={who} loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken(true)}
       className="shrink-0 object-cover" style={size} />;
   }
   return <span title={who} className="shrink-0 inline-flex items-center justify-center text-[9px] font-medium"

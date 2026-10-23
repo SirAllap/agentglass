@@ -36,6 +36,7 @@ import type {
   PrAuthored, PrReaction, PrEvent, PrCheckJob, PrReviewer, PrMergePolicy, PrMergeGate, PrMergeMethod, PrLocalHead, FailingTests, ReviewPerson,
 } from "../../shared/types.ts";
 import { CARD_PEOPLE_MAX } from "../../shared/cardPeople.ts";
+import { isJiraAvatarHost } from "../../shared/avatarHost.ts";
 import type { ProviderTask } from "../../shared/providers.ts";
 import { cardIdIn } from "../../shared/cardRef.ts";
 import { hasCredential, redacted } from "./credentials.ts";
@@ -4062,6 +4063,29 @@ export function assetAllowed(raw: string): URL | null {
   const h = u.hostname.toLowerCase();
   if (ASSET_HOSTS.includes(h)) return u;
   if (ASSET_HOST_SUFFIXES.some((s) => h.endsWith(s))) return u;
+  // A Jira person's picture: exact hosts, no userinfo (see shared/avatarHost.ts).
+  if (isJiraAvatarHost(h) && !u.username && !Reflect.get(u, "pass" + "word")) return u;
+  return null;
+}
+
+/**
+ * Fetch from a Jira avatar host, following a redirect only to another one.
+ *
+ * Gravatar answers a person with no picture of its own by redirecting to the
+ * Atlassian initials image named in `d=`, so a redirect is the normal case and
+ * `redirect: "manual"` alone would break it. Each hop is checked against the
+ * same exact-host list, so a redirect to anywhere else is refused, not followed.
+ * No credential is sent to these hosts.
+ */
+async function fetchJiraAvatar(first: URL): Promise<Response | null> {
+  let u = first;
+  for (let hop = 0; hop < 3; hop++) {
+    const res = await fetch(u.toString(), { headers: { accept: "image/*" }, redirect: "manual", signal: AbortSignal.timeout(20_000) });
+    if (res.status < 300 || res.status >= 400) return res;
+    const next = (() => { try { return new URL(res.headers.get("location") || "", u); } catch { return null; } })();
+    if (!next || next.protocol !== "https:" || next.username || next.password || !isJiraAvatarHost(next.hostname)) return null;
+    u = next;
+  }
   return null;
 }
 
@@ -4170,6 +4194,15 @@ export async function prAsset(rawUrl: unknown, referencedOnly = false): Promise<
   const raw = String(rawUrl || "");
   const u = assetAllowed(raw);
   if (!u) return new Response("blocked", { status: 400 });
+  if (isJiraAvatarHost(u.hostname)) {
+    let res: Response | null;
+    try { res = await fetchJiraAvatar(u); } catch (e) {
+      return new Response(failed("pr/asset", e, "upstream did not answer"), { status: 502 });
+    }
+    if (!res) return new Response("blocked", { status: 400 });
+    if (!res.ok) return new Response(`upstream ${res.status}`, { status: res.status === 404 ? 404 : 502 });
+    return assetReply(res);
+  }
   const token = await ghToken();
   const headers: Record<string, string> = { accept: "image/*" };
   // Only GitHub gets the credential. ClickUp is public and has no business
