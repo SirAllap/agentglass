@@ -999,6 +999,14 @@ What the server holds, and what a test asserts, in the order it matters:
   project's seat is refused, and so is an agent with no owner until one is
   taken. A seat's directory has to be inside its project or one of its
   worktrees.
+- **A seat cannot answer its worker's permission prompt.** While the worker's
+  screen is a permission dialog, a seat's key presses are refused with a `403`
+  and a line in the action log, except `escape` and `ctrl-c`, which only back
+  out. The same goes for a prompt or a broadcast to it, since a pasted line ends
+  in enter. The person's own calls are unchanged. The limit: this is the
+  server's reading of the screen, and a worker of the same user can read a
+  seat's credential from the process environment, so the seat and worker
+  boundary is the same partly enforced one as the engine locks.
 - **Narrow by default, and widened only inside the ceiling.** A worker starts
   with its own worktree, no network and no commit. A seat can widen by one
   thing (`--allow network` or `--allow commit`) and never past the project's

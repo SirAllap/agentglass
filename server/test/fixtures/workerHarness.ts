@@ -53,6 +53,9 @@ export interface Harness {
   mode(engine: "opencode" | "claude", how: "limit" | "work" | null): void;
   /** A tab somebody opened by hand in `dir`, running the TUI stub: its pane id. */
   handTab(dir: string): Promise<string>;
+  /** A tab whose TUI is stopped on a permission dialog, as Claude Code draws
+   *  one: the pane id, and what answers it (a line read from the pane). */
+  dialogTab(dir: string): Promise<{ pane: string; answered(): boolean }>;
   stop(): Promise<void>;
 }
 
@@ -103,6 +106,14 @@ echo x >> "${logs}/ran-claude"
   work) sleep 1; printf '%s\\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_fake0001","name":"Edit","input":{"file_path":"notes.txt"}}]},"session_id":"00000000-0000-4000-8000-000000000001"}'; printf '%s\\n' 'Error: rate limit reached, try again later' >&2; exit 1 ;;
 esac
 exec "${join(engines, "claude")}" "$@";; --version|--help|auth) exec "${join(engines, "claude")}" "$@";; esac; done
+if [ "$1" = --dialog ]; then
+printf '\\033[2J\\033[H'
+printf '%s\\n' 'Edit file' ' notes.txt' '' 'Do you want to make this edit to notes.txt?' '❯ 1. Yes' '  2. No' '' 'Esc to cancel'
+trap '' INT
+read answer
+echo x > "${logs}/answered-$(echo "$TMUX_PANE" | tr -d %)"
+sleep 300
+fi
 printf '%s\\0' "$@" > "${logs}/tui-$$.argv"
 [ -n "$AGENTGLASS_SEAT" ] && printf '%s' "$AGENTGLASS_TOKEN" > "${logs}/seat.token"
 printf '\\033[2J\\033[H❯ '
@@ -188,6 +199,13 @@ sleep 300
       const pane = (await new Response(p.stdout).text()).trim();
       if (await p.exited !== 0 || !pane) throw new Error("the hand-opened tab did not open");
       return pane;
+    },
+    dialogTab: async (dir) => {
+      const p = Bun.spawn(["tmux", "-L", SOCKET, ...TMUX_ISOLATED, "new-session", "-d", "-P", "-F", "#{pane_id}", "-c", dir, join(fakes, "claude"), "--dialog"],
+        { env: { ...process.env, TMUX_TMPDIR: TMUX_TEST_TMPDIR, TMUX: "" }, stdout: "pipe", stderr: "ignore" });
+      const pane = (await new Response(p.stdout).text()).trim();
+      if (await p.exited !== 0 || !pane) throw new Error("the dialog tab did not open");
+      return { pane, answered: () => existsSync(join(logs, `answered-${pane.slice(1)}`)) };
     },
     stop: async () => {
       await Bun.spawn(["tmux", "-L", SOCKET, ...TMUX_ISOLATED, "kill-server"], { env: { ...process.env, TMUX_TMPDIR: TMUX_TEST_TMPDIR }, stdout: "ignore", stderr: "ignore" }).exited;

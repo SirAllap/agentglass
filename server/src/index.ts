@@ -8816,6 +8816,13 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         return say({ ok: false, error: `${worker} is a worker, and a worker does not start, prompt or stop agents: it reports its result in its own window, and the seat that started it reads that.` }, 403);
       }
       const timeoutMs0 = Math.min(600_000, Math.max(0, Number(b.timeout ?? 0) || 0));
+      /* A permission prompt on a worker's screen is the person's to answer. A
+         seat that owns the worker could otherwise approve it by pressing enter,
+         or by pasting a line and its enter: the same answer, by the back door.
+         Only the way out (escape, ctrl-c) stays a seat's. */
+      const seatAtPrompt = async (paneId: string): Promise<boolean> =>
+        caller?.principal === "seat" && AgentOps.stateOfScreen(await AgentOps.screenOf(paneId)) === "needs-you";
+      const PROMPT_IS_THE_PERSONS = "a permission prompt is the person's; ask with agentglass-agent need";
       /*
        * BROADCAST — one message, N agents.
        *
@@ -8834,7 +8841,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         const missing = names.filter((n) => !live.some((a) => a.name === n));
         const sent: { name: string; outcome: string }[] = [];
         for (const a of want) {
-          const outcome = await AgentOps.promptAgent(a.paneId, text, timeoutMs0 || 10_000, a.kind).catch(() => "gone");
+          const outcome = await seatAtPrompt(a.paneId) ? `refused: ${PROMPT_IS_THE_PERSONS}` : await AgentOps.promptAgent(a.paneId, text, timeoutMs0 || 10_000, a.kind).catch(() => "gone");
           sent.push({ name: a.name, outcome: String(outcome) });
         }
         return say({
@@ -9041,6 +9048,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (verb === "prompt") {
         const text = typeof b.text === "string" ? b.text : "";
         if (!text.trim()) return json({ ok: false, error: "nothing to send" }, 400);
+        if (await seatAtPrompt(a.paneId)) return say({ ok: false, error: PROMPT_IS_THE_PERSONS }, 403);
         const outcome = await AgentOps.promptAgent(a.paneId, text, timeoutMs || 10_000, a.kind);
         return say({ ok: outcome === "sent" || outcome === "queued", result: { name, outcome } }, outcome === "gone" ? 410 : 200);
       }
@@ -9064,6 +9072,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (verb === "keys") {
         const key = AgentOps.keyNamed(b.key);
         if (!key) return json({ ok: false, error: "key: enter, escape, up, down, left, right, tab, space, backspace or ctrl-c" }, 400);
+        if (key !== "Escape" && key !== "C-c" && await seatAtPrompt(a.paneId)) return say({ ok: false, error: PROMPT_IS_THE_PERSONS }, 403);
         const ok = await AgentOps.pressKey(a.paneId, key);
         return say({ ok, result: { name, key } }, ok ? 200 : 410);
       }

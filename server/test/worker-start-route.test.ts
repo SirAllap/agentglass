@@ -419,6 +419,40 @@ describe.skipIf(!have)("who may reach an agent, and who may start one", () => {
     await h.asSeat("/agents/named/stop", { name: near });
   }, 40_000);
 
+  test("a seat cannot answer its worker's permission prompt, by keys, by prompt or by broadcast; the person can, and the way out stays open", async () => {
+    /* The seat owns the worker, and a TUI worker stops on its own dialog after
+       a hold ends empty. enter on that dialog is "Yes". */
+    const name = nm("w-dialog");
+    const { pane, answered } = await h.dialogTab(h.wt);
+    expect((await h.asSeat("/agents/named/enlist", { name, pane })).ok).toBe(true);
+    expect((await h.asSeat("/agents/named/own", { name })).ok).toBe(true);
+    await h.until(async () => (await h.asSeat("/agents/named/read", { name })).result?.state === "needs-you");
+
+    const rows = async () => (await h.actions()).filter((a) => a.action === "/agents/named/keys" && !a.ok).length;
+    const before = await rows();
+    for (const key of ["enter", "space", "up", "down", "tab", "left", "right", "backspace"]) {
+      const r = await h.asSeat("/agents/named/keys", { name, key });
+      expect(r.status).toBe(403);
+      expect(r.error).toBe("a permission prompt is the person's; ask with agentglass-agent need");
+    }
+    expect(await rows()).toBe(before + 8);
+    const p = await h.asSeat("/agents/named/prompt", { name, text: "1" });
+    expect(p.status).toBe(403);
+    const bc = await h.asSeat("/agents/named/broadcast", { names: [name], text: "1" });
+    expect(bc.ok).toBe(false);
+    expect(bc.result?.sent).toEqual([{ name, outcome: expect.stringContaining("refused") }]);
+    await Bun.sleep(700);
+    expect(answered()).toBe(false);
+
+    // Backing out is not approving, and is still the seat's.
+    expect((await h.asSeat("/agents/named/keys", { name, key: "ctrl-c" })).ok).toBe(true);
+    expect((await h.asSeat("/agents/named/keys", { name, key: "escape" })).ok).toBe(true);
+    // The person's own call is unchanged.
+    expect((await h.asPerson("/agents/named/keys", { name, key: "enter" })).ok).toBe(true);
+    await h.until(async () => answered());
+    await h.asPerson("/agents/named/stop", { name, kill: true });
+  }, 40_000);
+
   test("prompts to finished workers count against the seat's limit, and a start and a prompt on one name make one turn", async () => {
     await withNights({ limits: { maxWorkers: 1 } });
     const [a, b] = [nm("w-again"), nm("w-again")];
