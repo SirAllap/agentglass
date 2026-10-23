@@ -314,7 +314,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   const pointerNav = useRef(true);
   /* The folder of the column the pointer is over: where Ctrl+V pastes while the pointer was the last thing used (Strata's "indicated directory"). */
   const pointerDir = useRef<string | null>(null);
-  const folderPeek = useFolderPeek(prefs.peek && prefs.view !== "columns", prefs.hidden, reveal, () => pointerNav.current);
+  const folderPeek = useFolderPeek(prefs.peek && prefs.view !== "columns", prefs.hidden, reveal, () => pointerNav.current, onBench);
 
   const goUpRaw = useCallback(() => {
     const p = parentOf(trail[0]!);

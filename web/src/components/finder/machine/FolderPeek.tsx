@@ -13,6 +13,7 @@ import { ICON } from "../../../lib/iconSize.ts";
 import { LAYER } from "../../../lib/layers.ts";
 import { Portal } from "../../Portal.tsx";
 import { EDGE, LINE } from "../../workspace/Chrome.tsx";
+import { BarButton } from "./PreviewBar.tsx";
 import { FileTypeIcon, StrataIcon } from "./StrataIcon.tsx";
 
 interface Open { path: string; name: string; box: { left: number; right: number; top: number; bottom: number } }
@@ -24,7 +25,7 @@ const rect = (el: HTMLElement): Open["box"] => { const r = el.getBoundingClientR
 const zoneKey = (z: PeekZone) => (z.kind === "card" ? `card:${z.level}` : `row:${z.level}:${z.path}`);
 
 /** `byPointer` says whether the last way the person moved was the pointer: Strata peeks only then, so a folder the keyboard just reached does not open a card under a resting mouse. */
-export function useFolderPeek(enabled: boolean, hidden: boolean, onPick: (t: HitTarget) => void, byPointer: () => boolean = () => true): { peek: PeekBinder | null; node: ReactNode } {
+export function useFolderPeek(enabled: boolean, hidden: boolean, onPick: (t: HitTarget) => void, byPointer: () => boolean = () => true, onBench?: (path: string, mode: "terminal") => void): { peek: PeekBinder | null; node: ReactNode } {
   const [stack, setStackNow] = useState<Open[]>([]);
   const stackRef = useRef<Open[]>([]);
   const setStack = useCallback((s: Open[]) => { stackRef.current = s; setStackNow(s); }, []);
@@ -68,14 +69,15 @@ export function useFolderPeek(enabled: boolean, hidden: boolean, onPick: (t: Hit
     onMouseLeave: () => leave({ kind: "row", level: 0, path }),
   }), [enter, leave, setStack, byPointer]);
   const pick = useCallback((t: HitTarget) => { close(); onPick(t); }, [close, onPick]);
+  const terminal = onBench && ((path: string) => { close(); onBench(path, "terminal"); });
   return {
     peek: enabled ? { bind } : null,
-    node: enabled && stack.length ? stack.map((o, level) => <PeekCard key={o.path} at={o} level={level} hidden={hidden} enter={enter} leave={leave} openAt={openAt} pick={pick} />) : null,
+    node: enabled && stack.length ? stack.map((o, level) => <PeekCard key={o.path} at={o} level={level} hidden={hidden} enter={enter} leave={leave} openAt={openAt} pick={pick} onBench={terminal} />) : null,
   };
 }
 
-function PeekCard({ at, level, hidden, enter, leave, openAt, pick }: {
-  at: Open; level: number; hidden: boolean;
+function PeekCard({ at, level, hidden, enter, leave, openAt, pick, onBench }: {
+  at: Open; level: number; hidden: boolean; onBench?: (path: string) => void;
   enter: (z: PeekZone) => void; leave: (z: PeekZone) => void; openAt: (level: number, o: Open) => void; pick: (t: HitTarget) => void;
 }) {
   const [peek, setPeek] = useState<Peek | null>(null);
@@ -99,6 +101,7 @@ function PeekCard({ at, level, hidden, enter, leave, openAt, pick }: {
         style={{ width: PEEK.width, left: pos?.left ?? -9999, top: pos?.top ?? -9999, background: "var(--surface-card)", border: EDGE, color: "var(--text)", transition: "opacity 150ms", opacity: pos ? 1 : 0 }}>
         <div className="flex items-center gap-2 px-3 truncate" style={{ minHeight: 30, borderBottom: LINE, color: "var(--text3)", fontWeight: 600 }}>
           <span className="truncate flex-1">{at.name}</span><span className="tabular-nums text-[11px] shrink-0">{peek.count}</span>
+          {onBench && <BarButton icon="terminal" label="Terminal here" onClick={() => onBench(at.path)} />}
         </div>
         {peek.empty ? <div className="px-3 py-3" style={{ color: "var(--text3)" }}>Empty folder</div> : (
           <ul className="m-0 p-1 list-none">
