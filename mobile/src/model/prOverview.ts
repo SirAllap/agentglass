@@ -11,7 +11,7 @@
  */
 import type { PrDetail, PrReview } from "../../../shared/types.ts";
 import { mergeVerdict } from "../../../shared/mergeReason.ts";
-import { buildRoster, type ReviewerState } from "../../../shared/reviewRoster.ts";
+import { askedAtOf, buildRoster, type ReviewerState } from "../../../shared/reviewRoster.ts";
 import { mergeObstacles } from "./mergeObstacles.ts";
 import type { Mark, Tone } from "./talk.ts";
 
@@ -52,11 +52,7 @@ type ReviewFacts = Pick<PrDetail, "reviews" | "reviewers" | "author" | "timeline
 export function reviewerRows(d: ReviewFacts): ReviewerRow[] {
   /* When each person was last asked, from the timeline: the roster uses it to
      date a request. The same fold the desk's merge box does. */
-  const askedAt: Record<string, string> = {};
-  for (const e of d.timeline ?? []) {
-    const k = (e.detail ?? "").toLowerCase();
-    if (e.kind === "review-requested" && k && (!askedAt[k] || e.at > askedAt[k]!)) askedAt[k] = e.at;
-  }
+  const askedAt = askedAtOf(d.timeline);
   const roster = buildRoster({
     reviews: d.reviews, reviewers: d.reviewers, author: d.author, headSha: d.headSha,
     reviewDecision: d.reviewDecision, gate: d.gate,

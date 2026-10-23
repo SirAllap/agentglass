@@ -75,6 +75,25 @@ export interface Roster {
 
 const lc = (s: string | undefined) => (s ?? "").toLowerCase();
 
+/** When each person was last asked to review, from the timeline's "review-requested" entries. */
+export function askedAtOf(timeline: { kind: string; detail?: string; at: string }[] | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const e of timeline ?? []) {
+    const k = lc(e.detail);
+    if (e.kind === "review-requested" && k && (!out[k] || e.at > out[k]!)) out[k] = e.at;
+  }
+  return out;
+}
+
+/**
+ * A request counts as "asked again" only if it is newer than that person's latest
+ * review. Measured on a pull request where one reviewer answered after the last
+ * request event and another was re-requested a week after theirs: the list of
+ * outstanding requests named both, and the first was drawn as waiting on them.
+ * No request time known: GitHub's list is all there is, so it stands.
+ */
+export const reAsked = (askedAt: string | undefined, reviewedAt: string | undefined) => !askedAt || !reviewedAt || askedAt > reviewedAt;
+
 const ORDER: ReviewerState[] = ["approved", "approved-old", "approved-void", "changes", "changes-again", "requested", "team", "commented", "dismissed"];
 
 export function buildRoster(i: RosterInput): Roster {
@@ -106,8 +125,9 @@ export function buildRoster(i: RosterInput): Roster {
 
   const entries: RosterEntry[] = [];
   for (const [k, p] of seen) {
-    const again = (asked.has(k) && !asked.get(k)!.isTeam) || (askedAgain.has(k) && !!p.verdict);
     const v = p.verdict;
+    const lastSaid = [v?.submittedAt, p.commented?.submittedAt].filter(Boolean).sort().pop();
+    const again = ((asked.has(k) && !asked.get(k)!.isTeam) || (askedAgain.has(k) && !!v)) && reAsked(i.askedAt?.[k], lastSaid);
     const base = { login: p.login, askedAgain: again && !!v && v.state !== "DISMISSED", threads: openBy.get(k) ?? 0 };
     if (v?.state === "APPROVED") {
       const old = !!(v.commit && head && v.commit !== head);

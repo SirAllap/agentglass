@@ -73,3 +73,29 @@ describe("re-requesting the reviewer who asked for changes", () => {
     expect(reviewersPatch(7, [], ["dave"])(waiting).humanReview?.kind).toBe("awaiting");
   });
 });
+
+// One reviewer answered after the last request event, the other was asked again
+// after theirs. The outstanding-request list names both; only the second is waited on.
+describe("two reviewers, only one of them asked again", () => {
+  const H = 3_600_000, D = 24 * H;
+  const at = (ms: number) => new Date(NOW - ms).toISOString();
+  const mk = (author: string, ms: number): PrReview => ({ ...review, author, submittedAt: at(ms), nodeId: `r-${author}` });
+  const d = detail({
+    reviews: [mk("reviewer-a", 20 * H), mk("reviewer-b", 16 * D)],
+    reviewers: [{ login: "reviewer-a" }, { login: "reviewer-b" }],
+    humanReview: { kind: "changes", who: ["reviewer-a", "reviewer-b"], askedAgain: true, cleared: true },
+  } as Partial<PrDetail>);
+  const asked = { "reviewer-a": at(5 * D), "reviewer-b": at(7 * D) };
+  const path = mergePath({
+    state: "OPEN", mergeState: "BLOCKED", mergeable: "MERGEABLE", reviewDecision: "CHANGES_REQUESTED",
+    humanReview: d.humanReview, reviews: d.reviews, reviewers: d.reviewers, askedAt: asked, author: d.author,
+    viewerDidAuthor: true, checksAll: [], gate, baseRefName: "main", openThreads: 0, now: NOW,
+  } as MergePathInput);
+
+  test("the headline answers the first and waits on the second", () => {
+    const says = path.hero.parts.map((p) => p.text).join("");
+    expect(says).toContain("reviewer-a still wants changes");
+    expect(says).toContain("reviewer-b's re-review is pending");
+    expect(says).not.toContain("was asked");
+  });
+});

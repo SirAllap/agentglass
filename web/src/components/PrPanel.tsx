@@ -150,6 +150,7 @@ import { externalUrl, openExternal } from "../lib/externalUrl.ts";
 import { cardRef, chipAction } from "../lib/cardRef.ts";
 import { trackerName } from "../../../shared/taskref.ts";
 import { reviewerRoster, reviewerTitle, blockingReviewers, reviewVerdict, verdictLine, type ReviewerRow, type ReviewerState } from "../lib/prReviewers.ts";
+import { askedAtOf } from "../../../shared/reviewRoster.ts";
 import { expandRecipe } from "../../../shared/recipeText.ts";
 import { suggestRecipeId } from "../../../shared/reviewSuggest.ts";
 import { openSettings } from "../lib/openSettings.ts";
@@ -5944,8 +5945,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
    * merge button and its state, the conflict resolver, the branch actions —
    * handed in as nodes so each exists once.
    */
-  const askedAt: Record<string, string> = {};
-  for (const e of d.timeline ?? []) if (e.kind === "review-requested" && e.detail && (!askedAt[e.detail.toLowerCase()] || e.at > askedAt[e.detail.toLowerCase()])) askedAt[e.detail.toLowerCase()] = e.at;
+  const askedAt = askedAtOf(d.timeline);
   const path = mergePath({
     state: d.state, mergeState: d.mergeState, mergeable: d.mergeable, isDraft: d.isDraft,
     reviewDecision: d.reviewDecision, humanReview: d.humanReview, reviewers: d.reviewers, reviews: d.reviews, askedAt, timeline: d.timeline,
@@ -8646,7 +8646,7 @@ function PrSidebar({ d, root, spend, onEditField, onRerequest }: {
                       : v.kind === "approved" ? "Approved" : v.kind === "changes" ? "Changes requested"
                       : v.kind === "commented" ? "Commented" : "Awaiting"}
                   </b>
-                  {v.askedAgain && !v.cleared && <span className="truncate" style={{ color: "var(--text4)" }}>· asked again</span>}
+                  {v.askedAgain && !v.cleared && <span className="truncate" style={{ color: "var(--text4)" }}>· {v.who.length > 1 ? `${rows.filter((r) => v.who.includes(r.login) && r.again).length} of ${v.who.length} ` : ""}asked again</span>}
                 </div>
               )}
               <ReviewerList rows={rows} author={d.author} onAsk={onRerequest} />

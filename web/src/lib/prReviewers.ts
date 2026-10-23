@@ -18,6 +18,8 @@
  * checking without a network.
  */
 
+import { askedAtOf, reAsked } from "../../../shared/reviewRoster.ts";
+
 /** What a reviewer has said, in the words the sidebar uses. */
 export type ReviewerState = "changes" | "awaiting" | "approved" | "commented" | "dismissed";
 
@@ -79,7 +81,8 @@ function verdictOf(rs: ReviewLike[]): { state: ReviewerState; at: string; commen
   };
 }
 
-export function reviewerRoster(d: { author?: string; reviewers?: RequestedLike[]; reviews?: ReviewLike[] }): ReviewerRow[] {
+export function reviewerRoster(d: { author?: string; reviewers?: RequestedLike[]; reviews?: ReviewLike[]; timeline?: { kind: string; detail?: string; at: string }[] }): ReviewerRow[] {
+  const askedAt = askedAtOf(d.timeline);
   /* The author is never a reviewer of his own pull request. Replying to a
      thread on it is a COMMENTED review under his name, and drew a comment icon
      beside the real reviewers and turned the header to "Commented" while a
@@ -101,7 +104,7 @@ export function reviewerRoster(d: { author?: string; reviewers?: RequestedLike[]
       login, state: v.state, at: v.at, ...(v.commentedAt ? { commentedAt: v.commentedAt } : null),
       isBot: rs.some((r) => r.isBot),
       // Asked again after answering: the ↻ GitHub draws beside the tick.
-      again: asked.some((a) => a.login === login && !a.isTeam),
+      again: asked.some((a) => a.login === login && !a.isTeam) && reAsked(askedAt[login.toLowerCase()], v.commentedAt ?? v.at),
     });
   }
   for (const a of asked) {
