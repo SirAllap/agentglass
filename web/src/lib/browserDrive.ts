@@ -2070,6 +2070,7 @@ async function pollGuestClock(
  */
 export async function runBrowserAsk(...a: Parameters<typeof runVerb>): ReturnType<typeof runVerb> {
   const ask = a[1];
+  guardFrames(a[0]);
   /* The pointer goes where the act is about to land, not where it landed: an
      act that navigates answers a second later, and a pointer that set off then
      trailed every click by the length of a page load. Not awaited, and queued
@@ -2147,6 +2148,54 @@ function flashWhereActed(el: DrivableWebview, ask: BrowserAskFrame): void {
   const plan = flashPlan(ask);
   if (!plan) return;
   try { void Promise.resolve(el.executeJavaScript(flashScript(plan))).catch(() => { /* the page moved on */ }); } catch { /* not attached */ }
+}
+
+/**
+ * A page keeps moving while nobody looks at the window.
+ *
+ * A window on a workspace nobody looks at (or under a screen that went dark)
+ * gets no frames from the compositor, so a guest's requestAnimationFrame never
+ * fires: measured 1 frame a second against 63 on screen. Timers still run. A
+ * page that waits on a frame before it swaps its content — GitHub's own
+ * navigation does — then changes its address and never its page, and every
+ * act after that finds nothing (6 s and a refusal per click, a whole walk lost).
+ *
+ * So before each ask the guest checks whether a frame arrives within 150 ms;
+ * only when none does, requestAnimationFrame also answers from a 16 ms timer,
+ * whichever comes first. On screen the check costs one frame and one timer
+ * and changes nothing. Measured with frames withheld: GitHub's Issues click
+ * rendered in 1.3 s with it, never without.
+ * Ceiling: a page that kept its own reference to requestAnimationFrame from
+ * before the check is not reached, and the fallback stays for the life of
+ * the document once it went in.
+ */
+export const FRAME_GUARD = `(() => {
+  if (window.__agxFrames) return;
+  window.__agxFrames = "watching";
+  let fired = false;
+  requestAnimationFrame(() => { fired = true; });
+  setTimeout(() => {
+    if (fired) { window.__agxFrames = ""; return; }
+    const real = window.requestAnimationFrame.bind(window), cancelReal = window.cancelAnimationFrame.bind(window);
+    const jobs = new Map(); let next = 1;
+    const raf = function requestAnimationFrame(cb) {
+      const id = next++;
+      const run = (ts) => { const j = jobs.get(id); if (!j) return; jobs.delete(id); cancelReal(j.r); clearTimeout(j.t); cb(ts); };
+      jobs.set(id, { r: real(run), t: setTimeout(() => run(performance.now()), 16) });
+      return id;
+    };
+    const caf = function cancelAnimationFrame(id) { const j = jobs.get(id); if (!j) return; jobs.delete(id); cancelReal(j.r); clearTimeout(j.t); };
+    for (const [f, n] of [[raf, "requestAnimationFrame"], [caf, "cancelAnimationFrame"]]) f.toString = () => "function " + n + "() { [native code] }";
+    window.requestAnimationFrame = raf; window.cancelAnimationFrame = caf;
+    window.__agxFrames = "fallback";
+  }, 150);
+})()`;
+
+/* Only with a panel drawing this guest (the same signal the pointer uses):
+   off the desktop nothing listens, and the driver's tests count its scripts. */
+function guardFrames(el: DrivableWebview): void {
+  if (!landed) return;
+  try { void Promise.resolve(el.executeJavaScript(FRAME_GUARD)).catch(() => { /* the page moved on */ }); } catch { /* not attached */ }
 }
 
 function aimAt(el: DrivableWebview, ask: BrowserAskFrame): void {
