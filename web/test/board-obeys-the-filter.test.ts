@@ -41,8 +41,8 @@ test("is on a card status keeps exactly those rows", () => {
 test("the board is handed the filtered lists, not the raw fetches", () => {
   const src = readFileSync(new URL("../src/components/PrPanel.tsx", import.meta.url), "utf8");
   /* Enriched with the card the screen is showing, then filtered. */
-  expect(src).toMatch(/const boardMineCards = useMemo\(\s*\(\) => boardMine\.map\(\(p\) => withCard\(p, hasTaskProvider\)\)/);
-  expect(src).toMatch(/const boardReviewCards = useMemo\(\s*\(\) => boardReview\.map\(\(p\) => withCard\(p, hasTaskProvider\)\)/);
+  expect(src).toMatch(/const boardMineCards = useMemo\(\s*\(\) => boardMine\.map\(\(p\) => withConflict\(root, withCard\(p, hasTaskProvider\)\)\)/);
+  expect(src).toMatch(/const boardReviewCards = useMemo\(\s*\(\) => boardReview\.map\(\(p\) => withConflict\(root, withCard\(p, hasTaskProvider\)\)\)/);
   /* `applyRulesKeepUnread`, not `applyWith` directly: a pull request with
      something unread on it survives a rule that would otherwise drop it — see
      prFilter.test.ts. */

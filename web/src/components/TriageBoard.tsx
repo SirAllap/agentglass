@@ -37,6 +37,7 @@ import { Avatar } from "./Avatar.tsx";
 import { CardFaces } from "./CardFaces.tsx";
 import { cardReviewers, facesAria, waitingLine } from "../lib/cardReviewers.ts";
 import { askingBehind, behindOf, onBehind } from "../lib/prBehindStore.ts";
+import { askConflict, checkingConflict, onConflict } from "../lib/prConflictStore.ts";
 import { onRollup, rollupOf } from "../lib/prRollupStore.ts";
 import { onKnownBlock, withKnownBlock } from "../lib/prKnownBlock.ts";
 import { failureHint, jobIdOf } from "../lib/prFailureHint.ts";
@@ -208,6 +209,7 @@ export function TriageBoard({
      nothing else — the cards do not move, a chip appears on one of them. */
   const [, bump] = useState(0);
   useEffect(() => onBehind(() => bump((n) => n + 1)), []);
+  useEffect(() => onConflict(() => bump((n) => n + 1)), []);
   /*
    * A card that claims failure asks whether it is true.
    *
@@ -1371,6 +1373,11 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
      knows it is on screen. Null until the answer lands. */
   const behind = root ? behindOf(root, p.number) : null;
   const asking = root ? askingBehind(root, p.number) : false;
+  /* GitHub answers UNKNOWN for a branch it has not looked at lately. The card
+     asks git (lib/prConflictStore.ts) and says so meanwhile, rather than file
+     itself under "ready to land" over a silence. */
+  if (root) askConflict(root, p);
+  const checkingMerge = root ? checkingConflict(root, p) : false;
   /** Said on the number itself for a moment: a clipboard write is invisible. */
   const [copied, setCopied] = useState<number | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
@@ -1637,6 +1644,13 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
                   border: "1px solid color-mix(in srgb, var(--error) 35%, transparent)" }}
                 title="Conflicts with the base branch — nothing else can move until they are resolved">
                 <WarningIcon size={ICON.xs} />conflicts
+              </span>
+            )}
+            {checkingMerge && (
+              <span className="shrink-0 inline-flex items-center gap-1 rounded-md px-1.5"
+                style={{ height: CHIP_H + 2, color: "var(--text3)", background: "color-mix(in srgb, var(--text3) 10%, transparent)" }}
+                title="GitHub has not worked out whether this conflicts with the base branch yet — checking">
+                checking
               </span>
             )}
             <span aria-hidden style={{ color: "var(--text4)" }}>→</span>

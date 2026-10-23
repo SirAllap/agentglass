@@ -103,6 +103,7 @@ import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
 import { BOARD_ASK_MS, listOutcome, type ListOutcome } from "../lib/boardFace.ts";
 import { keepLoadedChecks } from "../lib/prMerge.ts";
 import { applyFilter, checkLabel, checkRowId, checkSpan, checkStatusLine, checkVerdict, filterCounts, formatSpan, sectionChecks, shortName, slowest, spanShare, usualTick, usualTip, verdictHero, workflowCards, type CheckFilter } from "../lib/prChecksList.ts";
+import { conflictVersion, conflictsFrom, learn as learnConflict, onConflict, withConflict } from "../lib/prConflictStore.ts";
 import { askingBehind, behindAnswer, forgetBehind, forgetOneBehind, onBehind, refreshBehind } from "../lib/prBehindStore.ts";
 import { refreshRollup, rollupOf } from "../lib/prRollupStore.ts";
 import { detailWithChecks, rowWithChecks, overlayDetail, reopenedRow, holdReopened, reopenKey, holdEdits, refreshPlan, rowPatch, landedDetail, dropLanded, staleOpen, once, type EditLog, type Landed, type Reopened } from "../lib/prRefresh.ts";
@@ -2701,6 +2702,14 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   }, [root, detail?.number, detail?.mergeable]);
   loadDetailRef.current = loadDetail;
 
+  /* What the page learned about conflicts, handed to the board: the files it
+     listed are git's own answer, and the card reads the same store. Tied to the
+     head commit so a push forgets it. */
+  useEffect(() => {
+    if (!root || !detail || !conflictFiles) return;
+    learnConflict(root, detail.number, conflictsFrom({ ok: true, conflicts: conflictFiles.files, stale: conflictFiles.stale }), detail.headSha ?? null);
+  }, [root, detail?.number, detail?.headSha, conflictFiles]);
+
   /* The detail is the newer reading of its own row. The lists are not fetched
      again when only that pull request is refreshed, so the board is brought
      up to date from it instead (see `overlayDetail`). */
@@ -3064,15 +3073,19 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
      `p.card` alone then matches nothing at all. No extra request: the board
      asks for exactly these rows already. */
   const cardTick = useSyncExternalStore(onCard, cardVersion, () => 0);
+  /* A conflict found by the page or by a card's own ask (lib/prConflictStore.ts)
+     is laid over GitHub's UNKNOWN here, so the badge, the lane and the Failing
+     view read one fact. */
+  const conflictTick = useSyncExternalStore(onConflict, conflictVersion, () => 0);
   const boardMineCards = useMemo(
-    () => boardMine.map((p) => withCard(p, hasTaskProvider)),
+    () => boardMine.map((p) => withConflict(root, withCard(p, hasTaskProvider))),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [boardMine, hasTaskProvider, cardTick],
+    [boardMine, hasTaskProvider, cardTick, conflictTick, root],
   );
   const boardReviewCards = useMemo(
-    () => boardReview.map((p) => withCard(p, hasTaskProvider)),
+    () => boardReview.map((p) => withConflict(root, withCard(p, hasTaskProvider))),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [boardReview, hasTaskProvider, cardTick],
+    [boardReview, hasTaskProvider, cardTick, conflictTick, root],
   );
   const boardMineShown = useMemo(
     () => applyRulesKeepUnread(boardMineCards, rules, readPrField, isRuleExempt),
@@ -3092,9 +3105,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    */
   const boardWide = boardShown && viewIsWide(boardView);
   const boardOthersCards = useMemo(
-    () => (boardWide ? listRows.filter((p) => p.state === "OPEN").map((p) => withCard(p, hasTaskProvider)) : []),
+    () => (boardWide ? listRows.filter((p) => p.state === "OPEN").map((p) => withConflict(root, withCard(p, hasTaskProvider))) : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [boardWide, listRows, hasTaskProvider, cardTick],
+    [boardWide, listRows, hasTaskProvider, cardTick, conflictTick, root],
   );
   const boardOthersShown = useMemo(
     () => applyRulesKeepUnread(boardOthersCards, rules, readPrField, isRuleExempt),
