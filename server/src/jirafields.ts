@@ -39,6 +39,7 @@ export function cardExtras(f: Record<string, unknown>, ids?: { sprint?: string; 
   // Zero is an answer ("no comments"); a block that was not asked for is not.
   if (isObj(f.comment) && typeof f.comment.total === "number") out.comments = f.comment.total;
   if (Array.isArray(f.subtasks) && f.subtasks.length) out.subtasks = f.subtasks.length;
+  if (isObj(f.parent) && str(f.parent.key)) out.parent = { key: str(f.parent.key), title: isObj(f.parent.fields) ? str(f.parent.fields.summary) : "" };
   const waitsOn: string[] = [];
   const blocks: string[] = [];
   for (const l of Array.isArray(f.issuelinks) ? f.issuelinks : []) {

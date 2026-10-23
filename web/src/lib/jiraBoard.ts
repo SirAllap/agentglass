@@ -106,13 +106,15 @@ export const JIRA_BOARD: BoardSource = {
   id: "jira",
   nouns: {
     tracker: "Jira", space: "site", folder: "project", list: "board", board: "board", openIn: "Open in Jira",
+    searchTip: "Searches the title, description and comments of the cards in the projects you can see, and a card key exactly.",
     addHint: "Add a board, a filter or a project",
     assignedHint: "Every open card assigned to you, on the site you connected.",
   },
   caps: {
-    sprintEdit: false, multiAssignee: false, fieldEdits: false, listViews: false, workspaceSearch: false, stream: false,
+    sprintEdit: false, multiAssignee: false, fieldEdits: false, listViews: false, workspaceSearch: true, stream: false,
     listMeta: false, editAddress: false, slowAssigned: false,
   },
+  shortKeys: true,
   storageKey: (name) => boardStorageKey("jira", name),
 
   views,
@@ -129,9 +131,9 @@ export const JIRA_BOARD: BoardSource = {
 
   where: async () => ({ ok: false }),
   find: (ref) => api.jiraFind(ref),
-  search: async (q) => api.jiraSearch(q),
-  searchStream: async (q, _force, onSome) => {
-    const r = await api.jiraSearch(q);
+  search: async (q, _force, signal) => api.jiraSearch(q, signal),
+  searchStream: async (q, _force, onSome, signal) => {
+    const r = await api.jiraSearch(q, signal);
     if (r.ok && r.tasks?.length) onSome(r.tasks);
     return { ok: r.ok, ...(r.error ? { error: r.error } : {}) };
   },

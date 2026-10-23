@@ -440,6 +440,8 @@ export interface ProviderTask {
   blocks?: string[];
   /** How many subtasks it has, so a card with hidden work says so. */
   subtasks?: number;
+  /** The card this one sits under, when it has one (a Jira subtask's parent, a story's epic). Read on a card's own read, not on a board's. */
+  parent?: { key: string; title: string };
   /**
    * Custom field values worth showing, already resolved from ids to names.
    *

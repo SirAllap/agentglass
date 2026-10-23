@@ -51,12 +51,12 @@ describe("reading a card's links", () => {
 describe("where it is wired", () => {
   const strip = (s: string) => s.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
   const store = Bun.file(new URL("../src/lib/jiraLinks.ts", import.meta.url));
-  const pane = Bun.file(new URL("../src/components/JiraTasks.tsx", import.meta.url));
+  const pane = Bun.file(new URL("../src/components/jira/JiraCard.tsx", import.meta.url));
 
   it("the card pane draws the section, once, with the write switch", async () => {
     const src = strip(await pane.text());
     expect(src.match(/<JiraCardPrs /g)?.length).toBe(1);
-    expect(src).toContain("<JiraCardPrs query={query} writable={writable}");
+    expect(src).toContain("<JiraCardPrs query={key} writable={writes} quiet={!writes} />");
   });
 
   it("nothing in the store polls", async () => {

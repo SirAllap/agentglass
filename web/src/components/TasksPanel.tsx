@@ -1918,7 +1918,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
 
   // A bare number, or a prefixed id. Loose on purpose — the server decides
   // what is really a card, and being asked is cheaper than not being offered.
-  const looksLikeId = looksLikeCardId(q, source.caps.workspaceSearch);
+  const looksLikeId = looksLikeCardId(q, source.caps.workspaceSearch, source.shortKeys);
 
   /**
    * Show a card by id, wherever it turns out to live.
@@ -2036,7 +2036,18 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
      * what makes "nothing found" mean it.
      */
     let idLookup: Promise<void> | null = null;
-    if (/^\s*([A-Za-z][\w]*-)?\d{3,}\s*$/.test(asked)) {
+    /* The card the search was asked for by id, once the tracker has answered:
+       put first in the list unless the sweep already holds it. */
+    const landCard = (w: { ok: boolean; task?: ProviderTask }) => {
+      if (!mine() || !w.ok || !w.task) return;
+      setResults((cur) => (cur && cur.asked === asked && !cur.rows.some((t) => t.id === w.task!.id)
+        ? { ...cur, rows: [w.task!, ...cur.rows] }
+        : cur));
+    };
+    /* Another tracker asks its own `find`, with its own idea of an id. */
+    if (source.id !== "clickup" && looksLikeCardId(asked, true, source.shortKeys)) {
+      idLookup = source.find(asked).then(landCard).catch(() => { /* the search may still find it */ });
+    } else if (source.id === "clickup" && /^\s*([A-Za-z][\w]*-)?\d{3,}\s*$/.test(asked)) {
       /*
        * ASKED OF THE FETCHER, NOT OF THE CACHE.
        *
@@ -2048,19 +2059,17 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
        * a real id: `/clickup/where?id=1042` answers {ok:false} while
        * `/clickup/find?q=1042` returns the card.
        */
-      idLookup = api.clickupFind(asked).then((w) => {
-        if (!mine() || !w.ok || !w.task) return;
-        setResults((cur) => (cur && cur.asked === asked && !cur.rows.some((t) => t.id === w.task!.id)
-          ? { ...cur, rows: [w.task!, ...cur.rows] }
-          : cur));
-      }).catch(() => { /* the sweep may still find it */ });
+      idLookup = api.clickupFind(asked).then(landCard).catch(() => { /* the sweep may still find it */ });
     }
     try {
       /* Read as it arrives: each batch the server matches goes straight into
          the list. The whole answer is still collected, for the sentence at the
          end that says how much was read. */
       const all: ProviderTask[] = [];
-      const r = await source.searchStream(asked, false, (batch) => {
+      let wholeTruncated = false;
+      /* A source that cannot stream has one answer, asked for once below; asking it
+         twice would send the same query twice when the answer is empty. */
+      const r: { ok: boolean; error?: string; scanned?: number; partial?: boolean; capped?: boolean; since?: number } = !source.caps.stream ? { ok: false } : await source.searchStream(asked, false, (batch) => {
         if (!mine()) return;
         all.push(...batch);
         setResults((cur) => {
@@ -2089,6 +2098,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
         if (!mine() || ac.signal.aborted) return;
         if (whole.ok) {
           all.push(...(whole.tasks ?? []));
+          wholeTruncated = !!(whole as { truncated?: boolean }).truncated;
         } else if (!r.ok) {
           setResults((cur) => (cur && cur.asked === asked ? { ...cur, looking: false } : cur));
           setNote({ ok: false, text: whole.error ?? r.error ?? "That search could not run" });
@@ -2126,6 +2136,10 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
              * card count into that; a date they can.
              */
             const window = r.since ? sinceWords(r.since) : null;
+            if (!source.caps.stream) {
+              setNote({ ok: false, text: `Nothing on ${source.nouns.tracker} matches “${asked}”${wholeTruncated ? ", in the part of it this search reaches" : ""}` });
+              return null;
+            }
             const reach = r.partial
               ? " — and one page of the sweep did not answer, so this is not all of it"
               : r.capped && window ? ` — this search covers ${window}, which is as far back as it reaches`
@@ -2532,7 +2546,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
               void searchAll();
             }}
             spellCheck={false}
-            placeholder={onLooked ? "Filter what you have looked up" : source.caps.workspaceSearch ? "Filter this board · Enter searches the workspace" : "Filter this board"}
+            placeholder={onLooked ? "Filter what you have looked up" : source.caps.workspaceSearch ? (source.id === "clickup" ? "Filter this board · Enter searches the workspace" : `Filter this board · Enter searches ${source.nouns.tracker}`) : "Filter this board"}
             className="flex-1 min-w-0 bg-transparent outline-none text-[12px]"
             style={{ color: "var(--text)", caretColor: "var(--primary)" }} />
           {searching && <span className="agx-spin shrink-0" aria-label="Searching" style={{ width: 11, height: 11, borderWidth: 1.5, borderColor: "var(--text3)", borderTopColor: "transparent" }} />}
@@ -2812,10 +2826,10 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
             jump, and it has its own path. */}
         {source.caps.workspaceSearch && !onLooked && q.trim().length >= 2 && !looksLikeId && (
           <button onClick={() => void searchAll()} disabled={searching}
-            title="ClickUp has no text search for this token, so this sweeps the most recently updated cards. The first one takes a moment."
+            title={source.nouns.searchTip}
             className="text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap disabled:opacity-50"
             style={{ border: EDGE, color: "var(--text2)" }}>
-            {searching ? "searching…" : "search the workspace ⏎"}
+            {searching ? "searching…" : `search the ${source.id === "clickup" ? "workspace" : "site"} ⏎`}
           </button>
         )}
         {/* Every chip from here on reads the BOARD — its ready count, its

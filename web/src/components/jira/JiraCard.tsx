@@ -22,9 +22,11 @@ import { TRACKERS } from "../../lib/trackerApi.ts";
 import { OfferedPeople } from "../../lib/trackerComment.ts";
 import type { Mentionable } from "../../lib/mentions.ts";
 import type { ProviderTask, TaskDetail } from "../../../../shared/providers.ts";
+import { openCard } from "../../lib/openCard.ts";
 import { Composer, COMPOSER_MIN } from "../tasks/Composer.tsx";
 import { LINE } from "../workspace/Chrome.tsx";
 import { Spinner } from "../Spinner.tsx";
+import { JiraCardPrs } from "./JiraCardPrs.tsx";
 
 /** The box may grow to this share of the pane, then scrolls inside; the ClickUp card's share. */
 const COMPOSER_SHARE = 0.3;
@@ -42,6 +44,27 @@ function Author({ who, initials, avatar }: { who: string; initials?: string; ava
   }
   return <span title={who} className="shrink-0 inline-flex items-center justify-center text-[9px] font-medium"
     style={{ ...size, background: "var(--bg4)", color: chipInk(null) }}>{initials || "?"}</span>;
+}
+
+type Tab = "card" | "github" | "subtasks";
+
+/** Subtasks as the detail read gave them: the key, the title, the status as the site spells it. A row opens the card in the app. */
+export function SubtaskRows({ rows }: { rows: ProviderTask[] }) {
+  return (
+    <div className="flex flex-col" aria-label="Subtasks">
+      {rows.map((s) => {
+        const k = s.customId ?? s.id;
+        return (
+          <button key={s.id} onClick={() => openCard(k, k, "jira")} title={`Open ${k}`}
+            className="agx-btn flex items-center gap-2 min-w-0 text-left text-[11px] py-1.5" style={{ borderBottom: LINE }}>
+            <span className="tabular-nums shrink-0" style={{ color: "var(--text3)" }}>{k}</span>
+            <span className="flex-1 min-w-0 truncate" style={{ color: s.statusKind === "done" ? "var(--text3)" : "var(--text)" }}>{s.title}</span>
+            <span className="shrink-0 text-[10px]" style={{ color: "var(--text3)" }}>{s.status}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 export function JiraCard({ t, header, writes, onTask }: {
@@ -72,6 +95,14 @@ export function JiraCard({ t, header, writes, onTask }: {
   }, [key]);
 
   useEffect(() => { setDetail(null); setMore(0); setErr(""); void read(); }, [read]);
+
+  /* Which half of the card is on screen. GitHub is there for every card (the
+     pull requests are read when it is opened, never before); subtasks only when
+     the card has some. A different card starts on the card itself. */
+  const [tab, setTab] = useState<Tab>("card");
+  useEffect(() => { setTab("card"); }, [key]);
+  const subtasks = detail?.subtasks ?? [];
+  const view: Tab = tab === "subtasks" && !subtasks.length ? "card" : tab;
 
   /* The composer, pinned under the thread. */
   const [say, setSay] = useState("");
@@ -148,11 +179,32 @@ export function JiraCard({ t, header, writes, onTask }: {
   return (
     <div ref={paneRef} className="flex flex-col flex-1 min-w-0 min-h-0">
       <div className="shrink-0" style={{ borderBottom: LINE }}>{header}</div>
+      <div className="shrink-0">
+        <div className="flex items-center gap-1.5 px-5" style={{ borderBottom: LINE }}>
+          {([
+            ["card", "Card"],
+            ["github", "GitHub"],
+            ...(subtasks.length ? [["subtasks", `Subtasks ${subtasks.length}`] as const] : []),
+          ] as const).map(([id, label]) => (
+            <button key={id} onClick={() => setTab(id)} aria-current={view === id ? "page" : undefined}
+              className="agx-btn text-[10px] uppercase tracking-[0.14em] px-2.5 py-1.5 -mb-px rounded-t-md"
+              style={{
+                color: view === id ? "var(--text)" : "var(--text3)",
+                background: view === id ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent",
+                borderBottom: `2px solid ${view === id ? "var(--primary)" : "transparent"}`,
+              }}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
 
       <div ref={listRef} className="agx-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-5 py-3">
-        {err && <div className="text-[11px] mb-3" role="alert" style={{ color: "var(--error-ink)" }}>{err}</div>}
-        {!detail && !err && <Spinner label="Reading the card…" className="" />}
-        {detail && (
+        {view === "github" && <JiraCardPrs query={key} writable={writes} quiet={!writes} />}
+        {view === "subtasks" && <SubtaskRows rows={subtasks} />}
+        {view === "card" && err && <div className="text-[11px] mb-3" role="alert" style={{ color: "var(--error-ink)" }}>{err}</div>}
+        {view === "card" && !detail && !err && <Spinner label="Reading the card…" className="" />}
+        {view === "card" && detail && (
           <>
             <div className="text-[10px] uppercase tracking-wide mb-1.5" style={{ color: "var(--text3)" }}>Description</div>
             <div className="agx-cu-body mb-5 min-w-0 break-words">
@@ -185,21 +237,18 @@ export function JiraCard({ t, header, writes, onTask }: {
         )}
       </div>
 
-      <div className="shrink-0 px-4 pt-2 pb-3" style={{ borderTop: LINE }}>
-        {writes
-          ? <Composer value={say} growTo={sayCap} onChange={(v) => { setSay(v); setSayErr(""); }} busy={saying}
-              placeholder={`Comment on ${key}. Markdown, and @ to mention somebody.`}
-              sendLabel="Comment"
-              people={people}
-              onNeedPeople={() => askPeople("")}
-              onPeopleQuery={askPeople}
-              onSend={send} />
-          : <div className="text-[11px] py-1" style={{ color: "var(--text3)" }}>
-              Commenting is switched off. Allow Jira changes in Settings to answer from here.
-            </div>}
+      {/* With writes off the pane has said so once, above; there is no box and no second sentence here. */}
+      {writes && <div className="shrink-0 px-4 pt-2 pb-3" style={{ borderTop: LINE }}>
+        <Composer value={say} growTo={sayCap} onChange={(v) => { setSay(v); setSayErr(""); }} busy={saying}
+          placeholder={`Comment on ${key}. Markdown, and @ to mention somebody.`}
+          sendLabel="Comment"
+          people={people}
+          onNeedPeople={() => askPeople("")}
+          onPeopleQuery={askPeople}
+          onSend={send} />
         {sayErr && <div className="text-[10.5px] mt-1" role="alert" style={{ color: "var(--error-ink)" }}>{sayErr}</div>}
         {sayWarn && <div className="text-[10.5px] mt-1" role="status" style={{ color: "var(--warning-ink)" }}>{sayWarn}</div>}
-      </div>
+      </div>}
     </div>
   );
 }

@@ -1413,7 +1413,7 @@ const realApi = {
   /** A card from what was typed: `ORBIT-1042`, or a bare number tried against the site's projects. */
   jiraFind: (q: string) => get<{ ok: boolean; error?: string; task?: ProviderTask; asked?: string }>(`/jira/find?q=${encodeURIComponent(q)}`),
   /** What is assigned to you and not done. `truncated` when the page cap cut it short. */
-  jiraSearch: (q: string) => get<{ ok: boolean; error?: string; tasks?: ProviderTask[]; truncated?: boolean; throttled?: boolean }>(`/jira/search?q=${encodeURIComponent(q)}`),
+  jiraSearch: (q: string, signal?: AbortSignal) => get<{ ok: boolean; error?: string; tasks?: ProviderTask[]; truncated?: boolean; throttled?: boolean }>(`/jira/search?q=${encodeURIComponent(q)}`, signal),
   /** The moves a Jira card has from where it is. An empty list carries `cannot`, the sentence for it. */
   jiraTransitions: (key: string) =>
     get<{ ok: boolean; error?: string; throttled?: boolean } & Partial<JiraMoves>>(`/jira/transitions?key=${encodeURIComponent(key)}`),

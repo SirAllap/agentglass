@@ -20,6 +20,7 @@ function fn(src: string, name: string): string {
 }
 
 const jira = await Bun.file(new URL("../src/components/JiraTasks.tsx", import.meta.url)).text();
+const facts = await Bun.file(new URL("../src/components/jira/JiraFacts.tsx", import.meta.url)).text();
 const railFile = new URL("../src/components/jira/ViewRail.tsx", import.meta.url);
 const panel = await Bun.file(new URL("../src/components/TasksPanel.tsx", import.meta.url)).text();
 const add = await Bun.file(new URL("../src/components/jira/AddBar.tsx", import.meta.url)).text();
@@ -41,7 +42,8 @@ describe("the group heading is one component", () => {
 
   test("the tab mounts the board's body, and what it draws for a card is Jira's own pane", () => {
     const j = strip(jira);
-    expect(j.match(/function Facts\(/g)).toHaveLength(1);
+    expect(strip(facts).match(/function JiraFacts\(/g)).toHaveLength(1);
+    expect(j).not.toContain("function Facts(");
     expect(j).toContain("<JiraCard ");
     expect(strip(panel)).toContain("source={JIRA_BOARD} />");
   });

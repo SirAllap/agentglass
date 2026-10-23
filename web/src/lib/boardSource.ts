@@ -69,6 +69,8 @@ export interface BoardNouns {
   space: string;
   folder: string;
   list: string;
+  /** The tooltip on the "search" button: what that search reads and what it cannot. */
+  searchTip: string;
   /** What a saved view is called on this tracker's bar. */
   board: string;
   /** "Open in ClickUp". */
@@ -105,6 +107,8 @@ export interface BoardSource {
   id: TrackerId;
   nouns: BoardNouns;
   caps: BoardCaps;
+  /** A key with one or two digits (ORBIT-12) is a card here, so Enter asks for it as well as searching. */
+  shortKeys?: boolean;
   /** The localStorage key for one remembered thing about this board's layout. */
   storageKey: (name: string) => string;
 
@@ -162,6 +166,7 @@ export const CLICKUP_BOARD: BoardSource = {
   id: "clickup",
   nouns: {
     tracker: "ClickUp", space: "space", folder: "folder", list: "list", board: "board", openIn: "Open in ClickUp",
+    searchTip: "ClickUp has no text search for this token, so this sweeps the most recently updated cards. The first one takes a moment.",
     addHint: "Add a board by pasting its address",
     assignedHint: "Every card assigned to you, across the workspace, the same list as ClickUp's My Work. Slower than a board (it asks the whole workspace), so it opens on what you last saw.",
   },

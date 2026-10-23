@@ -17,7 +17,7 @@
  * not exist in Jira's REST API, and a card with more comments than the issue
  * read carries says how many were left out rather than paging for them.
  */
-import { CARD_FIELDS, apiOf, jiraCall, jiraWriteEnabled, memoOk, taskContext, toTask, withStored, type JiraCreds, type JiraResult } from "./jira.ts";
+import { CARD_FIELDS, apiOf, cardPointsField, jiraCall, jiraWriteEnabled, memoOk, siteFields, taskContext, toTask, withStored, type JiraCreds, type JiraResult, type TaskContext } from "./jira.ts";
 import { adfToMarkdown, markdownToAdf, markdownToWiki, wikiToMarkdown, type Mention } from "./jiraAdf.ts";
 import type { TaskDetail, ProviderTask } from "../../shared/providers.ts";
 import type { WriteOutcome } from "./trackerTypes.ts";
@@ -48,7 +48,7 @@ const avatarOf = (u: Record<string, unknown>): string | undefined => {
 };
 
 /** The card's description and comments, as Markdown, from one issue read. */
-export function toDetail(issue: unknown, task: ProviderTask, v: 2 | 3, me?: string): { detail: TaskDetail; more: number } {
+export function toDetail(issue: unknown, task: ProviderTask, v: 2 | 3, me?: string, cx?: TaskContext): { detail: TaskDetail; more: number } {
   const f = isObj(issue) && isObj(issue.fields) ? issue.fields : {};
   const box = isObj(f.comment) ? f.comment : {};
   const raw = (Array.isArray(box.comments) ? box.comments : []).filter(isObj);
@@ -74,8 +74,10 @@ export function toDetail(issue: unknown, task: ProviderTask, v: 2 | 3, me?: stri
     };
   }).filter((c) => c.id).sort((x, y) => x.at - y.at);
   const total = typeof box.total === "number" ? box.total : comments.length;
+  // A subtask arrives as a stub (key, summary, status): enough for a row, not for a project.
+  const subtasks = cx ? (Array.isArray(f.subtasks) ? f.subtasks : []).flatMap((s) => { const t = toTask(s, cx); return t ? [t] : []; }) : [];
   return {
-    detail: { task, description: f.description == null ? "" : read(f.description).text, subtasks: [], checklists: [], comments },
+    detail: { task, description: f.description == null ? "" : read(f.description).text, subtasks, checklists: [], comments },
     more: Math.max(0, total - comments.length),
   };
 }
@@ -86,15 +88,20 @@ export interface JiraDetail { detail: TaskDetail; more: number }
 export async function readDetail(creds: JiraCreds, key: string, o: { fresh?: boolean } = {}): Promise<JiraResult<JiraDetail>> {
   if (!ISSUE_KEY.test(key)) return { ok: false, error: "That is not a Jira card id" };
   const v = apiOf(creds);
-  const fields = [...CARD_FIELDS, "description", "comment"].join(",");
-  const [r, cx] = await Promise.all([
+  // The site's own sprint and points fields, learned once and remembered. Where they cannot be read the card comes without them.
+  const found = await siteFields(creds);
+  const ids = found.ok && found.data ? found.data : null;
+  const ask = { sprint: ids?.sprint, points: cardPointsField(ids) };
+  const fields = [...CARD_FIELDS, "description", "comment", "parent", "subtasks", ...(ask.sprint ? [ask.sprint] : []), ...(ask.points ? [ask.points] : [])].join(",");
+  const [r, base] = await Promise.all([
     jiraCall<unknown>(creds, `/rest/api/${v}/issue/${encodeURIComponent(key)}?fields=${fields}`, { fresh: o.fresh }),
     taskContext(creds),
   ]);
   if (!r.ok) return { ...r, data: undefined };
+  const cx = { ...base, fields: ask };
   const task = toTask(r.data, cx);
   if (!task) return { ok: false, error: "Jira answered with something that is not a card" };
-  return { ok: true, data: toDetail(r.data, task, v, cx.me) };
+  return { ok: true, data: toDetail(r.data, task, v, cx.me, cx) };
 }
 
 export interface MentionPerson { key: string; name: string; initials: string; avatar?: string }

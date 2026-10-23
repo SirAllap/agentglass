@@ -150,12 +150,12 @@ describe("the screens, as source", () => {
   const code = (p: string) => read(p).split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
 
   test("the Jira card has the status, the person and the hand-off, and a write is folded back into the board's list", () => {
-    const s = code("components/JiraTasks.tsx");
+    const s = code("components/JiraTasks.tsx") + code("components/jira/JiraFacts.tsx");
     // A move's new stamp reaches the card, or the next write from it is a conflict.
     expect(s).toContain("<TrackerStatusPick tracker={TRACKERS.jira} task={t} query={query} onSaid={setSaid} onTask={onTask} />");
     expect(s).toContain("<TrackerPeoplePick tracker={TRACKERS.jira}");
     expect(s).toContain("<TrackerHandOffButton tracker={TRACKERS.jira}");
-    expect(s).toContain("<Facts t={t} writable={writable} onTask={onTask} />");
+    expect(s).toContain("<JiraFacts t={t} writable={writable} onTask={onTask} />");
     // And the board folds the written card over its own row, so the list and the pane are one datum.
     expect(code("components/TasksPanel.tsx")).toContain("onTask={(task) => setOver((m) => ({ ...m, [task.id]: foldCard(byId.get(task.id), task) }))}");
   });

@@ -543,6 +543,20 @@ export const __setSearchComments = (on: boolean): void => { searchComments = on;
 /** The site's own ids for the fields a board shows, found by what they are, never by what they are called. */
 export interface JiraFieldIds { sprint?: string; points: string[] }
 
+/**
+ * Which points field a card's number is read from. A board names the one it counts in; a view that does not takes the
+ * site's first. A card read cannot know which board it was opened from, so with several fields to choose from it asks
+ * for none rather than put a second field's number over the board's.
+ */
+export function pointsField(ids: JiraFieldIds | null, stated?: string): string | undefined {
+  if (stated && CUSTOM_ID.test(stated)) return stated;
+  if (!ids) return undefined;
+  return ids.points[0];
+}
+export function cardPointsField(ids: JiraFieldIds | null): string | undefined {
+  return ids && ids.points.length === 1 ? pointsField(ids) : undefined;
+}
+
 const CUSTOM_ID = /^customfield_\d{1,9}$/;
 
 /**
@@ -787,7 +801,7 @@ export async function searchJql(creds: JiraCreds, jql: string, o: { pages?: numb
     const found = await siteFields(creds);
     const ids = found.ok && found.data ? found.data : null;
     const sprint = ids?.sprint;
-    const points = o.board.points && CUSTOM_ID.test(o.board.points) ? o.board.points : ids?.points[0];
+    const points = pointsField(ids, o.board.points);
     fields = [...CARD_FIELDS, ...(sprint ? [sprint] : []), ...(points ? [points] : []), "issuelinks", "subtasks", ...(searchComments ? ["comment"] : [])];
     ask = { sprint, points };
   }
@@ -895,6 +909,8 @@ export async function searchText(creds: JiraCreds, q: string): Promise<JiraResul
   if (!p.ok || !p.data) return { ...p, data: undefined };
   if (!p.data.keys.length) return { ok: false, error: "Jira shows no projects to search" };
   const keys = p.data.keys.slice(0, TEXT_PROJECTS);
+  // No `key = ...` clause beside the text: Data Center rejects the whole search when the key is malformed or does not exist
+  // ("utf-8", a typo), and the card lookup that runs beside this search already fetches an exact key.
   const r = await searchJql(creds, `project in (${keys.map((k) => `"${k}"`).join(", ")}) AND text ~ "${phrase}" ORDER BY updated DESC`);
   if (!r.ok || !r.data) return r;
   return { ok: true, data: { tasks: r.data.tasks, truncated: r.data.truncated || p.data.truncated || p.data.keys.length > TEXT_PROJECTS } };

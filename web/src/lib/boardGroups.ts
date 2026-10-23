@@ -108,8 +108,9 @@ export function foldCard(row: ProviderTask | undefined, fresh: ProviderTask): Pr
  * three digits or more, loose on purpose (the server decides what is a card).
  * A source with no workspace search has only the jump, so its keys may be short:
  * ORBIT-12 is a card there, while on a board that can search, "ORBIT-12" is a
- * query like any other.
+ * query like any other. A source whose keys are short and that can search too
+ * (`shortKeys`, Jira: ORBIT-12 is a card) is asked for the card AND searched.
  */
-export function looksLikeCardId(q: string, workspaceSearch: boolean): boolean {
-  return /^\s*([A-Za-z][\w]*-)?\d{3,}\s*$/.test(q) || (!workspaceSearch && /^\s*[A-Za-z][A-Za-z0-9_]*-\d+\s*$/.test(q));
+export function looksLikeCardId(q: string, workspaceSearch: boolean, shortKeys = false): boolean {
+  return /^\s*([A-Za-z][\w]*-)?\d{3,}\s*$/.test(q) || ((!workspaceSearch || shortKeys) && /^\s*[A-Za-z][A-Za-z0-9_]*-\d+\s*$/.test(q));
 }

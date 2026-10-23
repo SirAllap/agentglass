@@ -17,7 +17,7 @@ import { CardPrDetailRow } from "../CardPrChip.tsx";
 import { EDGE, INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
 import { HIT } from "../../lib/iconSize.ts";
 
-export const LINKING_OFF = "Linking a pull request writes to Jira, which is switched off. Turn on \u201cLet agentglass change cards\u201d in the Jira settings.";
+export const LINKING_OFF = "Linking a pull request writes to Jira, which is switched off. Turn on “Changes in Jira” in the Jira settings.";
 
 export function openLinked(url: string, number: number): void {
   const ref = prRefFromUrl(url);
@@ -26,9 +26,11 @@ export function openLinked(url: string, number: number): void {
 }
 
 /** The rows and the box, from what is already known; the data and the writing live in `JiraCardPrs`. */
-export function JiraPrsView({ links, error, writable, said, busy, draft, onDraft, onLink }: {
+export function JiraPrsView({ links, error, writable, said, busy, draft, onDraft, onLink, quiet }: {
   links: JiraLinks["links"] | null; error: string; writable: boolean; said: string; busy: boolean;
   draft: string; onDraft: (v: string) => void; onLink: () => void;
+  /** The pane already says writes are off; this section then draws no box and no second sentence. */
+  quiet?: boolean;
 }) {
   return (
     <div className="flex flex-col gap-1.5 min-w-0" aria-label="Pull requests">
@@ -50,7 +52,7 @@ export function JiraPrsView({ links, error, writable, said, busy, draft, onDraft
             {busy ? "Linking…" : "Link"}
           </button>
         </form>
-      ) : (
+      ) : !quiet && (
         <div className="text-[10.5px]" style={{ color: "var(--text4)" }}>{LINKING_OFF}</div>
       )}
       {said && <div className="text-[10.5px]" role="status" style={{ color: said.startsWith("!") ? "var(--warning-ink)" : "var(--success-ink)" }}>{said.replace(/^!/, "")}</div>}
@@ -58,7 +60,7 @@ export function JiraPrsView({ links, error, writable, said, busy, draft, onDraft
   );
 }
 
-export function JiraCardPrs({ query, writable }: { query: string; writable: boolean }) {
+export function JiraCardPrs({ query, writable, quiet }: { query: string; writable: boolean; quiet?: boolean }) {
   const [v, setV] = useState<JiraLinks | null>(null);
   const [draft, setDraft] = useState("");
   const [said, setSaid] = useState("");
@@ -81,5 +83,5 @@ export function JiraCardPrs({ query, writable }: { query: string; writable: bool
     setDraft("");
     setSaid(r.linked ? "Linked on the card." : "Already linked on the card.");
   };
-  return <JiraPrsView links={v?.links ?? null} error={v?.error ?? ""} writable={writable} said={said} busy={busy} draft={draft} onDraft={setDraft} onLink={() => void link()} />;
+  return <JiraPrsView links={v?.links ?? null} error={v?.error ?? ""} writable={writable} said={said} busy={busy} draft={draft} onDraft={setDraft} onLink={() => void link()} quiet={quiet} />;
 }

@@ -17,10 +17,12 @@ import { readState } from "../src/lib/boardStaleness.ts";
 
 const stubGlobal = globalStubs();
 let asked: { path: string; method: string }[] = [];
+let signals: (AbortSignal | null | undefined)[] = [];
 let answer: (path: string) => unknown = () => ({ ok: true });
 stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
 stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000", search: "" });
-stubGlobal("fetch", async (input: unknown, init?: { method?: string }) => {
+stubGlobal("fetch", async (input: unknown, init?: { method?: string; signal?: AbortSignal | null }) => {
+  signals.push(init?.signal);
   const u = new URL(String(input));
   const path = u.pathname + u.search;
   asked.push({ path, method: init?.method ?? "GET" });
@@ -128,7 +130,17 @@ describe("what the board says, in Jira's words", () => {
     expect(looksLikeCardId("1042", true)).toBe(true);
     expect(looksLikeCardId("rematch", false)).toBe(false);
     expect(looksLikeCardId("ORBIT-", false)).toBe(false);
-    expect(body).toContain("looksLikeCardId(q, source.caps.workspaceSearch)");
+    expect(body).toContain("looksLikeCardId(q, source.caps.workspaceSearch, source.shortKeys)");
+  });
+
+  test("Jira searches the site AND fetches a short key, ClickUp still only a long id", () => {
+    expect(JIRA_BOARD.shortKeys).toBe(true);
+    expect(CLICKUP_BOARD.shortKeys).toBeUndefined();
+    expect(looksLikeCardId("ORBIT-12", true, JIRA_BOARD.shortKeys)).toBe(true);
+    expect(looksLikeCardId("orbit_x-7", true, true)).toBe(true);
+    expect(looksLikeCardId("ORBIT-", true, true)).toBe(false);
+    expect(looksLikeCardId("rematch", true, true)).toBe(false);
+    expect(looksLikeCardId("ORBIT-12", true, CLICKUP_BOARD.shortKeys)).toBe(false);
   });
 
   test("the same status spelled two ways is one group, wearing the spelling the view lists", () => {
@@ -298,14 +310,16 @@ describe("JIRA_BOARD asks Jira", () => {
 
 describe("a control Jira cannot honour is not drawn", () => {
   test("every capability Jira lacks is off", () => {
-    expect(Object.entries(JIRA_BOARD.caps).filter(([, on]) => on)).toEqual([]);
+    // The site search is the one thing Jira can do of these; it is answered whole, not streamed.
+    expect(Object.entries(JIRA_BOARD.caps).filter(([, on]) => on)).toEqual([["workspaceSearch", true]]);
     expect(Object.values(CLICKUP_BOARD.caps).every(Boolean)).toBe(true);
   });
 
-  test("the workspace search box and its button hang on the capability, and Enter falls back to a jump", () => {
+  test("the workspace search box and its button hang on the capability, and a source without one falls back to a jump", () => {
     expect(body).toContain("{source.caps.workspaceSearch && !onLooked && q.trim().length >= 2 && !looksLikeId && (");
     expect(body).toContain("if (!source.caps.workspaceSearch) { if (looksLikeId) void reveal(); return; }");
-    expect(body).toContain('source.caps.workspaceSearch ? "Filter this board · Enter searches the workspace" : "Filter this board"');
+    expect(body).toContain('`Filter this board · Enter searches ${source.nouns.tracker}`');
+    expect(body).toContain("title={source.nouns.searchTip}");
   });
 
   test("a new address for a saved board is offered only where a source can do it", () => {
@@ -324,9 +338,13 @@ describe("a control Jira cannot honour is not drawn", () => {
 
   test("ClickUp's warm-up and id lookup never run for another source", () => {
     expect(body).toContain('const clickupHere = source.id === "clickup" && boards?.connected === true;');
-    // The id lookup sits behind the workspace search, which Jira does not have.
+    // The sweep's id lookup is ClickUp's own; another source asks its own `find`.
     const search = body.slice(body.indexOf("const searchAll = useCallback("));
-    expect(search.indexOf("api.clickupFind(asked)")).toBeGreaterThan(search.indexOf("const searchAll = useCallback("));
+    expect(search).toContain('source.id === "clickup" && /^\\s*([A-Za-z][\\w]*-)?\\d{3,}\\s*$/.test(asked)');
+    expect(search).toContain('source.id !== "clickup" && looksLikeCardId(asked, true, source.shortKeys)');
+    expect(search).toContain("source.find(asked).then(landCard)");
+    // A source that cannot stream is asked once, not streamed and then asked again.
+    expect(search).toContain("!source.caps.stream ? { ok: false } : await source.searchStream(");
     expect(body).toContain("if (!source.caps.workspaceSearch) { if (looksLikeId) void reveal(); return; }");
   });
 
@@ -395,5 +413,32 @@ describe("a Jira card's pull requests", () => {
     expect(asked.some((a) => a.path.startsWith("/clickup/prs"))).toBe(true);
     expect(asked.some((a) => a.path.startsWith("/jira/prs?project="))).toBe(true);
     store.forgetCardPrs();
+  });
+});
+
+describe("Enter searches the site", () => {
+  beforeEach(() => { asked = []; signals = []; answer = () => ({ ok: true, tasks: [card("12", "Backlog")] }); });
+
+  test("one request per search, with the query encoded and the reader's abort attached", async () => {
+    const ac = new AbortController();
+    const r = await JIRA_BOARD.search("sync ORBIT-12 & more", false, ac.signal);
+    expect(r.ok).toBe(true);
+    expect(asked.map((a) => a.path)).toEqual(["/jira/search?q=sync%20ORBIT-12%20%26%20more"]);
+    expect(signals[0]).toBe(ac.signal);
+  });
+
+  test("the streamed form is the same single request, delivered as one batch", async () => {
+    const got: ProviderTask[][] = [];
+    const r = await JIRA_BOARD.searchStream("ORBIT-12", false, (b) => { got.push(b); });
+    expect(r.ok).toBe(true);
+    expect(got.map((b) => b.map((t) => t.id))).toEqual([["12"]]);
+    expect(asked.length).toBe(1);
+  });
+
+  test("a short key is fetched through the site's own find, never ClickUp's", async () => {
+    answer = () => ({ ok: true, task: card("12", "Backlog") });
+    const r = await JIRA_BOARD.find("ORBIT-12");
+    expect(r.ok).toBe(true);
+    expect(asked.map((a) => a.path)).toEqual(["/jira/find?q=ORBIT-12"]);
   });
 });

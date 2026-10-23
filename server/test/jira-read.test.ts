@@ -394,6 +394,26 @@ describe("text search", () => {
     expect(q).not.toMatch(/[(){}[\]^~*?:/&|!+](?=[^"]*" ORDER)/);
   });
 
+  test("a card key stays a text match: a key clause can make Data Center refuse the whole search", async () => {
+    for (const k of ["ORBIT-12", "orbit-7", "ORBIT-1042", "utf-8"]) {
+      proxy.jql.length = 0;
+      await search(k);
+      expect(new Set(proxy.jql)).toEqual(new Set([`project in ("ORBIT", "ACME") AND text ~ "${k}" ORDER BY updated DESC`]));
+    }
+  });
+
+  test("words that only look like a key stay a text match, and no query is ever without its projects", async () => {
+    for (const q of ["ORBIT-", "ORBIT-1 or key > 0", "a-1b", "ORBIT-12 ORBIT-13"]) {
+      proxy.jql.length = 0;
+      await search(q);
+      expect(proxy.jql.length).toBeGreaterThan(0);
+      for (const j of proxy.jql) {
+        expect(j).toMatch(/^project in \("ORBIT", "ACME"\) AND text ~ "[^"\\]*" ORDER BY updated DESC$/);
+        expect(j).not.toContain("key =");
+      }
+    }
+  });
+
   test("nothing to search for is a sentence and no request", async () => {
     for (const q of ["", "   ", '"', "()*?", "\u0000\u0001"]) {
       expect(await search(q)).toMatchObject({ ok: false, error: "Type something to search for" });

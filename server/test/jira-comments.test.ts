@@ -58,8 +58,9 @@ function suite(flavor: FakeFlavor) {
         ? await J.connectJira({ site: "jira.acme.example", token: FAKE_PAT })
         : await J.connectJira({ email: FAKE_EMAIL, site: "acme.atlassian.net", token: FAKE_TOKEN });
       expect(r.ok).toBe(true);
-      // The priority list is remembered after the first card read, as it is in a real session.
+      // The priority list is remembered after the first card read, and the site's field ids after the first board read, as in a real session.
       expect((await J.withStored((c) => J.readIssue(c, "ORBIT-1042"))).ok).toBe(true);
+      expect((await J.withStored((c) => J.siteFields(c))).ok).toBe(true);
       fake.requests.length = 0;
     });
     afterEach(() => {
