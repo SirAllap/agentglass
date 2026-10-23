@@ -37,6 +37,8 @@ import { FinderPathBar } from "./FinderPathBar.tsx";
 import { ErrorDialog } from "./VolumeDialogs.tsx";
 import { FinderTabs } from "./FinderTabs.tsx";
 import { closeTab, moveTab, openTab, selectTab, showHere, stepTab, tabsOf } from "../../../lib/finderTabs.ts";
+import { loadVisited, recordVisit, saveVisited, type Visit } from "../../../lib/finderVisited.ts";
+import { nothingTo } from "../../../lib/finderOps.ts";
 import { useFinderOps, type Chosen } from "./useFinderOps.tsx";
 import { FinderSearch } from "./FinderSearch.tsx";
 import type { HitTarget } from "../../../lib/finderSearch.ts";
@@ -152,7 +154,11 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   const [help, setHelp] = useState(false);
   const [searching, setSearching] = useState(false);
   const openSearch = useMemo(() => guarded("search-open", () => setSearching(true)), [guarded]);
-  const searchingRef = useRef(false); searchingRef.current = searching;
+  /** Ctrl+Shift+K: the same overlay over the folders visited before. Each folder the finder stands in adds a visit. */
+  const [jumping, setJumping] = useState(false);
+  const openJump = useMemo(() => guarded("search-open", () => setJumping(true)), [guarded]);
+  const [visited, setVisited] = useState<Visit[]>(loadVisited);
+  const searchingRef = useRef(false); searchingRef.current = searching || jumping;
   /** The panel's own width once somebody has dragged its edge. */
   const [prevDrag, setPrevDrag] = useState<number | undefined>(() => back?.prevDrag);
   const [filterTick, setFilterTick] = useState({ col: 0, n: 0 });
@@ -239,6 +245,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   }, [start, guarded, forgetScroll]);
 
   useEffect(() => { setVisitHidden(false); }, [trail[0]]);
+  useEffect(() => { const p = trail[0]; if (p) setVisited((v) => { const next = recordVisit(v, p, Date.now()); saveVisited(next); return next; }); }, [trail[0]]);
   useEffect(() => { if (!saved.hidden && selectsHidden(sel)) setVisitHidden(true); }, [sel, saved.hidden]);
 
   /* A request that names a file in the place the finder is already in changes no `start`, so it is read on its own. */
@@ -542,6 +549,13 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
     }
     return deepest ? { dir: trail[deepest.col]!, rows: [deepest.row] } : null;
   };
+  /** Ctrl+A: every row of the focused folder; an empty one says so, as Strata's footer does. */
+  const selectEvery = () => {
+    const col = prefs.view === "columns" ? focusCol : last;
+    const rows = columns[col]?.display.rows ?? [];
+    if (!rows.length) { setNote("Nothing to select"); return; }
+    choose(col, selectAll(rows, chosenOf(col)));
+  };
   const ops = useFinderOps({
     chosen: chosenNow,
     rowsIn: (dir) => columns[trail.indexOf(dir)]?.display.rows ?? [],
@@ -555,7 +569,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
     pins,
     togglePin: togglePinned,
     toggleHidden: () => setPrefs({ hidden: !prefs.hidden }),
-    selectAll: () => { const col = prefs.view === "columns" ? focusCol : last; choose(col, selectAll(columns[col]?.display.rows ?? [], chosenOf(col))); },
+    selectAll: () => selectEvery(),
     open: (dir, row) => { const col = trail.indexOf(dir); if (isFolder(row) && !row.locked) { if (prefs.view === "columns") { pick(col, row); enterFolder(col); } else go(joinPath(dir, row.name)); } else if (!row.locked) openDefault(joinPath(dir, row.name)); },
     preview: () => { if (wide) setPrefs({ preview: !prefs.preview }); else setPeek((p) => !p); },
     copyText: (text, said) => { void navigator.clipboard?.writeText(text).then(() => setNote(said)).catch(() => setNote("Could not copy")); },
@@ -638,7 +652,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
       case "pfind": root.current?.querySelector("[data-finder-preview]")?.dispatchEvent(new CustomEvent("agx-preview-find", { detail: a.do })); break;
       case "filter": setFilterTick((t) => ({ col: prefs.view === "columns" ? focusCol : last, n: t.n + 1 })); break;
       case "view": setPrefs({ view: a.view }); break;
-      case "preview": if (wide) setPrefs({ preview: !prefs.preview }); else setPeek((p) => !p); break;
+      case "preview": if (!chosenNow()) { setNote(nothingTo("preview")); break; } if (wide) setPrefs({ preview: !prefs.preview }); else setPeek((p) => !p); break;
       case "hidden": setPrefs({ hidden: !prefs.hidden }); break;
       case "terminal": onBench(trail[focusCol] ?? trail[0]!, "terminal"); break;
       case "sidebar": toggleSide(); break;
@@ -656,7 +670,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
         choose(col, extendSelect(rows, chosenOf(col), extendBy(a.by, page, per)));
         break;
       }
-      case "all": { const col = prefs.view === "columns" ? focusCol : last; choose(col, selectAll(columns[col]?.display.rows ?? [], chosenOf(col))); break; }
+      case "all": selectEvery(); break;
       case "toggle": { const col = prefs.view === "columns" ? focusCol : last; choose(col, toggleCursor(columns[col]?.display.rows ?? [], chosenOf(col))); break; }
     }
   }, [closeColumn, move, choose, columns, multi, sel, mainBox.w, mainBox.h, last, deepest, prefs, enterFolder, go, goUp, hist, goHist, home, trail, focusCol, onBench, wide, toggleSide, setPrefs, copy, currentPath, ops]);
@@ -678,8 +692,8 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
       if (modal && mine && windowChord(win)) { e.preventDefault(); e.stopPropagation(); return; }
       if (opsOpen.current) return; // a menu or a question has the keys while it is up
       // Ctrl+K is the app's command palette everywhere else; inside the finder it is Strata's search.
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k" && mine) {
-        e.preventDefault(); e.stopPropagation(); openSearch(); return;
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "k" && mine) {
+        e.preventDefault(); e.stopPropagation(); if (e.shiftKey) openJump(); else openSearch(); return;
       }
       if (!["Shift", "Control", "Alt", "Meta"].includes(e.key)) pointerNav.current = false;
       cancelSlowRef.current(); // any key cancels a pending slow-click rename, as in Strata
@@ -741,7 +755,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
     return () => window.removeEventListener("keydown", on, true);
   }, []);
   /* When a menu, a question, the search, Settings, the shortcuts or the typed path goes away, the keyboard goes back to the files, as Strata returns it to the cursor. */
-  const overlay = ops.hasMenu || searching || !!settings || help || pathEditing || !!held;
+  const overlay = ops.hasMenu || searching || jumping || !!settings || help || pathEditing || !!held;
   const hadOverlay = useRef(overlay);
   useEffect(() => { if (hadOverlay.current && !overlay) setTimeout(() => { if (!document.activeElement?.closest("[data-finder-sidebar]")) focusFilesRef.current(); }, 0); hadOverlay.current = overlay; }, [overlay]);
   /* Ctrl and the wheel over the finder: its text size, as Strata's (a listener that is not passive, or the browser zooms the page instead). */
@@ -1050,6 +1064,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
         )}
         <span className="flex-1" />
         <span className="truncate" aria-live="polite" aria-description={describedCount}>{note ?? count}</span>
+        {ops.jobsIndicator}
       </footer>
       {band && <div aria-hidden className="fixed pointer-events-none rounded-sm" style={{ left: band.left, top: band.top, width: band.right - band.left, height: band.bottom - band.top, zIndex: 3, background: "color-mix(in srgb, var(--primary) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 55%, transparent)" }} />}
       {held && (
@@ -1074,6 +1089,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
       {folderPeek.node}
       {help && <HelpSheet onClose={() => setHelp(false)} />}
       {searching && <FinderSearch home={home} onTarget={reveal} onClose={() => setSearching(false)} />}
+      {jumping && <FinderSearch home={home} jump={{ visited, here: trail[0] ?? "" }} onTarget={reveal} onClose={() => setJumping(false)} />}
       {settings && <FinderSettings say={setNote} prefs={prefs} onPref={setPrefs} onReset={() => { setPrefsState(DEFAULT_PREFS); savePrefs(DEFAULT_PREFS); setNote("Finder settings reset"); }} onForget={() => { try { localStorage.removeItem(SNAP_KEY); } catch { /* nothing kept */ } setDragged({}); scrolls.current = {}; setNote("Remembered places cleared"); }} onClose={() => setSettings(null)} />}
       {menu && <AppearanceMenu anchor={menu} prefs={prefs} onPref={setPrefs} onClose={() => setMenu(null)} />}
     </div>

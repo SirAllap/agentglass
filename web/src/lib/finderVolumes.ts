@@ -40,11 +40,25 @@ export type StepDialog =
   | { kind: "error"; title: string; message: string };
 /** What a connection step puts on screen; `done` puts nothing. */
 export function stepDialog(s: RemoteStep): StepDialog | null {
-  if (s.state === "password") return { kind: "form", title: "Authentication required", fields: s.fields };
-  if (s.state === "question") return { kind: "ask", title: "Verify the server", message: s.message, choices: s.choices };
-  if (s.state === "error") return { kind: "error", title: "Unable to open location", message: s.error };
+  if (s.state === "password") return { kind: "form", title: credentialWords(s.message).title, fields: s.fields };
+  if (s.state === "question") return { kind: "ask", title: VERIFY_TITLE, message: s.message, choices: s.choices };
+  if (s.state === "error") return { kind: "error", title: "Unable to connect", message: s.error };
   return null;
 }
+
+/** The two lines Strata writes over a host-key question, and the one under it that says what to do when there is no fingerprint (browser/location.rs). */
+export const VERIFY_TITLE = "Verify server identity";
+export const VERIFY_HINT = "Only continue after verifying the SSH host key through a trusted source.";
+export const VERIFY_NO_PRINT = "If the server did not provide a fingerprint, verify it outside the Finder before continuing.";
+/** Strata's credential prompt: a key that wants a passphrase says so in its title and names its field the same way. */
+export function credentialWords(message: string): { title: string; secret: "Password" | "Passphrase" } {
+  const secret = /passphrase/i.test(message) ? "Passphrase" : "Password";
+  return { title: secret === "Passphrase" ? "Passphrase required" : "Authentication required", secret };
+}
+/** The word over a field: gio asks for "User", Strata's label is "Username". */
+export const fieldLabel = (f: "User" | "Domain" | "Password", secret: string): string => (f === "User" ? "Username" : f === "Password" ? secret : f);
+/** Strata marks a choice that refuses (Cancel, Reject, Don't…) and lists it first; the others are the dangerous ones. */
+export const isRejection = (choice: string): boolean => /^(cancel|reject|deny|disconnect|abort|do not|don't|no)\b/i.test(choice.trim());
 
 // One socket frame tells every finder the list moved; each re-reads it.
 const listeners = new Set<() => void>();

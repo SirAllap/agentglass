@@ -1312,6 +1312,7 @@ const realApi = {
   openWithLaunch: (id: string, paths: string[], always?: { mime: string }) =>
     post<{ ok: boolean; error?: string; note?: string }>("/finder/openwith/launch", { id, paths, ...(always ? { always: true, mime: always.mime } : {}) }).catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) } as { ok: boolean; error?: string; note?: string })),
   fsJobCancel: (id: string) => post<{ ok: boolean }>("/fs/jobs/cancel", { id }),
+  fsJobsClear: () => post<{ ok: boolean }>("/fs/jobs/clear", {}),
   /** The sidebar's pinned places: GTK's bookmarks file, read freely, changed with the desk key (server/src/bookmarks.ts). */
   bookmarks: () => get<{ ok: boolean; bookmarks: PinnedPlace[] }>("/finder/bookmarks").catch(() => ({ ok: false, bookmarks: [] as PinnedPlace[] })),
   bookmarkToggle: (path: string) => post<{ ok: boolean; error?: string; bookmarks?: PinnedPlace[] }>("/finder/bookmarks", { path }).catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) } as { ok: boolean; error?: string; bookmarks?: PinnedPlace[] })),
@@ -2757,6 +2758,7 @@ const demoApi: typeof realApi = {
   openWithList: () => D({ ok: false, error: "the demo has no filesystem" }),
   openWithLaunch: () => D({ ok: false, error: "the demo has no filesystem" }),
   fsJobCancel: () => D({ ok: false }),
+  fsJobsClear: () => D({ ok: false }),
   actionsMatch: () => D({ ok: true, actions: [] }),
   actionsList: () => D({ ok: true, actions: [], problems: [] }),
   actionRead: () => D({ ok: false, error: "the demo has no filesystem" }),

@@ -3,7 +3,7 @@
  * click does, what the prompt says. Strata's rules, asserted without a screen.
  */
 import { describe, expect, test } from "bun:test";
-import { FAILED, WRONG_PASSPHRASE, clickOf, deviceIcon, disconnectItem, failedTitle, lockButton, releaseButton, stepDialog, volumesChanged } from "../src/lib/finderVolumes.ts";
+import { FAILED, WRONG_PASSPHRASE, credentialWords, fieldLabel, isRejection, clickOf, deviceIcon, disconnectItem, failedTitle, lockButton, releaseButton, stepDialog, volumesChanged } from "../src/lib/finderVolumes.ts";
 import type { Volume } from "../../shared/types.ts";
 
 const v = (o: Partial<Volume>): Volume => ({ id: "/dev/sdb1", name: "acme-backup", encrypted: false, locked: false, mounted: false, release: null, size: 1, ...o });
@@ -65,10 +65,21 @@ describe("a step of connecting", () => {
   test("a password step is a form with its fields, a question is buttons with the message untouched", () => {
     expect(stepDialog({ state: "password", session: "s", message: "m", fields: ["User", "Password"], defaults: { User: "ana" } })).toEqual({ kind: "form", title: "Authentication required", fields: ["User", "Password"] });
     expect(stepDialog({ state: "password", session: "s", message: "m", fields: ["Password"], defaults: {} })).toMatchObject({ title: "Authentication required" });
-    expect(stepDialog({ state: "question", session: "s", message: "fingerprint SHA256:abc", choices: ["Log In Anyway", "Cancel"] })).toEqual({ kind: "ask", title: "Verify the server", message: "fingerprint SHA256:abc", choices: ["Log In Anyway", "Cancel"] });
+    expect(stepDialog({ state: "question", session: "s", message: "fingerprint SHA256:abc", choices: ["Log In Anyway", "Cancel"] })).toEqual({ kind: "ask", title: "Verify server identity", message: "fingerprint SHA256:abc", choices: ["Log In Anyway", "Cancel"] });
   });
-  test("an error is Strata's 'Unable to open location', done is nothing to show", () => {
-    expect(stepDialog({ state: "error", error: "x" })).toEqual({ kind: "error", title: "Unable to open location", message: "x" });
+  test("the credential prompt names a passphrase and a username the way Strata does", () => {
+    expect(credentialWords("Enter passphrase for key")).toEqual({ title: "Passphrase required", secret: "Passphrase" });
+    expect(credentialWords("Enter your credentials for \u201chost\u201d.")).toEqual({ title: "Authentication required", secret: "Password" });
+    expect(fieldLabel("User", "Password")).toBe("Username");
+    expect(fieldLabel("Password", "Passphrase")).toBe("Passphrase");
+  });
+  test("a choice that refuses is listed first, as Strata orders them", () => {
+    expect(["Log In Anyway", "Cancel"].map(isRejection)).toEqual([false, true]);
+    expect(isRejection("Don't trust")).toBe(true);
+    expect(isRejection("Notify me")).toBe(false);
+  });
+  test("a failed connection is Strata's 'Unable to connect', done is nothing to show", () => {
+    expect(stepDialog({ state: "error", error: "x" })).toEqual({ kind: "error", title: "Unable to connect", message: "x" });
     expect(stepDialog({ state: "done", uri: "u" })).toBeNull();
   });
 });

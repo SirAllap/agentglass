@@ -172,7 +172,7 @@ export function TrashPanel({ home, onRestored, onClose }: { home: string; onRest
             <div key={r.id} role="listitem" className="flex items-center gap-2 px-3 py-1.5" style={{ borderBottom: LINE }}>
               <div className="flex-1 min-w-0">
                 <div className="truncate">{r.name}</div>
-                <div className="truncate text-[10.5px]" style={{ color: "var(--text3)" }} title={r.from}>{shortPath(r.from, home, 44)} · {r.deleted.replace("T", " ")}</div>
+                <div className="flex gap-1.5 text-[10.5px]" style={{ color: "var(--text3)" }} title={r.from}><span className="truncate min-w-0">{shortPath(r.from, home, 44)}</span><span className="shrink-0">· {r.deleted.replace("T", " ")}</span></div>
               </div>
               <button className="agx-btn rounded-md px-2" style={{ minHeight: HIT - 6, border: EDGE }} onClick={() => void restore(r)}>Restore</button>
               <button className="agx-btn rounded-md px-2" aria-label={`Delete ${r.name} for good`} style={{ minHeight: HIT - 6, border: EDGE, color: "var(--error-ink)" }} onClick={() => ask([r.id], [r.name])}>Delete</button>
@@ -217,7 +217,7 @@ export function OpenWithDialog({ paths, onLaunch, onClose }: {
   const go = () => { const r = rows[pick]; if (r) onLaunch(r.app.id, always && mime ? { mime } : null); };
   const empty = list && !rows.length ? (q ? "No applications match" : list.error ?? list.empty ?? "No compatible applications were found") : null;
   return (
-    <Sheet label="Open With" onClose={onClose} width={420}>
+    <Sheet label="Open With" onClose={onClose} width={480}>
       <DialogHead icon={<StrataIcon set="act" name="external-link" size={ICON.md} />} title="Open With" sub={`Choose an application to open ${paths.length === 1 ? "this item" : "these items"}`} onClose={onClose} />
       <input ref={input} value={q} onChange={(e) => { setQ(e.target.value); setAt(0); }} spellCheck={false} placeholder="Search applications…" aria-label="Search applications"
         onKeyDown={(e) => {
@@ -225,15 +225,15 @@ export function OpenWithDialog({ paths, onLaunch, onClose }: {
           else if (e.key === "ArrowDown") { e.preventDefault(); setAt(Math.min(rows.length - 1, pick + 1)); }
           else if (e.key === "ArrowUp") { e.preventDefault(); setAt(Math.max(0, pick - 1)); }
         }} className={`${INPUT} w-full mb-2`} style={INPUT_STYLE} />
-      <div role="listbox" aria-label="Applications" className="overflow-y-auto rounded-md" style={{ border: EDGE, maxHeight: 260 }}>
+      <div role="listbox" aria-label="Applications" className="agx-scroll overflow-y-auto rounded-md" style={{ border: EDGE, maxHeight: 300, minHeight: 200, padding: 3, background: "color-mix(in srgb, var(--bg) 42%, transparent)" }}>
         {!list && <p className="m-0 p-3" style={{ color: "var(--text3)" }}>Looking for applications…</p>}
         {empty && <p role="status" className="m-0 p-3" style={{ color: "var(--text3)" }}>{empty}</p>}
         {rows.map((r, i) => (
           <div key={r.app.id}>
-            {r.head && <div className="px-2 pt-2 pb-1 text-[11px]" style={{ color: "var(--text3)" }}>{r.head}</div>}
-            <button role="option" aria-selected={i === pick} onClick={() => setAt(i)} onDoubleClick={go} className="agx-btn w-full text-left px-2 rounded-md block"
-              style={{ minHeight: HIT, background: i === pick ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent" }}>
-              <span className="block truncate">{r.app.name}</span>
+            {r.head && <div className="text-[11px]" style={{ color: "var(--text3)", fontWeight: 700, padding: "8px 6px 3px" }}>{r.head}</div>}
+            <button role="option" aria-selected={i === pick} onClick={() => setAt(i)} onDoubleClick={go} className="agx-btn w-full text-left block"
+              style={{ minHeight: 36, padding: "4px 8px", marginBottom: 2, borderRadius: 5, background: i === pick ? "color-mix(in srgb, var(--primary) 20%, transparent)" : "transparent" }}>
+              <span className="block truncate" style={{ fontWeight: 600 }}>{r.app.name}</span>
               {r.app.comment && <span className="block truncate text-[11px]" style={{ color: "var(--text3)" }}>{r.app.comment}</span>}
             </button>
           </div>

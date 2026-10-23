@@ -34,7 +34,7 @@ describe("a server's credentials", () => {
   test("the connect dialog hands them over once and empties its state, and has no way to say yes by itself", () => {
     expect(dialogs).toMatch(/const answers = vals; setVals\(\{\}\); onAnswer\(\{ answers \}\)/);
     // A host key is a button per choice gio offered; nothing in the dialog or the flow chooses.
-    expect(dialogs).toContain("onAnswer({ choice: i + 1 })");
+    expect(dialogs).toContain("onAnswer({ choice: n })");
     expect(code(flow)).not.toMatch(/choice:\s*\d/);
   });
   test("the password field hides what is typed until asked", () => { expect(dialogs).toContain('type={f === "Password" && !peek ? "password" : "text"}'); });

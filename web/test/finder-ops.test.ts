@@ -4,7 +4,7 @@
  * are refused before the round trip.
  */
 import { describe, expect, test } from "bun:test";
-import { clipPaths, deleteWords, doneNote, dropPlan, volumeOf, jobFraction, jobsShown, menuFor, menuHead, nameProblem, shortPath, pasteOp, stemEnd, type MenuCtx } from "../src/lib/finderOps.ts";
+import { clipPaths, deleteWords, doneNote, dropPlan, volumeOf, jobFraction, nothingTo, cantHere, jobsLabel, jobStatus, elapsedText, menuFor, menuHead, nameProblem, shortPath, pasteOp, stemEnd, type MenuCtx } from "../src/lib/finderOps.ts";
 import { finderKey, type KeyIn } from "../src/lib/finderKeys.ts";
 
 const k = (key: string, o: Partial<KeyIn> = {}): KeyIn => ({ key, ctrl: false, meta: false, shift: false, alt: false, ...o });
@@ -171,9 +171,37 @@ describe("the jobs panel", () => {
     expect(jobFraction({ state: "running", total: 100, done: 900 })).toBe(1);
     expect(jobFraction({ state: "done", total: null, done: 0 })).toBe(1);
   });
-  test("a finished job stays a few seconds, a running one stays", () => {
-    const js = [{ state: "running", id: 1 }, { state: "done", ended: 9_000, id: 2 }, { state: "done", ended: 1_000, id: 3 }, { state: "error", id: 4 }];
-    expect(jobsShown(js, 10_000).map((j) => j.id)).toEqual([1, 2]);
+  test("the footer button counts what runs, then what finished, and says so when one failed", () => {
+    expect(jobsLabel([])).toBe("");
+    expect(jobsLabel([{ state: "running" }, { state: "done" }, { state: "running" }])).toBe("2 running");
+    expect(jobsLabel([{ state: "done" }, { state: "cancelled" }])).toBe("2 finished");
+    expect(jobsLabel([{ state: "done" }, { state: "error" }])).toBe("2 finished \u00b7 failures");
+  });
+  test("a job's status line is Strata's wording and its time", () => {
+    expect(elapsedText(42_000)).toBe("42 s");
+    expect(elapsedText(185_000)).toBe("3 min 05 s");
+    expect(elapsedText(3_720_000)).toBe("1 h 02 min");
+    expect(jobStatus({ state: "running", started: 1_000 }, 5_000)).toBe("Running for 4 s");
+    expect(jobStatus({ state: "done", started: 1_000, ended: 3_000 }, 99_000)).toBe("Done in 2 s");
+    expect(jobStatus({ state: "error", started: 0, ended: 1_000 }, 9_000)).toBe("Failed after 1 s");
+    expect(jobStatus({ state: "cancelled", started: 0, ended: 3_000 }, 9_000)).toBe("Cancelled after 3 s");
+  });
+});
+
+describe("the footer's one-line answers", () => {
+  test("a command with nothing to act on names the verb, as Strata does", () => {
+    expect(nothingTo("copy")).toBe("Nothing to copy");
+    expect(nothingTo("trash")).toBe("Nothing to delete");
+    expect(nothingTo("move-to")).toBe("Nothing to move");
+    expect(nothingTo("rename")).toBe("Nothing to rename");
+    expect(nothingTo("preview")).toBe("Nothing to preview");
+  });
+  test("Recent refuses to make, paste or rename, and says so", () => {
+    expect(cantHere("new-folder", true)).toBe("Can\u2019t create items here");
+    expect(cantHere("paste", true)).toBe("Can\u2019t create items here");
+    expect(cantHere("rename", true)).toBe("Can\u2019t rename items here");
+    expect(cantHere("copy", true)).toBeNull();
+    expect(cantHere("rename", false)).toBeNull();
   });
 });
 

@@ -8,7 +8,7 @@
 import { isAppChord } from "../../../lib/finderKeys.ts";
 import { useEffect, useRef, useState } from "react";
 import { HIT } from "../../../lib/iconSize.ts";
-import { WRONG_PASSPHRASE } from "../../../lib/finderVolumes.ts";
+import { WRONG_PASSPHRASE, VERIFY_HINT, VERIFY_NO_PRINT, VERIFY_TITLE, credentialWords, fieldLabel, isRejection } from "../../../lib/finderVolumes.ts";
 import { EDGE, INPUT, INPUT_STYLE } from "../../workspace/Chrome.tsx";
 import type { RemoteStep } from "../../../../../shared/types.ts";
 import { StrataIcon } from "./StrataIcon.tsx";
@@ -104,26 +104,32 @@ export function ConnectDialog({ step, busy, onAnswer, onCancel }: { step: Extrac
   const [peek, setPeek] = useState(false);
   const send = () => { if (busy) return; const answers = vals; setVals({}); onAnswer({ answers }); };
   const q = step.state === "question";
+  const words = credentialWords(step.message);
+  const title = q ? VERIFY_TITLE : words.title;
+  const choices = step.state === "question" ? step.choices.map((c, i) => ({ c, n: i + 1 })).sort((x, y) => Number(isRejection(y.c)) - Number(isRejection(x.c))) : [];
   useDialogEscape(onCancel);
   return (
-    <div role="dialog" aria-modal="true" aria-label={q ? "Verify the server" : "Authentication required"} className="absolute inset-0 grid place-items-center p-4" style={SCRIM}
+    <div role="dialog" aria-modal="true" aria-label={title} className="absolute inset-0 grid place-items-center p-4" style={SCRIM}
       onKeyDown={(e) => { if (!isAppChord(e)) e.stopPropagation(); if (e.key === "Escape") onCancel(); else spatialKey(e); }}>
       <div className="rounded-xl p-4 text-[12px]" style={CARD} onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center gap-2 mb-1"><StrataIcon set="act" name="key" /><b className="flex-1 text-[13px]">{q ? "Verify the server" : "Authentication required"}</b></div>
-        <p className="m-0 mb-3 whitespace-pre-wrap break-words" style={{ color: "var(--text3)" }}>{step.message}</p>
+        <div className="flex items-center gap-2 mb-1"><StrataIcon set="act" name={q ? "triangle-alert" : "key"} /><b className="flex-1 text-[13px]">{title}</b>
+          <button type="button" aria-label="Close" className="agx-btn rounded-md flex items-center justify-center" style={{ width: HIT, height: HIT }} onClick={onCancel}><StrataIcon set="act" name="x" /></button></div>
+        <p className="m-0 mb-3" style={{ color: "var(--text3)" }}>{q ? VERIFY_HINT : "Authenticate to access this volume or location"}</p>
+        <p className="m-0 mb-3 whitespace-pre-wrap break-words">{step.message}</p>
+        {q && <p className="m-0 mb-3" style={{ color: "var(--text3)" }}>{VERIFY_NO_PRINT}</p>}
         {step.state === "password" && step.fields.map((f, i) => (
           <div key={f} className="mb-2">
-            <label className="block mb-1" style={{ color: "var(--text3)" }} htmlFor={`finder-cred-${f}`}>{f === "Password" ? "Password" : f}</label>
+            <label className="block mb-1" style={{ color: "var(--text3)" }} htmlFor={`finder-cred-${f}`}>{fieldLabel(f, words.secret)}</label>
             <div className="flex items-center gap-1">
               <input id={`finder-cred-${f}`} autoFocus={i === 0} type={f === "Password" && !peek ? "password" : "text"} value={vals[f] ?? ""} onChange={(e) => setVals((v) => ({ ...v, [f]: e.target.value }))} autoComplete="off" spellCheck={false} data-1p-ignore
                 onKeyDown={(e) => { if (e.key === "Enter") send(); }} className={`${INPUT} flex-1 min-w-0`} style={INPUT_STYLE} />
-              {f === "Password" && <button type="button" aria-label={peek ? "Hide password" : "Show password"} aria-pressed={peek} className="agx-btn rounded-md flex items-center justify-center" style={{ width: HIT, height: HIT, border: EDGE }} onClick={() => setPeek((v) => !v)}><StrataIcon set="act" name={peek ? "eye-off" : "eye"} /></button>}
+              {f === "Password" && <button type="button" aria-label={peek ? `Hide ${words.secret.toLowerCase()}` : `Show ${words.secret.toLowerCase()}`} aria-pressed={peek} className="agx-btn rounded-md flex items-center justify-center" style={{ width: HIT, height: HIT, border: EDGE }} onClick={() => setPeek((v) => !v)}><StrataIcon set="act" name={peek ? "eye-off" : "eye"} /></button>}
             </div>
           </div>))}
         <div className="flex justify-end gap-2 mt-3">
           {!q && <button type="button" className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE }} onClick={onCancel}>Cancel</button>}
           {step.state === "question"
-            ? step.choices.map((c, i) => <button key={c} type="button" autoFocus={i === step.choices.length - 1} disabled={busy} className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE }} onClick={() => onAnswer({ choice: i + 1 })}>{c}</button>)
+            ? choices.map(({ c, n }) => <button key={c} type="button" autoFocus={isRejection(c)} disabled={busy} className="agx-btn rounded-md px-3" style={{ minHeight: HIT, border: EDGE, color: isRejection(c) ? undefined : "var(--error-ink)" }} onClick={() => onAnswer({ choice: n })}>{c}</button>)
             : <button type="button" disabled={busy} className="agx-btn rounded-md px-3" style={{ minHeight: HIT, background: "var(--text)", color: "var(--bg)" }} onClick={send}>Connect</button>}
         </div>
       </div>

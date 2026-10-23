@@ -3,14 +3,14 @@
 // awaited. The decisions are lib/finderOps.ts (tested); the work is /fs/op.
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { api } from "../../../lib/api.ts";
-import { failedNote, clipPaths, deleteWords, doneNote, dropAsks, dropPlan, freeName, menuFor, menuHead, pasteOp, withActions, type Clip, type Item, type Target } from "../../../lib/finderOps.ts";
+import { failedNote, clipPaths, deleteWords, doneNote, dropAsks, dropPlan, freeName, menuFor, menuHead, nothingTo, cantHere, pasteOp, withActions, type Clip, type Item, type Target } from "../../../lib/finderOps.ts";
 import { actionGroup, confirmWords } from "../../../lib/finderActions.ts";
 import { isFolder, isRecent, joinPath, type Row } from "../../../lib/finderMiller.ts";
 import { inTrash } from "../../../lib/finderPointer.ts";
 import type { FinderAction, FsBody, FsJob } from "../../../../../shared/types.ts";
 import { ConfirmDialog, ContextMenu, InlineName, Sheet, TransferDialog, type InlineEdit } from "./FinderOpsUI.tsx";
 import { printable, printUrl } from "../../../lib/finderPrint.ts";
-import { JobsPanel } from "./FinderJobs.tsx";
+import { JobsIndicator } from "./FinderJobs.tsx";
 import { clearStage, peekStage, subscribeStage } from "../../../lib/stageIntent.ts";
 import { stageRun, type FinderStageArgs } from "../../../lib/finderStage.ts";
 import { StageDialog } from "./FinderStage.tsx";
@@ -90,6 +90,12 @@ export function useFinderOps(env: OpsEnv) {
     let t = setTimeout(tick, 0);
     return () => { off = true; clearTimeout(t); };
   }, [polling]);
+  // Once on opening, so the footer button can show what ended before (the server keeps the last twenty), and pick up a job still running.
+  useEffect(() => {
+    let off = false;
+    void api.fsJobs().then((r) => { if (off || !r?.jobs.length) return; setJobs(r.jobs); if (r.jobs.some((j) => j.state === "running")) setPolling(true); }).catch(() => {});
+    return () => { off = true; };
+  }, []);
   const envRef = useRef(env); envRef.current = env;
   const clipRef = useRef(clip); clipRef.current = clip;
 
@@ -142,8 +148,9 @@ export function useFinderOps(env: OpsEnv) {
     const e = envRef.current;
     if (NOT_YET.has(id)) { e.say("That one is coming in the next step"); return; }
     /* Recent is a list of files from everywhere, not a folder: nothing is made or pasted into it, as in Strata. */
-    if ((id === "new-folder" || id === "paste") && isRecent(into)) { e.say("Can\u2019t create items here"); return; }
-    const need = (): Chosen | null => { if (!c || !c.rows.length) { e.say("Nothing is chosen"); return null; } return c; };
+    const refused = cantHere(id, isRecent(into) || (id === "rename" && !!c && isRecent(c.dir)));
+    if (refused) { e.say(refused); return; }
+    const need = (): Chosen | null => { if (!c || !c.rows.length) { e.say(nothingTo(id)); return null; } return c; };
     switch (id) {
       case "cut": case "copy": { const t = need(); if (!t) return; setClip({ mode: id === "cut" ? "cut" : "copy", dir: t.dir, names: names(t) }); e.say(`${id === "cut" ? "Cut" : "Copied"} ${t.rows.length === 1 ? t.rows[0]!.name : `${t.rows.length} items`}`); return; }
       case "paste": paste(into); return;
@@ -208,7 +215,7 @@ export function useFinderOps(env: OpsEnv) {
         return;
       }
       case "open": { const t = need(); if (t) e.open(t.dir, t.rows[0]!); return; }
-      case "preview": e.preview(); return;
+      case "preview": if (!c || !c.rows.length) { e.say(nothingTo(id)); return; } e.preview(); return;
       case "open-in": { const t = need(); if (!t) return; const r = t.rows[0]!; if (t.rows.length !== 1 || !isFolder(r)) { e.say("Only one folder opens in a tab"); return; } e.openTab(joinPath(t.dir, r.name)); return; }
       case "print": {
         const t = need(); if (!t) return;
@@ -324,7 +331,6 @@ export function useFinderOps(env: OpsEnv) {
         );
       })()}
       {edit && !env.columnsView && <Sheet label={edit.was ? "Rename" : "New name"} onClose={edit.end} width={320}><InlineName edit={edit} rowH={32} icon={null} /></Sheet>}
-      <JobsPanel jobs={jobs} onCancel={(id) => { void api.fsJobCancel(id); }} onDone={(j) => { if (j.state === "done") envRef.current.reload(envRef.current.here()); }} />
       {ask?.k === "compress" && (() => { const c = ask.c; return <CompressDialog names={names(c)} dirs={c.rows.map(isFolder)} onClose={() => setAsk(null)}
         onSubmit={(o) => { setAsk(null); void run({ op: "compress", paths: paths(c), name: o.name, format: o.format, password: o.password }, [c.dir], o.name, c.rows.length); }} />; })()}
       {ask?.k === "props" && (() => { const a = ask; return <PropsDialog path={a.path} home={env.home} pinned={env.pins.includes(a.path)} onClose={() => setAsk(null)}
@@ -350,5 +356,9 @@ export function useFinderOps(env: OpsEnv) {
   const openProps = (path: string) => { const at = path.lastIndexOf("/"); setAsk({ k: "props", path, dir: at > 0 ? path.slice(0, at) : "/", name: path.slice(at + 1) }); };
   const openCustomize = (path: string) => setAsk({ k: "customize", paths: [path], names: [path.slice(path.lastIndexOf("/") + 1) || path], isDir: true });
 
-  return { clip, openProps, openCustomize, openTrash: () => setAsk({ k: "trash" }), contextAt, key, nodes, edit, dragStart, dragEnd, dropAllows, dropOn, hasMenu: !!menu || !!ask || !!edit };
+  const jobsIndicator = <JobsIndicator jobs={jobs} onCancel={(id) => { void api.fsJobCancel(id); }}
+    onClear={() => { void api.fsJobsClear().then(() => setJobs((l) => l.filter((j) => j.state === "running"))); }}
+    onDone={(j) => { if (j.state === "done") envRef.current.reload(envRef.current.here()); }} />;
+
+  return { clip, jobsIndicator, openProps, openCustomize, openTrash: () => setAsk({ k: "trash" }), contextAt, key, nodes, edit, dragStart, dragEnd, dropAllows, dropOn, hasMenu: !!menu || !!ask || !!edit };
 }

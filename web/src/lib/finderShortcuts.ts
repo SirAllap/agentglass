@@ -35,6 +35,7 @@ export const SECTIONS: Section[] = [
   ] },
   { title: "Search and tools", rows: [
     { keys: "Ctrl+K", does: "Search Home by name or contents" },
+    { keys: "Ctrl+Shift+K", does: "Jump to a recent folder" },
     { keys: "Ctrl+L", does: "Edit the location" },
     { keys: "Ctrl+F", does: "Filter the current pane" },
     { keys: "A letter, /", does: "Filter the current pane, with that letter typed" },

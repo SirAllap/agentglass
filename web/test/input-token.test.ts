@@ -119,7 +119,7 @@ const ALLOWED: { file: string; marker: string; why: string }[] = [
 
   { file: "FinderChrome.tsx", marker: 'aria-label="Search settings"',
     why: "icon and the field share the Settings sheet's one pill border, as in the Strata reference; the input itself is transparent" },
-  { file: "FinderSearch.tsx", marker: 'aria-label="Search files and folders"',
+  { file: "FinderSearch.tsx", marker: 'placeholder={jump ? "Jump to a folder…"',
     why: "the Ctrl+K overlay draws its own bar (icon, field, mode chips) with one border; the field inside it is transparent" },
   { file: "FinderOpsUI.tsx", marker: "aria-invalid={!!problem}",
     why: "inline rename sits inside the listing row at the row's own height; INPUT's 32px box would resize the row" },

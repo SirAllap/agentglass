@@ -303,6 +303,22 @@ export function trashDeleteWords(names: readonly string[], all = false): { title
   };
 }
 
+/** What Strata says in the footer for two seconds when a command has nothing to act on. */
+const NOTHING: Partial<Record<OpId, string>> = {
+  cut: "Nothing to cut", copy: "Nothing to copy", duplicate: "Nothing to copy", "copy-to": "Nothing to copy", "copy-path": "Nothing to copy", "copy-name": "Nothing to copy",
+  "move-to": "Nothing to move", trash: "Nothing to delete", delete: "Nothing to delete", rename: "Nothing to rename", compress: "Nothing to compress",
+  preview: "Nothing to preview", pin: "Nothing to pin", open: "Nothing to open", "open-with": "Nothing to open", "open-in": "Nothing to open", print: "Nothing to open",
+};
+export const nothingTo = (id: OpId): string => NOTHING[id] ?? "Nothing to open";
+
+/** Recent lists files from everywhere, so nothing is made, pasted or renamed in it: Strata's two refusals. Null when the command is allowed. */
+export function cantHere(id: OpId, recent: boolean): string | null {
+  if (!recent) return null;
+  if (id === "new-folder" || id === "new-file" || id === "folder-with" || id === "paste") return "Can\u2019t create items here";
+  if (id === "rename") return "Can\u2019t rename items here";
+  return null;
+}
+
 /** How far a copy or move has got, 0 to 1; null while the total is still being counted. */
 export function jobFraction(j: { state: string; total: number | null; done: number }): number | null {
   if (j.state === "done") return 1;
@@ -310,9 +326,27 @@ export function jobFraction(j: { state: string; total: number | null; done: numb
   return Math.min(1, j.done / j.total);
 }
 
-/** The jobs the panel still shows: the running ones, and a finished one for a few seconds so the end is seen. */
-export function jobsShown<T extends { state: string; ended?: number }>(jobs: readonly T[], now: number, keepMs = 4000): T[] {
-  return jobs.filter((j) => j.state === "running" || (j.ended !== undefined && now - j.ended < keepMs));
+/** Strata's footer button for background jobs: "2 running", or, once they end, "3 finished" (+ " · failures"). Empty when there is nothing to show. */
+export function jobsLabel(jobs: readonly { state: string }[]): string {
+  const running = jobs.filter((j) => j.state === "running").length;
+  if (running) return `${running} running`;
+  const finished = jobs.length;
+  if (!finished) return "";
+  return jobs.some((j) => j.state === "error") ? `${finished} finished \u00b7 failures` : `${finished} finished`;
+}
+
+/** "42 s", "3 min 05 s", "1 h 02 min": how long a job ran, the way Strata's rows write it. */
+export function elapsedText(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s} s`;
+  if (s < 3600) return `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, "0")} s`;
+  return `${Math.floor(s / 3600)} h ${String(Math.floor((s % 3600) / 60)).padStart(2, "0")} min`;
+}
+
+/** The status word next to a job's name: Strata's "Running for 4 s", "Done in 2 s", "Failed after 1 s", "Cancelled after 3 s". */
+export function jobStatus(j: { state: string; started: number; ended?: number }, now: number): string {
+  const t = elapsedText((j.ended ?? now) - j.started);
+  return j.state === "running" ? `Running for ${t}` : j.state === "done" ? `Done in ${t}` : j.state === "error" ? `Failed after ${t}` : `Cancelled after ${t}`;
 }
 
 /** Open With's search: every word must be in the name or the description, either case. */
