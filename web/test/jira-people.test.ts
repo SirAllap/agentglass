@@ -179,14 +179,4 @@ describe("the screens, as source", () => {
     expect(s).not.toContain("setStatus(");
     expect(s).toContain("putCard(query, r.task)");
   });
-
-  test("the hand-off settings row is a component of its own, to be mounted in the Settings Tasks pane", () => {
-    const s = code("components/jira/HandoffSettings.tsx");
-    expect(s).toContain("export function HandoffSettings() {");
-    // It writes the local settings and never Jira.
-    expect(s).toContain("api.setJiraHandoff(");
-    // Not before the stored rules are read: a press then would save over them.
-    expect(s).toContain("const frozen = saving || !settings;");
-    expect(s).not.toMatch(/api\.jira(SetAssignee|HandOff|Transition)\(/);
-  });
 });

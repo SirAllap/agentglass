@@ -124,6 +124,7 @@ import {
   jiraSettings, setHandoffRule as jiraSetHandoff, projectStatusesStored as jiraProjectStatuses,
 } from "./jira.ts";
 import { jiraSteps, runStepStored as jiraRunStep, setJiraSteps } from "./jiraSteps.ts";
+import { countedProjects, setCountedProjects, statusUnitsStored as jiraStatusUnitsStored } from "./jiraUnits.ts";
 import {
   jiraViews, viewRead as jiraViewRead, viewChoices as jiraViewChoices, projectChoices as jiraProjectChoices,
   addViewByUrl as jiraAddViewByUrl, addViewByChoice as jiraAddViewByChoice, addFolderByKey as jiraAddFolder,
@@ -6539,6 +6540,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         ...(typeof c.clear === "boolean" ? { clear: c.clear } : null),
         ...(typeof c.assign === "string" || c.assign === null ? { assign: c.assign } : null),
         ...(typeof c.comment === "string" ? { comment: c.comment } : null),
+        ...(c.stay === true ? { stay: true } : null),
       }, p && typeof p.url === "string" ? {
         url: p.url,
         ...(typeof p.title === "string" ? { title: p.title } : null),
@@ -6554,6 +6556,21 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
       const r = jiraSetHandoff(b.project, b.rule === undefined ? undefined : b.rule);
       return json(r.ok ? { ok: true, ...r.settings } : r, r.ok ? 200 : 400);
+    }
+    /*
+     * The projects the workflow map is drawn from, with their statuses: the ones the person chose, else where
+     * their cards live. The pick is local; nothing here writes to Jira.
+     */
+    if (req.method === "GET" && pathname === "/jira/status-units") {
+      const r = await jiraStatusUnitsStored(url.searchParams.get("fresh") === "1");
+      return json(r.ok ? { ok: true, ...r.data, counted: countedProjects() } : { ok: false, error: r.error, ...(r.throttled ? { throttled: true } : null) });
+    }
+    if (pathname === "/jira/status-units" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const raw = await req.json().catch(() => null) as unknown;
+      const b = typeof raw === "object" && raw !== null && !Array.isArray(raw) ? raw as Record<string, unknown> : null;
+      const r = b && Object.keys(b).every((k) => k === "counted") ? setCountedProjects(b.counted) : { ok: false as const, error: "That is not a list of Jira project keys" };
+      return json(r, r.ok ? 200 : 400);
     }
     if (req.method === "GET" && pathname === "/jira/project-statuses") {
       const r = await jiraProjectStatuses(url.searchParams.get("project") ?? "");

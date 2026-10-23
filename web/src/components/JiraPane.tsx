@@ -5,12 +5,15 @@ import { closeSettings } from "../lib/openSettings.ts";
 import { noteJiraSettings, useJiraSettings } from "../lib/jiraSettings.ts";
 import { rememberTaskSource } from "../lib/taskLanding.ts";
 import { __forgetTrackerSetup } from "../lib/trackerSetup.ts";
-import { PROVIDERS, type JiraProjectChoice, type JiraStatus } from "../../../shared/providers.ts";
-import { SettingRow, Switch } from "./SettingRow.tsx";
-import { EmptyState, Field, SettingsCard, SettingsForm, StatusBadge, helpIdFor } from "./SettingsKit.tsx";
+import { PROVIDERS, type JiraStatus, type JiraSteps } from "../../../shared/providers.ts";
+import { SettingRow } from "./SettingRow.tsx";
+import { Field, SettingsCard, SettingsForm, StatusBadge, helpIdFor } from "./SettingsKit.tsx";
 import { Button, INPUT, INPUT_STYLE, Segmented } from "./workspace/Chrome.tsx";
-import { HandoffSettings } from "./jira/HandoffSettings.tsx";
-import { HIT } from "../lib/iconSize.ts";
+import { JiraSettingsView } from "./jira/JiraSettingsView.tsx";
+import { WaitingMap } from "./ClickUpPane.tsx";
+import { __forgetJiraUnits, useJiraUnits } from "../lib/jiraUnits.ts";
+import type { StepsPatch } from "../lib/jiraWorkflow.ts";
+import { noteJiraSteps } from "../lib/jiraStepUi.ts";
 
 const SPEC = PROVIDERS.find((p) => p.id === "jira")!;
 
@@ -79,26 +82,19 @@ function ConnectCard({ onDone }: { onDone: () => void }) {
   );
 }
 
-const Tag = ({ children }: { children: ReactNode }) => (
-  <span className="inline-flex items-center px-2 rounded-md text-[11px] font-semibold" style={{ height: 20, background: "var(--bg)", boxShadow: "inset 0 0 0 1px var(--surface-line)" }}>{children}</span>
-);
-const Value = ({ children }: { children: ReactNode }) => <span className="text-[13px]">{children}</span>;
-
-const runsOn = (s: JiraStatus): string => (s.deployment === "cloud" || (!s.deployment && s.kind === "cloud") ? "Jira Cloud" : "Jira Data Center");
-const signIn = (s: JiraStatus): string => (s.auth === "bearer" ? "Personal access token" : "Account and token");
+const EMPTY_STEPS: JiraSteps = { handoff: { enabled: false, blocks: [] }, review: { enabled: false, blocks: [] }, merge: { enabled: false, blocks: [] } };
 
 /**
- * Jira's own page, built from the settings kit like ClickUp's. It owns the
- * connection (the form that used to live in Tools & services), the switch
- * that lets agentglass write, the projects the site exposes, the hand-off,
- * and the way into the saved views. `tracker` is the per-project tracker
- * choice, drawn between the projects and the hand-off.
+ * Jira's own page: the connection form before Jira is connected, and after it the
+ * workflow page (`JiraSettingsView`), which is drawn from what this reads and saves.
+ * `tracker` is the per-project tracker choice, drawn between the map and the saved views.
+ * Everything saved here is the local settings file; only the switch lets a press write to Jira.
  */
 export function JiraPane({ tracker }: { tracker?: ReactNode }) {
   const [status, setStatus] = useState<JiraStatus | null>(null);
   const [failed, setFailed] = useState(false);
-  const [projects, setProjects] = useState<JiraProjectChoice[] | null>(null);
-  const [projectsError, setProjectsError] = useState("");
+  const [steps, setSteps] = useState<JiraSteps | null>(null);
+  const [overrides, setOverrides] = useState<string[]>([]);
   const [views, setViews] = useState<{ views: number; folders: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -111,22 +107,22 @@ export function JiraPane({ tracker }: { tracker?: ReactNode }) {
   useEffect(() => { read(); }, [read]);
 
   const connected = !!status?.connected;
+  const { state: units, reread } = useJiraUnits(connected);
+  const readSteps = useCallback(() => {
+    void api.jiraSteps().then((r) => { if (r?.ok && r.steps) { setSteps(r.steps); setOverrides(r.overrides ?? []); } else setSteps((s) => s ?? EMPTY_STEPS); }).catch(() => setSteps((s) => s ?? EMPTY_STEPS));
+  }, []);
   useEffect(() => {
     if (!connected) return;
     let live = true;
-    void api.jiraProjectChoices().then((r) => {
-      if (!live) return;
-      if (!r?.ok) { setProjectsError(r?.error || "Could not read the site's projects"); setProjects([]); return; }
-      setProjectsError(""); setProjects(r.projects);
-    }).catch(() => { if (live) { setProjectsError("Could not reach the server"); setProjects([]); } });
+    readSteps();
     void api.jiraViews().then((v) => { if (live && v) setViews({ views: v.views?.length ?? 0, folders: v.folders?.length ?? 0 }); }).catch(() => undefined);
     return () => { live = false; };
-  }, [connected]);
+  }, [connected, readSteps]);
 
   if (!status) {
     return <div className="py-6 text-[11px]" style={{ color: failed ? "var(--error-ink)" : "var(--text3)" }}>{failed ? "Could not read Jira's state." : "Reading your settings…"}</div>;
   }
-  if (!connected) return <ConnectCard onDone={read} />;
+  if (!connected) return <div className="wfm"><ConnectCard onDone={read} /><WaitingMap name="Jira" /></div>;
 
   const writes = settings ? settings.writes : status.writes;
   const setWrites = async (on: boolean) => {
@@ -138,13 +134,26 @@ export function JiraPane({ tracker }: { tracker?: ReactNode }) {
     setStatus({ ...status, writes: !!r.writes });
     if (settings) noteJiraSettings({ ...settings, writes: !!r.writes });
   };
+  const saveSteps = async (patch: StepsPatch): Promise<boolean> => {
+    const r = await api.setJiraSteps(patch).catch(() => null);
+    if (!r?.ok || !r.steps) { setNote(r?.error ?? "That did not save"); return false; }
+    setNote(null); setSteps(r.steps); setOverrides(r.overrides ?? []); noteJiraSteps({ steps: r.steps, overrides: r.overrides ?? [] });
+    return true;
+  };
+  const clearOverride = async (project: string) => {
+    const r = await api.setJiraHandoff(project, null).catch(() => null);
+    if (!r?.ok) { setNote(r?.error ?? "That did not save"); return; }
+    setNote(null);
+    if (settings && r.handoff) noteJiraSettings({ writes: settings.writes, handoff: r.handoff });
+    readSteps();
+  };
   const disconnect = async () => {
     setBusy(true);
     const r = await api.providerDisconnect("jira").catch(() => null);
     setBusy(false);
     if (!r?.ok) { setNote(r?.error ?? "Could not disconnect"); return; }
-    __forgetTrackerSetup();
-    setProjects(null); setViews(null); setNote(null);
+    __forgetTrackerSetup(); __forgetJiraUnits();
+    setSteps(null); setViews(null); setNote(null);
     read();
   };
   const openTab = () => {
@@ -155,57 +164,9 @@ export function JiraPane({ tracker }: { tracker?: ReactNode }) {
   };
 
   return (
-    <>
-      <SettingsCard title="Jira" desc={status.account ? `Signed in as ${status.account}.` : SPEC.what}
-        status={<StatusBadge tone="ok">Connected</StatusBadge>}>
-        <SettingRow agentExempt label="Site" control={<Value>{status.site}</Value>} />
-        <SettingRow agentExempt label="Runs on" control={<Value>{runsOn(status)}</Value>} />
-        <SettingRow agentExempt label="Signs in with" control={<Value>{signIn(status)}</Value>} />
-      </SettingsCard>
-
-      {/* The one switch that decides whether anything can write. Its state is a badge first in the control column, the switch after it. */}
-      <SettingsCard title="Changes in Jira">
-        <SettingRow agentExempt label={<span id="jira-changes-l">Let agentglass change cards</span>}
-          hint={writes
-            ? "Only the buttons on a card can change it (move, assign, comment, hand off), one at a time, when you press them."
-            : "agentglass only reads. Turn this on to let the buttons on a Jira card move it, assign it, comment on it and hand it off."}
-          status={<span data-guard={writes ? "on" : "off"}><StatusBadge tone={writes ? "warn" : "off"}>{writes ? "On" : "Read-only"}</StatusBadge></span>}
-          control={<button type="button" role="switch" aria-checked={writes} aria-labelledby="jira-changes-l" disabled={busy}
-            onClick={() => void setWrites(!writes)} className="agx-switch-hit inline-flex items-center rounded-full" style={{ minHeight: HIT }}>
-            <Switch on={writes} busy={busy} /></button>} />
-        {note && <SettingRow agentExempt label="That did not work" hint={<span role="alert" style={{ color: "var(--error-ink)" }}>{note}</span>} />}
-      </SettingsCard>
-
-      <SettingsCard title="Projects" desc="The projects this site exposes, and the key each card id starts with."
-        status={<StatusBadge tone={projectsError ? "warn" : projects ? "ok" : "checking"}>{projectsError ? "Not read" : projects ? `${projects.length} found` : "Reading"}</StatusBadge>}>
-        {projectsError && <SettingRow agentExempt label={projectsError} hint="Open the page again to try again." />}
-        {!projectsError && projects && !projects.length && <EmptyState>This account sees no projects.</EmptyState>}
-        {!!projects?.length && (
-          <SettingRow agentExempt label="Projects on this site"
-            below={
-              <ul className="m-0 p-0 flex flex-col gap-2" style={{ listStyle: "none" }}>
-                {projects.map((p) => (
-                  <li key={p.key} className="flex gap-2 items-center flex-wrap"><Tag>{p.key}</Tag><span className="text-[13px]">{p.name}</span></li>
-                ))}
-              </ul>
-            } />
-        )}
-      </SettingsCard>
-      {tracker}
-
-      <HandoffSettings />
-
-      <SettingsCard title="Saved views and folders"
-        desc="The boards and filters you saved sit in the Jira tab's sidebar. Add and remove them there.">
-        <SettingRow agentExempt label="Views and folders"
-          hint={views ? `${views.views} ${views.views === 1 ? "view" : "views"} · ${views.folders} ${views.folders === 1 ? "folder" : "folders"} saved on this machine.` : "Reading what is saved…"}
-          actions={<Button onClick={openTab}>Open the Jira tab</Button>} />
-      </SettingsCard>
-
-      <SettingsCard title="Disconnect">
-        <SettingRow agentExempt label="Disconnect Jira" hint="Removes the token from this machine. Nothing changes in Jira."
-          actions={<Button tone="danger" pending={busy} onClick={() => void disconnect()}>Disconnect</Button>} />
-      </SettingsCard>
-    </>
+    <JiraSettingsView status={status} writes={writes} writesBusy={busy} steps={steps} overrides={overrides} units={units} views={views} note={note}
+      tracker={tracker} busy={busy}
+      onWrites={(on) => void setWrites(on)} onSteps={saveSteps} onReread={reread}
+      onClearOverride={(k) => void clearOverride(k)} onOpenTab={openTab} onDisconnect={() => void disconnect()} />
   );
 }

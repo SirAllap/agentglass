@@ -490,7 +490,7 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
      workspace for a status to mean anything in, and a page for it would be a dead end. */
   { id: "clickup", label: "ClickUp", group: "Connections", kw: "clickup workflow map steps statuses cards tracker hand off qa review menu merge dialog note assigned people sprint swatch spaces subtasks pull request link", what: "How agentglass uses your ClickUp: the steps you add, tied to your own statuses.", icon: ChecklistIcon },
   /* Always there, unlike ClickUp's: the form that connects Jira lives on this page. */
-  { id: "jira", label: "Jira", group: "Connections", kw: "jira atlassian cloud data center site token email personal access token writes changes projects keys prefixes hand off qa assignee status saved views folders board filter tracker connect disconnect", what: "Your Jira site, what agentglass may change there, and the hand-off to QA.", icon: ChecklistIcon },
+  { id: "jira", label: "Jira", group: "Connections", kw: "jira atlassian cloud data center site token email personal access token writes changes projects keys prefixes hand off qa assignee status saved views folders board filter tracker connect disconnect", what: "Your Jira site, what agentglass may change there, and the steps a pull request can run on a card.", icon: ChecklistIcon },
   { id: "remote", label: "Remote", group: "Connections", kw: "remote access pair phone tailscale token device", what: "Reach this machine from your phone.", icon: PhoneIcon },
   /* Filed beside Remote rather than under Agents: a plugin is
      someone else's code holding a scoped credential to this server, the
@@ -766,6 +766,8 @@ const WIDE_PANES = new Map<string, string>([
   ["plugins", "1180px"],
   /* The workflow map is a column of step cards beside a column of statuses, with the lines running between them; this is the width that keeps a card's header on two lines. */
   ["clickup", "1100px"],
+  /* The same map, so the same width: narrower, the statuses fall under the steps and no line is drawn to them. */
+  ["jira", "1100px"],
 ]);
 
 const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];

@@ -146,6 +146,39 @@ describe("the step routes", () => {
     expect(watched()["ORBIT-1042"]?.status).toBe("In Review");
   });
 
+  step("a merge step told to leave the card where it is still posts its comment and moves nothing", async () => {
+    expect((await call("POST", "/jira/steps", { steps: { merge: { enabled: true, blocks: [{ type: "move", statusNames: ["Done"] }, { type: "comment", text: "Merged {pr_url}" }] } } })).status).toBe(200);
+    const was = fake.state.issues["ORBIT-1043"]!.statusId;
+    fake.requests.length = 0;
+    const r = await call("POST", "/jira/step", { key: "ORBIT-1043", updated: updated("ORBIT-1043"), trigger: "merge", choice: { stay: true }, pr: PR });
+    expect(r.status).toBe(200);
+    expect(r.body.ok).toBe(true);
+    expect(fake.requests.filter((q) => q.method !== "GET").map((q) => q.path)).toEqual(["/issue/ORBIT-1043/comment"]);
+    expect(fake.state.issues["ORBIT-1043"]!.statusId).toBe(was);
+  });
+
+  step("status units: the projects holding the person's cards, with the site's own statuses, and the pick is kept", async () => {
+    const r = await call("GET", "/jira/status-units");
+    expect(r.status).toBe(200);
+    expect(r.body.source).toBe("tasks");
+    const unit = (r.body.spaces as { id: string; statuses: { status: string }[]; counted?: boolean }[]).find((u) => u.id === "ORBIT")!;
+    expect(unit.counted).toBeUndefined();
+    expect(unit.statuses.map((x) => x.status)).toEqual(["To Do", "In Progress", "In Review", "QA", "Done"]);
+    expect(r.body.counted).toEqual([]);
+    expect((await call("POST", "/jira/status-units", { counted: ["ORBIT"] })).body).toEqual({ ok: true, counted: ["ORBIT"] });
+    expect((await call("GET", "/jira/status-units")).body).toMatchObject({ source: "chosen", counted: ["ORBIT"] });
+    expect((await call("POST", "/jira/status-units", { counted: ["not a key"] })).status).toBe(400);
+    expect((await call("POST", "/jira/status-units", { counted: ["ORBIT"] }, { origin: "https://evil.example" })).status).toBe(403);
+  });
+
+  step("the pick of projects is a closed shape: no extra keys, no empty body, no key longer than a key can be", async () => {
+    expect((await call("POST", "/jira/status-units", { counted: ["ORBIT"], extra: 1 })).status).toBe(400);
+    const r = await fetch(base + "/jira/status-units", { method: "POST", headers, body: "null" });
+    expect(r.status).toBe(400);
+    expect((await call("POST", "/jira/status-units", { counted: ["A".repeat(40)] })).status).toBe(400);
+    expect((await call("GET", "/jira/status-units")).body.counted).toEqual(["ORBIT"]);
+  });
+
   step("the answer never carries the token", async () => {
     expect(seen).not.toContain(FAKE_TOKEN);
     expect(seen).not.toContain(BASE64);

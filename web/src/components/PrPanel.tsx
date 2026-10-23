@@ -143,7 +143,7 @@ import { openCard } from "../lib/openCard.ts";
 import { TRACKERS } from "../lib/trackerApi.ts";
 import { TrackerStatusPick } from "./TrackerStatusPick.tsx";
 import { TrackerPeoplePick } from "./TrackerPeoplePick.tsx";
-import { TrackerHandOffButton } from "./TrackerHandOffButton.tsx";
+import { JiraStepButtons } from "./jira/JiraStepButtons.tsx";
 import { openIssue } from "../lib/openIssue.ts";
 import { useClickupSetup } from "../lib/clickupSetup.ts";
 import { useOwnerSetup } from "../lib/trackerView.ts";
@@ -4210,7 +4210,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       // than quietly winning.
       /* Without "Also assign" this is the status write it always was; with it, the same single
          write carries the person too (one card, one request), never a second call racing `updated`. */
-      const r = await (move.tracker === "jira" ? api.jiraTransition(move.id, move.to, move.updated)
+      const r = await (move.tracker === "jira" ? jiraMergeWrite(move, detail)
         : move.write ? api.clickupCard(move.id, move.write, move.updated) : api.clickupStatus(move.id, move.to, move.updated))
         .catch((e) => ({ ok: false, error: String(e) }));
       // The chip and the board's row read the status from the store: hand it the
@@ -4218,8 +4218,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       const query = move.tracker === "jira" ? move.query : mergeCardRef(detail, clickup)?.query;
       if (r.ok && query) putCard(query, "task" in r ? r.task : undefined);
       const ex = r.ok ? await sendMergeExtras() : null;
-      flash(r.ok && (!ex || ex.ok), mergeNote(true, {
-        asked: true, ok: r.ok, to: move.toLabel ?? move.to, ...(move.tracker === "jira" ? { tracker: "Jira" as const } : null), extra: [move.note, ex?.ok ? ex.done.join(" · ") : ex ? `but ${ex.error}` : ""].filter(Boolean).join(" · ") || undefined,
+      const part = "partial" in r && r.partial ? `but ${r.partial}` : "";
+      flash(r.ok && !part && (!ex || ex.ok), mergeNote(true, {
+        asked: true, ok: r.ok, to: move.toLabel ?? move.to, ...(move.tracker === "jira" ? { tracker: "Jira" as const } : null), ...(move.stay ? { stayed: true } : null), extra: [move.note, part, ex?.ok ? ex.done.join(" · ") : ex ? `but ${ex.error}` : ""].filter(Boolean).join(" · ") || undefined,
         unauthorised: "unauthorised" in r ? r.unauthorised : undefined,
         error: r.ok ? undefined : ("conflict" in r && r.conflict ? "somebody moved it while this was open" : r.error),
       }));
@@ -8420,8 +8421,14 @@ function CardReadyForQaButton({ task, query, onSaid, ask, author, pr }: {
     </button>
   );
 }
-/** A Jira card in the pull request panel: the site's own status and person controls, the hand-off, and a way to open it here or on the site. */
-export function JiraCardFacts({ label, query }: { label: string; query: string }) {
+/** The write a merge makes on a Jira card: the merge step when the move came from it (so what the step also does rides on it), else the plain move with the stamp. */
+function jiraMergeWrite(move: { id: string; to: string; toLabel?: string; toStatus?: string; stay?: true; updated: number; step?: true }, pr: { url: string; title: string; number: number; author: string }) {
+  return move.step
+    ? api.jiraRunStep(move.id, move.updated, "merge", move.stay ? { stay: true } : { to: move.toStatus ?? move.toLabel ?? move.to }, { url: pr.url, title: pr.title, number: pr.number, author: pr.author })
+    : api.jiraTransition(move.id, move.to, move.updated);
+}
+/** A Jira card in the pull request panel: the site's own status and person controls, the steps that are set up (hand-off, review), and a way to open it here or on the site. */
+export function JiraCardFacts({ label, query, pr }: { label: string; query: string; pr?: { url: string; title?: string; number?: number; author?: string } }) {
   const [, redraw] = useState(0);
   useEffect(() => onCard(() => redraw((n) => n + 1)), []);
   const [said, setSaid] = useState("");
@@ -8455,7 +8462,7 @@ export function JiraCardFacts({ label, query }: { label: string; query: string }
               <TrackerPeoplePick tracker={TRACKERS.jira} task={task} query={query} onSaid={setSaid} />
             </div>
             <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
-              <TrackerHandOffButton tracker={TRACKERS.jira} task={task} query={query} onSaid={setSaid} />
+              <JiraStepButtons task={task} query={query} {...(pr ? { pr } : null)} onSaid={setSaid} />
               {said && <span className="text-[10px]" style={{ color: said.startsWith("!") ? "var(--warning)" : "var(--success)" }}>{said.replace(/^!/, "")}</span>}
             </div>
           </div>
@@ -8497,7 +8504,7 @@ function CardFacts({ d }: { d: PrDetail }) {
   const asking = askingCard(query);
 
   if (!ref) return null;
-  if (ref.tracker === "jira") return <JiraCardFacts label={ref.label} query={ref.query} />;
+  if (ref.tracker === "jira") return <JiraCardFacts label={ref.label} query={ref.query} pr={{ url: d.url, title: d.title, number: d.number, author: d.author }} />;
 
   const task = hit?.task ?? null;
   return (

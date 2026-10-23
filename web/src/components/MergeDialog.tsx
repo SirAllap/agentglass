@@ -114,6 +114,11 @@ export type MergeChoice = {
     note?: string;
     /** A Jira card: `id` is its key and `to` the id of the move, not a status name. */
     tracker?: "jira";
+    /** A Jira move that comes from the merge step: run as the step, so what the step also does rides on it. */
+    step?: true;
+    /** Jira only: the status's own name (what a step resolves), and a step told to leave the card where it is. */
+    toStatus?: string;
+    stay?: true;
     /** Jira only: the card store's key, and the status the move leads to, in the site's words. */
     query?: string;
     toLabel?: string;

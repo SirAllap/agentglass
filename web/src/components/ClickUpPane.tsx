@@ -5,56 +5,28 @@ import { __forgetClickupSetup, clickupSetup } from "../lib/clickupSetup.ts";
 import { __forgetClickupSpaces, PENDING_CARDS, useClickupSpaces } from "../lib/clickupSpaces.ts";
 import { __forgetClickupPrefs } from "../lib/clickupPrefs.ts";
 import { CLICKUP, addTurnsWritesOn, clickupAdd, clickupBlocks, clickupRemove, clickupSteps, type PrefsPatch } from "../lib/clickupWorkflow.ts";
-import { blocksSentence, peopleButtonLabel, triggerOf } from "../lib/stepBlocksView.ts";
+import { triggerOf } from "../lib/stepBlocksView.ts";
 import { fieldIsWritable } from "../lib/stepExtras.ts";
 import type { FieldChoice } from "./StepExtraRows.tsx";
-import { allStatuses, countedIds, isActive, moments, movesNothing, resolveImplicit, withCounted, type MapSpace, type StepKind } from "../lib/workflowMap.ts";
+import { allStatuses, isActive, moments, resolveImplicit, withCounted, type MapSpace, type StepKind } from "../lib/workflowMap.ts";
 import { eyeIds, pageState, partitionUnits, type Partition } from "../lib/workflowLayout.ts";
 import { openSettings } from "../lib/openSettings.ts";
 import { __forgetListMembers } from "../lib/listMembers.ts";
-import { assignWords } from "../lib/stepAssign.ts";
 import { setting } from "../lib/settingsRegistry.ts";
-import { DEFAULT_SPRINT_LIST_PATTERN, DEFAULT_READ_ONLY_FIELD_PATTERN, type ClickUpPrefs, type ProviderStatus } from "../../../shared/providers.ts";
+import { DEFAULT_SPRINT_LIST_PATTERN, DEFAULT_READ_ONLY_FIELD_PATTERN, type ClickUpPrefs, type ClickUpStepBlock, type ProviderStatus } from "../../../shared/providers.ts";
 import { DEFAULT_CARD_SKILL_PATTERN } from "../../../shared/cardSkills.ts";
 import { SettingRow, Switch, Toggle } from "./SettingRow.tsx";
 import { EmptyState, Field, SettingsCard, SettingsForm, StatusBadge, helpIdFor } from "./SettingsKit.tsx";
-import { Button, INPUT, INPUT_STYLE, LINE, Segmented } from "./workspace/Chrome.tsx";
+import { Button, INPUT, INPUT_STYLE, Segmented } from "./workspace/Chrome.tsx";
 import { Dot, StatusPopover, type PanelView } from "./StatusPanel.tsx";
-import { Badge, ListEye, WorkflowMap } from "./WorkflowMap.tsx";
+import { ListEye, WorkflowMap } from "./WorkflowMap.tsx";
 import { WFM_CSS } from "./workflowMapStyle.ts";
-import { DoneIcon, EyeIcon, LinkIcon, LockIcon, NoteIcon, PlusIcon, UserIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { Card, CountedPicker, CardView, PrView, TextRow, Tagged, ago, hint } from "./TrackerMapParts.tsx";
+import { EyeIcon, LockIcon, PlusIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { HIT, ICON } from "../lib/iconSize.ts";
 
 const n = CLICKUP.nouns;
 
-/** One name-or-pattern row. A value equal to the shipped one shows as empty, so the placeholder says what applies. */
-function TextRow({ label, hint, value, fallback = "", placeholder, onSave, id }: {
-  label: string; hint: ReactNode; value: string; fallback?: string; placeholder: string; id?: string;
-  onSave: (v: string) => Promise<string | null>;
-}) {
-  const saved = value === fallback ? "" : value;
-  const [draft, setDraft] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const commit = async () => {
-    if (draft === null) return;
-    if (draft.trim() === saved) { setDraft(null); setErr(null); return; }
-    const e = await onSave(draft);
-    setErr(e);
-    if (!e) setDraft(null);
-  };
-  return (
-    /* A text field stacks under its description (see SettingRow's `below`):
-       squeezed into the control column it showed a third of a pattern. */
-    <SettingRow label={label} hint={hint}
-      below={<div className="flex flex-col gap-1.5" style={{ maxWidth: 480 }}>
-        <input id={id} value={draft ?? saved} onChange={(e) => setDraft(e.target.value)} onBlur={() => void commit()}
-          onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-          aria-label={label} placeholder={placeholder} spellCheck={false} autoComplete="off"
-          className={`w-full ${INPUT}`} style={INPUT_STYLE} />
-        {err && <span role="alert" className="agx-field-e">{err}</span>}
-      </div>} />
-  );
-}
 
 /** Which agent skills count as knowing what a card is. It was filed under the tracker's names; it is about agents. */
 export function CardSkillsRow({ connected }: { connected: boolean }) {
@@ -72,60 +44,7 @@ export function CardSkillsRow({ connected }: { connected: boolean }) {
   );
 }
 
-/** A section of the page: a settings card (SettingsKit). `open`/`onToggle` make its header a disclosure. */
-function Card({ title, status, actions, children, open, onToggle, desc }: { id?: string; title: string; status?: ReactNode; actions?: ReactNode; desc?: ReactNode; children: ReactNode; open?: boolean; onToggle?: (o: boolean) => void }) {
-  return (
-    <SettingsCard title={title} desc={desc} status={status} actions={actions}
-      fold={onToggle ? { open: !!open, onToggle } : undefined}>
-      {children}
-    </SettingsCard>
-  );
-}
 
-const hint = (c: ReactNode, style?: object) => <span className="text-[11px]" style={{ color: "var(--text3)", ...style }}>{c}</span>;
-const Tagged = ({ children }: { children: ReactNode }) => (
-  <span className="inline-flex items-center gap-1 px-2 rounded-md text-[11px]" style={{ height: 20, background: "var(--bg)", boxShadow: "inset 0 0 0 1px var(--surface-line)" }}>{children}</span>
-);
-
-const ago = (at: number): string => {
-  const m = Math.max(0, Math.round((Date.now() - at) / 60_000));
-  return m < 1 ? "just now" : m === 1 ? "1 min ago" : m < 120 ? `${m} min ago` : `${Math.round(m / 60)} h ago`;
-};
-
-/** Which spaces count: a checklist over every space the page knows, in a popover. Ignoring one folds it away; it is not deleted. */
-function CountedPicker({ units, chosen, onChange, onReset, onClose }: { units: readonly MapSpace[]; chosen: boolean; onChange: (ids: string[]) => void; onReset: () => void; onClose: () => void }) {
-  const all = units.filter((u) => !u.fromList);
-  const [last, setLast] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => { ref.current?.querySelector<HTMLElement>("[role=option]")?.focus(); }, []);
-  /* The ticks follow the press at once and the saved answer catches up: two presses in a row each start from the last one. */
-  const [ids, setIds] = useState(() => countedIds(units));
-  useEffect(() => { setIds(countedIds(units)); }, [units]);
-  const toggle = (u: MapSpace) => {
-    const next = ids.includes(u.id) ? ids.filter((x) => x !== u.id) : [...ids, u.id];
-    setLast(next.length === 0);
-    if (!next.length) return;
-    setIds(next);
-    onChange(next);
-  };
-  return (
-    <div ref={ref} className="wfm wfm-pop" role="listbox" aria-multiselectable="true" onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } }}
-      aria-label={`${n.spaces[0]!.toUpperCase()}${n.spaces.slice(1)} that count`}>
-      <div className="px-2 pt-1 pb-1 text-[11px]" style={{ color: "var(--text3)" }}>Steps are judged against the {n.spaces} that count. Ignoring one folds it away; it is not deleted.</div>
-      <div className="wfm-lst">
-        {all.map((u) => (
-          <button key={u.id} type="button" role="option" aria-selected={ids.includes(u.id)} className="wfm-opt" onClick={() => toggle(u)}>
-            <span className="ck" aria-hidden>{ids.includes(u.id) ? <DoneIcon size={ICON.xs} /> : null}</span>
-            <span className="n"><b>{u.name}</b>{u.group && <span className="block text-[11px]" style={{ color: "var(--text3)" }}>{u.group}</span>}</span>
-            <span className="m">{u.statuses.length} statuses</span>
-          </button>
-        ))}
-      </div>
-      {last && <div role="status" className="px-2 text-[11px]" style={{ color: "var(--warning-ink)" }}>At least one {n.space} has to count: with none there is no status to pick.</div>}
-      {chosen && <div className="pt-1" style={{ borderTop: LINE }}><Button size="compact" onClick={onReset}>Back to the default</Button></div>}
-    </div>
-  );
-}
 
 /** Sign in with a token: the page's face before ClickUp is connected, and after it refuses the one it has. */
 export function ConnectCard({ refused, error, onDone }: { refused: boolean; error: string | null; onDone: () => void }) {
@@ -192,11 +111,11 @@ export function ConnectCard({ refused, error, onDone }: { refused: boolean; erro
 }
 
 /** The map before ClickUp is connected: there is nothing to draw yet, and Add is not offered. */
-export function WaitingMap() {
+export function WaitingMap({ name = n.name }: { name?: string }) {
   return (
     <SettingsCard title="Workflow map" desc="Each step puts one control into agentglass. You build what it does from blocks."
       actions={<Button tone="primary" disabled><PlusIcon size={ICON.xs} /> Add a step</Button>}>
-      <EmptyState>{`Appears once ${n.name} is connected.`}</EmptyState>
+      <EmptyState>{`Appears once ${name} is connected.`}</EmptyState>
     </SettingsCard>
   );
 }
@@ -360,7 +279,7 @@ export function ClickUpPane() {
       </Card>
       {countAt && (
         <StatusPopover anchor={countAt} label={`${n.lists} that count`} onClose={(f) => { setCountAt(null); if (f) countAt.focus(); }}>
-          <CountedPicker units={units} chosen={chosen} onChange={count} onReset={() => count([])} onClose={() => { setCountAt(null); countAt.focus(); }} />
+          <CountedPicker n={n} units={units} chosen={chosen} onChange={count} onReset={() => count([])} onClose={() => { setCountAt(null); countAt.focus(); }} />
         </StatusPopover>
       )}
 
@@ -371,7 +290,7 @@ export function ClickUpPane() {
           if (ok && addTurnsWritesOn(changesOn, steps.length)) await setChanges(true);
           return ok;
         }}
-        onBlocks={(kind, blocks) => { const t = triggerOf(kind); if (t) void send(clickupBlocks(t, blocks)); }}
+        onBlocks={(kind, blocks) => { const t = triggerOf(kind); if (t) void send(clickupBlocks(t, blocks.filter((b): b is ClickUpStepBlock => b.type !== "link"))); }}
         onRemove={(kind) => { void send(clickupRemove(kind)); }}
         people={readPeople}
         fields={readFields}
@@ -384,8 +303,8 @@ export function ClickUpPane() {
         actions={<Segmented label={`Does the pull request name a ${n.item}?`} value={linked ? "1" : "0"} onChange={(v) => setLinked(v === "1")}
           options={[{ id: "1", label: "Linked" }, { id: "0", label: "No link" }]} />}>
         <div className="grid gap-4 agx-settings-x pt-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))" }}>
-          <div><PrView steps={live} all={steps} writes={changesOn} hover={hover} linked={linked} /></div>
-          <div><CardView writes={changesOn} linked={linked} /></div>
+          <div><PrView adapter={CLICKUP} status={CLICKUP.sample.status} steps={live} all={steps} writes={changesOn} hover={hover} linked={linked} /></div>
+          <div><CardView adapter={CLICKUP} status={CLICKUP.sample.status} writes={changesOn} linked={linked} /></div>
         </div>
         <div className="agx-settings-x pt-3 pb-3 text-[12px]" style={{ color: "var(--text3)" }}>
           {live.length ? `Only the steps above show up. Everything else about a ${n.item} stays read-only.`
@@ -419,77 +338,3 @@ function patternSave(r: { ok: boolean; error?: string; prefs?: ClickUpPrefs }, s
   return null;
 }
 
-const sm = CLICKUP.sample;
-/** The part of a mini view that a hovered step adds: it lights up, so the person sees where the step lands. */
-const lit = (hover: StepKind | null, k: StepKind) => (hover === k ? "wfm-hlx" : undefined);
-function Mini({ children }: { children: ReactNode }) {
-  return <div className="flex flex-wrap gap-2 items-center p-3 rounded-xl" style={{ background: "var(--surface-inset)", boxShadow: "inset 0 0 0 1px var(--surface-line)" }}>{children}</div>;
-}
-function Pane({ children }: { children: ReactNode }) {
-  return <div className="flex flex-col gap-3 p-4 rounded-xl" style={{ background: "var(--bg)", boxShadow: "0 0 0 1px var(--w-edge, var(--border))" }}>{children}</div>;
-}
-function Menu({ children }: { children: ReactNode }) {
-  return <div className="flex flex-col overflow-hidden rounded-xl" style={{ boxShadow: "inset 0 0 0 1px var(--surface-line)" }}>{children}</div>;
-}
-const Item = ({ children, cls }: { children: ReactNode; cls?: string }) => (
-  <div className={`px-3 py-2 text-[13px] flex gap-2 items-center ${cls ?? ""}`} style={{ borderTop: LINE }}>{children}</div>
-);
-/* A drawing of a pill inside a mock card: flat fill and no outline, because an outlined pill is how a control looks here and these press nothing. */
-const Chip2 = ({ children, cls }: { children: ReactNode; cls?: string }) => (
-  <span className={`inline-flex items-center gap-1 px-2 rounded-md text-[11px] font-semibold cursor-default select-none ${cls ?? ""}`} style={{ height: 24, background: "color-mix(in srgb, var(--text) 7%, transparent)" }}>{children}</span>
-);
-
-function PrView({ steps, all, writes, hover, linked }: { steps: ReturnType<typeof clickupSteps>; all: ReturnType<typeof clickupSteps>; writes: boolean; hover: StepKind | null; linked: boolean }) {
-  const g = (k: string) => steps.find((s) => s.kind === k);
-  const mv = g("move"), mn = g("menu"), pp = g("people"), nt = g("note");
-  const mg = all.find((s) => s.kind === "merge");
-  /* A button shows once it does something: a status to move to, or people to change. */
-  const mvOn = !!mv && (!!mv.status || (movesNothing(mv) && (mv.unassign !== "none" || mv.assign.who !== "none")));
-  return (
-    <Pane>
-      <div className="flex gap-2 items-center text-[13px]"><Chip2>Open</Chip2><b>#318</b>{hint("orbit/api · 12 checks passed")}</div>
-      <div className="text-[13px]">{sm.title}</div>
-      {linked ? (
-        <>
-          <Mini>
-            <Chip2><Dot type="custom" />{sm.id}</Chip2><Chip2><Dot type="custom" />{sm.status}</Chip2>
-            {mvOn && <Chip2 cls={lit(hover, "move")}>{mv!.status ? `${n.move} ${mv!.status}` : peopleButtonLabel(mv!)}</Chip2>}
-            {nt && <Chip2 cls={lit(hover, "note")}><NoteIcon size={ICON.xs} /> Note</Chip2>}
-            {!mvOn && !nt && hint("No control from a step here.")}
-          </Mini>
-          {mvOn && <div className={lit(hover, "move")} data-preview="move">{hint(blocksSentence({ lead: "Press the button:", trigger: "move", blocks: mv!.blocks ?? [], item: n.item, status: mv!.status }))}</div>}
-          <Menu>
-            <div className="px-3 py-2 text-[13px]">Request changes</div>
-            <Item>Approve</Item>
-            {mn?.status && <Item cls={lit(hover, "menu")}><span style={{ color: "var(--primary)", fontWeight: 700 }}>{n.move} {mn.status}</span>{assignWords(mn.assign) && hint(`and assigns ${assignWords(mn.assign)}`)}</Item>}
-            {mn && !mn.status && movesNothing(mn) && mn.assign.who !== "none" && <Item cls={lit(hover, "menu")}><span style={{ color: "var(--primary)", fontWeight: 700 }}>{peopleButtonLabel(mn)}</span></Item>}
-            {pp && <Item cls={lit(hover, "people")}><UserIcon size={ICON.xs} />Assigned · {sm.who}, {sm.others}</Item>}
-          </Menu>
-          {hint(mg && writes ? <>Merge dialog: <span className={lit(hover, "merge")} style={{ fontWeight: 700, color: "var(--text)" }}>{n.move} {sm.id} to {mg.status ?? "Leave it there"}</span>{mg.status && assignWords(mg.assign) && <> and assigns {assignWords(mg.assign)}</>}</> : "Merge dialog: no extra option.")}
-        </>
-      ) : (
-        <>
-          <Mini>{hint(`No ${n.item} is linked to this pull request, so none of the steps show on it.`)}</Mini>
-          <Menu><div className="px-3 py-2 text-[13px]">Request changes</div><Item>Approve</Item><Item><LinkIcon size={ICON.xs} />Link a {n.item}… {hint("this machine only")}</Item></Menu>
-        </>
-      )}
-    </Pane>
-  );
-}
-
-function CardView({ writes, linked }: { writes: boolean; linked: boolean }) {
-  return (
-    <Pane>
-      <div className="flex gap-2 items-center text-[13px]"><b>{linked ? sm.id : `No ${n.item}`}</b>{linked && <Chip2><Dot type="custom" />{sm.status}</Chip2>}{linked && !writes && <Badge>Read-only</Badge>}</div>
-      {linked ? (
-        <>
-          <div className="text-[13px]">{sm.title}</div>
-          {hint(`${sm.who}, ${sm.others} · High`)}
-          <Mini>{hint("Pull requests")}<Chip2>Open</Chip2><span className="text-[13px]">#318 Retry the webhook…</span></Mini>
-          <div className="flex gap-2"><Chip2>Assign</Chip2><Chip2>Comment</Chip2></div>
-          {!writes && hint("Read-only until you turn on changes.")}
-        </>
-      ) : hint(`Link a pull request to a ${n.item} to see the ${n.item} here.`)}
-    </Pane>
-  );
-}

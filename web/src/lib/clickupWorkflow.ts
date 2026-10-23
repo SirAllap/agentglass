@@ -14,6 +14,7 @@ import { STEP_ORDER } from "./workflowMap.ts";
 import { NO_ASSIGN } from "./stepAssign.ts";
 
 export const CLICKUP: TrackerAdapter = {
+  tracker: "clickup",
   nouns: { name: "ClickUp", workspace: "workspace", space: "space", spaces: "spaces", list: "list", lists: "lists", item: "card", items: "cards", move: "Move to", verb: "Move" },
   kinds: STEP_ORDER,
   suggest: { move: /qa|test/i, menu: /review/i, merge: /^(done|complete|completed|released|approved|closed)$/i },

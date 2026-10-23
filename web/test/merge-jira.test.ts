@@ -28,7 +28,9 @@ beforeAll(async () => {
   });
   mod = await import("../src/lib/mergeJira.ts");
 });
-beforeEach(() => { sent = []; answers = {}; });
+const OFF = { enabled: false, blocks: [] };
+const steps = (merge: object = OFF) => json({ ok: true, overrides: [], steps: { handoff: OFF, review: OFF, merge } });
+beforeEach(() => { sent = []; answers = { "/jira/steps": steps() }; });
 
 const json = (body: unknown) => () => Response.json(body);
 const ref = { label: "ORBIT-1042", query: "orbit-1042" };
@@ -37,7 +39,7 @@ const move = (id: string, label: string, extra: object = {}) => ({ id, name: `mo
 const status = (writes: boolean) => json({ connected: true, site: "acme.atlassian.net", writes, prefixes: ["ORBIT"] });
 
 describe("looking the card up", () => {
-  test("writes on: the card, the switch and the moves, three reads and no write", async () => {
+  test("writes on: the card, the switch, the saved steps and the moves, four reads and no write", async () => {
     answers["/jira/find"] = json({ ok: true, task, asked: "ORBIT-1042" });
     answers["/jira/status"] = status(true);
     answers["/jira/transitions"] = json({ ok: true, options: [move("21", "In Review"), move("41", "Done", { toKind: "done", needs: ["resolution"] })] });
@@ -45,7 +47,27 @@ describe("looking the card up", () => {
     expect(r.ok).toBe(true);
     expect(r.ok && r.card).toMatchObject({ key: "ORBIT-1042", label: "ORBIT-1042", query: "orbit-1042", status: "In Progress", updated: 1768294800000, writes: true });
     expect(r.ok && r.card.options.map((o) => [o.key, o.label, o.needs])).toEqual([["21", "In Review", undefined], ["41", "Done", ["resolution"]]]);
-    expect([...sent].sort()).toEqual(["/jira/find", "/jira/status", "/jira/transitions"]);
+    expect([...sent].sort()).toEqual(["/jira/find", "/jira/status", "/jira/steps", "/jira/transitions"]);
+  });
+
+  test("a saved merge step with a move rides on the card: its names, and whether the status is asked", async () => {
+    answers["/jira/find"] = json({ ok: true, task, asked: "ORBIT-1042" });
+    answers["/jira/status"] = status(true);
+    answers["/jira/transitions"] = json({ ok: true, options: [move("21", "In Review")] });
+    answers["/jira/steps"] = steps({ enabled: true, blocks: [{ type: "move", statusNames: ["In Review"] }, { type: "comment", text: "Merged" }] });
+    const r = await mod.lookUpJiraCard(ref);
+    expect(r.ok && r.card.step).toEqual({ names: ["In Review"], ask: false, hasMove: true, extras: true });
+    expect(r.ok && mod.stepOption(r.card)?.key).toBe("21");
+  });
+
+  test("a merge step that is off leaves the row as it was; one with no move is a step that only does the rest", async () => {
+    answers["/jira/find"] = json({ ok: true, task });
+    answers["/jira/status"] = status(false);
+    const off = await mod.lookUpJiraCard(ref);
+    expect(off.ok && off.card.step).toBeUndefined();
+    answers["/jira/steps"] = steps({ enabled: true, blocks: [{ type: "comment", text: "Merged" }] });
+    const note = await mod.lookUpJiraCard(ref);
+    expect(note.ok && note.card.step).toEqual({ names: [], ask: false, hasMove: false, extras: true });
   });
 
   test("writes off: the moves are never asked for", async () => {
@@ -93,7 +115,7 @@ describe("the answer", () => {
     expect(mod.jiraMergeMove(card, "")).toBeUndefined();
   });
   test("a pick is the move's id, the stamp, and the site's own word for where it goes", () => {
-    expect(mod.jiraMergeMove(card, "21")).toEqual({ id: "ORBIT-1042", label: "ORBIT-1042", to: "21", toLabel: "In Review", updated: 5, tracker: "jira", query: "orbit-1042" });
+    expect(mod.jiraMergeMove(card, "21")).toEqual({ id: "ORBIT-1042", label: "ORBIT-1042", to: "21", toLabel: "In Review", toStatus: "In Review", updated: 5, tracker: "jira", query: "orbit-1042" });
   });
   test("a move that needs a field is never an answer, and neither is one that is not offered", () => {
     expect(mod.jiraMergeMove(card, "41")).toBeUndefined();
@@ -115,7 +137,10 @@ describe("wiring that needs a renderer, asserted against the source", () => {
   test("the merge sends a Jira card through the move, with the stamp, and ClickUp's two calls are still there", async () => {
     const panel = await read("components/PrPanel.tsx");
     const run = panel.slice(panel.indexOf("const runMerge = async"), panel.indexOf("const doAutoMerge"));
-    expect(run).toContain('move.tracker === "jira" ? api.jiraTransition(move.id, move.to, move.updated)');
+    // A move that comes from the merge step runs as the step; any other is the plain transition with the stamp.
+    expect(run).toContain('move.tracker === "jira" ? jiraMergeWrite(move, detail)');
+    expect(panel).toContain('api.jiraRunStep(move.id, move.updated, "merge"');
+    expect(panel).toContain("api.jiraTransition(move.id, move.to, move.updated)");
     expect(run).toContain("move.write ? api.clickupCard(move.id, move.write, move.updated) : api.clickupStatus(move.id, move.to, move.updated)");
     expect(run).toContain('move.tracker === "jira" ? move.query');
   });

@@ -6,7 +6,8 @@ import type { PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/typ
 import type { AskedAlert } from "../../../shared/notifyPayload.ts";
 import type { CheckOnBasePlan, CheckOnBaseStatus } from "../../../shared/checkOnBase.ts";
 import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, EnginesReport, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest } from "../../../shared/types.ts";
-import type { ProvidersResponse, JiraConnectResult, JiraHandoffRule, JiraMoves, JiraPerson, JiraSettings, JiraStatus, JiraViews, JiraViewRead, JiraViewChoice, JiraProjectChoice, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, TrackerChoice } from "../../../shared/providers.ts";
+import type { JiraUnits } from "../../../shared/jiraStatusUnits.ts";
+import type { ProvidersResponse, JiraConnectResult, JiraHandoffRule, JiraMoves, JiraPerson, JiraSettings, JiraStep, JiraStepChoice, JiraStepKey, JiraStepPr, JiraSteps, JiraStepsRead, JiraStatus, JiraViews, JiraViewRead, JiraViewChoice, JiraProjectChoice, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, TrackerChoice } from "../../../shared/providers.ts";
 import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from "../../../shared/notifyPrefs.ts";
 import type { CheckMetric } from "../../../shared/checkBaseline.ts";
 import type { UiReply } from "../../../shared/uiActions.ts";
@@ -1432,6 +1433,16 @@ const realApi = {
   /** One project's hand-off, or null to drop it. */
   setJiraHandoff: (project: string, rule: JiraHandoffRule | null) =>
     post<{ ok: boolean; error?: string } & Partial<JiraSettings>>("/jira/settings", { project, rule }),
+  /** The steps in effect, global to the site and by status name; `overrides` are projects whose older hand-off rule still wins. */
+  jiraSteps: () => get<{ ok: boolean; error?: string } & Partial<JiraStepsRead>>("/jira/steps"),
+  setJiraSteps: (steps: Partial<Record<keyof JiraSteps, Partial<JiraStep>>>) => post<{ ok: boolean; error?: string } & Partial<JiraStepsRead>>("/jira/steps", { steps }),
+  /** Run one step on a card, as one request. Behind the write switch. */
+  jiraRunStep: (key: string, updated: number, trigger: JiraStepKey, choice: JiraStepChoice = {}, pr?: JiraStepPr) =>
+    post<JiraWrite>("/jira/step", { key, updated, trigger, choice, ...(pr ? { pr } : null) }),
+  /** The projects the workflow map is drawn from, with their statuses; `fresh` goes past the server's held answer. */
+  jiraStatusUnits: (fresh = false) =>
+    get<{ ok: boolean; error?: string; throttled?: boolean; counted?: string[] } & Partial<JiraUnits>>(`/jira/status-units${fresh ? "?fresh=1" : ""}`),
+  setJiraCounted: (counted: string[]) => post<{ ok: boolean; error?: string; counted?: string[] }>("/jira/status-units", { counted }),
   jiraProjectStatuses: (project: string) =>
     get<{ ok: boolean; error?: string; statuses?: { id: string; name: string; kind: "open" | "done" | "other" }[] }>(`/jira/project-statuses?project=${encodeURIComponent(project)}`),
   /** The saved Jira views and folders: local, no request to Jira. */
@@ -2821,6 +2832,11 @@ const demoApi: typeof realApi = {
   jiraHandOff: (_k: string, _u: number, _c?: { to?: string; clear?: boolean }) => D({ ok: false, error: "not available in the demo" }),
   jiraSettings: () => D({ ok: true, writes: false, handoff: {} as Record<string, JiraHandoffRule> }),
   setJiraHandoff: (_p: string, _r: JiraHandoffRule | null) => D({ ok: false, error: "not available in the demo" }),
+  jiraSteps: () => D({ ok: true, steps: { handoff: { enabled: false, blocks: [] }, review: { enabled: false, blocks: [] }, merge: { enabled: false, blocks: [] } } as JiraSteps, overrides: [] as string[] }),
+  setJiraSteps: (_s: Partial<Record<keyof JiraSteps, Partial<JiraStep>>>) => D({ ok: false, error: "not available in the demo" }),
+  jiraRunStep: (_k: string, _u: number, _t: JiraStepKey, _c?: JiraStepChoice, _p?: JiraStepPr) => D({ ok: false, error: "not available in the demo" }),
+  jiraStatusUnits: (_f?: boolean) => D({ ok: true, spaces: [], source: "spaces" as const, counted: [] as string[] }),
+  setJiraCounted: (_c: string[]) => D({ ok: false, error: "not available in the demo" }),
   jiraProjectStatuses: (_p: string) => D({ ok: true, statuses: [] as { id: string; name: string; kind: "open" | "done" | "other" }[] }),
   jiraViews: () => D<JiraViews>({
     connected: true, site: "acme.example", current: "board:1",

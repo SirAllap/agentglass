@@ -312,7 +312,7 @@ export const UI_READ_NOT_COVERED: Readonly<Record<string, string>> = {
   "settings.connections": "credential pane: values are never read through this channel (settings.privacy says only whether ClickUp is set)",
   "settings.remote": "credential pane: values are never read through this channel (settings.privacy says only how many devices are paired)",
   "settings.clickup": "credential pane: values are never read through this channel (settings.privacy says only whether it is set)",
-  "settings.jira": "credential pane: values are never read through this channel",
+  "settings.jira": "credential pane: the token, the site and the write switch are never read through this channel (the one setting on it is a def, and the steps have their own door, GET /jira/steps)",
   "settings.onboarding": "not a setting",
   "settings.engines": "no setting of its own: the page shows what GET /engines measures on this machine, and an agent reads that route (the tests there are a real turn and are not an agent's to start)",
 };

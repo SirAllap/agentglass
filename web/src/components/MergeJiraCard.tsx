@@ -4,7 +4,7 @@ import { StatusPill } from "./StatusPill.tsx";
 import { Spinner } from "./Spinner.tsx";
 import { api } from "../lib/api.ts";
 import { LEAVE_ALONE } from "../lib/cardMove.ts";
-import { lookUpJiraCard, type JiraMergeCard } from "../lib/mergeJira.ts";
+import { lookUpJiraCard, movesOffered, stepOption, stepReaches, type JiraMergeCard } from "../lib/mergeJira.ts";
 import { EDGE } from "./workspace/Chrome.tsx";
 
 type Look = { kind: "loading" } | { kind: "failed"; why: string } | { kind: "ready"; card: JiraMergeCard };
@@ -26,7 +26,7 @@ export function MergeJiraCard({ card: ref, pick, onPick }: {
   const load = async (alive: () => boolean) => {
     const r = await lookUpJiraCard(ref);
     if (!alive()) return;
-    if (r.ok) { setLook({ kind: "ready", card: r.card }); onPick(r.card, LEAVE_ALONE); }
+    if (r.ok) { setLook({ kind: "ready", card: r.card }); onPick(r.card, stepOption(r.card)?.key ?? LEAVE_ALONE); }
     else { setLook({ kind: "failed", why: r.why }); onPick(null, LEAVE_ALONE); }
   };
 
@@ -54,6 +54,8 @@ export function MergeJiraCard({ card: ref, pick, onPick }: {
     );
   }
   const c = look.card;
+  const stepNote = !c.step || !c.writes || c.cannot ? "" : !c.step.hasMove ? "The merge step posts and links; it makes no move."
+    : !stepReaches(c) ? `This card cannot make the merge step's move from where it is, so a move below is made on its own.` : "";
   const moving = pick !== LEAVE_ALONE;
   return (
     <div className="flex items-center gap-2 flex-wrap">
@@ -87,13 +89,14 @@ export function MergeJiraCard({ card: ref, pick, onPick }: {
           style={FIELD}
           options={[
             { value: LEAVE_ALONE, label: "Leave it there" },
-            ...c.options.map((o) => ({
+            ...movesOffered(c).map((o) => ({
               value: o.key, label: o.label, tint: o.color, pill: true, dim: o.toKind === "done",
               ...(o.needs?.length ? { disabled: true, hint: `needs ${o.needs.join(", ")}` } : null),
             })),
           ]}
         />
       )}
+      {stepNote && <span className="text-[10px] basis-full" style={{ color: "var(--text3)" }}>{stepNote}</span>}
     </div>
   );
 }

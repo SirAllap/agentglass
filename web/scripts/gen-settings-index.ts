@@ -23,7 +23,7 @@
  * per-row jump (Enter on a search result, the command palette's row entry)
  * cannot land on that one row. Nested components deeper than one level (a
  * component that itself renders another component that renders a row) are
- * also not indexed, for the same reason: this script does not evaluate the
+ * not indexed, except for the panes in DEEP_PANES, which are followed one level more, for the same reason: this script does not evaluate the
  * tree, it reads text.
  *
  * Regenerate with `bun run gen:settings-index` from web/.
@@ -169,7 +169,10 @@ function subComponentsIn(text: string): string[] {
   return [...found];
 }
 
-function rowsForPane(pane: string, block: string, seenComponents: Set<string>): Row[] {
+/** Panes whose container hands what it reads to a view that draws the rows. Opt-in: following every pane two levels adds rows to pages nobody asked about. */
+const DEEP_PANES = new Set(["jira"]);
+
+function rowsForPane(pane: string, block: string, seenComponents: Set<string>, depth = 0): Row[] {
   const rows = rowsIn(block, pane);
   for (const comp of subComponentsIn(block)) {
     if (seenComponents.has(`${pane}:${comp}`)) continue;
@@ -179,6 +182,8 @@ function rowsForPane(pane: string, block: string, seenComponents: Set<string>): 
     const body = componentBody(file, comp);
     if (!body) continue;
     rows.push(...rowsIn(body, pane));
+    // A pane whose container hands what it reads to a view (JiraPane -> JiraSettingsView) has its rows one level further down.
+    if (depth < 1 && DEEP_PANES.has(pane)) rows.push(...rowsForPane(pane, body, seenComponents, depth + 1).slice(rowsIn(body, pane).length));
   }
   return rows;
 }

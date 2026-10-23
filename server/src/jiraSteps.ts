@@ -149,6 +149,8 @@ export interface StepChoice {
   assign?: string | null;
   /** The comment, as edited. */
   comment?: string;
+  /** Leave the card in its status: the step's move is skipped, and what else it does (comment, link, people) still runs. */
+  stay?: boolean;
 }
 export interface StepPr { url: string; title?: string; number?: number; author?: string }
 
@@ -246,7 +248,7 @@ async function runStepOnce(creds: JiraCreds, key: string, updated: number, which
 
   // The hand-off an older file defined per project keeps its own rule for a project that resolves differently.
   const rule = stepKey === "handoff" && overrides.includes(project) && projectKey(project) ? handoffRules()[project] : undefined;
-  const move = rule
+  const move = choice.stay ? null : rule
     ? (rule.to || rule.askTo ? { names: rule.to ? [rule.to.name] : [], ask: rule.askTo } : null)
     : plan.move ? { names: plan.move.names, ask: plan.move.ask } : null;
   const ruleToId = rule?.to && !choice.to ? rule.to.id : null;

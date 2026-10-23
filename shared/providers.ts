@@ -174,6 +174,12 @@ export interface JiraHandoffRule {
 /** One Jira step: where it shows is its key in `JiraSteps`, what it does is its blocks. Steps are global by status NAME, like ClickUp's. */
 export interface JiraStep { enabled: boolean; blocks: StepBlock[] }
 export interface JiraSteps { handoff: JiraStep; review: JiraStep; merge: JiraStep }
+/** Which step a button runs: the key it has in `JiraSteps`. */
+export type JiraStepKey = keyof JiraSteps;
+/** What a person chose when a step asked (all optional): the status by name, the assignee, the comment as edited. */
+export interface JiraStepChoice { to?: string; clear?: boolean; assign?: string | null; comment?: string; /** Skip the step's move; the rest of it still runs. */ stay?: boolean }
+/** The pull request a step links on the card. */
+export interface JiraStepPr { url: string; title?: string; number?: number; author?: string }
 
 /** `GET /jira/settings`: the write switch and the hand-off, by project key. */
 export interface JiraSettings { writes: boolean; handoff: Record<string, JiraHandoffRule> }
@@ -783,6 +789,12 @@ export type BlockOf<I extends PersonId> =
 export type StepBlock = BlockOf<PersonId>;
 export type ClickUpStepBlock = BlockOf<number>;
 export type ClickUpStepAssign = StepAssign<number>;
+/**
+ * What the workflow map's block editor holds: ClickUp's blocks, plus the link Jira has. The editor treats a
+ * person's id as opaque (it compares and stores it, never reads it), so a Jira step whose blocks name a
+ * person by account id passes through it unchanged; naming one from the editor is not offered for Jira.
+ */
+export type MapBlock = ClickUpStepBlock | { type: "link" };
 
 export interface HandoffConfig {
   /** Off until a workspace says it has a QA column. */

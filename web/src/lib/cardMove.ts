@@ -281,11 +281,11 @@ export function statusColor(statuses: ListStatus[], status: string): string | un
  */
 export function mergeNote(
   merged: boolean,
-  move: { asked: boolean; ok?: boolean; to?: string; error?: string; unauthorised?: boolean; extra?: string; tracker?: "ClickUp" | "Jira" },
+  move: { asked: boolean; ok?: boolean; to?: string; error?: string; unauthorised?: boolean; extra?: string; tracker?: "ClickUp" | "Jira"; /** The card was left where it was, on purpose. */ stayed?: boolean },
 ): string {
   if (!merged) return "Merge failed";
   if (!move.asked) return "Merged";
-  if (move.ok) return `Merged · card moved to ${move.to}${move.extra ? ` · ${move.extra}` : ""}`;
+  if (move.ok) return `Merged · card ${move.stayed ? "left in" : "moved to"} ${move.to}${move.extra ? ` · ${move.extra}` : ""}`;
   /*
    * A refused token is the one failure here that pressing the button again
    * cannot fix, and the sentence has to say so — otherwise "ClickUp refused

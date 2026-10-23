@@ -6,7 +6,7 @@ import { WFM_CSS } from "./workflowMapStyle.ts";
 import { ArrowIcon, CaretIcon, DoneIcon, EyeIcon, EyeOffIcon, ListIcon, MergeIcon, NoteIcon, PlusIcon, UserIcon, WarningIcon, CrossIcon } from "../lib/glyphIcons.tsx";
 import { StepBlocks, type MapPerson } from "./StepBlocks.tsx";
 import type { FieldChoice } from "./StepExtraRows.tsx";
-import type { ClickUpStepBlock as StepBlock } from "../../../shared/providers.ts";
+import type { MapBlock as StepBlock } from "../../../shared/providers.ts";
 import { blocksSentence, blockNeedsValue, stepIsEmpty, triggerOf } from "../lib/stepBlocksView.ts";
 import { HIT, ICON } from "../lib/iconSize.ts";
 import {
@@ -366,7 +366,7 @@ export function WorkflowMap(p: MapProps) {
             <>
               <StepBlocks trigger={trig} blocks={st.blocks} status={st.status} statusType={stDot?.type ?? "custom"} statusColor={stDot?.color}
                 {...(awaiting ? { moveTone: "empty" as const } : pill?.tone === "ignored" ? { moveTone: "ignored" as const } : bad ? { moveTone: "bad" as const } : null)}
-                n={n} frozen={frozen} people={p.people} {...(p.fields ? { fields: p.fields } : null)} statusOpen={picker?.kind === st.kind}
+                n={n} tracker={p.adapter.tracker} frozen={frozen} people={p.people} {...(p.fields ? { fields: p.fields } : null)} statusOpen={picker?.kind === st.kind}
                 onChange={(next) => p.onBlocks(st.kind, next)}
                 onPickStatus={(anchor) => (picker?.kind === st.kind ? closePicker(false) : openPicker(st.kind)(anchor))} />
               <div className="text-[13px]" data-press={st.kind} style={{ color: "var(--text2)", borderLeft: "3px solid var(--text)", padding: "8px 12px", borderRadius: 10, background: "var(--bg)", boxShadow: "inset 0 0 0 1px var(--w-line)" }}>

@@ -63,7 +63,7 @@ const FAMILIES: [string, string][] = [
 ];
 
 describe("defs and rows agree", () => {
-  const modal = src("components/SettingsModal.tsx") + src("components/ThemePicker.tsx") + src("components/ClickUpPane.tsx");
+  const modal = src("components/SettingsModal.tsx") + src("components/ThemePicker.tsx") + src("components/ClickUpPane.tsx") + src("components/jira/JiraSettingsView.tsx");
 
   test("every def is reached by a row: a settingId in the generated list, or in source for the rows the generator cannot read", () => {
     const fromGen = new Set(SETTINGS_ROWS.map((r) => r.settingId).filter(Boolean) as string[]);
