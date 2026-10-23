@@ -1126,8 +1126,7 @@ export function FilePalette({
             {finderOn ? (
               <MachineFinder home={homeDir} workspace={root} start={place || homeDir} places={places} target={finderTo} onClose={onClose} wantFile={wantFile} onWanted={() => setWantFile(null)}
                 onPlace={(p) => { setPlaceRecents(rememberPlace(p)); setPlace(p); setBrowsePath(null); }}
-                onBench={(p, mode) => { onBench(benchOpen(mode, p, root)); onClose(); }}
-                onRecent={() => goTab("recent")} />
+                onBench={(p, mode) => { onBench(benchOpen(mode, p, root)); onClose(); }} />
             ) : (
             <div className="flex-1 min-h-0 flex">
               <div className="shrink-0 flex flex-col min-h-0 relative"

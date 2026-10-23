@@ -2835,3 +2835,16 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 /* What a drag would drop on: a folder row, a column, a place in the sidebar, the Trash. */
 [data-drop-on] { outline: 2px solid var(--primary); outline-offset: -2px; background: color-mix(in srgb, var(--primary) 14%, transparent); border-radius: 6px; }
 .agx-fm-row:hover { background: color-mix(in srgb, var(--primary) 8%, transparent); }
+
+/* Markdown in the Finder preview, as Strata draws it: one monospace face, the
+   title in the accent, tables as plain grids with a header that sorts. */
+.agx-strata-md { line-height: 1.6; }
+.agx-strata-md h1, .agx-strata-md h2, .agx-strata-md h3, .agx-strata-md h4 {
+  font-family: inherit; color: var(--primary-ink); font-weight: 700; letter-spacing: 0;
+}
+.agx-prose.agx-strata-md h1 { font-size: 1.35em; border-bottom: 0; padding-bottom: 0; margin: 0 0 0.8em; }
+.agx-strata-md h2 { font-size: 1.15em; margin: 1.4em 0 0.5em; }
+.agx-strata-md h3, .agx-strata-md h4 { font-size: 1em; margin: 1.2em 0 0.4em; }
+.agx-strata-md p { margin: 0.6em 0; }
+.agx-strata-md table { font-family: inherit; }
+.agx-strata-md th { user-select: none; }

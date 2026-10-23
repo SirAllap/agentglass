@@ -2,7 +2,7 @@ import { forgetShared, sharedRead } from "./sharedRead.ts";
 import type { UiAction, Field, NoteStatus, PluginPanel, PluginPrNotes } from "./pluginTypes.ts";
 import type { ImportedPlace } from "./desktop.ts";
 import type { Policy } from "../../../shared/orchestration.ts";
-import type { PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/types.ts";
+import type { PinnedPlace, PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/types.ts";
 import type { AskedAlert } from "../../../shared/notifyPayload.ts";
 import type { CheckOnBasePlan, CheckOnBaseStatus } from "../../../shared/checkOnBase.ts";
 import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, BrowsePage, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, EnginesReport, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, VolumeList, NetworkList, RemoteStep, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest, FsBody, FsAnswer, FsJob, FsTrashRow, FsProps, OpenWithList, FinderAction, FinderActionList } from "../../../shared/types.ts";
@@ -1311,6 +1311,9 @@ const realApi = {
   openWithLaunch: (id: string, paths: string[], always?: { mime: string }) =>
     post<{ ok: boolean; error?: string; note?: string }>("/finder/openwith/launch", { id, paths, ...(always ? { always: true, mime: always.mime } : {}) }).catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) } as { ok: boolean; error?: string; note?: string })),
   fsJobCancel: (id: string) => post<{ ok: boolean }>("/fs/jobs/cancel", { id }),
+  /** The sidebar's pinned places: GTK's bookmarks file, read freely, changed with the desk key (server/src/bookmarks.ts). */
+  bookmarks: () => get<{ ok: boolean; bookmarks: PinnedPlace[] }>("/finder/bookmarks").catch(() => ({ ok: false, bookmarks: [] as PinnedPlace[] })),
+  bookmarkToggle: (path: string) => post<{ ok: boolean; error?: string; bookmarks?: PinnedPlace[] }>("/finder/bookmarks", { path }).catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) } as { ok: boolean; error?: string; bookmarks?: PinnedPlace[] })),
   /** The person's own finder actions: matching and listing are reads; saving, deleting and running are the desk key's (server/src/finderactions.ts). */
   actionsMatch: (paths: string[], source: "selection" | "background") => get<{ ok: boolean; actions: FinderAction[] }>(`/finder/actions/match?source=${source}&${paths.map((p) => `path=${encodeURIComponent(p)}`).join("&")}`).catch(() => ({ ok: false, actions: [] as FinderAction[] })),
   actionsList: () => get<FinderActionList>("/finder/actions").catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e), actions: [], problems: [] } as FinderActionList)),
@@ -2751,6 +2754,8 @@ const demoApi: typeof realApi = {
   actionsList: () => D({ ok: true, actions: [], problems: [] }),
   actionRead: () => D({ ok: false, error: "the demo has no filesystem" }),
   actionSave: () => D({ ok: false, error: "the demo has no filesystem" }),
+  bookmarks: () => D({ ok: true, bookmarks: [] as PinnedPlace[] }),
+  bookmarkToggle: () => D({ ok: false, error: "the demo has no filesystem" }),
   actionDelete: () => D({ ok: false, error: "the demo has no filesystem" }),
   actionRun: () => D({ ok: false, error: "the demo has no filesystem" }),
   fsTrash: () => D({ ok: true, entries: [] }),

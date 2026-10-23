@@ -10,13 +10,14 @@ import { useDiffHighlight } from "../../../lib/diffHighlight.ts";
 import { humanBytes } from "../../../lib/paletteModel.ts";
 import {
   COLOUR_LINES, GRAPH_MAX_BYTES, HTML_RENDER_MAX_BYTES, JSON_READ_CAP, READ_LINES,
-  graphAllowed, htmlRenderable, isolatedDoc, previewPlan, readWindow, type PreviewTab,
+  graphAllowed, htmlRenderable, isolatedDoc, previewPlan, readWindow, sortedOrder, type PreviewTab,
 } from "../../../lib/finderPreview.ts";
 import { HIT } from "../../../lib/iconSize.ts";
 import type { FileFacts } from "../../../../../shared/types.ts";
 import { EDGE } from "../../workspace/Chrome.tsx";
 import { CODE_FONT_STYLE } from "../../diff/DiffLines.tsx";
 import { JsonGraph, JsonTree } from "./JsonViews.tsx";
+import { BarButton, PreviewBar } from "./PreviewBar.tsx";
 import { FinderNvim } from "./FinderNvim.tsx";
 import { editability } from "../../../lib/finderEdit.ts";
 import { FindBar } from "../../PeekFile.tsx";
@@ -28,7 +29,21 @@ const note = (children: React.ReactNode, warn = false) => (
   <p className="m-0 mb-2 text-[11px]" style={{ color: warn ? "var(--warning-ink)" : "var(--text3)" }}>{children}</p>
 );
 
-export function PreviewBody({ path, facts, canEdit, root, onEditing, savedTab, onTab }: {
+/** What the panel hands the body so the header bar can carry the view's own tools. */
+export interface BarProps { lead: React.ReactNode; name: string; meta: string; title: string; onClose?: () => void; onOpen?: () => void; onNvim?: () => void }
+
+/** Print what the pane shows: its markup in a hidden frame, so nothing else of the page is on the sheet. */
+function printPane(el: HTMLElement | null, title: string) {
+  if (!el) return;
+  const f = document.createElement("iframe");
+  f.style.cssText = "position:fixed;width:0;height:0;border:0;right:0;bottom:0";
+  f.srcdoc = `<!doctype html><meta charset="utf-8"><title>${title.replace(/[<&]/g, "")}</title><style>body{font:12px/1.5 ui-monospace,monospace;color:#000;background:#fff;white-space:pre-wrap;overflow-wrap:anywhere}</style>${el.innerHTML}`;
+  f.onload = () => { f.contentWindow?.print(); setTimeout(() => f.remove(), 1000); };
+  document.body.appendChild(f);
+}
+
+export function PreviewBody({ path, facts, canEdit, root, onEditing, savedTab, onTab, bar }: {
+  bar: BarProps;
   path: string;
   /** The workspace the editor session hangs off (the bench's own key). */
   root: string;
@@ -77,9 +92,13 @@ export function PreviewBody({ path, facts, canEdit, root, onEditing, savedTab, o
     setHit((i) => { const next = stepFind(i, n, dir); revealFind(ranges.current[next]); return next; });
   }, []);
 
-  const tabs = plan.tabs.length > 0 && (
-    <div className="flex items-center gap-1 pb-2 shrink-0" role="tablist" aria-label="How to show this file">
-      {plan.tabs.map((t) => {
+  /* Two ways to see a file (rendered / source) are one toggle in the bar, as in Strata; JSON's three stay a row. */
+  const toggles = plan.tabs.length === 2;
+  const other = toggles ? plan.tabs.find((t) => t !== tab) ?? plan.tabs[0]! : tab;
+  const showsSource = tab === "Source" || tab === "Reading";
+  const tabs = (plan.tabs.length > 2 || (canEdit && plan.tabs.length > 0 && !toggles)) && (
+    <div className="flex items-center gap-1 px-4 pt-2 shrink-0" role="tablist" aria-label="How to show this file">
+      {plan.tabs.length > 2 && plan.tabs.map((t) => {
         const off = t === "Graph" && !graphOk;
         return (
           <button key={t} role="tab" aria-selected={!editing && tab === t} disabled={off} className="agx-btn px-2.5 rounded-md text-[11px] disabled:opacity-40"
@@ -93,17 +112,16 @@ export function PreviewBody({ path, facts, canEdit, root, onEditing, savedTab, o
           style={{ minHeight: HIT - 6, border: EDGE, ...(editing ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)", color: "var(--text)" } : { color: "var(--text3)" }) }}
           title={mayEdit && !mayEdit.ok ? mayEdit.why : "Edit this file with nvim, here"} onClick={() => setEditing(true)}>Editing</button>
       )}
-      {texty && !editing && (
-        <span className="ml-auto flex items-center gap-1">
-          <button className="agx-btn px-2 rounded-md text-[11px] inline-flex items-center gap-1" aria-pressed={findOpen} title="Find in preview"
-            style={{ minHeight: HIT - 6, border: EDGE, color: findOpen ? "var(--primary-ink)" : "var(--text3)" }}
-            onClick={() => { setFindOpen((o) => !o); setTimeout(() => findRef.current?.focus(), 0); }}><SearchIcon size={ICON.xs} />Find</button>
-          <button className="agx-btn px-2 rounded-md text-[11px]" aria-pressed={wrap} title="Toggle word wrap"
-            style={{ minHeight: HIT - 6, border: EDGE, color: wrap ? "var(--text)" : "var(--text3)" }} onClick={() => setWrap((w) => !w)}>Wrap</button>
-        </span>
-      )}
     </div>
   );
+  const tools = (
+    <>
+      {toggles && <BarButton icon="file-code" label={showsSource ? `Show ${other.toLowerCase()}` : "Show source"} on={showsSource} onClick={() => { setEditing(false); setTab(other); }} />}
+      {texty && !editing && <BarButton icon="search" label="Find in preview" on={findOpen} onClick={() => { setFindOpen((o) => !o); setTimeout(() => findRef.current?.focus(), 0); }} />}
+      {bar.onNvim && <BarButton icon="terminal" label="Open in nvim" onClick={bar.onNvim} />}
+    </>
+  );
+  const afterTools = texty && !editing ? <BarButton icon="wrap-text" label="Wrap long lines" on={wrap} onClick={() => setWrap((w) => !w)} /> : null;
 
   let body: React.ReactNode;
   if (editorOn) body = <FinderNvim root={root} path={path} onEnd={() => setEditing(false)} />;
@@ -120,16 +138,19 @@ export function PreviewBody({ path, facts, canEdit, root, onEditing, savedTab, o
     default: body = <p style={{ color: "var(--text3)" }}><b>{facts.name}</b> is a binary file ({humanBytes(facts.bytes)}): there is no text to show. “Open in Files” hands it to the desktop.</p>;
   }
   return (
-    <div className="flex flex-col min-w-0 min-h-full">
+    <>
+      <PreviewBar lead={bar.lead} name={bar.name} meta={bar.meta} title={bar.title} tools={tools} afterPrint={afterTools} onOpen={bar.onOpen} onPrint={texty ? () => printPane(bodyRef.current, bar.name) : undefined} onClose={bar.onClose} />
       {tabs}
       {findOpen && (
-        <div className="-mx-4 mb-2">
+        <div className="mt-2">
           <FindBar inputRef={findRef} value={needle} onValue={(v) => { setNeedle(v); setHit(0); }} hit={hits ? hit + 1 : 0} hits={hits} onStep={goHit}
             onClose={() => { setFindOpen(false); setNeedle(""); clearFind(); }} />
         </div>
       )}
-      <div ref={bodyRef} className="flex-1 min-w-0 min-h-0 flex flex-col" style={wrap ? undefined : { overflowX: "auto" }}>{body}</div>
-    </div>
+      <div className="flex-1 min-h-0 flex flex-col agx-scroll overflow-y-auto overflow-x-hidden px-4 py-3 text-[12px]">
+        <div ref={bodyRef} className="flex-1 min-w-0 min-h-0 flex flex-col" style={wrap ? undefined : { overflowX: "auto" }}>{body}</div>
+      </div>
+    </>
   );
 }
 
@@ -163,11 +184,43 @@ function Reading({ facts, name, wrap = true }: { facts: FileFacts; name: string;
   );
 }
 
+/** Strata draws markdown in the monospace face, a centred column, the title in the accent, under a notice that raw HTML stays text. A table's header sorts its rows. */
 function MarkdownView({ facts }: { facts: FileFacts }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+    const undo: (() => void)[] = [];
+    root.querySelectorAll("table").forEach((table) => {
+      const body = table.tBodies[0];
+      if (!body) return;
+      let at = -1, dir: "asc" | "desc" = "asc";
+      table.querySelectorAll("th").forEach((th, col) => {
+        const arrow = document.createElement("span");
+        arrow.setAttribute("aria-hidden", "true");
+        arrow.style.cssText = "display:inline-block;width:1ch;margin-left:0.4ch;opacity:0.7";
+        th.appendChild(arrow);
+        th.style.cursor = "pointer";
+        th.setAttribute("aria-sort", "none");
+        const on = () => {
+          dir = at === col && dir === "asc" ? "desc" : "asc"; at = col;
+          const rows = [...body.rows];
+          for (const i of sortedOrder(rows.map((r) => r.cells[col]?.textContent ?? ""), dir)) body.appendChild(rows[i]!);
+          table.querySelectorAll("th").forEach((h, k) => { const a = h.lastElementChild as HTMLElement | null; if (a) a.textContent = k === col ? (dir === "asc" ? "↑" : "↓") : ""; h.setAttribute("aria-sort", k === col ? (dir === "asc" ? "ascending" : "descending") : "none"); });
+        };
+        th.addEventListener("click", on);
+        undo.push(() => { th.removeEventListener("click", on); arrow.remove(); });
+      });
+    });
+    return () => undo.forEach((f) => f());
+  }, [facts.text]);
   return (
-    <div className="agx-prose agx-prose-pane min-w-0" style={{ fontSize: 12.5, overflowWrap: "anywhere" }}>
-      <Markdown text={facts.text ?? ""} />
-      {facts.textTruncated && note(`Only the first part of this ${humanBytes(facts.bytes)} file is rendered. Open in nvim for the rest.`, true)}
+    <div className="min-w-0 flex flex-col gap-3" style={CODE_FONT_STYLE}>
+      <div role="note" className="rounded-md px-2.5 py-1.5 text-[11px]" style={{ border: EDGE, background: "var(--surface-card)", color: "var(--text2)" }}>Raw HTML is shown as inert text in Markdown previews.</div>
+      <div ref={ref} className="agx-prose agx-prose-pane agx-strata-md mx-auto w-full min-w-0" style={{ ...CODE_FONT_STYLE, fontSize: 11.5, maxWidth: "88ch", overflowWrap: "anywhere" }}>
+        <Markdown text={facts.text ?? ""} />
+        {facts.textTruncated && note(`Only the first part of this ${humanBytes(facts.bytes)} file is rendered. Open in nvim for the rest.`, true)}
+      </div>
     </div>
   );
 }

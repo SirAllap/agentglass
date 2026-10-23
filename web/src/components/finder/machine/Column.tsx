@@ -10,7 +10,7 @@ import { CaretIcon } from "../../../lib/glyphIcons.tsx";
 import { FileTypeIcon, StrataIcon, StyledIcon } from "./StrataIcon.tsx";
 import { useItemStyle } from "../../../lib/finderStyleStore.ts";
 import { HIT, ICON } from "../../../lib/iconSize.ts";
-import { formatSize, isDefaultSort, isFolder, isThumbable, joinPath, itemsLabel, makeDefaultSort, resetSort, type Display, type Prefs, type Row, type SortKey } from "../../../lib/finderMiller.ts";
+import { formatSize, isDefaultSort, isFolder, isThumbable, joinPath, itemsLabel, rowLabel, makeDefaultSort, resetSort, type Display, type Prefs, type Row, type SortKey } from "../../../lib/finderMiller.ts";
 import type { FolderState } from "../../../lib/finderFolders.ts";
 import { EDGE, INPUT, INPUT_STYLE, LINE } from "../../workspace/Chrome.tsx";
 import { MenuCap, MenuItem, MenuRule, Popover } from "./Popover.tsx";
@@ -154,7 +154,7 @@ export function Column({ dir: folderPath, title, filterSignal, width, onResize, 
                   boxShadow: sel ? "inset 0 0 0 1px color-mix(in srgb, var(--primary) 38%, transparent)" : undefined,
                 }}>
                 <span className="shrink-0 flex">{!r.locked && !dir && isThumbable(r.name) ? <Thumb path={joinPath(folderPath, r.name)} size={ROW_THUMB} radius={3} fallback={<RowIcon row={r} dir={folderPath} />} /> : <RowIcon row={r} />}</span>
-                {edit && edit.was === r.name ? <InlineName key="ren" edit={edit} rowH={rowH - 4} icon={null} /> : <NameCell name={r.name} />}
+                {edit && edit.was === r.name ? <InlineName key="ren" edit={edit} rowH={rowH - 4} icon={null} /> : <NameCell name={rowLabel(r.name)} />}
                 {dir ? (
                   <>
                     {r.items !== null && !tight && r.name === selName && <span className="shrink-0 tabular-nums text-[10px] px-1.5 rounded-md" style={{ background: "color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text3)", fontWeight: 400 }}>{itemsLabel(r.items)}</span>}

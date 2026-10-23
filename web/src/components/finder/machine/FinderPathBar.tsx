@@ -19,6 +19,11 @@ export function parentHint(dir: string, keep = 20): string {
   return d.length <= keep ? d : `…${d.slice(d.length - keep)}`;
 }
 
+/** What "Copy path" puts on the clipboard: the address under a remote, the path anywhere else. */
+export function pathToCopy(path: string, remote: { uri: string } | null): string {
+  return remote ? remote.uri : path;
+}
+
 export function FinderPathBar({ path, home, onGo, signalEdit, onEditing, volumes = [], onRemote }: { path: string; home: string; onGo: (path: string) => void; signalEdit: number; onEditing?: (on: boolean) => void; volumes?: readonly Volume[]; onRemote?: (address: string) => void }) {
   /** A folder of a mounted remote is shown and edited as its address, as Strata does. */
   const remote = remoteView(path, volumes);
@@ -27,6 +32,10 @@ export function FinderPathBar({ path, home, onGo, signalEdit, onEditing, volumes
   const [dir, setDir] = useState<string | null>(null);
   const [hot, setHot] = useState(0);
   const input = useRef<HTMLInputElement>(null);
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    void navigator.clipboard.writeText(pathToCopy(path, remote)).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }).catch(() => { /* a browser that refuses the clipboard has nothing to say about it */ });
+  };
   const seen = useRef(signalEdit);
 
   useEffect(() => { onEditing?.(text !== null); }, [text !== null]);
@@ -103,11 +112,13 @@ export function FinderPathBar({ path, home, onGo, signalEdit, onEditing, volumes
       onClick={edit} style={{ minHeight: 30 }} title="Click to type a path (Ctrl+L)">
       {parts.map((c, i) => (
         <span key={c.path} className="flex items-center gap-1 min-w-0">
-          {i > 0 && <span aria-hidden style={{ color: "var(--text4)" }}>/</span>}
-          <button className="agx-btn rounded px-1 truncate" style={{ color: i === parts.length - 1 ? "var(--primary-ink)" : "var(--text3)" }}
+          {i > 0 && <span aria-hidden className="px-1.5" style={{ color: "var(--text4)" }}>/</span>}
+          <button className="agx-btn rounded px-1 truncate" style={{ color: i === parts.length - 1 ? "var(--primary-ink)" : "var(--text3)", fontWeight: i === parts.length - 1 ? 700 : 400 }}
             onClick={(e) => { e.stopPropagation(); onGo(c.path); }}>{c.label}</button>
         </span>
       ))}
+      <button type="button" className="agx-btn rounded grid place-items-center shrink-0" style={{ width: HIT, height: HIT, color: copied ? "var(--primary-ink)" : "var(--text3)" }} title={copied ? "Copied" : "Copy path"} aria-label="Copy path"
+        onClick={(e) => { e.stopPropagation(); copy(); }}><StrataIcon set="act" name={copied ? "check" : "copy"} size={ICON.sm} /></button>
     </div>
   );
 }

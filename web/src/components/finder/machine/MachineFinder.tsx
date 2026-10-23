@@ -15,7 +15,7 @@ import { api } from "../../../lib/api.ts";
 import { FolderStore, type FolderState } from "../../../lib/finderFolders.ts";
 import { columnWidth, fitWidth, previewFits, stripLayout, previewWidth, sidebarWidth } from "../../../lib/finderColumns.ts";
 import { back as histBack, canBack, canForward, forward as histForward, here as histHere, startHistory, visit, type History } from "../../../lib/finderHistory.ts";
-import { readMachineSnap, writeMachineSnap } from "../../../lib/finderMachineState.ts";
+import { readMachineSnap, snapApplies, writeMachineSnap } from "../../../lib/finderMachineState.ts";
 import { finderKey } from "../../../lib/finderKeys.ts";
 import { clickSelect, extendBy, extendSelect, selectAll, selectedFooter, single, toggleCursor, type Choice } from "../../../lib/finderSelect.ts";
 import {
@@ -28,7 +28,7 @@ import type { DiskPlace } from "../../../../../shared/types.ts";
 import { EDGE, LINE } from "../../workspace/Chrome.tsx";
 import { Column, type Mod } from "./Column.tsx";
 import { AppearanceMenu, FinderSettings, HelpSheet } from "./FinderChrome.tsx";
-import { externalPlace, folderTargetMove } from "../../../lib/finderMiller.ts";
+import { externalPlace, folderTargetMove, isRecent, RECENT } from "../../../lib/finderMiller.ts";
 import { exitDecision, type Exit } from "../../../lib/finderEdit.ts";
 import { FinderPathBar } from "./FinderPathBar.tsx";
 import { FinderTabs } from "./FinderTabs.tsx";
@@ -41,14 +41,14 @@ import { StrataIcon } from "./StrataIcon.tsx";
 import { QuickLook } from "./QuickLook.tsx";
 import { Sidebar, placesFor } from "./Sidebar.tsx";
 import { useVolumeFlow } from "./useVolumeFlow.tsx";
-import { PIN_KEY, readPins, togglePin, writePins } from "../../../lib/finderPins.ts";
+import { reopensPreview } from "../../../lib/finderPreview.ts";
+import { useBookmarks } from "./useBookmarks.ts";
 import { useBox } from "./useBox.ts";
 
 const PREFS_KEY = "agentglass.finder.machine.prefs";
 const loadPrefs = (): Prefs => { try { return readPrefs(localStorage.getItem(PREFS_KEY)); } catch { return DEFAULT_PREFS; } };
 const savePrefs = (p: Prefs) => { try { localStorage.setItem(PREFS_KEY, writePrefs(p)); } catch { /* a private window forgets; the finder still works */ } };
 
-const loadPins = () => { try { return readPins(localStorage.getItem(PIN_KEY)); } catch { return []; } };
 
 const SNAP_KEY = "agentglass.finder.machine.state";
 const loadSnap = () => { try { return readMachineSnap(localStorage.getItem(SNAP_KEY)); } catch { return null; } };
@@ -63,7 +63,7 @@ const BIG = 2000;
 
 const basename = (p: string) => p.slice(p.lastIndexOf("/") + 1) || "/";
 
-export function MachineFinder({ home, workspace, start, wantFile, onWanted, places, target, onPlace, onBench, onRecent, onClose: closeNow }: {
+export function MachineFinder({ home, workspace, start, wantFile, onWanted, places, target, onPlace, onBench, onClose: closeNow }: {
   home: string;
   /** Where to open, and where to go when the palette's own place changes. */
   start: string;
@@ -79,7 +79,6 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   /** The workspace root: the key of the Editing tab's nvim session. */
   workspace: string;
   onBench: (path: string, mode: "edit" | "terminal") => void;
-  onRecent: () => void;
   /** The way out of the finder: it lives at the end of the path-bar row, where Strata has its close. */
   onClose: () => void;
 }) {
@@ -107,7 +106,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   const setPrefs = useCallback((p: Partial<Prefs>) => setPrefsState((cur) => { const n = { ...cur, ...p }; savePrefs(n); return n; }), []);
 
   /* Where it was left, if that is still where the palette says it is: a chip or a link that moved the place wins over the memory. */
-  const [back] = useState(() => { const s = loadSnap(); return s && s.trail[0] === (start || home || "/") ? s : null; });
+  const [back] = useState(() => { const s = loadSnap(); return s && snapApplies(s, start || home || "/") ? s : null; });
   const [trail, setTrail] = useState<string[]>(() => back?.trail ?? [start || home || "/"]);
   const [sel, setSel] = useState<(string | null)[]>(() => back?.sel ?? [null]);
   /* Folder tabs: each is only the folder it shows; the active one follows wherever the finder goes. */
@@ -133,12 +132,9 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   const [menu, setMenu] = useState<DOMRect | null>(null);
   const [settings, setSettings] = useState<DOMRect | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  const [pins, setPinsState] = useState<string[]>(loadPins);
-  const togglePinned = (path: string) => setPinsState((cur) => {
-    const next = togglePin(cur, path);
-    try { localStorage.setItem(PIN_KEY, writePins(next)); } catch { /* a private window forgets; the pins stay for this visit */ }
-    return next;
-  });
+  /* Enter and double-click on a file do what Strata does: hand it to the application the desktop has for its type. The bench opens only from the preview's "Open in nvim". */
+  const openDefault = useCallback((path: string) => { void api.previewOpen(path).then((r) => { if (!r.ok) setNote(r.error || "Could not open that file"); }).catch(() => setNote("Could not open that file")); }, []);
+  const { places: pinned, pins, toggle: togglePinned } = useBookmarks(setNote);
   const [pathSignal, setPathSignal] = useState(0);
   const [version, setVersion] = useState(0);
   /** Columns somebody dragged, by folder: their width wins over the names' until they double-click the edge. */
@@ -149,9 +145,9 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   const [multi, setMulti] = useState<{ col: number; path: string; choice: Choice } | null>(null);
   const wantFirst = useRef<number | null>(null);
   const snapNow = useRef<() => string>(() => "");
-  snapNow.current = () => writeMachineSnap({ v: 1, trail, sel, focusCol, scroll: scrolls.current, dragged, peek, ...(prevDrag === undefined ? {} : { prevDrag }), ...(previewTab ? { previewTab } : {}) });
+  snapNow.current = () => writeMachineSnap({ v: 1, origin: start || home || "/", trail, sel, focusCol, scroll: scrolls.current, dragged, peek, ...(prevDrag === undefined ? {} : { prevDrag }), ...(previewTab ? { previewTab } : {}) });
   const save = useCallback(() => { try { localStorage.setItem(SNAP_KEY, snapNow.current()); } catch { /* a private window forgets; the finder still works */ } }, []);
-  useEffect(() => { save(); }, [trail, sel, focusCol, dragged, peek, prevDrag, previewTab, save]);
+  useEffect(() => { save(); }, [trail, sel, focusCol, dragged, peek, prevDrag, previewTab, start, home, save]);
   const scrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onScrollTop = useCallback((path: string, top: number) => {
     scrolls.current[path] = top;
@@ -229,7 +225,8 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   const goRaw = useCallback((path: string) => {
     seen.current = path; setHist((h) => visit(h, path));
     setTrail([path]); setSel([null]); setFocusCol(0); setPeek(false); setSidePage(false);
-    onPlace(path);
+    /* Recent is a list, not a place the palette can start from: it is not remembered as one. */
+    if (!isRecent(path)) onPlace(path);
   }, [onPlace]);
   const go = useMemo(() => guarded("folder", goRaw), [guarded, goRaw]);
   const devices = useVolumeFlow({ here: trail[0]!, home, go });
@@ -270,7 +267,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
     const sig = `${needle}|${prefs.hidden}|${prefs.group}|${prefs.sortKey}|${prefs.sortDir}|${prefs.foldersFirst}|${big}`;
     const hit = cache.current.get(path);
     if (state && hit && hit.rows === state.rows && hit.sig === sig) return { path, state, display: hit.display };
-    const display = displayRows(state?.rows ?? [], { needle, hidden: prefs.hidden, group: prefs.group, sortKey: prefs.sortKey, sortDir: prefs.sortDir, foldersFirst: prefs.foldersFirst, unsorted: big });
+    const display = displayRows(state?.rows ?? [], { needle, hidden: prefs.hidden, group: prefs.group, sortKey: prefs.sortKey, sortDir: prefs.sortDir, foldersFirst: prefs.foldersFirst, unsorted: big || isRecent(path) });
     if (state) cache.current.set(path, { rows: state.rows, sig, display });
     return { path, state, display };
     // `version` is how the store says its rows changed.
@@ -311,8 +308,13 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   const chooseHeld = useMemo(() => guarded("row", chooseRaw), [guarded, chooseRaw]);
   /* Choosing the row that is already chosen is not leaving it. */
   const choose = useCallback((col: number, c: Choice): void => ((selRef.current[col] ?? null) === c.cursor ? chooseRaw(col, c) : chooseHeld(col, c)), [chooseRaw, chooseHeld]);
+  /* Set once `wide` is known, below: a click on a file opens a closed preview again. */
+  const reopen = useRef<(row: Row) => void>(() => {});
   const onPickMod = useCallback((col: number, row: Row, mod?: Mod) => {
-    if (!mod || (!mod.ctrl && !mod.shift)) { pick(col, row); return; }
+    if (!mod || (!mod.ctrl && !mod.shift)) {
+      reopen.current(row);
+      pick(col, row); return;
+    }
     choose(col, clickSelect(columns[col]?.display.rows ?? [], chosenOf(col), row.name, mod));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [columns, choose, multi, sel, trail, pick]);
@@ -403,6 +405,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   const sideMode = sidebarMode(prefs);
   /* Strata's rule: beside the browser only when what the sidebar leaves still holds a column and the preview's own floor. */
   const wide = box.w > 0 && !(compact && sidePage) && previewFits(box.w - ((compact ? sidePage : sideMode !== "hidden") ? sidebarWidth(sideMode === "rail" ? "rail" : "full", prefs.sideW, box.w) : 0), prefs.view);
+  reopen.current = (row) => { if (reopensPreview({ open: wide ? prefs.preview : peek, folder: isFolder(row), modified: false })) { if (wide) setPrefs({ preview: true }); else setPeek(true); } };
   /* One step for the button and Ctrl+B alike, as in Strata: full, the icon rail, hidden, full. */
   const toggleSide = useCallback(() => (compact ? setSidePage((v) => !v) : setPrefs(sidebarPrefs(nextSidebar(sideMode)))), [compact, sideMode, setPrefs]);
 
@@ -428,7 +431,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
     togglePin: togglePinned,
     toggleHidden: () => setPrefs({ hidden: !prefs.hidden }),
     selectAll: () => { const col = prefs.view === "columns" ? focusCol : last; choose(col, selectAll(columns[col]?.display.rows ?? [], chosenOf(col))); },
-    open: (dir, row) => { const col = trail.indexOf(dir); if (isFolder(row) && !row.locked) { if (prefs.view === "columns") { pick(col, row); enterFolder(col); } else go(joinPath(dir, row.name)); } else if (canEditRow(row)) onBench(joinPath(dir, row.name), "edit"); },
+    open: (dir, row) => { const col = trail.indexOf(dir); if (isFolder(row) && !row.locked) { if (prefs.view === "columns") { pick(col, row); enterFolder(col); } else go(joinPath(dir, row.name)); } else if (!row.locked) openDefault(joinPath(dir, row.name)); },
     preview: () => { if (wide) setPrefs({ preview: !prefs.preview }); else setPeek((p) => !p); },
     copyText: (text, said) => { void navigator.clipboard?.writeText(text).then(() => setNote(said)).catch(() => setNote("Could not copy")); },
     terminal: (dir) => onBench(dir, "terminal"),
@@ -443,7 +446,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
       case "enter": {
         if (!deepest) break;
         if (isFolder(deepest.row)) { if (prefs.view === "columns") enterFolder(deepest.col); else { go(deepest.path); } }
-        else if (canEditRow(deepest.row)) onBench(deepest.path, "edit");
+        else if (!deepest.row.locked) openDefault(deepest.path);
         break;
       }
       case "up": goUp(); break;
@@ -560,7 +563,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   const preview = (
     <QuickLook root={workspace} savedTab={previewTab} onTab={(path, tab) => setPreviewTab({ path, tab })} onEditing={(p) => { editing.current = p; }} path={deepest?.path ?? null} row={deepest?.row ?? null}
       rows={deepest && isFolder(deepest.row) ? (columns[deepest.col + 1]?.state?.rows ?? null) : null}
-      onBench={onBench} onCopy={copy} onClose={guarded("preview-close", () => (wide ? setPrefs({ preview: false }) : setPeek(false)))} />
+      onBench={onBench} onClose={guarded("preview-close", () => (wide ? setPrefs({ preview: false }) : setPeek(false)))} />
   );
 
   /* Strata's footer: the shortcuts button on the left, what is here or selected on the right. */
@@ -587,12 +590,14 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
         <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="New tab (Ctrl+T)" aria-label="New tab" onClick={() => newTab()}><StrataIcon set="act" name="plus" size={17} /></button>
         <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Search (Ctrl+K)" aria-label="Search" onClick={openSearch}><StrataIcon set="act" name="search" size={17} /></button>
         <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Appearance" aria-label="Appearance" aria-haspopup="menu" onClick={(e) => setMenu(e.currentTarget.getBoundingClientRect())}><StrataIcon set="act" name={prefs.view} size={17} /></button>
+        {/* The way back after the preview's own ×: lit while the panel is open, one click either way (Space does the same). */}
+        <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", opacity: wide ? (prefs.preview ? 1 : 0.7) : (peek ? 1 : 0.7) }} aria-pressed={wide ? prefs.preview : peek} title="Preview panel (Space)" aria-label="Toggle the preview panel (Space)" onClick={() => (wide ? setPrefs({ preview: !prefs.preview }) : setPeek((p) => !p))}><StrataIcon set="act" name="panel-right-close" size={17} /></button>
         <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Settings" aria-label="Settings" aria-haspopup="menu" onClick={(e) => setSettings(e.currentTarget.getBoundingClientRect())}><StrataIcon set="act" name="settings" size={17} /></button>
         <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Close window" aria-label="Close the finder" onClick={onClose}><StrataIcon set="act" name="x" size={17} /></button>
       </div>
 
       <div className="flex-1 min-h-0 flex">
-        {sideOn && <Sidebar places={placesFor(home, places)} pins={pins} here={trail[0]!} mode={compact || sideMode === "hidden" ? "full" : pathEditing ? "rail" : sideMode} width={sidebarWidth(compact || sideMode === "hidden" ? "full" : pathEditing || sideMode === "rail" ? "rail" : "full", prefs.sideW, box.w)} onResize={(w) => setPrefs({ sideW: sidebarWidth("full", w, box.w) })} onGo={go} onRecent={onRecent} onTrash={ops.openTrash} onNetwork={devices.openNetwork} volumes={devices.volumes} busy={devices.busy} onVolume={devices.onVolume} onVolumeAct={devices.onVolumeAct} dnd={dnd} />}
+        {sideOn && <Sidebar places={placesFor(home, places)} pins={pinned} onRemote={devices.openAddress} here={trail[0]!} mode={compact || sideMode === "hidden" ? "full" : pathEditing ? "rail" : sideMode} width={sidebarWidth(compact || sideMode === "hidden" ? "full" : pathEditing || sideMode === "rail" ? "rail" : "full", prefs.sideW, box.w)} onResize={(w) => setPrefs({ sideW: sidebarWidth("full", w, box.w) })} onGo={go} onRecent={() => go(RECENT)} onTrash={ops.openTrash} onNetwork={devices.openNetwork} volumes={devices.volumes} busy={devices.busy} onVolume={devices.onVolume} onVolumeAct={devices.onVolumeAct} dnd={dnd} />}
         {!(compact && sidePage) && (
           <>
             {/* With the preview beside the columns and nothing dragged, the columns take what their names ask for and the preview takes all that is left, as Strata's does; a gap between the two was the free room with nowhere to go. */}
@@ -605,7 +610,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
               ) : prefs.view === "columns" ? (
                 <ColumnsRow widths={widths} active={focusCol}>
                   {columns.map((c, i) => (
-                    <Column key={c.path} dir={c.path} title={basename(c.path)} filterSignal={filterTick.col === i ? filterTick.n : 0} width={widths[i]!} onResize={(w) => setDragged((d) => ({ ...d, [c.path]: w }))} onFit={() => setDragged((d) => ({ ...d, [c.path]: fitWidth(c.state?.rows.map((r) => r.name) ?? [], measure, mainBox.w || undefined) }))} state={c.state} display={c.display} selName={sel[i] ?? null} chosen={liveMulti?.col === i ? liveMulti.choice.names : null} focused={i === focusCol} prefs={prefs} rowH={rowH}
+                    <Column key={c.path} dir={c.path} title={isRecent(c.path) ? "Recent" : basename(c.path)} filterSignal={filterTick.col === i ? filterTick.n : 0} width={widths[i]!} onResize={(w) => setDragged((d) => ({ ...d, [c.path]: w }))} onFit={() => setDragged((d) => ({ ...d, [c.path]: fitWidth(c.state?.rows.map((r) => r.name) ?? [], measure, mainBox.w || undefined) }))} state={c.state} display={c.display} selName={sel[i] ?? null} chosen={liveMulti?.col === i ? liveMulti.choice.names : null} focused={i === focusCol} prefs={prefs} rowH={rowH}
                       filter={filters[c.path] ?? ""} onFilter={(v) => setFilters((f) => ({ ...f, [c.path]: v }))}
                       scrollTop={scrolls.current[c.path]} onScrollTop={(t) => onScrollTop(c.path, t)} onPick={(r, m) => onPickMod(i, r, m)} onOpen={(r) => { if (isFolder(r) && !r.locked) { pick(i, r); enterFolder(i); } else if (canEditRow(r)) onBench(joinPath(c.path, r.name), "edit"); }}
                       onFocusCol={() => setFocusCol(i)} onRefresh={() => refresh(c.path)} onSort={onSort} onPref={setPrefs} edit={ops.edit?.dir === c.path ? ops.edit : null} />

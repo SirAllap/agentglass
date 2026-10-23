@@ -19,7 +19,8 @@
  * rule is loosened here — this is a third door into the same two rooms, not a
  * new room.
  */
-import { opendirSync, readdirSync, statSync, lstatSync, openSync, readSync, closeSync } from "node:fs";
+import { opendirSync, readdirSync, statSync, lstatSync, openSync, readSync, closeSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { failed } from "./refused.ts";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { diskAllows, diskEnabled, diskRoots } from "./disk.ts";
@@ -262,6 +263,7 @@ function parentOf(abs: string, local: boolean): string | null {
  * `.ssh` and `.aws`; it does not let anybody into them or read what they hold.
  */
 export function browseDir(pathIn: unknown, showHidden = false, local = false): BrowseReport {
+  if (pathIn === RECENT_PLACE) return recentReport(showHidden, local);
   showHidden = showHidden && local;
   // Inside a dotted place every row is judged, not only the dotted ones: `gh` under `.config` is a secret store with an ordinary name.
   const viaDot = local && !diskAllows(realish(String(safeAbs(pathIn) ?? "")));
@@ -773,4 +775,55 @@ export function pagePolicy(pathIn: string): { mime: string; csp: string } | null
   return /\.html?$/i.test(pathIn)
     ? { mime: "text/html; charset=utf-8", csp: "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:" }
     : null;
+}
+
+/*
+ * Recent, as Strata lists it: the files the desktop's apps have used lately, newest use first, in the
+ * one flat list `recent:///` is. The source is the freedesktop `recently-used.xbel` — the same file a
+ * GTK file chooser fills — so what Strata shows and what this shows are one list.
+ *
+ * Each row's `name` is the file's ABSOLUTE path: rows of one list come from many folders, and every
+ * caller already joins `dir + name` and treats a name that is itself absolute as the whole path.
+ * Judged like any listing: a file the finder may not look at is not a row, a dotted one is a row only
+ * with hidden files on and for a caller on this machine. The order is the list's own and is never
+ * re-sorted (the client lays it out as it comes).
+ */
+export const RECENT_PLACE = "recent:///";
+
+const xmlText = (s: string) => s.replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+
+/** The local files of an xbel document, most recently used first, each once. */
+export function parseRecentXbel(xml: string): string[] {
+  const seen = new Map<string, number>();
+  for (const m of xml.matchAll(/<bookmark\s([^>]*)>/g)) {
+    const attrs = m[1]!;
+    const href = /\bhref="([^"]*)"/.exec(attrs)?.[1];
+    if (!href || !href.startsWith("file://")) continue;
+    let path: string;
+    try { path = decodeURIComponent(xmlText(href).slice("file://".length)); } catch { continue; }
+    if (!path.startsWith("/")) continue;
+    const when = Date.parse(/\bvisited="([^"]*)"/.exec(attrs)?.[1] ?? "") || Date.parse(/\bmodified="([^"]*)"/.exec(attrs)?.[1] ?? "") || 0;
+    seen.set(path, Math.max(seen.get(path) ?? 0, when));
+  }
+  return [...seen.entries()].sort((a, b) => b[1] - a[1]).map(([p]) => p);
+}
+
+const recentFile = (): string => join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "recently-used.xbel");
+
+export function recentReport(showHidden: boolean, local: boolean): BrowseReport {
+  let xml = "";
+  try { xml = readFileSync(recentFile(), "utf8"); } catch { /* nothing used yet: an empty list, not an error */ }
+  const entries: BrowseEntry[] = [];
+  let hiddenSkipped = 0;
+  let more = 0;
+  for (const path of parseRecentXbel(xml)) {
+    const abs = safeAbs(path);
+    if (!abs || !browseAllows(abs, local)) continue;
+    const hidden = basename(abs).startsWith(".");
+    if (hidden && !(showHidden && local)) { hiddenSkipped++; continue; }
+    if (entries.length >= MAX_ENTRIES) { more++; continue; }
+    try { entries.push({ ...entryOf(dirname(abs), basename(abs), false, local), name: abs }); }
+    catch { /* gone since it was used: not a row */ }
+  }
+  return { ok: true, path: RECENT_PLACE, parent: null, entries, more, hiddenSkipped };
 }

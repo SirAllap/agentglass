@@ -63,3 +63,22 @@ export function isolatedDoc(html: string): string {
   if (doctype) return html.slice(0, doctype[0].length) + meta + html.slice(doctype[0].length);
   return meta + html;
 }
+
+/** Strata: a plain click on a file while the preview is closed opens it again. A folder opens as a column, and a modified click is a selection. */
+export function reopensPreview(o: { open: boolean; folder: boolean; modified: boolean }): boolean {
+  return !o.open && !o.folder && !o.modified;
+}
+
+/** The order of a markdown table's rows after a header click: numbers as numbers, text by locale, empty cells last. Returns indexes into `cells` (one text per row). */
+export function sortedOrder(cells: readonly string[], dir: "asc" | "desc"): number[] {
+  const num = (s: string) => (/^\s*[-+]?\d+(\.\d+)?\s*([kKMG]?B)?\s*$/.test(s) ? parseFloat(s) : NaN);
+  const idx = cells.map((_, i) => i);
+  idx.sort((a, b) => {
+    const x = cells[a]!.trim(), y = cells[b]!.trim();
+    if (!x || !y) return x === y ? a - b : !x ? 1 : -1;
+    const nx = num(x), ny = num(y);
+    const c = !isNaN(nx) && !isNaN(ny) ? nx - ny : x.localeCompare(y);
+    return (dir === "asc" ? c : -c) || a - b;
+  });
+  return idx;
+}

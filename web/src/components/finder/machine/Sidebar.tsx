@@ -7,8 +7,8 @@
 import { StrataIcon } from "./StrataIcon.tsx";
 import { SIDE_DEFAULT } from "../../../lib/finderColumns.ts";
 import { ICON } from "../../../lib/iconSize.ts";
-import { joinPath, type SidebarMode } from "../../../lib/finderMiller.ts";
-import type { DiskPlace, Volume } from "../../../../../shared/types.ts";
+import { joinPath, RECENT, type SidebarMode } from "../../../lib/finderMiller.ts";
+import type { DiskPlace, PinnedPlace, Volume } from "../../../../../shared/types.ts";
 import { useState } from "react";
 import { Popover, MenuItem } from "./Popover.tsx";
 import { deviceIcon, disconnectItem, lockButton, releaseButton, type LockButton, type ReleaseButton } from "../../../lib/finderVolumes.ts";
@@ -29,7 +29,7 @@ export function placesFor(home: string, known: readonly DiskPlace[]): Place[] {
     { id: "home", label: "Home", path: home },
     { id: "trash", label: "Trash" },
     { id: "network", label: "Network" },
-    { id: "recent", label: "Recent" },
+    { id: "recent", label: "Recent", path: RECENT },
     ...XDG.map((n): Place => ({ id: n, label: n, path: joinPath(home, n) })).filter((p) => has(p.path!)),
   ];
 }
@@ -37,8 +37,8 @@ export function placesFor(home: string, known: readonly DiskPlace[]): Place[] {
 /** What a button at the end of a DEVICES row asks for. */
 export type VolumeAsk = LockButton["act"] | ReleaseButton["act"];
 
-export function Sidebar({ places, pins, here, mode, width, onResize, onGo, onRecent, onNetwork, onTrash, dnd, volumes = [], busy, onVolume, onVolumeAct }: {
-  places: Place[]; pins: readonly string[]; here: string; mode: Exclude<SidebarMode, "hidden">;
+export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, onGo, onRecent, onNetwork, onTrash, dnd, volumes = [], busy, onVolume, onVolumeAct }: {
+  places: Place[]; pins: readonly PinnedPlace[]; onRemote?: (uri: string) => void; here: string; mode: Exclude<SidebarMode, "hidden">;
   /** The DEVICES section: drawn only when there is a volume, as in Strata. `busy` is the ids with an action under way. */
   volumes?: readonly Volume[]; busy?: ReadonlySet<string>; onVolume?: (v: Volume) => void; onVolumeAct?: (v: Volume, ask: VolumeAsk) => void;
   /** Pixels, from lib/finderColumns `sidebarWidth`: the rail's fixed width or what was dragged. */
@@ -62,6 +62,14 @@ export function Sidebar({ places, pins, here, mode, width, onResize, onGo, onRec
       </button>
     );
   };
+  /** A pinned remote (sftp, smb): it has no folder here until it is connected, so the row asks the address flow to open it. */
+  const remote = (b: PinnedPlace) => (
+    <button key={`pin:${b.uri}`} type="button" aria-label={rail ? b.label : undefined} title={b.uri} onClick={() => onRemote?.(b.uri)}
+      className={`agx-btn w-full flex items-center ${rail ? "justify-center" : "gap-2 px-2.5"} rounded-md text-left`} style={{ minHeight: rail ? 28 : 26, color: "var(--text2)" }}>
+      <span className="shrink-0 flex" style={{ color: "var(--primary-ink)" }}><StrataIcon set="act" name="network" size={ICON.md} /></span>
+      {!rail && <span className="truncate">{b.label}</span>}
+    </button>
+  );
   /** One device: the row opens it, the two 24-px buttons at the end lock and eject (hidden on the rail, where the name is the tooltip). */
   const device = (v: Volume) => {
     const on = !!v.mountPoint && (here === v.mountPoint || here.startsWith(v.mountPoint + "/"));
@@ -93,7 +101,7 @@ export function Sidebar({ places, pins, here, mode, width, onResize, onGo, onRec
         {places.map(row)}
         {pins.length > 0 && !rail && <div className="px-2.5 pt-2 pb-0.5 text-[10px] uppercase" style={{ color: "var(--text4)" }}>Pinned</div>}
         {pins.length > 0 && rail && <div role="separator" className="mx-1 my-1" style={{ borderTop: LINE }} />}
-        {pins.map((path) => row({ id: `pin:${path}`, label: path.slice(path.lastIndexOf("/") + 1) || path, path }))}
+        {pins.map((b) => (b.path ? row({ id: `pin:${b.path}`, label: b.path.slice(b.path.lastIndexOf("/") + 1) || b.path, path: b.path }) : remote(b)))}
         {volumes.length > 0 && (
           <>
             <div role="separator" style={{ borderTop: LINE, margin: rail ? "6px 2px" : "6px 0" }} />

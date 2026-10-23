@@ -32,7 +32,7 @@ describe("the finder has no tab strip", () => {
     expect(palette).not.toMatch(/goTab\(TABS/);
     expect(palette).not.toMatch(/e\.shiftKey \? TABS/);
   });
-  test("Recent is the sidebar's entry", () => {
-    expect(palette).toContain('onRecent={() => goTab("recent")}');
+  test("Recent is the sidebar's entry, and it opens in the columns (finder-recent.test.ts), not as a view of its own", () => {
+    expect(palette).not.toContain('onRecent={() => goTab("recent")}');
   });
 });

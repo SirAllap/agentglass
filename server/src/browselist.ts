@@ -22,7 +22,7 @@
 import { readdirSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import type { BrowseEntry } from "./browse.ts";
-import { browseAllows, entryOf } from "./browse.ts";
+import { browseAllows, entryOf, RECENT_PLACE, recentReport } from "./browse.ts";
 import { diskAllows } from "./disk.ts";
 import { safeAbs } from "./git.ts";
 import { realish } from "./config.ts";
@@ -63,6 +63,11 @@ export function browseBatch(
 ): BrowsePage {
   const local = !!opt.local;
   const showHidden = !!opt.showHidden && local;
+  // Recent is a list the desktop keeps, not a folder: one page, in its own order.
+  if (pathIn === RECENT_PLACE) {
+    const r = recentReport(showHidden, local);
+    return { ok: true, path: RECENT_PLACE, total: r.entries.length, entries: r.entries, next: null, hiddenSkipped: r.hiddenSkipped };
+  }
   // `safeAbs` resolves a relative path against the server's cwd, which is wherever the app was started from.
   if (typeof pathIn !== "string" || !isAbsolute(pathIn) || pathIn.includes("\0")) return refuse("", "invalid path");
   const abs = safeAbs(pathIn);

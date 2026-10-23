@@ -147,7 +147,7 @@ describe("reads are an allowlist, not a mode", () => {
   });
   test("the browse routes ask 'local' the way the tokenless sinks do: another OS user is not local", async () => {
     const src = await Bun.file(new URL("../src/index.ts", import.meta.url)).text();
-    const i = src.indexOf('if (pathname === "/browse" || pathname === "/browse/list" || pathname.startsWith("/preview/") || pathname.startsWith("/fs/")) {');
+    const i = src.indexOf('if (pathname === "/browse" || pathname === "/browse/list" || pathname.startsWith("/preview/") || pathname.startsWith("/fs/")');
     expect(i).toBeGreaterThan(-1);
     const blk = src.slice(i, src.indexOf("\n    }\n", i));
     expect(blk).toContain('sinkFrom === "loopback"');

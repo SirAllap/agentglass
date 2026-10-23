@@ -149,6 +149,7 @@ import { fileText, fileToTemp, fileTree, findFiles, grepFiles, listRefs, filesEx
 import { diskEnabled, diskFind, diskGrep, diskPlaces } from "./disk.ts";
 import { homeIndex } from "./homeindex.ts";
 import { browseBatch } from "./browselist.ts";
+import { readBookmarks, toggleBookmark } from "./bookmarks.ts";
 import { actOnDevice, devicePolicy, ensureDeviceWatch, listDevices, type DeviceAct } from "./volumes.ts";
 import { Sessions, discoverNetwork, gvfsDir, remotePolicy, remotesFromMounts } from "./remotes.ts";
 import { runTool } from "./volumes.ts";
@@ -3022,6 +3023,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (!TERMINAL_ENABLED) return json({ error: "terminal is disabled" }, 403);
       const data: PtyWsData & { ip?: string | null; deviceId?: string | null } = {
         kind: "pty",
+        local: peer.source === "socket" && !!clientIp && isLoopback(clientIp) && sinkFrom === "loopback",
         deviceId: caller?.device?.id ?? null,
         root: url.searchParams.get("root") || "",
         // A path to open, not a command to run. Validated in ptyOpen against
@@ -7514,7 +7516,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      *
      * Behind the same switch as directory browsing: turning that off must not
      * leave a second door standing. */
-    if (pathname === "/browse" || pathname === "/browse/list" || pathname.startsWith("/preview/") || pathname.startsWith("/fs/") || pathname.startsWith("/finder/openwith") || pathname.startsWith("/finder/actions")) {
+    if (pathname === "/browse" || pathname === "/browse/list" || pathname.startsWith("/preview/") || pathname.startsWith("/fs/") || pathname.startsWith("/finder/openwith") || pathname.startsWith("/finder/actions") || pathname === "/finder/bookmarks") {
       /* "local" opens dotted folders and the agentglass config folder, so it is judged
          like the tokenless sinks: a direct loopback socket AND not another OS
          user on this box (sinkFrom). With a token every route here needs it, but
@@ -7590,6 +7592,19 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         } else if (pathname === "/finder/actions/save") r = saveAction({ manifest: b.manifest as string | Record<string, unknown>, script: typeof b.script === "string" ? b.script : undefined }, { create: b.create === true });
         else if (pathname === "/finder/actions/delete") r = deleteAction(b.id);
         else return json({ ok: false, error: "no such route" }, 404);
+        return json(r, r.ok ? 200 : 400);
+      }
+      /* The pinned places are GTK's bookmarks file. Reading is a read; pinning writes a file
+         in the person's config, so it takes the desk key like the actions above. */
+      if (pathname === "/finder/bookmarks") {
+        if (req.method === "GET") return json({ ok: true, bookmarks: readBookmarks() });
+        if (req.method !== "POST") return json({ ok: false, error: "method not allowed" }, 405);
+        if (!trustedCaller(req, from)) return csrfBlocked();
+        if (!fsWantsJson(req.headers.get("content-type"))) return json({ ok: false, error: "send application/json" }, 415);
+        if (!(deskHeld() && deskKeyOk(req))) return json({ ok: false, error: "only the desktop app pins a place for a person" }, 403);
+        let b: { path?: unknown } = {};
+        try { b = (await req.json()) as { path?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+        const r = toggleBookmark(b?.path);
         return json(r, r.ok ? 200 : 400);
       }
       if (pathname === "/preview/reveal" && req.method === "POST") {

@@ -10,7 +10,7 @@
  * Whether the folders still exist is not asked here; a column that cannot be
  * read says so itself, with the rest of the chain intact.
  */
-import { parentOf } from "./finderMiller.ts";
+import { parentOf, RECENT } from "./finderMiller.ts";
 
 export interface MachineSnap {
   v: 1;
@@ -23,12 +23,19 @@ export interface MachineSnap {
   scroll: Record<string, number>;
   /** Column widths somebody dragged, by folder. */
   dragged: Record<string, number>;
+  /** The palette's place when this was written. A different place now means something outside the finder (a terminal link, a chip) moved it while it was closed. */
+  origin?: string;
   /** The preview shown as a page of its own (a narrow window). */
   peek: boolean;
   /** The preview panel's dragged width. */
   prevDrag?: number;
   /** Which view of the selected file the preview was on (Rendered / Source / Tree...), for that file. */
   previewTab?: { path: string; tab: string };
+}
+
+/** Does the stored place win on reopen? The last place the person was wins, however they got there (columns, sidebar, path bar, keys); the palette's own place only wins when it moved while the finder was closed, and a snapshot written under the new place is the next one to win. A snapshot from before `origin` is believed by its first column, as it always was. */
+export function snapApplies(s: MachineSnap, start: string): boolean {
+  return s.origin !== undefined ? s.origin === start : s.trail[0] === start;
 }
 
 export const writeMachineSnap = (s: MachineSnap): string => JSON.stringify(s);
@@ -40,7 +47,7 @@ export function readMachineSnap(raw: string | null): MachineSnap | null {
   try { const p = raw ? JSON.parse(raw) : null; if (!p || typeof p !== "object") return null; o = p as Record<string, unknown>; } catch { return null; }
   if (o.v !== 1 || !Array.isArray(o.trail)) return null;
   const first = o.trail[0];
-  if (typeof first !== "string" || !first.startsWith("/")) return null;
+  if (typeof first !== "string" || !(first.startsWith("/") || first === RECENT)) return null;
   const trail: string[] = [first];
   for (const p of o.trail.slice(1)) {
     if (typeof p !== "string" || parentOf(p) !== trail[trail.length - 1]) break;
@@ -60,6 +67,7 @@ export function readMachineSnap(raw: string | null): MachineSnap | null {
     scroll: byFolder(o.scroll, (n) => n >= 0),
     dragged: byFolder(o.dragged, (n) => n >= 100),
     peek: o.peek === true,
+    ...(typeof o.origin === "string" ? { origin: o.origin } : {}),
     ...(num(o.prevDrag) && o.prevDrag >= 240 ? { prevDrag: o.prevDrag } : {}),
     ...(pt && typeof pt.path === "string" && pt.path.startsWith("/") && typeof pt.tab === "string" && pt.tab.length < 40 ? { previewTab: { path: pt.path, tab: pt.tab } } : {}),
   };

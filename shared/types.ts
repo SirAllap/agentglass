@@ -4624,6 +4624,9 @@ export interface FindReport {
  *  `places` is a menu, `roots` is the boundary; the two are not the same list. */
 export interface DiskPlace { path: string; label: string }
 /** One row of the finder's DEVICES list: a volume udisks knows, as the sidebar draws it. */
+/** One line of GTK's bookmarks file: a pinned place. `path` is set for a folder of this machine; a remote (sftp, smb) has only its `uri`. */
+export interface PinnedPlace { uri: string; label: string; path?: string }
+
 export interface Volume {
   /** The block device the actions name (`/dev/sdb1`); the server resolves it against its own last listing. */
   id: string; name: string;

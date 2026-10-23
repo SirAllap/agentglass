@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { api } from "../../../lib/api.ts";
 import { clipPaths, deleteWords, doneNote, dropPlan, menuFor, menuHead, pasteOp, withActions, type Clip, type Item, type Target } from "../../../lib/finderOps.ts";
 import { actionGroup, confirmWords } from "../../../lib/finderActions.ts";
-import { isFolder, joinPath, type Row } from "../../../lib/finderMiller.ts";
+import { isFolder, isRecent, joinPath, type Row } from "../../../lib/finderMiller.ts";
 import type { FinderAction, FsBody, FsJob } from "../../../../../shared/types.ts";
 import { ConfirmDialog, ContextMenu, InlineName, Sheet, type InlineEdit } from "./FinderOpsUI.tsx";
 import { printable, printUrl } from "../../../lib/finderPrint.ts";
@@ -133,6 +133,8 @@ export function useFinderOps(env: OpsEnv) {
   const doItem = useCallback((id: Item["id"], c: Chosen | null, into: string) => {
     const e = envRef.current;
     if (NOT_YET.has(id)) { e.say("That one is coming in the next step"); return; }
+    /* Recent is a list of files from everywhere, not a folder: nothing is made or pasted into it, as in Strata. */
+    if ((id === "new-folder" || id === "paste") && isRecent(into)) { e.say("Can\u2019t create items here"); return; }
     const need = (): Chosen | null => { if (!c || !c.rows.length) { e.say("Nothing is chosen"); return null; } return c; };
     switch (id) {
       case "cut": case "copy": { const t = need(); if (!t) return; setClip({ mode: id === "cut" ? "cut" : "copy", dir: t.dir, names: names(t) }); e.say(`${id === "cut" ? "Cut" : "Copied"} ${t.rows.length === 1 ? t.rows[0]!.name : `${t.rows.length} items`}`); return; }

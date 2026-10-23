@@ -140,6 +140,7 @@ export interface Crumb { label: string; path: string }
 
 /** `/home/ann/Documents` as `~ / Documents`, every crumb knowing where it goes. */
 export function crumbs(path: string, home: string): Crumb[] {
+  if (isRecent(path)) return [{ label: "Recent", path: RECENT }];
   const h = home.replace(/\/+$/, "");
   const inHome = !!h && (path === h || path.startsWith(`${h}/`));
   const out: Crumb[] = [inHome ? { label: "~", path: h } : { label: "/", path: "/" }];
@@ -310,7 +311,15 @@ export function parentOf(path: string): string | null {
   return cut <= 0 ? "/" : path.slice(0, cut);
 }
 
-export const joinPath = (dir: string, name: string): string => (dir === "/" ? `/${name}` : `${dir.replace(/\/+$/, "")}/${name}`);
+/** The name of the one place that is a list rather than a folder: what the desktop's apps used lately, as Strata's Recent. */
+export const RECENT = "recent:///";
+export const isRecent = (path: string): boolean => path === RECENT;
+
+/** A row's name is a name in its folder, except in Recent, where rows come from many folders and the name is the whole path. */
+export const joinPath = (dir: string, name: string): string => (name.startsWith("/") ? name : dir === "/" ? `/${name}` : `${dir.replace(/\/+$/, "")}/${name}`);
+
+/** What a row is called on screen: its last segment, whether its name is one segment or a whole path. */
+export const rowLabel = (name: string): string => (name.startsWith("/") ? name.slice(name.lastIndexOf("/") + 1) || name : name);
 
 /** The row height a density and a text size draw: the text, and the room round it. */
 export const rowHeight = (density: Prefs["density"], textSize: number): number => textSize + (density === "airy" ? 23 : 15);
@@ -430,4 +439,28 @@ export function previewMetaLine(o: { folder: boolean; bytes: number | null; item
   const when = o.ago ? o.ago[0]!.toUpperCase() + o.ago.slice(1) : "";
   const size = o.folder ? itemsLabel(o.items) : o.bytes !== null ? formatSize(o.bytes) : "";
   return [size, when, o.folder ? "" : mimeFor(o.name ?? "", o.mime).split(";")[0] ?? ""].filter(Boolean).join(" · ");
+}
+
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** When a file changed, worded as Strata's relative dates are: "Just now", "5m ago", "3h ago", the weekday up to six days, "2w ago" up to thirty, then "Jul 4, 13:24" this year and "Jul 4, 2025" before. */
+export function strataWhen(at: number, now = Date.now()): string {
+  const span = now - at;
+  const d = new Date(at), n = new Date(now);
+  const pad = (v: number) => String(v).padStart(2, "0");
+  const absolute = (withTime: boolean) => `${MONTHS[d.getMonth()]} ${d.getDate()}, ${withTime ? `${pad(d.getHours())}:${pad(d.getMinutes())}` : d.getFullYear()}`;
+  if (span < -60_000) return absolute(d.getFullYear() === n.getFullYear());
+  const s = Math.floor(span / 1000);
+  if (s < 60) return "Just now";
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const midnight = (v: Date) => new Date(v.getFullYear(), v.getMonth(), v.getDate()).getTime();
+  const days = Math.round((midnight(n) - midnight(d)) / 86_400_000);
+  if (days === 0) return `${h}h ago`;
+  if (days <= 6) return WEEKDAYS[d.getDay()]!;
+  if (days <= 30) return `${Math.floor(days / 7)}w ago`;
+  return absolute(d.getFullYear() === n.getFullYear());
 }

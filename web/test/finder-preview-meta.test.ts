@@ -18,3 +18,18 @@ describe("the preview's line under the file name", () => {
     expect(previewMetaLine({ folder: false, bytes: 8, items: null, ago: "just now", mime: "text/plain", name: "README" })).toContain("text/plain");
   });
 });
+
+import { strataWhen } from "../src/lib/finderMiller.ts";
+describe("dates as Strata words them", () => {
+  const now = new Date(2026, 9, 14, 15, 0).getTime();
+  const at = (y: number, mo: number, d: number, h = 12, mi = 0) => new Date(y, mo, d, h, mi).getTime();
+  test("minutes, hours, the weekday, weeks, then the calendar date", () => {
+    expect(strataWhen(now - 20_000, now)).toBe("Just now");
+    expect(strataWhen(now - 4 * 60_000, now)).toBe("4m ago");
+    expect(strataWhen(now - 5 * 3_600_000, now)).toBe("5h ago");
+    expect(strataWhen(at(2026, 9, 9), now)).toBe("Friday");
+    expect(strataWhen(at(2026, 9, 1), now)).toBe("1w ago");
+    expect(strataWhen(at(2026, 6, 4, 13, 24), now)).toBe("Jul 4, 13:24");
+    expect(strataWhen(at(2025, 6, 4, 13, 24), now)).toBe("Jul 4, 2025");
+  });
+});

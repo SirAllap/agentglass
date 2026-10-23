@@ -5,7 +5,7 @@
  * columns are not each a child of the one before, or a number that is not one.
  */
 import { describe, expect, test } from "bun:test";
-import { readMachineSnap, writeMachineSnap, type MachineSnap } from "../src/lib/finderMachineState.ts";
+import { readMachineSnap, snapApplies, writeMachineSnap, type MachineSnap } from "../src/lib/finderMachineState.ts";
 
 const snap: MachineSnap = {
   v: 1, trail: ["/home/ann", "/home/ann/code", "/home/ann/code/orbit"], sel: ["code", "orbit", "README.md"], focusCol: 2,
@@ -60,5 +60,28 @@ describe("the finder uses it", () => {
     const s = await src;
     expect(s).toContain("readMachineSnap(");
     expect(s).toContain("writeMachineSnap(");
+  });
+});
+
+describe("reopen: the last place wins, an outside move is consumed once", () => {
+  const written = (origin: string, trail0: string) => readMachineSnap(writeMachineSnap({ ...snap, origin, trail: [trail0], sel: ["x"], focusCol: 0 }))!;
+  test("external open X, navigate to Y and select a file, close, reopen: Y and the file", () => {
+    // The palette's place stayed X (columns never report it); the snapshot says where the person went.
+    const s = written("/home/ann/notes", "/home/ann");
+    expect(snapApplies(s, "/home/ann/notes")).toBe(true);
+    expect(s.trail[0]).toBe("/home/ann");
+    expect(s.sel[0]).toBe("x");
+  });
+  test("a place moved from outside while the finder was closed beats the memory, once", () => {
+    const s = written("/home/ann/notes", "/home/ann");
+    expect(snapApplies(s, "/home/ann/orbit")).toBe(false);
+    // the finder then writes under the new place, and that one wins next time
+    expect(snapApplies(written("/home/ann/orbit", "/home/ann/orbit"), "/home/ann/orbit")).toBe(true);
+  });
+  test("a snapshot from before origin was kept is believed by its first column", () => {
+    const old = readMachineSnap(writeMachineSnap(snap))!;
+    expect(old.origin).toBeUndefined();
+    expect(snapApplies(old, "/home/ann")).toBe(true);
+    expect(snapApplies(old, "/home/ann/code")).toBe(false);
   });
 });

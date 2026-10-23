@@ -161,3 +161,13 @@ describe("isolatedDoc", () => {
     expect(PAGE_CSP).not.toMatch(/script-src|connect-src|https?:/);
   });
 });
+
+import { sortedOrder } from "../src/lib/finderPreview.ts";
+describe("a markdown table sorts by its header", () => {
+  test("numbers as numbers, text by name, empty cells last either way", () => {
+    expect(sortedOrder(["10", "9", "100"], "asc")).toEqual([1, 0, 2]);
+    expect(sortedOrder(["10", "9", "100"], "desc")).toEqual([2, 0, 1]);
+    expect(sortedOrder(["b", "", "a"], "asc")).toEqual([2, 0, 1]);
+    expect(sortedOrder(["b", "", "a"], "desc")).toEqual([0, 2, 1]);
+  });
+});
