@@ -5,14 +5,14 @@
  * entries); the placement and the cut are decided here, away from the screen.
  */
 import { describe, expect, test } from "bun:test";
-import { PEEK, peekOf, peekPlace } from "../src/lib/finderPeek.ts";
+import { PEEK, peekKeep, peekOf, peekPlace, zoneHolds } from "../src/lib/finderPeek.ts";
 import { DEFAULT_PREFS, readPrefs } from "../src/lib/finderMiller.ts";
 import type { BrowseEntry } from "../../shared/types.ts";
 
 const entry = (name: string, kind: "dir" | "file" = "file"): BrowseEntry => ({ name, kind, bytes: kind === "file" ? 10 : null, items: kind === "dir" ? 2 : null, mtime: 0, hidden: name.startsWith(".") });
 
-describe("the numbers are Strata's", () => {
-  test("256 wide, 500 ms in, 80 ms out, eight entries", () => expect(PEEK).toMatchObject({ width: 256, open: 500, close: 80, limit: 8 }));
+describe("the numbers", () => {
+  test("256 wide, 500 ms in, eight entries; 150 ms out so the pointer can cross the gap to the card", () => expect(PEEK).toMatchObject({ width: 256, open: 500, close: 150, limit: 8 }));
 });
 
 describe("what the card lists", () => {
@@ -46,6 +46,22 @@ describe("where the card goes", () => {
   });
 });
 
+/* The pointer may leave the folder for its card and go on into the card's own folders: a card stays while the pointer is on the folder that opened it, on the card, or on the row that opened the next card. The gap between is bridged by the close delay, not by a zone. */
+describe("hover intent", () => {
+  const stack = ["/a/orbit", "/a/orbit/src"];
+  test("the folder row that opened the first card holds it", () => expect(zoneHolds(stack, { kind: "row", level: 0, path: "/a/orbit" })).toBe(1));
+  test("a row that did not open a card holds nothing", () => expect(zoneHolds(stack, { kind: "row", level: 0, path: "/a/other" })).toBe(0));
+  test("a card holds itself, and the row inside it that opened the next card holds both", () => {
+    expect(zoneHolds(stack, { kind: "card", level: 0 })).toBe(1);
+    expect(zoneHolds(stack, { kind: "row", level: 1, path: "/a/orbit/src" })).toBe(2);
+    expect(zoneHolds(stack, { kind: "card", level: 1 })).toBe(2);
+  });
+  test("pointer on the first card: the second closes, the first stays", () => expect(peekKeep(stack, [{ kind: "card", level: 0 }])).toBe(1));
+  test("pointer on the second card: both stay", () => expect(peekKeep(stack, [{ kind: "card", level: 1 }])).toBe(2));
+  test("pointer nowhere (in the gap): nothing is kept", () => expect(peekKeep(stack, [])).toBe(0));
+  test("never more than are open", () => expect(peekKeep(["/a"], [{ kind: "card", level: 3 }])).toBe(1));
+});
+
 describe("the setting", () => {
   test("off by default, as in Strata", () => expect(DEFAULT_PREFS.peek).toBe(false));
   test("a stored value of the wrong type falls back alone", () => {
@@ -61,9 +77,15 @@ describe("the views draw it", () => {
     expect(s.match(/peek\?\.bind\(/g)?.length).toBe(2);
     expect(await read("MachineFinder.tsx")).toContain("useFolderPeek(prefs.peek");
   });
-  test("the card is a tooltip, not a menu: it never takes focus or a click", async () => {
+  test("the card is a menu the pointer can enter: rows are buttons that reveal, folders open the next card", async () => {
     const s = await read("FolderPeek.tsx");
-    expect(s).toContain('role="tooltip"');
-    expect(s).toContain("pointer-events-none");
+    expect(s).toContain('role="menu"');
+    expect(s).not.toContain("pointer-events-none");
+    expect(s).toContain("onPick(");
+    expect(s).toContain("peekKeep(");
+  });
+  test("a folder tile gives up its native title while peeking, or the browser's tooltip covers the card", async () => {
+    const s = await read("FolderViews.tsx");
+    expect(s.match(/title=\{peek && isFolder\(r\) \? undefined : r\.name\}/g)?.length).toBe(1);
   });
 });

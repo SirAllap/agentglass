@@ -12,7 +12,7 @@
 import type { BrowseEntry } from "../../../shared/types.ts";
 import { folderPreview, type FolderRow } from "./finderFolder.ts";
 
-export const PEEK = { width: 256, gap: 8, open: 500, close: 80, limit: 8 } as const;
+export const PEEK = { width: 256, gap: 8, open: 500, close: 150, limit: 8 } as const;
 
 export interface Peek { rows: FolderRow[]; more: number; empty: boolean; count: string }
 
@@ -33,4 +33,25 @@ export function peekPlace(anchor: Box, size: { w: number; h: number }, view: { w
   let top = anchor.top;
   if (top + size.h > view.h - m) top = view.h - m - size.h;
   return { left: Math.max(m, left), top: Math.max(m, top) };
+}
+
+/**
+ * Hover intent. Cards stack: card 0 opens from a folder row of the view, card 1
+ * from a folder row inside card 0, and so on; `stack` is the folder path of each
+ * open card. A zone is somewhere the pointer can be, and holds open as many
+ * cards as it needs; when the pointer leaves everything, the close timer asks
+ * `peekKeep` what is left. The gap between a row and its card is no zone: the
+ * close delay carries the pointer across it.
+ */
+export type PeekZone = { kind: "row"; level: number; path: string } | { kind: "card"; level: number };
+
+/** How many cards (from the first) this zone keeps open. */
+export function zoneHolds(stack: readonly string[], z: PeekZone): number {
+  if (z.kind === "card") return z.level + 1;
+  return stack[z.level] === z.path ? z.level + 1 : 0;
+}
+
+/** How many cards survive when the pointer is over these zones. */
+export function peekKeep(stack: readonly string[], over: readonly PeekZone[]): number {
+  return Math.min(stack.length, over.reduce((n, z) => Math.max(n, zoneHolds(stack, z)), 0));
 }

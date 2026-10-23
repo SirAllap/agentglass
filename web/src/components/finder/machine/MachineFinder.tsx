@@ -85,8 +85,6 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   onClose: () => void;
 }) {
   const [prefs, setPrefsState] = useState<Prefs>(loadPrefs);
-  /* Folder peeking is an Icons and List thing: Columns already shows what is inside a folder. */
-  const folderPeek = useFolderPeek(prefs.peek && prefs.view !== "columns", prefs.hidden);
   /* Every way out of the Editing tab asks first when nvim holds unsaved changes (lib/finderEdit.EXITS). The move is
      held in `held` and runs once the person has said Save or Discard; leaving ends the editor's session either way. */
   const editing = useRef<string | null>(null);
@@ -243,6 +241,8 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
     onPlace(at);
   }, [onPlace]);
   const reveal = useMemo(() => guarded("search-hit", revealRaw), [guarded, revealRaw]);
+  /* Folder peeking is an Icons and List thing: Columns already shows what is inside a folder. */
+  const folderPeek = useFolderPeek(prefs.peek && prefs.view !== "columns", prefs.hidden, reveal);
 
   const goUpRaw = useCallback(() => {
     const p = parentOf(trail[0]!);

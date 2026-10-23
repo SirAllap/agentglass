@@ -32,7 +32,7 @@ export function IconsView({ display, dir, thumb, selName, chosen, width, onPick,
       render={(i) => (
         <div key={i} className="flex px-2" style={{ height: tile.h }}>
           {rows.slice(i * per, i * per + per).map((r) => (
-            <div key={r.name} role="option" {...(isFolder(r) && !r.locked ? peek?.bind(joinPath(dir, r.name), r.name) : undefined)} data-row={r.name} data-folder={isFolder(r) && !r.locked ? "" : undefined} draggable={!r.locked} aria-selected={r.name === selName || !!chosen?.has(r.name)} title={r.name} onMouseDown={noRange} onClick={(e) => onPick(r, modOf(e))} onDoubleClick={() => onOpen(r)}
+            <div key={r.name} role="option" {...(isFolder(r) && !r.locked ? peek?.bind(joinPath(dir, r.name), r.name) : undefined)} data-row={r.name} data-folder={isFolder(r) && !r.locked ? "" : undefined} draggable={!r.locked} aria-selected={r.name === selName || !!chosen?.has(r.name)} title={peek && isFolder(r) ? undefined : r.name} onMouseDown={noRange} onClick={(e) => onPick(r, modOf(e))} onDoubleClick={() => onOpen(r)}
               className="flex flex-col items-center justify-center gap-1.5 rounded-lg cursor-pointer px-1 min-w-0"
               style={{ width: tile.w, height: tile.h - 4, color: r.locked ? "var(--text4)" : "var(--text)", ...selStyle(r.name === selName || !!chosen?.has(r.name)) }}>
               <span className="flex" style={{ color: isFolder(r) ? "var(--warning-ink)" : "var(--text3)" }}>
