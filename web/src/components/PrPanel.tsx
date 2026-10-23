@@ -180,7 +180,7 @@ import { onChecksRead } from "../lib/prWatchStore.ts";
 import { CardChip } from "../lib/priority.tsx";
 import { BellIcon, InboxIcon, QuoteIcon } from "./settingsNavIcons.tsx";
 import { AnchoredMenu } from "./AnchoredMenu.tsx";
-import { pins, isPinned, togglePin, subscribePins, type Pin } from "../lib/prPins.ts";
+import { pins, isPinned, togglePin, subscribePins, filterPins, type Pin } from "../lib/prPins.ts";
 import { TriageBoard } from "./TriageBoard.tsx";
 import { Inbox } from "./prs/Inbox.tsx";
 import { CiMetrics } from "./prs/CiMetrics.tsx";
@@ -1384,188 +1384,117 @@ function RepoMenu({ repo }: { repo: string }) {
 }
 
 /**
- * The pins, centred on the bar.
+ * The pins: one control in the bar, a count on a tack, and a menu behind it.
  *
- * The ones you keep coming back to, one click from wherever you are. This panel
- * shows one pull request at a time, so moving between two of them was a trip:
- * back to the list, find it again in a list that reorders itself by activity,
- * open it — twice a minute while a suite runs, and the row has usually moved
- * since you last looked.
+ * They were chips in the header, and with more than a handful the row either
+ * scrolled sideways under arrows or pushed the rest of the bar around. One
+ * control cannot do either: it is the same 28px as its neighbours, it shows how
+ * many there are, and the list lives in a menu drawn over the panel that takes
+ * no room from it.
  *
- * It used to be a row of its own under the way back, drawn even when it was
- * empty so that it could not push the masthead down a second after the detail
- * landed. In one bar there is nothing to push: an empty capsule can simply not
- * be there, and the bar it would have sat in is the same height either way. So
- * the list view gets it too — the jump-list is as useful over a table as it is
- * over a pull request — and on a machine with nothing pinned neither view pays
- * anything for it.
+ * It stays in its place with nothing pinned, greyed and unable to open, because
+ * a control that appears with the first pin moves everything after it. The
+ * tooltip says why it is grey.
  *
- * Centred absolutely rather than laid out between its neighbours: the chips on
- * the left and the Refresh on the right are what the list view draws, and the
- * capsule must not move them. It also means the pins sit in the same place in
- * both views, which is the point of putting them in a shared bar at all.
+ * A row opens the pull request, as the chip did; its x unpins and leaves the
+ * menu open so several can go in one visit. Arrows, Home, End and Escape are
+ * `AnchoredMenu`'s and only act while it is open. The filter box appears past
+ * `PIN_FILTER_FROM`, where scanning the list by eye stops being quicker.
+ *
+ * Its dot is the one the chip had (what the checks are doing, from the list the
+ * panel already polls); a pin from another scope has none. No request is made
+ * here: titles are stored with the pin and states are read, not fetched.
  */
-function PinnedCapsule({ flow, pinned, pinState, selected, current, onOpen }: {
-  /** In the list view the header is one wrapping bar, so the capsule takes its place in it
-   *  instead of floating over the middle of it. */
-  flow?: boolean;
+const PIN_FILTER_FROM = 8;
+const PIN_MENU_W = 420;
+
+function PinMenu({ pinned, pinState, selected, onOpen }: {
   pinned: Pin[];
-  /** The rollup for a pinned pull request, when the current list happens to
-   *  carry it. A pin from another scope has no state to show and shows none. */
   pinState: Map<number, PrSummary>;
   selected: number | null;
-  /** The pull request on screen, when there is one — it gets the pin control.
-   *  Null in the list view, which is why that view is pins-or-nothing. */
-  current: { repo: string; number: number; title: string } | null;
   onOpen: (n: number) => void;
 }) {
-  // Nothing pinned and nothing to pin: no capsule, no gap where one would be.
-  if (pinned.length === 0 && !current) return null;
-  const currentPinned = !!current && isPinned(current.repo, current.number);
-
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const box = useRef<HTMLSpanElement>(null);
+  const close = useCallback(() => { setOpen(false); setQ(""); }, []);
+  const none = pinned.length === 0;
+  // The last pin unpinned from inside the menu: nothing left to show.
+  useEffect(() => { if (none && open) close(); }, [none, open, close]);
+  const filtering = pinned.length > PIN_FILTER_FROM;
+  const rows = filtering ? filterPins(pinned, q) : pinned;
   return (
-    <div className={flow ? "flex items-center min-w-0" : "absolute left-1/2 -translate-x-1/2 flex items-center pointer-events-none"}
-      style={flow ? undefined : { maxWidth: "40%" }}>
-      <div className="flex items-center gap-1.5 min-w-0 pointer-events-auto">
-        {/* The tack is the label: it says "pinned" without taking the width a
-            word would, and it is the same glyph as the button that put the
-            pull request here. It stays put while the chips scroll. */}
-        {pinned.length === 0
-          ? <span className="text-[10px] shrink-0 inline-flex items-center gap-1" style={{ color: "var(--text4)" }}><PinIcon size={ICON.xs} />nothing pinned</span>
-          : (
-            <span className="flex shrink-0" style={{ color: "var(--text4)" }} role="img" aria-label="Pinned" title="Pinned pull requests">
-              <PinIcon size={ICON.xs} filled />
-            </span>
-          )}
-        {pinned.length > 0 && (
-          <PinScroller pinned={pinned} pinState={pinState} selected={selected} onOpen={onOpen} />
-        )}
-        {/* The control sits IN the bar it feeds, so pressing it explains the bar
-            the first time — a pin button somewhere else and a strip of numbers
-            up here are two features until you happen to press one and watch the
-            other change. Outside the scroller: it is the one chip that must not
-            slide away with the others. */}
-        {current && (
-          <button
-            onClick={() => togglePin(current.repo, current.number, current.title)}
-            title={currentPinned
-              ? `#${current.number} is on the bar — click to take it off`
-              : `Keep #${current.number} on this bar, one click away from anywhere in this panel`}
-            className={`${CHIP} shrink-0`}
-            style={currentPinned
-              ? { color: "var(--primary-hover)", border: tintEdge("var(--primary)", 45) }
-              : { color: "var(--warning-ink)", border: tintEdge("var(--warning)", 32), background: "color-mix(in srgb, var(--warning) 8%, transparent)" }}>
-            <PinIcon size={ICON.xs} filled={currentPinned} />{currentPinned ? "Pinned" : `Pin #${current.number}`}
-          </button>
-        )}
-      </div>
-    </div>
+    <span ref={box} className="inline-flex shrink-0">
+      <button type="button" disabled={none} onClick={() => (open ? close() : setOpen(true))}
+        aria-haspopup="menu" aria-expanded={open}
+        aria-label={none ? "No pinned pull requests" : `Pinned pull requests (${pinned.length})`}
+        title={none ? "No pinned pull requests" : `${pinned.length} pinned pull request${pinned.length === 1 ? "" : "s"}`}
+        className={`agx-btn ${BAR_CTRL}`}
+        style={{ ...CHIP_SURFACE, color: none ? "var(--text4)" : open ? "var(--primary-ink)" : "var(--text2)",
+          opacity: none ? 0.5 : 1, cursor: none ? "not-allowed" : "pointer" }}>
+        <PinIcon size={BAR_ICON} filled={!none} />
+        {!none && <span className="tabular-nums">{pinned.length}</span>}
+      </button>
+      {open && !none && (
+        <AnchoredMenu anchor={box} align="left" onClose={close} minWidth={PIN_MENU_W} placeKey={rows.length} focus={filtering ? "input" : undefined}>
+          <div style={{ width: PIN_MENU_W, maxWidth: "calc(100vw - 32px)" }}>
+            <div className="px-2.5 pt-1 pb-1 text-[10px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>Pinned ({pinned.length})</div>
+            {filtering && (
+              <div className="px-1 pb-1">
+                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter by number or title"
+                  aria-label="Filter pinned pull requests" className={`${INPUT} w-full`} style={INPUT_STYLE} />
+              </div>
+            )}
+            <div className="overflow-y-auto agw-noscrollbar flex flex-col gap-px" style={{ maxHeight: 336 }}>
+              {rows.length === 0 && <div className="px-2.5 py-2 text-[11px]" style={{ color: "var(--text3)" }}>No pinned pull request matches.</div>}
+              {rows.map((p) => {
+                const cur = p.number === selected;
+                const sum = pinState.get(p.number);
+                const tint = sum?.state === "MERGED" ? "var(--primary)" : sum?.state === "CLOSED" ? "var(--text3)" : sum ? "var(--success)" : "var(--text2)";
+                return (
+                  <div key={`${p.repo}#${p.number}`} className="flex items-center rounded-lg"
+                    style={{ minHeight: HIT, background: cur ? "color-mix(in srgb, var(--primary) 14%, transparent)" : undefined }}>
+                    <button type="button" role="menuitem" onClick={() => { close(); onOpen(p.number); }}
+                      aria-current={cur ? "page" : undefined} title={`#${p.number} — ${p.title}`}
+                      className="agx-mi flex-1 min-w-0 self-stretch flex items-center gap-2 px-2.5 text-[11px] text-left rounded-lg"
+                      style={{ color: "var(--text2)" }}>
+                      {sum ? <Dot tint={stateTint(sum)} title={`#${p.number} — ${checksSentence(sum)}`} /> : <span className="shrink-0" style={{ width: 6 }} />}
+                      <span className="tabular-nums shrink-0" style={{ color: tint, fontWeight: 600 }}>#{p.number}</span>
+                      <span className="truncate min-w-0 flex-1" style={{ color: cur ? "var(--primary-ink)" : "var(--text2)" }}>{p.title}</span>
+                      <span className="shrink-0 tabular-nums text-[10px]" style={{ color: "var(--text4)" }}>{ago(sum?.updatedAt ?? new Date(p.at).toISOString())}</span>
+                    </button>
+                    <button type="button" tabIndex={-1} onClick={() => togglePin(p.repo, p.number, p.title)}
+                      title={`Unpin #${p.number}`} aria-label={`Unpin #${p.number}`}
+                      className="agx-btn leading-none grid place-items-center shrink-0 rounded-md mr-1"
+                      style={{ color: "var(--text3)", width: MIN_BOX, height: MIN_BOX }}>
+                      <CloseIcon size={ICON.xs} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </AnchoredMenu>
+      )}
+    </span>
   );
 }
 
-/** Room an arrow takes at an edge of the pin strip, and the fade after it. */
-const PIN_ARROW_W = CTRL_H.compact;
-
-/**
- * The pinned chips, in a row that scrolls without showing it.
- *
- * The native bar drew a thick track inside a header that is 48px tall, and
- * nothing in the row said what it was for. Here it is hidden (`agw-noscrollbar`,
- * the terminal tab strip's way) and the three things it did are done by hand:
- * the wheel moves the row sideways, a lit chip is kept on screen, and a side
- * with chips past it fades out and shows an arrow that pages that way. The
- * arrow is drawn over the faded edge, in a zone the mask holds fully
- * transparent, so it covers no chip and takes no width: the strip is the same
- * size with or without it, and a chip is never in two places. Both arrows are
- * always mounted; an edge with nothing hidden only disables its arrow.
- *
- * A chip is a `rounded-lg` control at `CTRL_H.regular`, the shape `CHIP` and
- * `ScopeChip` give the rest of this header. The strip has no box of its own,
- * as `Segmented` has none: a second outline around chips that already have one
- * was the capsule.
- */
-function PinScroller({ pinned, pinState, selected, onOpen }: {
-  pinned: Pin[];
-  pinState: Map<number, PrSummary>;
-  selected: number | null;
-  onOpen: (n: number) => void;
-}) {
-  const hold = PIN_ARROW_W;
-  const strip = useTabStripScroll(selected == null ? null : String(selected), pinned.map((p) => p.number).join(","), hold + EDGE_FADE_PX);
-  const mask = edgeMask(strip.edges, hold);
-  const page = (dir: -1 | 1) => {
-    const el = strip.el;
-    if (!el) return;
-    const to = stepX(el, dir);
-    if (to !== null) el.scrollTo({ left: to, behavior: "smooth" });
-  };
-  const arrow = (dir: -1 | 1) => {
-    const shown = dir < 0 ? strip.edges.start : strip.edges.end;
-    return (
-      <button type="button" onClick={() => page(dir)} disabled={!shown} tabIndex={shown ? 0 : -1} aria-hidden={!shown}
-        aria-label={dir < 0 ? "Show earlier pinned pull requests" : "Show later pinned pull requests"}
-        title={dir < 0 ? "Earlier" : "Later"}
-        className={`absolute top-1/2 -translate-y-1/2 grid place-items-center rounded-lg transition-opacity ${shown ? "opacity-100 agx-chip" : "opacity-0 pointer-events-none"}`}
-        style={{ [dir < 0 ? "left" : "right"]: 0, width: PIN_ARROW_W, height: CTRL_H.compact, color: "var(--text2)" }}>
-        <span style={{ display: "grid", transform: `rotate(${dir < 0 ? 90 : -90}deg)` }}><CaretIcon size={ICON.xs} /></span>
-      </button>
-    );
-  };
+/** The pull request on screen gets the pin control, so pressing it explains the menu the first time. */
+function PinCurrent({ current }: { current: { repo: string; number: number; title: string } }) {
+  const currentPinned = isPinned(current.repo, current.number);
   return (
-    <div className="relative min-w-0 flex">
-      <div ref={strip.ref} className="min-w-0 flex items-center gap-1.5 overflow-x-auto agw-noscrollbar"
-        style={{ maskImage: mask, WebkitMaskImage: mask }}>
-        {/*
-         * Two actions on one chip: the body opens it, the × takes it off.
-         * Taking a pin off used to mean opening the pull request first, which
-         * is the trip this bar exists to save. The × has a slot of its own at
-         * the end of the chip at every width, so showing it on hover or focus
-         * moves nothing; the one you are reading keeps it showing. Siblings,
-         * not nested: a button inside a button is invalid markup and the inner
-         * one stops receiving clicks in some engines.
-         *
-         * The title is cut at 96px and only drawn from 1024px up (`lg`): a chip is
-         * number-first, and the bar is 40% of the header, so with six pins the
-         * row scrolls sideways rather than wrapping or reaching the refresh
-         * button.
-         */}
-        {pinned.map((p) => {
-          const open = p.number === selected;
-          const sum = pinState.get(p.number);
-          return (
-            <span key={p.number} data-window={String(p.number)}
-              className={`group flex items-center rounded-lg shrink-0 ${open ? "" : "agx-chip"}`}
-              style={{ minHeight: CTRL_H.regular, ...(open
-                ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: tintEdge("var(--primary)", 45) }
-                : { background: CHIP_SURFACE.background, border: EDGE }) }}>
-              <button onClick={() => onOpen(p.number)}
-                title={`#${p.number} — ${p.title}`}
-                aria-current={open ? "page" : undefined}
-                className="flex items-center gap-1.5 min-w-0 rounded-lg pl-2 pr-1 text-[11px] self-stretch"
-                style={{ color: open ? "var(--primary-ink)" : "var(--text2)", fontWeight: open ? 700 : undefined }}>
-                {/* A dot, not a coloured number. Colour alone cannot say "green" to
-                    somebody who cannot see green, and the same dot is what the rows
-                    in the list use — so the bar and the list agree rather than
-                    being two vocabularies. */}
-                {sum && <Dot tint={stateTint(sum)} title={`#${p.number} — ${checksSentence(sum)}`} />}
-                <span className="tabular-nums shrink-0">#{p.number}</span>
-                <span className="hidden lg:inline truncate" style={{ maxWidth: 96, color: "var(--text3)", fontWeight: 400 }}>{p.title}</span>
-              </button>
-              <button
-                onClick={(e) => { e.stopPropagation(); togglePin(p.repo, p.number, p.title); }}
-                title={`Unpin #${p.number}`}
-                aria-label={`Unpin #${p.number}`}
-                className={`leading-none grid place-items-center shrink-0 rounded-md mr-1 ${open ? "" : "opacity-0 group-hover:opacity-100 focus:opacity-100"}`}
-                style={{ color: "var(--text3)", width: MIN_BOX, height: MIN_BOX }}>
-                <CloseIcon size={ICON.xs} />
-              </button>
-            </span>
-          );
-        })}
-      </div>
-      {arrow(-1)}
-      {arrow(1)}
-    </div>
+    <button
+      onClick={() => togglePin(current.repo, current.number, current.title)}
+      title={currentPinned
+        ? `#${current.number} is pinned — click to unpin it`
+        : `Pin #${current.number}: keep it one click away from anywhere in this panel`}
+      className={`${CHIP} shrink-0`}
+      style={currentPinned
+        ? { color: "var(--primary-hover)", border: tintEdge("var(--primary)", 45) }
+        : { color: "var(--warning-ink)", border: tintEdge("var(--warning)", 32), background: "color-mix(in srgb, var(--warning) 8%, transparent)" }}>
+      <PinIcon size={ICON.xs} filled={currentPinned} />{currentPinned ? "Pinned" : `Pin #${current.number}`}
+    </button>
   );
 }
 
@@ -4823,6 +4752,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                   a whole second. */}
               {detailStale && <span className="animate-pulse" style={{ color: "var(--primary-ink)" }}>· refreshing</span>}
             </button>
+            <PinMenu pinned={pinned} pinState={pinState} selected={selected} onOpen={openPr} />
+            {d && repo && <PinCurrent current={{ repo: repo.nameWithOwner, number: d.number, title: d.title }} />}
           </>
         )}
 
@@ -4865,6 +4796,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             title="Every check of this repository against its own history — slow, passed on a re-run, drifting"
             onClick={() => { setInboxOn(false); setClosedOn(false); setMetricsOn(true); }} />
         </div>
+        <PinMenu pinned={pinned} pinState={pinState} selected={selected} onOpen={openPr} />
         {/* Always, once the repository is known — not "once rows arrived".
             The bar is built from the rows, so gating it on them made it drop
             in a second late and shove the board down. It draws its own
@@ -4912,11 +4844,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
         )}          </>
         )}
 
-        <PinnedCapsule flow={selected == null}
-          pinned={pinned} pinState={pinState} selected={selected}
-          current={selected != null && d && repo ? { repo: repo.nameWithOwner, number: d.number, title: d.title } : null}
-          onOpen={openPr}
-        />
 
         <div className="ml-auto flex items-center gap-2 shrink-0">
           {toast?.ok && <span className="text-[10px] max-w-[380px] truncate" style={{ color: "var(--success)" }}>{toast.msg}</span>}
