@@ -11,7 +11,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { allPresent, announce, why } from "./generated-artifacts.ts";
+import { RECIPE } from "../scripts/engine-esbuild.mjs";
+import { allPresent, announce, engineStale, why } from "./generated-artifacts.ts";
 
 describe("whether the generated bundle is there", () => {
   let dir: string | undefined;
@@ -45,6 +46,45 @@ describe("whether the generated bundle is there", () => {
     // Pointing the resolver at a path with nothing behind it — no mkdtemp, no
     // rename, just a name nothing ever created.
     expect(allPresent(join(tmpdir(), "agx-generated-never-created-93f7"))).toBe(false);
+  });
+});
+
+describe("whether the generated engine matches the recipe", () => {
+  let dir: string | undefined;
+
+  afterEach(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    dir = undefined;
+  });
+
+  const engine = (header: string) => {
+    dir = mkdtempSync(join(tmpdir(), "agx-generated-engine-"));
+    writeFileSync(join(dir, "engine.generated.ts"), `${header}\nexport const y = 1;\n`);
+    return dir;
+  };
+
+  test("a bundle built before the recipe was named is stale", () => {
+    expect(engineStale(engine("// Target: chrome74. Regenerate with `npm run build:engine`."))).toBe(true);
+  });
+
+  test("a bundle built from another recipe is stale", () => {
+    expect(engineStale(engine("// Target: chrome74. Recipe: 000000000000. Regenerate."))).toBe(true);
+  });
+
+  test("a bundle built from this recipe is not", () => {
+    expect(engineStale(engine(`// Target: chrome74. Recipe: ${RECIPE}. Regenerate.`))).toBe(false);
+  });
+
+  test("nothing built is a skip's business, not a stale one", () => {
+    expect(engineStale(join(tmpdir(), "agx-generated-never-created-93f7"))).toBe(false);
+  });
+
+  test("the bundle in this checkout was built from the recipe in it", () => {
+    // The one that names the cause: without it, a stale bundle shows as seven
+    // unrelated pane tests going red.
+    const terminal = new URL("../src/terminal", import.meta.url).pathname;
+    if (!allPresent(terminal)) return;
+    expect(engineStale(terminal), "engine.generated.ts is older than scripts/engine-esbuild.mjs — run `cd mobile && npm run build:engine`").toBe(false);
   });
 });
 

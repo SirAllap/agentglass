@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 /*
  * How the terminal engine is compiled — one place, because the build script and
  * the test that guards the output must not disagree about it.
@@ -31,3 +33,11 @@ export const ENGINE_ESBUILD = {
   write: false,
   logLevel: "silent",
 };
+
+/** Names the recipe above in the header of what it built. The generated file is
+ *  gitignored and rewritten only by `npm install`, so a checkout that pulled a
+ *  change to the recipe keeps running tests against the old bundle: with the
+ *  same commit, the pane tests were red for the xterm fix above on one machine
+ *  and green on another. shortcut: covers these options only, not the entry
+ *  shims in build-terminal-engine.mjs; widen it when one of those matters. */
+export const RECIPE = createHash("sha256").update(JSON.stringify(ENGINE_ESBUILD)).digest("hex").slice(0, 12);

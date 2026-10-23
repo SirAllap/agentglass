@@ -13,8 +13,9 @@
  * load error. `announce()` is what makes that skip say why, since bun's own
  * summary line (`N skip`) does not.
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { RECIPE } from "../scripts/engine-esbuild.mjs";
 
 const FILE_NAMES = ["nerdfont.generated.ts", "engine.generated.ts"];
 
@@ -27,6 +28,14 @@ export function allPresent(dir: string): boolean {
 const TERMINAL_DIR = new URL("../src/terminal", import.meta.url).pathname;
 
 export const built = allPresent(TERMINAL_DIR);
+
+/** True when engine.generated.ts exists but was built from an older recipe than
+ *  scripts/engine-esbuild.mjs holds now. Present-and-wrong is not a skip: the
+ *  tests run and fail somewhere far from the cause. */
+export function engineStale(dir: string): boolean {
+  const file = join(dir, "engine.generated.ts");
+  return existsSync(file) && !readFileSync(file, "utf8").slice(0, 600).includes(`Recipe: ${RECIPE}.`);
+}
 
 export const why = "needs mobile's generated terminal bundle — run `make mobile-test`, or `cd mobile && npm ci`";
 
