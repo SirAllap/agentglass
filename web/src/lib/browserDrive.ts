@@ -2160,35 +2160,42 @@ function flashWhereActed(el: DrivableWebview, ask: BrowserAskFrame): void {
  * navigation does — then changes its address and never its page, and every
  * act after that finds nothing (6 s and a refusal per click, a whole walk lost).
  *
- * So before each ask the guest wraps requestAnimationFrame once: every frame
- * asked for is also armed on a timer, 150 ms while frames have been coming
- * (on screen the real frame wins and the timer is cleared, so nothing
- * changes) and 16 ms once one went unanswered, until a real frame comes back.
- * Measured with frames withheld: GitHub's Issues click rendered in 1.3 s with
- * it, never without.
- * Ceiling: a page that kept its own reference to requestAnimationFrame from
- * before its first ask is not reached.
+ * So before each ask the guest checks for a frame within 50 ms (on screen one
+ * comes in 16), and only when none comes does it wrap requestAnimationFrame:
+ * every frame asked for is also armed on a timer, 16 ms while frames are
+ * missing and 150 ms once a real one came back, whichever answers first. A page
+ * on screen is never touched, which matters on strict sites that check their
+ * built-ins. Measured with frames withheld: GitHub's Issues click rendered in
+ * 1.3 s with it, never without.
+ * Ceiling: a frame the page asked for inside those first 50 ms still waits on
+ * the compositor, and a page that kept its own reference to the function from
+ * before is not reached. Once in, the wrap stays for the life of the document.
  */
 export const FRAME_GUARD = `(() => {
   if (window.__agxFrames) return;
-  const real = window.requestAnimationFrame.bind(window), cancelReal = window.cancelAnimationFrame.bind(window);
-  const jobs = new Map(); let next = 1, starved = false;
-  const fire = (id, ts, byFrame) => {
-    const j = jobs.get(id); if (!j) return; jobs.delete(id);
-    if (byFrame) starved = false; else { starved = true; cancelReal(j.r); }
-    clearTimeout(j.t); j.cb(ts);
-  };
-  const raf = function requestAnimationFrame(cb) {
-    const id = next++;
-    const j = { cb, r: 0, t: 0 }; jobs.set(id, j);
-    j.r = real((ts) => fire(id, ts, true));
-    j.t = setTimeout(() => fire(id, performance.now(), false), starved ? 16 : 150);
-    return id;
-  };
-  const caf = function cancelAnimationFrame(id) { const j = jobs.get(id); if (!j) return; jobs.delete(id); cancelReal(j.r); clearTimeout(j.t); };
-  for (const [f, n] of [[raf, "requestAnimationFrame"], [caf, "cancelAnimationFrame"]]) f.toString = () => "function " + n + "() { [native code] }";
-  window.requestAnimationFrame = raf; window.cancelAnimationFrame = caf;
-  Object.defineProperty(window, "__agxFrames", { value: () => starved });
+  let came = false;
+  requestAnimationFrame(() => { came = true; });
+  setTimeout(() => {
+    if (came || window.__agxFrames) return;
+    const real = window.requestAnimationFrame.bind(window), cancelReal = window.cancelAnimationFrame.bind(window);
+    const jobs = new Map(); let next = 1, starved = true;
+    const fire = (id, ts, byFrame) => {
+      const j = jobs.get(id); if (!j) return; jobs.delete(id);
+      if (byFrame) starved = false; else { starved = true; cancelReal(j.r); }
+      clearTimeout(j.t); j.cb(ts);
+    };
+    const raf = function requestAnimationFrame(cb) {
+      const id = next++;
+      const j = { cb, r: 0, t: 0 }; jobs.set(id, j);
+      j.r = real((ts) => fire(id, ts, true));
+      j.t = setTimeout(() => fire(id, performance.now(), false), starved ? 16 : 150);
+      return id;
+    };
+    const caf = function cancelAnimationFrame(id) { const j = jobs.get(id); if (!j) return; jobs.delete(id); cancelReal(j.r); clearTimeout(j.t); };
+    for (const [f, n] of [[raf, "requestAnimationFrame"], [caf, "cancelAnimationFrame"]]) f.toString = () => "function " + n + "() { [native code] }";
+    window.requestAnimationFrame = raf; window.cancelAnimationFrame = caf;
+    Object.defineProperty(window, "__agxFrames", { value: () => starved });
+  }, 50);
 })()`;
 
 /* Only with a panel drawing this guest (the same signal the pointer uses):
