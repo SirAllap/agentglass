@@ -40,6 +40,8 @@ export function activityReducer(state: Activity, ev: ActivityEvent): Activity {
     case "begin":
       return { ...state, [ev.tab]: { agent: ev.agent, working: (cur?.working ?? 0) + 1, paused: cur?.paused ?? false, log: cur?.log ?? [], op: ev.op } };
     case "done":
+      // Still mid-ask: a `done` now would drop the glass over a page the agent is typing into.
+      if (cur && cur.working > 0) return state;
       return { ...state, [ev.tab]: { agent: cur?.agent ?? "agent", working: 0, paused: cur?.paused ?? false, log: cur?.log ?? [], done: true, op: cur?.op } };
     case "end": {
       if (!cur) return state;
@@ -63,6 +65,13 @@ export function activityReducer(state: Activity, ev: ActivityEvent): Activity {
 export function agentLabel(as: unknown, container: string): string {
   if (typeof as === "string" && as.trim()) return as.trim();
   return container && container !== "default" ? container : "agent";
+}
+
+/** Whether a `done` may mark the tab: only from the agent driving it, by name. `--page` and a caller
+ *  with no `as` skip the container check, and the badge's fallback name is the container's, so a name
+ *  that was never sent matches nothing here. The answer is ok either way. */
+export function doneMayMark(cur: TabAgent | undefined, as: unknown): boolean {
+  return !!cur && typeof as === "string" && as.trim() !== "" && as.trim() === cur.agent;
 }
 
 /** What an agent is told when the person has the tab. */

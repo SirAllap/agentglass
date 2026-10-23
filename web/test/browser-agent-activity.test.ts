@@ -2,17 +2,40 @@ import { readFileSync } from "node:fs";
 import { FLASH_MS, flashScript } from "../src/lib/browserDrive.ts";
 import { describe, expect, test } from "bun:test";
 import {
-  LOG_MAX, activityReducer, actionOf, agentLabel, agentState, boxState, pointerAt, tabState, ago, flashPlan, isActVerb, lapKeyframes, pausedRefusal, presenceLabel, travelMs, type Activity,
+  LOG_MAX, activityReducer, actionOf, agentLabel, doneMayMark, agentState, boxState, pointerAt, tabState, ago, flashPlan, isActVerb, lapKeyframes, pausedRefusal, presenceLabel, travelMs, type Activity,
 } from "../src/lib/browserAgentActivity.ts";
 
 const begin = (s: Activity, tab = "t1", agent = "orbit-ci") => activityReducer(s, { type: "begin", tab, agent });
 
 describe("agent activity per tab", () => {
   test("done marks the tab and the agent's next ask clears it", () => {
-    const d = activityReducer(begin({}), { type: "done", tab: "t1" });
+    const d = activityReducer(activityReducer(begin({}), { type: "end", tab: "t1", action: null }), { type: "done", tab: "t1" });
     expect(d.t1!.done).toBe(true);
     expect(d.t1!.working).toBe(0);
     expect(begin(d).t1!.done).toBeUndefined();
+  });
+  // A `done` sent while an act is still in flight read as finished: the glass came down mid-act.
+  test("done is ignored while an ask is in flight", () => {
+    const s = begin({});
+    const d = activityReducer(s, { type: "done", tab: "t1" });
+    expect(d).toBe(s);
+    expect(d.t1!.working).toBe(1);
+    expect(d.t1!.done).toBeUndefined();
+  });
+  // Only the agent driving the tab may say it is finished; `--page` and a caller with no name skip the container check.
+  test("done marks the tab only for the agent that drives it", () => {
+    const s = activityReducer(begin({}), { type: "end", tab: "t1", action: null });
+    expect(doneMayMark(s.t1, "orbit-ci")).toBe(true);
+    expect(doneMayMark(s.t1, " orbit-ci ")).toBe(true);
+    expect(doneMayMark(s.t1, "acme-bot")).toBe(false);
+    expect(doneMayMark(s.t1, undefined)).toBe(false);
+    expect(doneMayMark(s.t1, "")).toBe(false);
+    expect(doneMayMark(undefined, "orbit-ci")).toBe(false);
+  });
+  test("the panel marks a tab done only through that check", () => {
+    const panel = readFileSync(new URL("../src/components/BrowserPanel.tsx", import.meta.url), "utf8");
+    expect(panel).toContain('if (doneMayMark(actsRef.current[owner.id], ask.args.as)) dispatchAct({ type: "done", tab: owner.id });');
+    expect(panel.match(/type: "done"/g)?.length).toBe(1);
   });
   test("working counts asks in flight and returns to quiet", () => {
     let s = begin(begin({}));

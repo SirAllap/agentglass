@@ -45,7 +45,7 @@ import {
 import { VIEWPORTS, type Viewport } from "../lib/browserViewport.ts";
 import { browserNav, clearBrowserNav, subscribeBrowserNav } from "../lib/browserNav.ts";
 import { clientId, serveBrowserAsk, setBrowserAskHandler } from "../lib/browserBus.ts";
-import { activityReducer, actionOf, agentLabel, pausedRefusal, tabState, type Activity, type TabAgent } from "../lib/browserAgentActivity.ts";
+import { activityReducer, actionOf, agentLabel, doneMayMark, pausedRefusal, tabState, type Activity, type TabAgent } from "../lib/browserAgentActivity.ts";
 import { api } from "../lib/api.ts";
 import { forgetAgentZoom, reapplyZoom, applyGuestZoom, setPageZoomer, crossContainerRefusal, mintTakesThePane, notePopup, onActLanded, type ActLanding, type GuestZoom, type DrivableWebview } from "../lib/browserDrive.ts";
 import { AgentPresence } from "./browser/AgentPresence.tsx";
@@ -1077,10 +1077,12 @@ export function BrowserView({ active: viewOn, scope }: {
         }
       }
       /* `done` is the agent saying it has finished: it marks the tab and is
-         answered even when the person has taken it over. */
+         answered even when the person has taken it over. Only the agent that
+         drives the tab marks it; anybody else's `done` is answered and changes
+         nothing on screen. */
       if (ask.op === "done") {
         if (owner) {
-          dispatchAct({ type: "done", tab: owner.id });
+          if (doneMayMark(actsRef.current[owner.id], ask.args.as)) dispatchAct({ type: "done", tab: owner.id });
           ask.args.atTab = owner.id;
           ask.args.atProfile = owner.profile ? profileName(profilesRef.current, owner.profile) : "default";
         }
