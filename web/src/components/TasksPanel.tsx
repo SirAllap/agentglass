@@ -6015,7 +6015,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
             </button>
           )}
         </div>
-        <h2 className="text-[13px] font-semibold leading-snug mt-1.5" style={{ color: "var(--text)", textWrap: "balance" }}>
+        <h2 className="text-[13px] font-semibold leading-snug mt-1.5" style={{ color: "var(--text)", textWrap: "pretty" }}>
           {t.title}
           {/* The title is the other half of what you paste beside the id — a
               branch name, a commit subject, the line you send a colleague. The
@@ -8135,7 +8135,7 @@ function TaskDetail({ t, today, reminder, onCancel, writable, onToggleNote, onSh
   const progress = checkProgress(t.notes);
   return (
     <div>
-      <h2 className="text-[16px] font-semibold leading-snug mb-2.5" style={{ color: "var(--text)", textWrap: "balance" }}>
+      <h2 className="text-[16px] font-semibold leading-snug mb-2.5" style={{ color: "var(--text)", textWrap: "pretty" }}>
         {t.description}
       </h2>
       {onEdit && writable

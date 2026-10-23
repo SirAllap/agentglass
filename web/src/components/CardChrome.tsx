@@ -105,7 +105,7 @@ export function CardTitle({ title, copied, onCopy, children }: {
   // The last word and the button are one unbreakable unit, so a full last line never leaves the icon alone on the next one.
   const cut = title.lastIndexOf(" ") + 1;
   return (
-    <h2 className="text-[13px] font-semibold leading-snug" style={{ color: "var(--text)", textWrap: "balance" }}>
+    <h2 className="text-[13px] font-semibold leading-snug" style={{ color: "var(--text)", textWrap: "pretty" }}>
       {children ?? title.slice(0, cut)}
       {children ? copy : <span style={{ whiteSpace: "nowrap" }}>{title.slice(cut)}{copy}</span>}
     </h2>
