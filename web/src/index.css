@@ -3260,7 +3260,9 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 }
 
 /* Plugins page: installed cards fill the width, two to a row once there is room for two 560px cards. */
-.agx-plugin-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(560px, 100%), 1fr)); gap: 16px; align-items: stretch; }
+.agx-plugin-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(440px, 100%), 1fr)); gap: 16px; align-items: stretch; }
+.agx-plugin-add { background: transparent; border: 1px dashed var(--surface-line); color: var(--text2); transition: background-color 120ms ease, border-color 120ms ease; }
+.agx-plugin-add:hover { background: var(--surface-card); border-color: color-mix(in srgb, var(--primary) 45%, var(--surface-line)); }
 .agx-perm > summary::-webkit-details-marker { display: none; }
 .agx-perm-caret { display: inline-block; transition: transform 120ms ease; }
 .agx-perm[open] > summary .agx-perm-caret { transform: rotate(90deg); }

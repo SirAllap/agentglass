@@ -35,10 +35,10 @@ import { CloseButton } from "../CloseButton.tsx";
 import { LAYER } from "../../lib/layers.ts";
 import { Button, CHIP, CHIP_SURFACE, CHIP_SURFACE_CLS, Chip, EDGE, INPUT, INPUT_STYLE, LINE, RefreshButton } from "../workspace/Chrome.tsx";
 import { PluginPreview } from "./PluginPreview.tsx";
-import { SettingRow } from "../SettingRow.tsx";
 import { PLUGIN_CTRL_H } from "../../lib/pluginCard.ts";
-import { SettingsCard, StatusBadge } from "../SettingsKit.tsx";
-import type { Catalogue, InstallSource } from "../../../../shared/types.ts";
+import { EmptyState, StatusBadge } from "../SettingsKit.tsx";
+import { PageHead } from "./PageHead.tsx";
+import type { Catalogue, InstallSource, PublicPlugin } from "../../../../shared/types.ts";
 
 /** The list this project publishes, on its own site, and the same document
  *  its plugins page is drawn from. */
@@ -85,6 +85,16 @@ export function matching(entries: Entry[], q: string): Entry[] {
   if (!needle) return entries;
   return entries.filter((e) => [e.id, e.title, e.publisher, e.description, ...(e.categories ?? [])]
     .some((f) => (f ?? "").toLowerCase().includes(needle)));
+}
+
+export type Sort = "recent" | "name";
+
+/** The shelf in the order asked for. "Recently added" is the listing's own
+ *  `added` date, newest first; an entry without one goes last, so a listing
+ *  that omits it is still in a stable order (by name). */
+export function sorted(entries: Entry[], how: Sort): Entry[] {
+  const name = (e: Entry) => (e.title || e.id).toLowerCase();
+  return [...entries].sort((a, b) => (how === "recent" ? (b.added ?? "").localeCompare(a.added ?? "") : 0) || name(a).localeCompare(name(b)));
 }
 
 /**
@@ -145,18 +155,21 @@ export function offerFor(entry: Entry, have: InstallSource | null): "install" | 
   return entry.sha256 && have.plugin.sha256 && entry.sha256 !== have.plugin.sha256 ? "update" : null;
 }
 
-export function Market({ installed, onInstalled, onLoaded }: {
+export function Market({ installed, onInstalled, onLoaded, onSettings }: {
   /** Told what the market listed, so the installed cards can say an update exists. */
   onLoaded?: (catalogue: Catalogue | null) => void;
-  /** How the plugin from this git source is installed, or null. Passed in
+  /** The installed plugin that came from this git source, or null. Passed in
    *  rather than imported, so this file and the page that renders it do not
    *  import each other. */
-  installed: (gitUrl: string) => InstallSource | null;
+  installed: (gitUrl: string) => PublicPlugin | null;
   onInstalled: () => void;
+  /** Opens that plugin's own settings inside the Plugins page. */
+  onSettings?: (name: string) => void;
 }) {
   const [state, setState] = useState<State>({ kind: "loading" });
   const [q, setQ] = useState("");
   const [type, setType] = useState<string | null>(null);
+  const [sort, setSort] = useState<Sort>("recent");
   const [page, setPage] = useState(0);
 
   const load = useCallback(async () => {
@@ -169,108 +182,108 @@ export function Market({ installed, onInstalled, onLoaded }: {
   useEffect(() => { void load(); }, [load]);
 
   const all = state.kind === "ok" ? state.catalogue.plugins : [];
-  const offered = useMemo(() => all.filter((e) => offerFor(e, installed(e.source.url)) !== null), [all, installed]);
-  const kinds = useMemo(() => types(offered), [offered]);
+  const kinds = useMemo(() => types(all), [all]);
   const found = useMemo(() => {
-    const byType = type ? offered.filter((e) => (e.categories ?? []).includes(type)) : offered;
-    return matching(byType, q);
-  }, [offered, q, type]);
+    const byType = type ? all.filter((e) => (e.categories ?? []).includes(type)) : all;
+    return sorted(matching(byType, q), sort);
+  }, [all, q, type, sort]);
   const pages = Math.max(1, Math.ceil(found.length / PAGE));
   const here = Math.min(page, pages - 1);
   const shown = found.slice(here * PAGE, here * PAGE + PAGE);
 
-  const have = all.length - offered.length;
+  const free = all.filter((e) => installed(e.source.url) === null).length;
 
   return (
-    /*
-     * A settings card like every other group on this page: the plugins are its
-     * rows, separated by the one divider. An earlier version put bordered
-     * cards inside a bordered section, which made the page look amateur — two
-     * borders between the eye and the text — and with one plugin published it
-     * also left a 460px card floating in a 1900px box.
-     */
-    <SettingsCard title="Market"
-      status={state.kind === "ok" ? <StatusBadge tone="off">{offered.length} available</StatusBadge> : undefined}
-      actions={<RefreshButton onRefresh={() => void load()} busy={state.kind === "loading"}
-        title="Refresh the market" />}>
+    /* A section of the page like Installed above it, not a card holding cards:
+       two borders between the eye and the text. Its listings are the same
+       tiles, with what installing gets you read before it is installed. */
+    <section aria-label="Market" className="mb-8">
+      <PageHead title="Market" summary={state.kind === "ok" ? `${all.length} ${all.length === 1 ? "plugin" : "plugins"} · ${free} not installed` : undefined}>
+        <RefreshButton onRefresh={() => void load()} busy={state.kind === "loading"} title="Refresh the market" />
+      </PageHead>
+
       {/* Always here, never conditional on how long the list is: a search box
           that appears once a market grows past some number is a search box
           nobody learns is there. */}
-      <SettingRow label="Search the market"
-        below={<input value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }}
-          placeholder="Search the market" aria-label="Search the market" spellCheck={false}
-          className={`max-w-[360px] ${INPUT}`}
-          style={INPUT_STYLE} />} />
+      <div className="flex items-center gap-2 flex-wrap mb-3">
+        <input value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }}
+          placeholder="Search plugins, words, publishers" aria-label="Search the market" spellCheck={false}
+          className={`w-[420px] max-w-full ${INPUT}`} style={{ ...INPUT_STYLE, height: PLUGIN_CTRL_H }} />
+        <select value={sort} onChange={(e) => { setSort(e.target.value as Sort); setPage(0); }} aria-label="Sort the market"
+          className={INPUT} style={{ ...INPUT_STYLE, height: PLUGIN_CTRL_H }}>
+          <option value="recent">Recently added</option>
+          <option value="name">Name</option>
+        </select>
+      </div>
 
-      {/* The types, as a row of their own above the list — the second half of
-          "how do I find one": the box answers "the one that…", these answer
-          "what is there for…". Counted, so a row of them says how big the
-          market is per kind before anything is pressed. */}
+      {/* The types, as a row of their own — the second half of "how do I find
+          one": the box answers "the one that…", these answer "what is there
+          for…". Counted, so the row says how big the market is per kind. */}
       {state.kind === "ok" && kinds.length > 1 && (
-        <SettingRow label="Filter by type"
-          below={<div className="flex items-center gap-1.5 flex-wrap">
-            <TypeChip on={type === null} onClick={() => { setType(null); setPage(0); }}
-              label="All" count={offered.length} />
-            {kinds.map((k) => (
-              <TypeChip key={k.name} on={type === k.name}
-                onClick={() => { setType(type === k.name ? null : k.name); setPage(0); }}
-                label={k.name} count={k.count} />
-            ))}
-          </div>} />
-      )}
-
-      {state.kind === "loading" && (
-        <SettingRow label="Reading the market…" status={<StatusBadge tone="checking">Checking</StatusBadge>} />
-      )}
-
-      {state.kind === "error" && (
-        <SettingRow label="The market did not answer" status={<StatusBadge tone="err">Unreachable</StatusBadge>}
-          hint={state.error} actions={<Button onClick={() => void load()}>Try again</Button>} />
-      )}
-
-      {state.kind === "ok" && shown.length > 0 && (
-        <div className="agx-market-grid">
-          {shown.map((entry) => (
-            <Offer key={entry.id} entry={entry} owner={state.catalogue.owner} onInstalled={onInstalled}
-              mode={offerFor(entry, installed(entry.source.url)) ?? "install"}
-              was={(() => { const h = installed(entry.source.url); return h?.kind === "marketplace" ? h.plugin.ref : null; })()} />
+        <div className="flex items-center gap-1.5 flex-wrap mb-3.5" role="group" aria-label="Filter by type">
+          <TypeChip on={type === null} onClick={() => { setType(null); setPage(0); }} label="All" count={all.length} />
+          {kinds.map((k) => (
+            <TypeChip key={k.name} on={type === k.name}
+              onClick={() => { setType(type === k.name ? null : k.name); setPage(0); }}
+              label={k.name} count={k.count} />
           ))}
         </div>
       )}
 
+      {state.kind === "loading" && <EmptyState><StatusBadge tone="checking">Checking</StatusBadge> Reading the market…</EmptyState>}
+
+      {state.kind === "error" && (
+        <EmptyState>
+          <StatusBadge tone="err">Unreachable</StatusBadge> The market did not answer: {state.error}{" "}
+          <Button onClick={() => void load()}>Try again</Button>
+        </EmptyState>
+      )}
+
+      {state.kind === "ok" && shown.length > 0 && (
+        <div className="agx-plugin-grid">
+          {shown.map((entry) => {
+            const have = installed(entry.source.url);
+            const offer = offerFor(entry, have?.source ?? null);
+            return (
+              <Offer key={entry.id} entry={entry} owner={state.catalogue.owner} onInstalled={onInstalled}
+                mode={offer ?? "installed"}
+                was={have?.source.kind === "marketplace" ? have.source.plugin.ref : null}
+                onSettings={have && (have.contributes?.settings?.length ?? 0) > 0 && onSettings ? () => onSettings(have.name) : undefined} />
+            );
+          })}
+        </div>
+      )}
+
       {state.kind === "ok" && found.length === 0 && (
-        <SettingRow label={q.trim() || type
+        <EmptyState>{q.trim() || type
           ? `Nothing in the market matches ${[q.trim() && `“${q.trim()}”`, type && `“${type}”`].filter(Boolean).join(" and ")}.`
-          : all.length === 0 ? "The market lists nothing yet."
-            : "Everything in the market is installed."} />
+          : "The market lists nothing yet."}</EmptyState>
       )}
 
       {state.kind === "ok" && pages > 1 && (
-        <SettingRow label={<span className="tabular-nums">{here + 1} of {pages}</span>}
-          actions={<>
-            <Button onClick={() => setPage(here - 1)} disabled={here === 0}>Previous</Button>
-            <Button onClick={() => setPage(here + 1)} disabled={here >= pages - 1}>Next</Button>
-          </>} />
+        <div className="flex items-center gap-2 mt-3">
+          <span className="tabular-nums text-[12px] t-dim">{here + 1} of {pages}</span>
+          <Button onClick={() => setPage(here - 1)} disabled={here === 0}>Previous</Button>
+          <Button onClick={() => setPage(here + 1)} disabled={here >= pages - 1}>Next</Button>
+        </div>
       )}
 
       {/* Where the list comes from and what it costs to look at it — the
-          footnote of the group rather than a heading above it, because it is
-          the answer to a question asked once. */}
+          footnote of the section rather than a heading above it. */}
       {state.kind === "ok" && (
-        <SettingRow label="Where this list comes from"
-          hint={<>
-            Read fresh from{" "}
-            <a href={MARKET_PAGE} target="_blank" rel="noopener noreferrer"
-              className="underline underline-offset-2 hover:opacity-80" style={{ color: "var(--text3)" }}>
-              this project's plugin page
-            </a>{" "}on <span className="t-mono">{MARKET_HOST}</span>.
-            Nothing installs until you choose it{have > 0 ? `, and ${have} already installed ${have === 1 ? "is" : "are"} left out of this list` : ""}.
-            {/* What the server kept back has to be said, or a market past the
-                cap quietly becomes a shorter market. */}
-            {state.catalogue.total > all.length && ` That page lists ${state.catalogue.total}; the first ${all.length} were read.`}
-          </>} />
+        <p className="m-0 mt-3 text-[12px] t-dim">
+          Read fresh from{" "}
+          <a href={MARKET_PAGE} target="_blank" rel="noopener noreferrer"
+            className="underline underline-offset-2 hover:opacity-80" style={{ color: "var(--text3)" }}>
+            this project's plugin page
+          </a>{" "}on <span className="t-mono">{MARKET_HOST}</span>.
+          Nothing installs until you choose it, and a plugin you already have is marked, not hidden.
+          {/* What the server kept back has to be said, or a market past the
+              cap quietly becomes a shorter market. */}
+          {state.catalogue.total > all.length && ` That page lists ${state.catalogue.total}; the first ${all.length} were read.`}
+        </p>
       )}
-    </SettingsCard>
+    </section>
   );
 }
 
@@ -293,13 +306,16 @@ function TypeChip({ label, count, on, onClick }: { label: string; count: number;
  * where it will draw, then the sentence it describes itself with, with the
  * one button that does anything at the end of the line.
  */
-export function Offer({ entry, owner, onInstalled, mode, was = null }: {
+export function Offer({ entry, owner, onInstalled, mode, was = null, onSettings }: {
   entry: Entry; owner: string; onInstalled: () => void;
   /** An update installs the listed version over the one on disk; settings
-   *  are kept and a changed declaration asks again, as any install does. */
-  mode: "install" | "update";
+   *  are kept and a changed declaration asks again, as any install does.
+   *  `installed` is a plugin that has this one already: marked, not hidden. */
+  mode: "install" | "update" | "installed";
   /** The commit installed now, for an update. */
   was?: string | null;
+  /** Opens its settings, for an installed plugin that has a page of them. */
+  onSettings?: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
@@ -317,44 +333,64 @@ export function Offer({ entry, owner, onInstalled, mode, was = null }: {
   const draws = (entry.draws ?? []).map((d) => DRAWS_WORD[d] ?? d);
   const repo = externalUrl(entry.source.url);
   const tint = tintOf(entry.id);
+  const ref = entry.source.ref;
+  const commit = ref && COMMIT.test(ref) ? ref : null;
+  const title = entry.title || entry.id;
+  const initial = title.trim().charAt(0).toUpperCase();
+  // A link to the tree at that commit only where the host's URL shape is known.
+  const at = repo && commit && /^https:\/\/github\.com\/[^/]+\/[^/]+$/.test(repo.replace(/\.git$/, "")) ? `${repo.replace(/\.git$/, "")}/tree/${commit}` : repo;
 
   return (
     <>
-    {/* A compact card, the same tokens as an installed one: its initial (a list
-        of things to pick from needs its rows told apart at a glance), what it
-        is, where it draws, and one filled button at the bottom of every card. */}
+    {/* A tile, the same tokens as an installed card: its picture, who and what
+        it is, where it draws, what it is pinned to, and one filled button at
+        the bottom of every card. */}
     <article className="flex flex-col min-w-0 rounded-xl overflow-hidden"
       style={{ background: "var(--surface-card)", border: LINE, boxShadow: "var(--surface-lift)" }}>
-      <PluginPreview src={entry.preview} name={entry.title || entry.id} />
-      <div className="flex flex-col gap-2.5 p-3.5 flex-1 min-w-0">
+      <PluginPreview src={entry.preview} name={title} tint={tint}>
+        <span aria-hidden className="grid place-items-center rounded-2xl text-[28px] font-semibold" style={{
+          width: 72, height: 72, color: tint,
+          background: `color-mix(in srgb, ${tint} 15%, transparent)`,
+          border: `1px solid color-mix(in srgb, ${tint} 32%, transparent)`,
+        }}>{initial}</span>
+      </PluginPreview>
+      <div className="flex flex-col gap-3 p-4 flex-1 min-w-0">
       <div className="flex items-center gap-3 min-w-0">
         <span aria-hidden className="agx-market-tile shrink-0 grid place-items-center rounded-lg text-[15px] font-semibold" style={{
           width: 36, height: 36, color: tint,
           background: `color-mix(in srgb, ${tint} 15%, transparent)`,
           border: `1px solid color-mix(in srgb, ${tint} 32%, transparent)`,
-        }}>{(entry.title || entry.id).trim().charAt(0).toUpperCase()}</span>
+        }}>{initial}</span>
         <div className="min-w-0 flex-1">
-          <div className="flex items-baseline gap-2 min-w-0">
-            <span className="text-[13.5px] font-semibold break-words" style={{ color: "var(--text)" }}>{entry.title || entry.id}</span>
-            {entry.source.ref && (
-              <span className="t-mono text-[10.5px] px-1.5 rounded-md shrink-0 inline-flex items-center" style={{ height: 18, color: "var(--text2)", border: EDGE }}
-                title={entry.source.ref}>{COMMIT.test(entry.source.ref) ? entry.source.ref.slice(0, 7) : entry.source.ref}</span>
-            )}
-          </div>
+          <div className="text-[14px] font-semibold break-words" style={{ color: "var(--text)" }}>{title}</div>
           <div className="text-[11.5px] t-dim break-words">by {entry.publisher || owner}</div>
         </div>
+        {mode === "installed" && <StatusBadge tone="ok">Installed</StatusBadge>}
+        {mode === "update" && <StatusBadge tone="warn">Update available</StatusBadge>}
       </div>
-      <p className="m-0 text-[12px] leading-snug" style={{ color: "var(--text2)", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
+      <p className="m-0 text-[12.5px] leading-snug" style={{ color: "var(--text2)", display: "-webkit-box", WebkitLineClamp: 4, WebkitBoxOrient: "vertical", overflow: "hidden" }}
         title={entry.description}>{entry.description}</p>
       {/* Plain tags, not seven chips on two rows: every one of those chips
           was the same weight as the plugin's name. */}
       {draws.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 mt-auto">
+        <div className="flex flex-wrap gap-1.5">
           {draws.map((d) => (
             <span key={d} className="text-[10.5px] px-1.5 rounded-md inline-flex items-center whitespace-nowrap" style={{ height: 20, color: "var(--text2)", border: EDGE }}>{d}</span>
           ))}
         </div>
       )}
+      {(ref || entry.sha256) && (
+        <div className="flex items-center gap-2 px-3 rounded-lg min-w-0 text-[11px]" style={{ minHeight: 30, background: "var(--surface-inset)", border: EDGE, color: "var(--text2)" }}>
+          {ref && <span className="t-mono shrink-0" style={{ color: "var(--text)" }} title={ref}>{commit ? commit.slice(0, 7) : ref}</span>}
+          {entry.sha256 && <span className="t-mono truncate" title={entry.sha256}>sha256 {entry.sha256.slice(0, 12)}…</span>}
+        </div>
+      )}
+      <div className="flex items-center gap-x-3 gap-y-1 flex-wrap text-[11.5px] t-dim">
+        {at && <a href={at} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:opacity-80 inline-flex items-center gap-1" style={{ color: "var(--primary-ink)" }}>
+          {commit ? "Source at this commit" : "Source"} <ExternalIcon size={ICON.xs} />
+        </a>}
+        {entry.added && <span>listed {entry.added}</span>}
+      </div>
       {mode === "update" && (
         <p className="m-0 text-[11.5px] leading-snug t-dim">
           Installed at <span className="t-mono">{was ? was.slice(0, 7) : "its default branch"}</span>; the market lists{" "}
@@ -365,14 +401,17 @@ export function Offer({ entry, owner, onInstalled, mode, was = null }: {
       {error && <p className="m-0 text-[11.5px]" style={{ color: "var(--error-ink)" }}>{error}</p>}
       <div className="flex items-center gap-2 mt-auto pt-0.5">
         <Button style={{ height: PLUGIN_CTRL_H }} onClick={() => setOpen(true)}>Read the listing</Button>
-        <Button tone="primary" style={{ height: PLUGIN_CTRL_H }} className="ml-auto" pending={busy} onClick={install}>
-          {busy ? (mode === "update" ? "Updating…" : "Installing…") : (mode === "update" ? "Update" : "Install")}
-        </Button>
+        {mode !== "installed" && (
+          <Button tone="primary" style={{ height: PLUGIN_CTRL_H }} className="ml-auto" pending={busy} onClick={install}>
+            {busy ? (mode === "update" ? "Updating…" : "Installing…") : (mode === "update" ? "Update" : "Install")}
+          </Button>
+        )}
+        {onSettings && <Button style={{ height: PLUGIN_CTRL_H }} className={mode === "installed" ? "ml-auto" : ""} onClick={onSettings}>Settings</Button>}
       </div>
       </div>
     </article>
     <Details entry={entry} owner={owner} tint={tint} repo={repo} open={open} busy={busy}
-      onClose={() => setOpen(false)} onInstall={install} />
+      onClose={() => setOpen(false)} onInstall={mode === "installed" ? null : install} />
     </>
   );
 }
@@ -392,7 +431,9 @@ export function Offer({ entry, owner, onInstalled, mode, was = null }: {
  */
 function Details({ entry, owner, tint, repo, open, busy, onClose, onInstall }: {
   entry: Entry; owner: string; tint: string; repo: string | undefined;
-  open: boolean; busy: boolean; onClose: () => void; onInstall: () => void;
+  open: boolean; busy: boolean; onClose: () => void;
+  /** Null for a plugin that is installed already: reading it is all the dialog offers. */
+  onInstall: (() => void) | null;
 }) {
   // Captured, so Escape closes this and not the settings sheet underneath —
   // which listens on the same window in the bubble phase.
@@ -471,9 +512,9 @@ function Details({ entry, owner, tint, repo, open, busy, onClose, onInstall }: {
                 Repository <ExternalIcon size={ICON.xs} />
               </a>
             )}
-            <Button tone="primary" style={{ height: PLUGIN_CTRL_H }} className="ml-auto" pending={busy} onClick={onInstall}>
+            {onInstall && <Button tone="primary" style={{ height: PLUGIN_CTRL_H }} className="ml-auto" pending={busy} onClick={onInstall}>
               {busy ? "Installing…" : "Install"}
-            </Button>
+            </Button>}
           </div>
         </div>
       </div>

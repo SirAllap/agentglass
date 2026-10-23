@@ -28,13 +28,30 @@ describe("which picture an installed card gets", () => {
 
 describe("the picture is drawn where the listing is drawn", () => {
   test("both cards render it from the entry's own preview", () => {
-    expect(src("PluginsPane.tsx")).toMatch(/<PluginPreview src=\{preview\}/);
-    expect(src("PluginsPane.tsx")).toContain("preview={marketEntry(p, catalogue)?.preview}");
-    expect(src("plugins/Market.tsx")).toMatch(/<PluginPreview src=\{entry\.preview\}/);
+        expect(src("PluginsPane.tsx")).toContain("preview={marketEntry(p, catalogue)?.preview}");
+    expect(src("plugins/Market.tsx")).toContain("<PluginPreview src={entry.preview}");
   });
-  test("a missing or broken picture draws nothing, and the host is not told who asked", () => {
+  test("a missing or blocked picture is a tile with the mark on it, never a broken image, and the host is not told who asked", () => {
     const p = src("plugins/PluginPreview.tsx");
-    expect(p).toMatch(/if \(!src \|\| broken === src\) return null/);
+    expect(p).toContain("const shown = src && broken !== src");
+    expect(p).toContain("onError={() => setBroken(src)}");
+    expect(p).toMatch(/: children\}/);
     expect(p).toContain('referrerPolicy="no-referrer"');
+  });
+  test("an installed plugin gets the mark on its tile, a listing gets its initial", () => {
+    expect(src("PluginsPane.tsx")).toMatch(/<PluginPreview src=\{preview\} name=\{plugin\.name\} tint=\{tint\}>\s*<PluginMark/);
+    expect(src("plugins/Market.tsx")).toMatch(/<PluginPreview src=\{entry\.preview\} name=\{title\} tint=\{tint\}>/);
+  });
+});
+
+describe("a card waiting on a decision", () => {
+  test("keeps its picture on top, with the strip under it and an amber top edge", () => {
+    const p = src("PluginsPane.tsx");
+    expect(p.indexOf("<PluginPreview src={preview}")).toBeLessThan(p.indexOf("<Band band={band}>"));
+    expect(p).toContain('band === "approval" ? { borderTopColor: "var(--warning)", borderTopWidth: 2 }');
+    expect(p).toContain('band === "update" ? "var(--info)" : "var(--warning)"');
+  });
+  test("the page asks for the same list the nav's count comes from", () => {
+    expect(src("SettingsModal.tsx")).toContain("x.approvedFingerprint !== x.fingerprint");
   });
 });

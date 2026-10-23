@@ -285,3 +285,16 @@ describe("the components wire these decisions and nothing else", () => {
     expect(modal).toMatch(/const landOnResult = useCallback\(\(r: \{ pane: string; row: string \}\) => \{\s*setPane\(r\.pane as Pane\);\s*setQ\(""\);\s*if \(r\.row\) setFlashRow\(r\.row\);/);
   });
 });
+
+describe("the Plugins page's mark", () => {
+  test("waiting on approval beats running, and both come from real counts", () => {
+    expect(navMarks(facts({ pluginsRunning: 2, pluginsNeed: 1 })).plugins).toMatchObject({ state: "needs", count: 1 });
+    expect(navMarks(facts({ pluginsRunning: 2, pluginsNeed: 0 })).plugins).toMatchObject({ state: "on", count: 2 });
+    expect(navMarks(facts({ pluginsRunning: 0, pluginsNeed: 0 })).plugins).toBeUndefined();
+    expect(navMarks(NO_FACTS).plugins).toBeUndefined();
+  });
+  test("the header says how many run", () => {
+    expect(headerChips("plugins", { state: "on", count: 2 })).toEqual([{ tone: "ok", text: "2 running" }]);
+    expect(headerChips("plugins", { state: "needs", count: 1 })).toEqual([{ tone: "warn", text: "1 needs you" }]);
+  });
+});

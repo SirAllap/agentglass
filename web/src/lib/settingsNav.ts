@@ -92,11 +92,15 @@ export interface NavFacts {
   lanternWatching: boolean | null;
   updateAvailable: boolean | null;
   notificationsOn: boolean | null;
+  /** Plugins running now, and plugins waiting on a person's approval. */
+  pluginsRunning: number | null;
+  pluginsNeed: number | null;
 }
 
 export const NO_FACTS: NavFacts = {
   hooksWired: null, tmuxOk: null, connectionsNeed: null, remoteLive: null, logNeed: null,
   clickupConnected: null, jiraConnected: null, lanternWatching: null, updateAvailable: null, notificationsOn: null,
+  pluginsRunning: null, pluginsNeed: null,
 };
 
 const onOff = (v: boolean | null): PageMark | null => (v === null ? null : { state: v ? "on" : "off" });
@@ -122,6 +126,8 @@ export function navMarks(f: NavFacts): Record<string, PageMark> {
   set("jira", onOff(f.jiraConnected));
   set("lantern", onOff(f.lanternWatching));
   set("notifications", onOff(f.notificationsOn));
+  if (f.pluginsNeed) set("plugins", { state: "needs", count: f.pluginsNeed, title: `${f.pluginsNeed} ${f.pluginsNeed === 1 ? "plugin waits" : "plugins wait"} for your approval` });
+  else if (f.pluginsRunning) set("plugins", { state: "on", count: f.pluginsRunning, title: `${f.pluginsRunning} running` });
   if (f.logNeed !== null && f.logNeed > 0) set("about", { state: "needs", count: f.logNeed, title: "The server log has a crash loop or a spike worth a look" });
   else if (f.updateAvailable) set("about", { state: "update", title: "An update is ready" });
   return out;
@@ -173,6 +179,7 @@ const STATE_WORDS: Record<string, { on?: string; off?: string }> = {
  *  can never say something the nav does not. */
 export function headerChips(id: string, mark: PageMark): HeaderChip[] {
   const w = STATE_WORDS[id] ?? {};
+  if (id === "plugins" && mark.state === "on") return [{ tone: "ok", text: `${mark.count} running` }];
   if (mark.state === "on" && w.on) return [{ tone: "ok", text: w.on }];
   if (mark.state === "off" && w.off) return [{ tone: "off", text: w.off }];
   if (mark.state === "needs") {

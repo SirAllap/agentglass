@@ -3793,8 +3793,9 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
   /** Facts only the nav's marks and the page header's chips read. `null` is a
    *  read that has not landed or that failed: it draws no mark rather than a
    *  guess. Read with the batch above, once per open. */
-  const [facts, setFacts] = useState<Pick<NavFacts, "hooksWired" | "tmuxOk" | "jiraConnected" | "lanternWatching" | "updateAvailable" | "notificationsOn">>({
+  const [facts, setFacts] = useState<Pick<NavFacts, "hooksWired" | "tmuxOk" | "jiraConnected" | "lanternWatching" | "updateAvailable" | "notificationsOn" | "pluginsRunning" | "pluginsNeed">>({
     hooksWired: null, tmuxOk: null, jiraConnected: null, lanternWatching: null, updateAvailable: null, notificationsOn: null,
+    pluginsRunning: null, pluginsNeed: null,
   });
   useEffect(() => {
     if (!open) return;
@@ -3809,7 +3810,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
       api.lanternSettings().then((r) => (r.ok && typeof r.watch === "boolean" ? r.watch : null)).catch(() => null),
       api.updateStatus().then((r) => r.available === true).catch(() => null),
       api.notifyPrefs().then((r) => (r.ok ? !r.prefs.none : null)).catch(() => null),
-    ]).then(([deps, provs, remote, hookInstalled, digest, jira, lanternWatching, updateAvailable, notificationsOn]) => {
+      api.plugins().then((r) => r.plugins).catch(() => null),
+    ]).then(([deps, provs, remote, hookInstalled, digest, jira, lanternWatching, updateAvailable, notificationsOn, plugs]) => {
       if (!live) return;
       setBadges({
         connections: (deps ?? []).filter((d) => d.status !== "ok" && d.status !== "unsupported").length
@@ -3826,6 +3828,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
         hooksWired: hookInstalled,
         tmuxOk: deps === null ? null : deps.some((d) => d.id === "tmux" && d.status === "ok"),
         jiraConnected: jira, lanternWatching, updateAvailable, notificationsOn,
+        pluginsRunning: plugs === null ? null : plugs.filter((x) => x.running).length,
+        pluginsNeed: plugs === null ? null : plugs.filter((x) => x.approvedFingerprint !== x.fingerprint).length,
       });
     });
     return () => { live = false; };
