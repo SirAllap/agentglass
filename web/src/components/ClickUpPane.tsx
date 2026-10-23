@@ -258,12 +258,10 @@ export function ClickUpPane() {
   if (!prefs) {
     if (prefsFailed && connected) {
       return (
-        <SettingsCard title="ClickUp" icon={<PlugIcon size={ICON.sm} />} tone="error" status={<StatusBadge tone="err">Not reachable</StatusBadge>}>
-          <ProblemNote title="Could not read your ClickUp settings"
-            action={<Button onClick={() => { setPrefsFailed(false); void clickupPrefs().then((p) => { if (p) setPrefs(p); else setPrefsFailed(true); }); }}>Try again</Button>}>
-            The local server did not answer, so nothing here is known. Nothing was changed.
-          </ProblemNote>
-        </SettingsCard>
+        <ProblemNote title="Could not read your ClickUp settings"
+          action={<Button onClick={() => { setPrefsFailed(false); void clickupPrefs().then((p) => { if (p) setPrefs(p); else setPrefsFailed(true); }); }}>Try again</Button>}>
+          The local server did not answer, so nothing here is known. Nothing was changed.
+        </ProblemNote>
       );
     }
     return <div className="py-6 text-[11px]" style={{ color: "var(--text3)" }}>Reading your settings…</div>;
