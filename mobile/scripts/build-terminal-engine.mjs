@@ -21,11 +21,11 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { createRequire } from "node:module";
 import * as esbuild from "esbuild";
+import { ENGINE_ESBUILD, TARGET } from "./engine-esbuild.mjs";
 
 const require = createRequire(import.meta.url);
 const root = path.resolve(import.meta.dirname, "..");
 const out = path.join(root, "src", "terminal", "engine.generated.ts");
-const TARGET = "chrome74";
 const PACKAGES = ["@xterm/xterm", "@xterm/addon-fit", "@xterm/addon-unicode11", "@xterm/addon-webgl"];
 
 const version = async (name) => {
@@ -77,14 +77,7 @@ async function buildJs() {
       resolveDir: root,
       sourcefile: "terminal-engine-entry.js",
     },
-    bundle: true,
-    format: "iife",
-    minify: true,
-    platform: "browser",
-    target: TARGET,
-    legalComments: "none",
-    write: false,
-    logLevel: "silent",
+    ...ENGINE_ESBUILD,
   });
   return built.outputFiles[0].text;
 }
