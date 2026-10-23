@@ -2376,15 +2376,19 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
      height cap has to be the scroller's visible height. A cap from the window
      (100vh minus a guess) is taller than what is left under the header, and the
      bottom of the sidebar then rides along with the body instead of scrolling. */
-  useLayoutEffect(() => {
-    const el = tabBodyRef.current;
+  /* A callback ref, not an effect: the body only exists once the PR has loaded, and an
+     effect keyed on the tab ran before it did and never looked again. */
+  const bodyRO = useRef<ResizeObserver | null>(null);
+  const setBodyEl = useCallback((el: HTMLDivElement | null) => {
+    (tabBodyRef as { current: HTMLDivElement | null }).current = el;
+    bodyRO.current?.disconnect();
+    bodyRO.current = null;
     if (!el || typeof ResizeObserver === "undefined") return;
     const set = () => el.style.setProperty("--pr-body-h", `${el.clientHeight}px`);
     set();
-    const ro = new ResizeObserver(set);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [tab, selected]);
+    bodyRO.current = new ResizeObserver(set);
+    bodyRO.current.observe(el);
+  }, []);
   /* Before paint, or the old offset is on screen for a frame and the jump is
      the thing you see instead of the thing you asked for. */
   useLayoutEffect(() => {
@@ -5513,7 +5517,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                   columns scroll inside it, which is what the mockup means by
                   putting `overflow:auto` on each of the three. */}
               <CommitJumpCtx.Provider value={jumpToCommit}>
-              <div ref={tabBodyRef} id="pr-tab-body" role="tabpanel" className={`flex-1 min-h-0 agx-scroll ${tab === "files" ? "overflow-hidden p-0" : "overflow-y-auto p-3"}`}
+              <div ref={setBodyEl} id="pr-tab-body" role="tabpanel" className={`flex-1 min-h-0 agx-scroll ${tab === "files" ? "overflow-hidden p-0" : "overflow-y-auto p-3"}`}
                 onScroll={(e) => {
                   /*
                    * Files is a frame, not a page, and frames do not scroll.
