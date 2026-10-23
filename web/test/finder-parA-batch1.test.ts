@@ -17,7 +17,8 @@ describe("row 81: the filter placeholder counts the folder", () => {
     expect(filterPlaceholder(0)).toBe("Filter 0 items…");
   });
   test("the column uses it, counted on the whole folder so it does not change while typing", () => {
-    expect(column).toContain("filterPlaceholder(state?.total ?? display.rows.length)");
+    expect(column).toContain("total={state?.total ?? display.rows.length}");
+    expect(column).toContain("placeholder={filterPlaceholder(total)}");
     expect(column).not.toContain("Filter this column…");
   });
 });

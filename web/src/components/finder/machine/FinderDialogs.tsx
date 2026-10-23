@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../../../lib/api.ts";
 import { HIT, ICON } from "../../../lib/iconSize.ts";
 import { FileTypeIcon, StrataIcon } from "./StrataIcon.tsx";
-import { archiveName, compressSub, destProblem, trashDeleteWords, formatTakesPassword, canExec, kindWords, toggleExec, modeBits, modeSymbolic, filterApps, nameProblem, shortPath, toggleMode, type Who } from "../../../lib/finderOps.ts";
+import { archiveName, compressSub, destProblem, foldersOf, trashDeleteWords, formatTakesPassword, canExec, kindWords, toggleExec, modeBits, modeSymbolic, filterApps, nameProblem, shortPath, toggleMode, type Who } from "../../../lib/finderOps.ts";
 import type { FsProps, FsTrashRow, OpenWithApp, OpenWithList } from "../../../../../shared/types.ts";
 import { EDGE, INPUT, INPUT_STYLE, LINE } from "../../workspace/Chrome.tsx";
 import { DialogHead, Sheet } from "./FinderOpsUI.tsx";
@@ -114,11 +114,12 @@ export function PropsDialog({ path, home, pinned, onChmod, onOpen, onRename, onC
 /** Move to… / Copy to…: walk the folders and pick one. Only folders are listed; the server judges the rest. */
 export function FolderPicker({ op, paths, start, home, onPick, onClose }: { op: "move" | "copy"; paths: readonly string[]; start: string; home: string; onPick: (dest: string) => void; onClose: () => void }) {
   const [at, setAt] = useState(start);
-  const [dirs, setDirs] = useState<string[] | null>(null);
+  const [loaded, setLoaded] = useState<{ at: string; names: string[] } | null>(null);
+  const dirs = foldersOf(at, loaded);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
-    let live = true; setDirs(null); setErr(null);
-    void api.browseList(at, 0, false, undefined, 500).then((r) => { if (!live) return; if (r.ok) setDirs(r.entries.filter((e) => e.kind === "dir" && !e.locked).map((e) => e.name).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true }))); else setErr(r.error ?? "Could not open it"); });
+    let live = true; setErr(null);
+    void api.browseList(at, 0, false, undefined, 500).then((r) => { if (!live) return; if (r.ok) setLoaded({ at, names: r.entries.filter((e) => e.kind === "dir" && !e.locked).map((e) => e.name).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true })) }); else setErr(r.error ?? "Could not open it"); });
     return () => { live = false; };
   }, [at]);
   const join = (n: string) => `${at.replace(/\/$/, "")}/${n}`;

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { pinnedOnly, placesFor } from "../src/components/finder/machine/Sidebar.tsx";
+import { pinLabel, pinnedOnly, placesFor } from "../src/components/finder/machine/Sidebar.tsx";
 import type { DiskPlace, PinnedPlace } from "../../shared/types.ts";
 
 // The shape of a real GTK bookmarks file, as the server hands it over: XDG folders, one project folder, one remote.
@@ -36,4 +36,11 @@ test("every pinned row wears the plain folder icon, the remote too", () => {
 test("the server offers Music, Pictures and Videos as places when they exist", () => {
   const line = disk.slice(disk.indexOf("const HOME_FOLDERS"), disk.indexOf("];", disk.indexOf("const HOME_FOLDERS")));
   for (const n of ["Music", "Pictures", "Videos"]) expect(line).toContain(`"${n}"`);
+});
+
+describe("a pinned row's label", () => {
+  test("is the bookmark's own label, the folder name only without one", () => {
+    expect(pinLabel({ uri: "file:///h/pin", label: "Pinned Local", path: "/h/pin" })).toBe("Pinned Local");
+    expect(pinLabel({ uri: "file:///h/pin", label: " ", path: "/h/pin" })).toBe("pin");
+  });
 });

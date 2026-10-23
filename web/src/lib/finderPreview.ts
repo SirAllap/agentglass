@@ -95,6 +95,11 @@ export const nextReadWidth = (w: ReadWidth): ReadWidth => READ_WIDTHS[(READ_WIDT
 export const readMaxWidth = (w: ReadWidth): string => (w === "full" ? "none" : `${w}ch`);
 export const readWidthLabel = (w: ReadWidth): string => (w === "full" ? "Full" : String(w));
 
+/** How the header's preview toggle looks: always at full strength (a dimmed one was the only way back and could not be seen), lit when the panel is open and outlined when it is closed. */
+export const toggleLook = (open: boolean): { opacity: number; background?: string; border: string } => open
+  ? { opacity: 1, background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid transparent" }
+  : { opacity: 1, border: "1px solid color-mix(in srgb, var(--text) 28%, transparent)" };
+
 /** A GIF animates by itself in an <img>; "Autoplay media previews" off has to hold it on its first frame. */
 export const isGif = (name: string): boolean => /\.gif$/i.test(name) && name.length > 4;
 
@@ -103,3 +108,30 @@ export function defaultTab(tabs: readonly PreviewTab[], renderDocs: boolean): Pr
   if (tabs.includes("Rendered") && tabs.includes("Source")) return renderDocs ? "Rendered" : "Source";
   return tabs[0] ?? "Reading";
 }
+
+const NAME_WORDS = new Set("secret secrets token tokens password passwords passwd credential credentials apikey apikeys htpasswd netrc pgpass pypirc keystore".split(" "));
+const NAME_EXT = new Set(["pem", "key", "p12", "pfx", "jks", "keystore", "kdbx", "gpg"]);
+const NAME_PAIRS = new Set("api key,private key,access key,secret key,auth key,ssh key".split(","));
+const NAME_EXACT = new Set(["id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", ".envrc", ".git-credentials", ".dockercfg"]);
+
+/**
+ * Whether a file's NAME says it may hold a secret, so the preview asks before it reads the content: the
+ * name is the only thing known before the file is opened, and a preview that has to be asked is a
+ * preview that never put a key on a screen somebody is sharing. A name, not a scan: `tokenizer.py` is
+ * not `tokens.json` (words are whole words between `.`, `_`, `-` and spaces), a public key (`.pub`) and
+ * `.env.example` carry nothing. It errs towards asking: Show is one click.
+ */
+export function looksSecret(name: string): boolean {
+  const n = name.toLowerCase();
+  if (NAME_EXACT.has(n)) return true;
+  if (n === ".env" || (n.startsWith(".env.") && !/\.(example|sample|template|dist)$/.test(n))) return true;
+  const dot = n.lastIndexOf(".");
+  if (dot > 0 && NAME_EXT.has(n.slice(dot + 1))) return true;
+  const words = n.replace(/^\.+/, "").split(/[._\-\s]+/).filter(Boolean);
+  if (words.some((w) => NAME_WORDS.has(w))) return true;
+  for (let i = 0; i + 1 < words.length; i++) if (NAME_PAIRS.has(`${words[i]} ${words[i + 1]}`)) return true;
+  return false;
+}
+
+/** Whether a Markdown text has a raw HTML tag in it, which the rendered view shows as inert text: the note says so only then. A tag is `<name ...>` or `</name>`; `a < b` and an autolink `<https://x>` are not. */
+export const hasRawHtml = (text: string | undefined): boolean => !!text && /<\/?[a-zA-Z][a-zA-Z0-9-]*(\s[^<>\n]*)?\/?>/.test(text);

@@ -11,7 +11,7 @@ import { CloseIcon } from "../CloseButton.tsx";
 import { useCloseWithOwner } from "../../lib/layerOwner.ts";
 import { dayToMs, msToDay, tagChoices } from "../../lib/cardEdits.ts";
 import { Flag, prioLook } from "../../lib/priority.tsx";
-import { luminance, parseColor } from "../../lib/contrast.ts";
+import { schemeOfTheme } from "../../lib/schemeOfTheme.ts";
 import { ICON } from "../../lib/iconSize.ts";
 import { CTRL_H, EDGE } from "../workspace/Chrome.tsx";
 import { Select } from "../Select.tsx";
@@ -127,17 +127,6 @@ export function EditText({ value, empty, title, width, busy, parse, onSave, wrap
     </span>
   );
 }
-
-/**
- * The scheme the browser draws a native control in, from the page's own background. The date box was always drawn
- * "dark", which in a light theme left its calendar button white on white: the one way to open the picker, invisible.
- */
-const schemeOfTheme = (): "dark" | "light" => {
-  try {
-    const c = parseColor(getComputedStyle(document.documentElement).getPropertyValue("--bg").trim());
-    return c && luminance(c) > 0.4 ? "light" : "dark";
-  } catch { return "dark"; }
-};
 
 /** A date on the card, in the reader's own day. The button beside it is how a
  *  date comes OFF, which the picker itself has no way to say. */

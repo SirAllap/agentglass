@@ -257,3 +257,45 @@ describe("sort by type and folders first (Strata's sort menu)", () => {
     expect(sortRows(rows, "name", "asc").map((r) => r.name)).toEqual(["adir", "zdir", "a.txt", "b.py", "c.md"]);
   });
 });
+
+describe("scrollToReveal and a reopened scroll", () => {
+  test("shows the item with the least movement and leaves a visible one alone", async () => {
+    const { scrollToReveal } = await import("../src/lib/finderMiller.ts");
+    expect(scrollToReveal(2, 20, 0, 100)).toBe(0);
+    expect(scrollToReveal(10, 20, 0, 100)).toBe(120);
+    expect(scrollToReveal(1, 20, 200, 100)).toBe(20);
+  });
+  test("the list skips its first reveal when a saved scroll was restored", async () => {
+    const t = await Bun.file(new URL("../src/components/finder/machine/VirtualList.tsx", import.meta.url)).text();
+    expect(t).toMatch(/kept\.current\) \{ kept\.current = false; return; \}/);
+  });
+});
+
+describe("a link to a dotted file", () => {
+  test("selectsHidden is true for a dotted name only", async () => {
+    const { selectsHidden } = await import("../src/lib/finderMiller.ts");
+    expect(selectsHidden([".profile"])).toBe(true);
+    expect(selectsHidden([null, "notes.md"])).toBe(false);
+    expect(selectsHidden([".."])).toBe(false);
+  });
+  test("the finder lists dotted entries for that visit without storing the preference", async () => {
+    const t = await Bun.file(new URL("../src/components/finder/machine/MachineFinder.tsx", import.meta.url)).text();
+    expect(t).toContain("if (!saved.hidden && selectsHidden(sel)) setVisitHidden(true);");
+    expect(t).toContain('if ("hidden" in p) setVisitHidden(false);');
+  });
+});
+
+describe("the footer while a filter is typed", () => {
+  test("counts what the filter shows, and the total without one", async () => {
+    const { footerTotal } = await import("../src/lib/finderMiller.ts");
+    expect(footerTotal(300, 10, "rep")).toBe(10);
+    expect(footerTotal(300, 10, "  ")).toBe(300);
+    expect(footerTotal(null, 0, "")).toBeNull();
+  });
+  test("the finder uses it and the sort menu is wide enough for its longest label", async () => {
+    const f = await Bun.file(new URL("../src/components/finder/machine/MachineFinder.tsx", import.meta.url)).text();
+    const c = await Bun.file(new URL("../src/components/finder/machine/Column.tsx", import.meta.url)).text();
+    expect(f).toContain("footerTotal(n.total");
+    expect(c).toContain('width={280} label="Sort"');
+  });
+});

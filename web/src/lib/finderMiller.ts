@@ -152,6 +152,16 @@ export function crumbs(path: string, home: string): Crumb[] {
 }
 
 /**
+ * Strata's path-bar menu, the right button anywhere on the bar (ui/browser/location.rs
+ * hierarchy popover): the current folder first, then each one above it up to ~ or /,
+ * home drawn as a house and the root as a disk. Which crumb was under the pointer
+ * does not matter; the list is always the whole path.
+ */
+export function hierarchy(parts: readonly Crumb[]): (Crumb & { icon: "house" | "hard-drive" | "folder"; current: boolean })[] {
+  return parts.map((c, i) => ({ ...c, current: i === parts.length - 1, icon: (i === 0 && c.label === "~" ? "house" : c.path === "/" ? "hard-drive" : "folder") as "house" | "hard-drive" | "folder" })).reverse();
+}
+
+/**
  * What a typed path offers: the folder it names and which of that folder's
  * subfolders start with what is left after the last slash. `dir` is null for a
  * spelling that is not absolute, which has no folder to ask — the server has no
@@ -302,8 +312,25 @@ export function displayRows(all: readonly Row[], o: { needle: string; hidden: bo
   return { items, rows, itemOfRow };
 }
 
+/**
+ * Recent's own sort (Strata: the sort menu of "recent:///" starts with "Recency", newest first, has no
+ * "Folders first", and each visit starts on Recency again). Name, Size, Modified and Type work as anywhere.
+ */
+export type RecentSort = { key: SortKey | "recency"; dir: SortDir };
+export const RECENT_SORT: RecentSort = { key: "recency", dir: "desc" };
+
+/** The same key again reverses; another key starts ascending, except Recency, which starts newest first. */
+export const nextRecentSort = (cur: RecentSort, key: SortKey | "recency"): RecentSort =>
+  cur.key === key ? { key, dir: cur.dir === "asc" ? "desc" : "asc" } : { key, dir: key === "recency" ? "desc" : "asc" };
+
+/** What Recent draws: the server's order is last used, newest first; reversing it is Recency ascending. */
+export function recentDisplay(all: readonly Row[], o: { needle: string; hidden: boolean; group: boolean }, sort: RecentSort): Display {
+  if (sort.key !== "recency") return displayRows(all, { ...o, sortKey: sort.key, sortDir: sort.dir, foldersFirst: false });
+  return displayRows(sort.dir === "desc" ? all : [...all].reverse(), { ...o, sortKey: "name", sortDir: "asc", unsorted: true });
+}
+
 /** Where an arrow key puts the selection in a grid of tiles `perRow` wide. */
-export function gridStep(index: number, count: number, perRow: number, key: string): number {
+export function gridStep(index: number, count: number, perRow: number, key: string, pageLines = 1): number {
   if (count <= 0) return 0;
   const to = (n: number) => Math.min(count - 1, Math.max(0, n));
   switch (key) {
@@ -313,6 +340,9 @@ export function gridStep(index: number, count: number, perRow: number, key: stri
     case "ArrowDown": return to(index + Math.max(1, perRow));
     case "Home": return 0;
     case "End": return count - 1;
+    // A page is the lines on screen, a whole line at a time (Strata's page_selection).
+    case "PageUp": return to(index - Math.max(1, perRow) * Math.max(1, pageLines));
+    case "PageDown": return to(index + Math.max(1, perRow) * Math.max(1, pageLines));
     default: return index;
   }
 }
@@ -383,6 +413,9 @@ export function formatSize(bytes: number): string {
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
+/** The count the footer shows for a folder: what the filter lets through while one is typed, the folder's own total otherwise. */
+export const footerTotal = (total: number | null, shown: number, filter: string): number | null => (filter.trim() ? shown : total);
+
 /** The right-hand side of the footer: what the column holds, or what is selected. */
 export function footerCount(total: number | null, sel: Pick<Row, "kind" | "bytes" | "items"> | null): string {
   if (!sel) return total === null ? "" : plural(total, "item");
@@ -409,6 +442,23 @@ export function kindWord(r: Pick<Row, "name" | "kind" | "items">): string {
 
 /** A tile: the picture, a line or two of name, and room round them. Never smaller than the icon tile it replaced. */
 export const tileSize = (thumb: number): { w: number; h: number } => ({ w: Math.max(112, thumb + 32), h: Math.max(92, thumb + 44) });
+
+/**
+ * The first item of the tile row at the top of an Icons view. Stored in items, not pixels: a tile row holds a different
+ * number of tiles when the window is another width, and a pixel offset would land on another row. The part of the row
+ * scrolled past rides as the decimals (0.86 = 86 % of a row), because rounding to the row put a reopened list up to
+ * 107 px above where it was left (measured: 3333 came back as 3240).
+ */
+export const iconsFirstItem = (top: number, tileH: number, per: number): number => {
+  const rows = Math.max(0, top) / tileH, row = Math.floor(rows);
+  return row * per + Math.min(0.999, Math.round((rows - row) * 1000) / 1000);
+};
+
+/** The scrollTop that puts the tile row holding `item` at the top, and the decimals of it as far into that row as it was. */
+export const iconsTopOf = (item: number, tileH: number, per: number): number => {
+  const whole = Math.floor(Math.max(0, item));
+  return Math.floor(whole / per) * tileH + Math.round((Math.max(0, item) - whole) * tileH);
+};
 
 export const tilesPerRow = (width: number, thumb: number): number => Math.max(1, Math.floor((width - 16) / tileSize(thumb).w));
 
@@ -482,4 +532,27 @@ export function strataWhen(at: number, now = Date.now()): string {
   if (days <= 6) return WEEKDAYS[d.getDay()]!;
   if (days <= 30) return `${Math.floor(days / 7)}w ago`;
   return absolute(d.getFullYear() === n.getFullYear());
+}
+
+/** The scrollTop that shows item `index` with the least movement: unchanged when it is already visible. */
+export const scrollToReveal = (index: number, rowH: number, scrollTop: number, height: number): number => {
+  const y = index * rowH;
+  return y < scrollTop ? y : y + rowH > scrollTop + height ? y + rowH - height : scrollTop;
+};
+
+/** A selection that names a dotted entry needs the dotted entries listed, or the row it points at is not there to show. */
+export const selectsHidden = (sel: readonly (string | null)[]): boolean => sel.some((n) => !!n && n.startsWith(".") && n !== "." && n !== "..");
+
+/** Strata cuts one crumb's label in its middle past 32 characters ("ellipsize middle", max width 32 chars) and never shrinks a crumb to fit: a long path scrolls instead. */
+export const CRUMB_MAX_CHARS = 32;
+export function crumbLabel(label: string, max = CRUMB_MAX_CHARS): string {
+  const chars = [...label];
+  if (chars.length <= max) return label;
+  const keep = max - 1, head = Math.ceil(keep / 2), tail = keep - head;
+  return `${chars.slice(0, head).join("")}…${chars.slice(chars.length - tail).join("")}`;
+}
+
+/** Which edges of the scrolling path bar fade: the side that has more path past it. */
+export function crumbFades(scrollLeft: number, clientWidth: number, scrollWidth: number): { left: boolean; right: boolean } {
+  return { left: scrollLeft > 1, right: scrollLeft + clientWidth < scrollWidth - 1 };
 }

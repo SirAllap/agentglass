@@ -11,10 +11,10 @@ describe("the menu of a sidebar row, as Strata builds it", () => {
     expect(labels({ kind: "place", id: "Documents", path: "/home/ann/Documents" })).toEqual(["Unpin", "Customize…", "Properties"]);
     expect(labels({ kind: "pin", uri: "file:///home/ann/orbit", path: "/home/ann/orbit" })).toEqual(["Unpin", "Customize…", "Properties"]);
   });
-  test("Trash and Network only unpin, Recent has no menu", () => {
+  test("Trash, Network and Recent only unpin (a right-click on Recent opened nothing)", () => {
     expect(labels({ kind: "place", id: "trash" })).toEqual(["Unpin"]);
     expect(labels({ kind: "place", id: "network" })).toEqual(["Unpin"]);
-    expect(labels({ kind: "place", id: "recent", path: "recent://" })).toEqual([]);
+    expect(labels({ kind: "place", id: "recent", path: "recent://" })).toEqual(["Unpin"]);
   });
   test("a pinned remote only unpins", () => {
     expect(labels({ kind: "pin", uri: "sftp://ann@10.0.0.7/home/ann" })).toEqual(["Unpin"]);

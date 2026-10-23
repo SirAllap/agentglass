@@ -24,8 +24,7 @@ const PROPS: SideItem = { act: "properties", label: "Properties", icon: "info" }
 
 export function sideMenu(t: SideTarget): SideItem[] {
   if (t.kind === "place") {
-    if (t.id === "recent") return [];
-    if (t.id === "trash" || t.id === "network" || !t.path) return [UNPIN];
+    if (t.id === "trash" || t.id === "network" || t.id === "recent" || !t.path) return [UNPIN];
     return [UNPIN, CUSTOMIZE, PROPS];
   }
   if (t.kind === "pin") return t.path ? [UNPIN, CUSTOMIZE, PROPS] : [UNPIN];

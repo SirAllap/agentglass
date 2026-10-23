@@ -36,3 +36,15 @@ export function tabLabel(path: string, home: string): string {
   const name = path.slice(path.lastIndexOf("/") + 1);
   return name || "/";
 }
+
+/** Strata's Ctrl+Shift+Page Up / Down: the active tab one place left or right, stopping at the ends. */
+export function moveTab(t: Tabs, by: 1 | -1): Tabs {
+  const to = t.active + by;
+  if (to < 0 || to >= t.paths.length) return t;
+  const paths = t.paths.slice();
+  [paths[t.active], paths[to]] = [paths[to]!, paths[t.active]!];
+  return { paths, active: to };
+}
+
+/** Strata's strip scrolls sideways under either wheel, 36 px a notch (tabs/strip.rs). */
+export const tabWheel = (dx: number, dy: number): number => { const d = Math.abs(dx) > Math.abs(dy) ? dx : dy; return d === 0 ? 0 : Math.sign(d) * 36; };

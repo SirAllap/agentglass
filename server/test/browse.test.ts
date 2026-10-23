@@ -7,7 +7,7 @@
  * to read `~/.ssh/id_rsa` from a browser tab.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pagePolicy } from "../src/browse.ts";
@@ -443,7 +443,31 @@ describe("a dotfile in home opens in the Finder's Editing tab", () => {
   });
   test("the editor starts in the file's folder, with the file as one argv element (a name with spaces needs no escaping)", () => {
     const run = finderEditRun(["nvim", "--listen", "/run/x.sock", "/home/u/my notes/.bashrc"], "/home/u/my notes/.bashrc");
-    expect(run).toEqual(["env", "-C", "/home/u/my notes", "nvim", "--listen", "/run/x.sock", "/home/u/my notes/.bashrc"]);
+    expect(run).toEqual(["env", "-C", "/home/u/my notes", "sh", "-c", '"$@"; exit 0', "sh", "nvim", "--cmd", "set noswapfile", "--listen", "/run/x.sock", "/home/u/my notes/.bashrc"]);
+  });
+  test("neovim and vim run without a swap file, any other editor is left as configured", () => {
+    expect(finderEditRun(["/usr/bin/nvim", "x"], "/a/b").slice(7)).toEqual(["/usr/bin/nvim", "--cmd", "set noswapfile", "x"]);
+    expect(finderEditRun(["vim", "x"], "/a/b").slice(7)).toEqual(["vim", "--cmd", "set noswapfile", "x"]);
+    expect(finderEditRun(["nano", "x"], "/a/b").slice(7)).toEqual(["nano", "x"]);
+  });
+  test("a real nvim with it leaves no swap file behind when it is killed", async () => {
+    const nvim = Bun.which("nvim");
+    if (!nvim) return;
+    const dir = mkdtempSync(join(tmpdir(), "agx-noswap-"));
+    const state = join(dir, "state");
+    const file = join(dir, "notes.txt");
+    writeFileSync(file, "hello\n");
+    const run = finderEditRun([nvim, "--headless", "-c", "call system('kill -9 ' . getpid())", file], file);
+    const proc = Bun.spawn(run, { env: { PATH: process.env.PATH ?? "", HOME: dir, XDG_STATE_HOME: state, XDG_CONFIG_HOME: join(dir, "c"), XDG_DATA_HOME: join(dir, "d") }, stdout: "ignore", stderr: "ignore", stdin: "pipe" });
+    await proc.exited;
+    const swaps = existsSync(join(state, "nvim", "swap")) ? readdirSync(join(state, "nvim", "swap")) : [];
+    const stray = readdirSync(dir).filter((f) => f.endsWith(".swp"));
+    rmSync(dir, { recursive: true, force: true });
+    expect([...swaps, ...stray]).toEqual([]);
+  });
+  test("a failing editor still ends the pane cleanly, so no dead pane is left to re-attach", () => {
+    const [, , , , , script] = finderEditRun(["nvim", "x"], "/a/b");
+    expect(script).toBe('"$@"; exit 0');
   });
 });
 

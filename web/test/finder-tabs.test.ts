@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { closeTab, openTab, selectTab, showHere, stepTab, tabLabel, tabsOf } from "../src/lib/finderTabs.ts";
+import { closeTab, moveTab, openTab, selectTab, showHere, stepTab, tabLabel, tabsOf, tabWheel } from "../src/lib/finderTabs.ts";
 
 describe("folder tabs", () => {
   test("a new tab opens beside the active one and takes over", () => {
@@ -30,5 +30,19 @@ describe("folder tabs", () => {
   test("a click on a tab that is not there changes nothing", () => {
     const t = tabsOf("/a");
     expect(selectTab(t, 3)).toBe(t);
+  });
+});
+
+describe("Strata's tab keys and strip", () => {
+  test("Ctrl+Shift+Page Up / Down move the active tab one place and stop at the ends", () => {
+    const t = { paths: ["/a", "/b", "/c"], active: 1 };
+    expect(moveTab(t, 1)).toEqual({ paths: ["/a", "/c", "/b"], active: 2 });
+    expect(moveTab(t, -1)).toEqual({ paths: ["/b", "/a", "/c"], active: 0 });
+    expect(moveTab({ ...t, active: 2 }, 1)).toEqual({ ...t, active: 2 });
+  });
+  test("either wheel scrolls the strip sideways, 36 px a notch", () => {
+    expect(tabWheel(0, 120)).toBe(36);
+    expect(tabWheel(-40, 3)).toBe(-36);
+    expect(tabWheel(0, 0)).toBe(0);
   });
 });

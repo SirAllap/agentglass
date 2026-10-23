@@ -4,7 +4,7 @@
  * as the nine toggles, and which folders a destination picker may offer.
  */
 import { describe, expect, test } from "bun:test";
-import { archiveName, compressSub, formatTakesPassword, modeBits, modeSymbolic, toggleMode, destProblem, trashDeleteWords, canExec, toggleExec, kindWords } from "../src/lib/finderOps.ts";
+import { archiveName, compressSub, formatTakesPassword, modeBits, modeSymbolic, toggleMode, destProblem, trashDeleteWords, canExec, toggleExec, kindWords, foldersOf } from "../src/lib/finderOps.ts";
 
 describe("compress", () => {
   test("one item keeps its name, several are called Archive", () => {
@@ -88,5 +88,20 @@ describe("Properties, as Strata words it", () => {
     const d = await src("components/finder/machine/FinderDialogs.tsx");
     expect((d.match(/<DialogHead /g) ?? []).length).toBeGreaterThanOrEqual(5);
     expect(await src("components/finder/machine/FinderCustomize.tsx")).toContain("<DialogHead ");
+  });
+});
+
+describe("the folder picker lists the place it is in", () => {
+  // A double-click on a folder: the first click renders the new place while the old list is still on screen, and the second click on the same name went into ".../sub/sub".
+  const loaded = { at: "/h/a", names: ["sub", "other"] };
+  test("a list read for another place is not shown", () => {
+    expect(foldersOf("/h/a", loaded)).toEqual(["sub", "other"]);
+    expect(foldersOf("/h/a/sub", loaded)).toBeNull();
+    expect(foldersOf("/h/a", null)).toBeNull();
+  });
+  test("the picker shows only that", async () => {
+    const t = await Bun.file(new URL("../src/components/finder/machine/FinderDialogs.tsx", import.meta.url)).text();
+    expect(t).toContain("const dirs = foldersOf(at, loaded);");
+    expect(t).toContain("setLoaded({ at, names:");
   });
 });

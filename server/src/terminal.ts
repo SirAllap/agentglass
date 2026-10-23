@@ -722,7 +722,11 @@ export function viewableFile(wanted: string | null, tempCopy: boolean, local = f
  * the path never reaches a shell.
  */
 export function finderEditRun(editorArgv: string[], file: string): string[] {
-  return ["env", "-C", dirname(file), ...editorArgv];
+  // The wrapper makes the pane end cleanly: the engine keeps a pane whose command failed ("Pane is dead"), and the next Editing session would re-attach to it.
+  // No swap file: this editor lives in a pane that dies with the tab (a killed session, a crash, a closed pane), and a swap left behind is the "E325: swap file exists" prompt on the next Editing, in a directory nobody here owns. What it gives up is crash recovery of unsaved text; "Unsaved changes" already asks before the tab is left.
+  const bin = (editorArgv[0] ?? "").split("/").pop() ?? "";
+  const quiet = /^n?vim$/.test(bin) ? [editorArgv[0]!, "--cmd", "set noswapfile", ...editorArgv.slice(1)] : editorArgv;
+  return ["env", "-C", dirname(file), "sh", "-c", '"$@"; exit 0', "sh", ...quiet];
 }
 
 /**

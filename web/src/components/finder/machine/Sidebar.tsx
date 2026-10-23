@@ -37,6 +37,9 @@ export function placesFor(home: string, known: readonly DiskPlace[]): Place[] {
   ];
 }
 
+/** A pinned folder shows the name its bookmark was given, and the folder's own name only when it has none. */
+export const pinLabel = (b: PinnedPlace): string => (b.label.trim() || (b.path ?? "").slice((b.path ?? "").lastIndexOf("/") + 1) || b.path || b.uri);
+
 /** Strata pins only the bookmarks that are not already one of the places at the top: a folder listed twice is noise. */
 export function pinnedOnly(pins: readonly PinnedPlace[], places: readonly Place[]): PinnedPlace[] {
   const shown = new Set(places.flatMap((p) => (p.path ? [p.path.replace(/\/+$/, "")] : [])));
@@ -82,7 +85,7 @@ export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, o
     const on = !!p.path && (here === p.path);
     const off = !!p.off;
     return (
-      <button key={p.id} data-drop-path={p.path && !off && p.id !== "recent" && p.id !== "trash" ? p.path : undefined} data-drop-trash={p.id === "trash" ? "" : undefined} disabled={off} aria-current={on ? "true" : undefined} aria-label={rail ? p.label : undefined} title={p.off ?? (rail ? p.label : undefined)}
+      <button key={p.id} data-side-row data-drop-path={p.path && !off && p.id !== "recent" && p.id !== "trash" ? p.path : undefined} data-drop-trash={p.id === "trash" ? "" : undefined} disabled={off} aria-current={on ? "true" : undefined} aria-label={rail ? p.label : undefined} title={p.off ?? (rail ? p.label : undefined)}
         {...menuOf(pin ? { kind: "pin", uri: pin.uri, path: pin.path } : { kind: "place", id: p.id, path: p.id === "trash" || p.id === "network" ? undefined : p.path })}
         onClick={(e) => activates(e.button, "click") && (p.id === "recent" ? onRecent() : p.id === "trash" ? onTrash() : p.id === "network" ? onNetwork?.() : p.path && onGo(p.path))}
         className={`agx-btn w-full flex items-center ${rail ? "justify-center" : "gap-2 px-2.5"} rounded-md text-left disabled:cursor-not-allowed`}
@@ -94,7 +97,7 @@ export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, o
   };
   /** A pinned remote (sftp, smb): it has no folder here until it is connected, so the row asks the address flow to open it. */
   const remote = (b: PinnedPlace) => (
-    <button key={`pin:${b.uri}`} type="button" aria-label={rail ? b.label : undefined} title={b.uri} onClick={(e) => { if (activates(e.button, "click")) onRemote?.(b.uri); }} {...menuOf({ kind: "pin", uri: b.uri })}
+    <button key={`pin:${b.uri}`} type="button" data-side-row aria-label={rail ? b.label : undefined} title={b.uri} onClick={(e) => { if (activates(e.button, "click")) onRemote?.(b.uri); }} {...menuOf({ kind: "pin", uri: b.uri })}
       className={`agx-btn w-full flex items-center ${rail ? "justify-center" : "gap-2 px-2.5"} rounded-md text-left`} style={{ minHeight: rail ? 28 : 26, color: "var(--text2)" }}>
       <span className="shrink-0 flex" style={{ color: "var(--primary-ink)" }}><StrataIcon set="act" name="folder" size={ICON.md} /></span>
       {!rail && <span className="truncate">{b.label}</span>}
@@ -112,7 +115,7 @@ export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, o
     );
     return (
       <div key={v.id} data-device={v.id} className="flex items-center rounded-md" style={{ background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : undefined, paddingRight: rail ? 0 : 2 }}>
-        <button type="button" aria-current={on ? "true" : undefined} aria-label={rail ? v.name : undefined} title={rail ? v.name : v.mountPoint ?? undefined} aria-busy={working || undefined} onClick={(e) => { if (activates(e.button, "click")) onVolume?.(v); }}
+        <button type="button" data-side-row aria-current={on ? "true" : undefined} aria-label={rail ? v.name : undefined} title={rail ? v.name : v.mountPoint ?? undefined} aria-busy={working || undefined} onClick={(e) => { if (activates(e.button, "click")) onVolume?.(v); }}
           {...menuOf({ kind: "device", volume: v })}
           className={`agx-btn flex-1 min-w-0 flex items-center ${rail ? "justify-center" : "gap-2 px-2.5"} rounded-md text-left`}
           style={{ minHeight: rail ? 28 : 26, color: on ? "var(--text)" : "var(--text2)", fontWeight: on ? 600 : 400 }}>
@@ -126,12 +129,12 @@ export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, o
   };
   return (
     <div className="relative shrink-0 flex min-h-0" style={{ width }}>
-      <nav aria-label="Places" data-mode={mode} {...dnd} className="agx-scroll overflow-y-auto overflow-x-hidden flex-1 min-w-0 py-1.5 px-1 text-[12px] flex flex-col gap-0.5"
+      <nav aria-label="Places" data-finder-sidebar data-mode={mode} {...dnd} className="agx-scroll overflow-y-auto overflow-x-hidden flex-1 min-w-0 py-1.5 px-1 text-[12px] flex flex-col gap-0.5"
         style={{ borderRight: LINE, background: "var(--surface-nav)" }}>
         {visiblePlaces(places, hidden).map((p) => row(p))}
         {shownPins.length > 0 && !rail && <div className="px-2.5 pt-2 pb-0.5 text-[10px] uppercase" style={{ color: "var(--text4)" }}>Pinned</div>}
         {shownPins.length > 0 && rail && <div role="separator" className="mx-1 my-1" style={{ borderTop: LINE }} />}
-        {shownPins.map((b) => (b.path ? row({ id: `pin:${b.path}`, label: b.path.slice(b.path.lastIndexOf("/") + 1) || b.path, path: b.path }, b) : remote(b)))}
+        {shownPins.map((b) => (b.path ? row({ id: `pin:${b.path}`, label: pinLabel(b), path: b.path }, b) : remote(b)))}
         {volumes.length > 0 && (
           <>
             <div role="separator" style={{ borderTop: LINE, margin: rail ? "6px 2px" : "6px 0" }} />

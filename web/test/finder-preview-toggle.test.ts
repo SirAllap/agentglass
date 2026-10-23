@@ -46,3 +46,16 @@ test("the click path asks for the reopen before it picks", () => {
   expect(body).toContain("reopen.current(row)");
   expect(body.indexOf("reopen.current(row)")).toBeLessThan(body.indexOf("pick(col, row)"));
 });
+
+describe("the way back after closing the preview", () => {
+  test("the toggle is never dimmed and shows closed as an outline", async () => {
+    const { toggleLook } = await import("../src/lib/finderPreview.ts");
+    expect(toggleLook(true).opacity).toBe(1);
+    expect(toggleLook(false).opacity).toBe(1);
+    expect(toggleLook(true).background).toBeDefined();
+    expect(toggleLook(false).border).toContain("28%");
+  });
+  test("the last column takes the freed room when no preview sits beside it", () => {
+    expect(src).toContain("fill={!previewInline && i === columns.length - 1}");
+  });
+});

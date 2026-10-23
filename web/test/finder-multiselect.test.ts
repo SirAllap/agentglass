@@ -55,10 +55,11 @@ describe("keys", () => {
     const c = toggleCursor(rows, clickSelect(rows, single("a"), "c", { ctrl: true, shift: false }));
     expect(names(c)).toEqual(["a"]);
   });
-  test("ctrl+a takes every row shown, keeps the cursor", () => {
+  test("ctrl+a takes every row shown and leaves the anchor and the cursor on the last, as Strata does", () => {
     const c = selectAll(rows, single("c"));
     expect(c.names.size).toBe(5);
-    expect(c.cursor).toBe("c");
+    expect(c.anchor).toBe("e");
+    expect(c.cursor).toBe("e");
   });
   test("an empty column selects nothing", () => { expect(selectAll([], single(null)).names.size).toBe(0); });
   test("a name that left the folder is dropped from the set", () => {

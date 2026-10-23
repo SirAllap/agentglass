@@ -6,7 +6,8 @@
 // subfolders, so it offers what is really there and nothing it had to guess.
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../../lib/api.ts";
-import { completePath, crumbs, isFolder } from "../../../lib/finderMiller.ts";
+import { completePath, crumbFades, crumbLabel, crumbs, hierarchy, isFolder } from "../../../lib/finderMiller.ts";
+import { MenuItem, Popover } from "./Popover.tsx";
 import { EDGE, INPUT, INPUT_STYLE, LINE } from "../../workspace/Chrome.tsx";
 import { HIT, ICON } from "../../../lib/iconSize.ts";
 import { StrataIcon } from "./StrataIcon.tsx";
@@ -34,10 +35,25 @@ export function FinderPathBar({ path, home, onGo, signalEdit, onEditing, volumes
   const [hot, setHot] = useState(0);
   const input = useRef<HTMLInputElement>(null);
   const [copied, setCopied] = useState(false);
+  /** The hierarchy menu: open at the pointer, as Strata's is. */
+  const [menu, setMenu] = useState<DOMRect | null>(null);
   const copy = () => {
     void navigator.clipboard.writeText(pathToCopy(path, remote)).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }).catch(() => { /* a browser that refuses the clipboard has nothing to say about it */ });
   };
   const seen = useRef(signalEdit);
+  const strip = useRef<HTMLDivElement>(null);
+  const [fades, setFades] = useState({ left: false, right: false });
+  const measureFades = () => { const el = strip.current; if (el) { const f = crumbFades(el.scrollLeft, el.clientWidth, el.scrollWidth); setFades((o) => (o.left === f.left && o.right === f.right ? o : f)); } };
+  // A new place rests at its end, where the folder you are in is; a resize keeps the fades honest.
+  useEffect(() => {
+    const el = strip.current;
+    if (!el) return;
+    el.scrollLeft = el.scrollWidth;
+    measureFades();
+    const ro = new ResizeObserver(() => { el.scrollLeft = el.scrollWidth; measureFades(); });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [path, text === null]);
 
   useEffect(() => { onEditing?.(text !== null); }, [text !== null]);
   const edit = () => { const shownPath = remote ? remote.uri : path; setText(shownPath.endsWith("/") ? shownPath : `${shownPath}/`); setTimeout(() => input.current?.select(), 0); };
@@ -107,19 +123,35 @@ export function FinderPathBar({ path, home, onGo, signalEdit, onEditing, volumes
   const parts: { label: string; path: string }[] = remote
     ? [{ label: remote.root, path: remote.mountPoint }, ...path.slice(remote.mountPoint.length).split("/").filter(Boolean).map((seg, i, all) => ({ label: seg, path: `${remote.mountPoint}/${all.slice(0, i + 1).join("/")}` }))]
     : crumbs(path, home);
-  // Strata draws the path bare: segments separated by a slash, the last one in the accent.
+  // Strata draws the path bare: segments separated by a slash, the last one in the accent. A crumb is never squeezed to fit: the bar scrolls, rests at the end, and fades the side that has more path.
   return (
-    <div className="flex-1 min-w-0 flex items-center gap-1 px-2 overflow-hidden cursor-text whitespace-nowrap" role="navigation" aria-label="Path"
-      onClick={(e) => { if (activates(e.button, "click")) edit(); }} style={{ minHeight: 30 }} title="Click to type a path (Ctrl+L)">
+    <div className="relative flex-1 min-w-0 flex">
+    {/* In the flow, not over the crumbs: a fade drawn over the strip dimmed the first letters of the last crumb whenever it rested at the left edge (measured at 360 px: 3 px under it). */}
+    {fades.left && <span aria-hidden data-crumb-more className="shrink-0 grid place-items-center pointer-events-none" style={{ width: 16, color: "var(--text4)" }}>…</span>}
+    <div ref={strip} className="flex-1 min-w-0 flex items-center gap-1 px-2 overflow-x-auto cursor-text whitespace-nowrap" role="navigation" aria-label="Path" onScroll={measureFades}
+      onClick={(e) => { if (activates(e.button, "click")) edit(); }} style={{ minHeight: 30, scrollbarWidth: "none" }} title="Click to type a path (Ctrl+L)"
+      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu(new DOMRect(e.clientX, e.clientY, 1, 1)); }}>
       {parts.map((c, i) => (
-        <span key={c.path} className="flex items-center gap-1 min-w-0">
+        <span key={c.path} className="flex items-center gap-1 shrink-0">
           {i > 0 && <span aria-hidden className="px-1.5" style={{ color: "var(--text4)" }}>/</span>}
-          <button className="agx-btn rounded px-1 truncate" style={{ color: i === parts.length - 1 ? "var(--primary-ink)" : "var(--text3)", fontWeight: i === parts.length - 1 ? 700 : 400 }}
-            onClick={(e) => { e.stopPropagation(); if (activates(e.button, "click")) onGo(c.path); }}>{c.label}</button>
+          <button className="agx-btn rounded px-1 shrink-0" title={crumbLabel(c.label) !== c.label ? c.label : undefined} data-drop-path={i < parts.length - 1 ? c.path : undefined} data-drop-kind="crumb" style={{ color: i === parts.length - 1 ? "var(--primary-ink)" : "var(--text3)", fontWeight: i === parts.length - 1 ? 700 : 400 }}
+            onClick={(e) => { e.stopPropagation(); if (!activates(e.button, "click")) return; if (i === parts.length - 1) edit(); else onGo(c.path); }}>{crumbLabel(c.label)}</button>
         </span>
       ))}
       <button type="button" className="agx-btn rounded grid place-items-center shrink-0" style={{ width: HIT, height: HIT, color: copied ? "var(--primary-ink)" : "var(--text3)" }} title={copied ? "Copied" : "Copy path"} aria-label="Copy path"
         onClick={(e) => { e.stopPropagation(); copy(); }}><StrataIcon set="act" name={copied ? "check" : "copy"} size={ICON.sm} /></button>
+      {/* Inside the bar in the DOM: a click on the menu must not reach the bar and start typing. */}
+      {menu && (
+        <span onClick={(e) => e.stopPropagation()} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}>
+        <Popover anchor={menu} onClose={() => setMenu(null)} width={200} label="Path hierarchy">
+          {hierarchy(parts).map((h) => (
+            <MenuItem key={h.path} icon={h.icon} on={h.current} onClick={() => { setMenu(null); if (!h.current) onGo(h.path); }}>{h.label}</MenuItem>
+          ))}
+        </Popover>
+        </span>
+      )}
+    </div>
+    {fades.right && <span aria-hidden className="absolute right-0 top-0 bottom-0 pointer-events-none" style={{ width: 24, background: "linear-gradient(to left, var(--surface-card), transparent)" }} />}
     </div>
   );
 }

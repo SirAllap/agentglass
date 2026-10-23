@@ -35,6 +35,6 @@ describe("the palette asks for hidden entries", () => {
   });
 
   test("a locked row is not opened", () => {
-    expect(code).toContain('row.kind !== "recent" && row.locked)) return;');
+    expect(code).toContain('if (!row || row.locked) return;');
   });
 });

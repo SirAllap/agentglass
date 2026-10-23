@@ -122,14 +122,29 @@ export function pasteOp(c: Clip | null, into: string): { op: "copy" | "move"; co
 }
 
 /** What dropping rows on a folder does: a move, or a copy with Ctrl; nothing into the folder they are in, and never into themselves or something inside them. */
-export function dropPlan(srcDir: string, names: readonly string[], dest: string, ctrl: boolean): { op: "move" | "copy"; conflict: "keep-both" } | "nothing" | "inside" {
+/** The volume a path is on: the longest mount point it is under, or `/`. */
+export function volumeOf(path: string, mounts: readonly string[]): string {
+  let best = "/";
+  for (const m of mounts) { const r = m.replace(/\/+$/, "") || "/"; if ((path === r || path.startsWith(r === "/" ? "/" : `${r}/`)) && r.length > best.length) best = r; }
+  return best;
+}
+
+/**
+ * What a drop does (Strata's services/transfer_action.rs): Ctrl copies, Shift
+ * moves, and with neither it moves on the same volume and copies across
+ * volumes. Strata asks first across volumes (copy is its default answer); that
+ * question is not here, its default is. A drop in the folder it came from does
+ * nothing unless it is a copy.
+ */
+export function dropPlan(srcDir: string, names: readonly string[], dest: string, ctrl: boolean, more: { shift?: boolean; mounts?: readonly string[] } = {}): { op: "move" | "copy"; conflict: "keep-both" } | "nothing" | "inside" {
   if (!names.length) return "nothing";
   for (const n of names) {
     const own = (srcDir === "/" ? "" : srcDir) + "/" + n;
     if (dest === own || dest.startsWith(own + "/")) return "inside";
   }
   if (!ctrl && dest === srcDir) return "nothing";
-  return { op: ctrl ? "copy" : "move", conflict: "keep-both" };
+  const across = !!more.mounts && volumeOf(srcDir, more.mounts) !== volumeOf(dest, more.mounts);
+  return { op: ctrl ? "copy" : more.shift ? "move" : across ? "copy" : "move", conflict: "keep-both" };
 }
 
 /** A name somebody typed for a rename or a new folder: the same rule the server holds, said before the round trip. */
@@ -233,6 +248,13 @@ export function kindWords(name: string, kind: "dir" | "file" | "link"): string {
   const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
   return KIND_WORDS[ext] ?? (ext ? `${ext.toUpperCase()} file` : "File");
 }
+
+/**
+ * The folders of the place the picker is IN, or null while they load. Each list carries the folder it was read from:
+ * the click that enters a folder renders the new place before the effect clears the old list, and a second click of
+ * a double-click on a name in that frame went into ".../sub/sub", which does not exist.
+ */
+export const foldersOf = (at: string, loaded: { at: string; names: readonly string[] } | null): readonly string[] | null => (loaded && loaded.at === at ? loaded.names : null);
 
 /** Why a folder cannot take these: into itself or below itself, or a move to where it already is. Null when it can. */
 export function destProblem(paths: readonly string[], dest: string, op: "move" | "copy" = "move"): string | null {

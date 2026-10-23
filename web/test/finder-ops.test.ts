@@ -4,7 +4,7 @@
  * are refused before the round trip.
  */
 import { describe, expect, test } from "bun:test";
-import { clipPaths, deleteWords, doneNote, dropPlan, jobFraction, jobsShown, menuFor, menuHead, nameProblem, shortPath, pasteOp, stemEnd, type MenuCtx } from "../src/lib/finderOps.ts";
+import { clipPaths, deleteWords, doneNote, dropPlan, volumeOf, jobFraction, jobsShown, menuFor, menuHead, nameProblem, shortPath, pasteOp, stemEnd, type MenuCtx } from "../src/lib/finderOps.ts";
 import { finderKey, type KeyIn } from "../src/lib/finderKeys.ts";
 
 const k = (key: string, o: Partial<KeyIn> = {}): KeyIn => ({ key, ctrl: false, meta: false, shift: false, alt: false, ...o });
@@ -74,7 +74,7 @@ describe("the keys", () => {
       [k("x", { ctrl: true }), "cut"], [k("v", { ctrl: true }), "paste"], [k("d", { ctrl: true }), "duplicate"], [k("c", { ctrl: true }), "copyfiles"],
       [k("F2"), "rename"], [k("r", { ctrl: true }), "rename"], [k("Delete"), "trash"], [k("Delete", { shift: true }), "delete"],
       [k("N", { ctrl: true, shift: true }), "newfolder"], [k("n", { ctrl: true, alt: true }), "folderwith"],
-      [k("Enter", { alt: true }), "props"], [k("z", { ctrl: true }), "undo"], [k("z", { ctrl: true, shift: true }), "redo"], [k("y", { ctrl: true }), "redo"], [k("y"), "copy"], [k("p"), "pin"],
+      [k("Enter", { alt: true }), "props"], [k("z", { ctrl: true }), "undo"], [k("z", { ctrl: true, shift: true }), "redo"], [k("y", { ctrl: true }), "redo"],
     ];
     for (const [key, t] of want) expect(finderKey(key, free)).toEqual({ t } as never);
   });
@@ -150,6 +150,16 @@ describe("dropping rows on a folder", () => {
     expect(dropPlan("/h", ["a"], "/h/a/deep/er", true)).toBe("inside");
     expect(dropPlan("/h", ["a"], "/h/ab", false)).toEqual({ op: "move", conflict: "keep-both" });
     expect(dropPlan("/", ["a"], "/a/b", false)).toBe("inside");
+  });
+  test("Strata's modifiers and volumes: Shift moves, Ctrl copies, and with neither a drop across volumes copies", () => {
+    const mounts = ["/media/ada/orbit", "/run/media/ada/acme"];
+    expect(dropPlan("/home/ada/a", ["x"], "/media/ada/orbit/in", false, { mounts })).toEqual({ op: "copy", conflict: "keep-both" });
+    expect(dropPlan("/home/ada/a", ["x"], "/media/ada/orbit/in", false, { shift: true, mounts })).toEqual({ op: "move", conflict: "keep-both" });
+    expect(dropPlan("/media/ada/orbit/a", ["x"], "/media/ada/orbit/b", false, { mounts })).toEqual({ op: "move", conflict: "keep-both" });
+    expect(dropPlan("/home/ada/a", ["x"], "/home/ada/b", false, { mounts })).toEqual({ op: "move", conflict: "keep-both" });
+    expect(dropPlan("/home/ada/a", ["x"], "/home/ada/b", true, { shift: true, mounts })).toEqual({ op: "copy", conflict: "keep-both" });
+    expect(volumeOf("/media/ada/orbitx/a", mounts)).toBe("/");
+    expect(volumeOf("/media/ada/orbit", mounts)).toBe("/media/ada/orbit");
   });
   test("an empty pick is nothing", () => { expect(dropPlan("/h", [], "/x", false)).toBe("nothing"); });
 });

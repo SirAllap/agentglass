@@ -8,7 +8,7 @@ import { api } from "../../../lib/api.ts";
 import { TYPE_GROUPS, strataWhen, canEditRow, itemsLabel, isFolder, previewMetaLine, typeGroup, type Row } from "../../../lib/finderMiller.ts";
 import { PathIcon, StrataIcon } from "./StrataIcon.tsx";
 import type { FileFacts } from "../../../../../shared/types.ts";
-import type { ReadWidth } from "../../../lib/finderPreview.ts";
+import { looksSecret, type ReadWidth } from "../../../lib/finderPreview.ts";
 import { BarButton, PreviewBar } from "./PreviewBar.tsx";
 import { PreviewBody } from "./PreviewBody.tsx";
 
@@ -39,16 +39,19 @@ export function QuickLook({ path, row, rows, root, savedTab, onTab, onEditing, o
   const [facts, setFacts] = useState<FileFacts | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const folder = !!row && isFolder(row);
+  /* A name that says it may hold a secret is not read until Show is pressed, for that file only. */
+  const [shown, setShown] = useState<string | null>(null);
+  const gated = !!path && !!row && !folder && !row.locked && looksSecret(row.name) && shown !== path;
 
   useEffect(() => {
     setFacts(null); setFailed(null);
-    if (!path || !row || folder || row.locked) return;
+    if (!path || !row || folder || row.locked || gated) return;
     let live = true;
     void api.previewFacts(path)
       .then((f) => { if (live) { if (f.ok) setFacts(f); else setFailed(f.error ?? "could not be read here"); } })
       .catch(() => { if (live) setFailed("could not be read here"); });
     return () => { live = false; };
-  }, [path, row?.name, folder, row?.locked]);
+  }, [path, row?.name, folder, row?.locked, gated]);
 
   /* Strata gives a folder no preview: its contents are the next column, and the panel says so. */
   if (!path || !row || isFolder(row)) {
@@ -74,6 +77,14 @@ export function QuickLook({ path, row, rows, root, savedTab, onTab, onEditing, o
         <>
           <PreviewBar lead={bar.lead} name={bar.name} meta={bar.meta} title={path} onClose={onClose} />
           <div className="flex-1 min-h-0 agx-scroll overflow-y-auto px-4 py-3 text-[12px]"><p style={{ color: "var(--text3)" }}>{row.why ?? "Hidden entries are listed by name only; this one is not opened here."}</p></div>
+        </>
+      ) : gated ? (
+        <>
+          <PreviewBar lead={bar.lead} name={bar.name} meta={bar.meta} title={path} onClose={onClose} />
+          <div className="flex-1 min-h-0 agx-scroll overflow-y-auto px-4 py-3 text-[12px] flex items-start gap-2" style={{ color: "var(--text3)" }}>
+            <span>May hold a secret —</span>
+            <button className="agx-btn rounded px-1.5" style={{ color: "var(--text)" }} onClick={() => setShown(path)}>Show</button>
+          </div>
         </>
       ) : failed || !facts ? (
         <>

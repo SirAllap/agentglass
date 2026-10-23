@@ -2,6 +2,7 @@
 // lib/finderOps.menuFor), the prompt that asks for a name, and the confirmation
 // that comes before a permanent delete. Nothing here decides anything: the
 // model is lib/finderOps.ts, the doing is the server's (/fs/op).
+import { isAppChord } from "../../../lib/finderKeys.ts";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Portal } from "../../Portal.tsx";
 import { HIT, ICON } from "../../../lib/iconSize.ts";
@@ -11,6 +12,7 @@ import { EDGE, LINE } from "../../workspace/Chrome.tsx";
 import { StrataIcon } from "./StrataIcon.tsx";
 import { MENU_ROW, MENU_ROW_H, MENU_RULE } from "../../../lib/finderMenu.ts";
 import { useMenuKeys } from "./useMenuKeys.ts";
+import { useDialogEscape } from "./useDialogEscape.ts";
 
 /** Strata's icon for each item (its file menu reference, shot 42). */
 const ICON_OF: Record<OpId, string> = {
@@ -105,15 +107,10 @@ export function ContextMenu({ at, head, groups, onPick, onClose }: {
 
 /** A box laid over the finder, as the unsaved-changes one is: inside the finder's own root, so it is never clipped or lost behind the palette. */
 export function Sheet({ label, children, onClose, width = 380 }: { label: string; children: React.ReactNode; onClose: () => void; width?: number }) {
-  // Escape closes it wherever the focus is: a box that opened without taking the focus must not be left standing.
-  useEffect(() => {
-    const on = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onClose(); } };
-    window.addEventListener("keydown", on, true);
-    return () => window.removeEventListener("keydown", on, true);
-  }, [onClose]);
+  useDialogEscape(onClose);
   return (
     <div role="dialog" aria-label={label} aria-modal="true" className="absolute inset-0 grid place-items-center p-4" style={{ background: "color-mix(in srgb, var(--bg) 70%, transparent)", zIndex: 9, gridTemplateColumns: "minmax(0, 1fr)" }}
-      onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Escape") onClose(); }}>
+      onKeyDown={(e) => { if (!isAppChord(e)) e.stopPropagation(); if (e.key === "Escape") onClose(); }}>
       <div className="rounded-xl p-4 text-[12px]" style={{ background: "var(--surface-card)", border: EDGE, width, maxWidth: "100%" }}>{children}</div>
     </div>
   );
@@ -155,7 +152,7 @@ export function InlineName({ edit, rowH, icon }: { edit: InlineEdit; rowH: numbe
       onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
       {!inRow && <span className="shrink-0 flex">{icon}</span>}
       <input ref={input} value={v} onChange={(e) => setV(e.target.value)} spellCheck={false} aria-label={edit.was ? `Rename ${edit.was}` : "New name"} aria-invalid={!!problem}
-        onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") { e.preventDefault(); if (!problem) finish(true); } else if (e.key === "Escape") { e.preventDefault(); finish(false); } }}
+        onKeyDown={(e) => { if (!isAppChord(e)) e.stopPropagation(); if (e.key === "Enter") { e.preventDefault(); if (!problem) finish(true); } else if (e.key === "Escape") { e.preventDefault(); finish(false); } }}
         onBlur={() => finish(!problem)} className={`${inRow ? "w-full" : "flex-1"} min-w-0 bg-transparent outline-none text-[12px]`} style={{ color: "var(--text)", height: rowH - 4, boxShadow: inRow ? "0 0 0 1px var(--primary)" : undefined, borderRadius: 4 }} />
       {problem && <span role="alert" className="absolute left-2 right-2 rounded-md px-2 py-1 text-[11px] truncate" style={{ top: rowH + 2, background: "var(--surface-card)", border: EDGE, color: "var(--error-ink)", zIndex: 4 }}>{problem}</span>}
     </div>

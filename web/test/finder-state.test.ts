@@ -90,4 +90,11 @@ describe("closing the finder does not forget the selection", () => {
   test("open but the list is still loading: the last one stays", () => {
     expect(rememberedSel(file, true, null)).toBe(file);
   });
+
+  test("a store that still says recent opens the finder, and its recent view is dropped", () => {
+    const r = restore({ v: 1, tab: "recent", tabs: { recent: { q: "x", browsePath: null, sel: null, exts: [] }, machine: { q: "", browsePath: "/h", sel: null, exts: [] } } });
+    expect(r.tab).toBe("machine");
+    expect(r.tabs.recent).toBeUndefined();
+    expect(r.tabs.machine?.browsePath).toBe("/h");
+  });
 });

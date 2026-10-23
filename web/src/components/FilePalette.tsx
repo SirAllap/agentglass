@@ -26,11 +26,11 @@
 // after a restart (finderState.ts).
 import { HIT, ICON } from "../lib/iconSize.ts";
 import { CodeFileIcon, FileIcon, FolderIcon, HomeIcon, ImageFileIcon, NoteIcon, SearchIcon } from "../lib/glyphIcons.tsx";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { api, SERVER, withToken } from "../lib/api.ts";
-import { recents, remember, forget, subscribeRecents, ago } from "../lib/fileRecents.ts";
+import { remember, ago } from "../lib/fileRecents.ts";
 import { reduceSelection } from "../lib/finderSelection.ts";
 import { completion, finderTarget, looksLikePath, parseQuery, passesFilters, readPath, scoreMatch } from "../lib/finderQuery.ts";
 import { FileView, type Jump } from "./finder/FileView.tsx";
@@ -54,15 +54,13 @@ import { CloseButton } from "./CloseButton.tsx";
 import { FileViewer } from "./CardFiles.tsx";
 import type { CardAttachment } from "../../../shared/providers.ts";
 import type { FinderTarget } from "../lib/finderTarget.ts";
-import { INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
+import { EDGE, LINE } from "./workspace/Chrome.tsx";
 
-/** What the finder is showing. There is one mode, the finder itself; "recent" is
- *  the sidebar's Recent entry, a list you leave with the button in the top bar. */
-export type Face = "machine" | "recent";
+/** What the finder is showing. There is one mode, the finder itself. */
+export type Face = "machine";
 
 const PLACEHOLDER: Record<Face, string> = {
   machine: "Search this folder, or type a path…",
-  recent: "Filter what you have opened…",
 };
 
 /** One row of the result list, whatever produced it. Kept as data rather than
@@ -74,54 +72,10 @@ type Row =
      been, and the palette may be pointed somewhere else by the time you come
      back to it — opening it against the current chip would build a path in the
      wrong tree. */
-  | { kind: "recent"; rel: string; at: number; root: string; gone?: boolean; abs?: string };
 
-const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 
 export { humanBytes };
 
-/*
- * A menu of this palette's lives in a Portal, and two things go wrong there.
- * Both were measured in the running app rather than reasoned about, and
- * neither shows up in a screenshot.
- *
- *   the keys    A React portal bubbles its events through the REACT tree, not
- *               the DOM one — so every key pressed inside an open menu ALSO
- *               reached the palette's own handler. Measured, with the checkout
- *               menu open: ⇥ switched the tab underneath and left the menu
- *               floating over a different question, ↑↓ walked a cursor nobody
- *               could see, and ⏎ opened the highlighted result — nvim came up
- *               on a file behind the menu that was supposed to have the keys.
- *   the focus   `autoFocus` does not take when the field mounts while another
- *               one holds focus, which is always the case here: the palette
- *               focuses its search box and keeps it. So "Filter 24 copies and
- *               928 branches…" never had the caret, and what you typed to
- *               narrow the list went into the search behind the menu, quietly
- *               rebuilding the results underneath.
- *
- * Hence: a menu takes its own keys, and its field takes its own focus.
- */
-
-/** Every key pressed inside a menu belongs to the menu. Escape closes it —
- *  here rather than in each field, so it also works from a row. */
-const menuKeys = (close: () => void) => (e: React.KeyboardEvent) => {
-  // The app's own chords are answered on window; see the reader's handler.
-  if (isAppChord(e.nativeEvent)) return;
-  e.stopPropagation();
-  if (e.key === "Escape") { e.preventDefault(); close(); }
-};
-
-/** The caret goes in the menu's field, by hand. The delay is the palette's
- *  own: the panel around it may still be animating when this mounts. */
-function useMenuField(open: boolean) {
-  const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const t = setTimeout(() => ref.current?.focus(), 20);
-    return () => clearTimeout(t);
-  }, [open]);
-  return ref;
-}
 
 /** Where the palette last searched, so opening it lands on the checkout you
  *  were working in rather than on whichever repository sorts first. */
@@ -218,15 +172,12 @@ export function FilePalette({
   const [saved] = useState<FinderSnapshot>(() => restore(readSnap()));
   /* A snapshot from before the tabs went: names and contents were folder
      searches of a checkout, and the finder's own box is that now. */
-  const face0: Face = saved.tab === "recent" ? "recent" : "machine";
+  const face0: Face = "machine";
   const [tab, setTab] = useState<Face>(face0);
   const [q, setQ] = useState(saved.tabs[face0]?.q ?? "");
   /* What the tabs that are not showing were looking at — see `switchTab`. */
   const stash = useRef<Partial<Record<Face, BrowseState>>>(
     Object.fromEntries((Object.entries(saved.tabs) as [Face, TabView][]).map(([t, v]) => [t, { q: v.q, browsePath: v.browsePath }])));
-  /* The other half of what a tab remembers: its selection and chips. */
-  const viewStash = useRef<Partial<Record<Face, { sel: string | null; exts: string[] }>>>(
-    Object.fromEntries((Object.entries(saved.tabs) as [Face, TabView][]).map(([t, v]) => [t, { sel: v.sel, exts: v.exts }])));
   /** The saved selection, waiting for its results to arrive. */
   const pendingSel = useRef<string | null>(saved.tabs[face0]?.sel ?? null);
   const [exts, setExts] = useState<string[]>(saved.tabs[face0]?.exts ?? []);
@@ -236,7 +187,6 @@ export function FilePalette({
   const snap = useRef<FinderSnapshot>(saved);
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [root, setRoot] = useState(readRoot);
-  const [pickOpen, setPickOpen] = useState(false);
   /*
    * Which branch is being searched — "" meaning this working tree.
    *
@@ -275,17 +225,6 @@ export function FilePalette({
   const [browsed, setBrowsed] = useState<BrowseReport | null>(null);
   const [showHidden, setShowHidden] = useState(readHidden);
   const [cursor, setCursor] = useState(0);
-  /** Change tab and take that tab's own folder and box with it. */
-  const goTab = useCallback((to: Face) => {
-    const r = switchTab(stash.current, tab, { q, browsePath }, to);
-    stash.current = r.stash;
-    viewStash.current = { ...viewStash.current, [tab]: { sel: selAbsRef.current, exts } };
-    const v = viewStash.current[to];
-    pendingSel.current = v?.sel ?? null;
-    listTop.current = null;   // another tab's list is another length
-    setExts(v?.exts ?? []);
-    setTab(to); setQ(r.next.q); setBrowsePath(r.next.browsePath);
-  }, [tab, q, browsePath, exts]);
   /** The selected file's path, for the places that must not depend on render order. */
   const selAbsRef = useRef<string | null>(null);
   /** Which picture the in-app viewer is on, by index into `viewFiles`. Null is closed. */
@@ -418,35 +357,6 @@ export function FilePalette({
     !!place && tab === "machine" && !byText && q.trim().length >= 2 && !globAsked,
   );
 
-  /* The third argument is the server snapshot, and without it this component
-     cannot be rendered outside a browser at all — which is why nothing ever
-     executed it in a test. `recents()` reads localStorage behind a try/catch
-     and answers an empty list where there is none, so it is a correct answer
-     in both places rather than a stub for one. */
-  const recent = useSyncExternalStore(subscribeRecents, recents, recents);
-
-  /*
-   * Which of them the working tree still has.
-   *
-   * A recent is a memory, not a promise: check that checkout out on another
-   * branch and half the list points at files that are no longer on disk.
-   * Clicking one opened an empty viewer with "no such file" in the corner,
-   * which reads as the viewer being broken rather than as a fact about the
-   * branch you are on. Asked once when the tab is shown, for the whole list.
-   */
-  const [gone, setGone] = useState<Set<string>>(new Set());
-  useEffect(() => {
-    if (!open || tab !== "recent" || !root) return;
-    const mine = recent.filter((r) => r.root === root).map((r) => r.rel);
-    if (!mine.length) { setGone(new Set()); return; }
-    let live = true;
-    api.filesExist(root, mine).then((r) => {
-      if (!live || !r.ok) return;
-      const here = new Set(r.here);
-      setGone(new Set(mine.filter((rel) => !here.has(rel)).map((rel) => `${root}\u0000${rel}`)));
-    }).catch(() => { /* leave them all as present rather than greying the list on a blip */ });
-    return () => { live = false; };
-  }, [open, tab, root, recent]);
 
   /* What was typed, read as a question: the needle, and the filters taken out
      of it. Applied on the client to whatever the tab produced, which is what
@@ -557,19 +467,14 @@ export function FilePalette({
         ...d.files.map((rel): Row => ({ kind: "file", rel })),
       ];
     }
-    const needle = q.trim().toLowerCase();
-    return recent
-      .filter((r) => (root ? r.root === root : true))
-      .filter((r) => !needle || (hasGlob(needle) ? matchGlob(needle, r.rel) : r.rel.toLowerCase().includes(needle)))
-      .map((r): Row => ({ kind: "recent", rel: r.rel, at: r.at, root: r.root, gone: gone.has(`${r.root}\u0000${r.rel}`), abs: `${r.root}/${r.rel}` }));
-  }, [tab, at, browsed, byText, inside.data, onDisk.data, recent, q, root, gone]);
+    return [];
+  }, [tab, at, browsed, byText, inside.data, onDisk.data]);
 
   /** Where a row IS, whichever tab produced it — the one thing every backend
    *  knew and none of them handed over, and what the preview pane needs. */
   const absOf = useCallback((row: Row): string | null => {
     if (row.abs) return row.abs;
     if (tab === "machine") return place ? `${place.replace(/\/+$/, "")}/${row.rel}` : null;
-    if (row.kind === "recent") return `${row.root}/${row.rel}`;
     return root ? `${root.replace(/\/+$/, "")}/${row.rel}` : null;
   }, [tab, place, root]);
 
@@ -590,7 +495,7 @@ export function FilePalette({
     const { text, exact, filters } = asked;
     const filtered = rows.filter((r) => {
       const abs = absOf(r) ?? r.rel;
-      return passesFilters({ path: abs, kind: r.kind === "recent" ? "file" : r.kind, bytes: r.kind === "file" ? r.bytes ?? null : null, mtime: r.kind === "recent" ? r.at : r.mtime ?? null }, filters);
+      return passesFilters({ path: abs, kind: r.kind, bytes: r.kind === "file" ? r.bytes ?? null : null, mtime: r.mtime ?? null }, filters);
     });
     const needle = typedPath ? typedPath.tail : text;
     if (!at || !needle) return filtered;
@@ -655,7 +560,7 @@ export function FilePalette({
     const files: CardAttachment[] = [];
     const rowsOf: Row[] = [];
     for (const r of shown) {
-      if (r.kind === "dir" || (r.kind === "recent" && r.gone) || !VIEWABLE.test(r.rel)) continue;
+      if (r.kind === "dir" || !VIEWABLE.test(r.rel)) continue;
       const abs = absOf(r);
       if (!abs) continue;
       const url = withToken(`${SERVER}/preview/raw?path=${encodeURIComponent(abs)}`);
@@ -713,10 +618,10 @@ export function FilePalette({
      A picture or a PDF has no editor to go to, and sending one there is the
      floating-nvim-on-a-binary report all over again. */
   const benchRow = useCallback((row: Row | undefined) => {
-    if (!row || (row.kind === "recent" && row.gone)) return;
+    if (!row) return;
     const abs = absOf(row);
     if (!abs) return;
-    const project = row.kind === "recent" ? row.root : root;
+    const project = root;
     /* A folder's bench action is a shell in it; a file's is the editor. */
     if (row.kind === "dir") { onBench(benchOpen("terminal", abs, project)); onClose(); return; }
     if (IMAGEY.test(row.rel)) return;
@@ -730,7 +635,7 @@ export function FilePalette({
   }, []);
 
   const openRow = useCallback((row: Row | undefined, secondary = false, click = false) => {
-    if (!row || (row.kind !== "recent" && row.locked)) return;
+    if (!row || row.locked) return;
 
     /* A picture the browser can draw opens in the app, on ⏎ or a double-click.
        A single click only selects it, as it always did: the pane beside the
@@ -792,13 +697,6 @@ export function FilePalette({
     }
     // A recent opens against the checkout it was opened FROM, and a recent that
     // is no longer on disk is dropped instead of opened into an empty viewer.
-    if (row.kind === "recent") {
-      if (row.gone) { forget(row.root, row.rel); return; }
-      remember(row.root, row.rel);
-      if (secondary) { benchRow(row); return; }
-      if (!click) focusViewer();
-      return;
-    }
     // A file found on a branch is opened AS THAT BRANCH HAS IT. Opening the
     // working tree's copy of the same path would be a different file wearing
     // the right name — or nothing at all, for one that only exists upstream.
@@ -892,8 +790,7 @@ export function FilePalette({
   }, [mirrorTick]);
   const source: FileSource | null = useMemo(() => {
     if (!open || !selRow || !selAbs) return null;
-    if (selRow.kind === "recent" && selRow.gone) return null;
-    const rootOf = selRow.kind === "recent" ? selRow.root : at || tab === "machine" ? selAbs.slice(0, selAbs.lastIndexOf("/")) : root;
+    const rootOf = at || tab === "machine" ? selAbs.slice(0, selAbs.lastIndexOf("/")) : root;
     return { abs: selAbs, root: rootOf, rel: selAbs.slice(selAbs.lastIndexOf("/") + 1) };
     // A row is a new object per render; its path is what identifies it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -932,10 +829,6 @@ export function FilePalette({
   const flushSnap = useCallback(() => {
     saveTimer.current = null;
     const tabs: FinderSnapshot["tabs"] = {};
-    for (const t of ["machine", "recent"] as const) {
-      const b = stash.current[t]; const v = viewStash.current[t];
-      if (t !== tab && (b || v)) tabs[t] = { q: b?.q ?? "", browsePath: b?.browsePath ?? null, sel: v?.sel ?? null, exts: v?.exts ?? [] };
-    }
     tabs[tab] = { q, browsePath, sel: lastSel.current, exts };
     snap.current = { ...snap.current, v: 1, tab, tabs, drawerW, collapsed };
     writeSnap(snap.current);
@@ -1065,10 +958,6 @@ export function FilePalette({
                 <input ref={inputRef} data-finder-box value={q} onChange={(e) => { setBoxMirror(null); setQ(e.target.value); }}
                   spellCheck={false} autoComplete="off" placeholder={PLACEHOLDER[tab]}
                   className="flex-1 min-w-0 bg-transparent outline-none text-[13px]" style={{ color: "var(--text)" }} />
-                {tab === "recent" && (
-                  <RepoChip repo={repo} repos={repos} openState={[pickOpen, setPickOpen]}
-                    onPick={(r) => { setRoot(r); setPickOpen(false); inputRef.current?.focus(); }} />
-                )}
                 {!finderOn && (
                 <span className="shrink-0 text-[10.5px] px-2 py-0.5 rounded-full tabular-nums" aria-live="polite"
                     style={{ background: "color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text2)", fontWeight: 600 }}>
@@ -1076,11 +965,6 @@ export function FilePalette({
                   </span>
                 )}
               </div>
-
-              {tab === "recent" && (
-                <button className="agx-btn rounded-md text-[11.5px] px-3 py-1.5 shrink-0" style={{ border: EDGE, color: "var(--text2)" }}
-                  onClick={() => { goTab("machine"); inputRef.current?.focus(); }}>← Finder</button>
-              )}
 
               {!finderOn && (
               <div className="flex items-center gap-1.5 shrink-0 text-[11px]" style={{ color: "var(--text3)" }}>
@@ -1245,7 +1129,7 @@ export function FilePalette({
               <span className="hidden md:inline">Ctrl+I info</span>
               <span className="hidden lg:inline">{at ? "← up · ⇥ completes a path" : "type ~/ or ../ to move around"}</span>
               <span className="ml-auto truncate" aria-live="off">
-                {chordLabel(appChordFor("files.palette"))} hides · {resumeLine({ file: file.name || null, section: sectionAt, tab: tab === "recent" ? "Recent" : "Finder", q })}
+                {chordLabel(appChordFor("files.palette"))} hides · {resumeLine({ file: file.name || null, section: sectionAt, tab: "Finder", q })}
               </span>
             </div>
             )}
@@ -1300,16 +1184,14 @@ function Answers({ tab, q, root, place, placeErr, rows, cursor, status, onPick, 
     if (!place) return <Note>Nowhere to search yet — pick a folder with the chip on the right.</Note>;
     if (q.trim().length < 2) return <Note>Two letters at least — one matches most of a home folder.</Note>;
   } else if (!root) return <Note>No checkout to search. Open a repository first.</Note>;
-  if (tab !== "recent" && !q.trim()) return <Note>Type to search this folder.</Note>;
+  if (!q.trim()) return <Note>Type to search this folder.</Note>;
   if (status?.pending) return <Note>Searching…</Note>;
   if (status && !status.data) return <Note tint="var(--error)">{status.error ?? "the search failed"}</Note>;
   if (status?.data?.error) return <Note tint="var(--error)">{status.data.error}</Note>;
 
   if (!rows.length) {
     return <Note>{
-      tab === "recent"
-        ? (q.trim() ? `Nothing you opened matches “${q.trim()}”.` : "Nothing opened here yet — the files you read will collect in this tab.")
-        : tab === "machine" ? `Nothing under ${shortPath(place)} is called “${q.trim()}”. Hidden folders are not searched.`
+      tab === "machine" ? `Nothing under ${shortPath(place)} is called “${q.trim()}”. Hidden folders are not searched.`
           : tab === "names" ? `Nothing here is called “${q.trim()}”.`
           : `No code in this checkout says “${q.trim()}”.`
     }</Note>;
@@ -1384,7 +1266,7 @@ function RowView({ row, i, on, onPick, onDouble, needle }: {
   if (row.kind === "file" && row.bytes != null) facts.push(humanBytes(row.bytes));
   if (row.kind === "dir" && row.items != null) facts.push(`${row.items} item${row.items === 1 ? "" : "s"}`);
   if (row.kind === "dir" && row.items == null && !dir) facts.push("folder");
-  const when = row.kind === "recent" ? row.at : row.mtime;
+  const when = row.mtime;
   if (when) facts.push(ago(when));
   /* The part of the name that matched, marked — the highlight is how a list of
      near-identical names says why each one is here. */
@@ -1394,13 +1276,13 @@ function RowView({ row, i, on, onPick, onDouble, needle }: {
      keys. See finderSelection.ts. */
   return (
     <button data-row={i} onClick={() => onPick(row, i)} onDoubleClick={() => onDouble(row)}
-      className="agx-pal-hit text-left px-3 py-2 rounded-lg block" title={row.kind !== "recent" && row.locked ? `${row.rel} — ${row.why ?? "listed, but kept closed: it holds credentials or is off-limits from here"}` : row.rel}
+      className="agx-pal-hit text-left px-3 py-2 rounded-lg block" title={row.locked ? `${row.rel} — ${row.why ?? "listed, but kept closed: it holds credentials or is off-limits from here"}` : row.rel}
       aria-current={on ? "true" : undefined}
       style={{
         /* Inset from the list's edges so the selection is a pill, not a band. */
         width: "calc(100% - 16px)", margin: "0 8px 2px", minHeight: 48,
         ...(on ? { background: "color-mix(in srgb, var(--text) 10%, transparent)", boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--text) 16%, transparent)" } : null),
-        ...((row.kind === "recent" && row.gone) || (row.kind !== "recent" && row.locked) ? { opacity: 0.55 } : null),
+        ...(row.locked ? { opacity: 0.55 } : null),
       }}>
       <div className="flex items-center gap-3 text-[12.5px]">
         {/* The icon may carry a kind's colour; the NAME never does. A language
@@ -1417,14 +1299,6 @@ function RowView({ row, i, on, onPick, onDouble, needle }: {
             </>
           ) : name}{row.kind === "dir" ? "/" : ""}
         </span>
-        {row.kind === "recent" && row.gone && (
-          /* Named, not merely greyed: "not on this branch" is the fact, and
-             it is the difference between a broken app and a checkout that
-             moved under you. Pressing it forgets the entry. */
-          <span className="ml-auto shrink-0 text-[9px] px-1.5 rounded" style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 32%, transparent)" }}>
-            not here now · ⏎ forgets
-          </span>
-        )}
       </div>
       {facts.length > 0 && (
         <div className="mt-0.5 pl-7 truncate text-[10.5px] tabular-nums" style={{ color: on ? NAME_INK.metaOnCursor : NAME_INK.meta }}>
@@ -1461,125 +1335,6 @@ function RowView({ row, i, on, onPick, onDouble, needle }: {
 }
 
 /* ------------------------------------------------------------ the checkout */
-
-/**
- * Which checkout the search is asking.
- *
- * The list is in a PORTAL, and that is the fix rather than the design: the
- * palette clips its children so its rounded corners hold, so a dropdown
- * rendered inside it was cut off at the panel's edge — rows running off the
- * left with their names gone, which is what "it stays contained inside the
- * finder" looks like from the outside. Drawn against the viewport now, at its
- * own layer above the palette.
- *
- * Two lines per row, not two things fighting for one. A worktree's branch name
- * and its path are both long, and side by side each truncated the other into
- * uselessness — the branch is what you pick by, the path is how you tell two
- * checkouts of the same branch apart, and you need to read both.
- */
-function RepoChip({ repo, repos, openState, onPick }: {
-  repo: GitRepoRef | null; repos: GitRepoRef[];
-  openState: [boolean, (v: boolean) => void]; onPick: (root: string) => void;
-}) {
-  const [open, setOpen] = openState;
-  const btn = useRef<HTMLButtonElement>(null);
-  const [box, setBox] = useState<{ top: number; right: number } | null>(null);
-  const [filter, setFilter] = useState("");
-  const field = useMenuField(open);
-
-  // Measured when it opens, and again if the window moves under it. A position
-  // computed once at mount would be wrong the moment anything resized.
-  useEffect(() => {
-    if (!open) { setFilter(""); return; }
-    const place = () => {
-      const r = btn.current?.getBoundingClientRect();
-      if (r) setBox({ top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) });
-    };
-    place();
-    window.addEventListener("resize", place);
-    return () => window.removeEventListener("resize", place);
-  }, [open]);
-
-  const shown = repos.filter((r) => {
-    const q = filter.trim().toLowerCase();
-    return !q || `${r.name} ${r.branch} ${r.root}`.toLowerCase().includes(q);
-  });
-
-  return (
-    <>
-      <button ref={btn} onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 text-[10.5px] px-2 py-1 rounded-md max-w-[220px] shrink-0"
-        style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: EDGE, color: "var(--text2)" }}
-        title={repo ? `${repo.name}\n${repo.branch}\n${repo.root}` : "Pick a checkout"}>
-        <span className="truncate min-w-0">{repo ? (repo.worktreeOf ? repo.branch : repo.name) : "Pick a checkout"}</span>
-        <span className="shrink-0" style={{ color: "var(--text3)" }}>▾</span>
-      </button>
-      {open && box && (
-        <Portal z={LAYER.menu}>
-          {/* A backdrop rather than a document-level listener: one element that
-              closes on a click anywhere else, and cannot be outrun by a click
-              that lands on something which stops propagation. */}
-          <div className="fixed inset-0" onClick={() => setOpen(false)} />
-          <div className="fixed rounded-lg text-[11px] shadow-2xl flex flex-col overflow-hidden"
-            style={{
-              top: box.top, right: box.right,
-              // Wide enough for a branch name, and never wider than the window.
-              width: "min(520px, calc(100vw - 16px))", maxHeight: "min(420px, 60vh)",
-              background: "var(--surface-card)", border: edge(30),
-            }}
-            onKeyDown={menuKeys(() => setOpen(false))}>
-            {/* Said once, at the top: the pair of chips is only unambiguous
-                if each menu also says which question it answers. */}
-            {/* Label and explanation are two different kinds of text, so they
-                get 6px: touching, the caption read as the first line of the
-                sentence under it. */}
-            <div className="px-3 pt-2 pb-1.5 shrink-0 flex flex-col gap-1" style={{ borderBottom: LINE }}>
-              <div className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text2)" }}>Where</div>
-              <div className="text-[10px]" style={{ color: "var(--text4)" }}>a copy on disk — each has its own branch and its own uncommitted work</div>
-            </div>
-            {repos.length > 6 && (
-              <input ref={field} value={filter} onChange={(e) => setFilter(e.target.value)}
-                placeholder="Filter checkouts…" spellCheck={false}
-                className={`m-1.5 shrink-0 ${INPUT}`}
-                style={INPUT_STYLE} />
-            )}
-            {/* Padded on both ends: bottom-only put the first row against the
-                filter field, where it read as part of it. */}
-            <div className="agx-scroll overflow-y-auto overflow-x-hidden py-1.5" style={{ minHeight: 0 }}>
-              {repos.length === 0 && <div className="px-3 py-2" style={{ color: "var(--text3)" }}>No checkouts found.</div>}
-              {repos.length > 0 && shown.length === 0 && (
-                <div className="px-3 py-2" style={{ color: "var(--text3)" }}>No checkout matches “{filter.trim()}”.</div>
-              )}
-              {shown.map((r) => (
-                <button key={r.root} onClick={() => onPick(r.root)}
-                  className="w-full text-left px-3 py-1.5 flex flex-col gap-1"
-                  style={{ background: r.root === repo?.root ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
-                  {/*
-                    * The FOLDER leads, not the branch.
-                    *
-                    * This picks a place on disk, and leading with the branch
-                    * made it look like a second branch picker sitting next to
-                    * the real one. The branch is still here — it is how you
-                    * recognise which worktree is which — but as what that place
-                    * currently holds, which is what it is.
-                    */}
-                  <span className="flex items-center gap-2 min-w-0">
-                    <span className="truncate" style={{ color: "var(--text)" }}>{shortPath(r.root)}</span>
-                    {r.worktreeOf && (
-                      <span className="shrink-0 text-[8.5px] px-1 rounded"
-                        style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }}>WT</span>
-                    )}
-                  </span>
-                  <span className="text-[9.5px] truncate" style={{ color: "var(--text4)" }}>on {r.branch}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </Portal>
-      )}
-    </>
-  );
-}
 
 /* ------------------------------------------------------------- the place */
 

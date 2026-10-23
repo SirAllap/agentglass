@@ -79,18 +79,33 @@ export const stripPad = (widths: readonly number[], target: number, page: number
 /**
  * The preview panel's width: a third of the finder, 300 to 460 px, unless it was
  * dragged, then wherever it was dragged to, from 240 px up to leaving the columns
- * 320 px of their own. Strata's panel has a grip the same way.
+ * 320 px of their own beside the sidebar (`side`): counted from the whole
+ * finder, a wide drag left the first column less than its 300 px, cut by a scrollbar. Strata's panel has a grip the same way.
  */
-export function previewWidth(boxW: number, dragged?: number): number {
+export function previewWidth(boxW: number, dragged?: number, side = 0): number {
   if (dragged === undefined) return Math.max(300, Math.min(460, Math.round(boxW * 0.36)));
-  return clamp(dragged, 240, Math.max(240, boxW - 320));
+  return clamp(dragged, 240, Math.max(240, boxW - side - 320));
 }
+
+/**
+ * The width a dragged preview takes. The start is the width it HAS on screen, measured, not the one the
+ * maths would give it: while the person has not dragged yet the panel grows to fill the strip (523 px
+ * where previewWidth says 460), and starting from the computed one made the divider jump by the
+ * difference on the first pixel of the drag. The panel is on the right, so moving left widens it.
+ */
+export const dragPreviewWidth = (boxW: number, startWidth: number, startX: number, x: number, side = 0): number => previewWidth(boxW, startWidth - (x - startX), side);
+
+/** The room the strip has beside the preview, for the columns that fit and for autofit: the finder less the sidebar, the preview and its divider. A fit measured against the strip itself (which shrinks to its first column) could never be wider than that column. */
+export const stripRoom = (boxW: number, side: number): number => boxW - side - previewWidth(boxW) - 7;
 
 /** Strata: the sidebar starts 201 px wide and never goes under 169. */
 export const SIDE_DEFAULT = 201;
 export const SIDE_MIN = 169;
 export const SIDE_MAX = 360;
 const RAIL_W = 34;
+
+/** In a window too narrow for the sidebar beside the files, the sidebar is the whole page (Strata's), so it takes the full width; null when it is not that page. */
+export const sidePageWidth = (onPage: boolean, boxW: number): number | null => (onPage && boxW > 0 ? boxW : null);
 
 /** The sidebar's pixels: the rail is fixed, the full list is what was dragged, kept off the columns' last 320 px. */
 export function sidebarWidth(mode: "full" | "rail", dragged: number, boxW: number): number {
@@ -126,3 +141,10 @@ export function stripLayout(widths: readonly number[], active: number, page: num
 
 /** A column narrower than this drops the size and the item count from its rows: the name is what is left. */
 export const TIGHT_W = 170;
+
+/** The width of as many whole columns, from the first, as fit in `avail` (at least the first one): the strip beside the preview never ends in a sliced column. */
+export function wholeColumnsWidth(widths: readonly number[], avail: number): number {
+  let sum = 0;
+  for (const w of widths) { if (sum > 0 && sum + w > avail) break; sum += w; }
+  return sum;
+}

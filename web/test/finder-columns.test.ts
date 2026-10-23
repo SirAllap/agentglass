@@ -4,7 +4,7 @@
  * cut while there is room. Drag and double-click change one column's width.
  */
 import { describe, expect, test } from "bun:test";
-import { COL_CHROME, COL_DEFAULT, columnWidth, fitWidth, dragWidth, longestNames, revealScroll, stripPad, previewWidth, stripLayout, TIGHT_W } from "../src/lib/finderColumns.ts";
+import { COL_CHROME, COL_DEFAULT, columnWidth, fitWidth, dragWidth, longestNames, revealScroll, stripPad, previewWidth, dragPreviewWidth, stripLayout, stripRoom, TIGHT_W } from "../src/lib/finderColumns.ts";
 
 const px = (s: string) => s.length * 7;
 
@@ -103,7 +103,7 @@ describe("the edge stays inside its column", () => {
 describe("names and badges in a row", () => {
   test("a long name ends in an ellipsis: one truncating span, no clipped tail", async () => {
     const t = await Bun.file(new URL("../src/components/finder/machine/Column.tsx", import.meta.url)).text();
-    expect(t).toContain('<span className="flex-1 min-w-0 truncate">{name}</span>');
+    expect(t).toContain('<span data-name className="flex-1 min-w-0 truncate">{name}</span>');
     expect(t).not.toContain("splitName");
   });
   test("the item count shows on the selected folder of the active column only", async () => {
@@ -118,6 +118,11 @@ describe("the preview panel's width", () => {
     expect(previewWidth(1000)).toBe(360);
     expect(previewWidth(600)).toBe(300);
     expect(previewWidth(3000)).toBe(460);
+  });
+  test("the 320 px the columns keep are beside the sidebar, not counting it", () => {
+    expect(previewWidth(1200, 1100)).toBe(880);
+    expect(previewWidth(1200, 1100, 201)).toBe(679);
+    expect(dragPreviewWidth(1200, 500, 900, 100, 201)).toBe(679);
   });
   test("dragged, it keeps 240 px at least and leaves the columns 320", () => {
     expect(previewWidth(1200, 100)).toBe(240);
@@ -162,5 +167,61 @@ describe("free room goes to the preview, not to a gap", () => {
     const src = await Bun.file(new URL("../src/components/finder/machine/MachineFinder.tsx", import.meta.url)).text();
     expect(src).toContain('"0 1 auto" : "1 1 0%"');
     expect(src).toMatch(/flex: `\$\{prevDrag === undefined && prefs\.view === "columns" \? 1 : 0\} 0 /);
+  });
+});
+
+describe("the sidebar as a page", () => {
+  test("a window too narrow for it beside the files gives it the whole width", async () => {
+    const { sidePageWidth } = await import("../src/lib/finderColumns.ts");
+    expect(sidePageWidth(true, 460)).toBe(460);
+    expect(sidePageWidth(false, 460)).toBeNull();
+    expect(sidePageWidth(true, 0)).toBeNull();
+  });
+  test("the finder passes it to the sidebar", async () => {
+    const t = await Bun.file(new URL("../src/components/finder/machine/MachineFinder.tsx", import.meta.url)).text();
+    expect(t).toContain("const sideW = sidePageWidth(compact && sidePage, box.w) ??");
+  });
+});
+
+describe("the strip beside the preview", () => {
+  test("holds only whole columns, at least one", async () => {
+    const { wholeColumnsWidth } = await import("../src/lib/finderColumns.ts");
+    expect(wholeColumnsWidth([300, 300, 300], 697)).toBe(600);
+    expect(wholeColumnsWidth([300, 300], 900)).toBe(600);
+    expect(wholeColumnsWidth([300, 300], 200)).toBe(300);
+    expect(wholeColumnsWidth([], 500)).toBe(0);
+  });
+  test("the finder caps the strip with it and snaps to column edges, and refits when the strip is resized", async () => {
+    const t = await Bun.file(new URL("../src/components/finder/machine/MachineFinder.tsx", import.meta.url)).text();
+    expect(t).toContain("maxWidth: stripMax");
+    expect(t).toContain('scrollSnapType: "x mandatory"');
+    expect(t).toContain("[key, active, page]");
+  });
+});
+
+describe("autofit beside the preview", () => {
+  // The strip beside the preview shrinks to its first column (300), so a fit measured against the strip could never pass 300.
+  const long = ["a-very-long-folder-name-that-needs-more-than-three-hundred-pixels.txt"];
+  test("the room is the finder less the sidebar, the preview and its divider", () => {
+    expect(stripRoom(1400, 201)).toBe(1400 - 201 - previewWidth(1400) - 7);
+  });
+  test("a long name fits into that room, not into the 300 the strip has shrunk to", () => {
+    expect(fitWidth(long, px, 300)).toBe(300);
+    expect(fitWidth(long, px, stripRoom(1400, 201))).toBeGreaterThan(300);
+  });
+  test("the finder's fit asks for the room beside the preview", async () => {
+    const t = await Bun.file(new URL("../src/components/finder/machine/MachineFinder.tsx", import.meta.url)).text();
+    expect(t).toContain("measure, columnRoom)");
+    expect(t).toContain("const columnRoom = stripAvail ?? (mainBox.w || undefined);");
+    expect(t).toContain("columnWidth(dragged[c.path], columnRoom)");
+    expect(t).not.toContain("mainBox.w || undefined)),");
+  });
+});
+
+describe("the finder gives the preview its sidebar", () => {
+  test("every width it asks for counts the sidebar", async () => {
+    const t = await Bun.file(new URL("../src/components/finder/machine/MachineFinder.tsx", import.meta.url)).text();
+    expect(t).not.toMatch(/previewWidth\(box\.w, prevDrag\)/);
+    expect(t).toContain("dragPreviewWidth(box.w, w0, x0, ev.clientX, sideTaken)");
   });
 });

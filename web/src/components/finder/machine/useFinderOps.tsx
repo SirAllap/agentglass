@@ -220,19 +220,19 @@ export function useFinderOps(env: OpsEnv) {
   }, []);
   const dragEnd = useCallback(() => { drag.current = null; }, []);
   /** Whether a drop on `dest` would do anything, and what (null = refuse, so the pointer says no). */
-  const dropAllows = useCallback((dest: string, ctrl: boolean): "move" | "copy" | null => {
+  const dropAllows = useCallback((dest: string, ctrl: boolean, more?: { shift?: boolean; mounts?: readonly string[] }): "move" | "copy" | null => {
     const d = drag.current;
     if (!d) return null;
-    const p = dropPlan(d.dir, d.names, dest, ctrl);
+    const p = dropPlan(d.dir, d.names, dest, ctrl, more);
     return typeof p === "string" ? null : p.op;
   }, []);
-  const dropOn = useCallback((dest: string, ctrl: boolean, trash = false) => {
+  const dropOn = useCallback((dest: string, ctrl: boolean, trash = false, more?: { shift?: boolean; mounts?: readonly string[] }) => {
     const d = drag.current; drag.current = null;
     if (!d) return;
     const ps = d.names.map((n) => joinPath(d.dir, n));
     const one = d.names.length === 1 ? d.names[0]! : "";
     if (trash) { void run({ op: "trash", paths: ps }, [d.dir], one, d.names.length); return; }
-    const p = dropPlan(d.dir, d.names, dest, ctrl);
+    const p = dropPlan(d.dir, d.names, dest, ctrl, more);
     if (p === "inside") { envRef.current.say("A folder cannot go into itself"); return; }
     if (p === "nothing") return;
     void run({ op: p.op, paths: ps, dest, conflict: p.conflict }, [d.dir, dest], one, d.names.length);

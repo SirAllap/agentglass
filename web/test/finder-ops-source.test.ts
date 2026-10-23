@@ -77,8 +77,7 @@ describe("properties in the empty space", () => {
 describe("a box laid over the finder", () => {
   test("closes on Escape wherever the focus is", () => {
     const f = code(ui).slice(code(ui).indexOf("export function Sheet("), code(ui).indexOf("export interface InlineEdit"));
-    expect(f).toContain('window.addEventListener("keydown", on, true)');
-    expect(f).toContain('e.key === "Escape"');
+    expect(f).toContain("useDialogEscape(onClose)");
   });
 });
 

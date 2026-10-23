@@ -21,6 +21,8 @@ export interface MachineSnap {
   focusCol: number;
   /** scrollTop by folder. */
   scroll: Record<string, number>;
+  /** The first item at the top of the Icons view, by folder (items, because the tiles per row follow the width). */
+  iconsFirst?: Record<string, number>;
   /** Column widths somebody dragged, by folder. */
   dragged: Record<string, number>;
   /** The palette's place when this was written. A different place now means something outside the finder (a terminal link, a chip) moved it while it was closed. */
@@ -74,10 +76,22 @@ export function readMachineSnap(raw: string | null): MachineSnap | null {
   return {
     v: 1, trail, sel, focusCol,
     scroll: byFolder(o.scroll, (n) => n >= 0),
+    ...(o.iconsFirst ? { iconsFirst: byFolder(o.iconsFirst, (n) => n >= 0) } : {}),
     dragged: byFolder(o.dragged, (n) => n >= 100),
     peek: o.peek === true,
     ...(typeof o.origin === "string" ? { origin: o.origin } : {}),
     ...(num(o.prevDrag) && o.prevDrag >= 240 ? { prevDrag: o.prevDrag } : {}),
     ...(pt && typeof pt.path === "string" && pt.path.startsWith("/") && typeof pt.tab === "string" && pt.tab.length < 40 ? { previewTab: { path: pt.path, tab: pt.tab } } : {}),
   };
+}
+
+/**
+ * The remembered scroll of a folder a request is about to point at (a path clicked in a terminal, a typed
+ * path) is dropped: the request wants its file in view, and a restored scroll skips the one pass that
+ * scrolls to the selection, which left a linked file selected but out of sight. Everything else stays.
+ */
+export function scrollWithout(scroll: Readonly<Record<string, number>> | undefined, folders: readonly (string | null | undefined)[]): Record<string, number> {
+  const out: Record<string, number> = { ...scroll };
+  for (const f of folders) if (f) delete out[f];
+  return out;
 }

@@ -53,10 +53,10 @@ export function toggleCursor(rows: readonly Row[], from: Choice): Choice {
 }
 
 /** Ctrl+A: every row shown. */
-export function selectAll(rows: readonly Row[], from: Choice): Choice {
+export function selectAll(rows: readonly Row[], _from: Choice): Choice {
   if (!rows.length) return single(null);
-  const cursor = from.cursor !== null && at(rows, from.cursor) >= 0 ? from.cursor : rows[0]!.name;
-  return { names: new Set(rows.map((r) => r.name)), anchor: rows[0]!.name, cursor };
+  // Strata leaves the anchor (and the cursor) on the last row, so a Shift+arrow after it shrinks from the end.
+  return { names: new Set(rows.map((r) => r.name)), anchor: rows[rows.length - 1]!.name, cursor: rows[rows.length - 1]!.name };
 }
 
 const DETAIL_MAX = 64;
@@ -78,7 +78,27 @@ export function selectedFooter(rows: readonly Row[], c: Choice): string {
 }
 
 /** How many rows Shift+arrow or Shift+page moves the cursor: a row (or a line of tiles), or a page; down is positive. */
-export function extendBy(by: "up" | "down" | "pageUp" | "pageDown", page: number, perRow: number): number {
+export function extendBy(by: "up" | "down" | "pageUp" | "pageDown" | "home" | "end", page: number, perRow: number): number {
+  // Shift+Home / Shift+End: to the first or the last row; extendSelect stops at the ends.
+  if (by === "home" || by === "end") return by === "home" ? -Number.MAX_SAFE_INTEGER : Number.MAX_SAFE_INTEGER;
   const n = by === "pageUp" || by === "pageDown" ? Math.max(1, page) : Math.max(1, perRow);
   return by === "up" || by === "pageUp" ? -n : n;
+}
+
+/** Two corners of a drag as a box, whichever way it was dragged. */
+export interface Box { left: number; top: number; right: number; bottom: number }
+export const boxOf = (a: { x: number; y: number }, b: { x: number; y: number }): Box => ({ left: Math.min(a.x, b.x), top: Math.min(a.y, b.y), right: Math.max(a.x, b.x), bottom: Math.max(a.y, b.y) });
+export const touches = (r: Box, b: Box): boolean => r.left < b.right && r.right > b.left && r.top < b.bottom && r.bottom > b.top;
+
+/**
+ * Strata's rubber band (ui/browser/marquee.rs): the rows the box touches. With no
+ * key they are the selection; with Shift they are added to the one there was when
+ * the drag began; with Ctrl each one touched flips against it. The anchor is the
+ * first row touched and the cursor the last, in the folder's order.
+ */
+export function marqueeChoice(rows: readonly Row[], hit: ReadonlySet<string>, initial: Choice, mod: { ctrl: boolean; shift: boolean }): Choice {
+  const names = new Set<string>(mod.ctrl || mod.shift ? initial.names : []);
+  for (const n of hit) { if (mod.ctrl && initial.names.has(n)) names.delete(n); else names.add(n); }
+  const inOrder = rows.filter((r) => hit.has(r.name)).map((r) => r.name);
+  return { names, anchor: inOrder[0] ?? initial.anchor, cursor: inOrder[inOrder.length - 1] ?? initial.cursor };
 }

@@ -3,6 +3,7 @@
 // rendered, a page in an isolated frame, JSON as text / tree / graph, pictures,
 // PDF, audio and video in their own viewers, and a plain message for a binary.
 // The "Editing" tab is nvim running in this pane (FinderNvim); the header's "Open in nvim" is the bench.
+import { schemeOfTheme } from "../../../lib/schemeOfTheme.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../../lib/api.ts";
 import { Markdown } from "../../../lib/markdown.tsx";
@@ -10,7 +11,7 @@ import { useDiffHighlight } from "../../../lib/diffHighlight.ts";
 import { humanBytes } from "../../../lib/paletteModel.ts";
 import {
   COLOUR_LINES, GRAPH_MAX_BYTES, HTML_RENDER_MAX_BYTES, JSON_READ_CAP, READ_LINES,
-  defaultTab, graphAllowed, htmlRenderable, isGif, isolatedDoc, nextReadWidth, previewPlan, readMaxWidth, readWidthLabel, readWindow, sortedOrder, type ReadWidth, type PreviewTab,
+  defaultTab, graphAllowed, hasRawHtml, htmlRenderable, isGif, isolatedDoc, nextReadWidth, previewPlan, readMaxWidth, readWidthLabel, readWindow, sortedOrder, type ReadWidth, type PreviewTab,
 } from "../../../lib/finderPreview.ts";
 import { HIT } from "../../../lib/iconSize.ts";
 import type { FileFacts } from "../../../../../shared/types.ts";
@@ -143,7 +144,7 @@ export function PreviewBody({ path, facts, canEdit, root, onEditing, savedTab, o
     case "image": body = isGif(facts.name) && !autoplay ? <StillGif src={api.previewUrl(path)} facts={facts} /> : <Picture src={api.previewUrl(path)} facts={facts} />; break;
     case "convert": body = <Converted path={path} facts={facts} />; break;
     case "pdf": body = <iframe title={facts.name} src={api.previewUrl(path)} className="w-full flex-1" style={{ border: EDGE, borderRadius: 6, minHeight: 360, background: "var(--bg)" }} />; break;
-    case "audio": body = <audio src={api.previewUrl(path)} controls preload="metadata" autoPlay={autoplay} className="w-full" aria-label={facts.name} />; break;
+    case "audio": body = <audio style={{ colorScheme: schemeOfTheme() }} src={api.previewUrl(path)} controls preload="metadata" autoPlay={autoplay} className="w-full" aria-label={facts.name} />; break;
     case "video": body = <video src={api.previewUrl(path)} controls preload="metadata" autoPlay={autoplay} className="w-full" style={{ maxHeight: "60vh", borderRadius: 6 }} aria-label={facts.name} />; break;
     default: body = <p style={{ color: "var(--text3)" }}><b>{facts.name}</b> is a binary file ({humanBytes(facts.bytes)}): there is no text to show. “Open in Files” hands it to the desktop.</p>;
   }
@@ -226,7 +227,7 @@ function MarkdownView({ facts, readW }: { facts: FileFacts; readW: ReadWidth }) 
   }, [facts.text]);
   return (
     <div className="min-w-0 flex flex-col gap-3" style={CODE_FONT_STYLE}>
-      <div role="note" className="rounded-md px-2.5 py-1.5 text-[11px]" style={{ border: EDGE, background: "var(--surface-card)", color: "var(--text2)" }}>Raw HTML is shown as inert text in Markdown previews.</div>
+      {hasRawHtml(facts.text) && <div role="note" className="rounded-md px-2.5 py-1.5 text-[11px]" style={{ border: EDGE, background: "var(--surface-card)", color: "var(--text2)" }}>Raw HTML is shown as inert text in Markdown previews.</div>}
       <div ref={ref} className="agx-prose agx-prose-pane agx-strata-md mx-auto w-full min-w-0" style={{ ...CODE_FONT_STYLE, fontSize: 11.5, maxWidth: readMaxWidth(readW), overflowWrap: "anywhere" }}>
         <Markdown text={facts.text ?? ""} />
         {facts.textTruncated && note(`Only the first part of this ${humanBytes(facts.bytes)} file is rendered. Open in nvim for the rest.`, true)}
