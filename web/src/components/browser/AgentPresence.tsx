@@ -24,10 +24,12 @@ import { LivingMark } from "../Logo.tsx";
 const LAP_MS = 18_000;
 const calmNow = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-export function AgentPresence({ agent, landing, onToggle }: {
+export function AgentPresence({ agent, landing, onToggle, quiet = false }: {
   agent: TabAgent;
   landing: ActLanding | null;
   onToggle: () => void;
+  /** The island tucked away because the page is the person's: the dock leaves with it. */
+  quiet?: boolean;
 }) {
   const root = useRef<HTMLDivElement | null>(null);
   const sat = useRef<HTMLDivElement | null>(null);
@@ -90,7 +92,7 @@ export function AgentPresence({ agent, landing, onToggle }: {
           <span className="agx-presence-label">{ghost.label}</span>
         </div>
       )}
-      {(live || agent.paused) && (
+      {(live || agent.paused) && !quiet && (
         <div className={"agx-presence-dock" + (agent.paused ? " is-yours" : "")} role="status" aria-live="polite">
           <LivingMark size={22} style={{ color: "var(--agx-mark)" }} />
           <div className="agx-presence-who">

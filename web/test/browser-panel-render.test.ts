@@ -73,6 +73,8 @@ const seedSession = (url: string, title: string) => {
 
 beforeEach(() => {
   store.clear();
+  /* The bar these tests read is the classic tab list; the island is the default chrome. */
+  store.set("agentglass.browser.chrome", "classic");
   // Cache-busting the import between cases would re-register React's dispatcher
   // for nothing: the panel reads storage in its state initialisers, so a fresh
   // render is enough.
@@ -278,5 +280,19 @@ describe("the close button's place in the row", () => {
     }));
     const html = await draw();
     expect(html).toContain('aria-hidden="true"');
+  });
+});
+
+describe("the island is the default chrome", () => {
+  test("with no choice made, the page gets the island and the list is not drawn", async () => {
+    store.delete("agentglass.browser.chrome");
+    const html = await draw();
+    expect(html).toContain('class="agx-isl');
+    expect(html).not.toContain("New folder");
+  });
+  test("the classic list is one menu choice away, and comes back as it was", async () => {
+    expect(await draw()).toContain("New folder");
+    const src = await Bun.file(new URL("../src/components/BrowserPanel.tsx", import.meta.url)).text();
+    expect(src).toContain('"Classic tab list"');
   });
 });

@@ -27,7 +27,7 @@ import { Portal } from "./Portal.tsx";
 import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
 import { BROWSER_PARTITION, HAS_BROWSER, IS_DESKTOP, applySessionSettings, browserDevtools, browserDevtoolsClose, browserDevtoolsRect, browserDevtoolsZoom, browserCdp, browserZoom, browserShelfRead, captureFullPage, cookieSources, onDevtoolsZoom, onDevtoolsOpen, onBrowserZoom, onBrowserOpenTab, onBrowserKey, onBrowserSearch, onBrowserInspect, setActiveBrowserGuest, setGuestOwner, openEphemeralTab, closeEphemeralTab } from "../lib/desktop.ts";
 import { buildSearchUrl, displayUrl, normalizeNavigationUrl } from "../lib/browserUrl.ts";
-import { BLANK, homePage, searchEngine, zoomLevel, setZoomLevel as saveZoom, zoomPercent, stepZoom, ZOOM_MIN, ZOOM_MAX, devtoolsSide, setDevtoolsSide, devtoolsSize, setDevtoolsSize, devtoolsZoom, setDevtoolsZoom, sidebarOpen, setSidebarOpen, sidebarWidth, setSidebarWidth, type DevtoolsSide } from "../lib/browserPrefs.ts";
+import { BLANK, homePage, searchEngine, zoomLevel, setZoomLevel as saveZoom, zoomPercent, stepZoom, ZOOM_MIN, ZOOM_MAX, devtoolsSide, setDevtoolsSide, devtoolsSize, setDevtoolsSize, devtoolsZoom, setDevtoolsZoom, sidebarOpen, classicChrome, setClassicChrome, setSidebarOpen, sidebarWidth, setSidebarWidth, type DevtoolsSide } from "../lib/browserPrefs.ts";
 import { addTab, closeTab, listable, newTab, patchTab, popupHome, pruneBlank, sleepingTab, stepTab, tabLabel, wake, withInspected, type BrowserTab } from "../lib/browserTabs.ts";
 import { dropsBefore, isDrag, parseDrop, type DropAt } from "../lib/browserDrag.ts";
 import {
@@ -45,10 +45,11 @@ import {
 import { VIEWPORTS, type Viewport } from "../lib/browserViewport.ts";
 import { browserNav, clearBrowserNav, subscribeBrowserNav } from "../lib/browserNav.ts";
 import { clientId, serveBrowserAsk, setBrowserAskHandler } from "../lib/browserBus.ts";
-import { activityReducer, actionOf, agentLabel, pausedRefusal, type Activity } from "../lib/browserAgentActivity.ts";
+import { activityReducer, actionOf, agentLabel, pausedRefusal, presenceLabel, type Activity } from "../lib/browserAgentActivity.ts";
 import { api } from "../lib/api.ts";
 import { forgetAgentZoom, reapplyZoom, applyGuestZoom, setPageZoomer, crossContainerRefusal, mintTakesThePane, notePopup, onActLanded, type ActLanding, type GuestZoom, type DrivableWebview } from "../lib/browserDrive.ts";
 import { AgentPresence } from "./browser/AgentPresence.tsx";
+import { BrowserIsland } from "./browser/BrowserIsland.tsx";
 import { onBrowserTabs } from "../lib/browserBus.ts";
 import { COLLECTOR } from "../lib/browserObserve.ts";
 import { PagePicker } from "./browser/PagePicker.tsx";
@@ -525,6 +526,10 @@ export function BrowserView({ active: viewOn, scope }: {
   /** The bar itself, and how wide. Hidden, it leaves a hot edge that brings it
    *  back floating — see the sidebar's markup. */
   const [sideOpen, setSideOpen] = useState(() => sidebarOpen());
+  /** The island (default) or the classic list on the right; see BrowserIsland. */
+  const [classic, setClassic] = useState(() => classicChrome());
+  /** The island tucked itself away because the page is the person's: the dock goes too. */
+  const [islandTucked, setIslandTucked] = useState(false);
   const [sideW, setSideW] = useState(() => sidebarWidth());
   const [peek, setPeek] = useState(false);
   /** Which folder is being renamed, and what it says so far. */
@@ -2502,7 +2507,8 @@ export function BrowserView({ active: viewOn, scope }: {
             say("Opened in your browser");
           } },
           { key: "zoom", node: menuRow(null, "Zoom back to 100%"), hint: "Ctrl+0", run: () => applyZoom(0) },
-          { key: "hide", node: menuRow(<PanelIcon size={14} />, "Hide this bar"), hint: "Ctrl+S", run: () => { setSideOpen(false); setSidebarOpen(false); } },
+          { key: "chrome", node: menuRow(<PanelIcon size={14} />, classic ? "Use the island" : "Classic tab list"), hint: "", run: () => { const c = !classic; setClassic(c); setClassicChrome(c); if (c) { setSideOpen(true); setSidebarOpen(true); } } },
+          ...(classic ? [{ key: "hide", node: menuRow(<PanelIcon size={14} />, "Hide this bar"), hint: "Ctrl+S", run: () => { setSideOpen(false); setSidebarOpen(false); } }] : []),
         ].map((it) => (it.sep ? (
           <div key={it.key} className="my-1" style={{ borderTop: LINE }} />
         ) : (
@@ -3008,6 +3014,19 @@ export function BrowserView({ active: viewOn, scope }: {
           * long url is truncated, because two lines of address bouncing the
           * page's bottom corner is worse than the half you cannot read.
           */}
+        {!classic && !IS_DEMO && (
+          <BrowserIsland tabs={tabs} activeId={activeId} acts={acts}
+            spaceName={(id) => profileName(profilesRef.current, id)}
+            doing={active && landings[active.id] ? presenceLabel(landings[active.id]!.verb, landings[active.id]!.name, landings[active.id]!.key) : ""}
+            address={active?.url && active.url !== BLANK ? displayUrl(active.url) : ""}
+            canBack={!!active?.canBack} canForward={!!active?.canForward} loading={!!active?.loading}
+            onShow={show} onClose={close} onNew={() => setOmni("new")} onAddress={() => setOmni("edit")}
+            onBack={() => el()?.goBack()} onForward={() => el()?.goForward()} onReload={() => el()?.reload()} onStop={() => el()?.stop()}
+            onMenu={(r) => { setMenuAtXY({ top: r.bottom + 6, right: Math.max(6, window.innerWidth - r.right) }); setMenuOpen(true); }}
+            onToggle={(id) => { const a = actsRef.current[id]; if (a) dispatchAct({ type: "pause", tab: id, paused: !a.paused }); }}
+            picture={async (id) => { const w = els.current.get(id); if (!w) return null; try { return (await w.capturePage()).toDataURL(); } catch { return null; } }}
+            onTucked={setIslandTucked} />
+        )}
         {hover && (
           <div className="absolute bottom-0 left-0 max-w-[70%] truncate text-[10.5px] px-2 py-1 rounded-tr-md pointer-events-none"
             style={{ zIndex: 20, color: "var(--text2)", background: "var(--surface-card)",
@@ -3056,7 +3075,7 @@ export function BrowserView({ active: viewOn, scope }: {
                 : { left: 0, right: 0, ...(t.id === activeId ? null : { visibility: "hidden" }) }}>
             <div style={{ position: "relative", width: viewport.width ? `${viewport.width}px` : "100%", height: "100%", maxWidth: "100%" }}>
               {acts[t.id] && (
-                <AgentPresence agent={acts[t.id]!} landing={landings[t.id] ?? null}
+                <AgentPresence agent={acts[t.id]!} landing={landings[t.id] ?? null} quiet={!classic && islandTucked && t.id === activeId}
                   onToggle={() => dispatchAct({ type: "pause", tab: t.id, paused: !acts[t.id]!.paused })} />
               )}
               {IS_DEMO ? (
@@ -3272,7 +3291,7 @@ export function BrowserView({ active: viewOn, scope }: {
       </div>
       {/* The grip. In the gap, wide enough for a pointer even though the line
           it draws is one pixel — the same handle the card pane has. */}
-      {sideOpen && (
+      {classic && sideOpen && (
         <div role="separator" aria-orientation="vertical" tabIndex={0}
           aria-label="Drag to resize the bar"
           title="Drag to resize · double-click for the usual width"
@@ -3297,7 +3316,7 @@ export function BrowserView({ active: viewOn, scope }: {
           className="shrink-0 self-stretch"
           style={{ width: 5, marginLeft: -3, cursor: "col-resize", zIndex: 5 }} />
       )}
-      {sideOpen ? (
+      {!classic ? null : sideOpen ? (
         <aside className="shrink-0 min-h-0" style={{ width: sideW }}>{sideBody}</aside>
       ) : (
         <>
