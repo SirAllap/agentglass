@@ -19,8 +19,9 @@ describe("the frame guard", () => {
   // Off screen GitHub changed its address and never its page: its swap waits on a frame that never came.
   test("a page with no frames gets its frame callbacks from a timer", async () => {
     const w = page(false);
+    const before = w.requestAnimationFrame;
     await sleep(100);
-    expect((w.__agxFrames as () => boolean)()).toBe(true);
+    expect(w.requestAnimationFrame).not.toBe(before);
     let ran = false;
     (w.requestAnimationFrame as (cb: () => void) => void)(() => { ran = true; });
     await sleep(40);
@@ -37,6 +38,22 @@ describe("the frame guard", () => {
     const before = w.requestAnimationFrame;
     await sleep(120);
     expect(w.requestAnimationFrame).toBe(before);
-    expect(w.__agxFrames).toBeUndefined();
+  });
+  // A named global let any page tell an agent's tab from a person's and serve it something else.
+  test("a guarded page holds no global that names the guard", async () => {
+    const w = page(false);
+    await sleep(100);
+    expect(Object.keys(w).filter((k) => k.startsWith("__agx"))).toEqual([]);
+    expect(Object.getOwnPropertyNames(w).filter((k) => k.startsWith("__agx"))).toEqual([]);
+    expect(Object.getOwnPropertySymbols(w)).toEqual([]);
+  });
+  // A second run on the same document (every ask runs it twice) must not wrap the wrap.
+  test("a second run leaves the first wrap in place", async () => {
+    const w = page(false);
+    await sleep(100);
+    const once = w.requestAnimationFrame;
+    new Function("window", "requestAnimationFrame", FRAME_GUARD)(w, w.requestAnimationFrame);
+    await sleep(100);
+    expect(w.requestAnimationFrame).toBe(once);
   });
 });

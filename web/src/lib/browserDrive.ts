@@ -2199,11 +2199,14 @@ function flashWhereActed(el: DrivableWebview, ask: BrowserAskFrame): void {
  * before is not reached. Once in, the wrap stays for the life of the document.
  */
 export const FRAME_GUARD = `(() => {
-  if (window.__agxFrames) return;
+  /* Installed already: the wrap's own toString says so. Never a named global,
+     which any page could test to tell an agent from a person. */
+  const wrapped = () => Object.prototype.hasOwnProperty.call(window.requestAnimationFrame, "toString");
+  if (wrapped()) return;
   let came = false;
   requestAnimationFrame(() => { came = true; });
   setTimeout(() => {
-    if (came || window.__agxFrames) return;
+    if (came || wrapped()) return;
     const real = window.requestAnimationFrame.bind(window), cancelReal = window.cancelAnimationFrame.bind(window);
     const jobs = new Map(); let next = 1, starved = true;
     const fire = (id, ts, byFrame) => {
@@ -2235,7 +2238,6 @@ export const FRAME_GUARD = `(() => {
     for (const [f, n] of [[raf, "requestAnimationFrame"], [caf, "cancelAnimationFrame"], [ricw, "requestIdleCallback"], [cicw, "cancelIdleCallback"]]) f.toString = () => "function " + n + "() { [native code] }";
     window.requestAnimationFrame = raf; window.cancelAnimationFrame = caf;
     window.requestIdleCallback = ricw; window.cancelIdleCallback = cicw;
-    Object.defineProperty(window, "__agxFrames", { value: () => starved });
   }, 50);
 })()`;
 
