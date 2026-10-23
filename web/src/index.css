@@ -3065,7 +3065,9 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 /* Tucked, it lives on the top edge; opened from the arrow it comes down to
    its own place (a pill glued to the edge read as stuck). The panel keeps it
    open (.is-peek) while the pointer crosses the gap it just left. */
-.agx-isl.is-tucked:not(.is-peek) { top: 0; }
+/* Only folded all the way: a bar still shown by focus (the address, the menu)
+   after the peek ended was pulled up to the edge. */
+.agx-isl.is-tucked:not(.is-open):not(:hover):not(.is-peek):not(:focus-within) { top: 0; }
 /* Open beats every size the pill takes on hover or when tucked: a hover rule
    that won here shrank the open overview under the pointer, which then left
    it, which grew it again — a loop (measured on the installed app, tab yours). */

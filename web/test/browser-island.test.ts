@@ -68,3 +68,12 @@ describe("the island's own menu", () => {
     expect(menuSrc).toContain('(byKey ? "" : " is-anim")');
   });
 });
+
+describe("the tucked island", () => {
+  test("goes up to the edge only when folded all the way, never while its bar is shown", async () => {
+    const css = await Bun.file(new URL("../src/index.css", import.meta.url)).text();
+    const rule = css.split("\n").find((l) => /^\.agx-isl\.is-tucked[^{]*\{\s*top:\s*0;/.test(l));
+    expect(rule).toBeDefined();
+    for (const s of [":not(.is-open)", ":not(:hover)", ":not(.is-peek)", ":not(:focus-within)"]) expect(rule!).toContain(s);
+  });
+});
