@@ -165,6 +165,7 @@ export function Select({
   return (
     <>
       <button
+        type="button"
         ref={btnRef}
         title={title}
         disabled={disabled}
@@ -221,7 +222,7 @@ export function Select({
               >
                 {loading && !options.length && <div className="px-2.5 py-1.5 text-[11px]" style={{ color: "var(--text3)" }}>Reading…</div>}
                 {options.map((o, i) => (
-                  <button key={o.value} onClick={() => pick(o.value)}
+                  <button type="button" key={o.value} onClick={() => pick(o.value)}
                     role="option"
                     aria-selected={o.value === value}
                     aria-disabled={o.disabled || undefined}

@@ -194,7 +194,7 @@ export function SettingRow({ label, hint, control, status, actions, below, detai
   if (onClick) {
     return (
       <>
-        <button onClick={onClick} disabled={disabled} role={role} aria-checked={ariaChecked}
+        <button type="button" onClick={onClick} disabled={disabled} role={role} aria-checked={ariaChecked}
           className={`${cls} text-left disabled:cursor-not-allowed`} style={style} data-row={dataRow} {...dataSetting}>{body}</button>
         {moreBelow}
       </>
