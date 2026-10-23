@@ -282,16 +282,51 @@ function spendBeforeSeam(root: string, seamDay: string | null): number {
   }
 }
 
-// A short TTL, not none and not minutes. This is asked once per board draw, and
-// the board is the heaviest panel in the app: the answer must not be recomputed
-// for the second and third component that wants it, and it must not be so stale
-// that a review session's own spend fails to appear while it is happening.
-const TTL_MS = 15_000;
+// A minute, and stale-while-revalidate: asked once per board draw, and the
+// board is the heaviest panel in the app. The numbers behind it are sync SQLite
+// reads that took 1.1 s on a cold page (178 loop stalls, max 7.7 s, in one log),
+// so past the TTL the caller still gets the old answer at once and the refresh
+// runs behind it — a review session's own spend shows up a minute late at most.
+const TTL_MS = 60_000;
 const cache = new Map<string, { at: number; value: RepoSpend }>();
+const refreshing = new Map<string, Promise<RepoSpend>>();
+
+/**
+ * The cached value when there is one (refreshing it behind when it is older than
+ * `ttl`, one refresh per key), `compute()` when there is not. Only a computed
+ * value that `keep` accepts is remembered; a failure is never served stale.
+ */
+export async function cachedOrRefresh<V>(
+  store: Map<string, { at: number; value: V }>,
+  inflight: Map<string, Promise<V>>,
+  key: string,
+  ttl: number,
+  compute: () => Promise<V>,
+  keep: (v: V) => boolean,
+): Promise<V> {
+  const hit = store.get(key);
+  if (hit && Date.now() - hit.at < ttl) return hit.value;
+  let run = inflight.get(key);
+  if (!run) {
+    run = compute().then((v) => {
+      if (keep(v)) {
+        if (store.size > 32) store.clear();
+        store.set(key, { at: Date.now(), value: v });
+      }
+      return v;
+    }).finally(() => inflight.delete(key));
+    inflight.set(key, run);
+  }
+  if (hit) {
+    run.catch(() => {});
+    return hit.value;
+  }
+  return run;
+}
 
 /** Drop what is remembered. Exported for tests, which seed a database and then
  *  ask the same root twice on purpose. */
-export function forgetSpend(): void { cache.clear(); }
+export function forgetSpend(): void { cache.clear(); refreshing.clear(); }
 
 /**
  * Spend for one repository, broken down by branch and by checkout.
@@ -305,9 +340,10 @@ export async function repoSpend(rootIn: unknown): Promise<RepoSpend> {
   const root = typeof rootIn === "string" ? rootIn.trim() : "";
   if (!root) return { ok: false, error: "no project", since: 0, seamDay: null, beforeSeamUsd: 0, branches: [], worktrees: [] };
 
-  const hit = cache.get(root);
-  if (hit && Date.now() - hit.at < TTL_MS) return hit.value;
+  return cachedOrRefresh(cache, refreshing, root, TTL_MS, () => computeSpend(root), (v) => v.ok);
+}
 
+async function computeSpend(root: string): Promise<RepoSpend> {
   // The floor is retention's, because that is genuinely as far back as the
   // events table goes. With pruning off nothing has been deleted and the whole
   // history is fair game — the user who turned it off asked for exactly that.
@@ -323,7 +359,5 @@ export async function repoSpend(rootIn: unknown): Promise<RepoSpend> {
     // it is reported as one rather than thrown at the route.
     return { ok: false, error: failed("spend/repo", e, "the spend for this repository could not be read"), since, seamDay, beforeSeamUsd: 0, branches: [], worktrees: [] };
   }
-  if (cache.size > 32) cache.clear();
-  cache.set(root, { at: Date.now(), value });
   return value;
 }

@@ -2,18 +2,20 @@
 // parses SKILL.md / command frontmatter, dedupes worktree copies, and joins
 // recorded usage from the events DB. Read-only and cached — the dashboard's
 // answer to "what skills do we have and what do they do?".
-import { readdirSync, readFileSync, statSync, existsSync } from "node:fs";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
 import type { SkillInfo } from "../../shared/types.ts";
 import { skillUsageDetail, RETENTION_DAYS } from "./db.ts";
 
 // Where to look for `.claude` roots: the user's own + every project checkout.
-const CODE_DIR = process.env.AGENTGLASS_CODE_DIR || join(homedir(), "code");
+// Read per call, not at import: `bun test` shares this module between files that point it at different trees.
+const codeDir = (): string => process.env.AGENTGLASS_CODE_DIR || join(homedir(), "code");
 const TTL = 60_000;
 
 let cache: SkillInfo[] | null = null;
 let cacheAt = 0;
+let cacheDir = "";
 
 /** Minimal frontmatter reader: `--- key: value ... ---` at the top of the file.
  *  Handles plain scalars, quoted strings, and folded/literal block scalars
@@ -83,9 +85,9 @@ function whenToUse(description: string): string | null {
   return m ? m[0].trim().replace(/[.!?]$/, "") : null;
 }
 
-function readEntry(path: string, kind: "skill" | "command", fallbackName: string, source: string): RawEntry | null {
+async function readEntry(path: string, kind: "skill" | "command", fallbackName: string, source: string): Promise<RawEntry | null> {
   try {
-    const raw = readFileSync(path, "utf-8");
+    const [raw, st] = await Promise.all([readFile(path, "utf-8"), stat(path)]);
     const fm = frontmatter(raw);
     return {
       name: fm.name || fallbackName,
@@ -94,40 +96,49 @@ function readEntry(path: string, kind: "skill" | "command", fallbackName: string
       argument_hint: fm["argument-hint"] || null,
       source,
       path,
-      mtime: statSync(path).mtimeMs,
+      mtime: st.mtimeMs,
     };
   } catch {
     return null;
   }
 }
 
-function scanClaudeRoot(root: string, source: string, out: RawEntry[]) {
-  const skillsDir = join(root, "skills");
-  if (existsSync(skillsDir)) {
-    for (const dir of safeReaddir(skillsDir)) {
-      const p = join(skillsDir, dir, "SKILL.md");
-      if (existsSync(p)) {
-        const e = readEntry(p, "skill", dir, source);
-        if (e) out.push(e);
-      }
+/** `items.map(fn)` with at most `limit` calls in flight; results keep the
+ *  order of `items`, so the catalogue does not depend on which read lands first. */
+export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
     }
-  }
-  const cmdDir = join(root, "commands");
-  if (existsSync(cmdDir)) {
-    for (const f of safeReaddir(cmdDir)) {
-      if (!f.endsWith(".md") || f.toLowerCase() === "readme.md") continue;
-      const e = readEntry(join(cmdDir, f), "command", f.replace(/\.md$/, ""), source);
-      if (e) out.push(e);
-    }
-  }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
 }
 
-function safeReaddir(dir: string): string[] {
+async function safeReaddir(dir: string): Promise<string[]> {
   try {
-    return readdirSync(dir);
+    return await readdir(dir);
   } catch {
     return [];
   }
+}
+
+const READS = 8;
+
+async function scanClaudeRoot(root: string, source: string): Promise<RawEntry[]> {
+  const skillsDir = join(root, "skills");
+  const cmdDir = join(root, "commands");
+  const [skillDirs, cmdFiles] = await Promise.all([safeReaddir(skillsDir), safeReaddir(cmdDir)]);
+  const skills = await mapLimit(skillDirs, READS, (dir) => readEntry(join(skillsDir, dir, "SKILL.md"), "skill", dir, source));
+  const cmds = await mapLimit(
+    cmdFiles.filter((f) => f.endsWith(".md") && f.toLowerCase() !== "readme.md"),
+    READS,
+    (f) => readEntry(join(cmdDir, f), "command", f.replace(/\.md$/, ""), source)
+  );
+  return [...skills, ...cmds].filter((e): e is RawEntry => e !== null);
 }
 
 /**
@@ -170,16 +181,32 @@ export function usageSince(): number {
   return RETENTION_DAYS ? Date.now() - RETENTION_DAYS * 86_400_000 : 0;
 }
 
-export async function getSkills(): Promise<SkillInfo[]> {
-  const now = Date.now();
-  if (cache && now - cacheAt < TTL) return cache;
+// One scan at a time: a dashboard that opens four panels at once asked for
+// four, and a cold one is thousands of reads across every checkout.
+let inflight: Promise<SkillInfo[]> | null = null;
 
-  const raw: RawEntry[] = [];
-  scanClaudeRoot(join(homedir(), ".claude"), "user", raw);
-  for (const dir of safeReaddir(CODE_DIR)) {
-    const root = join(CODE_DIR, dir, ".claude");
-    if (existsSync(root)) scanClaudeRoot(root, dir, raw);
-  }
+/** For tests: `bun test` shares this module between files. */
+export function resetSkillsCache() {
+  cache = null;
+  cacheAt = 0;
+  cacheDir = "";
+}
+
+export function getSkills(): Promise<SkillInfo[]> {
+  if (cache && cacheDir === codeDir() && Date.now() - cacheAt < TTL) return Promise.resolve(cache);
+  return (inflight ??= buildSkills().finally(() => {
+    inflight = null;
+  }));
+}
+
+async function buildSkills(): Promise<SkillInfo[]> {
+  const now = Date.now();
+  // The scan was synchronous: 7966 entries over ~97 checkouts, 1.4 s cold on a
+  // loaded disk, and the loop sat in I/O wait for all of it (154 stalls, max 4 s).
+  const roots = [{ root: join(homedir(), ".claude"), source: "user" }];
+  const CODE_DIR = codeDir();
+  for (const dir of await safeReaddir(CODE_DIR)) roots.push({ root: join(CODE_DIR, dir, ".claude"), source: dir });
+  const raw = (await mapLimit(roots, READS, (r) => scanClaudeRoot(r.root, r.source))).flat();
 
   // Dedupe worktree copies by kind+name; keep the shortest source label
   // ("web" beats "web-feature-branch"), the OLDEST mtime (closest to the real
@@ -275,6 +302,7 @@ export async function getSkills(): Promise<SkillInfo[]> {
     })
     .sort((a, b) => b.calls - a.calls || a.name.localeCompare(b.name));
   cacheAt = now;
+  cacheDir = codeDir();
   return cache;
 }
 
