@@ -1,6 +1,5 @@
 /*
- * The list of computers this phone is paired to (src/lib/hosts.ts), and the
- * single-record API (src/lib/host.ts) that is now a view of its active entry.
+ * The list of computers this phone is paired to (src/lib/hosts.ts).
  *
  * The keystore is a Map here, injected through `__useKeystore` and not
  * `mock.module`, which is process-wide and clobbers talk-pref.test.ts. It has
@@ -27,11 +26,9 @@ const fake = {
 };
 
 let hosts: typeof import("../src/lib/hosts.ts");
-let host: typeof import("../src/lib/host.ts");
 
 beforeAll(async () => {
   hosts = await import("../src/lib/hosts.ts");
-  host = await import("../src/lib/host.ts");
   hosts.__useKeystore(fake);
 });
 
@@ -307,34 +304,5 @@ describe("a computer that took this phone off its list", () => {
     await hosts.markRevoked(a);
     await hosts.markRevoked("nope");
     expect(store.get(NEW)).toBe(before);
-  });
-});
-
-describe("host.ts, the single-record view the rest of the app still calls", () => {
-  test("loadHost is the active computer, with its id", async () => {
-    await hosts.addHost(rec(1));
-    await hosts.addHost(rec(2));
-    const h = await host.loadHost();
-    expect(h!.token).toBe("token-2");
-    expect(typeof h!.id).toBe("string");
-  });
-
-  test("loadHost on an old install migrates and returns the record", async () => {
-    store.set(OLD, JSON.stringify(rec(1)));
-    expect((await host.loadHost())!.token).toBe("token-1");
-    expect(store.has(OLD)).toBe(false);
-  });
-
-  test("loadHost is null when nothing is paired", async () => {
-    expect(await host.loadHost()).toBeNull();
-  });
-
-  test("saveHost adds and activates; forgetHost drops the active one only", async () => {
-    await host.saveHost(rec(1));
-    await host.saveHost(rec(2));
-    await host.forgetHost();
-    expect((await host.loadHost())!.token).toBe("token-1");
-    await host.forgetHost();
-    expect(await host.loadHost()).toBeNull();
   });
 });

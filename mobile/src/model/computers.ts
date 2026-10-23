@@ -10,7 +10,7 @@
 import type { HostEntry, HostList } from "../lib/hosts.ts";
 import { MAX_HOSTS } from "../lib/hosts.ts";
 import { readPairingCode } from "../lib/pairing.ts";
-import { addressName } from "../state/use-computer.ts";
+import { addressName, saidName } from "../state/use-computer.ts";
 import type { LiveState } from "../lib/live.ts";
 
 /** `checking`: the phone has no evidence yet. Drawn as neither green nor red,
@@ -24,6 +24,9 @@ export function displayName(entry: HostEntry, said?: string): string {
   if (said && said.trim()) return said.trim();
   return addressName(entry.origin);
 }
+
+/** What the owner and the computer between them call this computer. */
+export const nameOf = (entry: HostEntry): string => displayName(entry, saidName(entry.origin));
 
 /**
  * `live` is the socket of the computer in use; `own` is the socket kept for

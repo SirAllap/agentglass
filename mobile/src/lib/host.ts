@@ -1,9 +1,9 @@
 /*
- * The computer this phone is paired to, and the credential for it.
+ * A computer this phone is paired to, and the credential for it.
  *
- * What the rest of the app sees is still ONE computer: the active one. The
- * list of all of them, the keystore value and the migration from the old
- * single record live in hosts.ts; this file is the view the 28 screens that
+ * What the rest of the app sees is ONE computer: the active one, `host` in the
+ * provider. The list of all of them, the keystore value and the migration from
+ * the old single record live in hosts.ts; this is the shape the 28 screens that
  * read `host` were written against, so none of them moves.
  *
  * Kept in the OS keystore (Android Keystore via expo-secure-store) rather than
@@ -18,7 +18,6 @@
  * know what it is for.
  */
 import type { DeviceScope } from "../../../shared/types.ts";
-import { addHost, loadHosts, removeHost, type HostEntry, type HostList } from "./hosts.ts";
 
 export interface Host {
   /** `http://192.168.1.20:4000` — scheme, host and port, no trailing slash. */
@@ -30,30 +29,4 @@ export interface Host {
   /** What they granted. The server enforces it; this is for saying so. */
   scope: DeviceScope;
   pairedAt: number;
-}
-
-/** The active computer. Null when this phone has never been paired, or
- *  forgot them all. */
-export async function loadHost(): Promise<HostEntry | null> {
-  const { active, hosts } = await loadHosts();
-  return hosts.find((h) => h.id === active) ?? null;
-}
-
-/** Pair a computer and make it the active one. `name` is the owner's own
- *  alias for it, when they typed one. */
-export function saveHost(host: Host, name?: string): Promise<HostList> {
-  return addHost({ ...host, ...(name ? { name } : {}) });
-}
-
-/**
- * Forget the active computer.
- *
- * This is the phone's half only — it drops the credential it holds. The token
- * stays valid on the computer until somebody revokes the device there, which
- * is deliberate: a phone cannot be trusted to say "and revoke me", because a
- * phone that has been taken is exactly the one that will not.
- */
-export async function forgetHost(): Promise<void> {
-  const { active } = await loadHosts();
-  if (active) await removeHost(active);
 }

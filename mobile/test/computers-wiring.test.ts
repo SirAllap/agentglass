@@ -55,7 +55,7 @@ describe("the provider", () => {
     expect(provider).toMatch(/useMemo\(\s*\(\) => active,/);
   });
   test("leaving a computer drops its data, its cache and its colours", () => {
-    const leave = between(provider, "const leave = (): void => {", "const value = useMemo");
+    const leave = between(provider, "const leave = useCallback(", "const forgetComputer");
     expect(leave).toContain("setFleet(EMPTY)");
     expect(leave).toContain("setDeskTheme(null)");
     expect(leave).toContain("forgetCachedAsks()");
@@ -67,9 +67,9 @@ describe("the provider", () => {
     expect(sw).toContain("leave()");
   });
   test("forgetting the one in use leaves; forgetting another does not", () => {
-    const f = between(provider, "forgetComputer: async", "}), [");
+    const f = between(provider, "const forgetComputer = useCallback(", "}, [leave]);");
     expect(f).toContain("removeHost(");
-    expect(f).toMatch(/if \(id === list\.active\) leave\(\);/);
+    expect(f).toMatch(/if \(id === listRef\.current\.active\) leave\(\);/);
   });
 });
 

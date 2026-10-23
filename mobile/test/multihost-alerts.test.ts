@@ -74,23 +74,29 @@ describe("where the app handles a tap", () => {
 
 describe("the provider's sockets for the computers not in front", () => {
   const src = readFileSync(join(import.meta.dir, "../src/state/host-context.tsx"), "utf8");
-  const a = src.indexOf("const restKey");
-  const watchers = src.slice(a, src.indexOf("useEffect(() => {\n    const sub = AppState", a));
+  const watcher = src.slice(src.indexOf("function Watcher("), src.indexOf("export function HostProvider"));
+  const bridge = src.slice(src.indexOf("const bridge = useMemo"), src.indexOf("}), [buzz]);"));
   test("start no timer of their own", () => {
-    // Broken on purpose: a setInterval in this block is N computers asking on
-    // a clock, for a badge. The only clocks stay in the effects keyed on `host`.
-    expect(a).toBeGreaterThan(-1);
-    expect(watchers).not.toMatch(/setInterval|setTimeout/);
-    expect(watchers.length).toBeGreaterThan(200);
+    // Broken on purpose: a setInterval here is N computers asking on a clock,
+    // for a badge. The only clocks stay in the effects keyed on `host`.
+    expect(watcher.length).toBeGreaterThan(200);
+    expect(bridge.length).toBeGreaterThan(200);
+    expect(watcher + bridge).not.toMatch(/setInterval|setTimeout/);
   });
-  test("are rebuilt when the set of computers or a key changes, not when one is renamed", () => {
-    expect(watchers).toMatch(/\[restKey, watching\]/);
-    expect(src).toMatch(/const restKey = rest\.map\(\(h\) => `\$\{h\.id\}/);
+  test("one per computer, keyed by address and key, so a rename rebuilds nothing", () => {
+    expect(src).toMatch(/<Watcher key=\{`\$\{h\.id\}/);
+    expect(watcher).toMatch(/\[host\.id, host\.origin, host\.token, bridge\]/);
   });
   test("an alert from one of them is never held back for being on screen", () => {
-    expect(watchers).toMatch(/foreground: false/);
+    expect(bridge).toMatch(/foreground: false/);
   });
   test("and the talk and check counters are fed by the computer in front only", () => {
-    expect(watchers).not.toMatch(/noteTalk|noteChecks/);
+    expect(watcher + bridge).not.toMatch(/noteTalk|noteChecks/);
+  });
+  test("a report that changes nothing changes nothing", () => {
+    // Broken on purpose: without the bail-out a reconnect flap re-renders every
+    // screen that reads the provider.
+    expect(bridge).toMatch(/p\.states\[id\] === state \? p/);
+    expect(bridge).toMatch(/p\.waiting\[id\] === n \? p/);
   });
 });

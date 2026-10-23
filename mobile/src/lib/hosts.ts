@@ -31,6 +31,7 @@
  * time instead.
  */
 import type { Host } from "./host.ts";
+import { normalizeOrigin } from "./pairing.ts";
 
 interface Keystore {
   WHEN_UNLOCKED?: number;
@@ -81,22 +82,15 @@ export interface HostList {
   hosts: HostEntry[];
 }
 
-export class TooManyHosts extends Error {
-  constructor() {
-    super(`This phone can watch at most ${MAX_HOSTS} computers. Forget one to add another.`);
-  }
-}
+const TOO_MANY = `This phone can watch at most ${MAX_HOSTS} computers. Forget one to add another.`;
 
 const EMPTY: HostList = { active: null, hosts: [] };
 
-/** `http://192.168.1.20:4000` however it was typed: the same computer under
- *  two spellings must not become two entries. */
-function sameOrigin(origin: string): string {
-  try {
-    return new URL(origin).origin;
-  } catch {
-    return origin.trim().replace(/\/+$/, "").toLowerCase();
-  }
+/** The same computer under two spellings must not become two entries. */
+const sameOrigin = (origin: string): string => normalizeOrigin(origin) ?? origin.trim();
+
+function safeParse(raw: string): unknown {
+  try { return JSON.parse(raw); } catch { return null; }
 }
 
 function newId(): string {
@@ -168,7 +162,9 @@ async function read(): Promise<HostList> {
     if (legacyRaw) await keystore().deleteItemAsync(LEGACY_KEY).catch(() => {});
     return stored;
   }
-  const legacy = legacyRaw ? entryFromJson(legacyRaw) : null;
+  // `pairedAt` doubles as the first lastUsed, so the order after a migration
+  // is deterministic.
+  const legacy = legacyRaw ? entryFrom(safeParse(legacyRaw), newId()) : null;
   if (!legacy) return EMPTY;
   const list = tidy([legacy], legacy.id);
   try {
@@ -183,17 +179,6 @@ async function read(): Promise<HostList> {
     // be made again next time; nothing is keyed by it until the write lands.
   }
   return list;
-}
-
-function entryFromJson(raw: string): HostEntry | null {
-  try {
-    const h = JSON.parse(raw) as Partial<HostEntry>;
-    // `pairedAt` doubles as the first lastUsed, so the order after a migration
-    // is deterministic.
-    return entryFrom({ ...h, id: newId() }, "");
-  } catch {
-    return null;
-  }
 }
 
 let queue: Promise<unknown> = Promise.resolve();
@@ -230,11 +215,11 @@ const stamp = (list: HostList): number =>
  * replaces its key and keeps its entry (id, name); a new address is added, up
  * to MAX_HOSTS, and past that nothing is written.
  */
-export function addHost(host: Host & { name?: string }): Promise<HostList> {
+export function addHost(host: Host): Promise<HostList> {
   return change((list) => {
     const origin = sameOrigin(host.origin);
     const old = list.hosts.find((h) => sameOrigin(h.origin) === origin);
-    if (!old && list.hosts.length >= MAX_HOSTS) throw new TooManyHosts();
+    if (!old && list.hosts.length >= MAX_HOSTS) throw new Error(TOO_MANY);
     const entry: HostEntry = {
       origin,
       token: host.token,
@@ -242,7 +227,7 @@ export function addHost(host: Host & { name?: string }): Promise<HostList> {
       scope: host.scope,
       pairedAt: host.pairedAt,
       id: old?.id ?? newId(),
-      ...(old?.name || host.name ? { name: old?.name ?? host.name } : {}),
+      ...(old?.name ? { name: old.name } : {}),
       lastUsed: stamp(list),
     };
     const rest = list.hosts.filter((h) => h !== old);
@@ -250,26 +235,24 @@ export function addHost(host: Host & { name?: string }): Promise<HostList> {
   });
 }
 
-/** Switch to a computer. An id that is not in the list changes nothing. */
-export function setActive(id: string): Promise<HostList> {
+/** Change one entry in place. `edit` returning null means "nothing to
+ *  change", which writes nothing; an id that is not there changes nothing. */
+function editOne(id: string, edit: (target: HostEntry, list: HostList) => HostEntry | null, active?: string): Promise<HostList> {
   return change((list) => {
     const target = list.hosts.find((h) => h.id === id);
-    if (!target) return null;
-    const moved = { ...target, lastUsed: stamp(list) };
-    return tidy([moved, ...list.hosts.filter((h) => h !== target)], id);
+    const next = target ? edit(target, list) : null;
+    return next ? tidy(list.hosts.map((h) => (h === target ? next : h)), active ?? list.active) : null;
   });
 }
 
+/** Switch to a computer. An id that is not in the list changes nothing. */
+export const setActive = (id: string): Promise<HostList> =>
+  editOne(id, (t, list) => ({ ...t, lastUsed: stamp(list) }), id);
+
 /** An empty name clears the alias. */
 export function renameHost(id: string, name: string): Promise<HostList> {
-  return change((list) => {
-    const target = list.hosts.find((h) => h.id === id);
-    if (!target) return null;
-    const { name: _old, ...bare } = target;
-    const alias = name.trim();
-    const renamed: HostEntry = alias ? { ...bare, name: alias } : bare;
-    return tidy(list.hosts.map((h) => (h === target ? renamed : h)), list.active);
-  });
+  const alias = name.trim();
+  return editOne(id, ({ name: _old, ...bare }) => (alias ? { ...bare, name: alias } : bare));
 }
 
 /**
@@ -289,13 +272,8 @@ export function removeHost(id: string): Promise<HostList> {
 /** The computer answered 401. Marks the entry; the other computers are not
  *  touched, which is why this is not a forget. Marking twice keeps the first
  *  time and writes nothing. */
-export function markRevoked(id: string): Promise<HostList> {
-  return change((list) => {
-    const target = list.hosts.find((h) => h.id === id);
-    if (!target || target.revoked) return null;
-    return tidy(list.hosts.map((h) => (h === target ? { ...h, revoked: Date.now() } : h)), list.active);
-  });
-}
+export const markRevoked = (id: string): Promise<HostList> =>
+  editOne(id, (t) => (t.revoked ? null : { ...t, revoked: Date.now() }));
 
 /** A key for state that belongs to one computer: two of them can both have a
  *  checkout at /home/x/orbit, and a tick made on one must not show on the other. */

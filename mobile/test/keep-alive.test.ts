@@ -189,7 +189,7 @@ describe("host-context.tsx", () => {
     // Broken on purpose: an unconditional syncKeepAlive(false) in
     // forgetComputer silences the alerts of every computer still paired the
     // moment one of them is forgotten.
-    const block = hostContext.match(/forgetComputer: async[\s\S]*?\n {4}\},/)?.[0] ?? "";
+    const block = hostContext.match(/const forgetComputer = useCallback[\s\S]*?\}, \[leave\]\);/)?.[0] ?? "";
     expect(block).toMatch(/if \(!after\.hosts\.some\(\(h\) => !h\.revoked\)\) syncKeepAlive\(false\);/);
   });
 

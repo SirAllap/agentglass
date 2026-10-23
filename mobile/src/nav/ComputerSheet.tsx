@@ -13,13 +13,12 @@ import { useState } from "react";
 import { Pressable, Text, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useAgentglass } from "../state/host-context.tsx";
-import { saidName } from "../state/use-computer.ts";
-import { capReached, displayName, forgetNote, statusOf, switcherSub } from "../model/computers.ts";
-import { MAX_HOSTS, type HostEntry } from "../lib/hosts.ts";
+import { capReached, forgetNote, nameOf, statusOf, switcherSub } from "../model/computers.ts";
+import { MAX_HOSTS } from "../lib/hosts.ts";
 import { Btn, Note, Sheet } from "../ui.tsx";
 import { C, RADIUS, SPACE, T } from "../theme.ts";
 import { Glyph } from "./glyphs.tsx";
-import { statusColor } from "./computer-dot.ts";
+import { CountBadge, StatusDot } from "./computer-bits.tsx";
 
 type Menu = { id: string; mode: "menu" | "rename" | "forget" } | null;
 
@@ -29,7 +28,6 @@ export function ComputerSheet({ open, onClose }: { open: boolean; onClose: () =>
   const [menu, setMenu] = useState<Menu>(null);
   const [draft, setDraft] = useState("");
   const list = { active: host?.id ?? null, hosts };
-  const nameOf = (h: HostEntry): string => displayName(h, saidName(h.origin));
   const full = capReached(list);
 
   const close = (): void => { setMenu(null); onClose(); };
@@ -71,18 +69,14 @@ export function ComputerSheet({ open, onClose }: { open: boolean; onClose: () =>
                     borderRadius: RADIUS.md,
                   })}
                 >
-                  <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: statusColor(status, C) }} />
+                  <StatusDot status={status} />
                   <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
                     <Text numberOfLines={1} style={{ color: C.text, fontSize: T.body, fontWeight: "600" }}>{nameOf(h)}</Text>
                     <Text numberOfLines={1} style={{ color: status === "removed" ? C.error : C.text3, fontSize: T.small }}>
                       {switcherSub(status, waits)}
                     </Text>
                   </View>
-                  {h.id !== host?.id && status === "online" && waits > 0 ? (
-                    <View style={{ minWidth: 22, height: 22, borderRadius: 11, paddingHorizontal: 6, alignItems: "center", justifyContent: "center", backgroundColor: C.warning }}>
-                      <Text style={{ color: C.bg, fontSize: 12, fontWeight: "700" }}>{waits}</Text>
-                    </View>
-                  ) : null}
+                  {h.id !== host?.id && status === "online" && waits > 0 ? <CountBadge n={waits} /> : null}
                   {h.id === host?.id ? <Glyph name="check" color={C.primary} size={22} /> : null}
                 </Pressable>
                 <Pressable

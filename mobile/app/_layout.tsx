@@ -8,7 +8,7 @@
  * handshake they finished last week.
  */
 import "../src/lib/rng.ts"; // installs crypto.getRandomValues — must be first
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { ActivityIndicator, View } from "react-native";
@@ -46,20 +46,22 @@ function Gate(): React.ReactNode {
 
   // A tapped alert opens what it is about, once there is a computer to show it
   // from. The route comes from `alertRoute`, never straight from the data.
+  // Read through a ref so the native tap listener is not re-subscribed every
+  // time the list or the actions change; it only moves with the computer.
+  const tap = useRef({ hosts, switchTo });
+  tap.current = { hosts, switchTo };
   useEffect(() => {
     if (!ready || !host) return;
-    return watchAlertTaps((data) => {
+    return watchAlertTaps(async (data) => {
       const to = alertRoute(data);
       const hostId = alertHost(data);
-      void (async () => {
-        // The computer the alert is about, before the pane on it: a pane id is
-        // only a name on one tmux server. An id not on this phone's list is
-        // dropped, never switched to.
-        if (hostId && hostId !== host.id && hosts.some((h) => h.id === hostId)) await switchTo(hostId);
-        if (to) router.navigate(to);
-      })();
+      // The computer the alert is about, before the pane on it: a pane id is
+      // only a name on one tmux server. An id not on this phone's list is
+      // dropped, never switched to.
+      if (hostId && hostId !== host.id && tap.current.hosts.some((h) => h.id === hostId)) await tap.current.switchTo(hostId);
+      if (to) router.navigate(to);
     });
-  }, [ready, host, hosts, switchTo, router]);
+  }, [ready, host, router]);
 
   if (!ready) {
     return (

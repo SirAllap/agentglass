@@ -93,7 +93,7 @@ describe("the provider forgets what it cached when the computer changes", () => 
   test("forgetting the computer clears it too", () => {
     // Through `leave()`, which forgetting the computer in use calls, as does
     // switching to another one.
-    expect(body("const leave = (): void => {", "const value = useMemo")).toContain("forgetCachedAsks();");
-    expect(body("forgetComputer: async", "}), [host")).toContain("leave()");
+    expect(body("const leave = useCallback(", "const forgetComputer")).toContain("forgetCachedAsks();");
+    expect(body("const forgetComputer = useCallback(", "}, [leave]")).toContain("leave()");
   });
 });

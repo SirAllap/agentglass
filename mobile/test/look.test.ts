@@ -369,10 +369,10 @@ describe("the desk does not outlive its computer", () => {
     const src = readFileSync(join(import.meta.dir, "../src/state/host-context.tsx"), "utf8");
     // The colours are dropped by `leave()`, which forgetting the computer in
     // use (and switching away from it) both call.
-    const at = src.indexOf("const leave = (): void => {");
+    const at = src.indexOf("const leave = useCallback(");
     expect(at).toBeGreaterThan(-1);
-    expect(src.slice(at, src.indexOf("};", at))).toContain("setDeskTheme(null)");
-    const forget = src.indexOf("forgetComputer: async");
-    expect(src.slice(forget, src.indexOf("}), [", forget))).toContain("leave()");
+    expect(src.slice(at, src.indexOf("}, []);", at))).toContain("setDeskTheme(null)");
+    const forget = src.indexOf("const forgetComputer = useCallback(");
+    expect(src.slice(forget, src.indexOf("}, [leave]);", forget))).toContain("leave()");
   });
 });
