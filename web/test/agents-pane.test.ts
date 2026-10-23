@@ -10,7 +10,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
-const pane = readFileSync(new URL("../src/components/AgentsPane.tsx", import.meta.url), "utf8");
+const pane = readFileSync(new URL("../src/components/engines/ReportingRow.tsx", import.meta.url), "utf8");
+const copy = readFileSync(new URL("../src/components/engines/enginesCopy.ts", import.meta.url), "utf8");
 
 describe("the four states", () => {
   test("live means an event arrived, not that a file was written", () => {
@@ -32,13 +33,6 @@ describe("the four states", () => {
 });
 
 describe("what is shown", () => {
-  test("everything, including what is not installed", () => {
-    // A list of what is present says nothing about what is *supported*, which
-    // is the question somebody has before they try a second agent at all.
-    expect(pane).toContain("agents.map((p) => {");
-    expect(pane).not.toContain("agents.filter");
-  });
-
   test("with how to get the ones that are missing", () => {
     expect(pane).toContain("p.install");
   });
@@ -56,7 +50,7 @@ describe("what is shown", () => {
     // spelling of it — the row moved onto the shared SettingRow and the old
     // assertion was checking the markup around the decision, not the decision.
     expect(pane).toMatch(/actions=\{state === "missing"/);
-    expect(pane).toMatch(/Not found/);
+    expect(copy).toMatch(/Not found/);
   });
 });
 
@@ -79,11 +73,11 @@ describe("what it says about itself", () => {
     expect(pane).toMatch(/cannot parse is left alone/);
   });
 
-  test("it polls, because the state it shows changes without anybody clicking", () => {
-    // "waiting" becomes "live" the moment the first event arrives, and nobody
-    // is going to press refresh to find that out. Through usePoll, not a raw
-    // interval — so the same focus gate every other panel's poll respects
-    // applies here too, instead of polling a background window forever.
-    expect(pane).toContain("usePoll(open, load");
+  test("it does not poll: the page loads on open and on Recheck", () => {
+    // The old list polled every four seconds so "waiting" could turn into
+    // "live" by itself. A row of an engine's card is read when the page opens
+    // and when somebody presses Recheck, and a poll here would be a request
+    // per engine per interval for a state that one click refreshes.
+    expect(pane).not.toMatch(/usePoll|setInterval/);
   });
 });

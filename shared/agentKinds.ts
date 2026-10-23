@@ -204,6 +204,10 @@ export interface AccountFacet {
 /** Which of the server's argv builders runs one turn of this engine. */
 export interface HeadlessFacet {
   argv: "claude" | "codex" | "antigravity" | "hermes" | "opencode" | "gemini";
+  /** What follows the binary on a one-shot turn, with placeholders in angle
+   *  brackets: shown on the Agent engines page as "the command agentglass
+   *  runs", so a person reads what a worker will be started with. */
+  form: string;
   /** The words that name an earlier session on a follow-up turn, as they come
    *  before the id: "--resume" for a flag, "exec resume" for a subcommand. */
   resume: string;
@@ -288,7 +292,7 @@ export const AGENT_PROVIDERS: Provider[] = [
     run: { bypass: "--dangerously-skip-permissions", promptFlag: "" },
     version: { args: ["--version"], pattern: "^(\\d+\\.\\d+\\.\\d+)" },
     account: { args: ["auth", "status"], signedIn: '"loggedIn":\\s*true' },
-    headless: { argv: "claude", resume: "--resume", ceilings: { usd: "--max-budget-usd" } },
+    headless: { argv: "claude", form: '-p "<prompt>" --output-format stream-json --model <model> --settings <lock>', resume: "--resume", ceilings: { usd: "--max-budget-usd" } },
     envelope: { via: "settings-flag" },
     // Keep in step with NEEDS_YOU_RE and RUNNING_RE in server/src/chatpane.ts;
     // a test holds the two to the same screens.
@@ -329,7 +333,7 @@ export const AGENT_PROVIDERS: Provider[] = [
     // Repo facts only (antigravity.ts); the CLI is not installed where this was
     // measured, so there is no account command and no envelope to state.
     version: { args: ["--version"], pattern: "(\\d+\\.\\d+\\.\\d+)" },
-    headless: { argv: "antigravity", resume: "--conversation" },
+    headless: { argv: "antigravity", form: '-p "<prompt>" --output-format stream-json --model <model>', resume: "--conversation" },
     chat: {
       // Its four modes happen to line up with Claude's, which is a property of
       // the CLI rather than a mapping imposed here. Keep in step with
@@ -367,7 +371,7 @@ export const AGENT_PROVIDERS: Provider[] = [
       min: "0.21.4", minWhy: "it is the first with the output format agentglass reads",
     },
     account: { args: ["status"], signedIn: "✓ logged in" },
-    headless: { argv: "hermes", resume: "--resume", ceilings: { turns: "--max-turns", seconds: "--run-budget" } },
+    headless: { argv: "hermes", form: "chat --query=<prompt> --format stream-json --no-restore-cwd --max-turns <n>", resume: "--resume", ceilings: { turns: "--max-turns", seconds: "--run-budget" } },
     envelope: { via: "own-config", check: { args: ["approvals", "test", "--", "git", "push", "origin", "main"], exit: 3 } },
     chat: {
       label: "Hermes",
@@ -405,7 +409,7 @@ export const AGENT_PROVIDERS: Provider[] = [
     version: { args: ["--version"], pattern: "codex-cli (\\d+\\.\\d+\\.\\d+)" },
     account: { args: ["login", "status"], signedIn: "^Logged in" },
     // `-a` is a flag of `codex` itself, before `exec`; `codex exec -a` is refused.
-    headless: { argv: "codex", resume: "exec resume" },
+    headless: { argv: "codex", form: 'exec --json -s <sandbox> "<prompt>"', resume: "exec resume" },
     envelope: { via: "sandbox-flags" },
     chat: {
       // The mode is its sandbox rather than a permission policy, so the two
@@ -451,7 +455,7 @@ export const AGENT_PROVIDERS: Provider[] = [
     // Its free catalogue answers with no credential (measured on 1.18.32), so
     // an empty list of providers is not "signed out".
     account: { args: ["providers", "list"], signedIn: "[1-9]\\d* credentials?", optional: true },
-    headless: { argv: "opencode", resume: "-s" },
+    headless: { argv: "opencode", form: 'run --format json -m <provider/model> "<prompt>"', resume: "-s" },
     envelope: { via: "config-env" },
     lock: { via: "env", env: "OPENCODE_CONFIG_CONTENT" },
   },
@@ -481,3 +485,10 @@ export const AGENT_KINDS: AgentKind[] = AGENT_PROVIDERS.filter((p) => p.tab);
 
 export const agentKind = (id: string): AgentKind | undefined =>
   AGENT_KINDS.find((a) => a.id === id);
+
+/** The engines the Agent engines page and the orchestration policy know, in the
+ *  order they are shown (Qwen Code is a worker lock target only). */
+export const ENGINE_IDS = ["claude", "codex", "antigravity", "gemini", "hermes", "opencode"] as const;
+
+export const engineProviders = (): Provider[] =>
+  ENGINE_IDS.map((id) => AGENT_PROVIDERS.find((p) => p.id === id)).filter((p): p is Provider => !!p);

@@ -24,7 +24,7 @@ describe("slice 6 nav groups", () => {
     expect(idsIn("General")).toEqual(["prefs", "appearance", "notifications", "rail", "keys"]);
     // browser is filed only where HAS_BROWSER; the test source has both spellings of one entry
     expect(idsIn("Workspace")).toEqual(["terminal", "diff", "browser", "tasks"]);
-    expect(idsIn("Agents")).toEqual(["hooks", "lantern", "understudy", "budgets"]);
+    expect(idsIn("Agents")).toEqual(["hooks", "engines", "lantern", "understudy", "budgets"]);
     expect(idsIn("Library")).toEqual(["recipes", "review-prompts", "saved-replies"]);
     expect(idsIn("Connections")).toEqual(["connections", "clickup", "jira", "remote", "plugins"]);
     expect(idsIn("System")).toEqual(["tmux", "privacy", "about"]);

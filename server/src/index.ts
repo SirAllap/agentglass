@@ -215,7 +215,7 @@ import { cloneProject, createProject } from "./projectadd.ts";
 import { budgetStatus } from "./budget.ts";
 import type { Budget } from "../../shared/types.ts";
 import { hookStatus, applyHooks, applyGate, hooksDir, hookPython } from "./hooksetup.ts";
-import { probeAgents, ROSTER } from "./agentprobe.ts";
+import { probeAgents, probeEngines, testEngine, ROSTER } from "./agentprobe.ts";
 import { join as joinPath, resolve as resolvePath, basename } from "node:path";
 import { hostname, tmpdir } from "node:os";
 import { privateHost, resolvePeer, originOf, guardedFetch, hostsOnly } from "./net.ts";
@@ -3278,6 +3278,30 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      * supported" is the question somebody has before they try.
      */
     if (pathname === "/agents") return json({ agents: probeAgents() });
+
+    /**
+     * What this machine has of each engine and what each can do: version,
+     * account names, the roles it can take, and the next thing to fix. Cheap
+     * and read-only; `?fresh=1` is Recheck and skips the cache; `?fresh=hermes` rechecks one engine. Never polled.
+     */
+    if (pathname === "/engines" && req.method === "GET") {
+      const fresh = url.searchParams.get("fresh");
+      return json(await probeEngines({ fresh: fresh === "1" ? true : fresh ? fresh.split(",") : false }));
+    }
+
+    /**
+     * The one-line test: one real turn on the engine's own login, so a person
+     * asks for it and nothing runs it by itself. One at a time per engine.
+     */
+    if (pathname === "/engines/test" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { engine?: unknown };
+      try { b = (await req.json()) as { engine?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const engine = typeof b.engine === "string" ? b.engine : "";
+      const r = await testEngine(engine);
+      noteAction(clientIp, "/engines/test", { engine }, r, asActor(caller));
+      return json(r, r.error === "no such engine" ? 400 : 200);
+    }
 
     /*
      * WHO IS WORKING ON WHAT.

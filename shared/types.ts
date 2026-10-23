@@ -4187,6 +4187,50 @@ export interface KnownAgent {
   connects: string;
 }
 
+/** One thing to do next about an engine. `command` is typed in a terminal as
+ *  is; `login` is a command that asks the person for a password agentglass
+ *  never sees; `action` is a button in the app; `manual` is a sentence. */
+export interface EngineFix {
+  what: string;
+  kind: "command" | "login" | "action" | "manual";
+  command?: string;
+  action?: string;
+}
+
+export interface EngineVerdict {
+  ok: boolean;
+  /** The sentence that says why not, with what to do next. */
+  why?: string;
+}
+
+/** What this machine knows about one engine. Names only: nothing here is read
+ *  from a credential file, and a line a CLI printed is cut down to names
+ *  before it gets in. */
+export interface EngineReadiness {
+  id: string;
+  title: string;
+  found: boolean;
+  path: string | null;
+  version: string | null;
+  /** The oldest version agentglass can drive, when there is one. */
+  min: string | null;
+  /** null: it could not be told (the command timed out or failed). */
+  versionOk: boolean | null;
+  account: { signedIn: boolean | null; provider?: string; account?: string; model?: string };
+  /** The one-line test costs a turn, so it is never run by itself. */
+  answers: { state: "ok" | "failed" | "never" | "running"; at?: number; ms?: number; error?: string };
+  roles: { worker: EngineVerdict; orchestrator: EngineVerdict };
+  /** Ordered: the first one is the next thing to do. */
+  missing: EngineFix[];
+  envelope: { via: string | null; enforced: "yes" | "partly" | "no"; note: string };
+}
+
+export interface EnginesReport {
+  /** The machine these answers are about. */
+  host: string;
+  engines: EngineReadiness[];
+}
+
 export interface AgentProbe extends KnownAgent {
   /** On PATH right now. */
   found: boolean;

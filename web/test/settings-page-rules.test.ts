@@ -159,7 +159,7 @@ const METRICS: Record<string, (src: string) => number> = {
 };
 
 /** Held at zero: the pages already built from the kit. */
-const MIGRATED = ["connections", "clickup", "jira", "prefs", "appearance", "notifications", "rail", "keys", "terminal", "diff", "tasks", "browser", "lantern", "understudy", "review-prompts", "saved-replies", "about", "privacy", "tmux", "plugins", "remote", "log", "onboarding"];
+const MIGRATED = ["connections", "engines", "clickup", "jira", "prefs", "appearance", "notifications", "rail", "keys", "terminal", "diff", "tasks", "browser", "lantern", "understudy", "review-prompts", "saved-replies", "about", "privacy", "tmux", "plugins", "remote", "log", "onboarding"];
 
 const RATCHET_PATH = join(import.meta.dir, "settings-ratchet.txt");
 const ceilings = new Map<string, number>();

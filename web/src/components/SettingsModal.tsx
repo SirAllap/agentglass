@@ -63,7 +63,7 @@ import { resolvePane, openSettings, paneWhenClickupKnown } from "../lib/openSett
 import { RunningPanes } from "./RunningPanes.tsx";
 import { THEMES } from "../lib/highlight.ts";
 import { BudgetsPane } from "./BudgetsPane.tsx";
-import { AgentsPane } from "./AgentsPane.tsx";
+import { EnginesPane } from "./engines/EnginesPane.tsx";
 import { rendererPref, setRendererPref, type RendererPref } from "../lib/termRenderer.ts";
 import { TERM_FONTS, CURSORS, fontAvailable, currentTermFont, currentTermSize, currentTermCursor, currentTermLineHeight, setTermFont, setTermSize, setTermCursor, setTermLineHeight, SIZE_MIN, SIZE_MAX, LINE_HEIGHT_MIN, LINE_HEIGHT_MAX, DEFAULT_SIZE, DEFAULT_LINE_HEIGHT, type CursorStyle } from "../lib/termPrefs.ts";
 import { focusFollowsMouse, setFocusFollowsMouse } from "../lib/termFocusPref.ts";
@@ -343,7 +343,7 @@ function Row({ label, hint, kbd, href, download, onClick }: { label: string; hin
   );
 }
 
-type Pane = "recipes" | "review-prompts" | "saved-replies" | "appearance" | "prefs" | "terminal" | "diff" | "tasks" | "privacy" | "notifications" | "browser" | "rail" | "keys" | "lantern" | "log" | "budgets" | "hooks" | "connections" | "clickup" | "jira" | "tmux" | "remote" | "plugins" | "understudy" | "about" | "onboarding"
+type Pane = "recipes" | "review-prompts" | "saved-replies" | "appearance" | "prefs" | "terminal" | "diff" | "tasks" | "privacy" | "notifications" | "browser" | "rail" | "keys" | "lantern" | "log" | "budgets" | "hooks" | "connections" | "engines" | "clickup" | "jira" | "tmux" | "remote" | "plugins" | "understudy" | "about" | "onboarding"
   /** A plugin's own settings page, one per plugin that declares any. */
   | `plugin:${string}`;
 /** "" is a page that is in no group and so not in the nav (see LINK_ONLY).
@@ -456,6 +456,7 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
   ...(HAS_BROWSER ? [{ id: "browser" as const, label: "Browser", group: "Workspace" as const, kw: "browser web page zoom login cookies import chrome firefox zen profile home search engine", what: "The built-in browser: how it opens, and the logins it borrows.", icon: BrowserIcon }] : []),
   { id: "tasks", label: "Tasks", group: "Workspace", kw: "tasks sources github issues local taskwarrior clickup hide show providers view opens on", what: "Which sources the Tasks view offers you.", icon: ChecklistIcon },
   { id: "hooks", label: "Agents", group: "Agents", kw: "agents hooks claude code install setup worker roles scout builder verifier lock model opencode qwen how new chats run warm panes browser agent skill drive", what: "Wire Claude Code into this app, how new chats run, whether an agent can drive the browser, what else is installed, and which CLI each worker role runs on.", icon: PlugIcon },
+  { id: "engines", label: "Agent engines", group: "Agents", kw: "engine engines provider hermes opencode codex gemini antigravity claude model version minimum signed in sign-in login orchestrator worker role ready test recheck installed update reporting connect events", what: "Which agent CLIs this computer has, whether each is recent enough and signed in, and what each can do here.", icon: PlugIcon },
   { id: "lantern", label: "Lantern", group: "Agents", kw: "lantern reminder status what doing needs you ask sessions working on interval orchestrator seat wake floor chair post", what: "What the Lantern may ask of a session, and how often it looks.", icon: LanternIcon },
   /* Filed beside Agents rather than under System, and the two readings are
      both defensible: it is a store of what you did, and it is a thing that
@@ -2399,10 +2400,12 @@ function NotificationsSection(p: {
   );
 }
 
-function AgentsSection({ open }: { open: boolean }) {
+function AgentsSection() {
   return (
-    <SettingsCard title="Other agents on this machine">
-      <AgentsPane open={open} />
+    <SettingsCard title="Agent engines">
+      <SettingRow label="Which engines this computer has"
+        hint="Version, sign-in, what each can do, and whether it reports to this app: one card per engine, with its Connect button."
+        onClick={() => openSettings("engines")} />
     </SettingsCard>
   );
 }
@@ -4909,6 +4912,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
 
                   {ql && show("lantern") && <PageMatchHeading id="lantern" onOpen={() => { setPane("lantern" as Pane); setQ(""); }} />}
                   {show("lantern") && <LanternSection open={open} />}
+                  {ql && show("engines") && <PageMatchHeading id="engines" onOpen={() => { setPane("engines" as Pane); setQ(""); }} />}
+                  {show("engines") && <EnginesPane />}
                   {ql && show("hooks") && <PageMatchHeading id="hooks" onOpen={() => { setPane("hooks" as Pane); setQ(""); }} />}
 
                   {show("hooks") && <>
@@ -4948,7 +4953,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                     </SettingsCard>
                     {tmuxEngine?.available && <RunningPanes open={open} />}
                     {HAS_BROWSER && <AgentBrowserPane open={open} />}
-                    <AgentsSection open={open} /><WorkerRolesSection open={open} />
+                    <AgentsSection /><WorkerRolesSection open={open} />
                   </>}
 
                   {ql && show("tmux") && <PageMatchHeading id="tmux" onOpen={() => { setPane("tmux" as Pane); setQ(""); }} />}
