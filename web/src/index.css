@@ -3761,12 +3761,12 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-le-li:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
 .agx-le-li[aria-current="true"] { background: color-mix(in srgb, var(--hue, var(--primary)) 14%, transparent); }
 .agx-le-li[aria-current="true"]::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--hue, var(--primary)); }
-.agx-le-t { display: flex; align-items: center; gap: 8px; font-size: calc(13px * var(--agx-fs, 1)); font-weight: 650; min-width: 0; }
+.agx-le-t { display: flex; align-items: center; gap: 8px; font-size: calc(13px * var(--agx-fs, 1)); font-weight: 650; min-width: 0; overflow-wrap: anywhere; }
 .agx-le-s { font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agx-le-tag { font-size: calc(10px * var(--agx-fs, 1)); font-weight: 500; padding: 0 6px; border-radius: 5px; color: var(--text3); box-shadow: inset 0 0 0 1px var(--surface-line); }
 .agx-le-empty { padding: 10px 16px 14px; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); }
 .agx-le-eh { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 14px 20px; border-bottom: 1px solid var(--surface-line); }
-.agx-le-et { margin: 0; font-size: calc(15px * var(--agx-fs, 1)); font-weight: 650; color: var(--text); }
+.agx-le-et { margin: 0; font-size: calc(15px * var(--agx-fs, 1)); font-weight: 650; color: var(--text); min-width: 0; overflow-wrap: anywhere; }
 .agx-le-ed .agx-sform { gap: 0; }
 /* The editor of a prompt: fields beside the prompt when the card is wide enough for both, the prompt on top when it is not. */
 .agx-le-ed { container: agx-ed / inline-size; }
