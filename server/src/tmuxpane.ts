@@ -15,6 +15,7 @@
 // theirs. `tmux ls` in their terminal cannot see any of this, and ours cannot see
 // their sessions — which is also what makes `tmux -L agentglass attach` a safe
 // thing to hand them.
+import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { failed } from "./refused.ts";
 import { resolveTmuxBin, tmuxSocket, engineSocketArgs } from "./tmuxbin.ts";
@@ -408,7 +409,40 @@ export async function listPanes(): Promise<string[]> {
  * Attach-or-create on the session, so the second review of the day lands beside
  * the first rather than starting a server's worth of sessions.
  */
-export type EngineWindow = { ok: true; paneId: string; windowId: string } | { ok: false; reason: string };
+export type EngineWindow = { ok: true; paneId: string; windowId: string; reused?: true } | { ok: false; reason: string };
+
+/** A window that has a live pane, as the panel needs to find it again. */
+export type LiveWindow = { session: string; windowId: string; paneId: string; name: string; path: string };
+
+/* tmux escapes the free-form fields itself so no value can hold a separator. */
+const escField = (v: string): string => `#{s/%/%25/;s/\t/%09/;s/\n/%0A/:${v}}`;
+const unescField = (s: string): string => s.replace(/%(25|09|0A)/g, (_, h: string) => (h === "25" ? "%" : h === "09" ? "\t" : "\n"));
+
+/**
+ * Every window on the engine that still has a running pane, one row per window.
+ *
+ * Names are returned whole and compared by the caller with `===`: tmux's own
+ * `-t name` matches by prefix, which is how a button once selected the wrong
+ * window. A window whose every pane is dead (a command that ended under
+ * `remain-on-exit`) is left out, because nothing is working in it any more.
+ */
+export async function liveWindows(session?: string): Promise<LiveWindow[]> {
+  if (session !== undefined && !validSessionName(session)) return [];
+  const fmt = `${escField("session_name")}\t#{window_id}\t#{pane_id}\t#{pane_dead}\t${escField("window_name")}\t${escField("pane_current_path")}`;
+  const r = await tmux(session === undefined ? ["list-panes", "-a", "-F", fmt] : ["list-panes", "-s", "-t", `=${session}:`, "-F", fmt]);
+  if (!r.ok) return [];
+  const seen = new Set<string>();
+  const rows: LiveWindow[] = [];
+  for (const line of r.stdout.split("\n")) {
+    const f = line.split("\t");
+    if (f.length !== 6 || f[3] === "1") continue;
+    const [sess, windowId, paneId, , name, path] = [unescField(f[0]!), f[1]!, f[2]!, f[3], unescField(f[4]!), unescField(f[5]!)];
+    if (!windowId.startsWith("@") || !paneId.startsWith("%") || seen.has(`${sess}\t${windowId}`)) continue;
+    seen.add(`${sess}\t${windowId}`);
+    rows.push({ session: sess, windowId, paneId, name, path });
+  }
+  return rows;
+}
 
 export async function engineWindowOutcome(
   root: string, name: string, argv: string[], cwd: string = root,
@@ -463,6 +497,16 @@ export async function engineWindowOutcome(
    * resize and the capture are unaffected either way.
    */
   select = false,
+  /**
+   * LOOK FOR THE WINDOW FIRST, by exact name and checkout.
+   *
+   * For a button whose window name the app chose itself (`conflict-1042`):
+   * pressing it again while that window is still working used to start a
+   * second Claude on the same merge in the same checkout. With this on, a live
+   * window of the same name whose pane is in `cwd` is selected (when `select`)
+   * and returned with `reused: true` instead of a new one being made.
+   */
+  reuse = false,
 ): Promise<EngineWindow> {
   /* One place that says no, so the reason is written down the same way for all
      of them: returned to the button that asked, and logged once so the log and
@@ -520,6 +564,13 @@ export async function engineWindowOutcome(
   ];
 
   const there = await tmux(["has-session", "-t", `=${session}`]);
+  if (reuse && there.ok && clean) {
+    const mine = (await liveWindows(session)).find((w) => w.name === clean && samePlace(w.path, cwd));
+    if (mine) {
+      if (select) await tmux(["select-window", "-t", mine.windowId]);
+      return { ok: true, paneId: mine.paneId, windowId: mine.windowId, reused: true };
+    }
+  }
   /*
    * `=session:` for the new window, with the colon, and not the bare name.
    *
@@ -576,6 +627,12 @@ export async function engineWindowOutcome(
   // reason to hand a caller a string that goes on a command line.
   if (paneId.startsWith("%") && windowId.startsWith("@")) return { ok: true, paneId, windowId };
   return fail(`tmux opened a window but printed ids this app could not read (${JSON.stringify(out.stdout.trim().slice(0, 60))})`);
+}
+
+/** The same directory, whichever way it was spelled (a symlinked home, a trailing slash). */
+export function samePlace(a: string, b: string): boolean {
+  const real = (p: string): string => { try { return realpathSync(p); } catch { return p.replace(/\/+$/, ""); } };
+  return real(a) === real(b);
 }
 
 /** `engineWindowOutcome` for the callers that only need to know whether there

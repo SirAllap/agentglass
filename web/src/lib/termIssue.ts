@@ -51,6 +51,11 @@ export type TermIssue = {
    *  the CLI's own default. Names, not flags — the server owns the flags. */
   model?: string;
   effort?: string;
+  /** Select the window of this exact name when it is already running, instead
+   *  of starting a second one. Only for a name that stands for ONE piece of
+   *  work (`conflict-1042`): a different prompt to the same name would be
+   *  dropped, which is why it is asked for and not the default. */
+  reuse?: boolean;
   n: number;
 };
 
@@ -68,7 +73,10 @@ export function termIssue(): TermIssue | null { return pending; }
 
 /** What became of a request. `error` is a sentence for the person who pressed
  *  the button, never a code. */
-export type IssueResult = { ok: boolean; error?: string };
+export type IssueResult = { ok: boolean; error?: string;
+  /** The window was already there and working, so it was brought to the front
+   *  instead of a second one being started. */
+  reused?: boolean };
 
 const waiting = new Map<number, (r: IssueResult) => void>();
 
@@ -98,9 +106,9 @@ export function resolveTermIssue(n: number, r: IssueResult): void {
  *  UNTAKEN_MS with the request still here nobody is listening (it is taken
  *  back, so it cannot start an agent hours later when a terminal opens), and
  *  after UNANSWERED_MS with it sent the server did not reply. */
-export function requestTermIssue(cwd: string, name: string, prompt: string, agent: boolean, yolo = false, title = "", model = "", effort = ""): Promise<IssueResult> {
+export function requestTermIssue(cwd: string, name: string, prompt: string, agent: boolean, yolo = false, title = "", model = "", effort = "", reuse = false): Promise<IssueResult> {
   const n = ++lastN;
-  pending = { cwd, name, prompt, agent, yolo, title, model, effort, n };
+  pending = { cwd, name, prompt, agent, yolo, title, model, effort, reuse, n };
   const answered = new Promise<IssueResult>((res) => { waiting.set(n, res); });
   subs.forEach((f) => f());
   /* A view is mounted the first time it is shown, so a person who never opened

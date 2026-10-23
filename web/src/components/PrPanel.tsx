@@ -31,6 +31,7 @@ import { handoffTo } from "../lib/handoffTo.ts";
 import { isBackButton } from "../lib/mouseBack.ts";
 import { onAppBack } from "../lib/desktop.ts";
 import { requestTermIssue } from "../lib/termIssue.ts";
+import { useLiveWindow, openLiveWindow } from "../lib/liveWindow.ts";
 import { diffSplit, diffWrap, diffNoWhitespace, setDiffNoWhitespace } from "../lib/diffPrefs.ts";
 import { Portal } from "./Portal.tsx";
 import { CheckFailuresPanel, type PrRefs } from "./CheckFailures.tsx";
@@ -4396,8 +4397,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
         `This working directory is the same project, but not the pull request. Work out why the job is failing and propose the fix. Do not change any files yet.` +
         (check.url ? `\n\nThe run is at ${check.url}.` : "");
       if (to === "term") {
-        const done = await requestTermIssue(r.cwd, `check-${detail.number}`, prompt, true);
-        if (done.ok) flash(true, `#${detail.number} is waiting in a pane`);
+        const done = await requestTermIssue(r.cwd, `check-${detail.number}`, prompt, true, false, "", "", "", true);
+        if (done.ok) flash(true, done.reused ? `#${detail.number} already has its tab open — switched to it` : `#${detail.number} is waiting in a pane`);
         else flash(false, `Not started: ${done.error}`);
       } else {
         onOpenChatWith!(r.cwd, prompt, `Check on #${detail.number}`);
@@ -5671,6 +5672,13 @@ function ConflictActions({ root, number, branch, base, repo, title, disabled }: 
   const [busy, setBusy] = useState<"" | "open" | "claude">("");
   const [err, setErr] = useState("");
   const [note, setNote] = useState("");
+  /* Read from the engine, not remembered here: a second press used to start a
+     second Claude on the same merge in the same checkout. */
+  const windowName = `conflict-${number}`;
+  const live = useLiveWindow(root, windowName);
+  /* "Claude is on it" stops being true when its window closes. */
+  const wasLive = useRef(false);
+  useEffect(() => { if (wasLive.current && !live) setNote(""); wasLive.current = !!live; }, [live]);
 
   const prepare = async (): Promise<{ root: string; conflicts: string[]; clean: boolean } | null> => {
     setErr(""); setNote("");
@@ -5691,10 +5699,18 @@ function ConflictActions({ root, number, branch, base, repo, title, disabled }: 
           // saying so beats opening a resolver with an empty list in it.
           if (p.clean) { setNote(`Merged cleanly in ${p.root.split("/").pop()} — nothing to resolve, just push it`); return; }
           requestWorktreeJump({ view: "git", root: p.root });
-        }} disabled={disabled || !!busy} warn
-        title={`Merge ${base} into ${branch} in a worktree of its own, and open it here. Your checkout is not touched.`}>
+        }} disabled={disabled || !!busy || !!live} warn
+        title={live
+          ? `Claude is working on this merge in ${windowName} — two things must not edit the same checkout. Open its tab, or close it first.`
+          : `Merge ${base} into ${branch} in a worktree of its own, and open it here. Your checkout is not touched.`}>
         {busy === "open" ? "Preparing…" : <><BoltIcon size={ICON.xs} />Resolve conflicts</>}
       </Btn>
+      {live ? (
+        <Btn onClick={() => { void openLiveWindow(live); }} disabled={disabled} primary
+          title={`Claude is already working on this merge in ${live.path.split("/").pop()}. Switch to its tab instead of starting a second one.`}>
+          <SparkleIcon size={ICON.xs} />Claude is working in {windowName} · Open tab
+        </Btn>
+      ) : (
       <Btn onClick={async () => {
           setBusy("claude");
           const p = await prepare();
@@ -5717,22 +5733,25 @@ function ConflictActions({ root, number, branch, base, repo, title, disabled }: 
           // used to claim "Claude is on it" for a request the server refused,
           // or one no terminal view was mounted to take, and no window ever
           // opened. A second press while waiting is also what opened a second tab.
-          const done = await requestTermIssue(p.root, `conflict-${number}`, h.prompt, true, false, "", h.model, h.effort);
+          const done = await requestTermIssue(p.root, windowName, h.prompt, true, false, "", h.model, h.effort, true);
           setBusy("");
           // It opens somewhere you are not looking. Without this the button
           // did its whole job in silence and read as broken.
-          if (done.ok) setNote(`Claude is on it in a tmux window — "conflict-${number}", in ${p.root.split("/").pop()}`);
+          if (done.ok) setNote(done.reused
+            ? `Claude is already working in "${windowName}" — switched to its tab instead of starting another`
+            : `Claude is on it in a tmux window — "${windowName}", in ${p.root.split("/").pop()}`);
           else setErr(`Claude was not started: ${done.error}`);
         }} disabled={disabled || !!busy} primary
         title={`Open a tmux window in that worktree with Claude, told which side is which and which files are in conflict.`}>
         {busy === "claude" ? "Preparing…" : <><SparkleIcon size={ICON.xs} />Hand to Claude in a terminal</>}
       </Btn>
+      )}
       {/* On its own line, full width. Squeezed between the buttons it pushed
           them apart and ran off the row — and the sentences that matter here
           are the long ones: they name a path and say what to do with it. */}
-      {(err || note) && (
+      {(err || note || live) && (
         <span className="basis-full text-[10.5px] leading-snug pt-1" style={{ color: err ? "var(--error)" : "var(--text3)" }}>
-          {err || note}
+          {err || note || `Claude is working on this merge in ${windowName} (${live?.path.split("/").pop()}). Resolving by hand is off until it ends or you close that tab.`}
         </span>
       )}
     </>

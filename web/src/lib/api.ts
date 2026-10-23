@@ -964,6 +964,11 @@ const realApi = {
   tmuxWindows: (session: string) =>
     get<{ ok: boolean; windows: Array<{ id: string; index: number; name: string; active: boolean; flags: string; panes: Array<{ id: string; index: number; active: boolean; command: string; path: string }> }> }>(
       `/terminal/tmux/windows?session=${encodeURIComponent(session)}`),
+  /** The live window of this exact name in this repository (and checkout, when
+   *  `path` is given), or null. */
+  tmuxLiveWindow: (root: string, name: string, path?: string) =>
+    get<{ ok: boolean; window: { session: string; windowId: string; paneId: string; name: string; path: string } | null }>(
+      `/terminal/tmux/live-window?root=${encodeURIComponent(root)}&name=${encodeURIComponent(name)}${path ? `&path=${encodeURIComponent(path)}` : ""}`),
   /** Tabs/splits/focus/kill/rename/resize on the engine's tmux. */
   tmuxWindowOp: (op: string, body: Record<string, unknown>) =>
     post<{ ok: boolean; stdout?: string; stderr?: string; error?: string }>("/terminal/tmux/windows", { op, ...body }),
@@ -3275,6 +3280,7 @@ const demoApi: typeof realApi = {
   tmuxSettingsSave: (_f: object) => D({ ok: false, error: "not available in the demo" }),
   tmuxReset: () => D({ ok: false, error: "not available in the demo" }),
   tmuxRestoreAction: (_a: string, _m?: string) => D({ ok: false, error: "not available in the demo" }),
+  tmuxLiveWindow: (_r: string, _n: string, _p?: string) => D({ ok: true, window: null }),
   tmuxWindows: (_s: string) => D({ ok: false, windows: [] }),
   tmuxWindowOp: (_o: string, _b: object) => D({ ok: false, error: "not available in the demo" }),
   issuesWork: (_repo?: string) => D(demo.issuesWork()),

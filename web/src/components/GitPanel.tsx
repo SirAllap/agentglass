@@ -16,6 +16,7 @@ import { InsightsModal } from "./InsightsModal.tsx";
 import { BlameModal } from "./BlameModal.tsx";
 import { BisectModal } from "./BisectModal.tsx";
 import { requestTermIssue } from "../lib/termIssue.ts";
+import { useLiveWindow, openLiveWindow } from "../lib/liveWindow.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
 import { CHIP, RefreshButton, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
@@ -1062,15 +1063,21 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   // The prompt is fetched first and can take a moment; without this a second
   // press in that window opened a second tab.
   const handing = useRef(false);
+  /* Asked of the engine: while Claude is working in this checkout's "conflicts"
+     window the button opens that tab instead of starting a second Claude. */
+  const conflictWindow = useLiveWindow(root, "conflicts", root);
   const askClaudeInTerminal = async () => {
+    if (conflictWindow) { void openLiveWindow(conflictWindow); return; }
     if (handing.current) return;
     handing.current = true;
     const h = await conflictPrompt().catch((e) => { handing.current = false; throw e; });
-    const done = await requestTermIssue(root, "conflicts", h.prompt, true, false, "", h.model, h.effort).finally(() => { handing.current = false; });
+    const done = await requestTermIssue(root, "conflicts", h.prompt, true, false, "", h.model, h.effort, true).finally(() => { handing.current = false; });
     // It opens a tmux window somewhere you are not looking, and until this said
     // so the button read as broken: it worked perfectly, silently, and people
     // pressed it again. It says what the terminal answered, not what was asked.
-    if (done.ok) flash(true, `Claude is on it in a tmux window — "conflicts", in ${repoRef?.name ?? "this repo"}`);
+    if (done.ok) flash(true, done.reused
+      ? `Claude is already working in "conflicts" — switched to its tab instead of starting another`
+      : `Claude is on it in a tmux window — "conflicts", in ${repoRef?.name ?? "this repo"}`);
     else flash(false, `Claude was not started: ${done.error}`);
   };
 
@@ -2839,6 +2846,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     flash={flash}
                     onAskClaude={askClaude}
                     onAskClaudeTerminal={askClaudeInTerminal}
+                    terminalWindowLive={!!conflictWindow}
                     onOpenEditor={(relPath, line) => {
                       void api.editorOpen(`${root}/${relPath}`, line).then((r) => {
                         if (!r.ok) flash(false, r.error || "Could not open the editor");
@@ -3095,7 +3103,9 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                           <button onClick={askClaudeInTerminal}
                             className="text-[10.5px] px-2 py-0.5 rounded-lg whitespace-nowrap"
                             style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}
-                            title="Open a tmux window in this repo with Claude on it, told which side is which">▸_ in a terminal</button>
+                            title={conflictWindow
+                              ? "Claude is already working in the \"conflicts\" window of this repo — switch to its tab"
+                              : "Open a tmux window in this repo with Claude on it, told which side is which"}>{conflictWindow ? "▸_ Claude is working · Open tab" : "▸_ in a terminal"}</button>
                         </>
                       )}
                     </div>

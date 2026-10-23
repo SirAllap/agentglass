@@ -11,6 +11,7 @@ import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
 import { subscribeTermReview, termReview, clearTermReview } from "../lib/termReview.ts";
 import { subscribeTermIssue, termIssue, clearTermIssue, resolveTermIssue, type TermIssue } from "../lib/termIssue.ts";
 import { dirName } from "../lib/worktree.ts";
+import { noteWindowSet } from "../lib/liveWindow.ts";
 import { requestWorktreeJump } from "../lib/worktreeJump.ts";
 import { ICON } from "../lib/iconSize.ts";
 import { GearIcon } from "./workspace/icons.tsx";
@@ -680,6 +681,7 @@ function connect(s: Sess) {
       // file the app has never seen.
       s.tmux = f.active === true;
       s.tmuxWindows = Array.isArray(f.windows) ? f.windows : [];
+      noteWindowSet(s.tmuxWindows);
       /* The other sessions on this socket, for the strip's picker. */
       s.tmuxSessions = Array.isArray(f.sessions) ? f.sessions : [];
       s.tmuxPanes = Array.isArray(f.panes) ? f.panes : [];
@@ -692,7 +694,7 @@ function connect(s: Sess) {
       notify(s);
     } else if (f.t === "issue") {
       // The server's answer to a "start work in a window" request.
-      if (typeof f.n === "number") resolveTermIssue(f.n, { ok: f.ok === true, error: f.error });
+      if (typeof f.n === "number") resolveTermIssue(f.n, { ok: f.ok === true, error: f.error, ...(f.reused === true ? { reused: true } : {}) });
     } else if (f.t === "openfail") {
       // Not fatal to the shell — the socket is fine and this pane keeps
       // working. It is an answer to something that was asked, so it is recorded
@@ -2891,7 +2893,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     // slot is cleared here: a second press must not be blocked waiting on the
     // first one's answer.
     lastIssue.current = issue;
-    tmuxCmd({ cmd: "issue", n: issue.n, cwd: issue.cwd, name: issue.name, prompt: issue.prompt, agent: issue.agent, yolo: issue.yolo, title: issue.title, model: issue.model, effort: issue.effort });
+    tmuxCmd({ cmd: "issue", n: issue.n, cwd: issue.cwd, name: issue.name, prompt: issue.prompt, agent: issue.agent, yolo: issue.yolo, title: issue.title, model: issue.model, effort: issue.effort, reuse: issue.reuse });
     clearTermIssue();
   }, [issue, socketLive, tmuxCmd]);
 

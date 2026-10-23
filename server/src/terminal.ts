@@ -2242,7 +2242,7 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
       /* Every path out of here answers, because the button that sent this
          tells the person what happened and used to say "Claude is on it" for
          a request this handler had dropped. `n` is the client's request number. */
-      const answer = (ok: boolean, error = "") => ctl(ws, { t: "issue", n: msg.n, ok, ...(error ? { error } : {}) });
+      const answer = (ok: boolean, error = "", reused = false) => ctl(ws, { t: "issue", n: msg.n, ok, ...(error ? { error } : {}), ...(reused ? { reused: true } : {}) });
       const cwd = safeAbs(msg.cwd);
       if (!cwd) { answer(false, "that folder is not an absolute path"); return; }
       if (!existsSync(cwd)) { answer(false, `${basename(cwd)} no longer exists on disk`); return; }
@@ -2289,14 +2289,18 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
         // the UI still cannot pass an arbitrary argument. Claude only — another
         // CLI's `--model` takes different values.
         const argv = agentArgv(bin, { prompt, yolo: msg.yolo === true, title }, supportsSessionName(bin), modelFlags(msg.model, msg.effort));
+        // `reuse` is the caller's to ask for: a live window with this exact name
+        // in this checkout is selected instead of a second one being started
+        // beside it, and the prompt is NOT sent again — right for a name that
+        // stands for one piece of work, wrong for one that does not.
         // No agent available is not a reason to open nothing: a shell in the
         // right worktree is still most of what was asked for.
         /* Into the session this client is attached to — see the note on
            `engineWindowRunning`. A button a person pressed opens where they
            are looking, full stop. */
-        void engineWindowOutcome(cwd, name, argv, cwd, undefined, here, true).then((w) => { answer(w.ok, w.ok ? "" : w.reason); s.tmuxSweep?.(); });
+        void engineWindowOutcome(cwd, name, argv, cwd, undefined, here, true, msg.reuse === true).then((w) => { answer(w.ok, w.ok ? "" : w.reason, w.ok && w.reused === true); s.tmuxSweep?.(); });
       } else {
-        void engineWindowOutcome(cwd, name, [], cwd, undefined, here, true).then((w) => { answer(w.ok, w.ok ? "" : w.reason); s.tmuxSweep?.(); });
+        void engineWindowOutcome(cwd, name, [], cwd, undefined, here, true, msg.reuse === true).then((w) => { answer(w.ok, w.ok ? "" : w.reason, w.ok && w.reused === true); s.tmuxSweep?.(); });
       }
       return;
     }

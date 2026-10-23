@@ -226,6 +226,7 @@ import { codexStream, codexModels, codexTranscript, codexCwd, CODEX_ENABLED, COD
 import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_BYPASS_ALLOWED } from "./antigravity.ts";
 import { hermesStream, hermesModels, HERMES_ENABLED, hermesBypassAllowed } from "./hermes.ts";
 import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs, reloadEngineConf, tmuxCapability, engineWindowRunning, engineSessionName, tmux, validSessionName } from "./tmuxpane.ts";
+import { findLiveWindow } from "./livewindow.ts";
 import { takeLease, endLease, leaseHeld, reapLeases } from "./panelease.ts";
 import { runAgentInteractivePane } from "./understudy-pane.ts";
 import { startScanner, ownsSession, knownProjects, projectsKnownAtStart, resyncScope, scanningEnabled } from "./transcripts.ts";
@@ -9850,6 +9851,19 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const name = String(url.searchParams.get("session") ?? "");
       if (!validSessionName(name)) return json({ ok: false, error: "invalid session" }, 400);
       return json({ ok: true, windows: await windowTree(name) });
+    }
+
+    /* Is Claude already working in the window a button is about to open? Exact
+       name, in this repository (and, when given, this checkout). Read on mount
+       and whenever the tab strip changes, so the card says so after a reload
+       and in a second window of the app. */
+    if (pathname === "/terminal/tmux/live-window" && req.method === "GET") {
+      const root = gitSafeAbs(url.searchParams.get("root"));
+      const name = String(url.searchParams.get("name") ?? "");
+      if (!root || !name) return json({ ok: false, error: "root and name are required" }, 400);
+      if (isForeignRoot(root) && !mayReadForeignRoot(caller)) return foreignRefused();
+      const path = url.searchParams.get("path");
+      return json({ ok: true, window: await findLiveWindow({ root, name, ...(path ? { path: gitSafeAbs(path) ?? "/nowhere" } : {}) }) });
     }
 
     if (pathname === "/terminal/tmux/windows" && req.method === "POST") {

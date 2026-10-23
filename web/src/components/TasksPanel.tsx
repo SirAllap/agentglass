@@ -430,8 +430,8 @@ async function start(root: string, number: number, mode: StartMode, say: (ok: bo
   if ((mode === "claude" || mode === "shell" || mode === "plan") && r.cwd) {
     // A shell opens with nothing in it; the other two carry the prompt the
     // server wrote.
-    const done = await requestTermIssue(r.cwd, `i${number}`, mode === "shell" ? "" : (r.prompt ?? ""), mode !== "shell");
-    if (done.ok) say(true, `${r.work.branch} — opening a tmux window`);
+    const done = await requestTermIssue(r.cwd, `i${number}`, mode === "shell" ? "" : (r.prompt ?? ""), mode !== "shell", false, "", "", "", true);
+    if (done.ok) say(true, done.reused ? `${r.work.branch} — its tmux window is already open, switched to it` : `${r.work.branch} — opening a tmux window`);
     else say(false, `${r.work.branch} is ready, but no window opened: ${done.error}`);
   } else {
     say(true, `${r.work.branch} at ${r.work.path}`);
